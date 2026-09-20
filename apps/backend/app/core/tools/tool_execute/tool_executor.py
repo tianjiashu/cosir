@@ -21,6 +21,7 @@ stale、协调器异常等分支自动覆盖，将来新增分支也不会漏。
 
 from collections.abc import Collection
 
+from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.tools.guard.file_resource_paths import FileResourcePathError
 from app.core.tools.guard.file_tool_state_coordinator import (
     FileToolStateCoordinator,
@@ -41,9 +42,6 @@ from app.core.tools.tool_execute.tool_terminal_projection import (
     project_unhandled_tool_failure,
 )
 from app.core.tools.tool_registry import ToolRegistry
-from app.core.hook import HookContext
-from app.core.hook import HookEvent
-from app.core.hook import HookInterceptor
 
 
 class ToolExecutor:

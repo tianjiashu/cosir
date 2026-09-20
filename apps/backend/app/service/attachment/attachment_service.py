@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import re
 import stat
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -19,6 +18,7 @@ from uuid import uuid4
 
 from fastapi import UploadFile
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service import depends as service_depends
 from app.service.attachment.image_normalizer import (
@@ -31,13 +31,6 @@ from app.utils.cosir_paths import (
     workspace_attachment_staging_dir,
     workspace_cosir_dir,
 )
-
-_ASSET_ID = re.compile(r"^[0-9a-f]{64}$")
-_ASSET_FILE = re.compile(
-    r"^(?P<asset_id>[0-9a-f]{64})(?:\.source)?\.(?P<extension>[A-Za-z0-9]+)$"
-)
-_MAX_UPLOAD_BYTES = 32 * 1024 * 1024
-_IMAGE_FORMATS = {"jpeg", "png", "gif", "webp", "bmp", "tiff"}
 
 
 def _normal_path(path: Path) -> str:
@@ -93,7 +86,7 @@ def _attachment_directory(root_path: str | Path, *, create: bool) -> Path:
 
 
 def _asset_id_from_name(name: str) -> str | None:
-    match = _ASSET_FILE.fullmatch(name)
+    match = Constant.Attachment.ASSET_FILE.fullmatch(name)
     return match.group("asset_id") if match else None
 
 
@@ -193,7 +186,7 @@ class AttachmentService:
 
     @staticmethod
     def _safe_asset_id(asset_id: str) -> str:
-        if not _ASSET_ID.fullmatch(asset_id):
+        if not Constant.Attachment.ASSET_ID.fullmatch(asset_id):
             raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "附件不存在")
         return asset_id
 
@@ -267,7 +260,7 @@ class AttachmentService:
             with temp_path.open("wb") as output:
                 while chunk := await file.read(1024 * 1024):
                     total += len(chunk)
-                    if total > _MAX_UPLOAD_BYTES:
+                    if total > Constant.Attachment.MAX_UPLOAD_BYTES:
                         raise ImageNormalizationError("ATTACHMENT_FILE_TOO_LARGE", "附件文件过大")
                     output.write(chunk)
                     digest.update(chunk)
@@ -282,7 +275,7 @@ class AttachmentService:
                     width, height = image.size
             except Exception as exc:
                 raise ImageNormalizationError("ATTACHMENT_IMAGE_INVALID", "上传内容不是有效图片") from exc
-            if source_format not in _IMAGE_FORMATS:
+            if source_format not in Constant.Attachment.IMAGE_FORMATS:
                 raise ImageNormalizationError("ATTACHMENT_TYPE_UNSUPPORTED", "暂不支持该图片格式")
 
             asset_id = digest.hexdigest()

@@ -451,6 +451,38 @@ class TaskCrud:
                 update(TaskModel).where(TaskModel.id.in_(task_ids)).values(parent_run_id=None)
             )
 
+    def clear_parent_run_id_by_run_id(
+        self, run_id: int, session: Session | None = None
+    ) -> None:
+        """把所有指向指定 run 的 ``tasks.parent_run_id`` 置空。
+
+        删除某条 run 时，若其它 task（fork 子任务或委派子任务）的 ``parent_run_id`` 引用它，
+        ``tasks.parent_run_id → conversation_runs.id`` 外键会在删除 run 时报
+        ``FOREIGN KEY constraint failed``。与按 task_ids 清理的 ``clear_parent_run_id`` 不同，
+        本方法按被引用的 run_id 反向解除引用，只置空该列，不删除 task 行。
+
+        参数:
+            run_id: 被引用的 Conversation Run 标识。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时自开事务并
+                自动提交。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
+
+        副作用:
+            把 ``tasks`` 表中 ``parent_run_id`` 命中本 run 的行该列置为 NULL；无匹配时静默无操作。
+        """
+
+        stmt = update(TaskModel).where(TaskModel.parent_run_id == run_id).values(parent_run_id=None)
+        if session is not None:
+            session.execute(stmt)
+            return
+        with self._session_factory.begin() as owned_session:
+            owned_session.execute(stmt)
+
     def clear_delegation_id(self, task_ids: list[int], session: Session | None = None) -> None:
         """把指定 task 的 ``delegation_id`` 置空，解除与 ``delegations`` 的外键引用。
 

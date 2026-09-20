@@ -14,13 +14,13 @@ Run 记录读取与「task 是否已有 active run」查询。
 
 持久化事实归 ``ConversationRunCrud``；本模块只表达「一次合法状态迁移 + 其对应事件」。
 """
-
 from typing import cast
 
 from sqlalchemy.orm import Session
 
 from app.assistant_transport.event import RunStatusChangedEvent
 from app.assistant_transport.event.dispatch import dispatch_conversation_event
+from app.config.constant import Constant
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import (
     ConversationRunError,
@@ -28,8 +28,6 @@ from app.models import (
     ConversationRunStatus,
 )
 from app.models.conversation_run_failure import (
-    RUN_FAILURE_CODE_CANCELLED,
-    RUN_FAILURE_CODE_UNKNOWN,
     run_failure_message,
 )
 from app.models.conversation_run_usage import ConversationRunUsage
@@ -87,9 +85,9 @@ def terminal_error(
     code = end_reason if isinstance(end_reason, str) and end_reason.isidentifier() else None
     if code is None:
         code = (
-            RUN_FAILURE_CODE_CANCELLED
+            Constant.Run.RUN_FAILURE_CODE_CANCELLED
             if status is ConversationRunStatus.CANCELLED
-            else RUN_FAILURE_CODE_UNKNOWN
+            else Constant.Run.RUN_FAILURE_CODE_UNKNOWN
         )
     return ConversationRunError(code=code, message=run_failure_message(code))
 

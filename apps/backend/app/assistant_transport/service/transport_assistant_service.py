@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import NoReturn
@@ -28,6 +27,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     find_run,
 )
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.models import (
     ConversationRunAttachmentInput,
@@ -36,27 +36,25 @@ from app.models import (
 )
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-_HIDDEN_LOCAL_FILE_TOKEN = re.compile(
-    r"<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->"
-)
-
 
 def _build_ordered_display_text(
     parts: Sequence[AssistantTextPart | AssistantImagePart],
 ) -> str:
     """Encode composer text/image order into the existing Run display text value."""
 
-    image_token = re.compile(r"\[\[cosir-image:([^\]]+)\]\]")
+    image_token = Constant.Cosir.LOCAL_IMAGE_TOKEN
     emitted_image_ids = {
         image_id
         for part in parts
         if isinstance(part, AssistantTextPart)
-        for image_id in image_token.findall(_HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text))
+        for image_id in image_token.findall(
+            Constant.Transport.HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text)
+        )
     }
     segments: list[str] = []
     for part in parts:
         if isinstance(part, AssistantTextPart):
-            segments.append(_HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text))
+            segments.append(Constant.Transport.HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text))
         else:
             asset_id = part.image.removeprefix("cosir-attachment://")
             if asset_id in emitted_image_ids:

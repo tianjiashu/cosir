@@ -2,6 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { TerminalResizeController } from "@/components/terminal/terminal-resize-controller";
 
 import { reconcileTerminalOutput } from "./terminal-output-reconciler";
 import { TerminalWriteScheduler } from "./terminal-write-scheduler";
@@ -23,11 +24,9 @@ export class TerminalSession {
   private readonly terminal: Terminal;
   private readonly fitAddon: FitAddon;
   private readonly writeScheduler: TerminalWriteScheduler;
-  private readonly resizeObserver: ResizeObserver | null;
-  private fitFrame: number | null = null;
+  private readonly resizeController: TerminalResizeController;
   private desiredSnapshot: TerminalSnapshot = { output: "" };
   private renderedSnapshot: TerminalSnapshot = { output: "" };
-  private fitPending = false;
   private disposed = false;
 
   constructor(container: HTMLElement) {
@@ -54,7 +53,11 @@ export class TerminalSession {
 
     this.terminal.loadAddon(this.fitAddon);
     this.terminal.open(container);
-    this.fitNow();
+    try {
+      this.fitAddon.fit();
+    } catch {
+      // The host can be between React layout phases; the resize controller retries.
+    }
     this.writeScheduler = new TerminalWriteScheduler((done) => {
       this.flushSnapshot(done);
     }, (error) => {
@@ -63,14 +66,18 @@ export class TerminalSession {
         error,
       });
     });
-    this.scheduleFit();
-
-    this.resizeObserver = typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver(() => {
-        this.scheduleFit();
-      });
-    this.resizeObserver?.observe(container);
+    this.resizeController = new TerminalResizeController(
+      container,
+      () => {
+        try {
+          this.fitAddon.fit();
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      () => this.writeScheduler.isRunning,
+    );
   }
 
   /** Apply a cumulative Transport snapshot to this session exactly once. */
@@ -99,19 +106,15 @@ export class TerminalSession {
   /** Request a dimension recalculation after the host panel changes size. */
   fit(): void {
     if (this.disposed) return;
-    this.scheduleFit();
+    this.resizeController.request();
   }
 
   /** Dispose the terminal, addons, observers, and deferred layout work. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.resizeObserver?.disconnect();
+    this.resizeController.dispose();
     this.writeScheduler.dispose();
-    if (this.fitFrame !== null && typeof window !== "undefined") {
-      window.cancelAnimationFrame(this.fitFrame);
-      this.fitFrame = null;
-    }
     this.fitAddon.dispose();
     this.terminal.dispose();
   }
@@ -152,31 +155,6 @@ export class TerminalSession {
 
   private finishFlush(done: () => void): void {
     done();
-    if (this.fitPending) this.scheduleFit();
-  }
-
-  private fitNow(): void {
-    if (this.disposed) return;
-    this.fitAddon.fit();
-    this.fitPending = false;
-  }
-
-  private fitWhenIdle(): void {
-    if (this.disposed) return;
-    if (this.writeScheduler.isRunning) {
-      this.fitPending = true;
-      return;
-    }
-    this.fitNow();
-  }
-
-  private scheduleFit(): void {
-    if (this.disposed || typeof window === "undefined") return;
-    this.fitPending = true;
-    if (this.fitFrame !== null) return;
-    this.fitFrame = window.requestAnimationFrame(() => {
-      this.fitFrame = null;
-      this.fitWhenIdle();
-    });
+    this.resizeController.request();
   }
 }

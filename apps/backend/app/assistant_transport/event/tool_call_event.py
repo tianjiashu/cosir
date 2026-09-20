@@ -37,7 +37,7 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
         tool_name: 被调用工具名。
         presentation: 「怎么展示」的静态外壳声明，由 ``ToolDefinition.display``
             （``ToolDisplayHints``）经 ``to_dict()`` 序列化得到，**同一种工具每次调用
-            完全相同**。只含字面量字段（``verb`` 动词、``icon`` 图标、``surface`` 展示面、
+            完全相同**。只含字面量字段（``verb`` 动词、``icon`` 图标、``variant`` 语义变体、``surface`` 展示面、
             ``expandable`` 是否可展开、``expand_layout`` 展开布局、``default_open`` 默认展开、
             ``show_result`` 是否展示模型结果）；
             不含 Callable、摘要文本或条目内容。前端据此决定外壳布局与图标。

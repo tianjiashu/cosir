@@ -21,6 +21,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Protocol
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.terminal.errors import (
     TerminalWorkerBackpressureError,
@@ -28,11 +29,6 @@ from app.service.terminal.errors import (
 )
 from app.service.terminal.shell_resolver import ShellSpec
 
-MAX_FRAME_BYTES = 4 * 1024 * 1024
-MAX_INPUT_QUEUE_FRAMES = 64
-MAX_INPUT_QUEUE_BYTES = 64 * 1024
-WORKER_PROTOCOL = "terminal-worker-v1"
-WORKER_ENV = "CODING_AGENT_TERMINAL_WORKER"
 WorkerEventCallback = Callable[[Mapping[str, object]], None]
 
 
@@ -49,8 +45,6 @@ class TerminalWorker(Protocol):
         self,
         spec: ShellSpec,
         cwd: str,
-        cols: int,
-        rows: int,
         on_event: WorkerEventCallback,
     ) -> None: ...
 
@@ -78,10 +72,11 @@ class ProcessTerminalWorkerFactory:
     def create(self, instance_id: str) -> TerminalWorker:
         """构造 process worker；不在此处启动子进程。"""
 
-        executable = self._executable or os.environ.get(WORKER_ENV, "").strip()
+        executable = self._executable or os.environ.get(Constant.Terminal.WORKER_ENV, "").strip()
         if not executable:
             raise TerminalWorkerUnavailableError(
-                f"{WORKER_ENV} is not configured; terminal worker sidecar is unavailable"
+                f"{Constant.Terminal.WORKER_ENV} is not configured; "
+                "terminal worker sidecar is unavailable"
             )
         return ProcessTerminalWorker(executable, instance_id)
 
@@ -106,7 +101,9 @@ class ProcessTerminalWorker:
         self._reader_thread: threading.Thread | None = None
         self._heartbeat_thread: threading.Thread | None = None
         self._writer_thread: threading.Thread | None = None
-        self._input_queue: queue.Queue[bytes] = queue.Queue(maxsize=MAX_INPUT_QUEUE_FRAMES)
+        self._input_queue: queue.Queue[bytes] = queue.Queue(
+            maxsize=Constant.Terminal.MAX_INPUT_QUEUE_FRAMES
+        )
         self._input_queue_lock = threading.Lock()
         self._input_queue_bytes = 0
         self._writer_stop = threading.Event()
@@ -131,8 +128,6 @@ class ProcessTerminalWorker:
         self,
         spec: ShellSpec,
         cwd: str,
-        cols: int,
-        rows: int,
         on_event: WorkerEventCallback,
     ) -> None:
         """无可见控制台窗口地启动 worker，发送 shell spec 并等待 handshake。"""
@@ -177,8 +172,6 @@ class ProcessTerminalWorker:
                 "shell": list(spec.argv),
                 "shell_kind": spec.kind,
                 "cwd": cwd,
-                "cols": cols,
-                "rows": rows,
             }
         )
         if not self._handshake_event.wait(timeout=5) or not self._handshake_valid:
@@ -209,7 +202,7 @@ class ProcessTerminalWorker:
         with self._input_queue_lock:
             if (
                 self._input_queue.full()
-                or self._input_queue_bytes + len(data) > MAX_INPUT_QUEUE_BYTES
+                or self._input_queue_bytes + len(data) > Constant.Terminal.MAX_INPUT_QUEUE_BYTES
             ):
                 raise TerminalWorkerBackpressureError("terminal worker input queue is full")
             self._input_queue.put_nowait(payload)
@@ -274,7 +267,7 @@ class ProcessTerminalWorker:
         """编码长度前缀控制帧。"""
 
         payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        if len(payload) > MAX_FRAME_BYTES:
+        if len(payload) > Constant.Terminal.MAX_FRAME_BYTES:
             raise TerminalWorkerUnavailableError("terminal worker frame exceeds size limit")
         return struct.pack(">I", len(payload)) + payload
 
@@ -311,7 +304,7 @@ class ProcessTerminalWorker:
                 if not header:
                     break
                 size = struct.unpack(">I", header)[0]
-                if size <= 0 or size > MAX_FRAME_BYTES:
+                if size <= 0 or size > Constant.Terminal.MAX_FRAME_BYTES:
                     raise TerminalWorkerUnavailableError("invalid terminal worker frame size")
                 payload = _read_exact(process.stdout, size)
                 if len(payload) != size:
@@ -364,7 +357,7 @@ class ProcessTerminalWorker:
         """校验 worker 协议版本、实例、PID 与 PTY 类型。"""
 
         return (
-            event.get("protocol") == WORKER_PROTOCOL
+            event.get("protocol") == Constant.Terminal.WORKER_PROTOCOL
             and event.get("instance_id") == self.instance_id
             and event.get("pid") == process_pid
             and event.get("pty_kind") in {"conpty", "unix_pty"}

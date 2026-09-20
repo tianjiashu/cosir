@@ -24,9 +24,18 @@ export type KnownTransportToolStatus =
 /** 后端五态之外的值只用于安全显示，不得被解释为 pending 或 completed。 */
 export type TransportToolStatus = KnownTransportToolStatus | "unknown";
 
+export type TerminalSessionPresentationVariant =
+  | "terminal-session-start"
+  | "terminal-session-read"
+  | "terminal-session-write"
+  | "terminal-session-signal"
+  | "terminal-session-close";
+
 export type TransportToolPresentation = {
   verb?: string;
   icon?: string;
+  /** Stable semantic renderer variant; never contains dynamic tool output. */
+  variant?: TerminalSessionPresentationVariant;
   surface?: "trace" | "standalone";
   expandable?: boolean;
   expand_layout?: "none" | "details" | "list" | "diff" | "write" | "terminal";

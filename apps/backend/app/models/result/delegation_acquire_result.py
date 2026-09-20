@@ -7,8 +7,6 @@
 
 from dataclasses import dataclass
 
-REASON_CONCURRENCY_EXCEEDED = "delegation_concurrency_exceeded"
-
 
 @dataclass(frozen=True)
 class DelegationAcquireResult:

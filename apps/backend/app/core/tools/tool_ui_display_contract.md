@@ -19,9 +19,9 @@ Tauri Rust 主进程
 - 工具在 FastAPI 后端进程执行。
 - `apps/backend/app/core/tools/display/` 内的纯函数负责把执行结果投影成 UI 展示数据。
 - `ToolDisplayHints` 随 `ToolDefinition` 传给客户端，描述工具的静态展示方式。
-- `ToolObservation.display_data` 承载工具终态 UI 结构化数据；运行中的 terminal snapshot 可以临时追加原样的 `output` 增量，供当前界面实时呈现。终端输出仅从子进程字节解码为文本，不剥离 ANSI 控制序列、不改写文本、不按字符数截断，也不携带 `truncated` / `stream_truncated` 字段。模型 `content` 的统一输出预算属于另一条边界，不改变 UI 展示数据。
+- `ToolObservation.display_data` 承载工具终态 UI 结构化数据；交互 terminal 的运行期原始 bytes 只通过独立的只读 preview WebSocket 实时呈现，不进入 display_data。一次性 terminal 的有限输出仍可按 `terminal-result` 契约进入 display_data。终端输出仅从子进程字节解码为文本，不剥离 ANSI 控制序列、不改写文本、不按字符数截断，也不携带 `truncated` / `stream_truncated` 字段。模型 `content` 的统一输出预算属于另一条边界，不改变 UI 展示数据。
 - Assistant Transport 可以把展示数据带入事件和 snapshot，以支持前端渲染与重连恢复；展示数据不是任务、Run、Agent context 或文件变更事实源。
-- terminal 增量只存在于当前进程的运行期 snapshot，不写入数据库或 Agent context；工具完成后由终态 `display_data` 替换，重新 attach/state 以最终 snapshot 为准。
+- 一次性 terminal 增量只存在于当前进程的运行期 snapshot，不写入数据库或 Agent context；交互 terminal 增量只存在于 preview subscriber/ring buffer。工具完成后由终态 `display_data` 替换，重新 attach/state 以最终 snapshot 为准。
 - `ToolObservation.artifact_data` 只承载内部工具产物，不进入 UI Transport。文件变更展示数据只服务于工具结果渲染。
 - 后端重启后由已有 snapshot 恢复 UI，不隐式重放旧工具执行。
 
@@ -37,6 +37,7 @@ Tauri Rust 主进程
 
 - `verb`：客户端标题动词，例如"读取文件""执行命令"。
 - `icon`：客户端使用的图标名。
+- `variant`：稳定的 renderer 语义变体；用于同一 `kind` 下的不同展示形态，不携带动态结果或用户输入。
 - `surface`：`trace` 表示普通执行轨迹，`standalone` 表示需要独立强调的结果。
 - `expandable`：是否允许展开。
 - `expand_layout`：客户端使用的通用布局：`none`、`details`、`list`、`diff`、`write`、`terminal`。
@@ -154,7 +155,7 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 
 ## 3. 内置工具契约
 
-当前内置工具共 13 个，包括 `delegate_task`。
+当前内置工具共 18 个，包括 `delegate_task` 与 5 个交互式 terminal 工具。
 
 | 工具 | 静态展示声明 | `kind` | 动态展示字段 |
 | --- | --- | --- | --- |
@@ -168,16 +169,19 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `find_files` | `trace`、可展开、`list`、`search` | `file-list` | `pattern`、`path`、`files`、`page`、`match_count` |
 | `list_directory` | `trace`、可展开、`list`、`eye` | `directory-list` | `path`、`entries`、`page`、`total_entries` |
 | `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out` |
+| `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、shell/cwd、status、generation 和有限 cursor 元数据；原始 PTY 输出只走 preview WebSocket |
+| `terminal_read` / `terminal_write` | `trace`、不可展开、`none` | `terminal-session` | session/status/cursor 元数据；write 额外提供 `submitted`；完整输出或输入只进入模型 content，不进入 display_data |
+| `terminal_signal` / `terminal_close` | `trace`、不可展开、`none` | `terminal-session` | session/status 元数据；signal 额外提供受控的 `signal` |
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
 | `delegate_task` | `trace`、可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、`child_run_id`、状态 |
 
-交互式 terminal handler 当前处于隐藏实现阶段，尚未计入上述 13 个工具，也不会出现在
-Agent tool schema。实现完成后继续复用现有 renderer 路由，静态布局为 `terminal`，动态
-`kind` 为 `terminal-session`，只传 session identity、状态和有限 cursor 元数据；完整 PTY
-输出只走独立的只读 `terminal-preview-v1` WebSocket，不进入 Assistant Transport 的工具
-展示 payload。handler 的 docstring 明确记录"未注册、Agent 不可见"，注册必须在真实
-worker 和跨平台集成验收后作为独立变更完成。
+交互式 terminal handler 已注册到 Agent tool schema，并继续复用现有 renderer 路由；静态
+布局为 `terminal`，动态 `kind` 为 `terminal-session`。静态 `ToolDisplayHints.variant`
+区分 start/read/write/signal/close 五种 UI 语义。display_data 只传 session identity、
+状态和有限 cursor 元数据；完整 PTY 输出只走独立的只读 `terminal-preview-v1` WebSocket，
+不进入 Assistant Transport 的工具展示 payload。`terminal_write` 使用 session 内进程级
+`operation_id` 去重，不新增数据库表；`data` 保持原始 UTF-8 文本，`submit=true` 时由工具边界显式追加一个真实 CR（0x0D）提交输入，不对字面 `\\r`/`\\n` 或 HTML 实体做隐式解码。
 
 ### 3.1 文件读取
 

@@ -70,7 +70,7 @@ def test_delete_unlink_oserror_is_normalized(tmp_path: Path, monkeypatch) -> Non
     target.write_bytes(b"data\n")
     real_unlink = Path.unlink
 
-    def failing_unlink(self, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def failing_unlink(self, *args, **kwargs):
         if self == target:
             raise OSError(errno.EACCES, "permission denied")
         return real_unlink(self, *args, **kwargs)
@@ -100,7 +100,7 @@ def test_delete_refuses_target_changed_before_mutation(tmp_path: Path, monkeypat
     real_resolve = delete_module.PathResolver.resolve_within_workspace
     calls = {"n": 0}
 
-    def resolving_to_other(self, path):  # noqa: ANN001
+    def resolving_to_other(self, path):
         # First call (inside the pre-check) behaves normally; the mutation-time
         # re-resolution returns a *different* path, simulating a concurrent swap.
         resolved, error = real_resolve(self, path)

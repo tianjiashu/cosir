@@ -10,6 +10,7 @@ from app.api.schemas.request.CreateTaskRequest import CreateTaskRequest
 from app.api.schemas.request.CreateTurnRequest import CreateTurnRequest
 from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceRequest
 from app.api.schemas.request.ForkTaskRequest import ForkTaskRequest
+from app.api.schemas.response.DeleteRunResponse import DeleteRunResponse
 from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse
 from app.api.schemas.response.HealthResponse import HealthResponse
@@ -20,6 +21,7 @@ __all__ = [
     "CreateTaskRequest",
     "CreateTurnRequest",
     "CreateWorkspaceRequest",
+    "DeleteRunResponse",
     "DeleteTaskResponse",
     "DeleteWorkspaceResponse",
     "ForkTaskRequest",

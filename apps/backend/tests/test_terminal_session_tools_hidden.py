@@ -5,14 +5,22 @@ from app.core.tools.tool_handler.terminal_session import (
     TerminalStartTool,
     TerminalWriteTool,
 )
+from app.core.tools.tool_handler.terminal_session.common import build_session_display_payload
+from app.core.tools.tool_handler.terminal_session.write import encode_terminal_input
 from app.core.tools.tool_handler.tool_base import HandlerBase
-from app.core.tools.tool_models import TerminalStartArgs
+from app.core.tools.tool_models import (
+    TerminalCloseArgs,
+    TerminalReadArgs,
+    TerminalSignalArgs,
+    TerminalStartArgs,
+    TerminalWriteArgs,
+)
 from app.core.tools.tool_system import ToolSystem
 from app.service.terminal.terminal_session_service import TerminalSessionService
 from app.service.terminal.worker import ProcessTerminalWorker
 
 
-def test_terminal_handlers_implement_handler_base_but_are_not_registered() -> None:
+def test_terminal_handlers_implement_handler_base_and_are_registered() -> None:
     handlers = (
         TerminalStartTool,
         TerminalWriteTool,
@@ -23,17 +31,178 @@ def test_terminal_handlers_implement_handler_base_but_are_not_registered() -> No
 
     assert all(issubclass(handler, HandlerBase) for handler in handlers)
     registered_names = ToolSystem.build_tool_system().registry.get_all_tool_names()
-    assert not any(name.startswith("terminal_") for name in registered_names)
+    assert {
+        "terminal_start",
+        "terminal_read",
+        "terminal_write",
+        "terminal_signal",
+        "terminal_close",
+    }.issubset(registered_names)
     assert not hasattr(ProcessTerminalWorker, "resize")
     assert not hasattr(TerminalSessionService, "resize")
     assert "terminal_resize" not in {handler.name for handler in handlers}
 
 
-def test_terminal_start_schema_matches_fixed_initial_dimensions() -> None:
-    assert TerminalStartArgs.model_validate({"cols": 20, "rows": 5}).cols == 20
-    for payload in ({"cols": 19}, {"rows": 4}, {"rows": 201}):
+def test_terminal_start_schema_rejects_removed_dimensions() -> None:
+    for payload in ({"cols": 20}, {"rows": 5}, {"cols": 20, "rows": 5}):
         try:
             TerminalStartArgs.model_validate(payload)
         except ValueError:
             continue
         raise AssertionError(f"invalid initial dimensions accepted: {payload}")
+
+
+def test_terminal_session_schema_describes_agent_operational_semantics() -> None:
+    models = (
+        TerminalStartArgs,
+        TerminalWriteArgs,
+        TerminalReadArgs,
+        TerminalSignalArgs,
+        TerminalCloseArgs,
+    )
+
+    for model in models:
+        properties = model.model_json_schema()["properties"]
+        assert all(properties[name].get("description") for name in properties)
+        assert all(len(properties[name]["description"]) <= 300 for name in properties)
+
+    start = TerminalStartArgs.model_json_schema()["properties"]
+    assert "PowerShell on Windows" in start["shell"]["description"]
+    assert "cols" not in start
+    assert "rows" not in start
+    assert "inside it" in start["cwd"]["description"]
+
+    write = TerminalWriteArgs.model_json_schema()["properties"]
+    assert "identical input" in write["operation_id"]["description"]
+    assert "submit=true" in write["data"]["description"]
+    assert "real Enter" in write["submit"]["description"]
+    assert "shell to exit" in write["wait_ms"]["description"]
+
+    read = TerminalReadArgs.model_json_schema()["properties"]
+    assert "previous next_seq" in read["after_seq"]["description"]
+    assert "new output" in read["wait_ms"]["description"]
+
+    signal = TerminalSignalArgs.model_json_schema()["properties"]
+    assert "Ctrl-C-like" in signal["signal"]["description"]
+
+
+def test_terminal_session_schema_describes_host_specific_shell_and_paths(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        lambda: "Windows",
+    )
+    windows_schema = TerminalStartTool().to_definition().to_model_tool_definition()["parameters"]
+    assert "Windows ConPTY" in windows_schema["properties"]["shell"]["description"]
+    assert "Windows path syntax" in windows_schema["properties"]["cwd"]["description"]
+
+    monkeypatch.setattr(
+        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        lambda: "Darwin",
+    )
+    macos_schema = TerminalStartTool().to_definition().to_model_tool_definition()["parameters"]
+    assert "macOS PTY" in macos_schema["properties"]["shell"]["description"]
+    assert "zsh" in macos_schema["properties"]["shell"]["description"]
+
+    monkeypatch.setattr(
+        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        lambda: "Linux",
+    )
+    linux_schema = TerminalStartTool().to_definition().to_model_tool_definition()["parameters"]
+    assert "Linux PTY" in linux_schema["properties"]["shell"]["description"]
+    assert "bash" in linux_schema["properties"]["shell"]["description"]
+
+
+def test_terminal_signal_schema_warns_about_windows_capability(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        lambda: "Windows",
+    )
+    schema = TerminalSignalTool().to_definition().to_model_tool_definition()["parameters"]
+    assert "does not advertise terminal signal support" in schema["properties"]["signal"][
+        "description"
+    ]
+
+
+def test_terminal_session_display_variants_match_their_ui_roles() -> None:
+    definitions = {
+        handler.name: handler().to_definition()
+        for handler in (
+            TerminalStartTool,
+            TerminalReadTool,
+            TerminalWriteTool,
+            TerminalSignalTool,
+            TerminalCloseTool,
+        )
+    }
+
+    assert definitions["terminal_start"].display.to_dict()["variant"] == "terminal-session-start"
+    assert definitions["terminal_read"].display.to_dict()["variant"] == "terminal-session-read"
+    assert definitions["terminal_write"].display.to_dict()["variant"] == "terminal-session-write"
+    assert definitions["terminal_signal"].display.to_dict()["variant"] == "terminal-session-signal"
+    assert definitions["terminal_close"].display.to_dict()["variant"] == "terminal-session-close"
+    assert definitions["terminal_start"].display.to_dict()["surface"] == "standalone"
+    assert definitions["terminal_read"].display.to_dict()["expandable"] is False
+    assert definitions["terminal_write"].display.to_dict()["expandable"] is False
+    assert definitions["terminal_read"].display.to_dict()["expand_layout"] == "none"
+    assert definitions["terminal_write"].display.to_dict()["expand_layout"] == "none"
+
+
+def test_session_display_payload_allowlists_ui_metadata() -> None:
+    payload = build_session_display_payload(
+        {
+            "session_id": "term_demo",
+            "status": "running",
+            "generation": "gen_demo",
+            "first_available_seq": 1,
+            "next_seq": 3,
+            "initial_cwd": "H:/coding-agent",
+            "shell_kind": "powershell",
+            "shell_executable": "powershell.exe",
+            "worker_pid": 1234,
+            "workspace_id": 99,
+            "created_at": "secret-timestamp",
+        },
+        include_terminal_info=True,
+    )
+
+    assert payload == {
+        "session_id": "term_demo",
+        "status": "running",
+        "generation": "gen_demo",
+        "first_available_seq": 1,
+        "next_seq": 3,
+        "initial_cwd": "H:/coding-agent",
+        "shell_kind": "powershell",
+    }
+
+
+def test_terminal_write_submit_appends_real_enter_without_decoding_data() -> None:
+    args = TerminalWriteArgs.model_validate(
+        {
+            "session_id": "session-1",
+            "operation_id": "write-1",
+            "data": "echo TERM-OK",
+            "submit": True,
+        }
+    )
+    assert args.submit is True
+    assert encode_terminal_input("echo TERM-OK", submit=False) == b"echo TERM-OK"
+    assert encode_terminal_input("echo TERM-OK", submit=True) == b"echo TERM-OK\r"
+    assert encode_terminal_input(r"literal\\r\\n", submit=False) == b"literal\\\\r\\\\n"
+    assert encode_terminal_input(r"literal\\r\\n", submit=True) == b"literal\\\\r\\\\n\r"
+
+
+def test_terminal_write_schema_limits_final_utf8_bytes() -> None:
+    base = {"session_id": "session-1", "operation_id": "write-1"}
+    TerminalWriteArgs.model_validate({**base, "data": "a" * (64 * 1024 - 1), "submit": True})
+    for payload in (
+        {**base, "data": "a" * (64 * 1024), "submit": True},
+        {**base, "data": "中" * (64 * 1024), "submit": False},
+    ):
+        try:
+            TerminalWriteArgs.model_validate(payload)
+        except ValueError:
+            continue
+        raise AssertionError("terminal input exceeding the final UTF-8 byte limit was accepted")

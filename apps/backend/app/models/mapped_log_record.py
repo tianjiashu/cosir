@@ -1,21 +1,18 @@
 """将 Python LogRecord 映射为统一 9 字段日志结构。
 
 映射逻辑收口在 :class:`MappedLogRecord` 的 :meth:`from_record` 工厂方法中；
-:class:`LogError` 是映射产出的嵌套错误块，:data:`MAX_LOG_TEXT_LENGTH` 为
-文本截断阈值常量。
+:class:`LogError` 是映射产出的嵌套错误块；文本截断阈值常量见
+``Constant.LogRecord.MAX_LOG_TEXT_LENGTH``。
 """
-
 import logging
-import re
 import traceback
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from app.config.constant import Constant
 from app.config.logging.filter.caller_filter import compute_caller
-MAX_LOG_TEXT_LENGTH = 2000
-EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -160,7 +157,7 @@ class MappedLogRecord:
 
         raw_message = str(record.msg or "")
         candidate = raw_message.strip().split(maxsplit=1)[0] if raw_message.strip() else ""
-        if EVENT_NAME_PATTERN.match(candidate):
+        if Constant.LogRecord.EVENT_NAME_PATTERN.match(candidate):
             return candidate
         return "log_event"
 
@@ -307,9 +304,9 @@ class MappedLogRecord:
             # 已是带截断标记的二次输入（如跨进程桥接预截断后回传），
             # 不再重复截断，避免叠加多个 [TRUNCATED:] 标记。
             return value
-        if len(value) <= MAX_LOG_TEXT_LENGTH:
+        if len(value) <= Constant.LogRecord.MAX_LOG_TEXT_LENGTH:
             return value
-        return f"{value[:MAX_LOG_TEXT_LENGTH]}...[TRUNCATED:{len(value)}]"
+        return f"{value[:Constant.LogRecord.MAX_LOG_TEXT_LENGTH]}...[TRUNCATED:{len(value)}]"
 
     @staticmethod
     def _mark_truncated(mapped: "MappedLogRecord") -> "MappedLogRecord":

@@ -39,15 +39,13 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
             shell,
             shell_kind,
             cwd,
-            cols,
-            rows,
-        }) if !shell_kind.trim().is_empty() => (shell, shell_kind, cwd, cols, rows),
+        }) if !shell_kind.trim().is_empty() => (shell, shell_kind, cwd),
         InternalEvent::BackendEof => return Ok(()),
         _ => anyhow::bail!("first terminal worker frame must be start"),
     };
 
     let shell_kind = start.1;
-    let spawned = PtyRuntime::spawn(start.0, start.2, start.3, start.4)?;
+    let spawned = PtyRuntime::spawn(start.0, start.2)?;
     let runtime = spawned.runtime;
     output.send(&WorkerEvent::Handshake {
         protocol: PROTOCOL,
@@ -56,11 +54,6 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
         pty_kind: pty_kind(),
         capabilities: capabilities(),
     })?;
-    output.send(&WorkerEvent::Status {
-        cols: start.3,
-        rows: start.4,
-    })?;
-
     spawn_pty_reader(
         spawned.reader,
         runtime.clone(),

@@ -78,7 +78,8 @@ class TaskRuntimeSpace:
     并发边界见模块 docstring：``lock`` 是唯一 Task 操作闸门；snapshot working copy **不**持有
     内部锁（由 ``ConversationTaskStateService._lock`` 统一串行化）；``_context_manager`` 槽位
     由 ``_context_guard`` 保护；``system_queue`` 延迟系统消息队列由标准库 ``SimpleQueue`` 提供
-    并发安全（内部已加锁，本类不再额外加锁），跨同 task 内 run 共享、run 间串行由 Task 操作闸门保证。
+    并发安全（内部已加锁，本类不再额外加锁），跨同 task 内 run 共享、run 间串行由
+    Task 操作闸门保证。
     """
 
     task_id: int
@@ -93,7 +94,7 @@ class TaskRuntimeSpace:
     _context_guard: threading.Lock = field(init=False)
     # 延迟注入的「修复类系统消息」队列（FIFO）：跨同 task 内的 run 共享，run 间串行由 Task 操作
     # 闸门保证；用标准库 SimpleQueue 提供并发安全，不额外加锁。
-    system_queue: "SimpleQueue[SystemMessage]" = field(
+    system_queue: SimpleQueue[SystemMessage] = field(
         default_factory=SimpleQueue, init=False, repr=False, compare=False
     )
 
@@ -341,19 +342,29 @@ class TaskRuntimeSpace:
 
         self.system_queue.put(message)
 
-    def take_deferred_system_messages(self) -> list[SystemMessage]:
-        """取出并清空本 task 当前排队的全部延迟系统消息（FIFO）。
+    def take_deferred_system_messages(self, *, run_id: int | None = None) -> list[SystemMessage]:
+        """取出当前 Run 可消费的延迟系统消息，并清理旧 Run 的消息（FIFO）。
+
+        没有 ``run_id`` 标记的消息属于既有 task 级修复提示，任何 Run 都可消费；带有
+        ``run_id`` 标记的消息只允许对应 Run 消费，旧 Run 的消息会在本次取队列时丢弃，
+        避免取消或异常后的终端背压提示污染后续 Run。
+
+        参数:
+            run_id: 当前模型节点所属 Run；省略时保留无条件取队列行为。
 
         返回:
-            按入队顺序排列的系统消息列表；无排队时返回空列表。
+            按入队顺序排列且属于当前 Run 的系统消息列表；无排队时返回空列表。
         """
 
         messages: list[SystemMessage] = []
         while True:
             try:
-                messages.append(self.system_queue.get_nowait())
+                message = self.system_queue.get_nowait()
             except Empty:
                 break
+            message_run_id = message.additional_kwargs.get("run_id")
+            if run_id is None or message_run_id is None or message_run_id == run_id:
+                messages.append(message)
         return messages
 
     def has_deferred_system_messages(self) -> bool:

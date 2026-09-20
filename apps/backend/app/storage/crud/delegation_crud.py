@@ -10,19 +10,16 @@
 依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，
 必须在 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
-
 import dataclasses
 
 from sqlalchemy import ColumnElement, asc, delete, func, insert, or_, select, update
 from sqlalchemy.orm import Session
 
+from app.config.constant import Constant
 from app.models.delegation_record import DelegationRecord
 from app.storage.model.delegation_model import DelegationModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import to_text, utc_now
-
-ACTIVE_DELEGATION_STATUSES = ("pending", "running")
-"""视为「活跃」的 delegation 状态集合，用于并发额度统计与活跃列表查询。"""
 
 
 class DelegationCrud:
@@ -113,7 +110,7 @@ class DelegationCrud:
             active_count = conn.scalar(
                 select(func.count(DelegationModel.id)).where(
                     DelegationModel.parent_run_id == record.parent_run_id,
-                    DelegationModel.status.in_(ACTIVE_DELEGATION_STATUSES),
+                    DelegationModel.status.in_(Constant.Delegation.ACTIVE_DELEGATION_STATUSES),
                 )
             )
             if (active_count or 0) >= max_concurrency:
@@ -214,7 +211,7 @@ class DelegationCrud:
         """
 
         conditions: list[ColumnElement[bool]] = [
-            DelegationModel.status.in_(ACTIVE_DELEGATION_STATUSES)
+            DelegationModel.status.in_(Constant.Delegation.ACTIVE_DELEGATION_STATUSES)
         ]
         if parent_run_id is not None:
             conditions.append(DelegationModel.parent_run_id == parent_run_id)
@@ -321,6 +318,41 @@ class DelegationCrud:
             result = session.execute(stmt)
         return int(result.rowcount or 0)
 
+    def delete_by_run_id(self, run_id: int, session: Session | None = None) -> int:
+        """删除与指定 run 相关的全部 delegation 记录。
+
+        ``delegations.parent_run_id`` 是 NOT NULL 外键、``child_run_id`` 是普通外键，两者都
+        指向 ``conversation_runs.id`` 且无 ``ON DELETE`` 动作。删除单条 run 前必须清掉以该 run
+        作为 parent 或 child 的委派行，否则外键检查报错。parent 方向删除本 run 发起的委派记录，
+        child 方向删除把本 run 作为执行体的委派记录（仅删委派记录本身，不级联删除其 child_task）。
+
+        参数:
+            run_id: 目标 Conversation Run 标识。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时自开事务并
+                自动提交。
+
+        返回:
+            被删除的 delegation 行数（便于调用方审计日志）。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果删除失败。
+
+        副作用:
+            从 ``delegations`` 表删除 ``parent_run_id`` 或 ``child_run_id`` 命中的行；无匹配时
+            静默无操作，返回 0。
+        """
+
+        stmt = delete(DelegationModel).where(
+            or_(
+                DelegationModel.parent_run_id == run_id,
+                DelegationModel.child_run_id == run_id,
+            )
+        )
+        if session is not None:
+            return int(session.execute(stmt).rowcount or 0)
+        with self._session_factory.begin() as owned_session:
+            return int(owned_session.execute(stmt).rowcount or 0)
+
     def list_pending_or_running(self) -> list[DelegationRecord]:
         """列出全部活跃 delegation，按创建时间升序。
 
@@ -341,7 +373,7 @@ class DelegationCrud:
             rows = (
                 session.execute(
                     select(DelegationModel)
-                    .where(DelegationModel.status.in_(ACTIVE_DELEGATION_STATUSES))
+                    .where(DelegationModel.status.in_(Constant.Delegation.ACTIVE_DELEGATION_STATUSES))
                     .order_by(asc(DelegationModel.created_at), asc(DelegationModel.id))
                 )
                 .scalars()

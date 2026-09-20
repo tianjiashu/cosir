@@ -15,6 +15,7 @@ import time
 from typing import cast
 
 import pytest
+
 from app.config.settings import Settings
 from app.core.observability.tool_trace_recorder import _NullToolTraceRecorder
 from app.core.tools.schemas import ToolCall, ToolObservation

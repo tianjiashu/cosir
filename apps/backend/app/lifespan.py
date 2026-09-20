@@ -28,9 +28,6 @@ from app.assistant_transport.event.tool_runtime_output_adapter import (
     ToolRuntimeOutputChannelFactory,
 )
 from app.bootstate import (
-    BOOT_PHASE_FAILED,
-    BOOT_PHASE_READY,
-    BOOT_PHASE_STOPPED,
     boot_state_file_from_env,
     write_bootstate,
 )
@@ -39,14 +36,15 @@ from app.config.configuration import (
     set_agent_registry,
     set_tool_system,
 )
+from app.config.constant import Constant
 from app.config.logging.configuration import install_logging_for_current_process, shutdown_logging
 from app.config.logging.logger import log
 from app.config.settings import Settings
+from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
 from app.core.tools import ToolSystem
-from app.core.hook import HookContext, HookEvent
-from app.core.hook import HookInterceptor
+from app.core.workflows.react.workflow import ReactLikeWorkflow
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_run_executor,
@@ -89,8 +87,9 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         无。Runtime 内部会记录关闭失败。
 
     副作用:
-        按启动顺序安装日志管线、加载配置、初始化服务依赖、收敛遗留 Run 与委派、
-        创建系统级 ``.cosir`` 目录、播种 Hook 注册表、装配工具系统与 Agent Runtime，
+        按启动顺序安装日志管线、加载配置、初始化服务依赖、收敛遗留 Run、委派与
+        最近 Run 的 terminal checkpoint，创建系统级 ``.cosir`` 目录、播种 Hook 注册表、
+        装配工具系统与 Agent Runtime，
         并在就绪后写入 ``ready`` 启动状态；关闭时触发 ``SESSION_END``、关闭 Run
         executor 与终端会话、flush 观测数据、关闭服务依赖，最后写入 ``stopped``
         启动状态并卸载日志管线。
@@ -118,8 +117,28 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
                 "data": {"run_ids": [run.id for run in recovered_runs]},
             },
         )
-    get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
     get_terminal_session_service().initialize()
+    try:
+        latest_runs = get_conversation_run_service().list_latest_runs()
+        recovered_terminal_count = await ReactLikeWorkflow().recover_orphaned_terminal_checkpoints(
+            latest_runs
+        )
+        if recovered_terminal_count:
+            log.info(
+                "orphaned_terminal_sessions_recovered",
+                extra={
+                    "msg": "后端启动时已扫描并强制关闭最近 Run 的遗留 terminal",
+                    "data": {"session_count": recovered_terminal_count},
+                },
+            )
+    except Exception:
+        # terminal checkpoint recovery is a startup cleanup side path; it must not prevent the
+        # backend from becoming ready when the main database and runtime can still serve requests.
+        log.exception(
+            "orphaned_terminal_sessions_recovery_failed",
+            extra={"msg": "启动期 terminal checkpoint 恢复失败，继续启动 backend", "data": {}},
+        )
+    get_delegation_service().mark_interrupted_delegations_failed("runtime_restarted")
 
     # Hook 注册表初始化（启动期单线程播种，必须在 ToolExecutor 首次触发拦截前完成，
     # 否则 HookInterceptor 首次 fire 会拿不到注册表）。无配置层（决策 D3）。
@@ -177,7 +196,7 @@ def _mark_boot_ready() -> None:
     """
     boot_state_file = boot_state_file_from_env()
     if boot_state_file is not None:
-        write_bootstate(boot_state_file, BOOT_PHASE_READY, step="app_ready")
+        write_bootstate(boot_state_file, Constant.Boot.READY, step="app_ready")
 
 
 def _mark_boot_failed(exc: Exception) -> None:
@@ -205,11 +224,11 @@ def _mark_boot_failed(exc: Exception) -> None:
     except (OSError, json.JSONDecodeError):
         current = {}
     # ``json.loads`` 只保证是合法 JSON，不保证顶层是对象（可能是数组或标量）。
-    if not isinstance(current, dict) or current.get("phase") != "booting":
+    if not isinstance(current, dict) or current.get("phase") != Constant.Boot.BOOTING:
         return
     write_bootstate(
         boot_state_file,
-        BOOT_PHASE_FAILED,
+        Constant.Boot.FAILED,
         step="lifespan",
         error_type=type(exc).__name__,
         error_message=str(exc),
@@ -236,7 +255,7 @@ def _mark_boot_stopped() -> None:
     """
     boot_state_file = boot_state_file_from_env()
     if boot_state_file is not None:
-        write_bootstate(boot_state_file, BOOT_PHASE_STOPPED)
+        write_bootstate(boot_state_file, Constant.Boot.STOPPED)
 
 
 def _ensure_system_cosir_dir() -> None:

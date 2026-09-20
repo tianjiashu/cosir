@@ -33,10 +33,10 @@ from typing import Any
 import httpx
 
 __all__ = [
-    "resolve_httpx_proxy",
-    "build_proxy_client",
-    "build_proxy_async_client",
     "ProxyHttpClient",
+    "build_proxy_async_client",
+    "build_proxy_client",
+    "resolve_httpx_proxy",
 ]
 
 # 支持关闭自动检测的布尔值集合（与 Settings._env_bool 保持一致）。

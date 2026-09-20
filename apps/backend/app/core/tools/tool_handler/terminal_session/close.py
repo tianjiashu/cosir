@@ -1,4 +1,4 @@
-"""Hidden ``terminal_close`` handler."""
+"""``terminal_close`` handler."""
 
 from typing import ClassVar
 
@@ -9,18 +9,23 @@ from app.core.tools.schemas import (
     ToolObservation,
 )
 from app.core.tools.tool_handler.terminal_session.common import (
+    build_session_display_payload,
     cancelled,
     cancelled_observation,
     require_service,
     success_observation,
     with_terminal_errors,
 )
+from app.core.tools.tool_handler.terminal_session.descriptions import (
+    build_terminal_session_parameters_schema,
+    describe_terminal_tool,
+)
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import TerminalCloseArgs
 
 
 class TerminalCloseTool(HandlerBase):
-    """关闭 Agent 创建的终端 session；当前未注册到 Agent。"""
+    """关闭 Agent 创建的终端 session。"""
 
     name = "terminal_close"
     description = "Close an existing local terminal session and its shell process tree."
@@ -45,18 +50,20 @@ class TerminalCloseTool(HandlerBase):
             payload = require_service(execution_context).close(
                 session_id,
                 task_id=execution_context.task_id,
+                workspace_id=execution_context.workspace_id,
             )
             return success_observation(
                 self.name,
                 self.permission,
                 payload,
                 summary="Terminal session closed.",
+                display_payload=build_session_display_payload(payload),
             )
 
         return with_terminal_errors(self.name, self.permission, action)
 
     def to_definition(self) -> ToolDefinition:
-        """返回 hidden tool definition；调用方当前不得自动注册到 Agent。"""
+        """返回交互终端工具定义。"""
 
         return ToolDefinition(
             name=self.name,
@@ -71,9 +78,14 @@ class TerminalCloseTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="关闭终端",
                 icon="x",
+                variant="terminal-session-close",
                 surface="trace",
                 expandable=False,
                 expand_layout="none",
                 show_result=False,
+            ),
+            description_provider=lambda: describe_terminal_tool(self.name, self.description),
+            schema_provider=lambda: build_terminal_session_parameters_schema(
+                self.name, self.args_model
             ),
         )

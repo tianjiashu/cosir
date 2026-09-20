@@ -16,7 +16,6 @@ from app.config.logging.filter.caller_filter import CallerFilter, compute_caller
 from app.config.logging.filter.log_context_filter import LogContextFilter
 from app.config.logging.formatter.jsonl_formatter import JsonlFormatter
 from app.config.logging.logger import install_msg_relocation
-from app.models.mapped_log_record import MAX_LOG_TEXT_LENGTH
 
 # 全局允许 coding_agent.backend 及子进程 logger 使用规范约定的 extra["msg"] 键。
 # setLoggerClass 对既有 logger（如已创建的 coding_agent.backend）与子进程 logger 不可靠，
@@ -50,7 +49,6 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
-    "MAX_LOG_TEXT_LENGTH",
     "CallerFilter",
     "JsonlFormatter",
     "LogContextFilter",

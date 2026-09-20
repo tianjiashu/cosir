@@ -13,7 +13,11 @@ from app.config.logging.logger import log
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.models import ConversationRunRecord, ConversationRunStatus
-from app.service.depends import get_conversation_run_state_service, get_delegation_service
+from app.service.depends import (
+    get_conversation_run_state_service,
+    get_delegation_service,
+    get_terminal_session_service,
+)
 
 ConversationRunRunner = Callable[[ConversationRunRecord], Awaitable[None]]
 
@@ -34,10 +38,9 @@ class ConversationRunExecutor:
     本执行器只做「执行」：不拥有 run 终态（``running`` → ``completed`` / ``failed`` /
     ``cancelled`` 由 workflow 落定），也不决定业务准入（由 ``prepare_run_start`` 判定）。
 
-    取消入口同属本类但只负责发信号、不负责收束：``cancel`` 标记 run 级取消（整个 run
-    停止，并沿委派关系级联到后代 run），``cancel_tool_call`` 标记工具级取消（只中止一次
-    工具调用，run 继续）。两者的终态都由各自的消费方落定，信号本身不落库、不跨进程、
-    不跨重启。
+    取消入口同属本类：``cancel`` 标记 run 级取消并立即强制关闭该 Run 的 terminal（整个
+    run 停止，并沿委派关系级联到后代 run），``cancel_tool_call`` 标记工具级取消（只中止
+    一次工具调用，run 继续）。Run 业务终态仍由 workflow 落定；信号本身不跨进程、不跨重启。
     """
 
     def __init__(
@@ -151,12 +154,12 @@ class ConversationRunExecutor:
             )
 
     async def cancel(self, run_id: int, end_reason: str = "user_cancelled") -> bool:
-        """标记指定 run 及其后代 run 的进程内取消信号；不落库 run 终态、不直接中断后台 task。
+        """标记指定 run 及其后代 run 的取消信号，并立即关闭本 Run 的 terminal。
 
-        本方法只负责「发送取消信号」一件事：在进程内取消信号源标记 ``run_id``，使工具
-        /runner 在轮询信号时能协作停止。run 的终态转移（active → cancelled）由 workflow
-        经 run_service 负责，本方法不触碰 run 状态列；后台 asyncio task 也不直接取消，
-        而是由 runner 观察到信号后自行收束（全局收口由 ``close`` 统一取消）。
+        本方法在进程内取消信号源标记 ``run_id``，使工具/runner 在轮询信号时能协作停止，
+        并同步关闭该 Run 当前 registry 中的全部 terminal worker。run 的终态转移（active →
+        cancelled）由 workflow 经 run_service 负责，本方法不触碰 run 状态列；后台 asyncio
+        task 也不直接取消，而是由 runner 观察到信号后自行收束。
 
         存在性预检：mark 之后立刻确认 run 存在，不存在则回滚已标记的信号再抛
         ``KeyError``，保持「信号已标记」与「run 真实存在」的一致性。mark 与存在性检查之间
@@ -169,8 +172,7 @@ class ConversationRunExecutor:
 
         参数:
             run_id: 待取消的运行标识。
-            end_reason: 保留形参，本方法不消费（run 终态的 end_reason 由 workflow 落定），
-                保留以兼容调用方签名。
+            end_reason: 写入 terminal 关闭事件的原因；Run 终态的 end_reason 仍由 workflow 落定。
 
         返回:
             信号为新标记（取消请求已发出）返回 ``True``；run 已被标记取消返回 ``False``。
@@ -180,8 +182,9 @@ class ConversationRunExecutor:
                 由 API 层映射为 404。
 
         副作用:
-            向进程内取消信号源写入 ``run_id`` 及其全部后代 run；run 不存在时回滚该信号；
-            不发起状态落库、不取消 asyncio task。HTTP 订阅断开不会调用本方法。
+            向进程内取消信号源写入 ``run_id`` 及其全部后代 run，并强制关闭本 Run 的 terminal；
+            run 不存在时回滚该信号；不发起 Run 状态落库、不取消 asyncio task。HTTP 订阅断开
+            不会调用本方法。
         """
 
         # 标记是同步集合操作且在第一个 await 之前完成：本调用返回后，该 run 的取消
@@ -195,6 +198,9 @@ class ConversationRunExecutor:
         except KeyError:
             self._signal.clear(run_id)
             raise
+        # 取消请求必须立即关闭本 Run 的 PTY；workflow 之后仍会协作收束，
+        # ``_execute`` 的 finally 还会再次幂等兜底。
+        get_terminal_session_service().close_run_terminals(run_id, reason=end_reason)
         # 级联放在存在性确认之后：不存在的 run 不可能有后代 run，同时避免 404 路径白查一次库。
         try:
             self._cancel_descendant_runs(run_id)
@@ -314,7 +320,8 @@ class ConversationRunExecutor:
         """驱动 runner 执行一次 ConversationRun；执行器不拥有 run 终态。
 
         本方法只负责「执行」：读取 run 后把控制权交给 ``runner`` 跑完整个 workflow，
-        退出时从进程内 ``_executions`` 注销本次执行。它不落库、不落定 run 终态
+        退出时关闭本 Run 的 terminal 并从进程内 ``_executions`` 注销本次执行。它不落库、
+        不落定 run 终态
         （running → completed/failed/cancelled 由 workflow 内部经 run_service 落定），
         也不清理进程内取消信号（该清理由 ``AgentRuntime`` 的收尾负责）。
 
@@ -333,18 +340,31 @@ class ConversationRunExecutor:
 
         副作用:
             runner 抛 ``Exception`` 时先经 ``_project_tools_settled`` 投影工具失败收束
-            （该投影失败只记日志，不替换原始异常）；退出时若本次执行仍在 ``_executions``
-            中登记且当前 task 就是登记的那个 task，则移除该登记；不改写 run 状态列、
-            不清理取消信号。
+            （该投影失败只记日志，不替换原始异常）；退出时强制关闭 terminal，并在本次执行
+            仍登记且当前 task 就是登记 task 时移除该登记；不改写 run 状态列、不清理取消信号。
         """
         try:
             run = self._run_service.get_run(run_id)
+            get_terminal_session_service().begin_run(run_id)
             try:
                 await runner(run)
             except Exception as e:
                 self._project_tools_settled(run_id, "failed", "runtime_failed")
                 raise e
         finally:
+            try:
+                get_terminal_session_service().close_run_terminals(
+                    run_id,
+                    reason="run_execution_finished",
+                )
+            except Exception:
+                log.exception(
+                    "conversation_run_terminal_cleanup_failed",
+                    extra={
+                        "msg": "Run 收尾时 Terminal Worker 清理失败",
+                        "data": {"run_id": run_id},
+                    },
+                )
             current = self._executions.get(run_id)
             try:
                 current_task = asyncio.current_task()

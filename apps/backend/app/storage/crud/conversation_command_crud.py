@@ -261,3 +261,32 @@ class ConversationCommandCrud:
                     ConversationCommandModel.task_id.in_(task_ids)
                 )
             )
+
+    def delete_by_run_id(self, run_id: int, session: Session | None = None) -> None:
+        """删除绑定到指定 run 的全部命令记录。
+
+        ``conversation_commands.run_id`` 外键指向 ``conversation_runs.id`` 且无 ``ON DELETE``
+        动作，删除单条 run（非整任务）前必须先删掉以该 run 为目标的命令行，否则 SQLite 即时
+        外键检查会报 ``FOREIGN KEY constraint failed``。与按 ``task_id`` 的整任务清理不同，
+        本方法只按 ``run_id`` 精确删除。
+
+        参数:
+            run_id: 目标 Conversation Run 标识。
+            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时自开事务并
+                自动提交。
+
+        返回:
+            无。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 底层删除失败。
+
+        副作用:
+            删除 ``conversation_commands`` 中 ``run_id`` 命中的行；无匹配时静默无操作。
+        """
+        stmt = delete(ConversationCommandModel).where(ConversationCommandModel.run_id == run_id)
+        if session is not None:
+            session.execute(stmt)
+            return
+        with self._session_factory.begin() as owned_session:
+            owned_session.execute(stmt)

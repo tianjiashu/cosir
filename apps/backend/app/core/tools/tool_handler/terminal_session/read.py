@@ -1,4 +1,4 @@
-"""Hidden ``terminal_read`` handler."""
+"""``terminal_read`` handler."""
 
 from typing import ClassVar
 
@@ -9,18 +9,23 @@ from app.core.tools.schemas import (
     ToolObservation,
 )
 from app.core.tools.tool_handler.terminal_session.common import (
+    build_session_display_payload,
     cancelled,
     cancelled_observation,
     require_service,
     success_observation,
     with_terminal_errors,
 )
+from app.core.tools.tool_handler.terminal_session.descriptions import (
+    build_terminal_session_parameters_schema,
+    describe_terminal_tool,
+)
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import TerminalReadArgs
 
 
 class TerminalReadTool(HandlerBase):
-    """按 cursor 非破坏性读取 session 输出；当前未注册到 Agent。"""
+    """按 cursor 非破坏性读取 session 输出。"""
 
     name = "terminal_read"
     description = "Read new output from a local terminal session using an output sequence cursor."
@@ -47,6 +52,7 @@ class TerminalReadTool(HandlerBase):
             result = require_service(execution_context).read(
                 session_id,
                 task_id=execution_context.task_id,
+                workspace_id=execution_context.workspace_id,
                 after_seq=after_seq,
                 wait_ms=wait_ms,
                 is_cancelled=lambda: cancelled(execution_context),
@@ -58,12 +64,15 @@ class TerminalReadTool(HandlerBase):
                 self.permission,
                 {"session_id": session_id, **result.to_dict()},
                 summary="Terminal output read.",
+                display_payload=build_session_display_payload(
+                    {"session_id": session_id, **result.to_dict()},
+                ),
             )
 
         return with_terminal_errors(self.name, self.permission, action)
 
     def to_definition(self) -> ToolDefinition:
-        """返回 hidden tool definition；调用方当前不得自动注册到 Agent。"""
+        """返回交互终端工具定义。"""
 
         return ToolDefinition(
             name=self.name,
@@ -78,9 +87,14 @@ class TerminalReadTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="读取终端",
                 icon="terminal",
+                variant="terminal-session-read",
                 surface="trace",
-                expandable=True,
-                expand_layout="terminal",
+                expandable=False,
+                expand_layout="none",
                 show_result=False,
+            ),
+            description_provider=lambda: describe_terminal_tool(self.name, self.description),
+            schema_provider=lambda: build_terminal_session_parameters_schema(
+                self.name, self.args_model
             ),
         )

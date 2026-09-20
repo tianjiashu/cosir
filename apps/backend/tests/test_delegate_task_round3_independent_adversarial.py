@@ -488,7 +488,7 @@ def test_concurrent_projection_stable(tool_system_after_injection: ToolSystem) -
                 payload = definition.to_model_tool_definition()
                 with lock:
                     results.append(payload)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             with lock:
                 errors.append(exc)
 

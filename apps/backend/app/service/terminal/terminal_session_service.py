@@ -2,6 +2,7 @@
 
 该服务拥有 session registry、PTY worker client、输出 seq/ring buffer 和只读预览订阅。
 它不注册 Agent tool、不承载 Assistant UI 类型，也不把 PTY 输出写入 conversation snapshot。
+ring buffer 只负责进程内 cursor 连续性；模型可见输出预算由统一的 ToolOutputBudget 负责。
 """
 
 from __future__ import annotations
@@ -17,8 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy.orm import Session
+from langchain_core.messages import SystemMessage
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.models.terminal_session_record import TerminalSessionRecord
@@ -29,6 +31,7 @@ from app.service.terminal.errors import (
     TerminalSessionOwnershipError,
     TerminalSessionResyncRequiredError,
     TerminalSessionStateError,
+    TerminalWorkerBackpressureError,
     TerminalWorkerUnavailableError,
 )
 from app.service.terminal.shell_resolver import ShellResolver
@@ -38,34 +41,20 @@ from app.service.terminal.worker import (
     TerminalWorkerFactory,
     new_worker_instance_id,
 )
-from app.storage.crud.terminal_session_crud import TerminalSessionCrud
-from app.utils.datetime_utils import to_text, utc_now
-
-MAX_ACTIVE_SESSIONS = 32
-MAX_RING_BUFFER_BYTES = 1024 * 1024
-MAX_PREVIEW_QUEUE_FRAMES = 256
-MAX_PREVIEW_QUEUE_BYTES = 1024 * 1024
-MAX_AGENT_INPUT_BYTES = 64 * 1024
-MAX_AGENT_READ_BYTES = 64 * 1024
-MAX_WORKER_OUTPUT_CHUNK_BYTES = 16 * 1024
-DEFAULT_MAX_LIFETIME_SECONDS = 8 * 60 * 60
-DEFAULT_IDLE_TIMEOUT_SECONDS = 30 * 60
-SWEEPER_INTERVAL_SECONDS = 30
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.utils.datetime_utils import utc_now
 
 RunCancellationCheck = Callable[[], bool]
 
 
 @dataclass(frozen=True)
 class TerminalReadResult:
-    """按 cursor 返回的非破坏性输出读取结果。"""
+    """按 cursor 返回的非破坏性输出读取结果，不在此层施加模型输出预算。"""
 
     output: tuple[dict[str, object], ...]
     next_seq: int
     first_available_seq: int
     status: str
-    cols: int
-    rows: int
-    truncated: bool
 
     def to_dict(self) -> dict[str, object]:
         """转换为工具/API 可序列化的 UTF-8 文本视图。
@@ -80,9 +69,6 @@ class TerminalReadResult:
             "next_seq": self.next_seq,
             "first_available_seq": self.first_available_seq,
             "status": self.status,
-            "cols": self.cols,
-            "rows": self.rows,
-            "truncated": self.truncated,
         }
 
 
@@ -104,7 +90,9 @@ class TerminalPreviewSubscription:
 
         import queue
 
-        self._queue: queue.Queue[dict[str, object]] = queue.Queue(maxsize=MAX_PREVIEW_QUEUE_FRAMES)
+        self._queue: queue.Queue[dict[str, object]] = queue.Queue(
+            maxsize=Constant.Terminal.MAX_PREVIEW_QUEUE_FRAMES
+        )
         self._queue_bytes = 0
         self._lock = threading.Lock()
         self._replaying = True
@@ -129,17 +117,17 @@ class TerminalPreviewSubscription:
             if self._overflowed:
                 return
             if self._replaying:
-                if len(self._pending) >= MAX_PREVIEW_QUEUE_FRAMES:
+                if len(self._pending) >= Constant.Terminal.MAX_PREVIEW_QUEUE_FRAMES:
                     self._mark_overflow_locked()
                     return
                 self._pending.append(event)
                 self._pending_bytes += _event_size(event)
-                if self._pending_bytes > MAX_PREVIEW_QUEUE_BYTES:
+                if self._pending_bytes > Constant.Terminal.MAX_PREVIEW_QUEUE_BYTES:
                     self._mark_overflow_locked()
                 return
             try:
                 event_bytes = _event_size(event)
-                if self._queue_bytes + event_bytes > MAX_PREVIEW_QUEUE_BYTES:
+                if self._queue_bytes + event_bytes > Constant.Terminal.MAX_PREVIEW_QUEUE_BYTES:
                     self._mark_overflow_locked()
                     return
                 self._queue.put_nowait(event)
@@ -210,7 +198,9 @@ class _SessionRuntime:
     def __init__(self, record: TerminalSessionRecord, worker: TerminalWorker | None) -> None:
         self.record = record
         self.worker = worker
-        self.generation = record.worker_instance_id
+        # worker_instance_id is persisted diagnostic identity; generation is the
+        # ephemeral callback fence for this in-process runtime attach.
+        self.generation = f"gen_{uuid.uuid4().hex}"
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.frames: deque[dict[str, object]] = deque()
@@ -231,47 +221,38 @@ class TerminalSessionService:
 
     该服务是 backend 进程内唯一的 session registry owner。它只接受来自 Agent tool
     handler 或 backend API 的调用；前端 WebSocket 只能订阅输出，不能通过本服务改变
-    PTY 状态。session 元数据由 ``TerminalSessionCrud`` 持久化，PTY 和 ring buffer
-    不跨 backend 重启恢复。
+    PTY 状态。session 元数据只作为 Run 级 workflow state 的可序列化投影进入 checkpoint；
+    PTY 和 ring buffer 不跨 backend 重启恢复。
     """
 
     def __init__(
         self,
-        crud: TerminalSessionCrud | None = None,
         worker_factory: TerminalWorkerFactory | None = None,
         shell_resolver: ShellResolver | None = None,
         *,
-        max_active_sessions: int = MAX_ACTIVE_SESSIONS,
-        ring_buffer_bytes: int = MAX_RING_BUFFER_BYTES,
+        max_active_sessions: int = Constant.Terminal.MAX_ACTIVE_SESSIONS,
+        ring_buffer_bytes: int = Constant.Terminal.MAX_RING_BUFFER_BYTES,
     ) -> None:
         """创建服务；不启动 worker。"""
 
-        self._crud = crud
         self._worker_factory = worker_factory or ProcessTerminalWorkerFactory()
         self._shell_resolver = shell_resolver or ShellResolver()
         self._max_active_sessions = max_active_sessions
         self._ring_buffer_bytes = ring_buffer_bytes
         self._registry: dict[str, _SessionRuntime] = {}
         self._registry_lock = threading.RLock()
+        self._closing_runs: set[int] = set()
+        self._backpressure_notified_runs: set[tuple[int, int]] = set()
+        self._write_operations: dict[tuple[str, str], tuple[bytes, TerminalReadResult | None]] = {}
+        self._write_operations_condition = threading.Condition(threading.RLock())
         self._accepting = True
         self._sweeper_stop = threading.Event()
         self._sweeper_thread: threading.Thread | None = None
 
     def initialize(self) -> list[str]:
-        """执行 backend 启动期 orphan recovery。"""
+        """启动 sweeper；活终端不跨 backend 重启恢复。"""
 
-        if self._crud is None:
-            recovered = []
-        else:
-            recovered = self._crud.recover_active()
-            if recovered:
-                log.info(
-                    "terminal_sessions_recovered_after_restart",
-                    extra={
-                        "msg": "启动时收敛遗留 terminal session",
-                        "data": {"session_ids": recovered},
-                    },
-                )
+        recovered: list[str] = []
         if self._sweeper_thread is None:
             self._sweeper_stop.clear()
             self._sweeper_thread = threading.Thread(
@@ -290,14 +271,14 @@ class TerminalSessionService:
         workspace_root: str,
         shell: str = "auto",
         cwd: str | None = None,
-        cols: int = 120,
-        rows: int = 32,
-        created_by_run_id: int | None = None,
+        run_id: int,
     ) -> dict[str, object]:
         """创建一个由 Agent 驱动的交互式 shell session。"""
 
         self._ensure_accepting()
-        _validate_initial_dimensions(cols, rows)
+        with self._registry_lock:
+            if run_id in self._closing_runs:
+                raise TerminalSessionStateError("run is already closing")
         cwd_path = self._resolve_cwd(workspace_root, cwd)
         shell_spec = self._shell_resolver.resolve(shell)
         instance_id = new_worker_instance_id()
@@ -307,7 +288,7 @@ class TerminalSessionService:
             session_id=session_id,
             task_id=task_id,
             workspace_id=workspace_id,
-            created_by_run_id=created_by_run_id,
+            run_id=run_id,
             initial_cwd=str(cwd_path),
             shell_kind=shell_spec.kind,
             shell_executable=shell_spec.executable,
@@ -316,35 +297,36 @@ class TerminalSessionService:
             status="starting",
             end_reason=None,
             exit_code=None,
-            cols=cols,
-            rows=rows,
             created_at=now,
             updated_at=now,
             last_activity_at=now,
             ended_at=None,
         )
         with self._registry_lock:
+            if run_id in self._closing_runs:
+                raise TerminalSessionStateError("run is already closing")
             self._ensure_capacity_locked()
-            persisted = self._crud_create(record)
-            try:
-                worker = self._worker_factory.create(instance_id)
-            except Exception as exc:
-                self._persist_start_failure(
-                    record,
-                    f"worker_create_failed: {type(exc).__name__}",
-                )
-                raise
-            runtime = _SessionRuntime(persisted, worker)
+            worker = self._worker_factory.create(instance_id)
+            runtime = _SessionRuntime(record, worker)
             self._registry[session_id] = runtime
         try:
             worker.start(
                 shell_spec,
                 str(cwd_path),
-                cols,
-                rows,
-                lambda event: self._on_worker_event(session_id, event),
+                lambda event, generation=runtime.generation: self._on_worker_event(
+                    session_id, generation, event
+                ),
             )
             self._update_runtime(runtime, status="running", worker_pid=worker.pid)
+            with self._registry_lock:
+                stale = (
+                    run_id in self._closing_runs
+                    or self._registry.get(session_id) is not runtime
+                )
+            if stale:
+                with suppress(Exception):
+                    worker.close()
+                raise TerminalSessionStateError("run is already closing")
         except Exception as exc:
             self._fail_runtime(runtime, f"worker_start_failed: {type(exc).__name__}")
             with suppress(Exception):
@@ -360,6 +342,8 @@ class TerminalSessionService:
         *,
         task_id: int,
         data: bytes,
+        operation_id: str | None = None,
+        workspace_id: int | None = None,
         after_seq: int | None = None,
         wait_ms: int = 0,
         is_cancelled: RunCancellationCheck | None = None,
@@ -368,40 +352,81 @@ class TerminalSessionService:
 
         if not data:
             raise TerminalSessionError("terminal input must not be empty")
-        if len(data) > MAX_AGENT_INPUT_BYTES:
+        if len(data) > Constant.Terminal.MAX_AGENT_INPUT_BYTES:
             raise TerminalSessionError("terminal input exceeds 64 KiB")
-        runtime = self._require_runtime(session_id, task_id)
+        runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
+        operation_key = (session_id, operation_id) if operation_id else None
+        if operation_key is not None:
+            with self._write_operations_condition:
+                while True:
+                    existing = self._write_operations.get(operation_key)
+                    if existing is None:
+                        self._write_operations[operation_key] = (data, None)
+                        break
+                    existing_data, existing_result = existing
+                    if existing_data != data:
+                        raise TerminalSessionError(
+                            "terminal operation_id was reused with different input"
+                        )
+                    if existing_result is not None:
+                        return existing_result
+                    self._write_operations_condition.wait(timeout=0.05)
         with runtime.lock:
-            self._ensure_mutable(runtime)
-            worker = runtime.worker
-            if worker is None:
-                raise TerminalSessionStateError("terminal session has no active worker")
             try:
+                self._ensure_mutable(runtime)
+                worker = runtime.worker
+                if worker is None:
+                    raise TerminalSessionStateError("terminal session has no active worker")
                 worker.write(data)
+            except TerminalWorkerBackpressureError:
+                self._defer_backpressure_message(runtime)
+                if operation_key is not None:
+                    self._forget_write_operation(operation_key)
+                raise
             except TerminalWorkerUnavailableError:
                 self._fail_runtime(runtime, "worker_unavailable")
+                if operation_key is not None:
+                    self._forget_write_operation(operation_key)
+                raise
+            except Exception:
+                if operation_key is not None:
+                    self._forget_write_operation(operation_key)
                 raise
             self._touch(runtime)
-        return self.read(
-            session_id,
-            task_id=task_id,
-            after_seq=after_seq,
-            wait_ms=wait_ms,
-            is_cancelled=is_cancelled,
-        )
+        try:
+            result = self.read(
+                session_id,
+                task_id=task_id,
+                workspace_id=workspace_id,
+                after_seq=after_seq,
+                wait_ms=wait_ms,
+                is_cancelled=is_cancelled,
+            )
+        except Exception:
+            if operation_key is not None:
+                self._forget_write_operation(operation_key)
+            raise
+        if operation_key is not None:
+            with self._write_operations_condition:
+                self._write_operations[operation_key] = (data, result)
+                while len(self._write_operations) > 4096:
+                    self._write_operations.pop(next(iter(self._write_operations)))
+                self._write_operations_condition.notify_all()
+        return result
 
     def read(
         self,
         session_id: str,
         *,
         task_id: int,
+        workspace_id: int | None = None,
         after_seq: int | None = None,
         wait_ms: int = 1000,
         is_cancelled: RunCancellationCheck | None = None,
     ) -> TerminalReadResult:
         """按 output cursor 非破坏性读取 session 输出。"""
 
-        runtime = self._require_runtime(session_id, task_id)
+        runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
         wait_seconds = max(0, min(wait_ms, 30_000)) / 1000
         deadline = time.monotonic() + wait_seconds
         with runtime.condition:
@@ -417,12 +442,19 @@ class TerminalSessionService:
                     return result
                 runtime.condition.wait(timeout=min(remaining, 0.05))
 
-    def signal(self, session_id: str, *, task_id: int, signal_name: str) -> dict[str, object]:
+    def signal(
+        self,
+        session_id: str,
+        *,
+        task_id: int,
+        workspace_id: int | None = None,
+        signal_name: str,
+    ) -> dict[str, object]:
         """由 Agent 向 PTY 发送平台无关的 signal。"""
 
         if signal_name not in {"interrupt", "eof", "suspend"}:
             raise TerminalSessionError(f"unsupported terminal signal: {signal_name}")
-        runtime = self._require_runtime(session_id, task_id)
+        runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
         with runtime.lock:
             self._ensure_mutable(runtime)
             if runtime.worker is None:
@@ -442,21 +474,22 @@ class TerminalSessionService:
                 self._fail_runtime(runtime, "worker_unavailable")
                 raise
             self._touch(runtime)
-        return self.snapshot(session_id, task_id=task_id)
+        return self.snapshot(session_id, task_id=task_id, workspace_id=workspace_id)
 
     def close(
         self,
         session_id: str,
         *,
         task_id: int,
+        workspace_id: int | None = None,
         reason: str = "agent_closed",
     ) -> dict[str, object]:
         """显式关闭 session；重复关闭只返回当前终态。"""
 
-        runtime = self._require_runtime(session_id, task_id)
+        runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
         with runtime.lock:
             if runtime.status in {"closed", "exited", "interrupted", "failed"}:
-                return self.snapshot(session_id, task_id=task_id)
+                return self.snapshot(session_id, task_id=task_id, workspace_id=workspace_id)
             worker = runtime.worker
             self._update_runtime(
                 runtime,
@@ -468,12 +501,18 @@ class TerminalSessionService:
         if worker is not None:
             worker.close()
         self._publish_status(runtime)
-        return self.snapshot(session_id, task_id=task_id)
+        return self.snapshot(session_id, task_id=task_id, workspace_id=workspace_id)
 
-    def snapshot(self, session_id: str, *, task_id: int) -> dict[str, object]:
+    def snapshot(
+        self,
+        session_id: str,
+        *,
+        task_id: int,
+        workspace_id: int | None = None,
+    ) -> dict[str, object]:
         """读取 session 当前元数据和 cursor watermark。"""
 
-        runtime = self._require_runtime(session_id, task_id)
+        runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
         with runtime.lock:
             first_available = _first_available_seq(runtime)
             return {
@@ -511,8 +550,6 @@ class TerminalSessionService:
                 "first_available_seq": first_available,
                 "next_seq": runtime.next_seq,
                 "status": runtime.status,
-                "cols": runtime.record.cols,
-                "rows": runtime.record.rows,
             }
             terminal_event = (
                 _terminal_event(runtime)
@@ -569,48 +606,104 @@ class TerminalSessionService:
             self._sweeper_thread.join(timeout=2)
         self._sweeper_thread = None
 
-    def delete_task_sessions(
-        self,
-        task_ids: Iterable[int],
-        session: Session | None = None,
-    ) -> int:
-        """在 Task 删除前关闭 worker，并在调用方事务中删除 session 元数据。
+    def delete_task_sessions(self, task_ids: Iterable[int]) -> int:
+        """在 Task 删除前关闭其仍存活的 terminal worker。
 
-        该方法不会调用 ``close`` 的独立数据库事务，避免和 Task 级删除事务互相锁定；
-        session 行会随调用方事务删除，worker/subscriber 则在进程内立即释放。
+        终端元数据属于 checkpoint，不存在主库行需要删除；此方法仅释放当前进程资源。
         """
 
         ids = set(task_ids)
         if not ids:
             return 0
+        closed = self._close_matching(
+            lambda runtime: runtime.record.task_id in ids,
+            reason="task_deleted",
+            log_event="terminal_session_task_delete_worker_close_failed",
+        )
         with self._registry_lock:
-            runtimes = [
-                runtime for runtime in self._registry.values() if runtime.record.task_id in ids
-            ]
+            self._backpressure_notified_runs = {
+                key for key in self._backpressure_notified_runs if key[0] not in ids
+            }
+        return closed
+
+    def begin_run(self, run_id: int) -> None:
+        """允许一个新的执行轮次创建 terminal。
+
+        同一 ``ConversationRun`` 业务 resume 时，旧轮次的 terminal 已经被关闭；
+        resume 会在新的工具调用中创建新的 session，而不会复用旧 PTY。
+        """
+
+        with self._registry_lock:
+            self._closing_runs.discard(run_id)
+
+    def close_run_terminals(self, run_id: int, *, reason: str = "run_finished") -> int:
+        """幂等强制关闭一个 Run 持有的全部 terminal worker。
+
+        先设置 closing fence 并从 registry 脱离 session，阻止迟到的工具调用重新写入；
+        然后发布终态、关闭 subscriber，并调用 worker 的 shutdown/terminate/kill 兜底。
+        不修改 checkpoint；Run 状态由 ConversationRunModel 负责，checkpoint 只保存工具
+        操作期间已投影的终端元数据。
+        """
+
+        with self._registry_lock:
+            self._closing_runs.add(run_id)
+        closed = self._close_matching(
+            lambda runtime: runtime.record.run_id == run_id,
+            reason=reason,
+            log_event="terminal_session_run_close_worker_failed",
+        )
+        with self._registry_lock:
+            self._backpressure_notified_runs = {
+                key for key in self._backpressure_notified_runs if key[1] != run_id
+            }
+        return closed
+
+    def _close_matching(
+        self,
+        predicate: Callable[[_SessionRuntime], bool],
+        *,
+        reason: str,
+        log_event: str,
+    ) -> int:
+        """脱离并关闭满足条件的 session；不触碰 checkpoint 或主库。"""
+
+        with self._registry_lock:
+            runtimes = [runtime for runtime in self._registry.values() if predicate(runtime)]
             for runtime in runtimes:
                 self._registry.pop(runtime.record.session_id, None)
         for runtime in runtimes:
+            worker: TerminalWorker | None
             with runtime.lock:
+                if runtime.status in {"starting", "running"}:
+                    self._update_runtime(
+                        runtime,
+                        status="closed",
+                        end_reason=reason,
+                        ended_at=utc_now(),
+                )
                 worker = runtime.worker
-                for subscriber in tuple(runtime.subscribers):
-                    subscriber.close()
+                runtime.worker = None
+                self._publish_status(runtime)
                 runtime.subscribers.clear()
+                runtime.condition.notify_all()
             if worker is not None:
                 try:
                     worker.close()
                 except Exception:
                     log.exception(
-                        "terminal_session_task_delete_worker_close_failed",
+                        log_event,
                         extra={
-                            "msg": "Task 删除时 Terminal Worker 关闭失败",
-                            "data": {"session_id": runtime.record.session_id},
+                            "msg": "Terminal Worker 强制关闭失败",
+                            "data": {
+                                "session_id": runtime.record.session_id,
+                                "run_id": runtime.record.run_id,
+                                "reason": reason,
+                            },
                         },
                     )
-        if self._crud is None:
-            return 0
-        return self._crud.delete_by_task_ids(ids, session)
+        return len(runtimes)
 
-    def _on_worker_event(self, session_id: str, event: object) -> None:
+    def _on_worker_event(self, session_id: str, generation: str, event: object) -> None:
         """将 worker 事件投影到 session runtime。"""
 
         if not isinstance(event, dict):
@@ -619,17 +712,67 @@ class TerminalSessionService:
             runtime = self._registry.get(session_id)
         if runtime is None:
             return
+        if runtime.generation != generation:
+            log.warning(
+                "terminal_session_stale_worker_event",
+                extra={
+                    "msg": "丢弃旧 Terminal Worker callback",
+                    "data": {"session_id": session_id},
+                },
+            )
+            return
         event_type = event.get("type")
         if event_type == "handshake":
             return
         if event_type == "output":
             self._on_output(runtime, event)
-        elif event_type == "status":
-            self._on_status(runtime, event)
         elif event_type == "error":
             self._on_worker_error(runtime, event)
         elif event_type == "exit":
             self._on_exit(runtime, event)
+
+    def _forget_write_operation(self, operation_key: tuple[str, str]) -> None:
+        """Remove a failed in-flight operation and wake a retrying caller."""
+
+        with self._write_operations_condition:
+            self._write_operations.pop(operation_key, None)
+            self._write_operations_condition.notify_all()
+
+    def _defer_backpressure_message(self, runtime: _SessionRuntime) -> None:
+        """在输入队列背压时向该 Task 延迟注入一次可重试提示。"""
+
+        run_key = (runtime.record.task_id, runtime.record.run_id)
+        with self._registry_lock:
+            if run_key in self._backpressure_notified_runs:
+                return
+            self._backpressure_notified_runs.add(run_key)
+        try:
+            task_runtime_spaces.get_or_create(runtime.record.task_id).defer_system_message(
+                SystemMessage(
+                    content=(
+                        "The terminal input queue is temporarily full. Wait briefly for "
+                        "the terminal worker to drain, then retry terminal_write."
+                    ),
+                    additional_kwargs={
+                        "source": "terminal_input_backpressure",
+                        "run_id": runtime.record.run_id,
+                    },
+                )
+            )
+        except Exception:
+            with self._registry_lock:
+                self._backpressure_notified_runs.discard(run_key)
+            log.warning(
+                "terminal_session_backpressure_message_defer_failed",
+                extra={
+                    "msg": "Terminal 输入队列背压提示注入失败",
+                    "data": {
+                        "session_id": runtime.record.session_id,
+                        "task_id": runtime.record.task_id,
+                        "run_id": runtime.record.run_id,
+                    },
+                },
+            )
 
     def _on_output(self, runtime: _SessionRuntime, event: dict[str, object]) -> None:
         """接收 worker output 并广播到 ring buffer/subscribers。"""
@@ -642,7 +785,7 @@ class TerminalSessionService:
         except (ValueError, TypeError):
             self._fail_runtime(runtime, "invalid_worker_output")
             return
-        if not data or len(data) > MAX_WORKER_OUTPUT_CHUNK_BYTES:
+        if not data or len(data) > Constant.Terminal.MAX_WORKER_OUTPUT_CHUNK_BYTES:
             self._fail_runtime(runtime, "worker_output_chunk_too_large")
             return
         with runtime.condition:
@@ -666,17 +809,6 @@ class TerminalSessionService:
                 subscriber.publish(frame)
             runtime.condition.notify_all()
         self._touch(runtime)
-
-    def _on_status(self, runtime: _SessionRuntime, event: dict[str, object]) -> None:
-        """处理 worker 的初始 status 事件并同步 session 元数据。"""
-
-        cols = _positive_int(event.get("cols"))
-        rows = _positive_int(event.get("rows"))
-        with runtime.condition:
-            if cols is not None or rows is not None:
-                self._update_runtime(runtime, cols=cols, rows=rows)
-            self._publish_status(runtime)
-            runtime.condition.notify_all()
 
     def _on_exit(self, runtime: _SessionRuntime, event: dict[str, object]) -> None:
         """把 worker 退出映射为唯一 session 终态。"""
@@ -728,8 +860,6 @@ class TerminalSessionService:
             "session_id": runtime.record.session_id,
             "generation": runtime.generation,
             "status": runtime.status,
-            "cols": runtime.record.cols,
-            "rows": runtime.record.rows,
         }
         if runtime.status in {"exited", "interrupted", "failed", "closed"}:
             event = _terminal_event(runtime)
@@ -755,23 +885,24 @@ class TerminalSessionService:
             with suppress(Exception):
                 worker.close()
 
-    def _require_runtime(self, session_id: str, task_id: int) -> _SessionRuntime:
-        """取得 active runtime 或从持久化终态构造只读 runtime。"""
+    def _require_runtime(
+        self,
+        session_id: str,
+        task_id: int,
+        *,
+        workspace_id: int | None = None,
+    ) -> _SessionRuntime:
+        """取得当前 backend 进程中的 active runtime。"""
 
         with self._registry_lock:
             runtime = self._registry.get(session_id)
             if runtime is not None:
-                if runtime.record.task_id != task_id:
+                if runtime.record.task_id != task_id or (
+                    workspace_id is not None and runtime.record.workspace_id != workspace_id
+                ):
                     raise TerminalSessionOwnershipError("terminal session does not belong to task")
                 return runtime
-        record = self._crud_get(session_id)
-        if record.task_id != task_id:
-            raise TerminalSessionOwnershipError("terminal session does not belong to task")
-        if record.status in {"starting", "running"}:
-            raise TerminalSessionStateError("terminal session is not available in this process")
-        runtime = _SessionRuntime(record, None)
-        with self._registry_lock:
-            return self._registry.setdefault(session_id, runtime)
+        raise TerminalSessionNotFoundError(session_id)
 
     @staticmethod
     def _resolve_cwd(workspace_root: str, cwd: str | None) -> Path:
@@ -843,120 +974,41 @@ class TerminalSessionService:
         """在 session lock 下生成 cursor 增量。"""
 
         selected: list[dict[str, object]] = []
-        selected_bytes = 0
-        truncated = False
         for frame in runtime.frames:
             if after_seq is not None and _frame_seq(frame) <= after_seq:
                 continue
-            frame_bytes = _frame_bytes(frame)
-            if selected and selected_bytes + frame_bytes > MAX_AGENT_READ_BYTES:
-                truncated = True
-                break
             selected.append(frame)
-            selected_bytes += frame_bytes
         return TerminalReadResult(
             output=tuple(selected),
             next_seq=runtime.next_seq,
             first_available_seq=_first_available_seq(runtime),
             status=runtime.status,
-            cols=runtime.record.cols,
-            rows=runtime.record.rows,
-            truncated=truncated,
         )
 
     def _touch(self, runtime: _SessionRuntime) -> None:
-        """刷新 activity 元数据；失败不影响 PTY 主流程。"""
+        """刷新进程内 activity 元数据；不写主库。"""
 
         now_datetime = utc_now()
-        now = to_text(now_datetime)
         with runtime.lock:
             runtime.record = _replace_record(runtime.record, "last_activity_at", now_datetime)
             monotonic_now = time.monotonic()
             if monotonic_now - runtime.last_touch_monotonic < 1.0:
                 return
             runtime.last_touch_monotonic = monotonic_now
-            try:
-                runtime.record = self._crud_update(runtime.record.session_id, last_activity_at=now)
-            except Exception:
-                log.warning(
-                    "terminal_session_activity_persist_failed",
-                    extra={
-                        "msg": "Terminal session activity 持久化失败",
-                        "data": {"session_id": runtime.record.session_id},
-                    },
-                )
 
     def _update_runtime(self, runtime: _SessionRuntime, **values: object) -> None:
-        """更新进程内 record，并尽力持久化。"""
+        """更新进程内 record；checkpoint 投影由 workflow 工具节点完成。"""
 
         current = runtime.record
         for name, value in values.items():
             if value is not None and hasattr(current, name):
                 current = _replace_record(current, name, value)
         runtime.record = current
-        try:
-            runtime.record = self._crud_update(current.session_id, **values)
-        except Exception:
-            log.exception(
-                "terminal_session_metadata_persist_failed",
-                extra={
-                    "msg": "Terminal session 元数据持久化失败",
-                    "data": {"session_id": current.session_id},
-                },
-            )
-
-    def _crud_create(self, record: TerminalSessionRecord) -> TerminalSessionRecord:
-        """创建持久化记录；测试无 CRUD 时退化为内存记录。"""
-
-        return self._crud.create(record) if self._crud is not None else record
-
-    def _crud_get(self, session_id: str) -> TerminalSessionRecord:
-        """读取持久化记录；无 CRUD 时只允许当前 registry。"""
-
-        if self._crud is None:
-            raise TerminalSessionNotFoundError(session_id)
-        try:
-            return self._crud.get(session_id)
-        except KeyError as exc:
-            raise TerminalSessionNotFoundError(session_id) from exc
-
-    def _crud_update(self, session_id: str, **values: object) -> TerminalSessionRecord:
-        """写入持久化 runtime 元数据；无 CRUD 时返回当前值。"""
-
-        if self._crud is None:
-            with self._registry_lock:
-                runtime = self._registry.get(session_id)
-            if runtime is None:
-                raise TerminalSessionNotFoundError(session_id)
-            return runtime.record
-        return self._crud.update_runtime(session_id, **cast(Any, values))
-
-    def _persist_start_failure(self, record: TerminalSessionRecord, reason: str) -> None:
-        """把 worker 创建失败收敛成 failed，避免留下 starting 行。"""
-
-        ended_at = utc_now()
-        if self._crud is None:
-            return
-        try:
-            self._crud.update_runtime(
-                record.session_id,
-                status="failed",
-                end_reason=reason,
-                ended_at=ended_at,
-            )
-        except Exception:
-            log.exception(
-                "terminal_session_start_failure_persist_failed",
-                extra={
-                    "msg": "Terminal session 启动失败状态持久化失败",
-                    "data": {"session_id": record.session_id},
-                },
-            )
 
     def _sweep_expired(self) -> None:
         """定期关闭超出生命周期或 idle timeout 的 session。"""
 
-        while not self._sweeper_stop.wait(SWEEPER_INTERVAL_SECONDS):
+        while not self._sweeper_stop.wait(Constant.Terminal.SWEEPER_INTERVAL_SECONDS):
             now = utc_now()
             with self._registry_lock:
                 runtimes = list(self._registry.values())
@@ -968,9 +1020,9 @@ class TerminalSessionService:
                     idle = (now - runtime.record.last_activity_at).total_seconds()
                     reason = (
                         "max_lifetime_exceeded"
-                        if lifetime >= DEFAULT_MAX_LIFETIME_SECONDS
+                        if lifetime >= Constant.Terminal.DEFAULT_MAX_LIFETIME_SECONDS
                         else "idle_timeout"
-                        if idle >= DEFAULT_IDLE_TIMEOUT_SECONDS
+                        if idle >= Constant.Terminal.DEFAULT_IDLE_TIMEOUT_SECONDS
                         else None
                     )
                 if reason is not None:
@@ -1018,28 +1070,6 @@ def _replace_record(
     from dataclasses import replace
 
     return replace(record, **cast(Any, {name: value}))
-
-
-def _positive_int(value: object) -> int | None:
-    """读取正整数事件字段。"""
-
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
-
-
-def _validate_initial_dimensions(cols: int, rows: int) -> None:
-    """校验 PTY 创建时的初始尺寸；session 创建后不支持调整尺寸。"""
-
-    if (
-        isinstance(cols, bool)
-        or isinstance(rows, bool)
-        or not isinstance(cols, int)
-        or not isinstance(rows, int)
-        or cols < 20
-        or rows < 5
-        or cols > 500
-        or rows > 200
-    ):
-        raise TerminalSessionError("terminal dimensions are out of range")
 
 
 def _frame_bytes(frame: dict[str, object]) -> int:

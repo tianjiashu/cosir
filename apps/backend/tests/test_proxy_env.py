@@ -8,17 +8,14 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from unittest.mock import patch
 
-import httpx
 import pytest
 
-from app.utils.http_proxy import resolve_httpx_proxy
-from app.utils import http_proxy as proxy_module
-from app.core.tools.tool_handler.web.providers import firecrawl_provider
 from app.core.tools.tool_handler.web.providers.firecrawl_provider import FirecrawlProvider
+from app.utils import http_proxy as proxy_module
+from app.utils.http_proxy import resolve_httpx_proxy
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +84,7 @@ def test_disabled_by_flag(monkeypatch: pytest.MonkeyPatch) -> None:
 class _CaptureClient:
     """记录构造参数并模拟最小 httpx.Client 行为，用于断言代理注入与复用。"""
 
-    instances: list["_CaptureClient"] = []
+    instances: list[_CaptureClient] = []
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         self.kwargs = dict(kwargs)
@@ -97,7 +94,7 @@ class _CaptureClient:
     def close(self) -> None:
         self.closed = True
 
-    def post(self, url: str, json: object = None, headers: object = None) -> "_FakeResponse":
+    def post(self, url: str, json: object = None, headers: object = None) -> _FakeResponse:
         return _FakeResponse()
 
 

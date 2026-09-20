@@ -258,9 +258,8 @@ def get_terminal_session_service() -> TerminalSessionService:
     """返回进程级 terminal session service 单例。"""
 
     from app.service.terminal.terminal_session_service import TerminalSessionService
-    from app.storage.crud.terminal_session_crud import TerminalSessionCrud
 
-    return TerminalSessionService(crud=TerminalSessionCrud())
+    return TerminalSessionService()
 
 
 @lru_cache(maxsize=1)

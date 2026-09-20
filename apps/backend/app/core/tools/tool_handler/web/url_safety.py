@@ -1,17 +1,15 @@
 """URL normalization and network safety checks for web extraction."""
-
 import ipaddress
-import re
 import socket
 from collections.abc import Callable, Iterable
 from urllib.parse import parse_qsl, unquote, urlsplit
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.utils.http_proxy import resolve_httpx_proxy
 
 # 单次拦截日志最多记录的解析地址数：多记录或双栈主机的解析结果可能很长，
 # 无边界地写进日志字段会挤掉同一记录里的其它定位线索。
-_MAX_LOGGED_ADDRESSES = 8
 
 # 本地代理（Clash / Mihomo / Surge 等）fake-ip 模式的占位地址段（RFC2544 保留，永不公开分配）。
 # 该模式下本机 DNS 只返回占位地址、真实解析发生在代理侧，因此这些地址不能用来判断「目标是
@@ -27,31 +25,7 @@ _MAX_LOGGED_ADDRESSES = 8
 #    （``getproxies()`` 返回 None）而 DNS 仍返回 fake-ip，绑上去会让 TUN 模式重新全量失效。
 #    该段本身不可公网路由，无条件豁免的实际风险仅限「本机 DNS 被劫持到该段」，而那种情况下
 #    连接同样无处可达；``auto_proxy`` 只作为日志字段用于事后审计。
-_PROXY_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
-SECRET_VALUE_RE = re.compile(
-    r"(?i)(sk-[a-z0-9_-]{8,}|xox[baprs]-[a-z0-9-]{8,}|gh[pousr]_[a-z0-9_]{12,}|"
-    r"api[_-]?key[=:][^&\s]+|bearer\s+[a-z0-9._-]{12,})"
-)
-SENSITIVE_QUERY_KEYS = {
-    "access_token",
-    "api_key",
-    "apikey",
-    "auth",
-    "authorization",
-    "client_secret",
-    "code",
-    "id_token",
-    "jwt",
-    "key",
-    "password",
-    "refresh_token",
-    "secret",
-    "session",
-    "sig",
-    "signature",
-    "token",
-}
 
 
 def normalize_url_for_request(url: str) -> str:
@@ -94,7 +68,7 @@ def sensitive_query_param_name(url: str) -> str | None:
 
     query = urlsplit(url).query
     for name, _value in parse_qsl(query, keep_blank_values=True):
-        if name.casefold() in SENSITIVE_QUERY_KEYS:
+        if name.casefold() in Constant.Web.SENSITIVE_QUERY_KEYS:
             return name
     return None
 
@@ -116,7 +90,7 @@ def url_contains_secret(url: str) -> bool:
     """
 
     decoded_url = unquote(url)
-    return SECRET_VALUE_RE.search(decoded_url) is not None or any(
+    return Constant.Web.SECRET_VALUE_RE.search(decoded_url) is not None or any(
         value.casefold().startswith("sk-")
         for _name, value in parse_qsl(urlsplit(decoded_url).query, keep_blank_values=True)
     )
@@ -171,7 +145,7 @@ def is_safe_public_url(
             ip_address = ipaddress.ip_address(address)
         except ValueError:
             return False, "Blocked: hostname resolved to an invalid address."
-        if not host_is_address_literal and ip_address in _PROXY_FAKE_IP_NETWORK:
+        if not host_is_address_literal and ip_address in Constant.Web.PROXY_FAKE_IP_NETWORK:
             # 代理 fake-ip 占位地址：本机 DNS 不等于真实目的地，不参与内网判定。
             # 此处只暂存、不写日志：日志必须在循环确认「没有任何地址触发拦截」之后才写，
             # 否则同批解析里若有真实内网地址、最终结论是拦截，URL 仍会留下一条语义为
@@ -261,7 +235,7 @@ def _log_address_decision(
             "msg": message,
             "data": {
                 "host": host,
-                "addresses": addresses[:_MAX_LOGGED_ADDRESSES],
+                "addresses": addresses[:Constant.Web.MAX_LOGGED_ADDRESSES],
                 "matched_address": matched_address,
                 "auto_proxy": resolve_httpx_proxy() is not None,
             },

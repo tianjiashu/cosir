@@ -29,25 +29,14 @@ pub enum TerminalControlResult {
 }
 
 impl PtyRuntime {
-    pub fn spawn(
-        shell: Vec<String>,
-        cwd: String,
-        cols: u16,
-        rows: u16,
-    ) -> anyhow::Result<SpawnedPty> {
+    pub fn spawn(shell: Vec<String>, cwd: String) -> anyhow::Result<SpawnedPty> {
         if shell.is_empty() {
             anyhow::bail!("shell argv must not be empty")
         }
-        if cols == 0 || rows == 0 {
-            anyhow::bail!("pty dimensions must be positive")
-        }
         let pty_system = native_pty_system();
-        let pair = pty_system.openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
+        // A PTY still requires an initial geometry for shell line discipline, but this
+        // headless worker has no resizeable window or public geometry contract.
+        let pair = pty_system.openpty(PtySize::default())?;
         let mut command =
             CommandBuilder::from_argv(shell.into_iter().map(OsString::from).collect::<Vec<_>>());
         command.cwd(cwd);

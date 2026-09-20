@@ -7,7 +7,6 @@
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-
 _SEARCH_LINE_DISPLAY_LIMIT = 240
 
 

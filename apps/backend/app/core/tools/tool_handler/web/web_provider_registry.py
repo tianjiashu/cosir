@@ -1,11 +1,9 @@
 """Web provider registration and selection."""
-
 from collections.abc import Iterable
 
+from app.config.constant import Constant
 from app.config.settings import Settings
 from app.core.tools.tool_handler.web.web_provider import WebProvider
-
-LEGACY_PROVIDER_PRIORITY = ("firecrawl",)
 
 
 class WebProviderRegistry:
@@ -158,7 +156,7 @@ class WebProviderRegistry:
             return self.get_provider(explicit_backend)
 
         candidates = list(self._providers.values())
-        for provider_name in LEGACY_PROVIDER_PRIORITY:
+        for provider_name in Constant.Web.LEGACY_PROVIDER_PRIORITY:
             provider = self.get_provider(provider_name)
             if (
                 provider is not None

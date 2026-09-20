@@ -14,6 +14,13 @@ from typing import Literal
 
 ToolDisplaySurface = Literal["trace", "standalone"]
 ToolDisplayLayout = Literal["none", "details", "list", "diff", "write", "terminal"]
+ToolDisplayVariant = Literal[
+    "terminal-session-start",
+    "terminal-session-read",
+    "terminal-session-write",
+    "terminal-session-signal",
+    "terminal-session-close",
+]
 
 
 @dataclass(frozen=True)
@@ -23,6 +30,8 @@ class ToolDisplayHints:
     参数:
         verb: 动作名，如 “读取”、“搜索”，客户端作为主标题动词。
         icon: lucide 图标名，如 “eye”、“search”，客户端据此渲染图标。
+        variant: 稳定的 renderer 语义变体；用于同一 ``display_data.kind`` 下的
+            不同展示形态，不应携带动态结果或用户输入。
         surface: 工具位于普通执行轨迹（``trace``）还是独立结果区域
             （``standalone``）。
         expandable: 是否可展开；默认 ``True``，客户端据此隐藏展开箭头。
@@ -43,6 +52,7 @@ class ToolDisplayHints:
 
     verb: str
     icon: str
+    variant: ToolDisplayVariant | None = None
     surface: ToolDisplaySurface = "trace"
     expandable: bool = True
     expand_layout: ToolDisplayLayout = "details"

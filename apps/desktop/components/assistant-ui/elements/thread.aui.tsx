@@ -587,7 +587,7 @@ const AssistantMessageDefault: FC = () => {
   const isLastRunMessage = custom?.isLastRunMessage === true;
   const runId = typeof custom?.runId === "number" ? custom.runId : null;
   const isRunning = useAuiState((state) => state.thread.isRunning);
-  const { forkAvailable = false, forkingRunId = null, onForkRun, cancellingRunId = null } = useContext(ThreadContext);
+  const { forkAvailable = false, forkingRunId = null, onForkRun, cancellingRunId = null, taskId } = useContext(ThreadContext);
   const canFork = isLastRunMessage && runId !== null && forkAvailable && !isRunning;
   const isForking = runId !== null && forkingRunId === runId;
 
@@ -621,7 +621,7 @@ const AssistantMessageDefault: FC = () => {
               case "reasoning":
                 return <Reasoning {...part} />;
               case "tool-call":
-                return <ToolPart {...part} runId={runId} runCancelling={cancellingRunId === runId} />;
+                return <ToolPart {...part} taskId={taskId} runId={runId} runCancelling={cancellingRunId === runId} />;
               case "file":
               case "image":
               case "data":

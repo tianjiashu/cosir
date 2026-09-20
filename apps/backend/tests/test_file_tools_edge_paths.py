@@ -181,7 +181,7 @@ def test_text_sample_rejects_nul_bytes(tmp_path: Path) -> None:
     weird = tmp_path / "nul.txt"
     fd = os.open(weird, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_BINARY)
     try:
-        os.write(fd, "has\x00nul".encode("utf-8"))
+        os.write(fd, b"has\x00nul")
     finally:
         os.close(fd)
     if weird.stat().st_size == 0:
@@ -331,7 +331,7 @@ def _os_proxy(monkeypatch, move_module, **overrides):
     """
 
     class _Proxy:
-        def __getattr__(self, item):  # noqa: ANN001
+        def __getattr__(self, item):
             if item in overrides:
                 return overrides[item]
             return getattr(__import__("os"), item)
@@ -369,7 +369,7 @@ def test_move_without_overwriting_unlink_failure_removes_destination(
     source.write_bytes(b"payload\n")
     destination = tmp_path / "d.txt"
 
-    def failing_unlink(path, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    def failing_unlink(path, *args, **kwargs):
         if Path(path) == source:
             raise OSError(errno.EACCES, "denied")
         return real_os.unlink(path, *args, **kwargs)
@@ -397,7 +397,7 @@ def test_move_without_overwriting_windows_branch_uses_rename(
 
     calls: list[tuple[object, object]] = []
 
-    def fake_rename(src, dst):  # noqa: ANN001
+    def fake_rename(src, dst):
         calls.append((src, dst))
         source.rename(destination)
 

@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
+from app.config.constant import Constant
 from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
-
-_LOCAL_FILE_TOKEN = re.compile(r"\[\[cosir-file:([^\]]+)\]\]")
-_LOCAL_FILE_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +41,7 @@ class ConversationRunExtra:
                 raise TypeError("attachment fields must be strings")
             attachment_id = attachment["id"]
             if (
-                not _LOCAL_FILE_ID.fullmatch(attachment_id)
+                not Constant.Cosir.LOCAL_FILE_ID.fullmatch(attachment_id)
                 or not attachment["name"]
                 or not attachment["content_type"]
                 or not attachment["path"].strip()
@@ -61,7 +58,7 @@ class ConversationRunExtra:
                 }
             )
 
-        token_ids = list(dict.fromkeys(_LOCAL_FILE_TOKEN.findall(self.display_text)))
+        token_ids = list(dict.fromkeys(Constant.Cosir.LOCAL_FILE_TOKEN.findall(self.display_text)))
         if token_ids != [attachment["id"] for attachment in normalized]:
             raise ValueError("display_text attachment tokens do not match attachments")
         object.__setattr__(self, "attachments", normalized)

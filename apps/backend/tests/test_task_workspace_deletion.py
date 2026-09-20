@@ -8,7 +8,6 @@ from sqlalchemy import func, select
 
 from app.api.tasks_api import delete_task as delete_task_endpoint
 from app.api.workspaces_api import delete_workspace as delete_workspace_endpoint
-from app.utils import paths
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service.depends import (
@@ -26,6 +25,7 @@ from app.storage.model.task_model import TaskModel
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import init_storage, main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.utils import paths
 
 
 @pytest.fixture

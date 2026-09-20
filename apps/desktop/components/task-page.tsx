@@ -6,6 +6,8 @@ import { Assistant } from "@/app/assistant";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { TerminalPanelHost } from "@/components/terminal/terminal-panel";
+import { TaskWorkspaceLayout } from "@/components/task-workspace-layout";
 
 type TaskSessionProps = {
   taskId: number;
@@ -118,8 +120,8 @@ export function TaskPage({
   if (!loadedTask || loadedTask.task_id !== taskId) return <div className="flex h-full items-center justify-center text-sm">正在加载任务工作区…</div>;
 
   return (
-    <div className="relative flex h-full min-h-0 min-w-0 overflow-hidden">
-      <div className="min-h-0 min-w-0 flex-1">
+    <TaskWorkspaceLayout bottomPanel={<TerminalPanelHost taskId={taskId} />}>
+      <div className="h-full min-h-0 min-w-0 w-full">
         <Assistant
           taskId={taskId}
           workspaceId={loadedTask.workspace_id}
@@ -133,6 +135,6 @@ export function TaskPage({
           onRunStateChange={onRunStateChange}
         />
       </div>
-    </div>
+    </TaskWorkspaceLayout>
   );
 }

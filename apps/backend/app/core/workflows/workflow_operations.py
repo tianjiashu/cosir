@@ -694,7 +694,6 @@ class WorkflowOperations:
             error_detail = error or "the tool call failed"
             lines = [
                 f"error: {error_detail}",
-                f"retryable: {str(observation.retryable).lower()}",
             ]
             if observation.retryable:
                 lines.append(

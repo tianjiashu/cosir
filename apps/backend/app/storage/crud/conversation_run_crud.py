@@ -400,6 +400,39 @@ class ConversationRunCrud:
             return None
         return ConversationRunRecord.from_model(row)
 
+    def list_latest_by_tasks(self) -> list[ConversationRunRecord]:
+        """返回每个 task 最近创建的一个 run，按 task 无关的时间倒序排列。
+
+        启动恢复使用该投影检查最近一次 Run 的 checkpoint 终端元数据；它不改变 Run
+        状态，也不读取或创建进程内 terminal registry。无 run 时返回空列表。
+
+        返回:
+            每个 task 一条最新 ``ConversationRunRecord``，按 ``created_at``、``id`` 倒序。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 查询主库失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+
+        with self._session_factory() as session:
+            rows = (
+                session.execute(
+                    select(ConversationRunModel).order_by(
+                        desc(ConversationRunModel.created_at),
+                        desc(ConversationRunModel.id),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        latest_by_task: dict[int, ConversationRunRecord] = {}
+        for row in rows:
+            if row.task_id not in latest_by_task:
+                latest_by_task[row.task_id] = ConversationRunRecord.from_model(row)
+        return list(latest_by_task.values())
+
     def list_recoverable(self) -> list[ConversationRunRecord]:
         """返回进程重启后仍需恢复的 pending/running 运行。
 

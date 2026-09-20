@@ -1,12 +1,11 @@
 """委派生命周期领域服务。"""
-
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.models.delegation_record import DelegationRecord
 from app.models.result.delegation_acquire_result import (
-    REASON_CONCURRENCY_EXCEEDED,
     DelegationAcquireResult,
 )
-from app.storage.crud.delegation_crud import ACTIVE_DELEGATION_STATUSES, DelegationCrud
+from app.storage.crud.delegation_crud import DelegationCrud
 
 
 class DelegationService:
@@ -58,7 +57,7 @@ class DelegationService:
             return DelegationAcquireResult(
                 acquired=False,
                 delegation_id=-1,
-                reason=REASON_CONCURRENCY_EXCEEDED,
+                reason=Constant.Delegation.REASON_CONCURRENCY_EXCEEDED,
             )
         return DelegationAcquireResult(acquired=True, delegation_id=created_id, reason="")
 
@@ -166,5 +165,5 @@ class DelegationService:
         return [
             record
             for record in self._delegation_crud.list_by_parent_turn(parent_run_id)
-            if record.status in ACTIVE_DELEGATION_STATUSES
+            if record.status in Constant.Delegation.ACTIVE_DELEGATION_STATUSES
         ]

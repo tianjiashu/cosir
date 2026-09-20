@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-LOG_FILE_NAME = "backend.log"
+from app.utils.paths import LOG_FILE_NAME
 
 
 def current_log_file(log_dir: Path) -> Path:

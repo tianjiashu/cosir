@@ -148,7 +148,7 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
       </div>
       <CollapsibleContent className="ml-6 pb-2 pl-2 pr-2">
         <div className="overflow-hidden rounded-lg border border-white/10 bg-zinc-950">
-          <div className="max-h-72 overflow-auto px-3 py-2 font-mono text-xs leading-relaxed">
+          <div className="max-h-72 overflow-hidden px-3 py-2 font-mono text-xs leading-relaxed">
             {workdir && <p className="mb-1 text-[11px] text-zinc-500">cwd {workdir}</p>}
             {cancellationError && <p className="mb-1 text-amber-300" role="alert">{cancellationError}</p>}
             {artifact.error

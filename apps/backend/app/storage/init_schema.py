@@ -16,7 +16,6 @@ from app.storage.model.delegation_model import DelegationModel
 from app.storage.model.model_entry_model import ModelEntryModel
 from app.storage.model.provider_model import ProviderModel
 from app.storage.model.task_model import TaskModel
-from app.storage.model.terminal_session_model import TerminalSessionModel
 from app.storage.model.workspace_model import WorkspaceModel
 
 APP_MODELS = (
@@ -28,7 +27,6 @@ APP_MODELS = (
     ConversationCommandModel,
     ConversationTaskContextModel,
     DelegationModel,
-    TerminalSessionModel,
 )
 def initialize_app_schema(engine: Engine) -> None:
     """创建当前应用 metadata 声明的全部业务表。

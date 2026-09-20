@@ -1,4 +1,4 @@
-"""Hidden ``terminal_signal`` handler."""
+"""``terminal_signal`` handler."""
 
 from typing import ClassVar
 
@@ -9,18 +9,23 @@ from app.core.tools.schemas import (
     ToolObservation,
 )
 from app.core.tools.tool_handler.terminal_session.common import (
+    build_session_display_payload,
     cancelled,
     cancelled_observation,
     require_service,
     success_observation,
     with_terminal_errors,
 )
+from app.core.tools.tool_handler.terminal_session.descriptions import (
+    build_terminal_session_parameters_schema,
+    describe_terminal_tool,
+)
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import TerminalSignalArgs
 
 
 class TerminalSignalTool(HandlerBase):
-    """由 Agent 向 PTY 发送 interrupt/eof/suspend；当前未注册到 Agent。"""
+    """由 Agent 向 PTY 发送 interrupt/eof/suspend。"""
 
     name = "terminal_signal"
     description = "Send an interrupt, EOF, or suspend signal to a local terminal session."
@@ -46,6 +51,7 @@ class TerminalSignalTool(HandlerBase):
             payload = require_service(execution_context).signal(
                 session_id,
                 task_id=execution_context.task_id,
+                workspace_id=execution_context.workspace_id,
                 signal_name=signal,
             )
             return success_observation(
@@ -53,12 +59,13 @@ class TerminalSignalTool(HandlerBase):
                 self.permission,
                 payload,
                 summary="Terminal signal sent.",
+                display_payload=build_session_display_payload(payload, extra={"signal": signal}),
             )
 
         return with_terminal_errors(self.name, self.permission, action)
 
     def to_definition(self) -> ToolDefinition:
-        """返回 hidden tool definition；调用方当前不得自动注册到 Agent。"""
+        """返回交互终端工具定义。"""
 
         return ToolDefinition(
             name=self.name,
@@ -73,9 +80,14 @@ class TerminalSignalTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="控制终端",
                 icon="square-terminal",
+                variant="terminal-session-signal",
                 surface="trace",
                 expandable=False,
                 expand_layout="none",
                 show_result=False,
+            ),
+            description_provider=lambda: describe_terminal_tool(self.name, self.description),
+            schema_provider=lambda: build_terminal_session_parameters_schema(
+                self.name, self.args_model
             ),
         )

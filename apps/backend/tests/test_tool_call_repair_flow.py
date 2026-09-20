@@ -19,12 +19,12 @@ from app.core.context.runtime_context_manager import _as_ai_message
 from app.core.workflows.react.nodes import model_node as model_module
 from app.core.workflows.react.nodes import observation_node as observe_module
 from app.core.workflows.react.nodes import tools_node as tools_module
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
 from app.core.workflows.react.state import ReactGraphState
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 @pytest.fixture(autouse=True)

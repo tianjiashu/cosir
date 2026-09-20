@@ -5,9 +5,9 @@
 （而非并入 model_node）是因为该逻辑横跨 canonical writer / run 标记 / 终态 patch_write 构造，
 职责清晰。
 """
-
 from typing import Any
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.workflows.react.nodes.helper.common import (
     _runtime_config,
@@ -18,10 +18,6 @@ from app.core.workflows.react.state import ReactGraphState
 # 步数耗尽时写给父 Agent / 用户的默认可见文本（英文，与面向模型的文本约定一致）。
 # 正常完成路径的 final_text 是模型最终回答；步数耗尽没有最终回答，故给一个明确
 # 的失败说明，让父 Agent / 用户能感知「因步数耗尽而停止」，而不是静默失败。
-_MAX_STEPS_FINAL_TEXT = (
-    "The agent stopped after reaching the maximum number of steps "
-    "before producing a final answer."
-)
 
 
 async def _finalize_max_steps(
@@ -72,7 +68,7 @@ async def _finalize_max_steps(
         )
         return _terminal_state(effective_step_count)
 
-    event_data = {"final_text": _MAX_STEPS_FINAL_TEXT}
+    event_data = {"final_text": Constant.Workflow.MAX_STEPS_FINAL_TEXT}
     log.warning(
         "max_steps_node_failed",
         extra={
@@ -112,5 +108,5 @@ def _terminal_state(step_count: int) -> dict[str, Any]:
 
     return {
         **terminal_state(step_count),
-        "final_text": _MAX_STEPS_FINAL_TEXT,
+        "final_text": Constant.Workflow.MAX_STEPS_FINAL_TEXT,
     }

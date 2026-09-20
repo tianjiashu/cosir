@@ -17,13 +17,13 @@ stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContext
 模型侧数据处理辅助（流式 chunk 解析 ``ModelChunkProcessor``、流式 part 生命周期）
 已拆为独立模块，本模块仅 import 使用；节点共享运行时原语见 ``common``。
 """
-
 import asyncio
 
-from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, SystemMessage
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolCall
 from app.core.workflows.react.nodes.helper.common import (
@@ -37,16 +37,13 @@ from app.core.workflows.react.nodes.helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
 from app.core.workflows.react.nodes.helper.tool_call_lifecycle import ToolCallLifecycleManager
+from app.core.workflows.react.state import ReactGraphState
 from app.core.workflows.vision_input import resolve_messages_for_model
 from app.utils.message_content import content_to_text
-
-from app.core.workflows.react.state import ReactGraphState
 
 # ``finish_reason`` 是 Provider 语义，不直接等同于工作流终态。不同兼容层可能使用
 # ``stop``、``end`` 或 ``end_turn`` 表示正常文本结束；在 model 节点内做最小归一化，避免
 # 把 provider-specific 字符串扩散到 graph edge 与终态写入逻辑。
-_NORMAL_FINISH_REASONS = frozenset({"stop", "end", "end_turn"})
-_CONTINUATION_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
 
 
 def _build_continuation_prompt(finish_reason: str | None) -> str:
@@ -69,7 +66,7 @@ def _build_continuation_prompt(finish_reason: str | None) -> str:
         无。
     """
 
-    if finish_reason in _CONTINUATION_FINISH_REASONS:
+    if finish_reason in Constant.Workflow.CONTINUATION_FINISH_REASONS:
         return (
             "Your previous response was truncated by the output length limit. "
             "Continue from where it stopped, do not repeat completed content, and finish the "
@@ -156,7 +153,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
     messages: list[BaseMessage] = _runtime_context().load_message()
 
-    for system_message in task_space.take_deferred_system_messages():
+    for system_message in task_space.take_deferred_system_messages(run_id=run_id):
         _runtime_context().add_message(system_message)
         messages.append(system_message)
 
@@ -317,7 +314,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
         interrupt({"reason": "user_cancelled"})
 
-    if finish_reason in _NORMAL_FINISH_REASONS and ai_message.content:
+    if finish_reason in Constant.Workflow.NORMAL_FINISH_REASONS and ai_message.content:
         # 没有工具调用且 Provider 明确报告正常结束 → 最终回答。
         final_answer = ai_message.content if isinstance(ai_message.content, str) else None
         completed_run = operations.complete_run_if_running(
@@ -344,7 +341,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "final_text": ai_message.content,
         }
 
-    if finish_reason not in _NORMAL_FINISH_REASONS:
+    if finish_reason not in Constant.Workflow.NORMAL_FINISH_REASONS:
         # 已有文本不代表模型完成：例如 finish_reason=length 只说明本轮达到输出上限。
         # AIMessage 已先落库，SystemMessage 紧跟其后作为下一模型步的显式续写指令。
         continuation_prompt = _build_continuation_prompt(finish_reason)

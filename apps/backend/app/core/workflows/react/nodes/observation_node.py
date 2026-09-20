@@ -31,7 +31,6 @@ from typing import Any
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.workflows.react.nodes.helper.common import _runtime_config, _runtime_context
-
 from app.core.workflows.react.state import ReactGraphState
 
 

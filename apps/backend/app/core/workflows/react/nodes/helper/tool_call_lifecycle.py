@@ -20,6 +20,7 @@ from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.assistant_transport.event import ToolCallCreatedEvent, ToolCallStatusChangedEvent
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.context.runtime_context_manager import RuntimeContextManager
 from app.core.tools.schemas import ToolCall, ToolObservation
@@ -34,10 +35,8 @@ from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
 
 # 非法工具调用参数预览截断长度
-INVALID_TOOL_ARGS_PREVIEW_CHARS = 500
 
 # 修复提示整体字符预算上限（超出整体截断并加末尾说明）
-INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS = 2000
 
 
 class ToolCallLifecycleRecord(BaseModel):
@@ -207,7 +206,7 @@ def build_invalid_tool_call_repair_message(
 
     sections: list[str] = []
     total_chars = len(header)
-    budget = INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS
+    budget = Constant.Workflow.INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS
     truncated = False
 
     for repair_data in repair_datas:
@@ -217,8 +216,8 @@ def build_invalid_tool_call_repair_message(
             invalid_tc = {}
 
         args_preview = str(invalid_tc.get("args", ""))
-        if len(args_preview) > INVALID_TOOL_ARGS_PREVIEW_CHARS:
-            args_preview = args_preview[:INVALID_TOOL_ARGS_PREVIEW_CHARS] + "...[truncated]"
+        if len(args_preview) > Constant.Workflow.INVALID_TOOL_ARGS_PREVIEW_CHARS:
+            args_preview = args_preview[:Constant.Workflow.INVALID_TOOL_ARGS_PREVIEW_CHARS] + "...[truncated]"
 
         error = invalid_tc.get("error")
         error_line = f"error: {error}\n" if error else ""

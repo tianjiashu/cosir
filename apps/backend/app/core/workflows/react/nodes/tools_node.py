@@ -20,13 +20,52 @@ checkpoint 恢复时待执行集合为空、直接短路返回空摘要。模型
 
 import asyncio
 import dataclasses
+from typing import Any
 
 from app.config.logging.logger import log
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall
 from app.core.workflows.react.nodes.helper.common import _runtime_config
-
 from app.core.workflows.react.state import ReactGraphState
+
+_TERMINAL_CHECKPOINT_FIELDS = frozenset(
+    {
+        "session_id",
+        "status",
+        "initial_cwd",
+        "shell_kind",
+        "first_available_seq",
+        "next_seq",
+        "exit_code",
+        "end_reason",
+    }
+)
+
+
+def _project_terminal_sessions(
+    previous: dict[str, dict[str, Any]], observations: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """把终端工具展示元数据合并到当前 Run 的 checkpoint state。
+
+    只接受 ``display_data.kind == terminal-session`` 的 allowlisted 字段；工具结果中的
+    原始 output、诊断文本和进程对象不会进入 checkpoint。活终端清理由 runtime registry
+    负责，不依赖这个投影执行。
+    """
+
+    projected = {session_id: dict(value) for session_id, value in previous.items()}
+    for observation in observations:
+        display_data = observation.get("display_data")
+        if not isinstance(display_data, dict) or display_data.get("kind") != "terminal-session":
+            continue
+        session_id = display_data.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            continue
+        current = projected.setdefault(session_id, {"session_id": session_id})
+        for field in _TERMINAL_CHECKPOINT_FIELDS:
+            value = display_data.get(field)
+            if value is not None:
+                current[field] = value
+    return projected
 
 
 def _to_tool_call(record: object) -> ToolCall:
@@ -152,6 +191,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
         },
     )
     observations = tool_run.observations  # 每个工具调用的观察结果
+    observation_dicts = [dataclasses.asdict(observation) for observation in observations]
     # 终态事件（completed/failed/cancelled）、模型上下文写回与错误计数统一收敛到
     # observe 节点（经 ToolCallLifecycleManager.settle_batch 分发），本节点只产出治理摘要。
     log.info(
@@ -169,7 +209,11 @@ async def _tools_node(state: ReactGraphState) -> dict:
         "last_tool_results":
             {
                 "instruction": instruction or "",
-                "observations": [dataclasses.asdict(observation) for observation in observations],
+                "observations": observation_dicts,
                 "expected_call_ids": [call.call_id for call in approved_calls],
             },
+        "terminal_sessions": _project_terminal_sessions(
+            state.terminal_sessions,
+            observation_dicts,
+        ),
     }

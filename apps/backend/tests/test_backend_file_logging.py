@@ -7,8 +7,8 @@ from pathlib import Path
 
 from app.config.logging.configuration import configure_logging, shutdown_logging
 from app.config.logging.context.log_context_store import merge_log_context, reset_log_context
-from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
 from app.config.logging.logger import log
+from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
 
 
 def test_configure_logging_writes_fixed_jsonl_record(tmp_path: Path) -> None:

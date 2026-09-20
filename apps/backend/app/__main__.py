@@ -16,15 +16,14 @@ import traceback
 import uvicorn
 
 from app.bootstate import (
-    BOOT_PHASE_BOOTING,
-    BOOT_PHASE_FAILED,
     boot_state_file_from_env,
     write_bootstate,
 )
-from app.utils import paths
+from app.config.constant import Constant
 from app.config.logging.configuration import install_logging_for_current_process
 from app.config.settings import Settings
 from app.service.depends import initialize_service_dependencies
+from app.utils import paths
 
 
 def main() -> None:
@@ -54,7 +53,7 @@ def main() -> None:
     boot_state_file = boot_state_file_from_env()
     try:
         if boot_state_file is not None:
-            write_bootstate(boot_state_file, BOOT_PHASE_BOOTING, step="start")
+            write_bootstate(boot_state_file, Constant.Boot.BOOTING, step="start")
 
         # 先按固定路径安装最小日志管线，覆盖 Settings.load 和依赖初始化失败窗口。
         install_logging_for_current_process(log_dir=paths.LOG_DIR)
@@ -84,7 +83,7 @@ def main() -> None:
         if boot_state_file is not None:
             write_bootstate(
                 boot_state_file,
-                BOOT_PHASE_FAILED,
+                Constant.Boot.FAILED,
                 error_type=type(exc).__name__,
                 error_message=str(exc),
                 traceback_text=traceback.format_exc(),

@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-from app.utils import paths
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_command_crud,
@@ -23,6 +22,7 @@ from app.service.depends import (
 )
 from app.storage.store_engines import init_storage
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.utils import paths
 
 
 @pytest.fixture

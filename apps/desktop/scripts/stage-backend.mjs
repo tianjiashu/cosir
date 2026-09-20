@@ -16,6 +16,18 @@ const stagingRoot = path.join(buildArtifactsRoot, "resources", "backend");
 const executableName = process.platform === "win32" ? `${appName}.exe` : appName;
 const pyinstallerExecutable = process.platform === "win32" ? "pyinstaller.exe" : "pyinstaller";
 const uvExecutable = process.platform === "win32" ? "uv.exe" : "uv";
+const providerCapabilityRoot = path.join(
+  backendRoot,
+  "app",
+  "core",
+  "llm_provider",
+  "capability",
+);
+const providerCapabilityDestination = "app/core/llm_provider/capability";
+const providerCapabilityDataFiles = ["llm_provider.json", "model_capabilities.json"].map(
+  (fileName) => path.join(providerCapabilityRoot, fileName),
+);
+const pyinstallerDataSeparator = process.platform === "win32" ? ";" : ":";
 
 function assertWithin(parent, candidate, label) {
   const relative = path.relative(parent, candidate);
@@ -113,6 +125,10 @@ const pyinstallerArgs = [
   buildRoot,
   "--collect-submodules",
   "app",
+  ...providerCapabilityDataFiles.flatMap((filePath) => [
+    "--add-data",
+    `${filePath}${pyinstallerDataSeparator}${providerCapabilityDestination}`,
+  ]),
   entrypoint,
 ];
 run(actualPyinstallerPath, pyinstallerArgs, {
@@ -128,6 +144,19 @@ if (!fs.existsSync(packagedExecutable)) {
   throw new Error(`PyInstaller 未生成后端可执行文件：${packagedExecutable}`);
 }
 
+function assertPackagedCapabilityData(root, label) {
+  const capabilityRoot = path.join(root, "_internal", providerCapabilityDestination);
+  for (const filePath of providerCapabilityDataFiles) {
+    const fileName = path.basename(filePath);
+    const packagedPath = path.join(capabilityRoot, fileName);
+    if (!fs.existsSync(packagedPath)) {
+      throw new Error(`PyInstaller ${label}缺少 Provider 能力数据文件：${packagedPath}`);
+    }
+  }
+}
+
+assertPackagedCapabilityData(sourceRoot, "产物");
+
 assertWithin(buildArtifactsRoot, sourceRoot, "后端构建产物");
 assertWithin(buildArtifactsRoot, stagingRoot, "Tauri 后端资源目录");
 fs.mkdirSync(path.dirname(stagingRoot), { recursive: true });
@@ -141,6 +170,7 @@ for (const entry of fs.readdirSync(stagingRoot)) {
 for (const entry of fs.readdirSync(sourceRoot)) {
   fs.cpSync(path.join(sourceRoot, entry), path.join(stagingRoot, entry), { recursive: true });
 }
+assertPackagedCapabilityData(stagingRoot, "staging 资源");
 if (process.platform !== "win32") {
   fs.chmodSync(path.join(stagingRoot, executableName), 0o755);
 }

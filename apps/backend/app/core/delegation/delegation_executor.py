@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.assistant_transport.event import DelegationRefData, ToolCallRuntimeUpdateEvent
 from app.config.configuration import get_agent_registry
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
@@ -463,7 +464,7 @@ class DelegationExecutor(DelegateTaskExecutor):
         """
 
         log.info(
-            "delegation_concurrency_exceeded",
+            Constant.Delegation.REASON_CONCURRENCY_EXCEEDED,
             extra={
                 "msg": "委派被并发额度拒绝",
                 "data": {

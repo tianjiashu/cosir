@@ -9,8 +9,6 @@ run 执行状态的迁移（含终态）。run 内消息与工具的细节事实
 不负责：assistant 消息内容与工具调用生命周期（分别见 ``message_event``、
 ``tool_call_event``）；本模块只定义用户输入事实事件的 Transport parts。
 """
-
-import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, cast
@@ -28,6 +26,7 @@ from app.assistant_transport.state.conversation_state_part import (
     ConversationStateTextPart,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.config.constant import Constant
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunError
 from app.models.enums.conversation_run_status import ConversationRunStatus
@@ -264,9 +263,6 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
         return mutations
 
 
-_IMAGE_LOCATOR = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
-_FILE_LOCATOR = re.compile(r"^cosir-local-file:[A-Za-z0-9._-]{1,128}$")
-_INPUT_TOKEN = re.compile(r"\[\[cosir-(file|image):([^\]]+)\]\]")
 UserInputPart = ConversationStateTextPart | ConversationStateImagePart | ConversationStateFilePart
 
 
@@ -291,7 +287,7 @@ def build_user_input_parts(
         attachment_id = attachment_record.get("id")
         if (
             not attachment_id
-            or not _FILE_LOCATOR.fullmatch(f"cosir-local-file:{attachment_id}")
+            or not Constant.Transport.FILE_LOCATOR.fullmatch(f"cosir-local-file:{attachment_id}")
             or not attachment_record.get("name")
             or not attachment_record.get("content_type")
         ):
@@ -302,7 +298,7 @@ def build_user_input_parts(
     for path in image_paths:
         image_id = Path(path).name.split(".", 1)[0]
         locator = f"cosir-attachment://{image_id}"
-        if not _IMAGE_LOCATOR.fullmatch(locator):
+        if not Constant.Transport.IMAGE_LOCATOR.fullmatch(locator):
             raise ValueError("image attachment locator is invalid")
         image_paths_by_id[image_id] = path
 
@@ -310,7 +306,7 @@ def build_user_input_parts(
     cursor = 0
     referenced_image_ids: set[str] = set()
     referenced_file_ids: set[str] = set()
-    for match in _INPUT_TOKEN.finditer(display_text):
+    for match in Constant.Transport.INPUT_TOKEN.finditer(display_text):
         text_part = display_text[cursor:match.start()]
         if text_part:
             parts.append({"type": "text", "text": text_part, "status": "completed"})
@@ -387,14 +383,14 @@ class UserInputAppendedEvent(ConversationEventEnvelope):
                 image_part = cast(ConversationStateImagePart, part)
                 if (
                     set(image_part) != {"type", "image"}
-                    or not _IMAGE_LOCATOR.fullmatch(image_part["image"])
+                    or not Constant.Transport.IMAGE_LOCATOR.fullmatch(image_part["image"])
                 ):
                     raise ValueError("user image part locator is invalid")
             elif part_type == "file":
                 file_part = cast(ConversationStateFilePart, part)
                 if (
                     set(file_part) != {"type", "file", "name", "contentType"}
-                    or not _FILE_LOCATOR.fullmatch(file_part["file"])
+                    or not Constant.Transport.FILE_LOCATOR.fullmatch(file_part["file"])
                     or not file_part["name"]
                     or not file_part["contentType"]
                 ):

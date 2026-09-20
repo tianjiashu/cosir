@@ -3,11 +3,12 @@ import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { DetailsTool } from "./details-tool";
 import { DiffTool } from "./diff-tool";
 import { TerminalTool } from "./terminal-tool";
+import { TerminalSessionTool } from "./terminal-session-tool";
 import { ToolFallback } from "./tool-fallback";
 import { DelegationToolRow } from "./delegation-tool-row";
 import { readToolArtifact } from "./types";
 
-export type ToolPartRoute = "diff" | "terminal" | "delegation" | "details" | "fallback";
+export type ToolPartRoute = "diff" | "terminal" | "terminal-session" | "delegation" | "details" | "fallback";
 const KNOWN_DISPLAY_KINDS = new Set([
   "read-file-meta",
   "file-list",
@@ -17,6 +18,7 @@ const KNOWN_DISPLAY_KINDS = new Set([
   "web-search-results",
   "web-extract-urls",
   "terminal-result",
+  "terminal-session",
   "delegation-result",
   "repeated-call",
 ]);
@@ -26,11 +28,14 @@ const KNOWN_DISPLAY_KINDS = new Set([
  * `expand_layout=none` 只决定紧凑展示，不决定工具语义。
  */
 export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartRoute {
+  // Keep the stable call shape for callers; routing intentionally ignores tool names.
+  void toolName;
   const artifact = readToolArtifact(rawArtifact);
   const kind = typeof artifact.display_data?.kind === "string" ? artifact.display_data.kind : undefined;
   if (kind !== undefined && !KNOWN_DISPLAY_KINDS.has(kind)) return "fallback";
-  if (kind === "delegation-result" || toolName === "delegate_task") return "delegation";
+  if (kind === "delegation-result") return "delegation";
   if (kind === "file-changes" || artifact.presentation.expand_layout === "diff") return "diff";
+  if (kind === "terminal-session") return "terminal-session";
   if (kind === "terminal-result" || artifact.presentation.expand_layout === "terminal") return "terminal";
   if (
     kind === "read-file-meta" ||
@@ -52,6 +57,8 @@ type ToolPartProps = ToolCallMessagePartProps & {
   runId?: number | null;
   /** Whole-run cancellation is already in progress. */
   runCancelling?: boolean;
+  /** Task owning the tool part, used only to open its task-scoped preview panel. */
+  taskId?: number;
 };
 
 const ToolPartImpl = (props: ToolPartProps) => {
@@ -60,6 +67,8 @@ const ToolPartImpl = (props: ToolPartProps) => {
       return <DiffTool {...props} />;
     case "terminal":
       return <TerminalTool {...props} />;
+    case "terminal-session":
+      return <TerminalSessionTool {...props} />;
     case "delegation":
       return <DelegationToolRow {...props} />;
     case "details":

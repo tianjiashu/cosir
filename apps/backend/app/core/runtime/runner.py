@@ -5,6 +5,7 @@ from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.core.delegation.child_agent_runner import ChildAgentRunner
 from app.core.delegation.delegation_executor import DelegationExecutor
+from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.observability import (
     TraceMetadata,
     build_tool_trace_recorder,
@@ -22,9 +23,6 @@ from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.workflow_operations import WorkflowOperations
-from app.core.hook import HookContext
-from app.core.hook import HookEvent
-from app.core.hook import HookInterceptor
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
     get_task_service,

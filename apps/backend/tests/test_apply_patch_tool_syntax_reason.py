@@ -17,10 +17,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from app.core.tools.guard.syntax_check import SyntaxDiagnostic
 from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-
-import pytest
 
 
 def _diagnostic(

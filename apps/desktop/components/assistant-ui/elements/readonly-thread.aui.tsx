@@ -5,7 +5,7 @@ import { MarkdownText } from "@/components/markdown-text";
 import { Reasoning } from "@/components/assistant-ui/elements/reasoning.aui";
 import { ToolPart } from "@/components/assistant-ui/tools/tool-part";
 
-function ReadonlyMessage() {
+function ReadonlyMessage({ taskId }: { taskId?: number }) {
   const role = useAuiState((state) => state.message.role);
   return (
     <MessagePrimitive.Root
@@ -20,7 +20,7 @@ function ReadonlyMessage() {
             case "reasoning":
               return <Reasoning {...part} />;
             case "tool-call":
-              return <ToolPart {...part} />;
+              return <ToolPart {...part} taskId={taskId} />;
             default:
               return null;
           }
@@ -31,13 +31,13 @@ function ReadonlyMessage() {
 }
 
 /** Render transport messages with assistant-ui's readonly runtime provider. */
-export function ReadonlyThread({ messages }: { messages: readonly ThreadMessage[] }) {
+export function ReadonlyThread({ messages, taskId }: { messages: readonly ThreadMessage[]; taskId?: number }) {
   return (
     <ReadonlyThreadProvider messages={messages}>
       <ThreadPrimitive.Root className="aui-root flex h-full min-h-0 min-w-0 flex-col bg-background">
         <ThreadPrimitive.Viewport className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
           <div className="mx-auto flex min-w-0 w-full max-w-4xl flex-1 flex-col gap-2 px-4 py-4">
-            <ThreadPrimitive.Messages>{() => <ReadonlyMessage />}</ThreadPrimitive.Messages>
+            <ThreadPrimitive.Messages>{() => <ReadonlyMessage taskId={taskId} />}</ThreadPrimitive.Messages>
           </div>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>

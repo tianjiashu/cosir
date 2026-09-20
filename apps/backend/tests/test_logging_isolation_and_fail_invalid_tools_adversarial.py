@@ -20,11 +20,11 @@ import pytest
 import app.core.workflows.react.nodes.helper.tool_call_lifecycle as lifecycle_module
 from app.config.logging.configuration import configure_logging, shutdown_logging
 from app.config.logging.logger import log as backend_log
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 # ---------------------------------------------------------------------------
 # 通用桩

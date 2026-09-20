@@ -1,5 +1,4 @@
 """Firecrawl API provider."""
-
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -7,8 +6,8 @@ from typing import Any
 
 import httpx
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.utils.http_proxy import ProxyHttpClient
 from app.config.settings import Settings
 from app.core.tools.tool_handler.web.web_provider import (
     WebExtractItem,
@@ -19,18 +18,13 @@ from app.core.tools.tool_handler.web.web_provider import (
     ensure_supported_extract_format,
     provider_result_metadata,
 )
+from app.utils.http_proxy import ProxyHttpClient
 
 # Firecrawl 官方当前 API 版本为 v2（v1 为 legacy）。搜索响应在 v2 下是
 # ``data.web``（数组嵌在对象中），v1 下是 ``data`` 直接为数组，解析需同时兼容。
-_DEFAULT_BASE_URL = "https://api.firecrawl.dev/v2"
 # 单次提取最多并发抓取的页数：避免 N 个 URL 串行导致整体耗时成倍放大。
-_MAX_CONCURRENT_SCRAPES = 5
 # 回传给模型的 metadata 中体积大且对阅读无价值的键。
-_METADATA_NOISE_KEYS = frozenset({"rawHtml", "links", "screenshot"})
 # 提取结果中已映射到 WebExtractItem 专有字段、不应重复进 metadata 的键。
-_EXTRACT_MAPPED_FIELDS = frozenset(
-    {"url", "markdown", "html", "rawHtml", "content", "links", "screenshot", "error"}
-)
 
 
 class FirecrawlProvider(WebProvider):
@@ -240,7 +234,7 @@ class FirecrawlProvider(WebProvider):
         )
         if not urls:
             return []
-        worker_count = min(len(urls), _MAX_CONCURRENT_SCRAPES)
+        worker_count = min(len(urls), Constant.Web.FIRECRAWL_MAX_CONCURRENT_SCRAPES)
         with ThreadPoolExecutor(max_workers=worker_count) as pool:
             return list(
                 pool.map(
@@ -302,7 +296,7 @@ class FirecrawlProvider(WebProvider):
                 error="Firecrawl scrape response missing 'data' object.",
             )
         metadata = _clean_metadata(data.get("metadata")) or provider_result_metadata(
-            data, _EXTRACT_MAPPED_FIELDS
+            data, Constant.Web.FIRECRAWL_EXTRACT_MAPPED_FIELDS
         )
         content = str(
             data.get(output_format) or data.get("markdown") or data.get("content") or ""
@@ -362,7 +356,7 @@ class FirecrawlProvider(WebProvider):
         if not self.is_available():
             raise WebProviderUnavailableError(self.missing_configuration_message())
         request_headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
-        base_url = self._base_url.rstrip("/") or _DEFAULT_BASE_URL
+        base_url = self._base_url.rstrip("/") or Constant.Web.FIRECRAWL_DEFAULT_BASE_URL
         started = time.monotonic()
         try:
             response = self._get_client().post(
@@ -496,4 +490,8 @@ def _clean_metadata(metadata: object) -> dict[str, object]:
 
     if not isinstance(metadata, dict):
         return {}
-    return {key: value for key, value in metadata.items() if key not in _METADATA_NOISE_KEYS}
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key not in Constant.Web.FIRECRAWL_METADATA_NOISE_KEYS
+    }

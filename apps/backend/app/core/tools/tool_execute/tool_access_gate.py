@@ -17,6 +17,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.hook import HookContext, HookDecision, HookEvent, HookInterceptor, HookResult
 from app.core.tools.schemas import (
     ToolCall,
     ToolDefinition,
@@ -29,10 +30,6 @@ from app.core.tools.validation.arguments import (
     ToolArgumentValidation,
     validate_tool_arguments,
 )
-from app.core.hook import HookContext
-from app.core.hook import HookDecision, HookEvent
-from app.core.hook import HookInterceptor
-from app.core.hook import HookResult
 
 
 @dataclass(frozen=True)

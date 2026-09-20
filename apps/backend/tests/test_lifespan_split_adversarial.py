@@ -146,7 +146,7 @@ def test_domain_route_modules_share_the_singleton() -> None:
         "app.assistant_transport.assistant_api",
     ):
         module = sys.modules.get(module_name) or importlib.import_module(module_name)
-        assert getattr(module, "app") is app_module.app, module_name
+        assert module.app is app_module.app, module_name
 
 
 def test_cors_middleware_installed_after_split() -> None:
@@ -725,6 +725,10 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
             recorder.calls.append("recover_runs")
             return []
 
+        def list_latest_runs(self) -> list[Any]:
+            recorder.calls.append("list_latest_runs")
+            return []
+
     class _DelegationService:
         def mark_interrupted_delegations_failed(self, reason: str) -> None:
             recorder.calls.append("mark_delegations")
@@ -852,6 +856,10 @@ def test_lifespan_logs_recovered_runs_path(
         def recover_orphaned_runs(self) -> list[Any]:
             stubbed_lifespan.calls.append("recover_runs")
             return [SimpleNamespace(id=101), SimpleNamespace(id=202)]
+
+        def list_latest_runs(self) -> list[Any]:
+            stubbed_lifespan.calls.append("list_latest_runs")
+            return []
 
     monkeypatch.setattr(
         lifespan_module, "get_conversation_run_service", lambda: _RunServiceWithRecovered()

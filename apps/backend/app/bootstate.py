@@ -8,8 +8,8 @@
 "启动就绪 / 失败"契约：桌面端 supervisor 轮询该文件即可在进程崩溃的
 瞬间拿到结构化失败原因，无需读日志、无需等超时。
 
-阶段取值：``booting``（启动中）、``ready``（应用装配成功）、
-``failed``（启动失败）、``stopped``（优雅关闭）。
+阶段取值见 ``Constant.Boot`` 的四个稳定字符串：``booting``（启动中）、
+``ready``（应用装配成功）、``failed``（启动失败）、``stopped``（优雅关闭）。
 """
 
 from __future__ import annotations
@@ -23,10 +23,6 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-BOOT_PHASE_BOOTING = "booting"
-BOOT_PHASE_READY = "ready"
-BOOT_PHASE_FAILED = "failed"
-BOOT_PHASE_STOPPED = "stopped"
 
 def write_bootstate(
     path: Path,
@@ -41,7 +37,7 @@ def write_bootstate(
 
     参数:
         path: 启动状态文件绝对路径。
-        phase: 当前启动阶段，取值见模块级 ``BOOT_PHASE_*`` 常量。
+        phase: 当前启动阶段，取值见 ``Constant.Boot`` 的四个稳定字符串。
         step: 可选的子步骤名，例如 ``start`` / ``app_ready``。
         error_type: 失败时的异常类型名。
         error_message: 失败时的异常消息，按原文写入。

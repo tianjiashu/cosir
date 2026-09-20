@@ -64,11 +64,11 @@ React WebView
 - `apps/backend/app/api/terminal_api.py`：终端 session API/只读预览边界；
 - `apps/backend/app/core/tools/tool_handler/terminal_session/`：`terminal_start`、`terminal_read`、`terminal_write`、`terminal_signal`、`terminal_close` handler；
 - `apps/backend/app/core/tools/tool_models/terminal_session_args.py`：交互终端参数模型；
-- `apps/backend/app/storage/model/terminal_session_model.py` 与对应 CRUD：现有 `terminal_sessions` 元数据表；
+- `apps/backend/app/core/workflows/react/state.py`：Run 级 `terminal_sessions` checkpoint 元数据；
 - `apps/backend/app/core/tools/tool_ui_display_contract.md`：已约定交互 session 使用 `kind: terminal-session`，并复用 terminal layout；
 - `apps/desktop/components/assistant-ui/tools/terminal-session.ts`、`terminal-write-scheduler.ts`、`terminal-output-reconciler.ts`、`terminal-viewport.tsx`：一次性终端的 xterm 渲染和控制字符处理基础。
 
-当前限制是：交互式 handler 仍处于 hidden 状态，没有加入 `ToolSystem`，因此 Agent 当前不可见；前端已有一次性终端 renderer，但还没有 session attach 的任务级只读面板。
+当前实现已将交互式 handler 注册到 `ToolSystem`，并接入 Task 级只读 session attach 面板；一次性终端 renderer 与 raw PTY bytes renderer 仍保持分离。
 
 当前一次性 `TerminalSession` 的输入是后端累计文本 snapshot，并依赖 snapshot 前缀比较；交互式 preview 则是 `Uint8Array` 原始 output frame。两者应复用 xterm 初始化、尺寸、生命周期和错误处理，但不能把 raw byte frame 直接塞进一次性 snapshot reconciler。交互式面板需要单独的 append-bytes consumer；一次性终端继续使用累计 snapshot consumer。
 
@@ -86,26 +86,25 @@ React WebView
 
 本方案不新增数据库表，不增加 session output 表，不增加 operation 表，不增加 terminal history 表。
 
-直接复用当前已有的 `terminal_sessions` 元数据表，用于：
+终端元数据随当前 Run 的 LangGraph checkpoint 保存，用于：
 
-- `session_id`、`task_id`、`workspace_id`；
-- shell 类型和 executable；
+- `session_id`；
+- shell 类型；
 - 初始 cwd；
 - status、exit code、end reason；
-- worker instance/pid 诊断信息；
-- cols/rows 和时间字段。
+- output cursor。
 
-表中不保存 PTY handle、worker connection、完整终端输出、subscriber、UI 的 xterm 屏幕状态或 Agent 的终端输入历史。
+checkpoint 不保存 PTY handle、worker connection、完整终端输出、subscriber、UI 的 xterm 屏幕状态或 Agent 的终端输入历史。
 
-输出 ring buffer、subscriber、generation、cursor 和活跃 worker handle 只存在当前 backend 进程内。backend 重启后，遗留 active session 收敛为 `interrupted`，不重放旧 shell、不恢复旧 Agent 操作。
+输出 ring buffer、subscriber、generation、worker pid 和活跃 worker handle 只存在当前 backend 进程内。backend 重启后，不重放旧 shell、不恢复旧 Agent 操作。
 
-`worker_instance_id` 是现有元数据表中的诊断 identity；`generation` 是当前 backend 进程内用于拒绝旧 callback/event 的运行时 fencing 值。两者相关但不等价：持久化 identity 不能替代每次 worker attach 的 generation 校验。
+`generation` 是当前 backend 进程内用于拒绝旧 callback/event 的运行时 fencing 值，不进入 checkpoint。
 
 ### 3.2 事实所有权
 
 ```text
-terminal_sessions 表
-  session 元数据和最终生命周期状态
+LangGraph checkpoint（Run 级）
+  可序列化 session 元数据和工具操作期间的生命周期投影
 
 TerminalSessionService / process registry
   当前 worker、ring buffer、subscriber、generation、cursor
@@ -144,13 +143,13 @@ React state / xterm
 terminal_start(shell="auto", cwd=".")
   → 返回 session_id、platform、shell、cwd、status、next_seq
 
-terminal_write(session_id, data="npm install\n", after_seq=0, wait_ms=500)
+terminal_write(session_id, data="npm install", submit=true, after_seq=0, wait_ms=500)
   → 返回新增输出、next_seq、status
 
 terminal_read(session_id, after_seq=next_seq, wait_ms=1000)
   → 等待后续输出或状态变化
 
-terminal_write(session_id, data="y\n", ...)
+terminal_write(session_id, data="y", submit=true, ...)
   → 仅在输出明确要求输入时使用
 
 terminal_signal(session_id, signal="interrupt")
@@ -167,6 +166,8 @@ terminal_close(session_id)
 所有操作都必须携带 `session_id`，由 backend 校验 Task、Workspace 和当前 session 的归属。
 
 `terminal_write` 应增加进程内的 `operation_id`/`command_id` 去重语义。该字段必须进入工具参数或统一执行 envelope：同一个 session 内同一个 id 搭配相同 payload 只允许写入一次并返回既有结果；相同 id 搭配不同 payload 必须拒绝。去重状态只保存在当前 session actor 内，不新增数据库表；backend 重启后 session 已经 interrupted，不自动重试旧写入；前端没有写入权限，因此不需要为 UI 设计写入幂等协议。
+
+`terminal_write.data` 只表示原始 UTF-8 文本，`submit=false` 时不会隐式追加回车；需要提交命令或回答交互提示时必须传 `submit=true`，由工具边界追加一个真实的 CR（`0x0D`）。这不是对 `data` 的静默转义或解码，因此字面量 `\\r`、`\\n` 和 `&#13;` 会保持原样。显式的 `submit` 参数避免模型/JSON 通道无法可靠产生裸控制字符时，Windows ConPTY 只收到回显而不执行。
 
 输出读取使用从 `1` 开始的单调递增 `output_seq`：`after_seq=0` 或 `null` 表示尚未应用任何 frame；`after_seq` 表示调用方已经完整应用的最后一个序号；返回 `seq > after_seq` 的增量和 `next_seq`；ring buffer 无法覆盖 cursor 时返回 `resync_required`，禁止静默拼接不完整输出；不根据文本内容猜测重复或增量。
 
@@ -236,12 +237,12 @@ Tool 描述还必须按 worker capabilities 声明可用信号。当前 worker h
 
 ### 7.1 需要改造的模块
 
-1. **Tool 注册**：在真实 worker、跨平台和生命周期测试通过后，把现有 hidden handler 注册进 `ToolSystem`。不要新建第二套交互工具执行器。
+1. **Tool 注册**：复用现有 worker、service 和生命周期边界，将现有 handler 注册进 `ToolSystem`，不新建第二套交互工具执行器。
 2. **Tool 描述**：把静态描述拆成稳定公共部分和平台运行时部分；描述由 shell resolver 的实际结果生成。
-3. **session service**：继续复用 `TerminalSessionService`、已有 `terminal_sessions` 表、进程内 registry、ring buffer 和 Task/Workspace/session 归属校验。Tool handler 已经有 `workspace_id` 上下文但后续 service API 当前主要以 `task_id` 校验；正式注册前必须在 service 边界交叉验证 `context.workspace_id` 与 session 的 `workspace_id`，不需要把 workspace_id 暴露给模型参数。不要新增表。
+3. **session service**：继续复用 `TerminalSessionService`、Run 级 checkpoint 元数据、进程内 registry、ring buffer 和 Task/Workspace/session 归属校验。Tool handler 已经有 `workspace_id` 上下文，service 在边界交叉验证 `context.workspace_id` 与 session 的 `workspace_id`，不把 workspace_id 暴露给模型参数。不要新增终端表。
 4. **worker 生命周期**：backend 是 terminal-worker 的唯一 owner。启动、heartbeat、EOF、正常 close、强制清理和 backend crash recovery 都必须由 backend/worker 边界完成。
 5. **只读预览 API**：保持独立的本机 preview stream。浏览器连接只允许 attach 和 cursor，不接受 input、signal、close、resize 消息。
-6. **Assistant Transport 投影**：`terminal_start` 的 `display_data` 使用有限的 `kind: terminal-session`，不把完整 PTY 输出放进 display data、conversation snapshot 或数据库。
+6. **Assistant Transport 投影**：所有 terminal session 工具的 `display_data` 使用有限的 `kind: terminal-session`，不把完整 PTY 输出放进 display data、conversation snapshot 或数据库；read/write 的完整文本只进入模型 content。
 
 建议的 display data：
 
@@ -314,7 +315,7 @@ apps/desktop/components/terminal/
 - xterm `onData`；
 - 键盘输入或粘贴写入；
 - Ctrl+C、Ctrl+D、signal、kill、close session 按钮；
-- 通过 ResizeObserver 反向修改 PTY cols/rows；
+- 通过 ResizeObserver 反向修改 PTY geometry；
 - 直接调用 terminal Tool；
 - 直接创建或停止进程。
 
@@ -398,10 +399,10 @@ WebSocket 的 `trace_id` 使用 query 是因为浏览器原生 WebSocket 不能�
 
 ### Agent Run
 
-- `terminal_start` 记录 `created_by_run_id`，但 session 生命周期由 session service 管理；
+- `terminal_start` 必须绑定当前 `run_id`，session 生命周期由 session service 管理；
 - `terminal_read/write` 的等待支持当前 Run cancel；
-- Run cancel 默认只取消当前 Tool 等待，不自动关闭 Task 级 session；
-- Agent 必须显式调用 `terminal_close`，或由 session idle/max lifetime 策略清理；
+- Run cancel 立即关闭该 Run 的全部 terminal，并由 executor `finally` 再次兜底；
+- Run 正常结束或异常结束时强制关闭该 Run 的全部 terminal；
 - 同一 session 的 write/signal/close 通过 session actor/mailbox 串行化。
 
 ### 面板
@@ -427,13 +428,13 @@ WebSocket 的 `trace_id` 使用 query 是因为浏览器原生 WebSocket 不能�
 
 ### 后端改造
 
-1. 以现有 `TerminalSessionService`、`terminal-worker`、`terminal_api` 和 `terminal_sessions` 表为基础，不增加表；
-2. 补齐 `operation_id/command_id` 的进程内 write 去重；
-3. 统一 session generation、output seq、resync 和 subscriber 背压；
+1. 以 `TerminalSessionService`、`terminal-worker`、`terminal_api` 和 Run checkpoint 为基础，不增加终端表；（已完成）
+2. 补齐 `operation_id/command_id` 的进程内 write 去重；（已完成）
+3. 统一 session generation、output seq、resync 和 subscriber 背压；（已完成）
 4. 完成 Windows/macOS/Linux shell resolver 和 Tool 描述；
 5. 完成 worker 无窗口启动和进程树清理验收；
-6. 将现有 hidden handlers 注册到 `ToolSystem`；
-7. 投影 `terminal-session` display data，不把完整 output 放进 Assistant Transport。
+6. 将现有 handlers 注册到 `ToolSystem`；（已完成）
+7. 投影 `terminal-session` display data，不把完整 output 放进 Assistant Transport。（已完成）
 
 ### 前端改造
 
@@ -537,7 +538,7 @@ P2：后续优化建议（没有则写“无”）
 2. 不在 React 中使用 `child_process`、Tauri command 或直接 SQLite；
 3. 不打开系统终端 GUI；
 4. 不让 TerminalPanel 发送用户输入或控制信号；
-5. 不把终端 output 全量写入 conversation snapshot、LangGraph checkpoint 或新数据库表；
+5. 不把终端 output 全量写入 conversation snapshot、LangGraph checkpoint 或数据库表；
 6. 不通过 Assistant SSE 模拟无限终端输出；
 7. 不引入公网 WebSocket、认证、多租户、Redis、Postgres、容器沙箱或远程队列；
 8. 不按操作系统拆出重复 Tool 名称；
@@ -552,18 +553,21 @@ P2：后续优化建议（没有则写“无”）
 
 ```text
 TaskPage
-├─ Thread
-├─ Assistant UI ToolPart
-│   └─ TerminalToolCard
-│       └─ 打开终端
-└─ TerminalPanelHost
-    └─ TerminalPanel
-        ├─ TerminalPanelHeader
-        ├─ TerminalViewport
-        └─ TerminalPanelStatus
+└─ TaskWorkspaceLayout（纵向布局边界）
+    ├─ AssistantContent（flex: 1，min-h-0）
+    │   └─ Thread / Assistant UI ToolPart
+    │       └─ TerminalToolCard
+    │           └─ 打开终端
+    └─ TerminalPanelHost（w-full，shrink-0）
+        └─ TerminalPanel
+            ├─ TerminalPanelHeader
+            ├─ TerminalViewport
+            └─ TerminalPanelStatus
 ```
 
 TerminalPanel 应作为 Task 级底部面板或右侧抽屉存在，不嵌入每一个 Tool 卡片。Tool 卡片只展示 session 摘要并提供“打开终端”入口；点击入口只聚焦或打开已有 session，不创建 session、不执行命令。
+
+任务页必须通过 `TaskWorkspaceLayout` 之类的稳定布局边界承载 surface，不能把可选面板作为普通横向 flex sibling 直接插入 `TaskPage`。主内容和底部面板必须明确设置 `min-h-0`、`min-w-0`，面板必须 `w-full`、`shrink-0` 并使用受控高度；面板内容或 xterm 的 intrinsic size 不得改变 Assistant 主区的布局方向，也不得把空白区域误判为消息。
 
 面板关闭只取消 preview 订阅，不关闭 backend session。一个 Task 可以存在多个 session，store 必须使用 `task_id + session_id` 作为 key，不能把不同 session 的输出混入同一个 xterm 实例。
 
@@ -615,11 +619,15 @@ new Terminal({
 - 不注册 xterm `onData`；
 - 不转发键盘输入或粘贴内容；
 - 不发送 Ctrl+C、EOF、signal 或 close；
-- 不通过 ResizeObserver 修改后端 PTY 的 cols/rows；
+- 不通过 ResizeObserver 修改后端 PTY 的 geometry；
 - 只用 fit addon 做本地视觉适配；
 - 保持 PTY 的 `\r`、`\n`、ANSI 光标、擦除、颜色和全屏语义。
 
+尺寸管理必须由共享的 terminal resize controller 负责：只观察外层宿主容器，在 animation frame 中合并 fit 请求，跳过零尺寸和相同尺寸，并在 dispose 时先停止 observer。不得在每个 renderer 中各自同步调用 `fit()`，避免 flex/surface 切换时形成 ResizeObserver 反馈循环。全局前端错误日志必须记录受控的 `ErrorEvent.message`，并对相同窗口错误限流/去重，不能因为一个布局错误持续写入大量重复日志。
+
 一次性终端可以继续使用自身的换行配置；交互式 raw PTY 输出不能套用一次性终端的文本归一化逻辑。
+
+`terminal_write.data` 是原始 UTF-8 终端输入，`submit=false` 时不追加回车；需要提交命令或回答交互提示时使用 `submit=true`，由工具边界追加一个真实的 CR（`0x0D`）。后端不得在通用 PTY 层静默 HTML decode、转义解码或 trim 输入；因此字面量 `\\r`、`\\n`、`&#13;` 会保持原样，发现可疑编码时只记录不含原文的结构化诊断，保留终端输入语义。
 
 ### 15.4 TerminalSessionStore
 

@@ -523,7 +523,7 @@ def test_concurrent_projection_produces_consistent_results(
                 payload = definition.to_model_tool_definition()
                 with lock:
                     results.append(payload)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             with lock:
                 errors.append(exc)
 

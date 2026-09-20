@@ -10,6 +10,7 @@ leaf 层可被 ``api`` / ``core`` / ``service`` 任意层无循环依赖地引�
 
 from pathlib import Path
 
+
 def read_text_file(path: str | Path) -> str:
     """读取文本文件的全部内容。
 

@@ -20,37 +20,21 @@
 
 from __future__ import annotations
 
+from app.config.constant import Constant
 from app.models.enums.error_kind import ErrorKind
-
-# 兜底 code：没有任何可用分类信息时使用。
-RUN_FAILURE_CODE_UNKNOWN = "run_failed"
-# 取消类终态：领域侧未给出具体取消原因时的兜底 code。
-RUN_FAILURE_CODE_CANCELLED = "run_cancelled"
-# 配置期失败：provider / 模型解析不出可用模型，或 Run 缺少 provider 绑定。
-RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE = "model_resolve_failed"
-# 流程类失败：与模型调用错误无关，出处在 workflow 节点或生命周期收口。
-RUN_FAILURE_CODE_MODEL_OUTPUT_INVALID = "invalid_model_output"
-RUN_FAILURE_CODE_TOOL_ERROR_LIMIT = "tool_error_limit_reached"
-RUN_FAILURE_CODE_MAX_STEPS = "max_steps_reached"
-RUN_FAILURE_CODE_GRAPH_FAILED = "workflow_graph_failed"
-RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED = "graph_already_finished"
-RUN_FAILURE_CODE_BACKEND_RESTARTED = "backend_restarted"
-RUN_FAILURE_CODE_CLIENT_DISCONNECTED = "client_disconnected"
-
-_DEFAULT_MESSAGE = "对话运行失败，请重试或查看日志"
 
 # 唯一文案目录：键为失败 code，值为面向用户的受控文案。
 _RUN_FAILURE_MESSAGES: dict[str, str] = {
-    RUN_FAILURE_CODE_UNKNOWN: _DEFAULT_MESSAGE,
-    RUN_FAILURE_CODE_CANCELLED: "已取消本轮对话",
-    RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE: "模型配置不可用，请检查模型设置后重试",
-    RUN_FAILURE_CODE_MODEL_OUTPUT_INVALID: "模型未返回可用内容，请重试",
-    RUN_FAILURE_CODE_TOOL_ERROR_LIMIT: "连续工具调用失败过多，已停止本轮对话",
-    RUN_FAILURE_CODE_MAX_STEPS: "已达最大步数上限，已停止本轮对话",
-    RUN_FAILURE_CODE_GRAPH_FAILED: "对话运行中断，请重试",
-    RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED: "本轮对话已结束，无法继续，请新建对话",
-    RUN_FAILURE_CODE_BACKEND_RESTARTED: "后端已重启，本轮对话被中断，请重新发送",
-    RUN_FAILURE_CODE_CLIENT_DISCONNECTED: "连接已断开，本轮对话被中断，请重新发送",
+    Constant.Run.RUN_FAILURE_CODE_UNKNOWN: Constant.Run.DEFAULT_MESSAGE,
+    Constant.Run.RUN_FAILURE_CODE_CANCELLED: "已取消本轮对话",
+    Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE: "模型配置不可用，请检查模型设置后重试",
+    Constant.Run.RUN_FAILURE_CODE_MODEL_OUTPUT_INVALID: "模型未返回可用内容，请重试",
+    Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT: "连续工具调用失败过多，已停止本轮对话",
+    Constant.Run.RUN_FAILURE_CODE_MAX_STEPS: "已达最大步数上限，已停止本轮对话",
+    Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED: "对话运行中断，请重试",
+    Constant.Run.RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED: "本轮对话已结束，无法继续，请新建对话",
+    Constant.Run.RUN_FAILURE_CODE_BACKEND_RESTARTED: "后端已重启，本轮对话被中断，请重新发送",
+    Constant.Run.RUN_FAILURE_CODE_CLIENT_DISCONNECTED: "连接已断开，本轮对话被中断，请重新发送",
     # 取消类：领域侧只给到这些原因时的通用文案。
     "user_cancelled": "已取消本轮对话",
     "runtime_cancelled": "已取消本轮对话",
@@ -87,20 +71,10 @@ def run_failure_message(code: str | None) -> str:
     """
 
     if code is None:
-        return _DEFAULT_MESSAGE
-    return _RUN_FAILURE_MESSAGES.get(code, _DEFAULT_MESSAGE)
+        return Constant.Run.DEFAULT_MESSAGE
+    return _RUN_FAILURE_MESSAGES.get(code, Constant.Run.DEFAULT_MESSAGE)
 
 
 __all__ = [
-    "RUN_FAILURE_CODE_BACKEND_RESTARTED",
-    "RUN_FAILURE_CODE_CANCELLED",
-    "RUN_FAILURE_CODE_CLIENT_DISCONNECTED",
-    "RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED",
-    "RUN_FAILURE_CODE_GRAPH_FAILED",
-    "RUN_FAILURE_CODE_MAX_STEPS",
-    "RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE",
-    "RUN_FAILURE_CODE_MODEL_OUTPUT_INVALID",
-    "RUN_FAILURE_CODE_TOOL_ERROR_LIMIT",
-    "RUN_FAILURE_CODE_UNKNOWN",
     "run_failure_message",
 ]

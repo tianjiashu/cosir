@@ -3,7 +3,6 @@
 本模块只开放 session 输出预览。Agent 对 session 的状态改变仍只能经隐藏的
 terminal handler/service 调用；浏览器连接不能写入、signal 或 close PTY。
 """
-
 import asyncio
 import json
 from typing import cast
@@ -11,6 +10,7 @@ from typing import cast
 from fastapi import Depends, WebSocket, WebSocketDisconnect
 
 from app.app import app
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.depends import get_terminal_session_service
 from app.service.terminal.errors import (
@@ -21,9 +21,6 @@ from app.service.terminal.terminal_session_service import (
     TerminalPreviewSubscription,
     TerminalSessionService,
 )
-
-MAX_PREVIEW_CONTROL_BYTES = 8 * 1024
-PREVIEW_POLL_SECONDS = 0.25
 
 
 @app.websocket("/tasks/{task_id}/terminal/sessions/{session_id}/stream")
@@ -53,9 +50,14 @@ async def terminal_preview_stream(
                 after_seq=after_seq,
             )
         except TerminalSessionResyncRequiredError as exc:
+            try:
+                snapshot = terminal_service.snapshot(session_id, task_id=task_id)
+                generation = snapshot.get("generation")
+            except TerminalSessionError:
+                generation = None
             await websocket.send_json(
                 _resync_event(
-                    generation=None,
+                    generation=generation,
                     after_seq=exc.after_seq,
                     first_available_seq=exc.first_available_seq,
                     next_seq=exc.next_seq,
@@ -111,7 +113,7 @@ async def _stream_events(
     try:
         while True:
             event_task = asyncio.create_task(
-                asyncio.to_thread(subscription.get, PREVIEW_POLL_SECONDS)
+                asyncio.to_thread(subscription.get, Constant.Terminal.PREVIEW_POLL_SECONDS)
             )
             done, _ = await asyncio.wait(
                 {receive_task, event_task},
@@ -161,10 +163,13 @@ async def _receive_control_frame(websocket: WebSocket) -> dict[str, object]:
         payload_bytes = message.get("bytes")
         if not isinstance(payload_bytes, bytes):
             raise ValueError("control frame must be JSON text")
-        if len(payload_bytes) > MAX_PREVIEW_CONTROL_BYTES:
+        if len(payload_bytes) > Constant.Terminal.MAX_PREVIEW_CONTROL_BYTES:
             raise ValueError("control frame is too large")
         payload = payload_bytes.decode("utf-8")
-    if not isinstance(payload, str) or len(payload.encode("utf-8")) > MAX_PREVIEW_CONTROL_BYTES:
+    if (
+        not isinstance(payload, str)
+        or len(payload.encode("utf-8")) > Constant.Terminal.MAX_PREVIEW_CONTROL_BYTES
+    ):
         raise ValueError("control frame is too large")
     value = json.loads(payload)
     if not isinstance(value, dict):

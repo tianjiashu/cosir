@@ -15,7 +15,6 @@ usage / 终态语义，那些由调用方处理。状态机持有「当前处于
 的增量缓冲」两个状态，把原先散落在流式循环多处（切通道先关旧 part、tool_call / 取消 / 流末
 收口）的开关逻辑收口到一处。
 """
-
 import time
 from collections.abc import Callable
 
@@ -24,12 +23,11 @@ from app.assistant_transport.event import (
     AssistantTextDeltaEvent,
     AssistantTextPartKind,
 )
+from app.config.constant import Constant
 
 # 单次事件合并的最小字符数；≤0 时该阈值恒满足，合并退化为每次增量立即发出。
-DEFAULT_TEXT_FLUSH_MIN_CHARS = 32
 # 距上次发出达到该秒数即强制发出，避免短回复在字符阈值未满时长时间不出字；
 # ≤0 时该阈值恒满足，同样退化为每次增量立即发出。
-DEFAULT_TEXT_FLUSH_MAX_INTERVAL_SECONDS = 0.05
 
 
 class StreamingPartStateMachine:
@@ -66,8 +64,8 @@ class StreamingPartStateMachine:
         task_id: int,
         run_id: int,
         step_id: str,
-        text_flush_min_chars: int = DEFAULT_TEXT_FLUSH_MIN_CHARS,
-        text_flush_max_interval_seconds: float = DEFAULT_TEXT_FLUSH_MAX_INTERVAL_SECONDS,
+        text_flush_min_chars: int = Constant.Workflow.DEFAULT_TEXT_FLUSH_MIN_CHARS,
+        text_flush_max_interval_seconds: float = Constant.Workflow.DEFAULT_TEXT_FLUSH_MAX_INTERVAL_SECONDS,
         now: Callable[[], float] | None = None,
     ) -> None:
         """构造 part 生命周期状态机。

@@ -11,7 +11,6 @@
   （委托给 ``ConversationRunCrud``/``TaskCrud``）；Run 创建期的 canonical 初始 user
   message 通过 Task context owner 写入。
 """
-
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +19,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.assistant_transport.event import RunInitializedEvent
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
@@ -36,9 +36,6 @@ from app.service.depends import get_provider_service
 from app.service.task.conversation_run_state_service import terminal_error
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.store_engines import main_session_factory
-
-_LOCAL_FILE_TOKEN = re.compile(r"\[\[cosir-file:([^\]]+)\]\]")
-_LOCAL_IMAGE_TOKEN = re.compile(r"\[\[cosir-image:([^\]]+)\]\]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +162,7 @@ class ConversationRunService:
             }
 
         result: list[ConversationRunFileAttachment] = []
-        for attachment_id in dict.fromkeys(_LOCAL_FILE_TOKEN.findall(display_text)):
+        for attachment_id in dict.fromkeys(Constant.Cosir.LOCAL_FILE_TOKEN.findall(display_text)):
             resolved_attachment = merged.get(attachment_id)
             if resolved_attachment is None or not Path(resolved_attachment["path"]).is_file():
                 raise ValueError("ordinary file attachment is unavailable")
@@ -187,7 +184,9 @@ class ConversationRunService:
                 raise ValueError("ordinary file attachment is unavailable")
             return attachment["path"]
 
-        return _LOCAL_IMAGE_TOKEN.sub("", _LOCAL_FILE_TOKEN.sub(replace, text))
+        return Constant.Cosir.LOCAL_IMAGE_TOKEN.sub(
+            "", Constant.Cosir.LOCAL_FILE_TOKEN.sub(replace, text)
+        )
 
     @staticmethod
     def _finalize_image_assets(
@@ -460,3 +459,12 @@ class ConversationRunService:
                     },
                 )
         return recovered
+
+    def list_latest_runs(self) -> list[ConversationRunRecord]:
+        """返回每个 task 最近一次 Run，供启动期 checkpoint 旁路恢复扫描使用。
+
+        本方法只读取主库 Run 记录，不改变业务状态；调用方负责按需读取对应的 LangGraph
+        checkpoint，并处理进程内 terminal worker。返回结果按最近创建时间倒序。
+        """
+
+        return self._run.list_latest_by_tasks()

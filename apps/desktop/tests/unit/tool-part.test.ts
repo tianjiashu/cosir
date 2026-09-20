@@ -46,6 +46,14 @@ describe("tool renderer routing", () => {
     })).toBe("delegation");
   });
 
+  it("routes interactive terminal sessions to the task-scoped readonly panel", () => {
+    expect(routeToolPart("terminal_start", {
+      backendStatus: "completed",
+      presentation: { variant: "terminal-session-start", expand_layout: "terminal" },
+      display_data: { kind: "terminal-session", session_id: "term_demo" },
+    })).toBe("terminal-session");
+  });
+
   it("allows only http(s) URLs from tool display data", () => {
     expect(safeExternalUrl("https://example.com/a")).toBe("https://example.com/a");
     expect(safeExternalUrl("javascript:alert(1)")).toBeNull();

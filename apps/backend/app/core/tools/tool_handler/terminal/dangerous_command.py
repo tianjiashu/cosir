@@ -24,10 +24,11 @@
 受控 ``delete_file`` 文件操作；目录删除不受 Agent 文件工具支持。本模块**不承诺**能拦截全部危险
 命令，只负责提高攻击成本；被放行的命令仍受审批与隔离约束。
 """
-
 import re
 import unicodedata
 from dataclasses import dataclass
+
+from app.config.constant import Constant
 
 # 灾难级 deny-list：每项严格对应一条 (regex, key, description)。
 # key 为稳定分类键（英文 snake_case），供日志 event/data 使用；description 拼进
@@ -294,12 +295,6 @@ _CODE_DANGEROUS_CALLS: tuple[tuple[str, str, str], ...] = (
 # ``node -e 'code'`` / ``php -r "code"`` / ``powershell -Command "code"`` 等。
 # 引号内代码串经 ``(.*?)`` 非贪婪捕获，``(?<!\\)\1`` 拒绝转义引号提前闭合；
 # ``re.DOTALL`` 使 ``.`` 可跨换行（多行代码串）。
-_INTERPRETER_CODE_RE = re.compile(
-    r"\b(?:python(?:[0-9.]*)?|node(?:js)?|ruby|perl|php|bash|sh|zsh|fish|pwsh|powershell)\s+"
-    r"(?:-[cer]\b|-Command\b)\s*"
-    r"(['\"])(.*?)(?<!\\)\1",
-    re.IGNORECASE | re.DOTALL,
-)
 
 # 代码串递归检测的最大嵌套深度：防御 ``python -c "python -c ..."`` 无限递归。
 _MAX_CODE_RECURSION_DEPTH = 3
@@ -512,7 +507,7 @@ def _extract_interpreter_code(command: str) -> list[str]:
     副作用:
         无（纯函数）。
     """
-    return [match.group(2) for match in _INTERPRETER_CODE_RE.finditer(command)]
+    return [match.group(2) for match in Constant.Tools.INTERPRETER_CODE_RE.finditer(command)]
 
 
 def _detect_code_string(code: str, depth: int) -> DangerousCommandVerdict:

@@ -31,6 +31,7 @@ from typing import Any
 
 import pytest
 
+from app.config.constant import Constant
 from app.core.delegation import child_agent_runner as runner_module
 from app.core.delegation.child_agent_runner import ChildAgentRunner
 
@@ -258,9 +259,8 @@ def test_claim_failure_leaves_pending_zombie_run(monkeypatch: pytest.MonkeyPatch
     # 失败收敛确实尝试过，但因非 running 而未命中（真实实现语义）。
     assert run_state.fail_calls == [31]
     # 佐证僵尸后果：pending 仍属「活跃」状态集合，has_active_run 会为 True。
-    from app.storage.crud.delegation_crud import ACTIVE_DELEGATION_STATUSES
 
-    assert "pending" in ACTIVE_DELEGATION_STATUSES
+    assert "pending" in Constant.Delegation.ACTIVE_DELEGATION_STATUSES
 
 
 # =========================================================================== #
@@ -486,8 +486,8 @@ def test_child_runner_claims_before_start_in_source() -> None:
 def real_state_service(monkeypatch: pytest.MonkeyPatch):
     """用临时 SQLite 初始化真实存储，返回真实 ``ConversationRunStateService`` 与其 CRUD。"""
 
-    from app.utils import paths
     from app.service import depends as service_depends
+    from app.utils import paths
 
     tmpdir = Path(tempfile.mkdtemp(prefix="child_claim_it_"))
     original_db = paths.DATABASE_FILE

@@ -14,8 +14,6 @@ pub enum ControlFrame {
         shell: Vec<String>,
         shell_kind: String,
         cwd: String,
-        cols: u16,
-        rows: u16,
     },
     Write {
         data_base64: String,
@@ -39,10 +37,6 @@ pub enum WorkerEvent {
     },
     Output {
         data_base64: String,
-    },
-    Status {
-        cols: u16,
-        rows: u16,
     },
     Error {
         code: &'static str,
@@ -89,7 +83,7 @@ mod tests {
 
     #[test]
     fn reads_length_prefixed_start_frame() {
-        let payload = br#"{"type":"start","shell":["bash"],"shell_kind":"bash","cwd":"/tmp","cols":80,"rows":24}"#;
+        let payload = br#"{"type":"start","shell":["bash"],"shell_kind":"bash","cwd":"/tmp"}"#;
         let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
         frame.extend_from_slice(payload);
 
@@ -101,13 +95,10 @@ mod tests {
                 shell,
                 shell_kind,
                 cwd,
-                cols,
-                rows,
             } => {
                 assert_eq!(shell, vec!["bash"]);
                 assert_eq!(shell_kind, "bash");
                 assert_eq!(cwd, "/tmp");
-                assert_eq!((cols, rows), (80, 24));
             }
             _ => panic!("expected start frame"),
         }
@@ -121,14 +112,10 @@ mod tests {
     }
 
     #[test]
-    fn encodes_event_with_big_endian_length_prefix() {
-        let frame = encode_event(&WorkerEvent::Status {
-            cols: 100,
-            rows: 40,
-        })
-        .expect("event");
+    fn encodes_exit_event_with_big_endian_length_prefix() {
+        let frame = encode_event(&WorkerEvent::Exit { exit_code: Some(0) }).expect("event");
         let size = u32::from_be_bytes(frame[..4].try_into().expect("length prefix")) as usize;
         assert_eq!(size, frame.len() - 4);
-        assert_eq!(&frame[4..], br#"{"type":"status","cols":100,"rows":40}"#);
+        assert_eq!(&frame[4..], br#"{"type":"exit","exit_code":0}"#);
     }
 }

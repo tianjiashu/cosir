@@ -1,4 +1,4 @@
-"""Hidden ``terminal_start`` handler."""
+"""``terminal_start`` handler."""
 
 from typing import ClassVar
 
@@ -9,11 +9,16 @@ from app.core.tools.schemas import (
     ToolObservation,
 )
 from app.core.tools.tool_handler.terminal_session.common import (
+    build_session_display_payload,
     cancelled,
     cancelled_observation,
     require_service,
     success_observation,
     with_terminal_errors,
+)
+from app.core.tools.tool_handler.terminal_session.descriptions import (
+    build_terminal_session_parameters_schema,
+    describe_terminal_tool,
 )
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import TerminalStartArgs
@@ -22,7 +27,6 @@ from app.core.tools.tool_models import TerminalStartArgs
 class TerminalStartTool(HandlerBase):
     """创建 Agent 驱动的 PTY session。
 
-    当前类已经实现并可单元测试，但刻意未加入 ``ToolSystem``，因此当前 Agent 不可见。
     前端不会调用此 handler；前端只能 attach ``terminal_start`` 返回的 session 预览。
     """
 
@@ -41,8 +45,6 @@ class TerminalStartTool(HandlerBase):
         self,
         shell: str = "auto",
         cwd: str | None = None,
-        cols: int = 120,
-        rows: int = 32,
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """创建 session 并返回 session 元数据；不向前端发送任何输入。"""
@@ -60,21 +62,20 @@ class TerminalStartTool(HandlerBase):
                 workspace_root=str(execution_context.workspace_root),
                 shell=shell,
                 cwd=cwd,
-                cols=cols,
-                rows=rows,
-                created_by_run_id=execution_context.run_id or None,
+                run_id=execution_context.run_id,
             )
             return success_observation(
                 self.name,
                 self.permission,
                 payload,
                 summary="Terminal session started.",
+                display_payload=build_session_display_payload(payload, include_terminal_info=True),
             )
 
         return with_terminal_errors(self.name, self.permission, action)
 
     def to_definition(self) -> ToolDefinition:
-        """返回 hidden tool definition；调用方当前不得自动注册到 Agent。"""
+        """返回交互终端工具定义。"""
 
         return ToolDefinition(
             name=self.name,
@@ -89,9 +90,14 @@ class TerminalStartTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="启动终端",
                 icon="terminal",
+                variant="terminal-session-start",
                 surface="standalone",
                 expandable=True,
                 expand_layout="terminal",
                 show_result=False,
+            ),
+            description_provider=lambda: describe_terminal_tool(self.name, self.description),
+            schema_provider=lambda: build_terminal_session_parameters_schema(
+                self.name, self.args_model
             ),
         )

@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from app.utils import paths
 from app.service.depends import (
     close_service_dependencies,
     get_task_crud,
@@ -21,6 +20,7 @@ from app.service.depends import (
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import init_storage, main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.utils import paths
 
 
 @pytest.fixture

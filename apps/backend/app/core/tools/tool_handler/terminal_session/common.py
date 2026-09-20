@@ -1,14 +1,19 @@
-"""Hidden terminal session tool shared helpers."""
+"""Terminal session tool shared helpers."""
+
+from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.service.terminal.errors import TerminalSessionError
-from app.service.terminal.terminal_session_service import TerminalSessionService
+
+if TYPE_CHECKING:
+    from app.service.terminal.terminal_session_service import TerminalSessionService
 
 
 def require_service(context: ToolExecutionContext) -> TerminalSessionService:
@@ -80,6 +85,7 @@ def success_observation(
     payload: dict[str, object],
     *,
     summary: str,
+    display_payload: dict[str, object],
 ) -> ToolObservation:
     """构造终端工具成功观察；完整 output 只进入结构化 payload。"""
 
@@ -87,8 +93,42 @@ def success_observation(
         tool_name=tool_name,
         permission=permission,
         content=f"{summary}\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}",
-        display_data={"kind": "terminal-session", **payload},
+        display_data={
+            "kind": "terminal-session",
+            **display_payload,
+        },
     )
+
+
+def build_session_display_payload(
+    payload: dict[str, object],
+    *,
+    include_terminal_info: bool = False,
+    extra: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Project a session snapshot into the allowlisted UI metadata.
+
+    The service snapshot also contains worker, workspace, executable and timestamp
+    diagnostics. Those are backend facts and must not cross into Assistant Transport.
+    ``extra`` is reserved for small, validated operation metadata such as ``signal``
+    or ``submitted``; it must never contain terminal input or output.
+    """
+
+    fields = (
+        "session_id",
+        "status",
+        "generation",
+        "first_available_seq",
+        "next_seq",
+        "exit_code",
+        "end_reason",
+    )
+    if include_terminal_info:
+        fields += ("initial_cwd", "shell_kind")
+    result = {key: payload[key] for key in fields if key in payload}
+    if extra:
+        result.update(extra)
+    return result
 
 
 def with_terminal_errors(

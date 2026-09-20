@@ -17,8 +17,7 @@ import re
 import tempfile
 from pathlib import Path
 
-UTF8_BOM = "\ufeff"
-UTF8_BOM_BYTES = b"\xef\xbb\xbf"
+from app.config.constant import Constant
 
 
 def atomic_write_text(
@@ -57,15 +56,15 @@ def atomic_write_text(
         target_eol = detect_line_ending(sample)
     else:
         # 新建文件按 content 自身检测 BOM/CRLF 保留（方案 4.2）。
-        target_bom = content.startswith(UTF8_BOM)
+        target_bom = content.startswith(Constant.Text.UTF8_BOM)
         target_eol = detect_line_ending(content)
 
     if preserve_eol:
         text = content.replace("\r\n", "\n")
         text = text.replace("\n", target_eol)
-        if target_bom and not text.startswith(UTF8_BOM):
-            text = UTF8_BOM + text
-        elif not target_bom and text.startswith(UTF8_BOM):
+        if target_bom and not text.startswith(Constant.Text.UTF8_BOM):
+            text = Constant.Text.UTF8_BOM + text
+        elif not target_bom and text.startswith(Constant.Text.UTF8_BOM):
             text = text[1:]
         content_out = text
     else:
@@ -193,8 +192,8 @@ def detect_bom(text: str) -> bytes | None:
         无。
     """
 
-    if text.startswith(UTF8_BOM):
-        return UTF8_BOM_BYTES
+    if text.startswith(Constant.Text.UTF8_BOM):
+        return Constant.Text.UTF8_BOM_BYTES
     return None
 
 

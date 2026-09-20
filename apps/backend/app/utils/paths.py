@@ -30,6 +30,7 @@ _LOG_DIR_NAME: Final[str] = "logs"
 _RUNTIME_DIR_NAME: Final[str] = "runtime"
 _DATABASE_FILE_NAME: Final[str] = "app.sqlite3"
 _CHECKPOINT_FILE_NAME: Final[str] = "langgraph_checkpoints.sqlite"
+LOG_FILE_NAME: Final[str] = "backend.log"
 
 
 def repository_root() -> Path:

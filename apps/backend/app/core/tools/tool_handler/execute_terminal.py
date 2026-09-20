@@ -4,15 +4,14 @@
 ``ToolObservation`` 组装都在 ``ExecuteTerminalTool`` 内完成；不含 subprocess 细节
 （下沉到 ``app.tools.tool_handler.terminal.local_backend``）。
 """
-
 import os
 import platform
-import re
 import shutil
 from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.display.terminal_display import build_terminal_display_data
 from app.core.tools.schemas import (
@@ -37,7 +36,6 @@ from app.core.tools.tool_models.execute_terminal_args import (
 )
 
 # workdir 字符白名单：挡住命令注入式 workdir（含 ;|&$() 等注入字符直接拒绝）。
-_WORKDIR_SAFE_RE = re.compile(r"^[A-Za-z0-9/\\:_\-.~ +=@,]+$")
 
 
 class ExecuteTerminalTool(HandlerBase):
@@ -379,7 +377,7 @@ class ExecuteTerminalTool(HandlerBase):
         root = Path(execution_root).resolve()
         if workdir is None or workdir == "":
             return root, ""
-        if not _WORKDIR_SAFE_RE.match(workdir):
+        if not Constant.Tools.WORKDIR_SAFE_RE.match(workdir):
             return Path(), f"invalid workdir (contains unsafe characters): {workdir}"
         candidate = Path(workdir)
         resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()

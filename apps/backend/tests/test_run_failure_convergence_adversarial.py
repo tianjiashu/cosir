@@ -31,13 +31,12 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     empty_snapshot,
     validate_snapshot,
 )
+from app.config.constant import Constant
 from app.core.llm_provider.model_failure import classify_model_failure
 from app.core.workflows.react.workflow import ReactLikeWorkflow
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models import conversation_run_failure as failure_catalog
 from app.models.conversation_run_failure import (
-    RUN_FAILURE_CODE_GRAPH_FAILED,
-    RUN_FAILURE_CODE_UNKNOWN,
     run_failure_message,
 )
 from app.models.conversation_run_record import ConversationRunRecord
@@ -327,8 +326,8 @@ def test_every_catalog_code_has_non_empty_own_message() -> None:
     for code in _all_catalog_codes():
         message = run_failure_message(code)
         assert message.strip(), code
-        if code != RUN_FAILURE_CODE_UNKNOWN:
-            assert message != fallback or code == RUN_FAILURE_CODE_UNKNOWN, code
+        if code != Constant.Run.RUN_FAILURE_CODE_UNKNOWN:
+            assert message != fallback or code == Constant.Run.RUN_FAILURE_CODE_UNKNOWN, code
         seen[code] = message
     # 除各取消类 code 共享「已取消本轮对话」外，其余文案应各不相同。
     duplicated = {
@@ -348,7 +347,7 @@ def test_unknown_and_none_codes_fall_back_to_generic_message() -> None:
 
     fallback = run_failure_message(None)
     assert fallback.strip()
-    assert run_failure_message(RUN_FAILURE_CODE_UNKNOWN) == fallback
+    assert run_failure_message(Constant.Run.RUN_FAILURE_CODE_UNKNOWN) == fallback
     assert run_failure_message("totally_unknown_code") == fallback
     assert run_failure_message("") == fallback
 
@@ -429,7 +428,7 @@ def test_terminal_error_rejects_non_identifier_end_reason(end_reason: str | None
     assert error is not None
     assert error["code"].isidentifier()
     if end_reason is None or not end_reason.isidentifier():
-        assert error["code"] == RUN_FAILURE_CODE_UNKNOWN
+        assert error["code"] == Constant.Run.RUN_FAILURE_CODE_UNKNOWN
     else:
         assert error["code"] == end_reason
 
@@ -471,7 +470,7 @@ def test_settle_failed_run_swallows_runtime_error() -> None:
 
     workflow = ReactLikeWorkflow()
     operations = _RecordingOperations(failure=RuntimeError("db down"))
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), RUN_FAILURE_CODE_GRAPH_FAILED)
+    workflow._settle_failed_run(cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED)
     assert len(operations.calls) == 1
 
 
@@ -480,7 +479,7 @@ def test_settle_failed_run_swallows_key_error() -> None:
 
     workflow = ReactLikeWorkflow()
     operations = _RecordingOperations(failure=KeyError("run not found"))
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), RUN_FAILURE_CODE_GRAPH_FAILED)
+    workflow._settle_failed_run(cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED)
     assert len(operations.calls) == 1
 
 
@@ -494,7 +493,7 @@ def test_settle_failed_run_does_not_swallow_base_exception() -> None:
     operations = _RecordingOperations(failure=KeyboardInterrupt())
     with pytest.raises(KeyboardInterrupt):
         workflow._settle_failed_run(
-            cast(WorkflowOperations, operations), RUN_FAILURE_CODE_GRAPH_FAILED
+            cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
         )
     assert len(operations.calls) == 1
 
@@ -509,7 +508,7 @@ def test_settle_failed_run_survives_get_current_run_failure() -> None:
     workflow = ReactLikeWorkflow()
     operations = _RecordingOperations(failure=RuntimeError("db down"))
     operations.get_current_run_failure = RuntimeError("run gone")
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), RUN_FAILURE_CODE_GRAPH_FAILED)
+    workflow._settle_failed_run(cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED)
     assert len(operations.calls) == 1
 
 
@@ -519,7 +518,7 @@ def test_settle_failed_run_survives_get_current_run_failure_on_race_lost() -> No
     workflow = ReactLikeWorkflow()
     operations = _RecordingOperations(settles=False)
     operations.get_current_run_failure = RuntimeError("run gone")
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), RUN_FAILURE_CODE_GRAPH_FAILED)
+    workflow._settle_failed_run(cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED)
     assert len(operations.calls) == 1
 
 
@@ -604,7 +603,7 @@ async def test_run_classifier_failure_does_not_break_settlement(
     with pytest.raises(_BoomClassifier):
         await workflow.run(cast(WorkflowOperations, operations))
 
-    assert operations.calls[0]["end_reason"] == RUN_FAILURE_CODE_GRAPH_FAILED
+    assert operations.calls[0]["end_reason"] == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
 
 
 @pytest.mark.asyncio
@@ -654,7 +653,7 @@ async def test_run_settles_even_when_provider_id_missing_branch_present(
         await workflow.run(cast(WorkflowOperations, operations))
 
     assert len(operations.calls) == 1
-    assert operations.calls[0]["end_reason"] == RUN_FAILURE_CODE_GRAPH_FAILED
+    assert operations.calls[0]["end_reason"] == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
 
 
 # --------------------------------------------------------------------------------------
@@ -732,8 +731,8 @@ def test_validate_snapshot_rejects_run_error_with_extra_keys() -> None:
 
     state = _record_state()
     state["runs"][0]["error"] = {
-        "code": RUN_FAILURE_CODE_GRAPH_FAILED,
-        "message": run_failure_message(RUN_FAILURE_CODE_GRAPH_FAILED),
+        "code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED,
+        "message": run_failure_message(Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED),
         "retryable": False,
     }
     with pytest.raises(ValueError):
@@ -744,7 +743,7 @@ def test_validate_snapshot_rejects_run_error_missing_message() -> None:
     """``error`` 缺 ``message`` 键时必须显式失败，不得静默降级。"""
 
     state = _record_state()
-    state["runs"][0]["error"] = {"code": RUN_FAILURE_CODE_GRAPH_FAILED}
+    state["runs"][0]["error"] = {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED}
     with pytest.raises(ValueError):
         validate_snapshot(state)
 

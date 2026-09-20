@@ -1,12 +1,11 @@
 """Conversation Transport Task snapshot 的中性 JSON 契约。"""
-
 import math
-import re
 
 from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
+from app.config.constant import Constant
 
 _SNAPSHOT_KEYS = {
     "runs",
@@ -22,8 +21,6 @@ _MESSAGE_KEYS = {"id", "role", "parts"}
 _TEXT_PART_KEYS = {"type", "text", "status"}
 _IMAGE_PART_KEYS = {"type", "image"}
 _FILE_PART_KEYS = {"type", "file", "name", "contentType"}
-_IMAGE_LOCATOR = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
-_FILE_LOCATOR = re.compile(r"^cosir-local-file:[A-Za-z0-9._-]{1,128}$")
 _TOOL_PART_KEYS = {
     "type",
     "toolCallId",
@@ -228,13 +225,16 @@ def _validate_part(part: object) -> None:
         if set(part) != _IMAGE_PART_KEYS:
             raise ValueError("snapshot image part contains unknown fields")
         image = part.get("image")
-        if not isinstance(image, str) or not _IMAGE_LOCATOR.fullmatch(image):
+        if not isinstance(image, str) or not Constant.Transport.IMAGE_LOCATOR.fullmatch(image):
             raise ValueError("snapshot image part locator is invalid")
         return
     if part_type == "file":
         if set(part) != _FILE_PART_KEYS:
             raise ValueError("snapshot file part contains unknown fields")
-        if not isinstance(part.get("file"), str) or not _FILE_LOCATOR.fullmatch(part["file"]):
+        if (
+            not isinstance(part.get("file"), str)
+            or not Constant.Transport.FILE_LOCATOR.fullmatch(part["file"])
+        ):
             raise ValueError("snapshot file part locator is invalid")
         if not isinstance(part.get("name"), str) or not part["name"]:
             raise ValueError("snapshot file part name is invalid")

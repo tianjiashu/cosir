@@ -19,7 +19,7 @@ from sqlalchemy.orm.session import Session
 
 from app.config.logging.logger import log
 from app.models import ConversationRunRecord, ConversationRunStatus, TaskRecord
-from app.models.errors.deletion_errors import DeletionBusyError
+from app.models.errors.deletion_errors import DeletionBusyError, RunDeletionConflictError
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service import depends as service_depends
 from app.storage.checkpoint_gc import cleanup_orphan_checkpoint_threads
@@ -453,6 +453,87 @@ class TaskService:
             },
         )
 
+    def delete_run(self, task_id: int, run_id: int) -> None:
+        """删除单个 run 及其会话上下文与产物（checkpoint、终端元数据）。
+
+        允许删除 task 内任意位置的 run（含中间），不重排剩余 context 的 ``sequence``。
+        先校验 run 属于该 task（否则 ``KeyError``）；再按 workspace → task 锁顺序取得结构性
+        写操作闸门。task 内存在 ``pending`` / ``running`` 的 active run 时拒绝删除（抛
+        ``RunDeletionConflictError``），该判断在持有 task 闸门后执行，与 run 创建路径互斥。
+        在单个 ``BEGIN IMMEDIATE`` 事务内按外键依赖逆序清理：context → command → delegation →
+            ``tasks.parent_run_id`` 引用 → run 行（``tasks.current_run_id`` 由
+        ``ON DELETE SET NULL`` 自动处理）。提交后回收本 run 遗留的孤儿 LangGraph checkpoint 线程。
+
+        不新增 run 级进程内 snapshot 失效入口：Transport 快照刷新由前端在删除后重新拉取/重连
+        处理（见架构边界：允许 context 与 snapshot 最终一致）。
+
+        参数:
+            task_id: run 所属任务标识。
+            run_id: 待删除的 Conversation Run 标识。
+
+        返回:
+            无。
+
+        异常:
+            KeyError: 如果 task 或 run 不存在，或 run 不属于该 task。
+            RunDeletionConflictError: 如果 task 内存在 active run。
+            DeletionBusyError: 如果取得 workspace/task 闸门超时。
+            sqlalchemy.exc.SQLAlchemyError: 如果删除事务失败（回滚）。
+
+        副作用:
+            从 ``conversation_task_contexts`` / ``conversation_commands`` / ``delegations`` /
+            ``conversation_runs`` 删除该 run 相关行，并把 ``tasks`` 中
+            ``parent_run_id`` 指向本 run 的引用置空；提交后回收孤儿 checkpoint 线程。
+        """
+
+        task = self._task.get(task_id)
+        run = self._turn.get(run_id)
+        if run.task_id != task_id:
+            raise KeyError(run_id)
+        checkpoint_thread = run.checkpoint_thread_id
+        try:
+            with workspace_operations.operation(task.workspace_id, timeout=10):
+                space = self._task_register.get_or_create(task_id)
+                with space.operation(timeout=10):
+                    # active run 守卫必须在持有 task 闸门后执行：run 创建同样需要该闸门，
+                    # 持锁后重查可避免 get 与持锁之间新启一个 active run 的竞态。
+                    if self._turn.has_active_for_task(task_id):
+                        raise RunDeletionConflictError(
+                            "TASK_HAS_ACTIVE_RUN",
+                            f"task {task_id} has an active run; run deletion is rejected",
+                        )
+                    service_depends.get_terminal_session_service().close_run_terminals(
+                        run_id,
+                        reason="run_deleted",
+                    )
+                    log.info(
+                        "run_delete_start",
+                        extra={
+                            "msg": "run delete started",
+                            "data": {"task_id": task_id, "run_id": run_id},
+                        },
+                    )
+                    with begin_immediate(self._session_factory) as session:
+                        self._context.delete_by_run_id(task_id, run_id, session=session)
+                        self._command.delete_by_run_id(run_id, session=session)
+                        self._delegation.delete_by_run_id(run_id, session=session)
+                        self._task.clear_parent_run_id_by_run_id(run_id, session=session)
+                        self._turn.delete_by_ids([run_id], session)
+                        remaining_threads = (
+                            self._turn.collect_checkpoint_threads_by_thread_ids(
+                                session, {checkpoint_thread}
+                            )
+                        )
+                    orphan_threads = {checkpoint_thread} - remaining_threads
+                    if orphan_threads:
+                        cleanup_orphan_checkpoint_threads(orphan_threads)
+        except TimeoutError as exc:
+            raise DeletionBusyError("task", task_id) from exc
+        log.info(
+            "run_deleted",
+            extra={"msg": "run deleted", "data": {"task_id": task_id, "run_id": run_id}},
+        )
+
     def collect_workspace_attachment_orphans(self, workspace_id: int, root_path: str) -> None:
         """在删除任务或工作区后清理未被剩余 Run 引用的 workspace 附件。
 
@@ -738,7 +819,7 @@ class TaskService:
         self._delegation.delete_by_task_ids([task_id], session)
         # command.run_id 外键指向 run，必须先删 command 再删 run。
         self._command.delete_by_task_ids([task_id], session)
-        service_depends.get_terminal_session_service().delete_task_sessions([task_id], session)
+        service_depends.get_terminal_session_service().delete_task_sessions([task_id])
         self._turn.delete_by_ids(run_ids, session)
         self._task.delete_by_ids([task_id], session)
 

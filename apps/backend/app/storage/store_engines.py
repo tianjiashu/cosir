@@ -13,9 +13,9 @@ from threading import RLock
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.utils import paths
 from app.storage.engine_cache import _engine_cache, create_session_factory
 from app.storage.init_schema import initialize_app_schema
+from app.utils import paths
 
 _INIT_LOCK = RLock()
 

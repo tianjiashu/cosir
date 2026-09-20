@@ -149,8 +149,6 @@ function waitForWorker() {
       shell: spec.shell,
       shell_kind: process.platform === "win32" ? "cmd" : path.basename(spec.shell[0]),
       cwd: repositoryRoot,
-      cols: 80,
-      rows: 24,
     }));
   });
 }

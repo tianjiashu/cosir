@@ -26,10 +26,10 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     empty_snapshot,
     validate_snapshot,
 )
+from app.config.constant import Constant
 from app.core.workflows.react.workflow import ReactLikeWorkflow
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_run_failure import (
-    RUN_FAILURE_CODE_GRAPH_FAILED,
     run_failure_message,
 )
 from app.models.conversation_run_record import ConversationRunRecord
@@ -140,14 +140,14 @@ def test_settle_failed_run_honours_explicit_final_output_and_usage() -> None:
 
     workflow._settle_failed_run(
         cast(WorkflowOperations, operations),
-        RUN_FAILURE_CODE_GRAPH_FAILED,
+        Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED,
         usage_stats=cast(object, usage),
         final_output="自定义说明",
     )
 
     assert operations.calls == [
         {
-            "end_reason": RUN_FAILURE_CODE_GRAPH_FAILED,
+            "end_reason": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED,
             "usage_stats": usage,
             "final_output": "自定义说明",
         }
@@ -160,7 +160,7 @@ def test_settle_failed_run_tolerates_lost_terminal_race() -> None:
     workflow = ReactLikeWorkflow()
     operations = _RecordingOperations(settles=False)
 
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), RUN_FAILURE_CODE_GRAPH_FAILED)
+    workflow._settle_failed_run(cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED)
 
     assert len(operations.calls) == 1
 
@@ -171,7 +171,7 @@ def test_settle_failed_run_never_masks_original_failure() -> None:
     workflow = ReactLikeWorkflow()
     operations = _RecordingOperations(failure=RuntimeError("database unavailable"))
 
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), RUN_FAILURE_CODE_GRAPH_FAILED)
+    workflow._settle_failed_run(cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED)
 
     assert len(operations.calls) == 1
 
@@ -239,7 +239,7 @@ async def test_run_falls_back_to_graph_failed_for_unclassifiable_errors(
     with pytest.raises(RuntimeError):
         await workflow.run(cast(WorkflowOperations, operations))
 
-    assert operations.calls[0]["end_reason"] == RUN_FAILURE_CODE_GRAPH_FAILED
+    assert operations.calls[0]["end_reason"] == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
 
 
 @pytest.mark.asyncio
@@ -329,11 +329,11 @@ def test_build_run_error_returns_none_without_persisted_error() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"code": RUN_FAILURE_CODE_GRAPH_FAILED},
+        {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED},
         {"code": "", "message": "运行失败"},
-        {"code": RUN_FAILURE_CODE_GRAPH_FAILED, "message": ""},
+        {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED, "message": ""},
         {"code": 1, "message": "运行失败"},
-        {"code": RUN_FAILURE_CODE_GRAPH_FAILED, "message": "运行失败", "retryable": True},
+        {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED, "message": "运行失败", "retryable": True},
     ],
 )
 def test_build_run_error_rejects_malformed_payload(payload: dict[str, object]) -> None:
@@ -349,7 +349,7 @@ def test_validate_snapshot_rejects_malformed_run_error() -> None:
     """快照校验拒绝不合法的 Run 级错误契约。"""
 
     state = _running_state()
-    state["runs"][0]["error"] = {"code": RUN_FAILURE_CODE_GRAPH_FAILED}
+    state["runs"][0]["error"] = {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED}
 
     with pytest.raises(ValueError):
         validate_snapshot(state)
@@ -360,8 +360,8 @@ def test_validate_snapshot_accepts_controlled_run_error() -> None:
 
     state = _running_state()
     state["runs"][0]["error"] = {
-        "code": RUN_FAILURE_CODE_GRAPH_FAILED,
-        "message": run_failure_message(RUN_FAILURE_CODE_GRAPH_FAILED),
+        "code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED,
+        "message": run_failure_message(Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED),
     }
 
     validate_snapshot(state)

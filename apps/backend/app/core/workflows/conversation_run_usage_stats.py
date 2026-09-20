@@ -3,17 +3,16 @@
 本值对象作为 ``RuntimeConfig`` 的可变成员被 model 节点写入、被 Run 终态事件读取；
 不进入 LangGraph checkpoint，只在单次 graph 执行期间生效。
 """
-
 import math
 from dataclasses import dataclass
 from typing import Any
+
+from app.config.constant import Constant
 
 # LangChain UsageMetadata 契约中缓存/推理细节的键名（以 provider 返回的
 # _create_usage_metadata：usage_metadata["input_token_details"]["cache_read"]、
 # usage_metadata["output_token_details"]["reasoning"]）。旧 OpenAI 兼容扁平键
 # prompt_cache_hit_tokens / reasoning_tokens 等旧版扁平键不再作为兼容分支，勿再用。
-_INPUT_CACHE_READ_KEY = "cache_read"
-_OUTPUT_REASONING_KEY = "reasoning"
 
 
 @dataclass
@@ -118,14 +117,14 @@ class ConversationRunUsageStats:
         cache_details_complete = False
         cache_hit = 0
         input_details = usage_metadata.get("input_token_details")
-        if isinstance(input_details, dict) and _INPUT_CACHE_READ_KEY in input_details:
-            cache_hit = self._safe_int(input_details.get(_INPUT_CACHE_READ_KEY))
+        if isinstance(input_details, dict) and Constant.Workflow.INPUT_CACHE_READ_KEY in input_details:
+            cache_hit = self._safe_int(input_details.get(Constant.Workflow.INPUT_CACHE_READ_KEY))
             cache_details_complete = True
         self.cache_hit_tokens = cache_hit
 
         output_details = usage_metadata.get("output_token_details") or {}
         if isinstance(output_details, dict):
-            self.reasoning_tokens = self._safe_int(output_details.get(_OUTPUT_REASONING_KEY))
+            self.reasoning_tokens = self._safe_int(output_details.get(Constant.Workflow.OUTPUT_REASONING_KEY))
         else:
             self.reasoning_tokens = 0
 

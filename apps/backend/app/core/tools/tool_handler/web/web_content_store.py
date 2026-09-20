@@ -5,13 +5,9 @@
 文件 IO / 路径安全基础设施重复实现（该模块已使用 ``ProjectPathResolver`` 与
 ``atomic_write_text`` 完成 workspace 边界约束与原子写）。
 """
-
 import re
 
-_BASE64_IMAGE_PATTERN = re.compile(
-    r"!\[([^\]]*)\]\(data:image/[A-Za-z0-9.+-]+;base64,[^)]*\)",
-    re.IGNORECASE,
-)
+from app.config.constant import Constant
 
 
 def convert_base64_images_to_placeholders(markdown: str) -> str:
@@ -30,7 +26,7 @@ def convert_base64_images_to_placeholders(markdown: str) -> str:
         无。
     """
 
-    return _BASE64_IMAGE_PATTERN.sub(_image_placeholder, markdown)
+    return Constant.Web.BASE64_IMAGE_PATTERN.sub(_image_placeholder, markdown)
 
 
 def _image_placeholder(match: re.Match[str]) -> str:

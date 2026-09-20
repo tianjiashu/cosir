@@ -70,14 +70,14 @@ function AgentRunTransport({ taskId, initialState, onError }: { taskId: number; 
         backendAvailable={backendRuntime.available}
         backendGeneration={backendRuntime.generation}
       />
-      <AgentReadonlyMessages />
+      <AgentReadonlyMessages taskId={taskId} />
     </AssistantRuntimeProvider>
   );
 }
 
-function AgentReadonlyMessages() {
+function AgentReadonlyMessages({ taskId }: { taskId: number }) {
   const messages = useAuiState((state) => state.thread.messages);
-  return <ReadonlyThread messages={messages} />;
+  return <ReadonlyThread messages={messages} taskId={taskId} />;
 }
 
 /** Load a canonical child snapshot, then mount one active readonly transport. */
