@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <path
+    d="M764 248C690 196 602 168 508 168C320 168 194 304 194 512C194 720 320 856 508 856C602 856 690 828 764 776"
+    fill="none"
+    stroke="#F8FAFC"
+    stroke-linecap="round"
+    stroke-width="148"
+  />
+  <path
+    d="M402 408L520 512L402 616"
+    fill="none"
+    stroke="#F8FAFC"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="64"
+  />
+  <circle cx="764" cy="512" r="58" fill="#22D3EE"/>
+</svg>

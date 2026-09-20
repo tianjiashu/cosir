@@ -32,8 +32,16 @@ pub fn install(app: &mut App) -> tauri::Result<()> {
         .text(QUIT_MENU_ID, "退出并停止运行")
         .build()?;
 
-    let tray = TrayIconBuilder::new()
-        .icon(tauri::include_image!("./icons/icon.ico"))
+    #[cfg(target_os = "macos")]
+    let tray_icon = tauri::include_image!("./icons/tray-macos.png");
+    #[cfg(not(target_os = "macos"))]
+    let tray_icon = tauri::include_image!("./icons/tray-windows.png");
+
+    let tray_builder = TrayIconBuilder::new().icon(tray_icon);
+    #[cfg(target_os = "macos")]
+    let tray_builder = tray_builder.icon_as_template(true);
+
+    let tray = tray_builder
         // Windows/macOS 左键直接显示窗口；菜单中的“显示 Cosir”始终保留，
         // 不依赖平台是否发出托盘点击事件。
         .show_menu_on_left_click(false)
