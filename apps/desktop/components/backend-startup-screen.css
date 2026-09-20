@@ -1,4 +1,7 @@
 .backend-startup-screen {
+  --backend-startup-accent: #22d3ee;
+  --backend-startup-accent-soft: color-mix(in oklab, var(--backend-startup-accent) 14%, transparent);
+  --backend-startup-accent-faint: color-mix(in oklab, var(--backend-startup-accent) 6%, transparent);
   position: fixed;
   z-index: 100;
   inset: 0;
@@ -6,7 +9,7 @@
   place-items: center;
   overflow: hidden;
   background:
-    radial-gradient(ellipse at 50% 47%, color-mix(in oklab, #22d3ee 7%, transparent), transparent 33rem),
+    radial-gradient(ellipse at 50% 47%, var(--backend-startup-accent-faint), transparent 33rem),
     var(--background);
   color: var(--foreground);
   animation: backend-startup-enter 650ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
@@ -17,13 +20,42 @@
   animation: backend-startup-exit 280ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
+.backend-startup-screen__grid,
+.backend-startup-screen__scanline {
+  position: absolute;
+  pointer-events: none;
+}
+
+.backend-startup-screen__grid {
+  inset: -25%;
+  opacity: 0;
+  background-image:
+    linear-gradient(color-mix(in oklab, var(--backend-startup-accent) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklab, var(--backend-startup-accent) 5%, transparent) 1px, transparent 1px);
+  background-size: 3.5rem 3.5rem;
+  mask-image: radial-gradient(ellipse at center, black 0%, transparent 68%);
+  transform: perspective(500px) rotateX(62deg) translateY(9%);
+  animation: backend-startup-grid-in 1.2s 120ms ease-out forwards, backend-startup-grid-drift 16s linear infinite;
+}
+
+.backend-startup-screen__scanline {
+  top: -20%;
+  left: 0;
+  width: 100%;
+  height: 16rem;
+  opacity: 0;
+  background: linear-gradient(180deg, transparent, var(--backend-startup-accent-soft), transparent);
+  filter: blur(12px);
+  animation: backend-startup-scan 5.5s 900ms ease-in-out infinite;
+}
+
 .backend-startup-screen__glow {
   position: absolute;
   inset: auto;
   width: min(72vw, 46rem);
   aspect-ratio: 1;
   border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in oklab, #22d3ee 5%, transparent), transparent 68%);
+  background: radial-gradient(circle, var(--backend-startup-accent-soft), transparent 68%);
   filter: blur(18px);
   opacity: 0.7;
   animation: backend-startup-ambient 5s ease-in-out infinite alternate;
@@ -47,10 +79,69 @@
   margin-bottom: 1rem;
 }
 
+.backend-startup-screen__orbit {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: scale(0.78);
+  animation: backend-startup-orbit-in 800ms 820ms cubic-bezier(0.22, 0.72, 0.18, 1) forwards;
+}
+
+.backend-startup-screen__orbit--inner {
+  inset: 0.65rem;
+  animation-delay: 960ms;
+}
+
+.backend-startup-screen__orbit-spin {
+  position: absolute;
+  inset: 0;
+  border: 1px solid color-mix(in oklab, var(--backend-startup-accent) 13%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 0 1.5rem var(--backend-startup-accent-faint);
+  transform: rotate(-22deg) scaleX(0.72);
+  animation: backend-startup-orbit-outer 9s 1.55s linear infinite;
+}
+
+.backend-startup-screen__orbit--inner .backend-startup-screen__orbit-spin {
+  border-color: color-mix(in oklab, var(--backend-startup-accent) 9%, transparent);
+  transform: rotate(68deg) scaleX(0.7);
+  animation-name: backend-startup-orbit-inner;
+  animation-duration: 6s;
+}
+
+.backend-startup-screen__orbit-spin span {
+  position: absolute;
+  top: 50%;
+  left: -0.18rem;
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  background: var(--backend-startup-accent);
+  box-shadow: 0 0 0.7rem var(--backend-startup-accent);
+  transform: translateY(-50%);
+}
+
+.backend-startup-screen__orbit-spin span:last-child {
+  top: auto;
+  right: -0.18rem;
+  bottom: 18%;
+  left: auto;
+}
+
+.backend-startup-screen__orbit--inner .backend-startup-screen__orbit-spin span {
+  top: 7%;
+  right: 16%;
+  bottom: auto;
+  left: auto;
+  width: 0.25rem;
+  height: 0.25rem;
+  opacity: 0.7;
+}
+
 .backend-startup-screen__halo {
   position: absolute;
   inset: 0.35rem;
-  border: 1px solid color-mix(in oklab, #22d3ee 20%, transparent);
+  border: 1px solid color-mix(in oklab, var(--backend-startup-accent) 20%, transparent);
   border-radius: 50%;
   opacity: 0;
   animation: backend-startup-halo 2.8s 2.15s ease-out infinite;
@@ -61,7 +152,7 @@
   width: 5.25rem;
   height: 5.25rem;
   overflow: visible;
-  filter: drop-shadow(0 8px 22px color-mix(in oklab, #22d3ee 12%, transparent));
+  filter: drop-shadow(0 8px 22px color-mix(in oklab, var(--backend-startup-accent) 12%, transparent));
 }
 
 .cosir-mark-animated__stroke {
@@ -83,7 +174,7 @@
 }
 
 .cosir-mark-animated__runner {
-  filter: drop-shadow(0 0 5px #22d3eeaa);
+  filter: drop-shadow(0 0 5px color-mix(in oklab, var(--backend-startup-accent) 70%, transparent));
 }
 
 .backend-startup-screen__wordmark {
@@ -110,8 +201,8 @@
   height: 0.4rem;
   flex: none;
   border-radius: 50%;
-  background: #22d3ee;
-  box-shadow: 0 0 0 0 color-mix(in oklab, #22d3ee 30%, transparent);
+  background: var(--backend-startup-accent);
+  box-shadow: 0 0 0 0 color-mix(in oklab, var(--backend-startup-accent) 30%, transparent);
   animation: backend-startup-status-pulse 1.8s ease-out infinite;
 }
 
@@ -145,7 +236,23 @@
 }
 
 @keyframes backend-startup-exit {
-  to { opacity: 0; transform: scale(1.015); }
+  to { opacity: 0; transform: scale(1.015); filter: blur(3px); }
+}
+
+@keyframes backend-startup-grid-in {
+  from { opacity: 0; }
+  to { opacity: 0.62; }
+}
+
+@keyframes backend-startup-grid-drift {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 0 3.5rem, 3.5rem 0; }
+}
+
+@keyframes backend-startup-scan {
+  0%, 18% { opacity: 0; transform: translateY(-20vh); }
+  38% { opacity: 0.55; }
+  68%, 100% { opacity: 0; transform: translateY(120vh); }
 }
 
 @keyframes backend-startup-content-in {
@@ -158,6 +265,21 @@
   to { transform: scale(1.06); opacity: 0.85; }
 }
 
+@keyframes backend-startup-orbit-in {
+  from { opacity: 0; transform: scale(0.78); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes backend-startup-orbit-outer {
+  from { transform: rotate(-22deg) scaleX(0.72) rotate(0deg); }
+  to { transform: rotate(-22deg) scaleX(0.72) rotate(360deg); }
+}
+
+@keyframes backend-startup-orbit-inner {
+  from { transform: rotate(68deg) scaleX(0.7) rotate(360deg); }
+  to { transform: rotate(68deg) scaleX(0.7) rotate(0deg); }
+}
+
 @keyframes backend-startup-halo {
   0% { opacity: 0; transform: scale(0.72); }
   22% { opacity: 0.7; }
@@ -165,7 +287,7 @@
 }
 
 @keyframes backend-startup-status-pulse {
-  0% { box-shadow: 0 0 0 0 color-mix(in oklab, #22d3ee 30%, transparent); }
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--backend-startup-accent) 30%, transparent); }
   75%, 100% { box-shadow: 0 0 0 0.42rem transparent; }
 }
 
@@ -189,14 +311,24 @@
 
 @media (prefers-reduced-motion: reduce) {
   .backend-startup-screen,
+  .backend-startup-screen[data-state="exiting"],
+  .backend-startup-screen__grid,
+  .backend-startup-screen__scanline,
   .backend-startup-screen__glow,
   .backend-startup-screen__content,
+  .backend-startup-screen__orbit,
+  .backend-startup-screen__orbit-spin,
   .backend-startup-screen__halo,
   .backend-startup-screen__status-dot,
   .backend-startup-screen__status-pulse i,
   .cosir-mark-animated__stroke,
   .cosir-mark-animated__arrow {
     animation: none;
+  }
+
+  .backend-startup-screen[data-state="exiting"] {
+    transform: none;
+    filter: none;
   }
 
   .cosir-mark-animated__stroke,
@@ -210,5 +342,10 @@
 
   .cosir-mark-animated__runner {
     display: none;
+  }
+
+  .backend-startup-screen__grid {
+    opacity: 0.35;
+    transform: none;
   }
 }

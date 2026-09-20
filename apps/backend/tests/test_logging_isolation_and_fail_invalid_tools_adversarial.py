@@ -20,6 +20,7 @@ import pytest
 import app.core.workflows.react.nodes.helper.tool_call_lifecycle as lifecycle_module
 from app.config.logging.configuration import configure_logging, shutdown_logging
 from app.config.logging.logger import log as backend_log
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
@@ -378,7 +379,7 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
     from app.core.workflows.react.nodes import model_node as model_module
     from app.core.workflows.react.state import ReactGraphState
 
-    model_module.system_queue.clear()
+    task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
 
     message = AIMessage(
         content="",
@@ -450,7 +451,7 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
         last_tool_results={"instruction": "", "observations": []},
     )
     result = asyncio.run(model_module._model_node(state))
-    model_module.system_queue.clear()
+    task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
 
     lifecycle = result["tool_call_lifecycle"]
     assert (

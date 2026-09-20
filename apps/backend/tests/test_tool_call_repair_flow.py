@@ -19,6 +19,7 @@ from app.core.context.runtime_context_manager import _as_ai_message
 from app.core.workflows.react.nodes import model_node as model_module
 from app.core.workflows.react.nodes import observation_node as observe_module
 from app.core.workflows.react.nodes import tools_node as tools_module
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
@@ -28,11 +29,15 @@ from app.core.workflows.react.state import ReactGraphState
 
 @pytest.fixture(autouse=True)
 def _clear_deferred_system_messages():
-    """隔离 model 节点模块级延迟队列，避免测试顺序污染消息协议断言。"""
+    """隔离 model 节点的延迟系统消息队列，避免测试顺序污染消息协议断言。
 
-    model_module.system_queue.clear()
+    队列已随 TaskRuntimeSpace 下沉到 task 维度；此处按 harness 使用的 task_id=1 取出
+    同一 space 并排空，保持用例间隔离。
+    """
+
+    task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
     yield
-    model_module.system_queue.clear()
+    task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
 
 
 def _state(**overrides: Any) -> ReactGraphState:
@@ -405,8 +410,9 @@ def test_all_repairable_invalid_calls_route_back_to_model(monkeypatch: Any) -> N
     )
     # 修复提示由 model 节点放入延迟队列；observe 只收口非法调用，不直接写消息。
     assert [type(item) for item in observe_harness.messages] == [AIMessage]
-    assert len(model_module.system_queue) == 1
-    assert "Retry this step" in model_module.system_queue[0].content
+    deferred_system_messages = task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
+    assert len(deferred_system_messages) == 1
+    assert "Retry this step" in deferred_system_messages[0].content
     # 非法调用已被收口为 failed（前端 pending part 闭合），且不计入 tool_error_count。
     assert observe_result["tool_error_count"] == 0
     repairable_records = [
@@ -502,8 +508,9 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
     # 修复提示要等下一次 model 节点读取延迟队列时写入；持久化顺序因此为
     # AIMessage -> ToolMessage -> SystemMessage，而不是在两者之间插入。
     assert [type(item) for item in observe_harness.messages] == [AIMessage, ToolMessage]
-    assert len(model_module.system_queue) == 1
-    assert "Retry this step" in model_module.system_queue[0].content
+    deferred_system_messages = task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
+    assert len(deferred_system_messages) == 1
+    assert "Retry this step" in deferred_system_messages[0].content
     assert observe_harness.messages[1].tool_call_id == "valid-1"
     # 合法调用成功结算；非法调用被收口为 failed 且不计入错误计数。
     assert observe_result["tool_error_count"] == 0

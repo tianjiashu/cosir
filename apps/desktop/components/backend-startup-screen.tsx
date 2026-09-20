@@ -12,14 +12,32 @@ type BackendStartupScreenProps = {
  */
 export function BackendStartupScreen({ exiting = false }: BackendStartupScreenProps) {
   return (
-    <main
+    <div
       className="backend-startup-screen"
       data-state={exiting ? "exiting" : "starting"}
       aria-busy={!exiting}
+      aria-hidden={exiting || undefined}
     >
+      <div className="backend-startup-screen__grid" aria-hidden="true" />
+      <div className="backend-startup-screen__scanline" aria-hidden="true" />
       <div className="backend-startup-screen__glow" aria-hidden="true" />
-      <section className="backend-startup-screen__content" role="status" aria-live="polite">
+      <section
+        className="backend-startup-screen__content"
+        role={exiting ? undefined : "status"}
+        aria-live={exiting ? undefined : "polite"}
+      >
         <div className="backend-startup-screen__mark-wrap" aria-hidden="true">
+          <div className="backend-startup-screen__orbit backend-startup-screen__orbit--outer">
+            <div className="backend-startup-screen__orbit-spin">
+              <span />
+              <span />
+            </div>
+          </div>
+          <div className="backend-startup-screen__orbit backend-startup-screen__orbit--inner">
+            <div className="backend-startup-screen__orbit-spin">
+              <span />
+            </div>
+          </div>
           <div className="backend-startup-screen__halo" />
           <CosirMark animated className="backend-startup-screen__mark" />
         </div>
@@ -34,6 +52,6 @@ export function BackendStartupScreen({ exiting = false }: BackendStartupScreenPr
           </span>
         </div>
       </section>
-    </main>
+    </div>
   );
 }

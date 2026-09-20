@@ -19,7 +19,6 @@ stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContext
 """
 
 import asyncio
-from typing import Deque
 
 from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, BaseMessage
 from langgraph.config import get_stream_writer
@@ -48,8 +47,6 @@ from app.core.workflows.react.state import ReactGraphState
 # 把 provider-specific 字符串扩散到 graph edge 与终态写入逻辑。
 _NORMAL_FINISH_REASONS = frozenset({"stop", "end", "end_turn"})
 _CONTINUATION_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
-
-system_queue: Deque[SystemMessage] = Deque()
 
 
 def _build_continuation_prompt(finish_reason: str | None) -> str:
@@ -137,6 +134,10 @@ async def _model_node(state: ReactGraphState) -> dict:
     task_id = operations.get_current_run().task_id
     run_id = operations.get_current_run().id
 
+    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+    task_space = task_runtime_spaces.get_or_create(task_id)
+
     step_count = state.step_count + 1
     # 提前拦截：本次推理若已超配额（step_count > max_steps）
     if step_count > state.max_steps:
@@ -155,8 +156,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
     messages: list[BaseMessage] = _runtime_context().load_message()
 
-    while len(system_queue) > 0:
-        system_message = system_queue.pop()
+    for system_message in task_space.take_deferred_system_messages():
         _runtime_context().add_message(system_message)
         messages.append(system_message)
 
@@ -283,7 +283,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     )
     # 3. 注入修复提示（若有可修复非法调用）：必须排在全部 ToolMessage 之后,通过system_queue延后注入.
     if repair_message:
-        system_queue.append(SystemMessage(content=repair_message))
+        task_space.defer_system_message(SystemMessage(content=repair_message))
 
     log.info(
         "model_node_completed",
@@ -371,7 +371,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     #如果存在系统修复提示，重新进入model
-    if len(system_queue) > 0:
+    if task_space.has_deferred_system_messages():
         return {
             "step_count": step_count,
             "requested_tool": False,

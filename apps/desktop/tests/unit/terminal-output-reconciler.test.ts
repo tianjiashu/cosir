@@ -43,5 +43,12 @@ describe("reconcileTerminalOutput", () => {
       nextOutput: "new screen",
       nextSeq: 4,
     })).toEqual({ kind: "reset", text: "new screen" });
+
+    expect(reconcileTerminalOutput({
+      previousOutput: "old",
+      previousSeq: 4,
+      nextOutput: "old plus more",
+      nextSeq: 4,
+    })).toEqual({ kind: "reset", text: "old plus more" });
   });
 });

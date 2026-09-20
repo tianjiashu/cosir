@@ -39,6 +39,10 @@ export function reconcileTerminalOutput({
     return { kind: "ignore" };
   }
 
+  if (nextSeq !== undefined && previousSeq !== undefined && nextSeq === previousSeq) {
+    return { kind: "reset", text: nextOutput };
+  }
+
   if (nextOutput.startsWith(previousOutput)) {
     return { kind: "append", text: nextOutput.slice(previousOutput.length) };
   }

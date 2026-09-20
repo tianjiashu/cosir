@@ -38,7 +38,10 @@ import weakref
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
+from queue import Empty, SimpleQueue
 from typing import TYPE_CHECKING, TypeVar, cast
+
+from langchain_core.messages import SystemMessage
 
 from app.core.context.context_listener.context_compress_listener import ContextCompressListener
 from app.core.context.context_listener.context_usage_compute_listener import (
@@ -74,7 +77,8 @@ class TaskRuntimeSpace:
 
     并发边界见模块 docstring：``lock`` 是唯一 Task 操作闸门；snapshot working copy **不**持有
     内部锁（由 ``ConversationTaskStateService._lock`` 统一串行化）；``_context_manager`` 槽位
-    由 ``_context_guard`` 保护。
+    由 ``_context_guard`` 保护；``system_queue`` 延迟系统消息队列由标准库 ``SimpleQueue`` 提供
+    并发安全（内部已加锁，本类不再额外加锁），跨同 task 内 run 共享、run 间串行由 Task 操作闸门保证。
     """
 
     task_id: int
@@ -87,6 +91,11 @@ class TaskRuntimeSpace:
     # 该字段刻意不配内部锁：所有访问经 ``ConversationTaskStateService._lock`` 串行化。
     _snapshot: ConversationStateSnapshot | None = field(default=None, init=False)
     _context_guard: threading.Lock = field(init=False)
+    # 延迟注入的「修复类系统消息」队列（FIFO）：跨同 task 内的 run 共享，run 间串行由 Task 操作
+    # 闸门保证；用标准库 SimpleQueue 提供并发安全，不额外加锁。
+    system_queue: "SimpleQueue[SystemMessage]" = field(
+        default_factory=SimpleQueue, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         """初始化统一执行闸门与 context manager 槽位锁。"""
@@ -322,3 +331,32 @@ class TaskRuntimeSpace:
                 .add_change_listener(ContextCompressListener())
             )
             self._context_manager = _weak_ref(installed)
+
+    def defer_system_message(self, message: SystemMessage) -> None:
+        """将一条修复类系统消息延后到本 task 下一次 model 节点入口注入。
+
+        参数:
+            message: 待注入的系统消息（通常为非法工具调用修复提示）。
+        """
+
+        self.system_queue.put(message)
+
+    def take_deferred_system_messages(self) -> list[SystemMessage]:
+        """取出并清空本 task 当前排队的全部延迟系统消息（FIFO）。
+
+        返回:
+            按入队顺序排列的系统消息列表；无排队时返回空列表。
+        """
+
+        messages: list[SystemMessage] = []
+        while True:
+            try:
+                messages.append(self.system_queue.get_nowait())
+            except Empty:
+                break
+        return messages
+
+    def has_deferred_system_messages(self) -> bool:
+        """本 task 是否仍排队有未注入的延迟系统消息。"""
+
+        return not self.system_queue.empty()
