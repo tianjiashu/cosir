@@ -217,7 +217,10 @@ def build_invalid_tool_call_repair_message(
 
         args_preview = str(invalid_tc.get("args", ""))
         if len(args_preview) > Constant.Workflow.INVALID_TOOL_ARGS_PREVIEW_CHARS:
-            args_preview = args_preview[:Constant.Workflow.INVALID_TOOL_ARGS_PREVIEW_CHARS] + "...[truncated]"
+            args_preview = (
+                args_preview[:Constant.Workflow.INVALID_TOOL_ARGS_PREVIEW_CHARS]
+                + "...[truncated]"
+            )
 
         error = invalid_tc.get("error")
         error_line = f"error: {error}\n" if error else ""
@@ -616,7 +619,6 @@ class ToolCallLifecycleManager(BaseModel):
         task_id: int,
         run_id: int,
         step_id: str,
-        tool_calls: list[ToolCall] | None = None,
     ) -> ToolCallLifecycleManager:
         """把尚未结束的调用迁移到 cancelled，并为每条发出终态事件。
 
@@ -624,14 +626,16 @@ class ToolCallLifecycleManager(BaseModel):
         调用；适用于「流式期 ``create`` 已把调用投影给前端、但该调用不会真正执行」的场景，
         避免前端留下悬空的「执行中」part。
 
-        注意：当前 workflow 生产路径没有调用方——协作取消由 ``model_node`` 经 ``interrupt``
-        中断图，工具侧取消由执行层的取消检查产生 ``cancelled`` 观察。本方法与其单测作为
-        取消收口能力保留，接入新的调用点时需同步确认图路由。
+        调用点：``model_node`` 在流式期间检测到协作取消时调用本方法，随后才 ``interrupt``
+        挂起节点；顺序不可颠倒——``interrupt`` 中断本节点，其后的语句不会执行。调用方必须接住
+        返回值（copy-on-write 快照），否则同一分支被重复进入时读到的是未迁移的旧快照，
+        会对已 ``cancelled`` 的调用重复发事件。取消路径没有 ``ToolCallsSettledEvent`` 兜底
+        （该补偿只覆盖失败与执行器收敛路径），因此本方法发出的 ``cancelled`` 事件是取消时
+        关闭前端 part 的唯一通道；冷读重建对没有 ``ToolMessage`` 行的 part 同样默认
+        ``cancelled``，两者口径一致。执行层的取消检查产生的 ``cancelled`` 观察不经过本方法。
 
         参数:
             task_id, run_id, step_id: 事件定位三元组。
-            tool_calls: 待收口的调用；为 ``None`` 时收口本 manager 当前**全部** ``pending`` /
-                ``running`` 调用（取消场景通常无需先枚举，因为收口判据就是状态本身）。
 
         返回:
             更新后的 manager；已终态的调用不受影响。
@@ -642,23 +646,18 @@ class ToolCallLifecycleManager(BaseModel):
         """
 
         updated = self._copy()
-        call_ids = (
-            list(updated.calls)
-            if tool_calls is None
-            else [tool_call.call_id for tool_call in tool_calls]
-        )
-        for call_id in call_ids:
-            record = updated.calls.get(call_id)
+
+        for record in updated.calls.values():
             if record is None or record.status not in {"pending", "running"}:
                 continue
             updated._emit_status_safe(
                 task_id=task_id,
                 run_id=run_id,
                 step_id=step_id,
-                call_id=call_id,
+                call_id=record.tool_call_id,
                 to_status="cancelled",
             )
-            updated.calls[call_id].status = "cancelled"
+            updated.calls[record.tool_call_id].status = "cancelled"
         return updated
 
     def fail_invalid_tools(
@@ -694,7 +693,7 @@ class ToolCallLifecycleManager(BaseModel):
             ``ToolMessage``）。
         """
 
-        # 与 ``settle`` / ``cancel_pending`` 同口径：无论本批是否有待收口调用，都交出新的快照，
+        # 与 ``settle`` / ``cancel`` 同口径：无论本批是否有待收口调用，都交出新的快照，
         # 让调用方拿到的生命周期对象身份是可预期的。
         updated = self._copy()
         repair_datas: list[dict[str, Any]] = []

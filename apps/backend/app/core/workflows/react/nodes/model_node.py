@@ -105,9 +105,16 @@ async def _model_node(state: ReactGraphState) -> dict:
           使下一模型步能累积看到本轮输出；
         - 模型文本与 reasoning 增量经 LangGraph custom stream 写给 workflow；由 workflow
           统一调用 ``RuntimeOperations`` 更新 snapshot；状态写入 ``run``；
-        - 非法输出经 ``RuntimeOperations`` 落定失败；请求前 / 流式中 / 流式结束后检测到协作
-          取消时，经 ``RuntimeOperations.cancel_run_if_running`` 落定取消终态并 ``interrupt``
-          挂起本节点（不写路由标志、不结束图，该 run 仍可由续跑恢复）；
+        - 非法输出经 ``RuntimeOperations`` 落定失败。协作取消只在两处检测：进入模型请求前
+          与流式循环内（每个 chunk 处理前）；命中时经 ``RuntimeOperations.cancel_run_if_running``
+          落定取消终态并 ``interrupt`` 挂起本节点（不写路由标志、不结束图，该 run 仍可由
+          续跑恢复）；
+        - 流式循环内命中取消时额外收口本轮遗留：草稿经 ``flush_message_chunk(mode="cancel")``
+          落库但不加入模型上下文（半截消息不进入下一次模型请求），已投影的工具调用经
+          ``ToolCallLifecycleManager.cancel`` 收为 ``cancelled``；因此本轮半截工具调用不会被
+          送入 ``tools`` 节点执行。循环结束后的收口不检查取消，故取消信号若落在「最后一个
+          chunk 处理完 → 循环退出」之间，本轮已完整流出的输出会照常收口并按正常路径路由
+          （该批工具仍会执行），下一次进入本节点时才由请求前检查挂起；
         - ``invalid_tool_calls`` 的判定已下沉到 ``ToolCallLifecycleManager.classify``：按 ``id``
           对齐模型未解析成功的调用，命中者挂 ``invalid_detail`` 并维持 ``pending``，由 observe
           节点统一结算并注入修复 ``SystemMessage``（排在全部 ToolMessage 之后，避免产生
@@ -118,6 +125,9 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     异常:
         RuntimeError: 超步数收口时 ``RuntimeConfig`` 未携带 run id（见 ``_finalize_max_steps``）。
+        AttributeError: 本步模型未产出任何 chunk（无草稿可收口）时 ``flush_message_chunk``
+            返回 ``None``，随后读取 ``ai_message.tool_calls`` 失败；异常由 workflow 的兜底分支
+            把 run 落 failed 终态。
         Exception: 模型调用或流式消费失败时向上传播，由 runner 收敛 run 终态。
     """
 
@@ -219,7 +229,11 @@ async def _model_node(state: ReactGraphState) -> dict:
                 stream_id=step_id, run_id=run_id, mode="cancel"
             )
             parts.finish()
-            break
+            lifecycle = lifecycle.cancel(task_id=task_id, run_id=run_id, step_id=step_id)
+            operations.cancel_run_if_running(
+                usage_stats=rc.usage_stats, final_output="user_cancelled"
+            )
+            interrupt({"reason": "user_cancelled"})
 
         # 提取文本与 reasoning 内容。
         text = content_to_text(chunk.content)
@@ -244,15 +258,10 @@ async def _model_node(state: ReactGraphState) -> dict:
                 raw_tool_calls=raw_tool_calls,
             )
 
-    if not operations.is_current_run_cancelled():
-        parts.finish()
-        ai_message: AIMessage = _runtime_context().flush_message_chunk(
-            stream_id=step_id, run_id=run_id, mode="complete"
-        )
-
-    if ai_message is None:
-        operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
-        interrupt({"reason": "user_cancelled"})
+    parts.finish()
+    ai_message: AIMessage = _runtime_context().flush_message_chunk(
+        stream_id=step_id, run_id=run_id, mode="complete"
+    )
 
     finish_reason = chunk_processor.extract_finish_reason(ai_message)
 
@@ -309,10 +318,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             "instruction": ai_message.content if isinstance(ai_message.content, str) else "",
             "tool_call_lifecycle": lifecycle,
         }
-
-    if operations.is_current_run_cancelled():
-        operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
-        interrupt({"reason": "user_cancelled"})
 
     if finish_reason in Constant.Workflow.NORMAL_FINISH_REASONS and ai_message.content:
         # 没有工具调用且 Provider 明确报告正常结束 → 最终回答。
