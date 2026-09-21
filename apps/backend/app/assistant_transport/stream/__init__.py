@@ -1,3 +1,3 @@
-from app.assistant_transport.stream.snapshot_change import SnapshotChange
+from app.assistant_transport.stream.transport_frame import FrameKind, TransportFrame
 
-__all__ = ["SnapshotChange"]
+__all__ = ["FrameKind", "TransportFrame"]

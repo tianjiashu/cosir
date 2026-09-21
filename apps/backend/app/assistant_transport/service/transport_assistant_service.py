@@ -7,9 +7,8 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import NoReturn
 
-from assistant_stream import create_run
-from assistant_stream.serialization import AssistantTransportResponse
 from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.assistant_transport.request import AddMessageCommand, AssistantTransportRequest
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
@@ -40,7 +39,7 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 def _build_ordered_display_text(
     parts: Sequence[AssistantTextPart | AssistantImagePart],
 ) -> str:
-    """Encode composer text/image order into the existing Run display text value."""
+    """将 composer 的文本/图片顺序编码进既有 Run 展示文本值。"""
 
     image_token = Constant.Cosir.LOCAL_IMAGE_TOKEN
     emitted_image_ids = {
@@ -67,7 +66,7 @@ def _build_ordered_display_text(
 class TransportAssistantService:
     """负责 Assistant Transport 入口的 run 前置校验、生命周期编排与响应构造。
 
-    快照订阅与 SSE 编码（stream / subscribe_run_state 等）已拆分到
+    快照订阅与 SSE 编码已拆分到
     ``AssistantTransportStreamService``；本类通过 ``self._stream`` 委托其完成流式响应。
     """
 
@@ -117,20 +116,25 @@ class TransportAssistantService:
             thread_id: str,
             run_id: int,
             state: ConversationStateSnapshot,
-    ) -> AssistantTransportResponse:
-        """为指定 run 构造统一的 Assistant Transport snapshot response。"""
+    ) -> StreamingResponse:
+        """为指定 run 构造项目自有的 frame SSE response。
+
+        ``state`` 仅用于验证调用方已解析出目标 run；真正的首帧由 stream service 在
+        subscriber 注册临界区内重新取得，避免首帧与后续 mutation 之间出现 attach gap。
+        """
 
         try:
             find_run(state, run_id)
         except KeyError as exc:
             raise ValueError(
-                f"snapshot run {run_id} does not exist"
+                f"快照中不存在 run {run_id}"
             ) from exc
-        stream = create_run(
-            lambda controller: self._stream.subscribe_run_state(controller, task_id, run_id),
-            state=state,
+        response = StreamingResponse(
+            self._stream.stream_envelopes(task_id, run_id, lambda: False),
+            media_type="text/event-stream",
         )
-        response = AssistantTransportResponse(stream)
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["Connection"] = "keep-alive"
         response.headers["X-Cosir-Task-Id"] = str(task_id)
         response.headers["X-Cosir-Thread-Id"] = thread_id
         return response
@@ -418,7 +422,7 @@ class TransportAssistantService:
             task_id: int,
             thread_id: str,
             run_id: int,
-    ) -> AssistantTransportResponse:
+    ) -> StreamingResponse:
         """只订阅一个已有 run 的 canonical snapshot，不启动或恢复执行。
 
         参数:
@@ -427,7 +431,7 @@ class TransportAssistantService:
             run_id: 已存在的 Conversation Run 标识。
 
         返回:
-            使用 ``assistant-stream`` 编码的 snapshot subscription 响应。
+            使用项目自有 frame SSE 编码的 snapshot subscription 响应。
 
         异常:
             HTTPException: run 不存在（404）；run 不属于该 task、不是当前 task 的最新

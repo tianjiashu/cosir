@@ -11,7 +11,7 @@ from app.assistant_transport.event import (
     ConversationEvent,
     ConversationEventEnvelope,
 )
-from app.assistant_transport.stream import SnapshotChange
+from app.assistant_transport.stream import TransportFrame
 from app.config.logging.logger import log
 from app.service.depends import get_conversation_task_state_service
 
@@ -64,14 +64,14 @@ class ConversationEventProjector:
     def process(
         self,
         raw_event: object,
-    ) -> SnapshotChange | None:
+    ) -> TransportFrame | None:
         """校验并投影一条事件。
 
         参数:
             raw_event: workflow custom stream 产出的 event 对象或其 JSON 字典。
         返回:
-            已提交的 ``SnapshotChange``；未知事件返回 ``None``；重复事件返回无 mutation
-            的 change。未知事件只记 warning，已知但格式非法的事件抛出 ``ValueError``。
+            已提交的 ``TransportFrame``；未知或重复事件返回 ``None``。未知事件只记 warning，
+            已知但格式非法的事件抛出 ``ValueError``。
 
         异常:
             ValueError: 已知事件无法通过判别式契约校验，或事件不满足 snapshot 投影规则。
@@ -87,8 +87,7 @@ class ConversationEventProjector:
         with self._lock:
             seen = self._seen_event_ids.setdefault(event.task_id, set())
             if event.event_id in seen:
-                state = self._state_service.get_state(event.task_id)
-                return SnapshotChange(event.task_id, state, ())
+                return None
 
             change = self._state_service.apply_planned(event)
             # 事件可能先于 run 骨架抵达；空投影不能被永久去重，否则后续无法重放。

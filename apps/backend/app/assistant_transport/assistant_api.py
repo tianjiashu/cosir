@@ -5,8 +5,8 @@
 它不把 assistant-ui 类型传入 core、service 或 storage。
 """
 
-from assistant_stream.serialization import AssistantTransportResponse
 from fastapi import Depends, HTTPException, Response
+from fastapi.responses import StreamingResponse
 from fastapi.responses import JSONResponse
 
 from app.app import app
@@ -43,7 +43,7 @@ async def assistant_transport(
     run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
     runtime: AgentRuntime = Depends(get_runtime),
     transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
-) -> AssistantTransportResponse:
+) -> StreamingResponse:
     """接收用户消息并返回 Assistant Transport 状态流。
 
     参数:
@@ -53,7 +53,7 @@ async def assistant_transport(
         run_executor: 进程级后台执行器，负责驱动 AgentRuntime 执行。
 
     返回:
-        使用 ``assistant-stream`` 编码的 ``text/event-stream`` 响应。
+    使用项目自有 frame 协议编码的 ``text/event-stream`` 响应。
 
     异常:
         HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。
@@ -135,9 +135,8 @@ async def assistant_transport(
                 state=initial_state,
             )
     except HTTPException:
-        # Domain conflict responses raised by ``_raise_transport_error`` must
-        # reach FastAPI unchanged.  Converting them to RUN_START_FAILED would
-        # hide actionable states such as RUN_NOT_RESUMABLE and TASK_BUSY.
+        # 由 ``_raise_transport_error`` 抛出的领域冲突响应必须原样到达 FastAPI。
+        # 若把它们转成 RUN_START_FAILED，会掩盖 RUN_NOT_RESUMABLE、TASK_BUSY 等可处理状态。
         raise
     except ImageNormalizationError as exc:
         _raise_transport_error(
@@ -201,7 +200,7 @@ async def assistant_transport_attach(
     request: AssistantAttachRequest,
     task_service: TaskService = Depends(get_task_service),
     transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
-) -> AssistantTransportResponse:
+) -> StreamingResponse:
     """重新订阅已有 Run，不触发业务 resume。"""
 
     try:
