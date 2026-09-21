@@ -57,6 +57,9 @@ export function useRuntimeTransport(
   const backendRuntimeAvailableRef = useRef(context.backendRuntimeAvailable);
   backendRuntimeGenerationRef.current = context.backendRuntimeGeneration;
   backendRuntimeAvailableRef.current = context.backendRuntimeAvailable;
+  const onAttachReady = useCallback((attach: (() => Promise<void>) | null) => {
+    context.attachTransportRef.current = attach;
+  }, [context.attachTransportRef]);
   const clearRecoveryIssueTimer = useCallback(() => {
     if (recoveryIssueTimerRef.current === null) return;
     window.clearTimeout(recoveryIssueTimerRef.current);
@@ -395,7 +398,7 @@ export function useRuntimeTransport(
         });
       }
     },
-    attachRef: context.attachTransportRef,
+    onAttachReady,
     onStateCommit,
   });
 }

@@ -11,10 +11,13 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:4173",
     trace: "retain-on-failure",
+    launchOptions: process.env.COSIR_PLAYWRIGHT_EXECUTABLE
+      ? { executablePath: process.env.COSIR_PLAYWRIGHT_EXECUTABLE }
+      : undefined,
   },
   webServer: [
     {
-      command: "npm.cmd run dev -- --host 127.0.0.1 --port 4173",
+      command: `${process.platform === "win32" ? "npm.cmd" : "npm"} run dev -- --host 127.0.0.1 --port 4173`,
       url: "http://127.0.0.1:4173",
       // Reuse a manually started Vite instance when present; Playwright still
       // starts Vite automatically when this URL is not already available.

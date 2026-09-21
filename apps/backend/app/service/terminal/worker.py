@@ -18,6 +18,7 @@ import threading
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -25,11 +26,22 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.terminal.errors import (
     TerminalWorkerBackpressureError,
+    TerminalWorkerSignalFailedError,
+    TerminalWorkerSignalUnsupportedError,
     TerminalWorkerUnavailableError,
 )
 from app.service.terminal.shell_resolver import ShellSpec
 
 WorkerEventCallback = Callable[[Mapping[str, object]], None]
+SIGNAL_ACK_TIMEOUT_SECONDS = 5.0
+
+
+@dataclass
+class _PendingSignal:
+    """等待 worker signal_result 的单次请求状态。"""
+
+    event: threading.Event
+    result: Mapping[str, object] | None = None
 
 
 class TerminalWorker(Protocol):
@@ -111,6 +123,8 @@ class ProcessTerminalWorker:
         self._exit_emitted = False
         self._handshake_valid = False
         self._capabilities = frozenset[str]()
+        self._signal_lock = threading.Lock()
+        self._pending_signals: dict[str, _PendingSignal] = {}
 
     @property
     def pid(self) -> int | None:
@@ -209,9 +223,32 @@ class ProcessTerminalWorker:
             self._input_queue_bytes += len(data)
 
     def signal(self, signal_name: str) -> None:
-        """发送平台无关的 signal 名称，由 worker 映射到平台语义。"""
+        """发送 signal 并等待 worker 确认实际投递结果。"""
 
-        self._send({"type": "signal", "signal": signal_name})
+        request_id = uuid.uuid4().hex
+        pending = _PendingSignal(threading.Event())
+        with self._signal_lock:
+            self._pending_signals[request_id] = pending
+        try:
+            self._send({"type": "signal", "request_id": request_id, "signal": signal_name})
+        except Exception:
+            with self._signal_lock:
+                self._pending_signals.pop(request_id, None)
+            raise
+        if not pending.event.wait(timeout=SIGNAL_ACK_TIMEOUT_SECONDS):
+            with self._signal_lock:
+                self._pending_signals.pop(request_id, None)
+            raise TerminalWorkerUnavailableError("terminal worker signal acknowledgement timed out")
+        with self._signal_lock:
+            result = self._pending_signals.pop(request_id, None)
+        status = result.result.get("status") if result and result.result else None
+        if status == "applied":
+            return
+        if status == "unsupported":
+            raise TerminalWorkerSignalUnsupportedError("terminal signal is unsupported")
+        if status == "failed":
+            raise TerminalWorkerSignalFailedError("terminal worker failed to deliver signal")
+        raise TerminalWorkerUnavailableError("terminal worker signal result is missing")
 
     def close(self) -> None:
         """请求 worker 关闭 shell，超时后终止 worker 进程。"""
@@ -221,6 +258,10 @@ class ProcessTerminalWorker:
             return
         self._stop_event.set()
         self._writer_stop.set()
+        with self._signal_lock:
+            for pending in self._pending_signals.values():
+                pending.result = {"status": "unavailable"}
+                pending.event.set()
         with self._input_queue_lock:
             while True:
                 try:
@@ -320,6 +361,15 @@ class ProcessTerminalWorker:
                             value for value in raw_capabilities if isinstance(value, str)
                         )
                     self._handshake_event.set()
+                if event.get("type") == "signal_result":
+                    request_id = event.get("request_id")
+                    if isinstance(request_id, str):
+                        with self._signal_lock:
+                            pending = self._pending_signals.get(request_id)
+                            if pending is not None:
+                                pending.result = event
+                                pending.event.set()
+                    continue
                 callback = self._on_event
                 if callback is not None:
                     callback(event)

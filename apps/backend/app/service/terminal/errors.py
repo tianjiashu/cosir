@@ -61,3 +61,15 @@ class TerminalWorkerBackpressureError(TerminalSessionError):
 
     code = "TERMINAL_INPUT_BACKPRESSURE"
     retryable = True
+
+
+class TerminalWorkerSignalUnsupportedError(TerminalSessionError):
+    """Worker 明确拒绝当前平台或终端状态下的 signal。"""
+
+    code = "TERMINAL_SIGNAL_UNSUPPORTED"
+
+
+class TerminalWorkerSignalFailedError(TerminalSessionError):
+    """Worker 已处理 signal 请求但无法完成实际投递。"""
+
+    code = "TERMINAL_SIGNAL_FAILED"

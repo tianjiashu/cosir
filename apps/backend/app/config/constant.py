@@ -39,6 +39,8 @@ class Constant:
 
         # 单进程同时活跃的终端会话数上限（全局容量闸门，超出则新建会话被拒）。
         MAX_ACTIVE_SESSIONS: int = 32
+        # 终态 session 只保留有限的查询历史，避免 registry/幂等状态随运行时间增长。
+        MAX_TERMINAL_HISTORY_SESSIONS: int = 256
         # 单会话环形缓冲字节上限，超出后最旧输出被丢弃。
         MAX_RING_BUFFER_BYTES: int = 1024 * 1024
         # 预览队列最大帧数（防止预览消费者堆积）。
@@ -63,8 +65,10 @@ class Constant:
         MAX_INPUT_QUEUE_FRAMES: int = 64
         # Worker 输入队列最大字节数。
         MAX_INPUT_QUEUE_BYTES: int = 64 * 1024
+        # 已完成 terminal_write 幂等结果的进程内上限；session 终态时会按 session 清理。
+        MAX_WRITE_OPERATION_CACHE: int = 4096
         # 服务侧与 Worker 握手时约定的协议版本标识。
-        WORKER_PROTOCOL: str = "terminal-worker-v1"
+        WORKER_PROTOCOL: str = "terminal-worker-v2"
         # Worker 子进程启动时注入的环境变量键，用于标识自身为终端 worker。
         WORKER_ENV: str = "CODING_AGENT_TERMINAL_WORKER"
 

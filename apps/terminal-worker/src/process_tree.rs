@@ -313,9 +313,12 @@ fn child_processes(pid: libc::pid_t) -> Vec<libc::pid_t> {
         if size <= 0 {
             return Vec::new();
         }
-        let bytes = size as usize;
-        let count = (bytes / std::mem::size_of::<libc::pid_t>()).min(children.len());
-        if bytes < children.len() * std::mem::size_of::<libc::pid_t>() {
+        // proc_listchildpids returns the number of PIDs, not the number of
+        // bytes written.  Treating this value as bytes makes every small
+        // result truncate to zero on macOS and loses the whole descendant
+        // tree during cleanup.
+        let count = (size as usize).min(children.len());
+        if count < children.len() {
             children.truncate(count);
             return children.into_iter().filter(|pid| *pid > 0).collect();
         }
@@ -325,6 +328,23 @@ fn child_processes(pid: libc::pid_t) -> Vec<libc::pid_t> {
             return children.into_iter().filter(|pid| *pid > 0).collect();
         }
         capacity *= 2;
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::child_processes;
+    use std::process::Command;
+
+    #[test]
+    fn discovers_a_direct_child_on_macos() {
+        let mut child = Command::new("sleep").arg("2").spawn().expect("spawn child");
+        let pid = child.id() as libc::pid_t;
+
+        assert!(child_processes(std::process::id() as libc::pid_t).contains(&pid));
+
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 

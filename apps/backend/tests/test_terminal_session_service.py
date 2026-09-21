@@ -5,6 +5,7 @@ from typing import cast
 import pytest
 from langchain_core.messages import SystemMessage
 
+from app.config.constant import Constant
 from app.service.terminal.errors import (
     TerminalSessionError,
     TerminalSessionNotFoundError,
@@ -12,6 +13,7 @@ from app.service.terminal.errors import (
     TerminalSessionResyncRequiredError,
     TerminalSessionStateError,
     TerminalWorkerBackpressureError,
+    TerminalWorkerSignalFailedError,
     TerminalWorkerUnavailableError,
 )
 from app.service.terminal.shell_resolver import ShellResolver
@@ -86,6 +88,21 @@ class BackpressureWorkerFactory:
 
     def create(self, instance_id: str) -> BackpressureWorker:
         worker = BackpressureWorker()
+        self.workers.append(worker)
+        return worker
+
+
+class SignalFailureWorker(FakeWorker):
+    def signal(self, signal_name: str) -> None:
+        raise TerminalWorkerSignalFailedError("terminal worker failed to deliver signal")
+
+
+class SignalFailureWorkerFactory:
+    def __init__(self) -> None:
+        self.workers: list[SignalFailureWorker] = []
+
+    def create(self, instance_id: str) -> SignalFailureWorker:
+        worker = SignalFailureWorker()
         self.workers.append(worker)
         return worker
 
@@ -351,6 +368,78 @@ def test_worker_exit_is_terminal_and_shutdown_closes_workers(tmp_path: Path) -> 
     assert attachment.subscription.get(0.1)["type"] == "exit"
     service.shutdown()
     assert factory.workers[0].closed
+
+
+def test_terminal_completion_is_retired_from_active_registry(tmp_path: Path) -> None:
+    service, factory = make_service()
+    snapshot = service.start(
+        task_id=1,
+        workspace_id=1,
+        workspace_root=str(tmp_path),
+        run_id=1,
+    )
+    session_id = str(snapshot["session_id"])
+
+    factory.workers[0].emit_exit(0)
+
+    assert session_id not in service._registry
+    assert session_id in service._terminal_history
+    assert service.snapshot(session_id, task_id=1)["status"] == "exited"
+
+
+def test_signal_delivery_failure_is_returned_without_false_success(tmp_path: Path) -> None:
+    factory = SignalFailureWorkerFactory()
+    service = TerminalSessionService(worker_factory=factory)
+    snapshot = service.start(
+        task_id=1,
+        workspace_id=1,
+        workspace_root=str(tmp_path),
+        run_id=1,
+    )
+
+    with pytest.raises(TerminalWorkerSignalFailedError):
+        service.signal(
+            str(snapshot["session_id"]),
+            task_id=1,
+            signal_name="interrupt",
+        )
+
+    assert service.snapshot(str(snapshot["session_id"]), task_id=1)["status"] == "running"
+
+
+def test_terminal_history_and_write_idempotency_cache_are_bounded(tmp_path: Path) -> None:
+    service, factory = make_service()
+    session_ids: list[str] = []
+    for index in range(Constant.Terminal.MAX_TERMINAL_HISTORY_SESSIONS + 1):
+        snapshot = service.start(
+            task_id=1,
+            workspace_id=1,
+            workspace_root=str(tmp_path),
+            run_id=index + 1,
+        )
+        session_ids.append(str(snapshot["session_id"]))
+        factory.workers[-1].emit_exit(0)
+
+    assert len(service._terminal_history) == Constant.Terminal.MAX_TERMINAL_HISTORY_SESSIONS
+    assert session_ids[0] not in service._terminal_history
+
+    active = service.start(
+        task_id=1,
+        workspace_id=1,
+        workspace_root=str(tmp_path),
+        run_id=10_000,
+    )
+    for index in range(Constant.Terminal.MAX_WRITE_OPERATION_CACHE + 1):
+        service.write(
+            str(active["session_id"]),
+            task_id=1,
+            operation_id=f"operation-{index}",
+            data=b"x",
+            wait_ms=0,
+        )
+
+    assert len(service._write_operations) == Constant.Terminal.MAX_WRITE_OPERATION_CACHE
+    service.shutdown()
 
 
 def test_fatal_worker_error_is_not_projected_as_shell_exit(tmp_path: Path) -> None:

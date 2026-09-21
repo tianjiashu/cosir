@@ -902,7 +902,7 @@ class ToolCallLifecycleManager(BaseModel):
             )
             if event_status == "completed":
                 tool_error_count = 0
-            elif event_status == "failed":
+            elif event_status == "failed" and summary["retryable"] is False:
                 tool_error_count += 1
                 error_count += 1
 

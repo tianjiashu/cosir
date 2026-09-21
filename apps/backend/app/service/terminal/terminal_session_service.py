@@ -11,7 +11,7 @@ import base64
 import threading
 import time
 import uuid
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -240,6 +240,7 @@ class TerminalSessionService:
         self._max_active_sessions = max_active_sessions
         self._ring_buffer_bytes = ring_buffer_bytes
         self._registry: dict[str, _SessionRuntime] = {}
+        self._terminal_history: OrderedDict[str, _SessionRuntime] = OrderedDict()
         self._registry_lock = threading.RLock()
         self._closing_runs: set[int] = set()
         self._backpressure_notified_runs: set[tuple[int, int]] = set()
@@ -409,7 +410,7 @@ class TerminalSessionService:
         if operation_key is not None:
             with self._write_operations_condition:
                 self._write_operations[operation_key] = (data, result)
-                while len(self._write_operations) > 4096:
+                while len(self._write_operations) > Constant.Terminal.MAX_WRITE_OPERATION_CACHE:
                     self._write_operations.pop(next(iter(self._write_operations)))
                 self._write_operations_condition.notify_all()
         return result
@@ -498,9 +499,23 @@ class TerminalSessionService:
                 ended_at=utc_now(),
             )
             runtime.condition.notify_all()
+        close_error: Exception | None = None
         if worker is not None:
-            worker.close()
+            try:
+                worker.close()
+            except Exception as exc:
+                close_error = exc
+                log.exception(
+                    "terminal_session_close_worker_failed",
+                    extra={
+                        "msg": "Terminal Worker 显式关闭失败",
+                        "data": {"session_id": session_id, "reason": reason},
+                    },
+                )
         self._publish_status(runtime)
+        self._retire_runtime(runtime)
+        if close_error is not None:
+            raise close_error
         return self.snapshot(session_id, task_id=task_id, workspace_id=workspace_id)
 
     def snapshot(
@@ -556,7 +571,8 @@ class TerminalSessionService:
                 if runtime.status in {"exited", "interrupted", "failed", "closed"}
                 else None
             )
-            runtime.subscribers.add(subscription)
+            if terminal_event is None:
+                runtime.subscribers.add(subscription)
         return TerminalPreviewAttachment(attached, replay, terminal_event, subscription)
 
     def unsubscribe(self, session_id: str, subscription: TerminalPreviewSubscription) -> None:
@@ -598,6 +614,10 @@ class TerminalSessionService:
                 runtime.subscribers.clear()
         with self._registry_lock:
             self._registry.clear()
+            self._terminal_history.clear()
+        with self._write_operations_condition:
+            self._write_operations.clear()
+            self._write_operations_condition.notify_all()
         self._sweeper_stop.set()
         if (
             self._sweeper_thread is not None
@@ -686,6 +706,7 @@ class TerminalSessionService:
                 self._publish_status(runtime)
                 runtime.subscribers.clear()
                 runtime.condition.notify_all()
+            self._forget_write_operations_for_session(runtime.record.session_id)
             if worker is not None:
                 try:
                     worker.close()
@@ -830,6 +851,9 @@ class TerminalSessionService:
         if worker is not None:
             with suppress(Exception):
                 worker.close()
+        with runtime.lock:
+            runtime.worker = None
+        self._retire_runtime(runtime)
 
     def _on_worker_error(self, runtime: _SessionRuntime, event: dict[str, object]) -> None:
         """将 Worker 错误事件映射为失败或可记录的非致命运行态。"""
@@ -837,8 +861,6 @@ class TerminalSessionService:
         code = event.get("code")
         if code in {
             "START_ALREADY_COMPLETE",
-            "PTY_SIGNAL_FAILED",
-            "PTY_SIGNAL_UNSUPPORTED",
             "PTY_QUERY_RESPONSE_FAILED",
         }:
             log.warning(
@@ -884,6 +906,25 @@ class TerminalSessionService:
         if worker is not None:
             with suppress(Exception):
                 worker.close()
+        with runtime.lock:
+            runtime.worker = None
+        self._retire_runtime(runtime)
+
+    def _retire_runtime(self, runtime: _SessionRuntime) -> None:
+        """从 active registry 脱离终态 runtime，并保留有限的只读查询历史。"""
+
+        session_id = runtime.record.session_id
+        self._forget_write_operations_for_session(session_id)
+        with runtime.lock:
+            runtime.worker = None
+            runtime.subscribers.clear()
+        with self._registry_lock:
+            if self._registry.get(session_id) is runtime:
+                self._registry.pop(session_id, None)
+            self._terminal_history[session_id] = runtime
+            self._terminal_history.move_to_end(session_id)
+            while len(self._terminal_history) > Constant.Terminal.MAX_TERMINAL_HISTORY_SESSIONS:
+                self._terminal_history.popitem(last=False)
 
     def _require_runtime(
         self,
@@ -892,10 +933,10 @@ class TerminalSessionService:
         *,
         workspace_id: int | None = None,
     ) -> _SessionRuntime:
-        """取得当前 backend 进程中的 active runtime。"""
+        """取得当前 backend 进程中的 active 或有限终态 runtime。"""
 
         with self._registry_lock:
-            runtime = self._registry.get(session_id)
+            runtime = self._registry.get(session_id) or self._terminal_history.get(session_id)
             if runtime is not None:
                 if runtime.record.task_id != task_id or (
                     workspace_id is not None and runtime.record.workspace_id != workspace_id
@@ -903,6 +944,15 @@ class TerminalSessionService:
                     raise TerminalSessionOwnershipError("terminal session does not belong to task")
                 return runtime
         raise TerminalSessionNotFoundError(session_id)
+
+    def _forget_write_operations_for_session(self, session_id: str) -> None:
+        """删除一个 session 的所有幂等写缓存，避免终态引用继续存活。"""
+
+        with self._write_operations_condition:
+            stale = [key for key in self._write_operations if key[0] == session_id]
+            for key in stale:
+                self._write_operations.pop(key, None)
+            self._write_operations_condition.notify_all()
 
     @staticmethod
     def _resolve_cwd(workspace_root: str, cwd: str | None) -> Path:

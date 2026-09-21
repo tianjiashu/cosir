@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_OUTPUT_CHUNK_BYTES: usize = 16 * 1024;
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
-pub const PROTOCOL: &str = "terminal-worker-v1";
+pub const PROTOCOL: &str = "terminal-worker-v2";
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -19,6 +19,7 @@ pub enum ControlFrame {
         data_base64: String,
     },
     Signal {
+        request_id: String,
         signal: String,
     },
     Heartbeat,
@@ -40,6 +41,11 @@ pub enum WorkerEvent {
     },
     Error {
         code: &'static str,
+    },
+    SignalResult {
+        request_id: String,
+        status: &'static str,
+        reason: Option<&'static str>,
     },
     Exit {
         exit_code: Option<u32>,
@@ -117,5 +123,39 @@ mod tests {
         let size = u32::from_be_bytes(frame[..4].try_into().expect("length prefix")) as usize;
         assert_eq!(size, frame.len() - 4);
         assert_eq!(&frame[4..], br#"{"type":"exit","exit_code":0}"#);
+    }
+
+    #[test]
+    fn reads_signal_frame_with_request_id() {
+        let payload = br#"{"type":"signal","request_id":"req-1","signal":"interrupt"}"#;
+        let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
+        frame.extend_from_slice(payload);
+
+        let parsed = read_control_frame(&mut Cursor::new(frame))
+            .expect("valid frame")
+            .expect("one frame");
+        match parsed {
+            ControlFrame::Signal { request_id, signal } => {
+                assert_eq!(request_id, "req-1");
+                assert_eq!(signal, "interrupt");
+            }
+            _ => panic!("expected signal frame"),
+        }
+    }
+
+    #[test]
+    fn encodes_signal_result_event() {
+        let frame = encode_event(&WorkerEvent::SignalResult {
+            request_id: "req-1".to_owned(),
+            status: "unsupported",
+            reason: Some("platform_signal_unavailable"),
+        })
+        .expect("event");
+        let size = u32::from_be_bytes(frame[..4].try_into().expect("length prefix")) as usize;
+        assert_eq!(size, frame.len() - 4);
+        assert_eq!(
+            &frame[4..],
+            br#"{"type":"signal_result","request_id":"req-1","status":"unsupported","reason":"platform_signal_unavailable"}"#
+        );
     }
 }

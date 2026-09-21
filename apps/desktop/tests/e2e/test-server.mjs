@@ -269,6 +269,19 @@ function delegationState() {
               delegation_ref_seq: 0,
               isError: false,
             },
+            {
+              type: "tool-call",
+              toolCallId: "delegate-ref-501",
+              toolName: "delegate_task",
+              args: { child_agent_id: "delegate_tester", title: "检查测试", prompt: "请检查相关测试" },
+              status: "completed",
+              presentation: { verb: "委派 Agent", icon: "users", surface: "standalone", expandable: false, expand_layout: "none" },
+              display_data: { kind: "delegation-result", title: "检查测试", role: "Tester", child_task_id: 502 },
+              child_task_id: 502,
+              agent_role: "Tester",
+              delegation_ref_seq: 1,
+              isError: false,
+            },
             { type: "text", text: "子 Agent 已开始工作。", status: "completed" },
           ],
         },
@@ -287,6 +300,10 @@ function delegationState() {
 
 function childDelegationState() {
   return stateWithExchange(emptyState(), "请审查当前改动", 501, "", "running");
+}
+
+function secondChildDelegationState() {
+  return stateWithExchange(emptyState(), "请检查相关测试", 502, "", "running");
 }
 
 function jsonResponse(res, status, value) {
@@ -776,7 +793,8 @@ const server = createServer(async (req, res) => {
     });
     states.set(TASK_ID, delegationState());
     states.set(501, childDelegationState());
-    jsonResponse(res, 200, { task_id: TASK_ID, child_task_id: 501 });
+    states.set(502, secondChildDelegationState());
+    jsonResponse(res, 200, { task_id: TASK_ID, child_task_id: 501, second_child_task_id: 502 });
     return;
   }
   if (req.method === "POST" && url.pathname.startsWith("/runs/") && url.pathname.endsWith("/cancel")) {

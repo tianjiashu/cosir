@@ -1,10 +1,11 @@
 "use client";
 
 import { AssistantRuntimeProvider, useAuiState } from "@assistant-ui/react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ReadonlyThread } from "@/components/assistant-ui/elements/readonly-thread.aui";
+import { AssistantAttachController } from "@/lib/assistant/assistant-attach-controller";
 import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
-import { useTaskAssistantTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
+import { useTaskAssistantReadonlyTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
 import type { TransportState } from "@/lib/assistant/contract";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
@@ -14,31 +15,38 @@ import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtim
 const MAX_AUTOMATIC_RESYNCS = 2;
 const RESYNC_DELAYS_MS = [300, 900];
 
-function AttachBridge({ runId, backendAvailable, attachRef }: { runId: number | null; backendAvailable: boolean; attachRef: MutableRefObject<(() => Promise<void>) | null> }) {
+function AttachBridge({ runId, backendAvailable, controller }: { runId: number | null; backendAvailable: boolean; controller: AssistantAttachController }) {
   useEffect(() => {
-    if (runId === null || !backendAvailable) return;
+    if (runId === null || !backendAvailable) {
+      controller.cancel(runId ?? undefined);
+      return;
+    }
     let cancelled = false;
     const timer = window.setTimeout(() => {
       if (cancelled) return;
       void frontendLog("INFO", "workbench_agent_attach", "Workbench 子 Agent 开始只读订阅", { data: { runId } });
-      void attachRef.current?.();
+      controller.request(runId);
     }, 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      controller.cancel(runId);
     };
-  }, [attachRef, backendAvailable, runId]);
+  }, [backendAvailable, controller, runId]);
   return null;
 }
 
 function AgentRunTransport({ taskId, initialState, onError }: { taskId: number; initialState: TransportState; onError: (error: unknown) => void }) {
   const backendRuntime = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
   const [traceId] = useState(() => getActiveTraceId() ?? newTraceId());
-  const attachRef = useRef<(() => Promise<void>) | null>(null);
   const runId = initialState.current_run_id;
   const currentRun = initialState.runs.find((run) => run.runId === runId);
   const shouldAttach = currentRun?.status === "pending" || currentRun?.status === "running";
-  const runtime = useTaskAssistantTransportRuntime(taskId, {
+  const attachController = useMemo(
+    () => new AssistantAttachController((error) => onError(error)),
+    [onError],
+  );
+  const runtime = useTaskAssistantReadonlyTransportRuntime(taskId, {
     initialState,
     readonly: true,
     api: `${backendRuntime.backendBaseUrl}/assistant`,
@@ -50,14 +58,14 @@ function AgentRunTransport({ taskId, initialState, onError }: { taskId: number; 
     }),
     body: async () => ({ taskId, threadId: `task-${taskId}`, runId }),
     onError: async (error) => onError(error),
-    attachRef,
+    onAttachReady: attachController.setAttach,
   });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <AttachBridge
         runId={shouldAttach ? runId : null}
         backendAvailable={backendRuntime.available}
-        attachRef={attachRef}
+        controller={attachController}
       />
       <AgentReadonlyMessages taskId={taskId} />
     </AssistantRuntimeProvider>

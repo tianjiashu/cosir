@@ -2,8 +2,8 @@
 
 本模型用三个字段（child_agent_id / title / prompt）描述父 Agent 指派给子 Agent 的
 委派契约。任务内容通过自由文本 ``prompt`` 承载，父 Agent 不被迫拆成结构化字段；
-任务契约结构（Objective / Rules / References / Expected Output）由 handler 的
-description 模板软引导，而非此处强制。预算校验退化为 ``prompt`` 总长度硬校验与
+``prompt`` 描述不限定章节格式（Objective / Rules / References / Expected Output 等
+仅作可选建议，不当作强制结构）。预算校验退化为 ``prompt`` 总长度硬校验与
 ``title`` 必填/长度校验，超限时返回明确中英文错误并通过规范日志事件记录超限字段
 与实测长度，便于排查父 Agent 调用问题。
 """
@@ -92,9 +92,7 @@ class DelegateTaskArgs(BaseModel):
     prompt: str = Field(
         description=(
             "The complete task contract as free-form text, passed verbatim as the child's "
-            f"entire input. REQUIRED, at most {PROMPT_MAX} characters. Optional markdown "
-            "sections improve clarity: ## Objective / ## Rules / ## References / "
-            "## Expected Output / ## Background."
+            f"entire input. REQUIRED, at most {PROMPT_MAX} characters."
         )
     )
 

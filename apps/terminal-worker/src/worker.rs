@@ -95,16 +95,26 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
                         return Ok(());
                     }
                 }
-                ControlFrame::Signal { signal } => match runtime.signal(&signal) {
-                    Ok(TerminalControlResult::Applied) => {}
+                ControlFrame::Signal { request_id, signal } => match runtime.signal(&signal) {
+                    Ok(TerminalControlResult::Applied) => {
+                        let _ = output.send(&WorkerEvent::SignalResult {
+                            request_id,
+                            status: "applied",
+                            reason: None,
+                        });
+                    }
                     Ok(TerminalControlResult::Unsupported(_reason)) => {
-                        let _ = output.send(&WorkerEvent::Error {
-                            code: "PTY_SIGNAL_UNSUPPORTED",
+                        let _ = output.send(&WorkerEvent::SignalResult {
+                            request_id,
+                            status: "unsupported",
+                            reason: Some(_reason),
                         });
                     }
                     Err(_) => {
-                        let _ = output.send(&WorkerEvent::Error {
-                            code: "PTY_SIGNAL_FAILED",
+                        let _ = output.send(&WorkerEvent::SignalResult {
+                            request_id,
+                            status: "failed",
+                            reason: Some("signal_delivery_failed"),
                         });
                     }
                 },

@@ -39,7 +39,7 @@ class Settings:
     # --- 类级静态配置（进程启动后由 ``Settings.load`` 填充，之后只读） ---
     LOG_MAX_BYTES: ClassVar[int] = 5 * 1024 * 1024
     LOG_BACKUP_COUNT: ClassVar[int] = 7
-    TOOL_ERROR_LIMIT: ClassVar[int] = 10
+    TOOL_ERROR_LIMIT: ClassVar[int] = 100
     MAX_PARALLEL_TOOL_CALLS: ClassVar[int] = 8
     # 工具结果摘要中 content 的截断上限（字符），供 observe 节点与阶段二 LLM 观察使用，
     # 避免把大体积工具输出塞进 checkpoint。

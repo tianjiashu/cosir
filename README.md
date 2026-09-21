@@ -49,17 +49,33 @@ flowchart LR
 
 ### 启动桌面开发版
 
-在仓库根目录执行：
+先在仓库根目录安装依赖并准备 dev 构建前置：
 
 ```bash
 git clone https://github.com/tianjiashu/coding-agent.git
 cd coding-agent
-npm ci --prefix apps/desktop
-cargo install tauri-cli --version "^2"
-npm run dev:desktop
+npm ci --prefix apps/desktop                # 安装前端依赖
+cargo install tauri-cli --version "^2"      # 安装 Tauri CLI（提供 cargo tauri 子命令）
+uv sync --project apps/backend              # 按 uv.lock 准备后端 Python 依赖
+
+# 让 tauri-build 的资源校验通过（详见下方说明）
+mkdir -p target/resources/backend target/resources/terminal-worker
+
+# 编译 terminal-worker，并放到开发宿主查找的仓库统一 target/debug 目录
+cargo build --manifest-path apps/terminal-worker/Cargo.toml
+cp apps/terminal-worker/target/debug/terminal-worker target/debug/terminal-worker
 ```
 
-开发启动时，Tauri 会启动 Vite 前端和本机 FastAPI 后端；后端依赖由 `uv` 根据 `apps/backend/uv.lock` 管理。首次启动后，在界面中打开**模型设置**，配置 Provider 和模型，再选择一个本地文件夹创建工作区。
+然后进入 `apps/desktop` 启动桌面开发版：
+
+```bash
+cd apps/desktop
+npm run tauri:dev
+```
+
+开发启动时，Tauri 会启动 Vite 前端并在 debug 模式下通过 `uv run` 拉起本机 FastAPI 后端；后端依赖由 `uv` 根据 `apps/backend/uv.lock` 管理。首次启动后，在界面中打开**模型设置**，配置 Provider 和模型，再选择一个本地文件夹创建工作区。
+
+> 关于上面两条 dev 前置步骤：`tauri.conf.json` 的 `bundle.resources` 指向打包 staging 目录，`tauri-build` 在编译期会校验这些路径必须存在，缺失会导致 `cosir-desktop` 构建失败。因此这里只需创建**占位目录** `target/resources/{backend,terminal-worker}` 让校验通过即可——dev 模式的后端实际走 `uv run` 从 `apps/backend` 启动，并不会读取这些打包资源，无需运行完整的 PyInstaller 打包。`terminal-worker` 同理：debug 宿主只从仓库统一的 `target/debug/` 查找该二进制，缺失时会降级为「无 Terminal Worker」而不阻断启动，放好它即可让终端工具在 dev 下真正可用。正式打包分发时才需要用 `npm run build:bundle` 生成真实的后端与 release 版 terminal-worker 资源。
 
 ## 开发与测试
 

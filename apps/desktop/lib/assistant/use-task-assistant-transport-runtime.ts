@@ -7,7 +7,7 @@ import {
   type RemoteThreadListAdapter,
 } from "@assistant-ui/react";
 import type { ReadonlyJSONValue } from "assistant-stream/utils";
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import {
@@ -38,7 +38,7 @@ export type TaskAssistantTransportOptions = {
     params: { commands: readonly unknown[]; updateState: (updater: (state: TransportState) => TransportState) => void },
   ) => Promise<void>;
   onCancel?: (params: { error?: Error; commands: readonly unknown[] }) => void;
-  attachRef?: MutableRefObject<(() => Promise<void>) | null>;
+  onAttachReady?: (attach: (() => Promise<void>) | null) => void;
   readonly?: boolean;
   onStateCommit?: (state: TransportState) => void;
 };
@@ -49,13 +49,14 @@ type StreamCallbacks = {
 };
 
 /**
- * Build the assistant-ui runtime on one external frame store.
+ * Build one assistant-ui external adapter on one task frame store.
  *
  * The store is the only stream projection owner. This hook owns request/connection lifetime;
  * a superseded AbortController and object identity check isolate an old SSE connection from a
- * newer attach/send without introducing protocol version fields.
+ * newer attach/send without introducing protocol version fields. It does not create a runtime
+ * or persist task state; the exported runtime hooks choose the appropriate assistant-ui host.
  */
-export function useTaskAssistantTransportRuntime(
+function useTaskAssistantTransportAdapter(
   taskId: number,
   options: TaskAssistantTransportOptions,
 ) {
@@ -169,12 +170,9 @@ export function useTaskAssistantTransportRuntime(
   }, [openStream, store, taskId]);
 
   useEffect(() => {
-    if (!options.attachRef) return;
-    options.attachRef.current = attach;
-    return () => {
-      if (options.attachRef?.current === attach) options.attachRef.current = null;
-    };
-  }, [attach, options.attachRef]);
+    options.onAttachReady?.(attach);
+    return () => options.onAttachReady?.(null);
+  }, [attach, options.onAttachReady]);
 
   useEffect(() => {
     options.onStateCommit?.(view.state);
@@ -207,8 +205,7 @@ export function useTaskAssistantTransportRuntime(
   }, [closeActiveStream, store]);
   const onRefetchThread = useCallback(async () => {
     const currentSnapshot = store.getSnapshot();
-    const attach = optionsRef.current.attachRef?.current;
-    if ((currentSnapshot.targetRunStatus === "pending" || currentSnapshot.targetRunStatus === "running") && attach) {
+    if (currentSnapshot.targetRunStatus === "pending" || currentSnapshot.targetRunStatus === "running") {
       await attach();
       return;
     }
@@ -239,6 +236,15 @@ export function useTaskAssistantTransportRuntime(
     return base as unknown as ExternalStoreAdapter<FrameStoreItem>;
   }, [onCancel, onEdit, onNew, onRefetchThread, options.adapters, options.readonly, store, view]);
 
+  return adapter;
+}
+
+/** Build the writable persisted-task runtime with its remote thread-list identity. */
+export function useTaskAssistantTransportRuntime(
+  taskId: number,
+  options: TaskAssistantTransportOptions,
+) {
+  const adapter = useTaskAssistantTransportAdapter(taskId, options);
   const threadId = `task-${taskId}`;
   const threadListAdapter = useMemo<RemoteThreadListAdapter>(() => {
     const inMemory = new InMemoryThreadListAdapter();
@@ -254,6 +260,15 @@ export function useTaskAssistantTransportRuntime(
     allowNesting: true,
     runtimeHook: () => useExternalStoreRuntime(adapter),
   });
+}
+
+/** Build a readonly Workbench runtime without mounting a nested remote thread list. */
+export function useTaskAssistantReadonlyTransportRuntime(
+  taskId: number,
+  options: TaskAssistantTransportOptions,
+) {
+  const adapter = useTaskAssistantTransportAdapter(taskId, options);
+  return useExternalStoreRuntime(adapter);
 }
 
 function isAddMessageCommand(value: unknown): value is UserAddMessageCommand {
