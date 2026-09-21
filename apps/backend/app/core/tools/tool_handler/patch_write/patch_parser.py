@@ -2,7 +2,8 @@
 
 This module accepts only one-file-per-section Git unified diffs. It rejects file
 creation, deletion, rename, copy, binary, and mode-change metadata before callers
-resolve paths or touch the workspace.
+resolve paths or touch the workspace, and it rewrites hunk headers whose declared line
+counts disagree with their own body -- reporting each rewrite instead of failing the call.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import re
 from dataclasses import dataclass, field
 
 from unidiff import PatchSet
+from unidiff.constants import RE_HUNK_HEADER
 from unidiff.errors import UnidiffParseError
 
 
@@ -164,6 +166,110 @@ def _validate_section_headers(section: str) -> str | None:
     return None
 
 
+def _recompute_hunk_counts(section: str, section_index: int) -> tuple[str, list[str]]:
+    """Rewrite every ``@@`` header whose declared counts disagree with the body it introduces.
+
+    The body of a hunk is every line between its ``@@`` header and the next ``@@`` header
+    or the end of the section, because that is the text the caller wrote as this hunk.
+    Trailing empty lines are dropped rather than counted: they only separate file sections,
+    separate hunks, or terminate the patch, and belong to no hunk. Counting rules otherwise
+    match ``unidiff``: an empty body line counts as context on both sides, an omitted count
+    means one line, and ``\\ No newline at end of file`` markers count on neither side.
+
+    Repairing instead of rejecting is deliberate. The apply layer matches hunks by context
+    text through ``fuzzy_match`` and never reads the counts, so a miscounted header is
+    harmless once the numbers are consistent; ``unidiff``, however, consumes a hunk by its
+    declared counts, so a mismatch desynchronises the file section and surfaces as an
+    unrelated "unexpected hunk" / "hunk is shorter than expected" error. Rewriting the
+    header keeps the patch applicable and lets the caller report one honest note instead.
+
+    Args:
+        section: One Git file section, starting at its ``diff --git`` header.
+        section_index: Zero-based section position, used to locate the hunk in the notes.
+
+    Returns:
+        ``(section_text, notes)``: the section with every mismatching ``@@`` header rewritten
+        (start lines and any section text preserved), plus one model-facing note per rewrite
+        naming the positions, the header as written, and the old and new counts. A section
+        whose headers already agree is returned unchanged with no notes.
+
+    Raises:
+        Nothing.
+
+    Side effects:
+        None (pure string analysis; no filesystem access).
+    """
+
+    lines = section.splitlines(keepends=True)
+    headers: list[tuple[int, re.Match[str]]] = []
+    for index, line in enumerate(lines):
+        matched = RE_HUNK_HEADER.match(line)
+        if matched:
+            headers.append((index, matched))
+    if not headers:
+        return section, []
+    rewritten = list(lines)
+    notes: list[str] = []
+    for position, (start, header) in enumerate(headers):
+        end = headers[position + 1][0] if position + 1 < len(headers) else len(lines)
+        body = [line.rstrip("\r\n") for line in lines[start + 1 : end]]
+        while body and not body[-1]:
+            body.pop()
+        source_lines = sum(1 for line in body if line[:1] in {" ", "", "-"})
+        target_lines = sum(1 for line in body if line[:1] in {" ", "", "+"})
+        declared_source = int(header.group(2) or 1)
+        declared_target = int(header.group(4) or 1)
+        if declared_source == source_lines and declared_target == target_lines:
+            continue
+        ending = "\r\n" if lines[start].endswith("\r\n") else "\n"
+        rewritten[start] = (
+            f"@@ -{header.group(1)},{source_lines} +{header.group(3)},{target_lines} @@"
+            f"{header.group(5)}{ending}"
+        )
+        notes.append(
+            f"file section {section_index + 1} hunk {position + 1}: '{lines[start].rstrip()}' "
+            f"declared source={declared_source} target={declared_target} but body has "
+            f"source={source_lines} target={target_lines}; counts recomputed from the body and "
+            f"applied as written"
+        )
+    return "".join(rewritten), notes
+
+
+def _repair_hunk_counts(patch: str) -> tuple[str, list[str]]:
+    """Normalise every file section of ``patch`` before parsing.
+
+    Args:
+        patch: Git unified diff text as submitted by the caller.
+
+    Returns:
+        ``(patch_text, notes)``. The text is returned unchanged with no notes when the diff
+        has no recognisable Git file sections (the parser reports that shape itself), when no
+        hunk header needed a rewrite, or when the repair would change nothing.
+
+    Raises:
+        Nothing.
+
+    Side effects:
+        None (pure string analysis; no filesystem access).
+    """
+
+    if not isinstance(patch, str) or not patch.strip():
+        return patch, []
+    normalized_input = patch if patch.endswith("\n") else patch + "\n"
+    sections, error = _split_sections(normalized_input)
+    if error:
+        return patch, []
+    repaired_sections: list[str] = []
+    notes: list[str] = []
+    for index, section in enumerate(sections):
+        section_text, section_notes = _recompute_hunk_counts(section, index)
+        repaired_sections.append(section_text)
+        notes.extend(section_notes)
+    if not notes:
+        return patch, []
+    return "".join(repaired_sections), notes
+
+
 def _normalize_parser_paths(
     sections: list[str],
 ) -> tuple[list[str], list[str], str | None]:
@@ -197,11 +303,92 @@ def _normalize_parser_paths(
     return normalized, paths, None
 
 
+@dataclass(frozen=True)
+class PatchParseOutcome:
+    """Outcome of one Git unified diff parse, including any hunk-header count repairs.
+
+    Attributes:
+        operations: UPDATE operations of the accepted patch; empty when ``error`` is set.
+        error: Model-facing rejection message, or None when the diff was accepted.
+        count_repairs: One note per hunk whose declared counts were recomputed from its body.
+            Notes are reported only for accepted patches, and a repaired header still means
+            the patch applies exactly what its body says.
+    """
+
+    operations: list[PatchOperation]
+    error: str | None
+    count_repairs: list[str]
+
+
 def parse_git_unified_diff(patch: str) -> tuple[list[PatchOperation], str | None]:
     """Parse a Git unified diff without performing filesystem access.
 
-    The parser validates Git file sections and hunk lengths. It returns only UPDATE
-    operations; callers remain responsible for workspace containment and file checks.
+    Convenience entry for callers that need only the operations or the rejection message;
+    use :func:`parse_git_unified_diff_detailed` to also receive the hunk-count repair notes.
+    Hunk headers that disagree with their own body are repaired by both entries, never
+    rejected (see :func:`_recompute_hunk_counts`).
+
+    Args:
+        patch: Git unified diff text.
+
+    Returns:
+        ``(operations, None)`` when the diff is accepted; otherwise ``([], message)`` with a
+        model-facing diagnosis. It returns only UPDATE operations; callers remain responsible
+        for workspace containment and file checks.
+
+    Raises:
+        Nothing.
+
+    Side effects:
+        None.
+    """
+
+    outcome = parse_git_unified_diff_detailed(patch)
+    return outcome.operations, outcome.error
+
+
+def parse_git_unified_diff_detailed(patch: str) -> PatchParseOutcome:
+    """Parse a Git unified diff, reporting every hunk header whose counts had to be repaired.
+
+    The patch is normalised by :func:`_repair_hunk_counts` first, so a header that disagrees
+    with the body it introduces no longer fails the call: the counts are rewritten from the
+    body and the rewrite is reported to the caller instead.
+
+    Args:
+        patch: Git unified diff text.
+
+    Returns:
+        A :class:`PatchParseOutcome`. ``count_repairs`` is empty for a rejected patch and for
+        a patch whose headers already agreed with their bodies.
+
+    Raises:
+        Nothing.
+
+    Side effects:
+        None.
+    """
+
+    repaired_patch, count_repairs = _repair_hunk_counts(patch)
+    operations, error = _parse_sections(repaired_patch)
+    return PatchParseOutcome(operations, error, count_repairs if error is None else [])
+
+
+def _parse_sections(patch: str) -> tuple[list[PatchOperation], str | None]:
+    """Validate file headers and convert an already count-normalised Git unified diff.
+
+    Args:
+        patch: Git unified diff text whose ``@@`` headers already match their bodies.
+
+    Returns:
+        ``(operations, None)`` when the diff is accepted; otherwise ``([], message)`` with a
+        model-facing diagnosis. Section and file-header errors take precedence over every
+        later stage, so a patch that is wrong in several ways reports the earliest problem.
+
+    Raises:
+        Nothing.
+
+    Side effects:
+        None.
     """
 
     if not isinstance(patch, str) or not patch.strip():

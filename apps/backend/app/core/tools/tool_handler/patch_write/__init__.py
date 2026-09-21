@@ -24,7 +24,9 @@ from app.core.tools.tool_handler.patch_write.patch_parser import (
     Hunk,
     HunkLine,
     PatchOperation,
+    PatchParseOutcome,
     parse_git_unified_diff,
+    parse_git_unified_diff_detailed,
 )
 
 __all__ = [
@@ -33,6 +35,7 @@ __all__ = [
     "HunkLine",
     "PatchApplyError",
     "PatchOperation",
+    "PatchParseOutcome",
     "apply_all_with_diff",
     "build_diff_stats",
     "format_git_diff",
@@ -40,5 +43,6 @@ __all__ = [
     "format_unified_diff",
     "fuzzy_find_and_replace",
     "parse_git_unified_diff",
+    "parse_git_unified_diff_detailed",
     "validate_all",
 ]

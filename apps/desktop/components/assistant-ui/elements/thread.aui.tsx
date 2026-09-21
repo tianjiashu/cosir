@@ -188,7 +188,7 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
 const Composer: FC<{ autoFocus: boolean; taskId?: number; workspaceRoot?: string }> = ({ autoFocus, taskId, workspaceRoot }) => (
   <InlineAttachmentInsertionProvider>
     <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
-      <ComposerPrimitive.AttachmentDropzone>
+      <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
         <ComposerAttachments />
         <InlineComposerInput
           placeholder="输入任务，例如：帮我查找登录相关代码…"
@@ -545,7 +545,7 @@ const UserEditMessage: FC = () => {
     >
       <InlineAttachmentInsertionProvider>
         <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
-          <ComposerPrimitive.AttachmentDropzone>
+          <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
             <ComposerAttachments />
             <InlineComposerInput
               className="text-foreground placeholder:text-muted-foreground/60 max-h-48 min-h-20 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"

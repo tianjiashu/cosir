@@ -118,3 +118,40 @@ def test_hunk_validation_failure_does_not_write_any_file(tmp_path: Path) -> None
     assert observation.retryable is True
     assert "no files were modified" in observation.error
     assert target.read_text(encoding="utf-8") == "current\n"
+
+
+# 计数不符（2026-09-21 真实故障：hunk 头部少算正文行数）必须给出可行动诊断，
+# 使模型能核对「按正文应用」的结果，而不是重复失败到触顶。
+# 2026-09-21 契约 B：计数不符改为按正文重算 + 提示——工具不再报错，而是报 success 且**确实写入**，
+# 并把「第几个 hunk、头部原文、声明值、实际值」写进模型可见的 content。原「error + 零写入」的期望
+# 已过时（任务要求把该用例翻转到新契约）。
+def test_hunk_count_mismatch_is_repaired_and_names_the_bad_header(tmp_path: Path) -> None:
+    target = tmp_path / "a.txt"
+    target.write_text("keep\nold\n", encoding="utf-8")
+    patch = "\n".join(
+        (
+            "diff --git a/a.txt b/a.txt",
+            "--- a/a.txt",
+            "+++ b/a.txt",
+            "@@ -1,3 +1,6 @@",
+            " keep",
+            "-old",
+            "+new",
+            " tail",
+        )
+    )
+
+    observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
+
+    assert observation.status == "success"
+    assert observation.error is None
+    assert observation.content is not None
+    assert observation.content.startswith("success\n")
+    assert "note: hunk headers declared counts that did not match the hunk body" in (
+        observation.content
+    )
+    assert "'@@ -1,3 +1,6 @@'" in observation.content
+    assert "declared source=3 target=6" in observation.content
+    assert "body has source=3 target=3" in observation.content
+    # 补丁按正文（ctx+rem+add+ctx = 3/3）应用，文件确实被写入为 'keep\nnew\ntail\n'。
+    assert target.read_text(encoding="utf-8") == "keep\nnew\ntail\n"

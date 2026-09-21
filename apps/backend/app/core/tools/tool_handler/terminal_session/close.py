@@ -79,7 +79,7 @@ class TerminalCloseTool(HandlerBase):
                 verb="关闭终端",
                 icon="x",
                 variant="terminal-session-close",
-                surface="trace",
+                surface="standalone",
                 expandable=False,
                 expand_layout="none",
                 show_result=False,

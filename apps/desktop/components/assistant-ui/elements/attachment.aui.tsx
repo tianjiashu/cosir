@@ -100,7 +100,7 @@ const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
 
 const AttachmentThumb: FC = () => {
   const src = useAttachmentSrc(useAttachmentTaskId());
-  return <ImageAttachmentCard src={src} name="图片附件" className="aui-attachment-tile-avatar size-full rounded-none border-0 shadow-none" />;
+  return <ImageAttachmentCard src={src} name="图片附件" className="aui-attachment-tile-avatar rounded-none border-0 shadow-none" />;
 };
 
 const AttachmentUI: FC = () => {
@@ -167,7 +167,7 @@ const AttachmentUI: FC = () => {
           className={cn(
             "aui-attachment-root relative",
             isComposer &&
-              "animate-in fade-in-0 zoom-in-95 duration-200 motion-reduce:animate-none",
+              "h-16 min-h-16 w-16 min-w-16 shrink-0 animate-in fade-in-0 zoom-in-95 duration-200 motion-reduce:animate-none",
             isImage &&
               !isComposer &&
               "aui-attachment-root-message only:*:first:size-24",
@@ -249,7 +249,7 @@ const AttachmentRemove: FC<{ compact?: boolean }> = ({ compact = false }) => {
 
 export const ComposerAttachments: FC = () => {
   return (
-    <div className="aui-composer-attachments flex max-h-16 w-full flex-row items-center gap-2 overflow-x-auto py-0.5 empty:hidden">
+    <div className="aui-composer-attachments flex h-16 min-h-16 max-h-16 min-w-0 w-full shrink-0 flex-row items-center gap-2 overflow-x-auto overflow-y-hidden empty:hidden">
       <ComposerPrimitive.Attachments>
         {({ attachment }) => attachment.type === "image" ? <AttachmentUI /> : null}
       </ComposerPrimitive.Attachments>
@@ -331,12 +331,35 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
     });
   };
 
+  const addExternalFiles = async (files: readonly File[]): Promise<InlineFileAttachment[]> => {
+    const existingIds = new Set(aui.composer.getState().attachments.map((attachment) => attachment.id));
+    const insertedFiles: InlineFileAttachment[] = [];
+    for (const file of files) {
+      await aui.composer.addAttachment(file);
+      const added = aui.composer.getState().attachments.find(
+        (attachment) => attachment.file === file && !existingIds.has(attachment.id),
+      );
+      if (!added) continue;
+      existingIds.add(added.id);
+      if (added.type !== "image") {
+        insertedFiles.push({
+          id: added.id,
+          name: added.name,
+          kind: "file",
+          tokenId: inlineAttachmentTokenId(added),
+        });
+      }
+    }
+    return insertedFiles;
+  };
+
   return (
     <InlineAttachmentInput
       value={composer.value}
       onChange={composer.setText}
       onSubmit={() => composer.send()}
       attachments={fileAttachments}
+      onExternalFiles={addExternalFiles}
       onRemoveAttachment={removeAttachment}
       placeholder={placeholder}
       autoFocus={autoFocus}

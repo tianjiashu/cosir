@@ -481,6 +481,7 @@ class WebExtractTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="网页正文提取",
                 icon="globe",
+                surface="standalone",
                 expandable=False,
                 expand_layout="none",
                 show_result=False,

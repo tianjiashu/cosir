@@ -32,10 +32,12 @@ class ToolDisplayHints:
         icon: lucide 图标名，如 “eye”、“search”，客户端据此渲染图标。
         variant: 稳定的 renderer 语义变体；用于同一 ``display_data.kind`` 下的
             不同展示形态，不应携带动态结果或用户输入。
-        surface: 工具位于普通执行轨迹（``trace``）还是独立结果区域
-            （``standalone``）。
-        expandable: 是否可展开；默认 ``True``，客户端据此隐藏展开箭头。
-        expand_layout: 展开态布局；客户端仅按该字符串分发布局，不按工具名写特化分支。
+        surface: 工具是否属于普通工具轨迹。``trace`` 表示允许客户端将卡片
+            折叠进 ``ToolGroup``；``standalone`` 表示卡片应在工具组之外独立展示。
+        expandable: 卡片自身是否可展开；默认 ``True``，不决定卡片是否进入
+            ``ToolGroup``。
+        expand_layout: 卡片自身展开后的布局；客户端仅按该字符串分发布局，不按
+            工具名写特化分支。
         default_open: 工具完成后是否默认展开；这是静态偏好，不代表执行状态。
         show_result: 是否把模型可见结果暴露给客户端；关闭时客户端只消费
             ``data``，模型正文仍只进入 RuntimeContext。

@@ -25,7 +25,9 @@ from typing import Any
 
 from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.tool_execute.tool_error import blocked_device_reason
-from app.core.tools.tool_handler.patch_write.patch_parser import parse_git_unified_diff
+from app.core.tools.tool_handler.patch_write.patch_parser import (
+    parse_git_unified_diff_detailed,
+)
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 
 
@@ -225,12 +227,12 @@ class FileResourceResolver:
         patch_text = arguments.get("patch")
         if not isinstance(patch_text, str):
             return FileResourcePaths()
-        operations, parse_error = parse_git_unified_diff(patch_text)
-        if parse_error:
+        outcome = parse_git_unified_diff_detailed(patch_text)
+        if outcome.error:
             return FileResourcePaths()
 
         paths: list[Path] = []
-        for operation in operations:
+        for operation in outcome.operations:
             paths.append(self._resolve_containment_path(operation.file_path, action="modified"))
         return FileResourcePaths(write_paths=tuple(dict.fromkeys(paths)))
 

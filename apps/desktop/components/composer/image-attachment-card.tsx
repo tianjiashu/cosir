@@ -28,13 +28,22 @@ export function ImageAttachmentCard({
   className,
 }: ImageAttachmentCardProps) {
   const preview = src ? (
-    <img src={src} alt={name} className="size-full object-cover" />
+    <img
+      src={src}
+      alt={name}
+      className="block h-full max-h-full max-w-full w-full object-cover"
+    />
   ) : (
     <ImageIcon className="text-muted-foreground absolute inset-0 m-auto size-6" />
   );
 
   return (
-    <div className={cn("relative size-16 shrink-0 overflow-hidden rounded-xl border bg-muted shadow-sm", className)}>
+    <div
+      className={cn(
+        "relative h-16 max-h-16 min-h-16 w-16 max-w-16 min-w-16 shrink-0 overflow-hidden rounded-xl border bg-muted shadow-sm",
+        className,
+      )}
+    >
       {onPreview ? (
         <button
           type="button"

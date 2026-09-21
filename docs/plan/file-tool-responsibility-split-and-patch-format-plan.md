@@ -52,13 +52,15 @@ diff --git a/src/example.py b/src/example.py
 
 工具名：`apply_patch`。必填参数只有 `patch: str`。
 
-建议的工具 description：
+**描述分工（2026-09-21 定稿）**：工具 description 只讲工具的职责与能力边界（做什么、不能做什么、该换哪个工具、路径作用域）；diff 格式契约（结构规则、行前缀、hunk 计数规则、最小样例）的唯一事实源是 `patch` 的 Field description。两段不得互相复述对方的内容，工具 description 对格式只用一句话指向参数描述。
 
-> Apply a Git-style unified diff to modify one or more existing UTF-8 text files inside the active workspace. Every diff section must target an existing file, and its `a/` and `b/` paths must resolve to the same workspace-relative path. This tool only modifies file contents; it cannot create, delete, or move files. Use `write_file` to create or replace a complete file, `delete_file` to delete a file, and `move_file` to move a file. All target paths must remain inside the active workspace.
+工具 description（职责与边界）：
 
-建议的 `patch` 参数描述：
+> Apply a Git-style unified diff to modify the contents of existing UTF-8 text files inside the active workspace. It only changes existing files: it cannot create, delete, or move files, so use `write_file` to create or replace a whole file, `delete_file` to delete one, and `move_file` to move or rename one. The `patch` parameter holds the diff text; its description defines the accepted format.
 
-> Required Git-style unified diff. Include one or more `diff --git`, `---`, `+++`, and `@@` sections. Use context lines prefixed with a space, removed lines prefixed with `-`, and added lines prefixed with `+`. Each `a/` and `b/` path must identify the same existing workspace file. File creation, deletion, rename, copy, binary, combined diff, absolute paths, and paths outside the workspace are not supported.
+`patch` 参数描述（格式契约，含最小样例）：
+
+> Required Git-style unified diff text: the value must contain nothing but the diff, with no `*** Begin Patch` / `*** End Patch` markers and no prose around the hunks. It holds one or more `diff --git a/<path> b/<path>` sections and accepts content hunks only: each file section must carry exactly one `---` header, exactly one `+++`, and at least one `@@` hunk, must name the same workspace-relative path in its Git, `---`, and `+++` headers, and must change file content. Sections that carry no content hunk (mode-only, rename-only, or binary) are rejected, and combined `diff --cc` / `diff --combined` sections are not supported. Inside a hunk every line starts with ` ` (context), `-` (removed), or `+` (added), and the numbers in `@@ -start,count +start,count @@` must match that hunk body exactly: the source count is that hunk's context plus `-` lines, the target count is its context plus `+` lines, and a count may be omitted only when it is 1. A header that disagrees with its own body is rejected before any file is touched, so fix the counts instead of resending the same patch. Minimal accepted example: `diff --git a/pkg/mod.py b/pkg/mod.py` / `--- a/pkg/mod.py` / `+++ b/pkg/mod.py` / `@@ -10,3 +10,3 @@` / ` import os` / `-old_line()` / `+new_line()` / ` keep()`。
 
 ### 3.2 `DeleteTool`
 

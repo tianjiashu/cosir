@@ -4,8 +4,10 @@ from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
 from app.core.tools.tool_models.delegate_task_args import DelegateTaskArgs
 from app.core.tools.tool_models.delete_file_args import DeleteFileArgs
 from app.core.tools.tool_models.execute_terminal_args import (
-    ExecuteTerminalArgs,
     ExecuteTerminalShell,
+    MacExecuteTerminalArgs,
+    WindowsExecuteTerminalArgs,
+    resolve_execute_terminal_args_model,
 )
 from app.core.tools.tool_models.find_files_args import FindFilesArgs
 from app.core.tools.tool_models.list_directory_args import ListDirectoryArgs
@@ -26,10 +28,10 @@ __all__ = [
     "ApplyPatchArgs",
     "DelegateTaskArgs",
     "DeleteFileArgs",
-    "ExecuteTerminalArgs",
     "ExecuteTerminalShell",
     "FindFilesArgs",
     "ListDirectoryArgs",
+    "MacExecuteTerminalArgs",
     "MoveFileArgs",
     "ReadFileArgs",
     "ReplaceArgs",
@@ -39,5 +41,7 @@ __all__ = [
     "TerminalSignalArgs",
     "TerminalStartArgs",
     "TerminalWriteArgs",
+    "WindowsExecuteTerminalArgs",
     "WriteFileArgs",
+    "resolve_execute_terminal_args_model",
 ]

@@ -18,6 +18,7 @@ import { createWorkspaceTask, type Workspace, type StartedConversation } from "@
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
+import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +26,27 @@ import {
 } from "@/components/ui/dialog";
 
 export type InitialConversationAttachment = PickedComposerAttachment;
+
+function clipboardAttachment(file: File): PickedComposerAttachment {
+  const id = crypto.randomUUID();
+  const kind = file.type.startsWith("image/") ? "image" : "file";
+  const name = file.name || (kind === "image" ? `粘贴图片-${id}.png` : `粘贴附件-${id}`);
+  const path = `clipboard:${id}`;
+  const namedFile = file.name ? file : new File([file], name, { type: file.type, lastModified: file.lastModified });
+  return {
+    id,
+    kind,
+    path,
+    name,
+    file: registerLocalAttachment(namedFile, {
+      id,
+      path,
+      name,
+      contentType: namedFile.type,
+      kind,
+    }),
+  };
+}
 
 function NewConversationAttachmentChip({ attachment, onRemove }: {
   attachment: PickedComposerAttachment;
@@ -191,7 +213,7 @@ export function NewConversation({
             />
           </div>
           {attachments.some((attachment) => attachment.kind === "image") && (
-            <div className="flex h-16 max-h-16 flex-nowrap gap-2 overflow-x-auto px-2" aria-label="待发送附件">
+            <div className="flex h-16 min-h-0 max-h-16 min-w-0 flex-nowrap gap-2 overflow-x-auto overflow-y-hidden px-2" aria-label="待发送附件">
               {attachments.filter((attachment) => attachment.kind === "image").map((attachment) => (
                 <NewConversationAttachmentChip
                   key={attachment.path}
@@ -209,6 +231,16 @@ export function NewConversation({
               formRef.current?.requestSubmit();
             }}
             attachments={fileAttachments}
+            onExternalFiles={(files) => {
+              const picked = files.map(clipboardAttachment);
+              setAttachments((current) => {
+                const existing = new Set(current.map((attachment) => attachment.path.toLowerCase()));
+                return [...current, ...picked.filter((attachment) => !existing.has(attachment.path.toLowerCase()))];
+              });
+              return picked
+                .filter((attachment) => attachment.kind === "file")
+                .map((attachment) => ({ id: attachment.id, name: attachment.name, kind: "file" as const }));
+            }}
             onRemoveAttachment={(fileId) => {
               setAttachments((current) => current.filter((attachment) => attachment.id !== fileId));
             }}

@@ -7,6 +7,7 @@
 import errno
 import os
 
+from app.config.logging.logger import log
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
@@ -24,18 +25,19 @@ from app.core.tools.tool_handler.patch_write.patch_apply import (
     apply_all_with_diff,
     validate_all,
 )
-from app.core.tools.tool_handler.patch_write.patch_parser import parse_git_unified_diff
+from app.core.tools.tool_handler.patch_write.patch_parser import (
+    parse_git_unified_diff_detailed,
+)
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
 APPLY_PATCH_DESCRIPTION = (
-    "Apply a Git-style unified diff to modify one or more existing UTF-8 text files inside the "
-    "active workspace. Every diff section must target an existing file, and its 'a/' and 'b/' "
-    "paths must resolve to the same workspace-relative path. This tool only modifies file "
-    "contents; it cannot create, delete, or move files. Use 'write_file' to create or replace a "
-    "complete file, 'delete_file' to delete a file, and 'move_file' to move a file. All target "
-    "paths must remain inside the active workspace."
+    "Apply a Git-style unified diff to modify the contents of existing UTF-8 text files inside "
+    "the active workspace. It only changes existing files: it cannot create, delete, or move "
+    "files, so use 'write_file' to create or replace a whole file, 'delete_file' to delete one, "
+    "and 'move_file' to move or rename one. The 'patch' parameter holds the diff text; its "
+    "description defines the accepted format."
 )
 
 
@@ -112,28 +114,42 @@ class ApplyPatchTool(HandlerBase):
             可能改写工作区内的目标文件；落盘前先查 ``cancellation_registry`` 的 run 级取消。
         """
 
-        operations, parse_error = parse_git_unified_diff(patch)
-        if parse_error:
+        outcome = parse_git_unified_diff_detailed(patch)
+        if outcome.count_repairs:
+            log.warning(
+                "apply_patch_hunk_counts_recomputed",
+                extra={
+                    "msg": "补丁 hunk 头计数与正文不符，已按正文重算",
+                    "data": {"run_id": execution_context.run_id, "repairs": outcome.count_repairs},
+                },
+            )
+        if outcome.error:
             return tool_error(
                 tool_name=self.name,
-                error=f"invalid Git unified diff: {parse_error}",
+                error=f"invalid Git unified diff: {outcome.error}",
                 reason=(
                     "provide a valid Git unified diff with 'diff --git', '---', '+++', and '@@' "
-                    "sections. Use write_file, delete_file, or move_file for whole-file operations."
+                    "sections, and make every hunk header count exactly the context, '-' and '+' "
+                    "lines its own body contains; remove any '*** Begin Patch'/'*** End Patch' "
+                    "markers. Use write_file, delete_file, or move_file for whole-file operations."
                 ),
                 retryable=True,
                 permission=self.permission,
             )
+        operations = outcome.operations
         resolver = PathResolver(execution_context.workspace_root)
         validation_errors = validate_all(operations, resolver)
         if validation_errors:
             return tool_error(
                 tool_name=self.name,
                 error="unified diff validation failed (no files were modified):\n"
-                + "\n".join(f"  • {error}" for error in validation_errors),
+                + "\n".join(f"  - {error}" for error in validation_errors),
                 reason=(
-                    "fix the listed existing-file paths or hunk context, then submit a new Git "
-                    "unified diff. This tool cannot create, delete, or move files."
+                    "fix every cause listed in 'error', then submit a new Git unified diff. Causes "
+                    "that live in a target file itself (missing or irregular file, binary content, "
+                    "non-UTF-8 bytes, reserved or blocked path) cannot be fixed by editing the "
+                    "diff: pick another target, or use write_file/delete_file/move_file. This tool "
+                    "cannot create, delete, or move files."
                 ),
                 retryable=True,
                 permission=self.permission,
@@ -174,18 +190,52 @@ class ApplyPatchTool(HandlerBase):
             check = check_source_syntax(str(resolved), result.after)
             if check.has_error:
                 diagnostics.extend(check.diagnostics)
-        content = None
-        if diagnostics:
-            content = (
-                "success\nPost-write syntax check reported issues:\n"
-                + self._format_syntax_reason(diagnostics)
-            )
+        content = self._build_content(outcome.count_repairs, diagnostics)
         return tool_success(
             tool_name=self.name,
             permission=self.permission,
             content=content,
             display_data=display_data,
         )
+
+    def _build_content(
+        self,
+        count_repairs: list[str],
+        diagnostics: list[SyntaxDiagnostic],
+    ) -> str | None:
+        """拼装成功观察的模型可见 `content`。
+
+        参数:
+            count_repairs: 解析期为「头部计数与正文不符」的 hunk 产出的重算说明；空列表表示
+                头部本来就自洽。它只是提示，不改变成功语义——补丁已按正文应用。
+            diagnostics: 写后语法检查产出的诊断；空列表表示未发现问题。
+
+        返回:
+            两类信息都为空时返回 ``None``（成功且无需提示）；否则以 ``success`` 开头，按
+            「写后语法问题 → 头部计数重算说明」顺序拼接，文本保持英文/ASCII（模型通道）。
+
+        异常:
+            无。
+
+        副作用:
+            无（纯字符串拼接，不读取文件）。
+        """
+
+        blocks: list[str] = []
+        if diagnostics:
+            blocks.append(
+                "Post-write syntax check reported issues:\n"
+                + self._format_syntax_reason(diagnostics)
+            )
+        if count_repairs:
+            blocks.append(
+                "note: hunk headers declared counts that did not match the hunk body; the counts "
+                "were recomputed from the body and the patch was applied as written:\n"
+                + "\n".join(f"  - {note}" for note in count_repairs)
+            )
+        if not blocks:
+            return None
+        return "success\n" + "\n".join(blocks)
 
     @staticmethod
     def _format_syntax_reason(diagnostics: list[SyntaxDiagnostic]) -> str:

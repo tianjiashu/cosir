@@ -39,16 +39,58 @@ def test_file_tool_descriptions_and_arguments_express_separate_responsibilities(
     move_source_description = MoveFileArgs.model_fields["source_path"].description or ""
     move_destination_description = MoveFileArgs.model_fields["destination_path"].description or ""
 
+    # 工具描述只讲「这个工具做什么 / 不能做什么 / 该换哪个工具」。
     assert "existing UTF-8 text files" in APPLY_PATCH_DESCRIPTION
     assert "cannot create, delete, or move" in APPLY_PATCH_DESCRIPTION
+    assert "write_file" in APPLY_PATCH_DESCRIPTION
+    assert "delete_file" in APPLY_PATCH_DESCRIPTION
+    assert "move_file" in APPLY_PATCH_DESCRIPTION
+    # 参数描述只讲「这个值要填什么格式」。
     assert "unified diff" in patch_description
-    assert "delete_file" in patch_description and "move_file" in patch_description
+    assert "diff --git a/" in patch_description
     assert "Directories are not supported" in DELETE_FILE_DESCRIPTION
     assert "Directories" in delete_description
     assert "directories" in move_source_description.lower()
     assert "must not already exist" in MOVE_FILE_DESCRIPTION
     assert "parent directory must already exist" in MOVE_FILE_DESCRIPTION
     assert "parent directory" in move_destination_description
+
+
+# 模型可见契约必须自带可用样例与行数规则；2026-09-21 的真实故障正是模型在无样例时
+# 只能靠猜（先吐 '*** Begin Patch'，再手写 @@ 计数且算错）。这些内容唯一落在参数描述里。
+def test_apply_patch_contract_documents_the_exact_accepted_diff_format() -> None:
+    patch_description = ApplyPatchArgs.model_fields["patch"].description or ""
+
+    assert "diff --git a/" in patch_description
+    assert "@@ -" in patch_description
+    assert "*** Begin Patch" in patch_description
+    assert "must match" in patch_description
+    assert "Minimal accepted example" in patch_description
+    # 工具描述不得回抄任何格式细节（回抄即两处事实源）。
+    assert "diff --git" not in APPLY_PATCH_DESCRIPTION
+    assert "@@" not in APPLY_PATCH_DESCRIPTION
+    assert "*** Begin Patch" not in APPLY_PATCH_DESCRIPTION
+    assert "Minimal accepted example" not in APPLY_PATCH_DESCRIPTION
+
+
+# 行数规则只允许有一处事实源（参数描述）：2026-09-21 的样例计数写错事故正是「同一规则散落在
+# 工具描述 / 参数描述 / 解析失败 reason 三处」造成的表述漂移。
+def test_patch_count_rule_is_stated_only_in_the_parameter_description() -> None:
+    patch_description = ApplyPatchArgs.model_fields["patch"].description or ""
+
+    assert "must match" in patch_description
+    assert "context plus '-' lines" in patch_description
+    assert "omitted only when it is 1" in patch_description
+    # 结构性断言：工具描述不得出现计数或 hunk 语法语义，同义改写也拦得住。
+    for leaked in (
+        "must match",
+        "counts",
+        "@@ -",
+        "context plus",
+        "source count",
+        "omitted only when",
+    ):
+        assert leaked not in APPLY_PATCH_DESCRIPTION, leaked
 
 
 def test_handlers_inherit_base_and_new_tools_are_registered() -> None:
@@ -73,6 +115,22 @@ def test_apply_patch_modifies_existing_file_and_emits_file_changes(tmp_path: Pat
     change = observation.display_data["changes"][0]
     assert change["status"] == "modified"
     assert change["path"] == "existing.txt"
+
+
+# 回归（2026-09-21 复审发现的误拒）：多文件补丁中间的空行分隔必须照常整体应用。
+# Git 实测该形状被忠实应用（`git apply --check` exit 0 且两个文件都按意图改动）。
+def test_apply_patch_applies_two_files_separated_by_a_blank_line(tmp_path: Path) -> None:
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("before\n", encoding="utf-8")
+    second.write_text("before\n", encoding="utf-8")
+    patch = "\n\n".join((_patch("first.txt"), _patch("second.txt")))
+
+    observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
+
+    assert observation.status == "success"
+    assert first.read_text(encoding="utf-8") == "after\n"
+    assert second.read_text(encoding="utf-8") == "after\n"
 
 
 def test_apply_patch_rejects_creation_deletion_move_and_workspace_escape(tmp_path: Path) -> None:

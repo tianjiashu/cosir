@@ -81,7 +81,7 @@ class TerminalSignalTool(HandlerBase):
                 verb="控制终端",
                 icon="square-terminal",
                 variant="terminal-session-signal",
-                surface="trace",
+                surface="standalone",
                 expandable=False,
                 expand_layout="none",
                 show_result=False,

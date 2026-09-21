@@ -12,12 +12,14 @@ import {
 } from "react";
 import { inlineAttachmentKey, LOCAL_FILE_TOKEN } from "@/lib/assistant/attachments/local-file-token";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { cn } from "@/lib/utils";
 
 export const FILE_ATTACHMENT_TOKEN_PREFIX = "[[cosir-file:";
 export const FILE_ATTACHMENT_TOKEN_SUFFIX = "]]";
 export const FILE_ATTACHMENT_TOKEN = LOCAL_FILE_TOKEN;
 const INLINE_ATTACHMENT_TOKEN = /\[\[cosir-(file|image):([^\]]+)\]\]/g;
 const HIDDEN_ATTACHMENT_TOKEN = /<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->/g;
+const UNSUPPORTED_EMBEDDED_CONTENT_SELECTOR = "img,video,audio,canvas,iframe,object,embed";
 
 const FILE_ICON_SVG = `<svg class="cosir-inline-file-token-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>`;
 
@@ -79,6 +81,7 @@ type InlineAttachmentInputProps = {
   onChange: (value: string) => void;
   onSubmit: () => void;
   attachments: readonly InlineFileAttachment[];
+  onExternalFiles?: (files: readonly File[]) => readonly InlineFileAttachment[] | Promise<readonly InlineFileAttachment[]>;
   onRemoveAttachment?: (id: string) => void;
   placeholder?: string;
   autoFocus?: boolean;
@@ -191,6 +194,25 @@ function serializeEditor(element: HTMLElement): string {
   return [...element.childNodes].map(serializeNode).join("");
 }
 
+/**
+ * Remove browser-native embedded media from the editable surface.
+ *
+ * The composer stores attachments separately from editable text. Browsers can
+ * nevertheless insert an `<img>` (for example when a screenshot is pasted)
+ * into a contenteditable element. The text serializer intentionally ignores
+ * that node, so leaving it in the DOM would make its intrinsic dimensions
+ * participate in layout while the controlled value remains unchanged.
+ *
+ * Returns the removed tag names for diagnostic logging. It does not touch
+ * inline attachment tokens, which are represented by dedicated spans.
+ */
+function removeUnsupportedEmbeddedContent(element: HTMLElement): string[] {
+  const nodes = [...element.querySelectorAll<HTMLElement>(UNSUPPORTED_EMBEDDED_CONTENT_SELECTOR)];
+  const tagNames = nodes.map((node) => node.tagName.toLowerCase());
+  nodes.forEach((node) => node.remove());
+  return tagNames;
+}
+
 function removePlaceholder(value: string, kind: "file" | "image", tokenId: string): string {
   const escapedId = tokenId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const hiddenToken = new RegExp(
@@ -207,6 +229,7 @@ export function InlineAttachmentInput({
   onChange,
   onSubmit,
   attachments,
+  onExternalFiles,
   onRemoveAttachment,
   placeholder,
   autoFocus = false,
@@ -348,6 +371,25 @@ export function InlineAttachmentInput({
 
   useEffect(() => insertion.register(insertAttachmentsAtCaret), [insertAttachmentsAtCaret, insertion]);
 
+  const handleExternalFiles = useCallback(async (files: readonly File[]) => {
+    if (disabled || files.length === 0) return;
+    if (!onExternalFiles) {
+      void frontendLog("INFO", "inline_attachment_external_files_ignored", "输入框未装配外部附件处理器，已忽略文件输入", {
+        data: { fileCount: files.length },
+      });
+      return;
+    }
+    try {
+      const inlineAttachments = await onExternalFiles(files);
+      insertAttachmentsAtCaret(inlineAttachments);
+    } catch (error) {
+      void frontendLog("ERROR", "inline_attachment_external_files_failed", "处理粘贴或拖拽附件失败", {
+        data: { fileCount: files.length },
+        error,
+      });
+    }
+  }, [disabled, insertAttachmentsAtCaret, onExternalFiles]);
+
   useEffect(() => {
     if (autoFocus) editorRef.current?.focus();
   }, [autoFocus]);
@@ -384,13 +426,48 @@ export function InlineAttachmentInput({
       aria-label={ariaLabel}
       aria-multiline="true"
       data-placeholder={placeholder}
-      className={className}
+      className={cn("min-w-0 max-h-48 overflow-y-auto", className)}
       onInput={(event) => {
+        const removedTags = removeUnsupportedEmbeddedContent(event.currentTarget);
+        if (removedTags.length > 0) {
+          void frontendLog("WARNING", "inline_attachment_embedded_content_removed", "输入框移除了未受支持的内嵌媒体节点", {
+            data: {
+              removedTags,
+              attachmentCount: attachments.length,
+            },
+          });
+        }
         const nextValue = serializeEditor(event.currentTarget);
         currentValue.current = nextValue;
         rememberCaret();
         lastMarkupSignature.current = `${nextValue}\u0000${attachmentSignature}`;
         onChange(nextValue);
+      }}
+      onPaste={(event) => {
+        const files = [...event.clipboardData.files];
+        if (files.length > 0) {
+          event.preventDefault();
+          void handleExternalFiles(files);
+          return;
+        }
+        // Let normal text paste proceed. A following input event removes any
+        // browser-inserted media before it can become persistent composer DOM.
+        requestAnimationFrame(() => {
+          const editor = editorRef.current;
+          if (!editor) return;
+          const removedTags = removeUnsupportedEmbeddedContent(editor);
+          if (removedTags.length === 0) return;
+          const nextValue = serializeEditor(editor);
+          currentValue.current = nextValue;
+          lastMarkupSignature.current = `${nextValue}\u0000${attachmentSignature}`;
+          onChange(nextValue);
+          rememberCaret();
+        });
+      }}
+      onDrop={(event) => {
+        if (event.defaultPrevented || event.dataTransfer.files.length === 0) return;
+        event.preventDefault();
+        void handleExternalFiles([...event.dataTransfer.files]);
       }}
       onKeyDown={handleKeyDown}
       onKeyUp={rememberCaret}

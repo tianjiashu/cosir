@@ -130,7 +130,7 @@ class TerminalWriteTool(HandlerBase):
                 verb="输入终端",
                 icon="terminal",
                 variant="terminal-session-write",
-                surface="trace",
+                surface="standalone",
                 expandable=False,
                 expand_layout="none",
                 show_result=False,

@@ -88,7 +88,7 @@ class TerminalReadTool(HandlerBase):
                 verb="读取终端",
                 icon="terminal",
                 variant="terminal-session-read",
-                surface="trace",
+                surface="standalone",
                 expandable=False,
                 expand_layout="none",
                 show_result=False,
