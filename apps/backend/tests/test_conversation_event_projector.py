@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import copy
 from typing import Any
 
@@ -24,16 +23,13 @@ from app.assistant_transport.event import (
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
-from app.assistant_transport.service.transport_stream_service import (
-    AssistantTransportStreamService,
-)
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     empty_snapshot,
     validate_snapshot,
 )
-from app.assistant_transport.stream import SnapshotChange
+from app.assistant_transport.stream import TransportFrame
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
@@ -48,7 +44,7 @@ class InMemorySnapshotService:
         state = self.states.setdefault(task_id, empty_snapshot())
         return copy.deepcopy(state)
 
-    def apply_planned(self, event: object) -> SnapshotChange:
+    def apply_planned(self, event: object) -> TransportFrame:
         """按生产口径投影一条事件：由事件自带 ``plan`` 产出 mutation 后落回进程内状态。"""
 
         task_id = event.task_id
@@ -58,7 +54,16 @@ class InMemorySnapshotService:
             _apply_mutation(state, mutation)
         validate_snapshot(state)
         self.states[task_id] = copy.deepcopy(state)
-        return SnapshotChange(task_id, copy.deepcopy(state), mutations)
+        return TransportFrame(
+            task_id=task_id,
+            kind="mutation",
+            mutations=mutations,
+            source_run_id=getattr(event, "run_id", None),
+            current_run_id=state["current_run_id"],
+            current_run_status=_run(state, state["current_run_id"])["status"]
+            if state["current_run_id"] is not None
+            else None,
+        )
 
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:
@@ -253,8 +258,7 @@ def test_user_input_supports_attachment_only_and_duplicate_event(
     second = event_projector.process(event)
 
     assert first is not None
-    assert second is not None
-    assert len(second.mutations) == 0
+    assert second is None
     assert _run(snapshots.states[1], 1)["messages"][0]["parts"] == event.parts
 
 
@@ -346,7 +350,7 @@ def test_duplicate_text_delta_is_not_appended_twice(
     first = event_projector.process(event)
     second = event_projector.process(event)
     assert first is not None and first.mutations
-    assert second is not None and second.mutations == ()
+    assert second is None
     assert _run(snapshots.states[1], 1)["messages"][1]["parts"][0]["text"] == "一次"
 
 
@@ -726,301 +730,11 @@ def test_unknown_event_is_ignored(
 
 
 def test_model_chunk_event_becomes_assistant_transport_update() -> None:
-    """验证 model chunk → event → mutation → Transport state adapter 的闭环。"""
+    """验证 model chunk → event → mutation frame 的闭环。"""
 
     snapshots = InMemorySnapshotService()
     event_projector = ConversationEventProjector(snapshots)
     _start(event_projector)
-    before = copy.deepcopy(snapshots.states[1])
     event = AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="你好")
     change = event_projector.process(event)
     assert change is not None and change.mutations
-
-    class Controller:
-        def __init__(self, state: ConversationStateSnapshot) -> None:
-            self.state = state
-            self.appended: list[tuple[list[str | int], str]] = []
-            self.flush_count = 0
-
-        def append_state_text(self, path: list[str | int], value: str) -> None:
-            self.appended.append((path, value))
-
-        def flush(self) -> None:
-            self.flush_count += 1
-
-    controller = Controller(before)
-    transport_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    transport_service._apply_snapshot_change(controller, change)
-    assert controller.appended == []
-    assert _run(controller.state, 1)["messages"][1]["parts"] == [
-        {"type": "text", "text": "你好", "status": "running"}
-    ]
-    assert controller.flush_count == 1
-
-
-@pytest.mark.asyncio
-async def test_stream_delivers_queued_terminal_change_before_exit() -> None:
-    """终态轮询命中时，仍必须先消费已经排队的终态快照。"""
-
-    initial = empty_snapshot()
-    initial["runs"] = [
-        {
-            "runId": 1,
-            "status": "running",
-            "endReason": None,
-            "messages": [],
-            "usage": None,
-            "error": None,
-        }
-    ]
-    initial["current_run_id"] = 1
-    terminal = copy.deepcopy(initial)
-    terminal["runs"][0]["status"] = "completed"
-    queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
-
-    class Snapshots:
-        def subscribe_with_snapshot(
-            self, task_id: int
-        ) -> tuple[asyncio.Queue[SnapshotChange], Any, ConversationStateSnapshot]:
-            return queue, lambda: None, self.get_state(task_id)
-
-        def get_state(self, task_id: int) -> ConversationStateSnapshot:
-            return copy.deepcopy(initial)
-
-        def is_task_deleted(self, task_id: int) -> bool:
-            return False
-
-    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    service._snapshots = Snapshots()
-
-    stream = service.stream(1, 1, lambda: False, is_terminal=lambda: _true())
-    first = await anext(stream)
-    assert _run(first.state, 1)["status"] == "running"
-    await queue.put(SnapshotChange(1, terminal, ()))
-    second = await anext(stream)
-    assert _run(second.state, 1)["status"] == "completed"
-    with pytest.raises(StopAsyncIteration):
-        await anext(stream)
-
-
-@pytest.mark.asyncio
-async def test_stream_waits_for_terminal_snapshot_projection() -> None:
-    """run 已终态但 snapshot 尚未投影时，订阅继续等待最后一帧。"""
-
-    initial = empty_snapshot()
-    initial["runs"] = [
-        {
-            "runId": 1,
-            "status": "running",
-            "endReason": None,
-            "messages": [],
-            "usage": None,
-            "error": None,
-        }
-    ]
-    initial["current_run_id"] = 1
-    terminal = copy.deepcopy(initial)
-    terminal["runs"][0]["status"] = "completed"
-    queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
-
-    class Snapshots:
-        def subscribe_with_snapshot(
-            self, task_id: int
-        ) -> tuple[asyncio.Queue[SnapshotChange], Any, ConversationStateSnapshot]:
-            return queue, lambda: None, self.get_state(task_id)
-
-        def get_state(self, task_id: int) -> ConversationStateSnapshot:
-            return copy.deepcopy(initial)
-
-        def is_task_deleted(self, task_id: int) -> bool:
-            return False
-
-    async def delayed_terminal_change() -> None:
-        await asyncio.sleep(0.06)
-        await queue.put(SnapshotChange(1, terminal, ()))
-
-    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    service._snapshots = Snapshots()
-    stream = service.stream(1, 1, lambda: False, is_terminal=lambda: _true(), poll_interval=0.05)
-    await anext(stream)
-    terminal_task = asyncio.create_task(delayed_terminal_change())
-    change = await anext(stream)
-    assert _run(change.state, 1)["status"] == "completed"
-    with pytest.raises(StopAsyncIteration):
-        await anext(stream)
-    await terminal_task
-
-
-@pytest.mark.asyncio
-async def test_stream_does_not_close_while_run_is_still_active() -> None:
-    """没有 snapshot 通知时，活跃 run 的 SSE 不能被 idle timeout 提前关闭。"""
-
-    initial = empty_snapshot()
-    initial["runs"] = [
-        {
-            "runId": 1,
-            "status": "running",
-            "endReason": None,
-            "messages": [],
-            "usage": None,
-            "error": None,
-        }
-    ]
-    initial["current_run_id"] = 1
-    queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
-
-    class Snapshots:
-        def subscribe_with_snapshot(
-            self, task_id: int
-        ) -> tuple[asyncio.Queue[SnapshotChange], Any, ConversationStateSnapshot]:
-            return queue, lambda: None, self.get_state(task_id)
-
-        def get_state(self, task_id: int) -> ConversationStateSnapshot:
-            return copy.deepcopy(initial)
-
-        def is_task_deleted(self, task_id: int) -> bool:
-            return False
-
-    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    service._snapshots = Snapshots()
-
-    async def delayed_terminal_change() -> None:
-        await asyncio.sleep(0.06)
-        terminal = copy.deepcopy(initial)
-        terminal["runs"][0]["status"] = "completed"
-        await queue.put(SnapshotChange(1, terminal, ()))
-
-    stream = service.stream(
-        1,
-        1,
-        lambda: False,
-        is_terminal=lambda: _true(),
-        poll_interval=0.01,
-    )
-    first = await anext(stream)
-    assert _run(first.state, 1)["status"] == "running"
-    terminal_task = asyncio.create_task(delayed_terminal_change())
-    second = await anext(stream)
-    assert _run(second.state, 1)["status"] == "completed"
-    with pytest.raises(StopAsyncIteration):
-        await anext(stream)
-    await terminal_task
-
-
-@pytest.mark.asyncio
-async def test_stream_disconnect_only_unsubscribes_and_does_not_cancel_run() -> None:
-    """Transport 断开只结束 subscriber，不触发 ConversationRun cancel。"""
-
-    initial = empty_snapshot()
-    initial["runs"] = [
-        {
-            "runId": 1,
-            "status": "running",
-            "endReason": None,
-            "messages": [],
-            "usage": None,
-            "error": None,
-        }
-    ]
-    initial["current_run_id"] = 1
-    queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
-    cancelled = False
-    unsubscribe_count = 0
-
-    def unsubscribe() -> None:
-        nonlocal unsubscribe_count
-        unsubscribe_count += 1
-
-    class Snapshots:
-        def subscribe_with_snapshot(
-            self, task_id: int
-        ) -> tuple[asyncio.Queue[SnapshotChange], Any, ConversationStateSnapshot]:
-            assert task_id == 1
-            return queue, unsubscribe, self.get_state(task_id)
-
-        def get_state(self, task_id: int) -> ConversationStateSnapshot:
-            assert task_id == 1
-            return copy.deepcopy(initial)
-
-        def is_task_deleted(self, task_id: int) -> bool:
-            return False
-
-    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    service._snapshots = Snapshots()
-    stream = service.stream(1, 1, lambda: cancelled, poll_interval=0.01)
-
-    first = await anext(stream)
-    assert _run(first.state, 1)["status"] == "running"
-    cancelled = True
-    with pytest.raises(StopAsyncIteration):
-        await anext(stream)
-
-    assert unsubscribe_count == 1
-
-
-@pytest.mark.asyncio
-async def test_stream_fallback_sends_terminal_snapshot() -> None:
-    """队列通知丢失但 snapshot 已终态时，兜底仍发送完整状态。"""
-
-    initial = empty_snapshot()
-    initial["runs"] = [
-        {
-            "runId": 1,
-            "status": "running",
-            "endReason": None,
-            "messages": [],
-            "usage": None,
-            "error": None,
-        }
-    ]
-    initial["current_run_id"] = 1
-    terminal = empty_snapshot()
-    terminal["runs"] = [
-        {
-            "runId": 1,
-            "status": "completed",
-            "endReason": None,
-            "messages": [],
-            "usage": None,
-            "error": None,
-        }
-    ]
-    terminal["current_run_id"] = 1
-    queue: asyncio.Queue[SnapshotChange] = asyncio.Queue()
-
-    class Snapshots:
-        read_count = 0
-
-        def subscribe_with_snapshot(
-            self, task_id: int
-        ) -> tuple[asyncio.Queue[SnapshotChange], Any, ConversationStateSnapshot]:
-            return queue, lambda: None, self.get_state(task_id)
-
-        def get_state(self, task_id: int) -> ConversationStateSnapshot:
-            self.read_count += 1
-            return copy.deepcopy(initial if self.read_count == 1 else terminal)
-
-        def is_task_deleted(self, task_id: int) -> bool:
-            return False
-
-    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    service._snapshots = Snapshots()
-    stream = service.stream(
-        1,
-        1,
-        lambda: False,
-        is_terminal=lambda: _true(),
-        poll_interval=0.01,
-    )
-    first = await anext(stream)
-    assert _run(first.state, 1)["status"] == "running"
-    change = await anext(stream)
-    assert _run(change.state, 1)["status"] == "completed"
-    with pytest.raises(StopAsyncIteration):
-        await anext(stream)
-
-
-async def _true() -> bool:
-    """测试用终态查询。"""
-
-    return True

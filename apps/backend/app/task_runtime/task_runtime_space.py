@@ -212,6 +212,21 @@ class TaskRuntimeSpace:
             self._snapshot = copy.deepcopy(loader())
         return copy.deepcopy(self._snapshot)
 
+    def get_working_snapshot(
+        self, loader: Callable[[], ConversationStateSnapshot]
+    ) -> ConversationStateSnapshot:
+        """Return the task-local mutable snapshot to its owning state service.
+
+        This is deliberately narrower than ``get_snapshot``: only
+        ``ConversationTaskStateService`` calls it while holding that service's class-level
+        lock. It avoids copying the whole conversation for every token mutation; callers must
+        publish or otherwise finish their mutation before releasing the owning lock.
+        """
+
+        if self._snapshot is None:
+            self._snapshot = copy.deepcopy(loader())
+        return self._snapshot
+
     def existing_snapshot(self) -> ConversationStateSnapshot | None:
         """返回已物化的 task snapshot，不触发数据库读取或懒加载。
 

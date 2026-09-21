@@ -23,6 +23,7 @@
     "@assistant-ui/react": "^0.15.17",
     "@assistant-ui/react-streamdown": "^0.3.13",
     "@base-ui/react": "^1.7.0",
+    "@tanstack/react-virtual": "^3.14.13",
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "2.7.3",
     "@tiptap/core": "^3.31.3",

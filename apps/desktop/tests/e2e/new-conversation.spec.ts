@@ -94,8 +94,8 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(assistantRequests[1]?.status).toBe(200);
   expect(assistantRequests[1]?.body.taskId).toBe(42);
   expect(assistantRequests[1]?.body.state).toBeUndefined();
-  expect(streamBody).toContain('"type":"update-state"');
-  expect(streamBody).toContain('"type":"append-text"');
+  expect(streamBody).toContain('"kind":"mutation"');
+  expect(streamBody).toContain('"kind":"append-text"');
   expect(streamBody).toContain("streaming response");
   expect(streamBody).toContain("data: [DONE]");
 
@@ -208,7 +208,9 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await page.getByRole("button", { name: "停止" }).click();
   await expect((await cancelResponse).status()).toBe(200);
   await expect(page.getByRole("button", { name: "继续运行" })).toBeVisible();
-  expect(assistantStateRequests).toHaveLength(stateReadsBeforeCancel);
+  // The stop path aborts the SSE connection first; cancellation confirmation then reads the
+  // target Run's canonical state before exposing the resume action.
+  expect(assistantStateRequests.length).toBeGreaterThan(stateReadsBeforeCancel);
   expect(assistantRequests).toHaveLength(1);
 
   // A cold Assistant runtime must derive the same business-resume action from the
@@ -224,7 +226,9 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await page.getByRole("button", { name: "继续运行" }).click();
   await expect((await resumeResponse).status()).toBe(200);
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
-  await expect.poll(() => attachRequests.length).toBe(2);
+  // The attach response is deliberately failed once. The runtime then imports the terminal
+  // canonical snapshot, so a second attach is unnecessary and would only duplicate a finished run.
+  await expect.poll(() => attachRequests.length).toBe(1);
   await expect.poll(() => assistantRequests.length).toBe(2);
   expect(assistantRequests[1]?.body.runId).toBe(1);
   expect(assistantRequests[1]?.body.commands).toHaveLength(0);
@@ -331,8 +335,8 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
   await expect(userMessages.last().getByRole("button", { name: "复制" })).toBeVisible();
   await editButton.click();
 
-  const editInput = page.getByLabel("编辑消息");
-  await expect(editInput).toHaveValue("second");
+  const editInput = page.getByRole("textbox", { name: "编辑消息" });
+  await expect(editInput).toHaveText("second");
   await editInput.fill("second-edited");
   const rerunResponse = page.waitForResponse((response) => (
     response.url().endsWith("/assistant") && response.request().method() === "POST"
@@ -374,7 +378,7 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   const latestUser = page.locator('[data-role="user"]').last();
   await latestUser.hover();
   await latestUser.getByRole("button", { name: "编辑并重跑" }).click();
-  const editInput = page.getByLabel("编辑消息");
+  const editInput = page.getByRole("textbox", { name: "编辑消息" });
   await editInput.fill("edit-failure");
   const failureResponse = page.waitForResponse((response) => (
     response.url().endsWith("/assistant") && response.request().method() === "POST"
@@ -383,6 +387,6 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   await expect((await failureResponse).status()).toBe(409);
 
   await expect(page.getByRole("status")).toContainText("编辑重跑被测试后端拒绝");
-  await expect(page.getByLabel("编辑消息")).toHaveValue("edit-failure");
-  await expect(topComposer).toHaveValue("keep draft");
+  await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveText("edit-failure");
+  await expect(topComposer).toHaveText("keep draft");
 });

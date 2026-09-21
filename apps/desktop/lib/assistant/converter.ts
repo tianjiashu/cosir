@@ -5,7 +5,7 @@ import type {
   ThreadMessage,
   ThreadUserMessage,
 } from "@assistant-ui/react";
-import type { ReadonlyJSONObject, ReadonlyJSONValue } from "assistant-stream/utils";
+import type { ReadonlyJSONObject } from "assistant-stream/utils";
 
 import type {
   TransportError,
@@ -13,7 +13,6 @@ import type {
   TransportMessage,
   TransportReasoningPart,
   TransportRun,
-  TransportState,
   TransportTextPart,
   TransportToolCallPart,
   TransportToolStatus,
@@ -327,7 +326,7 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
       // Assistant UI's optional client-side tracker uses result presence to
       // close a tool-call stream. This is a sanitized UI sentinel only: the
       // canonical backend status/error stays in artifact and the raw
-      // TransportState is never replaced by this projection.
+      // Transport state is never replaced by this projection.
       result: { kind: "tool-terminal", status: "failed" },
       isError: true,
     };
@@ -607,39 +606,5 @@ export function toSnapshotErrorMessage(error: TransportError): ThreadAssistantMe
       steps: [],
       custom: {},
     },
-  };
-}
-
-export function toTransportThreadView(
-  state: TransportState,
-  connectionMetadata: { pendingCommands: readonly unknown[]; isSending: boolean },
-): { messages: ThreadMessage[]; isRunning: boolean; state: ReadonlyJSONValue } {
-  const pendingMessages = connectionMetadata.pendingCommands
-    .map((command) => isUserAddMessageCommand(command) ? toPendingUserMessage(command) : null)
-    .filter((message): message is ThreadMessage => message !== null);
-  const messages = state.runs.flatMap((run) => {
-    const lastAssistantMessageId = [...run.messages].reverse().find((message) => message.role === "assistant")?.id;
-    return run.messages.map((message) =>
-      toThreadMessage(message, run, { isLastRunMessage: message.id === lastAssistantMessageId }),
-    );
-  });
-  if (state.error) messages.push(toSnapshotErrorMessage(state.error));
-  const currentRun = state.current_run_id === null
-    ? null
-    : state.runs.find((run) => run.runId === state.current_run_id) ?? null;
-  const hasPendingCommands = connectionMetadata.pendingCommands.length > 0;
-  const currentRunIsTerminal = currentRun !== null
-    && ["idle", "completed", "failed", "cancelled", "interrupted"].includes(currentRun.status);
-  return {
-    messages: [...messages, ...pendingMessages],
-    // 服务端 Run 终态是唯一事实源，优先级高于 transport 的 sending 标记。
-    // EOF/React 提交存在时序差异：如果 isSending 仍为 true，不能因此把
-    // 已经 failed/cancelled 的 Run 重新投影为运行中。待发送命令仍然保留
-    // sending 语义，以免新消息尚未创建 Run 时输入区提前恢复。
-    isRunning: hasPendingCommands
-      || (currentRun !== null ? !currentRunIsTerminal : connectionMetadata.isSending),
-    // initial-state/recovery 入口已通过 parseTransportState 验证；这里仅按官方
-    // AssistantTransportState 的 JSON state 字段透传，不构造或回写领域事实。
-    state: state as unknown as ReadonlyJSONValue,
   };
 }

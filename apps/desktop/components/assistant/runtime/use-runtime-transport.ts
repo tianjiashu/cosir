@@ -7,10 +7,6 @@ import {
   getOrCreateTransportCommandId,
   getUserAddMessageSourceId,
 } from "@/lib/assistant/converter";
-import {
-  createTransportViewConverter,
-  type TransportViewConverter,
-} from "@/lib/assistant/transport-view-converter";
 import { modelContextToTransportFields, selectionToTransportFields } from "@/lib/assistant/model-request-adapter";
 import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
 import { parseTransportError } from "@/lib/assistant/transport-error";
@@ -31,7 +27,7 @@ const RECOVERY_FEEDBACK_DELAY_MS = 350;
 const ERROR_SNAPSHOT_TIMEOUT_MS = 15_000;
 const TERMINAL_SNAPSHOT_TIMEOUT_MS = 3_000;
 
-function isTerminalRunStatus(status: string | undefined): boolean {
+function isTerminalRunStatus(status: string | null | undefined): boolean {
   return status === "idle"
     || status === "completed"
     || status === "failed"
@@ -39,10 +35,15 @@ function isTerminalRunStatus(status: string | undefined): boolean {
     || status === "interrupted";
 }
 
+function findTransportRun(state: TransportState, runId: number | null) {
+  return runId === null ? undefined : state.runs.find((run) => run.runId === runId);
+}
+
 /** Build the Assistant Transport runtime and keep transport-only policy here. */
 export function useRuntimeTransport(
   context: RuntimeSessionContext,
   recovery: RuntimeRecovery,
+  onStateCommit: (state: TransportState) => void,
 ): RuntimeTransport {
   const attachmentAdapter = useMemo(
     () => createAttachmentAdapter(context.taskId),
@@ -56,18 +57,6 @@ export function useRuntimeTransport(
   const backendRuntimeAvailableRef = useRef(context.backendRuntimeAvailable);
   backendRuntimeGenerationRef.current = context.backendRuntimeGeneration;
   backendRuntimeAvailableRef.current = context.backendRuntimeAvailable;
-  const transportViewConverterRef = useRef<{
-    taskId: number;
-    converter: TransportViewConverter;
-  } | null>(null);
-  if (transportViewConverterRef.current?.taskId !== context.taskId) {
-    transportViewConverterRef.current = {
-      taskId: context.taskId,
-      converter: createTransportViewConverter(),
-    };
-  }
-  const transportViewConverter = transportViewConverterRef.current.converter;
-
   const clearRecoveryIssueTimer = useCallback(() => {
     if (recoveryIssueTimerRef.current === null) return;
     window.clearTimeout(recoveryIssueTimerRef.current);
@@ -177,7 +166,7 @@ export function useRuntimeTransport(
   }, [context, recovery]);
 
   const reconcileTerminalSnapshot = useCallback(async (expectedRunId: number): Promise<boolean> => {
-    const currentRun = currentTransportRun(context.latestStateRef.current);
+    const currentRun = findTransportRun(context.latestStateRef.current, expectedRunId);
     if (
       currentRun?.runId !== expectedRunId
       || isTerminalRunStatus(currentRun.status)
@@ -191,8 +180,8 @@ export function useRuntimeTransport(
         signal,
         traceId: context.traceId,
       });
-      const snapshotRun = currentTransportRun(snapshot);
-      const latestRun = currentTransportRun(context.latestStateRef.current);
+      const snapshotRun = findTransportRun(snapshot, expectedRunId);
+      const latestRun = findTransportRun(context.latestStateRef.current, expectedRunId);
       if (
         signal.aborted
         || !backendRuntimeAvailableRef.current
@@ -223,8 +212,6 @@ export function useRuntimeTransport(
 
   return useTaskAssistantTransportRuntime(context.taskId, {
     initialState: context.initialState,
-    protocol: "assistant-transport",
-    capabilities: { edit: true },
     adapters: { attachments: attachmentAdapter },
     api: `${context.backendBaseUrl}/assistant`,
     resumeApi: `${context.backendBaseUrl}/tasks/${context.taskId}/assistant/attach`,
@@ -331,17 +318,19 @@ export function useRuntimeTransport(
       clearRecoveryIssueTimer();
       context.setIssue(null);
     },
-    onFinish: () => {
+    onFinish: ({ targetRunId, targetRunStatus }) => {
       void (async () => {
         finishCountRef.current += 1;
-        const initialRunId = context.latestStateRef.current.current_run_id;
-        const initialStatus = currentTransportRun(context.latestStateRef.current)?.status;
+        const initialRunId = targetRunId;
+        const initialStatus = targetRunStatus;
         const reconciled = initialRunId !== null
           && !isTerminalRunStatus(initialStatus)
           ? await reconcileTerminalSnapshot(initialRunId)
           : false;
-        const runId = context.latestStateRef.current.current_run_id;
-        const status = currentTransportRun(context.latestStateRef.current)?.status;
+        const runId = targetRunId;
+        const status = runId === null
+          ? null
+          : findTransportRun(context.latestStateRef.current, runId)?.status ?? targetRunStatus;
         const cancellationRequested = runId !== null && context.cancelRequestedRunIdRef.current === runId;
         void frontendLog("INFO", "assistant_transport_stream_finished", "Assistant Transport 流生命周期结束", {
           traceId: context.traceId,
@@ -369,13 +358,15 @@ export function useRuntimeTransport(
         if (context.lastTransportErrorRef.current) {
           context.setIssue(context.lastTransportErrorRef.current);
           context.onTaskStateChanged?.();
-          if (status === "pending" || status === "running") void recovery.reconcileAfterTransportFinish();
+          if (status === "pending" || status === "running") {
+            void recovery.reconcileAfterTransportFinish({ runId, status });
+          }
           return;
         }
 
         if (!isTerminalRunStatus(status)) {
           scheduleRecoveryIssue();
-          void recovery.reconcileAfterTransportFinish();
+          void recovery.reconcileAfterTransportFinish({ runId, status });
         } else {
           clearRecoveryIssueTimer();
           context.setIssue(null);
@@ -404,6 +395,7 @@ export function useRuntimeTransport(
         });
       }
     },
-    converter: transportViewConverter,
+    attachRef: context.attachTransportRef,
+    onStateCommit,
   });
 }

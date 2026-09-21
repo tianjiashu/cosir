@@ -61,6 +61,7 @@ import type { TransportState, TransportToolStatus } from "@/lib/assistant/contra
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import { AttachmentTaskContext } from "@/components/assistant-ui/elements/attachment-context";
+import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/virtualized-thread-messages";
 import {
   ComposerAttachmentButton,
   ComposerAttachments,
@@ -143,6 +144,8 @@ const isNewChatView = (state: AssistantState) => state.thread.messages.length ==
 
 export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null }) => {
   const isEmpty = useAuiState(isNewChatView);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
     <ThreadContext.Provider value={{ taskId, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId }}>
     <ThreadComponentsContext.Provider value={components}>
@@ -157,24 +160,23 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
           off-screen layout and paint through content-visibility utilities
           (intrinsic size is not calibrated yet).
         */}
-        <ThreadPrimitive.Viewport
-          className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth"
-          turnAnchor="top"
-          autoScroll={false}
-        >
-          <div className={cn("mx-auto flex min-w-0 w-full max-w-3xl flex-1 flex-col px-4 pt-4", isEmpty && "justify-center")}>
-            <div className="mb-14 flex flex-col gap-y-6 empty:hidden">
-              <ThreadPrimitive.Messages>{() => <ThreadMessage />}</ThreadPrimitive.Messages>
+        <ThreadPrimitive.Viewport ref={viewportRef} turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth">
+            <div className={cn("mx-auto flex min-w-0 w-full max-w-3xl flex-1 flex-col px-4 pt-4", isEmpty && "justify-center")}>
+              <VirtualizedThreadMessages
+                scrollElementRef={viewportRef}
+                components={messageComponents}
+                rowPaddingBottom="1.5rem"
+                keepActiveTail
+              />
+              <ThreadPrimitive.ViewportFooter className={cn("bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6", !isEmpty && "rounded-t-3xl")}>
+                <ThreadPrimitive.ScrollToBottom
+                  render={<TooltipIconButton tooltip="回到底部" variant="outline" className="absolute -top-12 self-center rounded-full p-3 disabled:invisible" />}
+                >
+                  <ArrowDownIcon />
+                </ThreadPrimitive.ScrollToBottom>
+                <Composer autoFocus={autoFocus} taskId={taskId} workspaceRoot={workspaceRoot} />
+              </ThreadPrimitive.ViewportFooter>
             </div>
-            <ThreadPrimitive.ViewportFooter className={cn("bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6", !isEmpty && "rounded-t-3xl")}>
-              <ThreadPrimitive.ScrollToBottom
-                render={<TooltipIconButton tooltip="回到底部" variant="outline" className="absolute -top-12 self-center rounded-full p-3 disabled:invisible" />}
-              >
-                <ArrowDownIcon />
-              </ThreadPrimitive.ScrollToBottom>
-              <Composer autoFocus={autoFocus} taskId={taskId} workspaceRoot={workspaceRoot} />
-            </ThreadPrimitive.ViewportFooter>
-          </div>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
       </AttachmentTaskContext.Provider>

@@ -42,6 +42,7 @@ export type RuntimeSessionContext = {
   onTaskStateChanged?: () => void;
   latestStateRef: MutableRefObject<TransportState>;
   runtimeControlsRef: MutableRefObject<RuntimeControls | null>;
+  attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;
   cancelRequestedRunIdRef: MutableRefObject<number | null>;
   lastTransportErrorRef: MutableRefObject<TransportIssue | null>;
   composerRestoreRef: MutableRefObject<ComposerRestore | null>;

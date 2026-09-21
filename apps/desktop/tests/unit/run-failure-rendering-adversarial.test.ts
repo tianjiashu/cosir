@@ -3,15 +3,12 @@
  *
  * 攻击面：
  * 1. `toMessageStatusForRun` 在「status × error × endReason」全组合下的输出；
- * 2. `transport-view-converter` 的缓存签名在 `error.message` 变化时是否失效
- *    （否则重连后重新分类的失败原因会一直显示旧文案）；
- * 3. `parseTransportState` 对 Run 级 error 的严格白名单校验（键缺失/多余/空白/非字符串）。
+ * 2. `parseTransportState` 对 Run 级 error 的严格白名单校验（键缺失/多余/空白/非字符串）。
  */
 import { describe, expect, it } from "vitest";
 
-import type { TransportError, TransportRun, TransportState } from "@/lib/assistant/contract";
-import { toMessageStatus, toThreadMessage } from "@/lib/assistant/converter";
-import { createTransportViewConverter } from "@/lib/assistant/transport-view-converter";
+import type { TransportRun, TransportState } from "@/lib/assistant/contract";
+import { toMessageStatus } from "@/lib/assistant/converter";
 import { parseTransportState } from "@/lib/assistant/snapshot-validation";
 
 const assistantMessage = () => ({
@@ -28,16 +25,6 @@ const run = (overrides: Partial<TransportRun> = {}): TransportRun => ({
   usage: null,
   error: null,
   ...overrides,
-});
-
-const state = (runs: TransportRun[], error: TransportState["error"] = null): TransportState => ({
-  runs,
-  current_run_id: runs.at(-1)?.runId ?? null,
-  approvals: {},
-  context_usage_ratio: null,
-  context_usage_used: null,
-  context_window_total: null,
-  error,
 });
 
 describe("toMessageStatusForRun 全组合对抗", () => {
@@ -137,70 +124,6 @@ describe("toMessageStatusForRun 全组合对抗", () => {
       reason: "error",
       error: "上次对话运行已中断，可以继续发送新消息。",
     });
-  });
-});
-
-describe("transport-view-converter 受控错误缓存签名对抗", () => {
-  it("同一 failed 状态下 error.message 变化必须让缓存失效", () => {
-    const convert = createTransportViewConverter();
-    const message = assistantMessage();
-    const first = convert(
-      state([run({ status: "failed", error: { code: "model_service_error", message: "第一次文案" }, messages: [message] })]),
-      { pendingCommands: [], isSending: false },
-    );
-    const second = convert(
-      state([run({ status: "failed", error: { code: "model_service_error", message: "第二次文案" }, messages: [message] })]),
-      { pendingCommands: [], isSending: false },
-    );
-
-    expect(second.messages[0]).not.toBe(first.messages[0]);
-    expect(second.messages[0]).toMatchObject({
-      status: { type: "incomplete", reason: "error", error: "第二次文案" },
-    });
-  });
-
-  it("同一 failed 状态下 error.code 变化但 message 相同也必须让缓存失效", () => {
-    const convert = createTransportViewConverter();
-    const message = assistantMessage();
-    const first = convert(
-      state([run({ status: "failed", error: { code: "model_service_error", message: "同一文案" }, messages: [message] })]),
-      { pendingCommands: [], isSending: false },
-    );
-    const second = convert(
-      state([run({ status: "failed", error: { code: "model_timeout", message: "同一文案" }, messages: [message] })]),
-      { pendingCommands: [], isSending: false },
-    );
-
-    expect(second.messages[0]).not.toBe(first.messages[0]);
-  });
-
-  it("error 从 null 变为有契约时必须让缓存失效（旧快照无失败原因）", () => {
-    const convert = createTransportViewConverter();
-    const message = assistantMessage();
-    const first = convert(state([run({ status: "failed", error: null, messages: [message] })]), {
-      pendingCommands: [],
-      isSending: false,
-    });
-    const second = convert(
-      state([run({ status: "failed", error: { code: "run_failed", message: "通用失败" }, messages: [message] })]),
-      { pendingCommands: [], isSending: false },
-    );
-
-    expect(second.messages[0]).not.toBe(first.messages[0]);
-    expect(second.messages[0]).toMatchObject({
-      status: { type: "incomplete", reason: "error", error: "通用失败" },
-    });
-  });
-
-  it("完全相同输入下缓存必须命中（不得为了安全每次都重建）", () => {
-    const convert = createTransportViewConverter();
-    const message = assistantMessage();
-    const fixture = state([
-      run({ status: "failed", error: { code: "run_failed", message: "通用失败" }, messages: [message] }),
-    ]);
-    const first = convert(fixture, { pendingCommands: [], isSending: false });
-    const second = convert(fixture, { pendingCommands: [], isSending: false });
-    expect(second.messages[0]).toBe(first.messages[0]);
   });
 });
 

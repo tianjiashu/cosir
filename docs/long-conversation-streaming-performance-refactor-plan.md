@@ -1,8 +1,8 @@
 # 长对话流式渲染性能改造方案
 
-状态：设计方案，尚未实施
+状态：实施中；第一至第三阶段核心代码已落地，待最终子 Agent 验收与长对话 E2E 固化
 
-验收状态：已完成一次只读子 Agent 审查；第一版方案发现的 frame wire contract、bounded queue resync 和 top-anchor 集成风险已纳入本修订版。当前按绿地项目处理：新契约直接替换旧实现，不保留代码或运行兼容层。第一、二阶段仍需先完成协议/基准测试，第三阶段默认关闭。
+验收状态：已完成前置只读审查；其发现的 frame wire contract、bounded queue resync 和 top-anchor 集成风险已纳入本方案。当前按绿地项目处理：新契约直接替换旧实现，不保留代码或运行兼容层。最终验收仍需检查代码事实、长期迭代铁律和测试结果。
 
 本文只覆盖三项改造：
 
@@ -52,7 +52,7 @@ Python / FastAPI 子进程
 
 以下事实以当前仓库代码和已安装的 `@assistant-ui/react@0.15.17` 为准。
 
-### 2.1 后端已有增量事件，但 snapshot 复制仍是全量的
+### 2.1 后端 frame 已完成增量化
 
 `StreamingPartStateMachine` 已把同一 text/reasoning 通道的增量按字符数或时间合并；默认阈值是 32 字符或 50ms。模块 docstring 明确说明每个下游事件都会触发 snapshot projection、SSE flush 和前端渲染，因此合并事件数可以同比例降低这些成本。
 
@@ -61,40 +61,19 @@ Python / FastAPI 子进程
 - `apps/backend/app/core/workflows/react/nodes/helper/streaming_part_state_machine.py`
 - `apps/backend/app/config/constant.py` 中 `DEFAULT_TEXT_FLUSH_MIN_CHARS` 与 `DEFAULT_TEXT_FLUSH_MAX_INTERVAL_SECONDS`
 
-但是 `ConversationTaskStateService.apply_planned()` 当前仍会：
+当前 `ConversationTaskStateService.apply_planned()` 在 `_lock` 下直接修改 task working copy：纯 `append-text` 不再执行完整 snapshot 校验，也不复制完整 state；结构性 mutation 仍执行完整校验。普通订阅只收到 mutation frame，full frame 只发生在原子 attach、recovery、显式 full publish 或终态边界。
 
-1. 在同一份 task snapshot working copy 上应用 mutation；
-2. 对完整 snapshot 执行 `validate_snapshot()`；
-3. `copy.deepcopy(state)` 创建 `SnapshotChange`；
-4. 把 change 投递给所有 subscriber。
+`Subscriber` 使用有界 mutation lane、control lane 和相邻 append 合并；overflow 发送 `resync_required` 并结束当前连接。参见：[conversation_task_state_service.py](../apps/backend/app/assistant_transport/service/conversation_task_state_service.py)、[subscriber.py](../apps/backend/app/assistant_transport/stream/subscriber.py)
 
-参见：[conversation_task_state_service.py](../apps/backend/app/assistant_transport/service/conversation_task_state_service.py)
+### 2.2 前端已切换到单一增量 FrameStore
 
-因此长历史下，单个 `append-text` 的成本仍可能随完整 task snapshot 大小增长。
+`TransportFrameStore` 是唯一 projection owner，直接消费 full/mutation/resync frame：full 重建基线，mutation 只复制受影响路径和对应 Run 的 message entries；每次提交创建新的浅消息数组，但未变化的消息对象保持稳定。旧的 `transport-view-converter.ts` 和 `toTransportThreadView()` 已删除，不保留双轨 projection。
 
-`AssistantTransportStreamService._apply_snapshot_change()` 当前对每个 change 应用 mutation 后立即 `controller.flush()`。参见：[transport_stream_service.py](../apps/backend/app/assistant_transport/service/transport_stream_service.py)
+参见：[transport-frame-store.ts](../apps/desktop/lib/assistant/transport-frame-store.ts)、[use-task-assistant-transport-runtime.ts](../apps/desktop/lib/assistant/use-task-assistant-transport-runtime.ts)
 
-### 2.2 前端已有消息级缓存，但 projection 仍扫描全历史
+### 2.3 Thread 已接入独立虚拟化 viewport
 
-`createTransportViewConverter()` 用 `WeakMap<TransportMessage, CachedMessage>` 复用未变化的 `ThreadMessage` 对象，这已经避免了历史消息的重复转换。
-
-参见：[transport-view-converter.ts](../apps/desktop/lib/assistant/transport-view-converter.ts)
-
-同一层还有 `apps/desktop/lib/assistant/converter.ts` 的 `toTransportThreadView()`，它也会全量遍历 runs/messages；第二阶段必须把这处重复 projection 一并删除或改为消费同一个 `TransportProjectionStore`，不能只替换一个入口。
-
-但 converter 每次调用仍会：
-
-- 遍历所有 runs；
-- 遍历每个 run 的所有 messages；
-- 对每个 run 反向查找最后一个 assistant message；
-- 新建扁平的 `messages` 数组；
-- 重新计算当前 run 和 `isRunning`。
-
-当前 `useRuntimeTransport()` 已经通过 task 级 ref 保持 converter 实例稳定，并把 converter 交给 `useAssistantTransportRuntime()`。这应保留，不能在每次 React render 时重新创建 converter。
-
-### 2.3 Thread 已经使用非虚拟化的第一阶段优化
-
-当前 Thread：
+当前普通 Thread 与 Workbench readonly Thread 均：
 
 - `turnAnchor="top"`；
 - `autoScroll={false}`；
@@ -102,6 +81,7 @@ Python / FastAPI 子进程
 - 用户消息使用 `contain-intrinsic-size:auto_6rem`；
 - assistant 消息使用 `contain-intrinsic-size:auto_24rem`；
 - assistant parts 使用 `MessagePrimitive.GroupedParts`。
+- 通过 `unstable_useThreadMessageIds`、`ThreadPrimitive.Unstable_MessageById` 和 `@tanstack/react-virtual` 只挂载可见 rows；消息 id 作为稳定身份，virtualizer 只存在于 UI 适配层。
 
 参见：[thread.aui.tsx](../apps/desktop/components/assistant-ui/elements/thread.aui.tsx)
 
@@ -184,7 +164,7 @@ ConversationTaskStateService
 新的 frame 同时是 backend stream 的领域边界和 Assistant Transport 的 wire 输入，至少包含：
 
 ```python
-class SnapshotFrame:
+class TransportFrame:
     task_id: int
     kind: Literal["full", "mutation", "resync_required"]
     mutations: tuple[ConversationStateMutation, ...]
@@ -195,7 +175,7 @@ class SnapshotFrame:
     resync_reason: str | None
 ```
 
-`SnapshotFrame` 是 task-wide frame，不携带某个 SSE 订阅目标 Run 的终态。连接级 SSE envelope 另外携带 `target_run_id` 与 `target_run_status`；这两个字段由 `AssistantTransportStreamService` 从 canonical Run status 填充，只服务当前连接的关闭判断，不进入 task snapshot、projection message 身份或数据库事实。
+`TransportFrame` 是 task-wide frame，不携带某个 SSE 订阅目标 Run 的终态。连接级 SSE envelope 另外携带 `target_run_id` 与 `target_run_status`；这两个字段由 `AssistantTransportStreamService` 从 canonical Run status 填充，只服务当前连接的关闭判断，不进入 task snapshot、projection message 身份或数据库事实。
 
 语义固定为：
 
@@ -222,15 +202,14 @@ SSE JSON envelope 只暴露上述稳定字段及其 JSON 化的 state/mutations�
 
 ### 5.4 完整校验的分层策略
 
-当前每个 mutation 都调用 `validate_snapshot()`，这条路径需要先通过性能测试确认成本，再分层：
+当前实现已经按 mutation 形状分层：
 
-- text append：只校验目标 part 存在、类型为 text/reasoning、状态允许追加、delta 非空；
-- tool/run 状态变化：校验对应 run 和 tool call 的局部状态迁移；
-- part closed、tool settled、run terminal：执行当前 run 或 message 的完整校验；
-- full frame、attach、recovery：执行完整 snapshot 校验；
-- 测试环境：保留可配置的每事件全量校验模式，便于发现 projector 回归。
+- 纯 `append-text`：由 mutation 的路径存在性、目标字符串类型和非空 delta 校验保护，不重复遍历完整 snapshot；
+- `set`、根替换、part/tool/run 状态变化：继续执行 `validate_snapshot()`，保留结构和生命周期不变量；
+- full frame、attach、recovery：执行完整 snapshot 校验并只在边界生成隔离副本；
+- 未来若引入更细的局部状态迁移校验，必须先有 profiling 和对应回归测试，不能用猜测削弱校验强度。
 
-如果 profiling 证明 `validate_snapshot()` 不是主要成本，应保留现状，不为了“看起来增量化”而降低校验强度。每次修改 frame 或校验职责时，必须在同一个 PR 同步更新 docstring、类型注释、结构化日志和测试，不延迟到后续清理 PR。
+每次修改 frame 或校验职责时，必须在同一个 PR 同步更新 docstring、类型注释、结构化日志和测试，不延迟到后续清理 PR。
 
 ### 5.5 task-wide subscriber 的安全合并和背压
 
@@ -270,17 +249,17 @@ terminal full 必须进入 control lane，不能进入可丢弃的 mutation lane
 
 ### 5.6 后端实现顺序
 
-1. 直接以 `SnapshotFrame` 替换 `SnapshotChange`，同时更新 state service、stream service、SSE encoder、测试和 docstring。
+1. 直接以 `TransportFrame` 替换 `SnapshotChange`，同时更新 state service、stream service、SSE encoder、测试和 docstring。
 2. 实现明确的 full/mutation/resync wire envelope，以及前端 decoder 的 schema/连接状态校验；禁止先构造完整 state 再猜 delta。
 3. 在 stream service 中实现 control lane、mutation lane、coalescer 和 resync 状态机；验证 terminal full frame 的优先级。
 4. 移除正常 mutation path 的全量深拷贝，并保留 full frame 只用于基线、attach、recovery 和 terminal。
-5. 只有 profiling 证明必要时，再把全量 snapshot 校验改为分层校验；校验强度不能因性能目标未经证据削弱。
+5. 对 append-only 热路径跳过重复的全量 snapshot 遍历；结构性 mutation 和 full/recovery 边界继续全量校验，后续再以 profiling 决定是否细化局部校验。
 
 这是一组一次性替换的绿地契约。每个阶段仍有独立测试边界，但不保留旧 wire、旧 frame 或旧 fallback 实现。
 
 ### 5.7 新 recovery 的唯一 owner
 
-新协议不再把恢复交给旧 `assistant-stream` decoder 的隐式累积行为。`TransportProjectionStore` 是前端恢复 owner：收到 `resync_required` 或 SSE EOF 后，先停止应用当前连接的后续 frame，调用一次原子 attach/recovery API；该 API 使用当前 `ConversationTaskStateService._lock` 这一实际串行化边界，与 `apply_planned()` 和 publish 共用同一把锁，先注册 subscriber、生成并返回 full frame，然后才允许后续 mutation 进入该 subscriber；不能拆成“先 GET snapshot、再建立 attach”，否则中间 mutation 无法由连接顺序补回。旧连接先通过 AbortController、连接对象身份和 unsubscribe 关闭；该流程不发送 command、不创建新 Run、不触发 business resume；`onResume` 只用于用户明确要求继续业务执行的 resume service。
+新协议不再把恢复交给旧 `assistant-stream` decoder 的隐式累积行为。`TransportFrameStore` 是前端恢复 owner：收到 `resync_required` 或 SSE EOF 后，先停止应用当前连接的后续 frame，调用一次原子 attach/recovery API；该 API 使用当前 `ConversationTaskStateService._lock` 这一实际串行化边界，与 `apply_planned()` 和 publish 共用同一把锁，先注册 subscriber、生成并返回 full frame，然后才允许后续 mutation 进入该 subscriber；不能拆成“先 GET snapshot、再建立 attach”，否则中间 mutation 无法由连接顺序补回。旧连接先通过 AbortController、连接对象身份和 unsubscribe 关闭；该流程不发送 command、不创建新 Run、不触发 business resume；业务 resume 由现有 `useBusinessResume` 完成后再调用 attach 控制引用。
 
 后端 `assistant_api.py`/response serializer 必须把 snapshot read、attach 和 stream response 统一编码为新 frame envelope；attach/recovery 的 full frame 与 subscriber 注册必须由同一个 use-case 完成；恢复完成后由 FrameStore 原子地替换 连接状态、normalized state 和 projection indexes，再通知 Assistant UI runtime。恢复失败只进入可观测的 error state，不清除 canonical state，也不把订阅失败改写成 Run failure。
 
@@ -290,7 +269,7 @@ terminal full 必须进入 control lane，不能进入可丢弃的 mutation lane
 
 前端必须继续向 assistant-ui 提供消息数组，但正常 streaming 更新不能每帧重新构造整条历史的 projection。
 
-直接用 task-scoped 的 `TransportProjectionStore` 替换当前 `createTransportViewConverter()` 的全量扫描职责，仍然放在 `apps/desktop/lib/assistant/transport/`，不把 Assistant UI 类型泄漏到 backend/domain/storage。它消费新的 `SnapshotFrame` wire envelope，不再让 converter 从完整 state 猜出变化。
+直接用 task-scoped 的 `TransportFrameStore` 承担原 `createTransportViewConverter()` 的全量扫描职责，放在 `apps/desktop/lib/assistant/transport-frame-store.ts`，不把 Assistant UI 类型泄漏到 backend/domain/storage。它消费新的 `TransportFrame` wire envelope，不再让 converter 从完整 state 猜出变化。
 
 projection 的输入是明确的 frame：
 
@@ -298,9 +277,9 @@ projection 的输入是明确的 frame：
 applyFrame(frame: TransportFrame): ProjectionCommit
 ```
 
-`TransportProjectionStore` 维护 normalized transport state、当前连接 phase、稳定的 message index 和 pending overlay；`mutation` 直接按 mutation path 更新受影响的 run/message；`full` 重建基线；`resync_required` 进入 recovery 状态并阻止旧 frame 继续写入。这样 O(delta) 是由输入契约保证的，不依赖 structural-diff 猜测，也不需要保留旧 full converter。
+`TransportFrameStore` 维护 task-local state、稳定的 per-run message entries 和 pending overlay；`mutation` 直接按 mutation path 更新受影响的 run/message；`full` 重建基线；`resync_required` 进入 recovery 状态并阻止旧 frame 继续写入。消息数组仍按 external store 契约在每次提交时创建新的浅数组，但每帧只重新构造受影响 Run 的 message entry；不会为未触达消息重新执行 converter。
 
-Assistant UI 接入统一改为官方 `useExternalStoreRuntime`：FrameStore 暴露稳定的 `messages`、`isRunning` 和 `convertMessage`，并提供 `onNew`、`onEdit`、`onReload`、`onCancel`、`onResume`、`onRefetchThread` 这些明确能力。FrameStore 内部通过 `useSyncExternalStore`/项目现有 store 订阅只发布受影响的消息对象；不再让 `useAssistantTransportRuntime` 直接消费旧 `set`/`append-text` 协议。`onResume` 只调用 business resume；attach-only recovery 是 FrameStore 的内部动作；`onRefetchThread` 只重读 canonical snapshot。Workbench 的 readonly surface 在挂载时由 FrameStore 直接执行 attach-only atomic recovery，不调用 `aui.thread.resumeRun`/`onResume`；它使用同一 FrameStore/decoder，但不注册写入 handler，按 Assistant UI 的 capability 规则保持只读。
+Assistant UI 接入统一改为官方 `useExternalStoreRuntime`：FrameStore 暴露稳定的 `messages`、`isRunning` 和 `convertMessage`，普通 runtime 注册 `onNew`、`onEdit`、`onCancel`、`onRefetchThread`，未实现的 `onReload`/`onResume` 不注册，因此对应 capability 保持关闭。FrameStore 内部通过 `useSyncExternalStore` 订阅并在 commit callback 更新 lifecycle ref；不再让 `useAssistantTransportRuntime` 直接消费旧 `set`/`append-text` 协议。业务 resume 由现有 `useBusinessResume` 调用 business POST 后，再由 attach 控制引用建立只读订阅；attach-only recovery 是 FrameStore 的内部动作。Workbench 的 readonly surface 在挂载时由同一 FrameStore 直接执行 attach-only atomic recovery，不调用 `aui.thread.resumeRun`/`onResume`，也不注册写入 handler。
 
 handler 边界固定为：
 
@@ -308,9 +287,9 @@ handler 边界固定为：
 | --- | --- | --- |
 | `onNew` | 创建幂等 command、建立或复用当前 Run 的 attach、把 canonical frame 交给 FrameStore | 不把本地 pending 直接当成 Run 已创建 |
 | `onEdit` | 提交 edit command，按 parent message 重建可见分支并等待 canonical frame | 不把草稿写入 Transport snapshot |
-| `onReload` | 触发明确的重新生成用例，重新 attach 其 Run | 不把 attach-only recovery 当重新生成 |
+| `onReload` | 当前不注册，重新生成入口尚未纳入本次改造 | 不把 attach-only recovery 当重新生成 |
 | `onCancel` | 提交 cancel command，保留 cancelling 状态直到 canonical Run status 收敛 | 不本地伪造 `cancelled` |
-| `onResume` | 只调用 business resume service | 不用来修复断开的 SSE |
+| `onResume` | 当前不注册；business resume 由现有 resume service 负责 | 不用来修复断开的 SSE |
 | `onRefetchThread` | 调用原子 attach/recovery，full replace FrameStore | 不发送 command、不创建 Run |
 
 官方 `queue` 只用于“Run 进行中用户继续发送”的 composer queue；`pendingByCommandId` 只用于 command 幂等/回显关联，不再自研第二套消息队列。Workbench readonly 不注册这些写入 handler。
@@ -322,13 +301,13 @@ External Store 不支持的可选能力（例如 `onDelete`、工具审批或其
 只维护一层项目级 FrameStore，不重复维护 Assistant UI 的 `ThreadMessage` 转换缓存：
 
 ```text
-FrameStore:
-  session: { taskId, connectionState }
-  runsById: Map<runId, StableRun>
-  messagesById: Map<messageId, StableTransportMessage>
-  orderedMessageIds: readonly string[]
-  pendingByCommandId: Map<commandId, PendingMessage>
-  recovery: "ready" | "resyncing" | "error"
+TransportFrameStore:
+  state: TransportState
+  runItems: FrameStoreItem[][]
+  items: readonly FrameStoreItem[]
+  pendingCommands: readonly UserAddMessageCommand[]
+  targetRunStatus: string | null
+  resyncRequired: boolean
 ```
 
 `StableTransportMessage` 只在对应 mutation 触达时替换引用；未触达消息继续复用。FrameStore 输出给 `useExternalStoreRuntime` 的 `messages` 数组在 membership 变化或内容更新时都创建新的浅数组，内容更新只替换受影响的 message 引用；不能原地修改数组。项目提供稳定的 per-message `convertMessage`，或使用官方 `useExternalMessageConverter`，负责把 transport message 转成包含 tool/error/render context 的 `ThreadMessageLike`。Assistant UI 负责 runtime/list primitive 的消费和 lazy accessor；项目不再维护 `runCache`、`messageCache`、`flatViewCache` 三套等价缓存。
@@ -390,7 +369,7 @@ projection 先识别 update 类别：
 
 第二阶段必须同时重构这些组件：
 
-- `TransportStateCommitBridge` 当前订阅 `runtimeState.thread.state`，这是一个每帧变化的宽 state；它必须替换为 FrameStore 的窄 lifecycle subscription 或 commit callback，不能继续依赖完整 state 触发 React bridge。
+- 当前 `TransportStateCommitBridge` 已删除；FrameStore 的 commit callback 直接更新 lifecycle ref，不能再依赖 Assistant UI 的宽 `runtimeState.thread.state` 触发 React bridge。
 - lifecycle ref 由 FrameStore commit 直接更新；React 只订阅 UI 真正需要的 `isRunning`、当前 run、cancel settling 和 recovery error 等稳定字段。
 - 不使用 Assistant UI 未公开的内部 store API；通过官方 `useExternalStoreRuntime` 和项目自己的 external store 完成连接。
 - `ToolTraceGroup` 的 selector 应保持返回稳定 primitive；不要改成每次返回新数组或对象。
@@ -421,7 +400,7 @@ projection 先识别 update 类别：
 - snapshot error 的添加/清除不影响 canonical message 对象；
 - pending command identity 和 canonical message 不互相污染；
 - full recovery 后缓存不会跨 task 或跨 runtime session 复用；
-- `onNew/onEdit/onReload/onCancel/onResume/onRefetchThread` 分别映射到正确 command、cancel、business resume 或 snapshot read；attach-only recovery 不重复发 command；
+- `onNew/onEdit/onCancel/onRefetchThread` 分别映射到正确 command、cancel 或原子 attach/full recovery；无 active Run 时 `onRefetchThread` 才读取 idle full snapshot；未注册的 `onReload`/`onResume` 保持 capability 关闭，attach-only recovery 不重复发 command；
 - Workbench readonly runtime 不注册写入 handler，且与普通 Thread 共用同一 FrameStore decoder。
 
 ## 7. 第三阶段：消息虚拟化
@@ -480,8 +459,8 @@ apps/desktop/components/assistant-ui/thread/
 - `ThreadPrimitive.Unstable_MessageById` 以 `{ messageId, components: MESSAGE_COMPONENTS }` 渲染可见消息；
 - `@tanstack/react-virtual` 管理可见 rows 和测量；
 - `virtualizer.measureElement` 测量动态高度；
-- padding top/bottom 表示未挂载区域；
-- 按官方示例使用 spacer 的 `paddingTop/paddingBottom`，让 row/message 本体保持普通 document flow；不要先假设 TanStack 默认 absolute-row 示例可以直接套用。若 POC 证明当前动态高度必须使用其他布局，只能把定位限制在 virtualizer wrapper，并记录其对 sticky、top-anchor 和测量的影响。
+- virtualizer wrapper 的总高度与绝对定位 row 表示未挂载区域；
+- 当前实现把定位限制在 virtualizer wrapper，并使用 `measureElement` 重测动态高度；如果后续 top-anchor 或 sticky footer 的实测滚动修正不稳定，再切换为 spacer 的 `paddingTop/paddingBottom` 布局，而不是扩散定位逻辑。
 
 官方 API 是 experimental，因此所有调用必须集中在 `virtualized-thread-viewport.aui.tsx`，未来升级 Assistant UI 时只需要修改这一层。
 
@@ -640,24 +619,24 @@ POC 还必须验证 sticky `ViewportFooter` 与 top/bottom spacer 的关系、�
 范围：
 
 - `apps/desktop/lib/assistant/transport/` 下的新 frame decoder、projection store、Assistant UI runtime bridge
-- `apps/desktop/lib/assistant/converter.ts` 中重复的 `toTransportThreadView()` projection
+- 已删除的 `apps/desktop/lib/assistant/converter.ts` 中旧 `toTransportThreadView()` projection
 - `apps/desktop/lib/assistant/use-task-assistant-transport-runtime.ts`
 - `apps/desktop/components/workbench-agent-run-surface.tsx` 的 readonly/transport 入口
 - `apps/desktop/components/assistant/runtime/` 的 commit bridge 性能收敛
 - backend connection 变化时的 projection cache 清理
 - projection 单元测试
 
-交付判定：旧 `transport-view-converter.ts` 和 `converter.ts` 的全量扫描职责被删除；`useRuntimeTransport()` 与 Workbench readonly 入口都接入同一 FrameStore/runtime bridge；连续 append 的 projection 重建数量与 delta 成正比；full frame 只作为基线/recovery 输入；宽 `TransportStateCommitBridge` 不再订阅每帧完整 state。
+交付判定：`useRuntimeTransport()` 与 Workbench readonly 入口都接入同一 `TransportFrameStore`/external runtime；连续 append 只重建受影响 Run 的 projection entry，full frame 只作为基线/recovery 输入；FrameStore commit callback 不依赖每帧完整 AUI state。
 
-### PR 3：独立 virtualized viewport
+### PR 3：独立 virtualized viewport（核心代码已落地）
 
 范围：
 
-- 新的 `components/assistant-ui/thread/` UI 目录
+- `components/assistant-ui/elements/thread.aui.tsx` 与 `readonly-thread.aui.tsx` 的共享消息 viewport 适配层
 - `@tanstack/react-virtual`
-- Playwright 长对话 fixture 和滚动回归测试
+- Playwright 长对话 fixture 和滚动回归测试（待补齐）
 
-交付判定：根据真实 message count 和 profile 结果选择 standard viewport 或 virtualized viewport；这是一项明确的 presentation policy，不是旧实现 fallback。两种 policy 必须共享同一套 message/tool/composer 组件和 projection state。
+交付判定：普通 Thread 与 Workbench readonly 均通过公开的 message-id/MessageById API 和 `@tanstack/react-virtual` 渲染可见 rows；runtime、消息组件、工具组件和 projection state 保持共享。长对话滚动与测量回归仍需 E2E fixture 完成后关闭该验收项。
 
 ### PR 4：按实测结果清理与固化
 

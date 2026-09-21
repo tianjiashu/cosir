@@ -47,18 +47,6 @@ wheels = [
 ]
 
 [[package]]
-name = "assistant-stream"
-version = "0.0.36"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "starlette" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6f/f8/2b3a7a6c1046d51af9207cd2754090819746693df3a2bf653966248abb7b/assistant_stream-0.0.36.tar.gz", hash = "sha256:87e0878d141f34121bd21386da80dcb7ae296b160c95cf53129fc1a413caa597", size = 133076, upload-time = "2026-08-04T21:32:56.925Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/a1/e82228bf44a41d96b624c060ba78a34d936ef33a53c10e5f5ffbfd06d37e/assistant_stream-0.0.36-py3-none-any.whl", hash = "sha256:efb3a0925414f3b85d02c97dfddf585140a85f409f2be05dd78c8d52fca37cd5", size = 38076, upload-time = "2026-08-04T21:32:55.557Z" },
-]
-
-[[package]]
 name = "attrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -185,7 +173,6 @@ name = "coding-agent-backend"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "assistant-stream" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "jsonschema" },
@@ -229,7 +216,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "assistant-stream", specifier = "==0.0.36" },
     { name = "fastapi", specifier = "==0.115.6" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "jsonschema", specifier = "==4.23.0" },

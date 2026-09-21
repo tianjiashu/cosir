@@ -44,7 +44,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     empty_snapshot,
     validate_snapshot,
 )
-from app.assistant_transport.stream import SnapshotChange
+from app.assistant_transport.stream import TransportFrame
 from app.core.tools.schemas import ToolCall, ToolExecutionContext, ToolObservation
 from app.core.tools.tool_execute import tool_terminal_projection as projection_module
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
@@ -77,13 +77,18 @@ class _MemorySnapshotOwner:
     def get_state(self, _task_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
 
-    def apply_planned(self, event: Any) -> SnapshotChange:
+    def apply_planned(self, event: Any) -> TransportFrame:
         mutations = tuple(event.plan(copy.deepcopy(self.state)))
         for mutation in mutations:
             _apply_mutation(self.state, mutation)
         validate_snapshot(self.state)
         self.applied.append(event)
-        return SnapshotChange(event.task_id, copy.deepcopy(self.state), mutations)
+        return TransportFrame(
+            task_id=event.task_id,
+            kind="mutation",
+            mutations=mutations,
+            source_run_id=getattr(event, "run_id", None),
+        )
 
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:
@@ -111,7 +116,7 @@ class _RecordingProjector:
         self._fail = fail
         self._owner = state_service
 
-    def process(self, raw_event: object) -> SnapshotChange | None:
+    def process(self, raw_event: object) -> TransportFrame | None:
         self.events.append(raw_event)
         if self._fail:
             raise RuntimeError("projector exploded")

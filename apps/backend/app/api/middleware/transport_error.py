@@ -13,7 +13,7 @@ def install_transport_request_error_handler(app: FastAPI) -> None:
     转换为与 ``assistant_api._raise_transport_error`` 完全相同的
     ``{error:{code,message,retryable}}`` 形状，使前端 HTTP 错误契约
     （``lib/http/errors.ts`` 的 ``StructuredHttpError``）零改动；同时复用
-    自定义 ``status_code``，不会退化成 Pydantic 422（422 会破坏前端 ``assistant-stream``
+    自定义 ``status_code``，不会退化成 Pydantic 422（422 会破坏前端 frame transport
     客户端的结构化错误解析）。
 
     参数:

@@ -300,8 +300,31 @@ function jsonResponse(res, status, value) {
   res.end(JSON.stringify(value));
 }
 
-function assistantFrame(operations) {
-  return { type: "update-state", operations };
+function assistantFrame(operations, targetRunId, targetRunStatus = null, taskId = TASK_ID) {
+  const rootOperation = operations.find((operation) => operation.path.length === 0);
+  if (rootOperation) {
+    const state = rootOperation.value;
+    const resolvedRunId = targetRunId ?? state.current_run_id;
+    const resolvedStatus = targetRunStatus
+      ?? state.runs.find((run) => run.runId === resolvedRunId)?.status
+      ?? null;
+    return {
+      task_id: taskId,
+      kind: "full",
+      mutations: [],
+      state,
+      target_run_id: resolvedRunId,
+      target_run_status: resolvedStatus,
+    };
+  }
+  return {
+    task_id: taskId,
+    kind: "mutation",
+    mutations: operations.map(({ type, ...operation }) => ({ kind: type, ...operation })),
+    source_run_id: targetRunId,
+    target_run_id: targetRunId,
+    target_run_status: targetRunStatus,
+  };
 }
 
 function writeSse(res, chunk) {
@@ -337,7 +360,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     if (generation === testGeneration && !res.writableEnded) telemetry.clientCancelCount += 1;
   });
 
-  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }]));
+  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }], runId, "running"));
   await wait(120);
   if (generation !== testGeneration) {
     res.end();
@@ -353,8 +376,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     cancelledState.runs[runIndex].endReason = "user_cancelled";
     writeSse(res, assistantFrame([
       { type: "set", path: ["runs", runIndex], value: cancelledState.runs[runIndex] },
-    ]));
-    writeSse(res, { type: "message-finish", finishReason: "cancelled" });
+    ], runId, "cancelled"));
     lastStreamBody += "data: [DONE]\n\n";
     res.write("data: [DONE]\n\n");
     res.end();
@@ -376,8 +398,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
       cancelledState.runs[runIndex].endReason = "user_cancelled";
       writeSse(res, assistantFrame([
         { type: "set", path: ["runs", runIndex], value: cancelledState.runs[runIndex] },
-      ]));
-      writeSse(res, { type: "message-finish", finishReason: "cancelled" });
+      ], runId, "cancelled"));
       lastStreamBody += "data: [DONE]\n\n";
       res.write("data: [DONE]\n\n");
       res.end();
@@ -397,7 +418,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
           path: ["runs", runIndex, "messages", assistantIndex, "parts", 1, "text"],
           value: chunk,
         },
-      ]),
+      ], runId, "running"),
     );
     await wait(420);
   }
@@ -410,9 +431,8 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     res,
     assistantFrame([
       { type: "set", path: ["runs", runIndex], value: finalState.runs[runIndex] },
-    ]),
+    ], runId, finalState.runs[runIndex].status),
   );
-  writeSse(res, { type: "message-finish", finishReason: "stop" });
   lastStreamBody += "data: [DONE]\n\n";
   res.write("data: [DONE]\n\n");
   res.end();
@@ -434,23 +454,19 @@ async function streamToolLifecycle(res, initialState, finalState, runId, generat
     Connection: "keep-alive",
     "Content-Type": "text/event-stream; charset=utf-8",
   });
-  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }]));
+  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }], runId, "running"));
   await wait(250);
   if (generation !== testGeneration) {
     res.end();
     return;
   }
-  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0, "messages", 1, "parts", 0, "status"], value: "running" }]));
+  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0, "messages", 1, "parts", 0, "status"], value: "running" }], runId, "running"));
   await wait(250);
   if (generation !== testGeneration) {
     res.end();
     return;
   }
-  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0], value: finalState.runs[0] }]));
-  writeSse(res, {
-    type: "message-finish",
-    finishReason: finalState.runs[0].status === "cancelled" ? "cancelled" : finalState.runs[0].status === "failed" ? "error" : "stop",
-  });
+  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0], value: finalState.runs[0] }], runId, finalState.runs[0].status));
   lastStreamBody += "data: [DONE]\n\n";
   res.write("data: [DONE]\n\n");
   res.end();

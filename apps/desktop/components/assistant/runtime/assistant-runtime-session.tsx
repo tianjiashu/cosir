@@ -9,7 +9,6 @@ import {
   RuntimeControlBridge,
   RuntimeRenderDiagnostics,
   TaskStateBridge,
-  TransportStateCommitBridge,
 } from "@/components/assistant/runtime/assistant-runtime-bridges";
 import { useRuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
 import { useRuntimeDiagnostics } from "@/components/assistant/runtime/use-runtime-diagnostics";
@@ -64,6 +63,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const sessionInitialState = initialStateRef.current;
   const latestStateRef = useRef(sessionInitialState);
   const runtimeControlsRef = useRef<RuntimeControls | null>(null);
+  const attachTransportRef = useRef<(() => Promise<void>) | null>(null);
   const cancelRequestedRunIdRef = useRef<number | null>(null);
   const lastTransportErrorRef = useRef<TransportIssue | null>(null);
   const composerRestoreRef = useRef<ComposerRestore | null>(null);
@@ -97,6 +97,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     onTaskStateChanged: notifyTaskStateChanged,
     latestStateRef,
     runtimeControlsRef,
+    attachTransportRef,
     cancelRequestedRunIdRef,
     lastTransportErrorRef,
     composerRestoreRef,
@@ -129,7 +130,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     latestStateRef.current = state;
     cancellation.onStateCommitted(state);
   }, [cancellation.onStateCommitted, sessionInitialState]);
-  const runtime = useRuntimeTransport(context, recovery);
+  const runtime = useRuntimeTransport(context, recovery, commitTransportState);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -139,8 +140,8 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
         backendGeneration={backendRuntimeGeneration}
         resumeOnMount={currentTransportRun(sessionInitialState)?.status === "pending" || currentTransportRun(sessionInitialState)?.status === "running"}
         taskId={taskId}
+        attachTransportRef={attachTransportRef}
       />
-      <TransportStateCommitBridge initialState={sessionInitialState} onCommit={commitTransportState} />
       <ComposerRestoreBridge register={registerComposerRestore} />
       <TaskStateBridge onRunStateChange={onRunStateChange} />
       <RuntimeRenderDiagnostics taskId={taskId} />

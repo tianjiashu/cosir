@@ -7,16 +7,21 @@ import {
   transportMessageCount,
 } from "@/lib/assistant/transport-state-operations";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import type { TransportState } from "@/lib/assistant/contract";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 
 export type RuntimeRecovery = {
-  reconcileAfterTransportFinish: () => Promise<void>;
+  reconcileAfterTransportFinish: (target?: { runId: number | null; status: string | null }) => Promise<void>;
   resetTransportRecoveryBudget: () => void;
 };
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAYS_MS = [0, 250, 500, 1_000, 2_000] as const;
 const RECONCILE_TIMEOUT_MS = 15_000;
+
+function findRun(state: TransportState, runId: number | null) {
+  return runId === null ? undefined : state.runs.find((run) => run.runId === runId);
+}
 
 /** Own backend changes and bounded Transport snapshot recovery orchestration. */
 export function useRuntimeRecovery(
@@ -61,7 +66,9 @@ export function useRuntimeRecovery(
     };
   }, []);
 
-  const reconcileAfterTransportFinish = useCallback(async () => {
+  const reconcileAfterTransportFinish = useCallback(async (
+    target?: { runId: number | null; status: string | null },
+  ) => {
     if (hasActiveCancellation?.()) return;
     if (
       disposedRef.current
@@ -81,7 +88,7 @@ export function useRuntimeRecovery(
     const { controller, signal, clear } = createTimeoutAbort(RECONCILE_TIMEOUT_MS);
     reconcileAbortControllerRef.current = controller;
     try {
-      void frontendLog("INFO", "assistant_transport_reconcile_started", "Assistant Transport 流结束后读取最新快照", {
+      void frontendLog("INFO", "assistant_transport_reconcile_started", "Assistant Transport 流结束后开始有界恢复", {
         traceId: context.traceId,
         data: {
           taskId: context.taskId,
@@ -90,6 +97,39 @@ export function useRuntimeRecovery(
           attempt: attempt + 1,
         },
       });
+
+      const knownRun = target?.runId === null || target?.runId === undefined
+        ? currentTransportRun(context.latestStateRef.current)
+        : findRun(context.latestStateRef.current, target.runId);
+      const knownStatus = target?.status ?? knownRun?.status ?? null;
+      if (knownRun && (knownStatus === "pending" || knownStatus === "running")) {
+        const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 2_000;
+        const scheduledRunId = target?.runId ?? knownRun.runId;
+        const scheduledGeneration = recoveryGenerationRef.current;
+        const scheduledBackendGeneration = backendRuntimeGenerationRef.current;
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null;
+          if (
+            disposedRef.current
+            || !backendRuntimeAvailableRef.current
+            || scheduledGeneration !== recoveryGenerationRef.current
+            || scheduledBackendGeneration !== backendRuntimeGenerationRef.current
+            || context.cancelRequestedRunIdRef.current === scheduledRunId
+          ) return;
+          const latestRun = findRun(context.latestStateRef.current, scheduledRunId);
+          if (
+            !latestRun
+            || latestRun.runId !== scheduledRunId
+            || (latestRun.status !== "pending" && latestRun.status !== "running")
+          ) return;
+          void context.attachTransportRef.current?.();
+        }, delay);
+        void frontendLog("INFO", "assistant_transport_reconcile_attach_scheduled", "已安排原子 attach 恢复流", {
+          traceId: context.traceId,
+          data: { taskId: context.taskId, runId: scheduledRunId, delay, attempt: attempt + 1 },
+        });
+        return;
+      }
 
       const snapshot = await requestAssistantSnapshot(context.taskId, {
         signal,

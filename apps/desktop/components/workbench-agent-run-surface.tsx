@@ -1,10 +1,10 @@
 "use client";
 
-import { AssistantRuntimeProvider, useAui, useAuiState, useAssistantTransportRuntime } from "@assistant-ui/react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { AssistantRuntimeProvider, useAuiState } from "@assistant-ui/react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import { ReadonlyThread } from "@/components/assistant-ui/elements/readonly-thread.aui";
 import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
-import { createTransportViewConverter } from "@/lib/assistant/transport-view-converter";
+import { useTaskAssistantTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
 import type { TransportState } from "@/lib/assistant/contract";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
@@ -14,44 +14,33 @@ import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtim
 const MAX_AUTOMATIC_RESYNCS = 2;
 const RESYNC_DELAYS_MS = [300, 900];
 
-function AttachBridge({ runId, backendAvailable, backendGeneration }: { runId: number | null; backendAvailable: boolean; backendGeneration: number }) {
-  const aui = useAui();
-  const backendAvailableRef = useRef(backendAvailable);
-  const backendGenerationRef = useRef(backendGeneration);
-  backendAvailableRef.current = backendAvailable;
-  backendGenerationRef.current = backendGeneration;
+function AttachBridge({ runId, backendAvailable, attachRef }: { runId: number | null; backendAvailable: boolean; attachRef: MutableRefObject<(() => Promise<void>) | null> }) {
   useEffect(() => {
     if (runId === null || !backendAvailable) return;
     let cancelled = false;
-    const scheduledBackendGeneration = backendGeneration;
     const timer = window.setTimeout(() => {
-      if (
-        cancelled
-        || !backendAvailableRef.current
-        || backendGenerationRef.current !== scheduledBackendGeneration
-      ) return;
+      if (cancelled) return;
       void frontendLog("INFO", "workbench_agent_attach", "Workbench 子 Agent 开始只读订阅", { data: { runId } });
-      aui.thread.resumeRun({ parentId: null });
+      void attachRef.current?.();
     }, 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [aui, backendAvailable, backendGeneration, runId]);
+  }, [attachRef, backendAvailable, runId]);
   return null;
 }
 
 function AgentRunTransport({ taskId, initialState, onError }: { taskId: number; initialState: TransportState; onError: (error: unknown) => void }) {
   const backendRuntime = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
   const [traceId] = useState(() => getActiveTraceId() ?? newTraceId());
-  const converter = useMemo(() => createTransportViewConverter(), []);
+  const attachRef = useRef<(() => Promise<void>) | null>(null);
   const runId = initialState.current_run_id;
   const currentRun = initialState.runs.find((run) => run.runId === runId);
   const shouldAttach = currentRun?.status === "pending" || currentRun?.status === "running";
-  const runtime = useAssistantTransportRuntime<TransportState>({
+  const runtime = useTaskAssistantTransportRuntime(taskId, {
     initialState,
-    protocol: "assistant-transport",
-    capabilities: {},
+    readonly: true,
     api: `${backendRuntime.backendBaseUrl}/assistant`,
     resumeApi: `${backendRuntime.backendBaseUrl}/tasks/${taskId}/assistant/attach`,
     headers: async () => ({
@@ -60,15 +49,15 @@ function AgentRunTransport({ taskId, initialState, onError }: { taskId: number; 
       "X-Trace-Id": traceId,
     }),
     body: async () => ({ taskId, threadId: `task-${taskId}`, runId }),
-    converter,
     onError: async (error) => onError(error),
+    attachRef,
   });
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <AttachBridge
         runId={shouldAttach ? runId : null}
         backendAvailable={backendRuntime.available}
-        backendGeneration={backendRuntime.generation}
+        attachRef={attachRef}
       />
       <AgentReadonlyMessages taskId={taskId} />
     </AssistantRuntimeProvider>

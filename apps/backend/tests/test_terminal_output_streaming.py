@@ -34,7 +34,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     empty_snapshot,
     validate_snapshot,
 )
-from app.assistant_transport.stream import SnapshotChange
+from app.assistant_transport.stream import TransportFrame
 from app.config.settings import Settings
 from app.core.observability.tool_trace_recorder import _NullToolTraceRecorder
 from app.core.tools.display.terminal_display import build_terminal_display_data
@@ -547,7 +547,7 @@ class _MemorySnapshotOwner:
     def get_state(self, _task_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
 
-    def apply_planned(self, event: Any) -> SnapshotChange:
+    def apply_planned(self, event: Any) -> TransportFrame:
         mutations = tuple(event.plan(copy.deepcopy(self.state)))
         for mutation in mutations:
             parent: Any = self.state
@@ -565,4 +565,9 @@ class _MemorySnapshotOwner:
             else:
                 parent[key] = copy.deepcopy(mutation.value)
         validate_snapshot(self.state)
-        return SnapshotChange(event.task_id, copy.deepcopy(self.state), mutations)
+        return TransportFrame(
+            task_id=event.task_id,
+            kind="mutation",
+            mutations=mutations,
+            source_run_id=getattr(event, "run_id", None),
+        )

@@ -40,7 +40,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     empty_snapshot,
     validate_snapshot,
 )
-from app.assistant_transport.stream import SnapshotChange
+from app.assistant_transport.stream import TransportFrame
 from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.tools.schemas import (
     ToolCall,
@@ -133,7 +133,7 @@ class _TimelineProjector:
         self._inner = inner
         self.events: list[Any] = []
 
-    def process(self, raw_event: Any) -> SnapshotChange | None:
+    def process(self, raw_event: Any) -> TransportFrame | None:
         self._timeline.record("projector.process")
         self.events.append(raw_event)
         return self._inner.process(raw_event)
@@ -150,7 +150,7 @@ class _MemorySnapshotOwner:
 
         return copy.deepcopy(self.state)
 
-    def apply_planned(self, event: Any) -> SnapshotChange:
+    def apply_planned(self, event: Any) -> TransportFrame:
         import copy
 
         mutations = tuple(event.plan(copy.deepcopy(self.state)))
@@ -170,7 +170,12 @@ class _MemorySnapshotOwner:
             else:
                 parent[key] = copy.deepcopy(mutation.value)
         validate_snapshot(self.state)
-        return SnapshotChange(event.task_id, copy.deepcopy(self.state), mutations)
+        return TransportFrame(
+            task_id=event.task_id,
+            kind="mutation",
+            mutations=mutations,
+            source_run_id=getattr(event, "run_id", None),
+        )
 
 
 def _instrument_real_calls(monkeypatch: pytest.MonkeyPatch, timeline: _Timeline) -> None:

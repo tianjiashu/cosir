@@ -14,16 +14,12 @@ from app.assistant_transport.assistant_api import (
 )
 from app.assistant_transport.request import AddMessageCommand, AssistantAttachRequest
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
-from app.assistant_transport.service import transport_assistant_service as transport_module
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandService,
 )
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
     _build_ordered_display_text,
-)
-from app.assistant_transport.service.transport_stream_service import (
-    AssistantTransportStreamService,
 )
 from app.service.task.conversation_run_service import ConversationRunService
 
@@ -219,7 +215,6 @@ def test_attach_route_is_separate_from_business_resume() -> None:
 
 @pytest.mark.asyncio
 async def test_attach_run_only_subscribes_existing_executor(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = _snapshot(7, "running")
 
@@ -231,22 +226,19 @@ async def test_attach_run_only_subscribes_existing_executor(
         def get_state(self, _task_id: int) -> dict[str, object]:
             return state
 
-    class _Response:
-        def __init__(self, value: object) -> None:
-            self.value = value
-            self.headers: dict[str, str] = {}
-
     service = TransportAssistantService.__new__(TransportAssistantService)
     service._runs = _RunService()
     service._snapshots = _SnapshotService()
-    service._stream = SimpleNamespace(subscribe_run_state=lambda *_args: None)  # type: ignore[attr-defined]
-    monkeypatch.setattr(transport_module, "create_run", lambda _callback, state: state)
-    monkeypatch.setattr(transport_module, "AssistantTransportResponse", _Response)
+    async def _stream_envelopes(*_args: object, **_kwargs: object):
+        yield "data: {}\n\n"
+
+    service._stream = SimpleNamespace(stream_envelopes=_stream_envelopes)
 
     result = await service.attach_run(task_id=1, thread_id="task-1", run_id=7)
 
-    assert result.value == state
-    assert result.headers == {"X-Cosir-Task-Id": "1", "X-Cosir-Thread-Id": "task-1"}
+    assert result.media_type == "text/event-stream"
+    assert result.headers["X-Cosir-Task-Id"] == "1"
+    assert result.headers["X-Cosir-Thread-Id"] == "task-1"
 
 
 @pytest.mark.asyncio
@@ -385,66 +377,6 @@ async def test_state_endpoint_returns_nested_run_snapshot() -> None:
         "context_window_total",
         "error",
     }
-
-
-@pytest.mark.asyncio
-async def test_sse_callback_logs_and_returns_on_normal_completion(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    async def _noop_stream(*_args, **_kwargs):
-        return
-        yield  # pragma: no cover
-
-    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    service._runs = SimpleNamespace(get_run=lambda _id: SimpleNamespace(task_id=1))
-    service._snapshots = SimpleNamespace(get_state=lambda _t: _snapshot(7, "completed"))
-    service.run_executor = SimpleNamespace(status=lambda *_a: None)
-    service.stream = _noop_stream
-
-    with caplog.at_level("INFO"):
-        await service.subscribe_run_state(object(), 1, 7)
-
-    events = {record.message for record in caplog.records}
-    assert "assistant_sse_callback_started" in events
-    assert "assistant_sse_callback_finished" in events
-
-
-@pytest.mark.asyncio
-async def test_sse_callback_logs_and_propagates_cancellation(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    async def _cancelling_stream(*_args, **_kwargs):
-        raise asyncio.CancelledError()
-        yield  # pragma: no cover
-
-    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    service._runs = SimpleNamespace(get_run=lambda _id: SimpleNamespace(task_id=1))
-    service._snapshots = SimpleNamespace(get_state=lambda _t: _snapshot(7, "completed"))
-    service.run_executor = SimpleNamespace(status=lambda *_a: None)
-    service.stream = _cancelling_stream
-
-    with caplog.at_level("WARNING"), pytest.raises(asyncio.CancelledError):
-        await service.subscribe_run_state(object(), 1, 12)
-
-    assert "assistant_sse_callback_cancelled" in {record.message for record in caplog.records}
-
-
-@pytest.mark.asyncio
-async def test_sse_callback_logs_and_propagates_failures(caplog: pytest.LogCaptureFixture) -> None:
-    async def _failing_stream(*_args, **_kwargs):
-        raise RuntimeError("stream failed")
-        yield  # pragma: no cover
-
-    service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    service._runs = SimpleNamespace(get_run=lambda _id: SimpleNamespace(task_id=1))
-    service._snapshots = SimpleNamespace(get_state=lambda _t: _snapshot(7, "completed"))
-    service.run_executor = SimpleNamespace(status=lambda *_a: None)
-    service.stream = _failing_stream
-
-    with caplog.at_level("ERROR"), pytest.raises(RuntimeError, match="stream failed"):
-        await service.subscribe_run_state(object(), 1, 13)
-
-    assert "assistant_sse_callback_failed" in {record.message for record in caplog.records}
 
 
 @pytest.mark.asyncio

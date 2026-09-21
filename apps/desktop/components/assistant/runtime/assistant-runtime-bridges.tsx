@@ -1,14 +1,10 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
 import type { CreateAttachment } from "@assistant-ui/core";
-import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
+import { useEffect, useRef, type MutableRefObject } from "react";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
-import {
-  currentTransportRun,
-  isTransportState,
-  transportMessageCount,
-} from "@/lib/assistant/transport-state-operations";
+import { currentTransportRun, transportMessageCount } from "@/lib/assistant/transport-state-operations";
 import type {
   AssistantRuntimeProps,
   ComposerRestore,
@@ -28,30 +24,6 @@ import {
   isCurrentEditComposerOperation,
   setPendingEditComposerDraft,
 } from "@/lib/assistant/edit-composer-draft";
-
-type TransportStateCommitBridgeProps = {
-  initialState: TransportState;
-  onCommit: (state: TransportState) => void;
-};
-
-export function TransportStateCommitBridge({
-  initialState,
-  onCommit,
-}: TransportStateCommitBridgeProps) {
-  const state = useAuiState((runtimeState) => runtimeState.thread.state);
-  const lastValidStateRef = useRef(initialState);
-
-  useLayoutEffect(() => {
-    if (isTransportState(state)) {
-      lastValidStateRef.current = state;
-      onCommit(state);
-      return;
-    }
-    onCommit(lastValidStateRef.current);
-  }, [initialState, onCommit, state]);
-
-  return null;
-}
 
 export function TaskStateBridge({
   onRunStateChange,
@@ -109,12 +81,14 @@ export function RuntimeControlBridge({
   backendGeneration,
   resumeOnMount,
   taskId,
+  attachTransportRef,
 }: {
   register: (controls: RuntimeControls | null) => void;
   backendAvailable: boolean;
   backendGeneration: number;
   resumeOnMount: boolean;
   taskId: number;
+  attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;
 }) {
   const aui = useAui();
   const remoteThreadId = useAuiState((state) => state.threadListItem.remoteId);
@@ -127,12 +101,12 @@ export function RuntimeControlBridge({
   useEffect(() => {
     register({
       resume: () => {
-        if (backendAvailableRef.current) aui.thread.resumeRun({ parentId: null });
+        if (backendAvailableRef.current) void attachTransportRef.current?.();
       },
       importState: (state) => aui.thread.importExternalState(state),
     });
     return () => register(null);
-  }, [aui, register]);
+  }, [attachTransportRef, aui, register]);
 
   useEffect(() => {
     if (!backendAvailable || !resumeOnMount || initialResumeIssuedRef.current || remoteThreadId !== `task-${taskId}`) return;
@@ -146,13 +120,13 @@ export function RuntimeControlBridge({
         || initialResumeIssuedRef.current
       ) return;
       initialResumeIssuedRef.current = true;
-      void aui.thread.resumeRun({ parentId: null });
+      void attachTransportRef.current?.();
     }, 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [aui, backendAvailable, backendGeneration, remoteThreadId, resumeOnMount, taskId]);
+  }, [attachTransportRef, backendAvailable, backendGeneration, remoteThreadId, resumeOnMount, taskId]);
 
   return null;
 }

@@ -1,9 +1,11 @@
 "use client";
 
 import { MessagePrimitive, ReadonlyThreadProvider, ThreadPrimitive, useAuiState, type ThreadMessage } from "@assistant-ui/react";
+import { useMemo, useRef } from "react";
 import { MarkdownText } from "@/components/markdown-text";
 import { Reasoning } from "@/components/assistant-ui/elements/reasoning.aui";
 import { ToolPart } from "@/components/assistant-ui/tools/tool-part";
+import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/virtualized-thread-messages";
 
 function ReadonlyMessage({ taskId }: { taskId?: number }) {
   const role = useAuiState((state) => state.message.role);
@@ -32,14 +34,20 @@ function ReadonlyMessage({ taskId }: { taskId?: number }) {
 
 /** Render transport messages with assistant-ui's readonly runtime provider. */
 export function ReadonlyThread({ messages, taskId }: { messages: readonly ThreadMessage[]; taskId?: number }) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const messageComponents = useMemo(() => ({ Message: () => <ReadonlyMessage taskId={taskId} /> }), [taskId]);
   return (
     <ReadonlyThreadProvider messages={messages}>
       <ThreadPrimitive.Root className="aui-root flex h-full min-h-0 min-w-0 flex-col bg-background">
-        <ThreadPrimitive.Viewport className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
+      <ThreadPrimitive.Viewport ref={viewportRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto">
           <div className="mx-auto flex min-w-0 w-full max-w-4xl flex-1 flex-col gap-2 px-4 py-4">
-            <ThreadPrimitive.Messages>{() => <ReadonlyMessage taskId={taskId} />}</ThreadPrimitive.Messages>
+            <VirtualizedThreadMessages
+              scrollElementRef={viewportRef}
+              components={messageComponents}
+              rowPaddingBottom="0.5rem"
+            />
           </div>
-        </ThreadPrimitive.Viewport>
+      </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
     </ReadonlyThreadProvider>
   );
