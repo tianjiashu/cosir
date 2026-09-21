@@ -88,6 +88,12 @@ def find_run(state: ConversationStateSnapshot, run_id: int) -> tuple[int, Conver
     raise KeyError(f"run {run_id} not found")
 
 
+def has_run(state: ConversationStateSnapshot, run_id: int) -> bool:
+    """返回快照中是否存在指定 Run；与 ``find_run`` 的区别是不抛异常。"""
+
+    return any(run["runId"] == run_id for run in state["runs"])
+
+
 def current_run(state: ConversationStateSnapshot) -> ConversationRunSnapshot | None:
     """返回当前 Run snapshot；空 Task 时返回 ``None``。"""
 

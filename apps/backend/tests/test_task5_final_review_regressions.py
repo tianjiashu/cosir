@@ -109,18 +109,26 @@ def _context_row(
 
 @pytest.mark.asyncio
 async def test_executor_propagates_runner_error_and_swallows_projector_failure() -> None:
-    """runner 失败时执行器投影「工具失败收束」：投影异常被吞，runner 异常照常上抛。
+    """runner 失败时执行器投影「工具失败收束」并兜底收敛未落终态的 run。
 
-    执行器不拥有 run 终态——run 状态列由 workflow 经 run_service 落定。本用例锁定两点
-    当前行为：投影失败被降级为日志（不得替换 runner 的真实异常），且执行器不改写
-    run 状态列。
+    执行器不拥有 run 的业务终态（正常路径由 workflow 经 run_service 落定），但驱动结束
+    后 run 仍 active 时必须条件收敛，否则会留下无执行器的僵尸 running。本用例锁定两点
+    当前行为：投影失败被降级为日志（不得替换 runner 的真实异常），且执行器退出时
+    对未落终态的 run 调用一次条件收敛。
     """
 
     run = SimpleNamespace(id=1, task_id=7, status="running", end_reason=None)
+    converged: list[tuple[int, str | None]] = []
 
     class RunService:
         def get_run(self, _run_id: int) -> SimpleNamespace:
             return run
+
+        def fail_run_if_running(
+            self, run_id: int, end_reason: str | None = None, **_kwargs: Any
+        ) -> SimpleNamespace:
+            converged.append((run_id, end_reason))
+            return SimpleNamespace(id=run_id, task_id=7, status="failed")
 
     class FailingProjector:
         def process(self, _event: object) -> None:
@@ -137,7 +145,7 @@ async def test_executor_propagates_runner_error_and_swallows_projector_failure()
     with pytest.raises(RuntimeError, match="runner failed"):
         await executor._execute(1, runner)
 
-    assert run.status == "running"
+    assert converged == [(1, "run_execution_ended_without_terminal")]
 
 
 def test_tool_settlement_projection_failure_is_swallowed() -> None:

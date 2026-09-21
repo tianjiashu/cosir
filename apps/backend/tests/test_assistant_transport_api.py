@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from app.assistant_transport.service.transport_assistant_service import (
     _build_ordered_display_text,
 )
 from app.service.task.conversation_run_service import ConversationRunService
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 def _snapshot(
@@ -499,3 +501,50 @@ def test_settle_run_start_failure_swallows_settle_errors() -> None:
     service._runs = _RunService()
 
     service.settle_run_start_failure(7)
+
+
+_GATE_TEST_TASK_ID = 900000001
+
+
+async def test_task_run_operation_waits_without_blocking_event_loop() -> None:
+    """闸门排队必须发生在工作线程：等待期间事件循环仍要能调度其它协程。
+
+    ``task_run_operation`` 要跨越 ``prepare_run_start`` 的 ``await``；若用同步
+    ``operation()`` 在事件循环线程上抢锁，同一 task 的并发请求会把事件循环整体卡在
+    ``acquire`` 上，而持锁者又必须回到事件循环才能释放闸门，等待者遂只能等满超时。
+    本用例断言等待期间心跳协程仍在推进。
+    """
+
+    service = TransportAssistantService.__new__(TransportAssistantService)
+    space = task_runtime_spaces.get_or_create(_GATE_TEST_TASK_ID)
+    release = threading.Event()
+
+    def _hold_gate() -> None:
+        with space.operation(timeout=5):
+            release.wait(0.3)
+
+    holder = threading.Thread(target=_hold_gate, daemon=True)
+    holder.start()
+    await asyncio.sleep(0.05)  # 让持锁线程先取得闸门
+
+    ticks = 0
+
+    async def _heartbeat() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    beating = asyncio.create_task(_heartbeat())
+    try:
+        async with service.task_run_operation(task_id=_GATE_TEST_TASK_ID):
+            pass
+    finally:
+        release.set()
+        holder.join(timeout=5)
+        beating.cancel()
+        task_runtime_spaces.unload(_GATE_TEST_TASK_ID)
+
+    assert not holder.is_alive()
+    # 同步 ``operation()`` 会把事件循环停住，心跳一次都跑不到。
+    assert ticks >= 5

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import logging
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -11,6 +13,7 @@ from app.assistant_transport.event import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
     ContextUsageUpdatedEvent,
+    DelegationRefData,
     RunInitializedEvent,
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
@@ -30,6 +33,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.assistant_transport.stream import TransportFrame
+from app.config.constant import Constant
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
@@ -738,3 +742,245 @@ def test_model_chunk_event_becomes_assistant_transport_update() -> None:
     event = AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="你好")
     change = event_projector.process(event)
     assert change is not None and change.mutations
+
+
+def _projector_with_window(
+    limit: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[ConversationEventProjector, InMemorySnapshotService]:
+    """按指定容量构造投影器（容量来源是 ``Constant.Transport``，此处临时覆盖）。"""
+
+    monkeypatch.setattr(Constant.Transport, "EVENT_DEDUP_WINDOW", limit)
+    snapshots = InMemorySnapshotService()
+    return ConversationEventProjector(snapshots), snapshots
+
+
+def _assert_reapply_changes_nothing(
+    event_projector: ConversationEventProjector,
+    snapshots: InMemorySnapshotService,
+    factory: Callable[[], object],
+) -> None:
+    """同一业务事实用新 event_id 再投一次后，快照必须与首次完全一致。
+
+    这证明该事件的 ``plan`` 自幂等：去重窗口淘汰后即使重复投递漏网，也不会改坏快照。
+    唯一的例外是 ``RunInitializedEvent(replace_existing=True)``，见对应用例。
+    """
+
+    event_projector.process(factory())
+    before = copy.deepcopy(snapshots.states[1])
+    event_projector.process(factory())
+    assert snapshots.states[1] == before
+
+
+def test_dedup_window_is_bounded_by_configured_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """去重窗口是全局有界 FIFO：条目数不随事件数增长。"""
+
+    event_projector, _ = _projector_with_window(4, monkeypatch)
+    _start(event_projector)
+    for _ in range(10):
+        event_projector.process(
+            AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="x")
+        )
+    assert event_projector._dedup_window.size == 4
+
+
+def test_dedup_window_is_not_keyed_by_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    """窗口不按 task 分桶：task 数量增加也不会突破容量上界。"""
+
+    event_projector, snapshots = _projector_with_window(3, monkeypatch)
+    for task_id in range(1, 6):
+        event_projector.process(RunInitializedEvent(task_id=task_id, run_id=task_id))
+        event_projector.process(
+            AssistantTextDeltaEvent(task_id=task_id, run_id=task_id, part="text", delta="x")
+        )
+    assert event_projector._dedup_window.size == 3
+    assert len(snapshots.states) == 5
+
+
+def test_duplicate_delta_event_is_dropped(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """同一 event_id 的增量事件只被投影一次。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event = AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="abc")
+    assert event_projector.process(event) is not None
+    assert event_projector.process(event) is None
+    parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
+    assert [part["text"] for part in parts] == ["abc"]
+
+
+def test_evicted_delta_is_no_longer_deduplicated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """超出窗口的旧 event_id 不再去重——这是有界化**记录在案**的取舍。"""
+
+    event_projector, snapshots = _projector_with_window(2, monkeypatch)
+    _start(event_projector)
+    events = [
+        AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta=delta)
+        for delta in ("a", "b", "c")
+    ]
+    for event in events:
+        event_projector.process(event)
+    assert event_projector._dedup_window.size == 2
+    # 最早的 a 已被淘汰：重放它会再次被应用（后果是文本重复，而非崩溃）。
+    assert event_projector.process(events[0]) is not None
+    parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
+    assert [part["text"] for part in parts] == ["abca"]
+
+
+def test_duplicate_delta_drop_is_logged(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """重复投递被丢弃时留下可观测日志（回答「该机制是否真被触发」）。"""
+
+    event_projector, _ = projector
+    _start(event_projector)
+    event = AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="a")
+    event_projector.process(event)
+    with caplog.at_level(logging.DEBUG):
+        event_projector.process(event)
+    assert "conversation_event_duplicate_dropped" in caplog.text
+
+
+def test_window_eviction_is_logged(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """窗口淘汰最旧 event_id 时记录容量预警。"""
+
+    event_projector, _ = _projector_with_window(1, monkeypatch)
+    _start(event_projector)
+    with caplog.at_level(logging.WARNING):
+        event_projector.process(
+            AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="a")
+        )
+        event_projector.process(
+            AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="b")
+        )
+    assert "conversation_event_dedup_window_evicted" in caplog.text
+
+
+def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """run / message / usage 级事件的 ``plan`` 自幂等：重复投递不会改变快照。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event_projector.process(
+        AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="你好")
+    )
+    _assert_reapply_changes_nothing(
+        event_projector, snapshots, lambda: RunInitializedEvent(task_id=1, run_id=1)
+    )
+    _assert_reapply_changes_nothing(
+        event_projector,
+        snapshots,
+        lambda: UserInputAppendedEvent(
+            task_id=1,
+            run_id=1,
+            parts=[{"type": "text", "text": "你好", "status": "completed"}],
+        ),
+    )
+    _assert_reapply_changes_nothing(
+        event_projector,
+        snapshots,
+        lambda: RunStatusChangedEvent(
+            task_id=1, run_id=1, status=ConversationRunStatus.RUNNING
+        ),
+    )
+    _assert_reapply_changes_nothing(
+        event_projector,
+        snapshots,
+        lambda: AssistantPartClosedEvent(task_id=1, run_id=1, part="text"),
+    )
+    _assert_reapply_changes_nothing(
+        event_projector,
+        snapshots,
+        lambda: ContextUsageUpdatedEvent(
+            task_id=1, run_id=1, ratio=0.5, used_tokens=10, context_window_tokens=20
+        ),
+    )
+
+
+def test_idempotent_tool_events_reapply_without_changing_snapshot(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """工具级事件的 ``plan`` 自带幂等（存在性检查 / seq 守卫 / 迁移矩阵）。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    _assert_reapply_changes_nothing(
+        event_projector,
+        snapshots,
+        lambda: ToolCallCreatedEvent(
+            task_id=1, run_id=1, tool_call_id="t1", tool_name="read_file"
+        ),
+    )
+    _assert_reapply_changes_nothing(
+        event_projector,
+        snapshots,
+        lambda: ToolCallStatusChangedEvent(
+            task_id=1, run_id=1, tool_call_id="t1", status="running", args={"path": "a.txt"}
+        ),
+    )
+    event_projector.process(
+        ToolCallCreatedEvent(task_id=1, run_id=1, tool_call_id="d1", tool_name="delegate_task")
+    )
+    _assert_reapply_changes_nothing(
+        event_projector,
+        snapshots,
+        lambda: ToolCallRuntimeUpdateEvent(
+            task_id=1,
+            run_id=1,
+            tool_call_id="d1",
+            seq=1,
+            data=DelegationRefData(
+                kind="delegation_ref",
+                child_task_id=2,
+                child_run_id=3,
+                title="子任务",
+                role="分析",
+            ),
+        ),
+    )
+    _assert_reapply_changes_nothing(
+        event_projector,
+        snapshots,
+        lambda: ToolCallsSettledEvent(
+            task_id=1, run_id=1, status="cancelled", reason="runtime_failed"
+        ),
+    )
+
+
+def test_run_initialized_replace_existing_reapplication_resets_run(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """记录危害：``replace_existing=True`` 重复应用会清空 run，故去重必须覆盖全部事件。
+
+    去重窗口淘汰后，极旧事件的重复投递会漏网。对绝大多数事件这不构成问题（plan 自幂等），
+    但本事件是唯一例外——它整体 ``set`` 会把 run 重置回 ``pending`` 并清空 messages。因此
+    去重不能按「事件是否幂等」收窄，必须对所有事件生效。
+    """
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    reset = RunInitializedEvent(task_id=1, run_id=1, replace_existing=True)
+
+    assert event_projector.process(reset) is not None
+    # 同一 event_id 的重复投递必须被去重，否则 run 会被再次重置。
+    assert event_projector.process(reset) is None
+
+    event_projector.process(
+        AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="已产出的回答")
+    )
+    assert _run(snapshots.states[1], 1)["messages"][1]["parts"] != []
+
+    # 换新 event_id、同一业务事实：模拟「去重窗口淘汰后漏网」的那一次重复投递。
+    event_projector.process(RunInitializedEvent(task_id=1, run_id=1, replace_existing=True))
+
+    assert _run(snapshots.states[1], 1)["messages"][1]["parts"] == []

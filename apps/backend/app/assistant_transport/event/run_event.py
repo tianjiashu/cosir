@@ -27,6 +27,7 @@ from app.assistant_transport.state.conversation_state_part import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.constant import Constant
+from app.config.logging.logger import log
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunError
 from app.models.enums.conversation_run_status import ConversationRunStatus
@@ -85,7 +86,7 @@ class RunInitializedEvent(ConversationEventEnvelope):
             无。
 
         副作用:
-            无。
+            无业务副作用；丢弃骨架建立的快照分叉分支会写 WARNING 日志（观测旁路）。
         """
 
         existing_index = next(
@@ -116,6 +117,20 @@ class RunInitializedEvent(ConversationEventEnvelope):
             or not state["runs"]
             or state["runs"][-1]["status"] not in {"completed", "failed", "cancelled"}
         ):
+            # 走到这里说明 snapshot 与 DB 已分叉（新 run 被当作陈旧事件丢弃）：不阻断
+            # 主流程，但必须留痕，否则排障时只能看到僵尸现象看不到丢弃本身。
+            log.warning(
+                "transport_run_initialized_skeleton_dropped",
+                extra={
+                    "msg": "RunInitializedEvent 未建立骨架：快照存在更新的未结束 run，疑似分叉",
+                    "data": {
+                        "task_id": self.task_id,
+                        "run_id": self.run_id,
+                        "current_run_id": current_run_id,
+                        "latest_run_status": state["runs"][-1]["status"] if state["runs"] else None,
+                    },
+                },
+            )
             return []
         if any(run["runId"] == self.run_id for run in state["runs"]):
             return []
@@ -221,6 +236,20 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
         if self.status.value not in _ALLOWED_RUN_STATUS_TRANSITIONS.get(
             current_status, frozenset()
         ):
+            # 白名单丢弃对重复投递是常态，但若因投影失败丢掉了唯一一次合法迁移，
+            # snapshot 会永久停在旧状态；留痕区分两种情况。
+            log.warning(
+                "transport_run_status_transition_dropped",
+                extra={
+                    "msg": "RunStatusChangedEvent 不在迁移白名单内，投影被丢弃",
+                    "data": {
+                        "task_id": self.task_id,
+                        "run_id": self.run_id,
+                        "snapshot_status": current_status,
+                        "incoming_status": self.status.value,
+                    },
+                },
+            )
             return []
         mutations: list[ConversationStateMutation] = [
             ConversationStateMutation("set", ("runs", run_index, "status"), self.status.value),

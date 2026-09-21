@@ -709,20 +709,12 @@ class TaskService:
             try:
                 self._task_register.mark_deleted(current_id)
                 self._state.mark_task_deleted(current_id)
-                projector = service_depends.get_conversation_event_projector()
-                mark_projector_deleted = getattr(projector, "mark_task_deleted", None)
-                if callable(mark_projector_deleted):
-                    mark_projector_deleted(current_id)
-                executor = service_depends.get_conversation_run_executor()
-                mark_executor_deleted = getattr(executor, "mark_task_deleted", None)
-                if callable(mark_executor_deleted):
-                    mark_executor_deleted(current_id)
                 try:
                     from app.config.configuration import get_tool_system
 
-                    clear_tool_state = getattr(get_tool_system().executor, "clear_task_state", None)
-                    if callable(clear_tool_state):
-                        clear_tool_state(current_id)
+                    # 契约方法直接调用：``ToolSystem.executor`` 已声明 ``ToolExecutor`` 类型，
+                    # 「工具系统尚未装配」由 ``get_tool_system()`` 抛 ``RuntimeError`` 表达。
+                    get_tool_system().executor.clear_task_state(current_id)
                 except RuntimeError:
                     # 删除可以发生在工具系统尚未完成装配的测试/启动边界；此时没有
                     # 进程内工具状态需要清理，数据库删除仍然是 canonical 结果。

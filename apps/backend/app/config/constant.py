@@ -244,7 +244,7 @@ class Constant:
         )
 
     class Transport:
-        """Assistant Transport 层 cosir 资源定位符与隐藏 token 的正则。"""
+        """Assistant Transport 层共享常量：cosir 资源定位符 / 隐藏 token 正则与事件去重窗口。"""
 
         # 图片资源定位符：``cosir-attachment://<64hex>``。
         IMAGE_LOCATOR: "re.Pattern[str]" = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
@@ -256,6 +256,11 @@ class Constant:
         HIDDEN_LOCAL_FILE_TOKEN: "re.Pattern[str]" = re.compile(
             r"<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->"
         )
+        # Conversation event 去重窗口容量：projector 保留最近 N 条 event_id 用于抵御重复投递。
+        # 依据：重复投递只发生在同一投递路径的近距离重放；按增量合批口径（32 字符/次）换算，
+        # 本窗口约等于 256KB 流式文本，远超任何可能的重放距离。窗口有界 ⇒ 内存上界恒定
+        # （约 1MB 量级），且不需要任何按 task 的生命周期清理钩子。
+        EVENT_DEDUP_WINDOW: int = 8192
 
     class Boot:
         """后端启动状态文件（bootstate）的阶段常量。

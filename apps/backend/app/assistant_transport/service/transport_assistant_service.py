@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from typing import NoReturn
 
 from fastapi import HTTPException
@@ -88,25 +88,33 @@ class TransportAssistantService:
         self._commands = get_conversation_run_command_service()
         self._stream = AssistantTransportStreamService()
 
-    @contextmanager
-    def task_run_operation(self, task_id: int) -> Iterator[None]:
+    @asynccontextmanager
+    async def task_run_operation(self, task_id: int) -> AsyncIterator[None]:
         """在 task 运行时空间内执行一个带超时的独占操作。
 
         参数:
             task_id: 目标任务标识。
 
         返回:
-            持有该 task 操作闸门的上下文管理器。
+            持有该 task 操作闸门的异步上下文管理器。
 
         异常:
             TimeoutError: 10 秒内未取得闸门（该 task 有长任务在执行或收束）。
 
         副作用:
             进入上下文后阻止同一 task 的其它 run 创建/编辑/续跑与结构性删除。
+
+        并发:
+            必须用 ``async_operation``（在工作线程中抢锁），**不能**改用同步的
+            ``operation``：本上下文跨越 ``await``（``prepare_run_start`` 经
+            ``asyncio.to_thread`` 落库）。若在事件循环线程上同步抢锁，另一个同 task
+            请求会把事件循环整体阻塞在 ``acquire`` 上，而持锁者必须回到事件循环才能
+            释放闸门，于是等待者只能等满超时、整个进程停顿；此时「task 忙」被放大成
+            「全进程忙」。
         """
 
         task_space = task_runtime_spaces.get_or_create(task_id)
-        with task_space.operation(timeout=10):
+        async with task_space.async_operation(wait_seconds=10):
             yield
 
     def build_response(

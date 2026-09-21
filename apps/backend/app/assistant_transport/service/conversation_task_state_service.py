@@ -82,6 +82,38 @@ class ConversationTaskStateService:
             validate_snapshot(state)
             return state
 
+    def rebuild_state(self, task_id: int) -> ConversationStateSnapshot:
+        """丢弃进程内 working copy，并立即从 canonical 记录重建该 task 的快照。
+
+        与 ``get_state`` 的区别是**强制**丢弃现有副本：调用方已确认快照缺少 canonical 确实
+        存在的 run（二者分叉）时使用，避免继续在陈旧副本上投影。本方法是进程内唯一显式的
+        快照自愈入口（``get_state`` 见到已物化副本不会重建，``unload_snapshot`` 此前只被
+        删除清理使用）。
+
+        参数:
+            task_id: 目标任务标识。
+
+        返回:
+            重建后并通过 ``validate_snapshot`` 校验的 task 快照（深拷贝）。
+
+        异常:
+            KeyError: Task 在本进程内已被删除或不存在。
+            ValueError: 重建结果不满足快照契约。
+            sqlalchemy.exc.SQLAlchemyError: canonical 数据源读取失败。
+
+        副作用:
+            先卸载该 task 的进程内快照副本，再读 canonical 三张表重建一份；不写数据库、
+            不通知 subscriber（调用方需自行 ``publish_state`` 让客户端收敛）。
+
+        并发:
+            全程持 ``_lock``，与投影、订阅注册与删除清理互斥。
+        """
+
+        with self._lock:
+            self._ensure_not_deleted(task_id)
+            task_runtime_spaces.get_or_create(task_id).unload_snapshot()
+            return self.get_state(task_id)
+
     def apply_planned(
             self,
             event: ConversationEvent

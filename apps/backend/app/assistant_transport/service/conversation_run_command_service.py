@@ -13,6 +13,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
+    has_run,
 )
 from app.config.logging.logger import log
 from app.core.runtime.execution_mode import ExecutionMode
@@ -174,13 +175,17 @@ class ConversationRunCommandService:
             ``created=True`` 表示本次创建了 run；``created=False`` 表示应重新订阅已有 run。
 
         异常:
-            RuntimeError: command_id 已存在但 payload 冲突或记录未绑定 run。
+            RuntimeError: command_id 已存在但 payload 冲突、记录未绑定 run，或快照重建后
+                仍缺该 run（不变量被破坏）。
             ValueError: 任务已有其他 active run。
             KeyError: 任务或 run 不存在。
 
         副作用:
             首次调用在一个数据库事务内写入 command、run 和 context baseline；重复调用只读
-            已有 command/run，不创建第二个 run。
+            已有 command/run，不创建第二个 run。事务提交后若快照缺少该 run（与 canonical
+            分叉），先按 canonical 重建快照并发布 full 帧；此后任一步（投影、认领、快照重读）
+            失败时，先把该 run 当场收敛为 ``cancelled``（end_reason=``run_setup_failed``）
+            再原样抛出，不留下无执行器的 active run。
         """
 
         if task_id is None:
@@ -224,13 +229,27 @@ class ConversationRunCommandService:
                 },
             },
         )
-        service_depends.get_conversation_event_projector().process(
-            RunInitializedEvent(task_id=task_id, run_id=run.id)
-        )
-        running_run = self._run_state.claim_pending_run(run.id)
-        if running_run is None:
-            raise ValueError(f"run {run.id} is not editable in its current state")
-        snapshot = self._state.get_state(task_id)
+        try:
+            service_depends.get_conversation_event_projector().process(
+                RunInitializedEvent(task_id=task_id, run_id=run.id)
+            )
+            self._ensure_run_visible(task_id, run.id)
+            running_run = self._run_state.claim_pending_run(run.id)
+            if running_run is None:
+                raise ValueError(f"run {run.id} is not editable in its current state")
+            snapshot = self._state.get_state(task_id)
+        except Exception:
+            # 事务已提交，run 至少是 pending；此后任一步失败都必须当场收敛，否则留下
+            # 无执行器的 active run 永久阻塞 task（启动 recover 只在重启时生效）。
+            log.exception(
+                "assistant_transport_run_setup_failed",
+                extra={
+                    "msg": "Run 已提交但请求内装配失败，当场收敛该 run 避免阻塞 task",
+                    "data": {"task_id": task_id, "run_id": run.id},
+                },
+            )
+            self._converge_failed_setup(run.id)
+            raise
         return ConversationRunStartResult(
             command=command,
             run=running_run,
@@ -277,14 +296,18 @@ class ConversationRunCommandService:
         异常:
             ValueError: ``run_command`` 缺失、``run_id`` 不是该 task 最近 run、run 当前
                 状态不允许编辑，或 pending → running 认领未命中。
-            RuntimeError: 同 ``command_id`` 的命令已存在但 payload 冲突，或命令未绑定 run。
+            RuntimeError: 同 ``command_id`` 的命令已存在但 payload 冲突、命令未绑定 run，
+                或快照重建后仍缺该 run（不变量被破坏）。
             KeyError: task 或 run 不存在。
 
         副作用:
             在同一事务内重置 run（写回输入、换 checkpoint thread、清空终态字段）、删除该
             run 的旧 context entries、写入新命令；随后投影 ``RunInitializedEvent``
-            （``replace_existing=True``）重建 Transport 骨架并刷新快照，最后把该 run
-            认领为 ``running``（发布一次 RUNNING 状态事件）。不会创建新的 run。
+            （``replace_existing=True``）重建 Transport 骨架并刷新快照（骨架若因快照分叉
+            未能建立，则先按 canonical 重建快照），最后把该 run 认领为 ``running``
+            （发布一次 RUNNING 状态事件）。不会创建新的 run。事务提交后任一步失败时，先把
+            该 run 当场收敛为 ``cancelled``（end_reason=``run_setup_failed``）再原样抛出，
+            不留下无执行器的 active run。
         """
 
         if run_command is None:
@@ -331,18 +354,31 @@ class ConversationRunCommandService:
                 },
             },
         )
-        service_depends.get_conversation_event_projector().process(
-            RunInitializedEvent(
-                task_id=task_id,
-                run_id=reset.id,
-                replace_existing=True,
+        try:
+            service_depends.get_conversation_event_projector().process(
+                RunInitializedEvent(
+                    task_id=task_id,
+                    run_id=reset.id,
+                    replace_existing=True,
+                )
             )
-        )
-        running_run = self._run_state.claim_pending_run(reset.id)
-        if running_run is None:
-            raise ValueError(f"run {reset.id} is not editable in its current state")
-        snapshot: ConversationStateSnapshot = self._state.get_state(task_id)
-        self._state.publish_state(task_id, snapshot)
+            self._ensure_run_visible(task_id, reset.id)
+            running_run = self._run_state.claim_pending_run(reset.id)
+            if running_run is None:
+                raise ValueError(f"run {reset.id} is not editable in its current state")
+            snapshot: ConversationStateSnapshot = self._state.get_state(task_id)
+            self._state.publish_state(task_id, snapshot)
+        except Exception:
+            # 与 start_or_attach 同一补偿语义：提交后的投影/认领/快照失败必须当场收敛。
+            log.exception(
+                "assistant_transport_run_setup_failed",
+                extra={
+                    "msg": "编辑重跑已提交但请求内装配失败，当场收敛该 run 避免阻塞 task",
+                    "data": {"task_id": task_id, "run_id": reset.id},
+                },
+            )
+            self._converge_failed_setup(reset.id)
+            raise
         return ConversationRunStartResult(
             command=command,
             run=reset,
@@ -375,16 +411,21 @@ class ConversationRunCommandService:
         异常:
             ValueError: run 不是 task 最近 run、不是 ``cancelled``、snapshot 归属失效、
                 缺少用户消息，或恢复时已被其它路径落定终态。
+            RuntimeError: 快照与 canonical 均不含该 run（不变量被破坏）。
 
         副作用:
             事务性把 ``cancelled`` run 恢复为 ``running``（清空旧终态字段）并发布 RUNNING
-            状态事件；补偿路径会把该 run 收敛回终态，避免留下无执行器的 active run。
+            状态事件；若快照缺少该 run（与 canonical 分叉）则先按 canonical 重建快照并发布
+            full 帧，再做归属与用户消息校验；补偿路径会把该 run 收敛回终态，避免留下无执行器
+            的 active run。
         """
 
         latest_run = self._task.get_latest_run(task_id)
         if latest_run is None or latest_run.id != run_id or latest_run.status != "cancelled":
             raise ValueError(f"run {run_id} is not resumable")
-        state = self._state.get_state(task_id)
+        # 快照缺失该 run 说明已与 canonical 分叉：先自愈，否则下面的归属/用户消息校验必然
+        # 失败，用户会看到「无法 resume」，而进程内没有其它恢复入口（只有重启或删 task）。
+        state = self._ensure_run_visible(task_id, run_id)
         if state["current_run_id"] != run_id:
             raise ValueError(f"run {run_id} is not the current task run")
         if not any(
@@ -397,22 +438,23 @@ class ConversationRunCommandService:
         # 驱动命令读取是最后一个只读步骤：一个 run 可绑定多条 command（同轮编辑重跑会
         # 追加一条），这里取最近一条。必须在写操作之前完成，避免失败时留下已恢复的 run。
         command = self._command.get_by_run(run_id)
-        resumed = self._run_state.resume_cancelled_run(run_id)
-        if resumed is None:
-            raise ValueError(f"run {run_id} is no longer resumable")
         try:
+            resumed = self._run_state.resume_cancelled_run(run_id)
+            if resumed is None:
+                raise ValueError(f"run {run_id} is no longer resumable")
             state = self._state.get_state(task_id)
         except Exception:
-            # run 已置 running，但本次续跑不会启动执行器；收敛回终态，让用户可重试，
-            # 而不是留下一个永远无法 resume 的 active run。
+            # run 可能已被本调用置为 running（认领提交成功但后续步骤/事件发布抛错）；
+            # 本次续跑不会启动执行器，无条件尝试收敛（未认领命中时条件是 no-op），让用户
+            # 可重试，而不是留下永远无法 resume 的 active run。
             log.exception(
                 "assistant_transport_resume_setup_failed",
                 extra={
-                    "msg": "续跑读取快照失败，已收敛该 run，避免留下无执行器的 active run",
+                    "msg": "续跑装配失败，已收敛该 run，避免留下无执行器的 active run",
                     "data": {"task_id": task_id, "run_id": run_id},
                 },
             )
-            self._run_state.cancel_run_if_running(
+            self._converge_failed_setup(
                 run_id, end_reason="resume_setup_failed"
             )
             raise
@@ -424,4 +466,90 @@ class ConversationRunCommandService:
             execution_mode="resume",
             mode="resume",
         )
+
+    def _ensure_run_visible(
+        self, task_id: int, run_id: int
+    ) -> ConversationStateSnapshot:
+        """返回含指定 run 的快照；快照缺失该 run（与 canonical 分叉）时按 canonical 重建。
+
+        快照是进程内 working copy，允许短暂滞后；但当它**完全没有**某条 canonical 确实存在
+        的 run 时，一切基于快照的存在性/归属校验都会永久失败，且会连锁出两个症状：
+
+        - 新 run 的 ``RunInitializedEvent`` 被陈旧事件防护丢弃（快照最后一个 run 仍是非终态），
+          随后 ``claim_pending_run`` 发布 RUNNING 时因找不到该 run 抛 ``KeyError``，该对话
+          **每次发送都 500**；
+        - ``resume`` 因 ``current_run_id`` 不匹配而返回「不是当前 run」，且无法自愈。
+
+        进程内没有其它恢复入口（``get_state`` 见到已物化副本不重建），因此这里在编排早期
+        显式复核并重建，让对话当场恢复可用。
+
+        参数:
+            task_id: 目标任务标识。
+            run_id: 必须出现在快照里的 Conversation Run 标识。
+
+        返回:
+            含该 run 的快照：正常路径是当前副本，分叉路径是重建后的新副本。
+
+        异常:
+            RuntimeError: 重建后仍不含该 run——canonical 也没有该 run，说明创建/重置事务
+                未生效，属不变量被破坏；立即失败，不继续认领以免留下无骨架的 active run。
+
+        副作用:
+            仅在分叉时卸载并重建该 task 的进程内快照，并向 subscriber 发布一个 full 帧让
+            客户端收敛；正常路径只做一次只读复核。
+        """
+
+        snapshot = self._state.get_state(task_id)
+        if has_run(snapshot, run_id):
+            return snapshot
+        log.warning(
+            "assistant_transport_snapshot_diverged_rebuilding",
+            extra={
+                "msg": "快照缺少该 run，疑似与 canonical 分叉，按 canonical 重建",
+                "data": {"task_id": task_id, "run_id": run_id},
+            },
+        )
+        rebuilt: ConversationStateSnapshot = self._state.rebuild_state(task_id)
+        if not has_run(rebuilt, run_id):
+            raise RuntimeError(
+                f"run {run_id} is absent from both snapshot and canonical rebuild"
+            )
+        self._state.publish_state(task_id, rebuilt)
+        return rebuilt
+
+    def _converge_failed_setup(
+        self, run_id: int, *, end_reason: str = "run_setup_failed"
+    ) -> None:
+        """run 事务已提交、但请求内后续步骤失败时的当场收敛。
+
+        负责把本次请求碰过的 run（认领前 ``pending``、认领后 ``running``）统一收敛为
+        ``cancelled``：``cancel_run_if_running`` 的条件更新覆盖两种 active 状态，对未认领
+        命中或已落终态的 run 是 no-op，不构成第二套状态写入者。选择 ``cancelled`` 而非
+        ``failed`` 是为了保留用户通过 resume 重试的能力。
+
+        参数:
+            run_id: 待收敛的 Conversation Run 标识。
+            end_reason: 写入终态的稳定原因标识（需为合法标识符以匹配受控错误契约）。
+
+        返回:
+            无。
+
+        异常:
+            无。收敛自身失败只记日志、不抛出，不覆盖调用方的原始异常；残余窗口由
+            启动期 ``recover_orphaned_runs`` 兜底。
+
+        副作用:
+            条件更新 run 为 ``cancelled`` 并随之发布状态事件；写日志。
+        """
+
+        try:
+            self._run_state.cancel_run_if_running(run_id, end_reason=end_reason)
+        except Exception:
+            log.exception(
+                "assistant_transport_run_setup_converge_failed",
+                extra={
+                    "msg": "run 装配失败后的当场收敛未落库，依赖下次启动 recover 兜底",
+                    "data": {"run_id": run_id},
+                },
+            )
 

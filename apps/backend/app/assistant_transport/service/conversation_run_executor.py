@@ -35,8 +35,12 @@ class _Execution:
 class ConversationRunExecutor:
     """在进程内独立驱动一次 ConversationRun，并作为进程内取消信号的标记入口。
 
-    本执行器只做「执行」：不拥有 run 终态（``running`` → ``completed`` / ``failed`` /
+    本执行器只做「执行」：不拥有 run 的业务终态（``running`` → ``completed`` / ``failed`` /
     ``cancelled`` 由 workflow 落定），也不决定业务准入（由 ``prepare_run_start`` 判定）。
+    唯一例外是兜底收敛：驱动结束后 run 仍 ``pending`` / ``running``（workflow 进入前抛错、
+    落终态写库失败、关闭期取消）时，``_execute`` 以条件更新把它收敛为终态，保证不遗留
+    无驱动者的 active run；条件更新使其对 workflow 已落定的 run 是 no-op，终态唯一写入
+    者仍是 workflow。
 
     取消入口同属本类：``cancel`` 标记 run 级取消并立即强制关闭该 Run 的 terminal（整个
     run 停止，并沿委派关系级联到后代 run），``cancel_tool_call`` 标记工具级取消（只中止
@@ -334,20 +338,26 @@ class ConversationRunExecutor:
 
         异常:
             KeyError: ``run_id`` 对应的 run 不存在（来自 run service 读取）。
-            runner 抛出的异常在投影工具失败收束后继续向上传播；``start()`` 的调用方
-                不 await 该 task，因此异常按 asyncio「未取回的 task 异常」语义处理 ⇒
-                run 的终态必须在 workflow 抛出之前由 workflow 自行落定。
+            runner 抛 ``Exception`` 时在投影工具失败收束后继续向上传播；runner 抛
+                ``CancelledError`` 时原样传播（由 ``close()`` / 取消路径驱动）。两条路径
+                退出前都会经过兜底收敛，run 的常规终态仍必须在 workflow 抛出之前由
+                workflow 自行落定。
 
         副作用:
             runner 抛 ``Exception`` 时先经 ``_project_tools_settled`` 投影工具失败收束
             （该投影失败只记日志，不替换原始异常）；退出时强制关闭 terminal，并在本次执行
-            仍登记且当前 task 就是登记 task 时移除该登记；不改写 run 状态列、不清理取消信号。
+            仍登记且当前 task 就是登记 task 时移除该登记，最后经
+            :meth:`_converge_unfinished_run` 兜底收敛仍未落终态的 run；不清理取消信号。
         """
+        cancelled = False
         try:
             run = self._run_service.get_run(run_id)
             get_terminal_session_service().begin_run(run_id)
             try:
                 await runner(run)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
             except Exception as e:
                 self._project_tools_settled(run_id, "failed", "runtime_failed")
                 raise e
@@ -372,6 +382,68 @@ class ConversationRunExecutor:
                 current_task = None
             if current is not None and current.thread_task is current_task:
                 self._executions.pop(run_id, None)
+            # 兜底收敛放在最后：即使它在事件循环拆除期被打断，前面的 terminal 清理与
+            # 登记移除也已完成，残余窗口退回下次启动的 recover_orphaned_runs。
+            await self._converge_unfinished_run(run_id, cancelled=cancelled)
+
+    async def _converge_unfinished_run(self, run_id: int, *, cancelled: bool) -> None:
+        """驱动结束后 run 仍未落终态时的条件收敛安全网。
+
+        负责兜住「run 被 ``prepare_run_start`` 翻成 running 后驱动死亡」的路径：
+        workflow 进入前的 setup 抛错、workflow 落终态写库失败、优雅关闭取消。正常
+        终态由 workflow 落定，本方法对已落终态的 run 是 no-op（条件更新保证终态的
+        业务写入者仍是 workflow）。
+
+        参数:
+            run_id: 本次驱动对应的 Conversation Run 标识。
+            cancelled: 驱动是否因 ``CancelledError`` 结束；True 时收敛为 ``cancelled``，
+                False 时收敛为 ``failed``。
+
+        返回:
+            无。
+
+        异常:
+            无。任何写入或读取失败只记日志、不向外抛出，避免打断 ``_execute`` 收尾；
+            残余僵尸由下次启动 ``recover_orphaned_runs`` 兜底。
+
+        副作用:
+            在线程池内条件更新 run 状态（active → failed/cancelled）并随之发布状态事件；
+            命中兜底时写 ``conversation_run_executor_converged_unfinished_run``（WARNING）
+            日志。
+        """
+
+        try:
+            if cancelled:
+                settled = await asyncio.to_thread(
+                    self._run_service.cancel_run_if_running,
+                    run_id,
+                    "run_execution_cancelled",
+                )
+                final_status = ConversationRunStatus.CANCELLED.value
+            else:
+                settled = await asyncio.to_thread(
+                    self._run_service.fail_run_if_running,
+                    run_id,
+                    end_reason="run_execution_ended_without_terminal",
+                )
+                final_status = ConversationRunStatus.FAILED.value
+        except Exception:
+            log.exception(
+                "conversation_run_executor_converge_unfinished_failed",
+                extra={
+                    "msg": "兜底收敛未落终态的 run 失败，依赖下次启动 recover 兜底",
+                    "data": {"run_id": run_id},
+                },
+            )
+            return
+        if settled is not None:
+            log.warning(
+                "conversation_run_executor_converged_unfinished_run",
+                extra={
+                    "msg": "后台执行结束但 run 未落终态，已兜底收敛",
+                    "data": {"run_id": run_id, "final_status": final_status},
+                },
+            )
 
     def _project_tools_settled(self, run_id: int, status: str, reason: str) -> None:
         """通过统一 event projector 收束执行器遗留的工具调用。

@@ -79,7 +79,7 @@ async def assistant_transport(
 
 
     try:
-        with transport_service.task_run_operation(task_id=task_id):
+        async with transport_service.task_run_operation(task_id=task_id):
             # 准备 run 启动结果
             start_result = await transport_service.prepare_run_start(
                 task_id=task_id,
