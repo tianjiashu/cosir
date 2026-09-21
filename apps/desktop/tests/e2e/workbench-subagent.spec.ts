@@ -26,6 +26,8 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
   const workbench = page.getByRole("complementary", { name: "Workbench" });
   await expect(workbench.getByRole("button", { name: "发送" })).toHaveCount(0);
+  await expect(workbench.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
+  await expect(workbench.getByRole("button", { name: "从此处 Fork 新任务" })).toHaveCount(0);
   await expect(workbench.getByRole("button", { name: "关闭 审查代码" })).toBeVisible();
   expect(businessWrites).toEqual([]);
   await workbench.getByRole("button", { name: "关闭 审查代码" }).click();

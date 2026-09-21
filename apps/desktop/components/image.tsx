@@ -162,6 +162,12 @@ type ImagePreviewProps = Omit<React.ComponentProps<"img">, "children"> & {
   containerClassName?: string;
 };
 
+export type ImageDisplay = "default" | "message-thumbnail";
+
+type ImageImplProps = ImageMessagePartComponent extends React.ComponentType<infer Props>
+  ? Props & { display?: ImageDisplay }
+  : never;
+
 function ImagePreview({
   className,
   containerClassName,
@@ -479,13 +485,23 @@ function ImageActions({ part, onRegenerate, className }: ImageActionsProps) {
   );
 }
 
-const ImageImpl: ImageMessagePartComponent = (props) => {
-  const { image, filename, status } = props;
+const ImageImpl = (props: ImageImplProps) => {
+  const { image, filename, status, display = "default" } = props;
   const imageSrc = resolveTransportImageSrc(image, useAttachmentTaskId());
+  const isMessageThumbnail = display === "message-thumbnail";
+  const rootClassName = isMessageThumbnail
+    ? "h-32 w-40 max-w-full border-border/70 bg-muted/40 shadow-none"
+    : undefined;
+  const previewContainerClassName = isMessageThumbnail
+    ? "h-full min-h-0"
+    : undefined;
+  const previewClassName = isMessageThumbnail
+    ? "h-full w-full"
+    : undefined;
 
   if (status?.type === "running") {
     return (
-      <ImageRoot>
+      <ImageRoot className={rootClassName}>
         <ImageGenerating />
         <ImageFilename>{filename}</ImageFilename>
       </ImageRoot>
@@ -494,7 +510,7 @@ const ImageImpl: ImageMessagePartComponent = (props) => {
 
   if (status?.type === "incomplete" && status.reason === "content-filter") {
     return (
-      <ImageRoot>
+      <ImageRoot className={rootClassName}>
         <ImageContentFilterError reason="The provider blocked this image." />
       </ImageRoot>
     );
@@ -502,7 +518,7 @@ const ImageImpl: ImageMessagePartComponent = (props) => {
 
   if (!imageSrc) {
     return (
-      <ImageRoot>
+      <ImageRoot className={rootClassName}>
         <div className="bg-muted/50 flex min-h-32 items-center justify-center p-4">
           <ImageIcon className="text-muted-foreground size-8" />
         </div>
@@ -512,16 +528,21 @@ const ImageImpl: ImageMessagePartComponent = (props) => {
   }
 
   return (
-    <ImageRoot>
+    <ImageRoot className={rootClassName}>
       <ImageZoom src={imageSrc} alt={filename || "Image content"}>
-        <ImagePreview src={imageSrc} alt={filename || "Image content"} />
+        <ImagePreview
+          src={imageSrc}
+          alt={filename || "Image content"}
+          containerClassName={previewContainerClassName}
+          className={previewClassName}
+        />
       </ImageZoom>
-      <ImageFilename>{filename}</ImageFilename>
+      {!isMessageThumbnail && <ImageFilename>{filename}</ImageFilename>}
     </ImageRoot>
   );
 };
 
-const Image = memo(ImageImpl) as unknown as ImageMessagePartComponent & {
+const Image = memo(ImageImpl) as unknown as React.ComponentType<ImageImplProps> & {
   Root: typeof ImageRoot;
   Preview: typeof ImagePreview;
   Filename: typeof ImageFilename;

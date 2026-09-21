@@ -146,7 +146,7 @@ terminal_start(shell="auto", cwd=".")
 terminal_write(session_id, data="npm install", submit=true, after_seq=0, wait_ms=500)
   → 返回新增输出、next_seq、status
 
-terminal_read(session_id, after_seq=next_seq, wait_ms=1000)
+terminal_read(session_id, after_seq=<上一批已应用的最大 seq，即上一轮 next_seq - 1>, wait_ms=1000)
   → 等待后续输出或状态变化
 
 terminal_write(session_id, data="y", submit=true, ...)
@@ -169,7 +169,7 @@ terminal_close(session_id)
 
 `terminal_write.data` 只表示原始 UTF-8 文本，`submit=false` 时不会隐式追加回车；需要提交命令或回答交互提示时必须传 `submit=true`，由工具边界追加一个真实的 CR（`0x0D`）。这不是对 `data` 的静默转义或解码，因此字面量 `\\r`、`\\n` 和 `&#13;` 会保持原样。显式的 `submit` 参数避免模型/JSON 通道无法可靠产生裸控制字符时，Windows ConPTY 只收到回显而不执行。
 
-输出读取使用从 `1` 开始的单调递增 `output_seq`：`after_seq=0` 或 `null` 表示尚未应用任何 frame；`after_seq` 表示调用方已经完整应用的最后一个序号；返回 `seq > after_seq` 的增量和 `next_seq`；ring buffer 无法覆盖 cursor 时返回 `resync_required`，禁止静默拼接不完整输出；不根据文本内容猜测重复或增量。
+输出读取使用从 `1` 开始的单调递增 `output_seq`：`after_seq=0` 或 `null` 表示尚未应用任何 frame；`after_seq` 表示调用方已经完整应用的最后一个序号；返回 `seq > after_seq` 的增量和 `next_seq`；ring buffer 无法覆盖 cursor 时返回 `resync_required`，禁止静默拼接不完整输出；不根据文本内容猜测重复或增量。因为 `next_seq` 是下一个将分配的序号，续读必须回传「上一批已应用的最大 seq」（等于上一轮 `next_seq - 1`）；直接回传 `next_seq` 会静默跳过 `seq == after_seq` 的那一帧。
 
 ## 5. 根据操作系统生成 Tool 描述
 

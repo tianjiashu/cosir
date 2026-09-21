@@ -18,7 +18,6 @@ import { StopButton } from "@/components/assistant/stop-button";
 import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-display";
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { MarkdownText } from "@/components/markdown-text";
-import { Image } from "@/components/image";
 import {
   Reasoning,
   ReasoningContent,
@@ -62,11 +61,11 @@ import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-lo
 import { cn } from "@/lib/utils";
 import { AttachmentTaskContext } from "@/components/assistant-ui/elements/attachment-context";
 import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/virtualized-thread-messages";
+import { UserMessageAttachments } from "@/components/assistant-ui/elements/user-message-attachments";
 import {
   ComposerAttachmentButton,
   ComposerAttachments,
   InlineComposerInput,
-  UserMessageFilePart,
 } from "@/components/assistant-ui/elements/attachment.aui";
 import { InlineAttachmentInsertionProvider } from "@/components/composer/inline-attachment-input";
 
@@ -78,6 +77,8 @@ export type ThreadComponents = {
 export type ThreadProps = {
   components?: ThreadComponents;
   autoFocus?: boolean;
+  /** Render the canonical message UI without any write affordances. */
+  readonly?: boolean;
   taskId?: number;
   workspaceRoot?: string;
   forkAvailable?: boolean;
@@ -92,7 +93,7 @@ export type ThreadProps = {
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
@@ -142,12 +143,12 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, taskId, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null }) => {
+export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null }) => {
   const isEmpty = useAuiState(isNewChatView);
   const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ taskId, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId }}>
+    <ThreadContext.Provider value={{ taskId, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly }}>
     <ThreadComponentsContext.Provider value={components}>
       <AttachmentTaskContext.Provider value={taskId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -168,14 +169,16 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
                 rowPaddingBottom="1.5rem"
                 keepActiveTail
               />
-              <ThreadPrimitive.ViewportFooter className={cn("bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6", !isEmpty && "rounded-t-3xl")}>
-                <ThreadPrimitive.ScrollToBottom
-                  render={<TooltipIconButton tooltip="回到底部" variant="outline" className="absolute -top-12 self-center rounded-full p-3 disabled:invisible" />}
-                >
-                  <ArrowDownIcon />
-                </ThreadPrimitive.ScrollToBottom>
-                <Composer autoFocus={autoFocus} taskId={taskId} workspaceRoot={workspaceRoot} />
-              </ThreadPrimitive.ViewportFooter>
+              {!readonly && (
+                <ThreadPrimitive.ViewportFooter className={cn("bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6", !isEmpty && "rounded-t-3xl")}>
+                  <ThreadPrimitive.ScrollToBottom
+                    render={<TooltipIconButton tooltip="回到底部" variant="outline" className="absolute -top-12 self-center rounded-full p-3 disabled:invisible" />}
+                  >
+                    <ArrowDownIcon />
+                  </ThreadPrimitive.ScrollToBottom>
+                  <Composer autoFocus={autoFocus} taskId={taskId} workspaceRoot={workspaceRoot} />
+                </ThreadPrimitive.ViewportFooter>
+              )}
             </div>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
@@ -306,15 +309,20 @@ const ThreadMessage: FC = () => {
 
 const UserMessage: FC = () => {
   const isEditing = useAuiState((state) => state.composer.isEditing);
-  if (isEditing) return <UserEditMessage />;
+  const readonly = useContext(ThreadContext).readonly === true;
+  if (isEditing && !readonly) return <UserEditMessage />;
   return <UserMessageView />;
 };
 
 const UserMessageView: FC = () => {
   const messageId = useAuiState((state) => state.message.id);
+  const hasText = useAuiState((state) => state.message.parts.some(
+    (part) => part.type === "text" && part.text.trim().length > 0,
+  ));
   const isRunning = useAuiState((state) => state.thread.isRunning);
+  const readonly = useContext(ThreadContext).readonly === true;
   const canEdit = useAuiState((state) => {
-    if (isRunning || !isEditableLatestRunUserMessage(
+    if (readonly || isRunning || !isEditableLatestRunUserMessage(
       state.thread.state as unknown as TransportState,
       messageId,
     )) return false;
@@ -333,19 +341,15 @@ const UserMessageView: FC = () => {
       data-role="user"
       className="group flex flex-col items-end px-2 [content-visibility:auto] [contain-intrinsic-size:auto_6rem]"
     >
-      <div className="bg-muted text-foreground flex max-w-[85%] flex-wrap items-center gap-2 rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
-        <MessagePrimitive.Parts>{({ part }) => {
-          switch (part.type) {
-            case "text":
-              return <MarkdownText status={part.status} />;
-            case "image":
-              return <Image type="image" image={part.image} status={{ type: "complete" }} />;
-            case "file":
-              return <UserMessageFilePart filename={part.filename ?? "附件"} mimeType={part.mimeType} />;
-            default:
-              return null;
-          }
-        }}</MessagePrimitive.Parts>
+      <div className="flex max-w-[85%] flex-col items-end gap-2">
+        <UserMessageAttachments />
+        {hasText && (
+          <div className="bg-primary/10 text-foreground rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
+            <MessagePrimitive.Parts>{({ part }) => (
+              part.type === "text" ? <MarkdownText status={part.status} /> : null
+            )}</MessagePrimitive.Parts>
+          </div>
+        )}
       </div>
       <div className="mt-1 h-6 shrink-0">
         <ActionBarPrimitive.Root
@@ -589,8 +593,8 @@ const AssistantMessageDefault: FC = () => {
   const isLastRunMessage = custom?.isLastRunMessage === true;
   const runId = typeof custom?.runId === "number" ? custom.runId : null;
   const isRunning = useAuiState((state) => state.thread.isRunning);
-  const { forkAvailable = false, forkingRunId = null, onForkRun, cancellingRunId = null, taskId } = useContext(ThreadContext);
-  const canFork = isLastRunMessage && runId !== null && forkAvailable && !isRunning;
+  const { forkAvailable = false, forkingRunId = null, onForkRun, cancellingRunId = null, taskId, readonly = false } = useContext(ThreadContext);
+  const canFork = !readonly && isLastRunMessage && runId !== null && forkAvailable && !isRunning;
   const isForking = runId !== null && forkingRunId === runId;
 
   return (
@@ -636,13 +640,13 @@ const AssistantMessageDefault: FC = () => {
         </MessagePrimitive.GroupedParts>
         <MessageError />
       </div>
-      <RunUsageDisplay runId={runId} visible={isLastRunMessage} />
+      {!readonly && <RunUsageDisplay runId={runId} visible={isLastRunMessage} />}
       <ActionBarPrimitive.Root hideWhenRunning className="mt-1 flex gap-1">
         <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>
           <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
           <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
         </ActionBarPrimitive.Copy>
-        {isLastRunMessage && runId !== null && (
+        {!readonly && isLastRunMessage && runId !== null && (
           <TooltipIconButton
             tooltip={forkAvailable ? "从此处 Fork 新任务" : "所有 Run 完成后才能 Fork"}
             size="sm"

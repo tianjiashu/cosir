@@ -57,8 +57,10 @@ class TerminalWriteArgs(BaseModel):
     after_seq: int | None = Field(
         default=None,
         ge=0,
-        description="Return only output with sequence greater than this value. Use null or 0 initially, "
-                    "then the previous next_seq.",
+        description="Return only output with sequence greater than this value. Pass the largest "
+                    "seq you have already applied, which is the previous response's next_seq "
+                    "minus 1; use null or 0 on the first call. Do not pass next_seq itself, "
+                    "because that silently skips one output frame.",
     )
     wait_ms: int = Field(default=500, ge=0, le=30000,
                          description="Maximum time to wait for new output in milliseconds; 0 returns immediately. "
@@ -91,8 +93,10 @@ class TerminalReadArgs(BaseModel):
     after_seq: int | None = Field(
         default=None,
         ge=0,
-        description="Return only output with sequence greater than this value. Use null or 0 initially, "
-                    "then the previous next_seq.",
+        description="Return only output with sequence greater than this value. Pass the largest "
+                    "seq you have already applied, which is the previous response's next_seq "
+                    "minus 1; use null or 0 on the first call. Do not pass next_seq itself, "
+                    "because that silently skips one output frame.",
     )
     wait_ms: int = Field(default=1000, ge=0, le=30000,
                          description="Maximum time to wait for new output in milliseconds; 0 returns immediately. "

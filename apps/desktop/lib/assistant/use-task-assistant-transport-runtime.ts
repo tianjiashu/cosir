@@ -260,7 +260,7 @@ function isAddMessageCommand(value: unknown): value is UserAddMessageCommand {
   return typeof value === "object" && value !== null && (value as { type?: unknown }).type === "add-message";
 }
 
-function toAddMessageCommand(message: AppendMessage): UserAddMessageCommand {
+export function toAddMessageCommand(message: AppendMessage): UserAddMessageCommand {
   const parts: Array<UserAddMessageCommand["message"]["parts"][number]> = [];
   for (const part of message.content) {
     if (part.type === "text") {
@@ -280,6 +280,25 @@ function toAddMessageCommand(message: AppendMessage): UserAddMessageCommand {
       });
     }
   }
+
+  // assistant-ui keeps uploaded attachments in `message.attachments`; they
+  // are not copied into `message.content` by the composer. Images therefore
+  // have to cross the transport boundary from the attachment content here,
+  // otherwise they are visible in the composer but silently absent from the
+  // add-message command and the canonical user snapshot.
+  const seenImages = new Set(
+    parts
+      .filter((part): part is { type: "image"; image: string } => part.type === "image")
+      .map((part) => part.image),
+  );
+  for (const attachment of message.attachments ?? []) {
+    for (const attachmentPart of attachment.content ?? []) {
+      if (attachmentPart.type !== "image" || seenImages.has(attachmentPart.image)) continue;
+      parts.push({ type: "image", image: attachmentPart.image });
+      seenImages.add(attachmentPart.image);
+    }
+  }
+
   return {
     type: "add-message",
     sourceId: message.sourceId,

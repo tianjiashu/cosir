@@ -1,5 +1,6 @@
 import base64
 from pathlib import Path
+from typing import cast
 
 import pytest
 from langchain_core.messages import SystemMessage
@@ -14,7 +15,10 @@ from app.service.terminal.errors import (
     TerminalWorkerUnavailableError,
 )
 from app.service.terminal.shell_resolver import ShellResolver
-from app.service.terminal.terminal_session_service import TerminalSessionService
+from app.service.terminal.terminal_session_service import (
+    TerminalReadResult,
+    TerminalSessionService,
+)
 from app.service.terminal.worker import ProcessTerminalWorker
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -100,6 +104,13 @@ def make_service(*, ring_buffer_bytes: int = 1024 * 1024):
     return service, factory
 
 
+def output_texts(result: TerminalReadResult) -> list[str]:
+    """取模型可见的 UTF-8 文本帧，用于断言游标语义。"""
+
+    frames = cast("list[dict[str, object]]", result.to_dict()["output"])
+    return [str(frame["data"]) for frame in frames]
+
+
 def test_session_agent_operations_and_readers_are_cursor_based(tmp_path: Path) -> None:
     service, factory = make_service()
     snapshot = service.start(
@@ -126,6 +137,43 @@ def test_session_agent_operations_and_readers_are_cursor_based(tmp_path: Path) -
     assert result.next_seq == 2
     assert attachment.subscription.get(0.1) == result.output[0]
     assert service.read(session_id, task_id=7, after_seq=0, wait_ms=0).output == result.output
+
+
+def test_cursor_must_be_the_last_applied_seq_not_next_seq(tmp_path: Path) -> None:
+    """续读必须回传「已应用的最后一个 seq」；回传 next_seq 会静默跳掉一帧。"""
+
+    service, factory = make_service()
+    snapshot = service.start(
+        task_id=7,
+        workspace_id=8,
+        workspace_root=str(tmp_path),
+        cwd=".",
+        run_id=1,
+    )
+    session_id = str(snapshot["session_id"])
+    worker = factory.workers[0]
+
+    # 一行输出在 ConPTY 上常被切成「内容帧 + 换行帧」两帧。
+    worker.emit_output(b"line-1")
+    worker.emit_output(b"\r\n")
+
+    first = service.read(session_id, task_id=7, after_seq=None, wait_ms=0)
+    assert output_texts(first) == ["line-1", "\r\n"]
+    assert first.next_seq == 3
+
+    worker.emit_output(b"line-2")
+    worker.emit_output(b"\r\n")
+
+    applied = service.read(session_id, task_id=7, after_seq=first.next_seq - 1, wait_ms=0)
+    assert output_texts(applied) == ["line-2", "\r\n"]
+    assert applied.next_seq == 5
+
+    worker.emit_output(b"line-3")
+    worker.emit_output(b"\r\n")
+
+    # 回传 next_seq 把 seq == after_seq 的内容帧过滤掉，只留下换行帧。
+    skipped = service.read(session_id, task_id=7, after_seq=applied.next_seq, wait_ms=0)
+    assert output_texts(skipped) == ["\r\n"]
 
 
 def test_agent_read_does_not_apply_a_second_output_byte_budget(tmp_path: Path) -> None:
