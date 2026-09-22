@@ -19,11 +19,14 @@
 stale、协调器异常等分支自动覆盖，将来新增分支也不会漏。
 """
 
-from collections.abc import Collection
+import asyncio
+from collections.abc import Callable, Collection
 
 from app.core.hook import HookContext, HookEvent, HookInterceptor
+from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.tools.guard.file_resource_paths import FileResourcePathError
 from app.core.tools.guard.file_tool_state_coordinator import (
+    FileToolExecutionPlan,
     FileToolStateCoordinator,
 )
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
@@ -34,7 +37,8 @@ from app.core.tools.schemas import (
     ToolObservation,
 )
 from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
-from app.core.tools.tool_execute.tool_error import tool_error
+from app.core.tools.tool_execute.tool_cancelled import ToolCallCancelled, tool_cancelled
+from app.core.tools.tool_execute.tool_error import handler_exception_reason, tool_error
 from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
 from app.core.tools.tool_execute.tool_observation_budget import ToolObservationBudget
 from app.core.tools.tool_execute.tool_terminal_projection import (
@@ -42,6 +46,8 @@ from app.core.tools.tool_execute.tool_terminal_projection import (
     project_unhandled_tool_failure,
 )
 from app.core.tools.tool_registry import ToolRegistry
+
+_ASYNC_CANCELLATION_POLL_INTERVAL_SECONDS = 0.05
 
 
 class ToolExecutor:
@@ -147,6 +153,93 @@ class ToolExecutor:
 
         self._state_coordinator.clear_task(task_id)
 
+    def _prepare_state(
+        self,
+        tool: ToolDefinition,
+        arguments: dict[str, object],
+        execution_context: ToolExecutionContext,
+        tool_call_id: str,
+    ) -> tuple[FileToolExecutionPlan | None, ToolObservation | None]:
+        """Run the shared file-state preparation and budget early exits."""
+
+        try:
+            plan = self._state_coordinator.prepare(
+                tool,
+                arguments,
+                execution_context,
+                tool_call_id=tool_call_id,
+            )
+        except FileResourcePathError as exc:
+            return None, self._budget.apply(
+                tool_error(
+                    tool.name,
+                    str(exc),
+                    reason=exc.reason,
+                    permission=tool.permission,
+                    tool_call_id=tool_call_id,
+                ),
+                execution_context,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            return None, self._budget.apply(
+                tool_error(
+                    tool.name,
+                    f"invalid file path: {exc}",
+                    reason=(
+                        f"the file path is invalid: {exc}; pass a well-formed path inside "
+                        "the project before retrying."
+                    ),
+                    permission=tool.permission,
+                    tool_call_id=tool_call_id,
+                ),
+                execution_context,
+            )
+        if plan.early_observation is not None:
+            return plan, self._budget.apply(plan.early_observation, execution_context)
+        return plan, None
+
+    def _state_coordinator_error(
+        self,
+        tool: ToolDefinition,
+        exc: RuntimeError,
+        execution_context: ToolExecutionContext,
+        tool_call_id: str,
+    ) -> ToolObservation:
+        """Normalize a shared state-coordinator runtime failure."""
+
+        return self._budget.apply(
+            tool_error(
+                tool.name,
+                str(exc),
+                reason=(
+                    f"the file state coordinator could not process the request: {exc}; "
+                    "retry after the transient condition clears."
+                ),
+                retryable=True,
+                permission=tool.permission,
+                tool_call_id=tool_call_id,
+            ),
+            execution_context,
+        )
+
+    def _finish_observation(
+        self,
+        tool: ToolDefinition,
+        observation: ToolObservation,
+        execution_context: ToolExecutionContext,
+    ) -> ToolObservation:
+        """Run the shared post-hook and observation-budget completion stages."""
+
+        HookInterceptor.safe_fire(
+            HookContext.from_locatable(
+                event=HookEvent.POST_TOOL_USE,
+                locatable=execution_context,
+                tool_name=tool.name,
+                tool_observation=observation,
+            )
+        )
+        return self._budget.apply(observation, execution_context)
+
     def execute(
         self,
         call: ToolCall,
@@ -250,40 +343,14 @@ class ToolExecutor:
             denial = gate_outcome.denial or self._unknown_denial(call)
             return self._budget.apply(denial, execution_context)
         tool = gate_outcome.tool
-
-        # 阶段二：文件状态协调的准备阶段。文件工具经 revision/stale/锁协调；非文件
-        # 工具由协调器短路为空计划（lock/check_stale/complete 全 no-op），
-        # 单一路径避免双分支重复 execute+hook 编排。
-        try:
-            plan = self._state_coordinator.prepare(
-                tool,
-                gate_outcome.arguments,
-                execution_context,
-                tool_call_id=call.call_id,
-            )
-        # FileResourcePathError 继承自 ValueError，必须在前面的 except 命中；若被
-        # 调到下方宽泛 (OSError, RuntimeError, ValueError) 分支，将丢失面向模型的
-        # 富文本 reason、退化为泛化文案。此顺序是显式契约，改动前须确认。
-        except FileResourcePathError as exc:
+        if tool.handler_kind != "sync":
             return self._budget.apply(
                 tool_error(
                     tool.name,
-                    str(exc),
-                    reason=exc.reason,
-                    permission=tool.permission,
-                    tool_call_id=call.call_id,
-                ),
-                execution_context,
-            )
-        except (OSError, RuntimeError, ValueError) as exc:
-            return self._budget.apply(
-                tool_error(
-                    tool.name,
-                    f"invalid file path: {exc}",
+                    "async tool handler requires ToolExecutor.execute_async",
                     reason=(
-                        f"the file path is invalid: {exc}; this is deterministic, "
-                        f"so pass a well-formed path inside the project. The same "
-                        f"malformed path will always be rejected."
+                        "this tool is explicitly asynchronous and cannot be dispatched by the "
+                        "synchronous execution entry point; use the async workflow path."
                     ),
                     permission=tool.permission,
                     tool_call_id=call.call_id,
@@ -291,8 +358,17 @@ class ToolExecutor:
                 execution_context,
             )
 
-        if plan.early_observation is not None:
-            return self._budget.apply(plan.early_observation, execution_context)
+        # 阶段二：文件状态协调的准备阶段。同步与异步入口共享同一准备、预算和
+        # early-return helper，避免两条管线的错误文案与边界逐渐漂移。
+        plan, early_observation = self._prepare_state(
+            tool,
+            gate_outcome.arguments,
+            execution_context,
+            call.call_id,
+        )
+        if early_observation is not None:
+            return early_observation
+        assert plan is not None
 
         # 阶段三：持锁 → stale 检查 → 隔离执行 → 状态回写。
         try:
@@ -321,35 +397,208 @@ class ToolExecutor:
                     execution_context,
                 )
         except RuntimeError as exc:
-            return self._budget.apply(
-                tool_error(
-                    tool.name,
-                    str(exc),
-                    reason=(
-                        f"the file state coordinator could not process the "
-                        f"request: {exc}; this is usually transient (e.g. a "
-                        f"temporary capacity or lock limit), so retrying the same "
-                        f"call may succeed once the condition clears."
-                    ),
-                    retryable=True,
-                    permission=tool.permission,
+            return self._state_coordinator_error(tool, exc, execution_context, call.call_id)
+
+        # 阶段四、五：PostToolUse 与统一输出预算的共享完成阶段。
+        return self._finish_observation(tool, observation, execution_context)
+
+    async def execute_async(
+        self,
+        call: ToolCall,
+        execution_context: ToolExecutionContext | None = None,
+        allowed_tool_names: Collection[str] | None = None,
+    ) -> ToolObservation:
+        """Execute one explicitly async tool on the current event loop.
+
+        The access gate, file-state boundary, hooks, observation budget, and terminal
+        projection are the same as :meth:`execute`; only handler dispatch differs.
+        Synchronous definitions are rejected instead of being silently awaited or moved
+        to a worker thread.
+        """
+
+        if execution_context is None:
+            raise ValueError("execution_context is required")
+
+        try:
+            tool = self._registry.get_tool_definition(call.tool_name)
+            if tool is not None and tool.handler_kind != "async":
+                raise TypeError(
+                    f"tool '{tool.name}' declares handler_kind=sync; "
+                    "ToolExecutor.execute_async requires handler_kind=async"
+                )
+
+            try:
+                observation = await self._execute_inner_async(
+                    call, execution_context, allowed_tool_names
+                )
+            except asyncio.CancelledError:
+                # Task cancellation is a control-flow signal, not a handler failure.  Project
+                # the same terminal observation used by the synchronous runner, then preserve
+                # asyncio's cancellation contract for the workflow caller.
+                definition = self._registry.get_tool_definition(call.tool_name)
+                cancelled = tool_cancelled(
+                    call.tool_name,
+                    permission=definition.permission if definition is not None else "",
                     tool_call_id=call.call_id,
-                ),
-                execution_context,
+                )
+                project_tool_terminal_state(
+                    task_id=execution_context.task_id,
+                    run_id=execution_context.run_id,
+                    tool_call_id=call.call_id or execution_context.tool_call_id,
+                    observation=cancelled,
+                )
+                if tool_call_cancellation_registry.is_cancelled(
+                    execution_context.run_id, call.call_id
+                ):
+                    raise ToolCallCancelled from None
+                raise
+            except Exception:
+                project_unhandled_tool_failure(
+                    task_id=execution_context.task_id,
+                    run_id=execution_context.run_id,
+                    tool_call_id=call.call_id or execution_context.tool_call_id,
+                )
+                raise
+            project_tool_terminal_state(
+                task_id=execution_context.task_id,
+                run_id=execution_context.run_id,
+                tool_call_id=call.call_id or execution_context.tool_call_id,
+                observation=observation,
             )
+            return observation
+        finally:
+            self._runner.cleanup_cancellation_signal(execution_context, call.call_id)
 
-        # 阶段四：PostToolUse 拦截点。门禁硬拒绝的路径不会走到这里（未执行、无观察）。
-        HookInterceptor.safe_fire(
-            HookContext.from_locatable(
-                event=HookEvent.POST_TOOL_USE,
-                locatable=execution_context,
-                tool_name=tool.name,
-                tool_observation=observation,
-            )
+    @staticmethod
+    async def _wait_for_cancellation(should_cancel: Callable[[], bool]) -> None:
+        """Poll a live cancellation check without blocking the event loop."""
+
+        while not should_cancel():  # noqa: ASYNC110 - registry has no awaitable signal
+            await asyncio.sleep(_ASYNC_CANCELLATION_POLL_INTERVAL_SECONDS)
+
+    @staticmethod
+    async def _await_cancelled_task(task: asyncio.Task[object]) -> None:
+        """Wait for a task after requesting cancellation, consuming its CancelledError."""
+
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def _run_async_handler(
+        self,
+        tool: ToolDefinition,
+        arguments: dict[str, object],
+        execution_context: ToolExecutionContext,
+        tool_call_id: str,
+        should_cancel: Callable[[], bool] | None,
+    ) -> object:
+        """Run an async handler and turn registry cancellation into task cancellation.
+
+        The handler and registry watcher are independent tasks.  Registry cancellation
+        cancels and awaits the handler task before propagating ``CancelledError``; outer
+        task cancellation follows the same cleanup path.  All waits are asyncio awaits,
+        so no event-loop thread is blocked.
+        """
+
+        if should_cancel is not None and should_cancel():
+            raise asyncio.CancelledError
+
+        handler_task = asyncio.create_task(
+            tool.handler(**arguments, execution_context=execution_context)
         )
+        if should_cancel is None:
+            return await handler_task
 
-        # 阶段五：统一输出预算。
-        return self._budget.apply(observation, execution_context)
+        cancellation_task = asyncio.create_task(self._wait_for_cancellation(should_cancel))
+        try:
+            done, _ = await asyncio.wait(
+                {handler_task, cancellation_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if cancellation_task in done:
+                handler_task.cancel()
+                await self._await_cancelled_task(handler_task)
+                raise asyncio.CancelledError
+
+            payload = handler_task.result()
+            if should_cancel():
+                raise asyncio.CancelledError
+            return payload
+        except asyncio.CancelledError:
+            if not handler_task.done():
+                handler_task.cancel()
+            await self._await_cancelled_task(handler_task)
+            raise
+        finally:
+            if not cancellation_task.done():
+                cancellation_task.cancel()
+            await self._await_cancelled_task(cancellation_task)
+
+    async def _execute_inner_async(
+        self,
+        call: ToolCall,
+        execution_context: ToolExecutionContext,
+        allowed_tool_names: Collection[str] | None = None,
+    ) -> ToolObservation:
+        """Run the common tool pipeline with direct async handler dispatch."""
+
+        gate_outcome = self._gate.evaluate(call, execution_context, allowed_tool_names)
+        if not gate_outcome.admitted or gate_outcome.tool is None:
+            denial = gate_outcome.denial or self._unknown_denial(call)
+            return self._budget.apply(denial, execution_context)
+        tool = gate_outcome.tool
+        if tool.handler_kind != "async":
+            raise TypeError(
+                f"tool '{tool.name}' declares handler_kind=sync; "
+                "ToolExecutor.execute_async requires handler_kind=async"
+            )
+
+        plan, early_observation = self._prepare_state(
+            tool,
+            gate_outcome.arguments,
+            execution_context,
+            call.call_id,
+        )
+        if early_observation is not None:
+            return early_observation
+        assert plan is not None
+
+        try:
+            with self._state_coordinator.lock(plan, execution_context):
+                stale_observation = self._state_coordinator.check_stale(
+                    plan,
+                    tool,
+                    execution_context,
+                    tool_call_id=call.call_id,
+                )
+                if stale_observation is not None:
+                    return self._budget.apply(stale_observation, execution_context)
+                try:
+                    should_cancel = self._runner.build_cancellation_check(
+                        execution_context, call.call_id
+                    )
+                    payload = await self._run_async_handler(
+                        tool,
+                        gate_outcome.arguments,
+                        execution_context,
+                        call.call_id,
+                        should_cancel,
+                    )
+                except Exception as exc:
+                    observation = tool_error(
+                        tool.name,
+                        str(exc),
+                        reason=handler_exception_reason(
+                            f"the async tool handler raised an exception: {exc}"
+                        ),
+                        permission=tool.permission,
+                        tool_call_id=call.call_id,
+                    )
+                else:
+                    observation = self._runner.normalize_result(tool, payload, call.call_id)
+                self._state_coordinator.complete(plan, observation, execution_context)
+        except RuntimeError as exc:
+            return self._state_coordinator_error(tool, exc, execution_context, call.call_id)
+
+        return self._finish_observation(tool, observation, execution_context)
 
     @staticmethod
     def _unknown_denial(call: ToolCall) -> ToolObservation:

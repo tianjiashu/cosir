@@ -12,7 +12,6 @@ from app.storage.model.base import StorageBase
 from app.storage.model.conversation_command_model import ConversationCommandModel
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
-from app.storage.model.delegation_model import DelegationModel
 from app.storage.model.model_entry_model import ModelEntryModel
 from app.storage.model.provider_model import ProviderModel
 from app.storage.model.task_model import TaskModel
@@ -26,7 +25,6 @@ APP_MODELS = (
     ConversationRunModel,
     ConversationCommandModel,
     ConversationTaskContextModel,
-    DelegationModel,
 )
 def initialize_app_schema(engine: Engine) -> None:
     """创建当前应用 metadata 声明的全部业务表。

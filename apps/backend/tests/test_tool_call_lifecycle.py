@@ -107,15 +107,14 @@ class _LifecycleHarness:
                 tool_calls=[ToolCall(tool_name="read_file", call_id=call_id, arguments=args or {})],
             )
 
-    def cancel(self, call_id: str) -> None:
-        """取消一个已创建的工具调用。"""
+    def cancel(self) -> None:
+        """收口全部未终态的工具调用（``cancel`` 按状态收口，不接受点名集合）。"""
 
         with self._patch_runtime():
             self.manager = self.manager.cancel(
                 task_id=1,
                 run_id=2,
                 step_id="step-3",
-                tool_calls=[ToolCall(tool_name="read_file", call_id=call_id)],
             )
 
 
@@ -208,7 +207,7 @@ def test_create_begin_and_cancel_update_serializable_state() -> None:
     assert harness.manager.calls["call-1"].args == {"path": "a.py"}
     assert harness.events[1].args == {"path": "a.py"}
 
-    harness.cancel("call-1")
+    harness.cancel()
     assert harness.manager.calls["call-1"].status == "cancelled"
     assert harness.events[2].status == "cancelled"
 

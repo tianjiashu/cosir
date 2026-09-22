@@ -61,6 +61,67 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(invalidSnapshot)).toThrow("child_run_id");
   });
 
+  it("accepts the minimal child session display contract", () => {
+    const snapshot = validSnapshot();
+    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", usage: null, error: null, messages: [{
+      id: "m1",
+      role: "assistant",
+      parts: [{
+        type: "tool-call",
+        toolCallId: "delegate-1",
+        toolName: "delegate_task",
+        status: "completed",
+        args: {},
+        display_data: {
+          kind: "delegation-result",
+          title: "审查代码",
+          role: "Reviewer",
+          child_task_id: 501,
+          child_run_id: 903,
+          status: "completed",
+          final_output: "已完成审查。",
+        },
+      }],
+    }] }];
+    snapshot.current_run_id = 1;
+
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+  });
+
+  it("validates child wait ids, statuses, and result payloads at the transport boundary", () => {
+    const snapshot = validSnapshot();
+    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", usage: null, error: null, messages: [{
+      id: "m1",
+      role: "assistant",
+      parts: [{
+        type: "tool-call",
+        toolCallId: "wait-1",
+        toolName: "child_agent_wait",
+        status: "completed",
+        args: {},
+        display_data: {
+          kind: "child-agent-wait-result",
+          timed_out: false,
+          messages: [{ child_task_id: 501, child_run_id: 903, status: "completed", final_output: "完成", end_reason: "stop" }],
+          pending: [],
+          interrupted_by: null,
+        },
+      }],
+    }] }];
+    snapshot.current_run_id = 1;
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+
+    const invalidStatus = structuredClone(snapshot);
+    const waitData = (invalidStatus.runs[0].messages[0].parts[0] as { display_data: Record<string, unknown> }).display_data;
+    (waitData.messages as Array<Record<string, unknown>>)[0].status = "running";
+    expect(() => parseTransportState(invalidStatus)).toThrow("messages[0].status");
+
+    const invalidId = structuredClone(snapshot);
+    const invalidWaitData = (invalidId.runs[0].messages[0].parts[0] as { display_data: Record<string, unknown> }).display_data;
+    (invalidWaitData.messages as Array<Record<string, unknown>>)[0].child_task_id = 0;
+    expect(() => parseTransportState(invalidId)).toThrow("messages[0].child_task_id");
+  });
+
   it("accepts a code+message snapshot error and rejects the legacy retryable field", () => {
     const snapshot = validSnapshot();
     snapshot.error = { code: "run_failed", message: "运行失败" };

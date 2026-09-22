@@ -33,6 +33,81 @@ function requireNullableNonNegativeInteger(value: unknown, path: string): number
   return value as number;
 }
 
+function requirePositiveInteger(value: unknown, path: string): number {
+  if (!Number.isInteger(value) || (value as number) < 1) {
+    throw new TransportSnapshotValidationError(path, "正整数");
+  }
+  return value as number;
+}
+
+function requireKnownChildStatus(value: unknown, path: string): void {
+  if (value !== "pending" && value !== "running" && value !== "completed" && value !== "failed" && value !== "cancelled") {
+    throw new TransportSnapshotValidationError(path, "受支持的子 Agent 状态");
+  }
+}
+
+function requireOptionalNonEmptyString(value: unknown, path: string): void {
+  if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
+    throw new TransportSnapshotValidationError(path, "非空字符串或 undefined");
+  }
+}
+
+function validateDelegationDisplayData(data: Record<string, unknown>, path: string): void {
+  const allowed = [
+    "kind", "title", "child_agent_id", "delegation_id", "child_task_id", "child_run_id",
+    "status", "role", "final_output", "status_hint", "end_reason",
+  ];
+  if (Object.keys(data).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
+  if (typeof data.title !== "string" || data.title.trim() === "") throw new TransportSnapshotValidationError(`${path}.title`, "非空字符串");
+  requireOptionalNonEmptyString(data.child_agent_id, `${path}.child_agent_id`);
+  requireOptionalNonEmptyString(data.role, `${path}.role`);
+  if (data.delegation_id !== undefined) requirePositiveInteger(data.delegation_id, `${path}.delegation_id`);
+  if (data.child_task_id !== undefined) requirePositiveInteger(data.child_task_id, `${path}.child_task_id`);
+  if (data.child_run_id !== undefined) requirePositiveInteger(data.child_run_id, `${path}.child_run_id`);
+  if (data.status !== undefined) requireKnownChildStatus(data.status, `${path}.status`);
+  if (data.final_output !== undefined && typeof data.final_output !== "string") throw new TransportSnapshotValidationError(`${path}.final_output`, "字符串");
+  requireOptionalNonEmptyString(data.status_hint, `${path}.status_hint`);
+  requireOptionalNonEmptyString(data.end_reason, `${path}.end_reason`);
+}
+
+function validateChildWaitDisplayData(data: Record<string, unknown>, path: string): void {
+  requireExactKeys(data, ["kind", "timed_out", "messages", "pending", "interrupted_by"], path);
+  if (typeof data.timed_out !== "boolean") throw new TransportSnapshotValidationError(`${path}.timed_out`, "布尔值");
+  if (!Array.isArray(data.messages)) throw new TransportSnapshotValidationError(`${path}.messages`, "数组");
+  data.messages.forEach((value, index) => {
+    const message = requireRecord(value, `${path}.messages[${index}]`);
+    requireExactKeys(message, ["child_task_id", "child_run_id", "status", "final_output", "end_reason"], `${path}.messages[${index}]`);
+    requirePositiveInteger(message.child_task_id, `${path}.messages[${index}].child_task_id`);
+    requirePositiveInteger(message.child_run_id, `${path}.messages[${index}].child_run_id`);
+    if (message.status !== "completed" && message.status !== "failed" && message.status !== "cancelled") {
+      throw new TransportSnapshotValidationError(`${path}.messages[${index}].status`, "completed、failed 或 cancelled");
+    }
+    if (message.final_output !== null && typeof message.final_output !== "string") throw new TransportSnapshotValidationError(`${path}.messages[${index}].final_output`, "字符串或 null");
+    if (message.end_reason !== null && typeof message.end_reason !== "string") throw new TransportSnapshotValidationError(`${path}.messages[${index}].end_reason`, "字符串或 null");
+  });
+  if (!Array.isArray(data.pending)) throw new TransportSnapshotValidationError(`${path}.pending`, "数组");
+  data.pending.forEach((value, index) => {
+    const pending = requireRecord(value, `${path}.pending[${index}]`);
+    requireExactKeys(pending, ["child_task_id", "status"], `${path}.pending[${index}]`);
+    requirePositiveInteger(pending.child_task_id, `${path}.pending[${index}].child_task_id`);
+    if (pending.status !== null) {
+      if (typeof pending.status !== "string") throw new TransportSnapshotValidationError(`${path}.pending[${index}].status`, "字符串或 null");
+      requireKnownChildStatus(pending.status, `${path}.pending[${index}].status`);
+    }
+  });
+  if (data.interrupted_by !== null && data.interrupted_by !== "parent_cancelled" && data.interrupted_by !== "session_closed" && data.interrupted_by !== "shutdown") {
+    throw new TransportSnapshotValidationError(`${path}.interrupted_by`, "受支持的中断原因或 null");
+  }
+}
+
+function validateDisplayData(value: unknown, path: string): void {
+  if (value === null || value === undefined) return;
+  const data = requireRecord(value, path);
+  if (data.kind !== undefined && typeof data.kind !== "string") throw new TransportSnapshotValidationError(`${path}.kind`, "字符串");
+  if (data.kind === "delegation-result") validateDelegationDisplayData(data, path);
+  if (data.kind === "child-agent-wait-result") validateChildWaitDisplayData(data, path);
+}
+
 const USAGE_KEYS = [
   "input_tokens",
   "output_tokens",
@@ -126,7 +201,7 @@ function validatePart(value: unknown, path: string): void {
   if (hasOwn(part, "error") && part.error !== null && typeof part.error !== "string") throw new TransportSnapshotValidationError(`${path}.error`, "字符串或 null");
   if (hasOwn(part, "errorCode") && part.errorCode !== null && part.errorCode !== undefined && typeof part.errorCode !== "string") throw new TransportSnapshotValidationError(`${path}.errorCode`, "字符串或 null");
   if (hasOwn(part, "presentation") && !isRecord(part.presentation)) throw new TransportSnapshotValidationError(`${path}.presentation`, "对象");
-  if (hasOwn(part, "display_data") && part.display_data !== null && !isRecord(part.display_data)) throw new TransportSnapshotValidationError(`${path}.display_data`, "对象或 null");
+  if (hasOwn(part, "display_data")) validateDisplayData(part.display_data, `${path}.display_data`);
   if (hasOwn(part, "isError") && part.isError !== null && typeof part.isError !== "boolean") throw new TransportSnapshotValidationError(`${path}.isError`, "布尔值或 null");
   if (hasOwn(part, "child_task_id") && (!Number.isInteger(part.child_task_id) || (part.child_task_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_task_id`, "正整数");
   if (hasOwn(part, "child_run_id") && (!Number.isInteger(part.child_run_id) || (part.child_run_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_run_id`, "正整数");

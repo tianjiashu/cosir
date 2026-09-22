@@ -21,7 +21,6 @@ from app.service.depends import (
 )
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
-from app.storage.model.delegation_model import DelegationModel
 from app.storage.store_engines import init_storage, main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils import paths
@@ -52,27 +51,6 @@ def _count(model: type[object]) -> int:
         return int(session.scalar(select(func.count()).select_from(model)) or 0)
 
 
-def _insert_delegation(task_id: int, parent_run_id: int) -> None:
-    """插入一条以 parent_run_id 为发起方的委派记录。"""
-
-    with main_session_factory().begin() as session:
-        session.add(
-            DelegationModel(
-                task_id=task_id,
-                parent_run_id=parent_run_id,
-                child_run_id=None,
-                child_task_id=None,
-                parent_agent_id="main_agent",
-                child_agent_id="sub_agent",
-                status="succeeded",
-                prompt="delegate",
-                summary="done",
-                error="",
-                effective_tools="[]",
-            )
-        )
-
-
 def test_delete_middle_run_removes_only_its_data(storage) -> None:
     workspace = get_workspace_crud().create("review", str(Path.cwd()))
     task = get_task_crud().create(workspace.id, "root")
@@ -94,7 +72,7 @@ def test_delete_middle_run_removes_only_its_data(storage) -> None:
             )
         )
 
-    # 只给中间 run_b 挂命令 / 委派产物。
+    # 只给中间 run_b 挂命令产物。
     get_conversation_command_crud().create(
         task_id=task.id,
         command_id="cmd-b",
@@ -102,8 +80,6 @@ def test_delete_middle_run_removes_only_its_data(storage) -> None:
         payload_hash="hash-b",
         run_id=run_b.id,
     )
-    _insert_delegation(task.id, run_b.id)
-
     get_task_service().delete_run(task.id, run_b.id)
 
     # 目标 run 及其上下文被删除，兄弟 run 与上下文保留。

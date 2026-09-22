@@ -6,6 +6,10 @@ from app.config.settings import Settings
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
+from app.core.tools.tool_handler.child_agent_close import build_child_agent_close_definition
+from app.core.tools.tool_handler.child_agent_send import build_child_agent_send_definition
+from app.core.tools.tool_handler.child_agent_status import build_child_agent_status_definition
+from app.core.tools.tool_handler.child_agent_wait import build_child_agent_wait_definition
 from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
 from app.core.tools.tool_handler.delete_tool import build_delete_file_definition
 from app.core.tools.tool_handler.execute_terminal import build_execute_terminal_definition
@@ -103,6 +107,10 @@ class ToolSystem:
         registry.register(build_web_search_definition())
         registry.register(build_web_extract_definition())
         registry.register(build_delegate_task_definition())
+        registry.register(build_child_agent_send_definition())
+        registry.register(build_child_agent_status_definition())
+        registry.register(build_child_agent_wait_definition())
+        registry.register(build_child_agent_close_definition())
         executor = ToolExecutor(
             registry=registry,
             output_budget=ToolOutputBudget(Settings.MAX_TOOL_OUTPUT_CHARS),

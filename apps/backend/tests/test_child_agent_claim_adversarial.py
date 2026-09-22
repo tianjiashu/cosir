@@ -462,6 +462,8 @@ def test_only_known_start_call_sites_exist() -> None:
         "assistant_transport/assistant_api.py",
         "core\\delegation\\child_agent_runner.py",
         "core/delegation/child_agent_runner.py",
+        "service\\child_agent\\child_agent_session_service.py",
+        "service/child_agent/child_agent_session_service.py",
     }
     unknown = files - allowed
     assert not unknown, f"发现未评估的 ConversationRunExecutor.start 调用点：{unknown}\n{hits}"

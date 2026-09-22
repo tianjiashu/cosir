@@ -5,8 +5,8 @@
 职责边界：
 - 负责：任务容器创建（不含首轮次）、从最新 turn 派生执行态、任务树原子级联删除
   （编排 ``TaskCrud``/``ConversationRunCrud``/``ConversationCommandCrud``/
-  ``ConversationTaskContextCrud``/
-  ``DelegationCrud`` 在单事务内逐个清理，孤儿 checkpoint 线程交 ``checkpoint_gc`` 回收）。
+  ``ConversationTaskContextCrud`` 在单事务内逐个清理，孤儿 checkpoint 线程交
+  ``checkpoint_gc`` 回收）。
 - 不负责：直接 SQL 操作（委托给上述 CRUD）；不写执行态（执行态由 ``Turn`` 持有，本
   service 仅派生展示）；不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
 """
@@ -71,7 +71,6 @@ class TaskService:
         self._context = service_depends.get_conversation_task_context_service()
         self._state = service_depends.get_conversation_task_state_service()
         self._command = service_depends.get_conversation_command_crud()
-        self._delegation = service_depends.get_delegation_crud()
         self._task_context_crud = service_depends.get_conversation_task_context_crud()
         self._session_factory = main_session_factory()
 
@@ -166,6 +165,24 @@ class TaskService:
         """
         return self._task.get(task_id)
 
+    def list_child_tasks(self, parent_task_id: int, parent_run_id: int) -> list[TaskRecord]:
+        """Return direct delegation children owned by one parent Run.
+
+        This is a relationship read only; it does not infer lifecycle state.  Callers
+        must read each child's ConversationRun records for canonical status.
+        """
+
+        return [
+            child
+            for child in self._task.list_by_parent_task(parent_task_id)
+            if child.task_type == "delegation" and child.parent_run_id == parent_run_id
+        ]
+
+    def list_runs_for_task(self, task_id: int) -> list[ConversationRunRecord]:
+        """Return canonical Run history for a child-session recovery/read boundary."""
+
+        return self._turn.list_by_task(task_id)
+
     def update_context_usage(
         self, task_id: int, used: int, context_window_total: int | None = None
     ) -> TaskRecord:
@@ -236,10 +253,15 @@ class TaskService:
             return
         try:
             task.result()
-        except Exception:
-            log.exception(
+        except asyncio.CancelledError:
+            return
+        except BaseException as exc:
+            log.error(
                 "task_fork_detached_worker_failed",
-                extra={"msg": "已取消请求的 fork supervisor 执行失败"},
+                extra={
+                    "msg": "已取消请求的 fork supervisor 执行失败",
+                    "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
+                },
             )
 
     def _fork_task_locked(self, source_task_id: int, source_run_id: int) -> TaskRecord:
@@ -410,8 +432,8 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败（事务回滚）。
 
         副作用:
-            从 ``conversation_task_contexts`` / ``conversation_commands`` / ``conversation_runs`` /
-            ``delegations`` / ``tasks`` 表删除该任务树相关数据；并提交后清理已删任务遗留的
+            从 ``conversation_task_contexts`` / ``conversation_commands`` /
+            ``conversation_runs`` / ``tasks`` 表删除该任务树相关数据；并提交后清理已删任务遗留的
             孤儿 LangGraph checkpoint 线程、卸载进程内 runtime space。
         """
 
@@ -432,6 +454,18 @@ class TaskService:
                             self._task_register.get_or_create(current_id).operation(timeout=10)
                         )
                         locked_ids.add(current_id)
+                    try:
+                        service_depends.get_child_agent_session_service().close_for_task_ids(
+                            set(task_ids)
+                        )
+                    except Exception:
+                        log.exception(
+                            "child_agent_task_delete_cleanup_failed",
+                            extra={
+                                "msg": "Task 删除前 Child Agent session 收口失败，继续事务删除",
+                                "data": {"task_ids": sorted(task_ids)},
+                            },
+                        )
                     log.info(
                         "task_delete_start",
                         extra={"msg": "task delete started", "data": {"task_id": task_id}},
@@ -481,7 +515,7 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果删除事务失败（回滚）。
 
         副作用:
-            从 ``conversation_task_contexts`` / ``conversation_commands`` / ``delegations`` /
+            从 ``conversation_task_contexts`` / ``conversation_commands`` /
             ``conversation_runs`` 删除该 run 相关行，并把 ``tasks`` 中
             ``parent_run_id`` 指向本 run 的引用置空；提交后回收孤儿 checkpoint 线程。
         """
@@ -516,7 +550,6 @@ class TaskService:
                     with begin_immediate(self._session_factory) as session:
                         self._context.delete_by_run_id(task_id, run_id, session=session)
                         self._command.delete_by_run_id(run_id, session=session)
-                        self._delegation.delete_by_run_id(run_id, session=session)
                         self._task.clear_parent_run_id_by_run_id(run_id, session=session)
                         self._turn.delete_by_ids([run_id], session)
                         remaining_threads = (
@@ -742,11 +775,9 @@ class TaskService:
         本方法只负责单任务粒度的删除，并在独立事务（无外部 session 时）提交后清理该任务
         遗留的孤儿 LangGraph checkpoint 线程。
 
-        外键前置条件（由上层保证）：因 ``tasks`` 与 ``conversation_runs`` 存在双向外键环
-        （``tasks.parent_run_id → runs``、``tasks.delegation_id → delegations``），且
-        ``tasks.parent_task_id`` 自引用指向父任务，本方法在删除 run / delegation / task 行前
-        会先解除本任务行对 run 与 delegation 的引用；而子任务必须在父任务之前删除（后序），
-        以避免自引用外键冲突。
+        外键前置条件（由上层保证）：因 ``tasks.parent_run_id → runs`` 且
+        ``tasks.parent_task_id`` 自引用指向父任务，本方法在删除 run / task 行前会先解除
+        本任务行对 run 的引用；而子任务必须在父任务之前删除（后序），以避免自引用外键冲突。
 
         参数:
             task_id: 待删除任务的标识（整数 id）。
@@ -778,10 +809,8 @@ class TaskService:
     def _delete_single_task_in_session(self, task_id: int, session: Session) -> set[str]:
         """在调用方事务内删除单个任务及其产物，返回孤儿 checkpoint 线程集合。
 
-        顺序：先解除本任务行对 run / delegation 的引用（双向外键环），再按外键依赖逆序
-        删除 context / delegation / command / run，最后删除 task 行。
-        delegation 同时按 ``task_id`` 与 ``child_task_id`` 删除，覆盖本任务发起的委派与
-        创建本任务的委派记录。
+        顺序：先解除本任务行对 ``parent_run_id`` 的引用，再按外键依赖逆序删除
+        context / command / run，最后删除 task 行。
 
         参数:
             task_id: 待删除任务的标识。
@@ -799,16 +828,13 @@ class TaskService:
         """
 
         self._task.ensure_task(session, task_id)  # 存在性守卫
-        # 解除 tasks.parent_run_id / delegation_id 对 run、delegation 的引用（双向外键环）。
+        # 解除 tasks.parent_run_id 对 run 的引用。
         self._task.clear_parent_run_id([task_id], session)
-        self._task.clear_delegation_id([task_id], session)
 
         checkpoint_threads = self._turn.collect_checkpoint_threads_by_task_ids(session, [task_id])
         run_ids = self._turn.collect_run_ids_by_task_ids(session, [task_id])
 
         self._task_context_crud.delete_by_task_ids([task_id], session)
-        # delegation 同时覆盖 task_id / child_task_id 两个外键方向。
-        self._delegation.delete_by_task_ids([task_id], session)
         # command.run_id 外键指向 run，必须先删 command 再删 run。
         self._command.delete_by_task_ids([task_id], session)
         service_depends.get_terminal_session_service().delete_task_sessions([task_id])

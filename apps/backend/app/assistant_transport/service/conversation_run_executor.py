@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
+import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -14,8 +14,8 @@ from app.core.runtime.conversation_run_cancellation_registry import cancellation
 from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.models import ConversationRunRecord, ConversationRunStatus
 from app.service.depends import (
+    get_child_agent_session_service,
     get_conversation_run_state_service,
-    get_delegation_service,
     get_terminal_session_service,
 )
 
@@ -56,24 +56,24 @@ class ConversationRunExecutor:
             无。
 
         副作用:
-            从依赖装配取得 ``run_service`` / ``event_projector`` / ``delegation_service`` /
+            从依赖装配取得 ``run_service`` / ``event_projector`` / child session service /
             进程内取消信号源；初始化空的进程内运行注册表；不读取或写入任何 run 状态。
         """
 
         self._run_service = get_conversation_run_state_service()
         self._event_projector = ConversationEventProjector()
-        self._delegation_service = get_delegation_service()
+        self._child_sessions = get_child_agent_session_service()
         self._signal = cancellation_registry
         self._executions: dict[int, _Execution] = {}
 
     async def start(self, run_id: int, runner: ConversationRunRunner) -> asyncio.Task[None]:
         """登记 run 并在当前事件循环创建独立后台 task。
 
-        本方法只做「前置条件断言 + 登记 + 建 task」：断言目标 run 已处于 ``running``
-        状态（该状态由 ``prepare_run_start`` 在同一 Task 操作闸门内落定），随后把后台
-        task 记入进程内 ``_executions``。它不做业务准入决策——「这次请求是否允许启动」
-        由 ``prepare_run_start`` 判定；本方法也不落库、不认领 run、不等待执行结果，
-        HTTP 订阅断开不会取消该 task。
+        本方法只做「异步 canonical 前置条件断言 + 进程内登记 + 建 task」：在 worker
+        thread 中确认目标 run 已处于 ``running`` 状态（该状态由 ``prepare_run_start``
+        在同一 Task 操作闸门内落定），随后把后台 task 记入进程内 ``_executions``。它不做
+        业务准入决策——「这次请求是否允许启动」由 ``prepare_run_start`` 判定；本方法也
+        不落库、不认领 run、不等待执行结果，HTTP 订阅断开不会取消该 task。
 
         参数:
             run_id: 运行对应的 ``ConversationRunRecord.id``。
@@ -90,13 +90,24 @@ class ConversationRunExecutor:
                 调用方应视为启动失败并收敛该 run，不得静默继续。
 
         副作用:
-            在当前事件循环创建后台 task、为其挂异常记录回调并写入进程内 ``_executions``
-            注册；不读取或写入 run 状态列。
+            在线程池中读取一次 run 状态；随后在当前事件循环创建后台 task、为其挂异常记录
+            回调并写入进程内 ``_executions`` 注册；不写入 run 状态列。
         """
 
-        run = self._run_service.get_run(run_id)
+        run = await asyncio.to_thread(self._run_service.get_run, run_id)
         if run.status != ConversationRunStatus.RUNNING:
             raise ValueError(f"run {run_id} is not running")
+        return self.start_registered(run_id, runner)
+
+    def start_registered(self, run_id: int, runner: ConversationRunRunner) -> asyncio.Task[None]:
+        """Synchronously register an already-validated Run execution on the owner loop.
+
+        This method contains no await point and no canonical storage access. Child-session fencing
+        uses it while holding its short in-memory lock so close cannot observe the canonical Run as
+        active before the task is present in ``_executions``. Callers must validate the canonical
+        Run before entering this process-local registration critical section.
+        """
+
         thread_task = asyncio.create_task(self._execute(run_id, runner))
         # 后台 task 无人 await：不挂回调时其异常会被 asyncio 静默吞掉，排障只能靠间接日志。
         thread_task.add_done_callback(lambda task: self._log_execution_result(run_id, task))
@@ -129,7 +140,16 @@ class ConversationRunExecutor:
             return
         try:
             error = task.exception()
-        except Exception:  # 结果取回失败不能反过来打断事件循环回调
+        except asyncio.CancelledError:
+            return
+        except BaseException as exc:
+            log.error(
+                "conversation_run_execution_done_callback_failed",
+                extra={
+                    "msg": "Run done callback 读取异常失败",
+                    "data": {"run_id": run_id, "error_type": type(exc).__name__},
+                },
+            )
             return
         if error is None:
             return
@@ -148,6 +168,10 @@ class ConversationRunExecutor:
     async def close(self) -> None:
         """优雅关闭执行器并取消活动执行。"""
 
+        shutdown_result = await asyncio.to_thread(self._child_sessions.shutdown)
+        if inspect.isawaitable(shutdown_result):
+            await shutdown_result
+
         executions = list(self._executions.values())
         for execution in executions:
             if not execution.thread_task.done():
@@ -156,6 +180,34 @@ class ConversationRunExecutor:
             await asyncio.gather(
                 *(execution.thread_task for execution in executions), return_exceptions=True
             )
+
+    def close_sync(self) -> None:
+        """Synchronously fence child sessions for dependency-cache reset.
+
+        This is a deterministic cleanup contract for test/process reconfiguration paths that
+        cannot await ``close``.  It closes canonical child sessions synchronously, schedules
+        cancellation on each task's owning loop, and clears this executor's process-local index.
+        The normal lifespan still uses :meth:`close` so it can await task completion.
+        """
+
+        self._child_sessions.shutdown()
+        executions = tuple(self._executions.items())
+        for run_id, execution in executions:
+            if execution.thread_task.done():
+                continue
+            try:
+                execution.thread_task.get_loop().call_soon_threadsafe(
+                    execution.thread_task.cancel
+                )
+            except RuntimeError:
+                log.warning(
+                    "conversation_run_executor_sync_close_cancel_failed",
+                    extra={
+                        "msg": "同步 reset 无法向 Run 所属事件循环投递取消",
+                        "data": {"run_id": run_id},
+                    },
+                )
+        self._executions.clear()
 
     async def cancel(self, run_id: int, end_reason: str = "user_cancelled") -> bool:
         """标记指定 run 及其后代 run 的取消信号，并立即关闭本 Run 的 terminal。
@@ -166,8 +218,8 @@ class ConversationRunExecutor:
         task 也不直接取消，而是由 runner 观察到信号后自行收束。
 
         存在性预检：mark 之后立刻确认 run 存在，不存在则回滚已标记的信号再抛
-        ``KeyError``，保持「信号已标记」与「run 真实存在」的一致性。mark 与存在性检查之间
-        无 ``await``，事件循环不会插入其他协程，避免「取消已标记但 run 不存在」的竞态窗口。
+        ``KeyError``，保持「信号已标记」与「run 真实存在」的一致性。进程内信号标记在第一次
+        await 前完成，canonical 存在性读取在线程池中执行。
 
         级联：确认 run 存在后，把取消请求沿委派关系传播到它的全部后代 run（子 Agent 的
         run），否则父 run 被取消时子 Agent 会继续跑到自己的终态。级联同样只发信号；级联
@@ -198,16 +250,20 @@ class ConversationRunExecutor:
             return False
         self._signal.mark_cancelled(run_id)
         try:
-            self._run_service.get_run(run_id)
+            await asyncio.to_thread(self._run_service.get_run, run_id)
         except KeyError:
             self._signal.clear(run_id)
             raise
         # 取消请求必须立即关闭本 Run 的 PTY；workflow 之后仍会协作收束，
         # ``_execute`` 的 finally 还会再次幂等兜底。
-        get_terminal_session_service().close_run_terminals(run_id, reason=end_reason)
+        await asyncio.to_thread(self._close_run_terminals, run_id, end_reason)
+        # Set the Child session closing fence before descendant signal propagation.  This
+        # covers both a parent Stop and a direct Child Run Stop: queued mailbox messages
+        # must not race cancellation into a follow-up Run.
+        await asyncio.to_thread(self._child_sessions.close_children, run_id)
         # 级联放在存在性确认之后：不存在的 run 不可能有后代 run，同时避免 404 路径白查一次库。
         try:
-            self._cancel_descendant_runs(run_id)
+            await asyncio.to_thread(self._cancel_descendant_runs, run_id)
         except Exception:
             # 级联是附加传播：它失败不影响父 run 收口，因此**不允许**让用户的取消请求失败
             # （父信号此时已标记，父 run 仍会按既有链路收口）。
@@ -230,8 +286,8 @@ class ConversationRunExecutor:
         仍是 ``running``，前端需继续以 canonical snapshot 为准。
 
         标记前先确认 run 存在（存在性预检），不存在则回滚已标记的信号再抛 ``KeyError``，
-        保持「信号已标记」与「run 真实存在」的一致性。mark 与存在性检查之间无 ``await``，
-        事件循环不会插入其他协程，避免「取消已标记但 run 不存在」的竞态窗口。
+        保持「信号已标记」与「run 真实存在」的一致性。进程内信号标记在第一次 await 前完成，
+        canonical 存在性读取在线程池中执行。
 
         参数:
             run_id: 目标工具调用所属的 Conversation Run 标识。
@@ -258,7 +314,7 @@ class ConversationRunExecutor:
             return False
         tool_call_cancellation_registry.mark_cancelled(run_id, tool_call_id)
         try:
-            self._run_service.get_run(run_id)
+            await asyncio.to_thread(self._run_service.get_run, run_id)
         except KeyError:
             tool_call_cancellation_registry.clear(run_id, tool_call_id)
             raise
@@ -267,8 +323,8 @@ class ConversationRunExecutor:
     def _cancel_descendant_runs(self, run_id: int) -> None:
         """把取消请求沿委派关系传播到全部后代 run（只发信号）。
 
-        子 Agent 的 run 不会因为父 run 被取消而自动停止（委派桥接器只观察 child run 自身的
-        信号），因此这里按 ``delegations`` 记录把取消请求传播下去：后代 run 的信号一旦标记，
+        子 Agent 的 run 不会因为父 run 被取消而自动停止（Child Agent 会话只观察 child run
+        自身的信号），因此这里按 canonical parent/child Run 关系传播取消请求：后代 run 一旦标记，
         它自己的 workflow 就会在下一个检查点收口。
 
         遍历：广度优先 + visited 防环。当前委派策略把深度限制为 1，但本方法不依赖该策略，
@@ -286,35 +342,11 @@ class ConversationRunExecutor:
 
         副作用:
             为每个后代 run 写入进程内 run 级取消信号，并写
-            ``run_cancellation_cascade_applied``（INFO）日志；不落库、不修改 ``delegations``
-            记录、不取消 asyncio task。
+            ``run_cancellation_cascade_applied``（INFO）日志；不落库、不修改 Run 记录、不取消
+            asyncio task。
         """
 
-        visited: set[int] = {run_id}
-        queue: deque[int] = deque([run_id])
-        cancelled_child_run_ids: list[int] = []
-        while queue:
-            current_run_id = queue.popleft()
-            for record in self._delegation_service.list_active_by_parent_turn(current_run_id):
-                child_run_id = record.child_run_id
-                if not child_run_id or child_run_id in visited:
-                    continue
-                visited.add(child_run_id)
-                queue.append(child_run_id)
-                cancellation_registry.mark_cancelled(child_run_id)
-                cancelled_child_run_ids.append(child_run_id)
-        if cancelled_child_run_ids:
-            log.info(
-                "run_cancellation_cascade_applied",
-                extra={
-                    "msg": "父 run 取消已级联到子 Agent run",
-                    "data": {
-                        "parent_run_id": run_id,
-                        "child_run_count": len(cancelled_child_run_ids),
-                        "child_run_ids": cancelled_child_run_ids,
-                    },
-                },
-            )
+        self._child_sessions.cancel_descendants(run_id)
 
     async def _execute(
         self,
@@ -350,41 +382,79 @@ class ConversationRunExecutor:
             :meth:`_converge_unfinished_run` 兜底收敛仍未落终态的 run；不清理取消信号。
         """
         cancelled = False
+        primary_exception: BaseException | None = None
+        runner_started = False
         try:
-            run = self._run_service.get_run(run_id)
-            get_terminal_session_service().begin_run(run_id)
             try:
+                run = await asyncio.to_thread(self._run_service.get_run, run_id)
+                get_terminal_session_service().begin_run(run_id)
+                runner_started = True
                 await runner(run)
-            except asyncio.CancelledError:
-                cancelled = True
-                raise
-            except Exception as e:
-                self._project_tools_settled(run_id, "failed", "runtime_failed")
-                raise e
+            except asyncio.CancelledError as exc:
+                cancelled = runner_started
+                primary_exception = exc
+            except Exception as exc:
+                primary_exception = exc
+                if runner_started:
+                    try:
+                        await asyncio.to_thread(
+                            self._project_tools_settled,
+                            run_id,
+                            "failed",
+                            "runtime_failed",
+                        )
+                    except BaseException:
+                        self._log_cleanup_failure(run_id, "tool_settlement")
         finally:
             try:
-                get_terminal_session_service().close_run_terminals(
-                    run_id,
-                    reason="run_execution_finished",
-                )
-            except Exception:
-                log.exception(
-                    "conversation_run_terminal_cleanup_failed",
-                    extra={
-                        "msg": "Run 收尾时 Terminal Worker 清理失败",
-                        "data": {"run_id": run_id},
-                    },
-                )
-            current = self._executions.get(run_id)
+                await asyncio.to_thread(self._child_sessions.close_children, run_id)
+            except BaseException:
+                self._log_cleanup_failure(run_id, "child_close")
             try:
+                await asyncio.to_thread(self._child_sessions.sweep_pending_follow_ups)
+            except BaseException:
+                self._log_cleanup_failure(run_id, "child_sweep")
+            try:
+                await asyncio.to_thread(
+                    self._close_run_terminals,
+                    run_id,
+                    "run_execution_finished",
+                )
+            except BaseException:
+                self._log_cleanup_failure(run_id, "terminal_close")
+            try:
+                current = self._executions.get(run_id)
                 current_task = asyncio.current_task()
-            except RuntimeError:
-                current_task = None
-            if current is not None and current.thread_task is current_task:
-                self._executions.pop(run_id, None)
-            # 兜底收敛放在最后：即使它在事件循环拆除期被打断，前面的 terminal 清理与
-            # 登记移除也已完成，残余窗口退回下次启动的 recover_orphaned_runs。
-            await self._converge_unfinished_run(run_id, cancelled=cancelled)
+                if current is not None and current.thread_task is current_task:
+                    self._executions.pop(run_id, None)
+            except BaseException:
+                self._log_cleanup_failure(run_id, "execution_registry_remove")
+            try:
+                # 兜底收敛放在最后：即使它在事件循环拆除期被打断，前面的 terminal 清理与
+                # 登记移除也已完成，残余窗口退回下次启动的 recover_orphaned_runs。
+                await self._converge_unfinished_run(run_id, cancelled=cancelled)
+            except BaseException:
+                self._log_cleanup_failure(run_id, "convergence")
+        if primary_exception is not None:
+            raise primary_exception
+
+    @staticmethod
+    def _log_cleanup_failure(run_id: int, stage: str) -> None:
+        """记录单个执行器收尾阶段失败，不向调用方抛出清理异常。"""
+
+        log.exception(
+            "conversation_run_executor_cleanup_failed",
+            extra={
+                "msg": "Run 执行器收尾阶段失败，继续执行后续收尾",
+                "data": {"run_id": run_id, "stage": stage},
+            },
+        )
+
+    @staticmethod
+    def _close_run_terminals(run_id: int, reason: str) -> None:
+        """Close terminal workers in a worker thread, never in the event loop."""
+
+        get_terminal_session_service().close_run_terminals(run_id, reason=reason)
 
     async def _converge_unfinished_run(self, run_id: int, *, cancelled: bool) -> None:
         """驱动结束后 run 仍未落终态时的条件收敛安全网。
@@ -473,4 +543,3 @@ class ConversationRunExecutor:
                     "data": {"run_id": run_id, "status": status, "reason": reason},
                 },
             )
-

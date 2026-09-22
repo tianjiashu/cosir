@@ -9,6 +9,11 @@ from app.core.tools.schemas.delegate_task_executor import DelegateTaskExecutor
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 
 if TYPE_CHECKING:
+    from app.core.tools.tool_handler.child_agent_wait import ChildAgentWaitReader
+    from app.service.child_agent.async_child_agent_wait_coordinator import (
+        AsyncChildAgentWaitCoordinator,
+    )
+    from app.service.child_agent.child_agent_session_service import ChildAgentSessionService
     from app.service.terminal.terminal_session_service import TerminalSessionService
 
 
@@ -28,3 +33,7 @@ class ToolRuntimeDependencies:
     # 仅供同进程 terminal_session handler 使用；process execution 必须清空。
     terminal_session_service: "TerminalSessionService | None" = None
     is_run_cancelled: Callable[[int], bool] | None = None
+    child_agent_wait_coordinator: "AsyncChildAgentWaitCoordinator | None" = None
+    child_agent_wait_reader: "ChildAgentWaitReader | None" = None
+    child_agent_wait_target_snapshot: Callable[..., list[dict[str, int | None]]] | None = None
+    child_agent_session_service: "ChildAgentSessionService | None" = None

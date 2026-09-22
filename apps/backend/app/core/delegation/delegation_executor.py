@@ -2,29 +2,23 @@
 
 from __future__ import annotations
 
-import asyncio
+import json
 from typing import Any
-
-from sqlalchemy.exc import IntegrityError
 
 from app.assistant_transport.event import DelegationRefData, ToolCallRuntimeUpdateEvent
 from app.config.configuration import get_agent_registry
-from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 from app.core.tools.schemas.delegate_task_executor import DelegateTaskExecutor
-from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_models import DelegateTaskArgs
-from app.models import ConversationRunCommand, ConversationRunRecord, TaskRecord
-from app.models.result.delegation_result import DelegationResult
+from app.models import ConversationRunRecord, TaskRecord
+from app.service.child_agent.child_agent_session_error import ChildAgentSessionError
 from app.service.delegation.delegation_context import DelegationPolicyDecision
-from app.service.delegation.delegation_service import DelegationService
-from app.service.depends import get_conversation_run_service, get_delegation_service
+from app.service.depends import get_child_agent_session_service
 
 
 class DelegationExecutor(DelegateTaskExecutor):
@@ -82,13 +76,8 @@ class DelegationExecutor(DelegateTaskExecutor):
             可能创建 delegation 记录、child run，运行 child Agent，并更新 delegation 终态。
         """
 
-        from app.service.depends import get_task_service
-
         runtime_event_loop = execution_context.runtime_dependencies.runtime_event_loop
         agent_registry = get_agent_registry()
-        delegation_service = get_delegation_service()
-        conversation_run_service = get_conversation_run_service()
-        task_service = get_task_service()
 
         # 获取child agent profile
         child_agent_profile: AgentProfile | None = agent_registry.resolve(args.child_agent_id)
@@ -114,9 +103,6 @@ class DelegationExecutor(DelegateTaskExecutor):
                 permission="delegate_task",
             )
 
-        # 构建agent输入文本
-        agent_input_text = args.prompt
-
         # 校验执行策略（深度、已知 child Agent、工具收敛三类）
         decision = self._resolve_delegation(
             child_agent_id=args.child_agent_id,
@@ -131,193 +117,121 @@ class DelegationExecutor(DelegateTaskExecutor):
         if not decision.allowed:
             return self._policy_error(args.child_agent_id, decision.reason)
 
-        # 原子 acquire 并发额度：额度满时 storage 层在同一事务内拒绝创建
-        acquire = delegation_service.try_create_pending(
-            task_id=self._parent_task.id,
-            parent_run_id=self._parent_run.id,
-            parent_agent_id=self._parent_profile.agent_id,
-            child_agent_id=args.child_agent_id,
-            prompt=agent_input_text,
-            effective_tools=decision.effective_tools,
-            max_concurrency=Settings.DELEGATION_MAX_CONCURRENCY,
-            runtime_event_loop=runtime_event_loop,
-        )
-        if not acquire.acquired:
-            return self._concurrency_exceeded_error(args.child_agent_id, acquire.reason)
-
-        delegation_id = acquire.delegation_id
-        try:
-            # 先创建委派子任务（只建 task，不建 run；并发重入由 delegation_id 唯一索引兜底）。
-            try:
-                child_task = task_service.get_or_create_task(
-                    task_id=None,
-                    workspace_id=self._parent_task.workspace_id,
-                    title=args.title,
-                    task_type="delegation",
-                    parent_task_id=self._parent_task.id,
-                    parent_run_id=self._parent_run.id,
-                    delegation_id=delegation_id,
-                )
-            except IntegrityError:
-                # delegation_id 唯一索引冲突：同一 delegation 已被并发重入创建过子 task。
-                # acquire 已插入 pending delegation 并占用 1 个并发额度，必须在此显式终态化，
-                # 否则该 pending 记录永久计入 ACTIVE_DELEGATION_STATUSES，导致父 run 并发额度泄漏。
-                log.error(
-                    "delegation_child_task_conflict",
-                    extra={
-                        "msg": "委派子任务创建冲突（delegation_id 已存在子任务）",
-                        "data": {
-                            "delegation_id": delegation_id,
-                            "parent_run_id": self._parent_run.id,
-                        },
-                    },
-                )
-                self._fail_delegation(
-                    delegation_id,
-                    delegation_service,
-                    runtime_event_loop,
-                    "child task already exists (concurrent re-entrancy)",
-                )
-                return tool_error(
-                    "delegate_task",
-                    f"delegate_task child task already exists: {delegation_id}",
-                    reason=(
-                        f"a child task for delegation '{delegation_id}' already exists; "
-                        f"this delegation was already acquired and its child task created, "
-                        f"so retrying identical arguments is deterministic and will fail "
-                        f"again. Inspect the existing child task instead of re-delegating."
-                    ),
-                    retryable=False,
-                    permission="delegate_task",
-                )
-
-            # 在子任务下创建 pending child run（上下文天然隔离，不依赖排除 hack）。
-            # ① service 期预解析（设计 §6.4）：create_run 内部会把 child 请求的 /
-            # 此处捕获后把 delegation 置 failed（child 无 HTTP 上下文，无法回 422），
-            # 成对记 warn model_resolve_rejected(child=true) + error，父收失败 DelegationResult。
-            child_provider_id, child_model_name, child_reasoning_effort = (
-                self._resolve_child_model_config(child_agent_profile)
-            )
-            try:
-                child_run = conversation_run_service.create_run(
-                    task_id=child_task.id,
-                    agent_id=args.child_agent_id,
-                    provider_id=child_provider_id,
-                    model_name=child_model_name,
-                    reasoning_effort=child_reasoning_effort,
-                    run_command=ConversationRunCommand(display_text=agent_input_text),
-                )
-            except Exception as exc:
-                log.exception(
-                    "child_delegation_model_resolve_failed",
-                    extra={
-                        "msg": f"委派 child 预解析模型失败，delegation 置 failed：{exc}",
-                        "data": {
-                            "delegation_id": delegation_id,
-                            "parent_run_id": self._parent_run.id,
-                            "child_agent_id": args.child_agent_id,
-                        },
-                    },
-                )
-                self._fail_delegation(
-                    delegation_id,
-                    delegation_service,
-                    runtime_event_loop,
-                    f"child model resolve failed: {exc}",
-                )
-                return self._child_error(
-                    "failed",
-                    f"child agent '{args.child_agent_id}' cannot run: model "
-                    f"child model resolve failed: {exc}",
-                )
-
-            # 标记 delegation 进入执行阶段并绑定 child run。注意：本次调用只更新
-            # ``delegations`` 表，**不代表 child run 已进入 running**——child run 的
-            # pending→running 由 ``ChildAgentRunner`` 在启动执行前认领
-            # （``child_agent_runner._run_child``），且必须发生在
-            # ``ConversationRunExecutor.start`` 的前置断言之前。
-            delegation_service.mark_child_started(
-                delegation_id,
-                child_run.id,
-                child_task_id=child_task.id,
-                runtime_event_loop=runtime_event_loop,
+        # Child Agent sessions are canonical Task/Run facts plus a process-local runtime
+        # registry.  The synchronous tool handler waits only for launch registration;
+        # child workflow completion is intentionally owned by ConversationRunExecutor.
+        session_service = get_child_agent_session_service()
+        if runtime_event_loop is None:
+            return tool_error(
+                "delegate_task",
+                "child_agent_start_failed",
+                reason="The parent runtime event loop is unavailable; retry the delegation.",
+                permission="delegate_task",
             )
 
-            if execution_context.tool_call_id:
-                from app.assistant_transport.event.dispatch import dispatch_conversation_event
-
-                try:
-                    dispatch_conversation_event(
-                        ToolCallRuntimeUpdateEvent(
-                            task_id=self._parent_task.id,
-                            run_id=self._parent_run.id,
-                            tool_call_id=execution_context.tool_call_id,
-                            seq=0,
-                            data=DelegationRefData(
-                                kind="delegation_ref",
-                                child_task_id=child_task.id,
-                                child_run_id=child_run.id,
-                                title=args.title,
-                                role=child_agent_profile.role,
-                            ),
-                        )
-                    )
-                except Exception:
-                    # Transport projection is a UI side effect. A subscriber or
-                    # projection failure must not fail an otherwise valid child run.
-                    log.exception(
-                        "delegation_ref_event_failed",
-                        extra={
-                            "msg": "委派引用事件投影失败，继续执行 child Agent",
-                            "data": {
-                                "delegation_id": delegation_id,
-                                "parent_run_id": self._parent_run.id,
-                                "child_task_id": child_task.id,
-                                "tool_call_id": execution_context.tool_call_id,
-                            },
-                        },
-                    )
-
-            # 构建child agent profile
+        async def run_child_workflow(child_run: ConversationRunRecord) -> None:
             child_profile = child_agent_profile.derive_for_run(
                 child_run,
                 allowed_tools=list(decision.effective_tools),
                 runtime_event_loop=runtime_event_loop,
                 model_defaults=self._parent_profile,
             )
-            result = self._child_runner.run_child(
-                child_profile,
-                delegation_id=delegation_id,
+            await self._child_runner.run_child_workflow(child_profile)
+
+        try:
+            started = session_service.start_child(
+                parent_task_id=self._parent_task.id,
+                parent_run_id=self._parent_run.id,
+                workspace_id=self._parent_task.workspace_id,
+                child_agent_id=args.child_agent_id,
+                title=args.title,
+                prompt=args.prompt,
+                tool_call_id=execution_context.tool_call_id,
+                run_callback=run_child_workflow,
+                runtime_event_loop=runtime_event_loop,
+                provider_id=self._resolve_child_model_config(child_agent_profile)[0],
+                model_name=self._resolve_child_model_config(child_agent_profile)[1],
+                reasoning_effort=self._resolve_child_model_config(child_agent_profile)[2],
+            )
+        except ChildAgentSessionError as exc:
+            return tool_error(
+                "delegate_task",
+                exc.code,
+                reason=f"Child Agent startup was rejected: {exc.code}.",
+                permission="delegate_task",
             )
         except Exception as exc:
             log.exception(
-                "delegation_execution_failed",
+                "child_agent_start_failed",
                 extra={
-                    "msg": "委派执行异常，已转换为 delegate_task 工具错误",
+                    "msg": "Child Agent session 创建失败",
                     "data": {
-                        "delegation_id": delegation_id,
                         "parent_run_id": self._parent_run.id,
                         "child_agent_id": args.child_agent_id,
+                        "error_type": type(exc).__name__,
                     },
                 },
             )
-            self._fail_delegation(
-                delegation_id,
-                delegation_service,
-                runtime_event_loop,
-                str(exc),
+            return tool_error(
+                "delegate_task",
+                "child_agent_start_failed",
+                reason=(
+                    "The Child Agent could not be started; inspect the backend log and retry later."
+                ),
+                permission="delegate_task",
             )
-            return self._child_error("failed", str(exc))
 
-        return self._finalize_result(
-            delegation_id,
-            result,
-            runtime_event_loop,
-            delegation_service,
-            child_task_id=child_task.id,
-            title=args.title,
-            child_agent_id=args.child_agent_id,
-            role=child_agent_profile.role,
+        try:
+            if execution_context.tool_call_id:
+                from app.assistant_transport.event.dispatch import dispatch_conversation_event
+
+                dispatch_conversation_event(
+                    ToolCallRuntimeUpdateEvent(
+                        task_id=self._parent_task.id,
+                        run_id=self._parent_run.id,
+                        tool_call_id=execution_context.tool_call_id,
+                        seq=0,
+                        data=DelegationRefData(
+                            kind="delegation_ref",
+                            child_task_id=started.child_task_id,
+                            child_run_id=started.child_run_id,
+                            title=args.title,
+                            role=child_agent_profile.role,
+                        ),
+                    )
+                )
+        except Exception:
+            log.exception(
+                "delegation_ref_event_failed",
+                extra={
+                    "msg": "委派引用事件投影失败，继续执行 child Agent",
+                    "data": {
+                        "parent_run_id": self._parent_run.id,
+                        "child_task_id": started.child_task_id,
+                        "child_run_id": started.child_run_id,
+                    },
+                },
+            )
+        return tool_success(
+            "delegate_task",
+            "delegate_task",
+            json.dumps(
+                {
+                    "status": "started",
+                    "child_task_id": started.child_task_id,
+                    "child_run_id": started.child_run_id,
+                    "child_agent_id": args.child_agent_id,
+                },
+                separators=(",", ":"),
+            ),
+            display_data=build_delegation_display_data(
+                title=args.title,
+                child_agent_id=args.child_agent_id,
+                child_task_id=started.child_task_id,
+                child_run_id=started.child_run_id,
+                status="running",
+                role=child_agent_profile.role,
+            ),
         )
 
     def _resolve_child_model_config(
@@ -439,200 +353,6 @@ class DelegationExecutor(DelegateTaskExecutor):
                 f"the delegation request was denied by policy with reason "
                 f"'{reason}'; this is deterministic, so adjust the child agent, "
                 f"delegation depth, or active child count before retrying."
-            ),
-            permission="delegate_task",
-        )
-
-    def _concurrency_exceeded_error(self, child_agent_id: str, reason: str) -> ToolObservation:
-        """构造并发额度已满的工具错误 observation。
-
-        并发额度由 storage 层在 ``try_create_pending`` 的原子事务内裁决，本方法仅在
-        acquire 返回 ``acquired=False`` 时调用，把确定性拒绝转换为面向模型的可读错误。
-
-        参数:
-            child_agent_id: 被拒绝的 child Agent 标识。
-            reason: 原子 acquire 返回的拒绝说明（英文富文本，含重试建议）。
-
-        返回:
-            delegate_task error observation（``retryable=False``）。
-
-        异常:
-            无。
-
-        副作用:
-            写入并发拒绝日志。
-        """
-
-        log.info(
-            Constant.Delegation.REASON_CONCURRENCY_EXCEEDED,
-            extra={
-                "msg": "委派被并发额度拒绝",
-                "data": {
-                    "parent_run_id": self._parent_run.id,
-                    "child_agent_id": child_agent_id,
-                    "max_concurrency": Settings.DELEGATION_MAX_CONCURRENCY,
-                },
-            },
-        )
-        return tool_error(
-            "delegate_task",
-            f"delegate_task concurrency_exceeded: {child_agent_id}",
-            reason=reason,
-            permission="delegate_task",
-        )
-
-    def _fail_delegation(
-        self,
-        delegation_id: int | None,
-        delegation_service: DelegationService,
-        runtime_event_loop: asyncio.AbstractEventLoop | None,
-        error: str,
-    ) -> None:
-        """把已 acquire 的 delegation 确定性终态化为 failed，释放并发额度。
-
-        并发额度由 storage 层 ``try_create_pending`` 插入的 pending 记录承载：只要该记录
-        仍处于 active（pending/running）状态，就会占用父 run 的并发槽。因此所有在 acquire
-        成功后、未能通过 ``_finalize_result`` 正常终态化的提前退出路径（并发重入冲突、
-        模型未配置、未预期异常）都必须调用本方法，把 delegation 推进到终态，避免额度泄漏。
-
-        参数:
-            delegation_id: 已 acquire 的 delegation 标识；为 None 时（acquire 失败）直接跳过。
-            delegation_service: 本次执行已解析出的委派生命周期 service。
-            runtime_event_loop: 父运行时事件循环；用于线程安全发布 delegation 事件。
-            error: 失败原因（英文，面向日志与模型可读）。
-
-        返回:
-            无。
-
-        异常:
-            无；``mark_failed`` 自身异常被吞掉并记 log.error，避免二次异常掩盖根因。
-
-        副作用:
-            将 delegation 置 failed 并发出对应 runtime event；写入失败日志。
-        """
-
-        if not delegation_id:
-            return
-        try:
-            delegation_service.mark_failed(
-                delegation_id,
-                error,
-                runtime_event_loop=runtime_event_loop,
-            )
-        except Exception:
-            log.exception(
-                "delegation_fail_finalize_error",
-                extra={
-                    "msg": "委派终态化（mark_failed）失败，并发额度可能无法释放",
-                    "data": {
-                        "delegation_id": delegation_id,
-                        "error": error,
-                    },
-                },
-            )
-
-    def _finalize_result(
-        self,
-        delegation_id: int,
-        result: DelegationResult,
-        runtime_event_loop: asyncio.AbstractEventLoop | None,
-        delegation_service: DelegationService,
-        child_task_id: int | None = None,
-        title: str = "",
-        child_agent_id: str = "",
-        role: str = "",
-    ) -> ToolObservation:
-        """根据 child 终态更新 delegation 并返回父工具 observation。
-
-        参数:
-            delegation_id: 当前 delegation 标识。
-            result: child runner 返回的终态结果。
-            runtime_event_loop: 父运行时事件循环；用于线程安全发布 delegation 事件。
-            delegation_service: 本次执行已解析出的委派生命周期 service。
-            child_task_id: 可选的 child task 标识；传入时一并落库便于前端跳转。
-
-        返回:
-            success 或 error ToolObservation。
-
-        异常:
-            KeyError: 如果 delegation 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果终态持久化失败。
-
-        副作用:
-            更新 delegation 终态并发出对应 runtime event。
-        """
-
-        if result.status == "completed":
-            summary = result.summary or "child run completed"
-            delegation_service.mark_completed(
-                delegation_id,
-                summary,
-                child_task_id=child_task_id,
-                runtime_event_loop=runtime_event_loop,
-            )
-            return tool_success(
-                "delegate_task",
-                "delegate_task",
-                summary,
-                display_data=build_delegation_display_data(
-                    title=title,
-                    child_agent_id=child_agent_id,
-                    delegation_id=delegation_id,
-                    child_task_id=child_task_id,
-                    child_run_id=result.child_run_id,
-                    status="completed",
-                    role=role,
-                ),
-            )
-        if result.status == "cancelled":
-            error = result.error or "child run cancelled"
-            delegation_service.mark_cancelled(
-                delegation_id,
-                error,
-                child_task_id=child_task_id,
-                runtime_event_loop=runtime_event_loop,
-            )
-            return tool_cancelled(
-                "delegate_task",
-                permission="delegate_task",
-            )
-        error = result.error or "child run failed"
-        delegation_service.mark_failed(
-            delegation_id,
-            error,
-            child_task_id=child_task_id,
-            runtime_event_loop=runtime_event_loop,
-        )
-        return self._child_error("failed", error)
-
-    def _child_error(self, status: str, error: str) -> ToolObservation:
-        """构造 child 失败的 delegate_task 工具错误 observation。
-
-        注意：本方法只服务于 child **失败**分支；child **取消**已由 :func:`tool_cancelled`
-        单独处理（``_finalize_result`` 的 cancelled 分支），不再走此路径，以免取消被
-        塌缩成 error。
-
-        参数:
-            status: child 委派失败终态。
-            error: child 失败原因。
-
-        返回:
-            delegate_task error observation。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return tool_error(
-            "delegate_task",
-            f"delegate_task child {status}: {error}",
-            reason=(
-                f"the delegated child agent ended with status '{status}': {error}. "
-                f"Treat this delegate_task call as terminal and continue from the "
-                f"reported child result instead of retrying identical arguments."
             ),
             permission="delegate_task",
         )

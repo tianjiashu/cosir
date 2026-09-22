@@ -1,10 +1,13 @@
 """ConversationRunExecutor 的进程内取消信号与启动闸门测试。"""
 
 import asyncio
+import threading
+from collections import deque
 from types import SimpleNamespace
 
 import pytest
 
+import app.assistant_transport.service.conversation_run_executor as executor_module
 from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 
@@ -51,6 +54,37 @@ class _FakeDelegationService:
         return self._records_by_parent.get(parent_run_id, [])
 
 
+class _FakeChildSessions:
+    """Explicit child-session contract used by executor cancellation tests."""
+
+    def __init__(self, delegation_service: _FakeDelegationService) -> None:
+        self._delegation_service = delegation_service
+        self.cancel_descendant_thread_ids: list[int] = []
+
+    def cancel_descendants(self, run_id: int) -> None:
+        self.cancel_descendant_thread_ids.append(threading.get_ident())
+        visited: set[int] = {run_id}
+        queue: deque[int] = deque([run_id])
+        while queue:
+            current_run_id = queue.popleft()
+            for record in self._delegation_service.list_active_by_parent_turn(current_run_id):
+                child_run_id = record.child_run_id
+                if not child_run_id or child_run_id in visited:
+                    continue
+                visited.add(child_run_id)
+                queue.append(child_run_id)
+                cancellation_registry.mark_cancelled(child_run_id)
+
+    def close_children(self, _run_id: int) -> None:
+        return None
+
+    def sweep_pending_follow_ups(self) -> int:
+        return 0
+
+    def shutdown(self) -> None:
+        return None
+
+
 def _build_executor(
     service: object, delegation_service: object | None = None
 ) -> ConversationRunExecutor:
@@ -63,6 +97,7 @@ def _build_executor(
     executor._delegation_service = (
         delegation_service if delegation_service is not None else _FakeDelegationService()
     )
+    executor._child_sessions = _FakeChildSessions(executor._delegation_service)
     executor._executions = {}
     return executor
 
@@ -106,6 +141,64 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner() -> N
     finally:
         execution.cancel()
         await asyncio.gather(execution, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancel_closes_terminals_off_event_loop() -> None:
+    service = _RunService(status="running")
+    executor = _build_executor(service)
+    entered = threading.Event()
+    release = threading.Event()
+    close_thread_id: list[int] = []
+
+    class _BlockingTerminalService:
+        def close_run_terminals(self, run_id: int, *, reason: str) -> None:
+            close_thread_id.append(threading.get_ident())
+            entered.set()
+            release.wait()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        executor_module,
+        "get_terminal_session_service",
+        lambda: _BlockingTerminalService(),
+    )
+    try:
+        cancel_task = asyncio.create_task(executor.cancel(_RUN_ID))
+        await asyncio.wait_for(asyncio.to_thread(entered.wait), timeout=1)
+        heartbeat = asyncio.Event()
+
+        async def tick() -> None:
+            await asyncio.sleep(0)
+            heartbeat.set()
+
+        tick_task = asyncio.create_task(tick())
+        await asyncio.wait_for(heartbeat.wait(), timeout=0.5)
+        release.set()
+        assert await cancel_task is True
+        await tick_task
+        assert close_thread_id
+        assert close_thread_id[0] != threading.get_ident()
+    finally:
+        release.set()
+        monkeypatch.undo()
+
+
+@pytest.mark.asyncio
+async def test_cancel_runs_descendant_crud_off_event_loop() -> None:
+    delegation_service = _FakeDelegationService({_RUN_ID: [_delegation(11)]})
+    child_sessions = _FakeChildSessions(delegation_service)
+    executor = _build_executor(_RunService(status="running"), delegation_service)
+    executor._child_sessions = child_sessions
+    event_loop_thread_id = threading.get_ident()
+
+    assert await executor.cancel(_RUN_ID) is True
+
+    assert child_sessions.cancel_descendant_thread_ids
+    assert all(
+        thread_id != event_loop_thread_id
+        for thread_id in child_sessions.cancel_descendant_thread_ids
+    )
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from itertools import groupby
 from operator import attrgetter
-from typing import cast
+from typing import Any, cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.messages.tool import ToolCall
@@ -26,7 +26,6 @@ from app.config.configuration import get_agent_registry, get_tool_registry
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.delegation_record import DelegationRecord
 from app.models.task_record import TaskRecord
 from app.utils.message_content import content_to_text
 
@@ -75,7 +74,7 @@ class ConversationTaskStateRebuilder:
     @staticmethod
     def build_pair_tool_part(
         rows: list[ConversationTaskContextRecord],
-        delegations: Sequence[DelegationRecord] = (),
+        delegations: Sequence[Any] = (),
     ) -> dict[str, ConversationStateToolCallPart]:
         tool_parts: dict[str, ConversationStateToolCallPart] = {}
         for row in rows:
@@ -229,7 +228,7 @@ class ConversationTaskStateRebuilder:
         task: TaskRecord,
         runs: Sequence[ConversationRunRecord],
         context_rows: Sequence[ConversationTaskContextRecord],
-        delegations: Sequence[DelegationRecord] = (),
+        delegations: Sequence[Any] = (),
     ) -> ConversationStateSnapshot:
         """Return a validated snapshot assembled from the three canonical record types.
 

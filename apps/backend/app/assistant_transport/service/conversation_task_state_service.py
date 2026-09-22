@@ -270,14 +270,7 @@ class ConversationTaskStateService:
             task = self._task_source.get(task_id)
             runs = self._run_source.list_by_task(task_id)
             context_rows = self._context_source.get(task_id, include_in_context=False)
-            from app.service.depends import get_delegation_service
-
-            delegations = [
-                record
-                for run in runs
-                for record in get_delegation_service().list_by_parent_turn(run.id)
-            ]
-            state = ConversationTaskStateRebuilder.rebuild(task, runs, context_rows, delegations)
+            state = ConversationTaskStateRebuilder.rebuild(task, runs, context_rows)
         except Exception as exc:
             log.exception(
                 "state_rebuild_failed",

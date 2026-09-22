@@ -31,9 +31,6 @@ class TaskModel(StorageBase):
         nullable=True,
         index=True,
     )
-    delegation_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("delegations.id"), nullable=True
-    )
     context_usage_used: Mapped[int | None] = mapped_column(
         Integer,
         default=0,
@@ -48,7 +45,6 @@ class TaskModel(StorageBase):
 
     __table_args__ = (
         Index("idx_tasks_parent_task_id", "parent_task_id"),
-        Index("uq_tasks_delegation_id", "delegation_id", unique=True),
         Index(
             "uq_tasks_workspace_creation_command",
             "workspace_id",

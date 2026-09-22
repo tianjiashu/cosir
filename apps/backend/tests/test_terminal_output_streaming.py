@@ -340,6 +340,7 @@ async def test_workflow_places_event_loop_in_run_scoped_tool_dependencies(
     operations._execution_context = context
     operations._allowed_tool_names = frozenset({"execute_terminal"})
     operations._parallel_mode_by_name = {"execute_terminal": "serial"}
+    operations._handler_kind_by_name = {"execute_terminal": "sync"}
 
     class Executor:
         def execute(

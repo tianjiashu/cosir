@@ -16,4 +16,15 @@ describe("workbench store", () => {
     expect(useWorkbenchStore.getState().activeTabId).toBeNull();
     store.ensureWorkspace(null);
   });
+
+  it("closes a child tab without changing backend session state", () => {
+    const store = useWorkbenchStore.getState();
+    store.ensureWorkspace(7);
+    store.openAgentTab({ workspaceId: 7, taskId: 501, title: "审查", role: "Reviewer" });
+    store.closeTab("agent-task:501");
+
+    expect(useWorkbenchStore.getState().tabs).toEqual([]);
+    expect(useWorkbenchStore.getState().panelOpen).toBe(false);
+    store.ensureWorkspace(null);
+  });
 });

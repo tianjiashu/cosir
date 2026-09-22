@@ -25,6 +25,7 @@ from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependen
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
+    get_child_agent_session_service,
     get_task_service,
     get_terminal_session_service,
     get_workspace_service,
@@ -280,6 +281,12 @@ class AgentRuntime:
                 terminal_session_service=get_terminal_session_service(),
                 is_run_cancelled=cancellation_registry.is_cancelled,
                 process_tool_output_channel_factory=self._process_tool_output_channel_factory,
+                child_agent_wait_coordinator=get_child_agent_session_service().wait_coordinator,
+                child_agent_wait_reader=get_child_agent_session_service().read_wait,
+                child_agent_wait_target_snapshot=(
+                    get_child_agent_session_service().snapshot_wait_targets
+                ),
+                child_agent_session_service=get_child_agent_session_service(),
             )
         return WorkflowOperations(
             tool_executor=self._tool_executor,

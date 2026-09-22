@@ -4,7 +4,14 @@ import { describe, expect, it } from "vitest";
 
 import { DelegationToolRow } from "@/components/assistant-ui/tools/delegation-tool-row";
 
-function renderDelegationRow(runId?: number) {
+function renderDelegationRow(runId?: number, displayData: Record<string, unknown> = {
+  kind: "delegation-result",
+  title: "审查代码",
+  child_task_id: 501,
+  child_run_id: 902,
+  status: "running",
+  role: "Reviewer",
+}) {
   const part = {
     toolName: "delegate_task",
     toolCallId: "delegate-1",
@@ -13,12 +20,7 @@ function renderDelegationRow(runId?: number) {
     artifact: {
       backendStatus: "running",
       presentation: {},
-      display_data: {
-        kind: "delegation-result",
-        title: "审查代码",
-        child_task_id: 501,
-        child_run_id: 902,
-      },
+      display_data: displayData,
       error: null,
       errorCode: null,
       child_task_id: 501,
@@ -30,6 +32,66 @@ function renderDelegationRow(runId?: number) {
 }
 
 describe("DelegationToolRow", () => {
+  it("renders a compact child session reference from the stable display payload", () => {
+    const html = renderDelegationRow(undefined, {
+      kind: "delegation-result",
+      title: "审查代码",
+      child_agent_id: "delegate_reviewer",
+      child_task_id: 501,
+      child_run_id: 902,
+      role: "Reviewer",
+      status: "running",
+      prompt: "不应显示的原始 prompt",
+      error: "Traceback: secret=do-not-render",
+    });
+
+    expect(html).toContain("Reviewer");
+    expect(html).toContain("task 501");
+    expect(html).toContain("run 902");
+    expect(html).toContain("运行中");
+    expect(html).not.toContain("不应显示的原始 prompt");
+    expect(html).not.toContain("Traceback: secret=do-not-render");
+  });
+
+  it("projects completed final output without exposing prompt or raw errors", () => {
+    const html = renderDelegationRow(undefined, {
+      kind: "delegation-result",
+      title: "审查代码",
+      child_task_id: 501,
+      child_run_id: 903,
+      role: "Reviewer",
+      status: "completed",
+      final_output: "已完成审查：发现一个可修复问题。",
+      prompt: "隐藏 prompt",
+      error: "raw provider exception",
+    });
+
+    expect(html).toContain("已完成");
+    expect(html).toContain("已完成审查：发现一个可修复问题。");
+    expect(html).not.toContain("隐藏 prompt");
+    expect(html).not.toContain("raw provider exception");
+  });
+
+  it.each([
+    ["failed", "失败"],
+    ["cancelled", "已取消"],
+  ] as const)("projects %s child state with a stable label", (status, label) => {
+    const html = renderDelegationRow(undefined, {
+      kind: "delegation-result",
+      title: "审查代码",
+      child_task_id: 501,
+      child_run_id: 904,
+      role: "Reviewer",
+      status,
+      status_hint: "受控失败提示",
+      error: "raw exception must stay hidden",
+    });
+
+    expect(html).toContain(label);
+    expect(html).toContain("受控失败提示");
+    expect(html).not.toContain("raw exception must stay hidden");
+  });
+
   it("offers child cancellation in the main Thread when both locators are available", () => {
     const html = renderDelegationRow(41);
 

@@ -137,10 +137,45 @@ async def _tools_node(state: ReactGraphState) -> dict:
         raise RuntimeError("tool_call_lifecycle is required before tools_node execution")
     # 仅执行状态为 running 的合法调用；pending（参数非法）调用不执行，由 observe 节点统一结算。
     approved_calls = [
-        _to_tool_call(record)
-        for record in lifecycle.calls.values()
-        if record.status == "running"
+        _to_tool_call(record) for record in lifecycle.calls.values() if record.status == "running"
     ]
+    expected_call_ids = [call.call_id for call in approved_calls]
+    resumed_delegate_observations: list[dict[str, Any]] = []
+    runnable_calls: list[ToolCall] = []
+    for call in approved_calls:
+        locator = state.child_agents.get(call.call_id)
+        if call.tool_name != "delegate_task" or not isinstance(locator, dict):
+            runnable_calls.append(call)
+            continue
+        resumed_delegate_observations.append(
+            {
+                "tool_name": "delegate_task",
+                "status": "success",
+                "content": "Child Agent reference restored from checkpoint.",
+                "error": None,
+                "reason": None,
+                "retryable": False,
+                "permission": "delegate_task",
+                "tool_call_id": call.call_id,
+                "display_data": {
+                    "kind": "delegation-result",
+                    **{
+                        key: locator[key]
+                        for key in (
+                            "child_task_id",
+                            "child_run_id",
+                            "child_agent_id",
+                            "title",
+                            "role",
+                            "status",
+                        )
+                        if key in locator
+                    },
+                },
+                "artifact_data": {},
+            }
+        )
+    approved_calls = runnable_calls
     instruction = state.instruction
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
 
@@ -159,8 +194,8 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "tool_call_lifecycle": lifecycle,
             "last_tool_results": {
                 "instruction": instruction or "",
-                "observations": [],
-                "expected_call_ids": [],
+                "observations": resumed_delegate_observations,
+                "expected_call_ids": expected_call_ids,
             },
         }
 
@@ -191,7 +226,31 @@ async def _tools_node(state: ReactGraphState) -> dict:
         },
     )
     observations = tool_run.observations  # 每个工具调用的观察结果
-    observation_dicts = [dataclasses.asdict(observation) for observation in observations]
+    observation_dicts = resumed_delegate_observations + [
+        dataclasses.asdict(observation) for observation in observations
+    ]
+    child_agents = dict(state.child_agents)
+    for observation in observation_dicts:
+        display_data = observation.get("display_data")
+        if (
+            observation.get("tool_name") == "delegate_task"
+            and isinstance(display_data, dict)
+            and display_data.get("kind") == "delegation-result"
+            and isinstance(display_data.get("child_task_id"), int)
+            and isinstance(display_data.get("child_run_id"), int)
+        ):
+            child_agents[observation.get("tool_call_id", "")] = {
+                key: display_data[key]
+                for key in (
+                    "child_task_id",
+                    "child_run_id",
+                    "child_agent_id",
+                    "title",
+                    "role",
+                    "status",
+                )
+                if key in display_data
+            }
     # 终态事件（completed/failed/cancelled）、模型上下文写回与错误计数统一收敛到
     # observe 节点（经 ToolCallLifecycleManager.settle_batch 分发），本节点只产出治理摘要。
     log.info(
@@ -206,14 +265,14 @@ async def _tools_node(state: ReactGraphState) -> dict:
     )
 
     return {
-        "last_tool_results":
-            {
-                "instruction": instruction or "",
-                "observations": observation_dicts,
-                "expected_call_ids": [call.call_id for call in approved_calls],
-            },
+        "last_tool_results": {
+            "instruction": instruction or "",
+            "observations": observation_dicts,
+            "expected_call_ids": expected_call_ids,
+        },
         "terminal_sessions": _project_terminal_sessions(
             state.terminal_sessions,
             observation_dicts,
         ),
+        "child_agents": child_agents,
     }

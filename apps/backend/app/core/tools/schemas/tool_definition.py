@@ -1,13 +1,22 @@
 """Tool definition value object."""
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
 from app.config.logging.logger import log
 from app.core.tools.schemas.tool_display import ToolDisplayHints
+
+
+@runtime_checkable
+class AsyncToolHandler(Protocol):
+    """Explicit contract for handlers that must execute on the backend event loop."""
+
+    def __call__(self, **kwargs: Any) -> Awaitable[Any]:
+        """Return an awaitable tool result without blocking the event loop."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -46,6 +55,9 @@ class ToolDefinition:
     # 调度字段：与 execution_mode 正交（前者选隔离方式，本字段选批处理分组）。
     parallel_mode: Literal["serial", "parallel"] = "serial"
     parallel_group: str = "default"
+    # Handler dispatch is explicit.  Existing built-in handlers remain sync by default;
+    # async handlers must opt in and are validated by ToolRegistry at registration.
+    handler_kind: Literal["sync", "async"] = "sync"
     # 运行期投影钩子（可选）：非 None 时，模型可见描述 / 参数 schema 在**每次投影时**
     # 实时生成，不在注册期快照固化。用于内容依赖运行期单例（如 agent 注册表）而启动期
     # 尚不可用的工具——否则注册期取到的空值会被永久固化，模型永远拿不到真实候选集
@@ -81,6 +93,7 @@ class ToolDefinition:
             execution_mode=self.execution_mode,
             parallel_mode=self.parallel_mode,
             parallel_group=self.parallel_group,
+            handler_kind=self.handler_kind,
             description_provider=self.description_provider,
             schema_provider=self.schema_provider,
         )

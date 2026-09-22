@@ -158,7 +158,6 @@ class TaskCrud:
             task_type=task_type,
             parent_task_id=parent_task_id,
             parent_run_id=parent_run_id,
-            delegation_id=delegation_id,
             creation_command_id=creation_command_id,
             extra=extra,
             context_usage_used=0,
@@ -482,37 +481,3 @@ class TaskCrud:
             return
         with self._session_factory.begin() as owned_session:
             owned_session.execute(stmt)
-
-    def clear_delegation_id(self, task_ids: list[int], session: Session | None = None) -> None:
-        """把指定 task 的 ``delegation_id`` 置空，解除与 ``delegations`` 的外键引用。
-
-        删除创建本任务的委派记录（``delegations.child_task_id`` 指向本任务）之前必须先
-        解除本列对该委派记录的引用，否则 SQLite 即时外键检查会因 ``tasks.delegation_id``
-        指向即将被删的委派行而报 ``FOREIGN KEY constraint failed``。本方法只改这一列。
-
-        参数:
-            task_ids: 待解除 delegation 引用的 task 整数 id 列表。
-            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时
-                自开事务并自动提交。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            把 ``tasks`` 表中匹配行的 ``delegation_id`` 置为 NULL；task_ids 为空时静默无操作。
-        """
-
-        if not task_ids:
-            return
-        if session is not None:
-            session.execute(
-                update(TaskModel).where(TaskModel.id.in_(task_ids)).values(delegation_id=None)
-            )
-            return
-        with self._session_factory.begin() as session:
-            session.execute(
-                update(TaskModel).where(TaskModel.id.in_(task_ids)).values(delegation_id=None)
-            )

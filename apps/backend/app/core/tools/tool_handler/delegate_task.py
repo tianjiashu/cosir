@@ -47,7 +47,8 @@ def _contract_description() -> str:
         "loop with only your prompt as input — it cannot see this conversation — and returns "
         "only a final summary, so the prompt must be self-contained. A child cannot delegate "
         "further, and its tools are reduced by parent and child permissions. Delegation is "
-        "synchronous: you wait until the child finishes. "
+        "asynchronous: it returns stable child references immediately; use child_agent_wait "
+        "or child_agent_status to observe completion. "
         f"At most {Settings.DELEGATION_MAX_CONCURRENCY} children run at once; further "
         "delegate_task calls in the same reply are rejected deterministically. A failed or "
         "rejected delegation is terminal: adjust the contract or ask the user instead of "
@@ -196,7 +197,8 @@ class DelegateTaskTool(HandlerBase):
             无。
 
         返回:
-            使用进程内线程执行、同一回复内多个委派可工具级并行的 delegate_task 工具定义。
+            使用进程内线程执行、同一回复内多个委派可工具级并行的 delegate_task 工具定义；
+            工具观察仅确认 child Run 已注册，不等待 child workflow 完成。
 
         异常:
             无。

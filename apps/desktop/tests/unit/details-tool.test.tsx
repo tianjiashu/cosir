@@ -38,6 +38,26 @@ describe("DetailsTool", () => {
     expect(html).not.toContain("href=\"javascript:");
   });
 
+  it("renders child_agent_wait terminal messages through the generic details renderer", () => {
+    const html = renderDetails({
+      kind: "child-agent-wait-result",
+      timed_out: false,
+      messages: [{
+        child_task_id: 501,
+        child_run_id: 903,
+        status: "completed",
+        final_output: "子 Agent 已完成审查。",
+        end_reason: "stop",
+      }],
+      pending: [],
+      interrupted_by: null,
+    }, { presentation: { verb: "等待子 Agent", expand_layout: "details", default_open: true } });
+
+    expect(html).toContain("子 Agent 已完成审查。");
+    expect(html).toContain("task 501");
+    expect(html).toContain("run 903");
+  });
+
   it("uses directory-specific empty state wording", () => {
     const html = renderDetails(
       { kind: "directory-list", path: "src", entries: [], total_entries: 0 },

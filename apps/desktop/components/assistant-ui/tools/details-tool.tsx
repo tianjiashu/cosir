@@ -7,6 +7,7 @@ import { asRecord, readToolArtifact, safeExternalUrl } from "./types";
 import { ToolStatus } from "./tool-status";
 import { ToolIcon } from "./tool-icons";
 import { useToolDisclosure } from "./tool-disclosure";
+import { childAgentStatusLabel, interruptionLabel, readChildAgentWaitDisplay } from "./child-agent-display";
 
 function toolTitle(toolName: string, verb?: string): string {
   return verb ?? toolName;
@@ -91,6 +92,14 @@ function displaySummary(data: Record<string, unknown>, backendStatus: string): s
       const target = urls.length > 1 ? `${formatUrlSite(firstUrl)} 等 ${urls.length} 个网站` : formatUrlSite(firstUrl);
       const overallStatus = typeof data.status_hint === "string" ? data.status_hint : formatToolStatus(backendStatus);
       return `${target} · ${overallStatus}`;
+    }
+    case "child-agent-wait-result": {
+      const messages = Array.isArray(data.messages) ? data.messages.length : 0;
+      const pending = Array.isArray(data.pending) ? data.pending.length : 0;
+      if (data.interrupted_by === "parent_cancelled" || data.interrupted_by === "session_closed" || data.interrupted_by === "shutdown") {
+        return `${messages} 条结果 · ${interruptionLabel(data.interrupted_by)}`;
+      }
+      return data.timed_out === true ? `${messages} 条结果 · ${pending} 个等待超时` : `${messages} 条结果 · ${pending} 个等待中`;
     }
     default:
       return typeof data.path === "string" ? data.path : typeof data.pattern === "string" ? data.pattern : "";
@@ -190,6 +199,32 @@ function ListEntries({ data }: { data: Record<string, unknown> }) {
   );
 }
 
+function ChildAgentWaitResult({ data }: { data: Record<string, unknown> }) {
+  const result = readChildAgentWaitDisplay(data);
+  if (!result) return <p className="text-muted-foreground text-xs">子 Agent 等待结果无效</p>;
+  return (
+    <div className="space-y-2 text-xs">
+      {result.interruptedBy && <p className="text-amber-300">{interruptionLabel(result.interruptedBy)}</p>}
+      {result.timedOut && <p className="text-amber-300">等待已超时，未完成的子 Agent 未被取消。</p>}
+      {result.messages.map((message) => (
+        <div key={`${message.childTaskId}:${message.childRunId}`} className="rounded border border-white/10 px-2.5 py-2">
+          <div className="flex items-center gap-2 text-zinc-300">
+            <span>task {message.childTaskId}</span>
+            <span aria-hidden="true">·</span>
+            <span>run {message.childRunId}</span>
+            <span className="ml-auto">{childAgentStatusLabel(message.status)}</span>
+          </div>
+          {message.status === "completed" && message.finalOutput && <p className="mt-1 whitespace-pre-wrap break-words text-muted-foreground">{message.finalOutput}</p>}
+        </div>
+      ))}
+      {result.pending.map((item) => (
+        <p key={item.childTaskId} className="text-muted-foreground">task {item.childTaskId} · {item.status ? childAgentStatusLabel(item.status) : "等待中"}</p>
+      ))}
+      {result.messages.length === 0 && result.pending.length === 0 && !result.interruptedBy && !result.timedOut && <p className="text-muted-foreground">没有新的子 Agent 结果</p>}
+    </div>
+  );
+}
+
 export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessagePartProps) {
   const artifact = readToolArtifact(rawArtifact);
   const data = artifact.display_data ?? {};
@@ -215,7 +250,9 @@ export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessage
         <p className="text-muted-foreground text-xs">
           {typeof data.child_agent_id === "string" ? data.child_agent_id : "子 Agent"}
           {typeof data.title === "string" && data.title ? ` · ${data.title}` : ""}
-        </p>
+          </p>
+      ) : data.kind === "child-agent-wait-result" ? (
+        <ChildAgentWaitResult data={data} />
       ) : (
         <>
           {presentation.show_result !== false && <p className="text-muted-foreground text-xs">暂无展示数据</p>}

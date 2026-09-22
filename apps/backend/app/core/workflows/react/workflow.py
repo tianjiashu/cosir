@@ -10,6 +10,7 @@ graph 编译时挂既有 checkpointer，由 LangGraph 负责控制流状态持�
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
+
 from collections.abc import Iterable
 from time import perf_counter
 from typing import Any, cast
@@ -441,6 +442,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                 max_steps=agent_profile.max_steps,
                 final_text="",
                 last_tool_results={},
+                child_agents={},
             )
             # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动
             # 一个新的 graph input，即使 thread_id 相同也不等价于 resume。
@@ -599,9 +601,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                 if not isinstance(run_id, int) or not isinstance(thread_id, str) or not thread_id:
                     continue
                 try:
-                    snapshot = await graph.aget_state(
-                        {"configurable": {"thread_id": thread_id}}
-                    )
+                    snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
                     terminal_sessions = snapshot.values.get("terminal_sessions")
                     active_count = sum(
                         1

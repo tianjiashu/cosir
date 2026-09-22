@@ -46,6 +46,36 @@ describe("tool renderer routing", () => {
     })).toBe("delegation");
   });
 
+  it("routes child_agent_wait results by stable display kind", () => {
+    expect(routeToolPart("child_agent_wait", {
+      backendStatus: "completed",
+      presentation: { expand_layout: "details" },
+      display_data: {
+        kind: "child-agent-wait-result",
+        timed_out: false,
+        messages: [],
+        pending: [],
+        interrupted_by: null,
+      },
+    })).toBe("details");
+  });
+
+  it("sends malformed display data to the fallback without trusting presentation", () => {
+    expect(routeToolPart("child_agent_wait", {
+      backendStatus: "completed",
+      presentation: { expand_layout: "details", verb: "等待子 Agent" },
+      display_data: { kind: 42, messages: "not-an-array" },
+    })).toBe("fallback");
+  });
+
+  it("sends malformed delegation payloads to the fallback", () => {
+    expect(routeToolPart("delegate_task", {
+      backendStatus: "completed",
+      presentation: { expand_layout: "none" },
+      display_data: { kind: "delegation-result", title: "子 Agent", child_task_id: 0 },
+    })).toBe("fallback");
+  });
+
   it("routes interactive terminal sessions to the task-scoped readonly panel", () => {
     expect(routeToolPart("terminal_start", {
       backendStatus: "completed",

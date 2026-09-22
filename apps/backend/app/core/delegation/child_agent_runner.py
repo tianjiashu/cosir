@@ -88,6 +88,16 @@ class ChildAgentRunner:
             )
         return asyncio.run(self._run_child(child_profile, delegation_id))
 
+    async def run_child_workflow(self, child_profile: AgentProfile) -> None:
+        """Run an already-claimed child workflow on the backend event loop.
+
+        ``ChildAgentSessionService`` owns pending→running claiming and
+        ``ConversationRunExecutor`` registration.  This entry point therefore only
+        executes the supplied per-run profile and never calls ``asyncio.run``.
+        """
+
+        await self._run_agent(child_profile)
+
     @staticmethod
     def _is_running_event_loop_thread() -> bool:
         """判断当前线程是否已有运行中的事件循环。

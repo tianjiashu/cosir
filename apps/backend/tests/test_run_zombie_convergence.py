@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+import app.assistant_transport.service.conversation_run_executor as executor_module
 from app.assistant_transport.event import RunInitializedEvent
 from app.assistant_transport.service import conversation_run_command_service as command_module
 from app.assistant_transport.service.conversation_run_command_service import (
@@ -63,6 +64,12 @@ def _build_executor(service: _ExecutorRunService) -> ConversationRunExecutor:
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = service
     executor._event_projector = None
+    executor._child_sessions = SimpleNamespace(
+        close_children=lambda _run_id: None,
+        sweep_pending_follow_ups=lambda: 0,
+        cancel_descendants=lambda _run_id: None,
+        shutdown=lambda: None,
+    )
     executor._executions = {}
     return executor
 
@@ -120,6 +127,54 @@ async def test_executor_converge_failure_does_not_mask_runner_error() -> None:
 
     with pytest.raises(RuntimeError, match="runner failed"):
         await executor._execute(_RUN_ID, runner)
+
+
+@pytest.mark.asyncio
+async def test_executor_cleanup_failures_do_not_mask_runner_or_skip_later_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """runner 原始异常优先，child cleanup 失败也不能跳过 terminal、registry、convergence。"""
+
+    service = _ExecutorRunService()
+    calls: list[str] = []
+
+    class _ChildSessions:
+        def close_children(self, _run_id: int) -> None:
+            calls.append("child_close")
+            raise RuntimeError("child cleanup failed")
+
+        def sweep_pending_follow_ups(self) -> int:
+            calls.append("child_sweep")
+            return 0
+
+    class _Terminal:
+        def begin_run(self, _run_id: int) -> None:
+            calls.append("terminal_begin")
+
+        def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
+            calls.append(f"terminal_close:{reason}")
+
+    executor = _build_executor(service)
+    executor._child_sessions = _ChildSessions()
+    monkeypatch.setattr(executor_module, "get_terminal_session_service", lambda: _Terminal())
+
+    async def runner(_run: object) -> None:
+        executor._executions[_RUN_ID] = SimpleNamespace(thread_task=asyncio.current_task())
+        calls.append("runner")
+        raise RuntimeError("runner failed")
+
+    with pytest.raises(RuntimeError, match="runner failed"):
+        await executor._execute(_RUN_ID, runner)
+
+    assert calls == [
+        "terminal_begin",
+        "runner",
+        "child_close",
+        "child_sweep",
+        "terminal_close:run_execution_finished",
+    ]
+    assert executor._executions == {}
+    assert service.failed == [(_RUN_ID, "run_execution_ended_without_terminal")]
 
 
 # --------------------------------------------------------------------- command service

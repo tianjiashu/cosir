@@ -10,6 +10,8 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+from app.config.logging.logger import log
+
 if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_event_projector import (
         ConversationEventProjector,
@@ -27,7 +29,10 @@ if TYPE_CHECKING:
         TransportAssistantService,
     )
     from app.core.runtime.runner import AgentRuntime
-    from app.service.delegation.delegation_service import DelegationService
+    from app.service.child_agent.async_child_agent_wait_coordinator import (
+        AsyncChildAgentWaitCoordinator,
+    )
+    from app.service.child_agent.child_agent_session_service import ChildAgentSessionService
     from app.service.provider import ModelEntryService, ProviderService
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_state_service import ConversationRunStateService
@@ -37,7 +42,6 @@ if TYPE_CHECKING:
     from app.storage.crud.conversation_command_crud import ConversationCommandCrud
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-    from app.storage.crud.delegation_crud import DelegationCrud
     from app.storage.crud.model_entry_crud import ModelEntryCrud
     from app.storage.crud.provider_crud import ProviderCrud
     from app.storage.crud.task_crud import TaskCrud
@@ -205,52 +209,6 @@ def get_workspace_crud() -> WorkspaceCrud:
     from app.storage.crud.workspace_crud import WorkspaceCrud
 
     return WorkspaceCrud()
-
-
-@lru_cache(maxsize=1)
-def get_delegation_crud() -> DelegationCrud:
-    """Return the process-local DelegationCrud singleton.
-
-    参数:
-        无。
-
-    返回:
-        DelegationCrud 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 DelegationCrud。
-    """
-
-    from app.storage.crud.delegation_crud import DelegationCrud
-
-    return DelegationCrud()
-
-
-@lru_cache(maxsize=1)
-def get_delegation_service() -> DelegationService:
-    """Return the process-local DelegationService singleton.
-
-    参数:
-        无。
-
-    返回:
-        DelegationService 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 DelegationService，并复用 delegation CRUD。
-    """
-
-    from app.service.delegation.delegation_service import DelegationService
-
-    return DelegationService(
-        delegation_crud=get_delegation_crud(),
-    )
 
 
 @lru_cache(maxsize=1)
@@ -432,6 +390,39 @@ def get_conversation_run_state_service() -> ConversationRunStateService:
 
 
 @lru_cache(maxsize=1)
+def get_async_child_agent_wait_coordinator() -> AsyncChildAgentWaitCoordinator:
+    """Return the process-local async Child Agent wait coordinator."""
+
+    from app.service.child_agent.async_child_agent_wait_coordinator import (
+        AsyncChildAgentWaitCoordinator,
+    )
+
+    return AsyncChildAgentWaitCoordinator()
+
+
+@lru_cache(maxsize=1)
+def get_child_agent_session_service() -> ChildAgentSessionService:
+    """Return the process-local Child Agent session coordinator."""
+
+    from app.service.child_agent.child_agent_run_finalization import (
+        ChildAgentRunFinalizationObserver,
+    )
+    from app.service.child_agent.child_agent_session_service import ChildAgentSessionService
+
+    service = ChildAgentSessionService(
+        task_service=get_task_service(),
+        conversation_run_service=get_conversation_run_service(),
+        conversation_run_state_service=get_conversation_run_state_service(),
+        wait_coordinator=get_async_child_agent_wait_coordinator(),
+        terminal_session_service=get_terminal_session_service(),
+    )
+    get_conversation_run_state_service().set_finalization_observer(
+        ChildAgentRunFinalizationObserver(service)
+    )
+    return service
+
+
+@lru_cache(maxsize=1)
 def get_conversation_event_projector() -> ConversationEventProjector:
     """返回进程级 conversation event → snapshot projector。"""
     from app.assistant_transport.service.conversation_event_projector import (
@@ -456,7 +447,9 @@ def get_conversation_run_executor() -> ConversationRunExecutor:
     """
     from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
 
-    return ConversationRunExecutor()
+    executor = ConversationRunExecutor()
+    get_child_agent_session_service().set_conversation_run_executor(executor)
+    return executor
 
 
 @lru_cache(maxsize=1)
@@ -545,13 +538,12 @@ def reset_service_dependencies() -> None:
         ConversationTaskStateService,
     )
 
+    _shutdown_cached_runtime_before_reset()
     ConversationTaskStateService.clear_process_state()
     get_workspace_service.cache_clear()
     get_conversation_run_service.cache_clear()
     get_conversation_run_state_service.cache_clear()
     get_task_service.cache_clear()
-    get_delegation_service.cache_clear()
-    get_delegation_crud.cache_clear()
     get_workspace_crud.cache_clear()
     get_conversation_run_crud.cache_clear()
     get_task_crud.cache_clear()
@@ -563,9 +555,70 @@ def reset_service_dependencies() -> None:
     get_conversation_run_state_service.cache_clear()
     get_transport_assistant_service.cache_clear()
     get_conversation_run_executor.cache_clear()
+    get_async_child_agent_wait_coordinator.cache_clear()
+    get_child_agent_session_service.cache_clear()
     get_conversation_event_projector.cache_clear()
     get_conversation_task_state_service.cache_clear()
     get_conversation_task_context_service.cache_clear()
     get_provider_service.cache_clear()
     get_model_entry_service.cache_clear()
+
+
+def _shutdown_cached_runtime_before_reset() -> None:
+    """Close process-local runtime owners before dropping their cached identities.
+
+    ``reset_service_dependencies`` is synchronous and is used by tests and storage-path
+    reconfiguration.  It therefore uses ``ConversationRunExecutor.close_sync`` as its explicit
+    deterministic contract: canonical child sessions and terminal workers are fenced, task
+    cancellation is posted to owner loops, and process-local indexes are cleared before caches
+    are discarded.  The normal application lifespan uses the awaitable close path instead.
+    """
+
+    executor = None
+    if get_conversation_run_executor.cache_info().currsize:
+        executor = get_conversation_run_executor()
+        try:
+            executor.close_sync()
+        except BaseException as exc:
+            log.error(
+                "service_dependency_runtime_reset_failed",
+                extra={
+                    "msg": "service dependency reset 的同步 runtime cleanup 失败",
+                    "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
+                },
+            )
+    elif get_child_agent_session_service.cache_info().currsize:
+        try:
+            get_child_agent_session_service().shutdown()
+        except BaseException as exc:
+            log.error(
+                "service_dependency_child_session_reset_failed",
+                extra={
+                    "msg": "service dependency reset 的 child session cleanup 失败",
+                    "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
+                },
+            )
+    elif get_async_child_agent_wait_coordinator.cache_info().currsize:
+        try:
+            get_async_child_agent_wait_coordinator().shutdown()
+        except BaseException as exc:
+            log.error(
+                "service_dependency_wait_coordinator_reset_failed",
+                extra={
+                    "msg": "service dependency reset 的 wait coordinator cleanup 失败",
+                    "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
+                },
+            )
+
+    if get_terminal_session_service.cache_info().currsize:
+        try:
+            get_terminal_session_service().shutdown()
+        except BaseException as exc:
+            log.error(
+                "service_dependency_terminal_reset_failed",
+                extra={
+                    "msg": "service dependency reset 的 terminal cleanup 失败",
+                    "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
+                },
+            )
     get_terminal_session_service.cache_clear()

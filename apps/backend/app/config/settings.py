@@ -41,6 +41,7 @@ class Settings:
     LOG_BACKUP_COUNT: ClassVar[int] = 7
     TOOL_ERROR_LIMIT: ClassVar[int] = 100
     MAX_PARALLEL_TOOL_CALLS: ClassVar[int] = 8
+    MAX_CONCURRENT_CHILD_WAITS: ClassVar[int] = 16
     # 工具结果摘要中 content 的截断上限（字符），供 observe 节点与阶段二 LLM 观察使用，
     # 避免把大体积工具输出塞进 checkpoint。
     TOOL_OBSERVATION_CONTEXT_LIMIT: ClassVar[int] = 4000
@@ -217,6 +218,8 @@ class Settings:
             raise ValueError("TOOL_ERROR_LIMIT must be greater than zero")
         if cls.MAX_PARALLEL_TOOL_CALLS < 1:
             raise ValueError("MAX_PARALLEL_TOOL_CALLS must be greater than zero")
+        if cls.MAX_CONCURRENT_CHILD_WAITS < 1:
+            raise ValueError("MAX_CONCURRENT_CHILD_WAITS must be greater than zero")
         if cls.DELEGATION_MAX_CONCURRENCY < 1:
             raise ValueError("DELEGATION_MAX_CONCURRENCY must be greater than zero")
         if cls.DELEGATION_TIMEOUT_SECONDS <= 0:
@@ -289,6 +292,9 @@ class Settings:
         cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
         cls.MAX_PARALLEL_TOOL_CALLS = int(
             os.environ.get("CODING_AGENT_MAX_PARALLEL_TOOL_CALLS", "8")
+        )
+        cls.MAX_CONCURRENT_CHILD_WAITS = int(
+            os.environ.get("CODING_AGENT_MAX_CONCURRENT_CHILD_WAITS", "16")
         )
         cls.DELEGATION_MAX_CONCURRENCY = int(
             os.environ.get("CODING_AGENT_DELEGATION_MAX_CONCURRENCY", "2")
