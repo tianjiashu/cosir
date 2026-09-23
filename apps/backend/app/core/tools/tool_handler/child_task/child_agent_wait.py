@@ -1,12 +1,8 @@
-"""Async ``child_agent_wait`` tool and its explicit canonical-read boundary."""
-
-from __future__ import annotations
+"""child_agent_wait 工具：在等待时间内轮询单个子任务的最终输出。"""
 
 import json
-from collections.abc import Callable, Mapping
-from typing import Any, ClassVar, Protocol
-
-from pydantic import ValidationError
+import time
+from typing import ClassVar
 
 from app.core.tools.schemas import (
     ToolDefinition,
@@ -14,242 +10,214 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
-from app.core.tools.tool_models.child_task import ChildAgentWaitArgs, ChildAgentWaitResult
-from app.service.child_agent.async_child_agent_wait_coordinator import (
-    AsyncChildAgentWaitCoordinator,
-    WaiterCapacityExceeded,
-    WaitQueryResult,
+from app.core.tools.tool_handler.tool_base import HandlerBase
+from app.core.tools.tool_models.child_task import ChildAgentWaitArgs
+from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.service.depends import get_conversation_run_state_service, get_task_service
+
+# 轮询间隔：子 Agent 完成一轮通常以秒到分钟计，1 秒足以兼顾及时性与查询开销。
+_POLL_INTERVAL_SECONDS = 1.0
+# Run 的终态集合：命中后不可能再产出 final_output，按事实结束等待。
+_TERMINAL_RUN_STATUSES: frozenset[str] = frozenset(
+    {
+        ConversationRunStatus.COMPLETED.value,
+        ConversationRunStatus.FAILED.value,
+        ConversationRunStatus.CANCELLED.value,
+    }
 )
-from app.service.child_agent.child_agent_session_error import ChildAgentSessionError
 
 
-class ChildAgentWaitReader(Protocol):
-    """Short synchronous canonical Run/SQLite query used by the wait tool."""
+class ChildAgentWaitTool(HandlerBase):
+    """轮询单个子任务的当前 Run，直到拿到 ``final_output``、进入终态或超时。
 
-    def __call__(
-        self,
-        *,
-        parent_task_id: int,
-        parent_run_id: int,
-        targets: list[dict[str, int | None]] | None,
-        wait_mode: str,
-    ) -> WaitQueryResult | ChildAgentWaitResult | Mapping[str, Any]:
-        """Return a query wrapper or an explicitly convertible canonical result."""
-        ...
-
-
-def _coerce_wait_result(value: object) -> ChildAgentWaitResult:
-    """Convert the reader's supported result shapes into the canonical Pydantic model."""
-
-    if isinstance(value, ChildAgentWaitResult):
-        return value
-    if isinstance(value, Mapping):
-        try:
-            payload = dict(value)
-            # The reader's short-query mapping may omit the derived timeout flag;
-            # the coordinator supplies that flag from its own terminal outcome.
-            payload.setdefault("timed_out", False)
-            return ChildAgentWaitResult.model_validate(payload)
-        except ValidationError as exc:
-            raise TypeError("reader Mapping is not a valid ChildAgentWaitResult") from exc
-    raise TypeError(
-        "child_agent_wait reader must return ChildAgentWaitResult, a Mapping, "
-        "or WaitQueryResult containing one of those values"
-    )
-
-
-def _coerce_query_result(value: object) -> WaitQueryResult:
-    """Convert one reader result while preserving the coordinator's readiness predicate."""
-
-    if isinstance(value, WaitQueryResult):
-        if value.value is None:
-            return value
-        return WaitQueryResult(ready=value.ready, value=_coerce_wait_result(value.value))
-    if isinstance(value, ChildAgentWaitResult | Mapping):
-        return WaitQueryResult(ready=True, value=_coerce_wait_result(value))
-    raise TypeError(
-        "child_agent_wait reader must return ChildAgentWaitResult, a Mapping, "
-        "or WaitQueryResult containing one of those values"
-    )
-
-
-class ChildAgentWaitTool:
-    """Await Child Agent terminal records through injected runtime services.
-
-    The reader owns parent/child ownership checks and canonical Run ordering.  This
-    handler only validates model arguments, delegates the blocking-free wait, and
-    serializes the fixed final-output-shaped result.
+    职责边界：本类只做「读 task → 读 current_run → 判 ``final_output``」这一条 canonical
+    轮询，不认领、不启动、不改写任何 Run 事实；等待期间父 Run 被取消时立即让出。
     """
 
     name: str = "child_agent_wait"
     description: str = (
-        "Wait for terminal messages from one or more direct Child Agents. "
-        "Completed messages include the canonical final output."
+        "This tool waits for the conclusion of exactly one child agent. To wait for several "
+        "child agents, call this tool once per child agent (batching the calls in one reply "
+        "is fine). Child agents usually run for a long time, so do not set too short a "
+        "timeout. A long timeout does not delay the result: as soon as the child agent "
+        "produces its final output, the tool returns immediately instead of waiting for the "
+        "timeout to elapse."
     )
     permission: ClassVar[str] = "child_agent_wait"
     args_model: type[ChildAgentWaitArgs] = ChildAgentWaitArgs
     timeout_seconds: ClassVar[float] = 300.0
     risk_level: ClassVar[str] = "low"
 
-    def __init__(
-        self,
-        reader: ChildAgentWaitReader | Callable[..., object] | None = None,
-        coordinator: AsyncChildAgentWaitCoordinator | None = None,
-    ) -> None:
-        self._reader = reader
-        self._coordinator = coordinator
+    def __init__(self) -> None:
+        """构造等待工具，装配任务与 Run 状态查询服务。
 
-    async def execute_async(
+        参数:
+            无。
+
+        返回:
+            无（构造函数）。
+
+        异常:
+            无。
+
+        副作用:
+            从依赖装配取得 ``TaskService`` 与 ``ConversationRunStateService`` 单例引用。
+        """
+
+        self._task_service = get_task_service()
+        self._run_state_service = get_conversation_run_state_service()
+
+    def execute(
         self,
-        *,
-        targets: list[dict[str, Any]] | None = None,
-        wait_mode: str = "any",
-        timeout_seconds: float = 30.0,
+        child_task_id: int,
+        timeout_seconds: float = 60.0,
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
-        """Wait asynchronously and return canonical terminal message records."""
+        """阻塞轮询指定子任务的当前 Run，直到拿到最终输出或超时。
+
+        参数:
+            child_task_id: 目标子任务标识（``delegate_task`` 返回的 ``child_task_id``）；
+                本工具一次只等待这一个子任务。
+            timeout_seconds: 本次等待上限（秒），须大于 0 且不超过 290；到点即返回
+                ``timed_out``，不视为失败。
+            execution_context: 父工具执行边界，提供父 Run 取消信号。
+
+        返回:
+            拿到最终输出时返回包含 ``timed_out=False`` 与 ``final_output`` 的 JSON 文本；
+            超时返回 ``timed_out=True`` 与当前状态；缺少执行上下文、参数非法、子任务不存在、
+            尚无 Run、Run 终态却没有最终输出、或父 Run 已取消时返回对应观察（取消为
+            ``cancelled``，其余为 ``error``）。
+
+        异常:
+            无。``ValidationError`` / ``KeyError`` 均在本方法内归一化为错误观察。
+
+        副作用:
+            在工具线程内按间隔重复只读查询 task 与 run 记录（不写库）；父 Run 取消时提前返回。
+        """
 
         if execution_context is None:
             return tool_error(
                 self.name,
                 "child_agent_wait requires an execution context.",
-                reason="Provide the parent Run execution context before waiting.",
+                reason="Call this tool from inside a running turn instead of directly.",
                 permission=self.permission,
             )
-        parsed = ChildAgentWaitArgs(
-            targets=targets,
-            wait_mode=wait_mode,
-            timeout_seconds=timeout_seconds,
-        )
-        reader = self._reader or execution_context.runtime_dependencies.child_agent_wait_reader
-        coordinator = (
-            self._coordinator or execution_context.runtime_dependencies.child_agent_wait_coordinator
-        )
-        if reader is None or coordinator is None:
-            return tool_error(
-                self.name,
-                "child_agent_wait is not configured.",
-                reason=(
-                    "Configure the canonical Child Agent wait reader and coordinator "
-                    "before waiting."
-                ),
-                permission=self.permission,
-            )
-
-        serialized_targets = (
-            [target.model_dump() for target in parsed.targets]
-            if parsed.targets is not None
-            else None
-        )
-        if serialized_targets is None:
-            snapshotter = execution_context.runtime_dependencies.child_agent_wait_target_snapshot
-            if snapshotter is not None:
-                serialized_targets = snapshotter(
-                    parent_task_id=execution_context.task_id,
-                    parent_run_id=execution_context.run_id,
-                )
-
-        def canonical_query() -> WaitQueryResult:
-            raw_result = reader(
-                parent_task_id=execution_context.task_id,
-                parent_run_id=execution_context.run_id,
-                targets=serialized_targets,
-                wait_mode=parsed.wait_mode,
-            )
-            return _coerce_query_result(raw_result)
 
         try:
-            outcome = await coordinator.wait_async(
-                execution_context.run_id,
-                canonical_query,
-                timeout_seconds=parsed.timeout_seconds,
-            )
-        except WaiterCapacityExceeded:
+            child_task = self._task_service.get_task(child_task_id)
+        except KeyError:
             return tool_error(
                 self.name,
-                "child_agent_wait_concurrency_exceeded",
+                f"child task not found: {child_task_id}",
                 reason=(
-                    "the bounded Child Agent waiter capacity is currently full; "
-                    "wait for an existing waiter to finish before retrying."
+                    "verify child_task_id against the value returned by delegate_task; "
+                    "this task does not exist."
                 ),
                 permission=self.permission,
-            )
-        except ChildAgentSessionError as exc:
-            return tool_error(
-                self.name,
-                exc.code,
-                reason=f"Child Agent wait request was rejected: {exc.code}.",
-                permission=self.permission,
-            )
-        except (TypeError, ValidationError) as exc:
-            return tool_error(
-                self.name,
-                f"invalid child_agent_wait reader result: {exc}",
-                reason=(
-                    "the canonical Child Agent wait reader returned a value outside its "
-                    "ChildAgentWaitResult/Mapping contract; fix the reader contract before "
-                    "retrying."
-                ),
-                permission=self.permission,
-            )
-        try:
-            if outcome.value is None:
-                if not outcome.timed_out and outcome.interrupted_by is None:
-                    raise TypeError(
-                        "canonical wait query completed without a ChildAgentWaitResult"
-                    )
-                result = ChildAgentWaitResult(
-                    timed_out=outcome.timed_out,
-                    interrupted_by=outcome.interrupted_by,
-                )
-            else:
-                result = _coerce_wait_result(outcome.value)
-        except (TypeError, ValidationError) as exc:
-            return tool_error(
-                self.name,
-                f"invalid child_agent_wait reader result: {exc}",
-                reason=(
-                    "the canonical Child Agent wait reader returned a value outside its "
-                    "ChildAgentWaitResult/Mapping contract; fix the reader contract before "
-                    "retrying."
-                ),
-                permission=self.permission,
+                retryable=False,
             )
 
-        result = result.model_copy(
-            update={
-                "timed_out": outcome.timed_out or result.timed_out,
-                "interrupted_by": outcome.interrupted_by or result.interrupted_by,
-            }
-        )
-        payload = result.model_dump(mode="json")
-        result = {
-            "timed_out": payload["timed_out"],
-            "messages": list(payload.get("messages", [])),
-            "pending": list(payload.get("pending", [])),
-            "interrupted_by": payload.get("interrupted_by"),
-        }
-        return tool_success(
-            tool_name=self.name,
-            permission=self.permission,
-            content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
-            display_data={"kind": "child-agent-wait-result", **payload},
-        )
+        if not child_task.is_child or child_task.parent_task_id != execution_context.task_id:
+            return tool_error(
+                tool_name=self.name,
+                error="child_task_not_delegated_by_caller",
+                reason=(
+                    "child_task_id does not refer to a child task delegated by this task; "
+                    "use the child_task_id returned by delegate_task_for_sub_agent, or "
+                    "delegate the subtask first and retry with the corrected child_task_id."
+                ),
+                permission=self.permission,
+                retryable=True,
+            )
+
+        is_parent_cancelled = execution_context.runtime_dependencies.is_run_cancelled
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if is_parent_cancelled is not None and is_parent_cancelled(execution_context.run_id):
+                return tool_cancelled(
+                    tool_name=self.name,
+                    permission=self.permission,
+                )
+
+            run = self._run_state_service.get_run(child_task.current_run_id)
+
+            if run.final_output:
+                return tool_success(
+                    tool_name=self.name,
+                    permission=self.permission,
+                    content=json.dumps(
+                        {
+                            "child_task_id": child_task_id,
+                            "child_run_id": run.id,
+                            "timed_out": False,
+                            "status": run.status,
+                            "final_output": run.final_output,
+                            "end_reason": run.end_reason,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+            if run.status in _TERMINAL_RUN_STATUSES:
+                return tool_error(
+                    self.name,
+                    f"child run {run.id} finished without final output ({run.status})",
+                    reason=(
+                        "the child run reached a terminal state without producing output; "
+                        "read it with child_agent_status or re-delegate instead of waiting."
+                    ),
+                    permission=self.permission,
+                    retryable=False,
+                )
+            if time.monotonic() >= deadline:
+                return tool_success(
+                    tool_name=self.name,
+                    permission=self.permission,
+                    content=json.dumps(
+                        {
+                            "child_task_id": child_task_id,
+                            "child_run_id": run.id,
+                            "timed_out": True,
+                            "status": run.status,
+                            "final_output": None,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                )
+
+            remaining = deadline - time.monotonic()
+            time.sleep(min(_POLL_INTERVAL_SECONDS, max(remaining, 0.0)))
 
     def to_definition(self) -> ToolDefinition:
-        """Return the serial async-only tool definition."""
+        """构建 child_agent_wait 工具的注册定义。
+
+        参数:
+            无。
+
+        返回:
+            同步执行（``handler_kind="sync"``）、线程直跑的 child_agent_wait 工具定义；
+            工具超时高于参数上限，保证参数内的等待不会被工具层提前中断。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
 
         return ToolDefinition(
             name=self.name,
             description=self.description,
             permission=self.permission,
-            handler=self.execute_async,
+            handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             risk_level=self.risk_level,
-            handler_kind="async",
+            execution_mode="thread",
             parallel_mode="serial",
             display=ToolDisplayHints(
                 verb="等待子 Agent",
@@ -263,6 +231,19 @@ class ChildAgentWaitTool:
 
 
 def build_child_agent_wait_definition() -> ToolDefinition:
-    """Build the runtime-injected ``child_agent_wait`` definition."""
+    """构建 child_agent_wait 工具定义。
+
+    参数:
+        无。
+
+    返回:
+        可直接注册到工具注册表的 child_agent_wait 工具定义。
+
+    异常:
+        无。
+
+    副作用:
+        创建一个 ``ChildAgentWaitTool`` 实例（构造期取得两个 service 单例）。
+    """
 
     return ChildAgentWaitTool().to_definition()

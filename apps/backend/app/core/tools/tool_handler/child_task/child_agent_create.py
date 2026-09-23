@@ -1,5 +1,6 @@
 """delegate_task tool handler。"""
 
+import asyncio
 import json
 from dataclasses import replace
 from typing import ClassVar
@@ -21,15 +22,19 @@ from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import DelegateTaskArgs
 from app.models import ConversationRunCommand
-from app.service.depends import get_task_service, get_conversation_run_service, get_conversation_run_state_service, \
-    get_conversation_run_executor
+from app.service.depends import (
+    get_conversation_run_executor,
+    get_conversation_run_service,
+    get_conversation_run_state_service,
+    get_task_service,
+)
 
 
 def _contract_description() -> str:
     """返回面向模型的委派契约主描述（不含子 Agent 清单与并行引导）。
 
     本函数只描述「委派是什么、何时该用、代价与边界」，**不重复具体数值上限**
-    （``PROMPT_MAX`` / ``TITLE_MAX`` 只留在参数字段描述里——工具描述与参数 schema 在同一份
+    （``MESSAGE_MAX`` / ``AGENT_NAME_MAX`` 只留在参数字段描述里——工具描述与参数 schema 在同一份
     function 定义里同时下发给模型，同一数值说两遍纯属浪费 token）；这里只保留「超预算会被
     立刻拒绝」这一确定性后果。并发额度在**每次投影时**从 ``Settings`` 实时读取，避免把配置
     值写死在文案里后与运行时漂移（``DELEGATION_MAX_CONCURRENCY`` 的类属性声明是 4，
@@ -51,8 +56,8 @@ def _contract_description() -> str:
     return (
         "Delegate one focused subtask to a single child agent and wait for its result. Use it "
         "when part of the work is separable from your own turn. The child runs its own agent "
-        "loop with only your prompt as input — it cannot see this conversation — and returns "
-        "only a final summary, so the prompt must be self-contained. A child cannot delegate "
+        "loop with only your message as input — it cannot see this conversation — and returns "
+        "only a final summary, so the message must be self-contained. A child cannot delegate "
         "further, and its tools are reduced by parent and child permissions. Delegation is "
         "asynchronous: it returns stable child references immediately; use child_agent_wait "
         "or child_agent_status to observe completion. "
@@ -67,8 +72,31 @@ def _contract_description() -> str:
 
 _PARALLEL_HINT = (
     "To run several children in parallel, emit several delegate_task calls in the same reply; "
-    "reusing the same child_agent_id is fine as long as each prompt is self-contained."
+    "reusing the same child_agent_id is fine as long as each message is self-contained."
 )
+
+# 子 Agent 不得使用的工具：**委派与父子通信**（``tool_handler/child_task/`` 全部工具）与
+# **可交互终端**（``tool_handler/terminal_session/`` 全部工具）。清单与这两个目录一一对应，
+# 新增同目录工具时必须同步登记。``delegate_task`` 与 ``child_agent_send`` 在启动 child Run
+# 时都把它作为 ``ban_tools`` 传给执行器，保证子 Agent 既不能再向下委派，也不能操作父级
+# 的交互式终端会话。
+CHILD_BANNED_TOOLS: tuple[str, ...] = (
+    # child_task/：委派与父子通信
+    "delegate_task_for_sub_agent",
+    "child_agent_status",
+    "child_agent_send",
+    "child_agent_close",
+    "child_agent_wait",
+    # terminal_session/：可交互终端
+    "terminal_start",
+    "terminal_write",
+    "terminal_read",
+    "terminal_signal",
+    "terminal_close",
+)
+
+# 只等 executor 完成「登记 + 建后台 task」这一段，不等子 Agent 跑完。
+_START_ACK_TIMEOUT_SECONDS = 10.0
 
 
 def _compose_description(agent_summary: str) -> str:
@@ -136,18 +164,18 @@ class DelegateTaskTool(HandlerBase):
         self.run_exector = get_conversation_run_executor()
 
     def execute(
-            self,
-            child_agent_id: str,
-            agent_name: str,
-            prompt: str,
-            execution_context: ToolExecutionContext | None = None,
+        self,
+        child_agent_id: str,
+        agent_name: str,
+        message: str,
+        execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """委派一个自由文本子任务给指定 child Agent，并返回启动结果观察。
 
         参数:
             child_agent_id: 要运行的 child agent profile 标识。
-            title: 任务标题，必填，用于展示与可追溯。
-            prompt: 面向子 Agent 的自由文本任务契约，原样作为 child turn 的输入。
+            agent_name: Agent 名称，必填，用于展示与可追溯。
+            message: 面向子 Agent 的自由文本任务契约，原样作为 child turn 的输入。
             execution_context: 父工具执行边界，提供运行期依赖与父 Run 事实。
 
         返回:
@@ -171,7 +199,7 @@ class DelegateTaskTool(HandlerBase):
                 "delegate_task requires an execution context.",
                 reason="Provide the parent task execution context before delegating work.",
                 permission=self.permission,
-                retryable=False
+                retryable=False,
             )
 
         runtime_dependencies = execution_context.runtime_dependencies
@@ -180,11 +208,9 @@ class DelegateTaskTool(HandlerBase):
             return tool_error(
                 self.name,
                 "delegate_task_runtime_unavailable",
-                reason=(
-                    "Configure the parent agent profile error before delegating work."
-                ),
+                reason="Configure the parent agent profile error before delegating work.",
                 permission=self.permission,
-                retryable=False
+                retryable=False,
             )
         if cancellation_registry.is_cancelled(execution_context.run_id):
             return tool_cancelled(
@@ -218,20 +244,30 @@ class DelegateTaskTool(HandlerBase):
                     f"before retrying."
                 ),
                 permission=self.permission,
-                retryable=True
+                retryable=True,
             )
 
         try:
             parent_run = self.run_state_service.get_run(execution_context.run_id)
 
-            child_task = self._task_service.get_or_create_task(workspace_id=execution_context.workspace_id,
-                                                               title=agent_name,
-                                                               task_type="delegate_task",
-                                                               parent_task_id=execution_context.task_id,
-                                                               parent_run_id=execution_context.run_id, )
+            child_task = self._task_service.get_or_create_task(
+                workspace_id=execution_context.workspace_id,
+                title=agent_name,
+                task_type="delegate_task",
+                parent_task_id=execution_context.task_id,
+                parent_run_id=execution_context.run_id,
+            )
 
-            provider_id = child_agent_profile.provider_id if child_agent_profile.provider_id is not None else parent_profile.provider_id
-            model_name = child_agent_profile.model_name if child_agent_profile.model_name is not None else parent_profile.model_name
+            provider_id = (
+                child_agent_profile.provider_id
+                if child_agent_profile.provider_id is not None
+                else parent_profile.provider_id
+            )
+            model_name = (
+                child_agent_profile.model_name
+                if child_agent_profile.model_name is not None
+                else parent_profile.model_name
+            )
             reasoning_effort = parent_run.reasoning_effort
 
             child_run = self.run_setvice.create_run(
@@ -240,12 +276,31 @@ class DelegateTaskTool(HandlerBase):
                 provider_id=provider_id,
                 model_name=model_name,
                 reasoning_effort=reasoning_effort,
-                run_command=ConversationRunCommand(display_text=prompt)
+                run_command=ConversationRunCommand(display_text=message),
             )
 
             child_run = self.run_state_service.claim_pending_run(child_run.id)
 
-            self.run_exector.start(child_run.id, start_mode="fresh")
+            # 执行器入口是协程：在父 Run 的事件循环上调度，并只等待登记完成。
+            loop = execution_context.runtime_dependencies.runtime_event_loop
+            if loop is None or loop.is_closed():
+                return tool_error(
+                    self.name,
+                    "delegate_task_runtime_unavailable",
+                    reason=(
+                        "the parent runtime event loop is unavailable, so the child run "
+                        "cannot be started; retry from a normal turn."
+                    ),
+                    permission=self.permission,
+                    retryable=False,
+                )
+            future = asyncio.run_coroutine_threadsafe(
+                self.run_exector.start(
+                    child_run.id, start_mode="fresh", ban_tools=list(CHILD_BANNED_TOOLS)
+                ),
+                loop,
+            )
+            future.result(timeout=_START_ACK_TIMEOUT_SECONDS)
 
         except Exception as e:
             log.exception(
@@ -263,17 +318,18 @@ class DelegateTaskTool(HandlerBase):
                 tool_name=self.name,
                 error="error",
                 reason="An error occurred while delegating the task.",
-                retryable=False
+                retryable=False,
             )
         return tool_success(
             self.name,
             self.name,
             json.dumps(
                 {
-                    "status": "started",
+                    "status": "running",
                     "child_task_id": child_task.id,
                     "child_run_id": child_run.id,
                     "child_agent_id": child_agent_id,
+                    "agent_name": agent_name,
                 },
                 separators=(",", ":"),
             ),
