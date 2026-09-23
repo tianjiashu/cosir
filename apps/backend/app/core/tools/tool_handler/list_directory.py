@@ -15,6 +15,7 @@ from typing import Any
 
 from app.core.tools.display.filesystem_display import build_directory_display_data
 from app.core.tools.schemas import (
+    TOOL_LIST_DIRECTORY,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -41,7 +42,7 @@ class ListDirectoryTool(HandlerBase):
         ``execution_context.workspace_root`` 取得。
     """
 
-    name = "list_directory"
+    name = TOOL_LIST_DIRECTORY
     description = (
         "List a directory's entries: name, type (file|dir|link), path. Read-only. "
         'Pass path="." for the workspace root; relative paths resolve against the root. '

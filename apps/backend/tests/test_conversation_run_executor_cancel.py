@@ -2,7 +2,9 @@
 
 import asyncio
 import threading
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -34,6 +36,33 @@ def _build_executor(service: object) -> ConversationRunExecutor:
     return executor
 
 
+class _StubRuntime:
+    """替代真实 AgentRuntime：``execute_run`` 的行为由用例注入。"""
+
+    def __init__(self, behavior: Callable[[], Awaitable[None]]) -> None:
+        self._behavior = behavior
+
+    async def execute_run(self, **_kwargs: Any) -> None:
+        await self._behavior()
+
+
+def _patch_drivers(
+    monkeypatch: pytest.MonkeyPatch,
+    behavior: Callable[[], Awaitable[None]],
+) -> None:
+    """把执行器依赖的 runtime 与 terminal service 替换为可控替身。"""
+
+    monkeypatch.setattr(executor_module, "get_runtime", lambda: _StubRuntime(behavior))
+    monkeypatch.setattr(
+        executor_module,
+        "get_terminal_session_service",
+        lambda: SimpleNamespace(
+            begin_run=lambda _run_id: None,
+            close_run_terminals=lambda *_args, **_kwargs: None,
+        ),
+    )
+
+
 @pytest.fixture(autouse=True)
 def _isolated_signal_registry():
     """每个用例前后清空进程内取消信号，避免用例间串扰。"""
@@ -44,16 +73,20 @@ def _isolated_signal_registry():
 
 
 @pytest.mark.asyncio
-async def test_cancel_marks_signal_and_returns_without_waiting_for_runner() -> None:
+async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """runner 永不返回时取消依旧立即返回 True，且只标记进程内信号。"""
 
     service = _RunService(status="running")
     executor = _build_executor(service)
 
-    async def runner(_run: object) -> None:
+    async def runner() -> None:
         await asyncio.Event().wait()
 
-    execution = await executor.start(_RUN_ID, runner)
+    _patch_drivers(monkeypatch, runner)
+
+    execution = await executor.start(_RUN_ID, "fresh")
     try:
         assert await asyncio.wait_for(executor.cancel(_RUN_ID), timeout=1.0) is True
         assert cancellation_registry.is_cancelled(_RUN_ID) is True
@@ -136,9 +169,6 @@ async def test_start_rejects_run_that_is_not_running() -> None:
 
     executor = _build_executor(_RunService(status="cancelled"))
 
-    async def runner(_run: object) -> None:
-        return None
-
     with pytest.raises(ValueError):
-        await executor.start(_RUN_ID, runner)
+        await executor.start(_RUN_ID, "fresh")
     assert executor._executions == {}

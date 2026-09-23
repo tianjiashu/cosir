@@ -1,9 +1,21 @@
-"""运行时与工作流策略共享的工作流协议。"""
+"""运行时与工作流策略共享的工作流协议，以及 LangGraph checkpointer 工厂。
+
+Workflow 编排层强依赖 LangGraph（见 ``AGENTS.md`` 不可变决议）：``StateGraph`` 负责编排、
+``AsyncSqliteSaver`` 负责 checkpoint 真实落盘。checkpoint 数据库文件路径来自
+``app.storage.store_engines.checkpoint_path``，本模块只负责产出 checkpointer；未来如需替换为
+其他后端（如 PostgreSQL），只需修改 ``build_checkpointer`` 与路径提供方两处。
+"""
+
 from abc import ABC
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import ClassVar
+
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.workflow_operations import WorkflowOperations
+from app.storage.store_engines import checkpoint_path as _engine_checkpoint_path
 
 
 class AgentWorkflow(ABC):
@@ -41,3 +53,23 @@ class AgentWorkflow(ABC):
         """
 
         ...
+
+
+@asynccontextmanager
+async def build_checkpointer() -> AsyncIterator[AsyncSqliteSaver]:
+    """构造并产出 AsyncSqliteSaver checkpointer。
+
+    ``AsyncSqliteSaver`` 底层经 aiosqlite 直连数据库文件，不接受 SQLAlchemy 引擎；因此
+    直接复用 ``app.storage.store_engines.checkpoint_path`` 提供的文件路径，连接生命周期由
+    LangGraph 的 ``from_conn_string`` 上下文管理器负责释放。产出对象需以 ``async with``
+    方式使用。
+
+    生成:
+        已配置好、可直接传给 ``graph.compile(checkpointer=...)`` 的 AsyncSqliteSaver。
+
+    异常:
+        RuntimeError: 如果 ``init_storage`` 尚未调用。
+    """
+
+    async with AsyncSqliteSaver.from_conn_string(_engine_checkpoint_path()) as saver:
+        yield saver

@@ -11,14 +11,15 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy.orm import sessionmaker
 
+import app.core.runtime.conversation_run_executor as executor_module
 from app.assistant_transport.event import RunInitializedEvent
-from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
+from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_record import ConversationRunRecord
@@ -108,13 +109,15 @@ def _context_row(
 
 
 @pytest.mark.asyncio
-async def test_executor_propagates_runner_error_and_swallows_projector_failure() -> None:
-    """runner 失败时执行器投影「工具失败收束」并兜底收敛未落终态的 run。
+async def test_executor_settles_run_and_swallows_projector_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """驱动期失败时执行器投影「工具失败收束」并兜底收敛未落终态的 run。
 
     执行器不拥有 run 的业务终态（正常路径由 workflow 经 run_service 落定），但驱动结束
     后 run 仍 active 时必须条件收敛，否则会留下无执行器的僵尸 running。本用例锁定两点
-    当前行为：投影失败被降级为日志（不得替换 runner 的真实异常），且执行器退出时
-    对未落终态的 run 调用一次条件收敛。
+    当前行为：驱动期异常在 ``_execute`` 内被收口（不外抛）、投影失败被降级为日志，
+    且执行器退出时对未落终态的 run 调用一次条件收敛。
     """
 
     run = SimpleNamespace(id=1, task_id=7, status="running", end_reason=None)
@@ -139,11 +142,24 @@ async def test_executor_propagates_runner_error_and_swallows_projector_failure()
     executor._event_projector = FailingProjector()
     executor._executions = {}
 
-    async def runner(_run: object) -> None:
+    async def runner() -> None:
         raise RuntimeError("runner failed")
 
-    with pytest.raises(RuntimeError, match="runner failed"):
-        await executor._execute(1, runner)
+    class _Runtime:
+        async def execute_run(self, **_kwargs: Any) -> None:
+            await runner()
+
+    class _Terminal:
+        def begin_run(self, _run_id: int) -> None:
+            return None
+
+        def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
+            return None
+
+    monkeypatch.setattr(executor_module, "get_runtime", lambda: _Runtime())
+    monkeypatch.setattr(executor_module, "get_terminal_session_service", lambda: _Terminal())
+
+    await executor._execute(1, "fresh")
 
     assert converged == [(1, "run_execution_ended_without_terminal")]
 
@@ -179,7 +195,6 @@ def test_workflow_event_dispatcher_swallows_projector_failure() -> None:
     operations._event_projector = FailingProjector()
 
     assert operations.process_event(RunInitializedEvent(task_id=7, run_id=11)) is None
-
 
 
 def test_direct_create_does_not_append_user_event_after_canonical_user_write(

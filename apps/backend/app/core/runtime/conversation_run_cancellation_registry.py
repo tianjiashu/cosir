@@ -46,7 +46,7 @@ class ConversationRunCancellationRegistry:
             无。
 
         副作用:
-            写入进程内取消集合，并记录调试日志。
+            写入进程内取消集合，并记录一条 INFO 级日志（``turn_cancellation_marked``）。
         """
 
         with self._lock:

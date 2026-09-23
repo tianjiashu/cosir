@@ -37,7 +37,6 @@ from app.core.tools.schemas import (
     ToolObservation,
 )
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
-from app.core.tools.tool_execute.tool_cancelled import ToolCallCancelled, tool_cancelled
 from app.core.tools.tool_execute.tool_error import (
     internal_execution_error_reason,
     tool_error,
@@ -116,9 +115,6 @@ class WorkflowOperations:
         self._allowed_tool_names = frozenset(tool.name for tool in self.model_tools)
         self._parallel_mode_by_name = {
             definition.name: definition.parallel_mode for definition in self.model_tools
-        }
-        self._handler_kind_by_name = {
-            definition.name: definition.handler_kind for definition in self.model_tools
         }
         self._trace_recorder = tool_trace_recorder or _NullToolTraceRecorder()
 
@@ -415,21 +411,14 @@ class WorkflowOperations:
                     runtime_dependencies=replace(dependencies, runtime_event_loop=loop),
                 )
         for index, call in serial_calls:
-            if (
-                call.tool_name in self._handler_kind_by_name
-                and self._handler_kind_by_name[call.tool_name] == "async"
-            ):
-                observation = await self._execute_async_tool_call(task_id, call, step_id)
-            else:
-                # Unknown model output is deliberately sent through the synchronous
-                # ToolExecutor entry point so its access gate can produce the stable
-                # unknown-tool observation instead of this scheduler raising KeyError.
-                observation = await asyncio.to_thread(
-                    self._execute_tool_call,
-                    task_id,
-                    call,
-                    step_id,
-                )
+            # 未知工具名同样交给同步入口：由 ToolExecutor 的 access gate 产出稳定的
+            # unknown-tool 观察，调度器自身不解析、不查表，因此不会抛 KeyError。
+            observation = await asyncio.to_thread(
+                self._execute_tool_call,
+                task_id,
+                call,
+                step_id,
+            )
             indexed_observations.append((index, observation))
 
         if parallel_calls:
@@ -573,38 +562,6 @@ class WorkflowOperations:
         except Exception as exc:
             return self._internal_error_observation(task_id, call, exc, step_id)
 
-    async def _execute_async_tool_call(
-        self,
-        task_id: int,
-        call: ToolCall,
-        step_id: str | None,
-    ) -> ToolObservation:
-        """Execute an async tool directly on the workflow event loop."""
-
-        try:
-            with self._trace_recorder.span(call, step_id or "") as tool_span:
-                execution_context = (
-                    replace(self._execution_context, tool_call_id=call.call_id)
-                    if self._execution_context is not None
-                    else None
-                )
-                observation = await self._executor.execute_async(
-                    call,
-                    execution_context=execution_context,
-                    allowed_tool_names=self._allowed_tool_names,
-                )
-                tool_span.record(observation)
-                return observation
-        except ToolCallCancelled:
-            observation = tool_cancelled(
-                tool_name=call.tool_name,
-                tool_call_id=call.call_id,
-            )
-            tool_span.record(observation)
-            return observation
-        except Exception as exc:
-            return self._internal_error_observation(task_id, call, exc, step_id)
-
     def _internal_error_observation(
         self,
         task_id: int,
@@ -668,15 +625,7 @@ class WorkflowOperations:
         副作用:
             无。
         """
-        if (
-            call.tool_name not in self._handler_kind_by_name
-            or call.tool_name not in self._parallel_mode_by_name
-        ):
-            return False
-        return (
-            self._handler_kind_by_name[call.tool_name] == "sync"
-            and self._parallel_mode_by_name[call.tool_name] == "parallel"
-        )
+        return self._parallel_mode_by_name.get(call.tool_name) == "parallel"
 
     def to_tool_model_message(self, observation: ToolObservation) -> ToolMessage:
         """把已治理的工具观察转为模型上下文消息（``observe`` 节点的共享契约）。

@@ -20,6 +20,7 @@ from app.assistant_transport.event.conversation_event_envelope import (
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import ConversationStateToolCallPart
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.models.enums.tool_call_status import ToolCallEventStatus
 
@@ -78,7 +79,7 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
         """
 
         run_index = self._find_run(state, self.run_id)
-        if state["runs"][run_index]["status"] in {"completed", "failed", "cancelled"}:
+        if state["runs"][run_index]["status"] in Constant.Run.TERMINAL_STATUSES:
             return []
         located = self._find_assistant_message(state, self.run_id, required=False)
         if located is None:

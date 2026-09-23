@@ -23,7 +23,6 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.llm_provider.model_failure import classify_model_failure
-from app.core.runtime.checkpointer import build_checkpointer
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.workflow_operations import WorkflowOperations
@@ -34,7 +33,7 @@ from app.service.depends import get_terminal_session_service
 from app.service.provider.capability_service import CapabilityService
 
 from ...context.runtime_context_manager import RuntimeContextManager
-from ..agent_workflow import AgentWorkflow
+from ..agent_workflow import AgentWorkflow, build_checkpointer
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
 from app.core.workflows.react.worflow_state.state import ReactGraphState

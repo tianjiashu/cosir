@@ -9,7 +9,7 @@ class ChildAgentWaitArgs(BaseModel):
     child_task_id: int = Field(
         gt=0,
         description=(
-            "The child task id returned by the delegate_task_for_sub_agent tool. REQUIRED."
+            "The child task id returned by the delegate_task tool. REQUIRED."
         ),
     )
     timeout_seconds: float = Field(

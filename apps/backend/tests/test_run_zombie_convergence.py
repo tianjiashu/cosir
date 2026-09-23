@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -24,8 +25,8 @@ from app.assistant_transport.service import conversation_run_command_service as 
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandService,
 )
-from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.config.logging.logger import log
+from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 
 _RUN_ID = 1
 _TASK_ID = 7
@@ -64,113 +65,129 @@ def _build_executor(service: _ExecutorRunService) -> ConversationRunExecutor:
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = service
     executor._event_projector = None
-    executor._child_sessions = SimpleNamespace(
-        close_children=lambda _run_id: None,
-        sweep_pending_follow_ups=lambda: 0,
-        cancel_descendants=lambda _run_id: None,
-        shutdown=lambda: None,
-    )
     executor._executions = {}
     return executor
 
 
+class _StubRuntime:
+    """替代真实 AgentRuntime：``execute_run`` 的行为由用例注入（旧契约里的 runner 角色）。"""
+
+    def __init__(self, behavior: Callable[[], Awaitable[None]]) -> None:
+        self._behavior = behavior
+        self.calls: list[dict[str, Any]] = []
+
+    async def execute_run(self, **kwargs: Any) -> None:
+        self.calls.append(kwargs)
+        await self._behavior()
+
+
+class _StubTerminal:
+    """替代 terminal session service：把 begin/close 调用记入共享列表。"""
+
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
+
+    def begin_run(self, _run_id: int) -> None:
+        self._calls.append("terminal_begin")
+
+    def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
+        self._calls.append(f"terminal_close:{reason}")
+
+
+def _patch_drivers(
+    monkeypatch: pytest.MonkeyPatch,
+    behavior: Callable[[], Awaitable[None]],
+    calls: list[str] | None = None,
+) -> _StubRuntime:
+    """把执行器依赖的 runtime 与 terminal service 替换为可控替身。"""
+
+    runtime = _StubRuntime(behavior)
+    monkeypatch.setattr(executor_module, "get_runtime", lambda: runtime)
+    monkeypatch.setattr(
+        executor_module,
+        "get_terminal_session_service",
+        lambda: _StubTerminal(calls if calls is not None else []),
+    )
+    return runtime
+
+
 @pytest.mark.asyncio
-async def test_executor_converges_run_when_runner_raises_before_terminal() -> None:
+async def test_executor_converges_run_when_runner_raises_before_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """runner（含 workflow 进入前的 setup 步骤）抛错且 run 未落终态时，兜底收敛为 failed。"""
 
     service = _ExecutorRunService()
     executor = _build_executor(service)
 
-    async def runner(_run: object) -> None:
+    async def runner() -> None:
         raise RuntimeError("setup died before workflow")
 
-    with pytest.raises(RuntimeError, match="setup died before workflow"):
-        await executor._execute(_RUN_ID, runner)
+    _patch_drivers(monkeypatch, runner)
+
+    # ``_execute`` 在内部收口驱动期异常（不外抛），由兜底收敛把仍未落终态的 run 收敛。
+    await executor._execute(_RUN_ID, "fresh")
 
     assert service.failed == [(_RUN_ID, "run_execution_ended_without_terminal")]
     assert service.cancelled == []
 
 
 @pytest.mark.asyncio
-async def test_executor_converges_run_when_task_cancelled() -> None:
+async def test_executor_converges_run_when_task_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """后台 task 被取消（优雅关闭路径）时，兜底收敛为 cancelled 而不是遗留 running。"""
 
     service = _ExecutorRunService()
     executor = _build_executor(service)
 
-    async def runner(_run: object) -> None:
+    async def runner() -> None:
         await asyncio.Event().wait()
 
-    execution = await executor.start(_RUN_ID, runner)
+    _patch_drivers(monkeypatch, runner)
+
+    execution = await executor.start(_RUN_ID, "fresh")
     # 先让后台 task 真正开始驱动，再取消：未调度就取消会让 _execute 整体不执行。
     await asyncio.sleep(0.05)
     execution.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await execution
+    # ``_execute`` 吞掉 CancelledError 并以 cancelled 兜底收敛，后台 task 正常结束。
+    await asyncio.gather(execution, return_exceptions=True)
 
     assert service.cancelled == [(_RUN_ID, "run_execution_cancelled")]
     assert service.failed == []
 
 
 @pytest.mark.asyncio
-async def test_executor_converge_failure_does_not_mask_runner_error() -> None:
-    """兜底收敛自身失败只记日志：不得覆盖 runner 的原始异常，也不阻断收尾。"""
-
-    class _BrokenRunService(_ExecutorRunService):
-        def fail_run_if_running(self, *_args: Any, **_kwargs: Any) -> Any:
-            raise RuntimeError("database unavailable")
-
-    executor = _build_executor(_BrokenRunService())
-
-    async def runner(_run: object) -> None:
-        raise RuntimeError("runner failed")
-
-    with pytest.raises(RuntimeError, match="runner failed"):
-        await executor._execute(_RUN_ID, runner)
-
-
-@pytest.mark.asyncio
-async def test_executor_cleanup_failures_do_not_mask_runner_or_skip_later_cleanup(
+async def test_executor_cleanup_failures_do_not_skip_later_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """runner 原始异常优先，child cleanup 失败也不能跳过 terminal、registry、convergence。"""
+    """驱动期异常被内部收口；terminal 清理失败也不能跳过 registry 移除与兜底收敛。"""
 
     service = _ExecutorRunService()
     calls: list[str] = []
+    executor = _build_executor(service)
 
-    class _ChildSessions:
-        def close_children(self, _run_id: int) -> None:
-            calls.append("child_close")
-            raise RuntimeError("child cleanup failed")
-
-        def sweep_pending_follow_ups(self) -> int:
-            calls.append("child_sweep")
-            return 0
-
-    class _Terminal:
-        def begin_run(self, _run_id: int) -> None:
-            calls.append("terminal_begin")
-
+    class _BrokenTerminal(_StubTerminal):
         def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
             calls.append(f"terminal_close:{reason}")
+            raise RuntimeError("terminal cleanup failed")
 
-    executor = _build_executor(service)
-    executor._child_sessions = _ChildSessions()
-    monkeypatch.setattr(executor_module, "get_terminal_session_service", lambda: _Terminal())
-
-    async def runner(_run: object) -> None:
+    async def runner() -> None:
         executor._executions[_RUN_ID] = SimpleNamespace(thread_task=asyncio.current_task())
         calls.append("runner")
         raise RuntimeError("runner failed")
 
-    with pytest.raises(RuntimeError, match="runner failed"):
-        await executor._execute(_RUN_ID, runner)
+    _patch_drivers(monkeypatch, runner, calls)
+    monkeypatch.setattr(
+        executor_module, "get_terminal_session_service", lambda: _BrokenTerminal(calls)
+    )
+
+    # 驱动期异常与清理失败都在执行器内收口为日志，收尾仍按序执行。
+    await executor._execute(_RUN_ID, "fresh")
 
     assert calls == [
         "terminal_begin",
         "runner",
-        "child_close",
-        "child_sweep",
         "terminal_close:run_execution_finished",
     ]
     assert executor._executions == {}
@@ -236,9 +253,7 @@ def _build_command_service(
     """构造只注入替身依赖的命令服务，并把会话工厂与 projector 装配替换为替身。"""
 
     monkeypatch.setattr(command_module, "main_session_factory", lambda: _FakeSessionFactory())
-    monkeypatch.setattr(
-        "app.service.depends.get_conversation_event_projector", lambda: projector
-    )
+    monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: projector)
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._command = SimpleNamespace(
         get=lambda *_args: None,

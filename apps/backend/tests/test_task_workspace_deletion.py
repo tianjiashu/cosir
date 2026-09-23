@@ -59,12 +59,26 @@ def _count(model: type[object]) -> int:
         return int(session.scalar(select(func.count()).select_from(model)) or 0)
 
 
+def test_list_child_tasks_uses_delegate_task_type(storage) -> None:
+    workspace, root = _new_workspace_and_task()
+    parent_run = get_conversation_run_crud().create(root.id, "root input", status="running")
+    child = get_task_crud().create(
+        workspace.id,
+        "child",
+        task_type="delegate_task",
+        parent_task_id=root.id,
+        parent_run_id=parent_run.id,
+    )
+
+    assert get_task_service().list_child_tasks(root.id, parent_run.id) == [child]
+
+
 def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
     workspace, root = _new_workspace_and_task()
     child = get_task_crud().create(
         workspace.id,
         "child",
-        task_type="delegation",
+        task_type="delegate_task",
         parent_task_id=root.id,
     )
     root_run = get_conversation_run_crud().create(root.id, "root input", status="completed")
@@ -113,7 +127,7 @@ def test_task_delete_rolls_back_all_rows_when_tree_delete_fails(
     child = get_task_crud().create(
         workspace.id,
         "child",
-        task_type="delegation",
+        task_type="delegate_task",
         parent_task_id=root.id,
     )
     get_conversation_run_crud().create(root.id, "root input", status="completed")
@@ -167,7 +181,7 @@ def test_task_delete_recollects_children_inside_write_transaction(
         child = service.get_or_create_task(
             workspace.id,
             "created-between-tree-read-and-transaction",
-            task_type="delegation",
+            task_type="delegate_task",
             parent_task_id=root.id,
         )
         created.append(child.id)

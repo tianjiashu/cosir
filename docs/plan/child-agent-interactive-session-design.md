@@ -66,7 +66,7 @@ Task + ConversationRun（主业务库）
 Child Task 使用已有字段：
 
 ```text
-task_type       = "delegation"
+task_type       = "delegate_task"
 parent_task_id  = parent Task id
 parent_run_id   = parent ConversationRun id
 workspace_id    = parent workspace id
@@ -438,7 +438,7 @@ Child session cleanup 失败只记日志，不阻断其它资源关闭，但必�
 
 Task 删除仍由 `TaskService` 编排，不由 session service 直接删除数据库行：
 
-1. 在 workspace/task operation lock 内收集根 Task 的完整子树，包含 `task_type='delegation'` 的 Child Task。
+1. 在 workspace/task operation lock 内收集根 Task 的完整子树，包含 `task_type='delegate_task'` 的 Child Task。
 2. 在主库事务提交前调用 `ChildAgentSessionService.close_for_task_ids()`，设置 closing fence 并停止当前进程资源；该调用失败只记录日志，但不能跳过即将删除的 Task ids。
 3. 在同一主库事务内先解除 `tasks.parent_run_id` 等外键环，再删除 context、commands、runs 和 tasks。
 4. 主库事务提交后，按已有 checkpoint GC 规则回收不再被任何 Run 引用的 checkpoint thread；checkpoint GC 失败不回滚已提交的业务删除。
@@ -461,7 +461,7 @@ Task 删除仍由 `TaskService` 编排，不由 session service 直接删除数�
 | 原 `DelegationModel` 职责 | 新 owner | 具体规则 |
 |---|---|---|
 | active delegation 计数 | `ChildAgentSessionService` | registry lock + reservation；只统计 `pending/running` Child session |
-| 父 Run 查询子 Agent | `TaskService.list_child_tasks()` | 查询 `parent_task_id + parent_run_id + task_type='delegation'` |
+| 父 Run 查询子 Agent | `TaskService.list_child_tasks()` | 查询 `parent_task_id + parent_run_id + task_type='delegate_task'` |
 | 子 Agent 当前状态 | `ConversationRunStateService` | 只读 `ConversationRun.status/final_output/end_reason` |
 | 取消级联 | `ChildAgentSessionService.cancel_descendants()` | session registry 与 Task/Run 查询合并，BFS + visited |
 | Task 删除清理 | `TaskService` | 先调用 child session cleanup，再按 `parent_task_id` 收集子树并删除 Run/context/Task |

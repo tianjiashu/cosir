@@ -1,4 +1,4 @@
-"""Pure reconstruction of Assistant Transport state from canonical conversation facts."""
+"""仅依据规范会话事实（Task、Run、context）以纯函数方式重建 Assistant Transport 状态。"""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
 from app.config.configuration import get_agent_registry, get_tool_registry
+from app.core.tools.schemas.tool_names import TOOL_DELEGATE_TASK
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -31,7 +32,7 @@ from app.utils.message_content import content_to_text
 
 
 class ConversationTaskStateRebuilder:
-    """Rebuild a Task Transport snapshot from Task, Run, and context records only."""
+    """仅依据 Task、Run 与 context 记录，重建 Task 级 Transport 快照。"""
 
     @staticmethod
     def build_run_error(run: ConversationRunRecord) -> ConversationStateError | None:
@@ -76,6 +77,26 @@ class ConversationTaskStateRebuilder:
         rows: list[ConversationTaskContextRecord],
         delegations: Sequence[Any] = (),
     ) -> dict[str, ConversationStateToolCallPart]:
+        """把单个 Run 的 context 行配对为 ``toolCallId → tool-call part`` 映射。
+
+        配对规则：AI 消息中的每个工具调用先以 ``cancelled`` 初始状态登记，随后由同一
+        ``tool_call_id`` 的 ToolMessage 行补全真实生命周期状态、``display_data`` 与错误标记；
+        委派类工具调用额外绑定子任务信息（``child_task_id``/``child_run_id`` 与子 Agent 角色）。
+
+        参数:
+            rows: 单个 Run 的 context 行，调用方保证已按 ``sequence`` 排序。
+            delegations: 该 Run 关联的委派记录，用于把 ``delegate_task`` 调用关联到子任务。
+
+        返回:
+            以工具调用 id 为键的 tool-call part 字典；``status`` 恒为字符串，未收到结果的
+            调用保持 ``cancelled``。
+
+        异常:
+            RuntimeError: ToolMessage 行找不到同一 Run 内对应的 AI 工具调用（上下文被破坏）。
+
+        副作用:
+            无（纯函数，不访问数据库、注册表之外的状态或前端运行时）。
+        """
         tool_parts: dict[str, ConversationStateToolCallPart] = {}
         for row in rows:
             message: BaseMessage = row.message
@@ -93,7 +114,7 @@ class ConversationTaskStateRebuilder:
                         ),
                         status="cancelled",
                     )
-                    if call.get("name") == "delegate_task":
+                    if call.get("name") == TOOL_DELEGATE_TASK:
                         args = call.get("args") or {}
                         candidates = [
                             record
@@ -176,18 +197,16 @@ class ConversationTaskStateRebuilder:
 
     @staticmethod
     def get_tool_display(tool_name: str) -> dict[str, object]:
-        """Return the static display hints for ``tool_name`` as a plain dict.
+        """返回 ``tool_name`` 的静态展示声明（已序列化为 dict）。
 
-        Parameters:
-            tool_name: Registered tool name carried by the AI tool call.
+        参数:
+            tool_name: AI 工具调用携带的已注册工具名。
 
-        Returns:
-            The ``ToolDisplayHints`` serialized to dict. Returns an **empty dict**
-            (never ``None``) when ``tool_name`` is empty, the tool is not registered,
-            or it declares no ``display``. This keeps the rebuilt snapshot part's
-            ``presentation`` field a valid object so ``validate_snapshot`` accepts it,
-            matching the streaming projection path which always emits ``{}`` for the
-            same missing-display case.
+        返回:
+            ``ToolDisplayHints`` 序列化后的 dict。当 ``tool_name`` 为空、工具未注册或未声明
+            ``display`` 时返回**空 dict**（绝不返回 ``None``），以保证重建出的快照 part 的
+            ``presentation`` 字段始终是合法对象、能通过 ``validate_snapshot``；这与流式投影
+            路径在同一「缺少展示声明」场景下恒发 ``{}`` 的行为保持一致。
         """
         if not tool_name:
             return {}
@@ -230,25 +249,25 @@ class ConversationTaskStateRebuilder:
         context_rows: Sequence[ConversationTaskContextRecord],
         delegations: Sequence[Any] = (),
     ) -> ConversationStateSnapshot:
-        """Return a validated snapshot assembled from the three canonical record types.
+        """从三类规范记录装配出通过校验的 Task 级 Transport 快照。
 
-        Parameters:
-            task: Task-level current run and context usage facts.
-            runs: All Run records belonging to ``task``.
-            context_rows: Persisted LangChain messages and Transport metadata for the Task.
+        参数:
+            task: Task 级当前 Run 与上下文用量事实。
+            runs: 属于 ``task`` 的全部 Run 记录。
+            context_rows: 该 Task 已持久化的 LangChain 消息与 Transport 元数据。
+            delegations: 该 Task 的委派记录，用于补齐 ``delegate_task`` 调用的子任务信息。
 
-        Returns:
-            A new ``ConversationStateSnapshot``. Run ordering is ``created_at`` then id;
-            assistant rows for one Run are merged and all message ids come from context row ids.
-            Streaming assistant drafts are retained in the assistant message; their text parts
-            are ``running`` only when the owning Run is still active.
+        返回:
+            新的 ``ConversationStateSnapshot``。Run 的排序为 ``created_at`` 再按 id；同一 Run 的
+            assistant 行会合并为一条消息，所有消息 id 均取自 context 行 id。流式 assistant 草稿
+            保留在 assistant 消息中，其文本 part 仅在所属 Run 仍活跃时为 ``running``。
 
-        Raises:
-            RuntimeError: If a tool result row has no matching AI tool call in the same Run.
+        异常:
+            RuntimeError: 某条工具结果行在同一 Run 内找不到对应的 AI 工具调用。
 
-        Side effects:
-            None. This method does not access sessions, snapshot storage, checkpoints, tools,
-            frontend runtime state, or the in-memory Transport registry.
+        副作用:
+            无。本方法不访问 Session、快照存储、checkpoint、工具、前端运行时状态或进程内
+            Transport registry。
         """
 
         run_records = list(runs)

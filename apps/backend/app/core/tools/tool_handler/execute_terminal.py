@@ -20,6 +20,7 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.display.terminal_display import build_terminal_display_data
 from app.core.tools.schemas import (
+    TOOL_EXECUTE_TERMINAL,
     OutputSink,
     ToolDefinition,
     ToolDisplayHints,
@@ -79,7 +80,7 @@ class ExecuteTerminalTool(HandlerBase):
         无（实例构造不执行命令、不读取文件系统、不保存状态）。
     """
 
-    name = "execute_terminal"
+    name = TOOL_EXECUTE_TERMINAL
     description = _DESCRIPTION
     permission = "execute_terminal"
     timeout_seconds = 120.0  # 外层 ToolHandlerRunner 硬保险

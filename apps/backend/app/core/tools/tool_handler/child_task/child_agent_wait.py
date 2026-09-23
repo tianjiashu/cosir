@@ -4,7 +4,9 @@ import json
 import time
 from typing import ClassVar
 
+from app.config.constant import Constant
 from app.core.tools.schemas import (
+    TOOL_CHILD_AGENT_WAIT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -15,19 +17,10 @@ from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.child_task import ChildAgentWaitArgs
-from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service.depends import get_conversation_run_state_service, get_task_service
 
 # 轮询间隔：子 Agent 完成一轮通常以秒到分钟计，1 秒足以兼顾及时性与查询开销。
 _POLL_INTERVAL_SECONDS = 1.0
-# Run 的终态集合：命中后不可能再产出 final_output，按事实结束等待。
-_TERMINAL_RUN_STATUSES: frozenset[str] = frozenset(
-    {
-        ConversationRunStatus.COMPLETED.value,
-        ConversationRunStatus.FAILED.value,
-        ConversationRunStatus.CANCELLED.value,
-    }
-)
 
 
 class ChildAgentWaitTool(HandlerBase):
@@ -37,7 +30,7 @@ class ChildAgentWaitTool(HandlerBase):
     轮询，不认领、不启动、不改写任何 Run 事实；等待期间父 Run 被取消时立即让出。
     """
 
-    name: str = "child_agent_wait"
+    name: str = TOOL_CHILD_AGENT_WAIT
     description: str = (
         "This tool waits for the conclusion of exactly one child agent. To wait for several "
         "child agents, call this tool once per child agent (batching the calls in one reply "
@@ -126,7 +119,7 @@ class ChildAgentWaitTool(HandlerBase):
                 error="child_task_not_delegated_by_caller",
                 reason=(
                     "child_task_id does not refer to a child task delegated by this task; "
-                    "use the child_task_id returned by delegate_task_for_sub_agent, or "
+                    "use the child_task_id returned by delegate_task, or "
                     "delegate the subtask first and retry with the corrected child_task_id."
                 ),
                 permission=self.permission,
@@ -161,7 +154,7 @@ class ChildAgentWaitTool(HandlerBase):
                         separators=(",", ":"),
                     ),
                 )
-            if run.status in _TERMINAL_RUN_STATUSES:
+            if run.status in Constant.Run.TERMINAL_STATUSES:
                 return tool_error(
                     self.name,
                     f"child run {run.id} finished without final output ({run.status})",
@@ -199,8 +192,8 @@ class ChildAgentWaitTool(HandlerBase):
             无。
 
         返回:
-            同步执行（``handler_kind="sync"``）、线程直跑的 child_agent_wait 工具定义；
-            工具超时高于参数上限，保证参数内的等待不会被工具层提前中断。
+            线程直跑的 child_agent_wait 工具定义；工具超时高于参数上限，保证参数内的
+            等待不会被工具层提前中断。
 
         异常:
             无。

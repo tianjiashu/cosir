@@ -6,11 +6,19 @@ from dataclasses import replace
 from typing import ClassVar
 
 from app.config.logging.logger import log
-from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.core.tools.schemas import (
+    TOOL_CHILD_AGENT_SEND,
+    TOOL_CHILD_AGENT_STATUS,
+    TOOL_CHILD_AGENT_WAIT,
+    TOOL_DELEGATE_TASK,
+    TOOL_TERMINAL_CLOSE,
+    TOOL_TERMINAL_READ,
+    TOOL_TERMINAL_SIGNAL,
+    TOOL_TERMINAL_START,
+    TOOL_TERMINAL_WRITE,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -36,9 +44,9 @@ def _contract_description() -> str:
     本函数只描述「委派是什么、何时该用、代价与边界」，**不重复具体数值上限**
     （``MESSAGE_MAX`` / ``AGENT_NAME_MAX`` 只留在参数字段描述里——工具描述与参数 schema 在同一份
     function 定义里同时下发给模型，同一数值说两遍纯属浪费 token）；这里只保留「超预算会被
-    立刻拒绝」这一确定性后果。并发额度在**每次投影时**从 ``Settings`` 实时读取，避免把配置
-    值写死在文案里后与运行时漂移（``DELEGATION_MAX_CONCURRENCY`` 的类属性声明是 4，
-    ``Settings.load`` 会把生效值覆盖为 2）。
+    立刻拒绝」这一确定性后果。**不下发任何 child 并发额度契约**：进程内没有 child 并发
+    裁决点，文案里写「超出 N 个会被拒绝」等于向模型下发不存在的规则（2026-09-23 随无执行点
+    的并发配置一并删除）。
 
     参数:
         无。
@@ -60,11 +68,8 @@ def _contract_description() -> str:
         "only a final summary, so the message must be self-contained. A child cannot delegate "
         "further, and its tools are reduced by parent and child permissions. Delegation is "
         "asynchronous: it returns stable child references immediately; use child_agent_wait "
-        "or child_agent_status to observe completion. "
-        f"At most {Settings.DELEGATION_MAX_CONCURRENCY} children run at once; further "
-        "delegate_task calls in the same reply are rejected deterministically. A failed or "
-        "rejected delegation is terminal: adjust the contract or ask the user instead of "
-        "retrying identical arguments. "
+        "or child_agent_status to observe completion. A failed delegation is terminal: adjust "
+        "the contract or ask the user instead of retrying identical arguments. "
         "CRITICAL BUDGET LIMIT: an over-budget call is rejected immediately and counts as a "
         "tool error, so trim or split the task instead of overshooting."
     )
@@ -82,17 +87,16 @@ _PARALLEL_HINT = (
 # 的交互式终端会话。
 CHILD_BANNED_TOOLS: tuple[str, ...] = (
     # child_task/：委派与父子通信
-    "delegate_task_for_sub_agent",
-    "child_agent_status",
-    "child_agent_send",
-    "child_agent_close",
-    "child_agent_wait",
+    TOOL_DELEGATE_TASK,
+    TOOL_CHILD_AGENT_STATUS,
+    TOOL_CHILD_AGENT_SEND,
+    TOOL_CHILD_AGENT_WAIT,
     # terminal_session/：可交互终端
-    "terminal_start",
-    "terminal_write",
-    "terminal_read",
-    "terminal_signal",
-    "terminal_close",
+    TOOL_TERMINAL_START,
+    TOOL_TERMINAL_WRITE,
+    TOOL_TERMINAL_READ,
+    TOOL_TERMINAL_SIGNAL,
+    TOOL_TERMINAL_CLOSE,
 )
 
 # 只等 executor 完成「登记 + 建后台 task」这一段，不等子 Agent 跑完。
@@ -131,9 +135,9 @@ def _compose_description(agent_summary: str) -> str:
 class DelegateTaskTool(HandlerBase):
     """Validate a delegate_task request and route it to the injected runtime executor."""
 
-    name: str = "delegate_task_for_sub_agent"
+    name: str = TOOL_DELEGATE_TASK
     # 类级描述只是「静态兜底」：真实下发文本由 build_delegate_task_definition 注册的
-    # ``description_provider`` 在每次投影时重新拼装（含运行期子 Agent 清单与并发额度）。
+    # ``description_provider`` 在每次投影时重新拼装（含运行期子 Agent 清单）。
     description: str = _compose_description("")
     permission: ClassVar[str] = "delegate_task"
     args_model: type[DelegateTaskArgs] = DelegateTaskArgs
@@ -321,9 +325,9 @@ class DelegateTaskTool(HandlerBase):
                 retryable=False,
             )
         return tool_success(
-            self.name,
-            self.name,
-            json.dumps(
+            tool_name=self.name,
+            permission=self.permission,
+            content=json.dumps(
                 {
                     "status": "running",
                     "child_task_id": child_task.id,
@@ -347,12 +351,9 @@ class DelegateTaskTool(HandlerBase):
         """构建 delegate_task 工具的注册定义。
 
         delegate_task 声明为工具级 ``parallel``：当模型在同一回复里发起多个
-        ``delegate_task`` 时，它们进入独立的 ``delegate_task_group`` 并行组并发执行，
-        使多个子 Agent 真正并行。child 并发的最终裁决权仍在 delegation 业务层的
-        并发额度（``DELEGATION_MAX_CONCURRENCY``）——超额的委派会在业务层被拒并回退为
-        错误观察，执行层并行不绕过该约束。``parallel_group`` 固定为
-        ``"delegate_task_group"``，不与外部工具共享分组，避免 delegate_task 与文件类
-        工具被错误地并发调度。
+        ``delegate_task`` 时，执行层把它们放进同一并行批次并发执行，使多个子 Agent
+        真正并行。并发度只受执行层线程池额度（``MAX_PARALLEL_TOOL_CALLS``）约束，
+        工具层**不声明** child 并发上限——不存在的契约不得下发给模型。
 
         参数:
             无。
@@ -378,7 +379,6 @@ class DelegateTaskTool(HandlerBase):
             risk_level=self.risk_level,
             execution_mode="thread",
             parallel_mode="parallel",
-            parallel_group="delegate_task_group",
             display=ToolDisplayHints(
                 verb="委派任务",
                 icon="users",

@@ -21,6 +21,7 @@ from app.assistant_transport.state.conversation_state_part import (
     ConversationStatePart,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.config.constant import Constant
 
 AssistantTextPartKind = Literal["text", "reasoning"]
 
@@ -69,7 +70,7 @@ class AssistantTextDeltaEvent(ConversationEventEnvelope):
         """
 
         run_index = self._find_run(state, self.run_id)
-        if state["runs"][run_index]["status"] in {"completed", "failed", "cancelled"}:
+        if state["runs"][run_index]["status"] in Constant.Run.TERMINAL_STATUSES:
             return []
         located = self._find_assistant_message(state, self.run_id)
         assert located is not None
@@ -144,7 +145,7 @@ class AssistantPartClosedEvent(ConversationEventEnvelope):
         """
 
         run_index = self._find_run(state, self.run_id)
-        if state["runs"][run_index]["status"] in {"completed", "failed", "cancelled"}:
+        if state["runs"][run_index]["status"] in Constant.Run.TERMINAL_STATUSES:
             return []
         located = self._find_assistant_message(state, self.run_id)
         assert located is not None

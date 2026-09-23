@@ -41,7 +41,6 @@ class Settings:
     LOG_BACKUP_COUNT: ClassVar[int] = 7
     TOOL_ERROR_LIMIT: ClassVar[int] = 100
     MAX_PARALLEL_TOOL_CALLS: ClassVar[int] = 8
-    MAX_CONCURRENT_CHILD_WAITS: ClassVar[int] = 16
     # 工具结果摘要中 content 的截断上限（字符），供 observe 节点与阶段二 LLM 观察使用，
     # 避免把大体积工具输出塞进 checkpoint。
     TOOL_OBSERVATION_CONTEXT_LIMIT: ClassVar[int] = 4000
@@ -90,13 +89,6 @@ class Settings:
     # 上下文的 token 上限由本配置约束，字节上限为 ``system_prompt_builder`` 模块内固定安全
     # 兜底（非配置项）。
     GLOBAL_INSTRUCTION_MAX_FILE_TOKENS: ClassVar[int] = 1_200
-
-    # --- 委派子Agent并发执行（见 docs/委派子Agent并发执行技术方案.md §6.1） ---
-    # 并发上限：单进程内同时运行的 child 委派数上限（第一版决策定为 2）；软超时：
-    # child 委派单次执行的生效超时（async 路径），不等同于线程硬杀，与工具定义
-    # ``timeout_seconds`` 元数据不双轨生效。
-    DELEGATION_MAX_CONCURRENCY: ClassVar[int] = 4
-    DELEGATION_TIMEOUT_SECONDS: ClassVar[float] = 300.0
 
     # --- LLM 请求全局默认值（所有模型统一，除非 Agent 级 ModelSettings 显式覆盖） ---
     # 请求超时：单次 ChatOpenAI HTTP 请求超时（秒），覆盖默认 600s 以更快失败重试；
@@ -218,12 +210,6 @@ class Settings:
             raise ValueError("TOOL_ERROR_LIMIT must be greater than zero")
         if cls.MAX_PARALLEL_TOOL_CALLS < 1:
             raise ValueError("MAX_PARALLEL_TOOL_CALLS must be greater than zero")
-        if cls.MAX_CONCURRENT_CHILD_WAITS < 1:
-            raise ValueError("MAX_CONCURRENT_CHILD_WAITS must be greater than zero")
-        if cls.DELEGATION_MAX_CONCURRENCY < 1:
-            raise ValueError("DELEGATION_MAX_CONCURRENCY must be greater than zero")
-        if cls.DELEGATION_TIMEOUT_SECONDS <= 0:
-            raise ValueError("DELEGATION_TIMEOUT_SECONDS must be greater than zero")
         if cls.LLM_REQUEST_TIMEOUT_SECONDS <= 0:
             raise ValueError("LLM_REQUEST_TIMEOUT_SECONDS must be greater than zero")
         if cls.LLM_MAX_RETRIES < 0:
@@ -292,15 +278,6 @@ class Settings:
         cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
         cls.MAX_PARALLEL_TOOL_CALLS = int(
             os.environ.get("CODING_AGENT_MAX_PARALLEL_TOOL_CALLS", "8")
-        )
-        cls.MAX_CONCURRENT_CHILD_WAITS = int(
-            os.environ.get("CODING_AGENT_MAX_CONCURRENT_CHILD_WAITS", "16")
-        )
-        cls.DELEGATION_MAX_CONCURRENCY = int(
-            os.environ.get("CODING_AGENT_DELEGATION_MAX_CONCURRENCY", "2")
-        )
-        cls.DELEGATION_TIMEOUT_SECONDS = float(
-            os.environ.get("CODING_AGENT_DELEGATION_TIMEOUT_SECONDS", "300")
         )
         cls.LLM_REQUEST_TIMEOUT_SECONDS = float(
             os.environ.get("CODING_AGENT_LLM_REQUEST_TIMEOUT_SECONDS", "120")

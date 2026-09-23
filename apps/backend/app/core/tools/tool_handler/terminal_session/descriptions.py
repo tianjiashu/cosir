@@ -7,6 +7,11 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.core.tools.schemas.tool_names import (
+    TOOL_TERMINAL_SIGNAL,
+    TOOL_TERMINAL_START,
+    TOOL_TERMINAL_WRITE,
+)
 from app.service.terminal.shell_resolver import ShellResolver
 
 
@@ -29,14 +34,14 @@ def build_terminal_session_parameters_schema(
 
     system = platform.system()
     resolved_kind = _resolve_auto_shell_kind()
-    if tool_name == "terminal_start":
+    if tool_name == TOOL_TERMINAL_START:
         shell = properties.get("shell")
         if isinstance(shell, dict):
             shell["description"] = _shell_parameter_description(system, resolved_kind)
         cwd = properties.get("cwd")
         if isinstance(cwd, dict):
             cwd["description"] = _cwd_parameter_description(system)
-    elif tool_name == "terminal_signal":
+    elif tool_name == TOOL_TERMINAL_SIGNAL:
         signal = properties.get("signal")
         if isinstance(signal, dict):
             signal["description"] = _signal_parameter_description(system)
@@ -142,14 +147,14 @@ def describe_terminal_tool(tool_name: str, fallback: str) -> str:
         "The PTY worker runs without opening a visible local terminal window; the frontend "
         "only provides a read-only preview."
     )
-    if tool_name == "terminal_start":
+    if tool_name == TOOL_TERMINAL_START:
         return f"{fallback} {host} {hidden}"
-    if tool_name == "terminal_write":
+    if tool_name == TOOL_TERMINAL_WRITE:
         return (
             f"{fallback} {host} Send command text in data without decoding escape sequences; "
             "set submit=true to append one real Enter key (CR, 0x0D). This is required to "
             "reliably submit commands through Windows ConPTY."
         )
-    if tool_name == "terminal_signal":
+    if tool_name == TOOL_TERMINAL_SIGNAL:
         return f"{fallback} {signal}"
     return f"{fallback} {host}"

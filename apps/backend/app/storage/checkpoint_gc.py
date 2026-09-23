@@ -2,7 +2,7 @@
 
 单一职责：删除已不在主库中任何 run 引用的 LangGraph checkpoint 线程对应的
 ``writes`` / ``checkpoints`` 记录。checkpoint 库是独立的 SQLite 数据库，由
-``app.core.runtime.runs.checkpointer`` 经 aiosqlite 直连，与本模块解耦；级联删除
+``app.core.workflows.agent_workflow.build_checkpointer`` 经 aiosqlite 直连，与本模块解耦；级联删除
 提交主库之后调用本模块做失败安全的 GC，不阻断主流程。
 
 职责边界：

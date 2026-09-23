@@ -11,6 +11,8 @@ __pycache__/
 apps/backend/.coverage
 
 
+.baseline-head
+
 logs/*.log
 logs/*.pid
 storage/*.sqlite
@@ -15826,3 +15828,4 @@ temp_gen_out.txt
 /apps/terminal-worker/target/
 /apps/desktop/src-tauri/target/
 /apps/desktop/src-tauri/target/
+/.baseline-head/

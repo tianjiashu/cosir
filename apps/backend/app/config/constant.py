@@ -78,14 +78,6 @@ class Constant:
         # 预览轮询间隔（秒）。
         PREVIEW_POLL_SECONDS: float = 0.25
 
-    class Delegation:
-        """委派子 Agent 并发执行的共享常量。"""
-
-        # 视为「活跃」的 delegation 状态集合，用于并发额度统计与活跃列表查询。
-        ACTIVE_DELEGATION_STATUSES: tuple[str, ...] = ("pending", "running")
-        # 并发额度不足时 ``DelegationAcquireResult.reason`` 的唯一取值。
-        REASON_CONCURRENCY_EXCEEDED: str = "delegation_concurrency_exceeded"
-
     class Run:
         """Conversation Run 失败 / 终态相关的稳定 code 与状态集合。
 
@@ -118,7 +110,8 @@ class Constant:
         DEFAULT_MESSAGE: str = "对话运行失败，请重试或查看日志"
 
         # 视为「终态」的 Run 状态集合（用于识别 terminal 类 run 是否已结束，取值来自
-        # ``ConversationRunStatus`` 的稳定字符串值）。
+        # ``ConversationRunStatus`` 的稳定字符串值）。**唯一事实源**：fork 校验、
+        # child_task 工具与 SSE 终止判定一律引用本集合，禁止在各处另立副本。
         TERMINAL_STATUSES: frozenset[str] = frozenset(
             {"completed", "failed", "cancelled"}
         )

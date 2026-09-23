@@ -18,6 +18,7 @@ from app.core.runtime.conversation_run_cancellation_registry import cancellation
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.core.tools.schemas import (
+    TOOL_REPLACE,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -69,7 +70,7 @@ class ReplaceTool(HandlerBase):
         仅保存工具元数据；不读取、不写入文件。
     """
 
-    name = "patch_write"
+    name = TOOL_REPLACE
     description = REPLACE_DESCRIPTION
     permission = "file_write"
     args_model = ReplaceArgs

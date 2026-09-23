@@ -15,6 +15,7 @@ from typing import ClassVar
 
 from app.core.tools.display.filesystem_display import build_read_file_display_data
 from app.core.tools.schemas import (
+    TOOL_READ_FILE,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -57,7 +58,7 @@ class ReadFileTool(HandlerBase):
         仅保存项目根目录路径；不读取、不写入文件。
     """
 
-    name = "read_file"
+    name = TOOL_READ_FILE
     description = (
         "Read a text file with line numbers and pagination. Use this instead of "
         "cat/head/tail in terminal. Output format: 'LINE_NUM| CONTENT'. Use offset "

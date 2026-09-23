@@ -11,6 +11,7 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.tools.display.web_display import build_web_extract_display_data
 from app.core.tools.schemas import (
+    TOOL_WEB_EXTRACT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -45,7 +46,7 @@ from app.core.tools.tool_models.web_extract_args import WebExtractArgs
 class WebExtractTool(HandlerBase):
     """验证 URL 后调用已配置 Provider 返回清理后的网页正文。"""
 
-    name: str = "web_extract"
+    name: str = TOOL_WEB_EXTRACT
     description: str = (
         "Extract content from public web page URLs. Returns clean page content in "
         "markdown/html (no LLM summarization - fast). Also works with PDF URLs "

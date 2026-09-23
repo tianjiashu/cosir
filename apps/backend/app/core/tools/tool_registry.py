@@ -1,6 +1,5 @@
 """In-memory registry for tool definitions."""
 
-import inspect
 import threading
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -64,7 +63,6 @@ class ToolRegistry:
 
         if not isinstance(definition, ToolDefinition):
             raise TypeError(f"expected ToolDefinition, got {type(definition).__name__}")
-        self._validate_handler_contract(definition)
         normalized = definition.normalized()
         with self._lock:
             if normalized.name in self._tool_definitions:
@@ -75,33 +73,6 @@ class ToolRegistry:
                 return
             self._tool_definitions[normalized.name] = normalized
             self._generation += 1
-
-    @staticmethod
-    def _validate_handler_contract(definition: ToolDefinition) -> None:
-        """Validate the declared dispatch kind before a definition enters the registry."""
-
-        if definition.handler_kind not in {"sync", "async"}:
-            raise ValueError(
-                f"tool '{definition.name}' has invalid handler_kind={definition.handler_kind!r}"
-            )
-        handler_is_async = inspect.iscoroutinefunction(definition.handler)
-        if not handler_is_async:
-            try:
-                handler_is_async = inspect.iscoroutinefunction(type(definition.handler).__call__)
-            except AttributeError:
-                handler_is_async = False
-
-        if definition.handler_kind == "async" and not handler_is_async:
-            raise TypeError(
-                f"tool '{definition.name}' declares handler_kind=async but its handler "
-                "does not implement an async entry point"
-            )
-        if definition.handler_kind == "sync" and handler_is_async:
-            raise TypeError(
-                f"tool '{definition.name}' declares handler_kind=sync but its handler " "is async"
-            )
-        if definition.handler_kind == "async" and definition.parallel_mode != "serial":
-            raise ValueError("async tool handlers must use parallel_mode=serial")
 
     def deregister(self, name: str) -> None:
         """按名称移除一个已注册的工具定义。

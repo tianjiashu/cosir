@@ -9,6 +9,7 @@ from app.assistant_transport.event import (
     ToolCallRuntimeUpdateEvent,
 )
 from app.assistant_transport.event.dispatch import dispatch_conversation_event
+from app.core.tools.schemas.tool_names import TOOL_EXECUTE_TERMINAL
 from app.core.tools.schemas.tool_output import (
     ProcessToolOutputChannel,
     ProcessToolOutputChannelFactory,
@@ -34,7 +35,7 @@ class ToolRuntimeOutputChannelFactory(ProcessToolOutputChannelFactory):
     ) -> ProcessToolOutputChannel | None:
         """仅为有效的终端工具调用创建输出通道。"""
         if (
-            tool_name != "execute_terminal"
+            tool_name != TOOL_EXECUTE_TERMINAL
             or task_id < 1
             or run_id < 1
             or not tool_call_id

@@ -357,11 +357,8 @@ class ConversationRunService:
             raise ValueError("input_text is required when run_command is not provided")
         if not input_text.strip() and not image_paths:
             raise ValueError("input_text must be a non-empty string")
-        allowed_statuses = (
-            ConversationRunStatus.COMPLETED.value,
-            ConversationRunStatus.FAILED.value,
-            ConversationRunStatus.CANCELLED.value,
-        )
+        # 「可原地编辑」的前置状态即 Run 终态集合，引用唯一事实源而非另立字面量。
+        allowed_statuses = tuple(Constant.Run.TERMINAL_STATUSES)
         return self._run.reset_for_edit(
             run_id=run_id,
             input_text=input_text,

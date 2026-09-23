@@ -24,6 +24,17 @@ from pathlib import Path
 from typing import Any
 
 from app.core.tools.schemas import ToolExecutionContext
+from app.core.tools.schemas.tool_names import (
+    TOOL_APPLY_PATCH,
+    TOOL_DELETE_FILE,
+    TOOL_FIND_FILES,
+    TOOL_LIST_DIRECTORY,
+    TOOL_MOVE_FILE,
+    TOOL_READ_FILE,
+    TOOL_REPLACE,
+    TOOL_SEARCH_CONTENT,
+    TOOL_WRITE_FILE,
+)
 from app.core.tools.tool_execute.tool_error import blocked_device_reason
 from app.core.tools.tool_handler.patch_write.patch_parser import (
     parse_git_unified_diff_detailed,
@@ -129,16 +140,16 @@ class FileResourceResolver:
             无。
         """
 
-        if tool_name == "read_file":
+        if tool_name == TOOL_READ_FILE:
             target = self._resolve_read_path(arguments.get("path"), recursive=False)
             return FileResourcePaths(read_paths=(target,))
-        if tool_name == "list_directory":
+        if tool_name == TOOL_LIST_DIRECTORY:
             scope = self._resolve_read_path(arguments.get("path"), recursive=True)
             return FileResourcePaths(
                 scope_root=scope,
                 scope_recursive=False,
             )
-        if tool_name in {"search_content", "find_files"}:
+        if tool_name in {TOOL_SEARCH_CONTENT, TOOL_FIND_FILES}:
             scope = self._resolve_read_path(arguments.get("path"), recursive=True)
             if scope.is_file():
                 return FileResourcePaths(read_paths=(scope,))
@@ -149,19 +160,19 @@ class FileResourceResolver:
                 scope_recursive=True,
                 scope_escapes_workspace=PathResolver.escapes_workspace(self._root, scope),
             )
-        if tool_name == "write_file":
+        if tool_name == TOOL_WRITE_FILE:
             target = self._resolve_containment_path(arguments.get("path"), action="written")
             return FileResourcePaths(
                 write_paths=(target,),
                 lock_paths=PathResolver.with_workspace_ancestors(self._root, (target,)),
             )
-        if tool_name == "delete_file":
+        if tool_name == TOOL_DELETE_FILE:
             target = self._resolve_containment_path(arguments.get("path"), action="deleted")
             return FileResourcePaths(
                 write_paths=(target,),
                 lock_paths=PathResolver.with_workspace_ancestors(self._root, (target,)),
             )
-        if tool_name == "move_file":
+        if tool_name == TOOL_MOVE_FILE:
             source = self._resolve_containment_path(
                 arguments.get("source_path"), action="moved"
             )
@@ -173,14 +184,14 @@ class FileResourceResolver:
                 write_paths=paths,
                 lock_paths=PathResolver.with_workspace_ancestors(self._root, paths),
             )
-        if tool_name == "patch_write":
+        if tool_name == TOOL_REPLACE:
             # patch_write 工具固定 replace 语义（原 mode=="replace" 分支）。
             resources = self._patch_resources(arguments, is_replace=True)
             return FileResourcePaths(
                 write_paths=resources.write_paths,
                 lock_paths=PathResolver.with_workspace_ancestors(self._root, resources.write_paths),
             )
-        if tool_name == "apply_patch":
+        if tool_name == TOOL_APPLY_PATCH:
             # apply_patch 仅解析修改既有文件的 Git unified diff。
             resources = self._patch_resources(arguments)
             return FileResourcePaths(

@@ -4,6 +4,7 @@ import json
 from typing import ClassVar
 
 from app.core.tools.schemas import (
+    TOOL_CHILD_AGENT_STATUS,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -23,7 +24,7 @@ class ChildAgentStatusTool(HandlerBase):
     不写入任何事实；父任务归属由调用方（模型）通过 ``child_task_id`` 指定。
     """
 
-    name: str = "child_agent_status"
+    name: str = TOOL_CHILD_AGENT_STATUS
     description: str = (
         "Read the current status and final output of a delegated child task. "
         "Uses the child task's current run; call it after delegate_task when you need "
@@ -92,7 +93,7 @@ class ChildAgentStatusTool(HandlerBase):
                 f"child task not found: {child_task_id}",
                 reason=(
                     "verify child_task_id against the value returned by "
-                    "delegate_task_for_sub_agent; this task does not exist."
+                    "delegate_task; this task does not exist."
                 ),
                 permission=self.permission,
                 retryable=False,
@@ -104,7 +105,7 @@ class ChildAgentStatusTool(HandlerBase):
                 error="child_task_not_delegated_by_caller",
                 reason=(
                     "child_task_id does not refer to a child task delegated by this task; "
-                    "use the child_task_id returned by delegate_task_for_sub_agent, or "
+                    "use the child_task_id returned by delegate_task, or "
                     "delegate the subtask first and retry with the corrected child_task_id."
                 ),
                 permission=self.permission,
@@ -151,7 +152,7 @@ class ChildAgentStatusTool(HandlerBase):
             无。
 
         返回:
-            同步执行（``handler_kind="sync"``）、线程直跑的 child_agent_status 工具定义。
+            线程直跑的 child_agent_status 工具定义。
 
         异常:
             无。

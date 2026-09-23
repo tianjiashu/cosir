@@ -15,7 +15,7 @@ class TaskResponse(BaseModel):
         title: 任务标题。
         execution_status: 派生执行状态，可能为 None。
         task_type: 任务类型，``"user"`` 为用户创建，``"fork"`` 为历史分支，
-            ``"delegation"`` 为委派子任务。
+            ``"delegate_task"`` 为委派子任务。
         parent_task_id: 父任务标识，仅委派子任务有值。
         parent_run_id: 父轮次标识，仅委派子任务有值。
         delegation_id: 所属委派标识，仅委派子任务有值。

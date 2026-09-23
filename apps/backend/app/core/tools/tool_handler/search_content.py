@@ -7,6 +7,7 @@ from typing import Any
 
 from app.core.tools.display.filesystem_display import build_content_search_display_data
 from app.core.tools.schemas import (
+    TOOL_SEARCH_CONTENT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -38,7 +39,7 @@ SEARCH_CONTENT_DESCRIPTION = (
 class SearchContentTool(HandlerBase):
     """只读搜索单文件或递归目录内容的模型工具。"""
 
-    name = "search_content"
+    name = TOOL_SEARCH_CONTENT
     description = SEARCH_CONTENT_DESCRIPTION
     permission = "file_search"
     args_model = SearchContentArgs

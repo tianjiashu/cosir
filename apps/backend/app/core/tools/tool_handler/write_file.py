@@ -17,6 +17,7 @@ from app.core.runtime.conversation_run_cancellation_registry import cancellation
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.core.tools.schemas import (
+    TOOL_WRITE_FILE,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -55,7 +56,7 @@ class WriteFileTool(HandlerBase):
         仅保存项目根与解析器；不读取、不写入文件。
     """
 
-    name = "write_file"
+    name = TOOL_WRITE_FILE
     description = (
         "Write a file with the provided content, creating parent directories as needed. "
         "Uses atomic write and preserves the target file's existing CRLF/BOM. Refuses to "

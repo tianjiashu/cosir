@@ -16,8 +16,8 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import SubscriberClosed
+from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.models import ConversationRunStatus
 
 
 class AssistantTransportStreamService:
@@ -28,11 +28,8 @@ class AssistantTransportStreamService:
     因此 attach 不会在注册与其首帧之间漏掉任何变更。
     """
 
-    terminal_statuses: ClassVar[set[str]] = {
-        ConversationRunStatus.COMPLETED.value,
-        ConversationRunStatus.FAILED.value,
-        ConversationRunStatus.CANCELLED.value,
-    }
+    # 终态判定唯一事实源：与 fork 校验、child_task 工具共用同一份集合，禁止在本类另立副本。
+    terminal_statuses: ClassVar[frozenset[str]] = Constant.Run.TERMINAL_STATUSES
 
     def __init__(self) -> None:
         """绑定进程本地快照持有者与 run 状态数据源。"""

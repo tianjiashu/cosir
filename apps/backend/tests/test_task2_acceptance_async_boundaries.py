@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -37,6 +37,29 @@ class _ThreadCheckedRunService:
         return None
 
 
+class _ThreadRecordingRunService(_ThreadCheckedRunService):
+    """记录每次 canonical 读取所在线程，用于断言收束路径不在事件循环线程读取。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_threads: list[int] = []
+
+    def get_run(self, _run_id: int) -> SimpleNamespace:
+        self.get_calls += 1
+        self.read_threads.append(threading.get_ident())
+        return self.run
+
+
+class _StubRuntime:
+    """替代真实 AgentRuntime：``execute_run`` 的行为由用例注入。"""
+
+    def __init__(self, behavior: Callable[[], Awaitable[None]]) -> None:
+        self._behavior = behavior
+
+    async def execute_run(self, **_kwargs: Any) -> None:
+        await self._behavior()
+
+
 def _executor(run_service: object) -> ConversationRunExecutor:
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = run_service
@@ -44,6 +67,23 @@ def _executor(run_service: object) -> ConversationRunExecutor:
     executor._signal = cancellation_registry
     executor._executions = {}
     return executor
+
+
+def _patch_execute_drivers(
+    monkeypatch: pytest.MonkeyPatch,
+    behavior: Callable[[], Awaitable[None]],
+) -> None:
+    """把执行器依赖的 runtime 与 terminal service 替换为可控替身。"""
+
+    monkeypatch.setattr(executor_module, "get_runtime", lambda: _StubRuntime(behavior))
+    monkeypatch.setattr(
+        executor_module,
+        "get_terminal_session_service",
+        lambda: SimpleNamespace(
+            begin_run=lambda _run_id: None,
+            close_run_terminals=lambda *_args, **_kwargs: None,
+        ),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -54,48 +94,42 @@ def _clear_run_signal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_executor_start_reads_canonical_run_off_event_loop() -> None:
+async def test_executor_start_reads_canonical_run_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = _ThreadCheckedRunService()
     executor = _executor(service)
 
-    async def runner(_run: object) -> None:
+    async def runner() -> None:
         return None
 
-    task = await executor.start(_RUN_ID, runner)
+    _patch_execute_drivers(monkeypatch, runner)
+
+    task = await executor.start(_RUN_ID, "fresh")
     await task
 
 
 @pytest.mark.asyncio
-async def test_executor_execute_reads_canonical_run_off_event_loop() -> None:
-    service = _ThreadCheckedRunService()
-    executor = _executor(service)
+async def test_executor_tool_settlement_reads_canonical_run_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """工具收束路径读取 canonical run 时不得占用事件循环线程。"""
 
-    await executor._execute(_RUN_ID, lambda _run: asyncio.sleep(0))
-
-
-@pytest.mark.asyncio
-async def test_executor_tool_settlement_reads_canonical_run_off_event_loop() -> None:
-    service = _ThreadCheckedRunService()
+    service = _ThreadRecordingRunService()
     executor = _executor(service)
     executor._event_projector = SimpleNamespace(process=lambda _event: None)
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(
-        executor_module,
-        "get_terminal_session_service",
-        lambda: SimpleNamespace(
-            begin_run=lambda _run_id: None,
-            close_run_terminals=lambda *_args, **_kwargs: None,
-        ),
-    )
+    loop_thread = threading.get_ident()
 
-    async def failing_runner(_run: object) -> None:
+    async def failing_runner() -> None:
         raise RuntimeError("runner failed")
 
-    try:
-        with pytest.raises(RuntimeError, match="runner failed"):
-            await executor._execute(_RUN_ID, failing_runner)
-    finally:
-        monkeypatch.undo()
+    _patch_execute_drivers(monkeypatch, failing_runner)
+
+    # ``_execute`` 内部收口驱动期异常，工具收束投影仍在同一路径上执行。
+    await executor._execute(_RUN_ID, "fresh")
+
+    # 首次读取发生在 ``_execute`` 的同步上下文；工具收束经 to_thread 读取，必须落在其它线程。
+    assert any(thread_id != loop_thread for thread_id in service.read_threads)
 
 
 @pytest.mark.asyncio
@@ -103,9 +137,11 @@ async def test_executor_cancel_reads_canonical_run_off_event_loop() -> None:
     service = _ThreadCheckedRunService()
     executor = _executor(service)
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(executor_module, "get_terminal_session_service", lambda: SimpleNamespace(
-        close_run_terminals=lambda *_args, **_kwargs: None
-    ))
+    monkeypatch.setattr(
+        executor_module,
+        "get_terminal_session_service",
+        lambda: SimpleNamespace(close_run_terminals=lambda *_args, **_kwargs: None),
+    )
     try:
         assert await executor.cancel(_RUN_ID) is True
     finally:

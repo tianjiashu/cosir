@@ -7,6 +7,8 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.tools.schemas.tool_names import TOOL_READ_FILE
+
 
 @dataclass(frozen=True)
 class RepeatedCallAction:
@@ -83,7 +85,7 @@ class RepeatedCallRegistry:
 
             previous.repeat_count += 1
             task_calls.move_to_end(signature)
-            if tool_name == "read_file":
+            if tool_name == TOOL_READ_FILE:
                 return RepeatedCallAction("unchanged", previous.repeat_count)
             if previous.repeat_count == 1:
                 return RepeatedCallAction("warning", previous.repeat_count)

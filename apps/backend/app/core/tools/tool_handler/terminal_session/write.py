@@ -4,6 +4,7 @@ from typing import ClassVar
 
 from app.config.logging.logger import log
 from app.core.tools.schemas import (
+    TOOL_TERMINAL_WRITE,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -39,7 +40,7 @@ def encode_terminal_input(data: str, *, submit: bool) -> bytes:
 class TerminalWriteTool(HandlerBase):
     """按 operation_id 幂等向已存在的 session 写入 Agent input。"""
 
-    name = "terminal_write"
+    name = TOOL_TERMINAL_WRITE
     description = (
         "Write raw UTF-8 input to an existing hidden local terminal session and optionally "
         "wait for output. Set submit=true to append one real Enter key (CR); do not encode "

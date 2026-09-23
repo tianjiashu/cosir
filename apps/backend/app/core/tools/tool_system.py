@@ -6,7 +6,6 @@ from app.config.settings import Settings
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
-from app.core.tools.tool_handler.child_task.child_agent_close import build_child_agent_close_definition
 from app.core.tools.tool_handler.child_task.child_agent_send import build_child_agent_send_definition
 from app.core.tools.tool_handler.child_task.child_agent_status import build_child_agent_status_definition
 from app.core.tools.tool_handler.child_task.child_agent_wait import build_child_agent_wait_definition
@@ -61,11 +60,11 @@ class ToolSystem:
     def build_tool_system(cls) -> "ToolSystem":
         """构建并注册进程级工具系统。
 
-            按内置清单注册 18 个工具定义（包含 ``delegate_task`` 与交互终端工具）。其中原
-        patch_write
-        工具已拆分为 replace(patch_write) 与 apply_patch(Git unified diff)，另有独立的
-        delete_file / move_file，
-        搜索工具已拆分为 find_files 与 search_content。本方法用
+            按内置清单逐一注册工具定义（包含 ``delegate_task`` 与交互终端工具）；构建函数返回
+        ``None`` 的工具（如无可用 Provider 时的 Web 工具）会被注册表跳过，故运行期实际注册数量
+        随环境而变，不在 docstring 中固化具体数值。原 patch_write 工具已拆分为
+        replace(patch_write) 与 apply_patch(Git unified diff)，另有独立的 delete_file /
+        move_file，搜索工具已拆分为 find_files 与 search_content。本方法用
         ``Settings.MAX_TOOL_OUTPUT_CHARS``（类级静态配置，非传入的 settings 对象）
         构造输出预算上限，装配执行管线（``ToolExecutor``）。工具拦截（Pre/PostToolUse）通过
         ``app.hook.hook_interceptor.HookInterceptor`` 静态方法直接收口，
@@ -110,7 +109,6 @@ class ToolSystem:
         registry.register(build_child_agent_send_definition())
         registry.register(build_child_agent_status_definition())
         registry.register(build_child_agent_wait_definition())
-        registry.register(build_child_agent_close_definition())
         executor = ToolExecutor(
             registry=registry,
             output_budget=ToolOutputBudget(Settings.MAX_TOOL_OUTPUT_CHARS),

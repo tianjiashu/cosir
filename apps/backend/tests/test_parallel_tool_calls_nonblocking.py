@@ -122,7 +122,6 @@ def _make_operations(executor: _FakeToolExecutor) -> WorkflowOperations:
     operations._execution_context = None
     operations._allowed_tool_names = frozenset({_PARALLEL_TOOL})
     operations._parallel_mode_by_name = {_PARALLEL_TOOL: "parallel"}
-    operations._handler_kind_by_name = {_PARALLEL_TOOL: "sync"}
     return operations
 
 

@@ -1,5 +1,6 @@
 """内置 Agent profile 与系统提示词契约测试。"""
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.agents.agent_profile import AgentProfileType
@@ -38,6 +39,14 @@ class _ToolRegistryStub:
             "web_extract",
             "delegate_task",
         ]
+
+
+@dataclass(frozen=True)
+class _RunRoute:
+    """Conversation Run 的最小替身：只承载 ``derive_for_run`` 读取的两个路由字段。"""
+
+    provider_id: int | None = None
+    model_name: str | None = None
 
 
 def test_builtin_child_profiles_have_prompt_files(monkeypatch) -> None:
@@ -140,22 +149,29 @@ def test_builtin_child_profiles_leave_model_route_to_parent_run(monkeypatch) -> 
 
 
 def test_child_profile_model_settings_keep_custom_overrides(monkeypatch) -> None:
-    """child profile 只补齐未配置参数，显式配置仍覆盖父 Agent 默认值。"""
+    """per-run 派生不得改写 child profile 自己配置的 model_settings。
+
+    说明：旧实现由 ``derive_for_run`` 合并父 Agent 的 ``model_settings`` 默认值，该形参
+    （``model_defaults``）已随 per-run 派生重构移除；模型路由改为在 child Run 创建时按父
+    Run 回填（见 ``test_builtin_child_profiles_leave_model_route_to_parent_run``），故本
+    用例只锁「派生不改写 profile 自有配置」这一条仍然成立的契约。
+    """
 
     monkeypatch.setattr(
         "app.core.agents.define_agents.get_tool_registry",
         lambda: _ToolRegistryStub(),
     )
-    parent = main_agent()
     child = reviewer_agent()
-    child.model_settings = ModelSettings(temperature=0.2)
+    custom = ModelSettings(temperature=0.2, thinking=True)
+    child.model_settings = custom
 
     derived = child.derive_for_run(
-        run=object(),  # type: ignore[arg-type]
-        model_defaults=parent,
+        run=_RunRoute(provider_id=7, model_name="glm-4.6"),  # type: ignore[arg-type]
     )
 
+    assert derived.model_settings is custom
     assert derived.model_settings.temperature == 0.2
     assert derived.model_settings.thinking is True
-    assert derived.model_settings.stream is True
-    assert derived.model_settings.reasoning_effort == "high"
+    # 未配置的模型路由由 run 回填，共享单例本身不被写入。
+    assert (derived.provider_id, derived.model_name) == (7, "glm-4.6")
+    assert (child.provider_id, child.model_name, child.run) == (None, None, None)

@@ -42,7 +42,7 @@ class TaskRecord:
             无。
 
         返回:
-            ``True`` 表示存在父 task（即该任务为 delegation 子任务）。
+            ``True`` 表示存在父 task（即该任务为 ``delegate_task`` 子任务）。
 
         异常:
             无。

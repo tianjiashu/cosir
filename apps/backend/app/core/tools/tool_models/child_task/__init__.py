@@ -4,14 +4,12 @@
 不感知内部文件划分。
 """
 
-from app.core.tools.tool_models.child_task.child_agent_close_args import ChildAgentCloseArgs
 from app.core.tools.tool_models.child_task.child_agent_send_args import ChildAgentSendArgs
 from app.core.tools.tool_models.child_task.child_agent_status_args import ChildAgentStatusArgs
 from app.core.tools.tool_models.child_task.child_agent_wait_args import ChildAgentWaitArgs
 from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 
 __all__ = [
-    "ChildAgentCloseArgs",
     "ChildAgentSendArgs",
     "ChildAgentStatusArgs",
     "ChildAgentWaitArgs",

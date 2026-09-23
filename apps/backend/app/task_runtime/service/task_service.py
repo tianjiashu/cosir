@@ -17,8 +17,9 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm.session import Session
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.models import ConversationRunRecord, ConversationRunStatus, TaskRecord
+from app.models import ConversationRunRecord, TaskRecord
 from app.models.errors.deletion_errors import DeletionBusyError, RunDeletionConflictError
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service import depends as service_depends
@@ -27,14 +28,6 @@ from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
-
-_TERMINAL_RUN_STATUSES = frozenset(
-    {
-        ConversationRunStatus.COMPLETED.value,
-        ConversationRunStatus.FAILED.value,
-        ConversationRunStatus.CANCELLED.value,
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -173,7 +166,7 @@ class TaskService:
         return [
             child
             for child in self._task.list_by_parent_task(parent_task_id)
-            if child.task_type == "delegation" and child.parent_run_id == parent_run_id
+            if child.task_type == "delegate_task" and child.parent_run_id == parent_run_id
         ]
 
     def list_runs_for_task(self, task_id: int) -> list[ConversationRunRecord]:
@@ -223,7 +216,8 @@ class TaskService:
         """返回任务的所有 Run 是否均处于已知终态。"""
 
         return not any(
-            run.status not in _TERMINAL_RUN_STATUSES for run in self._turn.list_by_task(task_id)
+            run.status not in Constant.Run.TERMINAL_STATUSES
+            for run in self._turn.list_by_task(task_id)
         )
 
     async def fork_task(self, source_task_id: int, source_run_id: int) -> TaskRecord:
@@ -302,7 +296,7 @@ class TaskService:
         with begin_immediate(self._session_factory) as session:
             source = self._task.ensure_task(session, source_task_id)
             runs = self._turn.list_by_task_in_session(session, source_task_id)
-            if any(run.status not in _TERMINAL_RUN_STATUSES for run in runs):
+            if any(run.status not in Constant.Run.TERMINAL_STATUSES for run in runs):
                 raise TaskForkConflictError(
                     "TASK_NOT_READY",
                     "all runs must be terminal before forking",
@@ -315,7 +309,9 @@ class TaskService:
             if boundary_index is None:
                 raise KeyError(source_run_id)
             source_prefix = runs[: boundary_index + 1]
-            if any(run.status not in _TERMINAL_RUN_STATUSES for run in source_prefix):
+            if any(
+                run.status not in Constant.Run.TERMINAL_STATUSES for run in source_prefix
+            ):
                 raise TaskForkConflictError(
                     "RUN_NOT_READY",
                     "the selected run must be terminal before forking",
@@ -393,7 +389,7 @@ class TaskService:
     def list_tasks_for_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务）。
 
-        委派子任务（``task_type='delegation'``）不进侧边栏对话列表，故本方法仅返回
+        委派子任务（``task_type='delegate_task'``）不进侧边栏对话列表，故本方法仅返回
         ``task_type='user'`` 的任务，按更新时间倒序。
 
         参数:

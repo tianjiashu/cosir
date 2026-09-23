@@ -49,7 +49,7 @@ class ConversationRunExecutor:
     """
 
     def __init__(
-            self,
+        self,
     ) -> None:
         """初始化执行器：装配 run_service、event_projector、进程内取消信号源与空运行注册表。
 
@@ -66,24 +66,28 @@ class ConversationRunExecutor:
         self._signal = cancellation_registry
         self._executions: dict[int, _Execution] = {}
 
-    async def start(self,
-                    run_id: int,
-                    start_mode: ExecutionMode,
-                    ban_tools: list[str] | None = None,
-                    model_settings: ModelSettings | None = None
-                    ) -> asyncio.Task[None]:
+    async def start(
+        self,
+        run_id: int,
+        start_mode: ExecutionMode,
+        ban_tools: list[str] | None = None,
+        model_settings: ModelSettings | None = None,
+    ) -> asyncio.Task[None]:
         """登记 run 并在当前事件循环创建独立后台 task。
 
         本方法只做「异步 canonical 前置条件断言 + 进程内登记 + 建 task」：在 worker
         thread 中确认目标 run 已处于 ``running`` 状态（该状态由 ``prepare_run_start``
-        在同一 Task 操作闸门内落定），随后把后台 task 记入进程内 ``_executions``。它不做
+        经 ``claim_pending_run`` 的条件更新落定），随后把后台 task 记入进程内
+        ``_executions``。它不做
         业务准入决策——「这次请求是否允许启动」由 ``prepare_run_start`` 判定；本方法也
         不落库、不认领 run、不等待执行结果，HTTP 订阅断开不会取消该 task。
 
         参数:
             run_id: 运行对应的 ``ConversationRunRecord.id``。
-            runner: ``AgentRuntime.execute_run`` 或同签名适配器；接收
-                :class:`ConversationRunRecord`，由后台 task 内的 ``_execute`` 调用。
+            start_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``），
+                原样透传给 ``_execute`` → ``AgentRuntime.execute_run``。
+            ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
+            model_settings: 可选的模型参数覆盖；``None`` 表示沿用 agent profile 的配置。
 
         返回:
             已创建的后台 ``asyncio.Task``。
@@ -117,6 +121,10 @@ class ConversationRunExecutor:
         本方法只做「取回并记录 task 结果」这件事：它不改变 run 状态、不重试、不重新抛出，
         也不替换 workflow 已经落定的终态。
 
+        异常分支属**防御性路径**：``_execute`` 已把驱动期异常（含取消）在内部收口，正常
+        情况下后台 task 不会以异常结束；保留该回调是为了让「task 异常结束」永不静默——
+        一旦出现，说明有异常绕过了 ``_execute`` 的收口。
+
         参数:
             run_id: 本次后台执行对应的 Conversation Run 标识。
             task: ``start`` 创建的后台 task。
@@ -128,8 +136,8 @@ class ConversationRunExecutor:
             无。task 已被取消或正常结束时直接返回；异常 inspection 自身失败按静默返回处理。
 
         副作用:
-            异常结束时写 ``conversation_run_execution_failed``（ERROR，含异常类型与异常文本）
-            日志；正常结束或取消不写日志。
+            极端情形下 task 以异常结束时写 ``conversation_run_execution_failed``（ERROR，
+            含异常类型与异常文本）日志；正常结束或取消不写日志。
         """
 
         if task.cancelled():
@@ -187,9 +195,7 @@ class ConversationRunExecutor:
             if execution.thread_task.done():
                 continue
             try:
-                execution.thread_task.get_loop().call_soon_threadsafe(
-                    execution.thread_task.cancel
-                )
+                execution.thread_task.get_loop().call_soon_threadsafe(execution.thread_task.cancel)
             except RuntimeError:
                 log.warning(
                     "conversation_run_executor_sync_close_cancel_failed",
@@ -201,7 +207,7 @@ class ConversationRunExecutor:
         self._executions.clear()
 
     async def cancel(self, run_id: int, end_reason: str = "user_cancelled") -> bool:
-        """标记指定 run 及其后代 run 的取消信号，并立即关闭本 Run 的 terminal。
+        """标记指定 run 的取消信号，并立即关闭本 Run 的 terminal。
 
         本方法在进程内取消信号源标记 ``run_id``，使工具/runner 在轮询信号时能协作停止，
         并同步关闭该 Run 当前 registry 中的全部 terminal worker。run 的终态转移（active →
@@ -289,37 +295,40 @@ class ConversationRunExecutor:
         return True
 
     async def _execute(
-            self,
-            run_id: int,
-            start_mode: ExecutionMode,
-            ban_tools: list[str] | None = None,
-            model_settings: ModelSettings | None = None
+        self,
+        run_id: int,
+        start_mode: ExecutionMode,
+        ban_tools: list[str] | None = None,
+        model_settings: ModelSettings | None = None,
     ) -> None:
         """驱动 runner 执行一次 ConversationRun；执行器不拥有 run 终态。
 
-        本方法只负责「执行」：读取 run 后把控制权交给 ``runner`` 跑完整个 workflow，
-        退出时关闭本 Run 的 terminal 并从进程内 ``_executions`` 注销本次执行。它不落库、
-        不落定 run 终态
+        本方法只负责「执行」：读取 run 后把控制权交给 ``AgentRuntime.execute_run`` 跑完
+        整个 workflow，退出时关闭本 Run 的 terminal 并从进程内 ``_executions`` 注销本次
+        执行。它不落库、不落定 run 终态
         （running → completed/failed/cancelled 由 workflow 内部经 run_service 落定），
         也不清理进程内取消信号（该清理由 ``AgentRuntime`` 的收尾负责）。
 
         参数:
             run_id: 当前运行标识。
-            runner: 实际 Agent runtime 执行函数，接收本次 run 记录。
+            start_mode: 本次执行是 ``fresh`` 还是 ``resume``，原样透传给
+                ``AgentRuntime.execute_run``。
+            ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
+            model_settings: 可选的模型参数覆盖；``None`` 表示沿用 agent profile 的配置。
 
         返回:
             无。
 
         异常:
             KeyError: ``run_id`` 对应的 run 不存在（来自 run service 读取）。
-            runner 抛 ``Exception`` 时在投影工具失败收束后继续向上传播；runner 抛
-                ``CancelledError`` 时原样传播（由 ``close()`` / 取消路径驱动）。两条路径
-                退出前都会经过兜底收敛，run 的常规终态仍必须在 workflow 抛出之前由
-                workflow 自行落定。
+            驱动期异常**不外抛**：runner 抛 ``Exception`` 时经 ``_project_tools_settled``
+            投影工具失败收束后在本方法内收口，runner 抛 ``CancelledError`` 时只置内部
+            ``cancelled`` 标志；两条路径都在退出前经过兜底收敛，把仍未落终态的 run 收敛为
+            failed / cancelled。run 的常规终态仍必须在 workflow 抛出之前由 workflow 落定。
 
         副作用:
             runner 抛 ``Exception`` 时先经 ``_project_tools_settled`` 投影工具失败收束
-            （该投影失败只记日志，不替换原始异常）；退出时强制关闭 terminal，并在本次执行
+            （该投影失败只记日志，不影响收口结果）；退出时强制关闭 terminal，并在本次执行
             仍登记且当前 task 就是登记 task 时移除该登记，最后经
             :meth:`_converge_unfinished_run` 兜底收敛仍未落终态的 run；不清理取消信号。
         """

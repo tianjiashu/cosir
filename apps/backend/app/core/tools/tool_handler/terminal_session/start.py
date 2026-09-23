@@ -3,6 +3,7 @@
 from typing import ClassVar
 
 from app.core.tools.schemas import (
+    TOOL_TERMINAL_START,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -30,7 +31,7 @@ class TerminalStartTool(HandlerBase):
     前端不会调用此 handler；前端只能 attach ``terminal_start`` 返回的 session 预览。
     """
 
-    name = "terminal_start"
+    name = TOOL_TERMINAL_START
     description = (
         "Start a persistent local interactive shell session for agent-driven terminal work. "
         "The frontend only previews its output; use terminal_write/read/signal/close "

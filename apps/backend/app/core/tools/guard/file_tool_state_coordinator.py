@@ -42,10 +42,17 @@ from app.core.tools.guard.file_state import (
     get_shared_file_path_lock_registry,
 )
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
+from app.core.tools.schemas.tool_names import (
+    TOOL_APPLY_PATCH,
+    TOOL_FIND_FILES,
+    TOOL_READ_FILE,
+    TOOL_REPLACE,
+    TOOL_SEARCH_CONTENT,
+)
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_handler.search.file_walker import iter_files
 
-_REPEATED_TOOLS = frozenset({"read_file", "search_content", "find_files"})
+_REPEATED_TOOLS = frozenset({TOOL_READ_FILE, TOOL_SEARCH_CONTENT, TOOL_FIND_FILES})
 
 
 def _canonical_path(root: Path, value: Any) -> Any:
@@ -99,15 +106,15 @@ def normalize_repeated_call_arguments(
         无。
     """
 
-    if tool_name == "patch_write":
+    if tool_name == TOOL_REPLACE:
         # patch_write 工具：固定 replace 语义（mode 为工具语义标记，非用户入参），
         # 以 path 作为重复调用签名键。
         return {"mode": "replace", "path": _canonical_path(root, arguments.get("path"))}
-    if tool_name == "apply_patch":
+    if tool_name == TOOL_APPLY_PATCH:
         # apply_patch 工具：固定 Git unified-diff 语义（mode 为内部标记），
         # 以实际 schema 参数 patch 的文本作为重复调用签名键。
         return {"mode": "apply_patch", "patch": arguments.get("patch")}
-    if tool_name in {"search_content", "find_files"}:
+    if tool_name in {TOOL_SEARCH_CONTENT, TOOL_FIND_FILES}:
         # 搜索结果由 path/pattern/file_glob/分页等全部参数共同决定，
         # 仅归一 path 会导致「不同检索词搜索同一范围」被误判为重复而拦截。
         return {
@@ -118,7 +125,7 @@ def normalize_repeated_call_arguments(
             "offset": arguments.get("offset"),
             "context": arguments.get("context"),
         }
-    if tool_name == "read_file":
+    if tool_name == TOOL_READ_FILE:
         # 大文件支持按 offset/limit 分页续读；不同页必须视为不同调用，否则续读
         # 会被误判为「unchanged」而永远只能看到第一页。
         return {
@@ -303,7 +310,7 @@ class FileToolStateCoordinator:
             return None
         # patch_write / apply_patch 对文本敏感用 stale_patch 语义；Delete/Move 按文件状态
         # 使用 stale_file。
-        reason = "stale_patch" if tool.name in ("patch_write", "apply_patch") else "stale_file"
+        reason = "stale_patch" if tool.name in (TOOL_REPLACE, TOOL_APPLY_PATCH) else "stale_file"
         path_text = ", ".join(str(path) for path in stale_paths)
         return tool_error(
             tool.name,

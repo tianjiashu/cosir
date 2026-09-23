@@ -12,6 +12,7 @@ from app.core.runtime.conversation_run_cancellation_registry import cancellation
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
 from app.core.tools.schemas import (
+    TOOL_APPLY_PATCH,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -83,7 +84,7 @@ class ApplyPatchTool(HandlerBase):
       （``PathResolver``）、展示载荷构造（``build_file_change_display_data``）。
     """
 
-    name = "apply_patch"
+    name = TOOL_APPLY_PATCH
     description = APPLY_PATCH_DESCRIPTION
     permission = "file_write"
     args_model = ApplyPatchArgs

@@ -6,6 +6,7 @@ import time
 
 from app.core.tools.display.filesystem_display import build_file_search_display_data
 from app.core.tools.schemas import (
+    TOOL_FIND_FILES,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -34,7 +35,7 @@ FIND_FILES_DESCRIPTION = (
 class FindFilesTool(HandlerBase):
     """只读按文件名 glob 查找文件的模型工具。"""
 
-    name = "find_files"
+    name = TOOL_FIND_FILES
     description = FIND_FILES_DESCRIPTION
     permission = "file_search"
     args_model = FindFilesArgs

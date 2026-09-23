@@ -7,6 +7,7 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.tools.display.web_display import build_web_search_display_data
 from app.core.tools.schemas import (
+    TOOL_WEB_SEARCH,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -27,7 +28,7 @@ from app.core.tools.tool_models.web_search_args import WebSearchArgs
 class WebSearchTool(HandlerBase):
     """调用已配置 Provider 并将搜索元数据返回给模型。"""
 
-    name: str = "web_search"
+    name: str = TOOL_WEB_SEARCH
     description: str = (
         "Search the web for information. Returns up to 5 results by default with "
         "titles, URLs, and descriptions. The query is passed through to the configured "

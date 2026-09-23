@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -64,7 +63,6 @@ class AgentProfile:
         max_steps: 单 run 最大步骤数。
         run: 当前所属 Conversation Run 记录（经 ``derive_for_run`` 注入 per-run 副本；
             单例上不原地写）。
-        runtime_event_loop: 运行时事件循环（可为 None）。
         prompt_file_path: 关联的 prompt 文件路径（可为 None）。
     """
 
@@ -91,27 +89,32 @@ class AgentProfile:
         """为一次独立的 Conversation Run 执行派生 per-run 副本。
 
         并发隔离收口：AgentProfile 是注册表共享单例，禁止调用方对其原地写运行时字段
-        （并发 run 会互相覆盖）。每次 run 执行必须先经本方法派生独立副本，副本承载
-        本次执行的 ``run`` 与可选的 ``runtime_event_loop``（及收窄后的 ``allowed_tools``），
-        不同 run 的副本互不串扰。
+        （并发 run 会互相覆盖）。每次 run 执行必须先经本方法派生独立副本，副本承载本次
+        执行的 ``run`` 与按 ``ban_tools`` 收窄后的 ``allowed_tools``，不同 run 的副本
+        互不串扰。
 
-        Args:
-            run: 本次执行的 Conversation Run 记录（必填，写入副本的 ``run`` 字段）。
-            allowed_tools: 覆盖工具白名单；None 表示沿用当前值（委派子 Agent 收窄工具集时传入）。
-            runtime_event_loop: 覆盖事件广播 loop；None 表示沿用当前值
-                （主路径缺省 None；委派 child 传入父 loop，child 事件经
-                ``call_soon_threadsafe`` 跨线程投递回父 loop）。
-            model_defaults: 可选的父 Agent Profile，仅用于补齐当前 profile 未显式设置的
-                provider/model/model_settings。当前 profile 的非空字段优先，供未来自定义
-                child profile 覆盖主 Agent 的默认配置。
+        参数:
+            run: 本次执行的 Conversation Run 记录（必填，写入副本的 ``run`` 字段）；其
+                ``provider_id`` / ``model_name`` 用于回填副本上尚未配置的模型路由。
+            ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。传入时按工具名
+                从 ``allowed_tools`` 中差集收窄（``select_tools`` 同样按工具名过滤，
+                两处口径必须一致）。
+            model_settings: 模型参数覆盖；``None`` 表示沿用副本当前值。
 
-        Returns:
-            绑定当前 run 的独立 ``AgentProfile`` 副本（不修改 ``self`` 原实例）。
+        返回:
+            绑定当前 run 的独立 ``AgentProfile`` 副本；``self`` 原实例不被修改。
+
+        异常:
+            无。
+
+        副作用:
+            无（纯值替换，不写数据库、不触碰注册表）。
         """
 
         changes: dict = {"run": run}
         if ban_tools is not None:
-            changes["allowed_tools"] = changes["allowed_tools"] - ban_tools
+            banned = set(ban_tools)
+            changes["allowed_tools"] = [t for t in self.allowed_tools if t not in banned]
         if self.provider_id is None:
             changes["provider_id"] = run.provider_id
         if self.model_name is None:

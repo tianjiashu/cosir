@@ -3,6 +3,7 @@
 from typing import ClassVar
 
 from app.core.tools.schemas import (
+    TOOL_TERMINAL_READ,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -27,7 +28,7 @@ from app.core.tools.tool_models import TerminalReadArgs
 class TerminalReadTool(HandlerBase):
     """按 cursor 非破坏性读取 session 输出。"""
 
-    name = "terminal_read"
+    name = TOOL_TERMINAL_READ
     description = "Read new output from a local terminal session using an output sequence cursor."
     permission: ClassVar[str] = "shell"
     args_model = TerminalReadArgs

@@ -66,7 +66,7 @@ class TaskCrud:
 
         主键 ``id`` 由存储引擎自增分配，调用方不再提供业务标识。``created_at`` /
         ``updated_at`` 由本方法以当前 UTC 时间统一填充。``task_type`` 区分用户创建任务
-        （``"user"``）与委派子任务（``"delegation"``）；委派子任务通过 ``parent_task_id`` /
+        （``"user"``）与委派子任务（``"delegate_task"``）；委派子任务通过 ``parent_task_id`` /
         ``parent_run_id`` / ``delegation_id``（均为整数 id）关联父任务与委派记录。
 
         任务不再绑定 agent：agent 维度由 turn（用户任务首 turn）与 delegation 记录
@@ -75,7 +75,7 @@ class TaskCrud:
         参数:
             workspace_id: 所属工作区标识（整数 id）。
             title: 任务标题。
-            task_type: 任务类型，``"user"`` 或 ``"delegation"``，缺省为 ``"user"``。
+            task_type: 任务类型，``"user"`` 或 ``"delegate_task"``，缺省为 ``"user"``。
             parent_task_id: 父任务标识（整数 id），委派子任务必填，用户任务为 None。
             parent_run_id: 触发委派的父 turn 标识（整数 id），委派子任务必填，用户任务为 None。
             delegation_id: 关联的委派记录标识（整数 id），委派子任务必填，用户任务为 None。
@@ -167,7 +167,7 @@ class TaskCrud:
     def list_by_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务），按更新时间倒序。
 
-        委派子任务（``task_type='delegation'``）不出现在侧边栏对话列表中，因此本方法仅返回
+        委派子任务（``task_type='delegate_task'``）不出现在侧边栏对话列表中，因此本方法仅返回
         ``task_type='user'`` 的任务。
 
         参数:
@@ -222,7 +222,7 @@ class TaskCrud:
             session: 可选的调用方事务 session；传入时复用当前事务，不自行提交。
 
         返回:
-            该父任务的直接子任务列表（``task_type='delegation'`` 且 ``parent_task_id`` 匹配）；
+            该父任务的直接子任务列表（``task_type='delegate_task'`` 且 ``parent_task_id`` 匹配）；
             无匹配时为空列表。
 
         异常:

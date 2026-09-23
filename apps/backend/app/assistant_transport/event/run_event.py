@@ -115,7 +115,7 @@ class RunInitializedEvent(ConversationEventEnvelope):
         if current_run_id is not None and (
             self.run_id <= current_run_id
             or not state["runs"]
-            or state["runs"][-1]["status"] not in {"completed", "failed", "cancelled"}
+            or state["runs"][-1]["status"] not in Constant.Run.TERMINAL_STATUSES
         ):
             # 走到这里说明 snapshot 与 DB 已分叉（新 run 被当作陈旧事件丢弃）：不阻断
             # 主流程，但必须留痕，否则排障时只能看到僵尸现象看不到丢弃本身。
@@ -275,7 +275,7 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
             return mutations
         _, assistant_index = message_index
         base = ("runs", run_index, "messages", assistant_index)
-        if self.status.value in {"completed", "failed", "cancelled"}:
+        if self.status.value in Constant.Run.TERMINAL_STATUSES:
             for part_index, part in enumerate(
                 state["runs"][run_index]["messages"][assistant_index]["parts"]
             ):

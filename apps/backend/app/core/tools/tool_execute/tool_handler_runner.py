@@ -118,7 +118,7 @@ class ToolHandlerRunner:
             状态：``cancelled`` 观察交由调用方（执行出口）在进程收尾后统一投影，见
             :meth:`_cancelled_observation` 的时序说明。
         """
-        should_cancel = self.build_cancellation_check(execution_context, tool_call_id)
+        should_cancel = self._build_cancel_check(execution_context, tool_call_id)
         try:
             if tool.execution_mode == "process":
                 return self._execute_in_process(
@@ -138,7 +138,7 @@ class ToolHandlerRunner:
         finally:
             # 本次工具调用已结束（任意结果），针对它的工具级信号不再有意义，就地释放；
             # 迟到的信号由 run 收尾时经 ``clear_run`` 兜底回收。
-            self.cleanup_cancellation_signal(execution_context, tool_call_id)
+            self._clear_tool_call_cancellation(execution_context, tool_call_id)
 
     # ------------------------------------------------------------------
     # Process-isolated execution (hard timeout kill)
@@ -694,80 +694,6 @@ class ToolHandlerRunner:
                 tool, tool_call_id, "在完成后转取消", execution_context
             )
         return self._normalize_result(tool, result, tool_call_id)
-
-    # ------------------------------------------------------------------
-    # Public node_helper contracts
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def build_cancellation_check(
-        execution_context: ToolExecutionContext | None,
-        tool_call_id: str = "",
-    ) -> Callable[[], bool] | None:
-        """Build the live cancellation check shared by sync and async executors.
-
-        The returned callback reads the run-level and tool-call-level registries on every
-        invocation.  Async callers use it to cancel the handler task from a non-blocking
-        event-loop watcher; synchronous callers use it at their existing execution
-        boundaries and polling points.
-
-        参数:
-            execution_context: 当前工具执行上下文；无有效 run id 时返回 ``None``。
-            tool_call_id: 当前工具调用 id；为空时回退到上下文中的 id。
-
-        返回:
-            实时取消检查回调，或 ``None``（当前执行没有可取消的 run 边界）。
-
-        异常:
-            无。
-
-        副作用:
-            构造期不读取或修改注册表；回调执行时只读注册表。
-        """
-
-        return ToolHandlerRunner._build_cancel_check(execution_context, tool_call_id)
-
-    @staticmethod
-    def cleanup_cancellation_signal(
-        execution_context: ToolExecutionContext | None,
-        tool_call_id: str,
-    ) -> None:
-        """Clear the tool-call cancellation signal at the execution boundary.
-
-        This is the public cleanup contract for every executor entry point.  It is
-        idempotent and only clears the exact ``(run_id, tool_call_id)`` signal; run-level
-        cancellation remains untouched.
-
-        参数:
-            execution_context: 当前工具执行上下文。
-            tool_call_id: 当前工具调用 id；为空时回退到上下文中的 id。
-
-        返回:
-            无。
-
-        异常:
-            无；注册表清理失败不会由本契约主动抛出。
-
-        副作用:
-            从进程内工具调用取消注册表移除当前调用的取消信号。
-        """
-
-        ToolHandlerRunner._clear_tool_call_cancellation(execution_context, tool_call_id)
-
-    def normalize_result(
-        self,
-        tool: ToolDefinition,
-        payload: Any,
-        tool_call_id: str,
-    ) -> ToolObservation:
-        """Normalize an in-process handler result for all executor entry points.
-
-        Async handlers stay on the workflow event loop, so they cannot use the full
-        synchronous runner dispatch.  This narrow public node_helper lets ``ToolExecutor``
-        reuse the runner's single result-normalization contract without duplicating it.
-        """
-
-        return self._normalize_result(tool, payload, tool_call_id)
 
     # Internal helpers
 

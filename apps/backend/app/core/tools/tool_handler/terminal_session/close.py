@@ -3,6 +3,7 @@
 from typing import ClassVar
 
 from app.core.tools.schemas import (
+    TOOL_TERMINAL_CLOSE,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -27,7 +28,7 @@ from app.core.tools.tool_models import TerminalCloseArgs
 class TerminalCloseTool(HandlerBase):
     """关闭 Agent 创建的终端 session。"""
 
-    name = "terminal_close"
+    name = TOOL_TERMINAL_CLOSE
     description = "Close an existing local terminal session and its shell process tree."
     permission: ClassVar[str] = "shell"
     args_model = TerminalCloseArgs

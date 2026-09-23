@@ -48,9 +48,9 @@ class AgentRuntime:
     """
 
     def __init__(
-            self,
-            *,
-            process_tool_output_channel_factory: (ProcessToolOutputChannelFactory | None) = None,
+        self,
+        *,
+        process_tool_output_channel_factory: (ProcessToolOutputChannelFactory | None) = None,
     ) -> None:
         """Initialize the execution engine with its private collaborators.
 
@@ -90,7 +90,8 @@ class AgentRuntime:
 
         前置条件由执行器保证，本方法不再重复认领或做状态复查：
         1. 调用前执行器已 ``claim_pending_run``，run 处于 running；
-        2. 执行器已持有 per-task 锁，同 task 内一次只有一个 running run；
+        2. 同 task 内一次只有一个 running run：由准入（``prepare_run_start`` 拒绝已有
+           active run）与 ``claim_pending_run`` 的原子条件更新共同保证，不依赖进程内锁；
         3. ``run`` 非 None 且为已认领 run。
 
         本方法只负责三件事：解析 run 绑定的 agent profile、为本次 run 派生独立副本、
@@ -99,6 +100,10 @@ class AgentRuntime:
 
         参数:
             run: 已被执行器认领的 Conversation Run 记录（非 None，状态 running）。
+            execution_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``）；
+                透传给 workflow，由其决定是否清空旧上下文与如何构造 graph 输入。
+            ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
+            model_settings: 可选的模型参数覆盖；``None`` 表示沿用 agent profile 的配置。
 
         异常:
             RuntimeError: 轮次绑定的 agent profile 不可用时抛出，由执行器捕获收束为 failed。
@@ -116,10 +121,10 @@ class AgentRuntime:
         await self.run_agent(agent_profile, execution_mode=execution_mode)
 
     async def run_agent(
-            self,
-            agent: AgentProfile,
-            *,
-            execution_mode: ExecutionMode = "fresh",
+        self,
+        agent: AgentProfile,
+        *,
+        execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """驱动一次 agent run 执行并提交 canonical conversation facts。
 
@@ -128,6 +133,8 @@ class AgentRuntime:
                 ``AgentProfile.derive_for_run`` 派生）；禁止传入共享注册表单例，
                 run 执行期间可安全写入副本上的运行时字段（如 ``main_agent``），
                 不污染共享实例。
+            execution_mode: 本次执行是 ``fresh`` 还是 ``resume``，原样透传给
+                ``agent.workflow.run``。
 
         异常:
             RuntimeError: 当 ``agent.run`` 为 None 时抛出。
@@ -203,15 +210,15 @@ class AgentRuntime:
             tool_call_cancellation_registry.clear_run(run_id)
 
     def _resolve_execution_context(
-            self,
-            task: TaskRecord,
-            run_id: int = 0,
+        self,
+        task: TaskRecord,
+        run_id: int = 0,
     ) -> ToolExecutionContext | None:
         """按 task 解析其所属 workspace 的执行上下文；缺失时返回 None。
 
         参数:
             task: 当前执行的任务记录；提供 ``workspace_id`` 与 ``task_id``。
-            run_id: 当前执行所属轮次标识，供工具执行上下文和取消边界使用。缺省为空字符串。
+            run_id: 当前执行所属轮次标识，供工具执行上下文和取消边界使用；缺省为 0。
 
         返回:
             命中 workspace 时返回 ToolExecutionContext；workspace 缺失或
@@ -240,12 +247,12 @@ class AgentRuntime:
         return ToolExecutionContext.from_workspace(task.id, workspace, run_id=run_id)
 
     def _build_operations(
-            self,
-            workspace: WorkspaceRecord,
-            task: TaskRecord,
-            run: ConversationRunRecord,
-            agent_profile: AgentProfile,
-            tool_trace_recorder: ToolTraceRecorder | None = None,
+        self,
+        workspace: WorkspaceRecord,
+        task: TaskRecord,
+        run: ConversationRunRecord,
+        agent_profile: AgentProfile,
+        tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> WorkflowOperations:
         """为单个 run 构建运行时操作门面，按 workspace 解析工具边界。
 
@@ -255,6 +262,7 @@ class AgentRuntime:
 
 
         参数:
+            workspace: 当前 run 所属的 workspace 记录，用于解析工具执行边界。
             task: 当前执行的任务记录（已预取，提供 ``workspace_id`` 与 ``task_id``）。
             run: 当前执行的 Conversation Run 记录（提供 ``run_id`` 作为门面绑定）。
             agent_profile: 驱动本轮执行的 agent profile。
@@ -263,7 +271,7 @@ class AgentRuntime:
 
         返回:
             已注入正确 tool_executor / model_tools / execution_context / trace_recorder 的
-            RuntimeOperations 实例。
+            WorkflowOperations 实例。
         """
         model_tools = agent_profile.select_tools(self._tool_executor.list_tools())
         execution_context = self._resolve_execution_context(task, run_id=run.id)

@@ -4,8 +4,10 @@ import asyncio
 import json
 from typing import ClassVar
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.schemas import (
+    TOOL_CHILD_AGENT_SEND,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -16,7 +18,7 @@ from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_handler.child_task.child_agent_create import CHILD_BANNED_TOOLS
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.child_task import ChildAgentSendArgs
-from app.models import ConversationRunCommand, ConversationRunStatus
+from app.models import ConversationRunCommand
 from app.service.depends import (
     get_conversation_run_executor,
     get_conversation_run_service,
@@ -36,7 +38,7 @@ class ChildAgentSendTool(HandlerBase):
     新轮次。子 Agent 的运行终态由它自己的 workflow 落定。
     """
 
-    name: str = "child_agent_send"
+    name: str = TOOL_CHILD_AGENT_SEND
     description: str = (
         "Send a message to a child agent after confirming that it has already produced a "
         "conclusion in its child task, reusing that child task. Note: if the child agent has "
@@ -138,7 +140,7 @@ class ChildAgentSendTool(HandlerBase):
                 error="child_task_not_delegated_by_caller",
                 reason=(
                     "child_task_id does not refer to a child task delegated by this task; "
-                    "use the child_task_id returned by delegate_task_for_sub_agent, or "
+                    "use the child_task_id returned by delegate_task, or "
                     "delegate the subtask first and retry with the corrected child_task_id."
                 ),
                 permission=self.permission,
@@ -147,11 +149,7 @@ class ChildAgentSendTool(HandlerBase):
 
         current_run_id = child_task.current_run_id
         current_run = self._run_state_service.get_run(current_run_id)
-        if current_run.status not in {
-            ConversationRunStatus.COMPLETED.value,
-            ConversationRunStatus.CANCELLED.value,
-            ConversationRunStatus.FAILED.value,
-        }:
+        if current_run.status not in Constant.Run.TERMINAL_STATUSES:
             return tool_error(
                 tool_name=self.name,
                 error="error",
@@ -235,8 +233,8 @@ class ChildAgentSendTool(HandlerBase):
             无。
 
         返回:
-            同步执行（``handler_kind="sync"``）、线程直跑的 child_agent_send 工具定义；
-            工具观察只确认新 Run 已登记，不等待子 Agent 执行结束。
+            线程直跑的 child_agent_send 工具定义；工具观察只确认新 Run 已登记，
+            不等待子 Agent 执行结束。
 
         异常:
             无。

@@ -89,7 +89,7 @@ SQLite 保存声明式 Run 配置；`BaseChatModel`、Runnable、HTTP client、T
 ```text
 解析 child AgentProfile
   -> 计算 decision.effective_tools
-  -> TaskService.get_or_create_task(task_type="delegation")
+  -> TaskService.get_or_create_task(task_type="delegate_task")
   -> ConversationRunService.create_run(... child profile 的 provider/model)
   -> derive_for_run(... allowed_tools=decision.effective_tools)
   -> ChildAgentRunner.run_child()
@@ -468,7 +468,7 @@ child Task 创建流程改为：
 DelegationExecutor
   -> 解析 child AgentProfile
   -> 计算 decision.effective_tools
-  -> TaskService.get_or_create_task(... task_type="delegation")
+  -> TaskService.get_or_create_task(... task_type="delegate_task")
   -> 组装 child RunModelConfig
   -> 创建 child Run，并写入 Run.extra
   -> ensure child TaskRuntimeSpace session

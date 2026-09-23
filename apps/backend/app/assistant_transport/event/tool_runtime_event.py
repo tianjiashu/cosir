@@ -12,6 +12,7 @@ from app.assistant_transport.state.conversation_state_mutation import Conversati
 from app.assistant_transport.state.conversation_state_part import ConversationStateToolCallPart
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
+from app.core.tools.schemas.tool_names import TOOL_EXECUTE_TERMINAL
 
 
 class TerminalOutputDeltaData(BaseModel):
@@ -101,7 +102,7 @@ class ToolCallRuntimeUpdateEvent(ConversationEventEnvelope):
         data = self.data
         if (
             not isinstance(data, TerminalOutputDeltaData)
-            or part.get("toolName") != "execute_terminal"
+            or part.get("toolName") != TOOL_EXECUTE_TERMINAL
             or part.get("status") != "running"
         ):
             return []

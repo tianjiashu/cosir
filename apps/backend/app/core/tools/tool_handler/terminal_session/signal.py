@@ -3,6 +3,7 @@
 from typing import ClassVar
 
 from app.core.tools.schemas import (
+    TOOL_TERMINAL_SIGNAL,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -27,7 +28,7 @@ from app.core.tools.tool_models import TerminalSignalArgs
 class TerminalSignalTool(HandlerBase):
     """由 Agent 向 PTY 发送 interrupt/eof/suspend。"""
 
-    name = "terminal_signal"
+    name = TOOL_TERMINAL_SIGNAL
     description = "Send an interrupt, EOF, or suspend signal to a local terminal session."
     permission: ClassVar[str] = "shell"
     args_model = TerminalSignalArgs
