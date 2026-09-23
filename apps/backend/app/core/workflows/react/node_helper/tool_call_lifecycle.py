@@ -29,7 +29,7 @@ from app.core.tools.tool_execute.tool_terminal_projection import (
     terminal_error_hint,
     terminal_status,
 )
-from app.core.workflows.react.nodes.helper.common import _runtime_config, _runtime_context
+from app.core.workflows.react.node_helper.common import _runtime_config, _runtime_context
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
@@ -293,6 +293,12 @@ class ToolCallLifecycleManager(BaseModel):
         """返回全部挂 ``invalid_detail`` 的非法调用记录。"""
 
         return [record for record in self.calls.values() if record.invalid_detail is not None]
+
+    @property
+    def valid_tools(self) -> list[ToolCallLifecycleRecord]:
+        """返回全部合法工具调用记录。"""
+
+        return [record for record in self.calls.values() if record.invalid_detail is None]
 
     @staticmethod
     def _valid_tool_name(tool_name: object) -> bool:

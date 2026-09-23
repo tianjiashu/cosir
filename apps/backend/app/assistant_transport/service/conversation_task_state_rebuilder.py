@@ -101,7 +101,7 @@ class ConversationTaskStateRebuilder:
                             if isinstance(record.child_task_id, int)
                             and record.child_task_id > 0
                             and record.child_agent_id == args.get("child_agent_id")
-                            and record.prompt == args.get("prompt")
+                            and record.prompt == args.get("message")
                         ]
                         if len(candidates) == 1:
                             record = candidates[0]
@@ -117,7 +117,7 @@ class ConversationTaskStateRebuilder:
                                     tool_part["child_run_id"] = child_run_id
                                 tool_part["display_data"] = {
                                     "kind": "delegation-result",
-                                    "title": args.get("title") or "子 Agent",
+                                    "title": args.get("agent_name") or "子 Agent",
                                     "child_task_id": child_task_id,
                                 }
                                 if "child_run_id" in tool_part:

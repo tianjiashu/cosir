@@ -310,7 +310,6 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     child_task_id: part.child_task_id,
     child_run_id: part.child_run_id,
     agent_role: part.agent_role,
-    delegation_ref_seq: part.delegation_ref_seq,
     terminal_output_seq: part.terminal_output_seq,
   };
   const args = part.args ?? {};

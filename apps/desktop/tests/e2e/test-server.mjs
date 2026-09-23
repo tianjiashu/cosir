@@ -266,7 +266,6 @@ function delegationState() {
               display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501 },
               child_task_id: 501,
               agent_role: "Reviewer",
-              delegation_ref_seq: 0,
               isError: false,
             },
             {
@@ -279,7 +278,6 @@ function delegationState() {
               display_data: { kind: "delegation-result", title: "检查测试", role: "Tester", child_task_id: 502 },
               child_task_id: 502,
               agent_role: "Tester",
-              delegation_ref_seq: 1,
               isError: false,
             },
             { type: "text", text: "子 Agent 已开始工作。", status: "completed" },

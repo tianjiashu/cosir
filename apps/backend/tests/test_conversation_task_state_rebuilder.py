@@ -206,11 +206,17 @@ def test_rebuild_restores_child_run_locator_from_delegation_record(
         run_id=1,
         message=AIMessage(
             content="",
-            tool_calls=[{
-                "id": "delegate-1",
-                "name": "delegate_task",
-                "args": {"child_agent_id": "reviewer", "prompt": "review", "title": "审查代码"},
-            }],
+            tool_calls=[
+                {
+                    "id": "delegate-1",
+                    "name": "delegate_task",
+                    "args": {
+                        "child_agent_id": "reviewer",
+                        "message": "review",
+                        "agent_name": "审查代码",
+                    },
+                }
+            ],
         ),
         include_in_context=False,
         sequence=1,
@@ -251,12 +257,14 @@ def test_rebuild_restores_ordinary_file_from_run_extra() -> None:
         checkpoint_thread_id="checkpoint-1",
         extra=ConversationRunExtra(
             display_text="请查看 [[cosir-file:file-1]]",
-            attachments=[{
-                "id": "file-1",
-                "name": "notes.md",
-                "content_type": "text/markdown",
-                "path": "C:/workspace/notes.md",
-            }],
+            attachments=[
+                {
+                    "id": "file-1",
+                    "name": "notes.md",
+                    "content_type": "text/markdown",
+                    "path": "C:/workspace/notes.md",
+                }
+            ],
         ),
     )
     row = ConversationTaskContextRecord(
@@ -294,12 +302,14 @@ def test_rebuild_restores_user_file_when_context_write_was_interrupted() -> None
         checkpoint_thread_id="checkpoint-1",
         extra=ConversationRunExtra(
             display_text="请查看 [[cosir-file:file-1]]",
-            attachments=[{
-                "id": "file-1",
-                "name": "notes.md",
-                "content_type": "text/markdown",
-                "path": "C:/workspace/notes.md",
-            }],
+            attachments=[
+                {
+                    "id": "file-1",
+                    "name": "notes.md",
+                    "content_type": "text/markdown",
+                    "path": "C:/workspace/notes.md",
+                }
+            ],
         ),
     )
 
@@ -315,30 +325,44 @@ def test_rebuild_restores_user_file_when_context_write_was_interrupted() -> None
 
 
 def test_malformed_conversation_run_extra_is_ignored() -> None:
-    assert ConversationRunExtra.from_dict({
-        "assistant_input": {
-            "version": 1,
-            "display_text": "请查看 [[cosir-file:bad:id]]",
-            "attachments": [{
-                "id": "bad:id",
-                "name": "notes.md",
-                "content_type": "text/markdown",
-                "path": "C:/workspace/notes.md",
-            }],
-        }
-    }) is None
+    assert (
+        ConversationRunExtra.from_dict(
+            {
+                "assistant_input": {
+                    "version": 1,
+                    "display_text": "请查看 [[cosir-file:bad:id]]",
+                    "attachments": [
+                        {
+                            "id": "bad:id",
+                            "name": "notes.md",
+                            "content_type": "text/markdown",
+                            "path": "C:/workspace/notes.md",
+                        }
+                    ],
+                }
+            }
+        )
+        is None
+    )
 
 
 def test_blank_file_path_is_treated_as_malformed_extra() -> None:
-    assert ConversationRunExtra.from_dict({
-        "assistant_input": {
-            "version": 1,
-            "display_text": "请查看 [[cosir-file:file-1]]",
-            "attachments": [{
-                "id": "file-1",
-                "name": "notes.md",
-                "content_type": "text/markdown",
-                "path": "   ",
-            }],
-        }
-    }) is None
+    assert (
+        ConversationRunExtra.from_dict(
+            {
+                "assistant_input": {
+                    "version": 1,
+                    "display_text": "请查看 [[cosir-file:file-1]]",
+                    "attachments": [
+                        {
+                            "id": "file-1",
+                            "name": "notes.md",
+                            "content_type": "text/markdown",
+                            "path": "   ",
+                        }
+                    ],
+                }
+            }
+        )
+        is None
+    )

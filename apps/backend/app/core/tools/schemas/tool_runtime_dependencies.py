@@ -5,15 +5,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.core.tools.schemas.delegate_task_executor import DelegateTaskExecutor
+from app.core.agents.agent_profile import AgentProfile
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 
 if TYPE_CHECKING:
-    from app.core.tools.tool_handler.child_agent_wait import ChildAgentWaitReader
-    from app.service.child_agent.async_child_agent_wait_coordinator import (
-        AsyncChildAgentWaitCoordinator,
-    )
-    from app.service.child_agent.child_agent_session_service import ChildAgentSessionService
     from app.service.terminal.terminal_session_service import TerminalSessionService
 
 
@@ -27,13 +22,12 @@ class ToolRuntimeDependencies:
     在 ``ToolExecutionContext.for_process_execution`` 中剔除，不进入工具子进程。
     """
 
-    delegate_task_executor: DelegateTaskExecutor | None = None
+    # 委派所需的父 Run 事实：父 Agent 的 per-run profile（child 未显式配置模型时的默认值）
+    # 与父 task 是否已处于委派链中（决定单次委派的深度裁决）。
+    parent_agent_profile: AgentProfile | None = None
+    parent_task_is_child: bool = False
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
     process_tool_output_channel_factory: ProcessToolOutputChannelFactory | None = None
     # 仅供同进程 terminal_session handler 使用；process execution 必须清空。
     terminal_session_service: "TerminalSessionService | None" = None
     is_run_cancelled: Callable[[int], bool] | None = None
-    child_agent_wait_coordinator: "AsyncChildAgentWaitCoordinator | None" = None
-    child_agent_wait_reader: "ChildAgentWaitReader | None" = None
-    child_agent_wait_target_snapshot: Callable[..., list[dict[str, int | None]]] | None = None
-    child_agent_session_service: "ChildAgentSessionService | None" = None

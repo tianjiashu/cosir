@@ -17,7 +17,6 @@
 """
 
 import asyncio
-import inspect
 import json
 import traceback
 from collections.abc import AsyncIterator
@@ -48,12 +47,8 @@ from app.core.tools import ToolSystem
 from app.core.workflows.react.workflow import ReactLikeWorkflow
 from app.service.depends import (
     close_service_dependencies,
-    get_async_child_agent_wait_coordinator,
-    get_child_agent_session_service,
     get_conversation_run_executor,
     get_conversation_run_service,
-    get_conversation_run_state_service,
-    get_task_service,
     get_terminal_session_service,
     initialize_service_dependencies,
     set_runtime,
@@ -88,8 +83,8 @@ async def _cleanup_startup_failure() -> None:
     """Release every resource that may have been initialized before startup failed.
 
     Startup is intentionally not wrapped in the normal post-``yield`` ``finally`` block, so a
-    failure during AgentRuntime/tool assembly can otherwise skip Child Agent waiters, the Run
-    executor, terminal workers, and service caches.  This helper only inspects already-populated
+    failure during AgentRuntime/tool assembly can otherwise skip the Run executor, terminal
+    workers, and service caches.  This node_helper only inspects already-populated
     dependency caches; it never constructs a missing service while cleaning up.  Cleanup is
     best-effort and each failure is logged without masking the original startup exception.
     """
@@ -97,29 +92,11 @@ async def _cleanup_startup_failure() -> None:
     try:
         if get_conversation_run_executor.cache_info().currsize:
             await get_conversation_run_executor().close()
-        elif get_child_agent_session_service.cache_info().currsize:
-            await asyncio.to_thread(get_child_agent_session_service().shutdown)
     except BaseException as exc:
         log.error(
             "lifespan_startup_runtime_cleanup_failed",
             extra={
-                "msg": "startup failure 后 Runtime/Child Agent cleanup 失败",
-                "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
-            },
-        )
-
-    try:
-        if get_async_child_agent_wait_coordinator.cache_info().currsize:
-            shutdown_result = await asyncio.to_thread(
-                get_async_child_agent_wait_coordinator().shutdown
-            )
-            if inspect.isawaitable(shutdown_result):
-                await shutdown_result
-    except BaseException as exc:
-        log.error(
-            "lifespan_startup_wait_coordinator_cleanup_failed",
-            extra={
-                "msg": "startup failure 后 Child Agent wait coordinator cleanup 失败",
+                "msg": "startup failure 后 Runtime cleanup 失败",
                 "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
             },
         )
@@ -192,18 +169,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
                 "data": {"run_ids": [run.id for run in recovered_runs]},
             },
         )
-    from app.service.child_agent.child_agent_recovery import ChildAgentRecoveryHook
-
     latest_runs = get_conversation_run_service().list_latest_runs()
-    recovered_children = ChildAgentRecoveryHook(
-        task_service=get_task_service(),
-        run_state_service=get_conversation_run_state_service(),
-    ).recover(latest_runs)
-    if recovered_children:
-        log.info(
-            "orphaned_child_agents_recovery_completed",
-            extra={"msg": "启动期 Child Agent 恢复已完成", "data": {"count": recovered_children}},
-        )
     get_terminal_session_service().initialize()
     try:
         recovered_terminal_count = await ReactLikeWorkflow().recover_orphaned_terminal_checkpoints(
@@ -224,11 +190,6 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             "orphaned_terminal_sessions_recovery_failed",
             extra={"msg": "启动期 terminal checkpoint 恢复失败，继续启动 backend", "data": {}},
         )
-    # Child wait coordination is a production runtime dependency, not a test-only
-    # injection.  Construct it before AgentRuntime so every run receives the canonical
-    # reader and coordinator through ToolRuntimeDependencies.
-    get_child_agent_session_service()
-
     # Hook 注册表初始化（启动期单线程播种，必须在 ToolExecutor 首次触发拦截前完成，
     # 否则 HookInterceptor 首次 fire 会拿不到注册表）。无配置层（决策 D3）。
     from app.core.hook import initialize_hook_registry

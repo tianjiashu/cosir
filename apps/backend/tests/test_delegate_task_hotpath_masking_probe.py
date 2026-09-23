@@ -18,7 +18,7 @@ import pytest
 from app.config import configuration
 from app.core.tools.schemas.tool_call import ToolCall
 from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
-from app.core.tools.tool_models.delegate_task_args import DelegateTaskArgs
+from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 from app.core.tools.tool_system import ToolSystem
 
 
@@ -37,7 +37,9 @@ def tool_system_with_broken_registry(monkeypatch) -> ToolSystem:
     """构建工具系统后注入一个持续故障的注册表。"""
 
     monkeypatch.setattr(configuration, "_TOOL_SYSTEM", None, raising=False)
-    monkeypatch.setattr(configuration, "_AGENT_REGISTRY", _PermanentlyBrokenRegistry(), raising=False)
+    monkeypatch.setattr(
+        configuration, "_AGENT_REGISTRY", _PermanentlyBrokenRegistry(), raising=False
+    )
     tool_system = ToolSystem.build_tool_system()
     configuration.set_tool_system(tool_system)
     return tool_system
@@ -55,9 +57,11 @@ def test_broken_registry_drops_enum(tool_system_with_broken_registry: ToolSystem
 def test_broken_registry_disables_hard_validation(monkeypatch) -> None:
     """[探针] 注册表持续故障 → 硬校验放行任意非法 id（enforcement 第二层失效）。"""
 
-    monkeypatch.setattr(configuration, "_AGENT_REGISTRY", _PermanentlyBrokenRegistry(), raising=False)
+    monkeypatch.setattr(
+        configuration, "_AGENT_REGISTRY", _PermanentlyBrokenRegistry(), raising=False
+    )
 
-    args = DelegateTaskArgs(child_agent_id="totally-fake", title="t", prompt="p")
+    args = DelegateTaskArgs(child_agent_id="totally-fake", agent_name="t", message="p")
     assert args.child_agent_id == "totally-fake"
 
 
@@ -76,7 +80,11 @@ def test_broken_registry_admits_invalid_id_through_gate(
 
     gate = ToolAccessGate(tool_system_with_broken_registry.registry)
     ctx = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=Path.cwd())
-    call = ToolCall(tool_name="delegate_task", arguments={"child_agent_id": "fake-id", "title": "t", "prompt": "p"}, call_id="c1")
+    call = ToolCall(
+        tool_name="delegate_task",
+        arguments={"child_agent_id": "fake-id", "agent_name": "t", "message": "p"},
+        call_id="c1",
+    )
 
     outcome = gate.evaluate(call, ctx)
 

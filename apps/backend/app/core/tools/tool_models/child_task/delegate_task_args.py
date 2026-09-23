@@ -1,10 +1,10 @@
 """Pydantic arguments for the delegate_task tool.
 
-本模型用三个字段（child_agent_id / title / prompt）描述父 Agent 指派给子 Agent 的
-委派契约。任务内容通过自由文本 ``prompt`` 承载，父 Agent 不被迫拆成结构化字段；
-``prompt`` 描述不限定章节格式（Objective / Rules / References / Expected Output 等
-仅作可选建议，不当作强制结构）。预算校验退化为 ``prompt`` 总长度硬校验与
-``title`` 必填/长度校验，超限时返回明确中英文错误并通过规范日志事件记录超限字段
+本模型用三个字段（child_agent_id / agent_name / message）描述父 Agent 指派给子 Agent 的
+委派契约。任务内容通过自由文本 ``message`` 承载，父 Agent 不被迫拆成结构化字段；
+``message`` 描述不限定章节格式（Objective / Rules / References / Expected Output 等
+仅作可选建议，不当作强制结构）。预算校验退化为 ``message`` 总长度硬校验与
+``agent_name`` 必填/长度校验，超限时返回明确中英文错误并通过规范日志事件记录超限字段
 与实测长度，便于排查父 Agent 调用问题。
 """
 
@@ -16,8 +16,8 @@ from pydantic.json_schema import GenerateJsonSchema
 from app.config.logging.logger import log
 
 # 预算常量
-PROMPT_MAX = 3000
-TITLE_MAX = 10
+MESSAGE_MAX = 3000
+AGENT_NAME_MAX = 10
 
 # child_agent_id 运行时描述模板：``{ids}`` 在 schema 投影期由进程级注册表的
 # ``child_agent_ids()`` 注入，模型据此从合法选项中选择且明确必填。合法 id 同时以
@@ -76,23 +76,24 @@ def _available_child_agent_ids() -> list[str]:
 class DelegateTaskArgs(BaseModel):
     """描述父 Agent 指派给子 Agent 的委派契约。
 
-    面向子 Agent 的任务信息统一通过 ``prompt`` 自由文本承载，父 Agent 只需给出
-    单一目标文本；``title`` 仅用于展示与可追溯，``child_agent_id`` 决定目标
+    面向子 Agent 的任务信息统一通过 ``message`` 自由文本承载，父 Agent 只需给出
+    单一目标文本；``agent_name`` 仅用于展示与可追溯，``child_agent_id`` 决定目标
     child Agent profile。预算校验在 ``model_validator(mode="after")`` 中统一进行，
     超限返回中英文错误信息。
     """
 
     child_agent_id: str = Field(description=_CHILD_AGENT_ID_DESCRIPTION_TEMPLATE)
-    title: str = Field(
+    #软约束
+    agent_name: str = Field(
         description=(
-            "Short noun-phrase title for the task, shown in the UI and used for traceability. "
-            f"REQUIRED, at most {TITLE_MAX} characters — keep it to a few words."
+            "Short noun-phrase agent_name for the agent,agent_name 必须是唯一的. "
+            f"REQUIRED, at most {AGENT_NAME_MAX} characters — keep it to a few words."
         ),
     )
-    prompt: str = Field(
+    message: str = Field(
         description=(
             "The complete task contract as free-form text, passed verbatim as the child's "
-            f"entire input. REQUIRED, at most {PROMPT_MAX} characters."
+            f"entire input. REQUIRED, at most {MESSAGE_MAX} characters."
         )
     )
 
@@ -107,7 +108,7 @@ class DelegateTaskArgs(BaseModel):
             校验通过的 ``DelegateTaskArgs`` 实例本身。
 
         异常:
-            ValueError: 当 prompt 超过预算上限或 title 为空/超长时抛出，消息含
+            ValueError: 当 message 超过预算上限或 agent_name 为空/超长时抛出，消息含
                 英文错误键与面向模型的中文 reason。
 
         副作用:
@@ -115,55 +116,64 @@ class DelegateTaskArgs(BaseModel):
             超限字段、上限与实测长度（不记录任何 secret 或敏感信息）。
         """
 
-        # title
-        if not self.title or not self.title.strip():
+        # agent_name
+        if not self.agent_name or not self.agent_name.strip():
             log.warning(
                 "delegate_task_args_over_budget",
                 extra={
-                    "msg": "delegate_task title 为空或纯空白",
-                    "data": {"field": "title"},
+                    "msg": "delegate_task agent_name 为空或纯空白",
+                    "data": {"field": "agent_name"},
                 },
             )
             raise ValueError(
-                "delegate_task.title_required: 任务标题不能为空或纯空白，必须提供简洁的任务标题。"
+                "delegate_task.agent_name_required: 任务标题不能为空或纯空白，"
+                "必须提供简洁的任务标题。"
             )
-        if len(self.title) > TITLE_MAX:
+        if len(self.agent_name) > AGENT_NAME_MAX:
             log.warning(
                 "delegate_task_args_over_budget",
                 extra={
-                    "msg": "delegate_task title 超出预算上限",
-                    "data": {"field": "title", "limit": TITLE_MAX, "actual": len(self.title)},
+                    "msg": "delegate_task agent_name 超出预算上限",
+                    "data": {
+                        "field": "agent_name",
+                        "limit": AGENT_NAME_MAX,
+                        "actual": len(self.agent_name),
+                    },
                 },
             )
             raise ValueError(
-                "delegate_task.title_over_budget: 任务标题不得超过 "
-                f"{TITLE_MAX} 个字符（当前 {len(self.title)} 字符）。"
+                "delegate_task.agent_name_over_budget: 任务标题不得超过 "
+                f"{AGENT_NAME_MAX} 个字符（当前 {len(self.agent_name)} 字符）。"
             )
 
-        # prompt
-        if not self.prompt or not self.prompt.strip():
+        # message
+        if not self.message or not self.message.strip():
             log.warning(
                 "delegate_task_args_over_budget",
                 extra={
-                    "msg": "delegate_task prompt 为空或纯空白",
-                    "data": {"field": "prompt"},
+                    "msg": "delegate_task message 为空或纯空白",
+                    "data": {"field": "message"},
                 },
             )
             raise ValueError(
-                "delegate_task.prompt_required: 任务 prompt 不能为空或纯空白，"
+                "delegate_task.message_required: 任务 message 不能为空或纯空白，"
                 "必须提供委派任务内容。"
             )
-        if len(self.prompt) > PROMPT_MAX:
+        if len(self.message) > MESSAGE_MAX:
             log.warning(
                 "delegate_task_args_over_budget",
                 extra={
-                    "msg": "delegate_task prompt 超出预算上限",
-                    "data": {"field": "prompt", "limit": PROMPT_MAX, "actual": len(self.prompt)},
+                    "msg": "delegate_task message 超出预算上限",
+                    "data": {
+                        "field": "message",
+                        "limit": MESSAGE_MAX,
+                        "actual": len(self.message),
+                    },
                 },
             )
             raise ValueError(
-                "delegate_task.prompt_over_budget: 任务 prompt 不得超过 "
-                f"{PROMPT_MAX} 个字符（当前 {len(self.prompt)} 字符）。"
+                "delegate_task.message_over_budget: 任务 message 不得超过 "
+                f"{MESSAGE_MAX} 个字符（当前 {len(self.message)} 字符）。"
             )
 
         return self

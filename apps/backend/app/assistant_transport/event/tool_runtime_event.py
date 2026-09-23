@@ -14,18 +14,6 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.config.logging.logger import log
 
 
-class DelegationRefData(BaseModel):
-    """Runtime locators for the child task and run created by a delegation call."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    kind: Literal["delegation_ref"]
-    child_task_id: int = Field(ge=1)
-    child_run_id: int = Field(ge=1)
-    title: str = Field(min_length=1, pattern=r".*\S.*")
-    role: str = Field(min_length=1, pattern=r".*\S.*")
-
-
 class TerminalOutputDeltaData(BaseModel):
     """One decoded terminal-output chunk for the running tool call."""
 
@@ -35,10 +23,7 @@ class TerminalOutputDeltaData(BaseModel):
     text: str = Field(min_length=1, max_length=4096)
 
 
-ToolCallRuntimeUpdateData = Annotated[
-    DelegationRefData | TerminalOutputDeltaData,
-    Field(discriminator="kind"),
-]
+ToolCallRuntimeUpdateData = Annotated[TerminalOutputDeltaData, Field(discriminator="kind")]
 
 
 class ToolCallRuntimeUpdateEvent(ConversationEventEnvelope):
@@ -105,48 +90,7 @@ class ToolCallRuntimeUpdateEvent(ConversationEventEnvelope):
             run["messages"][message_index]["parts"][part_index],
         )
         base = ("runs", run_index, "messages", message_index, "parts", part_index)
-        if isinstance(self.data, DelegationRefData):
-            return self._plan_delegation_ref(part, base)
         return self._plan_terminal_output(part, base)
-
-    def _plan_delegation_ref(
-        self,
-        part: ConversationStateToolCallPart,
-        base: tuple[str | int, ...],
-    ) -> Sequence[ConversationStateMutation]:
-        """Project a delegation locator without changing unrelated tool state."""
-        data = self.data
-        if not isinstance(data, DelegationRefData) or part.get("toolName") != "delegate_task":
-            return []
-        old_child_task_id = part.get("child_task_id")
-        old_seq = part.get("delegation_ref_seq")
-        if isinstance(old_seq, int) and old_seq >= self.seq:
-            return []
-        if old_child_task_id is not None:
-            if old_child_task_id != data.child_task_id:
-                return []
-            old_child_run_id = part.get("child_run_id")
-            if old_child_run_id is not None and old_child_run_id != data.child_run_id:
-                return []
-            if old_child_run_id == data.child_run_id and part.get("agent_role") == data.role:
-                return []
-        return [
-            ConversationStateMutation("set", (*base, "child_task_id"), data.child_task_id),
-            ConversationStateMutation("set", (*base, "child_run_id"), data.child_run_id),
-            ConversationStateMutation("set", (*base, "agent_role"), data.role),
-            ConversationStateMutation("set", (*base, "delegation_ref_seq"), self.seq),
-            ConversationStateMutation(
-                "set",
-                (*base, "display_data"),
-                {
-                    "kind": "delegation-result",
-                    "title": data.title,
-                    "role": data.role,
-                    "child_task_id": data.child_task_id,
-                    "child_run_id": data.child_run_id,
-                },
-            ),
-        ]
 
     def _plan_terminal_output(
         self,
@@ -197,7 +141,6 @@ class ToolCallRuntimeUpdateEvent(ConversationEventEnvelope):
 
 
 __all__ = [
-    "DelegationRefData",
     "TerminalOutputDeltaData",
     "ToolCallRuntimeUpdateData",
     "ToolCallRuntimeUpdateEvent",

@@ -13,7 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from app.core.workflows.react.edges import _after_observe, _after_tools, _should_continue
-from app.core.workflows.react.state import ReactGraphState
+from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 model_node_module = importlib.import_module("app.core.workflows.react.nodes.model_node")
 

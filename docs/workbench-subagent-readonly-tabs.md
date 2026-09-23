@@ -38,7 +38,7 @@ Workbench 是一个前端展示编排层，不拥有 Agent、Run、终端或文�
 | Shell | [`WorkspaceShell`](../apps/desktop/components/workspace-shell.tsx) 负责 workspace/task 导航和当前 `TaskPage` | Workbench 应作为 Shell 的稳定兄弟区域，切换 task 时不应无故卸载 |
 | Assistant runtime | [`AssistantRuntimeSession`](../apps/desktop/components/assistant/runtime/assistant-runtime-session.tsx) 按 `taskId` 装配 `AssistantRuntimeProvider` 和 Thread | 当前 runtime 是 task 级的；不能直接假设它是全局 Workbench runtime |
 | Tool 路由 | [`tool-part.tsx`](../apps/desktop/components/assistant-ui/tools/tool-part.tsx) 已按 `display_data.kind` 和布局路由 | 新增 Workbench 打开动作应放在 delegation renderer，不按工具名扩展通用路由状态机 |
-| 委派展示 | [`delegate_task.py`](../apps/backend/app/core/tools/tool_handler/delegate_task.py) 当前声明 `expandable=False`、`expand_layout=none`、`show_result=False` | 主消息已经接近“只显示状态”的方向，但目前没有可用的 Workbench 引用和点击动作 |
+| 委派展示 | [`delegate_task.py`](../apps/backend/app/core/tools/tool_handler/child_task/child_agent_create.py) 当前声明 `expandable=False`、`expand_layout=none`、`show_result=False` | 主消息已经接近“只显示状态”的方向，但目前没有可用的 Workbench 引用和点击动作 |
 | 委派 display data | [`delegation_display.py`](../apps/backend/app/core/tools/display/delegation_display.py) 当前可投影 title、child id、status 等字段，但尚未投影 `AgentProfile.role`；目标约束收窄为只向父 tool part 可见展示 `status`、`title`、`AgentProfile.role`，并允许附带不渲染的 `child_task_id` | 不会把子 Agent 正文带进主对话；实现必须补齐 role 的明确来源及 `child_task_id` 的协议投影，前端点击后可直接按 `child_task_id` 读取子 task，而不需要额外的 parent/tool-call locator 解析 |
 | 委派生命周期 | [`DelegationService`](../apps/backend/app/service/delegation/delegation_service.py) 已有 pending/running/completed/failed/cancelled 和恢复收敛 | 可复用现有事实，不应新增一套 Workbench 状态机 |
 | Assistant 状态读取 | `/tasks/{task_id}/assistant/state` 和 attach SSE 已存在 | 可作为只读 Agent viewer 的基础，但需要确认当前前端能否以只读方式复用 |

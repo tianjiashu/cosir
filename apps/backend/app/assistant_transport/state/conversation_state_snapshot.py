@@ -36,7 +36,6 @@ _TOOL_PART_KEYS = {
     "child_task_id",
     "child_run_id",
     "agent_role",
-    "delegation_ref_seq",
     "terminal_output_seq",
 }
 _USAGE_KEYS = {
@@ -291,10 +290,6 @@ def _validate_part(part: object) -> None:
             not isinstance(part.get("agent_role"), str) or not part["agent_role"].strip()
         ):
             raise ValueError("snapshot agent_role must be a non-empty string")
-        if part.get("delegation_ref_seq") is not None and (
-            not isinstance(part.get("delegation_ref_seq"), int) or part["delegation_ref_seq"] < 0
-        ):
-            raise ValueError("snapshot delegation_ref_seq must be a non-negative integer")
         if part.get("terminal_output_seq") is not None and (
             not isinstance(part.get("terminal_output_seq"), int)
             or isinstance(part.get("terminal_output_seq"), bool)

@@ -12,7 +12,7 @@
   终态事件分发、``ToolMessage`` 写回、非法调用结算、修复提示注入、连续失败计数与错误上限
   判定（阶段二将在此接入 LLM 观察推理）。
 
-``nodes/helper/``（节点共享的辅助，不注册为图节点）：
+``nodes/node_helper/``（节点共享的辅助，不注册为图节点）：
 - ``model_chunk``：模型流式 chunk 解析（``ModelChunkProcessor``：思考抽取 + 工具调用提前抽取
   + 完成原因归一化）。
 - ``streaming_part_state_machine``：text / reasoning 增量合并与 part 收口。
@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     # 仅为静态分析（IDE / mypy）提供名称声明：``__all__`` 中的名字由下方 ``__getattr__``
     # 惰性返回，静态分析看不到 ⇒ 会报「未解析的引用」。本分支运行时不执行，惰性加载语义不变。
-    from app.core.workflows.react.nodes.helper.finalize_max_steps import _finalize_max_steps
+    from app.core.workflows.react.node_helper import _finalize_max_steps
     from app.core.workflows.react.nodes.model_node import _model_node
     from app.core.workflows.react.nodes.observation_node import _observe_node
     from app.core.workflows.react.nodes.tools_node import _tools_node
@@ -36,7 +36,7 @@ def __getattr__(name: str) -> Any:
     """按需加载节点，避免 state 类型导入触发节点包级循环。"""
 
     if name == "_finalize_max_steps":
-        from app.core.workflows.react.nodes.helper.finalize_max_steps import _finalize_max_steps
+        from app.core.workflows.react.node_helper import _finalize_max_steps
 
         return _finalize_max_steps
     if name == "_model_node":

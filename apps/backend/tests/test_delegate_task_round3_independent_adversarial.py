@@ -28,7 +28,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import configuration
 from app.core.tools.schemas.tool_definition import ToolDefinition
-from app.core.tools.tool_models.delegate_task_args import DelegateTaskArgs
+from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 from app.core.tools.tool_system import ToolSystem
 
 
@@ -228,7 +228,10 @@ def test_to_model_definition_composition_matches_projections(
         raise ValueError("s")
 
     definition = _definition(
-        name="combo", description="STATIC", description_provider=desc, schema_provider=sch,
+        name="combo",
+        description="STATIC",
+        description_provider=desc,
+        schema_provider=sch,
         args_model=_TinyArgs,
     )
     with caplog.at_level(logging.WARNING):
@@ -248,7 +251,7 @@ def test_every_real_child_id_accepted(injected_catalog: set[str]) -> None:
 
     assert injected_catalog, "前置条件：内置注册表应有候选子 Agent"
     for agent_id in injected_catalog:
-        args = DelegateTaskArgs(child_agent_id=agent_id, title="t", prompt="p")
+        args = DelegateTaskArgs(child_agent_id=agent_id, agent_name="t", message="p")
         assert args.child_agent_id == agent_id
 
 
@@ -256,7 +259,7 @@ def test_invalid_id_rejected_with_full_candidate_list(injected_catalog: set[str]
     """[B] 非法 id 必须被拒，且错误消息含**全部**合法候选供模型自纠。"""
 
     with pytest.raises(ValidationError) as excinfo:
-        DelegateTaskArgs(child_agent_id="definitely-not-real", title="t", prompt="p")
+        DelegateTaskArgs(child_agent_id="definitely-not-real", agent_name="t", message="p")
 
     message = str(excinfo.value)
     for agent_id in injected_catalog:
@@ -271,9 +274,11 @@ def test_invalid_id_logs_unknown_event_with_candidates(
 
     with caplog.at_level(logging.WARNING):
         with pytest.raises(ValidationError):
-            DelegateTaskArgs(child_agent_id="ghost", title="t", prompt="p")
+            DelegateTaskArgs(child_agent_id="ghost", agent_name="t", message="p")
 
-    records = [r for r in caplog.records if r.getMessage() == "delegate_task_child_agent_id_unknown"]
+    records = [
+        r for r in caplog.records if r.getMessage() == "delegate_task_child_agent_id_unknown"
+    ]
     assert records, "未写出 delegate_task_child_agent_id_unknown"
     assert records[0].data["child_agent_id"] == "ghost"
     assert set(records[0].data["candidates"]) == injected_catalog
@@ -283,7 +288,7 @@ def test_absent_registry_passes_any_id(monkeypatch) -> None:
     """[B] 候选集不可用（注册表未注入）时必须放行，交由业务层裁决（不得全量拒绝）。"""
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
-    args = DelegateTaskArgs(child_agent_id="whatever-xyz", title="t", prompt="p")
+    args = DelegateTaskArgs(child_agent_id="whatever-xyz", agent_name="t", message="p")
     assert args.child_agent_id == "whatever-xyz"
 
 
@@ -295,7 +300,7 @@ def test_broken_registry_passes_any_id(monkeypatch) -> None:
             raise RuntimeError("boom")
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", _Broken(), raising=False)
-    args = DelegateTaskArgs(child_agent_id="whoever", title="t", prompt="p")
+    args = DelegateTaskArgs(child_agent_id="whoever", agent_name="t", message="p")
     assert args.child_agent_id == "whoever"
 
 
@@ -308,24 +313,26 @@ def test_catalog_fetch_failure_logs_warning(monkeypatch, caplog: pytest.LogCaptu
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", _Broken(), raising=False)
     with caplog.at_level(logging.WARNING):
-        DelegateTaskArgs(child_agent_id="x", title="t", prompt="p")
+        DelegateTaskArgs(child_agent_id="x", agent_name="t", message="p")
 
     assert "delegate_task_child_agent_catalog_unavailable" in _events(caplog)
 
 
-def test_blank_and_whitespace_id_rejected_when_catalog_available(injected_catalog: set[str]) -> None:
+def test_blank_and_whitespace_id_rejected_when_catalog_available(
+    injected_catalog: set[str],
+) -> None:
     """[B/边界] 候选集可用时空串 / 纯空白 / 含空白的 id 均必须被拒（不可绕过）。"""
 
     for bad in ("", "   ", "\t", " code-developer", "code-developer "):
         with pytest.raises(ValidationError):
-            DelegateTaskArgs(child_agent_id=bad, title="t", prompt="p")
+            DelegateTaskArgs(child_agent_id=bad, agent_name="t", message="p")
 
 
 def test_very_long_id_rejected_when_catalog_available(injected_catalog: set[str]) -> None:
     """[B/边界] 超长 id 必须被拒（不得因长度导致比较异常或放行）。"""
 
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="a" * 1_000_000, title="t", prompt="p")
+        DelegateTaskArgs(child_agent_id="a" * 1_000_000, agent_name="t", message="p")
 
 
 def test_non_string_id_rejected_when_catalog_available(injected_catalog: set[str]) -> None:
@@ -333,7 +340,7 @@ def test_non_string_id_rejected_when_catalog_available(injected_catalog: set[str
 
     for bad in (1, None, ["code-developer"], {"a": 1}):
         with pytest.raises(ValidationError):
-            DelegateTaskArgs(child_agent_id=bad, title="t", prompt="p")  # type: ignore[arg-type]
+            DelegateTaskArgs(child_agent_id=bad, agent_name="t", message="p")  # type: ignore[arg-type]
 
 
 def test_catalog_unavailable_still_enforces_budget(monkeypatch) -> None:
@@ -341,9 +348,9 @@ def test_catalog_unavailable_still_enforces_budget(monkeypatch) -> None:
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="x", title="  ", prompt="p")
+        DelegateTaskArgs(child_agent_id="x", agent_name="  ", message="p")
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="x", title="t", prompt="x" * 3001)
+        DelegateTaskArgs(child_agent_id="x", agent_name="t", message="x" * 3001)
 
 
 def test_catalog_unavailable_allows_blank_id_degradation(monkeypatch) -> None:
@@ -354,7 +361,7 @@ def test_catalog_unavailable_allows_blank_id_degradation(monkeypatch) -> None:
     """
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
-    args = DelegateTaskArgs(child_agent_id="   ", title="t", prompt="p")
+    args = DelegateTaskArgs(child_agent_id="   ", agent_name="t", message="p")
     assert args.child_agent_id == "   "
 
 
@@ -434,7 +441,9 @@ def tool_system_after_injection(monkeypatch) -> ToolSystem:
     return tool_system
 
 
-def test_registration_timing_does_not_freeze_catalog(tool_system_after_injection: ToolSystem) -> None:
+def test_registration_timing_does_not_freeze_catalog(
+    tool_system_after_injection: ToolSystem,
+) -> None:
     """[D/回归] 注册早于注入也不得固化空清单——投影必须反映注入后的真实候选集。"""
 
     definition = tool_system_after_injection.registry.get_tool_definition("delegate_task")
@@ -454,7 +463,9 @@ def test_enum_matches_real_catalog_exactly(tool_system_after_injection: ToolSyst
 
     definition = tool_system_after_injection.registry.get_tool_definition("delegate_task")
     assert definition is not None
-    enum = set(definition.to_model_tool_definition()["parameters"]["properties"]["child_agent_id"]["enum"])
+    enum = set(
+        definition.to_model_tool_definition()["parameters"]["properties"]["child_agent_id"]["enum"]
+    )
     real = configuration.get_agent_registry().child_agent_ids()
     assert enum == real
     assert "main_agent" not in enum
@@ -505,7 +516,9 @@ def test_concurrent_projection_stable(tool_system_after_injection: ToolSystem) -
 def test_normalized_keeps_providers_for_delegate_task() -> None:
     """[D/回归] schema_provider 存在时 normalized() 不得固化空 parameters_schema。"""
 
-    from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
+        build_delegate_task_definition,
+    )
 
     definition = build_delegate_task_definition()
     normalized = definition.normalized()
@@ -519,7 +532,9 @@ def test_build_delegate_task_definition_rejects_agent_summary_kwarg() -> None:
 
     import inspect
 
-    from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
+        build_delegate_task_definition,
+    )
 
     assert "agent_summary" not in inspect.signature(build_delegate_task_definition).parameters
     with pytest.raises(TypeError):
@@ -529,7 +544,9 @@ def test_build_delegate_task_definition_rejects_agent_summary_kwarg() -> None:
 def test_static_description_is_catalog_free_fallback() -> None:
     """[D/修复3] 静态兜底描述不含清单、不泄露占位符，且核心预算约束仍在。"""
 
-    from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
+        build_delegate_task_definition,
+    )
 
     static_description = build_delegate_task_definition().description
     assert "Available child agents" not in static_description
@@ -552,7 +569,7 @@ def test_broken_registry_contained_in_summary_provider(monkeypatch) -> None:
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", _Broken(), raising=False)
 
-    from app.core.tools.tool_handler.delegate_task import (
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
         _runtime_child_agent_summary,
         build_delegate_task_definition,
     )
@@ -593,7 +610,7 @@ def test_gate_rejection_for_invalid_id_carries_candidate_list(
     ctx = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=Path.cwd())
     call = ToolCall(
         tool_name="delegate_task",
-        arguments={"child_agent_id": "general", "title": "t", "prompt": "p"},
+        arguments={"child_agent_id": "general", "agent_name": "t", "message": "p"},
         call_id="c1",
     )
 
@@ -623,7 +640,7 @@ def test_gate_admits_valid_id_and_rejects_every_invalid_variant(
     def evaluate(child_agent_id: str):
         call = ToolCall(
             tool_name="delegate_task",
-            arguments={"child_agent_id": child_agent_id, "title": "t", "prompt": "p"},
+            arguments={"child_agent_id": child_agent_id, "agent_name": "t", "message": "p"},
             call_id="c1",
         )
         return gate.evaluate(call, ctx)
@@ -631,5 +648,13 @@ def test_gate_admits_valid_id_and_rejects_every_invalid_variant(
     for agent_id in configuration.get_agent_registry().child_agent_ids():
         assert evaluate(agent_id).admitted is True, f"合法 id 被误拒: {agent_id}"
 
-    for bad in ("general", "explorer", "main_agent", "", "   ", "CODE-DEVELOPER", "code-developer "):
+    for bad in (
+        "general",
+        "explorer",
+        "main_agent",
+        "",
+        "   ",
+        "CODE-DEVELOPER",
+        "code-developer ",
+    ):
         assert evaluate(bad).admitted is False, f"非法 id 未被拒绝: {bad!r}"

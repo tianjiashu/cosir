@@ -16,7 +16,7 @@ from app.core.workflows.react.edges import (
     _after_tools,
     _should_continue,
 )
-from app.core.workflows.react.state import ReactGraphState
+from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.react.workflow import ReactLikeWorkflow
 
 __all__ = [

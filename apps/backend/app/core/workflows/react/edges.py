@@ -6,7 +6,7 @@
 
 from langgraph.graph import END
 
-from .state import ReactGraphState
+from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
 def _should_continue(state: ReactGraphState) -> str:

@@ -47,7 +47,7 @@ def _default_workflow() -> AgentWorkflow:
 class AgentProfile:
     """描述某个任务的 Agent 执行主体（能力事实源）。
     description 应该是"选择指南"，prompt_file_path 应该是"执行协议"，而本次
-    delegate_task.prompt 才是"具体工作单"
+    delegate_task.message 才是"具体工作单"
 
     字段：
         agent_id: 持久化在任务和事件上的稳定 Agent 标识。
@@ -79,16 +79,14 @@ class AgentProfile:
     model_settings: ModelSettings = field(default_factory=ModelSettings)
     max_steps: int = 1000
     run: ConversationRunRecord | None = None
-    runtime_event_loop: asyncio.AbstractEventLoop | None = None
     prompt_file_path: Path | None = None
 
     def derive_for_run(
-        self,
-        run: ConversationRunRecord,
-        *,
-        allowed_tools: list[str] | None = None,
-        runtime_event_loop: asyncio.AbstractEventLoop | None = None,
-        model_defaults: AgentProfile | None = None,
+            self,
+            run: ConversationRunRecord,
+            *,
+            ban_tools: list[str] | None = None,
+            model_settings: ModelSettings | None = None,
     ) -> AgentProfile:
         """为一次独立的 Conversation Run 执行派生 per-run 副本。
 
@@ -112,18 +110,14 @@ class AgentProfile:
         """
 
         changes: dict = {"run": run}
-        if allowed_tools is not None:
-            changes["allowed_tools"] = allowed_tools
-        if runtime_event_loop is not None:
-            changes["runtime_event_loop"] = runtime_event_loop
-        if model_defaults is not None:
-            if self.provider_id is None:
-                changes["provider_id"] = model_defaults.provider_id
-            if self.model_name is None:
-                changes["model_name"] = model_defaults.model_name
-            changes["model_settings"] = self.model_settings.with_defaults(
-                model_defaults.model_settings
-            )
+        if ban_tools is not None:
+            changes["allowed_tools"] = changes["allowed_tools"] - ban_tools
+        if self.provider_id is None:
+            changes["provider_id"] = run.provider_id
+        if self.model_name is None:
+            changes["model_name"] = run.model_name
+        if model_settings is not None:
+            changes["model_settings"] = model_settings
         return replace(self, **changes)
 
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:

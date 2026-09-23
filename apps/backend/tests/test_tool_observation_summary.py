@@ -16,16 +16,16 @@ from typing import Any
 import pytest
 from langchain_core.messages import ToolMessage
 
-import app.core.workflows.react.nodes.helper.tool_call_lifecycle as lifecycle_module
+import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolObservation
 from app.core.workflows.react.nodes import observation_node as observe_module
 from app.core.workflows.react.nodes import tools_node as tools_module
-from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
+from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
-from app.core.workflows.react.state import ReactGraphState
+from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
 def _state(**overrides: Any) -> ReactGraphState:

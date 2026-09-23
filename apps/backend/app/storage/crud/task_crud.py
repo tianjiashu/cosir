@@ -52,16 +52,15 @@ class TaskCrud:
         return TaskRecord.from_model(task)
 
     def create(
-        self,
-        workspace_id: int,
-        title: str,
-        task_type: str = "user",
-        parent_task_id: int | None = None,
-        parent_run_id: int | None = None,
-        delegation_id: int | None = None,
-        creation_command_id: str | None = None,
-        session: Session | None = None,
-        extra: dict[str, Any] | None = None,
+            self,
+            workspace_id: int,
+            title: str,
+            task_type: str = "user",
+            parent_task_id: int | None = None,
+            parent_run_id: int | None = None,
+            creation_command_id: str | None = None,
+            session: Session | None = None,
+            extra: dict[str, Any] | None = None,
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 
@@ -103,7 +102,6 @@ class TaskCrud:
                     task_type,
                     parent_task_id,
                     parent_run_id,
-                    delegation_id,
                     creation_command_id,
                     extra,
                 )
@@ -114,22 +112,20 @@ class TaskCrud:
             task_type,
             parent_task_id,
             parent_run_id,
-            delegation_id,
             creation_command_id,
             extra,
         )
 
     def _build_and_flush(
-        self,
-        session: Session,
-        workspace_id: int,
-        title: str,
-        task_type: str,
-        parent_task_id: int | None,
-        parent_run_id: int | None,
-        delegation_id: int | None,
-        creation_command_id: str | None,
-        extra: dict[str, Any] | None,
+            self,
+            session: Session,
+            workspace_id: int,
+            title: str,
+            task_type: str,
+            parent_task_id: int | None,
+            parent_run_id: int | None,
+            creation_command_id: str | None,
+            extra: dict[str, Any] | None,
     ) -> TaskRecord:
         """在给定会话中构造并 flush 一条 task 记录。
 
@@ -217,7 +213,7 @@ class TaskCrud:
         return candidate
 
     def list_by_parent_task(
-        self, parent_task_id: int, session: Session | None = None
+            self, parent_task_id: int, session: Session | None = None
     ) -> list[TaskRecord]:
         """展开某父任务下的全部子任务树（当前仅一层，对应 1 父 task ↔ N 子 task）。
 
@@ -270,7 +266,7 @@ class TaskCrud:
         return TaskRecord.from_model(row)
 
     def set_current_run_id(
-        self, task_id: int, run_id: int, session: Session | None = None
+            self, task_id: int, run_id: int, session: Session | None = None
     ) -> TaskRecord:
         """在 task 事实中记录当前 Run；可复用调用方事务。"""
 
@@ -284,7 +280,7 @@ class TaskCrud:
             if not result.rowcount:
                 raise KeyError(task_id)
             session.flush()
-            row = session.get(TaskModel, task_id)
+            row: TaskModel | None = session.get(TaskModel, task_id)
             assert row is not None
             return TaskRecord.from_model(row)
         with self._session_factory.begin() as owned_session:
@@ -294,7 +290,7 @@ class TaskCrud:
         return self.get(task_id)
 
     def update_context_usage(
-        self, task_id: int, used: int, context_window_total: int | None = None
+            self, task_id: int, used: int, context_window_total: int | None = None
     ) -> TaskRecord:
         """更新 task 最近一次上下文窗口已用 token 并刷新更新时间。
 
@@ -358,7 +354,7 @@ class TaskCrud:
             return list(owned_session.scalars(stmt).all())
 
     def list_root_ids_by_workspace(
-        self, workspace_id: int, session: Session | None = None
+            self, workspace_id: int, session: Session | None = None
     ) -> list[int]:
         """返回某工作区下「主任务」（``parent_task_id`` 为 NULL）的整数 id 列表。
 
@@ -451,7 +447,7 @@ class TaskCrud:
             )
 
     def clear_parent_run_id_by_run_id(
-        self, run_id: int, session: Session | None = None
+            self, run_id: int, session: Session | None = None
     ) -> None:
         """把所有指向指定 run 的 ``tasks.parent_run_id`` 置空。
 

@@ -9,11 +9,11 @@ from typing import Any
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.workflows.react.nodes.helper.common import (
+from app.core.workflows.react.node_helper.common import (
     _runtime_config,
     terminal_state,
 )
-from app.core.workflows.react.state import ReactGraphState
+from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 # 步数耗尽时写给父 Agent / 用户的默认可见文本（英文，与面向模型的文本约定一致）。
 # 正常完成路径的 final_text 是模型最终回答；步数耗尽没有最终回答，故给一个明确

@@ -35,7 +35,7 @@ def _system_prompt_path(filename: str) -> Path:
 # - 只写「何时该选它 / 何时不该选它（含该改选谁）/ 硬边界」，每条 ≤ 260 字符；
 # - **不写**：agent_id（清单已渲染）、工具清单（由 allowed_tools 表达）、输出格式与报告字段、
 #   以及「必须遵守 workspace 指令」这类对所有子 Agent 都成立的通用纪律——它们分别属于
-#   prompt_file_path 里的执行协议与 delegate_task.prompt 里的具体工作单。
+#   prompt_file_path 里的执行协议与 delegate_task.message 里的具体工作单。
 
 
 # 主 Agent

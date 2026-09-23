@@ -15,7 +15,7 @@ import pytest
 
 from app.config import configuration
 from app.core.tools.schemas.tool_definition import ToolDefinition
-from app.core.tools.tool_models.delegate_task_args import DelegateTaskArgs
+from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 from app.core.tools.tool_system import ToolSystem
 
 

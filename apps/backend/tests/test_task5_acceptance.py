@@ -156,7 +156,7 @@ def _create_run(store, *, status: str = "running", current: bool = False):
 def _append(store, run_id: int, message: object, *, metadata: object = None) -> None:
     """按 Task 内下一个可用序号追加一条 context 事实。
 
-    序号游标属于调用方（运行期由 ``RuntimeContextManager`` 持有）：本 helper 用
+    序号游标属于调用方（运行期由 ``RuntimeContextManager`` 持有）：本 node_helper 用
     ``max_sequence + 1`` 复现同一口径，避免测试直接依赖 ``(task_id, sequence)`` 唯一键的细节。
     """
 

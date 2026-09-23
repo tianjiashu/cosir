@@ -19,20 +19,16 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_run_command_service import (
         ConversationRunCommandService,
     )
-    from app.assistant_transport.service.conversation_run_executor import (
-        ConversationRunExecutor,
-    )
     from app.assistant_transport.service.conversation_task_state_service import (
         ConversationTaskStateService,
     )
     from app.assistant_transport.service.transport_assistant_service import (
         TransportAssistantService,
     )
-    from app.core.runtime.runner import AgentRuntime
-    from app.service.child_agent.async_child_agent_wait_coordinator import (
-        AsyncChildAgentWaitCoordinator,
+    from app.core.runtime.conversation_run_executor import (
+        ConversationRunExecutor,
     )
-    from app.service.child_agent.child_agent_session_service import ChildAgentSessionService
+    from app.core.runtime.runner import AgentRuntime
     from app.service.provider import ModelEntryService, ProviderService
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_state_service import ConversationRunStateService
@@ -389,38 +385,6 @@ def get_conversation_run_state_service() -> ConversationRunStateService:
     return ConversationRunStateService()
 
 
-@lru_cache(maxsize=1)
-def get_async_child_agent_wait_coordinator() -> AsyncChildAgentWaitCoordinator:
-    """Return the process-local async Child Agent wait coordinator."""
-
-    from app.service.child_agent.async_child_agent_wait_coordinator import (
-        AsyncChildAgentWaitCoordinator,
-    )
-
-    return AsyncChildAgentWaitCoordinator()
-
-
-@lru_cache(maxsize=1)
-def get_child_agent_session_service() -> ChildAgentSessionService:
-    """Return the process-local Child Agent session coordinator."""
-
-    from app.service.child_agent.child_agent_run_finalization import (
-        ChildAgentRunFinalizationObserver,
-    )
-    from app.service.child_agent.child_agent_session_service import ChildAgentSessionService
-
-    service = ChildAgentSessionService(
-        task_service=get_task_service(),
-        conversation_run_service=get_conversation_run_service(),
-        conversation_run_state_service=get_conversation_run_state_service(),
-        wait_coordinator=get_async_child_agent_wait_coordinator(),
-        terminal_session_service=get_terminal_session_service(),
-    )
-    get_conversation_run_state_service().set_finalization_observer(
-        ChildAgentRunFinalizationObserver(service)
-    )
-    return service
-
 
 @lru_cache(maxsize=1)
 def get_conversation_event_projector() -> ConversationEventProjector:
@@ -445,10 +409,9 @@ def get_conversation_run_executor() -> ConversationRunExecutor:
     异常:
         RuntimeError: 若存储初始化失败。
     """
-    from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
+    from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 
     executor = ConversationRunExecutor()
-    get_child_agent_session_service().set_conversation_run_executor(executor)
     return executor
 
 
@@ -555,8 +518,6 @@ def reset_service_dependencies() -> None:
     get_conversation_run_state_service.cache_clear()
     get_transport_assistant_service.cache_clear()
     get_conversation_run_executor.cache_clear()
-    get_async_child_agent_wait_coordinator.cache_clear()
-    get_child_agent_session_service.cache_clear()
     get_conversation_event_projector.cache_clear()
     get_conversation_task_state_service.cache_clear()
     get_conversation_task_context_service.cache_clear()
@@ -569,9 +530,9 @@ def _shutdown_cached_runtime_before_reset() -> None:
 
     ``reset_service_dependencies`` is synchronous and is used by tests and storage-path
     reconfiguration.  It therefore uses ``ConversationRunExecutor.close_sync`` as its explicit
-    deterministic contract: canonical child sessions and terminal workers are fenced, task
-    cancellation is posted to owner loops, and process-local indexes are cleared before caches
-    are discarded.  The normal application lifespan uses the awaitable close path instead.
+    deterministic contract: terminal workers are fenced, task cancellation is posted to owner
+    loops, and process-local indexes are cleared before caches are discarded.  The normal
+    application lifespan uses the awaitable close path instead.
     """
 
     executor = None
@@ -584,28 +545,6 @@ def _shutdown_cached_runtime_before_reset() -> None:
                 "service_dependency_runtime_reset_failed",
                 extra={
                     "msg": "service dependency reset 的同步 runtime cleanup 失败",
-                    "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
-                },
-            )
-    elif get_child_agent_session_service.cache_info().currsize:
-        try:
-            get_child_agent_session_service().shutdown()
-        except BaseException as exc:
-            log.error(
-                "service_dependency_child_session_reset_failed",
-                extra={
-                    "msg": "service dependency reset 的 child session cleanup 失败",
-                    "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
-                },
-            )
-    elif get_async_child_agent_wait_coordinator.cache_info().currsize:
-        try:
-            get_async_child_agent_wait_coordinator().shutdown()
-        except BaseException as exc:
-            log.error(
-                "service_dependency_wait_coordinator_reset_failed",
-                extra={
-                    "msg": "service dependency reset 的 wait coordinator cleanup 失败",
                     "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
                 },
             )

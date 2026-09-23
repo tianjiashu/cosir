@@ -1694,10 +1694,6 @@
             "type": "string",
             "title": "Agent Role"
           },
-          "delegation_ref_seq": {
-            "type": "integer",
-            "title": "Delegation Ref Seq"
-          },
           "terminal_output_seq": {
             "type": "integer",
             "title": "Terminal Output Seq"

@@ -15,7 +15,7 @@ from app.assistant_transport.request import (
     AssistantAttachRequest,
     AssistantTransportRequest,
 )
-from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
+from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
@@ -39,10 +39,10 @@ from app.task_runtime.service.task_service import TaskService
 
 @app.post("/assistant")
 async def assistant_transport(
-    request: AssistantTransportRequest,
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
-    runtime: AgentRuntime = Depends(get_runtime),
-    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
+        request: AssistantTransportRequest,
+        run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+        runtime: AgentRuntime = Depends(get_runtime),
+        transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> StreamingResponse:
     """接收用户消息并返回 Assistant Transport 状态流。
 
@@ -77,7 +77,6 @@ async def assistant_transport(
         mode=mode,
     )
 
-
     try:
         async with transport_service.task_run_operation(task_id=task_id):
             # 准备 run 启动结果
@@ -101,13 +100,7 @@ async def assistant_transport(
                 )
 
             try:
-                await run_executor.start(
-                    run.id,
-                    lambda execution_run: runtime.execute_run(
-                        execution_run,
-                        execution_mode=start_result.execution_mode,
-                    ),
-                )
+                await run_executor.start(run.id, start_result.execution_mode)
             except Exception as exc:
                 # 真失败：run 已被本次请求置为 active，但执行器没有起来，必须收敛，否则该 task
                 # 会残留一个无执行器的 active run（new 与 resume 都会被状态校验拒绝）。
@@ -196,10 +189,10 @@ async def assistant_transport(
 
 @app.post("/tasks/{task_id}/assistant/attach")
 async def assistant_transport_attach(
-    task_id: int,
-    request: AssistantAttachRequest,
-    task_service: TaskService = Depends(get_task_service),
-    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
+        task_id: int,
+        request: AssistantAttachRequest,
+        task_service: TaskService = Depends(get_task_service),
+        transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> StreamingResponse:
     """重新订阅已有 Run，不触发业务 resume。"""
 
@@ -240,11 +233,11 @@ async def assistant_transport_attach(
 
 @app.get("/tasks/{task_id}/assistant/state")
 async def assistant_transport_state(
-    task_id: int,
-    task_service: TaskService = Depends(get_task_service),
-    state_service: ConversationTaskStateService = Depends(
-        get_conversation_task_state_service
-    ),
+        task_id: int,
+        task_service: TaskService = Depends(get_task_service),
+        state_service: ConversationTaskStateService = Depends(
+            get_conversation_task_state_service
+        ),
 ) -> ConversationStateSnapshot:
     """返回某任务的首屏历史 state（服务端权威对话视图）。
 
@@ -296,8 +289,8 @@ async def assistant_transport_state(
 
 @app.post("/runs/{run_id}/cancel")
 async def cancel_run(
-    run_id: int,
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+        run_id: int,
+        run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
 ) -> Response:
     """显式取消一个 Conversation Run。
 
@@ -360,9 +353,9 @@ async def cancel_run(
 
 @app.post("/runs/{run_id}/tool-calls/{tool_call_id}/cancel")
 async def cancel_tool_call(
-    run_id: int,
-    tool_call_id: str,
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+        run_id: int,
+        tool_call_id: str,
+        run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
 ) -> Response:
     """显式取消一个正在执行的工具调用（工具级取消）。
 

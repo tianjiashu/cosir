@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy.orm import sessionmaker
 
 from app.assistant_transport.event import RunInitializedEvent
-from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
+from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )

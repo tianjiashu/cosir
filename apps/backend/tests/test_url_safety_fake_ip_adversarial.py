@@ -9,7 +9,7 @@
 拦截。放行写 web_url_fake_ip_allowed(WARNING)，拦截写 web_url_address_blocked(WARNING)。
 
 本文件只新增测试，不修改任何业务代码。复用 test_web_search_extract_tools.py 的
-FakeProvider / _registry_with / _public_resolver / _log_full_text 等 helper。
+FakeProvider / _registry_with / _public_resolver / _log_full_text 等 node_helper。
 """
 
 import ipaddress

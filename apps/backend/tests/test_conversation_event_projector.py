@@ -13,7 +13,6 @@ from app.assistant_transport.event import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
     ContextUsageUpdatedEvent,
-    DelegationRefData,
     RunInitializedEvent,
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
@@ -124,7 +123,7 @@ def test_run_initialized_and_user_input(
     assert current["messages"][1]["parts"] == []
 
 
-def test_delegation_ref_projects_locator_title_and_role_only_to_target_tool(
+def test_delegation_status_event_projects_display_data_to_target_tool(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
     event_projector, snapshots = projector
@@ -137,17 +136,19 @@ def test_delegation_ref_projects_locator_title_and_role_only_to_target_tool(
             tool_name="delegate_task",
         )
     )
-    event = ToolCallRuntimeUpdateEvent(
+    event = ToolCallStatusChangedEvent(
         task_id=1,
         run_id=1,
         tool_call_id="delegate-1",
-        seq=0,
-        data={
-            "kind": "delegation_ref",
+        status="completed",
+        display_data={
+            "kind": "delegation-result",
+            "child_agent_id": "delegate_reviewer",
             "child_task_id": 22,
             "child_run_id": 220,
             "title": "审查前端",
             "role": "Reviewer",
+            "status": "running",
         },
     )
 
@@ -155,65 +156,15 @@ def test_delegation_ref_projects_locator_title_and_role_only_to_target_tool(
     part = _run(snapshots.states[1], 1)["messages"][1]["parts"][0]
 
     assert change is not None
-    assert part["child_task_id"] == 22
-    assert part["child_run_id"] == 220
-    assert part["agent_role"] == "Reviewer"
     assert part["display_data"] == {
         "kind": "delegation-result",
-        "title": "审查前端",
-        "role": "Reviewer",
+        "child_agent_id": "delegate_reviewer",
         "child_task_id": 22,
         "child_run_id": 220,
+        "title": "审查前端",
+        "role": "Reviewer",
+        "status": "running",
     }
-
-
-def test_delegation_ref_rejects_wrong_target_and_old_sequence(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event_projector.process(
-        ToolCallCreatedEvent(
-            task_id=1,
-            run_id=1,
-            tool_call_id="delegate-1",
-            tool_name="delegate_task",
-        )
-    )
-    current = ToolCallRuntimeUpdateEvent(
-        task_id=1,
-        run_id=1,
-        tool_call_id="delegate-1",
-        seq=2,
-        data={
-            "kind": "delegation_ref",
-            "child_task_id": 22,
-            "child_run_id": 220,
-            "title": "新标题",
-            "role": "New Role",
-        },
-    )
-    old = ToolCallRuntimeUpdateEvent(
-        task_id=1,
-        run_id=1,
-        tool_call_id="delegate-1",
-        seq=1,
-        data={
-            "kind": "delegation_ref",
-            "child_task_id": 23,
-            "child_run_id": 230,
-            "title": "旧标题",
-            "role": "Old Role",
-        },
-    )
-    event_projector.process(current)
-    change = event_projector.process(old)
-    part = _run(snapshots.states[1], 1)["messages"][1]["parts"][0]
-
-    assert change is not None
-    assert change.mutations == ()
-    assert part["child_task_id"] == 22
-    assert part["display_data"]["title"] == "新标题"
 
 
 def test_user_input_projects_ordered_text_image_and_file_parts(
@@ -309,7 +260,7 @@ def test_build_user_input_parts_deduplicates_repeated_attachment_markers() -> No
 
 
 def test_build_user_input_parts_rejects_unsafe_file_attachment_id() -> None:
-    """helper 直接被调用时也不能把不安全 id 投影为 file locator。"""
+    """node_helper 直接被调用时也不能把不安全 id 投影为 file locator。"""
 
     with pytest.raises(ValueError, match="malformed"):
         build_user_input_parts(
@@ -926,26 +877,6 @@ def test_idempotent_tool_events_reapply_without_changing_snapshot(
         snapshots,
         lambda: ToolCallStatusChangedEvent(
             task_id=1, run_id=1, tool_call_id="t1", status="running", args={"path": "a.txt"}
-        ),
-    )
-    event_projector.process(
-        ToolCallCreatedEvent(task_id=1, run_id=1, tool_call_id="d1", tool_name="delegate_task")
-    )
-    _assert_reapply_changes_nothing(
-        event_projector,
-        snapshots,
-        lambda: ToolCallRuntimeUpdateEvent(
-            task_id=1,
-            run_id=1,
-            tool_call_id="d1",
-            seq=1,
-            data=DelegationRefData(
-                kind="delegation_ref",
-                child_task_id=2,
-                child_run_id=3,
-                title="子任务",
-                role="分析",
-            ),
         ),
     )
     _assert_reapply_changes_nothing(

@@ -18,13 +18,13 @@ from typing import Any
 
 import pytest
 
-import app.assistant_transport.service.conversation_run_executor as executor_module
+import app.core.runtime.conversation_run_executor as executor_module
 from app.assistant_transport.event import RunInitializedEvent
 from app.assistant_transport.service import conversation_run_command_service as command_module
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandService,
 )
-from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
+from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.config.logging.logger import log
 
 _RUN_ID = 1

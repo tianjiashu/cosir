@@ -1,7 +1,7 @@
 """Pydantic schemas for tool arguments."""
 
 from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
-from app.core.tools.tool_models.delegate_task_args import DelegateTaskArgs
+from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 from app.core.tools.tool_models.delete_file_args import DeleteFileArgs
 from app.core.tools.tool_models.execute_terminal_args import (
     ExecuteTerminalShell,

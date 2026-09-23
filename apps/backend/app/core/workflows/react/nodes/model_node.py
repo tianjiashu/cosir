@@ -26,18 +26,18 @@ from langgraph.types import interrupt
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolCall
-from app.core.workflows.react.nodes.helper.common import (
+from app.core.workflows.react.node_helper import (
     _runtime_config,
     _runtime_context,
     terminal_state,
 )
-from app.core.workflows.react.nodes.helper.finalize_max_steps import _finalize_max_steps
-from app.core.workflows.react.nodes.helper.model_chunk import ModelChunkProcessor
-from app.core.workflows.react.nodes.helper.streaming_part_state_machine import (
+from app.core.workflows.react.node_helper import _finalize_max_steps
+from app.core.workflows.react.node_helper import ModelChunkProcessor
+from app.core.workflows.react.node_helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
-from app.core.workflows.react.nodes.helper.tool_call_lifecycle import ToolCallLifecycleManager
-from app.core.workflows.react.state import ReactGraphState
+from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
+from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.vision_input import resolve_messages_for_model
 from app.utils.message_content import content_to_text
 
@@ -138,7 +138,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     chunk_processor = ModelChunkProcessor(thinking_channel)
     stream_writer = get_stream_writer()
 
-    task_id = operations.get_current_run().task_id
+    task_id = operations.get_current_task().id
     run_id = operations.get_current_run().id
 
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -208,8 +208,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     # lifecycle 只覆盖本次 model request；model -> tools -> observe 之间会沿 state 传递，
     # 下一次进入 model 时从空快照开始，避免混入上一轮已结束的 tool call。
     state.tool_call_lifecycle = ToolCallLifecycleManager()
-    lifecycle = state.tool_call_lifecycle
-    ai_message: AIMessage | None = None
+    tool_call_lifecycle = state.tool_call_lifecycle
 
     async for chunk in model.astream(messages):
         chunks.append(chunk)
@@ -225,11 +224,11 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "usage": rc.usage_stats.to_dict()},
                 },
             )
-            ai_message = _runtime_context().flush_message_chunk(
+            _runtime_context().flush_message_chunk(
                 stream_id=step_id, run_id=run_id, mode="cancel"
             )
             parts.finish()
-            lifecycle = lifecycle.cancel(task_id=task_id, run_id=run_id, step_id=step_id)
+            tool_call_lifecycle = tool_call_lifecycle.cancel(task_id=task_id, run_id=run_id, step_id=step_id)
             operations.cancel_run_if_running(
                 usage_stats=rc.usage_stats, final_output="user_cancelled"
             )
@@ -251,7 +250,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         if raw_tool_calls:
             # 一个 chunk 可能并行携带多个 tool call，逐条处理已有的 name/id 身份。
             parts.tool_call()
-            lifecycle = lifecycle.create(
+            tool_call_lifecycle = tool_call_lifecycle.create(
                 task_id=task_id,
                 run_id=run_id,
                 step_id=step_id,
@@ -274,7 +273,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     # 「消费模型输出、决定工具/最终回答/非法输出」三类走向。
     invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
     tool_calls = [ToolCall.from_from_langchain(call) for call in ai_message.tool_calls]
-    lifecycle = lifecycle.classify(
+    tool_call_lifecycle = tool_call_lifecycle.classify(
         task_id=task_id,
         run_id=run_id,
         step_id=step_id,
@@ -284,7 +283,7 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     # 非法调用就地收口为 failed：返回的是新的生命周期快照（copy-on-write），必须写回局部
     # ``lifecycle`` 才能随返回值进入 graph state；丢弃它会让记录停在 pending。
-    lifecycle, repair_message = lifecycle.fail_invalid_tools(
+    tool_call_lifecycle, repair_message = tool_call_lifecycle.fail_invalid_tools(
         task_id=task_id, run_id=run_id, step_id=step_id
     )
     # 3. 注入修复提示（若有可修复非法调用）：必须排在全部 ToolMessage 之后,通过system_queue延后注入.
@@ -298,14 +297,14 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {
                 "step_id": step_id,
                 "tool_count": len(tool_calls),
-                "invalid_count": lifecycle.invalid_count,
+                "invalid_count": tool_call_lifecycle.invalid_count,
                 "output_text_length": len(ai_message.content),
                 "finish_reason": finish_reason,
             },
         },
     )
 
-    if lifecycle.has_call:
+    if tool_call_lifecycle.has_call:
         # 有任意工具调用（合法或非法）都进 tools 节点：合法调用执行，非法调用由 observe 结算。
         # 不再区分 requested_tool / repair_requested —— observe 非终态即经 _after_observe
         # 回流 model。
@@ -316,7 +315,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "final_response": False,
             "terminal": False,
             "instruction": ai_message.content if isinstance(ai_message.content, str) else "",
-            "tool_call_lifecycle": lifecycle,
+            "tool_call_lifecycle": tool_call_lifecycle,
         }
 
     if finish_reason in Constant.Workflow.NORMAL_FINISH_REASONS and ai_message.content:

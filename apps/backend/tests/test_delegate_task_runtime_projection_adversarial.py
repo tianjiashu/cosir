@@ -32,7 +32,7 @@ from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.tools.schemas.tool_call import ToolCall
 from app.core.tools.schemas.tool_definition import ToolDefinition
 from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
-from app.core.tools.tool_models.delegate_task_args import DelegateTaskArgs
+from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 from app.core.tools.tool_registry import ToolRegistry
 from app.core.tools.tool_system import ToolSystem
 
@@ -135,7 +135,9 @@ def test_definition_built_without_injection_is_projection_safe() -> None:
     """[降级] 即使 register 发生在注册表注入前，投影/注册全链路都不得崩。"""
 
     # 直接构造：不依赖进程级单例
-    from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
+        build_delegate_task_definition,
+    )
 
     definition = build_delegate_task_definition()
     registry = ToolRegistry()
@@ -266,7 +268,7 @@ def test_runtime_child_agent_summary_is_contained_for_broken_registry(
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", BrokenRegistry(), raising=False)
 
-    from app.core.tools.tool_handler.delegate_task import (
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
         _runtime_child_agent_summary,
         build_delegate_task_definition,
     )
@@ -330,7 +332,9 @@ def test_replace_and_equality_semantics() -> None:
 def test_normalized_is_idempotent_and_keeps_providers() -> None:
     """[语义] normalized() 幂等：多次调用不重复固化、不丢 provider。"""
 
-    from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
+        build_delegate_task_definition,
+    )
 
     definition = build_delegate_task_definition()
     once = definition.normalized()
@@ -382,7 +386,7 @@ def test_invalid_child_agent_id_is_rejected_at_gate(
 
     outcome = _gate_outcome(
         registry_injected_after_build,
-        {"child_agent_id": "general", "title": "t", "prompt": "p"},
+        {"child_agent_id": "general", "agent_name": "t", "message": "p"},
     )
 
     assert outcome.admitted is False
@@ -396,23 +400,23 @@ def test_valid_child_agent_id_passes_gate(
 
     outcome = _gate_outcome(
         registry_injected_after_build,
-        {"child_agent_id": "code-developer", "title": "t", "prompt": "p"},
+        {"child_agent_id": "code-developer", "agent_name": "t", "message": "p"},
     )
     assert outcome.admitted is True
     assert outcome.denial is None
 
 
 def test_delegate_args_budget_validation_still_enforced() -> None:
-    """[校验] DelegateTaskArgs 的空 title / 超长 prompt 仍被拒绝。"""
+    """[校验] DelegateTaskArgs 的空 agent_name / 超长 message 仍被拒绝。"""
 
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="code-developer", title="   ", prompt="p")
+        DelegateTaskArgs(child_agent_id="code-developer", agent_name="   ", message="p")
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="code-developer", title="ok", prompt="")
+        DelegateTaskArgs(child_agent_id="code-developer", agent_name="ok", message="")
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="code-developer", title="ok", prompt="x" * 3001)
+        DelegateTaskArgs(child_agent_id="code-developer", agent_name="ok", message="x" * 3001)
 
 
 # --------------------------------------------------------------------------- #
@@ -510,7 +514,9 @@ def test_static_summary_injection_channel_is_removed(
 
     import inspect
 
-    from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
+        build_delegate_task_definition,
+    )
 
     assert "agent_summary" not in inspect.signature(build_delegate_task_definition).parameters
 
@@ -525,7 +531,7 @@ def test_static_summary_injection_channel_is_removed(
 def test_compose_description_degrades_without_catalog() -> None:
     """[对抗] 空摘要时描述必须退化为通用形态且不含 "Available child agents" 误导。"""
 
-    from app.core.tools.tool_handler.delegate_task import _compose_description
+    from app.core.tools.tool_handler.child_task.child_agent_create import _compose_description
 
     text = _compose_description("")
     assert "{ids}" not in text
@@ -622,24 +628,24 @@ def test_get_all_definitions_sorted_and_permission_queries() -> None:
 def test_delegate_task_handler_without_execution_context() -> None:
     """[异常] delegate_task handler 无 execution_context 时返回错误观察而非抛异常。"""
 
-    from app.core.tools.tool_handler.delegate_task import DelegateTaskTool
+    from app.core.tools.tool_handler.child_task.child_agent_create import DelegateTaskTool
 
     observation = DelegateTaskTool().execute(
-        child_agent_id="code-developer", title="t", prompt="p", execution_context=None
+        child_agent_id="code-developer", agent_name="t", message="p", execution_context=None
     )
     assert observation.status == "error"
 
 
-def test_delegate_task_handler_without_executor() -> None:
-    """[异常] execution_context 存在但无 delegate_task_executor 时返回错误观察。"""
+def test_delegate_task_handler_without_runtime_dependencies() -> None:
+    """[异常] 缺运行期依赖（session service / 父 profile）时返回错误观察。"""
 
     from pathlib import Path
 
     from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
-    from app.core.tools.tool_handler.delegate_task import DelegateTaskTool
+    from app.core.tools.tool_handler.child_task.child_agent_create import DelegateTaskTool
 
     ctx = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=Path.cwd())
     observation = DelegateTaskTool().execute(
-        child_agent_id="code-developer", title="t", prompt="p", execution_context=ctx
+        child_agent_id="code-developer", agent_name="t", message="p", execution_context=ctx
     )
     assert observation.status == "error"

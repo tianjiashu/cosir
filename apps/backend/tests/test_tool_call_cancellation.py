@@ -30,7 +30,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 
 from app.assistant_transport.event.tool_call_event import ToolCallStatusChangedEvent
-from app.assistant_transport.service.conversation_run_executor import ConversationRunExecutor
+from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext

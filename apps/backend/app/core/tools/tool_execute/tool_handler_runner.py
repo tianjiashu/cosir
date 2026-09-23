@@ -696,7 +696,7 @@ class ToolHandlerRunner:
         return self._normalize_result(tool, result, tool_call_id)
 
     # ------------------------------------------------------------------
-    # Public helper contracts
+    # Public node_helper contracts
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -763,7 +763,7 @@ class ToolHandlerRunner:
         """Normalize an in-process handler result for all executor entry points.
 
         Async handlers stay on the workflow event loop, so they cannot use the full
-        synchronous runner dispatch.  This narrow public helper lets ``ToolExecutor``
+        synchronous runner dispatch.  This narrow public node_helper lets ``ToolExecutor``
         reuse the runner's single result-normalization contract without duplicating it.
         """
 

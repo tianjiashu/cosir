@@ -3,8 +3,7 @@
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
-from app.core.delegation.child_agent_runner import ChildAgentRunner
-from app.core.delegation.delegation_executor import DelegationExecutor
+from app.core.agents.model_settings import ModelSettings
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.observability import (
     TraceMetadata,
@@ -25,7 +24,6 @@ from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependen
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
-    get_child_agent_session_service,
     get_task_service,
     get_terminal_session_service,
     get_workspace_service,
@@ -50,9 +48,9 @@ class AgentRuntime:
     """
 
     def __init__(
-        self,
-        *,
-        process_tool_output_channel_factory: (ProcessToolOutputChannelFactory | None) = None,
+            self,
+            *,
+            process_tool_output_channel_factory: (ProcessToolOutputChannelFactory | None) = None,
     ) -> None:
         """Initialize the execution engine with its private collaborators.
 
@@ -85,6 +83,8 @@ class AgentRuntime:
         run: ConversationRunRecord,
         *,
         execution_mode: ExecutionMode = "fresh",
+        ban_tools: list[str] | None = None,
+        model_settings: ModelSettings | None = None,
     ) -> None:
         """执行一个已被 ConversationRunExecutor 认领（pending→running）的 run。
 
@@ -110,14 +110,16 @@ class AgentRuntime:
         if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for run {run_id}")
         # 派生 per-run 副本承载本次 run：共享注册表单例不被原地写，并发 run 互不串扰。
-        agent_profile = agent_profile.derive_for_run(run)
+        agent_profile = agent_profile.derive_for_run(
+            run, ban_tools=ban_tools, model_settings=model_settings
+        )
         await self.run_agent(agent_profile, execution_mode=execution_mode)
 
     async def run_agent(
-        self,
-        agent: AgentProfile,
-        *,
-        execution_mode: ExecutionMode = "fresh",
+            self,
+            agent: AgentProfile,
+            *,
+            execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """驱动一次 agent run 执行并提交 canonical conversation facts。
 
@@ -201,9 +203,9 @@ class AgentRuntime:
             tool_call_cancellation_registry.clear_run(run_id)
 
     def _resolve_execution_context(
-        self,
-        task: TaskRecord,
-        run_id: int = 0,
+            self,
+            task: TaskRecord,
+            run_id: int = 0,
     ) -> ToolExecutionContext | None:
         """按 task 解析其所属 workspace 的执行上下文；缺失时返回 None。
 
@@ -238,12 +240,12 @@ class AgentRuntime:
         return ToolExecutionContext.from_workspace(task.id, workspace, run_id=run_id)
 
     def _build_operations(
-        self,
-        workspace: WorkspaceRecord,
-        task: TaskRecord,
-        run: ConversationRunRecord,
-        agent_profile: AgentProfile,
-        tool_trace_recorder: ToolTraceRecorder | None = None,
+            self,
+            workspace: WorkspaceRecord,
+            task: TaskRecord,
+            run: ConversationRunRecord,
+            agent_profile: AgentProfile,
+            tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> WorkflowOperations:
         """为单个 run 构建运行时操作门面，按 workspace 解析工具边界。
 
@@ -267,26 +269,12 @@ class AgentRuntime:
         execution_context = self._resolve_execution_context(task, run_id=run.id)
         runtime_dependencies = None
         if execution_context is not None:
-            delegate_task_executor = DelegationExecutor(
-                child_runner=ChildAgentRunner(
-                    self.run_agent,
-                    should_cancel=cancellation_registry.is_cancelled,
-                ),
-                parent_profile=agent_profile,
-                parent_run=run,
-                parent_task=task,
-            )
             runtime_dependencies = ToolRuntimeDependencies(
-                delegate_task_executor=delegate_task_executor,
+                parent_agent_profile=agent_profile,
+                parent_task_is_child=task.is_child,
                 terminal_session_service=get_terminal_session_service(),
                 is_run_cancelled=cancellation_registry.is_cancelled,
                 process_tool_output_channel_factory=self._process_tool_output_channel_factory,
-                child_agent_wait_coordinator=get_child_agent_session_service().wait_coordinator,
-                child_agent_wait_reader=get_child_agent_session_service().read_wait,
-                child_agent_wait_target_snapshot=(
-                    get_child_agent_session_service().snapshot_wait_targets
-                ),
-                child_agent_session_service=get_child_agent_session_service(),
             )
         return WorkflowOperations(
             tool_executor=self._tool_executor,

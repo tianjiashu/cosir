@@ -116,7 +116,6 @@ export type TransportToolCallPart = {
   child_run_id?: number;
   /** Current AgentProfile.role resolved by the backend. */
   agent_role?: string;
-  delegation_ref_seq?: number;
   terminal_output_seq?: number;
 };
 

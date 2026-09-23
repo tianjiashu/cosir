@@ -83,7 +83,6 @@ class TaskService:
         task_type: str = "user",
         parent_task_id: int | None = None,
         parent_run_id: int | None = None,
-        delegation_id: int | None = None,
         session: Session | None = None,
         extra: dict[str, object] | None = None,
     ) -> TaskRecord:
@@ -97,7 +96,6 @@ class TaskService:
                 task_type=task_type,
                 parent_task_id=parent_task_id,
                 parent_run_id=parent_run_id,
-                delegation_id=delegation_id,
                 creation_command_id=creation_command_id,
                 extra=extra,
                 session=session,
@@ -454,18 +452,6 @@ class TaskService:
                             self._task_register.get_or_create(current_id).operation(timeout=10)
                         )
                         locked_ids.add(current_id)
-                    try:
-                        service_depends.get_child_agent_session_service().close_for_task_ids(
-                            set(task_ids)
-                        )
-                    except Exception:
-                        log.exception(
-                            "child_agent_task_delete_cleanup_failed",
-                            extra={
-                                "msg": "Task 删除前 Child Agent session 收口失败，继续事务删除",
-                                "data": {"task_ids": sorted(task_ids)},
-                            },
-                        )
                     log.info(
                         "task_delete_start",
                         extra={"msg": "task delete started", "data": {"task_id": task_id}},

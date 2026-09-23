@@ -17,10 +17,10 @@ from typing import Any
 
 import pytest
 
-import app.core.workflows.react.nodes.helper.tool_call_lifecycle as lifecycle_module
+import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 from app.config.logging.configuration import configure_logging, shutdown_logging
 from app.config.logging.logger import log as backend_log
-from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
+from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
@@ -377,7 +377,7 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
 
     from app.core.context.runtime_context_manager import _as_ai_message
     from app.core.workflows.react.nodes import model_node as model_module
-    from app.core.workflows.react.state import ReactGraphState
+    from app.core.workflows.react.worflow_state.state import ReactGraphState
 
     task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
 

@@ -359,7 +359,7 @@ class ToolExecutor:
             )
 
         # 阶段二：文件状态协调的准备阶段。同步与异步入口共享同一准备、预算和
-        # early-return helper，避免两条管线的错误文案与边界逐渐漂移。
+        # early-return node_helper，避免两条管线的错误文案与边界逐渐漂移。
         plan, early_observation = self._prepare_state(
             tool,
             gate_outcome.arguments,

@@ -15,7 +15,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-import app.core.workflows.react.nodes.helper.tool_call_lifecycle as lifecycle_module
+import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 from app.assistant_transport.event import RunStatusChangedEvent
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_usage_compute_listener import (
@@ -25,7 +25,7 @@ from app.core.context.context_listener.listener_event import ContextEventType, L
 from app.core.context.context_listener.listener_result import ListenerResult
 from app.core.context.runtime_context_manager import RuntimeContextManager, _as_ai_message
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflows.react.nodes.helper.tool_call_lifecycle import (
+from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )

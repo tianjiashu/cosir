@@ -25,8 +25,8 @@ from typing import Any
 from app.config.logging.logger import log
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall
-from app.core.workflows.react.nodes.helper.common import _runtime_config
-from app.core.workflows.react.state import ReactGraphState
+from app.core.workflows.react.node_helper import _runtime_config
+from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 _TERMINAL_CHECKPOINT_FIELDS = frozenset(
     {
@@ -133,74 +133,16 @@ async def _tools_node(state: ReactGraphState) -> dict:
     rc = _runtime_config()  # 取运行时配置
     operations = rc.operations  # 领域操作
     lifecycle = state.tool_call_lifecycle
+    task = operations.get_current_task()  # 任务（工具执行需要 task_id）
+    task_id = task.id
     if lifecycle is None:
         raise RuntimeError("tool_call_lifecycle is required before tools_node execution")
     # 仅执行状态为 running 的合法调用；pending（参数非法）调用不执行，由 observe 节点统一结算。
     approved_calls = [
-        _to_tool_call(record) for record in lifecycle.calls.values() if record.status == "running"
+        _to_tool_call(record) for record in lifecycle.valid_tools
     ]
-    expected_call_ids = [call.call_id for call in approved_calls]
-    resumed_delegate_observations: list[dict[str, Any]] = []
-    runnable_calls: list[ToolCall] = []
-    for call in approved_calls:
-        locator = state.child_agents.get(call.call_id)
-        if call.tool_name != "delegate_task" or not isinstance(locator, dict):
-            runnable_calls.append(call)
-            continue
-        resumed_delegate_observations.append(
-            {
-                "tool_name": "delegate_task",
-                "status": "success",
-                "content": "Child Agent reference restored from checkpoint.",
-                "error": None,
-                "reason": None,
-                "retryable": False,
-                "permission": "delegate_task",
-                "tool_call_id": call.call_id,
-                "display_data": {
-                    "kind": "delegation-result",
-                    **{
-                        key: locator[key]
-                        for key in (
-                            "child_task_id",
-                            "child_run_id",
-                            "child_agent_id",
-                            "title",
-                            "role",
-                            "status",
-                        )
-                        if key in locator
-                    },
-                },
-                "artifact_data": {},
-            }
-        )
-    approved_calls = runnable_calls
     instruction = state.instruction
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
-
-    if not approved_calls:
-        # 本轮无 running 调用（仅参数非法 pending）：不执行、不 spawn worker，直接进入 observe
-        # 结算非法调用，避免产生空的结果集合与无谓的并发开销。放在取 task 之前，使取消/任务
-        # 等运行时查询无需为「无执行」场景付出开销。
-        log.info(
-            "tools_node_no_runnable_calls",
-            extra={
-                "msg": f"本轮无 running 工具调用，跳过执行，step_id={step_id}",
-                "data": {"step_id": step_id, "lifecycle_size": len(lifecycle.calls)},
-            },
-        )
-        return {
-            "tool_call_lifecycle": lifecycle,
-            "last_tool_results": {
-                "instruction": instruction or "",
-                "observations": resumed_delegate_observations,
-                "expected_call_ids": expected_call_ids,
-            },
-        }
-
-    task = operations.get_current_task()  # 任务（工具执行需要 task_id）
-    task_id = task.id
 
     log.info(
         "tools_node_resumed",
@@ -225,21 +167,19 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "data": {"tool_run": dataclasses.asdict(tool_run)},
         },
     )
+
+    child_agents = state.child_agents
     observations = tool_run.observations  # 每个工具调用的观察结果
-    observation_dicts = resumed_delegate_observations + [
-        dataclasses.asdict(observation) for observation in observations
-    ]
-    child_agents = dict(state.child_agents)
-    for observation in observation_dicts:
-        display_data = observation.get("display_data")
+    for observation in observations:
+        display_data = observation.display_data
         if (
-            observation.get("tool_name") == "delegate_task"
+            observation.tool_name == "delegate_task"
             and isinstance(display_data, dict)
             and display_data.get("kind") == "delegation-result"
             and isinstance(display_data.get("child_task_id"), int)
             and isinstance(display_data.get("child_run_id"), int)
         ):
-            child_agents[observation.get("tool_call_id", "")] = {
+            state.child_agents[observation.tool_call_id] = {
                 key: display_data[key]
                 for key in (
                     "child_task_id",
@@ -264,11 +204,13 @@ async def _tools_node(state: ReactGraphState) -> dict:
         },
     )
 
+    observation_dicts = [dataclasses.asdict(observation) for observation in observations]
+
     return {
         "last_tool_results": {
             "instruction": instruction or "",
             "observations": observation_dicts,
-            "expected_call_ids": expected_call_ids,
+            "expected_call_ids": [call.call_id for call in approved_calls],
         },
         "terminal_sessions": _project_terminal_sessions(
             state.terminal_sessions,

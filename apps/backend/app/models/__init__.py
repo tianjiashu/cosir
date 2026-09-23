@@ -1,7 +1,7 @@
 """业务层 model 定义。
 
 本包只承载与编排无关、与服务无关的值对象（dataclass / 枚举），一个文件一个
-model，文件名与 model 相关。不承载服务、适配或 helper 逻辑。
+model，文件名与 model 相关。不承载服务、适配或 node_helper 逻辑。
 """
 
 from app.models.conversation_command_record import ConversationCommandRecord

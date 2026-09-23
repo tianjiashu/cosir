@@ -32,7 +32,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import configuration
 from app.core.tools.schemas.tool_definition import ToolDefinition
-from app.core.tools.tool_models.delegate_task_args import DelegateTaskArgs
+from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 from app.core.tools.tool_registry import ToolRegistry
 from app.core.tools.tool_system import ToolSystem
 
@@ -322,7 +322,7 @@ def test_valid_child_agent_id_accepted_by_validator(injected_registry) -> None:
     """[修复 2] 真实候选集中的每个合法 id 都必须通过校验（防误拒合法 id）。"""
 
     for agent_id in injected_registry.child_agent_ids():
-        args = DelegateTaskArgs(child_agent_id=agent_id, title="t", prompt="p")
+        args = DelegateTaskArgs(child_agent_id=agent_id, agent_name="t", message="p")
         assert args.child_agent_id == agent_id
 
 
@@ -330,7 +330,7 @@ def test_invalid_child_agent_id_rejected_with_candidate_list(injected_registry) 
     """[修复 2] 非法 id 必须被拒，且错误消息含合法候选清单供模型自纠。"""
 
     with pytest.raises(ValidationError) as excinfo:
-        DelegateTaskArgs(child_agent_id="general", title="t", prompt="p")
+        DelegateTaskArgs(child_agent_id="general", agent_name="t", message="p")
 
     message = str(excinfo.value)
     for agent_id in injected_registry.child_agent_ids():
@@ -342,7 +342,7 @@ def test_invalid_child_agent_id_logs_unknown_event(injected_registry, caplog) ->
 
     with caplog.at_level(logging.WARNING):
         with pytest.raises(ValidationError):
-            DelegateTaskArgs(child_agent_id="nope", title="t", prompt="p")
+            DelegateTaskArgs(child_agent_id="nope", agent_name="t", message="p")
 
     assert "delegate_task_child_agent_id_unknown" in _events(caplog)
 
@@ -352,7 +352,7 @@ def test_child_agent_id_passes_when_candidates_unavailable(monkeypatch) -> None:
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
 
-    args = DelegateTaskArgs(child_agent_id="anything-goes", title="t", prompt="p")
+    args = DelegateTaskArgs(child_agent_id="anything-goes", agent_name="t", message="p")
     assert args.child_agent_id == "anything-goes"
 
 
@@ -365,7 +365,7 @@ def test_child_agent_id_passes_when_registry_raises(monkeypatch) -> None:
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", _Broken(), raising=False)
 
-    args = DelegateTaskArgs(child_agent_id="whoever", title="t", prompt="p")
+    args = DelegateTaskArgs(child_agent_id="whoever", agent_name="t", message="p")
     assert args.child_agent_id == "whoever"
 
 
@@ -379,7 +379,7 @@ def test_catalog_unavailable_logs_warning(monkeypatch, caplog) -> None:
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", _Broken(), raising=False)
 
     with caplog.at_level(logging.WARNING):
-        DelegateTaskArgs(child_agent_id="x", title="t", prompt="p")
+        DelegateTaskArgs(child_agent_id="x", agent_name="t", message="p")
 
     assert "delegate_task_child_agent_catalog_unavailable" in _events(caplog)
 
@@ -388,41 +388,41 @@ def test_blank_child_agent_id_rejected_when_catalog_available(injected_registry)
     """[边界] 候选集可用时空白串 id 必须被拒（防绕过）。"""
 
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="   ", title="t", prompt="p")
+        DelegateTaskArgs(child_agent_id="   ", agent_name="t", message="p")
 
 
 def test_very_long_child_agent_id_rejected_when_catalog_available(injected_registry) -> None:
     """[边界] 候选集可用时超长 id 必须被拒。"""
 
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="a" * 100000, title="t", prompt="p")
+        DelegateTaskArgs(child_agent_id="a" * 100000, agent_name="t", message="p")
 
 
 def test_non_string_child_agent_id_rejected(injected_registry) -> None:
     """[边界] 非字符串 child_agent_id（整数/None）应被 pydantic 类型层拒绝。"""
 
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id=123, title="t", prompt="p")  # type: ignore[arg-type]
+        DelegateTaskArgs(child_agent_id=123, agent_name="t", message="p")  # type: ignore[arg-type]
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id=None, title="t", prompt="p")  # type: ignore[arg-type]
+        DelegateTaskArgs(child_agent_id=None, agent_name="t", message="p")  # type: ignore[arg-type]
 
 
 def test_budget_validation_still_enforced(injected_registry) -> None:
-    """[回归] 预算校验未被新增校验破坏（空 title/空 prompt/超长 prompt 仍拒）。"""
+    """[回归] 预算校验未被新增校验破坏（空 agent_name/空 message/超长 message 仍拒）。"""
 
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="code-developer", title="  ", prompt="p")
+        DelegateTaskArgs(child_agent_id="code-developer", agent_name="  ", message="p")
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="code-developer", title="ok", prompt="")
+        DelegateTaskArgs(child_agent_id="code-developer", agent_name="ok", message="")
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="code-developer", title="ok", prompt="x" * 3001)
+        DelegateTaskArgs(child_agent_id="code-developer", agent_name="ok", message="x" * 3001)
 
 
 def test_budget_valid_child_agent_id_validator_order(injected_registry) -> None:
     """[边界] 预算失败与 id 失败同时存在时，仍必须抛 ValidationError（不因顺序漏检）。"""
 
     with pytest.raises(ValidationError):
-        DelegateTaskArgs(child_agent_id="bogus", title="", prompt="")
+        DelegateTaskArgs(child_agent_id="bogus", agent_name="", message="")
 
 
 # =========================================================================== #
@@ -433,7 +433,9 @@ def test_build_delegate_task_definition_has_no_agent_summary_param() -> None:
 
     import inspect
 
-    from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
+        build_delegate_task_definition,
+    )
 
     params = inspect.signature(build_delegate_task_definition).parameters
     assert "agent_summary" not in params
@@ -444,7 +446,9 @@ def test_build_delegate_task_definition_has_no_agent_summary_param() -> None:
 def test_static_description_has_no_catalog_and_live_projection_does(monkeypatch) -> None:
     """[修复 3] 静态兜底描述无清单；注入注册表后运行期投影含真实清单。"""
 
-    from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
+        build_delegate_task_definition,
+    )
 
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", None, raising=False)
     monkeypatch.setattr(configuration, "_TOOL_SYSTEM", None, raising=False)
@@ -487,7 +491,9 @@ def test_enum_matches_real_ids_exactly(tool_system_injected_after_build: ToolSys
 
     definition = tool_system_injected_after_build.registry.get_tool_definition("delegate_task")
     assert definition is not None
-    enum = set(definition.to_model_tool_definition()["parameters"]["properties"]["child_agent_id"]["enum"])
+    enum = set(
+        definition.to_model_tool_definition()["parameters"]["properties"]["child_agent_id"]["enum"]
+    )
     real = configuration.get_agent_registry().child_agent_ids()
     assert enum == real
     assert "main_agent" not in enum
@@ -542,7 +548,15 @@ def test_description_provider_hot_path_never_raises_for_arbitrary_exception(
 ) -> None:
     """[对抗] description_provider 抛任意 Exception 子类时投影绝不穿透（热路径失败安全）。"""
 
-    for exc_type in (ValueError, TypeError, KeyError, AttributeError, RuntimeError, ZeroDivisionError):
+    for exc_type in (
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        RuntimeError,
+        ZeroDivisionError,
+    ):
+
         def boom(exc_type=exc_type) -> str:
             raise exc_type("boom")
 
@@ -554,7 +568,9 @@ def test_description_provider_hot_path_never_raises_for_arbitrary_exception(
 def test_normalized_keeps_providers_and_does_not_freeze_schema() -> None:
     """[回归] 声明 schema_provider 时 normalized() 不得固化空 schema。"""
 
-    from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
+    from app.core.tools.tool_handler.child_task.child_agent_create import (
+        build_delegate_task_definition,
+    )
 
     definition = build_delegate_task_definition()
     normalized = definition.normalized()
@@ -579,20 +595,20 @@ def test_registry_get_schema_uses_live_projection(
 
 
 def test_title_over_budget_rejected_with_log(injected_registry, caplog) -> None:
-    """[回归] title 超长必须被拒并写 delegate_task_args_over_budget 事件（预算分支）。"""
+    """[回归] agent_name 超长必须被拒并写 delegate_task_args_over_budget 事件（预算分支）。"""
 
     with caplog.at_level(logging.WARNING):
         with pytest.raises(ValidationError):
-            DelegateTaskArgs(child_agent_id="code-developer", title="x" * 11, prompt="p")
+            DelegateTaskArgs(child_agent_id="code-developer", agent_name="x" * 11, message="p")
 
     assert "delegate_task_args_over_budget" in _events(caplog)
 
 
-class _NeverCalledExecutor:
-    """绝不执行的委派执行器替身：用于验证取消分支在 executor 之前短路。"""
+class _NeverCalledSessionService:
+    """绝不执行的 Child Agent session service 替身：验证取消分支在启动之前短路。"""
 
-    def execute(self, *_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("executor must not be called when run is cancelled")
+    def start_child(self, **_kwargs: Any) -> Any:
+        raise AssertionError("start_child must not be called when run is cancelled")
 
 
 def test_handler_returns_cancelled_when_run_cancelled(monkeypatch) -> None:
@@ -600,25 +616,32 @@ def test_handler_returns_cancelled_when_run_cancelled(monkeypatch) -> None:
 
     from pathlib import Path
 
+    from app.core.agents.agent_profile import AgentProfile, AgentProfileType
     from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
     from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
     from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
-    from app.core.tools.tool_handler.delegate_task import DelegateTaskTool
+    from app.core.tools.tool_handler.child_task.child_agent_create import DelegateTaskTool
 
     monkeypatch.setattr(cancellation_registry, "is_cancelled", lambda run_id: True)
 
-    # 取消检查在 executor 存在性检查之后，故必须提供一个非 None 的执行器替身。
+    # 取消检查在运行期依赖存在性检查之后，故必须提供非 None 的 session service 与父 profile。
     ctx = ToolExecutionContext(
         task_id=1,
         workspace_id=1,
         workspace_root=Path.cwd(),
         runtime_dependencies=ToolRuntimeDependencies(
-            delegate_task_executor=_NeverCalledExecutor(),  # type: ignore[arg-type]
+            parent_agent_profile=AgentProfile(
+                agent_id="main_agent",
+                role="main",
+                allowed_tools=["delegate_task"],
+                agent_type=AgentProfileType.MAIN,
+            ),
+            child_agent_session_service=_NeverCalledSessionService(),  # type: ignore[arg-type]
         ),
     )
 
     observation = DelegateTaskTool().execute(
-        child_agent_id="code-developer", title="t", prompt="p", execution_context=ctx
+        child_agent_id="code-developer", agent_name="t", message="p", execution_context=ctx
     )
     assert observation.status == "cancelled"
 
@@ -626,7 +649,7 @@ def test_handler_returns_cancelled_when_run_cancelled(monkeypatch) -> None:
 def test_registry_duplicate_register_does_not_bump_generation() -> None:
     """[回归] 同名重复注册忽略且不递增 generation（既有契约）。"""
 
-    from app.core.tools.tool_models.delegate_task_args import DelegateTaskArgs as _Args
+    from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs as _Args
 
     registry = ToolRegistry()
     definition = ToolDefinition(

@@ -16,7 +16,7 @@ Run 记录读取与「task 是否已有 active run」查询。
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from sqlalchemy.orm import Session
 
@@ -35,9 +35,6 @@ from app.models.conversation_run_failure import (
 from app.models.conversation_run_usage import ConversationRunUsage
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
-
-if TYPE_CHECKING:
-    from app.service.child_agent.child_agent_run_finalization import RunFinalizationObserver
 
 
 def usage_payload(
@@ -100,8 +97,8 @@ def terminal_error(
 class ConversationRunStateService:
     """Run 状态迁移与查询的唯一入口。"""
 
-    def __init__(self, finalization_observer: RunFinalizationObserver | None = None) -> None:
-        """初始化状态 service：装配 run CRUD、会话工厂与事件投影依赖。
+    def __init__(self) -> None:
+        """初始化状态 service：装配 run CRUD 与会话工厂。
 
         参数:
             无。
@@ -118,31 +115,6 @@ class ConversationRunStateService:
 
         self._run = service_depends.get_conversation_run_crud()
         self._session_factory = main_session_factory()
-        self._finalization_observer = finalization_observer
-
-    def set_finalization_observer(self, observer: RunFinalizationObserver) -> None:
-        """Install the explicit post-commit live Run finalization observer."""
-
-        self._finalization_observer = observer
-
-    def _notify_finalization(self, record: ConversationRunRecord) -> None:
-        """Notify the live observer without rolling back an already committed Run."""
-
-        observer = self._finalization_observer
-        if observer is None:
-            return
-        try:
-            observer.on_run_finalized(record)
-        except Exception:
-            from app.config.logging.logger import log
-
-            log.exception(
-                "conversation_run_finalization_observer_failed",
-                extra={
-                    "msg": "Run 终态已提交，Child Agent finalization observer 失败并降级",
-                    "data": {"run_id": record.id, "task_id": record.task_id},
-                },
-            )
 
     def has_active_run(self, task_id: int, session: Session | None = None) -> bool:
         """检查该 task 是否已存在 ``pending`` / ``running`` 的 run。
@@ -332,7 +304,6 @@ class ConversationRunStateService:
                 usage_stats=usage_stats,
             ),
         )
-        self._notify_finalization(record)
         return record
 
     def fail_run_if_running(
@@ -371,7 +342,7 @@ class ConversationRunStateService:
         record = self._run.update_status_if_in(
             run_id,
             ConversationRunStatus.FAILED.value,
-            (ConversationRunStatus.RUNNING.value,),
+            (ConversationRunStatus.RUNNING.value,ConversationRunStatus.PENDING.value),
             end_reason,
             final_output=final_output,
             usage=usage_payload(usage_stats),
@@ -389,7 +360,6 @@ class ConversationRunStateService:
                 error=error,
             ),
         )
-        self._notify_finalization(record)
         return record
 
     def cancel_run_if_running(
@@ -445,7 +415,6 @@ class ConversationRunStateService:
                 error=error,
             ),
         )
-        self._notify_finalization(record)
         return record
 
     def cancel_run_for_startup_recovery(

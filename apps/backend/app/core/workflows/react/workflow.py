@@ -37,7 +37,7 @@ from ...context.runtime_context_manager import RuntimeContextManager
 from ..agent_workflow import AgentWorkflow
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
-from .state import ReactGraphState
+from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -350,9 +350,12 @@ class ReactLikeWorkflow(AgentWorkflow):
             if agent_profile.allowed_tools is None or tool.name in agent_profile.allowed_tools
         ]
         try:
-            bound_model = (
-                base_model.bind_tools(tool_schemas, strict=True) if tool_schemas else base_model
-            )
+            if len(tool_schemas) > 0:
+                bound_model = (
+                    base_model.bind_tools(tool_schemas, strict=True) if tool_schemas else base_model
+                )
+            else:
+                bound_model = base_model
         except NotImplementedError:
             # 降级防御：模型不支持 bind_tools 时禁用工具继续运行（与缺 Key 无关，缺 Key 在
             # resolve_chat_model 构建期即抛错，不会走到这里）。
@@ -443,6 +446,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                 final_text="",
                 last_tool_results={},
                 child_agents={},
+                terminal_sessions={},
             )
             # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动
             # 一个新的 graph input，即使 thread_id 相同也不等价于 resume。

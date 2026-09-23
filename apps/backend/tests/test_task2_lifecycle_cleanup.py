@@ -44,11 +44,6 @@ async def test_startup_failure_closes_initialized_runtime_resources(
     )
     monkeypatch.setattr(
         lifespan_module,
-        "get_child_agent_session_service",
-        _CachedGetter(object(), calls, "get_child_service"),
-    )
-    monkeypatch.setattr(
-        lifespan_module,
         "get_terminal_session_service",
         _CachedGetter(_Terminal(), calls, "get_terminal"),
     )

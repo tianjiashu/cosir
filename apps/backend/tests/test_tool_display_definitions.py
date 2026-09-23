@@ -1,6 +1,6 @@
 """Static Tool UI declarations for long-running tool shells."""
 
-from app.core.tools.tool_handler.delegate_task import build_delegate_task_definition
+from app.core.tools.tool_handler.child_task.child_agent_create import build_delegate_task_definition
 
 
 def test_delegate_task_is_a_non_expandable_standalone_shell() -> None:
