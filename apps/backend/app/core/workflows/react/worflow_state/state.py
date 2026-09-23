@@ -10,7 +10,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
-from app.core.workflows.react.worflow_state.child_agent_checkpoint import ChildAgentCheckpoint
 from app.core.workflows.react.worflow_state.terminal_session_checkpoint import (
     TerminalSessionCheckpoint,
 )
@@ -51,10 +50,6 @@ class ReactGraphState(BaseModel):
             ``TerminalSessionCheckpoint``。只保存由工具展示契约 allowlist 后的可序列化字段，
             不保存 worker、PTY、输出 ring buffer 或 subscriber。活终端的真实性仍由 backend
             进程内 ``TerminalSessionService`` registry 负责。
-        child_agents: 当前 Run 已创建的 Child Agent 稳定引用，键为触发委派的 ``tool_call_id``，
-            值为 ``ChildAgentCheckpoint``。这里只保存 task/run 标识和展示所需的静态字段，
-            不保存 session、mailbox、executor 或 child context；workflow 从 checkpoint 恢复时
-            可用这些引用避免重复创建 child。
         tool_call_lifecycle: 当前 workflow 已创建工具调用的可序列化生命周期记录。model
             节点写入创建 / 运行状态与非法调用标记，tools 节点回写同一快照，observe 节点写入
             终态；不含 operations、stream writer 或 runtime context。
@@ -70,6 +65,5 @@ class ReactGraphState(BaseModel):
     final_text: str
     last_tool_results: dict[str, Any]
     terminal_sessions: dict[str, TerminalSessionCheckpoint] = Field(default_factory=dict)
-    child_agents: dict[str, ChildAgentCheckpoint] = Field(default_factory=dict)
     continue_model: bool = False
     tool_call_lifecycle: ToolCallLifecycleManager | None = None

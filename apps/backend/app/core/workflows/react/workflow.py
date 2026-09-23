@@ -445,7 +445,6 @@ class ReactLikeWorkflow(AgentWorkflow):
                 max_steps=agent_profile.max_steps,
                 final_text="",
                 last_tool_results={},
-                child_agents={},
                 terminal_sessions={},
             )
             # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动

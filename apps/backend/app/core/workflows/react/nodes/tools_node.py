@@ -25,7 +25,7 @@ from typing import Any
 from app.config.logging.logger import log
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall
-from app.core.workflows.react.node_helper import _runtime_config
+from app.core.workflows.react.node_helper.common import _runtime_config
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 _TERMINAL_CHECKPOINT_FIELDS = frozenset(
@@ -138,9 +138,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
     if lifecycle is None:
         raise RuntimeError("tool_call_lifecycle is required before tools_node execution")
     # 仅执行状态为 running 的合法调用；pending（参数非法）调用不执行，由 observe 节点统一结算。
-    approved_calls = [
-        _to_tool_call(record) for record in lifecycle.valid_tools
-    ]
+    approved_calls = [_to_tool_call(record) for record in lifecycle.valid_tools]
     instruction = state.instruction
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
 
@@ -168,29 +166,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
         },
     )
 
-    child_agents = state.child_agents
     observations = tool_run.observations  # 每个工具调用的观察结果
-    for observation in observations:
-        display_data = observation.display_data
-        if (
-            observation.tool_name == "delegate_task"
-            and isinstance(display_data, dict)
-            and display_data.get("kind") == "delegation-result"
-            and isinstance(display_data.get("child_task_id"), int)
-            and isinstance(display_data.get("child_run_id"), int)
-        ):
-            state.child_agents[observation.tool_call_id] = {
-                key: display_data[key]
-                for key in (
-                    "child_task_id",
-                    "child_run_id",
-                    "child_agent_id",
-                    "title",
-                    "role",
-                    "status",
-                )
-                if key in display_data
-            }
     # 终态事件（completed/failed/cancelled）、模型上下文写回与错误计数统一收敛到
     # observe 节点（经 ToolCallLifecycleManager.settle_batch 分发），本节点只产出治理摘要。
     log.info(
@@ -216,5 +192,4 @@ async def _tools_node(state: ReactGraphState) -> dict:
             state.terminal_sessions,
             observation_dicts,
         ),
-        "child_agents": child_agents,
     }
