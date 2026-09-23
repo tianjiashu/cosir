@@ -16,10 +16,7 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
-from app.core.tools.tool_models.child_agent_session_args import (
-    ChildAgentWaitArgs,
-    ChildAgentWaitResult,
-)
+from app.core.tools.tool_models.child_task import ChildAgentWaitArgs, ChildAgentWaitResult
 from app.service.child_agent.async_child_agent_wait_coordinator import (
     AsyncChildAgentWaitCoordinator,
     WaiterCapacityExceeded,

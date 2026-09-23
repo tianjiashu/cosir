@@ -1,11 +1,14 @@
-"""delegate_task tool handler."""
+"""delegate_task tool handler。"""
 
+import json
 from dataclasses import replace
 from typing import ClassVar
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
+from app.core.agents.agent_profile import AgentProfile
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -14,8 +17,12 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
+from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_handler.tool_base import HandlerBase
-from app.core.tools.tool_models.delegate_task_args import DelegateTaskArgs
+from app.core.tools.tool_models import DelegateTaskArgs
+from app.models import ConversationRunCommand
+from app.service.depends import get_task_service, get_conversation_run_service, get_conversation_run_state_service, \
+    get_conversation_run_executor
 
 
 def _contract_description() -> str:
@@ -96,7 +103,7 @@ def _compose_description(agent_summary: str) -> str:
 class DelegateTaskTool(HandlerBase):
     """Validate a delegate_task request and route it to the injected runtime executor."""
 
-    name: str = "delegate_task"
+    name: str = "delegate_task_for_sub_agent"
     # 类级描述只是「静态兜底」：真实下发文本由 build_delegate_task_definition 注册的
     # ``description_provider`` 在每次投影时重新拼装（含运行期子 Agent 清单与并发额度）。
     description: str = _compose_description("")
@@ -123,33 +130,39 @@ class DelegateTaskTool(HandlerBase):
         """
 
         self.description = description if description is not None else _compose_description("")
+        self._task_service = get_task_service()
+        self.run_setvice = get_conversation_run_service()
+        self.run_state_service = get_conversation_run_state_service()
+        self.run_exector = get_conversation_run_executor()
 
     def execute(
             self,
             child_agent_id: str,
-            title: str,
+            agent_name: str,
             prompt: str,
             execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
-        """通过执行上下文中的运行时执行器委派自由文本任务。
+        """委派一个自由文本子任务给指定 child Agent，并返回启动结果观察。
 
         参数:
             child_agent_id: 要运行的 child agent profile 标识。
             title: 任务标题，必填，用于展示与可追溯。
             prompt: 面向子 Agent 的自由文本任务契约，原样作为 child turn 的输入。
-            execution_context: 包含运行时依赖的父工具执行边界。
+            execution_context: 父工具执行边界，提供运行期依赖与父 Run 事实。
 
         返回:
-            注入执行器的归一化结果；当执行上下文或执行器缺失时，返回错误观察结果。
+            child 启动成功时返回携带稳定 locator 的 success 观察；缺少执行上下文或运行期依赖、
+            run 已取消、child 无法解析、策略拒绝或启动失败时返回确定性的 error/cancelled 观察。
 
         异常:
-            无。参数校验由 ``ToolAccessGate`` 在准入门禁层统一
-            完成（单一收口），本方法信任已校验入参，不再二次校验；若上游契约被破坏，
-            ``DelegateTaskArgs`` 构造会抛出 ``ValidationError`` 由 ``ToolHandlerRunner``
-            归一化为错误观察。执行器异常由执行器自身负责处理。
+            无。参数校验由 ``ToolAccessGate`` 在准入门禁层统一完成（单一收口），本方法信任已
+            校验入参，不再二次校验；若上游契约被破坏，``DelegateTaskArgs`` 构造会抛出
+            ``ValidationError`` 由 ``ToolHandlerRunner`` 归一化为错误观察。委派失败全部在本
+            方法内收口为观察，不向上抛异常。
 
         副作用:
-            当请求有效时调用注入的运行时执行器。
+            解析 child Agent profile、裁决委派策略，并在通过后经注入的 session service 创建
+            child Task/Run、注册 child workflow 的后台执行；写委派相关日志。
         """
 
         if execution_context is None:
@@ -158,28 +171,120 @@ class DelegateTaskTool(HandlerBase):
                 "delegate_task requires an execution context.",
                 reason="Provide the parent task execution context before delegating work.",
                 permission=self.permission,
+                retryable=False
             )
 
-        executor = execution_context.runtime_dependencies.delegate_task_executor
-        if executor is None:
+        runtime_dependencies = execution_context.runtime_dependencies
+        parent_profile = runtime_dependencies.parent_agent_profile
+        if parent_profile is None:
             return tool_error(
                 self.name,
-                "delegate_task_executor is not configured.",
-                reason="Configure a delegate_task runtime executor before delegating work.",
+                "delegate_task_runtime_unavailable",
+                reason=(
+                    "Configure the parent agent profile error before delegating work."
+                ),
                 permission=self.permission,
+                retryable=False
             )
         if cancellation_registry.is_cancelled(execution_context.run_id):
             return tool_cancelled(
                 tool_name=self.name,
                 permission=self.permission,
             )
-        return executor.execute(
-            DelegateTaskArgs(
-                child_agent_id=child_agent_id,
-                title=title,
-                prompt=prompt,
+
+        # 延迟导入：agent 注册表在启动序列中晚于工具系统装配，且与工具注册表互为依赖，
+        # 模块级导入会成环（与 _runtime_child_agent_summary 同一处理）。
+        from app.config.configuration import get_agent_registry
+
+        agent_registry = get_agent_registry()
+        child_agent_profile: AgentProfile | None = agent_registry.resolve(child_agent_id)
+        if child_agent_profile is None:
+            log.warning(
+                "delegate_child_resolve_failed",
+                extra={
+                    "msg": "委派目标 child Agent 无法解析，返回工具错误",
+                    "data": {
+                        "parent_run_id": execution_context.run_id,
+                        "child_agent_id": child_agent_id,
+                    },
+                },
+            )
+            return tool_error(
+                self.name,
+                f"delegate_task child not found: {child_agent_id}",
+                reason=(
+                    f"the child agent '{child_agent_id}' is not registered; "
+                    f"verify the child_agent_id against the available delegate_* agents "
+                    f"before retrying."
+                ),
+                permission=self.permission,
+                retryable=True
+            )
+
+        try:
+            parent_run = self.run_state_service.get_run(execution_context.run_id)
+
+            child_task = self._task_service.get_or_create_task(workspace_id=execution_context.workspace_id,
+                                                               title=agent_name,
+                                                               task_type="delegate_task",
+                                                               parent_task_id=execution_context.task_id,
+                                                               parent_run_id=execution_context.run_id, )
+
+            provider_id = child_agent_profile.provider_id if child_agent_profile.provider_id is not None else parent_profile.provider_id
+            model_name = child_agent_profile.model_name if child_agent_profile.model_name is not None else parent_profile.model_name
+            reasoning_effort = parent_run.reasoning_effort
+
+            child_run = self.run_setvice.create_run(
+                task_id=child_task.id,
+                agent_id=child_agent_id,
+                provider_id=provider_id,
+                model_name=model_name,
+                reasoning_effort=reasoning_effort,
+                run_command=ConversationRunCommand(display_text=prompt)
+            )
+
+            child_run = self.run_state_service.claim_pending_run(child_run.id)
+
+            self.run_exector.start(child_run.id, start_mode="fresh")
+
+        except Exception as e:
+            log.exception(
+                "delegate_task_exception",
+                extra={
+                    "msg": "委托任务时发生异常",
+                    "data": {
+                        "parent_run_id": execution_context.run_id,
+                        "child_agent_id": child_agent_id,
+                        "error": str(e),
+                    },
+                },
+            )
+            return tool_error(
+                tool_name=self.name,
+                error="error",
+                reason="An error occurred while delegating the task.",
+                retryable=False
+            )
+        return tool_success(
+            self.name,
+            self.name,
+            json.dumps(
+                {
+                    "status": "started",
+                    "child_task_id": child_task.id,
+                    "child_run_id": child_run.id,
+                    "child_agent_id": child_agent_id,
+                },
+                separators=(",", ":"),
             ),
-            execution_context,
+            display_data=build_delegation_display_data(
+                title=agent_name,
+                child_agent_id=child_agent_id,
+                child_task_id=child_task.id,
+                child_run_id=child_run.id,
+                status="running",
+                role=child_agent_profile.role,
+            ),
         )
 
     def to_definition(self) -> ToolDefinition:
