@@ -1,4 +1,4 @@
-"""``ToolDefinition.handler_kind`` 及整条 async 工具调度通道删除后的缺陷发现型验证。
+"""``ToolDefinition.handler_kind`` / ``parallel_group`` 及相关调度通道删除后的缺陷发现型验证。
 
 本次改动删除了：
 - ``ToolDefinition.handler_kind`` 字段与 ``AsyncToolHandler`` Protocol；
@@ -8,7 +8,11 @@
 - ``WorkflowOperations._handler_kind_by_name`` / ``_execute_async_tool_call``（串行调用统一走
   ``asyncio.to_thread(self._execute_tool_call, ...)``），``_is_parallel_call`` 改为只看
   ``parallel_mode``；
-- ``ToolRegistry._validate_handler_contract``（注册期不再校验 handler 与 coroutine 一致性）。
+- ``ToolRegistry._validate_handler_contract``（注册期不再校验 handler 与 coroutine 一致性）；
+- ``ToolDefinition.parallel_group``（零消费者声明式字段）与 ``delegate_task_group`` 分组声明；
+- ``ToolHandlerRunner`` 的 public 包装层 ``normalize_result`` / ``build_cancellation_check`` /
+  ``cleanup_cancellation_signal``，调用点下沉到私有 ``_build_cancel_check`` /
+  ``_clear_tool_call_cancellation``。
 
 本模块从「删除后仍须成立的不变量」出发做对抗性验证：残留符号、投影保真、注册语义、
 调度分支（串行/并行/未知工具）与状态副作用。测试只断言现状，不修改生产代码。
@@ -219,7 +223,6 @@ def test_model_projection_exposes_only_name_description_parameters() -> None:
     projection = definition.to_model_tool_definition()
 
     assert set(projection) == {"name", "description", "parameters"}
-    assert "handler_kind" not in repr(projection)
     assert projection["name"] == "probe_tool"
 
 
@@ -973,6 +976,11 @@ _REMOVED_SYMBOLS = (
     "_execute_async_tool_call",
     "_handler_kind_by_name",
     "_validate_handler_contract",
+    "ToolCallCancelled",
+    "build_cancellation_check",
+    "cleanup_cancellation_signal",
+    "parallel_group",
+    "delegate_task_group",
 )
 
 

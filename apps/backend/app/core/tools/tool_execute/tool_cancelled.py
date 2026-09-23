@@ -4,13 +4,7 @@
 精确的取消来源说明覆盖它，但不得借此塞入错误详情（取消不是失败）。
 """
 
-import asyncio
-
 from app.core.tools.schemas import ToolObservation
-
-
-class ToolCallCancelled(asyncio.CancelledError):
-    """Internal marker separating tool-call cancellation from run cancellation."""
 
 CANCELLED_REASON = "the tool call was cancelled before completion; no result was produced."
 
