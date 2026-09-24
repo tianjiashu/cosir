@@ -9,4 +9,15 @@ describe("ToolIcon", () => {
 
     expect(html).toContain("lucide-git-compare");
   });
+
+  it.each([
+    ["info", "lucide-info"],
+    ["send", "lucide-send"],
+    ["clock", "lucide-clock"],
+  ])("renders the declared child-agent %s icon", (name, className) => {
+    const html = renderToStaticMarkup(<ToolIcon name={name} aria-hidden="true" />);
+
+    expect(html).toContain(className);
+    expect(html).not.toContain("lucide-wrench");
+  });
 });

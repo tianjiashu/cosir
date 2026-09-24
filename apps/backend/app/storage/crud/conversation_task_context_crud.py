@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -133,10 +133,141 @@ class ConversationTaskContextCrud:
         model.run_id = replacement.run_id
         model.tool_call_id = replacement.tool_call_id
         model.message_json = replacement.message_json
-        model.transport_metadata_json = replacement.transport_metadata_json
         model.include_in_context = replacement.include_in_context
         model.is_streaming = replacement.is_streaming
         session.flush()
+
+    def update_child_display_status(
+        self,
+        task_id: int,
+        sequence: int,
+        child_task_id: int,
+        child_run_id: int,
+        status: str,
+        session: Session | None = None,
+    ) -> None:
+        """原子更新一条动态 child display 的生命周期状态。
+
+        该方法使用 SQLite JSON 函数只改 ``display_data.status``，避免把调用方读取到的
+        完整 metadata 再写回而覆盖并发产生的其它 Transport 字段。locator 也放在 SQL
+        条件中，因此 context 行在读取和更新之间被替换时不会误写新内容。
+
+        参数:
+            task_id: context 所属任务。
+            sequence: 任务内 context 行的稳定序号；仅用于缩小更新目标。
+            child_task_id: display_data 中的子任务标识。
+            child_run_id: display_data 中的子 Run 标识。
+            status: canonical child Run 生命周期状态。
+            session: 可选外部事务。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 数据库写入失败。
+
+        副作用:
+            仅在 locator 仍匹配时更新 ``transport_metadata_json``；不发布 Assistant
+            Transport 事件。
+        """
+
+        if session is None:
+            with self._session_factory.begin() as owned_session:
+                self.update_child_display_status(
+                    task_id,
+                    sequence,
+                    child_task_id,
+                    child_run_id,
+                    status,
+                    session=owned_session,
+                )
+            return
+
+        metadata_json = ConversationTaskContextModel.transport_metadata_json
+        display_kind = func.json_extract(metadata_json, "$.display_data.kind")
+        statement = (
+            update(ConversationTaskContextModel)
+            .where(
+                ConversationTaskContextModel.task_id == task_id,
+                ConversationTaskContextModel.sequence == sequence,
+                func.json_extract(metadata_json, "$.display_data.child_task_id")
+                == child_task_id,
+                func.json_extract(metadata_json, "$.display_data.child_run_id")
+                == child_run_id,
+                or_(
+                    display_kind == "delegation-result",
+                    and_(
+                        display_kind == "child-agent-result",
+                        func.json_extract(metadata_json, "$.display_data.operation") == "send",
+                    ),
+                ),
+            )
+            .values(
+                transport_metadata_json=func.json_set(
+                    metadata_json,
+                    "$.display_data.status",
+                    status,
+                )
+            )
+        )
+        session.execute(statement)
+
+    def update_terminal_session_display(
+        self,
+        task_id: int,
+        sequence: int,
+        run_id: int,
+        session_id: str,
+        status: str,
+        end_reason: str | None,
+        exit_code: int | None,
+        session: Session | None = None,
+    ) -> None:
+        """原子更新精确 terminal session display 的生命周期字段。
+
+        locator 同时约束 task、context sequence、run 和 session_id，只修改已有的
+        ``terminal-session`` display_data，避免异步 PTY 状态回写覆盖并发产生的其它 metadata。
+        """
+
+        if session is None:
+            with self._session_factory.begin() as owned_session:
+                self.update_terminal_session_display(
+                    task_id,
+                    sequence,
+                    run_id,
+                    session_id,
+                    status,
+                    end_reason,
+                    exit_code,
+                    session=owned_session,
+                )
+            return
+
+        metadata_json = ConversationTaskContextModel.transport_metadata_json
+        display_kind = func.json_extract(metadata_json, "$.display_data.kind")
+        display_status = func.json_extract(metadata_json, "$.display_data.status")
+        updated_metadata = func.json_set(
+            metadata_json,
+            "$.display_data.status",
+            status,
+            "$.display_data.end_reason",
+            end_reason,
+            "$.display_data.exit_code",
+            exit_code,
+        )
+        statement = (
+            update(ConversationTaskContextModel)
+            .where(
+                ConversationTaskContextModel.task_id == task_id,
+                ConversationTaskContextModel.sequence == sequence,
+                ConversationTaskContextModel.run_id == run_id,
+                display_kind == "terminal-session",
+                func.json_extract(metadata_json, "$.display_data.session_id") == session_id,
+                # Session lifecycle is monotonic: only an active display may receive a
+                # transition. A delayed terminal event must not overwrite an established
+                # exited/failed/closed state.
+                display_status.in_(("starting", "running")),
+            )
+            .values(transport_metadata_json=updated_metadata)
+        )
+        session.execute(statement)
 
     def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:
         """删除指定 task 下某 run 的全部上下文消息行。

@@ -20,7 +20,7 @@ export function MarkdownText({ status }: MarkdownTextProps) {
       caret={status?.type === "running" ? "block" : undefined}
       linkSafety={{ enabled: true }}
       security={{ allowedProtocols: ["https", "mailto"] }}
-      className="aui-md"
+      className="aui-md !space-y-3 leading-6"
     />
   );
 }

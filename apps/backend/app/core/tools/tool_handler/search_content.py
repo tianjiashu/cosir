@@ -32,7 +32,9 @@ SEARCH_CONTENT_DESCRIPTION = (
     "or directory relative to the workspace. Use a regular expression in pattern; use "
     "file_glob to restrict directory searches to filenames such as '*.py'. Returns matching "
     "lines with file paths and line numbers. Use read_file when you already know the file "
-    "and need its full contents."
+    "and need its full contents. Use it to locate text you already know: tracing call sites "
+    "and upstream/downstream usages to follow a code path. Do not use it for semantic or "
+    "conceptual search over content you have not seen."
 )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 from collections.abc import Callable
+from contextlib import suppress
 from threading import RLock
 from typing import Any, ClassVar, cast
 
@@ -22,15 +23,26 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
-from app.core.tools.display.delegation_display import build_delegation_display_data
+from app.service.terminal.session_status import (
+    TerminalSessionStatusChange,
+    TerminalSessionStatusSource,
+)
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+_CHILD_RUN_STATUSES = frozenset({"pending", "running", "completed", "failed", "cancelled"})
+_TERMINAL_SESSION_ACTIVE_STATUSES = frozenset({"starting", "running"})
+_TERMINAL_SESSION_STATUSES = frozenset(
+    {"starting", "running", "exited", "interrupted", "failed", "closed"}
+)
 
 
 class ConversationTaskStateService:
     """持有进程本地 Transport 状态，并按需从 canonical 记录懒重建。
 
-    工作副本是刻意易失的，挂载在 task 的 ``TaskRuntimeSpace`` 中：projector 变更与 subscriber
-    变化都不写任何数据库行。某个 task 的首次读取会加载一个 Task、其全部 Run 与全部 context 行，
+    工作副本是刻意易失的，挂载在 task 的 ``TaskRuntimeSpace`` 中：普通 projector 变更与 subscriber
+    变化都不写数据库行；child Run 与 terminal session 状态投影只会更新已有工具行的 Transport
+    metadata。某个 task 的
+    首次读取会加载一个 Task、其全部 Run 与全部 context 行，
     再把纯 wire 状态构造委托给 ``ConversationTaskStateRebuilder``。之后的读取复用该 task 级的
     进程内内存快照，直到显式 rebuild 或进程重置。
 
@@ -41,8 +53,10 @@ class ConversationTaskStateService:
 
     副作用:
         ``get_state`` 可能读取三张 canonical SQLite 表，并只缓存一份内存副本。
-        ``apply_planned`` 与 ``publish_state`` 更新进程本地状态并通知 SSE subscriber。
-        任何方法都不访问 checkpoint、工具、前端运行时状态或持久化的 Transport 快照。
+            ``apply_planned`` 与 ``publish_state`` 更新进程本地状态并通知 SSE subscriber；child
+            与 terminal 状态投影还会尽力持久化已有工具的 UI metadata。
+        不访问 LangGraph checkpoint、工具 handler 或前端运行时状态；terminal session 只通过
+        ``TerminalSessionStatusSource`` 读取进程内生命周期事实。
 
     并发:
         ``_lock``（类级 ``RLock``）是每个 ``TaskRuntimeSpace`` 快照工作副本的**唯一串行化点**：
@@ -55,6 +69,7 @@ class ConversationTaskStateService:
     _lock: ClassVar[RLock] = RLock()
     _subscribers: ClassVar[dict[int, set[Subscriber]]] = {}
     _deleted_task_ids: ClassVar[set[int]] = set()
+    _terminal_status_source: TerminalSessionStatusSource | None = None
 
     def __init__(
             self,
@@ -64,6 +79,7 @@ class ConversationTaskStateService:
         self._task_source = depends.get_task_crud()
         self._run_source = depends.get_conversation_run_crud()
         self._context_source = depends.get_conversation_task_context_crud()
+        self._terminal_status_source = depends.get_terminal_session_service()
 
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
         """返回已校验的 task 级工作副本，首次访问时懒重建。
@@ -103,8 +119,9 @@ class ConversationTaskStateService:
             sqlalchemy.exc.SQLAlchemyError: canonical 数据源读取失败。
 
         副作用:
-            先卸载该 task 的进程内快照副本，再读 canonical 三张表重建一份；不写数据库、
-            不通知 subscriber（调用方需自行 ``publish_state`` 让客户端收敛）。
+            先卸载该 task 的进程内快照副本，再读 canonical 三张表重建一份；terminal session
+            冷重建可能原子修复遗留的活跃 display metadata；本方法不通知 subscriber（调用方需
+            自行 ``publish_state`` 让客户端收敛）。
 
         并发:
             全程持 ``_lock``，与投影、订阅注册与删除清理互斥。
@@ -129,9 +146,26 @@ class ConversationTaskStateService:
             self._ensure_not_deleted(task_id)
             space = task_runtime_spaces.get_or_create(task_id)
             state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            mutations = tuple(event.plan(state))
+            mutations = list(event.plan(state))
             for mutation in mutations:
                 _apply_mutation(state, mutation)
+            # A child can finish before the parent ToolMessage is persisted. Reconcile any
+            # already-present child display payload after every event so that this race does
+            # not leave the newly materialized parent card at ``running`` forever.
+            mutations.extend(
+                self._reconcile_child_delegation_statuses(
+                    state,
+                    persist=True,
+                    parent_task_id=task_id,
+                )
+            )
+            mutations.extend(
+                self._reconcile_terminal_session_statuses(
+                    state,
+                    persist=True,
+                    parent_task_id=task_id,
+                )
+            )
             # 仅追加的 token 帧不会改变快照形状或任何生命周期不变量。
             # ``_apply_mutation`` 中的 path/type 检查对这条热路径已足够；
             # 结构性变更仍付出完整校验代价。
@@ -140,7 +174,7 @@ class ConversationTaskStateService:
             change = TransportFrame(
                 task_id=task_id,
                 kind="mutation",
-                mutations=mutations,
+                mutations=tuple(mutations),
                 source_run_id=getattr(event, "run_id", None),
                 current_run_id=state["current_run_id"],
                 current_run_status=_current_run_status(state),
@@ -218,10 +252,8 @@ class ConversationTaskStateService:
             self._deleted_task_ids.add(task_id)
             subscribers = self._subscribers.pop(task_id, set())
             for subscriber in subscribers:
-                try:
+                with suppress(RuntimeError):
                     subscriber.loop.call_soon_threadsafe(subscriber.close)
-                except RuntimeError:
-                    pass
             space = task_runtime_spaces.get(task_id)
             if space is not None:
                 space.unload_snapshot()
@@ -235,14 +267,16 @@ class ConversationTaskStateService:
         """
 
         with cls._lock:
-            subscribers = [subscriber for group in cls._subscribers.values() for subscriber in group]
+            subscribers = [
+                subscriber
+                for group in cls._subscribers.values()
+                for subscriber in group
+            ]
             cls._subscribers.clear()
             cls._deleted_task_ids.clear()
         for subscriber in subscribers:
-            try:
+            with suppress(RuntimeError):
                 subscriber.loop.call_soon_threadsafe(subscriber.close)
-            except RuntimeError:
-                pass
         task_runtime_spaces.close()
 
     def is_task_deleted(self, task_id: int) -> bool:
@@ -276,6 +310,12 @@ class ConversationTaskStateService:
                 runs,
                 context_rows,
             )
+            self._reconcile_child_delegation_statuses(state, persist=False)
+            self._reconcile_terminal_session_statuses(
+                state,
+                persist=True,
+                parent_task_id=task_id,
+            )
         except Exception as exc:
             log.exception(
                 "state_rebuild_failed",
@@ -307,13 +347,14 @@ class ConversationTaskStateService:
         child_task_id: int,
         child_run_id: int,
         status: str,
-        end_reason: str | None = None,
     ) -> TransportFrame | None:
         """把 child Run 的 canonical 状态投影到已物化的父任务委派卡片。
 
         子 Run 的状态事件先更新子任务自身 snapshot，再调用此方法同步父任务中对应的
-        ``delegation-result``。父任务尚未物化时不主动加载它；后续冷读会从 Task/Run 事实
-        重建同样的终态。该方法只更新进程内 Transport working copy，不写数据库。
+        动态 child display。该方法只处理已经存在且 locator 精确匹配的
+        ``delegation-result`` 与 ``child-agent-result(operation=send)``；状态查询和等待
+        结果是历史快照，不会被异步改写。父任务未物化时仍会先持久化 metadata，后续冷读
+        可以恢复正确状态。
         """
 
         with self._lock:
@@ -321,13 +362,6 @@ class ConversationTaskStateService:
             parent_task_id = child_task.parent_task_id
             if parent_task_id is None:
                 return None
-            parent_space = task_runtime_spaces.get(parent_task_id)
-            if parent_space is None:
-                return None
-            state = parent_space.existing_snapshot()
-            if state is None:
-                return None
-
             child_run = next(
                 (
                     run
@@ -336,6 +370,35 @@ class ConversationTaskStateService:
                 ),
                 None,
             )
+            if child_run is None or child_run.status not in _CHILD_RUN_STATUSES:
+                return None
+            if child_run.status != status:
+                log.debug(
+                    "parent_delegation_stale_status_event",
+                    extra={
+                        "msg": "忽略与 canonical child Run 状态不一致的委派状态事件",
+                        "data": {
+                            "child_task_id": child_task_id,
+                            "child_run_id": child_run_id,
+                            "event_status": status,
+                            "canonical_status": child_run.status,
+                        },
+                    },
+                )
+            status = child_run.status
+            self._persist_child_display_status(
+                parent_task_id,
+                child_task_id,
+                child_run_id,
+                status,
+            )
+            parent_space = task_runtime_spaces.get(parent_task_id)
+            if parent_space is None:
+                return None
+            state = parent_space.existing_snapshot()
+            if state is None:
+                return None
+
             mutations: list[ConversationStateMutation] = []
             for run_index, run in enumerate(state["runs"]):
                 for message_index, message in enumerate(run["messages"]):
@@ -343,28 +406,14 @@ class ConversationTaskStateService:
                         if not isinstance(part, dict) or part.get("type") != "tool-call":
                             continue
                         display = part.get("display_data")
-                        if not isinstance(display, dict) or display.get("kind") != "delegation-result":
+                        if not _matches_dynamic_child_display(
+                            display,
+                            child_task_id,
+                            child_run_id,
+                        ):
                             continue
-                        if display.get("child_task_id", part.get("child_task_id")) != child_task_id:
-                            continue
-                        child_agent_id = display.get("child_agent_id")
-                        if not isinstance(child_agent_id, str) or not child_agent_id:
-                            args = part.get("args")
-                            child_agent_id = args.get("child_agent_id") if isinstance(args, dict) else None
-                        if not isinstance(child_agent_id, str) or not child_agent_id:
-                            continue
-                        updated_display = build_delegation_display_data(
-                            title=str(display.get("title") or child_task.title),
-                            child_agent_id=child_agent_id,
-                            child_task_id=child_task_id,
-                            child_run_id=child_run_id,
-                            status=status,
-                            role=(display.get("role") if isinstance(display.get("role"), str) else None),
-                            final_output=(child_run.final_output if child_run is not None else None),
-                            end_reason=(
-                                child_run.end_reason if child_run is not None else end_reason
-                            ),
-                        )
+                        updated_display = dict(display)
+                        updated_display["status"] = status
                         mutations.append(
                             ConversationStateMutation(
                                 "set",
@@ -386,6 +435,337 @@ class ConversationTaskStateService:
                 _apply_mutation(state, mutation)
             return self.publish_state(parent_task_id, state, tuple(mutations))
 
+    def refresh_terminal_session(
+        self,
+        change: TerminalSessionStatusChange,
+    ) -> TransportFrame | None:
+        """把 backend 内 terminal session 的异步状态投影到已有工具卡片。
+
+        ``TerminalSessionService`` 是 session 生命周期的唯一权威来源；本方法只定位已有的
+        ``terminal-session`` display_data，不根据工具名或缺失 metadata 创建 UI part。父任务
+        尚未物化时仍先原子持久化，之后的冷读可以恢复正确状态。
+        """
+
+        self._validate_terminal_status(change.status)
+        with self._lock:
+            self._persist_terminal_session_display(change)
+            parent_space = task_runtime_spaces.get(change.task_id)
+            if parent_space is None:
+                return None
+            state = parent_space.existing_snapshot()
+            if state is None:
+                return None
+
+            mutations: list[ConversationStateMutation] = []
+            for run_index, run in enumerate(state["runs"]):
+                if run["runId"] != change.run_id:
+                    continue
+                for message_index, message in enumerate(run["messages"]):
+                    for part_index, part in enumerate(message["parts"]):
+                        if not isinstance(part, dict):
+                            continue
+                        display = part.get("display_data")
+                        if not _matches_terminal_session_display(
+                            display,
+                            change.session_id,
+                        ):
+                            continue
+                        updated_display = _updated_terminal_display(display, change)
+                        if updated_display == display:
+                            continue
+                        mutations.append(
+                            ConversationStateMutation(
+                                "set",
+                                (
+                                    "runs",
+                                    run_index,
+                                    "messages",
+                                    message_index,
+                                    "parts",
+                                    part_index,
+                                    "display_data",
+                                ),
+                                updated_display,
+                            )
+                        )
+            if not mutations:
+                return None
+            for mutation in mutations:
+                _apply_mutation(state, mutation)
+            return self.publish_state(change.task_id, state, tuple(mutations))
+
+    def _reconcile_terminal_session_statuses(
+        self,
+        state: ConversationStateSnapshot,
+        *,
+        persist: bool,
+        parent_task_id: int | None = None,
+    ) -> list[ConversationStateMutation]:
+        """按当前进程 terminal registry 收敛已有 terminal display 状态。"""
+
+        if persist and parent_task_id is None:
+            raise ValueError("parent_task_id is required when persisting terminal status")
+        source = self._terminal_status_source
+        if source is None:
+            return []
+
+        mutations: list[ConversationStateMutation] = []
+        for run_index, run in enumerate(state["runs"]):
+            run_id = run["runId"]
+            for message_index, message in enumerate(run["messages"]):
+                for part_index, part in enumerate(message["parts"]):
+                    if not isinstance(part, dict):
+                        continue
+                    display = part.get("display_data")
+                    if not _is_active_terminal_display(display):
+                        continue
+                    session_id = display.get("session_id")
+                    if not isinstance(session_id, str) or not session_id:
+                        continue
+                    change = source.get_status_change(
+                        session_id,
+                        task_id=parent_task_id or 0,
+                        run_id=run_id,
+                    )
+                    if change is None:
+                        change = TerminalSessionStatusChange(
+                            task_id=parent_task_id or 0,
+                            run_id=run_id,
+                            session_id=session_id,
+                            generation="",
+                            status="closed",
+                            end_reason="backend_restarted",
+                            exit_code=None,
+                        )
+                    self._validate_terminal_status(change.status)
+                    updated_display = _updated_terminal_display(display, change)
+                    if updated_display == display:
+                        continue
+                    mutation = ConversationStateMutation(
+                        "set",
+                        (
+                            "runs",
+                            run_index,
+                            "messages",
+                            message_index,
+                            "parts",
+                            part_index,
+                            "display_data",
+                        ),
+                        updated_display,
+                    )
+                    _apply_mutation(state, mutation)
+                    mutations.append(mutation)
+                    if persist and parent_task_id is not None:
+                        self._persist_terminal_session_display(
+                            change,
+                            task_id=parent_task_id,
+                        )
+        return mutations
+
+    def _persist_terminal_session_display(
+        self,
+        change: TerminalSessionStatusChange,
+        *,
+        task_id: int | None = None,
+    ) -> None:
+        """原子持久化已存在的 terminal-session display。"""
+
+        self._validate_terminal_status(change.status)
+        target_task_id = change.task_id if task_id is None else task_id
+        try:
+            rows = self._context_source.get(target_task_id, include_in_context=False)
+            for row in rows:
+                metadata = row.transport_metadata or {}
+                display = metadata.get("display_data")
+                if not _matches_terminal_session_display(display, change.session_id):
+                    continue
+                if row.run_id != change.run_id:
+                    continue
+                if _updated_terminal_display(display, change) == display:
+                    continue
+                self._context_source.update_terminal_session_display(
+                    target_task_id,
+                    row.sequence,
+                    change.run_id,
+                    change.session_id,
+                    change.status,
+                    change.end_reason,
+                    change.exit_code,
+                )
+        except Exception:
+            log.exception(
+                "terminal_session_display_persist_failed",
+                extra={
+                    "msg": "Terminal session 状态已投影到内存，但 display metadata 持久化失败",
+                    "data": {
+                        "task_id": target_task_id,
+                        "run_id": change.run_id,
+                        "session_id": change.session_id,
+                        "status": change.status,
+                    },
+                },
+            )
+
+    @staticmethod
+    def _validate_terminal_status(status: str) -> None:
+        """拒绝未声明的 terminal session 生命周期状态。"""
+
+        if status not in _TERMINAL_SESSION_STATUSES:
+            raise ValueError(f"invalid terminal session status: {status}")
+
+    def _reconcile_child_delegation_statuses(
+        self,
+        state: ConversationStateSnapshot,
+        *,
+        persist: bool,
+        parent_task_id: int | None = None,
+    ) -> list[ConversationStateMutation]:
+        """按已有 child display locator 修正其缓存的 canonical Run 状态。
+
+        该修复只处理 snapshot 中已经存在的动态 child display，不会从工具名、Task 关系或
+        缺失的 ``display_data`` 创建任何 UI part。冷重建因此仍保持 display_data 优先，
+        但能收敛「子 Run 终态事件早于父 ToolMessage 持久化」留下的窗口。
+
+        参数:
+            state: 当前 task 的 Transport working copy。
+            persist: 是否把发生变化的 metadata 同步回父任务 context；冷重建传 False，
+                事件投影传 True。
+            parent_task_id: 事件投影时用于持久化 metadata 的父任务标识；冷重建无需提供。
+
+        返回:
+            已应用到 state 的 display_data set mutations。
+
+        副作用:
+            ``persist=True`` 时更新父任务 context 的 Transport metadata；持久化失败只记
+            日志，不阻断已经完成的内存 Transport 投影。
+        """
+
+        if persist and parent_task_id is None:
+            raise ValueError("parent_task_id is required when persisting child status")
+
+        locators: set[tuple[int, int]] = set()
+        for run in state["runs"]:
+            for message in run["messages"]:
+                for part in message["parts"]:
+                    if not isinstance(part, dict):
+                        continue
+                    display = part.get("display_data")
+                    child_task_id = (
+                        display.get("child_task_id")
+                        if isinstance(display, dict)
+                        else None
+                    )
+                    child_run_id = (
+                        display.get("child_run_id")
+                        if isinstance(display, dict)
+                        else None
+                    )
+                    if not _is_dynamic_child_display(display):
+                        continue
+                    if not _is_positive_int(child_task_id) or not _is_positive_int(child_run_id):
+                        continue
+                    locators.add((child_task_id, child_run_id))
+
+        statuses_by_locator: dict[tuple[int, int], str] = {}
+        for child_task_id in {task_id for task_id, _ in locators}:
+            child_runs = self._run_source.list_by_task(child_task_id)
+            for child_run in child_runs:
+                locator = (child_task_id, child_run.id)
+                if locator not in locators:
+                    continue
+                if (
+                    child_run.task_id != child_task_id
+                    or child_run.status not in _CHILD_RUN_STATUSES
+                ):
+                    continue
+                statuses_by_locator[locator] = child_run.status
+
+        mutations: list[ConversationStateMutation] = []
+        for run_index, run in enumerate(state["runs"]):
+            for message_index, message in enumerate(run["messages"]):
+                for part_index, part in enumerate(message["parts"]):
+                    if not isinstance(part, dict):
+                        continue
+                    display = part.get("display_data")
+                    if not isinstance(display, dict) or not _is_dynamic_child_display(display):
+                        continue
+                    child_task_id = display.get("child_task_id")
+                    child_run_id = display.get("child_run_id")
+                    if not _is_positive_int(child_task_id) or not _is_positive_int(child_run_id):
+                        continue
+                    status = statuses_by_locator.get((child_task_id, child_run_id))
+                    if status is None or display.get("status") == status:
+                        continue
+                    updated_display = dict(display)
+                    updated_display["status"] = status
+                    mutation = ConversationStateMutation(
+                        "set",
+                        (
+                            "runs",
+                            run_index,
+                            "messages",
+                            message_index,
+                            "parts",
+                            part_index,
+                            "display_data",
+                        ),
+                        updated_display,
+                    )
+                    _apply_mutation(state, mutation)
+                    mutations.append(mutation)
+                    if persist and parent_task_id is not None:
+                        self._persist_child_display_status(
+                            parent_task_id,
+                            child_task_id,
+                            child_run_id,
+                            status,
+                        )
+        return mutations
+
+    def _persist_child_display_status(
+        self,
+        parent_task_id: int,
+        child_task_id: int,
+        child_run_id: int,
+        status: str,
+    ) -> None:
+        """持久化父任务中精确 locator 命中的动态 child display 状态。"""
+
+        if status not in _CHILD_RUN_STATUSES:
+            return
+        try:
+            rows = self._context_source.get(parent_task_id, include_in_context=False)
+            for row in rows:
+                metadata = row.transport_metadata or {}
+                display = metadata.get("display_data")
+                if not isinstance(display, dict) or not _matches_dynamic_child_display(
+                    display,
+                    child_task_id,
+                    child_run_id,
+                ):
+                    continue
+                self._context_source.update_child_display_status(
+                    parent_task_id,
+                    row.sequence,
+                    child_task_id,
+                    child_run_id,
+                    status,
+                )
+        except Exception:
+            log.exception(
+                "parent_delegation_display_persist_failed",
+                extra={
+                    "msg": "子 Run 状态已投影到内存，但父委派 display metadata 持久化失败",
+                    "data": {
+                        "parent_task_id": parent_task_id,
+                        "child_task_id": child_task_id,
+                        "child_run_id": child_run_id,
+                        "status": status,
+                    },
+                },
+            )
+
     def _publish(self, change: TransportFrame) -> None:
         """存在 full 状态时安装该状态，并将帧入队给各 subscriber。"""
 
@@ -403,6 +783,81 @@ class ConversationTaskStateService:
                         "data": {"task_id": change.task_id},
                     },
                 )
+
+
+def _is_active_terminal_display(value: object) -> bool:
+    """判断 display_data 是否是需要实时收敛的活 terminal session。"""
+
+    return (
+        isinstance(value, dict)
+        and value.get("kind") == "terminal-session"
+        and isinstance(value.get("session_id"), str)
+        and bool(value.get("session_id"))
+        and value.get("status") in _TERMINAL_SESSION_ACTIVE_STATUSES
+    )
+
+
+def _matches_terminal_session_display(value: object, session_id: str) -> bool:
+    """按 kind 与 session_id 精确定位 terminal display。"""
+
+    return (
+        isinstance(value, dict)
+        and value.get("kind") == "terminal-session"
+        and value.get("session_id") == session_id
+    )
+
+
+def _updated_terminal_display(
+    value: object,
+    change: TerminalSessionStatusChange,
+) -> dict[str, object]:
+    """复制 display_data 并仅更新 terminal 生命周期字段。"""
+
+    if not isinstance(value, dict):
+        raise TypeError("terminal display_data must be an object")
+    current_status = value.get("status")
+    if current_status in {"exited", "interrupted", "failed", "closed"}:
+        return dict(value)
+    if current_status == "running" and change.status == "starting":
+        return dict(value)
+    updated = dict(value)
+    updated["status"] = change.status
+    if change.end_reason is not None:
+        updated["end_reason"] = change.end_reason
+    if change.exit_code is not None:
+        updated["exit_code"] = change.exit_code
+    return updated
+
+
+def _is_positive_int(value: object) -> bool:
+    """Return whether a child locator is a real positive integer."""
+
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _is_dynamic_child_display(value: object) -> bool:
+    """Return whether a display payload represents a live child Run reference."""
+
+    if not isinstance(value, dict):
+        return False
+    if value.get("kind") == "delegation-result":
+        return True
+    return value.get("kind") == "child-agent-result" and value.get("operation") == "send"
+
+
+def _matches_dynamic_child_display(
+    value: object,
+    child_task_id: int,
+    child_run_id: int,
+) -> bool:
+    """Match a live child display by both task and Run locator."""
+
+    if not _is_dynamic_child_display(value) or not isinstance(value, dict):
+        return False
+    return (
+        value.get("child_task_id") == child_task_id
+        and value.get("child_run_id") == child_run_id
+    )
 
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:

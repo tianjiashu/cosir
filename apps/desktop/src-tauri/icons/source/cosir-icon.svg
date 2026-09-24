@@ -1,40 +1,40 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="background" x1="150" y1="80" x2="880" y2="950" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#18264A"/>
-      <stop offset="0.52" stop-color="#101A35"/>
-      <stop offset="1" stop-color="#090F20"/>
+    <linearGradient id="background" x1="92" y1="64" x2="936" y2="960" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#273A70"/>
+      <stop offset="0.5" stop-color="#162653"/>
+      <stop offset="1" stop-color="#0B1330"/>
     </linearGradient>
-    <radialGradient id="halo" cx="0" cy="0" r="1" gradientTransform="translate(728 310) rotate(132) scale(470)" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#22D3EE" stop-opacity="0.28"/>
-      <stop offset="1" stop-color="#22D3EE" stop-opacity="0"/>
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientTransform="translate(768 220) rotate(135) scale(520)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4DE1F2" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#4DE1F2" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="node" x1="700" y1="450" x2="790" y2="580" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#67E8F9"/>
-      <stop offset="1" stop-color="#06B6D4"/>
+    <linearGradient id="node" x1="708" y1="456" x2="786" y2="568" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A5F3FC"/>
+      <stop offset="1" stop-color="#22D3EE"/>
     </linearGradient>
   </defs>
 
-  <rect width="1024" height="1024" fill="url(#background)"/>
-  <rect width="1024" height="1024" fill="url(#halo)"/>
+  <rect width="1024" height="1024" rx="216" fill="url(#background)"/>
+  <rect width="1024" height="1024" rx="216" fill="url(#halo)"/>
 
   <path
-    d="M764 248C690 196 602 168 508 168C320 168 194 304 194 512C194 720 320 856 508 856C602 856 690 828 764 776"
+    d="M766 254C696 200 610 174 516 174C326 174 194 308 194 512C194 716 326 850 516 850C610 850 696 824 766 770"
     fill="none"
-    stroke="#F8FAFC"
+    stroke="#FFFFFF"
     stroke-linecap="round"
-    stroke-width="112"
+    stroke-width="118"
   />
 
   <path
-    d="M402 408L520 512L402 616"
+    d="M418 420L516 512L418 604"
     fill="none"
-    stroke="#F8FAFC"
+    stroke="#CFFAFE"
     stroke-linecap="round"
     stroke-linejoin="round"
-    stroke-width="54"
+    stroke-width="58"
   />
 
-  <circle cx="764" cy="512" r="58" fill="#07111F" opacity="0.9"/>
-  <circle cx="764" cy="512" r="42" fill="url(#node)"/>
+  <circle cx="766" cy="512" r="66" fill="#08142E" opacity="0.96"/>
+  <circle cx="766" cy="512" r="42" fill="url(#node)"/>
 </svg>

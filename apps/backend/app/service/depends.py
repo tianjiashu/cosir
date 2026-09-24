@@ -213,7 +213,16 @@ def get_terminal_session_service() -> TerminalSessionService:
 
     from app.service.terminal.terminal_session_service import TerminalSessionService
 
-    return TerminalSessionService()
+    def observe_terminal_status(change: object) -> None:
+        """把 PTY 生命周期变化转交给 Transport state owner。"""
+
+        from app.service.terminal.session_status import TerminalSessionStatusChange
+
+        if not isinstance(change, TerminalSessionStatusChange):
+            raise TypeError("invalid terminal session status change")
+        get_conversation_task_state_service().refresh_terminal_session(change)
+
+    return TerminalSessionService(status_observer=observe_terminal_status)
 
 
 @lru_cache(maxsize=1)

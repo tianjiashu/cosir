@@ -114,7 +114,7 @@ function TerminalSessionStartCard({ artifact, taskId }: { artifact: ReturnType<t
   const status = sessionStatusLabel(data.status);
 
   return (
-    <div className="my-1 flex min-w-0 flex-col gap-2 rounded-xl border border-sky-400/20 bg-zinc-900 px-3 py-2 text-zinc-100 shadow-sm">
+    <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-sky-400/20 bg-zinc-900 px-3 py-2 text-zinc-100 shadow-sm">
       <div className="flex min-w-0 items-center gap-2">
         <TerminalIcon className="size-4 shrink-0 text-sky-300" aria-hidden="true" />
         <span className="font-medium">终端会话</span>
@@ -165,7 +165,6 @@ function TerminalSessionActionRow({
       label={<span className={cn("text-sm font-medium", artifact.backendStatus === "failed" && "text-destructive")}>{title}</span>}
       meta={<span className="text-muted-foreground max-w-[55%] truncate">{meta}</span>}
       trailing={<ToolStatus status={artifact.backendStatus} />}
-      className="my-1"
     />
   );
 }

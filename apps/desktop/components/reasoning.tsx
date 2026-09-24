@@ -17,14 +17,13 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { DisclosureRow } from "@/components/assistant-ui/elements/disclosure-row.aui";
-import { DISCLOSURE_CONTENT_CLASS } from "@/components/assistant-ui/elements/disclosure-tokens";
 import { cn } from "@/lib/utils";
 
 export const ANIMATION_DURATION = 200;
 
 const ReasoningPreviewContext = createContext(false);
 
-const reasoningVariants = cva("aui-reasoning-root mb-1 w-full", {
+const reasoningVariants = cva("aui-reasoning-root w-full", {
   variants: {
     variant: {
       outline: "rounded-lg border px-3 py-2",
@@ -309,7 +308,7 @@ function ReasoningText({
       )}
       {...props}
     >
-      <div ref={contentRef} className={cn("aui-reasoning-text-content", DISCLOSURE_CONTENT_CLASS)}>
+      <div ref={contentRef} className="aui-reasoning-text-content mt-1 flex flex-col gap-1">
         {children}
       </div>
     </div>

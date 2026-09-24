@@ -83,10 +83,10 @@ class DelegateTaskArgs(BaseModel):
     """
 
     child_agent_id: str = Field(description=_CHILD_AGENT_ID_DESCRIPTION_TEMPLATE)
-    #软约束
+    # 软约束：命名唯一性不校验、不拦截，只在描述里作为偏好提示（无任何代码裁决点）。
     agent_name: str = Field(
         description=(
-            "Short noun-phrase agent_name for the agent,agent_name 必须是唯一的. "
+            "Short noun-phrase label naming the agent; prefer a unique name. "
             f"REQUIRED, at most {AGENT_NAME_MAX} characters — keep it to a few words."
         ),
     )

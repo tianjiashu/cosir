@@ -11,7 +11,7 @@ const STATUS_LABELS: Record<TransportToolStatus, string> = {
   unknown: "状态未知",
 };
 
-export function ToolStatus({ status, className }: { status: TransportToolStatus; className?: string }) {
+export function ToolStatus({ status, className, prefix }: { status: TransportToolStatus; className?: string; prefix?: string }) {
   const Icon = status === "running" ? LoaderCircleIcon
     : status === "completed" ? CheckIcon
       : status === "failed" ? CircleAlertIcon
@@ -20,7 +20,7 @@ export function ToolStatus({ status, className }: { status: TransportToolStatus;
   return (
     <span className={cn("inline-flex items-center gap-1.5 text-xs", (status === "failed" || status === "unknown") ? "text-destructive" : "text-muted-foreground", className)}>
       <Icon className={cn("size-3.5", status === "running" && "animate-spin")} aria-hidden="true" />
-      {STATUS_LABELS[status]}
+      {prefix ? `${prefix} · ` : ""}{STATUS_LABELS[status]}
     </span>
   );
 }

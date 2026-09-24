@@ -26,7 +26,7 @@ from app.service.depends import (
 )
 from app.service.task.workspace_service import WorkspaceService
 from app.task_runtime.service.task_service import TaskService
-from app.utils.datetime_utils import preview
+from app.utils.datetime_utils import TASK_TITLE_LIMIT, preview
 
 
 @app.get("/health")
@@ -200,7 +200,9 @@ async def create_workspace_task(
     """创建工作区下的任务容器，不启动 ConversationRun。"""
     try:
         task = await asyncio.to_thread(
-            workspace_service.create_task, workspace_id, preview(payload.text) or "新对话"
+            workspace_service.create_task,
+            workspace_id,
+            preview(payload.text, limit=TASK_TITLE_LIMIT) or "新对话",
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc

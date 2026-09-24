@@ -1,11 +1,14 @@
 import { createElement, type ComponentProps } from "react";
 import {
+  ClockIcon,
   EyeIcon,
   FileSymlinkIcon,
   FileXIcon,
   GitCompareIcon,
   GlobeIcon,
+  InfoIcon,
   NetworkIcon,
+  SendIcon,
   UsersIcon,
   SearchIcon,
   TerminalIcon,
@@ -15,13 +18,16 @@ import {
 import { cn } from "@/lib/utils";
 
 const TOOL_ICON_MAP: Record<string, LucideIcon> = {
+  clock: ClockIcon,
   eye: EyeIcon,
   "git-compare": GitCompareIcon,
   "file-x": FileXIcon,
   "file-symlink": FileSymlinkIcon,
   globe: GlobeIcon,
+  info: InfoIcon,
   network: NetworkIcon,
   search: SearchIcon,
+  send: SendIcon,
   terminal: TerminalIcon,
   wrench: WrenchIcon,
   users: UsersIcon,

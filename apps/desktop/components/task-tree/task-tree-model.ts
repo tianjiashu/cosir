@@ -30,7 +30,7 @@ export function getForkSourceTaskId(task: WorkspaceTask): number | null {
 }
 
 /** 侧栏任务标题的展示字符上限；超出部分以 “…” 结尾，完整文本仍在 tooltip 中可见。 */
-export const TASK_TITLE_DISPLAY_LIMIT = 32;
+export const TASK_TITLE_DISPLAY_LIMIT = 10;
 
 /** 标题完全由内部 token 组成时的展示回退文案。 */
 const EMPTY_TITLE_FALLBACK = "新对话";
@@ -63,7 +63,7 @@ function visibleTaskTitle(rawTitle: string): string {
  *     limit: 展示字符上限（必须为正整数）。
  *
  * 返回:
- *     不超限的原文，或截断后带 “…” 的文本。
+ *     不超限的原文，或截断后带 “…” 的文本；省略号计入上限。
  *
  * 异常/副作用:
  *     无；纯函数。
@@ -71,7 +71,7 @@ function visibleTaskTitle(rawTitle: string): string {
 function truncateTaskTitle(visibleTitle: string, limit: number = TASK_TITLE_DISPLAY_LIMIT): string {
   if (visibleTitle.length <= limit) return visibleTitle;
   // 切点若正好落在 ASCII 点号上，先去掉它们，避免与省略号叠成“..…”。
-  return `${visibleTitle.slice(0, limit).replace(/\.+$/, "")}…`;
+  return `${visibleTitle.slice(0, Math.max(0, limit - 1)).replace(/\.+$/, "")}…`;
 }
 
 /**

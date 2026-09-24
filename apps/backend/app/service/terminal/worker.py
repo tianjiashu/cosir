@@ -26,6 +26,7 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.terminal.errors import (
     TerminalWorkerBackpressureError,
+    TerminalWorkerProtocolError,
     TerminalWorkerSignalFailedError,
     TerminalWorkerSignalUnsupportedError,
     TerminalWorkerUnavailableError,
@@ -34,6 +35,7 @@ from app.service.terminal.shell_resolver import ShellSpec
 
 WorkerEventCallback = Callable[[Mapping[str, object]], None]
 SIGNAL_ACK_TIMEOUT_SECONDS = 5.0
+HANDSHAKE_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass
@@ -82,10 +84,34 @@ class ProcessTerminalWorkerFactory:
         self._executable = executable
 
     def create(self, instance_id: str) -> TerminalWorker:
-        """构造 process worker；不在此处启动子进程。"""
+        """构造 process worker；不在此处启动子进程。
+
+        参数:
+            instance_id: 本次 worker 会话实例标识，参与握手校验并进入进程名与日志。
+
+        返回:
+            尚未启动的 :class:`ProcessTerminalWorker`。
+
+        异常:
+            TerminalWorkerUnavailableError: 未配置 worker 可执行文件时抛出（桌面宿主经
+                ``CODING_AGENT_TERMINAL_WORKER`` 注入，缺失说明装配不完整）。
+
+        副作用:
+            未配置时写一条 WARNING 日志 ``terminal_worker_not_configured``；否则只读环境变量。
+        """
 
         executable = self._executable or os.environ.get(Constant.Terminal.WORKER_ENV, "").strip()
         if not executable:
+            log.warning(
+                "terminal_worker_not_configured",
+                extra={
+                    "msg": "未配置 Terminal Worker 可执行文件，终端 session 无法创建",
+                    "data": {
+                        "env_var": Constant.Terminal.WORKER_ENV,
+                        "instance_id": instance_id,
+                    },
+                },
+            )
             raise TerminalWorkerUnavailableError(
                 f"{Constant.Terminal.WORKER_ENV} is not configured; "
                 "terminal worker sidecar is unavailable"
@@ -122,6 +148,7 @@ class ProcessTerminalWorker:
         self._exit_lock = threading.Lock()
         self._exit_emitted = False
         self._handshake_valid = False
+        self._handshake_payload: dict[str, object] | None = None
         self._capabilities = frozenset[str]()
         self._signal_lock = threading.Lock()
         self._pending_signals: dict[str, _PendingSignal] = {}
@@ -144,7 +171,27 @@ class ProcessTerminalWorker:
         cwd: str,
         on_event: WorkerEventCallback,
     ) -> None:
-        """无可见控制台窗口地启动 worker，发送 shell spec 并等待 handshake。"""
+        """无可见控制台窗口地启动 worker，发送 shell spec 并等待 handshake。
+
+        参数:
+            spec: shell 启动规格（argv 与 shell 类型），PTY 由 worker 侧创建。
+            cwd: 初始工作目录；调用方保证已通过路径安全解析。
+            on_event: worker 事件回调（``output`` / ``status`` / ``exit`` 等）。
+
+        返回:
+            无；握手通过后 writer 与 heartbeat 线程均已启动。
+
+        异常:
+            TerminalWorkerUnavailableError: worker 已启动过、可执行文件无法拉起，或握手超时
+                （可能是 worker 启动慢等瞬时条件，可重试）。
+            TerminalWorkerProtocolError: 收到握手但字段不合法（协议版本 / 实例 / PID / PTY
+                类型不符），属确定性失败，重试同一 worker 二进制不会有不同结果。
+
+        副作用:
+            启动 worker 子进程与 reader / stderr / writer / heartbeat 线程；失败路径写 WARNING
+            日志 ``terminal_worker_spawn_failed`` 或 ``terminal_worker_handshake_failed`` 并关闭
+            已启动的进程。
+        """
 
         if self._process is not None:
             raise TerminalWorkerUnavailableError("terminal worker has already started")
@@ -160,12 +207,26 @@ class ProcessTerminalWorker:
                 creationflags=creationflags,
             )
         except OSError as exc:
+            log.warning(
+                "terminal_worker_spawn_failed",
+                extra={
+                    "msg": "Terminal Worker 启动失败，终端 session 无法创建",
+                    "data": {
+                        "executable": self._executable,
+                        "instance_id": self.instance_id,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    },
+                },
+                exc_info=True,
+            )
             raise TerminalWorkerUnavailableError(f"failed to start terminal worker: {exc}") from exc
 
         self._process = process
         self._on_event = on_event
         self._exit_emitted = False
         self._handshake_valid = False
+        self._handshake_payload = None
         self._capabilities = frozenset()
         self._stop_event.clear()
         self._writer_stop.clear()
@@ -188,9 +249,17 @@ class ProcessTerminalWorker:
                 "cwd": cwd,
             }
         )
-        if not self._handshake_event.wait(timeout=5) or not self._handshake_valid:
+        # 超时与「收到但不合法」是两类故障：前者可能是 worker 启动慢（可重试），后者是确定性
+        # 协议不兼容（重试同一二进制必然失败），必须分开抛出并各自留下可定位的日志。
+        handshake_expired = not self._handshake_event.wait(timeout=HANDSHAKE_TIMEOUT_SECONDS)
+        if handshake_expired or not self._handshake_valid:
+            self._log_handshake_failure("timeout" if handshake_expired else "rejected")
             self.close()
-            raise TerminalWorkerUnavailableError("terminal worker handshake failed")
+            if handshake_expired:
+                raise TerminalWorkerUnavailableError(
+                    f"terminal worker handshake timed out after {HANDSHAKE_TIMEOUT_SECONDS:g}s"
+                )
+            raise TerminalWorkerProtocolError(self._describe_handshake_mismatch())
         self._writer_thread = threading.Thread(
             target=self._write_events,
             name=f"terminal-worker-writer-{self.instance_id[:8]}",
@@ -346,14 +415,16 @@ class ProcessTerminalWorker:
                     break
                 size = struct.unpack(">I", header)[0]
                 if size <= 0 or size > Constant.Terminal.MAX_FRAME_BYTES:
-                    raise TerminalWorkerUnavailableError("invalid terminal worker frame size")
+                    raise TerminalWorkerProtocolError(f"invalid terminal worker frame size: {size}")
                 payload = _read_exact(process.stdout, size)
                 if len(payload) != size:
                     break
                 event = json.loads(payload.decode("utf-8"))
                 if not isinstance(event, dict):
-                    raise TerminalWorkerUnavailableError("terminal worker event is not an object")
+                    raise TerminalWorkerProtocolError("terminal worker event is not an object")
                 if event.get("type") == "handshake":
+                    # 保留原始握手内容：校验不通过时由 start() 输出期望/实际字段对照与日志。
+                    self._handshake_payload = dict(event)
                     self._handshake_valid = self._validate_handshake(event, process.pid)
                     raw_capabilities = event.get("capabilities")
                     if isinstance(raw_capabilities, list):
@@ -384,7 +455,12 @@ class ProcessTerminalWorker:
                     "terminal_worker_reader_failed",
                     extra={
                         "msg": "Terminal Worker 事件读取失败",
-                        "data": {"error_type": type(exc).__name__},
+                        "data": {
+                            "instance_id": self.instance_id,
+                            "worker_pid": process.pid,
+                            "error": str(exc),
+                            "error_type": type(exc).__name__,
+                        },
                     },
                 )
         finally:
@@ -411,6 +487,90 @@ class ProcessTerminalWorker:
             and event.get("instance_id") == self.instance_id
             and event.get("pid") == process_pid
             and event.get("pty_kind") in {"conpty", "unix_pty"}
+        )
+
+    def _handshake_mismatch_details(self) -> dict[str, object]:
+        """返回握手「期望值 vs 实际收到值」的对照表（仅协议元数据，不含 PTY 内容）。
+
+        参数:
+            无。
+
+        返回:
+            可直接放进日志 ``data`` 或错误消息的键值表；尚未收到握手帧时实际值均为 ``None``。
+
+        异常:
+            无（只读实例状态与进程 PID）。
+
+        副作用:
+            无。
+        """
+
+        received = self._handshake_payload or {}
+        process = self._process
+        return {
+            "expected_protocol": Constant.Terminal.WORKER_PROTOCOL,
+            "received_protocol": received.get("protocol"),
+            "expected_instance_id": self.instance_id,
+            "received_instance_id": received.get("instance_id"),
+            "expected_pid": process.pid if process is not None else None,
+            "received_pid": received.get("pid"),
+            "received_pty_kind": received.get("pty_kind"),
+        }
+
+    def _describe_handshake_mismatch(self) -> str:
+        """构造握手被拒时的错误消息（列出期望与实际字段，便于直接定位版本错配）。
+
+        参数:
+            无。
+
+        返回:
+            含期望/实际字段对照的错误消息文本。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        details = self._handshake_mismatch_details()
+        rendered = ", ".join(f"{key}={value!r}" for key, value in details.items())
+        return (
+            f"terminal worker handshake rejected by {self._executable}: {rendered}; "
+            "the worker binary likely predates the current protocol contract"
+        )
+
+    def _log_handshake_failure(self, reason: str) -> None:
+        """记录握手失败的可排查日志（含失败类别与协议字段对照）。
+
+        参数:
+            reason: 失败类别，``"timeout"``（等待握手超时）或 ``"rejected"``（收到但校验不通过）。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            写 WARNING 日志 ``terminal_worker_handshake_failed``；只记录协议元数据与进程号，
+            不记录任何 PTY 输入输出内容。
+        """
+
+        process = self._process
+        log.warning(
+            "terminal_worker_handshake_failed",
+            extra={
+                "msg": "Terminal Worker 握手失败，终端 session 无法启动",
+                "data": {
+                    "reason": reason,
+                    "executable": self._executable,
+                    "instance_id": self.instance_id,
+                    "worker_pid": process.pid if process is not None else None,
+                    "timeout_seconds": HANDSHAKE_TIMEOUT_SECONDS,
+                    **self._handshake_mismatch_details(),
+                },
+            },
         )
 
     def _drain_stderr(self) -> None:

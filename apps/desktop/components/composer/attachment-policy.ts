@@ -20,6 +20,9 @@ const MIME_TYPES: Record<string, string> = {
   tiff: "image/tiff",
 };
 
+/** MIME-like marker used for a directory represented as a regular attachment. */
+export const DIRECTORY_CONTENT_TYPE = "application/x-directory";
+
 /** Return the final path segment without exposing platform-specific separators to the UI. */
 export function fileName(path: string): string {
   return path.replaceAll("\\", "/").split("/").pop() || path;

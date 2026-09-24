@@ -2,12 +2,16 @@ use std::fs;
 
 const MAX_ATTACHMENT_BYTES: u64 = 32 * 1024 * 1024;
 
-/// Canonicalize a user-selected regular file without reading its contents.
+/// Canonicalize a user-selected regular file or directory without reading its contents.
+///
+/// Both kinds of path are valid ordinary attachments. A directory is kept as
+/// one attachment so the backend agent can inspect it on demand instead of the
+/// picker eagerly expanding it into many files.
 #[tauri::command]
 pub fn resolve_selected_attachment_path(path: String) -> Result<String, String> {
     let selected = fs::canonicalize(&path).map_err(|_| "所选文件不可用".to_string())?;
-    if !selected.is_file() {
-        return Err("所选路径不是文件".to_string());
+    if !selected.is_file() && !selected.is_dir() {
+        return Err("所选路径不是文件或文件夹".to_string());
     }
     Ok(selected.to_string_lossy().into_owned())
 }

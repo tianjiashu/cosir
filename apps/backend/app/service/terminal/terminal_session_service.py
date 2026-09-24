@@ -34,6 +34,10 @@ from app.service.terminal.errors import (
     TerminalWorkerBackpressureError,
     TerminalWorkerUnavailableError,
 )
+from app.service.terminal.session_status import (
+    TerminalSessionStatusChange,
+    TerminalSessionStatusObserverLike,
+)
 from app.service.terminal.shell_resolver import ShellResolver
 from app.service.terminal.worker import (
     ProcessTerminalWorkerFactory,
@@ -232,6 +236,7 @@ class TerminalSessionService:
         *,
         max_active_sessions: int = Constant.Terminal.MAX_ACTIVE_SESSIONS,
         ring_buffer_bytes: int = Constant.Terminal.MAX_RING_BUFFER_BYTES,
+        status_observer: TerminalSessionStatusObserverLike | None = None,
     ) -> None:
         """创建服务；不启动 worker。"""
 
@@ -239,6 +244,7 @@ class TerminalSessionService:
         self._shell_resolver = shell_resolver or ShellResolver()
         self._max_active_sessions = max_active_sessions
         self._ring_buffer_bytes = ring_buffer_bytes
+        self._status_observer = status_observer
         self._registry: dict[str, _SessionRuntime] = {}
         self._terminal_history: OrderedDict[str, _SessionRuntime] = OrderedDict()
         self._registry_lock = threading.RLock()
@@ -328,6 +334,7 @@ class TerminalSessionService:
                 with suppress(Exception):
                     worker.close()
                 raise TerminalSessionStateError("run is already closing")
+            self._notify_status_changed(runtime)
         except Exception as exc:
             self._fail_runtime(runtime, f"worker_start_failed: {type(exc).__name__}")
             with suppress(Exception):
@@ -513,6 +520,7 @@ class TerminalSessionService:
                     },
                 )
         self._publish_status(runtime)
+        self._notify_status_changed(runtime)
         self._retire_runtime(runtime)
         if close_error is not None:
             raise close_error
@@ -536,6 +544,29 @@ class TerminalSessionService:
                 "first_available_seq": first_available,
                 "next_seq": runtime.next_seq,
             }
+
+    def get_status_change(
+        self,
+        session_id: str,
+        *,
+        task_id: int,
+        run_id: int,
+    ) -> TerminalSessionStatusChange | None:
+        """按 task/run/session 精确查询当前进程持有的生命周期状态。
+
+        该方法只服务 Transport 冷重建；未知 session 表示 PTY 不属于当前 backend
+        生命周期，调用方可以据此收敛遗留的 ``running`` 展示数据。
+        """
+
+        with self._registry_lock:
+            runtime = self._registry.get(session_id) or self._terminal_history.get(session_id)
+        if runtime is None:
+            return None
+        with runtime.lock:
+            record = runtime.record
+            if record.task_id != task_id or record.run_id != run_id:
+                return None
+            return self._status_change_locked(runtime)
 
     def subscribe(
         self,
@@ -722,6 +753,7 @@ class TerminalSessionService:
                             },
                         },
                     )
+            self._notify_status_changed(runtime)
         return len(runtimes)
 
     def _on_worker_event(self, session_id: str, generation: str, event: object) -> None:
@@ -853,6 +885,7 @@ class TerminalSessionService:
                 worker.close()
         with runtime.lock:
             runtime.worker = None
+        self._notify_status_changed(runtime)
         self._retire_runtime(runtime)
 
     def _on_worker_error(self, runtime: _SessionRuntime, event: dict[str, object]) -> None:
@@ -908,7 +941,50 @@ class TerminalSessionService:
                 worker.close()
         with runtime.lock:
             runtime.worker = None
+        self._notify_status_changed(runtime)
         self._retire_runtime(runtime)
+
+    def _status_change_locked(self, runtime: _SessionRuntime) -> TerminalSessionStatusChange:
+        """在持有 runtime lock 时复制一份安全的状态通知。"""
+
+        record = runtime.record
+        return TerminalSessionStatusChange(
+            task_id=record.task_id,
+            run_id=record.run_id,
+            session_id=record.session_id,
+            generation=runtime.generation,
+            status=record.status,
+            end_reason=record.end_reason,
+            exit_code=record.exit_code,
+        )
+
+    def _notify_status_changed(self, runtime: _SessionRuntime) -> None:
+        """把已确认的 session 状态交给 Transport 观察者。
+
+        观察者是展示旁路；其异常不能阻断 PTY 收尾、worker 清理或模型工具结果。
+        调用发生在 runtime lock 外，避免观察者回写快照时形成锁顺序反转。
+        """
+
+        observer = self._status_observer
+        if observer is None:
+            return
+        with runtime.lock:
+            change = self._status_change_locked(runtime)
+        try:
+            observer(change)
+        except Exception:
+            log.exception(
+                "terminal_session_status_observer_failed",
+                extra={
+                    "msg": "Terminal session 状态回写 Transport 失败",
+                    "data": {
+                        "task_id": change.task_id,
+                        "run_id": change.run_id,
+                        "session_id": change.session_id,
+                        "status": change.status,
+                    },
+                },
+            )
 
     def _retire_runtime(self, runtime: _SessionRuntime) -> None:
         """从 active registry 脱离终态 runtime，并保留有限的只读查询历史。"""

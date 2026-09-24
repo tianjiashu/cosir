@@ -82,7 +82,7 @@ class ConversationRunService:
         """把领域输入命令解析为 Run 持久化所需的最终事实。
 
         普通附件 token 只保留在 ``ConversationRunExtra.display_text``；传给模型的
-        ``input_text`` 则把 token 替换为已经校验存在的本机路径。图片顺序 marker 同样
+        ``input_text`` 则把 token 替换为已经校验存在的本机文件或目录路径。图片顺序 marker 同样
         只存在于既有 ``display_text`` JSON 值中，并在模型输入边界移除。编辑命令可以从旧
         Run 恢复请求中省略的附件路径。图片附件在这里 finalize 为 workspace-relative
         路径，避免 ``ConversationRunCommandService`` 和其它入口重复实现该规则。
@@ -128,7 +128,7 @@ class ConversationRunService:
         run_id: int | None,
         display_text: str,
     ) -> list[ConversationRunFileAttachment]:
-        """解析普通附件 token，并从既有 Run 恢复编辑请求缺失的路径。"""
+        """解析普通文件或目录附件 token，并从既有 Run 恢复编辑请求缺失的路径。"""
 
         existing_by_id: dict[str, ConversationRunFileAttachment] = {}
         if run_id is not None:
@@ -152,7 +152,7 @@ class ConversationRunService:
             if not attachment.id or attachment.path is None:
                 continue
             candidate = Path(attachment.path)
-            if not candidate.is_file():
+            if not (candidate.is_file() or candidate.is_dir()):
                 raise ValueError("ordinary file attachment is unavailable")
             merged[attachment.id] = {
                 "id": attachment.id,
@@ -164,7 +164,10 @@ class ConversationRunService:
         result: list[ConversationRunFileAttachment] = []
         for attachment_id in dict.fromkeys(Constant.Cosir.LOCAL_FILE_TOKEN.findall(display_text)):
             resolved_attachment = merged.get(attachment_id)
-            if resolved_attachment is None or not Path(resolved_attachment["path"]).is_file():
+            if resolved_attachment is None or not (
+                Path(resolved_attachment["path"]).is_file()
+                or Path(resolved_attachment["path"]).is_dir()
+            ):
                 raise ValueError("ordinary file attachment is unavailable")
             result.append(resolved_attachment)
         return result

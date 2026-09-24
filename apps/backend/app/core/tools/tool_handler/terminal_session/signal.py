@@ -1,5 +1,6 @@
 """``terminal_signal`` handler."""
 
+import platform
 from typing import ClassVar
 
 from app.core.tools.schemas import (
@@ -91,3 +92,14 @@ class TerminalSignalTool(HandlerBase):
                 show_result=False,
             ),
         )
+
+    def avaliable(self) -> bool:
+        """仅在当前 worker 已实现 PTY signal 语义的平台上注册工具。
+
+        Windows worker 当前只提供 ConPTY 的读写与关闭能力，不声明
+        ``signal_interrupt``、``signal_eof_canonical`` 或 ``signal_suspend``；
+        因此必须在工具系统装配期隐藏 ``terminal_signal``，避免模型收到一个
+        注定返回 unsupported 的工具定义。Unix worker 保持现有能力。
+        """
+
+        return platform.system() != "Windows"

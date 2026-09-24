@@ -20,7 +20,7 @@ Tauri 桌面应用
    └─ 按需创建的工具执行子进程
 ```
 
-开发期还可能存在 Vite 和 Uvicorn reload 辅助进程；它们不构成新的业务服务层。
+开发期还有 Vite 与 Uvicorn reload 辅助进程，不构成新的业务服务层。
 
 ## 开发约定
 
@@ -53,11 +53,11 @@ Tauri 桌面应用
 
 ### 日志打印与排查
 
-- React 正式诊断日志使用 `frontendLog(level, event, msg, { traceId, data, error })`；后端使用 `log.info`、`log.warning`、`log.error` 或 `log.exception`，通过 `extra={"msg": "...", "data": {...}}` 附带说明和业务字段。
-- `event` 使用稳定的 snake_case 名称；`task_id`、`run_id` 等标识放入 `data`。同一请求或执行链路复用同一个 `trace_id`；前端 HTTP 请求通过 `X-Trace-Id` 传入后端，后端绑定日志上下文。
+- React 诊断日志使用 `frontendLog(level, event, msg, { traceId, data, error })`；后端使用 `log.info`、`log.warning`、`log.error` 或 `log.exception`，通过 `extra={"msg": "...", "data": {...}}` 附带说明和业务字段。
+- `event` 使用稳定的 snake_case 名称；`task_id`、`run_id` 等标识放入 `data`。同一执行链路复用同一 `trace_id`；前端 HTTP 请求通过 `X-Trace-Id` 传入后端，后端绑定日志上下文。
 - 前端 Tauri 日志查看 `app_data_dir()/.cosir/logs/frontend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；浏览器开发模式查看 WebView/浏览器控制台。
 - 后端运行日志查看 `app_data_dir()/.cosir/logs/backend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；启动、停止或崩溃问题查看 `app_data_dir()/.cosir/logs/desktop-YYYY-MM-DD.log`、`backend-console-YYYY-MM-DD.log` 及其大小分片；`backend.bootstate.json` 位于 `app_data_dir()/.cosir/runtime/`。
-- `app_data_dir()` 由 Tauri 按平台解析：**Windows 实测为 `%APPDATA%\\com.cosir.desktop`（Roaming，不是 Local）**，macOS 通常为 `~/Library/Application Support/com.cosir.desktop`；所有系统运行数据统一位于其下的 `.cosir/`，包括 `.env`、SQLite、checkpoint、日志和 runtime。**经桌面宿主启动（含 `tauri dev`）时 `CODING_AGENT_DATA_DIR` 恒等于该目录**（`spawn_backend` 无条件注入，无 dev/prod 分支）；只有绕过 Tauri 直跑后端才回落到 `<repo>/.cosir`。
+- `app_data_dir()` 由 Tauri 按平台解析：**Windows 为 `%APPDATA%\com.cosir.desktop`（Roaming，非 Local）**，macOS 为 `~/Library/Application Support/com.cosir.desktop`；系统运行数据统一位于其下的 `.cosir/`（`.env`、SQLite、checkpoint、日志、runtime）。**经桌面宿主启动（含 `tauri dev`）时 `CODING_AGENT_DATA_DIR` 恒等于该目录**（`spawn_backend` 无条件注入，无 dev/prod 分支）；绕过 Tauri 直跑后端回落到 `<repo>/.cosir`。
 - 日志和观测是诊断旁路，不是业务事实。不得记录未经脱敏的密钥、Token、密码、完整请求正文或大段模型/工具内容；日志或观测失败不得阻断 Agent 主流程。
 
 ## 进程生命周期边界
@@ -68,7 +68,7 @@ Tauri 桌面应用
 - Tauri 负责等待 bootstate 与 `/health`、报告失败、有限重试以及退出时清理后端进程树。`/health` 仅表示 liveness，不代表数据库和模型已全部可用。
 - 后端 lifespan 负责初始化和关闭数据库、Run executor、运行期依赖与观测组件。工具子进程由工具执行层负责取消、超时和进程树清理。
 - 后端崩溃恢复必须有限且串行，不得无限重启。恢复耗尽后由用户显式重启；生命周期 generation 用于防止旧进程或旧线程覆盖当前状态。
-- 后端重启时，遗留 active Run 收敛为 `cancelled`，遗留 active delegation 标记失败；不得隐式重放旧 Agent 执行。进程内 registry、subscriber 和运行任务不跨重启恢复。
+- 后端重启时，遗留 active Run（含 child Run）收敛为 `cancelled`；不得隐式重放旧 Agent 执行。进程内 registry、subscriber 和运行任务不跨重启恢复。
 
 ## 进程间接口边界
 
@@ -76,10 +76,8 @@ Tauri 桌面应用
 
 前端与 Rust 宿主之间的控制面仅包括：
 
-- `backend_status`
-- `backend_runtime_config`
-- `restart_backend`
-- `write_frontend_log`
+- `backend_status`、`backend_runtime_config`、`restart_backend`、`write_frontend_log`
+- `file_access`：`read_selected_attachment_file`、`resolve_selected_attachment_path`
 
 新增桌面能力前必须判断其属于宿主控制面还是后端业务接口。React 业务组件不得绕过现有 runtime/logging 边界自行管理进程。
 
@@ -93,13 +91,13 @@ Tauri 桌面应用
 
 ## 数据与事实所有权
 
-- 后端拥有 task、workspace、Run、command、Agent context、Transport snapshot、delegation、文件变更记录和 provider/model 配置等持久化事实；前端状态只负责交互和渲染。
-- 主业务库默认是 `storage/app.sqlite3`；后端运行日志是固定格式的本地 JSONL 文件；LangGraph checkpoint 使用独立的 `storage/langgraph_checkpoints.sqlite`。业务库、日志文件和 checkpoint 职责与访问路径分离，不得跨层复用 session 或事实模型。
+- 后端拥有 task、workspace、Run、command、Agent context、Transport snapshot 和 provider/model 配置等持久化事实；前端状态只负责交互和渲染。
+- 主业务库为 `<DATA_DIR>/.cosir/storage/app.sqlite3`；运行日志在 `.cosir/logs/`；checkpoint 在 `.cosir/storage/`。三者职责与路径分离，不得跨层复用 session 或事实模型。
 - `ConversationRunModel.status` 是 Run 生命周期状态的唯一事实源。Transport snapshot、Agent context 和 LangGraph checkpoint 都不能演化成第二套 Run 状态机。
 - Agent context 的持久化事实由 `conversation_task_contexts` 承载；`RuntimeContextManager` 是 Task 级 context 的唯一运行时协调入口和进程内 working copy owner，但不是数据库事实源。
 - `ConversationTaskStateService` 负责 Transport snapshot 的重建与投影编排；`TaskRuntimeSpace` 按 taskId 持有 snapshot working copy，首次读取时懒加载重建，后续复用内存对象。`ConversationEventProjector` 只负责把 conversation event 投影到 snapshot。`ConversationStateSnapshot` 面向前端 Transport，不是 Agent context 的镜像。
 - context 与 Transport snapshot 允许短暂不一致，以最终一致性收敛。snapshot 普通读取不重复重建；数据库写入后由 projector 或明确的 rebuild 边界更新内存 snapshot。不得为了消除流式时序差异而强行把 Run、context、snapshot 放入一个全局事务。
-- LangGraph checkpoint 只服务 workflow 恢复，不代表 Run 生命周期状态；file snapshot/change set 只服务文件变更审阅、保留和回退，不是 Conversation snapshot。
+- LangGraph checkpoint 只服务 workflow 恢复，不代表 Run 生命周期状态。
 - `task_runtime`、取消 registry、snapshot subscriber 等属于当前后端进程内的协调状态，不是持久化事实。
 - WebView `localStorage` 只保存模型选择、最近 workspace 等用户偏好；各类偏好由对应 storage module 管理，不得存储任务或对话事实。
 
@@ -109,19 +107,19 @@ Tauri 桌面应用
 - 后端 snapshot 是对话、Run、usage 和 tool parts 的权威读取来源。Assistant UI runtime state 只用于当前渲染和传输控制，不得原样写回后端作为事实。
 - `WorkspaceShell` 是 workspace/task 导航的稳定容器；`TaskPage`、初始 snapshot 和 Assistant runtime 按 `taskId` 建立。普通 workspace 数据刷新不应无故卸载正在执行的 Assistant runtime。
 - transport resume/attach 只重新订阅已有 Run；business resume 才继续后端执行。前端实现和命名必须保持两种语义可辨认。
-- 前端测试分层：Vitest 验证模块行为；当前 Playwright E2E 使用 Vite 与独立内存测试服务，不覆盖真实 Tauri IPC、动态后端端口、BackendSupervisor 或后端崩溃恢复。不得把它视为完整桌面集成测试。
+- 前端测试分层：Vitest 验证模块行为；Playwright E2E 用 Vite + 内存测试服务，WDIO 经 `desktop-e2e` 驱动真实 Tauri 窗口；都不覆盖后端崩溃恢复，不得视为完整集成测试。
 
 ## 工具 UI 渲染边界
 
 工具执行结果的前端渲染是后端 `ToolObservation.display_data` 与前端 renderer 之间的稳定契约，不新增进程或服务；完整字段规范见 `apps/backend/app/core/tools/tool_ui_display_contract.md`，本文件只描述边界。
 
-- 两层契约：静态展示声明 `ToolDisplayHints` 随 `ToolDefinition` 传给客户端，只声明 `verb`/`icon`/`surface`/`expandable`/`expand_layout`/`default_open`/`show_result` 等 UI 意图，不含动态结果、渲染函数或业务数据；动态展示数据 `ToolObservation.display_data` 是一次执行完成后的结构化 JSON，每个 payload 必须有稳定 `kind`，由后端 `apps/backend/app/core/tools/display/` 纯函数投影，不执行额外 IO。
+- 两层契约：静态展示声明 `ToolDisplayHints` 随 `ToolDefinition` 传给客户端，只声明 `verb`/`icon`/`variant`/`surface`/`expandable`/`expand_layout`/`default_open`/`show_result` 等 UI 意图，不含动态结果、渲染函数或业务数据；动态展示数据 `ToolObservation.display_data` 是执行产出的结构化 JSON，每个 payload 必须有稳定 `kind`，由后端 `apps/backend/app/core/tools/display/` 纯函数投影，不执行额外 IO。
 - 状态唯一来源：工具生命周期 `pending`/`running`/`completed`/`failed`/`cancelled` 由 `ToolObservation.status` 投影；前端不得建立第二套状态机，也不得从 `args`/`result` 反推展示结果。
-- 前端路由：`components/assistant-ui/tools/tool-part.tsx` 的 `routeToolPart` 依据 `data.kind` 与 `presentation.expand_layout` 选择只读布局（`details`/`list`/`diff`/`terminal`/`none`）；禁止按工具名编写专用渲染分支，未知 `kind` 走 `ToolFallback`，不导致消息流崩溃。
+- 前端路由：`components/assistant-ui/tools/tool-part.tsx` 的 `routeToolPart` 依据 `data.kind` 与 `presentation.expand_layout` 选择只读布局（`details`/`list`/`diff`/`write`/`terminal`/`none`）；禁止按工具名编写专用渲染分支，未知 `kind` 走 `ToolFallback`，不导致消息流崩溃。
 - 错误三通道隔离：模型诊断走 `error`/`reason`；UI 短提示走受控 `display_data.status_hint`（约 5 字，来自后端分类映射，不得复制原始异常或 provider 响应）；生命周期走 Transport status。前端绝不展示堆栈、原始异常、原始 prompt、凭据或大段模型正文；失败 `display_data` 不得携带成功态的目标、结果或输出字段。
-- 当前工具 `kind` 与布局（完整字段见契约文档）：`read_file`→`read-file-meta`(`none`)、`search_files`→`file-list`(`list`)、`list_directory`→`directory-list`(`list`)、`write_file`/`replace`/`apply_patch`/`delete_file`/`move_file`→`file-changes`(`diff`)、`execute_terminal`→`terminal-result`(`terminal`)、`web_search`→`web-search-results`(`list`)、`web_extract`→`web-extract-urls`(`list`)、`delegate_task`→`delegation-result`(`details`)。
+- 当前工具 `kind`（布局见契约）：`read_file`→`read-file-meta`、`search_content`→`content-search-results`、`find_files`→`file-list`、`list_directory`→`directory-list`、`write_file`/`patch_write`/`apply_patch`/`delete_file`/`move_file`→`file-changes`、`execute_terminal`→`terminal-result`、`terminal_*`→`terminal-session`、`web_search`→`web-search-results`、`web_extract`→`web-extract-urls`、`delegate_task`→`delegation-result`、`child_agent_*`→`child-agent-result`/`child-agent-wait-result`。
 - 文件变更职责：`apply_patch` 只修改已有文件内容；新建、删除和移动分别由 `write_file`、`delete_file`、`move_file` 负责。
-- 展示数据不是后端事实源：`display_data` 只服务 UI 渲染与重连恢复；`artifact_data` 只服务文件快照、ChangeSet、回退与审计，不得进入 Assistant Transport；`ToolObservation.content` 不被当作通用 UI 展示数据来源。
+- 展示数据不是后端事实源：`display_data` 只服务 UI 渲染与重连恢复；`artifact_data` 只承载内部工具产物，不得进入 Assistant Transport；`ToolObservation.content` 不被当作通用 UI 展示数据来源。
 
 ## 后端架构
 
@@ -130,7 +128,7 @@ Tauri 桌面应用
 - Run 状态事件只能在数据库条件更新成功后发布，重复状态迁移不得重复发布。workflow 节点只产生普通 conversation event，经统一 workflow 消费边界交给 projector；不得直接发布 Run 状态事实。
 - `task_runtime` 是进程内并发协调层：task operation 串行化同一 task 的 Run 创建、编辑、resume 等互斥操作；workspace operation 仲裁运行、删除和关闭冲突。其锁和 registry 不跨进程、不跨重启。
 - AgentRuntime/workflow 在后端进程内运行。工具按 `execution_mode` 在线程内或独立进程执行；独立工具进程负责队列通信、取消、超时和进程树清理，但不拥有业务事实，也不构成新服务层。
-- Hook 是正式的运行期扩展边界：registry 负责注册和索引，interceptor 负责唯一触发、匹配、拒绝短路和失败安全。文件快照等旁路能力通过 Hook 接入；Hook 异常默认记录并放行，不阻断主 Run。
+- Hook 是运行期扩展边界：registry 负责注册索引，interceptor 负责触发、匹配、拒绝短路与失败安全；异常默认记录放行，不阻断主 Run。
 - provider/model 配置是数据库事实，由 provider service 管理；运行时模型构建只消费解析后的配置。能力目录不等于连接可用性，provider 连接测试也不等于 Agent Run。
 - Observability 是可降级旁路。workflow/service 通过窄接口记录 trace，不直接依赖具体观测实现；初始化、记录或 flush 失败不得改变 Run 结果。
 - RuntimeContextManager 是agent上下文唯一管理事实源，负责系统提示词构建、上下文修复加载、run续跑/恢复的上下文管理、上下文压缩（未实现）、上下文token计算、上下文序列管理、模型消息存储和持久化。
@@ -146,14 +144,14 @@ context是由app/core/context/runtime_context_manager.py维护，snapshot由Task
 ## 代码目录边界
 
 - `apps/desktop/src-tauri/`：桌面宿主、Tauri IPC、后端进程生命周期和桌面日志。
-- `apps/desktop/src/`、`app/`、`components/`、`hooks/`：React 页面、交互和展示组合。
+- `apps/desktop/` 下 `src/`（入口）、`app/`、`components/`、`hooks/`：React 页面、交互与展示组合。
 - `apps/desktop/lib/api/`、`lib/http/`：领域 API 与通用 HTTP 客户端。
 - `apps/desktop/lib/assistant/`、`components/assistant*/`：Assistant Transport 契约、runtime 装配和 UI 呈现。
 - `apps/backend/app/api/`：HTTP 路由、schema 和错误映射。
 - `apps/backend/app/assistant_transport/`：Assistant wire 协议、SSE、命令幂等、snapshot 和事件投影。
-- `apps/backend/app/service/`：Task、Workspace、Provider、Run、Delegation 等领域用例。
+- `apps/backend/app/service/`：Task、Workspace、Run、Provider、Terminal、Attachment 用例。
 - `apps/backend/app/core/runtime/`、`core/workflows/`、`core/tools/`：Agent 执行、workflow、checkpoint、工具系统和工具隔离。
-- `apps/backend/app/hook/`：运行期 Hook 注册、触发和内置旁路能力。
+- `apps/backend/app/core/hook/`：运行期 Hook 注册与触发。
 - `apps/backend/app/storage/`：SQLite engine、schema、CRUD、事务和持久化模型。
 - `apps/backend/app/task_runtime/`：进程内 task/workspace 并发协调。
 - `apps/backend/app/config/`、`core/observability/`：进程配置、日志和可降级观测。

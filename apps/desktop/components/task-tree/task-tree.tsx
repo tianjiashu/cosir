@@ -54,14 +54,14 @@ function TaskNode({
       <span className="text-muted-foreground/50 w-auto shrink-0 whitespace-pre font-mono text-[11px]" aria-hidden="true">
         {getTreeLinePrefix(node, { last: "└─ ", middle: "├─ ", pipe: "│  ", blank: "   " })}
       </span>
-      {/* 右侧为操作按钮预留固定宽度（pr-9），标题再长也只会在自己的宽度内被省略号截断。 */}
-      <div className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-9" title={task.full_title}>
+      {/* 操作列占据固定宽度，标题只使用剩余空间，避免省略号与菜单按钮重叠。 */}
+      <div className="flex min-w-0 flex-1 items-center gap-2 py-1.5" title={task.full_title}>
         {isFork ? <GitForkIcon className="text-sky-600 dark:text-sky-400 size-3.5 shrink-0" aria-hidden="true" /> : <MessageSquareIcon className="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />}
         <span className="min-w-0 flex-1 truncate font-medium">{task.display_title}</span>
       </div>
-      {/* 操作区脱离常规流：即使标题异常变长，按钮也固定在行尾预留区内，不会被挤出可视区域。 */}
+      {/* 操作区保留在常规流中，按钮位置不会随标题长度变化。 */}
       <div
-        className="bg-background/95 absolute right-1 top-1/2 flex -translate-y-1/2 items-center rounded-md backdrop-blur-sm opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+        className="flex size-7 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
         onClick={(event) => event.stopPropagation()}
       >
         {renderActions(task)}

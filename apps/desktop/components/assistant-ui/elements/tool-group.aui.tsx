@@ -18,12 +18,12 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { DisclosureRow } from "./disclosure-row.aui";
-import { DISCLOSURE_CONTENT_CLASS } from "./disclosure-tokens";
+import { TOOL_TRACE_CONTENT_CLASS } from "./tool-layout-tokens";
 import { toolGroupSummaryLabel, type ToolGroupSummary } from "./tool-group-status";
 
 const ANIMATION_DURATION = 200;
 
-const toolGroupVariants = cva("aui-tool-group-root group/tool-group mb-1 w-full", {
+const toolGroupVariants = cva("aui-tool-group-root group/tool-group w-full", {
   variants: {
     variant: {
       outline: "rounded-lg border py-3",
@@ -180,7 +180,7 @@ function ToolGroupContent({
     >
       <div
         className={cn(
-          DISCLOSURE_CONTENT_CLASS,
+          TOOL_TRACE_CONTENT_CLASS,
           "group-data-[variant=outline]/tool-group-root:mt-3 group-data-[variant=outline]/tool-group-root:border-t group-data-[variant=outline]/tool-group-root:px-4 group-data-[variant=outline]/tool-group-root:pt-3",
           "group-data-[variant=muted]/tool-group-root:mt-3 group-data-[variant=muted]/tool-group-root:border-t group-data-[variant=muted]/tool-group-root:px-4 group-data-[variant=muted]/tool-group-root:pt-3",
           "[&>*]:animate-in [&>*]:fade-in-0 [&>*]:blur-in-[2px] [&>*]:slide-in-from-top-1 [&>*]:animation-duration-(--animation-duration) [&>*]:ease-[cubic-bezier(0.32,0.72,0,1)]",

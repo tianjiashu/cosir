@@ -8,6 +8,7 @@ import { ToolStatus } from "./tool-status";
 import { ToolIcon } from "./tool-icons";
 import { useToolDisclosure } from "./tool-disclosure";
 import { childAgentStatusLabel, interruptionLabel, readChildAgentResultDisplay, readChildAgentWaitDisplay } from "./child-agent-display";
+import { TOOL_DETAIL_ROW_CLASS, TOOL_DETAIL_TEXT_ROW_CLASS } from "../elements/tool-layout-tokens";
 
 function toolTitle(toolName: string, verb?: string): string {
   return verb ?? toolName;
@@ -104,7 +105,7 @@ function displaySummary(data: Record<string, unknown>, backendStatus: string): s
     case "child-agent-result": {
       const status = typeof data.status === "string" ? data.status : backendStatus;
       const agent = typeof data.agent_name === "string" ? data.agent_name : "子 Agent";
-      return `${agent} · ${formatToolStatus(status)}`;
+      return `${agent} · 子 Agent：${formatToolStatus(status)}`;
     }
     default:
       return typeof data.path === "string" ? data.path : typeof data.pattern === "string" ? data.pattern : "";
@@ -129,7 +130,7 @@ function ListEntries({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="space-y-2">
       {typeof data.status_hint === "string" && <p className="text-muted-foreground text-xs">{data.status_hint}</p>}
-      <ul className="space-y-0.5 text-xs">
+      <ul className="text-xs">
       {entries.map((entry, index) => {
         const item = asRecord(entry);
         const type = item.type;
@@ -144,7 +145,7 @@ function ListEntries({ data }: { data: Record<string, unknown> }) {
           <span className="truncate">{label}</span>
         );
         return (
-          <li key={`${String(item.path ?? item.name ?? index)}-${index}`} className="flex items-center gap-2 px-2.5 py-1.5">
+          <li key={`${String(item.path ?? item.name ?? index)}-${index}`} className={TOOL_DETAIL_ROW_CLASS}>
             <Icon className="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
             {labelNode}
             {typeof type === "string" && <span className="text-muted-foreground ml-auto">{type}</span>}
@@ -154,14 +155,14 @@ function ListEntries({ data }: { data: Record<string, unknown> }) {
       {files.map((entry, index) => {
         const item = asRecord(entry);
         const path = String(item.path ?? "未知文件");
-        return <li key={`${path}-${index}`} className="truncate px-2.5 py-1.5">{path}</li>;
+        return <li key={`${path}-${index}`} className={TOOL_DETAIL_TEXT_ROW_CLASS}>{path}</li>;
       })}
       {matches.map((entry, index) => {
         const item = asRecord(entry);
         const path = String(item.path ?? "未知文件");
         const line = typeof item.line === "number" ? `:${item.line}` : "";
         const content = typeof item.content === "string" ? item.content : "";
-        return <li key={`${path}-${line}-${index}`} className="truncate px-2.5 py-1.5">{path}{line} {content}</li>;
+        return <li key={`${path}-${line}-${index}`} className={TOOL_DETAIL_TEXT_ROW_CLASS}>{path}{line} {content}</li>;
       })}
       {results.map((entry, index) => {
         const item = asRecord(entry);
@@ -170,7 +171,7 @@ function ListEntries({ data }: { data: Record<string, unknown> }) {
         const title = typeof item.title === "string" && item.title ? item.title : rawUrl;
         if (!rawUrl) return null;
         return (
-          <li key={`${url}-${index}`} className="flex items-center gap-2 px-2.5 py-1.5">
+          <li key={`${url}-${index}`} className={TOOL_DETAIL_ROW_CLASS}>
             <LinkIcon className="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
             {url ? <a href={url} target="_blank" rel="noreferrer" className="truncate hover:text-foreground" title={url}>{title}</a> : <span className="truncate" title={rawUrl}>{title}</span>}
           </li>
@@ -189,7 +190,7 @@ function ListEntries({ data }: { data: Record<string, unknown> }) {
           favicon = `${parsed.origin}/favicon.ico`;
         }
         return (
-          <li key={`${url}-${index}`} className="flex items-center gap-2 px-2.5 py-1.5">
+          <li key={`${url}-${index}`} className={TOOL_DETAIL_ROW_CLASS}>
             {favicon ? (
               <img src={favicon} alt="" className="size-3.5 shrink-0" onError={(event) => { event.currentTarget.style.display = "none"; }} />
             ) : (
@@ -219,6 +220,7 @@ function ChildAgentWaitResult({ data }: { data: Record<string, unknown> }) {
             <span>run {message.childRunId}</span>
             <span className="ml-auto">{childAgentStatusLabel(message.status)}</span>
           </div>
+          {message.endReason && <p className="mt-1 text-amber-300">结束原因：{message.endReason}</p>}
           {message.status === "completed" && message.finalOutput && <p className="mt-1 whitespace-pre-wrap break-words text-muted-foreground">{message.finalOutput}</p>}
         </div>
       ))}
@@ -286,7 +288,7 @@ export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessage
     leading: <ToolIcon name={presentation.icon} aria-hidden="true" />,
     label: <span className="text-sm font-medium">{title}</span>,
     meta: <span className="text-muted-foreground max-w-[45%] truncate">{artifact.error ?? summary}</span>,
-    trailing: <ToolStatus status={artifact.backendStatus} />,
+    trailing: <ToolStatus status={artifact.backendStatus} prefix={data.kind === "child-agent-result" || data.kind === "child-agent-wait-result" ? "工具" : undefined} />,
   };
 
   const [open, setOpen] = useToolDisclosure(artifact.backendStatus, defaultOpen, { openWhileRunning: false });

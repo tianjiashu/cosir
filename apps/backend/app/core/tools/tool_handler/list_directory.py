@@ -47,7 +47,9 @@ class ListDirectoryTool(HandlerBase):
         "List a directory's entries: name, type (file|dir|link), path. Read-only. "
         'Pass path="." for the workspace root; relative paths resolve against the root. '
         "Hidden entries are skipped unless include_hidden is true; use include_globs to show "
-        "only entries whose name matches given patterns."
+        "only entries whose name matches given patterns. Use it when the request does not name "
+        "a specific file or the target is still unclear: browse the project directory to get "
+        "an overview of the project layout."
     )
     permission = "file_search"
     args_model = ListDirectoryArgs

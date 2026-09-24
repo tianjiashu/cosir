@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   contentTypeFor,
+  DIRECTORY_CONTENT_TYPE,
   fileName,
   isImagePath,
 } from "@/components/composer/attachment-policy";
@@ -17,5 +18,9 @@ describe("attachment picker policy", () => {
   it("treats unknown extensions as regular files", () => {
     expect(contentTypeFor("C:\\outside\\notes.md")).toBe("application/octet-stream");
     expect(isImagePath("C:\\outside\\notes.md")).toBe(false);
+  });
+
+  it("uses a stable ordinary-attachment marker for selected directories", () => {
+    expect(DIRECTORY_CONTENT_TYPE).toBe("application/x-directory");
   });
 });

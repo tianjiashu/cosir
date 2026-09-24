@@ -12,10 +12,12 @@ def build_delegation_display_data(
     child_run_id: int | None = None,
     status: str,
     role: str | None = None,
-    final_output: str | None = None,
-    end_reason: str | None = None,
 ) -> dict[str, Any]:
-    """构造父级委派结果的最小展示数据，不携带 prompt 或 child 正文。"""
+    """构造父级委派生命周期展示数据，不携带 prompt 或 child 正文。
+
+    子 Agent 的最终输出属于 child task 的结果，不属于父级委派卡片。父级卡片只保留
+    可追踪的 locator、角色和生命周期，避免长文本进入紧凑的工具轨迹。
+    """
 
     data: dict[str, Any] = {
         "kind": "delegation-result",
@@ -31,8 +33,4 @@ def build_delegation_display_data(
         data["child_task_id"] = child_task_id
     if child_run_id is not None:
         data["child_run_id"] = child_run_id
-    if final_output is not None:
-        data["final_output"] = final_output
-    if end_reason is not None:
-        data["end_reason"] = end_reason
     return data

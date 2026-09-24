@@ -9,8 +9,6 @@ export type DelegationDisplay = {
   childTaskId?: number;
   childRunId?: number;
   status?: ChildAgentLifecycleStatus;
-  finalOutput?: string;
-  statusHint?: string;
 };
 
 export type ChildAgentWaitMessage = {
@@ -84,8 +82,6 @@ export function readDelegationDisplay(value: unknown): DelegationDisplay | null 
   if (data.child_agent_id !== undefined && nonEmptyString(data.child_agent_id) === undefined) return null;
   if (data.child_task_id !== undefined && positiveId(data.child_task_id) === undefined) return null;
   if (data.child_run_id !== undefined && positiveId(data.child_run_id) === undefined) return null;
-  if (data.final_output !== undefined && typeof data.final_output !== "string") return null;
-  if (data.status_hint !== undefined && nonEmptyString(data.status_hint) === undefined) return null;
   return {
     title: nonEmptyString(data.title),
     role: nonEmptyString(data.role),
@@ -93,8 +89,6 @@ export function readDelegationDisplay(value: unknown): DelegationDisplay | null 
     childTaskId: positiveId(data.child_task_id),
     childRunId: positiveId(data.child_run_id),
     status: statusValue,
-    finalOutput: data.final_output as string | undefined,
-    statusHint: nonEmptyString(data.status_hint),
   };
 }
 

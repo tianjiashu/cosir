@@ -3,6 +3,7 @@ import type { TransportToolStatus } from "@/lib/assistant/contract";
 import { cn } from "@/lib/utils";
 import { ToolIcon } from "./tool-icons";
 import { ToolStatus } from "./tool-status";
+import { TOOL_CARD_ROW_CLASS } from "../elements/tool-layout-tokens";
 
 export type FileChange = {
   path: string;
@@ -50,7 +51,7 @@ export function FileOperationCard({
         isTerminalState && "border-destructive/25",
       )}
     >
-      <header className="flex min-w-0 items-center gap-2.5 border-b bg-muted/20 px-3 py-2.5">
+      <header className="flex min-h-8 min-w-0 items-center gap-2.5 border-b bg-muted/20 px-3 py-1.5">
         <ToolIcon name={icon} aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
           {title}
@@ -61,7 +62,7 @@ export function FileOperationCard({
         </span>
       </header>
 
-      <div className={cn("space-y-2 px-3 py-2.5", isTerminalState && "bg-destructive/5")}>
+      <div className={cn("space-y-1 px-3 py-2", isTerminalState && "bg-destructive/5")}>
         {isTerminalState ? (
           <p className="text-xs text-destructive">{error ?? "执行失败"}</p>
         ) : (
@@ -84,7 +85,7 @@ function FileOperationRow({ change }: { change: FileChange }) {
   const destination = change.new_path ?? "目标路径不可用";
 
   return (
-    <div className="flex min-w-0 items-start gap-2">
+    <div className={cn("min-w-0", TOOL_CARD_ROW_CLASS)}>
       <span className={fileChangeStatusBadgeClass(change.status)}>
         {fileChangeStatusLabel(change.status)}
       </span>

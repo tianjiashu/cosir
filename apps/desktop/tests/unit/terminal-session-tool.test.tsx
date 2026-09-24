@@ -49,6 +49,25 @@ describe("TerminalSessionTool", () => {
     expect(html).toContain("打开终端");
   });
 
+  it.each([
+    ["exited", "已退出"],
+    ["failed", "会话失败"],
+    ["closed", "已关闭"],
+  ] as const)("renders terminal session lifecycle status %s independently of tool completion", (status, label) => {
+    const html = renderSession({
+      variant: "terminal-session-start",
+      display_data: {
+        session_id: "term_demo",
+        shell_kind: "powershell",
+        status,
+      },
+    });
+
+    expect(html).toContain(label);
+    expect(html).toContain("已完成");
+    expect(html).not.toContain("运行中");
+  });
+
   it("renders terminal_read as a compact trace without a panel action", () => {
     const html = renderSession({
       variant: "terminal-session-read",

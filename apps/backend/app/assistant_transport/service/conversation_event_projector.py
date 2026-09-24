@@ -106,8 +106,9 @@ class _EventIdWindow:
 class ConversationEventProjector:
     """按事件顺序把 conversation event 投影为 Task snapshot。
 
-    Projector 是 Transport 适配边界：它只读取 event 并维护 snapshot，不触碰
-    ``RuntimeContextManager``。每个 event 自带 ``plan`` 方法（继承自
+    Projector 是 Transport 适配边界：它只读取 event 并维护 snapshot；子 Run 状态投影时，
+    state service 会尽力把父委派 display metadata 写回已有 context 行，但不修改
+    ``RuntimeContextManager`` 的消息正文。每个 event 自带 ``plan`` 方法（继承自
     ``ConversationEventEnvelope`` 的抽象契约），projector 直接调用 ``event.plan(state)``
     获得 mutation，无需按类型分派。事件在单个 backend 进程内按 workflow 的消费顺序处理。
 
@@ -156,7 +157,8 @@ class ConversationEventProjector:
             KeyError: 事件引用的消息、part 或工具调用不存在。
 
         副作用:
-            只更新进程内 Transport state 并通知订阅者；不写入数据库。
+            更新进程内 Transport state 并通知订阅者；父委派 display metadata 收敛时可能
+            写回已有 context 行。
         """
 
         event = self._parse(raw_event)
@@ -184,7 +186,6 @@ class ConversationEventProjector:
                         event.task_id,
                         event.run_id,
                         event.status.value,
-                        event.end_reason,
                     )
                 except AttributeError:
                     # In-memory projector test owners intentionally implement only the

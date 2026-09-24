@@ -10,6 +10,7 @@ import { ToolStatus } from "./tool-status";
 import { useToolDisclosure } from "./tool-disclosure";
 import { cancelToolCall } from "@/lib/assistant/cancel-tool-call";
 import { TerminalViewport } from "./terminal-viewport";
+import { DARK_TOOL_CARD_CONTENT_CLASS, DARK_TOOL_CARD_HEADER_CLASS } from "../elements/tool-layout-tokens";
 
 /** 显式 shell 的徽标文案；`auto` 沿用宿主默认 shell，不展示徽标。 */
 const SHELL_LABELS: Record<string, string> = {
@@ -95,9 +96,9 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className="group/tool-call my-1 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 text-zinc-100 shadow-sm"
+      className="group/tool-call overflow-hidden rounded-xl border border-white/10 bg-zinc-900 text-zinc-100 shadow-sm"
     >
-      <div className="flex min-w-0 items-center gap-1 border-b border-white/5 bg-white/[0.02] pr-2">
+      <div className={DARK_TOOL_CARD_HEADER_CLASS}>
         <DisclosureRow
           leading={<TerminalIcon className="size-3.5 text-zinc-400" aria-hidden="true" />}
           label={
@@ -146,7 +147,7 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
           </Button>
         )}
       </div>
-      <CollapsibleContent className="ml-6 pb-2 pl-2 pr-2">
+      <CollapsibleContent className={DARK_TOOL_CARD_CONTENT_CLASS}>
         <div className="overflow-hidden rounded-lg border border-white/10 bg-zinc-950">
           <div className="max-h-72 overflow-hidden px-3 py-2 font-mono text-xs leading-relaxed">
             {workdir && <p className="mb-1 text-[11px] text-zinc-500">cwd {workdir}</p>}

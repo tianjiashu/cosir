@@ -370,6 +370,62 @@ def test_worker_exit_is_terminal_and_shutdown_closes_workers(tmp_path: Path) -> 
     assert factory.workers[0].closed
 
 
+def test_session_status_observer_receives_async_exit_after_start(tmp_path: Path) -> None:
+    factory = FakeWorkerFactory()
+    changes = []
+    service = TerminalSessionService(
+        worker_factory=factory,
+        status_observer=changes.append,
+    )
+
+    snapshot = service.start(
+        task_id=1,
+        workspace_id=1,
+        workspace_root=str(tmp_path),
+        run_id=10,
+    )
+    factory.workers[0].emit_exit(7)
+
+    assert [change.status for change in changes] == ["running", "exited"]
+    assert changes[-1].session_id == snapshot["session_id"]
+    assert changes[-1].run_id == 10
+    assert changes[-1].exit_code == 7
+
+
+def test_session_status_observer_receives_failure_and_explicit_close(tmp_path: Path) -> None:
+    failure_factory = FakeWorkerFactory()
+    failure_changes = []
+    failure_service = TerminalSessionService(
+        worker_factory=failure_factory,
+        status_observer=failure_changes.append,
+    )
+    failure_service.start(
+        task_id=1,
+        workspace_id=1,
+        workspace_root=str(tmp_path),
+        run_id=11,
+    )
+    failure_factory.workers[0].emit_error("WORKER_FAILED")
+
+    assert [change.status for change in failure_changes] == ["running", "failed"]
+
+    close_factory = FakeWorkerFactory()
+    close_changes = []
+    close_service = TerminalSessionService(
+        worker_factory=close_factory,
+        status_observer=close_changes.append,
+    )
+    close_snapshot = close_service.start(
+        task_id=1,
+        workspace_id=1,
+        workspace_root=str(tmp_path),
+        run_id=12,
+    )
+    close_service.close(str(close_snapshot["session_id"]), task_id=1)
+
+    assert [change.status for change in close_changes] == ["running", "closed"]
+
+
 def test_terminal_completion_is_retired_from_active_registry(tmp_path: Path) -> None:
     service, factory = make_service()
     snapshot = service.start(

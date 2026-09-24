@@ -73,9 +73,9 @@ describe("task display title", () => {
 
   it("truncates long titles with a single ellipsis", () => {
     expect(taskDisplayTitle("x".repeat(TASK_TITLE_DISPLAY_LIMIT + 5))).toBe(
-      `${"x".repeat(TASK_TITLE_DISPLAY_LIMIT)}…`,
+      `${"x".repeat(TASK_TITLE_DISPLAY_LIMIT - 1)}…`,
     );
-    expect(taskDisplayTitle("短标题", 2)).toBe("短标…");
+    expect(taskDisplayTitle("短标题", 2)).toBe("短…");
   });
 
   it("does not stack an ellipsis onto a trailing ASCII dot", () => {
@@ -91,6 +91,6 @@ describe("task display title", () => {
     const node = model.roots[0];
 
     expect(node.full_title).toBe(visibleTitle);
-    expect(node.display_title).toBe(`${visibleTitle.slice(0, TASK_TITLE_DISPLAY_LIMIT)}…`);
+    expect(node.display_title).toBe(`${visibleTitle.slice(0, TASK_TITLE_DISPLAY_LIMIT - 1)}…`);
   });
 });

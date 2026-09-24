@@ -175,9 +175,9 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
 | `delegate_task` | `trace`、可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、`child_run_id`、状态 |
-| `child_agent_send` | `standalone`、可展开、`details`、`send` | `child-agent-result` | `operation`、child task/run locator、状态、agent 标识、最终摘要、终态原因 |
-| `child_agent_status` | `standalone`、可展开、`details`、`info` | `child-agent-result` | `operation`、child task/run locator、状态、agent 标识、最终摘要、终态原因 |
-| `child_agent_wait` | `standalone`、可展开、`details`、`clock` | `child-agent-wait-result` | `timed_out`、终态 messages、pending locator、`interrupted_by` |
+| `child_agent_send` | `trace`、可展开、`details`、`send` | `child-agent-result` | `operation`、child task/run locator、状态、agent 标识、最终摘要、终态原因 |
+| `child_agent_status` | `trace`、可展开、`details`、`info` | `child-agent-result` | `operation`、child task/run locator、状态、agent 标识、最终摘要、终态原因 |
+| `child_agent_wait` | `trace`、可展开、`details`、`clock` | `child-agent-wait-result` | `timed_out`、终态 messages、pending locator、`interrupted_by` |
 
 交互式 terminal handler 已注册到 Agent tool schema，并继续复用现有 renderer 路由；静态
 布局为 `terminal`，动态 `kind` 为 `terminal-session`。静态 `ToolDisplayHints.variant`

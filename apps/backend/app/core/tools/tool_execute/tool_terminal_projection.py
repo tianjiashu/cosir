@@ -41,7 +41,6 @@ import copy
 from collections.abc import Mapping
 from typing import Literal
 
-from app.assistant_transport.event import ToolCallStatusChangedEvent
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolObservation
 from app.service.depends import get_conversation_event_projector
@@ -213,6 +212,11 @@ def _project(
         )
         return False
     try:
+        # 延迟导入：``app.assistant_transport.event`` 包初始化会经 tool_names → ``app.core.tools``
+        # 包 → tool_system → tool_executor 反向回到本模块，模块级导入会在 event 包尚未导出该事件时
+        # 触发 ImportError（后端启动即失败）。投影属运行期路径，此处导入时 event 包已完全就绪。
+        from app.assistant_transport.event import ToolCallStatusChangedEvent
+
         # 直投而非 ``dispatch_conversation_event``：后者在 graph 上下文内优先把事件入 LangGraph
         # custom stream，而 custom stream 要等节点返回才流出；本投影发生在 tools 节点内部的
         # 工具执行期，走 stream 会让「提前」退化成「整批跑完才可见」。

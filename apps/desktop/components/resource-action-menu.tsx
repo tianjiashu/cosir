@@ -16,7 +16,7 @@ export function ResourceActionMenu({
       <PopoverTrigger
         type="button"
         aria-label={`更多 ${label} 操作`}
-        className="text-muted-foreground hover:text-foreground size-6 rounded-md p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        className="text-muted-foreground hover:text-foreground flex size-6 items-center justify-center rounded-md p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
       >
         <MoreHorizontalIcon className="size-4" />
       </PopoverTrigger>

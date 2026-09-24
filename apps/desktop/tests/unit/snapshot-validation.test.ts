@@ -79,7 +79,6 @@ describe("Transport snapshot validation", () => {
           child_task_id: 501,
           child_run_id: 903,
           status: "completed",
-          final_output: "已完成审查。",
         },
       }],
     }] }];
@@ -148,6 +147,32 @@ describe("Transport snapshot validation", () => {
     }] }];
     snapshot.current_run_id = 1;
     expect(parseTransportState(snapshot)).toBe(snapshot);
+  });
+
+  it("rejects child output embedded in a parent delegation display", () => {
+    const snapshot = validSnapshot();
+    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", usage: null, error: null, messages: [{
+      id: "m1",
+      role: "assistant",
+      parts: [{
+        type: "tool-call",
+        toolCallId: "delegate-1",
+        toolName: "delegate_task",
+        status: "completed",
+        args: {},
+        display_data: {
+          kind: "delegation-result",
+          title: "审查代码",
+          child_task_id: 501,
+          child_run_id: 903,
+          status: "completed",
+          final_output: "不应进入父级委派卡片",
+        },
+      }],
+    }] }];
+    snapshot.current_run_id = 1;
+
+    expect(() => parseTransportState(snapshot)).toThrow("已知字段");
   });
 
   it("accepts a code+message snapshot error and rejects the legacy retryable field", () => {

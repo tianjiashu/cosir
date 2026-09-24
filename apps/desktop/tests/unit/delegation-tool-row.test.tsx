@@ -32,7 +32,7 @@ function renderDelegationRow(runId?: number, displayData: Record<string, unknown
 }
 
 describe("DelegationToolRow", () => {
-  it("renders a compact child session reference from the stable display payload", () => {
+  it("does not duplicate child locators or lifecycle text in the compact row", () => {
     const html = renderDelegationRow(undefined, {
       kind: "delegation-result",
       title: "审查代码",
@@ -46,14 +46,15 @@ describe("DelegationToolRow", () => {
     });
 
     expect(html).toContain("Reviewer");
-    expect(html).toContain("task 501");
-    expect(html).toContain("run 902");
-    expect(html).toContain("运行中");
+    expect(html).toContain("执行中");
+    expect(html).not.toContain("task 501");
+    expect(html).not.toContain("run 902");
+    expect(html).not.toContain("运行中");
     expect(html).not.toContain("不应显示的原始 prompt");
     expect(html).not.toContain("Traceback: secret=do-not-render");
   });
 
-  it("projects completed final output without exposing prompt or raw errors", () => {
+  it("keeps child output out of the parent delegation row", () => {
     const html = renderDelegationRow(undefined, {
       kind: "delegation-result",
       title: "审查代码",
@@ -61,13 +62,11 @@ describe("DelegationToolRow", () => {
       child_run_id: 903,
       role: "Reviewer",
       status: "completed",
-      final_output: "已完成审查：发现一个可修复问题。",
       prompt: "隐藏 prompt",
       error: "raw provider exception",
     });
 
     expect(html).toContain("已完成");
-    expect(html).toContain("已完成审查：发现一个可修复问题。");
     expect(html).not.toContain("隐藏 prompt");
     expect(html).not.toContain("raw provider exception");
   });
@@ -83,12 +82,10 @@ describe("DelegationToolRow", () => {
       child_run_id: 904,
       role: "Reviewer",
       status,
-      status_hint: "受控失败提示",
       error: "raw exception must stay hidden",
     });
 
     expect(html).toContain(label);
-    expect(html).toContain("受控失败提示");
     expect(html).not.toContain("raw exception must stay hidden");
   });
 

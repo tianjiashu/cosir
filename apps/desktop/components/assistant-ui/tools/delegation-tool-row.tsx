@@ -8,9 +8,10 @@ import { useWorkbenchActions } from "@/lib/workbench/context";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { DisclosureRow } from "../elements/disclosure-row.aui";
 import { ToolStatus } from "./tool-status";
-import { childAgentStatusLabel, readDelegationDisplay } from "./child-agent-display";
+import { readDelegationDisplay } from "./child-agent-display";
 import { readToolArtifact } from "./types";
 import { useToolDisclosure } from "./tool-disclosure";
+import { DARK_TOOL_CARD_CONTENT_CLASS, DARK_TOOL_CARD_HEADER_CLASS } from "../elements/tool-layout-tokens";
 
 type DelegationToolRowProps = ToolCallMessagePartProps & {
   /** Parent run context is supplied only by the writable main Thread. */
@@ -108,52 +109,36 @@ export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCanc
     </Button>
   ) : null;
 
-  const sessionReference = [
-    childTaskId === undefined ? null : `task ${childTaskId}`,
-    childRunId === undefined ? null : `run ${childRunId}`,
-  ].filter(Boolean).join(" · ");
-  const lifecycleLabel = status === "unknown" ? "状态未知" : childAgentStatusLabel(status);
-  const meta = [
-    role ?? "角色未知",
-    sessionReference,
-    lifecycleLabel,
-    display?.finalOutput ?? display?.statusHint,
-  ].filter(Boolean).join(" · ");
-  const output = display?.finalOutput;
-  const hint = display?.statusHint;
+  // Locator and lifecycle fields stay in the transport artifact for opening,
+  // cancellation, and child-run convergence. They are intentionally not
+  // repeated in the compact row because ToolStatus is their single UI owner.
+  const meta = role ? <span className="max-w-[55%] truncate text-zinc-400">{role}</span> : undefined;
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setOpen} className="group/tool-call my-1 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 text-zinc-100 shadow-sm">
-      <div className="flex min-w-0 items-center gap-1 border-b border-white/5 bg-white/[0.02] pr-2">
+    <Collapsible open={isOpen} onOpenChange={setOpen} className="group/tool-call overflow-hidden rounded-xl border border-white/10 bg-zinc-900 text-zinc-100 shadow-sm">
+      <div className={DARK_TOOL_CARD_HEADER_CLASS}>
         <DisclosureRow
           leading={<UsersIcon className="size-3.5 text-zinc-400" aria-hidden="true" />}
           label={<span className="truncate text-sm font-medium" title={title}>{title}</span>}
-          meta={<span className="max-w-[55%] truncate text-zinc-400">{meta}</span>}
+          meta={meta}
           trailing={<ToolStatus status={status} className="text-zinc-400" />}
           tone="terminal"
           className="w-auto min-w-0 flex-1 border-b-0 bg-transparent px-3"
           data-testid="tool-activity-row"
-          aria-label={`子 Agent：${title}`}
-          onClick={(event) => {
-            if (canOpen) {
-              event.preventDefault();
-              open();
-            }
-          }}
+          aria-label={`展开子 Agent详情：${title}`}
         />
         {canOpen && (
-          <Button type="button" variant="ghost" size="sm" className="h-7 shrink-0 px-2 text-zinc-400 hover:bg-white/10 hover:text-zinc-100" onClick={open}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 shrink-0 px-2 text-zinc-400 hover:bg-white/10 hover:text-zinc-100" aria-label={`打开子 Agent工作台：${title}`} onClick={open}>
             打开
           </Button>
         )}
         {cancelAction}
       </div>
-      <CollapsibleContent className="ml-6 pb-2 pl-2 pr-2">
+      <CollapsibleContent className={DARK_TOOL_CARD_CONTENT_CLASS}>
         <div className="space-y-1.5 border-t border-white/5 px-3 py-2 font-mono text-xs text-zinc-300">
-          {sessionReference && <p className="text-zinc-500">{sessionReference}</p>}
-          {hint && <p className="text-amber-300">{hint}</p>}
-          {status === "completed" && output && <p className="whitespace-pre-wrap break-words text-zinc-200">{output}</p>}
-          {(status === "failed" || status === "cancelled") && !hint && <p className={status === "failed" ? "text-red-300" : "text-zinc-400"}>{status === "failed" ? "子 Agent 执行失败" : "子 Agent 已取消"}</p>}
+          {status === "completed" && <p className="text-zinc-400">子 Agent 已完成；打开工作台查看完整结果。</p>}
+          {status === "failed" && <p className="text-red-300">子 Agent 执行失败。</p>}
+          {status === "cancelled" && <p className="text-zinc-400">子 Agent 已取消。</p>}
           {cancellationError && <p className="text-amber-300" role="alert">{cancellationError}</p>}
         </div>
       </CollapsibleContent>

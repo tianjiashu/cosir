@@ -15,12 +15,12 @@ from app.core.tools.tool_models import (
     TerminalStartArgs,
     TerminalWriteArgs,
 )
-from app.core.tools.tool_system import ToolSystem
+from app.core.tools.tool_registry import ToolRegistry
 from app.service.terminal.terminal_session_service import TerminalSessionService
 from app.service.terminal.worker import ProcessTerminalWorker
 
 
-def test_terminal_handlers_implement_handler_base_and_are_registered() -> None:
+def test_terminal_handlers_implement_handler_base_and_are_registered(monkeypatch) -> None:
     handlers = (
         TerminalStartTool,
         TerminalWriteTool,
@@ -30,7 +30,14 @@ def test_terminal_handlers_implement_handler_base_and_are_registered() -> None:
     )
 
     assert all(issubclass(handler, HandlerBase) for handler in handlers)
-    registered_names = ToolSystem.build_tool_system().registry.get_all_tool_names()
+    monkeypatch.setattr(
+        "app.core.tools.tool_handler.terminal_session.signal.platform.system",
+        lambda: "Linux",
+    )
+    registry = ToolRegistry()
+    for handler in handlers:
+        registry.register(handler().to_definition_if_avaliable())
+    registered_names = registry.get_all_tool_names()
     assert {
         "terminal_start",
         "terminal_read",
@@ -41,6 +48,16 @@ def test_terminal_handlers_implement_handler_base_and_are_registered() -> None:
     assert not hasattr(ProcessTerminalWorker, "resize")
     assert not hasattr(TerminalSessionService, "resize")
     assert "terminal_resize" not in {handler.name for handler in handlers}
+
+    monkeypatch.setattr(
+        "app.core.tools.tool_handler.terminal_session.signal.platform.system",
+        lambda: "Windows",
+    )
+    windows_registry = ToolRegistry()
+    for handler in handlers:
+        windows_registry.register(handler().to_definition_if_avaliable())
+    windows_registered_names = windows_registry.get_all_tool_names()
+    assert "terminal_signal" not in windows_registered_names
 
 
 def test_terminal_start_schema_rejects_removed_dimensions() -> None:

@@ -208,6 +208,40 @@ def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
     assert prepared.extra.attachments[0]["id"] == "readme"
 
 
+def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
+    attachment_path = Path(__file__).parent
+    service = ConversationRunService.__new__(ConversationRunService)
+    command = ConversationRunCommand(
+        display_text="请检查 [[cosir-file:references]]",
+        attachments=[
+            ConversationRunAttachmentInput(
+                id="references",
+                name="references",
+                content_type="application/x-directory",
+                path=str(attachment_path),
+            )
+        ],
+    )
+
+    prepared = service._prepare_command(  # type: ignore[attr-defined]
+        7,
+        command,
+        run_id=None,
+        model_name=None,
+    )
+
+    assert prepared.input_text == f"请检查 {attachment_path}"
+    assert prepared.extra is not None
+    assert prepared.extra.attachments == [
+        {
+            "id": "references",
+            "name": "references",
+            "content_type": "application/x-directory",
+            "path": str(attachment_path),
+        }
+    ]
+
+
 def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
     attachment_path = Path(__file__)
     existing_extra = ConversationRunExtra(

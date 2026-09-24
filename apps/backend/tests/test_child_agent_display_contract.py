@@ -15,6 +15,7 @@ from app.core.tools.display.child_agent_display import (
     build_child_agent_result_display_data,
     build_child_agent_wait_display_data,
 )
+from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 
@@ -68,6 +69,28 @@ def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> Non
     }
     assert wait["kind"] == "child-agent-wait-result"
     assert wait["messages"][0]["end_reason"] is None
+
+
+def test_parent_delegation_display_never_carries_child_output() -> None:
+    display = build_delegation_display_data(
+        title="Review",
+        child_agent_id="reviewer",
+        child_task_id=2,
+        child_run_id=3,
+        status="completed",
+        role="Reviewer",
+    )
+
+    assert display == {
+        "kind": "delegation-result",
+        "title": "Review",
+        "child_agent_id": "reviewer",
+        "child_task_id": 2,
+        "child_run_id": 3,
+        "status": "completed",
+        "role": "Reviewer",
+    }
+    assert "final_output" not in display
 
 
 def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(

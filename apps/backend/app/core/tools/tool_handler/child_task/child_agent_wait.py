@@ -236,7 +236,7 @@ class ChildAgentWaitTool(HandlerBase):
                 surface="standalone",
                 expandable=False,
                 expand_layout="details",
-                show_result=True,
+                show_result=False,
             ),
         )
 

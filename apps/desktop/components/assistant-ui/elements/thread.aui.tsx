@@ -31,6 +31,7 @@ import {
   ToolGroupTrigger,
 } from "@/components/assistant-ui/elements/tool-group.aui";
 import { summarizeToolGroup } from "@/components/assistant-ui/elements/tool-group-status";
+import { ASSISTANT_PART_STACK_CLASS } from "@/components/assistant-ui/elements/tool-layout-tokens";
 import { ToolPart } from "@/components/assistant-ui/tools/tool-part";
 import { readToolArtifact } from "@/components/assistant-ui/tools/types";
 import { Button } from "@/components/ui/button";
@@ -602,7 +603,7 @@ const AssistantMessageDefault: FC = () => {
       data-role="assistant"
       className="relative -mb-6 pb-6 px-2 [content-visibility:auto] [contain-intrinsic-size:auto_24rem]"
     >
-      <div className="text-foreground leading-relaxed wrap-break-word">
+      <div className={cn("aui-assistant-part-stack text-foreground wrap-break-word", ASSISTANT_PART_STACK_CLASS)}>
         <MessagePrimitive.GroupedParts
           groupBy={assistantMessageGroupBy}
         >

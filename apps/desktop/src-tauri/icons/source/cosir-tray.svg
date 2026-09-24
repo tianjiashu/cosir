@@ -1,18 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <path
-    d="M764 248C690 196 602 168 508 168C320 168 194 304 194 512C194 720 320 856 508 856C602 856 690 828 764 776"
+    d="M766 254C696 200 610 174 516 174C326 174 194 308 194 512C194 716 326 850 516 850C610 850 696 824 766 770"
     fill="none"
     stroke="#F8FAFC"
     stroke-linecap="round"
-    stroke-width="148"
+    stroke-width="154"
   />
   <path
-    d="M402 408L520 512L402 616"
+    d="M418 420L516 512L418 604"
     fill="none"
-    stroke="#F8FAFC"
+    stroke="#CFFAFE"
     stroke-linecap="round"
     stroke-linejoin="round"
     stroke-width="64"
   />
-  <circle cx="764" cy="512" r="58" fill="#22D3EE"/>
+  <circle cx="766" cy="512" r="62" fill="#22D3EE"/>
 </svg>

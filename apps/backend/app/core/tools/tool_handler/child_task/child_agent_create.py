@@ -54,7 +54,9 @@ def _contract_description() -> str:
     function 定义里同时下发给模型，同一数值说两遍纯属浪费 token）；这里只保留「超预算会被
     立刻拒绝」这一确定性后果。**不下发任何 child 并发额度契约**：进程内没有 child 并发
     裁决点，文案里写「超出 N 个会被拒绝」等于向模型下发不存在的规则（2026-09-23 随无执行点
-    的并发配置一并删除）。
+    的并发配置一并删除）。**不下发 child 的工具集收窄规则**：进程内不存在「父权限 ∩ 子权限」
+    这一逻辑（child 工具集只由自身 profile 的 ``allowed_tools`` 减 ``CHILD_BANNED_TOOLS``
+    决定），原先的 "reduced by parent and child permissions" 表述不准确，2026-09-24 删除。
 
     参数:
         无。
@@ -68,15 +70,14 @@ def _contract_description() -> str:
     副作用:
         无（纯常量拼接，不读配置、不访问注册表）。
     """
-
     return (
-        "Delegate one focused subtask to a single child agent and wait for its result. Use it "
+        "Delegate one focused subtask to a single child agent. Use it "
         "when part of the work is separable from your own turn. The child runs its own agent "
         "loop with only your message as input — it cannot see this conversation — and returns "
         "only a final summary, so the message must be self-contained. A child cannot delegate "
-        "further, and its tools are reduced by parent and child permissions. Delegation is "
-        "asynchronous: it returns stable child references immediately; use child_agent_wait "
-        "or child_agent_status to observe completion. A failed delegation is terminal: adjust "
+        "further. Delegation is asynchronous: after creating the child you can wait for it with "
+        "child_agent_wait, or work on other tasks that do not interfere with it. "
+        "A failed delegation is terminal: adjust "
         "the contract or ask the user instead of retrying identical arguments. "
         "CRITICAL BUDGET LIMIT: an over-budget call is rejected immediately and counts as a "
         "tool error, so trim or split the task instead of overshooting."
@@ -396,8 +397,8 @@ class DelegateTaskTool(HandlerBase):
                 verb="委派任务",
                 icon="users",
                 surface="standalone",
-                expandable=False,
-                expand_layout="none",
+                expandable=True,
+                expand_layout="details",
                 show_result=False,
             ),
         )

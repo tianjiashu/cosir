@@ -3,12 +3,14 @@
 import { useState, type FC } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { PaperclipIcon } from "lucide-react";
+import { FilePlusIcon, FolderOpenIcon, PaperclipIcon } from "lucide-react";
 
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import {
   contentTypeFor,
+  DIRECTORY_CONTENT_TYPE,
   fileName,
   isImagePath,
 } from "@/components/composer/attachment-policy";
@@ -32,6 +34,10 @@ async function readSelectedFile(path: string, name: string): Promise<File> {
   return new File([new Uint8Array(bytes)], name, { type: contentTypeFor(path) });
 }
 
+function createEmptyAttachmentFile(name: string, contentType: string): File {
+  return new File([], name, { type: contentType });
+}
+
 export const AttachmentPicker: FC<AttachmentPickerProps> = ({
   workspaceRoot,
   onPicked,
@@ -40,7 +46,7 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
 }) => {
   const [opening, setOpening] = useState(false);
 
-  const choose = async () => {
+  const chooseFiles = async () => {
     if (opening || disabled) return;
     setOpening(true);
     try {
@@ -66,7 +72,7 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
           }) });
           continue;
         }
-        const file = new File([], name, { type: contentType });
+        const file = createEmptyAttachmentFile(name, contentType);
         const id = crypto.randomUUID();
         picked.push({ id, kind: "file", path, name, file: registerLocalAttachment(file, {
           id, path, name, contentType, kind: "file",
@@ -85,18 +91,81 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
     }
   };
 
+  const chooseDirectory = async () => {
+    if (opening || disabled) return;
+    setOpening(true);
+    try {
+      const selected = await open({
+        multiple: false,
+        directory: true,
+        defaultPath: workspaceRoot,
+        title: "选择参考文件夹",
+      });
+      if (typeof selected !== "string") return;
+
+      const path = await invoke<string>("resolve_selected_attachment_path", { path: selected });
+      const name = fileName(path);
+      const id = crypto.randomUUID();
+      const file = createEmptyAttachmentFile(name, DIRECTORY_CONTENT_TYPE);
+      await onPicked([{
+        id,
+        kind: "file",
+        path,
+        name,
+        file: registerLocalAttachment(file, {
+          id,
+          path,
+          name,
+          contentType: DIRECTORY_CONTENT_TYPE,
+          kind: "file",
+        }),
+      }]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "选择文件夹失败";
+      onError?.(message);
+      await frontendLog("ERROR", "attachment_directory_picker_failed", "文件夹附件选择失败", {
+        data: { selectedCount: 0 },
+        error,
+      });
+    } finally {
+      setOpening(false);
+    }
+  };
+
   return (
-    <TooltipIconButton
-      tooltip="添加图片或附件"
-      side="bottom"
-      variant="ghost"
-      size="icon"
-      className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 size-7 rounded-full"
-      aria-label={opening ? "正在选择附件" : "添加图片或附件"}
-      disabled={opening || disabled}
-      onClick={() => void choose()}
-    >
-      <PaperclipIcon className="size-4" />
-    </TooltipIconButton>
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 size-7 rounded-full"
+            aria-label={opening ? "正在选择附件" : "添加图片、文件或文件夹"}
+            title="添加图片、文件或文件夹"
+            disabled={opening || disabled}
+          >
+            <PaperclipIcon className="size-4" />
+          </Button>
+        }
+      />
+      <PopoverContent align="end" side="top" className="w-52 p-1">
+        <button
+          type="button"
+          className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          onClick={() => void chooseFiles()}
+        >
+          <FilePlusIcon className="text-muted-foreground size-4" />
+          <span>选择文件或图片</span>
+        </button>
+        <button
+          type="button"
+          className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          onClick={() => void chooseDirectory()}
+        >
+          <FolderOpenIcon className="text-muted-foreground size-4" />
+          <span>选择文件夹</span>
+        </button>
+      </PopoverContent>
+    </Popover>
   );
 };

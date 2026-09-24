@@ -55,7 +55,7 @@ function requireOptionalNonEmptyString(value: unknown, path: string): void {
 function validateDelegationDisplayData(data: Record<string, unknown>, path: string): void {
   const allowed = [
     "kind", "title", "child_agent_id", "delegation_id", "child_task_id", "child_run_id",
-    "status", "role", "final_output", "status_hint", "end_reason",
+    "status", "role",
   ];
   if (Object.keys(data).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   if (typeof data.title !== "string" || data.title.trim() === "") throw new TransportSnapshotValidationError(`${path}.title`, "非空字符串");
@@ -65,9 +65,6 @@ function validateDelegationDisplayData(data: Record<string, unknown>, path: stri
   if (data.child_task_id !== undefined) requirePositiveInteger(data.child_task_id, `${path}.child_task_id`);
   if (data.child_run_id !== undefined) requirePositiveInteger(data.child_run_id, `${path}.child_run_id`);
   if (data.status !== undefined) requireKnownChildStatus(data.status, `${path}.status`);
-  if (data.final_output !== undefined && typeof data.final_output !== "string") throw new TransportSnapshotValidationError(`${path}.final_output`, "字符串");
-  requireOptionalNonEmptyString(data.status_hint, `${path}.status_hint`);
-  requireOptionalNonEmptyString(data.end_reason, `${path}.end_reason`);
 }
 
 function validateChildWaitDisplayData(data: Record<string, unknown>, path: string): void {
