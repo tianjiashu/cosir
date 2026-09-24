@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1320" viewBox="0 0 1920 1320" role="img" aria-labelledby="title desc">
+  <title id="title">coding-agent Agent 架构图</title>
+  <desc id="desc">单用户本机桌面 Agent 的进程、执行、上下文、工具与持久化边界。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f7f9fc"/><stop offset="1" stop-color="#eef3f9"/></linearGradient>
+    <linearGradient id="head" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#132b4a"/><stop offset="1" stop-color="#245a78"/></linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%"><feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#17324d" flood-opacity=".09"/></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#58728e"/></marker>
+    <marker id="blueArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#2384b8"/></marker>
+    <marker id="greenArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#2c9b7a"/></marker>
+    <style>
+      text{font-family:"Microsoft YaHei UI","Microsoft YaHei",Arial,sans-serif;fill:#172b43}
+      .title{font-size:34px;font-weight:700;fill:#fff}.subtitle{font-size:15px;fill:#d7e5f0}
+      .zone{font-size:15px;font-weight:700;letter-spacing:1px;fill:#526a82}
+      .h{font-size:19px;font-weight:700}.body{font-size:14px;fill:#52677e}.small{font-size:12px;fill:#62778e}
+      .tiny{font-size:11px;fill:#6b7f94}.pill{font-size:11px;font-weight:600}
+      .card{fill:#fff;stroke:#d8e2ed;stroke-width:1.4;rx:14;filter:url(#shadow)}
+      .runtime{fill:#f1f7ff;stroke:#b7d2ed}.tool{fill:#f2faf7;stroke:#b9dfd2}.data{fill:#fff8ed;stroke:#ecd3a6}.muted{fill:#f6f8fa;stroke:#d9e1e8}
+      .link{fill:none;stroke:#58728e;stroke-width:2.2;marker-end:url(#arrow)}
+      .linkBlue{fill:none;stroke:#2384b8;stroke-width:2.5;marker-end:url(#blueArrow)}
+      .linkGreen{fill:none;stroke:#2c9b7a;stroke-width:2.3;marker-end:url(#greenArrow)}
+      .dash{fill:none;stroke:#8798aa;stroke-width:1.8;stroke-dasharray:7 6;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1920" height="1320" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1920" height="116" fill="url(#head)"/>
+  <text x="64" y="54" class="title">coding-agent · Agent 架构</text>
+  <text x="66" y="84" class="subtitle">单用户本机桌面应用  ·  进程边界、Agent 执行链路与事实所有权</text>
+  <rect x="1550" y="36" width="300" height="42" rx="21" fill="#ffffff" fill-opacity=".12" stroke="#ffffff" stroke-opacity=".24"/>
+  <text x="1700" y="62" text-anchor="middle" class="subtitle">代码依据：README + 当前实现</text>
+
+  <!-- Desktop and local process boundary -->
+  <text x="64" y="151" class="zone">桌面与进程边界</text>
+  <rect x="64" y="171" width="1792" height="144" rx="18" fill="#eaf0f6" stroke="#cbd7e3" stroke-width="1.5"/>
+  <rect x="88" y="193" width="378" height="98" class="card"/>
+  <text x="112" y="222" class="h">Tauri 桌面宿主</text>
+  <text x="112" y="248" class="body">Rust 主进程 · 窗口 / IPC · 后端生命周期</text>
+  <text x="112" y="272" class="small">backend_supervisor · 动态端口 · readiness / 有限恢复</text>
+  <rect x="526" y="193" width="350" height="98" class="card"/>
+  <text x="550" y="222" class="h">React 前端 · WebView2</text>
+  <text x="550" y="248" class="body">交互、Assistant UI 与渲染状态</text>
+  <text x="550" y="272" class="small">runtime config → localhost HTTP / SSE</text>
+  <rect x="1050" y="193" width="756" height="98" class="card"/>
+  <text x="1076" y="222" class="h">Python / FastAPI 后端进程</text>
+  <text x="1076" y="248" class="body">Agent Runtime · LangGraph workflow · 本机服务与工具执行</text>
+  <text x="1076" y="272" class="small">127.0.0.1 · 桌面启动时由 Tauri 注入数据目录并管理进程树</text>
+  <path d="M466 242H518" class="dash"/>
+  <text x="492" y="230" text-anchor="middle" class="tiny">IPC</text>
+  <path d="M876 242H1042" class="linkBlue"/>
+  <text x="959" y="230" text-anchor="middle" class="tiny">HTTP / SSE</text>
+  <path d="M1050 282H884" class="linkGreen"/>
+  <text x="965" y="306" text-anchor="middle" class="tiny">状态流 / 展示数据</text>
+
+  <!-- Backend boundary -->
+  <rect x="64" y="340" width="1792" height="800" rx="20" fill="#f5f8fb" stroke="#c8d6e3" stroke-width="1.6"/>
+  <rect x="64" y="340" width="1792" height="48" rx="20" fill="#e7eef5"/>
+  <path d="M64 368v20h1792v-20" fill="#e7eef5"/>
+  <text x="90" y="371" class="zone">FASTAPI 后端 · 业务与 Agent 运行边界</text>
+
+  <!-- Ingress -->
+  <rect x="96" y="421" width="272" height="108" class="card"/>
+  <text x="120" y="451" class="h">Assistant Transport</text>
+  <text x="120" y="477" class="body">POST /assistant · 命令幂等</text>
+  <text x="120" y="501" class="small">建 Run / 初始 snapshot / SSE attach</text>
+  <rect x="420" y="421" width="275" height="108" class="card"/>
+  <text x="444" y="451" class="h">ConversationRunExecutor</text>
+  <text x="444" y="477" class="body">后台驱动，不依赖 SSE 连接</text>
+  <text x="444" y="501" class="small">同一 task 的 Run 操作由 task_runtime 协调</text>
+  <rect x="751" y="421" width="274" height="108" class="runtime" rx="14"/>
+  <text x="775" y="451" class="h">AgentRuntime</text>
+  <text x="775" y="477" class="body">执行 / 生命周期引擎</text>
+  <text x="775" y="501" class="small">解析 Agent、组装 operations、驱动 workflow</text>
+  <path d="M368 475H412" class="linkBlue"/>
+  <path d="M695 475H743" class="linkBlue"/>
+
+  <!-- Agent profile and orchestration -->
+  <rect x="96" y="581" width="280" height="118" class="card"/>
+  <text x="120" y="612" class="h">Agent 定义与目录</text>
+  <text x="120" y="639" class="body">AgentProfileRegistry → AgentProfile</text>
+  <text x="120" y="664" class="small">main / child / hidden · run 级派生配置</text>
+  <path d="M843 529V556H236V573" class="link"/>
+  <text x="535" y="551" text-anchor="middle" class="tiny">按 run.agent_id 解析 profile</text>
+
+  <rect x="420" y="581" width="605" height="300" class="runtime" rx="16"/>
+  <text x="446" y="613" class="h">ReactLikeWorkflow · LangGraph StateGraph</text>
+  <text x="446" y="638" class="small">执行策略：节点编排与条件边；模型、工具和事件能力由 operations 注入</text>
+  <rect x="456" y="681" width="150" height="91" class="card"/>
+  <text x="531" y="713" text-anchor="middle" class="h">Model</text>
+  <text x="531" y="741" text-anchor="middle" class="small">流式推理</text>
+  <rect x="647" y="681" width="150" height="91" class="tool" rx="14"/>
+  <text x="722" y="713" text-anchor="middle" class="h">Tools</text>
+  <text x="722" y="741" text-anchor="middle" class="small">执行工具调用</text>
+  <rect x="838" y="681" width="150" height="91" class="card"/>
+  <text x="913" y="713" text-anchor="middle" class="h">Observe</text>
+  <text x="913" y="741" text-anchor="middle" class="small">整理观察 / 路由</text>
+  <path d="M606 726H639" class="linkBlue"/>
+  <path d="M797 726H830" class="linkBlue"/>
+  <path d="M913 681V659H531V673" class="link"/>
+  <text x="725" y="655" text-anchor="middle" class="tiny">有工具结果 → 继续推理</text>
+  <text x="446" y="837" class="small">无工具 / 完成 / 取消或失败 → workflow 收口 Run 终态</text>
+  <path d="M888 529V573" class="linkBlue"/>
+  <text x="900" y="557" class="tiny">run_agent()</text>
+
+  <!-- Operations and dependencies -->
+  <rect x="1061" y="421" width="354" height="108" class="runtime" rx="14"/>
+  <text x="1085" y="451" class="h">WorkflowOperations</text>
+  <text x="1085" y="477" class="body">workflow 的窄副作用门面</text>
+  <text x="1085" y="501" class="small">模型构建 · 工具执行 · Run / event 操作</text>
+  <path d="M1025 475H1053" class="link"/>
+  <path d="M1238 529V551H1025V606" class="link"/>
+  <text x="1155" y="551" text-anchor="middle" class="tiny">依赖注入</text>
+
+  <rect x="1451" y="421" width="365" height="108" class="card"/>
+  <text x="1475" y="451" class="h">模型接入 · llm_provider</text>
+  <text x="1475" y="477" class="body">model_factory → LangChain ChatModel</text>
+  <text x="1475" y="501" class="small">能力目录 JSON · OpenAI 兼容适配器</text>
+  <path d="M1415 475H1443" class="link"/>
+
+  <!-- Tool system -->
+  <rect x="1061" y="581" width="755" height="300" class="tool" rx="16"/>
+  <text x="1087" y="613" class="h">工具系统 · ToolSystem</text>
+  <text x="1087" y="638" class="small">ToolRegistry → ToolExecutor → handler / 隔离执行</text>
+  <rect x="1090" y="671" width="205" height="80" class="card"/>
+  <text x="1192" y="701" text-anchor="middle" class="h">准入与执行管线</text>
+  <text x="1192" y="728" text-anchor="middle" class="small">权限 · Hook · 输出预算</text>
+  <rect x="1320" y="671" width="220" height="80" class="card"/>
+  <text x="1430" y="701" text-anchor="middle" class="h">内置工具 handlers</text>
+  <text x="1430" y="728" text-anchor="middle" class="small">文件 · 搜索 · 终端 · Web · 子 Agent</text>
+  <rect x="1564" y="671" width="218" height="80" class="card"/>
+  <text x="1673" y="701" text-anchor="middle" class="h">ToolObservation</text>
+  <text x="1673" y="728" text-anchor="middle" class="small">content · display_data · artifact_data</text>
+  <path d="M1295 711H1312" class="linkGreen"/>
+  <path d="M1540 711H1556" class="linkGreen"/>
+  <path d="M722 772V812H1082V720" class="linkGreen"/>
+  <text x="900" y="806" text-anchor="middle" class="tiny">调用 / 观察结果返回 workflow</text>
+  <path d="M1673 751V823H988" class="linkGreen"/>
+  <text x="1353" y="846" text-anchor="middle" class="tiny">content 回模型上下文 · display_data 投影给 UI · artifact_data 留在内部</text>
+  <rect x="1090" y="777" width="205" height="65" rx="12" fill="#e8f5ef" stroke="#b9dfd2"/>
+  <text x="1192" y="804" text-anchor="middle" class="body">工具子进程（按需）</text>
+  <text x="1192" y="826" text-anchor="middle" class="tiny">取消 / 超时 / 进程树清理</text>
+  <path d="M1192 751V769" class="dash"/>
+
+  <!-- Context and persistence -->
+  <rect x="96" y="925" width="490" height="158" class="runtime" rx="16"/>
+  <text x="122" y="958" class="h">RuntimeContextManager</text>
+  <text x="122" y="986" class="body">Task 级 working copy · system prompt / 修复加载 / resume</text>
+  <text x="122" y="1012" class="body">消息序列与 token 管理 · 消息写入由 context service 持久化</text>
+  <text x="122" y="1051" class="small">ContextEntry：run_id + message + sequence</text>
+  <path d="M531 881V913H341V917" class="link"/>
+  <text x="444" y="906" text-anchor="middle" class="tiny">workflow config 注入上下文</text>
+
+  <rect x="641" y="925" width="547" height="158" class="data" rx="16"/>
+  <text x="667" y="958" class="h">本机持久化 · SQLite</text>
+  <text x="667" y="986" class="body">主业务库 app.sqlite3：task / workspace / Run / command / context</text>
+  <text x="667" y="1012" class="body">LangGraph checkpoint：workflow 恢复状态（非 Run 生命周期事实）</text>
+  <text x="667" y="1051" class="small">ConversationRun.status 是 Run 状态唯一事实源</text>
+  <path d="M586 1004H633" class="link"/>
+  <path d="M883 881V913H914V917" class="link"/>
+  <text x="972" y="906" text-anchor="middle" class="tiny">Run / checkpoint / canonical facts</text>
+
+  <rect x="1245" y="925" width="571" height="158" class="muted" rx="16"/>
+  <text x="1271" y="958" class="h">旁路能力</text>
+  <rect x="1271" y="980" width="220" height="73" rx="12" fill="#fff" stroke="#d9e1e8"/>
+  <text x="1381" y="1008" text-anchor="middle" class="body">Hook registry / interceptor</text>
+  <text x="1381" y="1032" text-anchor="middle" class="tiny">工具与会话扩展点 · 失败安全</text>
+  <rect x="1510" y="980" width="278" height="73" rx="12" fill="#fff" stroke="#d9e1e8"/>
+  <text x="1649" y="1008" text-anchor="middle" class="body">Observability / 结构化日志</text>
+  <text x="1649" y="1032" text-anchor="middle" class="tiny">可降级诊断旁路，不改变 Run 结果</text>
+  <path d="M1025 824H1219V1018H1237" class="dash"/>
+
+  <!-- Footer flow and sources -->
+  <path d="M96 1140H1816" stroke="#cbd7e3" stroke-width="1"/>
+  <text x="96" y="1173" class="zone">关键链路</text>
+  <text x="96" y="1204" class="body">用户命令 → Transport 创建 Run → Executor → AgentRuntime → ReAct（模型 ⇄ 工具）→ context / Run 落库 → SSE snapshot 与工具展示数据回前端</text>
+  <text x="96" y="1253" class="tiny">代码锚点：apps/backend/app/lifespan.py · assistant_transport/assistant_api.py · core/runtime/runner.py · core/workflows/react/workflow.py · core/tools/tool_system.py · core/context/runtime_context_manager.py · storage/store_engines.py</text>
+</svg>

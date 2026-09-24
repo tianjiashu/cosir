@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1180" viewBox="0 0 1920 1180" role="img" aria-labelledby="title desc">
+  <title id="title">多 Agent 流水线式作业设想</title>
+  <desc id="desc">由图工作流引擎按预定义节点和条件边推进多个专职 Agent；未通过时按失败类型回退至配置节点；每条流水线拥有独立 task 状态与产物。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f7faf9"/><stop offset="1" stop-color="#eef4f5"/></linearGradient>
+    <linearGradient id="head" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#163b43"/><stop offset="1" stop-color="#267263"/></linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%"><feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#173d42" flood-opacity=".09"/></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#537486"/></marker>
+    <marker id="greenArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#248b70"/></marker>
+    <marker id="redArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#cf5f52"/></marker>
+    <style>
+      text{font-family:"Microsoft YaHei UI","Microsoft YaHei",Arial,sans-serif;fill:#17333e}
+      .title{font-size:33px;font-weight:700;fill:#fff}.subtitle{font-size:15px;fill:#d6e9e7}
+      .zone{font-size:14px;font-weight:700;letter-spacing:1px;fill:#58717d}
+      .h{font-size:20px;font-weight:700}.body{font-size:14px;fill:#516c78}.small{font-size:12px;fill:#627b85}.tiny{font-size:11px;fill:#6b828b}
+      .card{fill:#fff;stroke:#d4e1e4;stroke-width:1.4;rx:16;filter:url(#shadow)}
+      .node{fill:#f4faf8;stroke:#b9d9d0}.engine{fill:#e7f3f0;stroke:#a9d0c5}.local{fill:#f1f6fb;stroke:#c8d8e7}.warn{fill:#fff4f1;stroke:#e8b9b0}
+      .link{fill:none;stroke:#537486;stroke-width:2.4;marker-end:url(#arrow)}
+      .pass{fill:none;stroke:#248b70;stroke-width:2.8;marker-end:url(#greenArrow)}
+      .retry{fill:none;stroke:#cf5f52;stroke-width:2.1;stroke-dasharray:7 6;marker-end:url(#redArrow)}
+    </style>
+  </defs>
+  <rect width="1920" height="1180" fill="url(#bg)"/>
+  <rect width="1920" height="116" fill="url(#head)"/>
+  <text x="64" y="55" class="title">多 Agent 流水线 · Graph Engineering 设想</text>
+  <text x="66" y="84" class="subtitle">专职 Agent 作为图节点执行工作；由显式工作流边推进、检查与回退</text>
+  <rect x="1586" y="35" width="264" height="42" rx="21" fill="#ffffff" fill-opacity=".12" stroke="#ffffff" stroke-opacity=".25"/>
+  <text x="1718" y="61" text-anchor="middle" class="subtitle">未来方向 · 概念图</text>
+
+  <text x="72" y="154" class="zone">图工作流控制面</text>
+  <rect x="72" y="174" width="1290" height="96" class="engine" rx="18"/>
+  <text x="100" y="211" class="h">Graph Engine · 预定义 DAG / 条件边 / 回退路由</text>
+  <text x="100" y="240" class="body">根据节点结果推进下一步；记录当前节点、输入输出、检查结果与重试目标</text>
+  <rect x="1420" y="174" width="428" height="96" class="warn" rx="18"/>
+  <text x="1448" y="211" class="h">主 Agent 不做流程调度</text>
+  <text x="1448" y="240" class="body">Agent 只负责各自节点的工作与结构化结果</text>
+  <path d="M1362 221H1412" class="link"/>
+  <text x="1387" y="207" text-anchor="middle" class="tiny">职责边界</text>
+
+  <text x="72" y="315" class="zone">一条流水线：顺序推进，结果驱动分支</text>
+  <rect x="72" y="335" width="1776" height="308" rx="22" fill="#edf4f3" stroke="#c9dcda" stroke-width="1.4"/>
+  <rect x="105" y="362" width="370" height="244" class="card"/>
+  <circle cx="139" cy="400" r="18" fill="#267263"/><text x="139" y="406" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">1</text>
+  <text x="170" y="406" class="h">开发 Agent</text>
+  <text x="132" y="447" class="body">按任务描述实现功能</text>
+  <text x="132" y="476" class="small">读取任务输入与已有制品</text>
+  <rect x="132" y="506" width="286" height="66" rx="12" fill="#f1f7fb" stroke="#d3e0e9"/>
+  <text x="275" y="532" text-anchor="middle" class="small">产出：代码变更 / 实现说明</text>
+  <text x="275" y="554" text-anchor="middle" class="tiny">返回 status + artifacts</text>
+
+  <rect x="535" y="362" width="370" height="244" class="card"/>
+  <circle cx="569" cy="400" r="18" fill="#267263"/><text x="569" y="406" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">2</text>
+  <text x="600" y="406" class="h">代码审查 Agent</text>
+  <text x="562" y="447" class="body">检查代码规范与功能初步实现</text>
+  <text x="562" y="476" class="small">独立审查变更并给出明确结论</text>
+  <rect x="562" y="506" width="286" height="66" rx="12" fill="#f1f7fb" stroke="#d3e0e9"/>
+  <text x="705" y="532" text-anchor="middle" class="small">产出：通过结论 / 问题清单</text>
+  <text x="705" y="554" text-anchor="middle" class="tiny">status + 可执行的修改意见</text>
+
+  <rect x="965" y="362" width="370" height="244" class="card"/>
+  <circle cx="999" cy="400" r="18" fill="#267263"/><text x="999" y="406" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">3</text>
+  <text x="1030" y="406" class="h">单元测试 Agent</text>
+  <text x="992" y="447" class="body">为实现编写单元测试</text>
+  <text x="992" y="476" class="small">按约定运行测试并整理失败信息</text>
+  <rect x="992" y="506" width="286" height="66" rx="12" fill="#f1f7fb" stroke="#d3e0e9"/>
+  <text x="1135" y="532" text-anchor="middle" class="small">产出：测试文件 / 测试结果</text>
+  <text x="1135" y="554" text-anchor="middle" class="tiny">status + 失败断言 / 日志摘要</text>
+
+  <rect x="1395" y="362" width="410" height="244" class="card"/>
+  <circle cx="1429" cy="400" r="18" fill="#267263"/><text x="1429" y="406" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">4</text>
+  <text x="1460" y="406" class="h">集成测试 Agent</text>
+  <text x="1422" y="447" class="body">通过真实界面验证端到端行为</text>
+  <text x="1422" y="476" class="small">computer use / 浏览器工具</text>
+  <rect x="1422" y="506" width="320" height="66" rx="12" fill="#f1f7fb" stroke="#d3e0e9"/>
+  <text x="1582" y="532" text-anchor="middle" class="small">产出：检查结论 / 截图 / 日志</text>
+  <text x="1582" y="554" text-anchor="middle" class="tiny">通过 → 流水线完成</text>
+
+  <path d="M475 484H527" class="pass"/><text x="501" y="469" text-anchor="middle" class="tiny">pass</text>
+  <path d="M905 484H957" class="pass"/><text x="931" y="469" text-anchor="middle" class="tiny">pass</text>
+  <path d="M1335 484H1387" class="pass"/><text x="1361" y="469" text-anchor="middle" class="tiny">pass</text>
+  <rect x="1650" y="617" width="155" height="32" rx="16" fill="#e5f5ee" stroke="#acd8c5"/>
+  <text x="1727" y="638" text-anchor="middle" class="pill" fill="#24745d">全部通过 · 完成</text>
+
+  <rect x="530" y="690" width="860" height="102" class="warn" rx="18"/>
+  <text x="960" y="728" text-anchor="middle" class="h">失败回退路由</text>
+  <text x="960" y="758" text-anchor="middle" class="body">任一节点未通过 → 按失败类型 / 问题归属，回到图中配置的目标节点重做</text>
+  <text x="960" y="779" text-anchor="middle" class="tiny">例如：实现缺陷 → 开发；规范问题 → 开发或审查；测试问题 → 开发 / 单测</text>
+
+  <!-- failure collection and retry targets -->
+  <path d="M290 606V662H485V741H522" class="retry"/>
+  <path d="M720 606V662H522" class="retry"/>
+  <path d="M1150 606V662H1435V741H1398" class="retry"/>
+  <path d="M1600 606V662H1435" class="retry"/>
+  <text x="275" y="656" class="tiny" fill="#b34d43">failed</text>
+  <text x="1580" y="656" class="tiny" fill="#b34d43">failed</text>
+  <path d="M960 792V830H290V614" class="retry"/>
+  <path d="M960 830H720V614" class="retry"/>
+  <path d="M960 830H1150V614" class="retry"/>
+  <path d="M960 830H1600V614" class="retry"/>
+  <rect x="740" y="812" width="440" height="34" rx="17" fill="#fff" stroke="#e8b9b0"/>
+  <text x="960" y="834" text-anchor="middle" class="tiny" fill="#b34d43">按配置目标回退 · 不必每次从头重跑</text>
+
+  <text x="72" y="895" class="zone">任务本地化：每条流水线实例独立持有执行事实</text>
+  <rect x="72" y="916" width="1776" height="184" class="local" rx="20"/>
+  <text x="104" y="955" class="h">Pipeline Task · 独立 task_id</text>
+  <text x="104" y="983" class="body">每个任务有自己的输入、workflow 状态、上下文、Run 记录与恢复点；节点通过显式输入输出传递工作结果</text>
+  <rect x="104" y="1010" width="390" height="62" rx="12" fill="#fff" stroke="#d2dfeb"/>
+  <text x="299" y="1037" text-anchor="middle" class="small">任务上下文</text><text x="299" y="1058" text-anchor="middle" class="tiny">只包含该流水线需要的信息</text>
+  <rect x="522" y="1010" width="390" height="62" rx="12" fill="#fff" stroke="#d2dfeb"/>
+  <text x="717" y="1037" text-anchor="middle" class="small">共享制品</text><text x="717" y="1058" text-anchor="middle" class="tiny">代码变更 · 审查意见 · 测试与截图</text>
+  <rect x="940" y="1010" width="390" height="62" rx="12" fill="#fff" stroke="#d2dfeb"/>
+  <text x="1135" y="1037" text-anchor="middle" class="small">图状态与节点结果</text><text x="1135" y="1058" text-anchor="middle" class="tiny">当前节点 · pass / failed · 回退目标</text>
+  <rect x="1358" y="1010" width="454" height="62" rx="12" fill="#fff" stroke="#d2dfeb"/>
+  <text x="1585" y="1037" text-anchor="middle" class="small">恢复与追踪</text><text x="1585" y="1058" text-anchor="middle" class="tiny">可检查、可续跑、可定位失败节点</text>
+  <text x="72" y="1142" class="tiny">示意：工作流定义负责调度与分支；Agent 负责节点内的专业工作。节点契约、检查策略、重试上限与制品权限需在后续设计中明确。</text>
+</svg>
