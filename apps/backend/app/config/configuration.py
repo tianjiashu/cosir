@@ -6,9 +6,6 @@
 收口内容（进程级、按需构建、可热替换）：
 - agent profile 目录（``AgentProfileRegistry``）：``set_agent_registry`` /
   ``get_agent_registry`` / ``build_agent_registry``。
-- 委派子 Agent 能力摘要（投影文本）：``set_delegate_agent_summary`` /
-  ``get_delegate_agent_summary``（由 ``build_agent_registry`` 投影注入，
-  供 ``ToolSystem.build_tool_system`` 读取拼入 ``delegate_task`` 描述）。
 - 工具系统（``ToolSystem``）：``set_tool_system`` / ``get_tool_system``。
 
 设计要点：

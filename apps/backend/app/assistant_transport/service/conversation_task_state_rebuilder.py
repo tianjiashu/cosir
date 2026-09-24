@@ -23,8 +23,6 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
 from app.config.configuration import get_agent_registry, get_tool_registry
-from app.core.tools.display.delegation_display import build_delegation_display_data
-from app.core.tools.schemas.tool_names import TOOL_DELEGATE_TASK
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -77,17 +75,17 @@ class ConversationTaskStateRebuilder:
     def build_pair_tool_part(
         rows: list[ConversationTaskContextRecord],
         delegations: Sequence[Any] = (),
-        child_task_states: Sequence[tuple[TaskRecord, ConversationRunRecord | None]] = (),
     ) -> dict[str, ConversationStateToolCallPart]:
         """把单个 Run 的 context 行配对为 ``toolCallId → tool-call part`` 映射。
 
         配对规则：AI 消息中的每个工具调用先以 ``cancelled`` 初始状态登记，随后由同一
-        ``tool_call_id`` 的 ToolMessage 行补全真实生命周期状态、``display_data`` 与错误标记；
-        委派类工具调用额外绑定子任务信息（``child_task_id``/``child_run_id`` 与子 Agent 角色）。
+        ``tool_call_id`` 的 ToolMessage 行补全真实生命周期状态、``display_data`` 与错误标记。
+        动态展示数据只从 ToolMessage 的 ``transport_metadata.display_data`` 读取；冷重建不
+        通过工具名、委派记录或子任务记录推断展示数据。
 
         参数:
             rows: 单个 Run 的 context 行，调用方保证已按 ``sequence`` 排序。
-            delegations: 该 Run 关联的委派记录，用于把 ``delegate_task`` 调用关联到子任务。
+            delegations: 为保持调用方接口稳定而保留；委派展示数据不从该参数读取。
 
         返回:
             以工具调用 id 为键的 tool-call part 字典；``status`` 恒为字符串，未收到结果的
@@ -100,7 +98,6 @@ class ConversationTaskStateRebuilder:
             无（纯函数，不访问数据库、注册表之外的状态或前端运行时）。
         """
         tool_parts: dict[str, ConversationStateToolCallPart] = {}
-        canonical_delegation_display: dict[str, dict[str, object]] = {}
         for row in rows:
             message: BaseMessage = row.message
             if isinstance(message, AIMessage) and cast(AIMessage, message).tool_calls:
@@ -117,90 +114,6 @@ class ConversationTaskStateRebuilder:
                         ),
                         status="cancelled",
                     )
-                    if call.get("name") == TOOL_DELEGATE_TASK:
-                        args = call.get("args") or {}
-                        child_state = next(
-                            (
-                                state
-                                for state in child_task_states
-                                if state[0].task_type == "delegate_task"
-                                and state[0].title == (args.get("agent_name") or state[0].title)
-                                and (
-                                    state[1] is None
-                                    or state[1].agent_id == args.get("child_agent_id")
-                                )
-                            ),
-                            None,
-                        )
-                        if child_state is not None:
-                            child_task, child_run = child_state
-                            child_agent_id = (
-                                child_run.agent_id
-                                if child_run is not None and child_run.agent_id
-                                else args.get("child_agent_id")
-                            )
-                            if isinstance(child_agent_id, str) and child_agent_id:
-                                role = None
-                                try:
-                                    profile = get_agent_registry().resolve(child_agent_id)
-                                except RuntimeError:
-                                    profile = None
-                                if profile is not None and profile.role.strip():
-                                    role = profile.role
-                                    tool_part["agent_role"] = role
-                                display = build_delegation_display_data(
-                                    title=child_task.title or args.get("agent_name") or "子 Agent",
-                                    child_agent_id=child_agent_id,
-                                    child_task_id=child_task.id,
-                                    child_run_id=(child_run.id if child_run is not None else None),
-                                    status=(child_run.status if child_run is not None else "pending"),
-                                    role=role,
-                                    final_output=(child_run.final_output if child_run is not None else None),
-                                    end_reason=(child_run.end_reason if child_run is not None else None),
-                                )
-                                tool_part["child_task_id"] = child_task.id
-                                if child_run is not None:
-                                    tool_part["child_run_id"] = child_run.id
-                                tool_part["display_data"] = display
-                                canonical_delegation_display[call.get("id")] = display
-                        candidates = [] if child_state is not None else [
-                            record
-                            for record in delegations
-                            if isinstance(record.child_task_id, int)
-                            and record.child_task_id > 0
-                            and record.child_agent_id == args.get("child_agent_id")
-                            and record.prompt == args.get("message")
-                        ]
-                        if len(candidates) == 1:
-                            record = candidates[0]
-                            child_task_id = record.child_task_id
-                            if child_task_id is not None and child_task_id > 0:
-                                tool_part["child_task_id"] = child_task_id
-                                child_run_id = record.child_run_id
-                                if (
-                                    isinstance(child_run_id, int)
-                                    and not isinstance(child_run_id, bool)
-                                    and child_run_id > 0
-                                ):
-                                    tool_part["child_run_id"] = child_run_id
-                                display = build_delegation_display_data(
-                                    title=args.get("agent_name") or "子 Agent",
-                                    child_agent_id=record.child_agent_id,
-                                    child_task_id=child_task_id,
-                                    child_run_id=child_run_id,
-                                    status="running",
-                                )
-                                tool_part["display_data"] = display
-                                canonical_delegation_display[call.get("id")] = display
-                                try:
-                                    profile = get_agent_registry().resolve(record.child_agent_id)
-                                except RuntimeError:
-                                    profile = None
-                                if profile is not None and profile.role.strip():
-                                    tool_part["agent_role"] = profile.role
-                                    display_data = tool_part.get("display_data")
-                                    if display_data is not None:
-                                        display_data["role"] = profile.role
                     tool_parts[call.get("id")] = tool_part
             if isinstance(message, ToolMessage):
                 tool_message = cast(ToolMessage, message)
@@ -211,30 +124,8 @@ class ConversationTaskStateRebuilder:
                 if metadata_status is not None:
                     tool_part["status"] = metadata_status
                 display_data = row.transport_metadata.get("display_data")
-                if display_data:
-                    existing_display = tool_part.get("display_data")
-                    canonical_display = canonical_delegation_display.get(tool_message.tool_call_id)
-                    if (
-                        canonical_display is not None
-                        and isinstance(existing_display, dict)
-                        and existing_display.get("kind") == "delegation-result"
-                        and isinstance(display_data, dict)
-                        and display_data.get("kind") == "delegation-result"
-                    ):
-                        merged_display = dict(existing_display)
-                        merged_display.update(display_data)
-                        # Child Run is canonical for parent delegation lifecycle. A stale
-                        # ToolMessage metadata row must not turn a terminal child back to running.
-                        merged_display.update(
-                            {
-                                key: canonical_display[key]
-                                for key in ("status", "final_output", "end_reason")
-                                if key in canonical_display
-                            }
-                        )
-                        tool_part["display_data"] = merged_display
-                    else:
-                        tool_part["display_data"] = display_data
+                if display_data is not None:
+                    tool_part["display_data"] = display_data
                 elif "display_data" not in tool_part:
                     tool_part["display_data"] = None
                 if (
@@ -324,7 +215,6 @@ class ConversationTaskStateRebuilder:
         runs: Sequence[ConversationRunRecord],
         context_rows: Sequence[ConversationTaskContextRecord],
         delegations: Sequence[Any] = (),
-        child_task_states: Sequence[tuple[TaskRecord, ConversationRunRecord | None]] = (),
     ) -> ConversationStateSnapshot:
         """从三类规范记录装配出通过校验的 Task 级 Transport 快照。
 
@@ -332,7 +222,7 @@ class ConversationTaskStateRebuilder:
             task: Task 级当前 Run 与上下文用量事实。
             runs: 属于 ``task`` 的全部 Run 记录。
             context_rows: 该 Task 已持久化的 LangChain 消息与 Transport 元数据。
-            delegations: 该 Task 的委派记录，用于补齐 ``delegate_task`` 调用的子任务信息。
+            delegations: 为保持调用方接口稳定而保留；委派展示数据来自 context metadata。
 
         返回:
             新的 ``ConversationStateSnapshot``。Run 的排序为 ``created_at`` 再按 id；同一 Run 的
@@ -367,8 +257,6 @@ class ConversationTaskStateRebuilder:
 
             tool_parts_dict = ConversationTaskStateRebuilder.build_pair_tool_part(
                 rows,
-                [record for record in delegations if record.parent_run_id == run.id],
-                [state for state in child_task_states if state[0].parent_run_id == run.id],
             )
 
             snapshot_messages: list[ConversationStateMessage] = []

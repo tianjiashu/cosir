@@ -38,8 +38,8 @@ from app.utils.token_estimator import TokenEstimator
 
 logger = logging.getLogger(__name__)
 
-# 扫描 workspace 指令文件时跳过的目录（与 tools 层 IGNORED_DIRS 语义一致；此处局部定义
-# 以避免 core/context 反向依赖 tools 层）。如后续下沉到公共位置可统一替换。
+# 扫描 workspace 指令文件时跳过的目录（与 tools 层 ignore_rules.DEFAULT_IGNORED_DIR_NAMES
+# 语义一致；此处局部定义以避免 core/context 反向依赖 tools 层）。如后续下沉到公共位置可统一替换。
 _IGNORED_DIRS: frozenset[str] = frozenset(
     {
         ".git",

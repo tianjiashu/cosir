@@ -127,6 +127,35 @@ def test_terminal_signal_schema_warns_about_windows_capability(monkeypatch) -> N
     ]
 
 
+def test_terminal_definitions_snapshot_host_projection_at_construction(
+    monkeypatch,
+) -> None:
+    """终端定义在构造时固化宿主投影，不依赖 ToolDefinition provider 热路径。"""
+
+    handlers = (
+        TerminalStartTool,
+        TerminalReadTool,
+        TerminalWriteTool,
+        TerminalSignalTool,
+        TerminalCloseTool,
+    )
+    monkeypatch.setattr(
+        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        lambda: "Windows",
+    )
+    definitions = [handler().to_definition() for handler in handlers]
+    windows_payloads = [definition.to_model_tool_definition() for definition in definitions]
+
+    for definition in definitions:
+        assert definition.parameters_schema
+
+    monkeypatch.setattr(
+        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        lambda: "Darwin",
+    )
+    assert [definition.to_model_tool_definition() for definition in definitions] == windows_payloads
+
+
 def test_terminal_session_display_variants_match_their_ui_roles() -> None:
     definitions = {
         handler.name: handler().to_definition()

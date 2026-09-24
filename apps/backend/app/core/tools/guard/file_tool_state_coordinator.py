@@ -51,6 +51,7 @@ from app.core.tools.schemas.tool_names import (
 )
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_handler.search.file_walker import iter_files
+from app.core.tools.tool_handler.search.ignore_rules import load_ignore_rules
 
 _REPEATED_TOOLS = frozenset({TOOL_READ_FILE, TOOL_SEARCH_CONTENT, TOOL_FIND_FILES})
 
@@ -227,7 +228,9 @@ class FileToolStateCoordinator:
 
         # 第二步：取本次调用「观察到的」路径集合（read 路径 + 目录遍历范围）及其 fingerprint
         # 快照。这份快照会在 complete 时回写，作为后续重复调用检测与 stale 判定的基线。
-        observed_paths, snapshot_complete = self._observed_paths(resources)
+        observed_paths, snapshot_complete = self._observed_paths(
+            resources, execution_context.workspace_root
+        )
         observed_snapshot = self._revisions.snapshot_token(observed_paths)
         # 仅 read_file/search_content/find_files 参与重复调用检测；若目录遍历超容量导致快照不完整，
         # 也跳过重复检测（避免「未看全却判重复」误拦截）。其余工具直接返回计划，交由
@@ -449,11 +452,14 @@ class FileToolStateCoordinator:
     def _observed_paths(
         self,
         resources: FileResourcePaths,
+        workspace_root: Path,
     ) -> tuple[tuple[Path, ...], bool]:
         """展开一次只读调用实际观察的有界路径集合。
 
         参数:
             resources: 工具资源描述。
+            workspace_root: 当前 workspace 根：既是 ``.cosir/.fileignore`` 规则的来源，也是
+                相对路径规则的匹配基准。
 
         返回:
             ``(路径集合, 是否完整)``；list/search 超过容量时完整标记为 False。
@@ -462,7 +468,8 @@ class FileToolStateCoordinator:
             无。目录遍历失败时仅保留 scope 根。
 
         副作用:
-            读取目录结构和文件元数据。
+            读取目录结构和文件元数据；规则文件缺失时可能创建
+            ``<workspace>/.cosir/.fileignore``。
         """
 
         paths = list(resources.read_paths)
@@ -482,8 +489,13 @@ class FileToolStateCoordinator:
         try:
             if resources.scope_recursive:
                 # list_directory/search_content/find_files：递归遍历 scope 下所有文件，
-                # 最多取 max 个。
-                sampled = list(islice(iter_files(scope_root), self._max_scope_paths))
+                # 最多取 max 个；目录忽略规则取自 workspace 的 .cosir/.fileignore。
+                sampled = list(
+                    islice(
+                        iter_files(scope_root, rules=load_ignore_rules(workspace_root)),
+                        self._max_scope_paths,
+                    )
+                )
             elif scope_root.is_dir():
                 # list_directory 顶层：仅列一层子项。
                 sampled = list(islice(scope_root.iterdir(), self._max_scope_paths))

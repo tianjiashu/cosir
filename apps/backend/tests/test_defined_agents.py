@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.define_agents import (
@@ -18,29 +19,6 @@ from app.core.agents.model_settings import ModelSettings
 from app.core.context.system_prompt_builder import SystemPromptBuilder
 
 
-class _ToolRegistryStub:
-    """为 profile 工厂提供最小工具注册表替身。"""
-
-    def get_all_tool_names(self) -> list[str]:
-        """返回测试所需的最小工具名集合。"""
-
-        return [
-            "read_file",
-            "write_file",
-            "patch_write",
-            "apply_patch",
-            "delete_file",
-            "move_file",
-            "search_content",
-            "find_files",
-            "list_directory",
-            "execute_terminal",
-            "web_search",
-            "web_extract",
-            "delegate_task",
-        ]
-
-
 @dataclass(frozen=True)
 class _RunRoute:
     """Conversation Run 的最小替身：只承载 ``derive_for_run`` 读取的两个路由字段。"""
@@ -51,11 +29,6 @@ class _RunRoute:
 
 def test_builtin_child_profiles_have_prompt_files(monkeypatch) -> None:
     """四个内置子 Agent 应绑定存在的专属系统提示词文件。"""
-
-    monkeypatch.setattr(
-        "app.core.agents.define_agents.get_tool_registry",
-        lambda: _ToolRegistryStub(),
-    )
 
     profiles = [reviewer_agent(), explorer_agent(), build_test_agent(), coder_agent()]
 
@@ -81,13 +54,23 @@ def test_builtin_child_profiles_have_prompt_files(monkeypatch) -> None:
         assert marker in prompt
 
 
+def test_agent_registry_bootstraps_without_tool_registry(monkeypatch) -> None:
+    """Agent registry 构建只依赖规范工具名，不要求 ToolRegistry 先注入。"""
+
+    monkeypatch.setattr("app.config.configuration._TOOL_SYSTEM", None, raising=False)
+
+    registry = build_agent_registry()
+
+    assert registry.child_agent_ids() == {
+        "delegate_reviewer",
+        "code-explorer",
+        "unit-test-engineer",
+        "code-developer",
+    }
+
+
 def test_main_profile_uses_own_prompt_without_child_catalog(monkeypatch) -> None:
     """主 Agent 使用独立提示词，子 Agent 清单只由委派工具提供。"""
-
-    monkeypatch.setattr(
-        "app.core.agents.define_agents.get_tool_registry",
-        lambda: _ToolRegistryStub(),
-    )
 
     profile = main_agent()
     prompt = SystemPromptBuilder.build(profile, str(Path(__file__).resolve()))
@@ -108,11 +91,6 @@ def test_main_profile_uses_own_prompt_without_child_catalog(monkeypatch) -> None
 
 def test_registry_exposes_non_main_profiles_as_delegation_targets(monkeypatch) -> None:
     """注册表应向主 Agent 投影子 Agent，而不是把主 Agent 当成子 Agent。"""
-
-    monkeypatch.setattr(
-        "app.core.agents.define_agents.get_tool_registry",
-        lambda: _ToolRegistryStub(),
-    )
 
     registry = AgentProfileRegistry()
     children = [reviewer_agent(), explorer_agent(), build_test_agent(), coder_agent()]
@@ -136,11 +114,6 @@ def test_registry_exposes_non_main_profiles_as_delegation_targets(monkeypatch) -
 def test_builtin_child_profiles_leave_model_route_to_parent_run(monkeypatch) -> None:
     """内置 child profile 不应写死 provider/model，默认由父 Run 决定。"""
 
-    monkeypatch.setattr(
-        "app.core.agents.define_agents.get_tool_registry",
-        lambda: _ToolRegistryStub(),
-    )
-
     profiles = [reviewer_agent(), explorer_agent(), build_test_agent(), coder_agent()]
 
     assert all(profile.provider_id is None for profile in profiles)
@@ -157,10 +130,6 @@ def test_child_profile_model_settings_keep_custom_overrides(monkeypatch) -> None
     用例只锁「派生不改写 profile 自有配置」这一条仍然成立的契约。
     """
 
-    monkeypatch.setattr(
-        "app.core.agents.define_agents.get_tool_registry",
-        lambda: _ToolRegistryStub(),
-    )
     child = reviewer_agent()
     custom = ModelSettings(temperature=0.2, thinking=True)
     child.model_settings = custom

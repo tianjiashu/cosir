@@ -77,10 +77,13 @@ class TerminalReadTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
-            description=self.description,
+            description=describe_terminal_tool(self.name, self.description),
             permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
+            parameters_schema=build_terminal_session_parameters_schema(
+                self.name, self.args_model
+            ),
             timeout_seconds=self.timeout_seconds,
             risk_level=self.risk_level,
             resource_keys=("shell",),
@@ -93,9 +96,5 @@ class TerminalReadTool(HandlerBase):
                 expandable=False,
                 expand_layout="none",
                 show_result=False,
-            ),
-            description_provider=lambda: describe_terminal_tool(self.name, self.description),
-            schema_provider=lambda: build_terminal_session_parameters_schema(
-                self.name, self.args_model
             ),
         )

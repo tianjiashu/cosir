@@ -184,6 +184,7 @@ def test_tool_definition_default_contract_values_after_field_removal() -> None:
     """字段删除后默认值必须保持原契约（防默认值被顺手改动造成调度/隔离行为漂移）。"""
 
     definition = _make_definition()
+    field_names = {field.name for field in dataclasses.fields(ToolDefinition)}
 
     assert definition.parameters_schema == {}
     assert definition.timeout_seconds == 10.0
@@ -192,8 +193,10 @@ def test_tool_definition_default_contract_values_after_field_removal() -> None:
     assert definition.display is None
     assert definition.execution_mode == "thread"
     assert definition.parallel_mode == "serial"
-    assert definition.description_provider is None
-    assert definition.schema_provider is None
+    assert "description_provider" not in field_names
+    assert "schema_provider" not in field_names
+    assert not hasattr(definition, "description_provider")
+    assert not hasattr(definition, "schema_provider")
 
 
 def test_tool_definition_requires_handler_and_args_model() -> None:
@@ -227,7 +230,7 @@ def test_model_projection_exposes_only_name_description_parameters() -> None:
 
 
 def test_normalized_derives_schema_when_no_parameters_schema() -> None:
-    """无 parameters_schema 且无 schema_provider 时，normalized() 用 args_model 派生 schema。"""
+    """无 parameters_schema 时，normalized() 用 args_model 派生 schema。"""
 
     definition = _make_definition()
     assert definition.parameters_schema == {}
@@ -249,28 +252,8 @@ def test_normalized_returns_self_when_parameters_schema_supplied() -> None:
     assert definition.normalized() is definition
 
 
-def test_normalized_returns_self_when_schema_provider_supplied() -> None:
-    """声明 schema_provider 的工具不固化 schema：normalized() 返回自身，留给每次投影实时生成。"""
-
-    calls: list[int] = []
-
-    def provider() -> Mapping[str, Any]:
-        calls.append(1)
-        return {"type": "object", "properties": {"live": {"type": "string"}}}
-
-    definition = _make_definition(schema_provider=provider)
-
-    normalized = definition.normalized()
-
-    assert normalized is definition
-    assert calls == [], "normalized() 不应触发 schema_provider（否则等于启动期固化）"
-
-
 def test_normalized_preserves_every_carried_contract_field() -> None:
-    """normalized() 生成的副本必须逐字段保留调度/展示/钩子契约（防新副本漏字段）。"""
-
-    def description_provider() -> str:
-        return "live description"
+    """normalized() 生成的副本必须逐字段保留调度/展示契约（防新副本漏字段）。"""
 
     definition = _make_definition(
         timeout_seconds=3.5,
@@ -278,7 +261,6 @@ def test_normalized_preserves_every_carried_contract_field() -> None:
         resource_keys=("filesystem", "shell"),
         execution_mode="process",
         parallel_mode="parallel",
-        description_provider=description_provider,
     )
 
     normalized = definition.normalized()
@@ -288,36 +270,12 @@ def test_normalized_preserves_every_carried_contract_field() -> None:
     assert normalized.resource_keys == ("filesystem", "shell")
     assert normalized.execution_mode == "process"
     assert normalized.parallel_mode == "parallel"
-    assert normalized.description_provider is description_provider
-    assert normalized.schema_provider is None
     assert normalized.args_model is _ProbeArgs
     assert normalized.permission == "safe_read"
     assert normalized.handler is definition.handler
     assert normalized.display is definition.display
-    # 未声明 schema_provider 时参数 schema 被派生，故二者不相等；派生后应幂等。
+    # 参数 schema 被派生，故二者不相等；派生后应幂等。
     assert normalized.normalized() == normalized
-
-
-def test_normalized_evaluates_description_provider_once_via_model_projection() -> None:
-    """记录既有行为（非本次改动引入）：normalized() 经模型投影会真实调用 description_provider。
-
-    潜在缺陷类型：注释声称「运行期钩子不在注册期固化」，但注册期 normalize 会**求值**该钩子
-    （虽然不落库）。若钩子依赖启动期尚不可用的运行期单例，会在此产生一次无意义调用/告警。
-    """
-
-    calls: list[int] = []
-
-    def description_provider() -> str:
-        calls.append(1)
-        return "live description"
-
-    definition = _make_definition(description_provider=description_provider)
-
-    normalized = definition.normalized()
-
-    assert calls == [1], "normalized() 的模型投影会调用一次 description_provider"
-    assert normalized.description == "probe", "派生副本不得固化钩子结果，仍保留静态兜底描述"
-    assert normalized.description_provider is description_provider
 
 
 def test_normalized_keeps_parallel_mode_so_parallel_scheduling_is_not_lost() -> None:
@@ -331,72 +289,6 @@ def test_normalized_keeps_parallel_mode_so_parallel_scheduling_is_not_lost() -> 
     assert (
         normalized == _make_definition(name="parallel_tool", parallel_mode="parallel").normalized()
     )
-
-
-def test_description_provider_is_excluded_from_equality_and_hash() -> None:
-    """compare=False 契约：description_provider 是行为而非身份，不参与相等性与哈希。"""
-
-    def provider_a() -> str:
-        return "a"
-
-    def provider_b() -> str:
-        return "b"
-
-    left = _make_definition(description_provider=provider_a)
-    right = _make_definition(description_provider=provider_b)
-
-    assert left == right
-    # 结构性佐证：该字段在数据类声明里 compare=False（否则相等性断言即为假阳性）。
-    compare_flag = {f.name: f.compare for f in dataclasses.fields(ToolDefinition)}
-    assert compare_flag["description_provider"] is False
-    # 对照：参与比较的静态字段不同则必须不等（证明上面的相等断言不是恒真）。
-    assert left != _make_definition(description="different", description_provider=provider_a)
-    # 但行为投影确实不同（compare=False 并不意味着投影被忽略）。
-    assert left.project_description() == "a"
-    assert right.project_description() == "b"
-
-
-def test_schema_provider_is_excluded_from_equality_and_hash() -> None:
-    """compare=False 契约：schema_provider 同样不参与相等性与哈希。"""
-
-    def provider_a() -> Mapping[str, Any]:
-        return {"type": "object", "properties": {"a": {"type": "string"}}}
-
-    def provider_b() -> Mapping[str, Any]:
-        return {"type": "object", "properties": {"b": {"type": "integer"}}}
-
-    left = _make_definition(schema_provider=provider_a)
-    right = _make_definition(schema_provider=provider_b)
-
-    assert left == right
-    compare_flag = {f.name: f.compare for f in dataclasses.fields(ToolDefinition)}
-    assert compare_flag["schema_provider"] is False
-    assert left != _make_definition(description="different", schema_provider=provider_a)
-    assert left.project_parameters() == provider_a()
-    assert right.project_parameters() == provider_b()
-
-
-def test_project_parameters_falls_back_to_args_model_when_provider_raises() -> None:
-    """schema_provider 抛异常必须降级到 args_model 契约（热路径异常不得穿透）。"""
-
-    def broken() -> Mapping[str, Any]:
-        raise RuntimeError("provider exploded")
-
-    definition = _make_definition(schema_provider=broken)
-
-    assert definition.project_parameters() == _ProbeArgs.model_json_schema()
-
-
-def test_project_description_degrades_to_static_when_provider_raises() -> None:
-    """description_provider 抛异常必须降级为静态描述且不外抛（下发模型热路径不得炸穿 run）。"""
-
-    def broken() -> str:
-        raise ValueError("provider exploded")
-
-    definition = _make_definition(description_provider=broken)
-
-    assert definition.project_description() == "probe"
-    assert definition.to_model_tool_definition()["description"] == "probe"
 
 
 # --------------------------------------------------------------------------- #
@@ -534,15 +426,15 @@ def test_constructor_registers_iterable_and_views_are_sorted() -> None:
     assert registry.generation == 3
 
 
-def test_get_schema_projects_live_provider_and_none_for_unknown() -> None:
-    """``get_schema`` 命中时返回运行期投影，未注册时返回 None（既有契约不回归）。"""
+def test_get_schema_returns_static_schema_and_none_for_unknown() -> None:
+    """``get_schema`` 命中时返回静态 schema，未注册时返回 None。"""
 
-    def provider() -> Mapping[str, Any]:
-        return {"type": "object", "properties": {"live": {"type": "string"}}}
+    schema = {"type": "object", "properties": {"static": {"type": "string"}}}
+    registry = ToolRegistry(
+        [_make_definition(name="static_tool", parameters_schema=schema)]
+    )
 
-    registry = ToolRegistry([_make_definition(name="live_tool", schema_provider=provider)])
-
-    assert registry.get_schema("live_tool") == provider()
+    assert registry.get_schema("static_tool") == schema
     assert registry.get_schema("ghost_tool") is None
 
 

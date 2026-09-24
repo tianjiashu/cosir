@@ -33,13 +33,6 @@ from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
-APPLY_PATCH_DESCRIPTION = (
-    "Apply a Git-style unified diff to modify the contents of existing UTF-8 text files inside "
-    "the active workspace. It only changes existing files: it cannot create, delete, or move "
-    "files, so use 'write_file' to create or replace a whole file, 'delete_file' to delete one, "
-    "and 'move_file' to move or rename one. The 'patch' parameter holds the diff text; its "
-    "description defines the accepted format."
-)
 
 
 def _is_patch_retryable_after_correction(error: PatchApplyError) -> bool:
@@ -85,16 +78,20 @@ class ApplyPatchTool(HandlerBase):
     """
 
     name = TOOL_APPLY_PATCH
-    description = APPLY_PATCH_DESCRIPTION
+    description = "Apply a Git-style unified diff to modify the contents of existing UTF-8 text files inside "
+    "the active workspace. It only changes existing files: it cannot create, delete, or move "
+    "files, so use 'write_file' to create or replace a whole file, 'delete_file' to delete one, "
+    "and 'move_file' to move or rename one. The 'patch' parameter holds the diff text; its "
+    "description defines the accepted format."
     permission = "file_write"
     args_model = ApplyPatchArgs
     timeout_seconds = 30.0
     risk_level = "medium"
 
     def execute(
-        self,
-        execution_context: ToolExecutionContext,
-        patch: str,
+            self,
+            execution_context: ToolExecutionContext,
+            patch: str,
     ) -> ToolObservation:
         """完成格式、路径与内容校验后应用补丁 hunk。
 
@@ -144,7 +141,7 @@ class ApplyPatchTool(HandlerBase):
             return tool_error(
                 tool_name=self.name,
                 error="unified diff validation failed (no files were modified):\n"
-                + "\n".join(f"  - {error}" for error in validation_errors),
+                      + "\n".join(f"  - {error}" for error in validation_errors),
                 reason=(
                     "fix every cause listed in 'error', then submit a new Git unified diff. Causes "
                     "that live in a target file itself (missing or irregular file, binary content, "
@@ -200,9 +197,9 @@ class ApplyPatchTool(HandlerBase):
         )
 
     def _build_content(
-        self,
-        count_repairs: list[str],
-        diagnostics: list[SyntaxDiagnostic],
+            self,
+            count_repairs: list[str],
+            diagnostics: list[SyntaxDiagnostic],
     ) -> str | None:
         """拼装成功观察的模型可见 `content`。
 

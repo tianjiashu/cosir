@@ -74,18 +74,14 @@ class ToolSystem:
             已初始化 registry 与 executor 的 ToolSystem。
 
         异常:
-            无（注册过程不抛预期异常；子 Agent 摘要若尚未注入则降级为空串）。
+            RuntimeError: Agent registry 尚未在工具系统之前初始化。
 
         副作用:
             创建内存工具注册表并注册全部内置工具；创建 ToolExecutor 实例。``delegate_task``
-            的子 Agent 清单与候选集由运行期投影钩子在下发模型时读取注册表，本方法不固化。
+            的子 Agent 清单与候选集在本方法装配时由已初始化的 Agent registry 固化。
         """
 
-        # delegate_task 的子 Agent 能力摘要与 child_agent_id 候选集依赖 agent 注册表，
-        # 而注册表在启动序列中晚于本方法注入（且 build_agent_registry 又反向依赖
-        # get_tool_registry，二者构成循环依赖）。故此处**不做注册期快照**，交由
-        # delegate_task 的运行期投影钩子在每次下发模型时实时读取（见 ToolDefinition
-        # 的 schema_provider / description_provider）。
+        # Agent registry 已由 lifespan 在本方法前注入，delegate_task 在注册时固化其模型契约。
         registry = ToolRegistry()
         registry.register(build_read_file_definition())
         registry.register(build_write_file_definition())

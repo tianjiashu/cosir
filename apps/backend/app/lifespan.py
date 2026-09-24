@@ -196,9 +196,10 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
 
     initialize_hook_registry()
 
+    # Agent profile 只依赖规范工具名清单，先初始化它即可打破 Agent/ToolRegistry 循环依赖。
+    set_agent_registry(build_agent_registry())
     tool_system = ToolSystem.build_tool_system()
     set_tool_system(tool_system)
-    set_agent_registry(build_agent_registry())
     set_runtime(
         AgentRuntime(
             process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(),

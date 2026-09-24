@@ -275,7 +275,6 @@ class ConversationTaskStateService:
                 task,
                 runs,
                 context_rows,
-                child_task_states=self._child_task_states(task_id),
             )
         except Exception as exc:
             log.exception(
@@ -302,39 +301,6 @@ class ConversationTaskStateService:
             },
         )
         return state
-
-    def _child_task_states(
-        self, parent_task_id: int
-    ) -> tuple[tuple[Any, Any | None], ...]:
-        """读取父任务下的 child task 与当前 Run，供冷重建投影委派终态。
-
-        ``TaskCrud`` 是生产装配的 canonical source；缺少该关系读取能力的测试替身被显式
-        记录并退回仅使用 context metadata 的旧边界，不影响普通任务的冷读。
-        """
-
-        try:
-            children = self._task_source.list_by_parent_task(parent_task_id)
-        except AttributeError:
-            log.warning(
-                "state_rebuild_child_tasks_source_unavailable",
-                extra={
-                    "msg": "冷重建数据源未提供 child task 关系读取，跳过委派终态投影",
-                    "data": {"parent_task_id": parent_task_id},
-                },
-            )
-            return ()
-
-        states: list[tuple[Any, Any | None]] = []
-        for child in children:
-            if child.task_type != "delegate_task" or child.parent_task_id != parent_task_id:
-                continue
-            child_runs = self._run_source.list_by_task(child.id)
-            child_run = next(
-                (run for run in child_runs if run.id == child.current_run_id),
-                None,
-            )
-            states.append((child, child_run))
-        return tuple(states)
 
     def refresh_parent_delegation(
         self,

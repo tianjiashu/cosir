@@ -1,8 +1,16 @@
-"""delegate_task tool handler。"""
+"""delegate_task 工具 handler：把一次委派请求落地为 child Task/Run 并启动 child workflow。
+
+职责：解析 child Agent profile、建立 child Task 与 Run、经父 Run 的事件循环调度 child 执行器，
+返回「已启动」观察（携带 child locator），并把子 Agent 的工具禁用清单（``CHILD_BANNED_TOOLS``）
+交给执行器。
+
+不负责：child workflow 的实际运行与完成观测（父侧用 ``child_agent_wait`` / ``child_agent_status``
+查询）；参数校验与准入门禁（``ToolAccessGate``）；委派展示数据构造
+（``build_delegation_display_data``）。
+"""
 
 import asyncio
 import json
-from dataclasses import replace
 from typing import ClassVar
 
 from app.config.logging.logger import log
@@ -58,7 +66,7 @@ def _contract_description() -> str:
         无。
 
     副作用:
-        无（纯函数，只读 ``Settings``）。
+        无（纯常量拼接，不读配置、不访问注册表）。
     """
 
     return (
@@ -73,12 +81,6 @@ def _contract_description() -> str:
         "CRITICAL BUDGET LIMIT: an over-budget call is rejected immediately and counts as a "
         "tool error, so trim or split the task instead of overshooting."
     )
-
-
-_PARALLEL_HINT = (
-    "To run several children in parallel, emit several delegate_task calls in the same reply; "
-    "reusing the same child_agent_id is fine as long as each message is self-contained."
-)
 
 # 子 Agent 不得使用的工具：**委派与父子通信**（``tool_handler/child_task/`` 全部工具）与
 # **可交互终端**（``tool_handler/terminal_session/`` 全部工具）。清单与这两个目录一一对应，
@@ -103,98 +105,107 @@ CHILD_BANNED_TOOLS: tuple[str, ...] = (
 _START_ACK_TIMEOUT_SECONDS = 10.0
 
 
-def _compose_description(agent_summary: str) -> str:
+def _compose_description() -> str:
     """把契约主描述、子 Agent 清单与并行引导拼装为面向模型的完整工具描述。
 
     子 Agent 清单自带 ``Available child agents`` 标题（由
     ``AgentProfileRegistry.child_agent_summary`` 产出），本函数**不再重复加标题**——历史
-    实现两处都加，模型实际看到的是同一个标题连写两遍。清单为空（注册表尚未注入）时只输出
-    契约与并行引导，既不暴露模板占位符也不留误导性标题。
+    实现两处都加，模型实际看到的是同一个标题连写两遍。清单为空时只输出契约与并行引导，既不
+    暴露模板占位符也不留误导性标题。
 
     参数:
-        agent_summary: 已投影的子 Agent 能力摘要；空串表示当前取不到，退化为不含清单的
-            通用描述。
-
-    返回:
-        完整的 delegate_task 工具描述文本。
-
-    异常:
         无。
 
-    副作用:
-        无（纯函数）。
-    """
+    返回:
+        完整的 delegate_task 工具描述文本（各块之间以空行分隔）。
 
+    异常:
+        RuntimeError: agent registry 尚未注入（``get_agent_registry`` 取不到运行期单例），
+            由装配期调用方暴露为工具定义构建失败。
+
+    副作用:
+        读取进程内 agent registry 的子 Agent 清单；该导入延迟到调用时执行，避免配置层与工具
+        handler 在模块初始化期形成循环依赖。
+    """
+    from app.config.configuration import get_agent_registry
+    agent_summary = get_agent_registry().child_agent_summary()
     blocks = [_contract_description()]
     if agent_summary.strip():
         blocks.append(agent_summary.strip())
-    blocks.append(_PARALLEL_HINT)
+    blocks.append(
+        "To run several children in parallel, emit several delegate_task calls in the same reply; "
+        "reusing the same child_agent_id is fine as long as each message is self-contained."
+    )
     return "\n\n".join(blocks)
 
 
 class DelegateTaskTool(HandlerBase):
-    """Validate a delegate_task request and route it to the injected runtime executor."""
+    """把一次 delegate_task 调用落地为已启动的 child Task/Run。
+
+    职责：检查运行期依赖可用性、解析 child profile、创建 child Task/Run 并调度执行器，全程以
+    ``ToolObservation`` 返回结果。不等待 child 执行结束——完成情况由 ``child_agent_wait`` /
+    ``child_agent_status`` 查询。
+    """
 
     name: str = TOOL_DELEGATE_TASK
-    # 类级描述只是「静态兜底」：真实下发文本由 build_delegate_task_definition 注册的
-    # ``description_provider`` 在每次投影时重新拼装（含运行期子 Agent 清单）。
-    description: str = _compose_description("")
+    # HandlerBase 要求提供类级描述；真正下发给模型的完整描述由 to_definition 在
+    # ToolSystem 装配时读取 Agent registry 后固化。
+    description: str = ""
     permission: ClassVar[str] = "delegate_task"
     args_model: type[DelegateTaskArgs] = DelegateTaskArgs
     timeout_seconds: ClassVar[float] = 300.0
     risk_level: ClassVar[str] = "medium"
 
-    def __init__(self, description: str | None = None) -> None:
-        """构造 delegate_task 工具实例，可选覆盖面向模型的描述。
+    def __init__(self) -> None:
+        """构造 delegate_task handler，并绑定委派所需的运行期服务依赖。
 
         参数:
-            description: 可选的实例级描述。传入时覆盖类属性 ``description``；
-                为 ``None`` 时回退到类属性默认描述，兼容现有无参构造。
-
-        返回:
-            无（构造函数）。
-
-        异常:
             无。
 
+        返回:
+            无。
+
+        异常:
+            无（依赖由工具系统装配层提供；服务未初始化时由依赖装配层抛出异常）。
+
         副作用:
-            在实例上绑定 ``description`` 属性（覆盖类属性）。
+            在实例上绑定 Task 服务、Run 创建服务、Run 状态服务与 Run 执行器；构造即解析依赖
+            单例，因此必须晚于存储与运行期装配。
         """
 
-        self.description = description if description is not None else _compose_description("")
         self._task_service = get_task_service()
         self.run_setvice = get_conversation_run_service()
         self.run_state_service = get_conversation_run_state_service()
         self.run_exector = get_conversation_run_executor()
 
     def execute(
-        self,
-        child_agent_id: str,
-        agent_name: str,
-        message: str,
-        execution_context: ToolExecutionContext | None = None,
+            self,
+            child_agent_id: str,
+            agent_name: str,
+            message: str,
+            execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """委派一个自由文本子任务给指定 child Agent，并返回启动结果观察。
 
         参数:
             child_agent_id: 要运行的 child agent profile 标识。
-            agent_name: Agent 名称，必填，用于展示与可追溯。
+            agent_name: Agent 名称，用作 child Task 标题（展示与可追溯）。
             message: 面向子 Agent 的自由文本任务契约，原样作为 child turn 的输入。
             execution_context: 父工具执行边界，提供运行期依赖与父 Run 事实。
 
         返回:
-            child 启动成功时返回携带稳定 locator 的 success 观察；缺少执行上下文或运行期依赖、
-            run 已取消、child 无法解析、策略拒绝或启动失败时返回确定性的 error/cancelled 观察。
+            child 启动成功时返回携带稳定 locator 的 success 观察；缺少执行上下文、缺少父
+            profile、run 已取消、child 无法解析、父事件循环不可用或启动失败时返回确定性的
+            error/cancelled 观察。
 
         异常:
             无。参数校验由 ``ToolAccessGate`` 在准入门禁层统一完成（单一收口），本方法信任已
-            校验入参，不再二次校验；若上游契约被破坏，``DelegateTaskArgs`` 构造会抛出
-            ``ValidationError`` 由 ``ToolHandlerRunner`` 归一化为错误观察。委派失败全部在本
-            方法内收口为观察，不向上抛异常。
+            校验入参，不再二次校验；委派过程的异常全部在本方法内收口为 error 观察并写
+            ``delegate_task_exception`` 日志，不向上抛异常。
 
         副作用:
-            解析 child Agent profile、裁决委派策略，并在通过后经注入的 session service 创建
-            child Task/Run、注册 child workflow 的后台执行；写委派相关日志。
+            创建 child Task 与 pending Run、认领该 Run，并经父 Run 的事件循环调度 child 执行器
+            （只等待启动登记，不等待 child 执行结束）；写委派相关日志。
         """
 
         if execution_context is None:
@@ -222,8 +233,7 @@ class DelegateTaskTool(HandlerBase):
                 permission=self.permission,
             )
 
-        # 延迟导入：agent 注册表在启动序列中晚于工具系统装配，且与工具注册表互为依赖，
-        # 模块级导入会成环（与 _runtime_child_agent_summary 同一处理）。
+        # 延迟导入，避免配置层与工具 handler 的模块初始化形成循环依赖。
         from app.config.configuration import get_agent_registry
 
         agent_registry = get_agent_registry()
@@ -363,18 +373,21 @@ class DelegateTaskTool(HandlerBase):
             工具观察仅确认 child Run 已注册，不等待 child workflow 完成。
 
         异常:
-            无。
+            RuntimeError: agent registry 尚未注入，无法生成子 Agent 清单与 child_agent_id
+                候选集。
 
         副作用:
-            无。
+            读取进程内 agent registry 生成子 Agent 清单；并固化 ``DelegateTaskArgs`` 的 JSON
+            schema 作为模型可见参数契约。
         """
 
         return ToolDefinition(
             name=self.name,
-            description=self.description,
+            description=_compose_description(),
             permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
+            parameters_schema=DelegateTaskArgs.model_json_schema(),
             timeout_seconds=self.timeout_seconds,
             risk_level=self.risk_level,
             execution_mode="thread",
@@ -390,83 +403,26 @@ class DelegateTaskTool(HandlerBase):
         )
 
 
-def _runtime_child_agent_summary() -> str:
-    """投影期实时读取进程级 agent 注册表的子 Agent 能力摘要。
-
-    委派目标清单只能在运行期（注册表注入之后）取得：启动装配期 agent 注册表尚未注入，
-    任何注册期快照都会把空摘要永久固化（2026-09-17 委派全线失败的根因）。因此本函数在
-    **每次向模型投影工具定义时**实时读取，并显式记录取数失败，便于排查装配顺序问题。
-
-    参数:
-        无。
-
-    返回:
-        形如 ``"Available child agents:\\n- agent_id ..."`` 的摘要文本；注册表未就绪时
-        返回空串（描述退化为通用形态，但绝不暴露占位符）。
-
-    异常:
-        无（注册表不可用属预期降级路径，异常在本函数内收口后返回空串）。
-
-    副作用:
-        注册表不可用时写一条 WARNING 日志（``delegate_agent_catalog_unavailable``）。
-    """
-
-    try:
-        from app.config.configuration import get_agent_registry
-
-        return get_agent_registry().child_agent_summary()
-    except Exception as exc:
-        # 异常必须在本函数收口：本函数处于「每次下发模型」的投影热路径上，任何穿透
-        # 都会炸穿整轮 run（比原缺陷的静默降级更严重）。
-        log.warning(
-            "delegate_agent_catalog_unavailable",
-            extra={
-                "msg": "委派子 Agent 能力摘要不可用，delegate_task 描述降级为通用形态",
-                "data": {
-                    "reason": "agent_registry_unavailable",
-                    "error_type": type(exc).__name__,
-                },
-            },
-        )
-        return ""
-
-
 def build_delegate_task_definition() -> ToolDefinition | None:
-    """构建 delegate_task 工具定义（子 Agent 清单与候选集在投影期实时解析）。
+    """构建在装配期固化模型契约的 delegate_task 工具定义。
 
-    子 Agent 清单与 ``child_agent_id`` 候选集均依赖 agent 注册表，而注册表在启动序列中
-    晚于工具系统装配（``build_agent_registry`` 又反向依赖 ``get_tool_registry``，二者构成
-    循环依赖）。因此本函数把描述与参数 schema 注册为**运行期投影钩子**
-    （``description_provider`` / ``schema_provider``）：每次下发模型时实时读取注册表，
-    注册期空值不会被固化。静态 ``description`` 仅作钩子异常时的兜底值。
+    agent registry 必须先于 ToolSystem 装配完成：描述里的子 Agent 清单与参数 schema 都由
+    :meth:`DelegateTaskTool.to_definition` 在注册时一次性生成并固化，运行期不再刷新。本函数
+    经 ``HandlerBase.to_definition_if_avaliable`` 包装调用 ``to_definition``；``DelegateTaskTool``
+    未覆写 ``avaliable``，因此当前恒为可用。
 
     参数:
-        无。**不提供静态摘要注入口**：任何静态摘要都会遮蔽运行期清单，一旦被传入即退回
-        「子 Agent 清单不可见」的旧缺陷形态（2026-09-17 委派全线失败），故从签名上消除该
-        地雷，而非依赖调用方自律。
-
-    返回:
-        可直接注册到工具注册表的 delegate_task 工具定义（含运行期投影钩子）。
-
-    异常:
         无。
 
+    返回:
+        可直接注册到工具注册表的 delegate_task 工具定义；``avaliable`` 为假时返回 None。
+
+    异常:
+        RuntimeError: agent registry 尚未由应用启动流程注入。
+
     副作用:
-        创建 DelegateTaskTool 实例并绑定投影钩子，但不会启动委派；钩子仅在每次投影时
-        读取进程级注册表。
+        创建 ``DelegateTaskTool`` 实例（解析 Task/Run 服务与 Run 执行器单例）并生成一次静态
+        ``ToolDefinition``；不创建 child Task、不启动委派。
     """
 
-    static_description = _compose_description("")
-
-    def _description_provider() -> str:
-        return _compose_description(_runtime_child_agent_summary())
-
-    definition = DelegateTaskTool(description=static_description).to_definition_if_avaliable()
-    if definition is None:
-        return None
-    return replace(
-        definition,
-        description=static_description,
-        description_provider=_description_provider,
-        schema_provider=DelegateTaskArgs.model_json_schema,
-    )
+    return DelegateTaskTool().to_definition_if_avaliable()

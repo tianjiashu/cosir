@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from app.config.configuration import get_tool_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings
 from app.core.tools.schemas.tool_names import (
+    ALL_TOOL_NAMES,
     TOOL_APPLY_PATCH,
     TOOL_DELETE_FILE,
     TOOL_EXECUTE_TERMINAL,
@@ -25,9 +25,9 @@ from app.core.tools.schemas.tool_names import (
 
 
 def _all_tool_names() -> list[str]:
-    """调用期读取实时工具注册表全量工具名。"""
+    """返回内置工具规范清单，避免 Agent 与 ToolRegistry 启动顺序互相依赖。"""
 
-    return list(get_tool_registry().get_all_tool_names())
+    return list(ALL_TOOL_NAMES)
 
 
 def _system_prompt_path(filename: str) -> Path:

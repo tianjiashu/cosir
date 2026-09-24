@@ -761,12 +761,12 @@ def test_ensure_system_cosir_dir_degrades_when_name_is_file(tmp_path: Path) -> N
 
 
 def test_coding_agent_removed_from_ignored_dirs() -> None:
-    """file_walker.IGNORED_DIRS 与 system_prompt_builder._IGNORED_DIRS 不得再含 `.coding-agent`。"""
+    """ignore_rules 默认集合与 system_prompt_builder._IGNORED_DIRS 不得再含 `.coding-agent`。"""
 
     from app.core.context.system_prompt_builder import _IGNORED_DIRS as prompt_ignored
-    from app.core.tools.tool_handler.search.file_walker import IGNORED_DIRS as walker_ignored
+    from app.core.tools.tool_handler.search.ignore_rules import DEFAULT_IGNORED_DIR_NAMES
 
-    assert ".coding-agent" not in walker_ignored
+    assert ".coding-agent" not in DEFAULT_IGNORED_DIR_NAMES
     assert ".coding-agent" not in prompt_ignored
 
 
@@ -774,9 +774,9 @@ def test_cosir_not_in_ignored_dirs_by_design() -> None:
     """按设计，`.cosir` 允许被遍历/读取，故不得出现在跳过集里。"""
 
     from app.core.context.system_prompt_builder import _IGNORED_DIRS as prompt_ignored
-    from app.core.tools.tool_handler.search.file_walker import IGNORED_DIRS as walker_ignored
+    from app.core.tools.tool_handler.search.ignore_rules import DEFAULT_IGNORED_DIR_NAMES
 
-    assert ".cosir" not in walker_ignored
+    assert ".cosir" not in DEFAULT_IGNORED_DIR_NAMES
     assert ".cosir" not in prompt_ignored
 
 

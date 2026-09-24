@@ -229,12 +229,10 @@ class DelegateTaskArgs(BaseModel):
     ) -> dict[str, Any]:
         """生成模型可见 JSON schema，把可用 child agent id 收口为 enum 并列举在描述中。
 
-        本方法在**每次向模型投影工具定义时**调用（delegate_task 声明了运行期
-        ``schema_provider``），因此注册表注入时机不影响结果——注册期取到的空值不会
-        被固化。可用 id 同时进入 ``enum`` 硬约束与 description 文案：模型既无法凭语义
-        猜测不存在的角色名，也能直接读到合法候选。注册表尚未就绪时不注入 enum（避免
-        空 enum 让所有取值非法），并把描述降级为「不可列举且不得猜测」，绝不暴露模板
-        占位符。
+        本方法在 delegate_task 工具系统装配时调用。可用 id 同时进入 ``enum`` 硬约束与
+        description 文案：模型既无法凭语义猜测不存在的角色名，也能直接读到合法候选。
+        注册表尚未就绪时不注入 enum（避免空 enum 让所有取值非法），并把描述降级为
+        「不可列举且不得猜测」，绝不暴露模板占位符。
 
         参数:
             by_alias: 是否按别名生成（默认 True，与 pydantic 约定一致）。
