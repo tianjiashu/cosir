@@ -9,6 +9,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
+from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 
 
@@ -19,6 +20,43 @@ class ReasoningChatOpenAI(ChatOpenAI):
     和错误处理仍由 ``ChatOpenAI`` 负责；上层通过标准 LangChain ``AIMessageChunk`` 接收
     ``additional_kwargs["reasoning_content"]``，无需感知原始供应商响应结构。
     """
+
+    def bind_tools(
+        self,
+        tools,
+        *,
+        tool_choice=None,
+        strict=None,
+        parallel_tool_calls=None,
+        response_format=None,
+        **kwargs: Any,
+    ) -> Runnable:
+        """将工具配置绑定到模型，并保留 ``ChatOpenAI`` 的标准处理逻辑。
+
+        参数:
+            tools: LangChain 支持的工具、可调用对象、Pydantic 类型或 OpenAI-compatible
+                工具 schema。
+            tool_choice: 工具选择策略，语义与 ``ChatOpenAI.bind_tools`` 相同。
+            strict: 是否启用严格工具 schema 校验。
+            parallel_tool_calls: 是否允许并行工具调用。
+            response_format: 可选的结构化输出 schema。
+            kwargs: 透传给父类绑定逻辑的其他参数。
+
+        返回:
+            父类生成的 ``Runnable``，其中包含规范化后的工具配置。
+
+        副作用:
+            不发起网络请求，也不写入持久化状态；仅创建带工具绑定配置的 Runnable。
+        """
+
+        return super().bind_tools(
+            tools,
+            tool_choice=tool_choice,
+            strict=strict,
+            parallel_tool_calls=parallel_tool_calls,
+            response_format=response_format,
+            **kwargs,
+        )
 
     def _convert_chunk_to_generation_chunk(
         self,
@@ -65,6 +103,4 @@ class ReasoningChatOpenAI(ChatOpenAI):
         if isinstance(reasoning, str) and reasoning:
             generation_chunk.message.additional_kwargs["reasoning_content"] = reasoning
         return generation_chunk
-
-
 __all__ = ["ReasoningChatOpenAI"]
