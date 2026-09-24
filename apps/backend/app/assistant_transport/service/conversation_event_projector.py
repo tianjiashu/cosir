@@ -178,6 +178,25 @@ class ConversationEventProjector:
                 )
                 return None
             change = self._state_service.apply_planned(event)
+            if event.type == "run_status_changed":
+                try:
+                    self._state_service.refresh_parent_delegation(
+                        event.task_id,
+                        event.run_id,
+                        event.status.value,
+                        event.end_reason,
+                    )
+                except AttributeError:
+                    # In-memory projector test owners intentionally implement only the
+                    # snapshot mutation protocol; the production state service owns the
+                    # parent delegation side projection.
+                    log.debug(
+                        "conversation_parent_delegation_refresh_unavailable",
+                        extra={
+                            "msg": "snapshot owner未装配父委派刷新能力",
+                            "data": {"task_id": event.task_id, "run_id": event.run_id},
+                        },
+                    )
             # 事件可能先于 run 骨架抵达；空投影不能被永久去重，否则后续无法重放。
             if change.mutations and self._dedup_window.add(event.event_id):
                 log.warning(

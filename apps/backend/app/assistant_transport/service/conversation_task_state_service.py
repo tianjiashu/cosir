@@ -22,6 +22,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
+from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
@@ -270,7 +271,12 @@ class ConversationTaskStateService:
             task = self._task_source.get(task_id)
             runs = self._run_source.list_by_task(task_id)
             context_rows = self._context_source.get(task_id, include_in_context=False)
-            state = ConversationTaskStateRebuilder.rebuild(task, runs, context_rows)
+            state = ConversationTaskStateRebuilder.rebuild(
+                task,
+                runs,
+                context_rows,
+                child_task_states=self._child_task_states(task_id),
+            )
         except Exception as exc:
             log.exception(
                 "state_rebuild_failed",
@@ -296,6 +302,123 @@ class ConversationTaskStateService:
             },
         )
         return state
+
+    def _child_task_states(
+        self, parent_task_id: int
+    ) -> tuple[tuple[Any, Any | None], ...]:
+        """读取父任务下的 child task 与当前 Run，供冷重建投影委派终态。
+
+        ``TaskCrud`` 是生产装配的 canonical source；缺少该关系读取能力的测试替身被显式
+        记录并退回仅使用 context metadata 的旧边界，不影响普通任务的冷读。
+        """
+
+        try:
+            children = self._task_source.list_by_parent_task(parent_task_id)
+        except AttributeError:
+            log.warning(
+                "state_rebuild_child_tasks_source_unavailable",
+                extra={
+                    "msg": "冷重建数据源未提供 child task 关系读取，跳过委派终态投影",
+                    "data": {"parent_task_id": parent_task_id},
+                },
+            )
+            return ()
+
+        states: list[tuple[Any, Any | None]] = []
+        for child in children:
+            if child.task_type != "delegate_task" or child.parent_task_id != parent_task_id:
+                continue
+            child_runs = self._run_source.list_by_task(child.id)
+            child_run = next(
+                (run for run in child_runs if run.id == child.current_run_id),
+                None,
+            )
+            states.append((child, child_run))
+        return tuple(states)
+
+    def refresh_parent_delegation(
+        self,
+        child_task_id: int,
+        child_run_id: int,
+        status: str,
+        end_reason: str | None = None,
+    ) -> TransportFrame | None:
+        """把 child Run 的 canonical 状态投影到已物化的父任务委派卡片。
+
+        子 Run 的状态事件先更新子任务自身 snapshot，再调用此方法同步父任务中对应的
+        ``delegation-result``。父任务尚未物化时不主动加载它；后续冷读会从 Task/Run 事实
+        重建同样的终态。该方法只更新进程内 Transport working copy，不写数据库。
+        """
+
+        with self._lock:
+            child_task = self._task_source.get(child_task_id)
+            parent_task_id = child_task.parent_task_id
+            if parent_task_id is None:
+                return None
+            parent_space = task_runtime_spaces.get(parent_task_id)
+            if parent_space is None:
+                return None
+            state = parent_space.existing_snapshot()
+            if state is None:
+                return None
+
+            child_run = next(
+                (
+                    run
+                    for run in self._run_source.list_by_task(child_task_id)
+                    if run.id == child_run_id
+                ),
+                None,
+            )
+            mutations: list[ConversationStateMutation] = []
+            for run_index, run in enumerate(state["runs"]):
+                for message_index, message in enumerate(run["messages"]):
+                    for part_index, part in enumerate(message["parts"]):
+                        if not isinstance(part, dict) or part.get("type") != "tool-call":
+                            continue
+                        display = part.get("display_data")
+                        if not isinstance(display, dict) or display.get("kind") != "delegation-result":
+                            continue
+                        if display.get("child_task_id", part.get("child_task_id")) != child_task_id:
+                            continue
+                        child_agent_id = display.get("child_agent_id")
+                        if not isinstance(child_agent_id, str) or not child_agent_id:
+                            args = part.get("args")
+                            child_agent_id = args.get("child_agent_id") if isinstance(args, dict) else None
+                        if not isinstance(child_agent_id, str) or not child_agent_id:
+                            continue
+                        updated_display = build_delegation_display_data(
+                            title=str(display.get("title") or child_task.title),
+                            child_agent_id=child_agent_id,
+                            child_task_id=child_task_id,
+                            child_run_id=child_run_id,
+                            status=status,
+                            role=(display.get("role") if isinstance(display.get("role"), str) else None),
+                            final_output=(child_run.final_output if child_run is not None else None),
+                            end_reason=(
+                                child_run.end_reason if child_run is not None else end_reason
+                            ),
+                        )
+                        mutations.append(
+                            ConversationStateMutation(
+                                "set",
+                                (
+                                    "runs",
+                                    run_index,
+                                    "messages",
+                                    message_index,
+                                    "parts",
+                                    part_index,
+                                    "display_data",
+                                ),
+                                updated_display,
+                            )
+                        )
+            if not mutations:
+                return None
+            for mutation in mutations:
+                _apply_mutation(state, mutation)
+            return self.publish_state(parent_task_id, state, tuple(mutations))
 
     def _publish(self, change: TransportFrame) -> None:
         """存在 full 状态时安装该状态，并将帧入队给各 subscriber。"""

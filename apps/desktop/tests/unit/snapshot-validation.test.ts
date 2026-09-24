@@ -122,6 +122,34 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(invalidId)).toThrow("messages[0].child_task_id");
   });
 
+  it("accepts the child agent send/status result contract", () => {
+    const snapshot = validSnapshot();
+    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", usage: null, error: null, messages: [{
+      id: "m1",
+      role: "assistant",
+      parts: [{
+        type: "tool-call",
+        toolCallId: "status-1",
+        toolName: "child_agent_status",
+        status: "completed",
+        args: {},
+        display_data: {
+          kind: "child-agent-result",
+          operation: "status",
+          child_task_id: 501,
+          child_run_id: 903,
+          status: "completed",
+          agent_id: "reviewer",
+          agent_name: "审查代码",
+          final_output: "已完成审查。",
+          end_reason: null,
+        },
+      }],
+    }] }];
+    snapshot.current_run_id = 1;
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+  });
+
   it("accepts a code+message snapshot error and rejects the legacy retryable field", () => {
     const snapshot = validSnapshot();
     snapshot.error = { code: "run_failed", message: "运行失败" };

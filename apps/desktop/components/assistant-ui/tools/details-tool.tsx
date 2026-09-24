@@ -7,7 +7,7 @@ import { asRecord, readToolArtifact, safeExternalUrl } from "./types";
 import { ToolStatus } from "./tool-status";
 import { ToolIcon } from "./tool-icons";
 import { useToolDisclosure } from "./tool-disclosure";
-import { childAgentStatusLabel, interruptionLabel, readChildAgentWaitDisplay } from "./child-agent-display";
+import { childAgentStatusLabel, interruptionLabel, readChildAgentResultDisplay, readChildAgentWaitDisplay } from "./child-agent-display";
 
 function toolTitle(toolName: string, verb?: string): string {
   return verb ?? toolName;
@@ -100,6 +100,11 @@ function displaySummary(data: Record<string, unknown>, backendStatus: string): s
         return `${messages} 条结果 · ${interruptionLabel(data.interrupted_by)}`;
       }
       return data.timed_out === true ? `${messages} 条结果 · ${pending} 个等待超时` : `${messages} 条结果 · ${pending} 个等待中`;
+    }
+    case "child-agent-result": {
+      const status = typeof data.status === "string" ? data.status : backendStatus;
+      const agent = typeof data.agent_name === "string" ? data.agent_name : "子 Agent";
+      return `${agent} · ${formatToolStatus(status)}`;
     }
     default:
       return typeof data.path === "string" ? data.path : typeof data.pattern === "string" ? data.pattern : "";
@@ -225,6 +230,20 @@ function ChildAgentWaitResult({ data }: { data: Record<string, unknown> }) {
   );
 }
 
+function ChildAgentResult({ data }: { data: Record<string, unknown> }) {
+  const result = readChildAgentResultDisplay(data);
+  if (!result) return <p className="text-muted-foreground text-xs">子 Agent 结果无效</p>;
+  return (
+    <div className="space-y-1 text-xs">
+      <p className="text-muted-foreground">
+        {result.agentName ?? "子 Agent"} · task {result.childTaskId} · run {result.childRunId} · {childAgentStatusLabel(result.status)}
+      </p>
+      {result.endReason && <p className="text-amber-300">{result.endReason}</p>}
+      {result.finalOutput && <p className="whitespace-pre-wrap break-words text-muted-foreground">{result.finalOutput}</p>}
+    </div>
+  );
+}
+
 export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessagePartProps) {
   const artifact = readToolArtifact(rawArtifact);
   const data = artifact.display_data ?? {};
@@ -253,6 +272,8 @@ export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessage
           </p>
       ) : data.kind === "child-agent-wait-result" ? (
         <ChildAgentWaitResult data={data} />
+      ) : data.kind === "child-agent-result" ? (
+        <ChildAgentResult data={data} />
       ) : (
         <>
           {presentation.show_result !== false && <p className="text-muted-foreground text-xs">暂无展示数据</p>}

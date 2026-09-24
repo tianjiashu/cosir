@@ -18,6 +18,18 @@ export type ChildAgentWaitMessage = {
   childRunId: number;
   status: Extract<ChildAgentLifecycleStatus, "completed" | "failed" | "cancelled">;
   finalOutput?: string;
+  endReason?: string;
+};
+
+export type ChildAgentResultDisplay = {
+  operation: "send" | "status";
+  childTaskId: number;
+  childRunId: number;
+  status: ChildAgentLifecycleStatus;
+  agentId?: string;
+  agentName?: string;
+  finalOutput?: string;
+  endReason?: string;
 };
 
 export type ChildAgentWaitDisplay = {
@@ -86,6 +98,32 @@ export function readDelegationDisplay(value: unknown): DelegationDisplay | null 
   };
 }
 
+/** Read the allowlisted result projection for child_agent_send/status. */
+export function readChildAgentResultDisplay(value: unknown): ChildAgentResultDisplay | null {
+  const data = record(value);
+  if (!data || data.kind !== "child-agent-result") return null;
+  if (data.operation !== "send" && data.operation !== "status") return null;
+  const status = childAgentStatus(data.status);
+  if (!status) return null;
+  const childTaskId = positiveId(data.child_task_id);
+  const childRunId = positiveId(data.child_run_id);
+  if (childTaskId === undefined || childRunId === undefined) return null;
+  if (data.agent_id !== null && data.agent_id !== undefined && nonEmptyString(data.agent_id) === undefined) return null;
+  if (data.agent_name !== null && data.agent_name !== undefined && nonEmptyString(data.agent_name) === undefined) return null;
+  if (data.final_output !== null && data.final_output !== undefined && typeof data.final_output !== "string") return null;
+  if (data.end_reason !== null && data.end_reason !== undefined && typeof data.end_reason !== "string") return null;
+  return {
+    operation: data.operation,
+    childTaskId,
+    childRunId,
+    status,
+    agentId: nonEmptyString(data.agent_id),
+    agentName: nonEmptyString(data.agent_name),
+    finalOutput: typeof data.final_output === "string" ? data.final_output : undefined,
+    endReason: typeof data.end_reason === "string" ? data.end_reason : undefined,
+  };
+}
+
 /** Strictly parse the generic child-agent wait result before rendering it. */
 export function readChildAgentWaitDisplay(value: unknown): ChildAgentWaitDisplay | null {
   const data = record(value);
@@ -104,12 +142,14 @@ export function readChildAgentWaitDisplay(value: unknown): ChildAgentWaitDisplay
     const status = message ? message.status : undefined;
     if (!message || positiveId(message.child_task_id) === undefined || positiveId(message.child_run_id) === undefined) return null;
     if (status !== "completed" && status !== "failed" && status !== "cancelled") return null;
-    if (message.final_output !== undefined && typeof message.final_output !== "string") return null;
+    if (message.final_output !== undefined && message.final_output !== null && typeof message.final_output !== "string") return null;
+    if (message.end_reason !== undefined && message.end_reason !== null && typeof message.end_reason !== "string") return null;
     messages.push({
       childTaskId: positiveId(message.child_task_id)!,
       childRunId: positiveId(message.child_run_id)!,
       status,
       finalOutput: typeof message.final_output === "string" ? message.final_output : undefined,
+      endReason: typeof message.end_reason === "string" ? message.end_reason : undefined,
     });
   }
 

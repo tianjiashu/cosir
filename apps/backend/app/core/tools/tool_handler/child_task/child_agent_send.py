@@ -5,6 +5,7 @@ import json
 from typing import ClassVar
 
 from app.config.constant import Constant
+from app.core.tools.display.child_agent_display import build_child_agent_result_display_data
 from app.config.logging.logger import log
 from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_SEND,
@@ -224,6 +225,16 @@ class ChildAgentSendTool(HandlerBase):
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
+            display_data=build_child_agent_result_display_data(
+                operation="send",
+                child_task_id=child_task_id,
+                child_run_id=child_run.id,
+                status="running",
+                agent_id=current_run.agent_id,
+                agent_name=child_task.title,
+                final_output=None,
+                end_reason=None,
+            ),
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -257,7 +268,7 @@ class ChildAgentSendTool(HandlerBase):
                 icon="send",
                 surface="standalone",
                 expandable=False,
-                expand_layout="none",
+                expand_layout="details",
                 show_result=True,
             ),
         )

@@ -23,6 +23,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
 from app.config.configuration import get_agent_registry, get_tool_registry
+from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.core.tools.schemas.tool_names import TOOL_DELEGATE_TASK
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
@@ -76,6 +77,7 @@ class ConversationTaskStateRebuilder:
     def build_pair_tool_part(
         rows: list[ConversationTaskContextRecord],
         delegations: Sequence[Any] = (),
+        child_task_states: Sequence[tuple[TaskRecord, ConversationRunRecord | None]] = (),
     ) -> dict[str, ConversationStateToolCallPart]:
         """把单个 Run 的 context 行配对为 ``toolCallId → tool-call part`` 映射。
 
@@ -98,6 +100,7 @@ class ConversationTaskStateRebuilder:
             无（纯函数，不访问数据库、注册表之外的状态或前端运行时）。
         """
         tool_parts: dict[str, ConversationStateToolCallPart] = {}
+        canonical_delegation_display: dict[str, dict[str, object]] = {}
         for row in rows:
             message: BaseMessage = row.message
             if isinstance(message, AIMessage) and cast(AIMessage, message).tool_calls:
@@ -116,7 +119,51 @@ class ConversationTaskStateRebuilder:
                     )
                     if call.get("name") == TOOL_DELEGATE_TASK:
                         args = call.get("args") or {}
-                        candidates = [
+                        child_state = next(
+                            (
+                                state
+                                for state in child_task_states
+                                if state[0].task_type == "delegate_task"
+                                and state[0].title == (args.get("agent_name") or state[0].title)
+                                and (
+                                    state[1] is None
+                                    or state[1].agent_id == args.get("child_agent_id")
+                                )
+                            ),
+                            None,
+                        )
+                        if child_state is not None:
+                            child_task, child_run = child_state
+                            child_agent_id = (
+                                child_run.agent_id
+                                if child_run is not None and child_run.agent_id
+                                else args.get("child_agent_id")
+                            )
+                            if isinstance(child_agent_id, str) and child_agent_id:
+                                role = None
+                                try:
+                                    profile = get_agent_registry().resolve(child_agent_id)
+                                except RuntimeError:
+                                    profile = None
+                                if profile is not None and profile.role.strip():
+                                    role = profile.role
+                                    tool_part["agent_role"] = role
+                                display = build_delegation_display_data(
+                                    title=child_task.title or args.get("agent_name") or "子 Agent",
+                                    child_agent_id=child_agent_id,
+                                    child_task_id=child_task.id,
+                                    child_run_id=(child_run.id if child_run is not None else None),
+                                    status=(child_run.status if child_run is not None else "pending"),
+                                    role=role,
+                                    final_output=(child_run.final_output if child_run is not None else None),
+                                    end_reason=(child_run.end_reason if child_run is not None else None),
+                                )
+                                tool_part["child_task_id"] = child_task.id
+                                if child_run is not None:
+                                    tool_part["child_run_id"] = child_run.id
+                                tool_part["display_data"] = display
+                                canonical_delegation_display[call.get("id")] = display
+                        candidates = [] if child_state is not None else [
                             record
                             for record in delegations
                             if isinstance(record.child_task_id, int)
@@ -136,13 +183,15 @@ class ConversationTaskStateRebuilder:
                                     and child_run_id > 0
                                 ):
                                     tool_part["child_run_id"] = child_run_id
-                                tool_part["display_data"] = {
-                                    "kind": "delegation-result",
-                                    "title": args.get("agent_name") or "子 Agent",
-                                    "child_task_id": child_task_id,
-                                }
-                                if "child_run_id" in tool_part:
-                                    tool_part["display_data"]["child_run_id"] = child_run_id
+                                display = build_delegation_display_data(
+                                    title=args.get("agent_name") or "子 Agent",
+                                    child_agent_id=record.child_agent_id,
+                                    child_task_id=child_task_id,
+                                    child_run_id=child_run_id,
+                                    status="running",
+                                )
+                                tool_part["display_data"] = display
+                                canonical_delegation_display[call.get("id")] = display
                                 try:
                                     profile = get_agent_registry().resolve(record.child_agent_id)
                                 except RuntimeError:
@@ -158,9 +207,36 @@ class ConversationTaskStateRebuilder:
                 tool_part: ConversationStateToolCallPart = tool_parts.get(tool_message.tool_call_id)
                 if tool_part is None:
                     raise RuntimeError("未闭合tool")
-                tool_part["status"] = row.transport_metadata.get("status")
+                metadata_status = row.transport_metadata.get("status")
+                if metadata_status is not None:
+                    tool_part["status"] = metadata_status
                 display_data = row.transport_metadata.get("display_data")
-                tool_part["display_data"] = display_data
+                if display_data:
+                    existing_display = tool_part.get("display_data")
+                    canonical_display = canonical_delegation_display.get(tool_message.tool_call_id)
+                    if (
+                        canonical_display is not None
+                        and isinstance(existing_display, dict)
+                        and existing_display.get("kind") == "delegation-result"
+                        and isinstance(display_data, dict)
+                        and display_data.get("kind") == "delegation-result"
+                    ):
+                        merged_display = dict(existing_display)
+                        merged_display.update(display_data)
+                        # Child Run is canonical for parent delegation lifecycle. A stale
+                        # ToolMessage metadata row must not turn a terminal child back to running.
+                        merged_display.update(
+                            {
+                                key: canonical_display[key]
+                                for key in ("status", "final_output", "end_reason")
+                                if key in canonical_display
+                            }
+                        )
+                        tool_part["display_data"] = merged_display
+                    else:
+                        tool_part["display_data"] = display_data
+                elif "display_data" not in tool_part:
+                    tool_part["display_data"] = None
                 if (
                     isinstance(display_data, dict)
                     and display_data.get("kind") == "delegation-result"
@@ -248,6 +324,7 @@ class ConversationTaskStateRebuilder:
         runs: Sequence[ConversationRunRecord],
         context_rows: Sequence[ConversationTaskContextRecord],
         delegations: Sequence[Any] = (),
+        child_task_states: Sequence[tuple[TaskRecord, ConversationRunRecord | None]] = (),
     ) -> ConversationStateSnapshot:
         """从三类规范记录装配出通过校验的 Task 级 Transport 快照。
 
@@ -291,6 +368,7 @@ class ConversationTaskStateRebuilder:
             tool_parts_dict = ConversationTaskStateRebuilder.build_pair_tool_part(
                 rows,
                 [record for record in delegations if record.parent_run_id == run.id],
+                [state for state in child_task_states if state[0].parent_run_id == run.id],
             )
 
             snapshot_messages: list[ConversationStateMessage] = []

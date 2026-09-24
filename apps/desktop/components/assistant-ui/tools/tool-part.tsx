@@ -6,7 +6,7 @@ import { TerminalTool } from "./terminal-tool";
 import { TerminalSessionTool } from "./terminal-session-tool";
 import { ToolFallback } from "./tool-fallback";
 import { DelegationToolRow } from "./delegation-tool-row";
-import { readChildAgentWaitDisplay, readDelegationDisplay } from "./child-agent-display";
+import { readChildAgentResultDisplay, readChildAgentWaitDisplay, readDelegationDisplay } from "./child-agent-display";
 import { asRecord, readToolArtifact } from "./types";
 
 export type ToolPartRoute = "diff" | "terminal" | "terminal-session" | "delegation" | "details" | "fallback";
@@ -22,6 +22,7 @@ const KNOWN_DISPLAY_KINDS = new Set([
   "terminal-session",
   "delegation-result",
   "child-agent-wait-result",
+  "child-agent-result",
   "repeated-call",
 ]);
 
@@ -40,6 +41,7 @@ export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartR
   if (kind !== undefined && !KNOWN_DISPLAY_KINDS.has(kind)) return "fallback";
   if (kind === "delegation-result" && readDelegationDisplay(artifact.display_data) === null) return "fallback";
   if (kind === "child-agent-wait-result" && readChildAgentWaitDisplay(artifact.display_data) === null) return "fallback";
+  if (kind === "child-agent-result" && readChildAgentResultDisplay(artifact.display_data) === null) return "fallback";
   if (kind === "delegation-result") return "delegation";
   if (kind === "file-changes" || artifact.presentation.expand_layout === "diff") return "diff";
   if (kind === "terminal-session") return "terminal-session";

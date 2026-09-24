@@ -100,12 +100,27 @@ function validateChildWaitDisplayData(data: Record<string, unknown>, path: strin
   }
 }
 
+function validateChildAgentResultDisplayData(data: Record<string, unknown>, path: string): void {
+  requireExactKeys(data, [
+    "kind", "operation", "child_task_id", "child_run_id", "status", "agent_id", "agent_name", "final_output", "end_reason",
+  ], path);
+  if (data.operation !== "send" && data.operation !== "status") throw new TransportSnapshotValidationError(`${path}.operation`, "send 或 status");
+  requirePositiveInteger(data.child_task_id, `${path}.child_task_id`);
+  requirePositiveInteger(data.child_run_id, `${path}.child_run_id`);
+  requireKnownChildStatus(data.status, `${path}.status`);
+  if (data.agent_id !== null && (typeof data.agent_id !== "string" || data.agent_id.trim() === "")) throw new TransportSnapshotValidationError(`${path}.agent_id`, "非空字符串或 null");
+  if (data.agent_name !== null && (typeof data.agent_name !== "string" || data.agent_name.trim() === "")) throw new TransportSnapshotValidationError(`${path}.agent_name`, "非空字符串或 null");
+  if (data.final_output !== null && typeof data.final_output !== "string") throw new TransportSnapshotValidationError(`${path}.final_output`, "字符串或 null");
+  if (data.end_reason !== null && typeof data.end_reason !== "string") throw new TransportSnapshotValidationError(`${path}.end_reason`, "字符串或 null");
+}
+
 function validateDisplayData(value: unknown, path: string): void {
   if (value === null || value === undefined) return;
   const data = requireRecord(value, path);
   if (data.kind !== undefined && typeof data.kind !== "string") throw new TransportSnapshotValidationError(`${path}.kind`, "字符串");
   if (data.kind === "delegation-result") validateDelegationDisplayData(data, path);
   if (data.kind === "child-agent-wait-result") validateChildWaitDisplayData(data, path);
+  if (data.kind === "child-agent-result") validateChildAgentResultDisplayData(data, path);
 }
 
 const USAGE_KEYS = [

@@ -10,6 +10,7 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.display.child_agent_display import build_child_agent_result_display_data
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_handler.tool_base import HandlerBase
@@ -142,6 +143,16 @@ class ChildAgentStatusTool(HandlerBase):
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
+            ),
+            display_data=build_child_agent_result_display_data(
+                operation="status",
+                child_task_id=child_task_id,
+                child_run_id=run.id,
+                status=run.status,
+                agent_id=run.agent_id,
+                agent_name=child_task.title,
+                final_output=run.final_output,
+                end_reason=run.end_reason,
             ),
         )
 

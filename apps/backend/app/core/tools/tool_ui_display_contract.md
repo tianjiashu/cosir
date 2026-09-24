@@ -175,6 +175,9 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
 | `delegate_task` | `trace`、可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、`child_run_id`、状态 |
+| `child_agent_send` | `standalone`、可展开、`details`、`send` | `child-agent-result` | `operation`、child task/run locator、状态、agent 标识、最终摘要、终态原因 |
+| `child_agent_status` | `standalone`、可展开、`details`、`info` | `child-agent-result` | `operation`、child task/run locator、状态、agent 标识、最终摘要、终态原因 |
+| `child_agent_wait` | `standalone`、可展开、`details`、`clock` | `child-agent-wait-result` | `timed_out`、终态 messages、pending locator、`interrupted_by` |
 
 交互式 terminal handler 已注册到 Agent tool schema，并继续复用现有 renderer 路由；静态
 布局为 `terminal`，动态 `kind` 为 `terminal-session`。静态 `ToolDisplayHints.variant`
@@ -368,6 +371,10 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
 
 如果客户端支持跳转 child task，只使用明确的 `child_task_id`，不从文本中解析链接。
 
+`child_agent_send` 与 `child_agent_status` 使用同一安全结果形状，仅通过 `operation` 区分
+「启动新 Run」与「读取当前 Run」；`child_agent_wait` 使用固定数组形状，超时只进入
+`pending`，不会把未完成 Run 伪装成终态。
+
 ## 4. 展示数据构建位置
 
 展示构建方法放在 `apps/backend/app/core/tools/display/`，按展示语义拆分，避免每个 handler 内联大段字典：
@@ -378,6 +385,7 @@ display/
 ├─ file_change_display.py
 ├─ filesystem_display.py
 ├─ terminal_display.py
+├─ child_agent_display.py
 ├─ web_display.py
 └─ delegation_display.py
 ```

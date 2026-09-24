@@ -5,6 +5,7 @@ import time
 from typing import ClassVar
 
 from app.config.constant import Constant
+from app.core.tools.display.child_agent_display import build_child_agent_wait_display_data
 from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_WAIT,
     ToolDefinition,
@@ -153,6 +154,14 @@ class ChildAgentWaitTool(HandlerBase):
                         ensure_ascii=False,
                         separators=(",", ":"),
                     ),
+                    display_data=build_child_agent_wait_display_data(
+                        child_task_id=child_task_id,
+                        child_run_id=run.id,
+                        status=run.status,
+                        final_output=run.final_output,
+                        end_reason=run.end_reason,
+                        timed_out=False,
+                    ),
                 )
             if run.status in Constant.Run.TERMINAL_STATUSES:
                 return tool_error(
@@ -176,9 +185,18 @@ class ChildAgentWaitTool(HandlerBase):
                             "timed_out": True,
                             "status": run.status,
                             "final_output": None,
+                            "end_reason": None,
                         },
                         ensure_ascii=False,
                         separators=(",", ":"),
+                    ),
+                    display_data=build_child_agent_wait_display_data(
+                        child_task_id=child_task_id,
+                        child_run_id=run.id,
+                        status=run.status,
+                        final_output=None,
+                        end_reason=None,
+                        timed_out=True,
                     ),
                 )
 
