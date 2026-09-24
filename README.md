@@ -4,6 +4,12 @@
 
 Cosir 是一个**单用户、本机运行**的桌面应用。它使用 Tauri 承载桌面窗口，由本机 Python 后端运行 Agent；模型推理则通过你配置的 Provider 完成。
 
+<p align="center">
+  <img src="docs/readme/main.png" alt="Cosir 桌面 Agent 工作台界面" width="1200">
+</p>
+
+<p align="center"><em>Cosir 工作台：在本地工作区中管理任务、查看 Agent 推理与工具调用，并实时浏览执行结果。</em></p>
+
 ## 能做什么
 
 - **按工作区组织任务**：选择本地文件夹，为项目创建和继续多个任务对话。
