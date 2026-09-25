@@ -9,6 +9,7 @@ from typing import ClassVar
 
 from app.config.logging.logger import log
 from app.core.tools.schemas import (
+    TOOL_GROUP_TERMINAL_SESSION,
     TOOL_TERMINAL_WRITE,
     ToolDefinition,
     ToolDisplayHints,
@@ -76,6 +77,7 @@ class TerminalWriteTool(HandlerBase):
     args_model = TerminalWriteArgs
     timeout_seconds: ClassVar[float] = 30.0
     risk_level: ClassVar[str] = "high"
+    group = TOOL_GROUP_TERMINAL_SESSION
 
     def execute(
         self,
@@ -180,6 +182,7 @@ class TerminalWriteTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=describe_terminal_tool(self.name, self.description),
             permission=self.permission,
             handler=self.execute,

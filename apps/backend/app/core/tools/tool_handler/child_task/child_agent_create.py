@@ -22,6 +22,7 @@ from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_STATUS,
     TOOL_CHILD_AGENT_WAIT,
     TOOL_DELEGATE_TASK,
+    TOOL_GROUP_CHILD_AGENT,
     TOOL_TERMINAL_CLOSE,
     TOOL_TERMINAL_READ,
     TOOL_TERMINAL_SIGNAL,
@@ -156,6 +157,7 @@ class DelegateTaskTool(HandlerBase):
     args_model: type[DelegateTaskArgs] = DelegateTaskArgs
     timeout_seconds: ClassVar[float] = 300.0
     risk_level: ClassVar[str] = "medium"
+    group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
         """构造 delegate_task handler，并绑定委派所需的运行期服务依赖。
@@ -384,6 +386,7 @@ class DelegateTaskTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=_compose_description(),
             permission=self.permission,
             handler=self.execute,

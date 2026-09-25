@@ -690,6 +690,7 @@ def test_execute_does_not_raise_when_handler_returns_malformed_display_data(
 
     definition = ToolDefinition(
         name="bad_display",
+        group="probe",
         description="handler returning malformed display_data",
         permission="bad_display",
         handler=_bad_handler,
@@ -920,6 +921,7 @@ def test_projection_happens_in_parent_for_process_isolated_tool(
 
     definition = ToolDefinition(
         name="process_probe",
+        group="probe",
         description="process isolation probe",
         permission="process_probe",
         handler=_process_isolated_probe_handler,

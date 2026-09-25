@@ -104,6 +104,7 @@ def _make_tool(
 
     return ToolDefinition(
         name=name,
+        group="probe",
         description="test tool",
         permission="test",
         handler=handler,
@@ -432,6 +433,7 @@ def test_process_mode_missing_timeout_returns_error_without_spawn() -> None:
 
     tool = ToolDefinition(
         name="no_timeout",
+        group="probe",
         description="d",
         permission="test",
         handler=_handler_returns_string,

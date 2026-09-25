@@ -21,6 +21,7 @@ from app.config.logging.logger import log
 from app.core.tools.display.terminal_display import build_terminal_display_data
 from app.core.tools.schemas import (
     TOOL_EXECUTE_TERMINAL,
+    TOOL_GROUP_TERMINAL,
     OutputSink,
     ToolDefinition,
     ToolDisplayHints,
@@ -87,6 +88,8 @@ class ExecuteTerminalTool(HandlerBase):
     risk_level = "high"
     default_command_timeout = 60.0  # 内层命令级缺省
     max_command_timeout = 110.0  # 内层钳制上限（< 外层 120 留 10s 收尾）
+    group = TOOL_GROUP_TERMINAL
+
 
     def __init__(self) -> None:
         """初始化 execute_terminal 工具实例。
@@ -376,6 +379,7 @@ class ExecuteTerminalTool(HandlerBase):
         """
         definition = ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

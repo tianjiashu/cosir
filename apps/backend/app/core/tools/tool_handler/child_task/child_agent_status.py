@@ -5,6 +5,7 @@ from typing import ClassVar
 
 from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_STATUS,
+    TOOL_GROUP_CHILD_AGENT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -35,6 +36,8 @@ class ChildAgentStatusTool(HandlerBase):
     args_model: type[ChildAgentStatusArgs] = ChildAgentStatusArgs
     timeout_seconds: ClassVar[float] = 10.0
     risk_level: ClassVar[str] = "low"
+    group = TOOL_GROUP_CHILD_AGENT
+
 
     def __init__(self) -> None:
         """构造状态读取工具，装配任务与 Run 状态查询服务。
@@ -174,6 +177,7 @@ class ChildAgentStatusTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

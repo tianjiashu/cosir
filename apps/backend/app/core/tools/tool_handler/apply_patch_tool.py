@@ -13,6 +13,7 @@ from app.core.tools.display.file_change_display import build_file_change_display
 from app.core.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
 from app.core.tools.schemas import (
     TOOL_APPLY_PATCH,
+    TOOL_GROUP_FILE_EDIT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -87,6 +88,7 @@ class ApplyPatchTool(HandlerBase):
     args_model = ApplyPatchArgs
     timeout_seconds = 30.0
     risk_level = "medium"
+    group = TOOL_GROUP_FILE_EDIT
 
     def execute(
             self,
@@ -282,6 +284,7 @@ class ApplyPatchTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

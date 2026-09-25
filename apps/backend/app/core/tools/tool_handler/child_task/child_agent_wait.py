@@ -8,6 +8,7 @@ from app.config.constant import Constant
 from app.core.tools.display.child_agent_display import build_child_agent_wait_display_data
 from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_WAIT,
+    TOOL_GROUP_CHILD_AGENT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -44,6 +45,7 @@ class ChildAgentWaitTool(HandlerBase):
     args_model: type[ChildAgentWaitArgs] = ChildAgentWaitArgs
     timeout_seconds: ClassVar[float] = 300.0
     risk_level: ClassVar[str] = "low"
+    group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
         """构造等待工具，装配任务与 Run 状态查询服务。
@@ -222,6 +224,7 @@ class ChildAgentWaitTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

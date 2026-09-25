@@ -12,6 +12,7 @@ from app.core.runtime.conversation_run_cancellation_registry import cancellation
 from app.core.tools.display.file_change_display import build_file_delete_display_data
 from app.core.tools.schemas import (
     TOOL_DELETE_FILE,
+    TOOL_GROUP_FILE_EDIT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -51,6 +52,8 @@ class DeleteTool(HandlerBase):
     args_model = DeleteFileArgs
     timeout_seconds = 15.0
     risk_level = "medium"
+    group = TOOL_GROUP_FILE_EDIT
+
 
     def execute(self, execution_context: ToolExecutionContext, path: str) -> ToolObservation:
         """校验目标并删除一个已存在的普通文件。
@@ -144,6 +147,7 @@ class DeleteTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

@@ -7,6 +7,7 @@
 from typing import ClassVar
 
 from app.core.tools.schemas import (
+    TOOL_GROUP_TERMINAL_SESSION,
     TOOL_TERMINAL_READ,
     ToolDefinition,
     ToolDisplayHints,
@@ -50,6 +51,8 @@ class TerminalReadTool(HandlerBase):
     args_model = TerminalReadArgs
     timeout_seconds: ClassVar[float] = 30.0
     risk_level: ClassVar[str] = "medium"
+    group = TOOL_GROUP_TERMINAL_SESSION
+
 
     def execute(
         self,
@@ -122,6 +125,7 @@ class TerminalReadTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=describe_terminal_tool(self.name, self.description),
             permission=self.permission,
             handler=self.execute,

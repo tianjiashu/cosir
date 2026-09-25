@@ -8,6 +8,7 @@ import platform
 from typing import ClassVar
 
 from app.core.tools.schemas import (
+    TOOL_GROUP_TERMINAL_SESSION,
     TOOL_TERMINAL_SIGNAL,
     ToolDefinition,
     ToolDisplayHints,
@@ -46,6 +47,8 @@ class TerminalSignalTool(HandlerBase):
     args_model = TerminalSignalArgs
     timeout_seconds: ClassVar[float] = 10.0
     risk_level: ClassVar[str] = "high"
+    group = TOOL_GROUP_TERMINAL_SESSION
+
 
     def execute(
         self,
@@ -113,6 +116,7 @@ class TerminalSignalTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=describe_terminal_tool(self.name, self.description),
             permission=self.permission,
             handler=self.execute,

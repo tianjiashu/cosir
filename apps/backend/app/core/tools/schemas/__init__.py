@@ -4,6 +4,14 @@ from app.core.tools.schemas.tool_call import ToolCall
 from app.core.tools.schemas.tool_definition import ToolDefinition
 from app.core.tools.schemas.tool_display import ToolDisplayHints
 from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
+from app.core.tools.schemas.tool_groups import (
+    TOOL_GROUP_CHILD_AGENT,
+    TOOL_GROUP_FILE_EDIT,
+    TOOL_GROUP_SEARCH,
+    TOOL_GROUP_TERMINAL,
+    TOOL_GROUP_TERMINAL_SESSION,
+    TOOL_GROUP_WEB,
+)
 from app.core.tools.schemas.tool_names import (
     ALL_TOOL_NAMES,
     TOOL_APPLY_PATCH,
@@ -46,6 +54,12 @@ __all__ = [
     "TOOL_DELETE_FILE",
     "TOOL_EXECUTE_TERMINAL",
     "TOOL_FIND_FILES",
+    "TOOL_GROUP_CHILD_AGENT",
+    "TOOL_GROUP_FILE_EDIT",
+    "TOOL_GROUP_SEARCH",
+    "TOOL_GROUP_TERMINAL",
+    "TOOL_GROUP_TERMINAL_SESSION",
+    "TOOL_GROUP_WEB",
     "TOOL_LIST_DIRECTORY",
     "TOOL_MOVE_FILE",
     "TOOL_READ_FILE",

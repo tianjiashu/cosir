@@ -262,6 +262,7 @@ _STREAMING_TOOL_NAME = "execute_terminal"
 def _make_process_tool(name: str, *, timeout_seconds: float = 60.0) -> ToolDefinition:
     return ToolDefinition(
         name=name,
+        group="probe",
         description="cancellation ordering probe",
         permission="probe",
         handler=_probe_sleeps_then_writes_and_streams,

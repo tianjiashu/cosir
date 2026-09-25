@@ -7,6 +7,7 @@ from typing import Any
 
 from app.core.tools.display.filesystem_display import build_content_search_display_data
 from app.core.tools.schemas import (
+    TOOL_GROUP_SEARCH,
     TOOL_SEARCH_CONTENT,
     ToolDefinition,
     ToolDisplayHints,
@@ -47,6 +48,8 @@ class SearchContentTool(HandlerBase):
     args_model = SearchContentArgs
     timeout_seconds = 30.0
     risk_level = "low"
+    group = TOOL_GROUP_SEARCH
+
 
     def execute(
         self,
@@ -152,6 +155,7 @@ class SearchContentTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

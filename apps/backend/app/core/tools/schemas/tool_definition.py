@@ -29,6 +29,7 @@ class ToolDefinition:
     """
 
     name: str
+    group: str
     description: str
     permission: str
     handler: Callable[..., Any]
@@ -58,6 +59,7 @@ class ToolDefinition:
         model_def = self.to_model_tool_definition()
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.handler,

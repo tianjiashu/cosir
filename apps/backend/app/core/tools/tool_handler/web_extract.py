@@ -11,6 +11,7 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.tools.display.web_display import build_web_extract_display_data
 from app.core.tools.schemas import (
+    TOOL_GROUP_WEB,
     TOOL_WEB_EXTRACT,
     ToolDefinition,
     ToolDisplayHints,
@@ -61,6 +62,8 @@ class WebExtractTool(HandlerBase):
     args_model: type[WebExtractArgs] = WebExtractArgs
     timeout_seconds: ClassVar[float] = Settings.WEB_REQUEST_TIMEOUT_SECONDS + 10
     risk_level: ClassVar[str] = "medium"
+    group = TOOL_GROUP_WEB
+
 
     def __init__(
         self,
@@ -471,6 +474,7 @@ class WebExtractTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

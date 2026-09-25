@@ -15,6 +15,7 @@ from typing import Any
 
 from app.core.tools.display.filesystem_display import build_directory_display_data
 from app.core.tools.schemas import (
+    TOOL_GROUP_SEARCH,
     TOOL_LIST_DIRECTORY,
     ToolDefinition,
     ToolDisplayHints,
@@ -55,6 +56,8 @@ class ListDirectoryTool(HandlerBase):
     args_model = ListDirectoryArgs
     timeout_seconds = 15.0
     risk_level = "low"
+    group = TOOL_GROUP_SEARCH
+
 
     def __init__(self) -> None:
         """初始化 list_directory 工具实例（无状态）。
@@ -280,6 +283,7 @@ class ListDirectoryTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

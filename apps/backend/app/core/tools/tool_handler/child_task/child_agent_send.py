@@ -9,6 +9,7 @@ from app.core.tools.display.child_agent_display import build_child_agent_result_
 from app.config.logging.logger import log
 from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_SEND,
+    TOOL_GROUP_CHILD_AGENT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -49,6 +50,7 @@ class ChildAgentSendTool(HandlerBase):
     args_model: type[ChildAgentSendArgs] = ChildAgentSendArgs
     timeout_seconds: ClassVar[float] = 30.0
     risk_level: ClassVar[str] = "medium"
+    group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
         """构造发送工具，装配任务、Run 与执行器服务。
@@ -256,6 +258,7 @@ class ChildAgentSendTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

@@ -7,6 +7,7 @@ PTY 创建、shell 解析、cwd 边界校验与终端元数据登记都在 ``Ter
 from typing import ClassVar
 
 from app.core.tools.schemas import (
+    TOOL_GROUP_TERMINAL_SESSION,
     TOOL_TERMINAL_START,
     ToolDefinition,
     ToolDisplayHints,
@@ -51,6 +52,8 @@ class TerminalStartTool(HandlerBase):
     args_model = TerminalStartArgs
     timeout_seconds: ClassVar[float] = 10.0
     risk_level: ClassVar[str] = "high"
+    group = TOOL_GROUP_TERMINAL_SESSION
+
 
     def execute(
         self,
@@ -120,6 +123,7 @@ class TerminalStartTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=describe_terminal_tool(self.name, self.description),
             permission=self.permission,
             handler=self.execute,

@@ -74,6 +74,7 @@ def _make_definition(name: str = "probe_tool", **overrides: Any) -> ToolDefiniti
 
     base: dict[str, Any] = {
         "name": name,
+        "group": "probe",
         "description": "probe",
         "permission": "safe_read",
         "handler": _sync_probe_handler,
@@ -205,6 +206,7 @@ def test_tool_definition_requires_handler_and_args_model() -> None:
     with pytest.raises(TypeError):
         ToolDefinition(  # type: ignore[call-arg]
             name="missing_handler",
+            group="probe",
             description="d",
             permission="safe_read",
             args_model=_ProbeArgs,
@@ -212,6 +214,7 @@ def test_tool_definition_requires_handler_and_args_model() -> None:
     with pytest.raises(TypeError):
         ToolDefinition(  # type: ignore[call-arg]
             name="missing_args_model",
+            group="probe",
             description="d",
             permission="safe_read",
             handler=_sync_probe_handler,

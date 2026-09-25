@@ -7,6 +7,7 @@ import time
 from app.core.tools.display.filesystem_display import build_file_search_display_data
 from app.core.tools.schemas import (
     TOOL_FIND_FILES,
+    TOOL_GROUP_SEARCH,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -41,6 +42,8 @@ class FindFilesTool(HandlerBase):
     args_model = FindFilesArgs
     timeout_seconds = 30.0
     risk_level = "low"
+    group = TOOL_GROUP_SEARCH
+
 
     def execute(
         self,
@@ -141,6 +144,7 @@ class FindFilesTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

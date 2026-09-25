@@ -68,6 +68,7 @@ class HandlerBase(ABC):
     args_model: type[BaseModel]
     timeout_seconds: ClassVar[float]
     risk_level: ClassVar[str]
+    group: ClassVar[str]
 
     @abstractmethod
     def execute(self, *args: Any, **kwargs: Any) -> ToolObservation:

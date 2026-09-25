@@ -13,6 +13,7 @@ import os
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.schemas import (
+    TOOL_GROUP_FILE_EDIT,
     TOOL_MOVE_FILE,
     ToolDefinition,
     ToolDisplayHints,
@@ -95,6 +96,8 @@ class MoveTool(HandlerBase):
     args_model = MoveFileArgs
     timeout_seconds = 15.0
     risk_level = "medium"
+    group = TOOL_GROUP_FILE_EDIT
+
 
     def execute(
         self,
@@ -258,6 +261,7 @@ class MoveTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

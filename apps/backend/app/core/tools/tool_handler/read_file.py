@@ -15,6 +15,7 @@ from typing import ClassVar
 
 from app.core.tools.display.filesystem_display import build_read_file_display_data
 from app.core.tools.schemas import (
+    TOOL_GROUP_SEARCH,
     TOOL_READ_FILE,
     ToolDefinition,
     ToolDisplayHints,
@@ -72,6 +73,8 @@ class ReadFileTool(HandlerBase):
     args_model = ReadFileArgs
     timeout_seconds = 10.0
     risk_level = "low"
+    group = TOOL_GROUP_SEARCH
+
 
     binary_extensions: ClassVar[set[str]] = {
         ".7z",
@@ -239,6 +242,7 @@ class ReadFileTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

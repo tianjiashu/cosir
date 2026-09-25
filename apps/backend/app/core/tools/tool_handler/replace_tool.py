@@ -18,6 +18,7 @@ from app.core.runtime.conversation_run_cancellation_registry import cancellation
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.core.tools.schemas import (
+    TOOL_GROUP_FILE_EDIT,
     TOOL_REPLACE,
     ToolDefinition,
     ToolDisplayHints,
@@ -76,6 +77,8 @@ class ReplaceTool(HandlerBase):
     args_model = ReplaceArgs
     timeout_seconds = 30.0
     risk_level = "medium"
+    group = TOOL_GROUP_FILE_EDIT
+
 
     def __init__(self) -> None:
         """初始化 replace 工具实例。
@@ -258,6 +261,7 @@ class ReplaceTool(HandlerBase):
 
         return ToolDefinition(
             name=self.name,
+            group=self.group,
             description=self.description,
             permission=self.permission,
             handler=self.execute,

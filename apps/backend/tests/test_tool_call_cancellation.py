@@ -97,6 +97,7 @@ def _make_tool(
 
     return ToolDefinition(
         name=name,
+        group="probe",
         description="probe tool",
         permission="test",
         handler=handler,
