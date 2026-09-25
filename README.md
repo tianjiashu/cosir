@@ -72,16 +72,13 @@ class AgentProfile:
 
 - 未来基于当前架构探索 model - node - observe 的工作流作为Agent的核心工作流，探索observe节点来判断tool result 是进入上下文 or 丢弃不进上下文 or 部分进入上下文。
 - 探索 多Agent 流水线式作业，任务本地化，实现真正的`graph engineering`，不由主Agent调控，单纯流水线。如 开发Agent负责开发 -> 审查Agent负责维护代码规范 初步判断功能实现 -> 测试Agent负责编写单元测试 -> 集成测试Agent使用computer use 或者浏览器 tool 进行集成测试 等等，任意一个节点不通过则可以打回某个节点重做。
-
-<img src="docs/architecture/multi-agent-pipeline-vision.svg" alt="多 Agent 流水线式作业设想图" width="800" />
-
 - 探索本地部署大模型 与 小模型的 最佳多Agent coding 协作方式。
 
 ## 代码架构
 
 Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 
-![coding-agent Agent 架构图](docs/architecture/agent-architecture.svg)
+![coding-agent Agent 架构图](docs/architecture/agent-architecture.png)
 
 **Agent 定义（`core/agents/`）**
 
