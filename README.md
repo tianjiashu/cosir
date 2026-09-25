@@ -147,8 +147,8 @@ Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 先在仓库根目录安装依赖并准备 dev 构建前置：
 
 ```bash
-git clone https://github.com/tianjiashu/coding-agent.git
-cd coding-agent
+git clone https://github.com/tianjiashu/cosir.git
+cd cosir
 npm ci --prefix apps/desktop                # 安装前端依赖
 cargo install tauri-cli --version "^2"      # 安装 Tauri CLI（提供 cargo tauri 子命令）
 uv sync --project apps/backend              # 按 uv.lock 准备后端 Python 依赖
