@@ -1,4 +1,9 @@
-"""Terminal session tool shared helpers."""
+"""交互终端工具族的共享辅助函数。
+
+这里集中 terminal handler 共用的四类小能力：取进程内 session service、统一的取消检查、
+把领域错误与成功结果归一化为 ``ToolObservation``、把 session 快照投影为模型可见
+``display_data``。本模块不持有会话状态，也不实现任何 PTY 能力。
+"""
 
 from __future__ import annotations
 
@@ -17,7 +22,21 @@ if TYPE_CHECKING:
 
 
 def require_service(context: ToolExecutionContext) -> TerminalSessionService:
-    """取得仅供同进程 terminal handler 使用的 session service。"""
+    """取得仅供同进程 terminal handler 使用的 session service。
+
+    参数:
+        context: 本次工具调用的执行上下文，其 ``runtime_dependencies`` 携带注入的 service。
+
+    返回:
+        当前进程的 ``TerminalSessionService``。
+
+    异常:
+        TerminalSessionError: 运行期依赖未注入该 service 时抛出，属装配缺失而非调用方参数
+            错误。
+
+    副作用:
+        无；只读取执行上下文上的依赖引用。
+    """
 
     service = context.runtime_dependencies.terminal_session_service
     if service is None:
@@ -47,7 +66,22 @@ def cancelled(context: ToolExecutionContext) -> bool:
 
 
 def cancelled_observation(tool_name: str, permission: str) -> ToolObservation:
-    """构造 terminal handler 的取消观察。"""
+    """构造 terminal handler 的取消观察。
+
+    参数:
+        tool_name: 工具名，写入观察的工具标识。
+        permission: 该工具的权限标签。
+
+    返回:
+        ``status="cancelled"`` 的 ``ToolObservation``；用户取消与执行失败是两种不同语义，
+        因此不复用错误观察。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
 
     return tool_cancelled(
         tool_name,
@@ -60,7 +94,24 @@ def service_error_observation(
     permission: str,
     exc: TerminalSessionError,
 ) -> ToolObservation:
-    """把领域错误转换为模型可消费的工具错误。"""
+    """把终端领域错误转换为模型可消费的工具错误观察。
+
+    参数:
+        tool_name: 工具名，写入观察的工具标识。
+        permission: 该工具的权限标签。
+        exc: service 抛出的 ``TerminalSessionError``。
+
+    返回:
+        错误观察：``error`` 只陈述事实（含 ``exc.code``），``reason`` 按 ``exc.retryable``
+        分别给出「等待瞬时条件恢复后重试」或「先修正会话或参数再重试」，``status_hint`` 为
+        前端短提示「终端失败」。
+
+    异常:
+        无；``exc`` 本身已是归一化后的领域错误。
+
+    副作用:
+        无；只构造观察对象，不写日志、不改会话状态。
+    """
 
     return tool_error(
         tool_name,
@@ -87,7 +138,25 @@ def success_observation(
     summary: str,
     display_payload: dict[str, object],
 ) -> ToolObservation:
-    """构造终端工具成功观察；完整 output 只进入结构化 payload。"""
+    """构造终端工具的成功观察。
+
+    参数:
+        tool_name: 工具名，写入观察的工具标识。
+        permission: 该工具的权限标签。
+        payload: 结构化结果，会以紧凑 JSON 追加到 ``content`` 供模型读取。
+        summary: 一行英文摘要，作为 ``content`` 首行。
+        display_payload: 已按 allowlist 投影的展示数据，写入 ``display_data``。
+
+    返回:
+        ``status="success"`` 的 ``ToolObservation``：``content`` 为摘要加紧凑 JSON，
+        ``display_data`` 为 ``kind="terminal-session"`` 与投影后的字段。
+
+    异常:
+        无。
+
+    副作用:
+        无；只构造观察对象。
+    """
 
     return tool_success(
         tool_name=tool_name,
@@ -106,12 +175,26 @@ def build_session_display_payload(
     include_terminal_info: bool = False,
     extra: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Project a session snapshot into the allowlisted UI metadata.
+    """把 session 快照投影为 allowlist 内的 UI 元数据。
 
-    The service snapshot also contains worker, workspace, executable and timestamp
-    diagnostics. Those are backend facts and must not cross into Assistant Transport.
-    ``extra`` is reserved for small, validated operation metadata such as ``signal``
-    or ``submitted``; it must never contain terminal input or output.
+    service 快照还包含 worker、workspace、可执行文件与时间戳等诊断信息；那些是后端事实，
+    不允许进入 Assistant Transport。``extra`` 只承载少量已校验的操作元数据（如 ``signal``、
+    ``submitted``），**绝不**承载终端输入或输出。
+
+    参数:
+        payload: service 返回的 session 快照字典。
+        include_terminal_info: 为 True 时额外带上 ``initial_cwd`` 与 ``shell_kind``（仅创建
+            会话时使用）。
+        extra: 可选操作元数据，其键会覆盖同名的白名单字段。
+
+    返回:
+        只包含白名单字段的展示字典；``payload`` 中不存在的字段直接省略。
+
+    异常:
+        无。
+
+    副作用:
+        无；纯投影，不修改入参。
     """
 
     fields = (
@@ -136,7 +219,23 @@ def with_terminal_errors(
     permission: str,
     action: Callable[[], ToolObservation],
 ) -> ToolObservation:
-    """归一化 terminal session 领域错误，不吞掉非领域编程错误。"""
+    """执行一次终端操作，并把领域错误归一化为错误观察。
+
+    参数:
+        tool_name: 工具名，写入观察的工具标识。
+        permission: 该工具的权限标签。
+        action: 无参可调用对象，内部完成 service 调用与成功观察构造。
+
+    返回:
+        ``action`` 正常返回时原样透传其结果；抛出 ``TerminalSessionError`` 时返回
+        :func:`service_error_observation` 构造的错误观察。
+
+    异常:
+        不捕获其他异常：``ValueError`` 等编程错误继续向上抛出，避免把缺陷伪装成工具失败。
+
+    副作用:
+        ``action`` 自身的副作用（PTY 读写、关闭会话等）原样发生。
+    """
 
     try:
         return action()

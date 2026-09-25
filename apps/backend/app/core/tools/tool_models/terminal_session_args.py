@@ -98,7 +98,7 @@ class TerminalReadArgs(BaseModel):
                     "minus 1; use null or 0 on the first call. Do not pass next_seq itself, "
                     "because that silently skips one output frame.",
     )
-    wait_ms: int = Field(default=1000, ge=0, le=30000,
+    wait_ms: int = Field(default=3000, ge=0, le=30000,
                          description="Maximum time to wait for new output in milliseconds; 0 returns immediately. "
                                      "This does not wait for the shell to exit.")
 
