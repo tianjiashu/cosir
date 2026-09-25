@@ -1,5 +1,5 @@
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { memo, useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { type TransportIssue } from "@/components/assistant/transport-status";
@@ -24,6 +24,7 @@ import type {
 } from "@/components/assistant/runtime/runtime-types";
 import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
 import { newTraceId } from "@/lib/trace";
+import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import {
   getBackendRuntimeSnapshot,
   subscribeBackendRuntime,
@@ -42,6 +43,8 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   setIssue,
   initialMessage,
   initialAttachments,
+  initialDisabledToolGroups,
+  initialBanTools,
   forkAvailable,
   forkingRunId,
   onForkRun,
@@ -59,6 +62,10 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     available: backendRuntimeAvailable,
   } = backendRuntime;
   const [traceId] = useState(() => newTraceId());
+  const [toolGroups, setToolGroups] = useState<ToolGroupCatalog[]>([]);
+  const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>(() => initialDisabledToolGroups ?? []);
+  const [toolGroupsLoading, setToolGroupsLoading] = useState(true);
+  const [toolGroupsError, setToolGroupsError] = useState<string | null>(null);
   const initialStateRef = useRef(initialState);
   const sessionInitialState = initialStateRef.current;
   const latestStateRef = useRef(sessionInitialState);
@@ -70,6 +77,34 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const initialMessageSentRef = useRef(false);
   const onTaskStateChangedRef = useRef(onTaskStateChanged);
   onTaskStateChangedRef.current = onTaskStateChanged;
+
+  useEffect(() => {
+    if (!backendRuntimeAvailable) {
+      setToolGroupsLoading(true);
+      return;
+    }
+    const controller = new AbortController();
+    setToolGroupsLoading(true);
+    setToolGroupsError(null);
+    void getToolGroups({ signal: controller.signal })
+      .then(({ groups }) => setToolGroups(groups))
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setToolGroupsError(error instanceof Error ? error.message : "工具分组加载失败");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setToolGroupsLoading(false);
+      });
+    return () => controller.abort();
+  }, [backendRuntimeAvailable, backendRuntimeGeneration]);
+
+  const selectedBanTools = useMemo(() => {
+    if (toolGroupsLoading || toolGroupsError) return initialBanTools ?? [];
+    const selected = new Set(selectedToolGroups);
+    return toolGroups
+      .filter(({ group }) => selected.has(group))
+      .flatMap(({ tools }) => tools.map(({ name }) => name));
+  }, [initialBanTools, selectedToolGroups, toolGroups, toolGroupsError, toolGroupsLoading]);
 
   const registerRuntimeControls = useCallback((controls: RuntimeControls | null) => {
     runtimeControlsRef.current = controls;
@@ -130,7 +165,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     latestStateRef.current = state;
     cancellation.onStateCommitted(state);
   }, [cancellation.onStateCommitted, sessionInitialState]);
-  const runtime = useRuntimeTransport(context, recovery, commitTransportState);
+  const runtime = useRuntimeTransport(context, recovery, commitTransportState, selectedBanTools);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
@@ -148,6 +183,11 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       <div className="flex h-full min-h-0 flex-col">
         <Thread
           taskId={taskId}
+          toolGroups={toolGroups}
+          selectedToolGroups={selectedToolGroups}
+          onSelectedToolGroupsChange={setSelectedToolGroups}
+          toolGroupsLoading={toolGroupsLoading}
+          toolGroupsError={toolGroupsError}
           workspaceRoot={workspaceRoot}
           forkAvailable={forkAvailable}
           forkingRunId={forkingRunId}

@@ -11,8 +11,11 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.assistant_transport.request import AddMessageCommand, AssistantTransportRequest
+from app.assistant_transport.request.assistant_transport_request import TransportRequestError
+from app.assistant_transport.request.command.ban_tools_command import BanToolsCommand
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.service.conversation_run_command_service import (
+    ConversationRunCommandInput,
     ConversationRunStartResult,
     RunCommandMode,
 )
@@ -26,6 +29,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     find_run,
 )
+from app.config.configuration import get_agent_registry, get_tool_registry
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.models import (
@@ -61,6 +65,28 @@ def _build_ordered_display_text(
             segments.append(f"[[cosir-image:{asset_id}]]")
             emitted_image_ids.add(asset_id)
     return "\n".join(segments)
+
+
+def _parse_ban_tools(command: BanToolsCommand | None) -> list[str]:
+    """根据主 Agent 当前的工具目录校验禁用工具名。"""
+
+    if command is None:
+        return []
+    names = command.payload.ban_tools
+    profile = get_agent_registry().resolve("main_agent")
+    if profile is None:
+        raise RuntimeError("main agent profile is unavailable")
+    registered = {definition.name for definition in get_tool_registry().get_all_definitions()}
+    allowed = set(profile.allowed_tools) & registered
+    unknown = sorted(set(names) - allowed)
+    if unknown:
+        raise TransportRequestError(
+            status_code=400,
+            code="BAN_TOOLS_UNAVAILABLE",
+            message="ban_tools 包含主 Agent 当前不可用的工具",
+            retryable=False,
+        )
+    return list(names)
 
 
 class TransportAssistantService:
@@ -374,7 +400,18 @@ class TransportAssistantService:
             )
         # 非 resume 模式 command 必非空（详见 _classify_run_command）；assert 仅类型收窄。
         assert command is not None
+        ban_command = next(
+            (item for item in request.commands if isinstance(item, BanToolsCommand)), None
+        )
+        ban_tools = _parse_ban_tools(ban_command)
         payload_hash = request.payload_hash()
+        commands = [
+            ConversationRunCommandInput(
+                command_id=item.commandId,
+                command_type=item.type,
+            )
+            for item in request.commands
+        ]
         # image_paths 仍由 Run 记录保存；marker 只复用既有 extra.display_text，用于冷重建
         # 时恢复图片与文字/文件的原始顺序，不新增数据库字段。
         display_text = _build_ordered_display_text(command.message.parts)
@@ -386,6 +423,7 @@ class TransportAssistantService:
         run_command = ConversationRunCommand(
             display_text=display_text,
             image_asset_ids=image_asset_ids,
+            ban_tools=ban_tools,
             attachments=[
                 ConversationRunAttachmentInput(
                     id=attachment.id,
@@ -402,8 +440,7 @@ class TransportAssistantService:
             assert request.runId is not None
             return await asyncio.to_thread(
                 self._commands.edit_or_restart,
-                command_id=command.commandId,
-                command_type=command.type,
+                commands=commands,
                 payload_hash=payload_hash,
                 task_id=task_id,
                 run_id=request.runId,
@@ -414,8 +451,7 @@ class TransportAssistantService:
             )
         return await asyncio.to_thread(
             self._commands.start_or_attach,
-            command_id=command.commandId,
-            command_type=command.type,
+            commands=commands,
             payload_hash=payload_hash,
             provider_id=provider_id,
             model_name=model_name,

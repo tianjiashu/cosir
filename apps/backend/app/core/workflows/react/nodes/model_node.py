@@ -19,14 +19,24 @@ stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContext
 """
 import asyncio
 
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolCall
-from app.core.workflows.react.node_helper.common import _runtime_config, _runtime_context, terminal_state
+from app.core.workflows.react.node_helper.common import (
+    _runtime_config,
+    _runtime_context,
+    terminal_state,
+)
 from app.core.workflows.react.node_helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.react.node_helper.model_chunk import ModelChunkProcessor
 from app.core.workflows.react.node_helper.streaming_part_state_machine import (
@@ -35,6 +45,7 @@ from app.core.workflows.react.node_helper.streaming_part_state_machine import (
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.vision_input import resolve_messages_for_model
+from app.models.conversation_task_context import TransportMetadata
 from app.utils.message_content import content_to_text
 
 # ``finish_reason`` 是 Provider 语义，不直接等同于工作流终态。不同兼容层可能使用
@@ -42,7 +53,7 @@ from app.utils.message_content import content_to_text
 # 把 provider-specific 字符串扩散到 graph edge 与终态写入逻辑。
 
 
-def _build_continuation_prompt(finish_reason: str | None) -> str:
+def _build_continuation_prompt(finish_reason: str | None) -> str | None:
     """为未完成的模型输出构造一次模型可消费的继续提示。
 
     ``length`` 类原因明确表示达到输出上限；缺失或未知原因则表示 Provider/适配器没有
@@ -63,11 +74,7 @@ def _build_continuation_prompt(finish_reason: str | None) -> str:
     """
 
     if finish_reason in Constant.Workflow.CONTINUATION_FINISH_REASONS:
-        return (
-            "Your previous response was truncated by the output length limit. "
-            "Continue from where it stopped, do not repeat completed content, and finish the "
-            "answer. If a tool is required, issue the tool call instead of describing it."
-        )
+        return None
     reason_text = finish_reason or "missing"
     return (
         "Your previous response did not provide a recognized completion signal "
@@ -160,6 +167,10 @@ async def _model_node(state: ReactGraphState) -> dict:
     messages: list[BaseMessage] = _runtime_context().load_message()
 
     for system_message in task_space.take_deferred_system_messages(run_id=run_id):
+        # 如果存在run_id，说明是与run绑定的system message，需要核对run_id是否一致
+        message_run_id = system_message.additional_kwargs.get("run_id")
+        if message_run_id is not None and message_run_id != run_id:
+            continue
         _runtime_context().add_message(system_message)
         messages.append(system_message)
 
@@ -182,20 +193,6 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         },
     )
-    # chunks 攒结构化分块合并成 AIMessage 供解析 tool_calls 与提取最终正文。
-    chunks: list[AIMessageChunk] = []
-
-    log.info(
-        "model_node_model_requested",
-        extra={
-            "msg": f"模型节点请求模型，step_id={step_id}",
-            "data": {
-                "step_id": step_id,
-                "run_id": rc.run.id,
-                "message_count": len(messages),
-            },
-        },
-    )
     # part 生命周期收口：把交错的 text/reasoning 流转换为顺序括号化的 part 事件流。
     parts = StreamingPartStateMachine(
         stream_writer, task_id=task_id, run_id=run_id, step_id=step_id
@@ -203,11 +200,12 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     # lifecycle 只覆盖本次 model request；model -> tools -> observe 之间会沿 state 传递，
     # 下一次进入 model 时从空快照开始，避免混入上一轮已结束的 tool call。
-    state.tool_call_lifecycle = ToolCallLifecycleManager()
+    state.tool_call_lifecycle = ToolCallLifecycleManager(
+        ban_tools=tuple(rc.run.extra.ban_tools if rc.run.extra is not None else ())
+    )
     tool_call_lifecycle = state.tool_call_lifecycle
 
     async for chunk in model.astream(messages):
-        chunks.append(chunk)
         message_chunk = _runtime_context().add_message_chunk(
             chunk, stream_id=step_id, run_id=run_id
         )
@@ -224,7 +222,9 @@ async def _model_node(state: ReactGraphState) -> dict:
                 stream_id=step_id, run_id=run_id, mode="cancel"
             )
             parts.finish()
-            tool_call_lifecycle = tool_call_lifecycle.cancel(task_id=task_id, run_id=run_id, step_id=step_id)
+            tool_call_lifecycle = tool_call_lifecycle.cancel(
+                task_id=task_id, run_id=run_id, step_id=step_id
+            )
             operations.cancel_run_if_running(
                 usage_stats=rc.usage_stats, final_output="user_cancelled"
             )
@@ -277,6 +277,31 @@ async def _model_node(state: ReactGraphState) -> dict:
         invalid_tool_calls=invalid_tool_calls,
     )
 
+    blocked_calls = tool_call_lifecycle.blocked_tool_calls
+    if blocked_calls:
+        for blocked_call in blocked_calls:
+            _runtime_context().add_message(
+                ToolMessage(
+                    content="This tool is disabled for the current run.Do not call again",
+                    tool_call_id=blocked_call.tool_call_id,
+                    name=blocked_call.tool_name,
+                ),
+                transport_metadata=TransportMetadata(status="cancelled"),
+            )
+        log.info(
+            "model_node_disabled_tools_blocked",
+            extra={
+                "msg": "本轮禁用工具调用已隐藏并闭合模型协议",
+                "data": {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "step_id": step_id,
+                    "tool_names": sorted({record.tool_name for record in blocked_calls}),
+                    "count": len(blocked_calls),
+                },
+            },
+        )
+
     # 非法调用就地收口为 failed：返回的是新的生命周期快照（copy-on-write），必须写回局部
     # ``lifecycle`` 才能随返回值进入 graph state；丢弃它会让记录停在 pending。
     tool_call_lifecycle, repair_message = tool_call_lifecycle.fail_invalid_tools(
@@ -284,7 +309,9 @@ async def _model_node(state: ReactGraphState) -> dict:
     )
     # 3. 注入修复提示（若有可修复非法调用）：必须排在全部 ToolMessage 之后,通过system_queue延后注入.
     if repair_message:
-        task_space.defer_system_message(SystemMessage(content=repair_message))
+        task_space.defer_system_message(
+            SystemMessage(content=repair_message, additional_kwargs={"run_id": run_id})
+        )
 
     log.info(
         "model_node_completed",
@@ -345,7 +372,10 @@ async def _model_node(state: ReactGraphState) -> dict:
         # 已有文本不代表模型完成：例如 finish_reason=length 只说明本轮达到输出上限。
         # AIMessage 已先落库，SystemMessage 紧跟其后作为下一模型步的显式续写指令。
         continuation_prompt = _build_continuation_prompt(finish_reason)
-        _runtime_context().add_message(SystemMessage(content=continuation_prompt))
+        if continuation_prompt is not None:
+            task_space.defer_system_message(
+                SystemMessage(content=continuation_prompt, additional_kwargs={"run_id": run_id})
+            )
         log.warning(
             "model_node_output_requires_continuation",
             extra={

@@ -23,6 +23,7 @@ import app.core.runtime.conversation_run_executor as executor_module
 from app.assistant_transport.event import RunInitializedEvent
 from app.assistant_transport.service import conversation_run_command_service as command_module
 from app.assistant_transport.service.conversation_run_command_service import (
+    ConversationRunCommandInput,
     ConversationRunCommandService,
 )
 from app.config.logging.logger import log
@@ -350,8 +351,7 @@ def test_start_or_attach_settles_run_when_projection_fails(
 
     with pytest.raises(RuntimeError, match="projection failed"):
         service.start_or_attach(
-            command_id="cmd-1",
-            command_type="new",
+            commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
             payload_hash="hash",
             provider_id=None,
             model_name=None,
@@ -378,8 +378,7 @@ def test_start_or_attach_settles_run_when_claim_fails(
 
     with pytest.raises(RuntimeError, match="claim dispatch failed"):
         service.start_or_attach(
-            command_id="cmd-1",
-            command_type="new",
+            commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
             payload_hash="hash",
             provider_id=None,
             model_name=None,
@@ -406,8 +405,7 @@ def test_start_or_attach_settles_run_when_snapshot_reread_fails(
 
     with pytest.raises(RuntimeError, match="snapshot read failed"):
         service.start_or_attach(
-            command_id="cmd-1",
-            command_type="new",
+            commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
             payload_hash="hash",
             provider_id=None,
             model_name=None,
@@ -435,8 +433,7 @@ def test_edit_or_restart_settles_run_when_post_commit_step_fails(
 
     with pytest.raises(RuntimeError, match="snapshot read failed"):
         service.edit_or_restart(
-            command_id="cmd-2",
-            command_type="edit",
+            commands=[ConversationRunCommandInput(command_id="cmd-2", command_type="edit")],
             payload_hash="hash",
             task_id=_TASK_ID,
             run_id=11,
@@ -468,8 +465,7 @@ def test_settle_converge_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -
     # 原始异常仍是投影失败，而不是收敛过程中的数据库异常
     with pytest.raises(RuntimeError, match="projection failed"):
         service.start_or_attach(
-            command_id="cmd-1",
-            command_type="new",
+            commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
             payload_hash="hash",
             provider_id=None,
             model_name=None,

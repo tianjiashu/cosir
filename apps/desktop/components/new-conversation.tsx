@@ -5,6 +5,7 @@ import { FileTextIcon, Loader2Icon, SendIcon, XIcon } from "lucide-react";
 
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
+import { ToolGroupSelector } from "@/components/composer/tool-group-selector";
 import {
   InlineAttachmentInput,
   InlineComposerInsertionProvider,
@@ -16,6 +17,7 @@ import { WorkspacePicker } from "@/components/composer/workspace-picker";
 import { CosirMark } from "@/components/cosir-mark";
 import { Button } from "@/components/ui/button";
 import { createWorkspaceTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
+import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
@@ -137,6 +139,8 @@ type NewConversationProps = {
     conversation: StartedConversation,
     initialText: string,
     attachments: InitialConversationAttachment[],
+    disabledToolGroups: string[],
+    banTools: string[],
   ) => void;
 };
 
@@ -153,6 +157,10 @@ export function NewConversation({
   const [modelReady, setModelReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<PickedComposerAttachment[]>([]);
+  const [toolGroups, setToolGroups] = useState<ToolGroupCatalog[]>([]);
+  const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>([]);
+  const [toolGroupsLoading, setToolGroupsLoading] = useState(true);
+  const [toolGroupsError, setToolGroupsError] = useState<string | null>(null);
   const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
   const fileAttachments: InlineFileAttachment[] = attachments
     .filter((attachment) => attachment.kind === "file")
@@ -161,6 +169,22 @@ export function NewConversation({
       name: attachment.name,
     }));
   const hasDraft = Boolean(text.trim() || attachments.length > 0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setToolGroupsLoading(true);
+    setToolGroupsError(null);
+    void getToolGroups({ signal: controller.signal })
+      .then(({ groups }) => setToolGroups(groups))
+      .catch((cause: unknown) => {
+        if (controller.signal.aborted) return;
+        setToolGroupsError(cause instanceof Error ? cause.message : "工具组加载失败");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setToolGroupsLoading(false);
+      });
+    return () => controller.abort();
+  }, []);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -181,6 +205,10 @@ export function NewConversation({
         task,
         trimmedText,
         attachments,
+        selectedToolGroups,
+        toolGroups
+          .filter(({ group }) => selectedToolGroups.includes(group))
+          .flatMap(({ tools }) => tools.map(({ name }) => name)),
       );
       setSubmitting(false);
     } catch (cause) {
@@ -213,8 +241,16 @@ export function NewConversation({
               onWorkspaceCreated={async () => onWorkspaceCreated()}
             />
           </div>
-          <div className="flex min-w-0 items-center px-2">
+          <div className="flex min-w-0 items-center gap-2 px-2">
             <FavoritePromptToolbar disabled={submitting} />
+            <ToolGroupSelector
+              toolGroups={toolGroups}
+              selectedToolGroups={selectedToolGroups}
+              onSelectedToolGroupsChange={setSelectedToolGroups}
+              loading={toolGroupsLoading}
+              error={toolGroupsError}
+              disabled={submitting}
+            />
           </div>
           {attachments.some((attachment) => attachment.kind === "image") && (
             <div className="flex h-16 min-h-0 max-h-16 min-w-0 flex-nowrap gap-2 overflow-x-auto overflow-y-hidden px-2" aria-label="待发送附件">

@@ -46,7 +46,13 @@ type DeleteTarget =
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
 
-export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments }: { routeTaskId: number | null; initialMessage?: string; initialAttachments?: InitialConversationAttachment[] }) {
+export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments, initialDisabledToolGroups, initialBanTools }: {
+  routeTaskId: number | null;
+  initialMessage?: string;
+  initialAttachments?: InitialConversationAttachment[];
+  initialDisabledToolGroups?: string[];
+  initialBanTools?: string[];
+}) {
   const navigate = useNavigate();
   const closeWorkspaceTabs = useWorkbenchStore((state) => state.closeWorkspace);
   const [collapsed, setCollapsed] = useState(() => (
@@ -379,6 +385,8 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
             initialTask={activeTask}
             initialMessage={initialMessage}
             initialAttachments={initialAttachments}
+            initialDisabledToolGroups={initialDisabledToolGroups}
+            initialBanTools={initialBanTools}
             workspaceRoot={activeWorkspace?.root_path}
             forkAvailable={activeTask?.fork_available}
             forkingRunId={forkingRunId}
@@ -386,7 +394,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
             onTaskLoaded={handleTaskLoaded}
             onTaskStateChanged={refreshTaskState}
             onRunStateChange={handleRunStateChange}
-          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation, initialText, attachments) => { navigate(`/tasks/${conversation.task_id}`, { state: { initialMessage: initialText, initialAttachments: attachments } }); void load(); }} />}
+          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation, initialText, attachments, disabledToolGroups, banTools) => { navigate(`/tasks/${conversation.task_id}`, { state: { initialMessage: initialText, initialAttachments: attachments, initialDisabledToolGroups: disabledToolGroups, initialBanTools: banTools } }); void load(); }} />}
         </div>
       </main>
       <Workbench workspaceId={activeTaskWorkspaceId} />

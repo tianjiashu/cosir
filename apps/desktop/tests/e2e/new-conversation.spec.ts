@@ -56,6 +56,10 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
     JSON.stringify({ providerId: 1, modelName: "demo-model", reasoningEffort: null }),
   );
   expect(await page.evaluate(() => window.localStorage.getItem("cosir:model-selection:default"))).toBeNull();
+  await page.getByText("禁用工具组").click();
+  const fileToolGroup = page.locator("label").filter({ hasText: "文件" }).getByRole("checkbox");
+  await expect(fileToolGroup).toBeVisible();
+  await fileToolGroup.check();
   await page.getByLabel("新对话内容").fill("你好");
   await expect(page.getByRole("button", { name: "开始对话" })).toBeEnabled();
   await page.getByRole("button", { name: "开始对话" }).click();
@@ -69,8 +73,14 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(assistantRequests[0]?.body.workspaceId).toBe(7);
   expect(assistantRequests[0]?.body.providerId).toBe(1);
   expect(assistantRequests[0]?.body.taskId).toBe(42);
-  expect(assistantRequests[0]?.body.commands).toHaveLength(1);
+  expect(assistantRequests[0]?.body.commands).toHaveLength(2);
   expect((assistantRequests[0]?.body.commands as Array<{ message?: { parts?: Array<{ text?: string }> } }>)[0]?.message?.parts?.[0]?.text).toBe("你好");
+  expect((assistantRequests[0]?.body.commands as Array<{ type?: string; name?: string; payload?: { ban_tools?: string[] } }>)[1]).toMatchObject({
+    type: "custom",
+    name: "ban-tools",
+    payload: { ban_tools: ["read_file"] },
+  });
+  await expect(page.getByText("禁用工具组（1）")).toBeVisible();
   await expect(page.getByRole("main").getByText("你好", { exact: true })).toBeVisible();
   await expect(page.getByText("stream", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Reasoning", { exact: true }).first()).toBeVisible();
@@ -241,7 +251,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await expect(page.getByText("after-stop", { exact: true })).toHaveCount(1);
   await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
   await expect.poll(() => assistantRequests.length).toBe(3);
-  expect(assistantRequests[2]?.body.commands).toHaveLength(1);
+  expect(assistantRequests[2]?.body.commands).toHaveLength(2);
   await page.reload();
   await expect(page.getByText("after-stop", { exact: true })).toHaveCount(1);
   await expect.poll(() => assistantRequests.length).toBe(3);

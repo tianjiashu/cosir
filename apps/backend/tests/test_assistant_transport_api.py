@@ -433,8 +433,8 @@ async def test_resume_setup_failure_settles_run() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_reads_command_before_restoring_run() -> None:
-    """驱动命令读取必须在恢复 run 之前完成：读取失败时 run 仍是 cancelled。"""
+async def test_resume_does_not_depend_on_a_representative_command() -> None:
+    """恢复 Run 不依赖从批次中挑选一条代表 command。"""
 
     state = _snapshot(7, "cancelled")
     resumed = False
@@ -453,23 +453,17 @@ async def test_resume_reads_command_before_restoring_run() -> None:
             resumed = True
             return SimpleNamespace(id=7, task_id=1, status="running")
 
-        def cancel_run_if_running(self, *_args: object, **_kwargs: object) -> object:
-            raise AssertionError("读取失败时不应触发收敛")
-
-    class _CommandCrud:
-        def get_by_run(self, _run_id: int) -> object:
-            raise RuntimeError("command lookup failed")
-
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._task = _TaskService()
     service._state = _StateService()
     service._run_state = _RunService()
-    service._command = _CommandCrud()
+    service._command = object()
 
-    with pytest.raises(RuntimeError, match="command lookup failed"):
-        service.resume_latest_run(task_id=1, run_id=7)
+    result = service.resume_latest_run(task_id=1, run_id=7)
 
-    assert resumed is False
+    assert resumed is True
+    assert result.mode == "resume"
+    assert result.run.id == 7
 
 
 def test_settle_run_start_failure_cancels_active_run() -> None:

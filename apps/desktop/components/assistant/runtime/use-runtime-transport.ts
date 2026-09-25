@@ -44,6 +44,7 @@ export function useRuntimeTransport(
   context: RuntimeSessionContext,
   recovery: RuntimeRecovery,
   onStateCommit: (state: TransportState) => void,
+  selectedBanTools: readonly string[],
 ): RuntimeTransport {
   const attachmentAdapter = useMemo(
     () => createAttachmentAdapter(context.taskId),
@@ -269,6 +270,18 @@ export function useRuntimeTransport(
           ? { ...prepared, commandId }
           : prepared;
       });
+      const addMessage = commands.find((command) => (
+        typeof command === "object" && command !== null && "type" in command
+        && command.type === "add-message"
+      )) as { commandId?: string } | undefined;
+      if (addMessage?.commandId) {
+        commands.push({
+          type: "custom",
+          name: "ban-tools",
+          commandId: `${addMessage.commandId}-ban-tools`,
+          payload: { ban_tools: [...selectedBanTools] },
+        });
+      }
       // A new user command starts a fresh transport recovery budget. Empty
       // command batches are attach/resume operations and must not reset the
       // bounded EOF protection.

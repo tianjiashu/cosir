@@ -111,13 +111,10 @@ class ConversationRunService:
         return _PreparedConversationRunInput(
             input_text=input_text,
             image_paths=image_paths,
-            extra=(
-                ConversationRunExtra(
-                    display_text=command.display_text,
-                    attachments=file_attachments,
-                )
-                if file_attachments or image_paths
-                else None
+            extra=ConversationRunExtra(
+                display_text=command.display_text,
+                attachments=file_attachments,
+                ban_tools=command.ban_tools,
             ),
         )
 

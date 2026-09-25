@@ -262,6 +262,24 @@ def test_deferred_system_messages_drop_stale_run_scoped_messages() -> None:
     assert task_space.take_deferred_system_messages() == []
 
 
+def test_edit_rerun_discards_only_previous_messages_for_reused_run_id() -> None:
+    task_space = task_runtime_spaces.get_or_create(987656)
+    task_space.take_deferred_system_messages()
+    task_space.defer_system_message(
+        SystemMessage(content="previous run feedback", additional_kwargs={"run_id": 2})
+    )
+    task_space.defer_system_message(SystemMessage(content="task scoped"))
+    task_space.defer_system_message(
+        SystemMessage(content="other run", additional_kwargs={"run_id": 3})
+    )
+
+    discarded = task_space.discard_deferred_system_messages(run_id=2)
+    remaining = task_space.take_deferred_system_messages(run_id=3)
+
+    assert discarded == 1
+    assert [message.content for message in remaining] == ["task scoped", "other run"]
+
+
 def test_write_operation_id_is_idempotent_and_payload_bound(tmp_path: Path) -> None:
     service, factory = make_service()
     snapshot = service.start(

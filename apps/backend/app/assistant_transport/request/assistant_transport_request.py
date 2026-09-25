@@ -7,23 +7,21 @@ LangGraph 或 storage。wire 字段遵循 assistant-ui 的 camelCase 约定；�
 
 import json
 from hashlib import sha256
-from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.assistant_transport.request.command.add_message_command import AddMessageCommand
-from app.assistant_transport.request.command.custom_command import CustomCommand
+from app.assistant_transport.request.command.ban_tools_command import BanToolsCommand
 
-AssistantCommand = Annotated[
-    AddMessageCommand | CustomCommand,
-    Field(discriminator="type"),
-]
+# custom 命令共用 wire ``type`` discriminator，因此每种受支持的项目命令都按明确 schema
+# 定义，并通过字面量 ``name`` 区分。
+AssistantCommand = AddMessageCommand | BanToolsCommand
 
 
 class AssistantTransportRequest(BaseModel):
     """校验 Assistant Transport 请求。
 
-    命令数组由服务端按顺序幂等处理；对话历史由 canonical facts 重建。
+    当前受支持的命令共同构成一次 Run 请求；对话历史由 canonical facts 重建。
     """
 
     # Transport 请求只接受当前契约字段；旧的状态游标不得再被静默吞掉。
@@ -64,7 +62,7 @@ class AssistantTransportRequest(BaseModel):
         - ``commands`` 内 ``commandId`` 必须唯一；
         - ``threadId`` 必须与 ``task-{taskId}`` 一致，二者是同一领域身份的两种表达；
         - 一次请求最多包含一个 ``add-message`` 命令（首版运行模型不支持批量消息）；
-        - ``custom`` 命令尚未绑定领域处理器，直接拒绝；
+        - 唯一已定义的 custom 命令是与 add-message 同批的 ``BanToolsCommand``；
         - 空命令必须携带 ``runId`` 用于恢复已有 run；add-message 是否重放只由
           ``runId`` 是否存在决定，不能由 ``sourceId`` 推导；
         - 含 ``add-message`` 时 ``providerId`` 与 ``modelName`` 必填且 ``modelName``
@@ -118,16 +116,19 @@ class AssistantTransportRequest(BaseModel):
                 message="一次请求最多包含一个 add-message 命令",
                 retryable=False,
             )
-        if any(command.type == "custom" for command in self.commands):
-            raise TransportRequestError(
-                status_code=400,
-                code="CUSTOM_COMMAND_UNSUPPORTED",
-                message="custom 命令尚未绑定领域处理器",
-                retryable=False,
-            )
+        ban_tools_commands = [
+            command for command in self.commands if isinstance(command, BanToolsCommand)
+        ]
         # 首版运行模型在启动对话时必须同时确定厂商与模型，二者构成执行上下文；
         # 缺失其一会让 Turn 无法绑定执行器，属纯 wire 契约约束，前移至此。
         has_message = any(isinstance(command, AddMessageCommand) for command in self.commands)
+        if ban_tools_commands and (not has_message or len(ban_tools_commands) != 1):
+            raise TransportRequestError(
+                status_code=400,
+                code="BAN_TOOLS_COMMAND_INVALID",
+                message="ban-tools 必须与唯一 add-message 命令同批提交",
+                retryable=False,
+            )
         if not has_message and self.runId is None:
             raise TransportRequestError(
                 status_code=400,
@@ -147,7 +148,7 @@ class AssistantTransportRequest(BaseModel):
         return self
 
     def payload_hash(self) -> str:
-        """计算当前 add-message 请求的稳定业务载荷指纹。
+        """计算当前 Run 命令批次的稳定业务载荷指纹。
 
         参数:
             无；载荷字段直接取自当前请求模型。
@@ -163,17 +164,29 @@ class AssistantTransportRequest(BaseModel):
 
         说明:
             ``commandId`` 是幂等身份，``taskId`` / ``workspaceId`` 是路由身份，``threadId`` 是
-            Transport 元数据，不参与载荷 hash。消息、run 操作身份和模型选择会改变实际
-            执行语义，必须参与 hash；Assistant UI 的 ``parentId``/``sourceId`` 只属于
-            编辑元数据，不参与领域幂等指纹。
+            Transport 元数据，不参与载荷 hash。所有本批 command ID 共享此整体指纹；消息、
+            禁用工具集合、run 操作身份和模型选择会改变实际执行语义，必须参与 hash。当前
+            add-message 与 ban-tools 的批次顺序及禁用工具顺序不影响语义，因此先规范化顺序。
+            Assistant UI 的 ``parentId``/``sourceId`` 只属于编辑元数据，不参与领域幂等指纹。
         """
+        commands = [
+            command.model_dump(mode="json", exclude={"commandId", "parentId", "sourceId"})
+            for command in self.commands
+        ]
+        for command in commands:
+            if command.get("name") == "ban-tools":
+                payload = command.get("payload")
+                if isinstance(payload, dict) and isinstance(payload.get("ban_tools"), list):
+                    payload["ban_tools"] = sorted(payload["ban_tools"])
+        # 当前命令批次的顺序不影响语义：add-message 提供 Run 输入，ban-tools 提供 Run 配置，
+        # 因此将批次按集合语义计算 hash。
+        commands.sort(
+            key=lambda command: json.dumps(
+                command, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+        )
         payload = {
-            "commands": [
-                command.model_dump(
-                    mode="json", exclude={"commandId", "parentId", "sourceId"}
-                )
-                for command in self.commands
-            ],
+            "commands": commands,
             "providerId": self.providerId,
             "modelName": self.modelName,
             "reasoningEffort": self.reasoningEffort,

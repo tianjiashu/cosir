@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.config.constant import Constant
 from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
@@ -12,20 +12,29 @@ from app.models.conversation_run_file_attachment import ConversationRunFileAttac
 class ConversationRunExtra:
     """一次 Conversation Run 的扩展输入事实。
 
-    当前字段承载 Assistant 用户可见文本和普通本机文件附件引用。该类是内存中的
-    领域值对象；写入 ``conversation_runs.extra`` 时由 ``to_dict`` 转成 JSON 对象，
-    从数据库读取时由 ``from_dict`` 恢复。它不保存附件二进制，也不负责检查路径是否
-    仍然存在或是否属于当前工作区。
+    字段承载 Assistant 用户可见文本、普通本机文件附件引用和本次 Run 禁用的工具名。
+    该类是内存中的领域值对象；写入 ``conversation_runs.extra`` 时由 ``to_dict`` 转成
+    JSON 对象，从数据库读取时由 ``from_dict`` 恢复。它不保存附件二进制，也不负责检查
+    路径是否仍然存在或是否属于当前工作区。
     """
 
     display_text: str
     attachments: list[ConversationRunFileAttachment]
+    ban_tools: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """校验并规范化普通附件引用与展示文本中的 token 关系。"""
 
         if not isinstance(self.display_text, str):
             raise TypeError("display_text must be a string")
+        banned = self.ban_tools
+        if not isinstance(banned, list) or any(
+            not isinstance(name, str) or not name for name in banned
+        ):
+            raise TypeError("ban_tools must be a list of non-empty strings")
+        if len(banned) != len(set(banned)):
+            raise ValueError("ban_tools must not contain duplicates")
+        object.__setattr__(self, "ban_tools", list(banned))
         if len(self.attachments) > 32:
             raise ValueError("attachments must contain at most 32 items")
 
@@ -69,6 +78,7 @@ class ConversationRunExtra:
         return {
             "display_text": self.display_text,
             "attachments": [dict(attachment) for attachment in self.attachments],
+            "ban_tools": list(self.ban_tools),
         }
 
     @classmethod
@@ -94,10 +104,11 @@ class ConversationRunExtra:
 
         display_text = candidate.get("display_text")
         attachments = candidate.get("attachments")
+        ban_tools = candidate.get("ban_tools", [])
         if not isinstance(display_text, str) or not isinstance(attachments, list):
             return None
         try:
-            return cls(display_text=display_text, attachments=attachments)
+            return cls(display_text=display_text, attachments=attachments, ban_tools=ban_tools)
         except (TypeError, ValueError):
             return None
 

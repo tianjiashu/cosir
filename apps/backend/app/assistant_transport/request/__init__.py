@@ -11,6 +11,10 @@ from app.assistant_transport.request.assistant_transport_request import (
 from app.assistant_transport.request.command.add_message_command import (
     AddMessageCommand,
 )
+from app.assistant_transport.request.command.ban_tools_command import (
+    BanToolsCommand,
+    BanToolsPayload,
+)
 from app.assistant_transport.request.part.assistant_file_attachment import AssistantFileAttachment
 from app.assistant_transport.request.part.assistant_image_part import AssistantImagePart
 
@@ -21,5 +25,7 @@ __all__ = [
     "AssistantFileAttachment",
     "AssistantImagePart",
     "AssistantTransportRequest",
+    "BanToolsCommand",
+    "BanToolsPayload",
     "TransportRequestError",
 ]

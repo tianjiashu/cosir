@@ -16,6 +16,7 @@ from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
 from app.assistant_transport.service.conversation_run_command_service import (
+    ConversationRunCommandInput,
     ConversationRunCommandService,
 )
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
@@ -451,8 +452,9 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
         *(
             asyncio.to_thread(
                 service.start_or_attach,
-                command_id="same-command",
-                command_type="new",
+                commands=[
+                    ConversationRunCommandInput(command_id="same-command", command_type="new")
+                ],
                 payload_hash="same-payload",
                 provider_id=None,
                 model_name=None,
@@ -486,8 +488,9 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
     other_results = [
         await asyncio.to_thread(
             service.start_or_attach,
-            command_id="task-one-command",
-            command_type="new",
+            commands=[
+                ConversationRunCommandInput(command_id="task-one-command", command_type="new")
+            ],
             payload_hash="payload-one",
             provider_id=None,
             model_name=None,
@@ -497,8 +500,9 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
         ),
         await asyncio.to_thread(
             service.start_or_attach,
-            command_id="task-two-command",
-            command_type="new",
+            commands=[
+                ConversationRunCommandInput(command_id="task-two-command", command_type="new")
+            ],
             payload_hash="payload-two",
             provider_id=None,
             model_name=None,

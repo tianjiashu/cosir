@@ -257,8 +257,9 @@ def build_invalid_tool_call_repair_message(
 class ToolCallLifecycleManager(BaseModel):
     """工具调用生命周期的 LangGraph state 与事件发射门面。
 
-    state 中只保留 ``calls``，键为 ``tool_call_id``，值为可序列化记录。所有状态方法都
-    返回深拷贝后的新 manager，避免节点继续持有旧快照；调用节点必须将返回值放入返回的
+    state 中保存可执行/可见的 ``calls``、供协议闭合使用的隐藏 ``blocked_calls`` 和本 Run
+    的 ``ban_tools``。所有状态方法都返回深拷贝后的新 manager，避免节点继续持有旧快照；
+    调用节点必须将返回值放入返回的
     state patch_write。事件发射和模型上下文写回是方法的运行期副作用，依赖从当前 LangGraph
     execution context 解析，不会被 Pydantic 或 LangGraph 序列化。
 
@@ -270,6 +271,8 @@ class ToolCallLifecycleManager(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     calls: dict[str, ToolCallLifecycleRecord] = Field(default_factory=dict)
+    blocked_calls: dict[str, ToolCallLifecycleRecord] = Field(default_factory=dict)
+    ban_tools: tuple[str, ...] = ()
 
     def _copy(self) -> ToolCallLifecycleManager:
         """复制 state，确保生命周期迁移以新快照返回。"""
@@ -299,6 +302,12 @@ class ToolCallLifecycleManager(BaseModel):
         """返回全部合法工具调用记录。"""
 
         return [record for record in self.calls.values() if record.invalid_detail is None]
+
+    @property
+    def blocked_tool_calls(self) -> list[ToolCallLifecycleRecord]:
+        """Return disabled calls for hidden protocol closure by the model node."""
+
+        return list(self.blocked_calls.values())
 
     @staticmethod
     def _valid_tool_name(tool_name: object) -> bool:
@@ -354,9 +363,16 @@ class ToolCallLifecycleManager(BaseModel):
                 or not call_id
                 or not self._valid_tool_name(tool_name)
                 or call_id in updated.calls
+                or call_id in updated.blocked_calls
             ):
                 continue
             assert isinstance(tool_name, str)
+            if tool_name in self.ban_tools:
+                updated.blocked_calls[call_id] = ToolCallLifecycleRecord(
+                    tool_call_id=call_id,
+                    tool_name=tool_name,
+                )
+                continue
             presentation = self._presentation_for(tool_name)
             stream_writer(
                 ToolCallCreatedEvent(
@@ -560,20 +576,44 @@ class ToolCallLifecycleManager(BaseModel):
             invalid_tool_calls: 模型未解析成功的工具调用（``ai_message.invalid_tool_calls``）。
 
         返回:
-            更新后的 manager（合法调用 running、命中非法的调用 pending 并带 invalid_detail）。
+            更新后的 manager（禁用调用进入隐藏闭合集合；合法调用 running；命中非法的调用
+            pending 并带 invalid_detail）。
         """
 
-        invalid_by_id = {str(itc["id"]): itc for itc in invalid_tool_calls if itc.get("id")}
+        blocked_by_id: dict[str, str] = {
+            tc.call_id: tc.tool_name for tc in tool_calls
+            if tc.call_id and tc.tool_name in self.ban_tools
+        }
+        blocked_by_id.update({
+            str(itc["id"]): str(itc.get("name") or "")
+            for itc in invalid_tool_calls
+            if itc.get("id") and itc.get("name") in self.ban_tools
+        })
+        updated = self._copy()
+        for call_id, tool_name in blocked_by_id.items():
+            updated.calls.pop(call_id, None)
+            updated.blocked_calls[call_id] = ToolCallLifecycleRecord(
+                tool_call_id=call_id,
+                tool_name=tool_name,
+            )
+        invalid_by_id = {
+            str(itc["id"]): itc
+            for itc in invalid_tool_calls
+            if itc.get("id") and str(itc["id"]) not in blocked_by_id
+        }
+        valid_tool_calls = [
+            tc for tc in tool_calls
+            if tc.call_id not in invalid_by_id and tc.call_id not in blocked_by_id
+        ]
         if not invalid_by_id:
-            return self.begin(
+            return updated.begin(
                 task_id=task_id,
                 run_id=run_id,
                 step_id=step_id,
-                tool_calls=tool_calls,
+                tool_calls=valid_tool_calls,
             )
         # 合法调用中 id 命中非法集合的，不应进入 running，留给下方挂 invalid_detail。
-        valid_tool_calls = [tc for tc in tool_calls if tc.call_id not in invalid_by_id]
-        updated = self.begin(
+        updated = updated.begin(
             task_id=task_id,
             run_id=run_id,
             step_id=step_id,

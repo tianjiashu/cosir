@@ -22,6 +22,7 @@ import pytest
 from app.assistant_transport.service import conversation_run_command_service as command_module
 from app.assistant_transport.service import conversation_task_state_service as state_service_module
 from app.assistant_transport.service.conversation_run_command_service import (
+    ConversationRunCommandInput,
     ConversationRunCommandService,
 )
 from app.assistant_transport.service.conversation_task_state_service import (
@@ -150,7 +151,9 @@ def _build_command_service(
         get_by_run=lambda _run_id: SimpleNamespace(id=6, command_id="cmd-1"),
     )
     service._conversation_run = SimpleNamespace(
-        create_run=lambda **_kwargs: SimpleNamespace(id=_RUN_ID, task_id=_TASK_ID, status="pending"),
+        create_run=lambda **_kwargs: SimpleNamespace(
+            id=_RUN_ID, task_id=_TASK_ID, status="pending"
+        ),
         reset_run_for_edit=lambda *_args, **_kwargs: SimpleNamespace(
             id=_RUN_ID, task_id=_TASK_ID, status="pending"
         ),
@@ -166,8 +169,7 @@ def _build_command_service(
 
 def _start_or_attach(service: ConversationRunCommandService) -> object:
     return service.start_or_attach(
-        command_id="cmd-1",
-        command_type="new",
+        commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
         payload_hash="hash",
         provider_id=None,
         model_name=None,
@@ -178,8 +180,7 @@ def _start_or_attach(service: ConversationRunCommandService) -> object:
 
 def _edit_or_restart(service: ConversationRunCommandService) -> object:
     return service.edit_or_restart(
-        command_id="cmd-2",
-        command_type="edit",
+        commands=[ConversationRunCommandInput(command_id="cmd-2", command_type="edit")],
         payload_hash="hash",
         task_id=_TASK_ID,
         run_id=_RUN_ID,

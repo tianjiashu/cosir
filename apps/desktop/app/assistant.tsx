@@ -27,6 +27,8 @@ export const Assistant = ({
   workspaceRoot,
   initialMessage,
   initialAttachments,
+  initialDisabledToolGroups,
+  initialBanTools,
   forkAvailable,
   forkingRunId,
   onForkRun,
@@ -38,6 +40,8 @@ export const Assistant = ({
   workspaceRoot?: string;
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
+  initialDisabledToolGroups?: string[];
+  initialBanTools?: string[];
   forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
@@ -83,6 +87,8 @@ export const Assistant = ({
       initialState={initialState}
       initialMessage={initialMessage}
       initialAttachments={initialAttachments}
+      initialDisabledToolGroups={initialDisabledToolGroups}
+      initialBanTools={initialBanTools}
       forkAvailable={forkAvailable}
       forkingRunId={forkingRunId}
       onForkRun={onForkRun}

@@ -1,14 +1,17 @@
 import pytest
+from pydantic import ValidationError
 
 from app.assistant_transport.request.assistant_transport_request import (
     AssistantTransportRequest,
     TransportRequestError,
 )
+from app.assistant_transport.request.command.ban_tools_command import BanToolsCommand
 
 
 def _request(**extra: object) -> AssistantTransportRequest:
-    return AssistantTransportRequest(
-        commands=[
+    commands = extra.pop("commands", None)
+    if commands is None:
+        commands = [
             {
                 "type": "add-message",
                 "commandId": "command-1",
@@ -16,7 +19,9 @@ def _request(**extra: object) -> AssistantTransportRequest:
                 "parentId": None,
                 "sourceId": None,
             }
-        ],
+        ]
+    return AssistantTransportRequest(
+        commands=commands,
         threadId="task-1",
         taskId=1,
         providerId=1,
@@ -120,6 +125,122 @@ def test_run_id_changes_payload_hash() -> None:
     second = _request(runId=42)
 
     assert first.payload_hash() != second.payload_hash()
+
+
+def test_accepts_typed_ban_tools_command_and_hashes_its_payload() -> None:
+    payload = {
+        "type": "custom",
+        "commandId": "command-ban-tools",
+        "name": "ban-tools",
+        "payload": {"ban_tools": ["read_file"]},
+    }
+    request = _request(commands=[
+        {
+            "type": "add-message",
+            "commandId": "command-message",
+            "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
+        },
+        payload,
+    ])
+    changed = _request(commands=[
+        {
+            "type": "add-message",
+            "commandId": "command-message",
+            "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
+        },
+        {**payload, "payload": {"ban_tools": ["write_file"]}},
+    ])
+
+    assert request.payload_hash() != changed.payload_hash()
+    assert isinstance(request.commands[1], BanToolsCommand)
+    command = request.commands[1]
+    assert isinstance(command, BanToolsCommand)
+    assert command.payload.ban_tools == ["read_file"]
+
+
+def test_payload_hash_is_independent_of_command_and_tool_selection_order() -> None:
+    add_message = {
+        "type": "add-message",
+        "commandId": "command-message",
+        "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
+    }
+    ban_tools = {
+        "type": "custom",
+        "commandId": "command-ban-tools",
+        "name": "ban-tools",
+        "payload": {"ban_tools": ["read_file", "write_file"]},
+    }
+    first = _request(commands=[add_message, ban_tools])
+    reordered = _request(
+        commands=[
+            {**ban_tools, "payload": {"ban_tools": ["write_file", "read_file"]}},
+            add_message,
+        ]
+    )
+
+    assert first.payload_hash() == reordered.payload_hash()
+
+
+def test_accepts_empty_typed_ban_tools_selection() -> None:
+    request = _request(commands=[
+        {
+            "type": "add-message",
+            "commandId": "command-message",
+            "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
+        },
+        {
+            "type": "custom",
+            "commandId": "command-ban-tools",
+            "name": "ban-tools",
+            "payload": {"ban_tools": []},
+        },
+    ])
+
+    command = request.commands[1]
+    assert isinstance(command, BanToolsCommand)
+    assert command.payload.ban_tools == []
+
+
+def test_rejects_unregistered_custom_command() -> None:
+    with pytest.raises(ValidationError):
+        _request(commands=[
+            {
+                "type": "add-message",
+                "commandId": "command-message",
+                "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
+            },
+            {
+                "type": "custom",
+                "commandId": "command-custom",
+                "name": "unknown",
+                "payload": {},
+            },
+        ])
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ban_tools": ["read_file", "read_file"]},
+        {"ban_tools": [""]},
+        {"ban_tools": ["read_file"], "other": True},
+    ],
+)
+def test_rejects_malformed_ban_tools_payload(payload: object) -> None:
+    with pytest.raises(ValidationError):
+        _request(commands=[
+            {
+                "type": "add-message",
+                "commandId": "command-message",
+                "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
+            },
+            {
+                "type": "custom",
+                "commandId": "command-ban-tools",
+                "name": "ban-tools",
+                "payload": payload,
+            },
+        ])
 
 
 def test_accepts_explicit_ordinary_file_attachment_metadata() -> None:

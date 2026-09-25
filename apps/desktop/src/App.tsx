@@ -12,6 +12,8 @@ import {
 type TaskRouteState = {
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
+  initialDisabledToolGroups?: string[];
+  initialBanTools?: string[];
 };
 
 function TaskRoute() {
@@ -26,7 +28,13 @@ function TaskRoute() {
   const parsedTaskId = Number(taskPath[1]);
   const routeState = state as TaskRouteState | null;
   return Number.isInteger(parsedTaskId) && parsedTaskId > 0
-    ? <WorkspaceShell routeTaskId={parsedTaskId} initialMessage={routeState?.initialMessage} initialAttachments={routeState?.initialAttachments} />
+    ? <WorkspaceShell
+        routeTaskId={parsedTaskId}
+        initialMessage={routeState?.initialMessage}
+        initialAttachments={routeState?.initialAttachments}
+        initialDisabledToolGroups={routeState?.initialDisabledToolGroups}
+        initialBanTools={routeState?.initialBanTools}
+      />
     : <div className="p-6 text-sm">任务标识无效。</div>;
 }
 

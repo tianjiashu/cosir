@@ -242,6 +242,67 @@ def test_create_is_idempotent_and_handles_multiple_calls() -> None:
     assert set(harness.manager.calls) == {"a", "b"}
 
 
+def test_banned_tool_is_filtered_from_live_projection_and_execution() -> None:
+    """禁用调用只进入隐藏闭合集合，不发事件也不进入可执行集合。"""
+
+    harness = _LifecycleHarness()
+    harness.manager = ToolCallLifecycleManager(ban_tools=("read_file",))
+    harness.create(ToolCall(tool_name="read_file", call_id="blocked-call"))
+
+    with harness._patch_runtime():
+        harness.manager = harness.manager.classify(
+            task_id=1,
+            run_id=2,
+            step_id="step-3",
+            tool_calls=[ToolCall(tool_name="read_file", call_id="blocked-call")],
+            invalid_tool_calls=[],
+        )
+
+    assert harness.events == []
+    assert harness.manager.calls == {}
+    assert harness.manager.valid_tools == []
+    assert not harness.manager.has_call
+    assert [record.tool_call_id for record in harness.manager.blocked_tool_calls] == [
+        "blocked-call"
+    ]
+
+
+def test_mixed_banned_tool_only_projects_and_executes_allowed_call() -> None:
+    """混合批次只抑制禁用工具，启用工具保留原生命周期行为。"""
+
+    harness = _LifecycleHarness(
+        [
+            SimpleNamespace(name="read_file", display=None),
+            SimpleNamespace(name="write_file", display=None),
+        ]
+    )
+    harness.manager = ToolCallLifecycleManager(ban_tools=("read_file",))
+    with harness._patch_runtime():
+        harness.manager = harness.manager.create(
+            task_id=1,
+            run_id=2,
+            step_id="step-3",
+            raw_tool_calls=[
+                {"id": "blocked", "name": "read_file"},
+                {"id": "allowed", "name": "write_file"},
+            ],
+        )
+        harness.manager = harness.manager.classify(
+            task_id=1,
+            run_id=2,
+            step_id="step-3",
+            tool_calls=[
+                ToolCall(tool_name="read_file", call_id="blocked"),
+                ToolCall(tool_name="write_file", call_id="allowed"),
+            ],
+            invalid_tool_calls=[],
+        )
+
+    assert [event.tool_call_id for event in harness.events] == ["allowed", "allowed"]
+    assert [record.tool_call_id for record in harness.manager.valid_tools] == ["allowed"]
+    assert [record.tool_call_id for record in harness.manager.blocked_tool_calls] == ["blocked"]
+
+
 def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
     """state checkpoint 解码后仍恢复为 manager，而不是普通 dict。"""
 
@@ -258,6 +319,7 @@ def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
         final_text="",
         last_tool_results={},
         tool_call_lifecycle=ToolCallLifecycleManager(
+            ban_tools=("read_file",),
             calls={
                 "call-1": ToolCallLifecycleRecord(
                     tool_call_id="call-1",
@@ -272,3 +334,4 @@ def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
 
     assert isinstance(restored.tool_call_lifecycle, ToolCallLifecycleManager)
     assert restored.tool_call_lifecycle.calls["call-1"].status == "running"
+    assert restored.tool_call_lifecycle.ban_tools == ("read_file",)

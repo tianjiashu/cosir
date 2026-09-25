@@ -152,6 +152,7 @@ def test_run_extra_serializes_direct_shape_without_version() -> None:
                 "path": "attachments/readme.md",
             }
         ],
+        "ban_tools": [],
     }
     assert "version" not in serialized
     assert ConversationRunExtra.from_dict(serialized) == extra
@@ -206,6 +207,22 @@ def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
     assert prepared.extra is not None
     assert prepared.extra.display_text == command.display_text
     assert prepared.extra.attachments[0]["id"] == "readme"
+    assert prepared.extra.ban_tools == []
+
+
+def test_run_service_persists_banned_tools_without_other_extra_fields() -> None:
+    service = ConversationRunService.__new__(ConversationRunService)
+    command = ConversationRunCommand(
+        display_text="检查项目",
+        ban_tools=["execute_terminal", "web_search"],
+    )
+
+    prepared = service._prepare_command(7, command, run_id=None, model_name=None)  # type: ignore[attr-defined]
+
+    assert prepared.extra is not None
+    assert prepared.extra.attachments == []
+    assert prepared.extra.ban_tools == ["execute_terminal", "web_search"]
+    assert prepared.extra.to_dict()["ban_tools"] == ["execute_terminal", "web_search"]
 
 
 def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:

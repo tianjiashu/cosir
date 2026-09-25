@@ -115,6 +115,9 @@ class AgentRuntime:
         if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for run {run_id}")
         # 派生 per-run 副本承载本次 run：共享注册表单例不被原地写，并发 run 互不串扰。
+        # Existing child-agent restrictions still use this input. Conversation
+        # group bans are persisted on Run Extra and handled in ToolCallLifecycleManager,
+        # so the Assistant Transport path leaves this parameter unset and preserves bind_tools.
         agent_profile = agent_profile.derive_for_run(
             run, ban_tools=ban_tools, model_settings=model_settings
         )

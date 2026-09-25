@@ -701,6 +701,12 @@ const server = createServer(async (req, res) => {
     }]);
     return;
   }
+  if (req.method === "GET" && url.pathname === "/tools/groups") {
+    jsonResponse(res, 200, {
+      groups: [{ group: "文件", tools: [{ name: "read_file", description: "读取文件" }] }],
+    });
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/__test__/last-stream") {
     res.writeHead(200, {
       "Access-Control-Allow-Origin": "http://127.0.0.1:4173",

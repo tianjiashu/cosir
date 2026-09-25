@@ -19,6 +19,7 @@ import { StopButton } from "@/components/assistant/stop-button";
 import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-display";
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
+import { ToolGroupSelector as ToolGroupSelectorControl } from "@/components/composer/tool-group-selector";
 import { MarkdownText } from "@/components/markdown-text";
 import {
   Reasoning,
@@ -62,6 +63,7 @@ import {
 import type { TransportState, TransportToolStatus } from "@/lib/assistant/contract";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
+import type { ToolGroupCatalog } from "@/lib/api/tools";
 import { AttachmentTaskContext } from "@/components/assistant-ui/elements/attachment-context";
 import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/virtualized-thread-messages";
 import { UserMessageAttachments } from "@/components/assistant-ui/elements/user-message-attachments";
@@ -83,6 +85,11 @@ export type ThreadProps = {
   /** Render the canonical message UI without any write affordances. */
   readonly?: boolean;
   taskId?: number;
+  toolGroups?: ToolGroupCatalog[];
+  selectedToolGroups?: string[];
+  onSelectedToolGroupsChange?: (groups: string[]) => void;
+  toolGroupsLoading?: boolean;
+  toolGroupsError?: string | null;
   workspaceRoot?: string;
   forkAvailable?: boolean;
   forkingRunId?: number | null;
@@ -96,7 +103,7 @@ export type ThreadProps = {
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
@@ -146,12 +153,12 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null }) => {
+export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null }) => {
   const isEmpty = useAuiState(isNewChatView);
   const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ taskId, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly }}>
+    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly }}>
     <ThreadComponentsContext.Provider value={components}>
       <AttachmentTaskContext.Provider value={taskId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -225,7 +232,32 @@ const Composer: FC<{ autoFocus: boolean; taskId?: number; workspaceRoot?: string
 
 const ComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = false }) => {
   const composer = unstable_useComposerInput();
-  return <FavoritePromptToolbar disabled={disabled || composer.isDisabled} />;
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <FavoritePromptToolbar disabled={disabled || composer.isDisabled} />
+      <ToolGroupSelector disabled={disabled || composer.isDisabled} />
+    </div>
+  );
+};
+
+const ToolGroupSelector: FC<{ disabled: boolean }> = ({ disabled }) => {
+  const {
+    toolGroups = [],
+    selectedToolGroups = [],
+    onSelectedToolGroupsChange,
+    toolGroupsLoading = false,
+    toolGroupsError,
+  } = useContext(ThreadContext);
+  return (
+    <ToolGroupSelectorControl
+      toolGroups={toolGroups}
+      selectedToolGroups={selectedToolGroups}
+      onSelectedToolGroupsChange={onSelectedToolGroupsChange}
+      loading={toolGroupsLoading}
+      error={toolGroupsError}
+      disabled={disabled}
+    />
+  );
 };
 
 const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {

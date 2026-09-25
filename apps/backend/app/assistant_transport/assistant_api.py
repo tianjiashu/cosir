@@ -6,8 +6,8 @@
 """
 
 from fastapi import Depends, HTTPException, Response
-from fastapi.responses import StreamingResponse
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from langchain_core.messages import SystemMessage
 
 from app.app import app
 from app.assistant_transport.request import (
@@ -15,7 +15,6 @@ from app.assistant_transport.request import (
     AssistantAttachRequest,
     AssistantTransportRequest,
 )
-from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
@@ -24,7 +23,9 @@ from app.assistant_transport.service.transport_assistant_service import (
     _raise_transport_error,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
+from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.core.runtime.runner import AgentRuntime
 from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.service.depends import (
@@ -35,13 +36,13 @@ from app.service.depends import (
     get_transport_assistant_service,
 )
 from app.task_runtime.service.task_service import TaskService
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 @app.post("/assistant")
 async def assistant_transport(
         request: AssistantTransportRequest,
         run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
-        runtime: AgentRuntime = Depends(get_runtime),
         transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> StreamingResponse:
     """接收用户消息并返回 Assistant Transport 状态流。
@@ -97,6 +98,41 @@ async def assistant_transport(
                     retryable=True,
                     command_id=command.commandId if command is not None else None,
                     run_id=request.runId,
+                )
+
+            task_space = task_runtime_spaces.get_or_create(task_id)
+            banned_tools = run.extra.ban_tools if run.extra is not None else []
+            if banned_tools:
+                definitions = {
+                    definition.name: definition
+                    for definition in get_tool_registry().get_all_definitions()
+                }
+                grouped: dict[str, list[str]] = {}
+                for name in banned_tools:
+                    definition = definitions.get(name)
+                    group = definition.group if definition is not None else "工具"
+                    grouped.setdefault(group, []).append(name)
+                group_lines = [
+                    f"- {group}: {', '.join(sorted(names))}"
+                    for group, names in sorted(grouped.items())
+                ]
+                task_space.defer_system_message(
+                    SystemMessage(
+                        content=(
+                            "The user disabled these tool groups for this run. Do not attempt "
+                            "to use these tools; continue with available tools or answer "
+                            "directly.\n"
+                            + "\n".join(group_lines)
+                        ),
+                        additional_kwargs={"run_id": run.id},
+                    )
+                )
+            else:
+                task_space.defer_system_message(
+                    SystemMessage(
+                        content="The user enabled all tools for this run. ",
+                        additional_kwargs={"run_id": run.id},
+                    )
                 )
 
             try:
