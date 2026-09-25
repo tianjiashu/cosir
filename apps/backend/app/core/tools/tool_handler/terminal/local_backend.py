@@ -2,10 +2,13 @@
 
 本模块只负责在宿主机跑一条命令并回收完整输出，不做危险命令判定、不做权限
 校验、不组装 ``ToolObservation``（这些由 ``ExecuteTerminalTool`` 负责）。
-``shell="auto"`` 用系统默认（``shell=True`` 复用 Windows ``cmd.exe`` / POSIX
-``/bin/sh``）；显式 shell 使用 argv 直接启动（``shell=False``）。Windows 树杀用系统
-自带 ``taskkill /F /T``，Job Object 由 ``tool_handler_runner`` 子进程入口负责，均不引
-第三方依赖（不重复造轮子）。
+``shell="auto"`` 与 Windows 的 ``shell="cmd"`` 都走 ``shell=True``：命令原文交给
+``<COMSPEC> /c``（POSIX 为 ``/bin/sh -c``）解释，命令内部的引号原样到达 shell。其余
+显式 shell（``powershell`` / ``pwsh`` / POSIX shell）用 argv 直接启动（``shell=False``），
+避免命令先经过 cmd.exe 解析。``cmd`` 不能走 argv 形态：命令内部的引号会被
+``list2cmdline`` 转义成 cmd 无法还原的 ``\"``，含引号命令必然失败——取舍与证据见
+``_resolve_command`` 的 docstring。Windows 树杀用系统自带 ``taskkill /F /T``，Job Object
+由 ``tool_handler_runner`` 子进程入口负责，均不引第三方依赖（不重复造轮子）。
 """
 
 import contextlib
@@ -145,21 +148,37 @@ class LocalExecutionBackend(ExecutionBackend):
 def _resolve_command(command: str, shell: str) -> tuple[str | list[str], bool]:
     """把 shell 选择转换为 Popen 命令和 shell 标志。
 
-    ``auto`` 保留 Python 当前的宿主默认 shell 行为；显式 shell 使用 argv 直接启动，
-    从而避免 PowerShell 命令先经过 cmd.exe 解析。该函数只解析本机可执行文件，不启动
-    进程；未知、平台不支持或未安装的 shell 通过 ``ValueError`` 交给 execute 转为启动
-    失败结果。
+    返回值语义（两个值必须成对使用，调用方不得只取其一）：
+    - ``use_shell=True``：第一个值是需要由 shell 解释的**命令原文字符串**，Python 会以
+      ``<COMSPEC> /c "<命令原文>"``（POSIX 为 ``/bin/sh -c``）启动，命令内部的引号原样
+      到达 shell。
+    - ``use_shell=False``：第一个值是 argv 列表，``command`` 作为**单个参数**直接传给
+      显式 shell，不经 cmd.exe 二次解析。
+
+    转义职责（本函数的契约核心）：argv 形态下命令内的引号由 Python 的 ``list2cmdline``
+    按 MSVCRT 规则转义成 ``\"``。PowerShell 的参数解析接受 ``\"``，所以该形态在
+    ``powershell`` / ``pwsh`` 上可用；cmd 不还原 ``\"``，因此含引号的命令（如
+    ``dir /a /s /b "C:\\Program Files"``）会变成无意义路径并报「文件名、目录名或卷标语法
+    不正确」，故 Windows 的 ``cmd`` 与 ``auto`` 同为命令原文字符串形态。
+
+    不能把显式 shell「统一改成字符串形态」的原因：``powershell`` / ``pwsh`` 的命令原文
+    一旦不经 argv 元素、直接拼进命令行，PowerShell 自身的参数解析会吃掉引号并把引号内的
+    空格当作参数分隔符（实测 ``-Command Write-Output "a b"`` 输出两行），argv 形态才是正确
+    契约。POSIX 分支无此矛盾：argv 元素整体传递，不经 cmd 解析。
+
+    该函数只解析本机可执行文件与拼装命令行，不启动进程；未知、平台不支持或未安装的 shell
+    通过 ``ValueError`` 交给 execute 转为启动失败结果。
     """
 
     if shell == "auto":
         return command, True
 
     if os.name == "nt":
+        # cmd 与 auto 等价：命令原文交给 <COMSPEC> /c 解释，避免 list2cmdline 把命令内部的
+        # 引号转义成 cmd 无法还原的 \"（见 docstring「转义职责」）。cmd 不可用时由 Popen
+        # 自身报错，并被 execute 统一转为启动失败结果。
         if shell == "cmd":
-            executable = os.environ.get("COMSPEC") or shutil.which("cmd.exe")
-            if not executable:
-                raise ValueError("cmd.exe is not available")
-            return [executable, "/d", "/s", "/c", command], False
+            return command, True
         if shell in {"powershell", "pwsh"}:
             executable_name = "powershell.exe" if shell == "powershell" else "pwsh.exe"
             executable = shutil.which(executable_name)
