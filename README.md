@@ -121,16 +121,6 @@ Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 
 ## 运行方式与数据
 
-```mermaid
-flowchart LR
-  U[用户] --> UI[React 前端<br/>Tauri WebView]
-  UI <-->|本机 HTTP / SSE| API[Python / FastAPI<br/>127.0.0.1]
-  R[Tauri Rust 主进程] -->|启动、监控、停止| API
-  API --> DB[(本机 SQLite)]
-  API --> TOOL[本机工具与终端子进程]
-  API --> LLM[你配置的模型 Provider]
-```
-
 - Tauri Rust 主进程负责桌面窗口和后端进程生命周期。关闭窗口会隐藏到系统托盘；从托盘退出应用时会清理后端进程。
 - React 前端通过本机 HTTP/SSE 连接 FastAPI 后端。后端只绑定回环地址，不作为公网服务运行。
 - 任务、对话、Provider 配置等数据保存在本机 SQLite：`<DATA_DIR>/.cosir/storage/app.sqlite3`（经桌面宿主启动时 `DATA_DIR` 为系统应用数据目录；绕过 Tauri 直接跑后端时回落到仓库根的 `.cosir/`）。图片附件保存在工作区的 `.cosir/Attachment/` 目录。
