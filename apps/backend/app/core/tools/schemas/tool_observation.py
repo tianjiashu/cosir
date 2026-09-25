@@ -7,7 +7,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=False)
@@ -80,7 +80,7 @@ class ToolObservation:
     tool_name: str
     # 执行状态：可取 "success" / "error" / "cancelled"，是上层分流的唯一依据。
     # "cancelled" 表示用户主动中断导致的确定性终态，与失败语义不同。
-    status: str
+    status: Literal["success", "error", "cancelled"]
     # 面向模型的可读正文：成功时为工具输出，失败时为可恢复错误说明。
     content: str | None = None
     # 「发生了什么错误」：面向模型的英文错误描述（动作+直接原因），
