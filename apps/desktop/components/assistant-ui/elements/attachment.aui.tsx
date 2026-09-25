@@ -41,7 +41,7 @@ import { ImageAttachmentCard } from "@/components/composer/image-attachment-card
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import {
   InlineAttachmentInput,
-  useInlineAttachmentInsertion,
+  useInlineComposerInsertion,
   type InlineFileAttachment,
 } from "@/components/composer/inline-attachment-input";
 import { inlineAttachmentTokenId } from "@/lib/assistant/attachments/local-file-token";
@@ -373,7 +373,7 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
 
 export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: boolean }> = ({ workspaceRoot, disabled = false }) => {
   const aui = useAui();
-  const insertion = useInlineAttachmentInsertion();
+  const insertion = useInlineComposerInsertion();
 
   const addPicked = async (picked: PickedComposerAttachment[]) => {
     const existingIds = new Set(aui.composer.getState().attachments.map((attachment) => attachment.id));

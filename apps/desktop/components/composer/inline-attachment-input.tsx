@@ -30,23 +30,32 @@ export type InlineFileAttachment = {
   tokenId?: string;
 };
 
-type InlineAttachmentInsertionContextValue = {
+type InlineComposerInsertionContextValue = {
   register: (handler: (attachments: readonly InlineFileAttachment[]) => void) => () => void;
   insert: (attachments: readonly InlineFileAttachment[]) => void;
+  registerTextInsertion: (handler: (text: string) => void) => () => void;
+  insertText: (text: string) => void;
 };
 
-const InlineAttachmentInsertionContext = createContext<InlineAttachmentInsertionContextValue | null>(null);
+const InlineComposerInsertionContext = createContext<InlineComposerInsertionContextValue | null>(null);
 
 /**
- * Connect an attachment picker to the contenteditable that owns token order.
+ * Connect attachment pickers and text snippet controls to the contenteditable that owns token order.
  *
- * The picker is asynchronous, so the input captures its logical caret offset
- * before the picker opens and inserts the selected file token at that offset.
- * This deliberately keeps attachment insertion event-driven; attachment
- * counts are not used to infer text mutations.
+ * Controls insert through registered handlers so the editor can preserve its
+ * logical caret offset, attachment-token order, and controlled text value.
+ * This deliberately keeps insertion event-driven; attachment counts are not
+ * used to infer text mutations.
  */
-export function InlineAttachmentInsertionProvider({ children }: PropsWithChildren) {
+/**
+ * Own insertion callbacks for one composer surface.
+ *
+ * @param children - The editor and controls allowed to exchange attachment or text insertions.
+ * @returns A React provider element; it owns callbacks only for its mounted subtree.
+ */
+export function InlineComposerInsertionProvider({ children }: PropsWithChildren) {
   const handlerRef = useRef<((attachments: readonly InlineFileAttachment[]) => void) | null>(null);
+  const textHandlerRef = useRef<((text: string) => void) | null>(null);
   const register = useCallback((handler: (attachments: readonly InlineFileAttachment[]) => void) => {
     handlerRef.current = handler;
     return () => {
@@ -56,22 +65,37 @@ export function InlineAttachmentInsertionProvider({ children }: PropsWithChildre
   const insert = useCallback((attachments: readonly InlineFileAttachment[]) => {
     handlerRef.current?.(attachments);
   }, []);
-  const contextValue = useMemo(() => ({ register, insert }), [insert, register]);
+  const registerTextInsertion = useCallback((handler: (text: string) => void) => {
+    textHandlerRef.current = handler;
+    return () => {
+      if (textHandlerRef.current === handler) textHandlerRef.current = null;
+    };
+  }, []);
+  const insertText = useCallback((text: string) => {
+    textHandlerRef.current?.(text);
+  }, []);
+  const contextValue = useMemo(
+    () => ({ register, insert, registerTextInsertion, insertText }),
+    [insert, insertText, register, registerTextInsertion],
+  );
 
   return (
-    <InlineAttachmentInsertionContext.Provider value={contextValue}>
+    <InlineComposerInsertionContext.Provider value={contextValue}>
       {children}
-    </InlineAttachmentInsertionContext.Provider>
+    </InlineComposerInsertionContext.Provider>
   );
 }
 
-export function useInlineAttachmentInsertion(): InlineAttachmentInsertionContextValue {
-  const context = useContext(InlineAttachmentInsertionContext);
+/**
+ * Read the insertion bridge for the nearest composer surface.
+ *
+ * @returns Registration and dispatch functions for text and attachment insertion.
+ * @throws Error when called outside `InlineComposerInsertionProvider`; insertion controls require one editor owner.
+ */
+export function useInlineComposerInsertion(): InlineComposerInsertionContextValue {
+  const context = useContext(InlineComposerInsertionContext);
   if (!context) {
-    return {
-      register: () => () => undefined,
-      insert: () => undefined,
-    };
+    throw new Error("InlineComposerInsertionProvider is required for composer insertion controls");
   }
   return context;
 }
@@ -242,7 +266,7 @@ export function InlineAttachmentInput({
   const lastMarkupSignature = useRef("");
   const caretOffset = useRef<number | null>(null);
   const currentValue = useRef(value);
-  const insertion = useInlineAttachmentInsertion();
+  const insertion = useInlineComposerInsertion();
   const attachmentSignature = attachments.map((attachment) => `${attachment.id}:${attachment.name}`).join("\u001f");
 
   currentValue.current = value;
@@ -369,7 +393,24 @@ export function InlineAttachmentInput({
     requestAnimationFrame(() => restoreCaret(offset));
   }, [disabled, onChange, restoreCaret]);
 
+  const insertTextAtCaret = useCallback((text: string) => {
+    if (disabled || text.length === 0) return;
+    const current = currentValue.current;
+    const offset = Math.min(Math.max(0, caretOffset.current ?? current.length), current.length);
+    const nextValue = `${current.slice(0, offset)}${text}${current.slice(offset)}`;
+    const nextOffset = offset + text.length;
+    currentValue.current = nextValue;
+    caretOffset.current = nextOffset;
+    lastMarkupSignature.current = `${nextValue}\u0000${attachmentSignature}`;
+    onChange(nextValue);
+    requestAnimationFrame(() => restoreCaret(nextOffset));
+  }, [attachmentSignature, disabled, onChange, restoreCaret]);
+
   useEffect(() => insertion.register(insertAttachmentsAtCaret), [insertAttachmentsAtCaret, insertion]);
+  useEffect(
+    () => insertion.registerTextInsertion(insertTextAtCaret),
+    [insertTextAtCaret, insertion],
+  );
 
   const handleExternalFiles = useCallback(async (files: readonly File[]) => {
     if (disabled || files.length === 0) return;

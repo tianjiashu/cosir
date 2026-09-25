@@ -4,10 +4,11 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { FileTextIcon, Loader2Icon, SendIcon, XIcon } from "lucide-react";
 
 import { ComposerControls } from "@/components/composer/composer-controls";
+import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
 import {
   InlineAttachmentInput,
-  InlineAttachmentInsertionProvider,
-  useInlineAttachmentInsertion,
+  InlineComposerInsertionProvider,
+  useInlineComposerInsertion,
   type InlineFileAttachment,
 } from "@/components/composer/inline-attachment-input";
 import { ComposerSurface } from "@/components/composer/composer-surface";
@@ -110,7 +111,7 @@ function NewConversationAttachmentPicker({
   onPicked: (attachments: PickedComposerAttachment[]) => void | Promise<void>;
   onError: (message: string) => void;
 }) {
-  const insertion = useInlineAttachmentInsertion();
+  const insertion = useInlineComposerInsertion();
   return (
     <AttachmentPicker
       workspaceRoot={workspaceRoot}
@@ -190,7 +191,7 @@ export function NewConversation({
 
   return (
     <div className="mx-auto flex h-full w-full max-w-5xl items-center justify-center px-6">
-      <InlineAttachmentInsertionProvider>
+      <InlineComposerInsertionProvider>
       <form ref={formRef} onSubmit={submit} className="w-full">
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
           <CosirMark className="text-foreground size-16" />
@@ -211,6 +212,9 @@ export function NewConversation({
               onWorkspaceChange={onWorkspaceChange}
               onWorkspaceCreated={async () => onWorkspaceCreated()}
             />
+          </div>
+          <div className="flex min-w-0 items-center px-2">
+            <FavoritePromptToolbar disabled={submitting} />
           </div>
           {attachments.some((attachment) => attachment.kind === "image") && (
             <div className="flex h-16 min-h-0 max-h-16 min-w-0 flex-nowrap gap-2 overflow-x-auto overflow-y-hidden px-2" aria-label="待发送附件">
@@ -277,7 +281,7 @@ export function NewConversation({
         </ComposerSurface>
         {error && <p className="text-destructive mt-3 text-center text-sm">{error}</p>}
       </form>
-      </InlineAttachmentInsertionProvider>
+      </InlineComposerInsertionProvider>
     </div>
   );
 }

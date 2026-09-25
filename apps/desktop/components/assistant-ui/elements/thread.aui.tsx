@@ -9,6 +9,7 @@ import {
   ErrorPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  unstable_useComposerInput,
   useAui,
   useAuiState,
   type AssistantState,
@@ -17,6 +18,7 @@ import {
 import { StopButton } from "@/components/assistant/stop-button";
 import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-display";
 import { ComposerControls } from "@/components/composer/composer-controls";
+import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
 import { MarkdownText } from "@/components/markdown-text";
 import {
   Reasoning,
@@ -68,7 +70,7 @@ import {
   ComposerAttachments,
   InlineComposerInput,
 } from "@/components/assistant-ui/elements/attachment.aui";
-import { InlineAttachmentInsertionProvider } from "@/components/composer/inline-attachment-input";
+import { InlineComposerInsertionProvider } from "@/components/composer/inline-attachment-input";
 
 export type ThreadComponents = {
   AssistantMessage?: ComponentType;
@@ -190,8 +192,11 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
 };
 
 const Composer: FC<{ autoFocus: boolean; taskId?: number; workspaceRoot?: string }> = ({ autoFocus, taskId, workspaceRoot }) => (
-  <InlineAttachmentInsertionProvider>
+  <InlineComposerInsertionProvider>
     <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
+      <div className="flex min-w-0 items-center px-1">
+        <ComposerPromptToolbar />
+      </div>
       <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
         <ComposerAttachments />
         <InlineComposerInput
@@ -215,8 +220,13 @@ const Composer: FC<{ autoFocus: boolean; taskId?: number; workspaceRoot?: string
         <ComposerAction taskId={taskId ?? null} />
       </div>
     </ComposerPrimitive.Root>
-  </InlineAttachmentInsertionProvider>
+  </InlineComposerInsertionProvider>
 );
+
+const ComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = false }) => {
+  const composer = unstable_useComposerInput();
+  return <FavoritePromptToolbar disabled={disabled || composer.isDisabled} />;
+};
 
 const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const aui = useAui();
@@ -548,8 +558,11 @@ const UserEditMessage: FC = () => {
         });
       }}
     >
-      <InlineAttachmentInsertionProvider>
+      <InlineComposerInsertionProvider>
         <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
+          <div className="flex min-w-0 items-center px-1">
+            <ComposerPromptToolbar disabled={isHydrating || isRecoveryActive} />
+          </div>
           <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
             <ComposerAttachments />
             <InlineComposerInput
@@ -576,7 +589,7 @@ const UserEditMessage: FC = () => {
             </div>
           </div>
         </ComposerPrimitive.Root>
-      </InlineAttachmentInsertionProvider>
+      </InlineComposerInsertionProvider>
     </MessagePrimitive.Root>
   );
 };
