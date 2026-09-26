@@ -24,6 +24,7 @@ COSIR_DIR_NAME: str = ".cosir"
 COSIR_ATTACHMENT_DIR_NAME: str = "Attachment"
 COSIR_ATTACHMENT_STAGING_DIR_NAME: str = ".uploading"
 COSIR_TOOL_ARTIFACT_DIR_NAME: str = "tool-artifacts"
+COSIR_AGENT_CONFIG_DIR_NAME: str = "agents"
 COSIR_INSTRUCTION_FILE_NAME: str = "AGENTS.md"
 
 
@@ -103,6 +104,25 @@ def workspace_tool_artifact_dir(workspace_root: str | Path) -> Path:
     return workspace_cosir_dir(workspace_root) / COSIR_TOOL_ARTIFACT_DIR_NAME
 
 
+def workspace_agent_config_dir(workspace_root: str | Path) -> Path:
+    """返回 workspace 子 Agent JSON 配置目录路径。
+
+    参数:
+        workspace_root: 工作区根目录。
+
+    返回:
+        ``<workspace_root>/.cosir/agents``；不创建目录或检查存在性。
+
+    异常:
+        无。
+
+    副作用:
+        无（纯路径拼接）。
+    """
+
+    return workspace_cosir_dir(workspace_root) / COSIR_AGENT_CONFIG_DIR_NAME
+
+
 def is_within_cosir(path: str | Path, workspace_root: str | Path | None) -> bool:
     """判断路径（含符号链接解析后）是否落在 workspace ``.cosir`` 保留子树内。
 
@@ -176,3 +196,19 @@ def system_instruction_file() -> Path:
         无（纯路径拼接，可安全顶层导入）。
     """
     return system_cosir_dir() / COSIR_INSTRUCTION_FILE_NAME
+
+
+def system_agent_config_dir() -> Path:
+    """返回系统级子 Agent JSON 配置目录路径。
+
+    返回:
+        ``<SYSTEM_COSIR_DIR>/agents``；系统 `.cosir` 路径由 `paths` 模块决定。
+
+    异常:
+        无。
+
+    副作用:
+        无（纯路径拼接）。
+    """
+
+    return system_cosir_dir() / COSIR_AGENT_CONFIG_DIR_NAME

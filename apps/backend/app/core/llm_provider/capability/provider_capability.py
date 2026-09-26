@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from app.utils.json_utils import JsonFileError, read_json_object
 
 #: 厂商能力 JSON 数据源（与注册表同目录，只读，不修改该文件）。
 _PROVIDER_JSON_PATH: Path = Path(__file__).resolve().parent / "llm_provider.json"
@@ -24,20 +25,17 @@ def load_provider_json() -> dict[str, dict[str, Any]]:
         返回空字典（此时无任何厂商可用，由调用方提示用户补全 JSON）。
 
     异常:
-        无（文件缺失/JSON 非法均吞掉并返回空字典，不阻断启动）。
+        无（文件缺失、不可读、编码非法、JSON 非法或顶层不是对象均吞掉并返回空字典，
+        不阻断启动）。
 
     副作用:
         无（纯读取，不写日志以避免 leaf 层反向依赖 ``config.logging``）。
     """
 
     try:
-        with _PROVIDER_JSON_PATH.open(encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
+        return read_json_object(_PROVIDER_JSON_PATH)
+    except JsonFileError:
         return {}
-    if not isinstance(data, dict):
-        return {}
-    return data
 
 
 #: JSON 数据源解析结果（模块级单次加载，避免每次查询重复读盘）。

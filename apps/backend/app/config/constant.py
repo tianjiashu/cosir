@@ -25,8 +25,9 @@ from typing import ClassVar
 class Constant:
     """后端各域不可变共享常量的统一命名空间。
 
-    所有域（终端、委派、Run、Workflow、附件、cosir、日志、Web、Transport、启动、文本、工具）
-    都作为嵌套类挂在本类之下；调用方统一以 ``Constant.<域>.<NAME>`` 访问，单一事实源、无重复定义。
+    所有域（终端、Run、LLM、Workflow、系统提示词、附件、cosir、日志记录与日志文件、Web、
+    Transport、启动、文本、工具）都作为嵌套类挂在本类之下；调用方统一以
+    ``Constant.<域>.<NAME>`` 访问，单一事实源、无重复定义。
     """
 
     class Terminal:
@@ -116,6 +117,18 @@ class Constant:
             {"completed", "failed", "cancelled"}
         )
 
+    class LLM:
+        """模型请求的全局参数：所有模型统一，Agent 级 ``ModelSettings`` **无**对应覆盖字段。"""
+
+        # 单次模型 HTTP 请求超时（秒）；覆盖 SDK 默认的 600s，以便更快失败并重试。
+        REQUEST_TIMEOUT_SECONDS: float = 120.0
+        # SDK 层失败重试上限（不含超时本身的首次尝试）；0 表示不重试。
+        MAX_RETRIES: int = 2
+        # 生成种子：None 表示不固定种子（由 API 随机，正常生产语义）；设为非负整数可让输出
+        # 可复现，仅用于本地调试。迁移前由 ``CODING_AGENT_LLM_SEED`` 覆盖，现已固化为常量
+        # ——需要复现时直接改本值。
+        SEED: int | None = None
+
     class Workflow:
         """LangGraph React workflow 的共享常量。"""
 
@@ -129,6 +142,11 @@ class Constant:
         INVALID_TOOL_ARGS_PREVIEW_CHARS: int = 500
         # 单次工具调用错误累计展示的字符预算上限。
         INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS: int = 2000
+        # 连续工具调用失败次数上限：达到即终止本轮 Run（end_reason 取
+        # ``Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT``）。由 ``observation_node`` 判定。
+        # 取值沿用迁移前 ``CODING_AGENT_TOOL_ERROR_LIMIT`` 的实际生效值（100，容许长会话中的
+        # 偶发工具失败）；迁移后不再支持 env 覆盖——需要调整直接改本值。
+        TOOL_ERROR_LIMIT: int = 100
         # 流式文本刷新最小字符数（达到后再 flush，减少碎片）。
         DEFAULT_TEXT_FLUSH_MIN_CHARS: int = 32
         # 流式文本刷新最大间隔（秒）。
@@ -142,6 +160,27 @@ class Constant:
         INPUT_CACHE_READ_KEY: str = "cache_read"
         # LangChain UsageMetadata 推理明细键名（``output_token_details["reasoning"]``）。
         OUTPUT_REASONING_KEY: str = "reasoning"
+
+    class SystemPrompt:
+        """系统提示词各层预算闸门与字节安全兜底（原先散落在 ``Settings`` 与 builder 模块内的数值）。
+
+        token 上限决定「某一层注入多少内容」，字节上限是同层的廉价截断——先于 token 估算执行，
+        避免超大文件进入 O(n) 估算。两者都是固定值，不由环境变量覆盖（历史 env 覆盖面从未被使用）。
+        """
+
+        # Layer 2（Agent 系统预设）单文件预算。
+        AGENT_PERSONA_MAX_BYTES: int = 100_000
+        AGENT_PERSONA_MAX_TOKENS: int = 2_000
+        # Layer 1（运行期动态变量）整块字节上限。
+        RUNTIME_CONTEXT_MAX_BYTES: int = 4_000
+        # Layer T（工具能力目录）整块字节上限。
+        TOOL_LAYER_MAX_BYTES: int = 8_000
+        # Layer G（系统级全局指令）单文件预算。
+        GLOBAL_INSTRUCTION_MAX_FILE_BYTES: int = 200_000
+        GLOBAL_INSTRUCTION_MAX_FILE_TOKENS: int = 1_200
+        # Layer 3（Workspace 项目指令）单文件预算。
+        WORKSPACE_INSTRUCTION_MAX_FILE_BYTES: int = 200_000
+        WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: int = 1_200
 
     class Attachment:
         """附件上传与图片归一化的共享常量。"""
@@ -186,11 +225,31 @@ class Constant:
         # 事件名合法格式：小写字母开头，后接小写字母 / 数字 / 下划线。
         EVENT_NAME_PATTERN: "re.Pattern[str]" = re.compile(r"^[a-z][a-z0-9_]*$")
 
+    class Logging:
+        """日志文件落盘的轮转参数（记录级上限见 ``LogRecord``）。
+
+        由 ``app/config/logging`` 的 size 轮转 handler 与启动编排共同遵守：单个文件超过
+        ``MAX_BYTES`` 后轮转为 ``.N`` 分片，最多保留 ``BACKUP_COUNT`` 份历史分片。
+        """
+
+        # 单个日志文件最大字节数（超出轮转）。
+        MAX_BYTES: int = 5 * 1024 * 1024
+        # 历史分片保留数量上限。
+        BACKUP_COUNT: int = 7
+
     class Web:
         """网页搜索 / 提取工具的共享常量。"""
 
         # 兼容期 provider 优先级（仅 firecrawl）。
         LEGACY_PROVIDER_PRIORITY: tuple[str, ...] = ("firecrawl",)
+        # 单次 web_search 最多返回的结果条数（同时是模型可见 schema 的 ``limit`` 上限）。
+        SEARCH_LIMIT_MAX: int = 20
+        # web_search ``limit`` 的默认值：模型可见 schema 默认值与 handler 形参默认值同源。
+        SEARCH_LIMIT_DEFAULT: int = 5
+        # 单次 web_extract 最多接受的 URL 数（同时是模型可见 schema 的 ``urls`` 长度上限）。
+        EXTRACT_URL_LIMIT_MAX: int = 5
+        # web_extract 单次返回正文的字符上限（调用方未显式传 char_limit 时的默认值）。
+        EXTRACT_CHAR_LIMIT: int = 15_000
         # Markdown 内联 base64 图片占位符提取正则（忽略大小写）。
         BASE64_IMAGE_PATTERN: "re.Pattern[str]" = re.compile(
             r"!\[([^\]]*)\]\(data:image/[A-Za-z0-9.+-]+;base64,[^)]*\)",
@@ -205,6 +264,11 @@ class Constant:
             r"(?i)(sk-[a-z0-9_-]{8,}|xox[baprs]-[a-z0-9-]{8,}|gh[pousr]_[a-z0-9_]{12,}|"
             r"api[_-]?key[=:][^&\s]+|bearer\s+[a-z0-9._-]{12,})"
         )
+        # Web provider 单次 HTTP 请求超时（秒）：web_search / web_extract 的工具级超时在此
+        # 之上派生（``+5`` / ``+10``），firecrawl provider 的直连请求也用它。
+        # 取值沿用迁移前 ``CODING_AGENT_WEB_REQUEST_TIMEOUT_SECONDS`` 的实际生效值（抓取较慢
+        # 时放宽），迁移后不再支持 env 覆盖——需要调整直接改本值。
+        REQUEST_TIMEOUT_SECONDS: float = 45.0
         # URL query 中需脱敏的敏感键集合。
         SENSITIVE_QUERY_KEYS: frozenset[str] = frozenset(
             {
@@ -295,3 +359,7 @@ class Constant:
             r"(['\"])(.*?)(?<!\\)\1",
             re.IGNORECASE | re.DOTALL,
         )
+        # 工具结果进入模型通道的 content 字符上限（超出由 ``ToolOutputBudget`` 截断）。
+        MAX_OUTPUT_CHARS: int = 20_000
+        # 同一回复内工具调用的并行 worker 上限（并行批次按此收敛，超出的调用排队执行）。
+        MAX_PARALLEL_CALLS: int = 8

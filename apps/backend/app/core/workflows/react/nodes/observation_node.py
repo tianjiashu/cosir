@@ -11,7 +11,7 @@
 3. **修复提示注入**：把非法调用明细经 ``SystemMessage`` 注入模型上下文，必须排在全部
    ``ToolMessage`` 之后，维持 ``AIMessage(tool_calls) -> ToolMessage × N -> SystemMessage``
    顺序；
-4. **错误计数与上限判定**：连续失败计数达到 ``Settings.TOOL_ERROR_LIMIT`` 时经
+4. **错误计数与上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时经
    ``RuntimeOperations`` 标记失败终态；否则写回计数，让 graph 经条件边回到 ``model``
    节点继续推理。
 
@@ -28,8 +28,8 @@
 
 from typing import Any
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.config.settings import Settings
 from app.core.workflows.react.node_helper.common import _runtime_config, _runtime_context
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
@@ -49,7 +49,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
     3. **修复提示注入**：非法调用的修复 ``SystemMessage`` 排在全部 ``ToolMessage`` 之后。
     4. **空结果批次**：无本批工具结果且无修复提示时不计数也不判定，保留继承的
        ``tool_error_count``（无信息即不改写），避免对无新结果时误发 RUN_FAILED。
-    5. **错误上限判定**：连续失败计数达到 ``Settings.TOOL_ERROR_LIMIT`` 时经
+    5. **错误上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时经
        ``RuntimeOperations.fail_run_if_running`` 标记失败终态；否则写回计数，
        让 graph 经条件边回到 ``model`` 节点。
 
@@ -170,9 +170,10 @@ async def _observe_node(state: ReactGraphState) -> dict:
         },
     )
 
-    if tool_error_count >= Settings.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
+    if tool_error_count >= Constant.Workflow.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
         failed_run = operations.fail_run_if_running(
-            end_reason="tool_error_limit_reached", usage_stats=rc.usage_stats
+            end_reason=Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT,
+            usage_stats=rc.usage_stats,
         )
         if failed_run is None:
             log.info(
@@ -197,7 +198,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
                 "data": {
                     "step_id": step_id,
                     "tool_error_count": tool_error_count,
-                    "limit": Settings.TOOL_ERROR_LIMIT,
+                    "limit": Constant.Workflow.TOOL_ERROR_LIMIT,
                     "instruction": instruction,
                 },
             },

@@ -1,8 +1,12 @@
-"""web_search 工具的参数模型。"""
+"""web_search 工具的参数模型。
+
+``limit`` 的默认值与模型可见上限取自 ``Constant.Web``（导入期求值，属固定契约，不经环境
+变量覆盖；handler 形参默认值同源）。
+"""
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config.settings import Settings
+from app.config.constant import Constant
 
 
 class WebSearchArgs(BaseModel):
@@ -19,11 +23,12 @@ class WebSearchArgs(BaseModel):
         ),
     )
     limit: int = Field(
-        default=5,
+        default=Constant.Web.SEARCH_LIMIT_DEFAULT,
         ge=1,
-        le=Settings.WEB_SEARCH_LIMIT_MAX,
+        le=Constant.Web.SEARCH_LIMIT_MAX,
         description=(
-            f"Maximum number of results to return. Defaults to 5, hard-capped by "
-            f"the runtime limit ({Settings.WEB_SEARCH_LIMIT_MAX})."
+            f"Maximum number of results to return. Defaults to "
+            f"{Constant.Web.SEARCH_LIMIT_DEFAULT}, hard-capped by the runtime limit "
+            f"({Constant.Web.SEARCH_LIMIT_MAX})."
         ),
     )

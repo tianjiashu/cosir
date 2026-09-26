@@ -35,7 +35,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.assistant_transport.stream import TransportFrame
-from app.config.settings import Settings
+from app.config.constant import Constant
 from app.core.observability.tool_trace_recorder import _NullToolTraceRecorder
 from app.core.tools.display.terminal_display import build_terminal_display_data
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
@@ -300,7 +300,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence(
         loop=loop,
     )
     assert isinstance(channel, BufferedProcessToolOutputChannel)
-    expected = "x" * (Settings.MAX_TOOL_OUTPUT_CHARS + 1)
+    expected = "x" * (Constant.Tools.MAX_OUTPUT_CHARS + 1)
     producer = threading.Thread(target=channel.emit, args=(expected,))
     producer.start()
     producer.join(timeout=1)

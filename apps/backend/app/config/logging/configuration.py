@@ -6,6 +6,7 @@ import logging
 from multiprocessing.queues import Queue
 from pathlib import Path
 
+from app.config.constant import Constant
 from app.config.logging.common import current_log_file
 from app.config.logging.filter.caller_filter import CallerFilter
 from app.config.logging.filter.log_context_filter import LogContextFilter
@@ -24,8 +25,8 @@ _UVICORN_ERROR_LOGGER_NAME = "uvicorn.error"
 def configure_logging(
     log_dir: Path,
     *,
-    max_bytes: int = 5 * 1024 * 1024,
-    backup_count: int = 7,
+    max_bytes: int = Constant.Logging.MAX_BYTES,
+    backup_count: int = Constant.Logging.BACKUP_COUNT,
 ) -> logging.Logger:
     """安装后端固定 JSONL 文件日志和子进程日志桥接。
 
@@ -93,8 +94,8 @@ def configure_logging(
 def install_logging_for_current_process(
     *,
     log_dir: Path | None = None,
-    max_bytes: int = 5 * 1024 * 1024,
-    backup_count: int = 7,
+    max_bytes: int = Constant.Logging.MAX_BYTES,
+    backup_count: int = Constant.Logging.BACKUP_COUNT,
     log_queue: Queue | None = None,
 ) -> logging.Logger:
     """按当前进程角色安装文件日志或子进程队列日志。

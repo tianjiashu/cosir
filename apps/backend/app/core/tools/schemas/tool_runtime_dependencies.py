@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 
 if TYPE_CHECKING:
@@ -25,6 +26,8 @@ class ToolRuntimeDependencies:
     # 委派所需的父 Run 事实：父 Agent 的 per-run profile（child 未显式配置模型时的默认值）
     # 与父 task 是否已处于委派链中（决定单次委派的深度裁决）。
     parent_agent_profile: AgentProfile | None = None
+    # 全局 Agent profile Registry；作用域由 ToolExecutionContext.workspace_root 决定。
+    agent_profile_registry: AgentProfileRegistry | None = None
     parent_task_is_child: bool = False
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
     process_tool_output_channel_factory: ProcessToolOutputChannelFactory | None = None

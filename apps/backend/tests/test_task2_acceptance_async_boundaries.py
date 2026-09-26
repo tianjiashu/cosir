@@ -235,12 +235,22 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     monkeypatch.setattr(lifespan_module.Settings, "load", staticmethod(lambda: None))
     monkeypatch.setattr(lifespan_module, "initialize_service_dependencies", lambda: None)
     monkeypatch.setattr(lifespan_module, "_ensure_system_cosir_dir", lambda: None)
+    monkeypatch.setattr(lifespan_module, "initialize_system_agent_defaults", lambda: None)
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_workspace_service",
+        lambda: SimpleNamespace(list_workspaces=lambda: []),
+    )
     monkeypatch.setattr(lifespan_module, "get_conversation_run_service", lambda: _RunService())
     monkeypatch.setattr(lifespan_module, "get_terminal_session_service", lambda: _Terminal())
     monkeypatch.setattr(lifespan_module, "get_conversation_run_executor", lambda: _Executor())
     monkeypatch.setattr(lifespan_module, "ToolSystem", _ToolSystem)
     monkeypatch.setattr(lifespan_module, "ToolRuntimeOutputChannelFactory", _RuntimeFactory)
-    monkeypatch.setattr(lifespan_module, "build_agent_registry", lambda: object())
+    monkeypatch.setattr(
+        lifespan_module,
+        "build_agent_registry",
+        lambda *_args: SimpleNamespace(load_agent_profiles=lambda *_load_args: None),
+    )
     monkeypatch.setattr(lifespan_module, "set_tool_system", lambda _value: None)
     monkeypatch.setattr(lifespan_module, "set_agent_registry", lambda _value: None)
     monkeypatch.setattr(lifespan_module, "set_runtime", lambda _value: None)

@@ -1,5 +1,4 @@
 from app.config.logging.logger import log
-from app.config.settings import Settings
 from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
 from app.service.depends import get_provider_service
@@ -49,10 +48,8 @@ class CapabilityService:
         按模型名取最大上下文窗口（token），走完整解析链路。
         """
         model_max = ModelCapability.get_capability(model_name).context_window
-        soft_cap = Settings.CONTEXT_WINDOW_TOKENS
-        if soft_cap <= 0:
-            return model_max
-        return min(model_max, soft_cap)
+
+        return model_max
 
     @staticmethod
     def resolve_reasoning_effort(
@@ -66,9 +63,9 @@ class CapabilityService:
         再透传。未命中映射（模型声明支持推理但不支持该具体档位）返回 None，由调用方跳过注入。
 
         参数:
-            model_name: 模型名（仅用于日志上下文，便于排查未命中）。
-            requested_effort: 调用方请求的内部档位（已确认非 None）。
-            effort_cap: 该模型的推理强度能力元数据（含 effort_map）。
+            model_name: 模型名；本方法按它读取推理强度能力元数据（含 ``effort_map``），
+                并作为日志上下文便于排查未命中。
+            requested_effort: 调用方请求的内部档位（``None`` 时直接返回 ``None``）。
 
         返回:
             翻译后的厂商原始档位字符串；未命中映射时返回 None。

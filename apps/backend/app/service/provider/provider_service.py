@@ -22,8 +22,8 @@
 
 from time import perf_counter
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.config.settings import Settings
 from app.core.llm_provider.capability.provider_capability import ProviderCapability
 from app.models import ProviderRecord
 from app.service import depends as service_depends
@@ -90,6 +90,19 @@ class ProviderService:
 
         return self._provider_crud.get(provider_id)
 
+    def vaild_provider(self, provider_id: int, model_name: str):
+
+        try:
+            if provider_id is None or model_name is None:
+                return False
+            provider = self.get_provider(provider_id)
+            capability = ProviderCapability.get_capability(provider.name)
+            if model_name not in capability.models:
+                return False
+        except KeyError:
+            return False
+        return True
+
     @staticmethod
     def api_key_configured(provider: ProviderRecord) -> bool:
         """判定厂商的 API Key 是否已配置（DB 唯一事实来源的存在性检查）。
@@ -117,11 +130,11 @@ class ProviderService:
         return bool(provider.api_key)
 
     def create_provider(
-        self,
-        name: str,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        sort_order: int = 0,
+            self,
+            name: str,
+            base_url: str | None = None,
+            api_key: str | None = None,
+            sort_order: int = 0,
     ) -> ProviderRecord:
         """新建模型厂商并写 ``provider_created`` 审计日志。
 
@@ -169,13 +182,13 @@ class ProviderService:
         return record
 
     def update_provider(
-        self,
-        provider_id: int,
-        *,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        enabled: bool | None = None,
-        sort_order: int | None = None,
+            self,
+            provider_id: int,
+            *,
+            base_url: str | None = None,
+            api_key: str | None = None,
+            enabled: bool | None = None,
+            sort_order: int | None = None,
     ) -> ProviderRecord:
         """更新厂商字段并写 ``provider_updated`` 审计日志。
 
@@ -339,10 +352,10 @@ class ProviderService:
 
     @staticmethod
     async def _acompletion_ping(
-        *,
-        model: str,
-        base_url: str | None,
-        api_key: str | None,
+            *,
+            model: str,
+            base_url: str | None,
+            api_key: str | None,
     ) -> None:
         """经 OpenAI-compatible ``/chat/completions`` 发起最小请求。
 
@@ -368,7 +381,7 @@ class ProviderService:
             headers["Authorization"] = f"Bearer {api_key}"
 
         async with build_proxy_async_client(
-            timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS
+                timeout=Constant.LLM.REQUEST_TIMEOUT_SECONDS
         ) as client:
             response = await client.post(
                 f"{base_url.rstrip('/')}/chat/completions",

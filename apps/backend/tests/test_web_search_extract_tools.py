@@ -20,6 +20,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from app.config.constant import Constant
 from app.config.settings import Settings
 from app.core.tools.tool_handler.web.providers import firecrawl_provider
 from app.core.tools.tool_handler.web.providers.firecrawl_provider import (
@@ -330,7 +331,7 @@ def test_search_result_items_non_dict_payload_returns_empty() -> None:
 
 
 def test_firecrawl_search_clamps_limit_to_max(monkeypatch: pytest.MonkeyPatch) -> None:
-    """limit 超过 WEB_SEARCH_LIMIT_MAX 时，search 结果被钳制（潜在缺陷：越界保护）。"""
+    """limit 超过 Constant.Web.SEARCH_LIMIT_MAX 时，search 结果被钳制（潜在缺陷：越界保护）。"""
 
     many = [
         {"title": f"t{i}", "url": f"https://e.com/{i}"} for i in range(50)
@@ -340,7 +341,7 @@ def test_firecrawl_search_clamps_limit_to_max(monkeypatch: pytest.MonkeyPatch) -
 
     results = provider.search("query", limit=1000)
 
-    assert len(results) == Settings.WEB_SEARCH_LIMIT_MAX
+    assert len(results) == Constant.Web.SEARCH_LIMIT_MAX
     assert all(isinstance(r, WebSearchItem) for r in results)
 
 
@@ -873,9 +874,9 @@ def test_extract_dedup_requests_each_url_once() -> None:
 
 
 def test_extract_url_count_over_limit_returns_error() -> None:
-    """URL 数超过 WEB_EXTRACT_URL_LIMIT_MAX 时返回确定性错误（潜在缺陷：越界保护）。"""
+    """URL 数超过 Constant.Web.EXTRACT_URL_LIMIT_MAX 时返回确定性错误（潜在缺陷：越界保护）。"""
 
-    urls = [f"https://e.com/{i}" for i in range(Settings.WEB_EXTRACT_URL_LIMIT_MAX + 1)]
+    urls = [f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)]
     provider = FakeProvider()
     tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
 
@@ -1201,7 +1202,7 @@ def test_web_extract_args_schema_constraints() -> None:
     urls_prop = schema["properties"]["urls"]
 
     assert urls_prop["items"] == {"type": "string"}
-    assert urls_prop["maxItems"] == Settings.WEB_EXTRACT_URL_LIMIT_MAX
+    assert urls_prop["maxItems"] == Constant.Web.EXTRACT_URL_LIMIT_MAX
 
     format_prop = schema["properties"]["format"]
     enum = format_prop.get("enum") or []
@@ -1210,13 +1211,13 @@ def test_web_extract_args_schema_constraints() -> None:
     assert "text" not in enum
 
 
-def test_web_search_args_limit_max_equals_setting() -> None:
-    """WebSearchArgs 的 limit 上限等于 Settings.WEB_SEARCH_LIMIT_MAX。"""
+def test_web_search_args_limit_max_equals_constant() -> None:
+    """WebSearchArgs 的 limit 上限等于 Constant.Web.SEARCH_LIMIT_MAX。"""
 
     schema = WebSearchArgs.model_json_schema()
     limit_prop = schema["properties"]["limit"]
 
-    assert limit_prop["maximum"] == Settings.WEB_SEARCH_LIMIT_MAX
+    assert limit_prop["maximum"] == Constant.Web.SEARCH_LIMIT_MAX
 
 
 def test_web_extract_args_strict_rejects_type_mismatch() -> None:

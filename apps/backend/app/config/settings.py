@@ -2,16 +2,19 @@
 
 这些运行期配置作为 ``Settings`` 类的类级静态属性存在，由 ``Settings.load`` 在进程启动时
 填充一次，之后所有模块通过 ``from app.config.settings import Settings`` 后静态读取
-（如 ``Settings.TOOL_ERROR_LIMIT``），配置对象不再被到处传递。
+（如 ``Settings.WEB_BACKEND``），配置对象不再被到处传递。
 
 设计边界：
-- 本模块只承载进程级运行配置（各类数值上限、功能开关与外部集成参数）。模型相关配置不在
-  此处，统一收敛到 ``app.core.llm.model_settings``。
+- 本模块只承载**运行期可由环境变量 / ``.cosir/.env`` 覆盖**的进程级配置（默认回复语言、
+  Web provider 选择、可观测性集成参数），以及需要保密的集成凭据。模型相关配置不在此处，
+  统一收敛到 ``app.core.agents.model_settings``。
+- **不可变、无需按环境覆盖的数值上限不在此处**：系统提示词预算、工具输出与并发上限、
+  Web 限额、日志轮转等固定值统一收敛到 ``app.config.constant.Constant`` 的对应域；判定标准
+  是「是否存在真实的按环境覆盖需求」，不是数值大小。
 - 进程固定路径（数据根 / 日志目录 / 主库与 checkpoint 文件）不在此定义，唯一事实源为
   ``app.utils.paths``；``Settings.load`` 会触发其 ``reset`` 与环境变量对齐。
-- 数值上限类配置（如 ``Settings.TOOL_ERROR_LIMIT``）为全进程共享的静态值，运行时不确、
-  不可变；需要按环境覆盖时经环境变量或 ``Settings.override``（测试）注入。单轮最大步数
-  ``max_steps`` 不再在此定义，唯一来源为 ``AgentProfile.max_steps``（编排层经
+- 保留下来的配置全进程共享、启动后只读；测试注入经 ``Settings.override``。单轮最大步数
+  ``max_steps`` 不在此定义，唯一来源为 ``AgentProfile.max_steps``（编排层经
   ``workflow.py`` 初始化 input_state 注入）。
 """
 
@@ -28,75 +31,30 @@ class Settings:
     """后端运行时配置（类级静态属性，进程级单例命名空间）。
 
     配置作为类级静态属性存在，由 ``Settings.load`` 在进程启动时填充一次，之后所有模块通过
-    ``Settings.TOOL_ERROR_LIMIT`` 等静态读取，不实例化、不传递 ``Settings`` 对象。
+    ``Settings.WEB_BACKEND`` 等静态读取，不实例化、不传递 ``Settings`` 对象。
 
     职责边界：
         - 负责：进程级运行配置的定义、加载（含 ``.env`` 覆盖）、校验与按测试注入。
-        - 不负责：模型相关配置（见 ``app.core.llm.model_settings``）、进程固定路径
-          （见 ``app.utils.paths``）、任何业务读写。
+        - 不负责：不可变静态常量（见 ``app.config.constant.Constant``）、模型相关配置
+          （见 ``app.core.agents.model_settings``）、进程固定路径（见 ``app.utils.paths``）、
+          任何业务读写。
     """
 
     # --- 类级静态配置（进程启动后由 ``Settings.load`` 填充，之后只读） ---
-    LOG_MAX_BYTES: ClassVar[int] = 5 * 1024 * 1024
-    LOG_BACKUP_COUNT: ClassVar[int] = 7
-    TOOL_ERROR_LIMIT: ClassVar[int] = 100
-    MAX_PARALLEL_TOOL_CALLS: ClassVar[int] = 8
-    # 工具结果摘要中 content 的截断上限（字符），供 observe 节点与阶段二 LLM 观察使用，
-    # 避免把大体积工具输出塞进 checkpoint。
-    TOOL_OBSERVATION_CONTEXT_LIMIT: ClassVar[int] = 4000
-    MAX_CONTEXT_CHARS: ClassVar[int] = 20000
-    MAX_TOOL_OUTPUT_CHARS: ClassVar[int] = 20000
+    # 职责边界提醒：**不可变、且无需按环境覆盖的固定值不在这里**——数值上限、超时、计数、
+    # 预算等已收敛到 ``app.config.constant.Constant`` 的对应域（LLM 请求参数、系统提示词预算、
+    # 工具输出/并发上限、Web 超时与限额、日志轮转参数）。本类只保留「运行期可由环境变量 /
+    # ``.cosir/.env`` 覆盖」的配置，以及需要保密的集成参数。
 
     # 面向用户的默认回复语言（如 zh / en）：作为全局配置，统一驱动系统提示词与运行时
     # 上下文；需要本地化覆盖时经环境变量 ``CODING_AGENT_DEFAULT_LANGUAGE`` 注入。
     DEFAULT_LANGUAGE: ClassVar[str] = "zh"
 
-    # 上下文窗口软上限（token）：上下文占用圆环 100% 基准的上限之一，与「模型最大窗口」
-    # 取 min 后作为实际上限（分母）。0 表示不设软上限，只用模型自身最大窗口。可由
-    # CODING_AGENT_CONTEXT_WINDOW_TOKENS 经环境变量覆盖（如 32000 以省成本/控延迟）。
-    CONTEXT_WINDOW_TOKENS: ClassVar[int] = 200000
+    # Web 工具 provider 选择：``WEB_BACKEND`` 是统一开关，两个 per-tool 变量用于按工具覆盖
+    # （空串表示不覆盖）；三者都经 ``CODING_AGENT_WEB_*_BACKEND`` 覆盖。
     WEB_SEARCH_BACKEND: ClassVar[str] = ""
     WEB_EXTRACT_BACKEND: ClassVar[str] = ""
     WEB_BACKEND: ClassVar[str] = ""
-    WEB_REQUEST_TIMEOUT_SECONDS: ClassVar[float] = 20.0
-    WEB_SEARCH_LIMIT_MAX: ClassVar[int] = 20
-    WEB_EXTRACT_URL_LIMIT_MAX: ClassVar[int] = 5
-    WEB_EXTRACT_CHAR_LIMIT: ClassVar[int] = 15000
-
-    # 模型生成种子：调试阶段用于让模型输出可复现（相同输入 + 相同 seed 尽量得到一致结果）。
-    # 经 ``CODING_AGENT_LLM_SEED`` 覆盖；空串/未设置时取 None（不固定种子，由 API 随机）。
-    # 生产环境应保持 None，避免每次回答高度一致导致体验僵化。
-    LLM_SEED: ClassVar[int | None] = None
-
-    # --- 系统提示词三层构建（动态变量 / Agent 预设 / Workspace 项目指令） ---
-    # Layer 2：Agent 系统预设文件（AgentProfile.prompt_file_path）加载上限，避免超大预设
-    # 撑爆上下文；经 ``CODING_AGENT_AGENT_PERSONA_*`` 覆盖。
-    AGENT_PERSONA_MAX_BYTES: ClassVar[int] = 100_000
-    AGENT_PERSONA_MAX_TOKENS: ClassVar[int] = 2_000
-    # Layer 1：动态变量层字节硬上限（内容小且固定，仅防御性截断）；经
-    # ``CODING_AGENT_RUNTIME_CONTEXT_MAX_BYTES`` 覆盖。
-    RUNTIME_CONTEXT_MAX_BYTES: ClassVar[int] = 4_000
-
-    # Layer 3：Workspace 项目指令预算闸门；经 ``CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS``
-    # 覆盖。候选文件名唯一（``AGENTS.md``，硬编码在 ``system_prompt_builder`` 内、不经配置注入），
-    # 最终只加载唯一一个指令文件，因此不存在文件数闸门；单文件注入上下文的 token 上限由
-    # ``WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS`` 约束，字节上限为 ``system_prompt_builder`` 模块内
-    # 固定安全兜底（非配置项，先于 token 估算做廉价截断，防止超大文件撑爆上下文）。
-    WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: ClassVar[int] = 1_200
-    # Layer G：系统级全局指令预算闸门；经 ``CODING_AGENT_GLOBAL_INSTRUCTION_MAX_FILE_TOKENS``
-    # 覆盖。来源唯一、路径固定（``<system_cosir_dir>/AGENTS.md``，由 ``cosir_paths
-    # .system_instruction_file`` 计算），作为跨所有 workspace 生效的全局提示词；单文件注入
-    # 上下文的 token 上限由本配置约束，字节上限为 ``system_prompt_builder`` 模块内固定安全
-    # 兜底（非配置项）。
-    GLOBAL_INSTRUCTION_MAX_FILE_TOKENS: ClassVar[int] = 1_200
-
-    # --- LLM 请求全局默认值（所有模型统一，除非 Agent 级 ModelSettings 显式覆盖） ---
-    # 请求超时：单次 ChatOpenAI HTTP 请求超时（秒），覆盖默认 600s 以更快失败重试；
-    # 经 ``CODING_AGENT_LLM_REQUEST_TIMEOUT_SECONDS`` 覆盖。
-    LLM_REQUEST_TIMEOUT_SECONDS: ClassVar[float] = 120.0
-    # 请求重试次数：SDK 层失败重试上限（不含超时本身的首次尝试）；经
-    # ``CODING_AGENT_LLM_MAX_RETRIES`` 覆盖。0 表示不重试。
-    LLM_MAX_RETRIES: ClassVar[int] = 2
 
     # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---
     # 启用开关 + 密钥齐备 + langfuse 可导入，三者满足 ``tracing_enabled()`` 才返回 True。
@@ -190,64 +148,6 @@ class Settings:
         raise ValueError(f"{name} must be a boolean value")
 
     @classmethod
-    def _validate(cls) -> None:
-        """校验数值类配置是否合法。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            ValueError: 如果任一数值上限小于 1，或任一超时秒数不大于 0。
-
-        副作用:
-            无。
-        """
-
-        if cls.TOOL_ERROR_LIMIT < 1:
-            raise ValueError("TOOL_ERROR_LIMIT must be greater than zero")
-        if cls.MAX_PARALLEL_TOOL_CALLS < 1:
-            raise ValueError("MAX_PARALLEL_TOOL_CALLS must be greater than zero")
-        if cls.LLM_REQUEST_TIMEOUT_SECONDS <= 0:
-            raise ValueError("LLM_REQUEST_TIMEOUT_SECONDS must be greater than zero")
-        if cls.LLM_MAX_RETRIES < 0:
-            raise ValueError("LLM_MAX_RETRIES must be greater than or equal to zero")
-        if cls.LLM_SEED is not None and cls.LLM_SEED < 0:
-            raise ValueError("LLM_SEED must be greater than or equal to zero")
-        if cls.MAX_CONTEXT_CHARS < 1:
-            raise ValueError("MAX_CONTEXT_CHARS must be greater than zero")
-        if cls.MAX_TOOL_OUTPUT_CHARS < 1:
-            raise ValueError("MAX_TOOL_OUTPUT_CHARS must be greater than zero")
-        if cls.CONTEXT_WINDOW_TOKENS < 0:
-            raise ValueError("CONTEXT_WINDOW_TOKENS must not be negative")
-        if cls.LOG_MAX_BYTES < 1:
-            raise ValueError("LOG_MAX_BYTES must be greater than zero")
-        if cls.LOG_BACKUP_COUNT < 1:
-            raise ValueError("LOG_BACKUP_COUNT must be greater than zero")
-        if cls.WEB_REQUEST_TIMEOUT_SECONDS <= 0:
-            raise ValueError("WEB_REQUEST_TIMEOUT_SECONDS must be greater than zero")
-        if cls.WEB_SEARCH_LIMIT_MAX < 1:
-            raise ValueError("WEB_SEARCH_LIMIT_MAX must be greater than zero")
-        if cls.WEB_EXTRACT_URL_LIMIT_MAX < 1:
-            raise ValueError("WEB_EXTRACT_URL_LIMIT_MAX must be greater than zero")
-        if cls.WEB_EXTRACT_CHAR_LIMIT < 1:
-            raise ValueError("WEB_EXTRACT_CHAR_LIMIT must be greater than zero")
-        if cls.TOOL_OBSERVATION_CONTEXT_LIMIT < 1:
-            raise ValueError("TOOL_OBSERVATION_CONTEXT_LIMIT must be greater than zero")
-        if cls.AGENT_PERSONA_MAX_BYTES < 1:
-            raise ValueError("AGENT_PERSONA_MAX_BYTES must be greater than zero")
-        if cls.AGENT_PERSONA_MAX_TOKENS < 1:
-            raise ValueError("AGENT_PERSONA_MAX_TOKENS must be greater than zero")
-        if cls.RUNTIME_CONTEXT_MAX_BYTES < 1:
-            raise ValueError("RUNTIME_CONTEXT_MAX_BYTES must be greater than zero")
-        if cls.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS < 1:
-            raise ValueError("WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS must be greater than zero")
-        if cls.GLOBAL_INSTRUCTION_MAX_FILE_TOKENS < 1:
-            raise ValueError("GLOBAL_INSTRUCTION_MAX_FILE_TOKENS must be greater than zero")
-
-    @classmethod
     def load(cls, repository_root: Path | None = None) -> None:
         """加载默认配置与本地 env 覆盖，填充类级静态属性。
 
@@ -261,7 +161,7 @@ class Settings:
             无。
 
         异常:
-            ValueError: 如果数值配置非法（数值上限小于 1，或超时秒数不大于 0）。
+            ValueError: ``CODING_AGENT_LANGFUSE_ENABLED`` 不是受支持的布尔文本时抛出。
 
         副作用:
             加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性；经 ``paths.reset``
@@ -273,29 +173,7 @@ class Settings:
         # 固定路径唯一事实源在 ``app.utils.paths``：加载 .env 后按环境重新对齐，使
         # 系统 ``.cosir/.env`` 中的运行配置在此阶段生效；路径根由桌面宿主注入。
         paths.reset()
-        cls.LOG_MAX_BYTES = int(os.environ.get("CODING_AGENT_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
-        cls.LOG_BACKUP_COUNT = int(os.environ.get("CODING_AGENT_LOG_BACKUP_COUNT", "7"))
-        cls.TOOL_ERROR_LIMIT = int(os.environ.get("CODING_AGENT_TOOL_ERROR_LIMIT", "3"))
-        cls.MAX_PARALLEL_TOOL_CALLS = int(
-            os.environ.get("CODING_AGENT_MAX_PARALLEL_TOOL_CALLS", "8")
-        )
-        cls.LLM_REQUEST_TIMEOUT_SECONDS = float(
-            os.environ.get("CODING_AGENT_LLM_REQUEST_TIMEOUT_SECONDS", "120")
-        )
-        cls.LLM_MAX_RETRIES = int(os.environ.get("CODING_AGENT_LLM_MAX_RETRIES", "2"))
-        _raw_seed = os.environ.get("CODING_AGENT_LLM_SEED", "")
-        cls.LLM_SEED = int(_raw_seed) if _raw_seed else None
-        cls.TOOL_OBSERVATION_CONTEXT_LIMIT = int(
-            os.environ.get("CODING_AGENT_TOOL_OBSERVATION_CONTEXT_LIMIT", "4000")
-        )
-        cls.MAX_CONTEXT_CHARS = int(os.environ.get("CODING_AGENT_MAX_CONTEXT_CHARS", "20000"))
-        cls.MAX_TOOL_OUTPUT_CHARS = int(
-            os.environ.get("CODING_AGENT_MAX_TOOL_OUTPUT_CHARS", "20000")
-        )
         cls.DEFAULT_LANGUAGE = os.environ.get("CODING_AGENT_DEFAULT_LANGUAGE", "zh").strip().lower()
-        cls.CONTEXT_WINDOW_TOKENS = int(
-            os.environ.get("CODING_AGENT_CONTEXT_WINDOW_TOKENS", "200000")
-        )
         cls.WEB_SEARCH_BACKEND = (
             os.environ.get("CODING_AGENT_WEB_SEARCH_BACKEND", "").strip().lower()
         )
@@ -303,33 +181,6 @@ class Settings:
             os.environ.get("CODING_AGENT_WEB_EXTRACT_BACKEND", "").strip().lower()
         )
         cls.WEB_BACKEND = os.environ.get("CODING_AGENT_WEB_BACKEND", "").strip().lower()
-        cls.WEB_REQUEST_TIMEOUT_SECONDS = float(
-            os.environ.get("CODING_AGENT_WEB_REQUEST_TIMEOUT_SECONDS", "20")
-        )
-        cls.WEB_SEARCH_LIMIT_MAX = int(os.environ.get("CODING_AGENT_WEB_SEARCH_LIMIT_MAX", "20"))
-        cls.WEB_EXTRACT_URL_LIMIT_MAX = int(
-            os.environ.get("CODING_AGENT_WEB_EXTRACT_URL_LIMIT_MAX", "5")
-        )
-        cls.WEB_EXTRACT_CHAR_LIMIT = int(
-            os.environ.get("CODING_AGENT_WEB_EXTRACT_CHAR_LIMIT", "15000")
-        )
-
-        # 系统提示词三层构建配置（动态变量 / Agent 预设 / Workspace 项目指令）。
-        cls.AGENT_PERSONA_MAX_BYTES = int(
-            os.environ.get("CODING_AGENT_AGENT_PERSONA_MAX_BYTES", "100000")
-        )
-        cls.AGENT_PERSONA_MAX_TOKENS = int(
-            os.environ.get("CODING_AGENT_AGENT_PERSONA_MAX_TOKENS", "2000")
-        )
-        cls.RUNTIME_CONTEXT_MAX_BYTES = int(
-            os.environ.get("CODING_AGENT_RUNTIME_CONTEXT_MAX_BYTES", "4000")
-        )
-        cls.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS = int(
-            os.environ.get("CODING_AGENT_WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS", "1200")
-        )
-        cls.GLOBAL_INSTRUCTION_MAX_FILE_TOKENS = int(
-            os.environ.get("CODING_AGENT_GLOBAL_INSTRUCTION_MAX_FILE_TOKENS", "1200")
-        )
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
         cls.LANGFUSE_ENABLED = cls._env_bool("CODING_AGENT_LANGFUSE_ENABLED", False)
@@ -339,8 +190,6 @@ class Settings:
             "CODING_AGENT_LANGFUSE_BASE_URL",
             "http://124.220.55.187",
         )
-
-        cls._validate()
 
     @classmethod
     def override(cls, **kwargs: Any) -> None:

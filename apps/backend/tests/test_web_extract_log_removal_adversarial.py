@@ -40,6 +40,7 @@ import re
 
 import pytest
 
+from app.config.constant import Constant
 from app.config.settings import Settings
 from app.core.tools.tool_handler.web.web_provider import (
     WebExtractItem,
@@ -141,7 +142,7 @@ def test_over_limit_returns_error_not_silent_success_and_no_removed_event(
     且不得再产生 web_extract_url_limit_exceeded（潜在缺陷：删日志时误删了 return / 分支体）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    urls = [f"https://e.com/{i}" for i in range(Settings.WEB_EXTRACT_URL_LIMIT_MAX + 1)]
+    urls = [f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)]
     provider = FakeProvider()
     tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
 
@@ -149,7 +150,7 @@ def test_over_limit_returns_error_not_silent_success_and_no_removed_event(
 
     assert obs.status == "error"
     assert obs.retryable is True
-    assert obs.error is not None and str(Settings.WEB_EXTRACT_URL_LIMIT_MAX) in obs.error
+    assert obs.error is not None and str(Constant.Web.EXTRACT_URL_LIMIT_MAX) in obs.error
     # 超限在被拦时绝不能调用 provider（无网络副作用）。
     assert provider.extract_calls == []
     # 不得静默成功：content 必须是 None（错误观察）。
@@ -162,7 +163,7 @@ def test_exactly_at_limit_is_allowed_not_rejected() -> None:
     """test_purpose: 边界值 —— URL 数**恰好等于**上限必须放行（潜在缺陷：off-by-one 把 `<=` 写成 `<`，
     与「删除超限日志」相伴的分支改写风险）。"""
 
-    urls = [f"https://e.com/{i}" for i in range(Settings.WEB_EXTRACT_URL_LIMIT_MAX)]
+    urls = [f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX)]
     provider = FakeProvider()
     tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
 
@@ -418,7 +419,7 @@ def test_removed_events_never_emitted_across_all_paths(
     # 1) 超限
     WebExtractTool(
         _registry_with(FakeProvider()), resolver=_public_resolver
-    ).execute(urls=[f"https://e.com/{i}" for i in range(Settings.WEB_EXTRACT_URL_LIMIT_MAX + 1)])
+    ).execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)])
 
     # 2) 安全拦截（IP 字面量内网 / 敏感 query / 非法 scheme）
     safe_tool = WebExtractTool(_registry_with(FakeProvider()), resolver=_public_resolver)
@@ -843,7 +844,7 @@ def test_state_hint_present_on_all_error_paths_unchanged() -> None:
     tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
 
     # 超限
-    over = tool.execute(urls=[f"https://e.com/{i}" for i in range(Settings.WEB_EXTRACT_URL_LIMIT_MAX + 1)])
+    over = tool.execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)])
     # 安全拦截
     blocked = tool.execute(urls=["ftp://example.com/"])
     # 未配置
@@ -932,7 +933,7 @@ def test_no_removed_event_names_left_in_any_log_record_attribute(
     )
     tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
     tool.execute(urls=["https://e.com/1"])
-    tool.execute(urls=[f"https://e.com/{i}" for i in range(Settings.WEB_EXTRACT_URL_LIMIT_MAX + 1)])
+    tool.execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)])
 
     for record in caplog.records:
         blob = f"{record.msg!r}|{getattr(record, 'data', None)!r}|{getattr(record, 'display_message', '')!r}"

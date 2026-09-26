@@ -14,8 +14,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.model_settings import ModelSettings
 from app.core.llm_provider.capability.model_capability import (
@@ -85,7 +85,8 @@ def build_chat_model(
     参数透传分层：
     - OpenAI 标准参数（``temperature`` / ``top_p`` / ``max_tokens`` / ``max_retries`` /
       ``request_timeout`` / ``reasoning_effort`` / ``seed``）作为 ``ChatOpenAI`` 顶层命名参数
-      直接传入；``max_retries`` / ``request_timeout`` 取全局 ``Settings``（所有模型一致）。
+      直接传入；``max_retries`` / ``request_timeout`` / ``seed`` 取 ``Constant.LLM``
+      （所有模型一致，无按模型覆盖路径）。
     - 厂商私有参数（如 vLLM ``use_beam_search``）经 ``ProviderCapability.extra_body`` 透传；
     - 厂商不兼容参数经 ``ProviderCapability.disabled_params`` 软屏蔽（如老模型不支持
       ``parallel_tool_calls`` / ``strict``）；
@@ -156,10 +157,10 @@ def build_chat_model(
     # 进程启动期全局写入环境变量。
     resolved_base_url = base_url or ""
     http_client = build_proxy_client(
-        base_url=resolved_base_url, timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS
+        base_url=resolved_base_url, timeout=Constant.LLM.REQUEST_TIMEOUT_SECONDS
     )
     http_async_client = build_proxy_async_client(
-        base_url=resolved_base_url, timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS
+        base_url=resolved_base_url, timeout=Constant.LLM.REQUEST_TIMEOUT_SECONDS
     )
 
     chat_model_class = (
@@ -179,11 +180,11 @@ def build_chat_model(
         http_client=http_client,
         http_async_client=http_async_client,
         stream_usage=True,
-        max_retries=Settings.LLM_MAX_RETRIES,
-        timeout=Settings.LLM_REQUEST_TIMEOUT_SECONDS,
+        max_retries=Constant.LLM.MAX_RETRIES,
+        timeout=Constant.LLM.REQUEST_TIMEOUT_SECONDS,
         extra_body=provider_capability.extra_body or None,
         disabled_params=provider_capability.disabled_params or None,
-        seed=Settings.LLM_SEED,
+        seed=Constant.LLM.SEED,
         temperature=model_settings.temperature,
         top_p=model_settings.top_p if model_settings.top_p is not None else None,
         # max_tokens=model_settings.max_tokens if model_settings.max_tokens is not None else None,

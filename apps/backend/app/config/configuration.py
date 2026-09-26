@@ -70,45 +70,38 @@ def get_agent_registry() -> AgentProfileRegistry:
 
 
 def build_agent_registry() -> AgentProfileRegistry:
-    """构建并播种默认的内置 agent profile 目录。
+    """构建只包含代码内置 profile 的进程级 Registry。
 
     内置 agent 构造器在本地延迟导入（``app.core.agents.define_agents`` 在模块级又会
     回引 ``app.config.configuration``，顶层导入会形成循环；只有本函数真正消费这些
     构造器，故在此处导入即可打破循环且不改变任何职责边界）。
 
 
-    集中注册所有内置 agent；新增 agent 仅需在此多 ``register`` 一行。
-    本函数是「启动时注册所有 agent」的单一事实来源，供 ``api`` 层依赖注入与
-    ``service`` 层（如 agent_id 合法性校验）复用，避免知识重复与跨层依赖。
-
-    参数:
-        无。
+    通用子 Agent 和主 Agent 由代码构造并注册到 `system` 作用域；系统与 workspace JSON
+    由生命周期启动阶段一次性读取到同一个 Registry。
 
     返回:
         已播种完成的 ``AgentProfileRegistry``。
 
     异常:
-        无。
+        AgentProfileConfigError: 代码内置 profile 存在重复 ID。
 
     副作用:
         构造并填充一个全新的 registry 实例（调用方持有，不写入进程级单例）。
+
+    本函数是「启动时注册全局可用 Agent」的单一事实来源，供 ``api`` 层依赖注入与
+    ``service`` 层（如 agent_id 合法性校验）复用，避免知识重复与跨层依赖。
+
     """
 
     from app.core.agents.define_agents import (
-        coder_agent,
-        explorer_agent,
+        general_child_agent,
         main_agent,
-        reviewer_agent,
-        test_agent,
     )
 
     registry = AgentProfileRegistry()
-    registry.register(explorer_agent())
-    registry.register(reviewer_agent())
-    registry.register(test_agent())
-    registry.register(coder_agent())
-    registry.register(main_agent())
-    # 新增内置 agent 的扩展点：在此追加一行 registry.register(xxx_agent())。
+    for profile in (general_child_agent(), main_agent()):
+        registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, profile)
     return registry
 
 

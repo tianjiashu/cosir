@@ -3,6 +3,7 @@
 import json
 from typing import ClassVar
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.tools.display.web_display import build_web_search_display_data
@@ -31,14 +32,15 @@ class WebSearchTool(HandlerBase):
 
     name: str = TOOL_WEB_SEARCH
     description: str = (
-        "Search the web for information. Returns up to 5 results by default with "
+        "Search the web for information. Returns up to "
+        f"{Constant.Web.SEARCH_LIMIT_DEFAULT} results by default with "
         "titles, URLs, and descriptions. The query is passed through to the configured "
         "backend, so operators such as site:domain, filetype:pdf, intitle:word, -term, "
         'and "exact phrase" may work when the backend supports them.'
     )
     permission: ClassVar[str] = "network"
     args_model: type[WebSearchArgs] = WebSearchArgs
-    timeout_seconds: ClassVar[float] = Settings.WEB_REQUEST_TIMEOUT_SECONDS + 5
+    timeout_seconds: ClassVar[float] = Constant.Web.REQUEST_TIMEOUT_SECONDS + 5
     risk_level: ClassVar[str] = "medium"
     group = TOOL_GROUP_WEB
 
@@ -64,7 +66,7 @@ class WebSearchTool(HandlerBase):
     def execute(
         self,
         query: str,
-        limit: int = 5,
+        limit: int = Constant.Web.SEARCH_LIMIT_DEFAULT,
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """执行网页搜索并返回仅含元数据的结构化观察结果。
@@ -89,7 +91,7 @@ class WebSearchTool(HandlerBase):
         """
 
         del execution_context
-        effective_limit = min(limit, Settings.WEB_SEARCH_LIMIT_MAX)
+        effective_limit = min(limit, Constant.Web.SEARCH_LIMIT_MAX)
         backend = Settings.WEB_SEARCH_BACKEND or Settings.WEB_BACKEND
         provider = None
         try:

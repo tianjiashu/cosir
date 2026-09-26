@@ -10,22 +10,23 @@
 所有模型能力必须且只能来自 ``model_capabilities.json``；JSON 中不存在的模型名经
 ``get_capability`` 返回保守默认副本（不抛错，由调用方决定如何提示用户补全 JSON）。
 
-与 ``model_catalog.ModelCatalog`` 的关系：本包是模型「静态能力」（含上下文窗口）
-的**唯一事实源**；``ModelCatalog`` 是窗口的**解析策略**，其首选一步即经本包的
-``ModelCapability.context_window`` 读 JSON，未收录时才退到 Provider 目录与兜底值。
-即二者是「事实」与「策略」的上下游关系，不是两条独立链路——ModelCatalog 不再自带
-任何模型名 → 窗口的硬编码字典。
+窗口数值的消费方：``CapabilityService.get_model_context_window`` 直接返回本包的
+``ModelCapability.context_window``（未收录模型由 :meth:`ModelCapability.get_capability`
+的保守默认兜底）。不存在软上限、也不存在与「模型最大窗口」取 min 的第二层解析策略
+（历史设计中的 ``ModelCatalog`` / ``context_window_resolver`` 与
+``Settings.CONTEXT_WINDOW_TOKENS`` 软上限均已移除）。
 
-不负责：全局软上限（归 Settings）、实际窗口的 min 计算（归 context_window_resolver）、
-模型配置的加载（归 ModelSettings）。
+不负责：模型配置的加载（归 ModelSettings）、窗口数值的持久化与展示（归 task 事实与
+Transport snapshot）。
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from app.utils.json_utils import JsonFileError, read_json_object
 
 #: 模型能力 JSON 数据源（与注册表同目录，只读，不修改该文件）。
 _MODEL_JSON_PATH: Path = Path(__file__).resolve().parent / "model_capabilities.json"
@@ -42,20 +43,16 @@ def load_model_json() -> dict[str, dict[str, Any]]:
         （此时所有模型均回退保守默认，不阻断启动）。
 
     异常:
-        无（文件缺失 / JSON 非法均吞掉并返回空字典）。
+        无（文件缺失、不可读、编码非法、JSON 非法或顶层不是对象均吞掉并返回空字典）。
 
     副作用:
         无（纯读取，不写日志以避免 leaf 层反向依赖 ``config.logging``）。
     """
 
     try:
-        with _MODEL_JSON_PATH.open(encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
+        return read_json_object(_MODEL_JSON_PATH)
+    except JsonFileError:
         return {}
-    if not isinstance(data, dict):
-        return {}
-    return data
 
 
 #: JSON 数据源解析结果（模块级单次加载，避免每次查询重复读盘）。
@@ -82,7 +79,7 @@ class ImageLimitCapability:
 
     承载厂商文档公布的真实上限，作为产品侧安全余量（如 ``vision_content_blocks``
     内部的 20MiB / 48MiB 硬限）之外的权威事实源；二者职责分离：本对象只描述
-    “模型能接受什么”，不描述“我们主动收紧到什么”。
+    "模型能接受什么"，不描述"我们主动收紧到什么"。
 
     字段:
         supported_formats: 厂商接受的图像扩展名（小写，不含点），未知时为空列表。

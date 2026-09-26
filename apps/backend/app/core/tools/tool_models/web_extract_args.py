@@ -1,15 +1,14 @@
 """web_extract 工具的参数模型。
 
-本模块在导入期读取 ``Settings.WEB_EXTRACT_URL_LIMIT_MAX`` 生成 schema 上限，与
-``HandlerBase.timeout_seconds`` 一样属进程启动期静态配置：环境变量变更后需重启
-后端进程才会反映到模型可见 schema（运行时仍以 ``Settings`` 为准做二次校验）。
+``urls`` 的模型可见长度上限取自 ``Constant.Web.EXTRACT_URL_LIMIT_MAX``（导入期求值，属固定
+契约，不经环境变量覆盖）；handler 侧用同一常量做运行期二次校验，两处口径同源。
 """
 
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.config.settings import Settings
+from app.config.constant import Constant
 
 
 class WebExtractArgs(BaseModel):
@@ -19,10 +18,10 @@ class WebExtractArgs(BaseModel):
 
     urls: list[str] = Field(
         min_length=1,
-        max_length=Settings.WEB_EXTRACT_URL_LIMIT_MAX,
+        max_length=Constant.Web.EXTRACT_URL_LIMIT_MAX,
         description=(
             f"List of public HTTP(S) URLs to extract content from "
-            f"(max {Settings.WEB_EXTRACT_URL_LIMIT_MAX} URLs per call). "
+            f"(max {Constant.Web.EXTRACT_URL_LIMIT_MAX} URLs per call). "
             "Duplicates are collapsed before any network request."
         ),
     )

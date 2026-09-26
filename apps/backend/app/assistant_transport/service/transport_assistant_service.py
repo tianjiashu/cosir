@@ -32,6 +32,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.config.configuration import get_agent_registry, get_tool_registry
 from app.config.constant import Constant
 from app.config.logging.logger import log
+from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.models import (
     ConversationRunAttachmentInput,
     ConversationRunCommand,
@@ -73,7 +74,10 @@ def _parse_ban_tools(command: BanToolsCommand | None) -> list[str]:
     if command is None:
         return []
     names = command.payload.ban_tools
-    profile = get_agent_registry().resolve("main_agent")
+    profile = get_agent_registry().resolve(
+        AgentProfileRegistry.SYSTEM_WORKSPACE,
+        "main_agent",
+    )
     if profile is None:
         raise RuntimeError("main agent profile is unavailable")
     registered = {definition.name for definition in get_tool_registry().get_all_definitions()}

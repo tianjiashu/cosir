@@ -26,6 +26,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -514,7 +515,10 @@ def test_boot_markers_noop_when_env_is_empty_string(
     assert sorted(p.name for p in tmp_path.iterdir()) == before
 
 
-def test_mark_boot_ready_creates_parent_dirs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_mark_boot_ready_creates_parent_dirs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     """启动状态文件父目录不存在时，写入必须自动建父目录（不能因缺目录静默失败）。"""
 
     boot_file = tmp_path / "nested" / "runtime" / "backend.bootstate.json"
@@ -719,6 +723,17 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     monkeypatch.setattr(lifespan_module.Settings, "load", staticmethod(record("settings_load")))
     monkeypatch.setattr(lifespan_module, "initialize_service_dependencies", record("init_deps"))
     monkeypatch.setattr(lifespan_module, "_ensure_system_cosir_dir", record("ensure_cosir"))
+    monkeypatch.setattr(
+        lifespan_module,
+        "initialize_system_agent_defaults",
+        record("initialize_system_agent_defaults"),
+    )
+    registry_stub = SimpleNamespace(load_agent_profiles=record("load_agent_profiles"))
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_workspace_service",
+        record("get_workspace_service", SimpleNamespace(list_workspaces=lambda: [])),
+    )
 
     class _RunService:
         def recover_orphaned_runs(self) -> list[Any]:
@@ -744,20 +759,34 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         async def close(self) -> None:
             recorder.calls.append("executor_close")
 
-    monkeypatch.setattr(lifespan_module, "get_conversation_run_service", record("get_run_service", _RunService()))
     monkeypatch.setattr(
-        lifespan_module, "get_delegation_service", record("get_delegation_service", _DelegationService())
+        lifespan_module,
+        "get_conversation_run_service",
+        record("get_run_service", _RunService()),
+    )
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_delegation_service",
+        record("get_delegation_service", _DelegationService()),
     )
     monkeypatch.setattr(
         lifespan_module,
         "get_terminal_session_service",
         record("get_terminal_service", _TerminalService()),
     )
-    monkeypatch.setattr(lifespan_module, "get_conversation_run_executor", record("get_executor", _Executor()))
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_conversation_run_executor",
+        record("get_executor", _Executor()),
+    )
     monkeypatch.setattr(lifespan_module, "flush_langfuse", record("flush_langfuse"))
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", record("close_deps"))
     monkeypatch.setattr(lifespan_module, "ToolSystem", _ToolSystemStub(recorder))
-    monkeypatch.setattr(lifespan_module, "build_agent_registry", record("build_agent_registry", "registry"))
+    monkeypatch.setattr(
+        lifespan_module,
+        "build_agent_registry",
+        record("build_agent_registry", registry_stub),
+    )
     monkeypatch.setattr(lifespan_module, "set_tool_system", record("set_tool_system"))
     monkeypatch.setattr(lifespan_module, "set_agent_registry", record("set_agent_registry"))
     monkeypatch.setattr(lifespan_module, "set_runtime", record("set_runtime"))
@@ -767,9 +796,9 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     )
     monkeypatch.setattr(lifespan_module.HookInterceptor, "safe_fire", _safe_fire_stub(recorder))
 
-    hook_registry_module = importlib.import_module("app.hook.hook_registry")
+    hook_package = importlib.import_module("app.core.hook")
     monkeypatch.setattr(
-        hook_registry_module, "initialize_hook_registry", record("init_hook_registry")
+        hook_package, "initialize_hook_registry", record("init_hook_registry")
     )
 
     return recorder
@@ -834,6 +863,9 @@ def test_lifespan_happy_path_marks_ready_then_stopped(
     calls = stubbed_lifespan.calls
     assert calls.index("install_logging") < calls.index("settings_load")
     assert calls.index("settings_load") < calls.index("init_deps")
+    assert calls.index("initialize_system_agent_defaults") < calls.index("build_agent_registry")
+    assert calls.index("build_agent_registry") < calls.index("load_agent_profiles")
+    assert calls.index("load_agent_profiles") < calls.index("set_agent_registry")
     assert "init_hook_registry" in calls
     assert calls.count("install_logging") == 2, "启动期应重建一次日志管线"
 
@@ -927,7 +959,8 @@ def test_lifespan_startup_failure_before_yield_does_not_stop(
         _run_lifespan_once()
 
     assert "executor_close" not in stubbed_lifespan.calls
-    assert "close_deps" not in stubbed_lifespan.calls
+    assert "close_deps" in stubbed_lifespan.calls
+    assert not any(call.startswith("safe_fire:") for call in stubbed_lifespan.calls)
 
 
 def test_lifespan_startup_failure_does_not_overwrite_ready(

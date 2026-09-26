@@ -1,18 +1,23 @@
 """Rebuild-boundary tests for the canonical Transport snapshot assembler."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
+from app.assistant_transport.service.conversation_task_state_service import (
+    ConversationTaskStateService,
+)
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
+from app.core.agents.agent_profile import AgentProfile, AgentProfileType
+from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.delegation_record import DelegationRecord
 from app.models.task_record import TaskRecord
 
 
@@ -185,7 +190,7 @@ def test_rebuild_closes_streaming_assistant_draft_when_run_is_cancelled() -> Non
     ]
 
 
-def test_rebuild_restores_child_run_locator_from_delegation_record(
+def test_rebuild_restores_child_run_locator_and_workspace_role_from_display_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _ToolRegistry:
@@ -195,10 +200,6 @@ def test_rebuild_restores_child_run_locator_from_delegation_record(
     monkeypatch.setattr(
         "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
         lambda: _ToolRegistry(),
-    )
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_rebuilder.get_agent_registry",
-        lambda: (_ for _ in ()).throw(RuntimeError("registry unavailable")),
     )
     row = ConversationTaskContextRecord(
         id=1,
@@ -221,28 +222,83 @@ def test_rebuild_restores_child_run_locator_from_delegation_record(
         include_in_context=False,
         sequence=1,
     )
-    delegation = DelegationRecord(
-        id=1,
+    result_row = ConversationTaskContextRecord(
+        id=2,
         task_id=7,
-        parent_run_id=1,
-        child_run_id=220,
-        parent_agent_id="parent",
-        child_agent_id="reviewer",
-        status="running",
-        prompt="review",
-        summary="",
-        error="",
-        effective_tools=(),
-        child_task_id=22,
+        run_id=1,
+        message=ToolMessage(content="started", tool_call_id="delegate-1"),
+        include_in_context=False,
+        sequence=2,
+        transport_metadata={
+            "status": "completed",
+            "display_data": {
+                "kind": "delegation-result",
+                "child_task_id": 22,
+                "child_run_id": 220,
+                "child_agent_id": "reviewer",
+            },
+        },
     )
 
-    tool_part = ConversationTaskStateRebuilder.build_pair_tool_part([row], [delegation])[
-        "delegate-1"
-    ]
+    tool_part = ConversationTaskStateRebuilder.build_pair_tool_part(
+        [row, result_row],
+        child_agent_roles={(22, "reviewer"): "workspace-reviewer"},
+    )["delegate-1"]
 
     assert tool_part["child_task_id"] == 22
     assert tool_part["child_run_id"] == 220
     assert tool_part["display_data"]["child_run_id"] == 220
+    assert tool_part["agent_role"] == "workspace-reviewer"
+    assert tool_part["display_data"]["role"] == "workspace-reviewer"
+
+
+def test_legacy_role_lookup_uses_child_task_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """旧委派记录的 role 回填从 child Task 所属 workspace 目录解析。"""
+
+    configured_profile = AgentProfile(
+        agent_id="workspace-reviewer",
+        role="workspace role",
+        allowed_tools=["read_file"],
+        agent_type=AgentProfileType.CHILD,
+        system_prompt="Review the requested code.",
+    )
+    registry = AgentProfileRegistry()
+    registry.register("workspace-eight", configured_profile)
+
+    class _TaskSource:
+        def get(self, task_id: int) -> SimpleNamespace:
+            assert task_id == 22
+            return SimpleNamespace(workspace_id=8)
+
+    class _WorkspaceService:
+        def get_workspace(self, workspace_id: int) -> SimpleNamespace:
+            assert workspace_id == 8
+            return SimpleNamespace(id=8, root_path="workspace-eight")
+
+    state_service = object.__new__(ConversationTaskStateService)
+    state_service._task_source = _TaskSource()
+    monkeypatch.setattr(
+        "app.service.depends.get_workspace_service",
+        lambda: _WorkspaceService(),
+    )
+    monkeypatch.setattr("app.config.configuration.get_agent_registry", lambda: registry)
+    rows = [
+        SimpleNamespace(
+            transport_metadata={
+                "display_data": {
+                    "kind": "delegation-result",
+                    "child_task_id": 22,
+                    "child_agent_id": "workspace-reviewer",
+                }
+            }
+        )
+    ]
+
+    roles = state_service._resolve_legacy_child_agent_roles(rows)
+
+    assert roles == {(22, "workspace-reviewer"): "workspace role"}
 
 
 def test_rebuild_restores_ordinary_file_from_run_extra() -> None:

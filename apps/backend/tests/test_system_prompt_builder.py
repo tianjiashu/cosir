@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.context import system_prompt_builder as spb
 from app.utils import paths
@@ -36,6 +37,7 @@ def _profile() -> AgentProfile:
         role="main",
         allowed_tools=[],
         agent_type=AgentProfileType.MAIN,
+        system_prompt="Test main system prompt.",
         workflow=None,  # type: ignore[arg-type]
     )
 
@@ -72,7 +74,7 @@ def test_global_layer_truncated_by_budget(redirect_system_cosir: Path):
     out = spb.SystemPromptBuilder._build_global_layer()
     assert out.startswith("<global_layer>")
     body = out[len("<global_layer>\n"): -len("\n</global_layer>")]
-    assert len(body.encode("utf-8")) <= spb._GLOBAL_INSTRUCTION_MAX_FILE_BYTES
+    assert len(body.encode("utf-8")) <= Constant.SystemPrompt.GLOBAL_INSTRUCTION_MAX_FILE_BYTES
 
 
 def test_build_includes_global_layer_in_order(redirect_system_cosir: Path, tmp_path: Path):

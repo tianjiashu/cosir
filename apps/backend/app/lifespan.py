@@ -17,7 +17,6 @@
 """
 
 import asyncio
-import json
 import traceback
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -40,6 +39,9 @@ from app.config.constant import Constant
 from app.config.logging.configuration import install_logging_for_current_process, shutdown_logging
 from app.config.logging.logger import log
 from app.config.settings import Settings
+from app.core.agents.agent_profile import AgentProfileConfigError
+from app.core.agents.agent_profile_config import initialize_system_agent_defaults
+from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
@@ -50,11 +52,17 @@ from app.service.depends import (
     get_conversation_run_executor,
     get_conversation_run_service,
     get_terminal_session_service,
+    get_workspace_service,
     initialize_service_dependencies,
     set_runtime,
 )
 from app.utils import paths
-from app.utils.cosir_paths import system_cosir_dir
+from app.utils.cosir_paths import (
+    system_agent_config_dir,
+    system_cosir_dir,
+    workspace_agent_config_dir,
+)
+from app.utils.json_utils import JsonFileError, read_json_object
 
 
 def get_delegation_service() -> None:
@@ -153,11 +161,11 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     install_logging_for_current_process(log_dir=paths.LOG_DIR)
     Settings.load()
     initialize_service_dependencies()
-    # Settings.load 可能解析出轮转参数，因此按最终配置重建一次管线。
+    # 依赖初始化完成后按固定轮转参数（``Constant.Logging``）重建一次管线。
     install_logging_for_current_process(
         log_dir=paths.LOG_DIR,
-        max_bytes=Settings.LOG_MAX_BYTES,
-        backup_count=Settings.LOG_BACKUP_COUNT,
+        max_bytes=Constant.Logging.MAX_BYTES,
+        backup_count=Constant.Logging.BACKUP_COUNT,
     )
     _ensure_system_cosir_dir()
     recovered_runs = get_conversation_run_service().recover_orphaned_runs()
@@ -196,8 +204,32 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
 
     initialize_hook_registry()
 
-    # Agent profile 只依赖规范工具名清单，先初始化它即可打破 Agent/ToolRegistry 循环依赖。
-    set_agent_registry(build_agent_registry())
+    # 一次性把系统和全部已登记 workspace 的 Agent JSON 装入进程内 Registry。
+    initialize_system_agent_defaults()
+    agent_registry = build_agent_registry()
+    agent_registry.load_agent_profiles(
+        AgentProfileRegistry.SYSTEM_WORKSPACE,
+        system_agent_config_dir(),
+    )
+    for workspace in get_workspace_service().list_workspaces():
+        try:
+            agent_registry.load_agent_profiles(
+                workspace.root_path,
+                workspace_agent_config_dir(workspace.root_path),
+            )
+        except AgentProfileConfigError as exc:
+            log.warning(
+                "workspace_agent_profile_config_invalid",
+                extra={
+                    "msg": "workspace 子 Agent 配置无效，该 workspace 将禁用委派",
+                    "data": {
+                        "workspace_id": workspace.id,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:500],
+                    },
+                },
+            )
+    set_agent_registry(agent_registry)
     tool_system = ToolSystem.build_tool_system()
     set_tool_system(tool_system)
     set_runtime(
@@ -271,11 +303,11 @@ def _mark_boot_failed(exc: Exception) -> None:
     if boot_state_file is None:
         return
     try:
-        current = json.loads(boot_state_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        current = read_json_object(boot_state_file)
+    except JsonFileError:
+        # 文件缺失/损坏/顶层非对象一律按「无启动状态」处理：失败上报自身崩溃会掩盖原始异常。
         current = {}
-    # ``json.loads`` 只保证是合法 JSON，不保证顶层是对象（可能是数组或标量）。
-    if not isinstance(current, dict) or current.get("phase") != Constant.Boot.BOOTING:
+    if current.get("phase") != Constant.Boot.BOOTING:
         return
     write_bootstate(
         boot_state_file,

@@ -22,7 +22,7 @@ from app.assistant_transport.state.conversation_state_part import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
-from app.config.configuration import get_agent_registry, get_tool_registry
+from app.config.configuration import get_tool_registry
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -75,6 +75,7 @@ class ConversationTaskStateRebuilder:
     def build_pair_tool_part(
         rows: list[ConversationTaskContextRecord],
         delegations: Sequence[Any] = (),
+        child_agent_roles: Mapping[tuple[int, str], str] | None = None,
     ) -> dict[str, ConversationStateToolCallPart]:
         """把单个 Run 的 context 行配对为 ``toolCallId → tool-call part`` 映射。
 
@@ -86,6 +87,8 @@ class ConversationTaskStateRebuilder:
         参数:
             rows: 单个 Run 的 context 行，调用方保证已按 ``sequence`` 排序。
             delegations: 为保持调用方接口稳定而保留；委派展示数据不从该参数读取。
+            child_agent_roles: 由调用方按 child task 的 workspace 解析出的旧记录 role，键为
+                ``(child_task_id, child_agent_id)``；已持久化 role 优先于此回填值。
 
         返回:
             以工具调用 id 为键的 tool-call part 字典；``status`` 恒为字符串，未收到结果的
@@ -144,15 +147,24 @@ class ConversationTaskStateRebuilder:
                         tool_part["child_run_id"] = child_run_id
                     child_agent_id = display_data.get("child_agent_id")
                     if isinstance(child_agent_id, str) and child_agent_id:
-                        try:
-                            profile = get_agent_registry().resolve(child_agent_id)
-                        except RuntimeError:
-                            profile = None
-                        if profile is not None and profile.role.strip():
-                            tool_part["agent_role"] = profile.role
+                        persisted_role = display_data.get("role")
+                        if isinstance(persisted_role, str) and persisted_role.strip():
+                            tool_part["agent_role"] = persisted_role
+                        else:
+                            child_task_id = display_data.get("child_task_id")
+                            if (
+                                isinstance(child_task_id, int)
+                                and not isinstance(child_task_id, bool)
+                                and child_agent_roles is not None
+                            ):
+                                persisted_role = child_agent_roles.get(
+                                    (child_task_id, child_agent_id)
+                                )
+                        if isinstance(persisted_role, str) and persisted_role.strip():
                             display_data = dict(display_data)
-                            display_data["role"] = profile.role
+                            display_data["role"] = persisted_role
                             tool_part["display_data"] = display_data
+                            tool_part["agent_role"] = persisted_role
                 if tool_part["status"] == "failed":
                     tool_part["isError"] = True
                     tool_part["error"] = row.transport_metadata.get("error")
@@ -214,7 +226,7 @@ class ConversationTaskStateRebuilder:
         task: TaskRecord,
         runs: Sequence[ConversationRunRecord],
         context_rows: Sequence[ConversationTaskContextRecord],
-        delegations: Sequence[Any] = (),
+        child_agent_roles: Mapping[tuple[int, str], str] | None = None,
     ) -> ConversationStateSnapshot:
         """从三类规范记录装配出通过校验的 Task 级 Transport 快照。
 
@@ -223,6 +235,7 @@ class ConversationTaskStateRebuilder:
             runs: 属于 ``task`` 的全部 Run 记录。
             context_rows: 该 Task 已持久化的 LangChain 消息与 Transport 元数据。
             delegations: 为保持调用方接口稳定而保留；委派展示数据来自 context metadata。
+            child_agent_roles: 调用方按 child task workspace 解析出的旧 role 回填映射。
 
         返回:
             新的 ``ConversationStateSnapshot``。Run 的排序为 ``created_at`` 再按 id；同一 Run 的
@@ -257,6 +270,7 @@ class ConversationTaskStateRebuilder:
 
             tool_parts_dict = ConversationTaskStateRebuilder.build_pair_tool_part(
                 rows,
+                child_agent_roles=child_agent_roles,
             )
 
             snapshot_messages: list[ConversationStateMessage] = []

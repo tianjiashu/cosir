@@ -27,6 +27,24 @@ const providerCapabilityDestination = "app/core/llm_provider/capability";
 const providerCapabilityDataFiles = ["llm_provider.json", "model_capabilities.json"].map(
   (fileName) => path.join(providerCapabilityRoot, fileName),
 );
+const defaultAgentConfigRoot = path.join(backendRoot, "app", "core", "agents", "defaults");
+const systemPromptRoot = path.join(backendRoot, "app", "core", "context", "system_prompt");
+const backendDataFiles = [
+  ...fs
+    .readdirSync(defaultAgentConfigRoot)
+    .filter((fileName) => fileName.endsWith(".json"))
+    .map((fileName) => ({
+      source: path.join(defaultAgentConfigRoot, fileName),
+      destination: "app/core/agents/defaults",
+    })),
+  ...fs
+    .readdirSync(systemPromptRoot)
+    .filter((fileName) => fileName.endsWith(".md"))
+    .map((fileName) => ({
+      source: path.join(systemPromptRoot, fileName),
+      destination: "app/core/context/system_prompt",
+    })),
+];
 const pyinstallerDataSeparator = process.platform === "win32" ? ";" : ":";
 
 function assertWithin(parent, candidate, label) {
@@ -128,6 +146,10 @@ const pyinstallerArgs = [
   ...providerCapabilityDataFiles.flatMap((filePath) => [
     "--add-data",
     `${filePath}${pyinstallerDataSeparator}${providerCapabilityDestination}`,
+  ]),
+  ...backendDataFiles.flatMap(({ source, destination }) => [
+    "--add-data",
+    `${source}${pyinstallerDataSeparator}${destination}`,
   ]),
   entrypoint,
 ];

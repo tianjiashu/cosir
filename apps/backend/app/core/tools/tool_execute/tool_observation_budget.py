@@ -2,7 +2,7 @@
 
 工具观察有两条互不替代的消费通道，各自需要独立预算：
 
-- 模型通道 ``content``：受 ``ToolOutputBudget`` 约束（``Settings.MAX_TOOL_OUTPUT_CHARS``），
+- 模型通道 ``content``：受 ``ToolOutputBudget`` 约束（``Constant.Tools.MAX_OUTPUT_CHARS``），
   超限截断并在 workspace 内落盘完整 artifact；工具内容保持原文；
 客户端展示通道 ``display_data`` 仅用于前端渲染，不经过模型输出预算；其字段安全投影由
 各展示构造器负责，内容预算通过现有守卫处理后由 Transport 返回前端。execute_terminal
@@ -23,8 +23,8 @@ class ToolObservationBudget:
         """初始化模型输出预算。
 
         参数:
-            output_budget: 模型可见 ``content`` 的预算；缺省使用
-                ``ToolOutputBudget`` 自带默认值。
+            output_budget: 模型可见 ``content`` 的预算；缺省时构造 ``ToolOutputBudget``，
+                其上限同样取自 ``Constant.Tools.MAX_OUTPUT_CHARS``（单一事实源，无第二份默认值）。
 
         返回:
             无。

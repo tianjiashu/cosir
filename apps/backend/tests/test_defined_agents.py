@@ -1,67 +1,79 @@
-"""内置 Agent profile 与系统提示词契约测试。"""
+"""代码内 Agent 与 JSON 配置型子 Agent 的装配契约测试。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.agents.define_agents import (
-    coder_agent,
-    explorer_agent,
-    main_agent,
-    reviewer_agent,
-)
-from app.core.agents.define_agents import (
-    test_agent as build_test_agent,
-)
+from app.core.agents.define_agents import general_child_agent, main_agent
 from app.core.agents.model_settings import ModelSettings
 from app.core.context.system_prompt_builder import SystemPromptBuilder
+
+_DEFAULTS_DIR = Path(__file__).resolve().parents[1] / "app" / "core" / "agents" / "defaults"
+
+
+def _default_profiles():
+    """从随应用分发的默认 JSON 构造测试用系统作用域目录。"""
+
+    registry = AgentProfileRegistry()
+    registry.load_agent_profiles(AgentProfileRegistry.SYSTEM_WORKSPACE, _DEFAULTS_DIR)
+    return registry.list(AgentProfileRegistry.SYSTEM_WORKSPACE)
 
 
 @dataclass(frozen=True)
 class _RunRoute:
-    """Conversation Run 的最小替身：只承载 ``derive_for_run`` 读取的两个路由字段。"""
+    """Conversation Run 的最小替身：只承载 `derive_for_run` 读取的路由字段。"""
 
     provider_id: int | None = None
     model_name: str | None = None
 
 
-def test_builtin_child_profiles_have_prompt_files(monkeypatch) -> None:
-    """四个内置子 Agent 应绑定存在的专属系统提示词文件。"""
+def test_generic_child_profile_keeps_code_prompt(monkeypatch) -> None:
+    """唯一代码内 CHILD 在 profile 装配时载入仓库提示词正文。"""
 
-    profiles = [reviewer_agent(), explorer_agent(), build_test_agent(), coder_agent()]
-
-    assert all(profile.prompt_file_path is not None for profile in profiles)
-    assert all(isinstance(profile.prompt_file_path, Path) for profile in profiles)
-    assert all(
-        profile.prompt_file_path.is_file() for profile in profiles if profile.prompt_file_path
+    # 该 profile 的 allowed_tools 含 delegate_task，工具能力目录层会读取进程内 Agent 目录；
+    # 本用例只验证 Agent 预设层，故注入一个不含 CHILD 的空目录（该层因此不生成）。
+    monkeypatch.setattr(
+        "app.config.configuration.get_agent_registry",
+        AgentProfileRegistry,
     )
+    profile = general_child_agent()
+    prompt = SystemPromptBuilder.build(profile, str(Path(__file__).resolve()))
+
+    assert profile.agent_type is AgentProfileType.CHILD
+    assert profile.agent_id == "general-assistant"
+    assert profile.system_prompt.strip()
+    assert not hasattr(profile, "prompt_file_path")
+    assert "general-purpose child agent" in prompt
+
+
+def test_default_child_profiles_load_from_json() -> None:
+    """专用 CHILD profile 与其系统提示词均从随应用分发的 JSON 装载。"""
+
+    profiles = _default_profiles()
+
+    assert {profile.agent_id for profile in profiles} == {
+        "delegate_reviewer",
+        "code-explorer",
+        "unit-test-engineer",
+        "code-developer",
+    }
     assert all(profile.agent_type is AgentProfileType.CHILD for profile in profiles)
+    assert all(profile.system_prompt and profile.system_prompt.strip() for profile in profiles)
     coder = next(profile for profile in profiles if profile.agent_id == "code-developer")
-    assert {"apply_patch", "delete_file", "move_file"} <= set(coder.allowed_tools or [])
-
-    expected_prompt_markers = [
-        ("delegate_reviewer", "不得写入、删除或修改任何文件"),
-        ("code-explorer", "不要为了普通本地代码问题联网"),
-        ("unit-test-engineer", "不得修改生产代码"),
-        ("code-developer", "不做无关重构"),
-    ]
-    for profile, (agent_id, marker) in zip(profiles, expected_prompt_markers, strict=True):
-        prompt = SystemPromptBuilder.build(profile, str(Path(__file__).resolve()))
-        assert "<agent_layer>" in prompt
-        assert agent_id in prompt
-        assert marker in prompt
+    assert {"apply_patch", "delete_file", "move_file"} <= set(coder.allowed_tools)
 
 
-def test_agent_registry_bootstraps_without_tool_registry(monkeypatch) -> None:
-    """Agent registry 构建只依赖规范工具名，不要求 ToolRegistry 先注入。"""
+def test_system_registry_contains_generic_and_loaded_children(monkeypatch) -> None:
+    """进程目录包含代码内通用 CHILD 与显式载入的系统 JSON，不包含 workspace 配置。"""
 
     monkeypatch.setattr("app.config.configuration._TOOL_SYSTEM", None, raising=False)
-
     registry = build_agent_registry()
+    registry.load_agent_profiles(AgentProfileRegistry.SYSTEM_WORKSPACE, _DEFAULTS_DIR)
 
-    assert registry.child_agent_ids() == {
+    assert registry.child_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {
+        "general-assistant",
         "delegate_reviewer",
         "code-explorer",
         "unit-test-engineer",
@@ -69,68 +81,68 @@ def test_agent_registry_bootstraps_without_tool_registry(monkeypatch) -> None:
     }
 
 
-def test_main_profile_uses_own_prompt_without_child_catalog(monkeypatch) -> None:
-    """主 Agent 使用独立提示词，子 Agent 清单只由委派工具提供。"""
+def test_main_profile_uses_own_prompt_and_child_catalog_follows_allowed_tools(monkeypatch) -> None:
+    """主 Agent 使用独立提示词；子 Agent 目录只在 allowed_tools 含委派工具时进入工具层。"""
 
     profile = main_agent()
-    prompt = SystemPromptBuilder.build(profile, str(Path(__file__).resolve()))
+    workspace_root = str(Path(__file__).resolve())
 
-    assert profile.description is None
-    assert profile.prompt_file_path is not None
-    assert profile.prompt_file_path.name == "main_agent.md"
-    assert "主 Agent" in prompt
-    assert "用户明确限定修改范围时，范围是硬约束" in prompt
-    for child_id in (
-        "delegate_reviewer",
-        "code-explorer",
-        "unit-test-engineer",
-        "code-developer",
-    ):
-        assert child_id not in prompt
+    def _fail() -> None:
+        raise AssertionError("allowed_tools 不含委派工具时不应读取 Agent 目录")
 
-
-def test_registry_exposes_non_main_profiles_as_delegation_targets(monkeypatch) -> None:
-    """注册表应向主 Agent 投影子 Agent，而不是把主 Agent 当成子 Agent。"""
+    monkeypatch.setattr("app.config.configuration.get_agent_registry", _fail)
+    profile_without_delegation = replace(profile, allowed_tools=["read_file"])
+    prompt_without_tools = SystemPromptBuilder.build(profile_without_delegation, workspace_root)
+    assert "<tool_layer>" not in prompt_without_tools
+    assert "general-assistant" not in prompt_without_tools
 
     registry = AgentProfileRegistry()
-    children = [reviewer_agent(), explorer_agent(), build_test_agent(), coder_agent()]
+    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, general_child_agent())
+    monkeypatch.setattr(
+        "app.config.configuration.get_agent_registry",
+        lambda: registry,
+    )
+    prompt_with_delegation = SystemPromptBuilder.build(profile, workspace_root)
+
+    assert profile.description is None
+    assert profile.system_prompt.strip()
+    assert not hasattr(profile, "prompt_file_path")
+    assert "主 Agent" in prompt_with_delegation
+    assert "用户明确限定修改范围时，范围是硬约束" in prompt_with_delegation
+    assert "<tool_layer>" in prompt_with_delegation
+    assert "general-assistant" in prompt_with_delegation
+
+
+def test_registry_projects_only_child_profiles() -> None:
+    """registry 摘要和 ID 列表只暴露 CHILD，不包含 MAIN。"""
+
+    registry = AgentProfileRegistry()
+    generic = general_child_agent()
     main_profile = main_agent()
-    for profile in [*children, main_profile]:
-        registry.register(profile)
+    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, generic)
+    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, main_profile)
 
-    child_ids = {profile.agent_id for profile in children}
-    assert registry.child_agent_ids() == child_ids
-    summary = registry.child_agent_summary()
-    assert all(agent_id in summary for agent_id in child_ids)
-    # 「主 Agent 不得进入子 Agent 清单」这一不变量的断言必须与渲染格式无关：旧格式
-    # （``agent_id: X ==> role: Y ==> ...``）与新格式（``agent_id: X | description: ...``）
-    # 下都要能抓到越界投影，避免格式变更把断言变成永远成立的空转。
-    assert main_profile.agent_id not in summary
-    # 正向兜底：条目数必须等于 CHILD 数（多渲染一行即说明越界投影）。每个条目单行由
-    # ``child_agent_summary`` 的渲染契约保证（描述与工具清单都不得含换行）。
-    assert len(summary.splitlines()) - 1 == len(child_ids)
+    assert registry.child_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {generic.agent_id}
+    assert generic.agent_id in registry.child_agent_summary(AgentProfileRegistry.SYSTEM_WORKSPACE)
+    assert main_profile.agent_id not in registry.child_agent_summary(
+        AgentProfileRegistry.SYSTEM_WORKSPACE
+    )
 
 
-def test_builtin_child_profiles_leave_model_route_to_parent_run(monkeypatch) -> None:
-    """内置 child profile 不应写死 provider/model，默认由父 Run 决定。"""
+def test_json_children_leave_model_route_to_parent_run() -> None:
+    """默认配置型子 Agent 不内置 provider/model，默认从父 Run 继承。"""
 
-    profiles = [reviewer_agent(), explorer_agent(), build_test_agent(), coder_agent()]
+    profiles = _default_profiles()
 
     assert all(profile.provider_id is None for profile in profiles)
     assert all(profile.model_name is None for profile in profiles)
     assert all(profile.model_settings == ModelSettings() for profile in profiles)
 
 
-def test_child_profile_model_settings_keep_custom_overrides(monkeypatch) -> None:
-    """per-run 派生不得改写 child profile 自己配置的 model_settings。
+def test_child_profile_model_settings_keep_custom_overrides() -> None:
+    """per-run 派生保留 profile 自有模型参数覆盖。"""
 
-    说明：旧实现由 ``derive_for_run`` 合并父 Agent 的 ``model_settings`` 默认值，该形参
-    （``model_defaults``）已随 per-run 派生重构移除；模型路由改为在 child Run 创建时按父
-    Run 回填（见 ``test_builtin_child_profiles_leave_model_route_to_parent_run``），故本
-    用例只锁「派生不改写 profile 自有配置」这一条仍然成立的契约。
-    """
-
-    child = reviewer_agent()
+    child = _default_profiles()[0]
     custom = ModelSettings(temperature=0.2, thinking=True)
     child.model_settings = custom
 
@@ -141,6 +153,5 @@ def test_child_profile_model_settings_keep_custom_overrides(monkeypatch) -> None
     assert derived.model_settings is custom
     assert derived.model_settings.temperature == 0.2
     assert derived.model_settings.thinking is True
-    # 未配置的模型路由由 run 回填，共享单例本身不被写入。
     assert (derived.provider_id, derived.model_name) == (7, "glm-4.6")
     assert (child.provider_id, child.model_name, child.run) == (None, None, None)

@@ -8,7 +8,6 @@ import httpx
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.config.settings import Settings
 from app.core.tools.tool_handler.web.web_provider import (
     WebExtractItem,
     WebProvider,
@@ -185,7 +184,7 @@ class FirecrawlProvider(WebProvider):
             发起 Firecrawl Search API 网络请求。
         """
 
-        effective_limit = min(limit, Settings.WEB_SEARCH_LIMIT_MAX)
+        effective_limit = min(limit, Constant.Web.SEARCH_LIMIT_MAX)
         payload = self._post(
             "search",
             {"query": query, "limit": effective_limit, "sources": ["web"]},
@@ -331,7 +330,7 @@ class FirecrawlProvider(WebProvider):
             代理变化时由 holder 关闭旧 client 并重建新 client。
         """
 
-        return self._proxy_http_client.get(timeout=Settings.WEB_REQUEST_TIMEOUT_SECONDS)
+        return self._proxy_http_client.get(timeout=Constant.Web.REQUEST_TIMEOUT_SECONDS)
 
     def _post(self, endpoint: str, body: dict[str, object]) -> object:
         """向 Firecrawl API 发送 JSON 请求。

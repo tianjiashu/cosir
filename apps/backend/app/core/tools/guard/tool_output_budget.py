@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 from app.core.tools.tool_handler.patch_write.atomic_write import atomic_write_text
@@ -16,11 +17,12 @@ from app.utils.cosir_paths import workspace_tool_artifact_dir
 class ToolOutputBudget:
     """统一约束模型可见工具输出，并为超限内容保存 workspace artifact。"""
 
-    def __init__(self, max_chars: int = 20_000) -> None:
+    def __init__(self, max_chars: int = Constant.Tools.MAX_OUTPUT_CHARS) -> None:
         """初始化输出预算。
 
         参数:
-            max_chars: 模型可见 ``content`` 的最大字符数。
+            max_chars: 模型可见 ``content`` 的最大字符数；缺省取
+                ``Constant.Tools.MAX_OUTPUT_CHARS``（与工具系统装配时的取值同源）。
 
         返回:
             无。

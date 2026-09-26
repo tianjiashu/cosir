@@ -16,7 +16,7 @@ from typing import cast
 
 import pytest
 
-from app.config.settings import Settings
+from app.config.constant import Constant
 from app.core.observability.tool_trace_recorder import _NullToolTraceRecorder
 from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
@@ -181,11 +181,11 @@ def test_parallel_batch_does_not_block_event_loop() -> None:
     ), f"并行批次期间事件循环只推进了 {ticks_during_batch} 次，说明等待仍在 loop 线程上"
 
 
-def test_parallel_batch_respects_max_parallel_tool_calls(
+def test_parallel_batch_respects_constant_max_parallel_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """在途 worker 数不得超过 ``MAX_PARALLEL_TOOL_CALLS``，且每个调用都产出观察。"""
-    monkeypatch.setattr(Settings, "MAX_PARALLEL_TOOL_CALLS", 2)
+    """在途 worker 数不得超过 ``Constant.Tools.MAX_PARALLEL_CALLS``，且每个调用都产出观察。"""
+    monkeypatch.setattr(Constant.Tools, "MAX_PARALLEL_CALLS", 2)
     executor = _FakeToolExecutor({f"call-{index}": 0.15 for index in range(4)})
     operations = _make_operations(executor)
 
@@ -206,7 +206,7 @@ def test_parallel_batch_submits_pending_calls_in_argument_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """额度满时剩余调用按入参顺序排队提交，而不是逆序。"""
-    monkeypatch.setattr(Settings, "MAX_PARALLEL_TOOL_CALLS", 2)
+    monkeypatch.setattr(Constant.Tools, "MAX_PARALLEL_CALLS", 2)
     executor = _FakeToolExecutor({"call-0": 0.1, "call-1": 0.3, "call-2": 0.05})
     operations = _make_operations(executor)
 

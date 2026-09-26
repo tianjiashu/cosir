@@ -5,8 +5,9 @@ import json
 from typing import ClassVar
 
 from app.config.constant import Constant
-from app.core.tools.display.child_agent_display import build_child_agent_result_display_data
 from app.config.logging.logger import log
+from app.core.agents.agent_profile import AgentProfileConfigError, AgentProfileType
+from app.core.tools.display.child_agent_display import build_child_agent_result_display_data
 from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_SEND,
     TOOL_GROUP_CHILD_AGENT,
@@ -26,6 +27,7 @@ from app.service.depends import (
     get_conversation_run_service,
     get_conversation_run_state_service,
     get_task_service,
+    get_workspace_service,
 )
 
 # 只等 executor 完成「登记 + 建后台 task」这一段，不等子 Agent 跑完。
@@ -65,11 +67,11 @@ class ChildAgentSendTool(HandlerBase):
             无。
 
         副作用:
-            从依赖装配取得 ``TaskService`` / ``ConversationRunService`` /
-            ``ConversationRunStateService`` / ``ConversationRunExecutor`` 单例引用。
+            从依赖装配取得任务、工作区、Run 与执行器 service 单例引用。
         """
 
         self._task_service = get_task_service()
+        self._workspace_service = get_workspace_service()
         self._run_service = get_conversation_run_service()
         self._run_state_service = get_conversation_run_state_service()
         self._run_executor = get_conversation_run_executor()
@@ -95,8 +97,8 @@ class ChildAgentSendTool(HandlerBase):
             建 Run 或启动失败时返回错误观察。
 
         异常:
-            无。``ValidationError`` / ``KeyError`` / 执行器启动异常均在本方法内归一化为
-            错误观察。
+            无。配置无效、profile 已不可用、``ValidationError``、``KeyError`` 或执行器启动
+            异常均归一化为错误观察；profile 校验失败时不创建 Run。
 
         副作用:
             在目标子任务下创建一个 ``pending`` Run、认领为 ``running``，并在父 Run 的事件
@@ -161,6 +163,43 @@ class ChildAgentSendTool(HandlerBase):
                     "wait for its conclusion with child_agent_wait, and call this tool again "
                     "only after it reaches a terminal state."
                 ),
+            )
+
+        try:
+            workspace = self._workspace_service.get_workspace(child_task.workspace_id)
+            from app.config.configuration import get_agent_registry
+
+            current_agent_registry = get_agent_registry()
+            current_profile = current_agent_registry.resolve(
+                workspace.root_path,
+                current_run.agent_id or "",
+            )
+        except (AgentProfileConfigError, KeyError, RuntimeError) as exc:
+            log.warning(
+                "child_agent_send_profile_unavailable",
+                extra={
+                    "msg": "workspace 子 Agent 配置无效，拒绝创建 follow-up Run",
+                    "data": {
+                        "parent_run_id": execution_context.run_id,
+                        "child_task_id": child_task_id,
+                        "error_type": type(exc).__name__,
+                    },
+                },
+            )
+            return tool_error(
+                self.name,
+                "child_agent_send_profile_unavailable",
+                reason="The child agent configuration for this workspace is invalid.",
+                permission=self.permission,
+                retryable=False,
+            )
+        if current_profile is None or current_profile.agent_type is not AgentProfileType.CHILD:
+            return tool_error(
+                self.name,
+                "child_agent_send_profile_unavailable",
+                reason="The child agent is no longer available in this workspace.",
+                permission=self.permission,
+                retryable=False,
             )
 
         try:

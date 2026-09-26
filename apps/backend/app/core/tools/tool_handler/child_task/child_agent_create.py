@@ -14,7 +14,11 @@ import json
 from typing import ClassVar
 
 from app.config.logging.logger import log
-from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.agent_profile import (
+    AgentProfile,
+    AgentProfileConfigError,
+    AgentProfileType,
+)
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.core.tools.schemas import (
@@ -46,44 +50,6 @@ from app.service.depends import (
     get_task_service,
 )
 
-
-def _contract_description() -> str:
-    """返回面向模型的委派契约主描述（不含子 Agent 清单与并行引导）。
-
-    本函数只描述「委派是什么、何时该用、代价与边界」，**不重复具体数值上限**
-    （``MESSAGE_MAX`` / ``AGENT_NAME_MAX`` 只留在参数字段描述里——工具描述与参数 schema 在同一份
-    function 定义里同时下发给模型，同一数值说两遍纯属浪费 token）；这里只保留「超预算会被
-    立刻拒绝」这一确定性后果。**不下发任何 child 并发额度契约**：进程内没有 child 并发
-    裁决点，文案里写「超出 N 个会被拒绝」等于向模型下发不存在的规则（2026-09-23 随无执行点
-    的并发配置一并删除）。**不下发 child 的工具集收窄规则**：进程内不存在「父权限 ∩ 子权限」
-    这一逻辑（child 工具集只由自身 profile 的 ``allowed_tools`` 减 ``CHILD_BANNED_TOOLS``
-    决定），原先的 "reduced by parent and child permissions" 表述不准确，2026-09-24 删除。
-
-    参数:
-        无。
-
-    返回:
-        面向模型的契约主描述文本。
-
-    异常:
-        无。
-
-    副作用:
-        无（纯常量拼接，不读配置、不访问注册表）。
-    """
-    return (
-        "Delegate one focused subtask to a single child agent. Use it "
-        "when part of the work is separable from your own turn. The child runs its own agent "
-        "loop with only your message as input — it cannot see this conversation — and returns "
-        "only a final summary, so the message must be self-contained. A child cannot delegate "
-        "further. Delegation is asynchronous: after creating the child you can wait for it with "
-        "child_agent_wait, or work on other tasks that do not interfere with it. "
-        "A failed delegation is terminal: adjust "
-        "the contract or ask the user instead of retrying identical arguments. "
-        "CRITICAL BUDGET LIMIT: an over-budget call is rejected immediately and counts as a "
-        "tool error, so trim or split the task instead of overshooting."
-    )
-
 # 子 Agent 不得使用的工具：**委派与父子通信**（``tool_handler/child_task/`` 全部工具）与
 # **可交互终端**（``tool_handler/terminal_session/`` 全部工具）。清单与这两个目录一一对应，
 # 新增同目录工具时必须同步登记。``delegate_task`` 与 ``child_agent_send`` 在启动 child Run
@@ -107,40 +73,6 @@ CHILD_BANNED_TOOLS: tuple[str, ...] = (
 _START_ACK_TIMEOUT_SECONDS = 10.0
 
 
-def _compose_description() -> str:
-    """把契约主描述、子 Agent 清单与并行引导拼装为面向模型的完整工具描述。
-
-    子 Agent 清单自带 ``Available child agents`` 标题（由
-    ``AgentProfileRegistry.child_agent_summary`` 产出），本函数**不再重复加标题**——历史
-    实现两处都加，模型实际看到的是同一个标题连写两遍。清单为空时只输出契约与并行引导，既不
-    暴露模板占位符也不留误导性标题。
-
-    参数:
-        无。
-
-    返回:
-        完整的 delegate_task 工具描述文本（各块之间以空行分隔）。
-
-    异常:
-        RuntimeError: agent registry 尚未注入（``get_agent_registry`` 取不到运行期单例），
-            由装配期调用方暴露为工具定义构建失败。
-
-    副作用:
-        读取进程内 agent registry 的子 Agent 清单；该导入延迟到调用时执行，避免配置层与工具
-        handler 在模块初始化期形成循环依赖。
-    """
-    from app.config.configuration import get_agent_registry
-    agent_summary = get_agent_registry().child_agent_summary()
-    blocks = [_contract_description()]
-    if agent_summary.strip():
-        blocks.append(agent_summary.strip())
-    blocks.append(
-        "To run several children in parallel, emit several delegate_task calls in the same reply; "
-        "reusing the same child_agent_id is fine as long as each message is self-contained."
-    )
-    return "\n\n".join(blocks)
-
-
 class DelegateTaskTool(HandlerBase):
     """把一次 delegate_task 调用落地为已启动的 child Task/Run。
 
@@ -150,9 +82,20 @@ class DelegateTaskTool(HandlerBase):
     """
 
     name: str = TOOL_DELEGATE_TASK
-    # HandlerBase 要求提供类级描述；真正下发给模型的完整描述由 to_definition 在
-    # ToolSystem 装配时读取 Agent registry 后固化。
-    description: str = ""
+    # HandlerBase 要求提供类级描述；描述与工具集、workspace 候选无关（子 Agent 目录由系统提示词
+    # 的工具能力目录层下发），进程级基础定义即为模型可见终稿。
+    description: str = (
+        "Delegate one focused subtask to a single child agent. Use it "
+        "when part of the work is separable from your own turn. The child runs its own agent "
+        "loop with only your message as input — it cannot see this conversation — and returns "
+        "only a final summary, so the message must be self-contained. A child cannot delegate "
+        "further. Delegation is asynchronous: after creating the child you can wait for it with "
+        "child_agent_wait, or work on other tasks that do not interfere with it. "
+        "A failed delegation is terminal: adjust "
+        "the contract or ask the user instead of retrying identical arguments. "
+        "CRITICAL BUDGET LIMIT: an over-budget call is rejected immediately and counts as a "
+        "tool error, so trim or split the task instead of overshooting."
+    )
     permission: ClassVar[str] = "delegate_task"
     args_model: type[DelegateTaskArgs] = DelegateTaskArgs
     timeout_seconds: ClassVar[float] = 300.0
@@ -236,12 +179,43 @@ class DelegateTaskTool(HandlerBase):
                 permission=self.permission,
             )
 
-        # 延迟导入，避免配置层与工具 handler 的模块初始化形成循环依赖。
-        from app.config.configuration import get_agent_registry
-
-        agent_registry = get_agent_registry()
-        child_agent_profile: AgentProfile | None = agent_registry.resolve(child_agent_id)
-        if child_agent_profile is None:
+        agent_registry = runtime_dependencies.agent_profile_registry
+        if agent_registry is None:
+            return tool_error(
+                self.name,
+                "delegate_task_catalog_unavailable",
+                reason="The child agent catalog for this workspace is unavailable.",
+                permission=self.permission,
+                retryable=False,
+            )
+        try:
+            child_agent_profile: AgentProfile | None = agent_registry.resolve(
+                execution_context.workspace_root,
+                child_agent_id,
+            )
+        except AgentProfileConfigError as exc:
+            log.warning(
+                "delegate_workspace_agent_config_invalid",
+                extra={
+                    "msg": "workspace 子 Agent 配置无效，拒绝委派",
+                    "data": {
+                        "parent_run_id": execution_context.run_id,
+                        "workspace_id": execution_context.workspace_id,
+                        "error_type": type(exc).__name__,
+                    },
+                },
+            )
+            return tool_error(
+                self.name,
+                "delegate_task_workspace_agent_config_invalid",
+                reason="The child agent configuration for this workspace is invalid.",
+                permission=self.permission,
+                retryable=False,
+            )
+        if (
+                child_agent_profile is None
+                or child_agent_profile.agent_type is not AgentProfileType.CHILD
+        ):
             log.warning(
                 "delegate_child_resolve_failed",
                 extra={
@@ -256,8 +230,8 @@ class DelegateTaskTool(HandlerBase):
                 self.name,
                 f"delegate_task child not found: {child_agent_id}",
                 reason=(
-                    f"the child agent '{child_agent_id}' is not registered; "
-                    f"verify the child_agent_id against the available delegate_* agents "
+                    f"the child agent '{child_agent_id}' is not available in this workspace; "
+                    f"verify the child_agent_id against the available child agents "
                     f"before retrying."
                 ),
                 permission=self.permission,
@@ -365,8 +339,8 @@ class DelegateTaskTool(HandlerBase):
 
         delegate_task 声明为工具级 ``parallel``：当模型在同一回复里发起多个
         ``delegate_task`` 时，执行层把它们放进同一并行批次并发执行，使多个子 Agent
-        真正并行。并发度只受执行层线程池额度（``MAX_PARALLEL_TOOL_CALLS``）约束，
-        工具层**不声明** child 并发上限——不存在的契约不得下发给模型。
+        真正并行。并发度只受执行层线程池额度（``Constant.Tools.MAX_PARALLEL_CALLS``）
+        约束，工具层**不声明** child 并发上限——不存在的契约不得下发给模型。
 
         参数:
             无。
@@ -376,18 +350,16 @@ class DelegateTaskTool(HandlerBase):
             工具观察仅确认 child Run 已注册，不等待 child workflow 完成。
 
         异常:
-            RuntimeError: agent registry 尚未注入，无法生成子 Agent 清单与 child_agent_id
-                候选集。
+            无。
 
         副作用:
-            读取进程内 agent registry 生成子 Agent 清单；并固化 ``DelegateTaskArgs`` 的 JSON
-            schema 作为模型可见参数契约。
+            生成结构 schema 基线；不读取 agent registry 或固化 workspace 候选。
         """
 
         return ToolDefinition(
             name=self.name,
             group=self.group,
-            description=_compose_description(),
+            description=self.description,
             permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
@@ -408,12 +380,12 @@ class DelegateTaskTool(HandlerBase):
 
 
 def build_delegate_task_definition() -> ToolDefinition | None:
-    """构建在装配期固化模型契约的 delegate_task 工具定义。
+    """构建供 ToolSystem 注册的 delegate_task 基础定义。
 
-    agent registry 必须先于 ToolSystem 装配完成：描述里的子 Agent 清单与参数 schema 都由
-    :meth:`DelegateTaskTool.to_definition` 在注册时一次性生成并固化，运行期不再刷新。本函数
-    经 ``HandlerBase.to_definition_if_avaliable`` 包装调用 ``to_definition``；``DelegateTaskTool``
-    未覆写 ``avaliable``，因此当前恒为可用。
+    CHILD 候选不在工具定义里固化（既无 ``enum`` 也不列举 ID 清单）：合法候选由系统提示词的
+    工具能力目录层下发，目标是否可委派由 ``DelegateTaskTool.execute`` 在执行期按 workspace
+    作用域解析内存 Registry 裁决。本函数经 `HandlerBase.to_definition_if_avaliable` 包装调用
+    `to_definition`。
 
     参数:
         无。
@@ -422,11 +394,11 @@ def build_delegate_task_definition() -> ToolDefinition | None:
         可直接注册到工具注册表的 delegate_task 工具定义；``avaliable`` 为假时返回 None。
 
     异常:
-        RuntimeError: agent registry 尚未由应用启动流程注入。
+        无。
 
     副作用:
-        创建 ``DelegateTaskTool`` 实例（解析 Task/Run 服务与 Run 执行器单例）并生成一次静态
-        ``ToolDefinition``；不创建 child Task、不启动委派。
+        创建 `DelegateTaskTool` 实例（解析 Task/Run 服务与 Run 执行器单例）并生成基础
+        `ToolDefinition`；不创建 child Task、不启动委派。
     """
 
     return DelegateTaskTool().to_definition_if_avaliable()

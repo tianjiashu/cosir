@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable, Iterable
 from typing import Any, ClassVar, Literal, cast
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.tools.display.web_display import build_web_extract_display_data
@@ -60,7 +61,7 @@ class WebExtractTool(HandlerBase):
     )
     permission: ClassVar[str] = "network"
     args_model: type[WebExtractArgs] = WebExtractArgs
-    timeout_seconds: ClassVar[float] = Settings.WEB_REQUEST_TIMEOUT_SECONDS + 10
+    timeout_seconds: ClassVar[float] = Constant.Web.REQUEST_TIMEOUT_SECONDS + 10
     risk_level: ClassVar[str] = "medium"
     group = TOOL_GROUP_WEB
 
@@ -122,12 +123,12 @@ class WebExtractTool(HandlerBase):
             放宽由 :func:`is_safe_public_url` 记录）。
         """
 
-        if len(urls) > Settings.WEB_EXTRACT_URL_LIMIT_MAX:
+        if len(urls) > Constant.Web.EXTRACT_URL_LIMIT_MAX:
             return tool_error(
                 self.name,
                 (
                     "Web extraction accepts at most "
-                    f"{Settings.WEB_EXTRACT_URL_LIMIT_MAX} URLs per call."
+                    f"{Constant.Web.EXTRACT_URL_LIMIT_MAX} URLs per call."
                 ),
                 reason="split the URLs into smaller batches and call web_extract again.",
                 retryable=True,
@@ -138,7 +139,7 @@ class WebExtractTool(HandlerBase):
         if isinstance(normalized_urls_or_error, ToolObservation):
             return normalized_urls_or_error
 
-        effective_char_limit = char_limit or Settings.WEB_EXTRACT_CHAR_LIMIT
+        effective_char_limit = char_limit or Constant.Web.EXTRACT_CHAR_LIMIT
         backend = Settings.WEB_EXTRACT_BACKEND or Settings.WEB_BACKEND
         provider = self._resolve_extract_provider(backend)
         if isinstance(provider, ToolObservation):

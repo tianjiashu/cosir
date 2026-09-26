@@ -6,13 +6,9 @@ from app.core.tools.tool_handler.child_task.child_agent_status import ChildAgent
 from app.core.tools.tool_handler.child_task.child_agent_wait import ChildAgentWaitTool
 
 
-def test_child_agent_tools_are_expandable_trace_rows(monkeypatch) -> None:
+def test_child_agent_tools_are_expandable_trace_rows() -> None:
     """Child Agent activity stays groupable while its safe details remain inspectable."""
 
-    monkeypatch.setattr(
-        "app.config.configuration.get_agent_registry",
-        lambda: type("Registry", (), {"child_agent_summary": lambda self: "reviewer"})(),
-    )
     definitions = [
         DelegateTaskTool.to_definition(object.__new__(DelegateTaskTool)),
         ChildAgentSendTool.to_definition(object.__new__(ChildAgentSendTool)),

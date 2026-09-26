@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING
 
 from langchain_core.messages import ToolMessage
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.config.settings import Settings
 from app.core.observability.tool_trace_recorder import (
     ToolTraceRecorder,
     _NullToolTraceRecorder,
@@ -473,7 +473,7 @@ class WorkflowOperations:
             return []
 
         completed: list[tuple[int, ToolObservation]] = []
-        max_workers = min(len(calls), Settings.MAX_PARALLEL_TOOL_CALLS)
+        max_workers = min(len(calls), Constant.Tools.MAX_PARALLEL_CALLS)
         pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="tool-parallel")
         try:
             # 待提交队列用 FIFO：额度满时剩余调用按入参顺序排队提交（历史实现用 list.pop()

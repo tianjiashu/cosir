@@ -305,10 +305,12 @@ class ConversationTaskStateService:
             task = self._task_source.get(task_id)
             runs = self._run_source.list_by_task(task_id)
             context_rows = self._context_source.get(task_id, include_in_context=False)
+            child_agent_roles = self._resolve_legacy_child_agent_roles(context_rows)
             state = ConversationTaskStateRebuilder.rebuild(
                 task,
                 runs,
                 context_rows,
+                child_agent_roles=child_agent_roles,
             )
             self._reconcile_child_delegation_statuses(state, persist=False)
             self._reconcile_terminal_session_statuses(
@@ -341,6 +343,59 @@ class ConversationTaskStateService:
             },
         )
         return state
+
+    def _resolve_legacy_child_agent_roles(
+        self,
+        context_rows: list[Any],
+    ) -> dict[tuple[int, str], str]:
+        """按每个 child Task 所属 workspace 解析旧委派记录缺失的 role。"""
+
+        child_targets: set[tuple[int, str]] = set()
+        for row in context_rows:
+            metadata = row.transport_metadata or {}
+            display = metadata.get("display_data")
+            if not isinstance(display, dict) or display.get("kind") != "delegation-result":
+                continue
+            child_task_id = display.get("child_task_id")
+            child_agent_id = display.get("child_agent_id")
+            if (
+                _is_positive_int(child_task_id)
+                and isinstance(child_agent_id, str)
+                and child_agent_id.strip()
+                and not (isinstance(display.get("role"), str) and display["role"].strip())
+            ):
+                child_targets.add((child_task_id, child_agent_id))
+        if not child_targets:
+            return {}
+
+        from app.config.configuration import get_agent_registry
+        from app.core.agents.agent_profile import AgentProfileConfigError
+        from app.service.depends import get_workspace_service
+
+        workspace_service = get_workspace_service()
+        registry = get_agent_registry()
+        roles: dict[tuple[int, str], str] = {}
+        for child_task_id, child_agent_id in sorted(child_targets):
+            try:
+                child_task = self._task_source.get(child_task_id)
+                workspace = workspace_service.get_workspace(child_task.workspace_id)
+                profile = registry.resolve(workspace.root_path, child_agent_id)
+            except (AgentProfileConfigError, KeyError, RuntimeError) as exc:
+                log.warning(
+                    "legacy_child_agent_role_resolution_failed",
+                    extra={
+                        "msg": "旧委派记录无法按 child workspace 解析 Agent role",
+                        "data": {
+                            "child_task_id": child_task_id,
+                            "child_agent_id": child_agent_id,
+                            "error_type": type(exc).__name__,
+                        },
+                    },
+                )
+                continue
+            if profile is not None and profile.role.strip():
+                roles[(child_task_id, child_agent_id)] = profile.role
+        return roles
 
     def refresh_parent_delegation(
         self,
