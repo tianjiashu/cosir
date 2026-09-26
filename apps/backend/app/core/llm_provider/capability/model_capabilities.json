@@ -173,12 +173,13 @@
       "effort_map": {}
     }
   },
-  "qwen-3.8-max": {
-    "context_window": 1048576,
+  "qwen3.8-max": {
+    "context_window": 1000000,
     "max_output_tokens": 131072,
     "supports_thinking": true,
     "supports_image": true,
     "supports_video": true,
+    "need_reasoning_content": true,
     "supports_reasoning_effort": {
       "supported": true,
       "effort_map": {
@@ -186,11 +187,55 @@
         "high": "medium",
         "max": "xhigh"
       }
+    },
+    "image_limit": {
+      "supported_formats": ["jpeg", "png"],
+      "max_images_per_request": 250
     }
   },
-  "qwen-3.7-max": {
-    "context_window": 1048576,
+  "qwen3.8-flash": {
+    "context_window": 1000000,
     "max_output_tokens": 131072,
+    "supports_thinking": true,
+    "supports_image": true,
+    "supports_video": true,
+    "need_reasoning_content": true,
+    "supports_reasoning_effort": {
+      "supported": true,
+      "effort_map": {
+        "low": "low",
+        "high": "medium",
+        "max": "xhigh"
+      }
+    },
+    "image_limit": {
+      "supported_formats": ["jpeg", "png"],
+      "max_images_per_request": 250
+    }
+  },
+  "qwen3.8-max-0902": {
+    "context_window": 1000000,
+    "max_output_tokens": 131072,
+    "supports_thinking": true,
+    "supports_image": true,
+    "supports_video": true,
+    "need_reasoning_content": true,
+    "supports_reasoning_effort": {
+      "supported": true,
+      "effort_map": {
+        "low": "low",
+        "high": "medium",
+        "max": "xhigh"
+      }
+    },
+    "image_limit": {
+      "supported_formats": ["jpeg", "png"],
+      "max_images_per_request": 250
+    }
+  },
+  "qwen3.7-max": {
+    "context_window": 1000000,
+    "max_output_tokens": 65536,
     "supports_thinking": true,
     "supports_image": false,
     "supports_video": false,
@@ -232,8 +277,8 @@
       "effort_map": {}
     }
   },
-  "qwen-3.6-plus": {
-    "context_window": 1048576,
+  "qwen3.6-plus": {
+    "context_window": 1000000,
     "max_output_tokens": 65536,
     "supports_thinking": true,
     "supports_image": true,
@@ -241,6 +286,10 @@
     "supports_reasoning_effort": {
       "supported": false,
       "effort_map": {}
+    },
+    "image_limit": {
+      "supported_formats": ["jpeg", "png"],
+      "max_images_per_request": 250
     }
   },
   "qwen-3.5-plus": {
@@ -254,8 +303,8 @@
       "effort_map": {}
     }
   },
-  "qwen-3.5-flash": {
-    "context_window": 1048576,
+  "qwen3.5-flash": {
+    "context_window": 1000000,
     "max_output_tokens": 65536,
     "supports_thinking": true,
     "supports_image": true,
@@ -263,6 +312,10 @@
     "supports_reasoning_effort": {
       "supported": false,
       "effort_map": {}
+    },
+    "image_limit": {
+      "supported_formats": ["jpeg", "png"],
+      "max_images_per_request": 250
     }
   },
   "kimi-k3": {

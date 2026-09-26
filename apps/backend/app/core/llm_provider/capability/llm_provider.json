@@ -23,5 +23,25 @@
       }
     },
     "disabled_params":{}
+  },
+  "qwen":{
+    "provider_type": "api",
+    "base_url": "",
+    "models": [
+      "qwen3.8-max",
+      "qwen3.8-flash",
+      "qwen3.8-max-0902",
+      "qwen3.7-max",
+      "qwen3.6-plus",
+      "qwen3.5-flash",
+      "qwen3.5-flash"
+    ],
+    "thinking_channel": "reasoning_content",
+    "vision_input_format": "openai_url",
+    "extra_body": {
+      "enable_thinking": true,
+      "preserve_thinking": true
+    },
+    "disabled_params":{}
   }
 }

@@ -169,6 +169,11 @@ def build_chat_model(
         else ChatOpenAI
     )
 
+
+    #千问reasoning_content需要在extra_body中传递reasoning_content
+    extra_body = provider_capability.extra_body or None
+    extra_body["reasoning_content"] = resolved_effort
+
     return chat_model_class(
         model=model_name,
         # api_key 以 SecretStr 封装传入（langchain 推荐做法，防止明文在 repr/日志泄露）；
@@ -190,6 +195,7 @@ def build_chat_model(
         # max_tokens=model_settings.max_tokens if model_settings.max_tokens is not None else None,
         reasoning_effort=resolved_effort,
         model_kwargs=model_kwargs or {},
+        stream_options={"include_usage": True}
     )
 
 
