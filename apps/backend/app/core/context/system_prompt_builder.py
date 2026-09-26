@@ -1,13 +1,17 @@
-"""构建面向模型的系统提示词（四层结构）。
+"""构建面向模型的系统提示词（五层结构）。
 
-系统提示词重构为四层，每层一块，边界清晰：
+系统提示词按层构建，每层一块，边界清晰（拼接顺序即下列顺序）：
 
 1. ``<runtime_context>`` 动态变量层：运行期才确定的事实（身份与角色、操作系统、工作区根目录
    与写入边界、工具集合、用户语言），直接由 ``AgentProfile`` / ``Settings`` / 系统状态注入，
    不读取任何文件。
-2. ``<agent_layer>`` Agent 系统预设层：来源唯一为 ``AgentProfile.prompt_file_path`` 指向的
-   md/txt 文件全文（系统预设，与用户无关）；该字段为 ``None`` 或文件读取失败时使用空的
-   规则层，加载后不做变量替换。
+2. ``<agent_layer>`` Agent 系统预设层：所有 profile 都使用装配阶段载入的
+   ``AgentProfile.system_prompt`` 正文。该层是系统预设，与用户无关；本层只负责施加预算，
+   不访问提示词文件或做变量替换。
+T. ``<tool_layer>`` 工具能力目录层：只在本轮生效工具集包含委派工具（``delegate_task``）时生成，
+   内容为 ``AgentProfileRegistry.child_agent_summary`` 产出的子 Agent 目录。委派工具不生效
+   （子 Agent 已禁用委派、workspace 配置无效、目录为空）时整层不出现，避免向模型下发不存在的
+   契约；本层只消费调用方传入的工具名集合，不自行推导工具可用性。
 3. ``<global_layer>`` 系统级全局指令层：来源唯一、路径固定为 ``<system_cosir_dir>/AGENTS.md``
    （由 ``app.utils.cosir_paths.system_instruction_file`` 计算），作为跨所有 workspace 生效的
    全局提示词；文件缺失时创建空白文件供用户编辑并降级为空，读取失败（权限/编码/IO）时同样降级为空，
@@ -16,10 +20,12 @@
    ``_WORKSPACE_INSTRUCTION_FILE_NAME``），按目录层级择优（顶层优先）选出**唯一**一个项目
    指令文件，受预算闸门约束，避免上下文爆炸。
 
-预算控制仅在 Layer 2（单文件上限）、Layer G（单文件字节安全兜底 / 单文件 token 上限）与
-Layer 3（单文件字节安全兜底 / 单文件 token 上限）生效；Layer 1 内容小且固定，仅给字节硬上限
-防御。Layer G / Layer 3 的 token 上限为唯一可配置闸门，字节上限为模块内固定安全兜底
-（非配置项）。
+空层块（``""``）不参与拼接，避免相邻层之间出现多余空行。
+
+预算控制仅在 Layer 2（单文件上限）、Layer T（字节安全兜底）、Layer G（单文件字节安全兜底 /
+单文件 token 上限）与 Layer 3（单文件字节安全兜底 / 单文件 token 上限）生效；Layer 1 内容小且
+固定，仅给字节硬上限防御。Layer G / Layer 3 的 token 上限为唯一可配置闸门，字节上限为模块内
+固定安全兜底（非配置项）。
 """
 
 from __future__ import annotations
@@ -27,11 +33,13 @@ from __future__ import annotations
 import logging
 import os
 from collections import deque
+from collections.abc import Collection
 from pathlib import Path
 from platform import system
 
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
+from app.core.tools.schemas.tool_names import TOOL_DELEGATE_TASK
 from app.utils.cosir_paths import system_instruction_file
 from app.utils.file_utils import read_text_file
 from app.utils.token_estimator import TokenEstimator
@@ -71,37 +79,50 @@ _WORKSPACE_INSTRUCTION_MAX_FILE_BYTES: int = 200_000
 # 避免异常大文件进入 O(n) token 估算、也防止上下文被超大全局指令撑爆。
 _GLOBAL_INSTRUCTION_MAX_FILE_BYTES: int = 200_000
 
+# 工具能力目录层字节安全兜底（固定上限、非配置项）：内容由进程内 Agent 目录投影而来，通常很小，
+# 这里只做异常放大（例如 workspace 配置里塞入超长子 Agent 描述）时的防御性截断。
+_TOOL_LAYER_MAX_BYTES: int = 8_000
+
 
 class SystemPromptBuilder:
-    """按三层结构构建本地 coding-agent 的系统提示词。
+    """按五层结构构建本地 coding-agent 的系统提示词。
 
     本类为无状态工具类，所有构建逻辑均为静态方法，不持有实例状态。
     """
 
     @staticmethod
-    def build(agent_profile: AgentProfile, workspace_root: str) -> str:
-        """构建完整系统提示词文本（四层）。
+    def build(
+            agent_profile: AgentProfile,
+            workspace_root: str,
+    ) -> str:
+        """构建完整系统提示词文本（五层）。
 
         参数:
             agent_profile: 当前执行主体的 Agent 档案。
             workspace_root: 当前工作区根目录。
+            available_tool_names: 本轮 Run 生效的模型侧工具名集合（来源为
+                ``WorkflowOperations.model_tools``）；只用于判定工具能力目录层是否需要生成。
+                缺省为空集合，表示调用方未提供工具集，此时不生成 ``<tool_layer>``。
 
         返回:
-            由四层层块拼接出的系统提示词；Layer 1 动态变量 + Layer 2 系统预设
-            + Layer G 系统级全局指令 + Layer 3 workspace 项目指令。
+            由五层层块拼接出的系统提示词（空层块不参与拼接）；Layer 1 动态变量 + Layer 2 系统
+            预设 + Layer T 工具能力目录 + Layer G 系统级全局指令 + Layer 3 workspace 项目指令。
 
         异常:
-            无。
+            RuntimeError: 生效工具集包含委派工具、但进程级 Agent 目录尚未初始化时，由
+                ``configuration.get_agent_registry`` 抛出（装配错误，不静默降级）。
 
         副作用:
-            可能读取 ``prompt_file_path``、系统级全局指令文件与 workspace 指令文件
-            （失败均容错）。
+            读取系统级全局指令文件与 workspace 指令文件（失败均容错）；委派工具生效时额外读取
+            进程级 Agent 目录；Agent 系统提示词已在 profile 装配阶段载入。
         """
         layer1 = SystemPromptBuilder._build_runtime_context(agent_profile, workspace_root)
         layer2 = SystemPromptBuilder._build_agent_layer(agent_profile)
+        tool_layer = SystemPromptBuilder._build_tool_layer(workspace_root, agent_profile.allowed_tools)
         global_layer = SystemPromptBuilder._build_global_layer()
         layer3 = SystemPromptBuilder._build_workspace_layer(workspace_root)
-        return "\n\n".join([layer1, layer2, global_layer, layer3])
+        blocks = [layer1, layer2, tool_layer, global_layer, layer3]
+        return "\n\n".join(block for block in blocks if block)
 
     # --- Layer 1: 动态变量层（运行期事实，不读文件） ---
     @staticmethod
@@ -153,13 +174,13 @@ class SystemPromptBuilder:
         text = "\n".join(lines)
         return SystemPromptBuilder._enforce_bytes(text, Settings.RUNTIME_CONTEXT_MAX_BYTES)
 
-    # --- Layer 2: Agent 系统预设层（profile.prompt_file_path 或内置默认） ---
+    # --- Layer 2: Agent 系统预设层（profile.system_prompt） ---
     @staticmethod
     def _build_agent_layer(agent_profile: AgentProfile) -> str:
-        """构建 Agent 系统预设层：加载预设文件并施加预算上限。
+        """构建 Agent 系统预设层并施加预算上限。
 
         参数:
-            agent_profile: 当前执行主体的 Agent 档案（取其 ``prompt_file_path``）。
+            agent_profile: 当前执行主体的 Agent 档案（取其 ``system_prompt``）。
 
         返回:
             包裹在 ``<agent_layer>`` 标签内的系统预设文本。
@@ -168,42 +189,70 @@ class SystemPromptBuilder:
             无。
 
         副作用:
-            可能读取 ``prompt_file_path``（失败容错为空规则层）。
+            提示词超预算时记录 Agent ID，不记录提示词正文。
         """
-        raw = SystemPromptBuilder._load_agent_preset(agent_profile)
-        if raw is None:
-            raw = ""
+        raw = agent_profile.system_prompt
+        if raw is None or raw.strip() == "":
+            return ""
         content = SystemPromptBuilder._enforce_budget(
             raw, Settings.AGENT_PERSONA_MAX_BYTES, Settings.AGENT_PERSONA_MAX_TOKENS
         )
+        if content != raw:
+            logger.warning(
+                "agent_system_prompt_truncated",
+                extra={"data": {"agent_id": agent_profile.agent_id}},
+            )
         return "<agent_layer>\n" + content + "\n</agent_layer>"
 
+    # --- Layer T: 工具能力目录层（委派工具生效时的子 Agent 目录） ---
     @staticmethod
-    def _load_agent_preset(agent_profile: AgentProfile) -> str | None:
-        """加载 Agent 系统预设内容。
+    def _build_tool_layer(
+            workspace_root: str,
+            available_tool_names: Collection[str],
+    ) -> str:
+        """构建工具能力目录层：委派工具生效时投影子 Agent 目录。
 
-        ``prompt_file_path`` 非空时读取该文件；路径为空或读取失败（不存在/无权限/编码错误）
-        时返回 ``None``，读取失败会记录 warning，不中断构建。
+        判定与取材都只用两份外部事实：``available_tool_names``（本轮 Run 生效的模型侧工具名
+        集合）与进程级 ``AgentProfileRegistry``。委派工具不在工具集里、或该 workspace 可见的
+        CHILD 目录为空时返回 ``""``（整层不出现）——提示词不得声明工具集里不存在的委派能力。
 
         参数:
-            agent_profile: 当前执行主体的 Agent 档案。
+            workspace_root: 当前工作区根目录，用作 Agent 目录的作用域键。
+            available_tool_names: 本轮 Run 生效的模型侧工具名集合。
 
         返回:
-            预设文件全文；没有可用文件时返回 ``None``。
+            包裹在 ``<tool_layer>`` 标签内的子 Agent 目录；不需要该层时返回 ``""``。超字节兜底时
+            截断的是目录正文而不是标签，返回文本仍是一对完整标签。
 
         异常:
-            无（读取异常均内部兜底）。
+            RuntimeError: 委派工具生效但进程级 Agent 目录未初始化（``configuration
+                .get_agent_registry`` 的装配错误）时原样抛出，不静默降级。
 
         副作用:
-            读取 ``prompt_file_path`` 指向的文件。
+            读取进程级 Agent 目录的内存索引（不读文件、不修改注册表）；超字节兜底时记录警告。
         """
-        path = agent_profile.prompt_file_path
-        if path:
-            try:
-                return read_text_file(path)
-            except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError) as exc:
-                logger.warning(f"agent_preset_load_failed path={path} error={exc}")
-        return None
+        if TOOL_DELEGATE_TASK not in available_tool_names:
+            return ""
+        # 函数内延迟导入：``app.config.configuration`` 模块级导入 ``app.core.tools``，而工具装配
+        # 链会反向导入 ``app.core.context`` / ``app.assistant_transport.event``，顶层导入会形成环
+        # （详见 ``app/core/tools/__init__.py`` 的 PEP 562 惰性导出说明）。
+        from app.config.configuration import get_agent_registry
+
+        summary = get_agent_registry().child_agent_summary(workspace_root).strip()
+        if not summary:
+            return ""
+        layer = "<tool_layer>\n" + summary + "\n</tool_layer>"
+        if len(layer.encode("utf-8")) <= _TOOL_LAYER_MAX_BYTES:
+            return layer
+        logger.warning(
+            "tool_layer_truncated",
+            extra={"data": {"max_bytes": _TOOL_LAYER_MAX_BYTES}},
+        )
+        overhead = len(b"<tool_layer>\n\n</tool_layer>")
+        summary = SystemPromptBuilder._enforce_bytes(
+            summary, _TOOL_LAYER_MAX_BYTES - overhead
+        )
+        return "<tool_layer>\n" + summary + "\n</tool_layer>"
 
     # --- Layer G: 系统级全局指令层（system_cosir_dir/AGENTS.md，跨 workspace 生效） ---
     @staticmethod
@@ -238,6 +287,8 @@ class SystemPromptBuilder:
             raw = read_text_file(path)
         except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError) as exc:
             logger.warning(f"global_instruction_read_failed path={path} error={exc}")
+            return ""
+        if raw is None or raw.strip() == "":
             return ""
         content = SystemPromptBuilder._enforce_budget(
             raw,
@@ -287,7 +338,7 @@ class SystemPromptBuilder:
             _WORKSPACE_INSTRUCTION_MAX_FILE_BYTES,
             Settings.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS,
         )
-        return f"<workspace_layer>\n# ./{rel.as_posix()}\n{content}\n</workspace_layer>"
+        return f"<workspace_layer abs_path={abs_path}>\n# ./{rel.as_posix()}\n{content}\n</workspace_layer>"
 
     @staticmethod
     def _find_instruction_file(root: Path) -> tuple[Path, Path] | None:

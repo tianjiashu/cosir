@@ -129,7 +129,6 @@ class RuntimeContextManager:
 
         参数:
             task_id: 已完成持久化复制的目标 Task 标识。
-            run_id: 源 Task 的历史边界，仅用于调用语义记录；不绑定目标当前 run。
 
         返回:
             绑定目标 Task、初始没有当前 run 且带有 ``is_fork`` 标记的新 manager。
