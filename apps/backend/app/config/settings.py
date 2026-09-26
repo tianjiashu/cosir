@@ -6,21 +6,22 @@
 
 设计边界：
 - 本模块只承载**运行期可由环境变量 / ``.cosir/.env`` 覆盖**的进程级配置（默认回复语言、
-  Web provider 选择、可观测性集成参数），以及需要保密的集成凭据。模型相关配置不在此处，
-  统一收敛到 ``app.core.agents.model_settings``。
+  Web provider 选择、可观测性集成参数），以及需要保密的集成凭据。**环境变量名与类字段名
+  完全同名**（如 ``DEFAULT_LANGUAGE``），不加应用前缀，避免两套命名漂移。模型相关配置不在
+  此处，统一收敛到 ``app.core.agents.model_settings``。
 - **不可变、无需按环境覆盖的数值上限不在此处**：系统提示词预算、工具输出与并发上限、
   Web 限额、日志轮转等固定值统一收敛到 ``app.config.constant.Constant`` 的对应域；判定标准
   是「是否存在真实的按环境覆盖需求」，不是数值大小。
 - 进程固定路径（数据根 / 日志目录 / 主库与 checkpoint 文件）不在此定义，唯一事实源为
   ``app.utils.paths``；``Settings.load`` 会触发其 ``reset`` 与环境变量对齐。
-- 保留下来的配置全进程共享、启动后只读；测试注入经 ``Settings.override``。单轮最大步数
+- 保留下来的配置全进程共享、启动后只读；测试需临时改值时经 ``monkeypatch.setattr``（自动还原）。
+  单轮最大步数
   ``max_steps`` 不在此定义，唯一来源为 ``AgentProfile.max_steps``（编排层经
   ``workflow.py`` 初始化 input_state 注入）。
 """
 
 import os
-from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from dotenv import dotenv_values
 
@@ -34,7 +35,8 @@ class Settings:
     ``Settings.WEB_BACKEND`` 等静态读取，不实例化、不传递 ``Settings`` 对象。
 
     职责边界：
-        - 负责：进程级运行配置的定义、加载（含 ``.env`` 覆盖）、校验与按测试注入。
+        - 负责：进程级运行配置的定义、加载（含 ``.env`` 覆盖）与校验；测试临时改值由调用方
+          经 ``monkeypatch.setattr`` 完成，本类不提供覆盖入口。
         - 不负责：不可变静态常量（见 ``app.config.constant.Constant``）、模型相关配置
           （见 ``app.core.agents.model_settings``）、进程固定路径（见 ``app.utils.paths``）、
           任何业务读写。
@@ -47,54 +49,31 @@ class Settings:
     # ``.cosir/.env`` 覆盖」的配置，以及需要保密的集成参数。
 
     # 面向用户的默认回复语言（如 zh / en）：作为全局配置，统一驱动系统提示词与运行时
-    # 上下文；需要本地化覆盖时经环境变量 ``CODING_AGENT_DEFAULT_LANGUAGE`` 注入。
+    # 上下文；需要本地化覆盖时经同名环境变量 ``DEFAULT_LANGUAGE`` 注入。
     DEFAULT_LANGUAGE: ClassVar[str] = "zh"
 
     # Web 工具 provider 选择：``WEB_BACKEND`` 是统一开关，两个 per-tool 变量用于按工具覆盖
-    # （空串表示不覆盖）；三者都经 ``CODING_AGENT_WEB_*_BACKEND`` 覆盖。
+    # （空串表示不覆盖）；三者都经同名环境变量（``WEB_BACKEND`` / ``WEB_SEARCH_BACKEND`` /
+    # ``WEB_EXTRACT_BACKEND``）覆盖。
     WEB_SEARCH_BACKEND: ClassVar[str] = ""
     WEB_EXTRACT_BACKEND: ClassVar[str] = ""
     WEB_BACKEND: ClassVar[str] = ""
 
     # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---
     # 启用开关 + 密钥齐备 + langfuse 可导入，三者满足 ``tracing_enabled()`` 才返回 True。
-    # 密钥仅通过环境变量（``CODING_AGENT_LANGFUSE_*``）注入，不写入代码库，避免泄露。
+    # 密钥仅通过同名环境变量（``LANGFUSE_*``）注入，不写入代码库，避免泄露。
     LANGFUSE_ENABLED: ClassVar[bool] = False
     LANGFUSE_PUBLIC_KEY: ClassVar[str | None] = None
     LANGFUSE_SECRET_KEY: ClassVar[str | None] = None
     # 云服务器经反向代理对外暴露的 HTTPS 域名（指向 langfuse/server）。
     LANGFUSE_BASE_URL: ClassVar[str] = "http://124.220.55.187"
 
-    # 允许被 ``override`` 覆盖的字段名集合；实际值在 ``Settings`` 类定义结束后由
-    # ``_finalize_overridable`` 经 ``Settings.__annotations__`` 推导注入，规避类体内裸
-    # ``__annotations__`` 的 IDE 静态解析告警；占位为空集，置位见 ``_finalize_overridable``。
-    _OVERRIDABLE: ClassVar[frozenset[str]] = frozenset()
-
     @staticmethod
-    def repository_root() -> Path:
-        """推导仓库根目录绝对路径（公开契约，供跨模块安全调用）。
-
-        参数:
-            无。
-
-        返回:
-            仓库根目录绝对路径；实现委托给 ``app.config.paths.repository_root``。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return paths.repository_root()
-
-    @staticmethod
-    def _load_local_env(repository_root: Path) -> None:
+    def _load_local_env() -> None:
         """从系统级 ``.cosir`` 配置文件加载未显式设置的环境变量。
 
-        参数:
-            repository_root: 保留参数以维持启动调用契约；路径实际由 ``app.utils.paths`` 决定。
+        配置文件位置完全由 ``app.utils.paths.env_files()`` 决定（``<数据根>/.cosir/.env`` 与其
+        ``.env.local`` 覆盖），本方法不接受路径参数，避免出现第二套位置口径。
 
         返回:
             无。
@@ -108,7 +87,6 @@ class Settings:
         """
 
         merged_values: dict[str, str] = {}
-        del repository_root
         for env_file in paths.env_files():
             if not env_file.exists():
                 continue
@@ -148,99 +126,38 @@ class Settings:
         raise ValueError(f"{name} must be a boolean value")
 
     @classmethod
-    def load(cls, repository_root: Path | None = None) -> None:
+    def load(cls) -> None:
         """加载默认配置与本地 env 覆盖，填充类级静态属性。
 
         进程启动时调用一次（``__main__.py`` 与 ``app.py`` 的 lifespan 均会调用）；模块导入时
-        亦会调用一次，使未显式启动的单元测试也能拿到仓库根推导出的默认路径。
-
-        参数:
-            repository_root: 仓库根目录绝对路径；省略时从本文件路径推导。
+        亦会调用一次，使未显式启动的单元测试也能拿到按环境推导出的默认路径。不接受路径参数：
+        配置文件来源与全部固定路径都由 ``app.utils.paths`` 决定。
 
         返回:
             无。
 
         异常:
-            ValueError: ``CODING_AGENT_LANGFUSE_ENABLED`` 不是受支持的布尔文本时抛出。
+            ValueError: ``LANGFUSE_ENABLED`` 不是受支持的布尔文本时抛出。
 
         副作用:
             加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性；经 ``paths.reset``
             按当前环境重新对齐固定路径（数据根 / 日志目录 / 主业务库与 checkpoint 文件）。
         """
-
-        root = repository_root or cls.repository_root()
-        cls._load_local_env(root)
+        cls._load_local_env()
         # 固定路径唯一事实源在 ``app.utils.paths``：加载 .env 后按环境重新对齐，使
         # 系统 ``.cosir/.env`` 中的运行配置在此阶段生效；路径根由桌面宿主注入。
         paths.reset()
-        cls.DEFAULT_LANGUAGE = os.environ.get("CODING_AGENT_DEFAULT_LANGUAGE", "zh").strip().lower()
-        cls.WEB_SEARCH_BACKEND = (
-            os.environ.get("CODING_AGENT_WEB_SEARCH_BACKEND", "").strip().lower()
-        )
-        cls.WEB_EXTRACT_BACKEND = (
-            os.environ.get("CODING_AGENT_WEB_EXTRACT_BACKEND", "").strip().lower()
-        )
-        cls.WEB_BACKEND = os.environ.get("CODING_AGENT_WEB_BACKEND", "").strip().lower()
+        # 环境变量名与类字段名同名（见模块 docstring）：读取的键即字段本身，无前缀映射。
+        cls.DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "zh").strip().lower()
+        cls.WEB_SEARCH_BACKEND = os.environ.get("WEB_SEARCH_BACKEND", "").strip().lower()
+        cls.WEB_EXTRACT_BACKEND = os.environ.get("WEB_EXTRACT_BACKEND", "").strip().lower()
+        cls.WEB_BACKEND = os.environ.get("WEB_BACKEND", "").strip().lower()
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
-        cls.LANGFUSE_ENABLED = cls._env_bool("CODING_AGENT_LANGFUSE_ENABLED", False)
-        cls.LANGFUSE_PUBLIC_KEY = os.environ.get("CODING_AGENT_LANGFUSE_PUBLIC_KEY")
-        cls.LANGFUSE_SECRET_KEY = os.environ.get("CODING_AGENT_LANGFUSE_SECRET_KEY")
+        cls.LANGFUSE_ENABLED = cls._env_bool("LANGFUSE_ENABLED", False)
+        cls.LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY")
+        cls.LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY")
         cls.LANGFUSE_BASE_URL = os.environ.get(
-            "CODING_AGENT_LANGFUSE_BASE_URL",
+            "LANGFUSE_BASE_URL",
             "http://124.220.55.187",
         )
-
-    @classmethod
-    def override(cls, **kwargs: Any) -> None:
-        """覆盖个别类级静态属性，用于测试或特殊场景注入临时配置。
-
-        参数:
-            kwargs: 待覆盖的类级静态属性名与值（键必须是本类已定义的静态属性名）。
-
-        返回:
-            无。
-
-        异常:
-            ValueError: 如果传入了本类不存在的属性名。
-
-        副作用:
-            修改本类的全局静态属性；该修改跨测试持续，调用方应自行保证隔离（必要时用
-            ``Settings.load()`` 复位）。
-        """
-
-        invalid = set(kwargs) - cls._OVERRIDABLE
-        if invalid:
-            raise ValueError(f"unknown settings to override: {sorted(invalid)}")
-        for name, value in kwargs.items():
-            setattr(cls, name, value)
-
-    @classmethod
-    def _finalize_overridable(cls) -> None:
-        """类定义结束后推导 ``_OVERRIDABLE``，固化允许被 ``override`` 覆盖的字段名集合。
-
-        在类体执行完毕后调用，经 ``cls.__annotations__``（属性访问，规避类体内裸
-        ``__annotations__`` 的 IDE 静态解析告警）取得全部类级静态属性注解，剔除
-        ``_OVERRIDABLE`` 自身后固化为不可变集合，使可覆盖字段与类注解单一事实来源一致，
-        不手抄、不漂移。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            无。
-
-        副作用:
-            将派生结果写入 ``cls._OVERRIDABLE``（类级静态属性）。
-        """
-
-        cls._OVERRIDABLE = frozenset(cls.__annotations__) - {"_OVERRIDABLE"}
-
-
-# 类定义结束后推导可覆盖字段集合，再加载一次默认配置（含 ``.env`` 与环境变量覆盖，并触发
-# ``paths.reset()`` 使固定路径与环境对齐）；生产启动时再次调用为幂等覆盖。
-Settings._finalize_overridable()
-Settings.load()

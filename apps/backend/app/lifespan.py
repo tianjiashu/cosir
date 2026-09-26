@@ -7,9 +7,10 @@
 
 职责边界：
 
-- 负责：日志管线安装、``Settings`` 加载、服务依赖初始化、遗留 Run 与委派收敛、
-  Hook 注册表播种、工具系统与 Agent Runtime 装配、``SESSION_START`` /
-  ``SESSION_END`` 触发、启动状态标记、系统级 ``.cosir`` 目录创建。
+- 负责：日志管线安装（失败窗口先建最小管线，配置加载后按最终数据根重建）、``Settings``
+  加载、服务依赖初始化、遗留 Run 与最近 Run terminal checkpoint 收敛、Hook 注册表播种、
+  工具系统与 Agent Runtime 装配、``SESSION_START`` / ``SESSION_END`` 触发、启动状态标记、
+  系统级 ``.cosir`` 目录创建。
 - 不负责：HTTP 路由、中间件安装、FastAPI 实例的创建与导出。
 
 本模块在 ``app.app`` 导入期被加载，因此这里的顶层 import 都发生在应用装配阶段；
@@ -65,15 +66,25 @@ from app.utils.cosir_paths import (
 from app.utils.json_utils import JsonFileError, read_json_object
 
 
-def get_delegation_service() -> None:
-    """Compatibility test seam; production startup no longer owns delegation storage."""
-
-    return None
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """包装生命周期，使 yield 前的启动异常也能写入 bootstate。"""
+    """包装生命周期：把启动异常写入启动状态，并保证日志管线一定被卸载。
+
+    参数:
+        _app: FastAPI 应用实例，仅用于满足 lifespan 协议。
+
+    生成:
+        应用运行期间的控制权。
+
+    异常:
+        无自身异常；``_lifespan_impl`` 抛出的启动异常在写入 ``failed`` 启动状态、清理已
+        初始化资源后原样向上抛出。
+
+    副作用:
+        启动失败时写入 ``failed`` 启动状态并释放已初始化的资源；无论正常关闭还是启动失败都会
+        卸载日志管线（与 ``_lifespan_impl`` 正常关闭路径合计调用两次 ``shutdown_logging``，
+        属拆分后的既有语义：启动失败可能到不了 ``_lifespan_impl`` 自己的关闭块）。
+    """
     try:
         async with _lifespan_impl(_app):
             yield
@@ -82,19 +93,30 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await _cleanup_startup_failure()
         raise
     finally:
-        # Startup can fail before _lifespan_impl reaches its normal shutdown block.
-        # Close any file/queue handlers created before that failure as well.
+        # 启动失败可能发生在 _lifespan_impl 进入正常关闭块之前，此时它自己的 finally 不会执行；
+        # 这里再兜一次，确保那时已创建的文件 / 队列 handler 也被关闭。
         await asyncio.to_thread(shutdown_logging)
 
 
 async def _cleanup_startup_failure() -> None:
-    """Release every resource that may have been initialized before startup failed.
+    """释放启动失败前可能已经初始化的资源。
 
-    Startup is intentionally not wrapped in the normal post-``yield`` ``finally`` block, so a
-    failure during AgentRuntime/tool assembly can otherwise skip the Run executor, terminal
-    workers, and service caches.  This node_helper only inspects already-populated
-    dependency caches; it never constructs a missing service while cleaning up.  Cleanup is
-    best-effort and each failure is logged without masking the original startup exception.
+    启动阶段不经 ``yield`` 之后的正常 ``finally`` 块收尾：AgentRuntime / 工具装配中途失败时，
+    Run executor、terminal worker 与 service 缓存都不会被关闭。本函数只检查**已经填充**的
+    依赖缓存（``cache_info().currsize``），清理过程中绝不顺手构造缺失的服务；清理为尽力而为，
+    每项失败只记 ``error`` 日志，不覆盖原始启动异常。
+
+    参数:
+        无。
+
+    返回:
+        无。
+
+    异常:
+        无：所有清理失败都被捕获并记录。
+
+    副作用:
+        关闭已存在的 Run executor、terminal 会话与 service 依赖缓存。
     """
 
     try:
@@ -144,24 +166,28 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         应用运行期间的控制权。
 
     异常:
-        无。Runtime 内部会记录关闭失败。
+        启动阶段异常（``Settings.load``、依赖初始化、运行时与工具装配失败等）向上抛出，由
+        ``lifespan`` 包装层记入 ``failed`` 启动状态；关闭阶段的单个步骤失败自行记录日志。
 
     副作用:
-        按启动顺序安装日志管线、加载配置、初始化服务依赖、收敛遗留 Run、委派与
-        最近 Run 的 terminal checkpoint，创建系统级 ``.cosir`` 目录、播种 Hook 注册表、
-        装配工具系统与 Agent Runtime，
-        并在就绪后写入 ``ready`` 启动状态；关闭时触发 ``SESSION_END``、关闭 Run
-        executor 与终端会话、flush 观测数据、关闭服务依赖，最后写入 ``stopped``
-        启动状态并卸载日志管线。
+        按启动顺序安装日志管线、加载配置、初始化服务依赖、收敛遗留 Run 与最近 Run 的
+        terminal checkpoint，创建系统级 ``.cosir`` 目录、播种 Hook 注册表、装配工具系统与
+        Agent Runtime，并在就绪后写入 ``ready`` 启动状态；关闭时触发 ``SESSION_END``、
+        关闭 Run executor 与终端会话、flush 观测数据、关闭服务依赖，最后写入 ``stopped``
+        启动状态并卸载日志管线。日志管线共安装两次：先按当前 ``paths.LOG_DIR`` 建立最小
+        管线，覆盖配置加载与依赖初始化的失败窗口；``Settings.load()`` 触发 ``paths.reset()``
+        对齐最终数据根后再重建一次。
     """
 
     # 在服务器进程内（无论 uvicorn 以 fork 还是 spawn 拉起子进程）尽早配置日志。
-    # reload 模式下子进程只执行 lifespan、不会执行 __main__.py；先按固定路径建立文件管线，
-    # 确保 Settings.load 或依赖初始化失败也有固定 JSONL 现场。
+    # reload 模式下子进程只执行 lifespan、不会执行 __main__.py；先按当前 paths.LOG_DIR 建立
+    # 文件管线，确保 Settings.load 或依赖初始化失败也有固定 JSONL 现场。
     install_logging_for_current_process(log_dir=paths.LOG_DIR)
     Settings.load()
     initialize_service_dependencies()
-    # 依赖初始化完成后按固定轮转参数（``Constant.Logging``）重建一次管线。
+    # 重建一次管线：Settings.load() 已把 .env 载入进程环境并调用 paths.reset()，此刻
+    # paths.LOG_DIR 才是最终数据根（CODING_AGENT_DATA_DIR）下的日志目录。轮转参数与函数默认值
+    # 同源（Constant.Logging，不经环境覆盖），这里显式传入只为固定意图。
     install_logging_for_current_process(
         log_dir=paths.LOG_DIR,
         max_bytes=Constant.Logging.MAX_BYTES,
@@ -192,8 +218,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
                 },
             )
     except Exception:
-        # terminal checkpoint recovery is a startup cleanup side path; it must not prevent the
-        # backend from becoming ready when the main database and runtime can still serve requests.
+        # terminal checkpoint 恢复只是启动期的清理旁路：主库与运行时仍可服务时，它不得阻止
+        # 后端进入 ready。
         log.exception(
             "orphaned_terminal_sessions_recovery_failed",
             extra={"msg": "启动期 terminal checkpoint 恢复失败，继续启动 backend", "data": {}},

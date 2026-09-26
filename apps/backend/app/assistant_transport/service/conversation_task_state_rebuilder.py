@@ -74,7 +74,6 @@ class ConversationTaskStateRebuilder:
     @staticmethod
     def build_pair_tool_part(
         rows: list[ConversationTaskContextRecord],
-        delegations: Sequence[Any] = (),
         child_agent_roles: Mapping[tuple[int, str], str] | None = None,
     ) -> dict[str, ConversationStateToolCallPart]:
         """把单个 Run 的 context 行配对为 ``toolCallId → tool-call part`` 映射。
@@ -86,7 +85,6 @@ class ConversationTaskStateRebuilder:
 
         参数:
             rows: 单个 Run 的 context 行，调用方保证已按 ``sequence`` 排序。
-            delegations: 为保持调用方接口稳定而保留；委派展示数据不从该参数读取。
             child_agent_roles: 由调用方按 child task 的 workspace 解析出的旧记录 role，键为
                 ``(child_task_id, child_agent_id)``；已持久化 role 优先于此回填值。
 

@@ -7,8 +7,8 @@
   B. ``paths.reset()`` 按环境变量重算：只设 DATA_DIR、同时设 DATA_DIR 与 LOG_DIR、
      LOG_DIR 优先级、空串回落、monkeypatch 清理后还原。
   C. ``paths.override(**kwargs)``：部分覆盖、未知键、覆盖后 ``system_cosir_dir`` 联动。
-  D. ``Settings`` 已无四个路径属性；``Settings.override`` 对路径键抛 ``ValueError``；
-     ``Settings.load()`` 触发 ``paths.reset()`` 与环境对齐。
+  D. ``Settings`` 已无四个路径属性、也不再提供覆盖入口；``Settings.load()`` 触发
+     ``paths.reset()`` 与环境对齐。
   E. ``app.utils.cosir_paths`` 可独立导入且 ``system_cosir_dir`` 读 ``paths.DATA_DIR``。
   F. ``app.storage.store_engines`` 的 ``init_storage`` / ``checkpoint_path`` 使用 ``paths`` 常量、
      路径变化后切换引擎、并在结束时复位避免污染。
@@ -221,15 +221,10 @@ def test_settings_has_no_path_attribute(attribute: str) -> None:
     assert not hasattr(Settings, attribute), f"Settings 仍残留 {attribute}"
 
 
-@pytest.mark.parametrize(
-    "key",
-    ["LOG_DIR", "DATABASE_FILE", "CHECKPOINT_FILE", "DATA_DIR"],
-)
-def test_settings_override_rejects_path_keys(key: str, tmp_path: Path) -> None:
-    # 目的：Settings.override 对已退场的路径键抛 ValueError。
-    # 潜在缺陷：路径键仍在 _OVERRIDABLE 中被静默接受。
-    with pytest.raises(ValueError):
-        Settings.override(**{key: tmp_path / "x"})
+def test_settings_has_no_override_entry_point() -> None:
+    # 目的：覆盖入口已退场，测试注入统一走 monkeypatch.setattr。
+    # 潜在缺陷：无声地重新引入第二套进程级覆盖事实源。
+    assert not hasattr(Settings, "override")
 
 
 def test_settings_load_aligns_paths_with_env(
@@ -258,15 +253,15 @@ def test_settings_loads_environment_from_system_cosir(
     data_dir = tmp_path / "data"
     env_file = data_dir / ".cosir" / ".env"
     env_file.parent.mkdir(parents=True)
-    env_file.write_text("CODING_AGENT_DEFAULT_LANGUAGE=en\n", encoding="utf-8")
+    env_file.write_text("DEFAULT_LANGUAGE=en\n", encoding="utf-8")
     monkeypatch.setenv("CODING_AGENT_DATA_DIR", str(data_dir))
-    monkeypatch.delenv("CODING_AGENT_DEFAULT_LANGUAGE", raising=False)
+    monkeypatch.delenv("DEFAULT_LANGUAGE", raising=False)
     paths.reset()
     try:
-        Settings._load_local_env(paths.repository_root())
-        assert os.environ["CODING_AGENT_DEFAULT_LANGUAGE"] == "en"
+        Settings._load_local_env()
+        assert os.environ["DEFAULT_LANGUAGE"] == "en"
     finally:
-        monkeypatch.delenv("CODING_AGENT_DEFAULT_LANGUAGE", raising=False)
+        monkeypatch.delenv("DEFAULT_LANGUAGE", raising=False)
         _reset_paths()
 
 
