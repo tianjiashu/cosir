@@ -2,7 +2,12 @@
 
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
-from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.agent_profile import (
+    AgentProfile,
+    AgentProfileConfigError,
+    AgentProfileType,
+)
+from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.model_settings import ModelSettings
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.observability import (
@@ -19,6 +24,7 @@ from app.core.runtime.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
 from app.core.tools.schemas import ToolExecutionContext
+from app.core.tools.schemas.tool_names import TOOL_DELEGATE_TASK
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.workflow_operations import WorkflowOperations
@@ -109,9 +115,19 @@ class AgentRuntime:
             RuntimeError: 轮次绑定的 agent profile 不可用时抛出，由执行器捕获收束为 failed。
         """
         run_id = run.id
-        # 解析本次执行的 agent profile：使用 run 创建时绑定的 agent_id
-        # （run 维度承载 agent，task 不再绑定 agent），未绑定时回退到 main_agent。
-        agent_profile = self._agent_registry.resolve(run.agent_id or "main_agent")
+        task = self._task_service.get_task(run.task_id)
+        workspace = self._workspace_service.get_workspace(task.workspace_id)
+        agent_id = run.agent_id or "main_agent"
+        is_main_agent = agent_id == "main_agent"
+        workspace_scope = (
+            AgentProfileRegistry.SYSTEM_WORKSPACE if is_main_agent else workspace.root_path
+        )
+        try:
+            agent_profile = self._agent_registry.resolve(workspace_scope, agent_id)
+        except AgentProfileConfigError as exc:
+            raise RuntimeError(
+                f"workspace child agent configuration unavailable for run {run_id}: {exc}"
+            ) from exc
         if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for run {run_id}")
         # 派生 per-run 副本承载本次 run：共享注册表单例不被原地写，并发 run 互不串扰。
@@ -121,13 +137,18 @@ class AgentRuntime:
         agent_profile = agent_profile.derive_for_run(
             run, ban_tools=ban_tools, model_settings=model_settings
         )
-        await self.run_agent(agent_profile, execution_mode=execution_mode)
+        await self.run_agent(
+            agent_profile,
+            execution_mode=execution_mode,
+            agent_profile_registry=self._agent_registry,
+        )
 
     async def run_agent(
         self,
         agent: AgentProfile,
         *,
         execution_mode: ExecutionMode = "fresh",
+        agent_profile_registry: AgentProfileRegistry | None = None,
     ) -> None:
         """驱动一次 agent run 执行并提交 canonical conversation facts。
 
@@ -256,13 +277,15 @@ class AgentRuntime:
         run: ConversationRunRecord,
         agent_profile: AgentProfile,
         tool_trace_recorder: ToolTraceRecorder | None = None,
+        agent_profile_registry: AgentProfileRegistry | None = None,
     ) -> WorkflowOperations:
         """为单个 run 构建运行时操作门面，按 workspace 解析工具边界。
 
         workspace 可见性（写、改、删是否开放）由 ``execution_context`` 决定；
         最终「可运行工具集合」由 ``agent_profile.select_tools`` 在候选集上裁定，
-        运行底座不再自行做权限门禁。
-
+        运行底座不再自行做权限门禁。唯一例外是 fail closed 的委派前置条件：主 Agent 拿不到
+        ``agent_profile_registry`` 时从工具集中剔除 ``delegate_task``（无目录即无法解析目标），
+        子 Agent 则已由 ``ban_tools`` 收窄，不在此处处理。
 
         参数:
             workspace: 当前 run 所属的 workspace 记录，用于解析工具执行边界。
@@ -271,6 +294,9 @@ class AgentRuntime:
             agent_profile: 驱动本轮执行的 agent profile。
             tool_trace_recorder: 可选的工具调用 trace 记录器（依赖倒置）；为 None 时
                 工具执行不产生 trace，行为与集成前一致。
+            agent_profile_registry: 进程内 Agent 目录，作为本 run 的运行期依赖透传给工具
+                （委派执行期按 workspace 作用域解析目标）；为 None 时主 Agent 不暴露
+                ``delegate_task``。
 
         返回:
             已注入正确 tool_executor / model_tools / execution_context / trace_recorder 的
@@ -282,6 +308,7 @@ class AgentRuntime:
         if execution_context is not None:
             runtime_dependencies = ToolRuntimeDependencies(
                 parent_agent_profile=agent_profile,
+                agent_profile_registry=agent_profile_registry,
                 parent_task_is_child=task.is_child,
                 terminal_session_service=get_terminal_session_service(),
                 is_run_cancelled=cancellation_registry.is_cancelled,
