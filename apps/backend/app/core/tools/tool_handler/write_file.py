@@ -17,7 +17,6 @@ from app.core.runtime.conversation_run_cancellation_registry import cancellation
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.core.tools.schemas import (
-    TOOL_GROUP_FILE_EDIT,
     TOOL_WRITE_FILE,
     ToolDefinition,
     ToolDisplayHints,
@@ -31,6 +30,7 @@ from app.core.tools.tool_execute.tool_error import (
     tool_error,
 )
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_grouping import TOOL_GROUP_FILE_EDIT
 from app.core.tools.tool_handler.patch_write.atomic_write import (
     atomic_write_text,
     looks_like_line_numbered,

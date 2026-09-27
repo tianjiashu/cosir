@@ -7,7 +7,6 @@ from typing import Any
 
 from app.core.tools.display.filesystem_display import build_content_search_display_data
 from app.core.tools.schemas import (
-    TOOL_GROUP_SEARCH,
     TOOL_SEARCH_CONTENT,
     ToolDefinition,
     ToolDisplayHints,
@@ -16,6 +15,7 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_execute.tool_error import blocked_device_reason, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_grouping import TOOL_GROUP_SEARCH
 from app.core.tools.tool_handler.search.content_engine import search_content
 from app.core.tools.tool_handler.search.errors import (
     InvalidSearchPattern,

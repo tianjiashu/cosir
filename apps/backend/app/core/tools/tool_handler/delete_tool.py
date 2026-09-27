@@ -12,7 +12,6 @@ from app.core.runtime.conversation_run_cancellation_registry import cancellation
 from app.core.tools.display.file_change_display import build_file_delete_display_data
 from app.core.tools.schemas import (
     TOOL_DELETE_FILE,
-    TOOL_GROUP_FILE_EDIT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -21,6 +20,7 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import os_error_message, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_grouping import TOOL_GROUP_FILE_EDIT
 from app.core.tools.tool_handler.security.file_operation_paths import (
     resolve_workspace_relative_path,
 )

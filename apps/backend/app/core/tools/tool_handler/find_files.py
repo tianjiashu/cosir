@@ -7,7 +7,6 @@ import time
 from app.core.tools.display.filesystem_display import build_file_search_display_data
 from app.core.tools.schemas import (
     TOOL_FIND_FILES,
-    TOOL_GROUP_SEARCH,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -15,6 +14,7 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_execute.tool_error import blocked_device_reason, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_grouping import TOOL_GROUP_SEARCH
 from app.core.tools.tool_handler.search.errors import (
     SearchPathNotFound,
     SearchPathUnreadable,

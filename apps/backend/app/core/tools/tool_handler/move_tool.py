@@ -13,7 +13,6 @@ import os
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.schemas import (
-    TOOL_GROUP_FILE_EDIT,
     TOOL_MOVE_FILE,
     ToolDefinition,
     ToolDisplayHints,
@@ -23,6 +22,7 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import os_error_message, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_grouping import TOOL_GROUP_FILE_EDIT
 from app.core.tools.tool_handler.patch_write.patch_diff import FileDiffResult
 from app.core.tools.tool_handler.security.file_operation_paths import (
     ensure_utf8_text_file,

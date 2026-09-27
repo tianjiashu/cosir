@@ -8,7 +8,6 @@ from app.config.constant import Constant
 from app.core.tools.display.child_agent_display import build_child_agent_wait_display_data
 from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_WAIT,
-    TOOL_GROUP_CHILD_AGENT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -17,6 +16,7 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.child_task import ChildAgentWaitArgs
 from app.service.depends import get_conversation_run_state_service, get_task_service

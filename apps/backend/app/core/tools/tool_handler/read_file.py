@@ -15,7 +15,6 @@ from typing import ClassVar
 
 from app.core.tools.display.filesystem_display import build_read_file_display_data
 from app.core.tools.schemas import (
-    TOOL_GROUP_SEARCH,
     TOOL_READ_FILE,
     ToolDefinition,
     ToolDisplayHints,
@@ -24,6 +23,7 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_execute.tool_error import os_error_message, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_grouping import TOOL_GROUP_SEARCH
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import ReadFileArgs

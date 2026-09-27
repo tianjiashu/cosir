@@ -8,13 +8,13 @@ import platform
 from typing import ClassVar
 
 from app.core.tools.schemas import (
-    TOOL_GROUP_TERMINAL_SESSION,
     TOOL_TERMINAL_SIGNAL,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.core.tools.tool_handler.terminal_session.common import (
     build_session_display_payload,
     cancelled,

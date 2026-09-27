@@ -26,7 +26,6 @@ from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_STATUS,
     TOOL_CHILD_AGENT_WAIT,
     TOOL_DELEGATE_TASK,
-    TOOL_GROUP_CHILD_AGENT,
     TOOL_TERMINAL_CLOSE,
     TOOL_TERMINAL_READ,
     TOOL_TERMINAL_SIGNAL,
@@ -40,6 +39,7 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import DelegateTaskArgs
 from app.models import ConversationRunCommand

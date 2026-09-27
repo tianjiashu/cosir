@@ -13,7 +13,6 @@ from app.core.tools.display.file_change_display import build_file_change_display
 from app.core.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
 from app.core.tools.schemas import (
     TOOL_APPLY_PATCH,
-    TOOL_GROUP_FILE_EDIT,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -22,6 +21,7 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_grouping import TOOL_GROUP_FILE_EDIT
 from app.core.tools.tool_handler.patch_write.patch_apply import (
     PatchApplyError,
     apply_all_with_diff,

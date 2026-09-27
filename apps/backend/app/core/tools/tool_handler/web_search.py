@@ -8,7 +8,6 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.tools.display.web_display import build_web_search_display_data
 from app.core.tools.schemas import (
-    TOOL_GROUP_WEB,
     TOOL_WEB_SEARCH,
     ToolDefinition,
     ToolDisplayHints,
@@ -17,6 +16,7 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tools.tool_grouping import TOOL_GROUP_WEB
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_handler.web.providers import default_web_providers
 from app.core.tools.tool_handler.web.web_provider import WebProviderUnavailableError

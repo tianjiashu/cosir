@@ -7,13 +7,13 @@ PTY 创建、shell 解析、cwd 边界校验与终端元数据登记都在 ``Ter
 from typing import ClassVar
 
 from app.core.tools.schemas import (
-    TOOL_GROUP_TERMINAL_SESSION,
     TOOL_TERMINAL_START,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.core.tools.tool_handler.terminal_session.common import (
     build_session_display_payload,
     cancelled,
