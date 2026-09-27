@@ -22,10 +22,10 @@ T. ``<tool_layer>`` 工具能力目录层：只在 ``AgentProfile.allowed_tools`
 
 空层块（``""``）不参与拼接，避免相邻层之间出现多余空行。
 
-各层预算（token 上限与字节安全兜底）的唯一事实源是 ``Constant.SystemPrompt``：token 上限决定
-某一层注入多少内容，字节上限是同层的廉价截断（先于 token 估算执行，避免超大文件进入 O(n)
-估算）。这些数值都是固定常量、不经环境变量覆盖，故不在 ``Settings``；本模块不再自带任何预算
-字面量。
+各层预算的唯一事实源是 ``Constant.SystemPrompt``：Agent 系统预设、全局指令、Workspace 指令三层各
+有一个 token 上限，决定该层最多注入多少内容（超限按 token 估算截断前缀）；Layer 1 与 Layer T 的
+内容由构造方保证有界，不再施加预算。这些数值都是固定常量、不经环境变量覆盖，故不在 ``Settings``；
+本模块不再自带任何预算字面量。
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from app.config.constant import Constant
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.tools.schemas.tool_names import TOOL_DELEGATE_TASK
+from app.service.configuration.file_store import ConfigurationFileStore
 from app.utils.cosir_paths import system_instruction_file
 from app.utils.file_utils import read_text_file
 from app.utils.token_estimator import TokenEstimator
@@ -81,8 +82,8 @@ class SystemPromptBuilder:
 
     @staticmethod
     def build(
-            agent_profile: AgentProfile,
-            workspace_root: str,
+        agent_profile: AgentProfile,
+        workspace_root: str,
     ) -> str:
         """构建完整系统提示词文本（五层）。
 
@@ -132,8 +133,7 @@ class SystemPromptBuilder:
             无。
 
         副作用:
-            读取 ``Settings``（用户语言）、``Constant.SystemPrompt``（字节上限）与
-            ``platform.system()``；不读任何用户/workspace 文件。
+            读取 ``Settings``（用户语言）与 ``platform.system()``；不读任何用户/workspace 文件。
         """
         language = Settings.DEFAULT_LANGUAGE
         allowed = ", ".join(agent_profile.allowed_tools) or "none"
@@ -161,9 +161,7 @@ class SystemPromptBuilder:
             "</runtime_context>",
         ]
         text = "\n".join(lines)
-        return SystemPromptBuilder._enforce_bytes(
-            text, Constant.SystemPrompt.RUNTIME_CONTEXT_MAX_BYTES
-        )
+        return text
 
     # --- Layer 2: Agent 系统预设层（profile.system_prompt） ---
     @staticmethod
@@ -186,9 +184,7 @@ class SystemPromptBuilder:
         if raw is None or raw.strip() == "":
             return ""
         content = SystemPromptBuilder._enforce_budget(
-            raw,
-            Constant.SystemPrompt.AGENT_PERSONA_MAX_BYTES,
-            Constant.SystemPrompt.AGENT_PERSONA_MAX_TOKENS,
+            raw, Constant.SystemPrompt.AGENT_PERSONA_MAX_TOKENS
         )
         if content != raw:
             logger.warning(
@@ -200,8 +196,8 @@ class SystemPromptBuilder:
     # --- Layer T: 工具能力目录层（可用工具含委派工具时的子 Agent 目录） ---
     @staticmethod
     def _build_tool_layer(
-            workspace_root: str,
-            available_tool_names: Collection[str],
+        workspace_root: str,
+        available_tool_names: Collection[str],
     ) -> str:
         """构建工具能力目录层：可用工具含委派工具时投影子 Agent 目录。
 
@@ -215,15 +211,15 @@ class SystemPromptBuilder:
             available_tool_names: 该 Agent 声明的可用工具名集合。
 
         返回:
-            包裹在 ``<tool_layer>`` 标签内的子 Agent 目录；不需要该层时返回 ``""``。超字节兜底时
-            截断的是目录正文而不是标签，返回文本仍是一对完整标签。
+            包裹在 ``<tool_layer>`` 标签内的子 Agent 目录；不需要该层时返回 ``""``。本层不施加预算，
+            目录正文原样注入。
 
         异常:
             RuntimeError: 委派工具可用但进程级 Agent 目录未初始化（``configuration
                 .get_agent_registry`` 的装配错误）时原样抛出，不静默降级。
 
         副作用:
-            读取进程级 Agent 目录的内存索引（不读文件、不修改注册表）；超字节兜底时记录警告。
+            读取进程级 Agent 目录的内存索引（不读文件、不修改注册表）。
         """
         if TOOL_DELEGATE_TASK not in available_tool_names:
             return ""
@@ -235,16 +231,7 @@ class SystemPromptBuilder:
         summary = get_agent_registry().child_agent_summary(workspace_root).strip()
         if not summary:
             return ""
-        layer = "<tool_layer>\n" + summary + "\n</tool_layer>"
-        max_bytes = Constant.SystemPrompt.TOOL_LAYER_MAX_BYTES
-        if len(layer.encode("utf-8")) <= max_bytes:
-            return layer
-        logger.warning(
-            "tool_layer_truncated",
-            extra={"data": {"max_bytes": max_bytes}},
-        )
-        overhead = len(b"<tool_layer>\n\n</tool_layer>")
-        summary = SystemPromptBuilder._enforce_bytes(summary, max_bytes - overhead)
+
         return "<tool_layer>\n" + summary + "\n</tool_layer>"
 
     # --- Layer G: 系统级全局指令层（system_cosir_dir/AGENTS.md，跨 workspace 生效） ---
@@ -269,14 +256,20 @@ class SystemPromptBuilder:
             已有文件内容。
         """
         path = system_instruction_file()
+        try:
+            ConfigurationFileStore.assert_safe_child(path.parent, path)
+        except (OSError, ValueError) as exc:
+            logger.warning(f"global_instruction_path_rejected path={path} error={exc}")
+            return ""
         if not path.is_file():
             try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("", encoding="utf-8")
+                ConfigurationFileStore.write_text_atomic(path, "", root=path.parent)
             except OSError as exc:
                 logger.warning(f"global_instruction_create_failed path={path} error={exc}")
                 return ""
         try:
+            # 上面的包含关系校验是安全闸门；保留这个窄读取调用，兼容运行时探针在不触碰
+            # 文件存储实现的前提下注入读取失败。
             raw = read_text_file(path)
         except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError) as exc:
             logger.warning(f"global_instruction_read_failed path={path} error={exc}")
@@ -284,9 +277,7 @@ class SystemPromptBuilder:
         if raw is None or raw.strip() == "":
             return ""
         content = SystemPromptBuilder._enforce_budget(
-            raw,
-            Constant.SystemPrompt.GLOBAL_INSTRUCTION_MAX_FILE_BYTES,
-            Constant.SystemPrompt.GLOBAL_INSTRUCTION_MAX_FILE_TOKENS,
+            raw, Constant.SystemPrompt.GLOBAL_INSTRUCTION_MAX_FILE_TOKENS
         )
         if not content.strip():
             return ""
@@ -312,9 +303,7 @@ class SystemPromptBuilder:
         副作用:
             遍历工作区目录，并读取命中的唯一指令文件。
         """
-        found = SystemPromptBuilder._find_instruction_file(
-            Path(workspace_root)
-        )
+        found = SystemPromptBuilder._find_instruction_file(Path(workspace_root))
         if found is None:
             return ""
         rel, abs_path = found
@@ -323,17 +312,11 @@ class SystemPromptBuilder:
         except (FileNotFoundError, PermissionError, OSError, UnicodeDecodeError) as exc:
             logger.warning(f"workspace_instruction_read_failed path={abs_path} error={exc}")
             return ""
-        # 单文件预算：token 上限与字节安全兜底都取自 ``Constant.SystemPrompt``；字节上限先于
-        # token 估算执行，避免超大文件进入二分查找、也防止上下文被撑爆。
+        # 单文件预算：token 上限取自 ``Constant.SystemPrompt``，超限时按 token 估算截断超长前缀。
         content = SystemPromptBuilder._enforce_budget(
-            raw,
-            Constant.SystemPrompt.WORKSPACE_INSTRUCTION_MAX_FILE_BYTES,
-            Constant.SystemPrompt.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS,
+            raw, Constant.SystemPrompt.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS
         )
-        return (
-            f"<workspace_layer abs_path={abs_path}>\n"
-            f"# ./{rel.as_posix()}\n{content}\n</workspace_layer>"
-        )
+        return "<workspace_layer>\n" f"# ./{rel.as_posix()}\n{content}\n</workspace_layer>"
 
     @staticmethod
     def _find_instruction_file(root: Path) -> tuple[Path, Path] | None:
@@ -392,9 +375,9 @@ class SystemPromptBuilder:
                                     best_rel = rel
                                     best_abs = Path(e.path)
                             elif (
-                                    depth + 1 <= 4
-                                    and e.name not in _IGNORED_DIRS
-                                    and e.is_dir(follow_symlinks=False)
+                                depth + 1 <= 4
+                                and e.name not in _IGNORED_DIRS
+                                and e.is_dir(follow_symlinks=False)
                             ):
                                 queue.append((Path(e.path), depth + 1))
                 except (PermissionError, OSError):
@@ -408,58 +391,15 @@ class SystemPromptBuilder:
 
     # --- 预算工具 ---
     @staticmethod
-    def _enforce_bytes(text: str, max_bytes: int) -> str:
-        """按 UTF-8 字节上限防御性截断（超出则丢弃尾部，避免越界）。
-
-        参数:
-            text: 待截断文本。
-            max_bytes: 字节上限。
-
-        返回:
-            截断后的文本（不超过 ``max_bytes`` 字节）。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-        encoded = text.encode("utf-8")
-        if len(encoded) <= max_bytes:
-            return text
-        return encoded[:max_bytes].decode("utf-8", "ignore")
-
-    @staticmethod
-    def _enforce_budget(text: str, max_bytes: int, max_tokens: int) -> str:
-        """对文本施加字节与 token 双重预算上限。
-
-        参数:
-            text: 待约束文本。
-            max_bytes: 字节上限。
-            max_tokens: token 上限（启发式估算）。
-
-        返回:
-            约束后的文本。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-        text = SystemPromptBuilder._enforce_bytes(text, max_bytes)
-        return SystemPromptBuilder._truncate_tokens(text, max_tokens)
-
-    @staticmethod
-    def _truncate_tokens(text: str, max_tokens: int) -> str:
+    def _enforce_budget(text: str, max_tokens: int | None = None) -> str:
         """按 token 估算上限截断文本（二分查找字符边界，纯启发式）。
 
         参数:
-            text: 待截断文本。
-            max_tokens: token 上限。
+            text: 待约束文本。
+            max_tokens: token 上限（启发式估算）；``None`` 表示无限制。
 
         返回:
-            估算 token 不超过 ``max_tokens`` 的前缀。
+            估算 token 不超过 ``max_tokens`` 的前缀；``max_tokens`` 为 ``None`` 时原样返回原文。
 
         异常:
             无。
@@ -467,7 +407,7 @@ class SystemPromptBuilder:
         副作用:
             无。
         """
-        if TokenEstimator.estimate(text) <= max_tokens:
+        if max_tokens is None or TokenEstimator.estimate(text) <= max_tokens:
             return text
         lo, hi = 0, len(text)
         while lo < hi:

@@ -22,7 +22,7 @@ async def test_tool_groups_returns_only_main_agent_tools_grouped_and_sorted(monk
     monkeypatch.setattr(
         tools_api,
         "get_agent_registry",
-        lambda: SimpleNamespace(resolve=lambda _agent_id: Profile()),
+        lambda: SimpleNamespace(resolve=lambda _workspace, _agent_id: Profile()),
     )
     monkeypatch.setattr(
         tools_api,

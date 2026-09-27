@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class CreateTaskRequest(BaseModel):
@@ -21,7 +21,24 @@ class CreateTaskRequest(BaseModel):
         无。
     """
 
+    model_config = ConfigDict(populate_by_name=True)
+
     text: str = ""
+    creation_command_id: str | None = Field(default=None, alias="creationCommandId")
+
+    @field_validator("creation_command_id")
+    @classmethod
+    def normalize_creation_command_id(cls, value: str | None) -> str | None:
+        """将 provisional 清理标记归一化为空或非空字符串。"""
+
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized or len(normalized) > 128:
+            raise ValueError(
+                "creationCommandId must be a non-empty string of at most 128 characters"
+            )
+        return normalized
 
     @field_validator("text")
     @classmethod

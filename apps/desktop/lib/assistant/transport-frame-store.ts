@@ -235,9 +235,27 @@ export class TransportFrameStore {
     this.publish();
   }
 
-  public clearPendingCommands(): void {
+  public clearPendingCommands(rejectedCommands?: readonly UserAddMessageCommand[]): void {
     if (this.pendingCommands.length === 0) return;
-    this.pendingCommands = [];
+    if (!rejectedCommands || rejectedCommands.length === 0) {
+      this.pendingCommands = [];
+    } else {
+      const rejectedIds = new Set(
+        rejectedCommands
+          .map((command) => command.commandId)
+          .filter((commandId): commandId is string => typeof commandId === "string"),
+      );
+      this.pendingCommands = this.pendingCommands.filter((command) => (
+        typeof command.commandId === "string"
+          ? !rejectedIds.has(command.commandId)
+          : !rejectedCommands.includes(command)
+      ));
+    }
+    if (this.pendingCommands.length === 0) {
+      this.composeItems();
+      this.publish();
+      return;
+    }
     this.composeItems();
     this.publish();
   }

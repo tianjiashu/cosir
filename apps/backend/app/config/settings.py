@@ -21,10 +21,12 @@
 """
 
 import os
+from io import StringIO
 from typing import ClassVar
 
 from dotenv import dotenv_values
 
+from app.service.configuration.file_store import ConfigurationFileStore
 from app.utils import paths
 
 
@@ -67,6 +69,8 @@ class Settings:
     LANGFUSE_SECRET_KEY: ClassVar[str | None] = None
     # 云服务器经反向代理对外暴露的 HTTPS 域名（指向 langfuse/server）。
     LANGFUSE_BASE_URL: ClassVar[str] = "http://124.220.55.187"
+    # 记录由系统配置文件注入的值，使配置中心能够与桌面宿主/启动器提供的进程环境区分。
+    _LOADED_ENV_VALUES: ClassVar[dict[str, str]] = {}
 
     @staticmethod
     def _load_local_env() -> None:
@@ -87,15 +91,33 @@ class Settings:
         """
 
         merged_values: dict[str, str] = {}
+        previous_file_values = dict(Settings._LOADED_ENV_VALUES)
+        for key, previous_value in previous_file_values.items():
+            if os.environ.get(key) == previous_value:
+                os.environ.pop(key, None)
+        file_values: dict[str, str] = {}
         for env_file in paths.env_files():
             if not env_file.exists():
                 continue
-            file_values = dotenv_values(env_file)
-            for key, value in file_values.items():
+            content = ConfigurationFileStore.read_text(
+                env_file,
+                root=paths.SYSTEM_COSIR_DIR,
+            )
+            parsed_values = dotenv_values(stream=StringIO(content))
+            for key, value in parsed_values.items():
                 if value is not None:
                     merged_values[key] = value
+                    if key not in os.environ or key in previous_file_values:
+                        file_values[key] = value
+        Settings._LOADED_ENV_VALUES = dict(file_values)
         for key, value in merged_values.items():
             os.environ.setdefault(key, value)
+
+    @classmethod
+    def is_file_loaded_value(cls, name: str) -> bool:
+        """判断当前环境值是否由本次 Settings 加载从配置文件注入。"""
+
+        return name in cls._LOADED_ENV_VALUES
 
     @staticmethod
     def _env_bool(name: str, default: bool) -> bool:

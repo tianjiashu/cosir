@@ -219,12 +219,19 @@ class WorkspaceService:
         """
         return self._workspace.get(workspace_id)
 
-    def create_task(self, workspace_id: int, title: str) -> TaskRecord:
+    def create_task(
+        self,
+        workspace_id: int,
+        title: str,
+        creation_command_id: str | None = None,
+    ) -> TaskRecord:
         """在 workspace 结构性写闸门内创建用户 task 容器。
 
         参数:
             workspace_id: 所属 workspace 标识。
             title: task 标题。
+            creation_command_id: 可选的 provisional Task 来源标记，仅供未接受的首条
+                Assistant Transport 请求做受控清理。
 
         返回:
             新建的 task 记录。
@@ -241,7 +248,11 @@ class WorkspaceService:
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
                 self._workspace.get(workspace_id)
-                return self._task_service.get_or_create_task(workspace_id, title)
+                return self._task_service.get_or_create_task(
+                    workspace_id,
+                    title,
+                    creation_command_id=creation_command_id,
+                )
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc
 
@@ -270,7 +281,6 @@ class WorkspaceService:
             事件体系已删除，不再参与级联删除）。
         """
 
-        workspace = self._workspace.get(workspace_id)
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
                 task_ids = set(self._task_crud.list_ids_by_workspace(workspace_id))

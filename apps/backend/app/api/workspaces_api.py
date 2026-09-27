@@ -203,6 +203,7 @@ async def create_workspace_task(
             workspace_service.create_task,
             workspace_id,
             preview(payload.text, limit=TASK_TITLE_LIMIT) or "新对话",
+            payload.creation_command_id,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc

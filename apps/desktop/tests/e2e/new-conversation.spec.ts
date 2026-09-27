@@ -9,6 +9,36 @@ test.beforeEach(async ({ request }) => {
   await request.post("http://127.0.0.1:8000/__test__/reset");
 });
 
+test("新对话 Assistant Transport 被拒绝时不导航、不丢输入并清理 provisional Task", async ({ page, request }) => {
+  await page.addInitScript(() => {
+    window.localStorage.clear();
+    window.localStorage.setItem(
+      "cosir:model-selection:workspace:7",
+      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+    );
+  });
+  await page.route("http://127.0.0.1:8000/assistant", async (route) => {
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "TASK_BUSY", message: "测试拒绝新对话", retryable: true } }),
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "选择工作区" }).click();
+  await page.getByRole("option", { name: /demo/ }).click();
+  await expect(page.getByRole("combobox", { name: "选择模型" })).toContainText("demo-model");
+  const input = page.getByLabel("新对话内容");
+  await input.fill("保留这段输入");
+  await page.getByRole("button", { name: "开始对话" }).click();
+
+  await expect(page).toHaveURL("http://127.0.0.1:4173/");
+  await expect(page.getByRole("dialog")).toContainText("测试拒绝新对话");
+  await expect(input).toHaveValue("保留这段输入");
+  await expect.poll(async () => (await request.get("http://127.0.0.1:8000/workspaces/7/tasks")).json()).toEqual([]);
+});
+
 async function frontendLogs(page: import("@playwright/test").Page): Promise<FrontendLog[]> {
   return page.evaluate(() => {
     const value = (window as unknown as { __cosirFrontendLogs?: FrontendLog[] }).__cosirFrontendLogs;
@@ -396,7 +426,7 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   await page.getByRole("button", { name: "重跑" }).click();
   await expect((await failureResponse).status()).toBe(409);
 
-  await expect(page.getByRole("status")).toContainText("编辑重跑被测试后端拒绝");
+  await expect(page.getByRole("dialog")).toContainText("编辑重跑被测试后端拒绝");
   await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveText("edit-failure");
   await expect(topComposer).toHaveText("keep draft");
 });

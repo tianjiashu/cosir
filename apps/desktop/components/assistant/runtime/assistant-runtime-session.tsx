@@ -24,7 +24,7 @@ import type {
 } from "@/components/assistant/runtime/runtime-types";
 import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
 import { newTraceId } from "@/lib/trace";
-import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
+import { getToolGroups, toolNamesForGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import {
   getBackendRuntimeSnapshot,
   subscribeBackendRuntime,
@@ -100,10 +100,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
 
   const selectedBanTools = useMemo(() => {
     if (toolGroupsLoading || toolGroupsError) return initialBanTools ?? [];
-    const selected = new Set(selectedToolGroups);
-    return toolGroups
-      .filter(({ group }) => selected.has(group))
-      .flatMap(({ tools }) => tools.map(({ name }) => name));
+    return toolNamesForGroups(selectedToolGroups, toolGroups);
   }, [initialBanTools, selectedToolGroups, toolGroups, toolGroupsError, toolGroupsLoading]);
 
   const registerRuntimeControls = useCallback((controls: RuntimeControls | null) => {

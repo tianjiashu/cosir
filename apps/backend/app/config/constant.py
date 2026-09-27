@@ -162,25 +162,19 @@ class Constant:
         OUTPUT_REASONING_KEY: str = "reasoning"
 
     class SystemPrompt:
-        """系统提示词各层预算闸门与字节安全兜底（原先散落在 ``Settings`` 与 builder 模块内的数值）。
+        """系统提示词各层预算闸门（原先散落在 ``Settings`` 与 builder 模块内的数值）。
 
-        token 上限决定「某一层注入多少内容」，字节上限是同层的廉价截断——先于 token 估算执行，
-        避免超大文件进入 O(n) 估算。两者都是固定值，不由环境变量覆盖（历史 env 覆盖面从未被使用）。
+        Agent 系统预设、全局指令、Workspace 指令三个提示词内容层各有一个 token 上限，决定该层最多
+        注入多少内容；超限时由 ``SystemPromptBuilder`` 按 token 估算截断前缀。所有数值都是固定常量，
+        不由环境变量覆盖（历史 env 覆盖面从未被使用）。
         """
 
-        # Layer 2（Agent 系统预设）单文件预算。
-        AGENT_PERSONA_MAX_BYTES: int = 100_000
+        # Layer 2（Agent 系统预设）token 上限。
         AGENT_PERSONA_MAX_TOKENS: int = 2_000
-        # Layer 1（运行期动态变量）整块字节上限。
-        RUNTIME_CONTEXT_MAX_BYTES: int = 4_000
-        # Layer T（工具能力目录）整块字节上限。
-        TOOL_LAYER_MAX_BYTES: int = 8_000
-        # Layer G（系统级全局指令）单文件预算。
-        GLOBAL_INSTRUCTION_MAX_FILE_BYTES: int = 200_000
-        GLOBAL_INSTRUCTION_MAX_FILE_TOKENS: int = 1_200
-        # Layer 3（Workspace 项目指令）单文件预算。
-        WORKSPACE_INSTRUCTION_MAX_FILE_BYTES: int = 200_000
-        WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: int = 1_200
+        # Layer G（系统级全局指令）token 上限。
+        GLOBAL_INSTRUCTION_MAX_FILE_TOKENS: int = 5_000
+        # Layer 3（Workspace 项目指令）token 上限。
+        WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: int = 5_000
 
     class Attachment:
         """附件上传与图片归一化的共享常量。"""

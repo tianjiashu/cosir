@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { TransportStatus, type TransportIssue } from "@/components/assistant/transport-status";
+import { TransportErrorDialog } from "@/components/assistant/transport-error-dialog";
 import { AssistantRuntimeErrorBoundary } from "@/components/assistant/runtime/assistant-runtime-error-boundary";
 import { AssistantRuntimeSession } from "@/components/assistant/runtime/assistant-runtime-session";
 import type { AssistantRuntimeProps } from "@/components/assistant/runtime/runtime-types";
@@ -52,7 +53,14 @@ export function AssistantRuntime(props: AssistantRuntimeProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <TransportStatus issue={issue} onRetry={handleRetry} />
+      <TransportStatus issue={issue?.presentation === "dialog" ? null : issue} onRetry={handleRetry} />
+      {issue?.presentation === "dialog" && (
+        <TransportErrorDialog
+          open
+          message={issue.message}
+          onOpenChange={(open) => { if (!open) setIssue(null); }}
+        />
+      )}
       <div className="min-h-0 flex-1">
         <AssistantRuntimeErrorBoundary
           key={runtimeGeneration}

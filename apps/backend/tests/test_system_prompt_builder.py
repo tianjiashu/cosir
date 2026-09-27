@@ -15,6 +15,7 @@ from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.context import system_prompt_builder as spb
 from app.utils import paths
+from app.utils.token_estimator import TokenEstimator
 
 
 @pytest.fixture
@@ -69,12 +70,22 @@ def test_global_layer_read_error_degrades_to_empty(redirect_system_cosir: Path, 
 
 
 def test_global_layer_truncated_by_budget(redirect_system_cosir: Path):
-    # 远超字节/ token 上限的大文件，应被截断到模块内固定字节兜底以内。
+    # 远超 token 上限的大文件，应被截断到该层 token 预算以内。
     _write_global(redirect_system_cosir, "a" * 500_000)
     out = spb.SystemPromptBuilder._build_global_layer()
     assert out.startswith("<global_layer>")
     body = out[len("<global_layer>\n"): -len("\n</global_layer>")]
-    assert len(body.encode("utf-8")) <= Constant.SystemPrompt.GLOBAL_INSTRUCTION_MAX_FILE_BYTES
+    assert (
+        TokenEstimator.estimate(body)
+        <= Constant.SystemPrompt.GLOBAL_INSTRUCTION_MAX_FILE_TOKENS
+    )
+    assert len(body) < 500_000
+
+
+def test_enforce_budget_is_unlimited_without_token_limit():
+    # 不传 max_tokens 视为无限制：超长文本原样返回，不做截断。
+    body = "a" * 10_000
+    assert spb.SystemPromptBuilder._enforce_budget(body) == body
 
 
 def test_build_includes_global_layer_in_order(redirect_system_cosir: Path, tmp_path: Path):

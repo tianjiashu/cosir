@@ -26,6 +26,7 @@ COSIR_ATTACHMENT_STAGING_DIR_NAME: str = ".uploading"
 COSIR_TOOL_ARTIFACT_DIR_NAME: str = "tool-artifacts"
 COSIR_AGENT_CONFIG_DIR_NAME: str = "agents"
 COSIR_INSTRUCTION_FILE_NAME: str = "AGENTS.md"
+COSIR_MAIN_AGENT_PROMPT_FILE_NAME: str = "main_agent_system_prompt.md"
 COSIR_ENV_FILE_NAME: str = ".env"
 COSIR_ENV_LOCAL_FILE_NAME: str = ".env.local"
 
@@ -198,6 +199,23 @@ def system_instruction_file() -> Path:
         无（纯路径拼接，可安全顶层导入）。
     """
     return system_cosir_dir() / COSIR_INSTRUCTION_FILE_NAME
+
+
+def system_main_agent_prompt_file() -> Path:
+    """返回系统级主 Agent 系统提示词配置文件路径。
+
+    返回：
+        ``<SYSTEM_COSIR_DIR>/main_agent_system_prompt.md``；该文件由主 Agent
+        prompt 配置 service 负责创建、读取和原子写入，本函数只计算路径。
+
+    异常：
+        无。
+
+    副作用：
+        无（纯路径拼接）。
+    """
+
+    return system_cosir_dir() / COSIR_MAIN_AGENT_PROMPT_FILE_NAME
 
 
 def system_agent_config_dir() -> Path:

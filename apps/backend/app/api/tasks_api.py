@@ -9,7 +9,7 @@
 
 import asyncio
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Query
 
 from app.api.schemas import (
     DeleteRunResponse,
@@ -18,7 +18,11 @@ from app.api.schemas import (
     TaskResponse,
 )
 from app.app import app
-from app.models.errors.deletion_errors import DeletionBusyError, RunDeletionConflictError
+from app.models.errors.deletion_errors import (
+    DeletionBusyError,
+    ProvisionalTaskCleanupConflictError,
+    RunDeletionConflictError,
+)
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service.depends import get_task_service
 from app.task_runtime.service.task_service import TaskService
@@ -84,6 +88,7 @@ async def fork_task(
 async def delete_task(
     task_id: int,
     task_service: TaskService = Depends(get_task_service),
+    creation_command_id: str | None = Query(default=None, alias="creationCommandId"),
 ) -> DeleteTaskResponse:
     """删除单个任务及其级联的轮次与运行时事件。
 
@@ -104,13 +109,25 @@ async def delete_task(
     try:
         # 级联删除是同步 DB 操作（单 BEGIN IMMEDIATE 写锁事务），经 asyncio.to_thread
         # 移出 event loop，避免冻结其它 task 的 turn 调度。
-        await asyncio.to_thread(task_service.delete_task, task_id)
+        if isinstance(creation_command_id, str):
+            await asyncio.to_thread(
+                task_service.cleanup_provisional_task,
+                task_id,
+                creation_command_id,
+            )
+        else:
+            await asyncio.to_thread(task_service.delete_task, task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     except DeletionBusyError as exc:
         raise HTTPException(
             status_code=409,
             detail={"code": exc.code, "message": exc.message, "retryable": True},
+        ) from exc
+    except ProvisionalTaskCleanupConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": exc.message, "retryable": False},
         ) from exc
     return DeleteTaskResponse(task_id=task_id, deleted=True)
 

@@ -4,6 +4,18 @@
 
 # 重要提示：当前是绿地项目，不需要做兼容，包括代码兼容和运行兼容，数据库、日志、配置等文件再进行破坏性变更后，可以删除
 
+## assistant-ui
+
+This project uses assistant-ui for chat interfaces.
+
+Documentation: https://www.assistant-ui.com/llms-full.txt
+
+Key patterns:
+- Use AssistantRuntimeProvider at the app root
+- Thread component for full chat interface
+- AssistantModal for floating chat widget
+- useChatRuntime hook with AI SDK transport
+
 ## 产品形态与运行拓扑
 
 本项目是单用户、本机运行的桌面 Agent。前后端分离用于隔离职责和进程；HTTP/SSE 是 localhost 进程边界，不代表公网服务或独立部署边界。
@@ -156,7 +168,7 @@ context是由app/core/context/runtime_context_manager.py维护，snapshot由Task
 - `apps/backend/app/task_runtime/`：进程内 task/workspace 并发协调。
 - `apps/backend/app/config/`、`core/observability/`：进程配置、日志和可降级观测。
 
-## docstring 约定
+## docstring 约定【必须中文】
 
 源码 docstring 描述具体职责，不重复本文件的架构宣言。公共模块、类、函数至少说明：
 
@@ -167,4 +179,5 @@ context是由app/core/context/runtime_context_manager.py维护，snapshot由Task
 - 涉及生命周期时的初始化、关闭、取消、重试或恢复条件；
 - 涉及边界转换时，从输入契约到输出契约的转换规则。
 
-docstring 必须随代码事实更新；
+如果**注释**或者**docstring**与**代码事实**不一致，则必须修正注释以及docString 与代码事实对齐；
+

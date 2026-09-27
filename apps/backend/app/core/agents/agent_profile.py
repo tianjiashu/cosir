@@ -196,37 +196,23 @@ def _require_tool_names(document: Mapping[str, Any], source: Path) -> list[str]:
     副作用:
         首次调用会经 :func:`_allowed_tool_names` 导入 ``app.core.tools.schemas`` 包。
     """
-    try:
-        tool_names = document["allowed_tools"]
-        if not all(isinstance(name, str) for name in tool_names):
-            raise AgentProfileConfigError(
-                f"Agent 配置无效，文件={source}，allowed_tools 必须全部是字符串"
-            )
-        if not tool_names:
-            raise AgentProfileConfigError(
-                f"Agent 配置无效，文件={source}，allowed_tools 至少需要一个工具名"
-            )
-        unknown = sorted(set(tool_names) - _allowed_tool_names())
-        if unknown:
-            raise AgentProfileConfigError(
-                f"Agent 配置无效，文件={source}，allowed_tools 含未知工具名: {', '.join(unknown)}"
-            )
-        if len(set(tool_names)) != len(tool_names):
-            raise AgentProfileConfigError(f"Agent 配置无效，文件={source}，allowed_tools 不能重复")
-        return list(tool_names)
-    except Exception as exc:
-        log.exception(
-            "_require_tool_names_invalid",
-            extra={
-                "msg": "_require_tool_names 校验失败,返回空列表",
-                "data": {
-                    "file": str(source),
-                    "error_type": type(exc).__name__,
-                    "error": str(exc)[:500],
-                },
-            },
+    tool_names = document["allowed_tools"]
+    if not all(isinstance(name, str) for name in tool_names):
+        raise AgentProfileConfigError(
+            f"Agent 配置无效，文件={source}，allowed_tools 必须全部是字符串"
         )
-        return []
+    if not tool_names:
+        raise AgentProfileConfigError(
+            f"Agent 配置无效，文件={source}，allowed_tools 至少需要一个工具名"
+        )
+    unknown = sorted(set(tool_names) - _allowed_tool_names())
+    if unknown:
+        raise AgentProfileConfigError(
+            f"Agent 配置无效，文件={source}，allowed_tools 含未知工具名: {', '.join(unknown)}"
+        )
+    if len(set(tool_names)) != len(tool_names):
+        raise AgentProfileConfigError(f"Agent 配置无效，文件={source}，allowed_tools 不能重复")
+    return list(tool_names)
 
 
 @dataclass
@@ -402,33 +388,7 @@ class AgentProfile:
         source = Path(path)
         try:
             document = read_json_object(source)
-            _validate_document(document, source)
-            _reject_blank_text_fields(document, source)
-            allowed_tools = _require_tool_names(document, source)
-            max_steps = document.get("max_steps")
-            if max_steps is not None and max_steps <= 0:
-                raise AgentProfileConfigError(
-                    f"Agent 配置无效，文件={source}，max_steps 必须是正整数"
-                )
-            model_settings = ModelSettings.from_json(document.get("model_settings", {}))
-            provider_id = document.get("provider_id")
-            model_name = document.get("model_name")
-            if not get_provider_service().vaild_provider(provider_id=provider_id, model_name=model_name):
-                provider_id = None
-                model_name = None
-            return AgentProfile(
-                agent_id=document["agent_id"],
-                role=document["role"],
-                description=document["description"],
-                allowed_tools=allowed_tools,
-                agent_type=AgentProfileType.CHILD,
-                system_prompt=document["system_prompt"],
-                provider_id=provider_id,
-                model_name=model_name,
-                model_settings=model_settings,
-                # 未声明时沿用 dataclass 字段默认值，避免在此重复硬编码步骤上限。
-                max_steps=AgentProfile.max_steps if max_steps is None else max_steps,
-            )
+            return parse_agent_profile_document(document, source)
         except Exception as exc:
             # 坏配置必须留痕：这里捕获后返回 None，调用方只会跳过文件，没有日志就查不到原因。
             log.exception(
@@ -443,3 +403,65 @@ class AgentProfile:
                 },
             )
             return None
+
+
+def parse_agent_profile_document(
+    document: Mapping[str, Any],
+    source: Path,
+    *,
+    strict_provider: bool = False,
+) -> AgentProfile:
+    """将已解析的 Agent JSON 文档严格转换为 CHILD profile。
+
+    ``vaild_agent_profile`` 使用默认的兼容运行时语义：无效 Provider/model 引用被记录后降为
+    未配置。配置中心写入时应传入 ``strict_provider=True``，让部分填写或不存在的引用直接失败，
+    避免用户保存后配置被静默丢弃。
+
+    参数:
+        document: JSON 顶层对象。
+        source: 配置来源路径，仅用于错误定位。
+        strict_provider: 是否拒绝无效 Provider/model 覆盖。
+
+    返回:
+        已完成字段、工具名、模型设置和可选 Provider/model 校验的 CHILD profile。
+
+    异常:
+        AgentProfileConfigError: 文档字段、工具、步骤数或严格 Provider/model 校验失败。
+
+    副作用:
+        读取进程内 Provider service 以验证显式模型覆盖；不写文件、不修改 Registry。
+    """
+
+    _validate_document(document, source)
+    _reject_blank_text_fields(document, source)
+    allowed_tools = _require_tool_names(document, source)
+    max_steps = document.get("max_steps")
+    if max_steps is not None and max_steps <= 0:
+        raise AgentProfileConfigError(f"Agent 配置无效，文件={source}，max_steps 必须是正整数")
+    model_settings = ModelSettings.from_json(document.get("model_settings", {}))
+    provider_id = document.get("provider_id")
+    model_name = document.get("model_name")
+    has_provider_override = provider_id is not None or model_name is not None
+    provider_valid = not has_provider_override or get_provider_service().vaild_provider(
+        provider_id=provider_id,
+        model_name=model_name,
+    )
+    if not provider_valid and strict_provider:
+        raise AgentProfileConfigError(
+            f"Agent 配置无效，文件={source}，provider_id 与 model_name 必须同时为空或引用有效模型"
+        )
+    if not provider_valid:
+        provider_id = None
+        model_name = None
+    return AgentProfile(
+        agent_id=document["agent_id"],
+        role=document["role"],
+        description=document["description"],
+        allowed_tools=allowed_tools,
+        agent_type=AgentProfileType.CHILD,
+        system_prompt=document["system_prompt"],
+        provider_id=provider_id,
+        model_name=model_name,
+        model_settings=model_settings,
+        max_steps=AgentProfile.max_steps if max_steps is None else max_steps,
+    )

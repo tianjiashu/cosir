@@ -52,3 +52,12 @@ class RunDeletionConflictError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class ProvisionalTaskCleanupConflictError(RuntimeError):
+    """临时 Task 清理闸门拒绝了不安全的删除请求。"""
+
+    def __init__(self, message: str = "provisional task cleanup is not allowed") -> None:
+        super().__init__(message)
+        self.code = "PROVISIONAL_TASK_CLEANUP_REJECTED"
+        self.message = message

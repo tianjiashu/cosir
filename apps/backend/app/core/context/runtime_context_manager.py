@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -74,6 +75,9 @@ class RuntimeContextManager:
     is_fork: bool = False
     # task 级 system prompt 条目，不参与压缩。
     _system_entry: ContextEntry | None = field(default=None, init=False)
+    # 用于判断 profile 的系统提示词来源是否已变化；配置更新不改写正在运行的 manager，
+    # 下一次 Run 获取 manager 时由 TaskRuntimeSpace 重新装配。
+    _system_prompt_source: str | None = field(default=None, init=False)
     _entries: list[ContextEntry] = field(default_factory=list, init=False)
     # begin_run 从持久化 context 恢复下一个可用序号，add_message 落库后自增。
     # 序号游标由 RuntimeContextManager 独自管理；context service 只负责持久化。
@@ -149,17 +153,53 @@ class RuntimeContextManager:
 
     def __post_init__(self) -> None:
         """确保并加载 Task 级 system prompt，再建立内存 working copy。"""
-
         service = self._require_context_service()
-        prompt = SystemMessage(
-            content=SystemPromptBuilder.build(self.agent_profile, self.workspace_root)
-        )
+        system_prompt_text = SystemPromptBuilder.build(self.agent_profile, self.workspace_root)
+        self._system_prompt_source = self._build_system_prompt_source(system_prompt_text)
+        if self._system_entry is None:
+            prompt = SystemMessage(content=system_prompt_text)
+            self._system_entry = ContextEntry(prompt, None, -1)
         entries = service.entries_in_context(self.current_task_id)
-        self._system_entry = ContextEntry(prompt, None, -1)
         self._entries = list(entries)
         self._message_sequence = (
                 self._require_context_service().max_sequence(self.current_task_id) + 1
         )
+
+    def matches_system_prompt_source(
+        self,
+        agent_profile: AgentProfile,
+        workspace_root: str,
+    ) -> bool:
+        """判断当前 manager 是否仍对应传入 profile 的系统提示词来源。
+
+        参数：
+            agent_profile: 下一次 Run 解析出的最新 Agent profile。
+            workspace_root: 下一次 Run 使用的 workspace 根目录。
+
+        返回：
+            ``True`` 表示完整构建结果未变化；否则返回 ``False``，调用方应在 Run 边界重新
+            创建 manager。构建结果包含 Agent profile、工具目录、全局指令、workspace 指令和
+            当前用户语言等所有系统提示词层。
+
+        异常：
+            无。
+
+        副作用：
+            读取当前系统提示词依赖的配置和 workspace 指令，但不修改 context；全局指令缺失时
+            由 ``SystemPromptBuilder`` 按既有契约创建空文件。
+        """
+
+        return self._system_prompt_source == self._build_system_prompt_source(
+            SystemPromptBuilder.build(agent_profile, workspace_root)
+        )
+
+    def _build_system_prompt_source(
+        self,
+        prompt: str,
+    ) -> str:
+        """生成完整 system prompt 的非持久化指纹。"""
+
+        return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
     def _require_context_service(self) -> ConversationTaskContextService:
         """返回已装配的 context service；未装配时立即失败。

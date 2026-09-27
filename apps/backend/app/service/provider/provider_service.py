@@ -255,11 +255,15 @@ class ProviderService:
             无。
 
         异常:
-            无。厂商不存在时静默无操作（幂等删除语义）。
+            sqlalchemy.exc.IntegrityError: 仍有其它事实以外键引用该厂商时由存储层抛出
+                （调用方负责映射为可读的 HTTP 错误）。
+            sqlalchemy.exc.SQLAlchemyError: 删除语句执行失败。
 
         副作用:
-            从 ``providers`` 表删除匹配行并级联删除 ``models`` 关联行；
-            写 info 日志 ``provider_deleted``。
+            从 ``providers`` 表删除匹配行并级联删除 ``models`` 关联行；引用该厂商的
+            ``conversation_runs.provider_id`` 由 FK ``ON DELETE SET NULL`` 置空
+            （Run 行与其 ``model_name`` 历史事实保留）；
+            写 info 日志 ``provider_deleted``。厂商不存在时静默无操作（幂等删除语义）。
         """
 
         try:

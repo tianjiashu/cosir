@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import { BackendStartupScreen } from "@/components/backend-startup-screen";
 import { WorkspaceShell } from "@/components/workspace-shell";
@@ -6,10 +6,13 @@ import type { InitialConversationAttachment } from "@/components/new-conversatio
 import {
   initializeBackendRuntime,
   restartBackendRuntime,
+  getBackendStatusSnapshot,
+  subscribeBackendStatus,
   startBackendRuntimeMonitor,
 } from "@/src/runtime-config";
 
 type TaskRouteState = {
+  returnTaskId?: number | null;
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
@@ -18,6 +21,11 @@ type TaskRouteState = {
 
 function TaskRoute() {
   const { pathname, state } = useLocation();
+  const routeState = state as TaskRouteState | null;
+  if (pathname === "/settings") {
+    const returnTaskId = routeState?.returnTaskId;
+    return <WorkspaceShell routeTaskId={returnTaskId && returnTaskId > 0 ? returnTaskId : null} settingsOpen />;
+  }
   const taskPath = pathname.match(/^\/tasks\/([^/]+)$/);
   if (!taskPath) {
     return pathname === "/"
@@ -26,7 +34,6 @@ function TaskRoute() {
   }
 
   const parsedTaskId = Number(taskPath[1]);
-  const routeState = state as TaskRouteState | null;
   return Number.isInteger(parsedTaskId) && parsedTaskId > 0
     ? <WorkspaceShell
         routeTaskId={parsedTaskId}
@@ -57,6 +64,11 @@ function DesktopApp() {
   const [boot, setBoot] = useState<"starting" | "ready" | "failed">("starting");
   const [showApp, setShowApp] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const runtimeStatus = useSyncExternalStore(
+    subscribeBackendStatus,
+    getBackendStatusSnapshot,
+    getBackendStatusSnapshot,
+  );
 
   useEffect(() => {
     let active = true;
@@ -89,6 +101,9 @@ function DesktopApp() {
   }, [boot]);
 
   if (boot === "failed") return <BootFailure key={retryToken} error={error ?? "启动失败"} onRetry={() => { setBoot("starting"); setError(null); setRetryToken((value) => value + 1); }} />;
+  if (boot === "ready" && runtimeStatus?.state === "failed") {
+    return <BootFailure key={retryToken} error={runtimeStatus.message} onRetry={() => { setBoot("starting"); setError(null); setRetryToken((value) => value + 1); }} />;
+  }
   if (boot !== "ready") return <BackendStartupScreen />;
 
   return (

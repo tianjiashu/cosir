@@ -20,7 +20,11 @@ from sqlalchemy.orm.session import Session
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.models import ConversationRunRecord, TaskRecord
-from app.models.errors.deletion_errors import DeletionBusyError, RunDeletionConflictError
+from app.models.errors.deletion_errors import (
+    DeletionBusyError,
+    ProvisionalTaskCleanupConflictError,
+    RunDeletionConflictError,
+)
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service import depends as service_depends
 from app.storage.checkpoint_gc import cleanup_orphan_checkpoint_threads
@@ -412,8 +416,9 @@ class TaskService:
         删除前先校验任务存在（不存在则抛 ``KeyError``），再按固定的 workspace → task
         锁顺序取得结构性写操作闸门。在单个 ``BEGIN IMMEDIATE`` 事务内按「子任务先于父任务」
         的后序清理每个任务自身及其产物，保证原子性（全删或全不删）。
-        提交后把孤儿 LangGraph checkpoint 线程交 ``checkpoint_gc.cleanup_orphan_checkpoint_threads``
-        回收。删除是高风险操作，保留 start / complete 审计日志。
+        提交后回收孤儿 LangGraph checkpoint 线程并卸载进程内 runtime space。Task 删除不负责
+        删除图片附件，也不触发 workspace 附件孤儿 GC。删除是高风险操作，保留 start / complete
+        审计日志。
 
         参数:
             task_id: 待删除的任务标识。
@@ -432,33 +437,9 @@ class TaskService:
         """
 
         task = self._task.get(task_id)
-        workspace = self._workspace.get(task.workspace_id)
         try:
             with workspace_operations.operation(task.workspace_id, timeout=10):
-                task = self._task.get(task_id)
-                locked_ids = self._collect_task_ancestor_ids(task_id) | {task_id}
-                with ExitStack() as stack:
-                    for current_id in sorted(locked_ids):
-                        stack.enter_context(
-                            self._task_register.get_or_create(current_id).operation(timeout=10)
-                        )
-                    task_ids = self._collect_task_tree_ids(task_id)
-                    for current_id in sorted(task_ids - locked_ids):
-                        stack.enter_context(
-                            self._task_register.get_or_create(current_id).operation(timeout=10)
-                        )
-                        locked_ids.add(current_id)
-                    log.info(
-                        "task_delete_start",
-                        extra={"msg": "task delete started", "data": {"task_id": task_id}},
-                    )
-                    with begin_immediate(self._session_factory) as session:
-                        result = self.delete_task_tree_in_session(task_id, session)
-                    self.finalize_deleted_task_spaces(result)
-                    self.collect_workspace_attachment_orphans(
-                        workspace.id,
-                        workspace.root_path,
-                    )
+                result = self._delete_task_locked(task_id)
         except TimeoutError as exc:
             raise DeletionBusyError("task", task_id) from exc
         log.info(
@@ -468,6 +449,74 @@ class TaskService:
                 "data": {"task_id": task_id, "deleted_tasks": len(result.task_ids)},
             },
         )
+
+    def cleanup_provisional_task(self, task_id: int, creation_command_id: str) -> None:
+        """在 Assistant Transport 尚未接受首条命令时受控删除 provisional Task。
+
+        只有任务创建标记完全匹配、任务树尚未产生任何 Run 时才允许删除。该用例复用普通
+        Task 树删除核心，但明确不做图片附件删除或 workspace 附件孤儿 GC；清理失败由调用方
+        保留原始 Transport 错误并记录诊断日志。
+        """
+
+        if not creation_command_id.strip():
+            raise ProvisionalTaskCleanupConflictError("creationCommandId is required")
+        task = self._task.get(task_id)
+        if task.creation_command_id != creation_command_id:
+            raise ProvisionalTaskCleanupConflictError("creationCommandId does not match task")
+        try:
+            with workspace_operations.operation(task.workspace_id, timeout=10):
+                current = self._task.get(task_id)
+                if current.creation_command_id != creation_command_id:
+                    raise ProvisionalTaskCleanupConflictError(
+                        "creationCommandId does not match task"
+                    )
+                tree_ids = self._collect_task_tree_ids(task_id)
+                locked_ids = self._collect_task_ancestor_ids(task_id) | tree_ids
+                with ExitStack() as stack:
+                    for current_id in sorted(locked_ids):
+                        stack.enter_context(
+                            self._task_register.get_or_create(current_id).operation(timeout=10)
+                        )
+                    if any(self._turn.list_by_task(current_id) for current_id in tree_ids):
+                        raise ProvisionalTaskCleanupConflictError(
+                            "provisional task already has accepted business facts"
+                        )
+                    self._delete_task_after_operations(task_id)
+        except TimeoutError as exc:
+            raise DeletionBusyError("task", task_id) from exc
+        log.info(
+            "provisional_task_cleaned",
+            extra={
+                "msg": "provisional task cleaned without attachment deletion",
+                "data": {"task_id": task_id, "creation_command_id": creation_command_id},
+            },
+        )
+
+    def _delete_task_locked(self, task_id: int) -> TaskDeletionResult:
+        """在已持有 workspace 闸门时删除任务树，不触发附件清理。"""
+
+        locked_ids = self._collect_task_ancestor_ids(task_id) | {task_id}
+        with ExitStack() as stack:
+            for current_id in sorted(locked_ids):
+                stack.enter_context(self._task_register.get_or_create(current_id).operation(timeout=10))
+            task_ids = self._collect_task_tree_ids(task_id)
+            for current_id in sorted(task_ids - locked_ids):
+                stack.enter_context(self._task_register.get_or_create(current_id).operation(timeout=10))
+                locked_ids.add(current_id)
+            result = self._delete_task_after_operations(task_id)
+        return result
+
+    def _delete_task_after_operations(self, task_id: int) -> TaskDeletionResult:
+        """在 workspace 与任务树闸门均已持有时提交任务树删除。"""
+
+        log.info(
+            "task_delete_start",
+            extra={"msg": "task delete started", "data": {"task_id": task_id}},
+        )
+        with begin_immediate(self._session_factory) as session:
+            result = self.delete_task_tree_in_session(task_id, session)
+        self.finalize_deleted_task_spaces(result)
+        return result
 
     def delete_run(self, task_id: int, run_id: int) -> None:
         """删除单个 run 及其会话上下文与产物（checkpoint、终端元数据）。

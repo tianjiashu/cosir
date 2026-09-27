@@ -35,7 +35,12 @@ export type TaskAssistantTransportOptions = {
   onFinish?: (status: { targetRunId: number | null; targetRunStatus: string | null }) => void;
   onError?: (
     error: Error,
-    params: { commands: readonly unknown[]; updateState: (updater: (state: TransportState) => TransportState) => void },
+    params: {
+      commands: readonly unknown[];
+      phase: "request-rejected" | "accepted-stream-failed";
+      updateState: (updater: (state: TransportState) => TransportState) => void;
+      clearPendingCommands: () => void;
+    },
   ) => Promise<void>;
   onCancel?: (params: { error?: Error; commands: readonly unknown[] }) => void;
   onAttachReady?: (attach: (() => Promise<void>) | null) => void;
@@ -108,6 +113,7 @@ function useTaskAssistantTransportAdapter(
     const controller = new AbortController();
     const callbacks: StreamCallbacks = { commands, controller };
     activeStreamRef.current = callbacks;
+    let accepted = false;
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -122,6 +128,7 @@ function useTaskAssistantTransportAdapter(
         throw new Error(`Status ${response.status}: ${body}`);
       }
       if (activeStreamRef.current !== callbacks) return;
+      accepted = true;
       optionsRef.current.onResponse?.(response);
       await readSse(response, callbacks);
       if (activeStreamRef.current === callbacks) {
@@ -138,7 +145,9 @@ function useTaskAssistantTransportAdapter(
       const normalized = error instanceof Error ? error : new Error(String(error));
       await optionsRef.current.onError?.(normalized, {
         commands,
+        phase: accepted ? "accepted-stream-failed" : "request-rejected",
         updateState: (updater) => store.importState(updater(store.getSnapshot().state)),
+        clearPendingCommands: () => store.clearPendingCommands(commands as UserAddMessageCommand[]),
       });
     }
   }, [closeActiveStream, readSse, store]);

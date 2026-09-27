@@ -168,13 +168,21 @@ async def delete_provider(
         ``{"provider_id": ..., "deleted": true}``（幂等：厂商不存在也返回成功）。
 
     异常:
-        无。
+        HTTPException: 删除仍被其它事实引用而触发外键违约时抛 409，
+            并在 ``detail`` 中给出可操作原因（不暴露原始 SQL）。
 
     副作用:
-        级联删除厂商与其下模型条目（service 层写 ``provider_deleted`` 审计日志）。
+        级联删除厂商与其下模型条目；引用该厂商的 ``conversation_runs.provider_id``
+        由 FK ``ON DELETE SET NULL`` 置空（service 层写 ``provider_deleted`` 审计日志）。
     """
 
-    provider_service.delete_provider(provider_id)
+    try:
+        provider_service.delete_provider(provider_id)
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="该厂商仍被其它数据引用，无法删除",
+        ) from exc
     return {"provider_id": provider_id, "deleted": True}
 
 

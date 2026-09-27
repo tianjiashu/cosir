@@ -23,6 +23,7 @@ from app.api.middleware.api_logging import (
     install_request_logging,
 )
 from app.api.middleware.transport_error import install_transport_request_error_handler
+from app.api.middleware.validation_error import install_request_validation_error_handler
 from app.config.logging.logger import log
 from app.lifespan import lifespan
 
@@ -50,6 +51,8 @@ app.add_middleware(
 
 install_request_logging(app, log)
 install_http_exception_logging(app, log)
+# 框架校验错误的响应形状（RequestValidationError 类型的唯一注册者）。
+install_request_validation_error_handler(app)
 install_transport_request_error_handler(app)
 
 # 触发各域路由的模块级装饰器注册到真实 app 上。
@@ -61,7 +64,10 @@ install_transport_request_error_handler(app)
 importlib.import_module("app.api.tasks_api")
 importlib.import_module("app.api.workspaces_api")
 importlib.import_module("app.api.providers_api")
-importlib.import_module("app.api.configuration_api")
+importlib.import_module("app.api.configuration.agents")
+importlib.import_module("app.api.configuration.global_instructions")
+importlib.import_module("app.api.configuration.main_agent_prompt")
+importlib.import_module("app.api.configuration.environment")
 importlib.import_module("app.api.models_api")
 importlib.import_module("app.api.terminal_api")
 importlib.import_module("app.api.attachments_api")

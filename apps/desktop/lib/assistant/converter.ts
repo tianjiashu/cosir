@@ -27,6 +27,7 @@ import {
 
 export type UserAddMessageCommand = {
   type: "add-message";
+  commandId?: string;
   sourceId?: string | null;
   parentId?: string | null;
   message: {

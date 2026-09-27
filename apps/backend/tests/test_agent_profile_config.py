@@ -12,6 +12,7 @@ from app.core.agents.agent_profile_config import initialize_system_agent_default
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.core.context import system_prompt_builder
+from app.utils.token_estimator import TokenEstimator
 
 
 def _document(agent_id: str) -> dict:
@@ -90,20 +91,13 @@ def test_configured_prompt_enters_agent_layer_and_truncation_logs_agent_id(
 
     _write_config(tmp_path, "local-reader")
     profile = AgentProfile.vaild_agent_profile(tmp_path / "local-reader.json")
-    monkeypatch.setattr(
-        Constant.SystemPrompt,
-        "AGENT_PERSONA_MAX_BYTES",
-        12,
-    )
-    monkeypatch.setattr(
-        Constant.SystemPrompt,
-        "AGENT_PERSONA_MAX_TOKENS",
-        1000,
-    )
+    monkeypatch.setattr(Constant.SystemPrompt, "AGENT_PERSONA_MAX_TOKENS", 3)
 
     layer = system_prompt_builder.SystemPromptBuilder._build_agent_layer(profile)
 
-    assert "Read only the files" not in layer
+    body = layer[len("<agent_layer>\n"): -len("\n</agent_layer>")]
+    assert 0 < TokenEstimator.estimate(body) <= 3
+    assert body != profile.system_prompt
     assert "agent_system_prompt_truncated" in caplog.text
     assert caplog.records[0].data == {"agent_id": "local-reader"}
 

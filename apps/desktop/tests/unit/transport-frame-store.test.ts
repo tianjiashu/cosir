@@ -171,4 +171,23 @@ describe("TransportFrameStore", () => {
     expect(store.getSnapshot().pendingCommands).toHaveLength(0);
     expect(store.getSnapshot().items.filter((item) => item.kind === "canonical")).toHaveLength(1);
   });
+
+  it("clears only the rejected command pending projection", () => {
+    const store = new TransportFrameStore(state([]));
+    const first = {
+      type: "add-message" as const,
+      commandId: "command-1",
+      message: { role: "user" as const, parts: [{ type: "text" as const, text: "first" }] },
+    };
+    const second = {
+      type: "add-message" as const,
+      commandId: "command-2",
+      message: { role: "user" as const, parts: [{ type: "text" as const, text: "second" }] },
+    };
+
+    store.setPendingCommands([first, second]);
+    store.clearPendingCommands([first]);
+
+    expect(store.getSnapshot().pendingCommands).toEqual([second]);
+  });
 });

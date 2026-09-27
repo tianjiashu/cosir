@@ -12,6 +12,7 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   RefreshCwIcon,
+  Settings2Icon,
 } from "lucide-react";
 
 import { TaskPage } from "@/components/task-page";
@@ -24,6 +25,7 @@ import { TaskTree } from "@/components/task-tree/task-tree";
 import { BackendStatusBanner } from "@/components/backend-status-banner";
 import { Workbench } from "@/components/workbench";
 import { WorkbenchProvider } from "@/lib/workbench/context";
+import { SystemConfigurationPage } from "@/components/system-configuration-page";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import {
   deleteTask,
@@ -46,12 +48,13 @@ type DeleteTarget =
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
 
-export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments, initialDisabledToolGroups, initialBanTools }: {
+export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments, initialDisabledToolGroups, initialBanTools, settingsOpen = false }: {
   routeTaskId: number | null;
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
   initialBanTools?: string[];
+  settingsOpen?: boolean;
 }) {
   const navigate = useNavigate();
   const closeWorkspaceTabs = useWorkbenchStore((state) => state.closeWorkspace);
@@ -261,6 +264,12 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
     setSelectedWorkspaceId(workspaceId);
     navigate("/");
   };
+  const openSettings = () => {
+    navigate("/settings", { state: { returnTaskId: activeTaskId } });
+  };
+  const closeSettings = () => {
+    navigate(activeTaskId ? `/tasks/${activeTaskId}` : "/");
+  };
   const requestDelete = (target: NonNullable<DeleteTarget>) => { setDeleteError(null); setDeleteTarget(target); };
   const refreshTaskState = useCallback(() => {
     const workspaceId = activeTaskWorkspaceId;
@@ -375,6 +384,18 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
             </nav>
           </>
         )}
+        <div className="mt-auto border-t p-3">
+          <Button
+            variant="ghost"
+            className={`w-full gap-2 ${collapsed ? "justify-center px-0" : "justify-start"}`}
+            onClick={openSettings}
+            aria-label="系统配置"
+            title={collapsed ? "系统配置" : undefined}
+          >
+            <Settings2Icon className="size-4" />
+            {!collapsed && <span>系统配置</span>}
+          </Button>
+        </div>
       </aside>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex h-14 shrink-0 items-center justify-between border-b px-5"><div className="min-w-0"><p className="flex items-center gap-2 text-sm font-medium">{activeTaskId ? "对话" : "新对话"}{activeTask?.task_type === "fork" && <GitForkIcon className="text-muted-foreground size-3.5" aria-label="Fork Task" />}</p><p className="text-muted-foreground truncate text-xs">{forkError ?? (activeTaskId ? "已存在任务" : "选择工作区后开始创建对话")}</p></div>{selectedWorkspace && <div className="text-muted-foreground flex items-center gap-2 text-xs"><FolderIcon className="size-3.5" />{selectedWorkspace.name}</div>}</div>
@@ -394,11 +415,12 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
             onTaskLoaded={handleTaskLoaded}
             onTaskStateChanged={refreshTaskState}
             onRunStateChange={handleRunStateChange}
-          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation, initialText, attachments, disabledToolGroups, banTools) => { navigate(`/tasks/${conversation.task_id}`, { state: { initialMessage: initialText, initialAttachments: attachments, initialDisabledToolGroups: disabledToolGroups, initialBanTools: banTools } }); void load(); }} />}
+          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation) => { navigate(`/tasks/${conversation.task_id}`); void load(); }} />}
         </div>
       </main>
       <Workbench workspaceId={activeTaskWorkspaceId} />
       {deleteTarget && <DeleteConfirmDialog open title={deleteTarget.kind === "workspace" ? `删除工作区“${deleteTarget.label}”？` : `删除任务“${deleteTarget.label}”？`} description={deleteTarget.kind === "workspace" ? `此操作将永久删除该工作区及其下的 ${deleteTarget.taskCount} 个任务和全部对话数据。` : "此操作将永久删除该任务及其全部对话数据，不影响所属工作区和其他任务。"} warning="删除后无法撤销。" error={deleteError} busy={deleting} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteError(null); } }} onConfirm={() => void confirmDelete()} />}
+      {settingsOpen && <SystemConfigurationPage onClose={closeSettings} />}
     </div>
     </WorkbenchProvider>
   );

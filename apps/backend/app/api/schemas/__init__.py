@@ -6,25 +6,41 @@
 FastAPI/Pydantic 把模块当作类型注解从而报错）。
 """
 
+from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
+from app.api.schemas.request.AgentConfigurationRequest import AgentConfigurationRequest
 from app.api.schemas.request.CreateTaskRequest import CreateTaskRequest
 from app.api.schemas.request.CreateTurnRequest import CreateTurnRequest
 from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceRequest
+from app.api.schemas.request.EnvironmentChangeRequest import EnvironmentChangeRequest
+from app.api.schemas.request.EnvironmentUpdateRequest import EnvironmentUpdateRequest
 from app.api.schemas.request.ForkTaskRequest import ForkTaskRequest
+from app.api.schemas.request.GlobalInstructionUpdateRequest import GlobalInstructionUpdateRequest
+from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
 from app.api.schemas.response.DeleteRunResponse import DeleteRunResponse
 from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse
+from app.api.schemas.response.EnvironmentResponse import EnvironmentResponse
+from app.api.schemas.response.GlobalInstructionResponse import GlobalInstructionResponse
 from app.api.schemas.response.HealthResponse import HealthResponse
 from app.api.schemas.response.TaskResponse import TaskResponse
 from app.api.schemas.response.WorkspaceResponse import WorkspaceResponse
 
 __all__ = [
+    "AgentConfigurationDocument",
+    "AgentConfigurationRequest",
+    "AgentConfigurationResponse",
     "CreateTaskRequest",
     "CreateTurnRequest",
     "CreateWorkspaceRequest",
     "DeleteRunResponse",
     "DeleteTaskResponse",
     "DeleteWorkspaceResponse",
+    "EnvironmentChangeRequest",
+    "EnvironmentResponse",
+    "EnvironmentUpdateRequest",
     "ForkTaskRequest",
+    "GlobalInstructionResponse",
+    "GlobalInstructionUpdateRequest",
     "HealthResponse",
     "TaskResponse",
     "WorkspaceResponse",

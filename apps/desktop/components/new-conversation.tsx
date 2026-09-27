@@ -16,12 +16,15 @@ import { ComposerSurface } from "@/components/composer/composer-surface";
 import { WorkspacePicker } from "@/components/composer/workspace-picker";
 import { CosirMark } from "@/components/cosir-mark";
 import { Button } from "@/components/ui/button";
-import { createWorkspaceTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
+import { createWorkspaceTask, deleteTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
+import { submitAssistantTransport, AssistantTransportProtocolError } from "@/lib/assistant/submit-assistant-transport";
+import { parseTransportError } from "@/lib/assistant/transport-error";
+import { safeFrontendErrorMessage, frontendLog } from "@/lib/logging/frontend-log";
 import {
   Dialog,
   DialogContent,
@@ -137,10 +140,6 @@ type NewConversationProps = {
   onWorkspaceCreated: () => Promise<void>;
   onStarted: (
     conversation: StartedConversation,
-    initialText: string,
-    attachments: InitialConversationAttachment[],
-    disabledToolGroups: string[],
-    banTools: string[],
   ) => void;
 };
 
@@ -192,10 +191,32 @@ export function NewConversation({
     if (!selectedWorkspaceId || !modelReady || !hasDraft || submitting) return;
     setSubmitting(true);
     setError(null);
+    const sendAttachments = [...attachments];
+    const creationCommandId = crypto.randomUUID();
+    let provisionalTask: StartedConversation | null = null;
     try {
       const selection = readStoredSelection({ kind: "workspace", id: selectedWorkspaceId });
       if (!selection?.providerId || !selection.modelName) throw new Error("请先选择模型");
-      const task = await createWorkspaceTask(selectedWorkspaceId, { text: trimmedText });
+      const task = await createWorkspaceTask(selectedWorkspaceId, {
+        text: trimmedText,
+        creationCommandId,
+      });
+      provisionalTask = task;
+      await submitAssistantTransport({
+        taskId: task.task_id,
+        workspaceId: selectedWorkspaceId,
+        commandId: creationCommandId,
+        text: trimmedText,
+        imageAttachments: sendAttachments
+          .filter((attachment) => attachment.kind === "image")
+          .map((attachment) => ({ file: attachment.file, name: attachment.name })),
+        banTools: toolGroups
+          .filter(({ group }) => selectedToolGroups.includes(group))
+          .flatMap(({ tools }) => tools.map(({ name }) => name)),
+        providerId: selection.providerId,
+        modelName: selection.modelName,
+        reasoningEffort: selection.reasoningEffort ?? null,
+      });
       writeStoredSelection({ kind: "task", id: task.task_id }, {
         providerId: selection.providerId,
         modelName: selection.modelName,
@@ -203,16 +224,26 @@ export function NewConversation({
       });
       onStarted(
         task,
-        trimmedText,
-        attachments,
-        selectedToolGroups,
-        toolGroups
-          .filter(({ group }) => selectedToolGroups.includes(group))
-          .flatMap(({ tools }) => tools.map(({ name }) => name)),
       );
-      setSubmitting(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "创建对话失败，请重试");
+      if (provisionalTask && !(cause instanceof AssistantTransportProtocolError)) {
+        try {
+          await deleteTask(provisionalTask.task_id, creationCommandId);
+        } catch (cleanupError) {
+          void frontendLog("ERROR", "provisional_task_cleanup_failed", "provisional Task 清理失败", {
+            data: { taskId: provisionalTask.task_id, creationCommandId },
+            error: cleanupError,
+          });
+        }
+      }
+      const structured = parseTransportError(cause);
+      const message = structured?.message ?? safeFrontendErrorMessage(cause, "创建对话失败，请重试");
+      void frontendLog("ERROR", "new_conversation_submit_failed", "新对话首条消息发送失败", {
+        data: { taskId: provisionalTask?.task_id ?? null, creationCommandId },
+        error: cause,
+      });
+      setError(message);
+    } finally {
       setSubmitting(false);
     }
   };
@@ -315,7 +346,12 @@ export function NewConversation({
             </div>
           </div>
         </ComposerSurface>
-        {error && <p className="text-destructive mt-3 text-center text-sm">{error}</p>}
+        <Dialog open={Boolean(error)} onOpenChange={(open) => { if (!open) setError(null); }}>
+          <DialogContent>
+            <DialogTitle>创建对话失败</DialogTitle>
+            <p className="text-muted-foreground text-sm">{error}</p>
+          </DialogContent>
+        </Dialog>
       </form>
       </InlineComposerInsertionProvider>
     </div>

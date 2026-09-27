@@ -33,7 +33,7 @@ export type WorkspaceTask = {
 export type StartedConversation = Pick<WorkspaceTask, "task_id">;
 
 export type CreateWorkspaceInput = { name: string; root_path: string };
-export type CreateTaskInput = { text?: string };
+export type CreateTaskInput = { text?: string; creationCommandId?: string };
 
 export const getWorkspaces = (options?: ReadRequestOptions) => requestJson<Workspace[]>("/workspaces", options);
 export const createWorkspace = (input: CreateWorkspaceInput) => postJson<Workspace>("/workspaces", input);
@@ -42,6 +42,9 @@ export const createWorkspaceTask = (workspaceId: number, input: CreateTaskInput)
 export const getTask = (taskId: number, options?: ReadRequestOptions) => requestJson<WorkspaceTask>(`/tasks/${taskId}`, options);
 export const deleteWorkspace = (workspaceId: number) =>
   requestJson<{ workspace_id: number; deleted: boolean }>(`/workspaces/${workspaceId}`, { method: "DELETE" });
-export const deleteTask = (taskId: number) =>
-  requestJson<{ task_id: number; deleted: boolean }>(`/tasks/${taskId}`, { method: "DELETE" });
+export const deleteTask = (taskId: number, creationCommandId?: string) =>
+  requestJson<{ task_id: number; deleted: boolean }>(
+    `/tasks/${taskId}${creationCommandId ? `?creationCommandId=${encodeURIComponent(creationCommandId)}` : ""}`,
+    { method: "DELETE" },
+  );
 export const forkTask = (taskId: number, runId: number) => postJson<WorkspaceTask>(`/tasks/${taskId}/fork`, { runId });

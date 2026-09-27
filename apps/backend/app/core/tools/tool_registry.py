@@ -178,6 +178,56 @@ class ToolRegistry:
         with self._lock:
             return [self._tool_definitions[name] for name in sorted(self._tool_definitions)]
 
+    def tool_names_to_tool_groups(self, tool_names: list[str]) -> set[str]:
+        """把工具名称集合反向聚合为「完整选中」的分组名集合。
+
+        只有分组内全部工具都在 ``tool_names`` 中时才返回该分组。口径与配置界面多选框一致：把只
+        选到一部分的分组显示为「已选中」，用户不改动直接保存就会经
+        :meth:`tool_groups_to_tool_names` 把整组工具补回去，等于静默扩大授权。
+
+        参数:
+            tool_names: 已选中的工具名称。
+
+        返回:
+            组内工具全部被选中的分组名集合；没有这样的分组时返回空集合。
+
+        异常:
+            无。
+
+        副作用:
+            无（只读，持锁查询）。
+        """
+
+        selected = set(tool_names)
+        with self._lock:
+            groups: dict[str, list[str]] = {}
+            for definition in self._tool_definitions.values():
+                groups.setdefault(definition.group, []).append(definition.name)
+            return {group for group, names in groups.items() if selected.issuperset(names)}
+
+    def tool_groups_to_tool_names(self, tool_groups: list[str]) -> list[str]:
+        """把选中的分组展开为这些分组内全部工具的名称。
+
+        参数:
+            tool_groups: 已选中的分组名。
+
+        返回:
+            命中分组的工具名称列表（顺序跟随注册顺序）；分组名不存在时该分组不贡献任何名称。
+
+        异常:
+            无。
+
+        副作用:
+            无（只读，持锁查询）。
+        """
+
+        with self._lock:
+            return [
+                definition.name
+                for definition in self._tool_definitions.values()
+                if definition.group in tool_groups
+            ]
+
     def get_tools_by_permission(self, permission: str) -> list[ToolDefinition]:
         """按权限标签筛选工具定义。
 

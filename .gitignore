@@ -15829,3 +15829,4 @@ temp_gen_out.txt
 /apps/desktop/src-tauri/target/
 /apps/desktop/src-tauri/target/
 /.baseline-head/
+/apps/desktop/test-results/

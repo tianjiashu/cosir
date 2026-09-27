@@ -21,6 +21,33 @@ test("直接打开不存在的 Task 会显示错误而不是永久等待", async
   await expect(page.getByText("正在加载任务工作区…", { exact: true })).toHaveCount(0);
 });
 
+test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输入", async ({ page, request }) => {
+  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "拒绝发送回归" } });
+  await page.route("http://127.0.0.1:8000/assistant", async (route) => {
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { code: "TASK_BUSY", message: "测试拒绝普通发送", retryable: true } }),
+    });
+  });
+  await page.addInitScript(() => {
+    window.localStorage.clear();
+    window.localStorage.setItem(
+      "cosir:model-selection:task:42",
+      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+    );
+  });
+
+  await page.goto("/tasks/42");
+  const input = page.getByLabel("消息输入");
+  await input.fill("这条消息不能进入对话");
+  await page.getByRole("button", { name: "发送" }).click();
+
+  await expect(page.getByRole("dialog")).toContainText("测试拒绝普通发送");
+  await expect(input).toHaveValue("这条消息不能进入对话");
+  await expect(page.locator('[data-role="user"]').getByText("这条消息不能进入对话", { exact: true })).toHaveCount(0);
+});
+
 test("工具追踪视觉回归：Reasoning 和工具组都有图标且完成后收起", async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/seed-tool-trace");
   await page.goto("/tasks/42");

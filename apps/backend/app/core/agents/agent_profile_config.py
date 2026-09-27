@@ -22,14 +22,15 @@ def initialize_system_agent_defaults() -> Path:
     """将随应用分发的默认 JSON 安全导入系统配置目录。
 
     标记文件不存在时只补入缺少的默认文件，不覆盖已有用户文件；默认内容先写入同目录临时
-    文件再原子替换。所有默认文件写入成功后才落初始化标记，因此中断后可以重试。初始化标记
-    存在后不再自动恢复用户删除的默认 Agent。
+    文件再原子替换。所有默认文件写入成功后才落初始化标记，因此中断后可以重试。当前应用若
+    没有随包分发的默认 JSON，空的系统 Agent 目录也是合法状态。初始化标记存在后不再自动
+    恢复用户删除的默认 Agent。
 
     返回:
         系统级 Agent 配置目录。
 
     异常:
-        AgentProfileConfigError: 默认资源缺失或无法复制、创建目录或写初始化标记。
+        AgentProfileConfigError: 无法复制默认文件、创建目录或写初始化标记。
 
     副作用:
         创建系统 `.cosir/agents` 目录，首次初始化时写入默认 JSON 和标记文件。
@@ -42,8 +43,6 @@ def initialize_system_agent_defaults() -> Path:
         if marker.exists():
             return directory
         default_files = sorted(_DEFAULTS_DIR.glob("*.json"))
-        if not default_files:
-            raise AgentProfileConfigError(f"默认 Agent JSON 资源为空: {_DEFAULTS_DIR}")
         for source in default_files:
             target = directory / source.name
             if target.exists():

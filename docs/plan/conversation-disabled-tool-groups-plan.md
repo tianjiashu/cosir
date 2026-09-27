@@ -17,7 +17,7 @@
 
 ## 当前代码事实
 
-- `ToolDefinition` 已有 `group` 字段；各 handler 在构建定义时提供分组。分组词表集中在 `app/core/tools/schemas/tool_groups.py`。
+- `ToolDefinition` 已有 `group` 字段；各 handler 在构建定义时提供分组。分组词表与分组投影（`group_tool_definitions` 等）集中在 `app/core/tools/tool_grouping.py`。
 - `ReactLikeWorkflow` 在 graph 启动前，基于 `operations.model_tools` 和 `agent_profile.allowed_tools` 生成 schema，并执行一次 `base_model.bind_tools(..., strict=True)`。这是稳定的模型工具绑定边界。
 - `model_node` 消费模型流时，将累计的 `tool_call_chunks` 交给 `ToolCallLifecycleManager.create`。对已注册工具，`create` 发出 `ToolCallCreatedEvent`，由此建立前端 tool part。
 - 流结束后，`AIMessage.tool_calls` 再经 `ToolCallLifecycleManager.classify` 分类；合法调用进入 `running`，而 `tools_node` 只执行 lifecycle 中的 `running` 调用。

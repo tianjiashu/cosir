@@ -21,6 +21,7 @@ import {
   type Provider,
   type ProviderCatalogItem,
 } from "@/lib/api/providers";
+import { HttpError } from "@/lib/http/errors";
 
 type FormState = {
   name: string;
@@ -121,8 +122,12 @@ export function ProviderConfigPanel({
       await loadProviders();
       onChanged();
       setMessage({ ok: true, text: "Provider 已删除，模型列表已刷新" });
-    } catch {
-      setMessage({ ok: false, text: "删除失败，请重试" });
+    } catch (cause) {
+      // 后端在删除被其它数据引用时会给出可操作原因（409），原样透出优于通用文案。
+      setMessage({
+        ok: false,
+        text: cause instanceof HttpError && cause.message ? cause.message : "删除失败，请重试",
+      });
     } finally {
       setBusy(false);
     }

@@ -41,7 +41,14 @@ if ! cargo tauri --version >/dev/null 2>&1; then
 fi
 
 if [[ ! -d "${DESKTOP_ROOT}/node_modules" ]]; then
-    fail "未找到 apps/desktop/node_modules。请先执行：npm ci --prefix apps/desktop"
+    fail "未找到 apps/desktop/node_modules。请先执行：cd apps/desktop && npm ci --include=dev"
+fi
+
+# node_modules 目录存在不代表安装完整：省略 devDependencies（NODE_ENV=production 或 --omit=dev）或被中断的安装
+# 会留下缺失或被悬空软链指向的包，Tauri 的 beforeDevCommand（npm run dev）随后以 “vite: command not found” 失败。
+# 因此这里直接校验真正会被执行的 vite 可执行入口，而不是只判断目录是否存在。
+if [[ ! -x "${DESKTOP_ROOT}/node_modules/.bin/vite" ]]; then
+    fail "apps/desktop/node_modules 不完整：缺少可执行的 node_modules/.bin/vite（Vite 属于 devDependencies）。请先执行：cd apps/desktop && npm ci --include=dev"
 fi
 
 if pgrep -x "cosir-desktop" >/dev/null 2>&1; then

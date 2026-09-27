@@ -28,8 +28,8 @@ class AssistantTransportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     commands: list[AssistantCommand] = Field(min_length=0, max_length=32)
-    # 已有 task 使用 ``task-{taskId}``；新对话尚无 task/thread 身份，使用
-    # workspaceId 作为创建目标，响应头返回新 task id 后再进入同一 runtime。
+    # 每次 Assistant Transport 请求都绑定一个已创建的 Task；新对话由前端先创建
+    # provisional Task，再使用同一个 task/thread 身份提交首条命令。
     threadId: str = Field(pattern=r"^task-[1-9][0-9]*$")
     taskId: int = Field(ge=1)
     workspaceId: int | None = Field(default=None, ge=1)
@@ -67,7 +67,7 @@ class AssistantTransportRequest(BaseModel):
           ``runId`` 是否存在决定，不能由 ``sourceId`` 推导；
         - 含 ``add-message`` 时 ``providerId`` 与 ``modelName`` 必填且 ``modelName``
           非空（启动对话必须确定执行上下文，原 service 内的同等校验已前移至此）；
-        - 新建对话（``taskId is None``）必须提供 ``workspaceId`` 作为创建目标。
+        - ``taskId`` 始终是必填的已存在 Task 标识；``workspaceId`` 仅用于校验归属。
 
         参数:
             无；约束字段直接取自当前请求模型。

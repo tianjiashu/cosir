@@ -33,6 +33,7 @@ class TaskRecord:
     context_usage_used: int | None = None
     current_run_id: int | None = None
     context_window_total: int | None = None
+    creation_command_id: str | None = None
 
     @property
     def is_child(self) -> bool:
@@ -117,6 +118,7 @@ class TaskRecord:
             context_usage_used=row.context_usage_used,
             current_run_id=row.current_run_id,
             context_window_total=row.context_window_total,
+            creation_command_id=row.creation_command_id,
         )
 
     def to_model(self) -> TaskModel:
@@ -132,6 +134,7 @@ class TaskRecord:
             "current_run_id": self.current_run_id,
             "context_usage_used": self.context_usage_used,
             "context_window_total": self.context_window_total,
+            "creation_command_id": self.creation_command_id,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }

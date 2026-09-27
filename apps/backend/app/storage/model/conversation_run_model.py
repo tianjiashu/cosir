@@ -20,6 +20,11 @@ class ConversationRunModel(StorageBase):
     - 负责：单次运行的输入、模型路由、状态机与终态结果。
     - 不负责：Transport 命令幂等占用（由 ``conversation_commands`` 表持有指向本表的
       ``run_id`` 外键）、消息/工具调用等 canonical 会话事实（各自独立表）。
+
+    模型路由事实分层：``model_name`` 是本次运行用过的模型名文本，属于 Run 历史事实，
+    永不随厂商配置变化；``provider_id`` 只是指向当时那个厂商配置行的弱引用，
+    厂商被删除时由 ``ON DELETE SET NULL`` 置空（该厂商配置行已不存在，续跑此类 Run
+    会因缺少 provider 配置而显式失败，而不是让删除厂商的操作被历史行挡住）。
     """
 
     __tablename__ = "conversation_runs"
@@ -42,7 +47,9 @@ class ConversationRunModel(StorageBase):
     )
     input_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     agent_id: Mapped[str | None] = mapped_column(Text)
-    provider_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("providers.id"))
+    provider_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("providers.id", ondelete="SET NULL")
+    )
     model_name: Mapped[str | None] = mapped_column(String)
     image_paths: Mapped[list[str] | None] = mapped_column(JSON)
     reasoning_effort: Mapped[str | None] = mapped_column(Text)

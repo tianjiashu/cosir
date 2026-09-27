@@ -561,21 +561,8 @@ async function handleAssistant(req, res, body) {
     return;
   }
 
-  if (body.taskId === undefined) {
-    tasks.set(TASK_ID, {
-      task_id: TASK_ID,
-      workspace_id: WORKSPACE_ID,
-      title: text.slice(0, 40),
-      execution_status: "completed",
-      created_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:00.000Z",
-    });
-    finalText = "world";
-    chunks = ["world"];
-  } else {
-    finalText = "streaming response";
-    chunks = ["stream", "ing response"];
-  }
+  finalText = "streaming response";
+  chunks = ["stream", "ing response"];
 
   const finalState = stateWithExchange(branchBase, text, runId, finalText, "completed");
   if (text.startsWith("usage-regression")) {
@@ -687,6 +674,13 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, tasks.get(TASK_ID));
     return;
   }
+  if (req.method === "DELETE" && /^\/tasks\/\d+$/.test(url.pathname)) {
+    const taskId = Number(url.pathname.split("/")[2]);
+    tasks.delete(taskId);
+    states.delete(taskId);
+    jsonResponse(res, 200, { task_id: taskId, deleted: true });
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/models") {
     jsonResponse(res, 200, [{
       provider_id: 2,
@@ -703,7 +697,11 @@ const server = createServer(async (req, res) => {
   }
   if (req.method === "GET" && url.pathname === "/tools/groups") {
     jsonResponse(res, 200, {
-      groups: [{ group: "文件", tools: [{ name: "read_file", description: "读取文件" }] }],
+      groups: [
+        { group: "文件", tools: [{ name: "read_file", description: "读取文件" }] },
+        { group: "交互终端工具", tools: [{ name: "terminal_read", description: "读取终端输出" }] },
+        { group: "子Agent工具", tools: [{ name: "delegate_task", description: "委派子任务" }] },
+      ],
     });
     return;
   }

@@ -88,7 +88,9 @@ export function useRuntimeTransport(
     error: Error,
     params: {
       commands: readonly unknown[];
+      phase: "request-rejected" | "accepted-stream-failed";
       updateState: (updater: (state: TransportState) => TransportState) => void;
+      clearPendingCommands: () => void;
     },
   ) => {
     const currentRunId = context.latestStateRef.current.current_run_id;
@@ -109,6 +111,10 @@ export function useRuntimeTransport(
       error,
     });
 
+    if (params.phase === "request-rejected") {
+      params.clearPendingCommands();
+    }
+
     const failedCommands = [...params.commands].reverse();
     const failedEditCommand = failedCommands.find((command) => getUserAddMessageSourceId(command) !== null);
     const failedCommand = failedEditCommand ?? failedCommands.find((command) => {
@@ -117,14 +123,14 @@ export function useRuntimeTransport(
     });
     const failedText = failedCommand ? extractUserAddMessageText(failedCommand) : "";
     const failedAttachments = failedCommand ? extractUserAddMessageAttachments(failedCommand) : [];
-    if (failedCommand && failedEditCommand && (failedText.trim() || failedAttachments.length > 0)) {
+    if (params.phase === "request-rejected" && failedCommand && failedEditCommand && (failedText.trim() || failedAttachments.length > 0)) {
       const sourceId = getUserAddMessageSourceId(failedEditCommand);
       const restored = sourceId !== null
         && context.composerRestoreRef.current?.restoreEditMessage(sourceId, failedText, failedAttachments) === true;
       if (!restored) {
         context.setIssue({ message: "编辑重跑失败，原消息仍保留，请重新点击编辑重试。", canResync: true });
       }
-    } else if (failedCommand && (failedText.trim() || failedAttachments.length > 0)) {
+    } else if (params.phase === "request-rejected" && failedCommand && (failedText.trim() || failedAttachments.length > 0)) {
       context.composerRestoreRef.current?.restoreNewMessage(failedText, failedAttachments);
     }
 
@@ -133,9 +139,12 @@ export function useRuntimeTransport(
       message: transportError?.message ?? safeFrontendErrorMessage(error, "网络异常，请检查本机后端是否正在运行"),
       // HTTP 错误体的 retryable 表示“修正条件后能否重试”，这里映射为能否重新同步。
       canResync: transportError?.retryable ?? true,
+      presentation: params.phase === "request-rejected" ? "dialog" : "status",
     };
     context.lastTransportErrorRef.current = nextIssue;
     context.setIssue(nextIssue);
+
+    if (params.phase === "request-rejected") return;
 
     errorSnapshotAbortControllerRef.current?.abort();
     const generation = ++errorSnapshotGenerationRef.current;

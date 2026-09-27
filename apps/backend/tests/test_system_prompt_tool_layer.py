@@ -1,8 +1,8 @@
 """``SystemPromptBuilder`` 工具能力目录层（Layer T）单元测试。
 
-覆盖该层的四条契约：只在 ``AgentProfile.allowed_tools`` 含委派工具时生成、目录取自进程级 Agent
-目录且按 workspace 作用域隔离、无 CHILD 候选时不生成、字节兜底截断后标签仍闭合；另覆盖
-`Agent 目录未初始化必须硬失败` 与 `build` 中的层序。不覆盖 delegate_task 工具定义（见
+覆盖该层的三条契约：只在 ``AgentProfile.allowed_tools`` 含委派工具时生成、目录取自进程级 Agent
+目录且按 workspace 作用域隔离、无 CHILD 候选时不生成；另覆盖 `Agent 目录未初始化必须硬失败`、
+`该层不施加预算` 与 `build` 中的层序。不覆盖 delegate_task 工具定义（见
 ``test_delegate_task_model_contract.py``）。
 """
 
@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from app.config import configuration
-from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.define_agents import main_agent
@@ -21,7 +20,6 @@ from app.core.context import system_prompt_builder as spb
 from app.utils import paths
 
 _DELEGATION_TOOLS = ("read_file", "delegate_task")
-_TOOL_LAYER_OVERHEAD = len(b"<tool_layer>\n\n</tool_layer>")
 # 该层只把 workspace 当作 Registry 作用域键，故用例用任意稳定的路径字符串。
 _ANY_WORKSPACE = "ws"
 
@@ -128,8 +126,8 @@ def test_tool_layer_requires_initialized_registry(monkeypatch) -> None:
         spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS)
 
 
-def test_tool_layer_byte_cap_keeps_tags_balanced(monkeypatch) -> None:
-    """目录超字节兜底时截断正文并保留完整标签对，整体不超过上限。"""
+def test_tool_layer_injects_catalog_without_budget(monkeypatch) -> None:
+    """该层不施加预算：目录正文原样注入，标签保持完整成对。"""
 
     monkeypatch.setattr(
         configuration,
@@ -141,13 +139,7 @@ def test_tool_layer_byte_cap_keeps_tags_balanced(monkeypatch) -> None:
 
     assert layer.startswith("<tool_layer>\n")
     assert layer.endswith("\n</tool_layer>")
-    assert len(layer.encode("utf-8")) <= Constant.SystemPrompt.TOOL_LAYER_MAX_BYTES
-    assert "a" * 20_000 not in layer
-    body = layer[len("<tool_layer>\n"): -len("\n</tool_layer>")]
-    assert (
-        len(body.encode("utf-8"))
-        == Constant.SystemPrompt.TOOL_LAYER_MAX_BYTES - _TOOL_LAYER_OVERHEAD
-    )
+    assert "a" * 20_000 in layer
 
 
 def test_build_orders_tool_layer_between_agent_and_global(

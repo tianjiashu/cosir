@@ -314,3 +314,20 @@ async def test_delete_endpoints_return_404_and_busy_409(storage) -> None:
     assert task_409.value.detail["code"] == "TASK_BUSY"
     assert workspace_409.value.status_code == 409
     assert workspace_409.value.detail["code"] == "WORKSPACE_BUSY"
+
+
+@pytest.mark.asyncio
+async def test_delete_task_endpoint_routes_creation_marker_to_guarded_cleanup(storage) -> None:
+    calls: list[tuple[int, str]] = []
+
+    class ProvisionalTask:
+        def cleanup_provisional_task(self, task_id: int, creation_command_id: str) -> None:
+            calls.append((task_id, creation_command_id))
+
+        def delete_task(self, _task_id: int) -> None:
+            raise AssertionError("provisional cleanup must not use ordinary deletion")
+
+    result = await delete_task_endpoint(7, ProvisionalTask(), "creation-7")
+
+    assert result.task_id == 7
+    assert calls == [(7, "creation-7")]

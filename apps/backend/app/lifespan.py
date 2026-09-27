@@ -48,6 +48,9 @@ from app.core.observability import flush_langfuse
 from app.core.runtime.runner import AgentRuntime
 from app.core.tools import ToolSystem
 from app.core.workflows.react.workflow import ReactLikeWorkflow
+from app.service.configuration.main_agent_prompt_configuration_service import (
+    MainAgentPromptConfigurationService,
+)
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_run_executor,
@@ -232,7 +235,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
 
     # 一次性把系统和全部已登记 workspace 的 Agent JSON 装入进程内 Registry。
     initialize_system_agent_defaults()
-    agent_registry = build_agent_registry()
+    main_agent_prompt = MainAgentPromptConfigurationService().read().content
+    agent_registry = build_agent_registry(main_agent_prompt)
     agent_registry.load_agent_profiles(
         AgentProfileRegistry.SYSTEM_WORKSPACE,
         system_agent_config_dir(),
