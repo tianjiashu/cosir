@@ -26,12 +26,10 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
 from app.core.runtime.conversation_run_executor import ConversationRunExecutor
-from app.core.runtime.runner import AgentRuntime
 from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.service.depends import (
     get_conversation_run_executor,
     get_conversation_task_state_service,
-    get_runtime,
     get_task_service,
     get_transport_assistant_service,
 )
@@ -51,7 +49,6 @@ async def assistant_transport(
         request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。
         state_service: 负责读取 Task Transport state 的唯一 owner。
         run_service: 在一个事务中占用 command 并创建、绑定 Conversation Run 的 service。
-        run_executor: 进程级后台执行器，负责驱动 AgentRuntime 执行。
 
     返回:
     使用项目自有 frame 协议编码的 ``text/event-stream`` 响应。
@@ -137,7 +134,7 @@ async def assistant_transport(
 
             try:
                 await run_executor.start(run.id, start_result.execution_mode)
-            except Exception as exc:
+            except Exception:
                 # 真失败：run 已被本次请求置为 active，但执行器没有起来，必须收敛，否则该 task
                 # 会残留一个无执行器的 active run（new 与 resume 都会被状态校验拒绝）。
                 transport_service.settle_run_start_failure(run.id)
@@ -151,7 +148,7 @@ async def assistant_transport(
                 _raise_transport_error(
                     500,
                     "RUN_START_FAILED",
-                    str(exc),
+                    "无法启动对话运行，请稍后重试",
                     retryable=True,
                     command_id=command.commandId if command is not None else None,
                     run_id=request.runId,
@@ -184,10 +181,21 @@ async def assistant_transport(
             if mode == "edit"
             else "RUN_START_CONFLICT"
         )
+        log.warning(
+            "assistant_transport_domain_value_error",
+            extra={
+                "msg": "Assistant Transport 领域校验失败，已使用安全错误文案",
+                "data": {
+                    "task_id": task_id,
+                    "mode": mode,
+                    "error_type": type(exc).__name__,
+                },
+            },
+        )
         _raise_transport_error(
             409,
             operation_code,
-            str(exc),
+            "当前对话状态不允许执行该操作，请刷新后重试",
             retryable=True,
             command_id=command.commandId if command is not None else None,
             run_id=request.runId,
