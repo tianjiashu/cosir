@@ -26,6 +26,8 @@ COSIR_ATTACHMENT_STAGING_DIR_NAME: str = ".uploading"
 COSIR_TOOL_ARTIFACT_DIR_NAME: str = "tool-artifacts"
 COSIR_AGENT_CONFIG_DIR_NAME: str = "agents"
 COSIR_INSTRUCTION_FILE_NAME: str = "AGENTS.md"
+COSIR_ENV_FILE_NAME: str = ".env"
+COSIR_ENV_LOCAL_FILE_NAME: str = ".env.local"
 
 
 def workspace_cosir_dir(workspace_root: str | Path) -> Path:
@@ -160,17 +162,17 @@ def is_within_cosir(path: str | Path, workspace_root: str | Path | None) -> bool
 def system_cosir_dir() -> Path:
     """返回系统级 ``.cosir`` 目录路径（``<数据根>/.cosir``）。
 
-    目录名 ``.cosir`` 是**固定常量**（``COSIR_DIR_NAME``），不对外配置；数据根来自
-  ``app.utils.paths.SYSTEM_COSIR_DIR``（由 ``CODING_AGENT_DATA_DIR`` 推导）。
+      目录名 ``.cosir`` 是**固定常量**（``COSIR_DIR_NAME``），不对外配置；数据根来自
+    ``app.utils.paths.SYSTEM_COSIR_DIR``（由 ``CODING_AGENT_DATA_DIR`` 推导）。
 
-    返回:
-        系统级 ``.cosir`` 目录的 ``Path``；不校验存在性。
+      返回:
+          系统级 ``.cosir`` 目录的 ``Path``；不校验存在性。
 
-    异常:
-        无。
+      异常:
+          无。
 
-    副作用:
-        无（``paths`` 是无副作用的固定路径模块，可安全顶层导入）。
+      副作用:
+          无（``paths`` 是无副作用的固定路径模块，可安全顶层导入）。
     """
 
     from app.utils import paths
@@ -212,3 +214,35 @@ def system_agent_config_dir() -> Path:
     """
 
     return system_cosir_dir() / COSIR_AGENT_CONFIG_DIR_NAME
+
+
+def system_env_file() -> Path:
+    """返回系统级基础环境配置文件路径。
+
+    返回:
+        ``<SYSTEM_COSIR_DIR>/.env``；不创建、不读取文件。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    return system_cosir_dir() / COSIR_ENV_FILE_NAME
+
+
+def system_env_local_file() -> Path:
+    """返回系统级本地环境覆盖文件路径。
+
+    返回:
+        ``<SYSTEM_COSIR_DIR>/.env.local``；不创建、不读取文件。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    return system_cosir_dir() / COSIR_ENV_LOCAL_FILE_NAME
