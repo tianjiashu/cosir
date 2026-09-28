@@ -5,7 +5,6 @@ from app.config.logging.logger import log
 from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileConfigError,
-    AgentProfileType,
 )
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.model_settings import ModelSettings
@@ -24,7 +23,6 @@ from app.core.runtime.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
 from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.schemas.tool_names import TOOL_DELEGATE_TASK
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.workflow_operations import WorkflowOperations
@@ -75,7 +73,8 @@ class AgentRuntime:
             RuntimeError: 依赖入口要求的存储或配置尚未初始化时抛出。
 
         副作用:
-            解析并持有进程级 service 单例引用。
+            解析并持有进程级 service 单例引用；工具执行器同样在构造期从进程级工具系统解析，
+            配置变更后需要重装配时由 :meth:`reload_tool_executor` 显式刷新。
         """
 
         self._task_service = get_task_service()

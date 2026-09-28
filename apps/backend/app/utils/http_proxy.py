@@ -15,7 +15,7 @@
 既不在进程启动时、也不在每次请求时重复检测系统代理。
 
 设计边界：
-- 唯一配置开关是 ``CODING_AGENT_PROXY_AUTO_DETECT``；不再支持在 ``.env`` / ``.env.local``
+- 唯一配置开关是 ``CODING_AGENT_PROXY_AUTO_DETECT``；不再支持在系统 ``.env``
   手动写 ``HTTP_PROXY`` / ``HTTPS_PROXY`` / ``ALL_PROXY`` / ``NO_PROXY`` 来覆盖（旧方案已移除）。
 - 只读取系统代理并返回 URL 字符串或构建 client，不读写任何环境变量。
 - 不记录代理地址中的凭据；调用方也不得将代理 URL 写进日志。

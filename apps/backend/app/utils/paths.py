@@ -28,7 +28,6 @@ from typing import Any, Final
 from app.utils.cosir_paths import (
     COSIR_DIR_NAME,
     system_env_file,
-    system_env_local_file,
 )
 
 _STORAGE_DIR_NAME: Final[str] = "storage"
@@ -135,10 +134,10 @@ CHECKPOINT_FILE: Path = _initial["CHECKPOINT_FILE"]
 RUNTIME_DIR: Path = _initial["RUNTIME_DIR"]
 
 
-def env_files() -> tuple[Path, Path]:
-    """返回系统级运行配置文件路径，顺序为基础配置和本地覆盖配置。"""
+def env_file() -> Path:
+    """返回系统级运行配置文件路径（``<数据根>/.cosir/.env``）。"""
 
-    return system_env_file(), system_env_local_file()
+    return system_env_file()
 
 
 def reset() -> None:

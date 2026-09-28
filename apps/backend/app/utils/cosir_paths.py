@@ -28,7 +28,6 @@ COSIR_AGENT_CONFIG_DIR_NAME: str = "agents"
 COSIR_INSTRUCTION_FILE_NAME: str = "AGENTS.md"
 COSIR_MAIN_AGENT_PROMPT_FILE_NAME: str = "main_agent_system_prompt.md"
 COSIR_ENV_FILE_NAME: str = ".env"
-COSIR_ENV_LOCAL_FILE_NAME: str = ".env.local"
 
 
 def workspace_cosir_dir(workspace_root: str | Path) -> Path:
@@ -249,19 +248,3 @@ def system_env_file() -> Path:
     """
 
     return system_cosir_dir() / COSIR_ENV_FILE_NAME
-
-
-def system_env_local_file() -> Path:
-    """返回系统级本地环境覆盖文件路径。
-
-    返回:
-        ``<SYSTEM_COSIR_DIR>/.env.local``；不创建、不读取文件。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    return system_cosir_dir() / COSIR_ENV_LOCAL_FILE_NAME

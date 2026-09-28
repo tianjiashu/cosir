@@ -6,9 +6,10 @@
 
 设计边界：
 - 本模块只承载**运行期可由环境变量 / ``.cosir/.env`` 覆盖**的进程级配置（默认回复语言、
-  Web provider 选择、可观测性集成参数），以及需要保密的集成凭据。**环境变量名与类字段名
+  可观测性集成参数），以及需要保密的集成凭据。**环境变量名与类字段名
   完全同名**（如 ``DEFAULT_LANGUAGE``），不加应用前缀，避免两套命名漂移。模型相关配置不在
-  此处，统一收敛到 ``app.core.agents.model_settings``。
+  此处，统一收敛到 ``app.core.agents.model_settings``。Web provider 选择见下方
+  ``WEB_*_BACKEND`` 的说明：它们在当前实现下是固定值，不属于可覆盖配置。
 - **不可变、无需按环境覆盖的数值上限不在此处**：系统提示词预算、工具输出与并发上限、
   Web 限额、日志轮转等固定值统一收敛到 ``app.config.constant.Constant`` 的对应域；判定标准
   是「是否存在真实的按环境覆盖需求」，不是数值大小。
@@ -55,8 +56,11 @@ class Settings:
     DEFAULT_LANGUAGE: ClassVar[str] = "zh"
 
     # Web 工具 provider 选择：``WEB_BACKEND`` 是统一开关，两个 per-tool 变量用于按工具覆盖
-    # （空串表示不覆盖）；三者都经同名环境变量（``WEB_BACKEND`` / ``WEB_SEARCH_BACKEND`` /
-    # ``WEB_EXTRACT_BACKEND``）覆盖。
+    # （空串表示不覆盖）。三者是**固定值**：不经环境变量覆盖，也不进配置中心白名单。
+    # 原因：当前内置 Web Provider 只有 ``firecrawl`` 一个实现（见 ``default_web_providers``），
+    # 留空即由 ``Constant.Web.LEGACY_PROVIDER_PRIORITY`` 命中它，显式赋值不会改变选择结果，
+    # 反而引入「填了未注册的名字 → 显式分支跳过回退 → 选不到 Provider」的失败路径。
+    # 接入第二个实现后如需开放，再恢复环境变量读取并加回配置中心白名单。
     WEB_SEARCH_BACKEND: ClassVar[str] = ""
     WEB_EXTRACT_BACKEND: ClassVar[str] = ""
     WEB_BACKEND: ClassVar[str] = ""
@@ -73,11 +77,11 @@ class Settings:
     _LOADED_ENV_VALUES: ClassVar[dict[str, str]] = {}
 
     @staticmethod
-    def _load_local_env() -> None:
-        """从系统级 ``.cosir`` 配置文件加载未显式设置的环境变量。
+    def _load_env_file() -> None:
+        """从系统级 ``.cosir/.env`` 加载未显式设置的环境变量。
 
-        配置文件位置完全由 ``app.utils.paths.env_files()`` 决定（``<数据根>/.cosir/.env`` 与其
-        ``.env.local`` 覆盖），本方法不接受路径参数，避免出现第二套位置口径。
+        配置文件位置完全由 ``app.utils.paths.env_file()`` 决定（``<数据根>/.cosir/.env``），本方法
+        不接受路径参数，避免出现第二套位置口径。
 
         返回:
             无。
@@ -86,32 +90,27 @@ class Settings:
             OSError: 当 env 文件存在但无法读取时抛出。
 
         副作用:
-            将系统级 ``.cosir/.env`` / ``.env.local`` 中的键值对写入当前进程环境，但不会覆盖已存在的
-            环境变量。
+            将系统级 ``.cosir/.env`` 中的键值对写入当前进程环境，但不会覆盖已存在的环境变量；同时
+            记录本次由文件注入的键，供下次加载时先撤回，避免旧文件值粘住。
         """
 
-        merged_values: dict[str, str] = {}
         previous_file_values = dict(Settings._LOADED_ENV_VALUES)
         for key, previous_value in previous_file_values.items():
             if os.environ.get(key) == previous_value:
                 os.environ.pop(key, None)
+        env_file = paths.env_file()
+        if not env_file.exists():
+            Settings._LOADED_ENV_VALUES = {}
+            return
+        content = ConfigurationFileStore.read_text(env_file, root=paths.SYSTEM_COSIR_DIR)
         file_values: dict[str, str] = {}
-        for env_file in paths.env_files():
-            if not env_file.exists():
+        for key, value in dotenv_values(stream=StringIO(content)).items():
+            if value is None:
                 continue
-            content = ConfigurationFileStore.read_text(
-                env_file,
-                root=paths.SYSTEM_COSIR_DIR,
-            )
-            parsed_values = dotenv_values(stream=StringIO(content))
-            for key, value in parsed_values.items():
-                if value is not None:
-                    merged_values[key] = value
-                    if key not in os.environ or key in previous_file_values:
-                        file_values[key] = value
-        Settings._LOADED_ENV_VALUES = dict(file_values)
-        for key, value in merged_values.items():
+            if key not in os.environ or key in previous_file_values:
+                file_values[key] = value
             os.environ.setdefault(key, value)
+        Settings._LOADED_ENV_VALUES = dict(file_values)
 
     @classmethod
     def is_file_loaded_value(cls, name: str) -> bool:
@@ -165,15 +164,12 @@ class Settings:
             加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性；经 ``paths.reset``
             按当前环境重新对齐固定路径（数据根 / 日志目录 / 主业务库与 checkpoint 文件）。
         """
-        cls._load_local_env()
+        cls._load_env_file()
         # 固定路径唯一事实源在 ``app.utils.paths``：加载 .env 后按环境重新对齐，使
         # 系统 ``.cosir/.env`` 中的运行配置在此阶段生效；路径根由桌面宿主注入。
         paths.reset()
         # 环境变量名与类字段名同名（见模块 docstring）：读取的键即字段本身，无前缀映射。
         cls.DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "zh").strip().lower()
-        cls.WEB_SEARCH_BACKEND = os.environ.get("WEB_SEARCH_BACKEND", "").strip().lower()
-        cls.WEB_EXTRACT_BACKEND = os.environ.get("WEB_EXTRACT_BACKEND", "").strip().lower()
-        cls.WEB_BACKEND = os.environ.get("WEB_BACKEND", "").strip().lower()
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
         cls.LANGFUSE_ENABLED = cls._env_bool("LANGFUSE_ENABLED", False)
