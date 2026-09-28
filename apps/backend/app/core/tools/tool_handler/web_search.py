@@ -90,7 +90,14 @@ class WebSearchTool(HandlerBase):
             Provider 执行异常会记录结构化错误日志。
         """
 
-        del execution_context
+        if not self.tool_avaliable():
+            return tool_error(
+                self.name,
+                "Web search is not available.",
+                reason="configure the selected provider locally before continuing.",
+                retryable=False,
+                permission=self.permission,
+            )
         effective_limit = min(limit, Constant.Web.SEARCH_LIMIT_MAX)
         backend = Settings.WEB_SEARCH_BACKEND or Settings.WEB_BACKEND
         provider = None
@@ -188,7 +195,7 @@ class WebSearchTool(HandlerBase):
             ),
         )
 
-    def avaliable(self) -> bool:
+    def tool_avaliable(self) -> bool:
         backend = Settings.WEB_SEARCH_BACKEND or Settings.WEB_BACKEND
         provider = self._provider_registry.active_search_provider(backend)
         if provider is None:

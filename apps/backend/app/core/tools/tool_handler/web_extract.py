@@ -123,6 +123,14 @@ class WebExtractTool(HandlerBase):
             放宽由 :func:`is_safe_public_url` 记录）。
         """
 
+        if not self.tool_avaliable:
+            return tool_error(
+                self.name,
+                "Web extraction is not available.",
+                reason="configure the selected provider locally before calling web_extract again.",
+                retryable=False,
+                permission=self.permission,
+            )
         if len(urls) > Constant.Web.EXTRACT_URL_LIMIT_MAX:
             return tool_error(
                 self.name,
@@ -494,7 +502,7 @@ class WebExtractTool(HandlerBase):
             ),
         )
 
-    def avaliable(self) ->bool:
+    def tool_avaliable(self) ->bool:
         backend = Settings.WEB_EXTRACT_BACKEND or Settings.WEB_BACKEND
         provider = self._resolve_extract_provider(backend)
         if not provider.is_available():
