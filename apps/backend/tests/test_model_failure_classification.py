@@ -16,8 +16,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.config.constant import Constant
 from app.core.llm_provider.model_failure import classify_model_failure
-from app.models import conversation_run_failure as failure_catalog
 from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.error_kind import ErrorKind
 
@@ -61,11 +61,11 @@ class _ConnectionLikeError(Exception):
 
 
 def _flow_codes() -> list[str]:
-    """返回目录模块声明的流程类失败 code。"""
+    """返回 ``Constant.Run`` 声明的流程类失败 code（单一事实源）。"""
 
     return [
         value
-        for name, value in vars(failure_catalog).items()
+        for name, value in vars(Constant.Run).items()
         if name.startswith("RUN_FAILURE_CODE_") and isinstance(value, str)
     ]
 
@@ -104,9 +104,7 @@ def test_status_code_is_classified_into_error_kind(
 def test_status_code_is_read_from_response_when_missing_at_top_level() -> None:
     """顶层没有 ``status_code`` 时回退读 ``response.status_code``。"""
 
-    assert (
-        classify_model_failure(_ResponseStatusError(429)) == ErrorKind.MODEL_RATE_LIMITED.value
-    )
+    assert classify_model_failure(_ResponseStatusError(429)) == ErrorKind.MODEL_RATE_LIMITED.value
 
 
 def test_boolean_status_code_is_not_treated_as_http_status() -> None:
@@ -118,12 +116,9 @@ def test_boolean_status_code_is_not_treated_as_http_status() -> None:
 def test_exception_type_name_carries_timeout_and_connection_semantics() -> None:
     """顶层无语义状态码时，按异常类型名判定超时与网络不可达。"""
 
+    assert classify_model_failure(_TimeoutLikeError("boom")) == ErrorKind.MODEL_TIMEOUT.value
     assert (
-        classify_model_failure(_TimeoutLikeError("boom")) == ErrorKind.MODEL_TIMEOUT.value
-    )
-    assert (
-        classify_model_failure(_ConnectionLikeError("boom"))
-        == ErrorKind.MODEL_NETWORK_ERROR.value
+        classify_model_failure(_ConnectionLikeError("boom")) == ErrorKind.MODEL_NETWORK_ERROR.value
     )
     assert classify_model_failure(TimeoutError("boom")) == ErrorKind.MODEL_TIMEOUT.value
 
@@ -229,5 +224,5 @@ def test_unknown_code_falls_back_to_generic_message() -> None:
 
     fallback = run_failure_message(None)
     assert fallback.strip()
-    assert run_failure_message(failure_catalog.RUN_FAILURE_CODE_UNKNOWN) == fallback
+    assert run_failure_message(Constant.Run.RUN_FAILURE_CODE_UNKNOWN) == fallback
     assert run_failure_message("totally_unknown_code") == fallback

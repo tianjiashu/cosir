@@ -7,7 +7,6 @@ from langchain_core.messages import AIMessage, ToolMessage
 # Load the tool package before the transport event package to match the production
 # dependency bootstrap and avoid the legacy import cycle during isolated collection.
 import app.core.tools  # noqa: F401
-
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
@@ -20,7 +19,13 @@ from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 
 
-def _run(*, run_id: int, task_id: int, status: str, final_output: str | None = None) -> ConversationRunRecord:
+def _run(
+    *,
+    run_id: int,
+    task_id: int,
+    status: str,
+    final_output: str | None = None,
+) -> ConversationRunRecord:
     now = datetime(2026, 9, 24, tzinfo=UTC)
     return ConversationRunRecord(
         id=run_id,
@@ -144,8 +149,10 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
     ]
 
     # Legacy delegation rows are deliberately ignored: display_data is the only dynamic
-    # delegation payload accepted by cold rebuild.
-    parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows, [object()])
+    # delegation payload accepted by cold rebuild. ``child_agent_roles`` 是
+    # ``(child_task_id, child_agent_id) -> role`` 的回填映射，这里传空映射代表「没有可回填
+    # 的旧 role」，验证重建不会自行推断 role。
+    parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows, {})
 
     assert parts["delegate-call"]["display_data"] == rows[1].transport_metadata["display_data"]
     assert "final_output" not in parts["delegate-call"]["display_data"]

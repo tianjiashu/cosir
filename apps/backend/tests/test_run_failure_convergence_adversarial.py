@@ -102,11 +102,11 @@ def _record_state() -> ConversationStateSnapshot:
 
 
 def _flow_codes() -> list[str]:
-    """返回文案目录模块声明的流程类失败 code（``RUN_FAILURE_CODE_*`` 常量值）。"""
+    """返回 ``Constant.Run`` 声明的流程类失败 code（``RUN_FAILURE_CODE_*`` 常量值）。"""
 
     return [
         value
-        for name, value in vars(failure_catalog).items()
+        for name, value in vars(Constant.Run).items()
         if name.startswith("RUN_FAILURE_CODE_") and isinstance(value, str)
     ]
 
@@ -438,11 +438,11 @@ def test_terminal_error_cancelled_fallback_code() -> None:
 
     error = terminal_error(ConversationRunStatus.CANCELLED, None)
     assert error is not None
-    assert error["code"] == failure_catalog.RUN_FAILURE_CODE_CANCELLED
+    assert error["code"] == Constant.Run.RUN_FAILURE_CODE_CANCELLED
 
     error = terminal_error(ConversationRunStatus.CANCELLED, "not an identifier")
     assert error is not None
-    assert error["code"] == failure_catalog.RUN_FAILURE_CODE_CANCELLED
+    assert error["code"] == Constant.Run.RUN_FAILURE_CODE_CANCELLED
 
 
 def test_terminal_error_message_is_non_empty_and_controlled() -> None:
@@ -470,7 +470,9 @@ def test_settle_failed_run_swallows_runtime_error() -> None:
 
     workflow = ReactLikeWorkflow()
     operations = _RecordingOperations(failure=RuntimeError("db down"))
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED)
+    workflow._settle_failed_run(
+        cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+    )
     assert len(operations.calls) == 1
 
 
@@ -479,7 +481,9 @@ def test_settle_failed_run_swallows_key_error() -> None:
 
     workflow = ReactLikeWorkflow()
     operations = _RecordingOperations(failure=KeyError("run not found"))
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED)
+    workflow._settle_failed_run(
+        cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+    )
     assert len(operations.calls) == 1
 
 
@@ -508,7 +512,9 @@ def test_settle_failed_run_survives_get_current_run_failure() -> None:
     workflow = ReactLikeWorkflow()
     operations = _RecordingOperations(failure=RuntimeError("db down"))
     operations.get_current_run_failure = RuntimeError("run gone")
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED)
+    workflow._settle_failed_run(
+        cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+    )
     assert len(operations.calls) == 1
 
 
@@ -518,7 +524,9 @@ def test_settle_failed_run_survives_get_current_run_failure_on_race_lost() -> No
     workflow = ReactLikeWorkflow()
     operations = _RecordingOperations(settles=False)
     operations.get_current_run_failure = RuntimeError("run gone")
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED)
+    workflow._settle_failed_run(
+        cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+    )
     assert len(operations.calls) == 1
 
 

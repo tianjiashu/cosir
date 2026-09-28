@@ -395,6 +395,8 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
 
     operations = SimpleNamespace(
         model_tools=[SimpleNamespace(name="read_file", display=None)],
+        # model 节点按 task 维度取延迟系统消息队列，故桩需暴露 get_current_task。
+        get_current_task=lambda: SimpleNamespace(id=1),
         get_current_run=lambda: SimpleNamespace(task_id=1, id=2),
         is_current_run_cancelled=lambda: False,
         complete_run_if_running=lambda *a, **k: object(),
@@ -405,7 +407,8 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
         model=SimpleNamespace(astream=_astream),
         thinking_channel="",
         thinking_roundtrip=True,
-        run=SimpleNamespace(task_id=1, id=2),
+        # model 节点读 run.extra.ban_tools 构造禁用工具集；无禁用工具时 extra 为 None。
+        run=SimpleNamespace(task_id=1, id=2, extra=None),
         usage_stats=SimpleNamespace(add_usage_metadata=lambda m: None, to_dict=lambda: {}),
     )
     merged: dict[str, AIMessageChunk] = {}

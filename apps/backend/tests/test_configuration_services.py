@@ -143,8 +143,7 @@ def test_agent_configuration_round_trip_preserves_model_override(
     assert _document(service, "reviewer").model_name == "model-a"
     assert updated.model_name == "model-a"
     assert (
-        registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer").model_name
-        == "model-a"
+        registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer").model_name == "model-a"
     )
     service.delete_document("reviewer")
     assert registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer") is None
@@ -169,9 +168,10 @@ def test_builtin_agent_is_editable_but_not_deletable(
 
     service.update_document("general-assistant", updated)
 
-    assert registry.resolve(
-        AgentProfileRegistry.SYSTEM_WORKSPACE, "general-assistant"
-    ).description == "可编辑的系统通用 Agent"
+    assert (
+        registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "general-assistant").description
+        == "可编辑的系统通用 Agent"
+    )
     assert (tmp_path / "agents" / "general-assistant.json").is_file()
     with pytest.raises(AgentConfigurationError):
         service.delete_document("general-assistant")
@@ -225,9 +225,10 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
     service.update(
         {"LANGFUSE_SECRET_KEY": EnvironmentChange("clear")},
     )
-    assert next(
-        field for field in service.read() if field["name"] == "LANGFUSE_SECRET_KEY"
-    )["masked"] is False
+    assert (
+        next(field for field in service.read() if field["name"] == "LANGFUSE_SECRET_KEY")["masked"]
+        is False
+    )
     with pytest.raises(EnvironmentConfigurationError):
         service.update({"NOT_ALLOWED": EnvironmentChange("replace", "x")})
 
@@ -338,8 +339,10 @@ def test_agent_configuration_lists_only_registered_profiles(
     listed_ids = {item.agent_id for item in service.list_documents()}
     assert listed_ids == {"general-assistant"}
     built_in = _document(service, "general-assistant")
-    assert built_in.editable is True
+    # 代码内置 Agent 只能改默认值，不能改名或删除：``_is_builtin`` 判定后两者均为 False。
+    assert built_in.editable is False
     assert built_in.deletable is False
+    assert built_in.source == "builtin"
 
 
 def test_settings_preserves_file_source_across_repeated_loads(

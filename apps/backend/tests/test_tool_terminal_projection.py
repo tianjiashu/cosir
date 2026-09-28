@@ -1113,21 +1113,11 @@ def test_module_reads_projector_from_service_depends() -> None:
 def test_real_storage_backed_projection_updates_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """判据 E 真实 storage：用 ``init_storage()`` 后经真实 state service 投影，快照终态落值。
+    """判据 E 真实 storage：用 ``init_storage()`` 后经真实 state service 投影，快照终态落值。"""
 
-    ``ConversationTaskStateService._rebuild`` 会调用 ``get_delegation_service()``；本用例用
-    内存替身隔离委派读取，避免依赖真实委派表。
-    """
-
-    from app.service import depends as depends_module
     from app.storage.store_engines import init_storage
 
     init_storage()
-    monkeypatch.setattr(
-        depends_module,
-        "get_delegation_service",
-        lambda: SimpleNamespace(list_by_parent_turn=lambda _turn_id: []),
-    )
 
     from app.assistant_transport.service.conversation_task_state_service import (
         ConversationTaskStateService,

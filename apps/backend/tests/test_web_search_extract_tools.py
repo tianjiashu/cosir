@@ -1174,20 +1174,22 @@ def test_extract_search_only_only_registered_no_backend_gives_search_only_error(
     assert "No web extraction provider configured." not in obs.error
 
 
-def test_search_provider_without_search_support_reports_error(
+def test_search_provider_without_search_support_is_not_registrable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """显式选中不支持 search 的 provider 时 web_search 给出对应错误（潜在缺陷：能力判定）。"""
+    """显式选中不支持 search 的 provider 时 web_search 不可注册（能力判定已前移到 avaliable）。
+
+    ``to_definition_if_avaliable`` 契约变更后，能力不匹配不再在 ``execute`` 内返回运行时错误，
+    而是在装配期由 ``avaliable()`` 判定并隐藏该工具；此处即断言新的门控契约。
+    """
 
     monkeypatch.setattr(Settings, "WEB_SEARCH_BACKEND", "nosupport")
     monkeypatch.setattr(Settings, "WEB_BACKEND", "")
     provider = FakeProvider(name="nosupport", supports_search=False, available=True)
     tool = WebSearchTool(_registry_with(provider))
 
-    obs = tool.execute(query="hello")
-
-    assert obs.status == "error"
-    assert "does not support search" in obs.error
+    assert tool.avaliable() is False
+    assert tool.to_definition_if_avaliable() is None
 
 
 # ---------------------------------------------------------------------------
@@ -1469,13 +1471,21 @@ def test_provider_result_metadata_uses_explicit_or_falls_back() -> None:
 
 
 def test_build_definitions_return_tool_definition() -> None:
-    """build_web_search_definition / build_web_extract_definition 返回可用定义（不触网）。"""
+    """build_web_search_definition / build_web_extract_definition 返回可用定义（不触网）。
+
+    build_* 自 ``to_definition_if_avaliable`` 起按 ``avaliable()`` 门控：默认内置 Provider 在
+    未配置凭据时不可用，故必须注入「可用且声明对应能力」的 Fake Provider 才返回定义。
+    """
 
     from app.core.tools.tool_handler.web_extract import build_web_extract_definition
     from app.core.tools.tool_handler.web_search import build_web_search_definition
 
-    search_def = build_web_search_definition()
-    extract_def = build_web_extract_definition()
+    registry = _registry_with(
+        FakeProvider(name="fake", supports_search=True, supports_extract=True)
+    )
+
+    search_def = build_web_search_definition(registry)
+    extract_def = build_web_extract_definition(registry)
 
     assert search_def.name == "web_search"
     assert extract_def.name == "web_extract"

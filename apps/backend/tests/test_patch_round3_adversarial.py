@@ -22,6 +22,7 @@ and the model-visible contract sample.
 
 from __future__ import annotations
 
+import errno
 import pathlib
 import shutil
 import subprocess
@@ -678,15 +679,17 @@ def test_successful_patch_emits_file_change_display_payload(tmp_path: pathlib.Pa
 
 # 目的：``_is_patch_retryable_after_correction`` 的重试分类契约——部分写入恒不可重试，
 # OSError 起因按 errno 分类。缺陷类型：部分写入被误判为可重试（重放补丁破坏文件）。
+# 瞬时故障用例必须用 ``errno.EAGAIN`` / ``errno.EBUSY`` 符号表达：字面量 11 只在 Linux 上等于
+# EAGAIN（macOS 为 35、11 是 EDEADLK），写死数字会得到与实现口径无关的平台相关失败。
 @pytest.mark.parametrize(
     ("partial_applied", "cause", "expected"),
     [
         (True, RuntimeError("x"), False),
-        (True, OSError(1, "x"), False),
+        (True, OSError(errno.ENOENT, "x"), False),
         (False, RuntimeError("x"), True),
-        (False, OSError(2, "no such file"), False),
-        (False, OSError(11, "EAGAIN"), True),
-        (False, OSError(16, "EBUSY"), True),
+        (False, OSError(errno.ENOENT, "no such file"), False),
+        (False, OSError(errno.EAGAIN, "EAGAIN"), True),
+        (False, OSError(errno.EBUSY, "EBUSY"), True),
         (False, ValueError("not an OSError"), False),
     ],
 )

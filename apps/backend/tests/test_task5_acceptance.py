@@ -18,6 +18,7 @@ from app.assistant_transport.service.conversation_event_projector import (
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandInput,
     ConversationRunCommandService,
+    ConversationRunStartResult,
 )
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
@@ -44,27 +45,6 @@ from app.storage.engine_cache import create_sqlite_engine
 from app.storage.init_schema import APP_MODELS, initialize_app_schema
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-
-
-@pytest.fixture(autouse=True)
-def _stub_delegation_service(monkeypatch: pytest.MonkeyPatch) -> None:
-    """冷读 rebuild 会解析进程级委派 service；本文件不验证委派，注入空替身。
-
-    ``ConversationTaskStateService._rebuild`` 会按 Run 查询该 Run 的委派记录，而解析出的
-    委派 service 依赖已初始化主库会话；本文件用独立临时 SQLite（``canonical_store``）装配，
-    不经 ``init_storage``，故预置「无委派」替身，保持本文件「不涉及委派」的既有前提。
-    """
-
-    class _NoDelegationService:
-        """返回空委派集合的最小替身。"""
-
-        def list_by_parent_turn(self, run_id: int) -> list[object]:
-            return []
-
-    monkeypatch.setattr(
-        "app.service.depends.get_delegation_service", lambda: _NoDelegationService()
-    )
-
 
 _USAGE = {
     "input_tokens": 10,
@@ -435,6 +415,37 @@ def _command_service(store) -> ConversationRunCommandService:
     return service
 
 
+def _start_or_attach_under_operation(
+    task_space, service: ConversationRunCommandService, store
+) -> ConversationRunStartResult:
+    """在 Task 操作闸门内以相同 command 启动一次 Run，复刻 API 层调用方持有的并发边界。
+
+    参数:
+        task_space: 目标 task 的运行时空间，提供串行化同 task 并发操作的闸门。
+        service: 被测命令服务，假定调用方已持闸。
+        store: acceptance fixture 装配的临时 canonical 存储。
+
+    返回:
+        命令服务归一化后的启动结果（``created=True`` 表示新建，``False`` 表示幂等重连）。
+
+    副作用:
+        进入 ``task_space.operation()`` 期间独占该 task；内部会创建或复用 Run 行。
+    """
+
+    with task_space.operation():
+        return service.start_or_attach(
+            commands=[
+                ConversationRunCommandInput(command_id="same-command", command_type="new")
+            ],
+            payload_hash="same-payload",
+            provider_id=None,
+            model_name=None,
+            reasoning_effort=None,
+            task_id=store.task.id,
+            run_command=ConversationRunCommand(display_text="hello"),
+        )
+
+
 @pytest.mark.asyncio
 async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_idempotent(
     canonical_store, monkeypatch: pytest.MonkeyPatch
@@ -448,19 +459,17 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
         lambda: store.factory,
     )
     task_runtime_spaces.close()
+    # Task 操作闸门在重构后收口到 API 层（见 assistant_api 的 ``task_run_operation``），
+    # ``start_or_attach`` 变成假定调用方已持闸的内部原语。因此这里按生产调用方的方式在
+    # ``task_space.operation()`` 内并发调用，验证的仍是「同 task 互斥 + 同 command 幂等」。
+    task_space = task_runtime_spaces.get_or_create(store.task.id)
     results = await asyncio.gather(
         *(
             asyncio.to_thread(
-                service.start_or_attach,
-                commands=[
-                    ConversationRunCommandInput(command_id="same-command", command_type="new")
-                ],
-                payload_hash="same-payload",
-                provider_id=None,
-                model_name=None,
-                reasoning_effort=None,
-                task_id=store.task.id,
-                run_command=ConversationRunCommand(display_text="hello"),
+                _start_or_attach_under_operation,
+                task_space,
+                service,
+                store,
             )
             for _ in range(2)
         )

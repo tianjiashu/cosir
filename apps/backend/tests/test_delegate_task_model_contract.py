@@ -5,6 +5,7 @@
 """
 
 import json
+import logging
 from importlib import import_module
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependen
 from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 
 child_agent_create = import_module("app.core.tools.tool_handler.child_task.child_agent_create")
+child_agent_wait = import_module("app.core.tools.tool_handler.child_task.child_agent_wait")
 
 
 def _model_payload(definition: ToolDefinition) -> dict:
@@ -74,8 +76,10 @@ def test_base_delegate_definition_does_not_freeze_candidates(
     assert "Available child agents" not in payload["description"]
     assert "enum" not in child_property
     assert "{ids}" not in child_property["description"]
-    # 同回复内并行委派属于工具调用契约，拆分出目录后仍必须留在工具描述里。
-    assert "same reply" in payload["description"]
+    # 同回复内并行委派仍是工具调用契约：delegate_task 声明工具级并行，等待多个 child 的
+    # 「同一回复里批量调用」提示由 child_agent_wait 承载（描述从 delegate_task 迁到了那里）。
+    assert base_delegate_definition.parallel_mode == "parallel"
+    assert "one reply" in child_agent_wait.ChildAgentWaitTool.description
 
 
 def test_workspace_profiles_do_not_cross_workspace_boundaries(
@@ -162,16 +166,36 @@ def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_c
 
 def test_workspace_config_error_is_not_silently_merged(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """无效 workspace 配置抛出明确异常，调用方据此禁用委派工具。"""
+    """无效 workspace 配置不得被静默合并：坏文件只被跳过并留 error 日志，不注册任何 profile。
+
+    目录级问题（目录不是目录 / 符号链接越界等）才抛 ``AgentProfileConfigError``（``ValueError``
+    子类），由启动编排捕获后禁用该 workspace 的委派。
+    """
 
     workspace = tmp_path / "workspace"
     directory = workspace / ".cosir" / "agents"
     directory.mkdir(parents=True)
-    (directory / "broken.json").write_text("{", encoding="utf-8")
+    broken = directory / "broken.json"
+    broken.write_text("{", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="Agent 配置无效"):
+    registry = configuration.build_agent_registry()
+    with caplog.at_level(logging.ERROR):
+        registry.load_agent_profiles(workspace, directory)
+
+    # 坏配置未进入 registry，也没有从 system 作用域回退出一个同名 profile。
+    assert registry.resolve(workspace, "broken") is None
+    records = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert any(
+        record.message == "agent_profile_config_invalid" for record in records
+    ), "坏配置必须写 error 日志留痕，否则「跳过」无法排查"
+
+    # 目录级问题才向上抛出，调用方据此禁用该 workspace 的委派工具。
+    not_a_directory = workspace / ".cosir" / "agents-file"
+    not_a_directory.write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="Agent 配置路径不是目录"):
         configuration.build_agent_registry().load_agent_profiles(
             workspace,
-            workspace / ".cosir" / "agents",
+            not_a_directory,
         )

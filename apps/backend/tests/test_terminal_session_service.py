@@ -262,7 +262,15 @@ def test_deferred_system_messages_drop_stale_run_scoped_messages() -> None:
     assert task_space.take_deferred_system_messages() == []
 
 
-def test_edit_rerun_discards_only_previous_messages_for_reused_run_id() -> None:
+def test_take_only_discards_stale_run_scoped_messages_keeps_task_and_other_run() -> None:
+    """取队列只丢弃「非当前 run」的 run 绑定消息，task 级与其它 run 的消息按规则留存。
+
+    队列里同时存在三种消息：绑定旧 run_id=2 的（edit/重跑后属于过期反馈，必须丢弃）、
+    无 run_id 的 task 级修复提示（任何 run 都可消费，必须保留）、绑定 run_id=3 的
+    （尚未被消费，必须保留）。以 run_id=3 取队列时只应拿到后两者，且旧 run_id=2 的消息
+    不得再被后续任何一次取队列看到。
+    """
+
     task_space = task_runtime_spaces.get_or_create(987656)
     task_space.take_deferred_system_messages()
     task_space.defer_system_message(
@@ -273,11 +281,11 @@ def test_edit_rerun_discards_only_previous_messages_for_reused_run_id() -> None:
         SystemMessage(content="other run", additional_kwargs={"run_id": 3})
     )
 
-    discarded = task_space.discard_deferred_system_messages(run_id=2)
     remaining = task_space.take_deferred_system_messages(run_id=3)
 
-    assert discarded == 1
     assert [message.content for message in remaining] == ["task scoped", "other run"]
+    # 旧 run_id=2 的消息已在上面那次取队列时被丢弃，不会被任何后续 run 再消费。
+    assert task_space.take_deferred_system_messages(run_id=2) == []
 
 
 def test_write_operation_id_is_idempotent_and_payload_bound(tmp_path: Path) -> None:

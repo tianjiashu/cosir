@@ -541,7 +541,6 @@ def test_task_crud_new_task_has_empty_run_and_window_defaults() -> None:
                 task_type="user",
                 parent_task_id=None,
                 parent_run_id=None,
-                delegation_id=None,
                 creation_command_id=None,
                 extra=None,
             )

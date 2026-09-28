@@ -1,3 +1,5 @@
+import errno
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -68,9 +70,19 @@ def test_transient_apply_failure_is_retryable_after_regenerating_the_diff(
         lambda _operations, _resolver: [],
     )
 
+    # 瞬时故障必须按平台可复现的方式表达：Windows 走 winerror=32（ERROR_SHARING_VIOLATION，
+    # ``_is_patch_retryable_after_correction`` 只在该分支读 winerror），POSIX 走 EAGAIN。
+    # 用 4 参数 OSError 模拟 winerror 在 POSIX 上不会填充 winerror（实测为 None），该形状在
+    # POSIX 上无法命中任何瞬时分支，只会得到与本用例意图无关的失败。
+    transient_cause = (
+        OSError(0, "file is locked", None, 32)
+        if os.name == "nt"
+        else OSError(errno.EAGAIN, "file is locked")
+    )
+
     def fail_apply(_operations, _resolver):
         try:
-            raise OSError(0, "file is locked", None, 32)
+            raise transient_cause
         except OSError as cause:
             raise PatchApplyError("file is locked", partial_applied=False) from cause
 

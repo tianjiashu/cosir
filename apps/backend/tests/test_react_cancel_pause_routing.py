@@ -60,6 +60,8 @@ def test_model_node_interrupts_when_run_was_cancelled_before_request(
     cancel_calls: list[dict[str, Any]] = []
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
+            # model 节点在发起请求前先按 task 维度取延迟系统消息队列，故桩需暴露 get_current_task。
+            get_current_task=lambda: SimpleNamespace(id=current_run.task_id),
             get_current_run=lambda: current_run,
             is_current_run_cancelled=lambda: True,
             cancel_run_if_running=lambda **kwargs: cancel_calls.append(kwargs),

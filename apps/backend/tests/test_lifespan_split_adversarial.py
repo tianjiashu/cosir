@@ -744,10 +744,6 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
             recorder.calls.append("list_latest_runs")
             return []
 
-    class _DelegationService:
-        def mark_interrupted_delegations_failed(self, reason: str) -> None:
-            recorder.calls.append("mark_delegations")
-
     class _TerminalService:
         def initialize(self) -> None:
             recorder.calls.append("terminal_init")
@@ -763,11 +759,6 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         lifespan_module,
         "get_conversation_run_service",
         record("get_run_service", _RunService()),
-    )
-    monkeypatch.setattr(
-        lifespan_module,
-        "get_delegation_service",
-        record("get_delegation_service", _DelegationService()),
     )
     monkeypatch.setattr(
         lifespan_module,

@@ -12,17 +12,18 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.context.runtime_context_manager import _as_ai_message
-from app.core.workflows.react.nodes import model_node as model_module
-from app.core.workflows.react.nodes import observation_node as observe_module
-from app.core.workflows.react.nodes import tools_node as tools_module
+from app.core.runtime.run_result import ToolRunResult
 from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
+from app.core.workflows.react.nodes import model_node as model_module
+from app.core.workflows.react.nodes import observation_node as observe_module
+from app.core.workflows.react.nodes import tools_node as tools_module
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -88,19 +89,27 @@ class _ModelHarness:
             self.failed = True
             return object()
 
+        async def run_tool_calls(*_args: Any, **_kwargs: Any) -> ToolRunResult:
+            # tools 节点即使没有 running 调用也会调用本入口；桩返回空批次，保持其短路语义。
+            return ToolRunResult(observations=[])
+
         self.operations = SimpleNamespace(
             model_tools=[SimpleNamespace(name="read_file", display=None)],
+            # model / tools 节点按「当前 task 维度」取上下文，故桩必须暴露 get_current_task。
+            get_current_task=lambda: SimpleNamespace(id=1),
             get_current_run=lambda: SimpleNamespace(task_id=1, id=2),
             is_current_run_cancelled=lambda: False,
             complete_run_if_running=complete_run_if_running,
             fail_run_if_running=fail_run_if_running,
+            run_tool_calls=run_tool_calls,
         )
         self.runtime_config = SimpleNamespace(
             operations=self.operations,
             model=SimpleNamespace(astream=self._astream),
             thinking_channel="",
             thinking_roundtrip=True,
-            run=SimpleNamespace(task_id=1, id=2),
+            # model 节点读 run.extra.ban_tools 构造禁用工具集；无禁用工具时 extra 为 None。
+            run=SimpleNamespace(task_id=1, id=2, extra=None),
             usage_stats=SimpleNamespace(
                 add_usage_metadata=lambda _metadata: None,
                 to_dict=lambda: {},
@@ -236,8 +245,8 @@ def test_normal_finish_reason_is_required_for_final_response(monkeypatch: Any) -
     assert [type(item) for item in harness.messages] == [AIMessage]
 
 
-def test_truncated_model_output_gets_continuation_prompt(monkeypatch: Any) -> None:
-    """达到长度上限的文本不能完成 Run，应追加提示并回到 model。"""
+def test_truncated_model_output_continues_without_injected_prompt(monkeypatch: Any) -> None:
+    """达到长度上限的文本不能完成 Run，直接回到 model 由模型自行延续，不注入续写提示。"""
 
     message = AIMessage(
         content="回答到一半",
@@ -256,8 +265,10 @@ def test_truncated_model_output_gets_continuation_prompt(monkeypatch: Any) -> No
     assert result["continue_model"] is True
     assert harness.completed is False
     assert harness.failed is False
-    assert [type(item) for item in harness.messages] == [AIMessage, SystemMessage]
-    assert "truncated" in harness.messages[-1].content
+    # length 类截断只表示本轮达到输出上限，由模型自行从已有输出继续；既不就地写入
+    # canonical context，也不进 task 级延迟队列。
+    assert [type(item) for item in harness.messages] == [AIMessage]
+    assert task_runtime_spaces.get_or_create(1).take_deferred_system_messages() == []
 
 
 def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) -> None:
@@ -275,8 +286,12 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     assert result["terminal"] is False
     assert result["continue_model"] is True
     assert harness.completed is False
-    assert [type(item) for item in harness.messages] == [AIMessage, SystemMessage]
-    assert "finish_reason=missing" in harness.messages[-1].content
+    # 续写提示不再就地写入 canonical context，而是经 task 级延迟队列在下一个 model 步注入；
+    # 故本轮 harness.messages 只含 AIMessage，提示位于延迟队列。
+    assert [type(item) for item in harness.messages] == [AIMessage]
+    deferred_system_messages = task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
+    assert len(deferred_system_messages) == 1
+    assert "finish_reason=missing" in deferred_system_messages[0].content
 
 
 def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
@@ -380,7 +395,8 @@ def test_all_repairable_invalid_calls_route_back_to_model(monkeypatch: Any) -> N
     assert model_result["tool_call_lifecycle"].invalid_count == 1
     assert [type(item) for item in harness.messages] == [AIMessage]
 
-    # tools 节点：无 running 调用，直接短路返回空结果。
+    # tools 节点：无 running 调用，执行空批次并返回空摘要；不再回写 tool_call_lifecycle，
+    # 该快照由 model 节点写入 state 后沿 state 传递。
     monkeypatch.setattr(tools_module, "_runtime_config", lambda: harness.runtime_config)
     tools_result = asyncio.run(
         tools_module._tools_node(_state(tool_call_lifecycle=model_result["tool_call_lifecycle"]))
@@ -403,7 +419,7 @@ def test_all_repairable_invalid_calls_route_back_to_model(monkeypatch: Any) -> N
             _state(
                 step_count=model_result["step_count"],
                 requested_tool=True,
-                tool_call_lifecycle=tools_result["tool_call_lifecycle"],
+                tool_call_lifecycle=model_result["tool_call_lifecycle"],
                 last_tool_results=tools_result["last_tool_results"],
             )
         )

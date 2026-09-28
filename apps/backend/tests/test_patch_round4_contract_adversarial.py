@@ -31,7 +31,7 @@ import pytest
 
 from app.core.tools.guard.file_resource_paths import FileResourceResolver
 from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.apply_patch_tool import APPLY_PATCH_DESCRIPTION, ApplyPatchTool
+from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.core.tools.tool_handler.patch_write.patch_parser import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
@@ -39,6 +39,11 @@ from app.core.tools.tool_handler.patch_write.patch_parser import (
 from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
 PARAM_DESCRIPTION = ApplyPatchArgs.model_fields["patch"].description or ""
+
+# 工具描述的事实源已从模块级常量 ``APPLY_PATCH_DESCRIPTION`` 迁移为类属性
+# ``ApplyPatchTool.description``（模块不再导出该名字）。此处只做「测试内别名」，把断言指向新位置，
+# 不要求 app 重新导出旧符号。
+APPLY_PATCH_DESCRIPTION = ApplyPatchTool.description
 
 
 def _section(path: str, *lines: str) -> str:

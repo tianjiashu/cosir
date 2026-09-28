@@ -16,6 +16,7 @@ Windows 上 multiprocessing 为 spawn：自定义 handler 必须是**模块级�
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 from dataclasses import replace
@@ -34,6 +35,22 @@ from app.core.tools.schemas.tool_output import (
 )
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_setsid_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """屏蔽子进程入口的 ``os.setsid()``，让进程内 fake 子进程不污染宿主会话。
+
+    真实子进程里 ``os.setsid()`` 只是自立为进程组组长（供 ``_force_kill`` 的
+    ``os.killpg`` 清理孙进程）。但本模块的 ``_FakeProcess`` 在同一进程的**线程**内
+    执行 ``_execute_handler``，此时 ``os.setsid()`` 实际改的是 pytest 进程自身的会话：
+    首次调用会把 pytest 变成会话首进程，之后所有调用都因 EPERM 抛 ``PermissionError``，
+    导致排在后面的 fake 子进程用例出现「顺序相关」的偶发失败。这里把该副作用收敛为
+    无操作，既保留被覆盖的父进程等待/归一化分支，又让用例结果与执行顺序解耦。
+    """
+
+    monkeypatch.setattr(os, "setsid", lambda: None, raising=False)
+
 
 # ---------------------------------------------------------------------------
 # 最小参数校验契约模型（args_model 在执行路径上不被消费，仅需为 pydantic BaseModel）

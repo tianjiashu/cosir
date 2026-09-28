@@ -17,6 +17,7 @@ import logging
 
 import pytest
 
+from app.config.constant import Constant
 from app.core.tools.tool_handler.web import url_safety
 from app.core.tools.tool_handler.web.url_safety import is_safe_public_url
 from app.core.tools.tool_handler.web_extract import WebExtractTool
@@ -86,9 +87,9 @@ def test_fake_ip_boundary_outside_is_public_and_allowed(address: str) -> None:
     assert safe is True, f"{address} 是公网地址，应放行"
     assert reason == ""
     # 该地址不属于 fake-ip 段，绝不能触发豁免分支的日志（否则说明网段判定过宽）。
-    assert not [r for r in records if r.msg == "web_url_fake_ip_allowed"], (
-        f"{address} 不在 fake-ip 段，不应命中豁免分支"
-    )
+    assert not [
+        r for r in records if r.msg == "web_url_fake_ip_allowed"
+    ], f"{address} 不在 fake-ip 段，不应命中豁免分支"
 
 
 @pytest.mark.parametrize(
@@ -98,9 +99,7 @@ def test_fake_ip_boundary_inside_allowed_for_hostname(address: str) -> None:
     """test_purpose: fake-ip 段内全部地址在「按主机名解析」路径必须放行（潜在缺陷：边界处
     漏放行，导致代理环境下部分域名被误拦）。"""
 
-    safe, reason = is_safe_public_url(
-        "https://example.com/", resolver=_fake_ip_resolver(address)
-    )
+    safe, reason = is_safe_public_url("https://example.com/", resolver=_fake_ip_resolver(address))
 
     assert safe is True
     assert reason == ""
@@ -131,9 +130,7 @@ def test_hostname_resolving_to_ipv6_internal_is_blocked(address: str) -> None:
     """test_purpose: 域名解析到 IPv6 回环/链路本地/文档保留段必须仍被拦截（潜在缺陷：IPv6
     分支未覆盖，解析结果换成 IPv6 就能绕过内网判定）。"""
 
-    safe, reason = is_safe_public_url(
-        "https://example.com/", resolver=_fake_ip_resolver(address)
-    )
+    safe, reason = is_safe_public_url("https://example.com/", resolver=_fake_ip_resolver(address))
 
     assert safe is False
     assert reason.startswith("Blocked:")
@@ -148,9 +145,7 @@ def test_ipv6_literal_host_is_blocked(url: str) -> None:
     resolver 恰好返回 fake-ip 而被豁免（潜在缺陷：方括号导致 _is_ip_literal 误判为 False）。"""
 
     # 即便恶意/异常 resolver 返回 fake-ip 段，字面量 host 也不得豁免。
-    safe, reason = is_safe_public_url(
-        url, resolver=lambda hostname: ["::1", "2001:db8::1"]
-    )
+    safe, reason = is_safe_public_url(url, resolver=lambda hostname: ["::1", "2001:db8::1"])
     assert safe is False
     assert reason.startswith("Blocked:")
 
@@ -348,9 +343,7 @@ def test_resolver_returning_empty_list_is_blocked() -> None:
     """test_purpose: resolver 返回空列表（解析无结果）必须拦截，绝不能视为「无可疑地址」
     而放行（潜在缺陷：空集合被真空真值绕过）。"""
 
-    safe, reason = is_safe_public_url(
-        "https://example.com/", resolver=lambda hostname: []
-    )
+    safe, reason = is_safe_public_url("https://example.com/", resolver=lambda hostname: [])
 
     assert safe is False
     assert reason == "Blocked: hostname could not be resolved."
@@ -360,9 +353,7 @@ def test_resolver_returning_empty_list_is_blocked() -> None:
 def test_resolver_returning_invalid_address_string_is_blocked(bad: str) -> None:
     """test_purpose: resolver 返回非法地址字符串必须拦截（潜在缺陷：非法地址被跳过而放行）。"""
 
-    safe, reason = is_safe_public_url(
-        "https://example.com/", resolver=_fake_ip_resolver(bad)
-    )
+    safe, reason = is_safe_public_url("https://example.com/", resolver=_fake_ip_resolver(bad))
 
     assert safe is False
     assert reason == "Blocked: hostname resolved to an invalid address."
@@ -373,7 +364,8 @@ def test_resolver_returning_none_element_is_blocked_not_crash() -> None:
     ip_address(None) 传入非法类型。注：当前实现捕获 ValueError 不含 TypeError）。"""
 
     safe, reason = is_safe_public_url(
-        "https://example.com/", resolver=lambda hostname: [None]  # type: ignore[list-item]
+        "https://example.com/",
+        resolver=lambda hostname: [None],  # type: ignore[list-item]
     )
 
     assert safe is False
@@ -570,9 +562,9 @@ def test_mixed_resolution_does_not_emit_fake_ip_allowed_when_final_verdict_block
     assert [r for r in records if r.msg == "web_url_address_blocked"]
 
     # 但放行日志不该出现（该 URL 并没有被放行）。
-    assert not [r for r in records if r.msg == "web_url_fake_ip_allowed"], (
-        "混解析最终被拦截，却写了 web_url_fake_ip_allowed，日志语义与最终判定矛盾"
-    )
+    assert not [
+        r for r in records if r.msg == "web_url_fake_ip_allowed"
+    ], "混解析最终被拦截，却写了 web_url_fake_ip_allowed，日志语义与最终判定矛盾"
 
 
 def test_address_blocked_event_is_warning_level() -> None:
@@ -593,10 +585,10 @@ def test_address_blocked_event_is_warning_level() -> None:
 def test_blocked_log_truncates_address_list_to_max(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """test_purpose: 拦截日志中 addresses 字段被限制在 _MAX_LOGGED_ADDRESSES 以内，且仍包含
-    matched_address（潜在缺陷：无边界日志字段膨胀，或截断后丢失命中地址）。"""
+    """test_purpose: 拦截日志中 addresses 字段被限制在 ``Constant.Web.MAX_LOGGED_ADDRESSES``
+    以内，且仍包含 matched_address（潜在缺陷：无边界日志字段膨胀，或截断后丢失命中地址）。"""
 
-    monkeypatch.setattr(url_safety, "_MAX_LOGGED_ADDRESSES", 2)
+    monkeypatch.setattr(Constant.Web, "MAX_LOGGED_ADDRESSES", 2)
     records: list[logging.LogRecord] = []
     addresses = ["198.18.0.1", "198.18.0.2", "198.18.0.3", "10.0.0.5"]
     _capture(
@@ -606,6 +598,8 @@ def test_blocked_log_truncates_address_list_to_max(
 
     blocked = [r for r in records if r.msg == "web_url_address_blocked"]
     assert blocked
+    # 截断只影响 addresses 列表，命中的内网地址仍必须单独成字段（不得随截断丢失）。
+    assert blocked[0].data["addresses"] == addresses[:2]
     assert blocked[0].data["matched_address"] == "10.0.0.5"
 
 
@@ -652,9 +646,7 @@ def test_execute_rejects_fake_ip_literal_before_provider() -> None:
     字面量被豁免而放行到 provider）。"""
 
     provider = FakeProvider()
-    tool = WebExtractTool(
-        _registry_with(provider), resolver=_fake_ip_resolver("198.18.0.67")
-    )
+    tool = WebExtractTool(_registry_with(provider), resolver=_fake_ip_resolver("198.18.0.67"))
 
     obs = tool.execute(urls=["http://198.18.0.67/"])
     assert obs.status == "error"

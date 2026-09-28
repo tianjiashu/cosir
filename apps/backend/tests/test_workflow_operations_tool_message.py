@@ -42,9 +42,9 @@ def test_error_message_contains_only_diagnostic_retry_signal_and_reason() -> Non
         )
     )
 
+    # ``retryable`` 不再单独成行：重试信号由 hint 承载，避免同一信息重复发送给模型。
     assert message.content == (
         "error: provider unavailable\n"
-        "retryable: true\n"
         "hint: this error can be retried; decide from the context whether "
         "retrying is appropriate.\n"
         "reason: retry after a short delay"
@@ -65,7 +65,6 @@ def test_non_retryable_error_does_not_emit_optional_retry_hint() -> None:
 
     assert message.content == (
         "error: invalid patch_write\n"
-        "retryable: false\n"
         "hint: do not retry this tool call.\n"
         "reason: fix the patch_write format before calling again"
     )

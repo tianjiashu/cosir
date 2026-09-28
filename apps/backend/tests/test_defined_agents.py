@@ -1,7 +1,16 @@
-"""代码内 Agent 与 JSON 配置型子 Agent 的装配契约测试。"""
+"""代码内置 Agent 与注册表装配契约测试。
+
+专用 CHILD profile（code-developer / code-explorer / delegate_reviewer /
+unit-test-engineer）原由 ``app/core/agents/defaults/*.json`` 随包分发，该目录已移除：
+当前系统作用域只由代码内置的 ``general-assistant`` 与 ``main_agent`` 播种，用户自定义
+CHILD 通过配置中心写入运行时的 ``system_agent_config_dir``。本模块因此以「process 作用域
+能解析出哪些内置 profile」为断言对象，并用配置中心目录作为 JSON 装载路径。
+"""
 
 from dataclasses import dataclass, replace
 from pathlib import Path
+
+import pytest
 
 from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfileType
@@ -10,14 +19,26 @@ from app.core.agents.define_agents import general_child_agent, main_agent
 from app.core.agents.model_settings import ModelSettings
 from app.core.context.system_prompt_builder import SystemPromptBuilder
 
-_DEFAULTS_DIR = Path(__file__).resolve().parents[1] / "app" / "core" / "agents" / "defaults"
 
+def _code_defined_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list:
+    """构造只含代码内置 profile 的系统作用域目录。
 
-def _default_profiles():
-    """从随应用分发的默认 JSON 构造测试用系统作用域目录。"""
+    系统 JSON 目录被指向空目录：与启动装配一致（``build_agent_registry`` 只播种代码内置
+    profile，运行时 JSON 由生命周期另行载入），避免用例受宿主机器上的用户配置影响。
 
-    registry = AgentProfileRegistry()
-    registry.load_agent_profiles(AgentProfileRegistry.SYSTEM_WORKSPACE, _DEFAULTS_DIR)
+    参数:
+        monkeypatch: pytest 补丁夹具，用于把系统 Agent 目录指向临时空目录。
+        tmp_path: 临时目录根。
+
+    返回:
+        系统作用域当前可见的 profile 列表。
+    """
+
+    monkeypatch.setattr(
+        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        lambda: tmp_path / "agents",
+    )
+    registry = build_agent_registry()
     return registry.list(AgentProfileRegistry.SYSTEM_WORKSPACE)
 
 
@@ -48,37 +69,42 @@ def test_generic_child_profile_keeps_code_prompt(monkeypatch) -> None:
     assert "general-purpose child agent" in prompt
 
 
-def test_default_child_profiles_load_from_json() -> None:
-    """专用 CHILD profile 与其系统提示词均从随应用分发的 JSON 装载。"""
+def test_builtin_child_profiles_are_general_assistant_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """系统作用域只播种唯一代码内置 CHILD，且其提示词与工具能力完整。"""
 
-    profiles = _default_profiles()
+    profiles = _code_defined_profiles(monkeypatch, tmp_path)
 
-    assert {profile.agent_id for profile in profiles} == {
-        "delegate_reviewer",
-        "code-explorer",
-        "unit-test-engineer",
-        "code-developer",
-    }
-    assert all(profile.agent_type is AgentProfileType.CHILD for profile in profiles)
-    assert all(profile.system_prompt and profile.system_prompt.strip() for profile in profiles)
-    coder = next(profile for profile in profiles if profile.agent_id == "code-developer")
-    assert {"apply_patch", "delete_file", "move_file"} <= set(coder.allowed_tools)
+    assert {profile.agent_id for profile in profiles} == {"general-assistant", "main_agent"}
+    children = [profile for profile in profiles if profile.agent_type is AgentProfileType.CHILD]
+    assert [profile.agent_id for profile in children] == ["general-assistant"]
+    assert children[0].system_prompt.strip()
+    assert {
+        "write_file",
+        "apply_patch",
+        "delete_file",
+        "move_file",
+        "read_file",
+    } <= set(children[0].allowed_tools)
 
 
-def test_system_registry_contains_generic_and_loaded_children(monkeypatch) -> None:
-    """进程目录包含代码内通用 CHILD 与显式载入的系统 JSON，不包含 workspace 配置。"""
+def test_system_registry_contains_only_code_defined_children(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """进程目录只含代码内置 CHILD，不含已移除的 JSON 预设，也不含 workspace 配置。"""
 
     monkeypatch.setattr("app.config.configuration._TOOL_SYSTEM", None, raising=False)
+    monkeypatch.setattr(
+        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        lambda: tmp_path / "agents",
+    )
     registry = build_agent_registry()
-    registry.load_agent_profiles(AgentProfileRegistry.SYSTEM_WORKSPACE, _DEFAULTS_DIR)
 
-    assert registry.child_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {
-        "general-assistant",
-        "delegate_reviewer",
-        "code-explorer",
-        "unit-test-engineer",
-        "code-developer",
-    }
+    assert registry.child_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {"general-assistant"}
+    assert registry.child_agent_ids(tmp_path / "workspace") == {"general-assistant"}
 
 
 def test_main_profile_uses_own_prompt_and_child_catalog_follows_allowed_tools(monkeypatch) -> None:
@@ -129,20 +155,22 @@ def test_registry_projects_only_child_profiles() -> None:
     )
 
 
-def test_json_children_leave_model_route_to_parent_run() -> None:
-    """默认配置型子 Agent 不内置 provider/model，默认从父 Run 继承。"""
+def test_builtin_children_leave_model_route_to_parent_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """内置子 Agent 不内置 provider/model，默认从父 Run 继承。"""
 
-    profiles = _default_profiles()
+    profiles = _code_defined_profiles(monkeypatch, tmp_path)
 
     assert all(profile.provider_id is None for profile in profiles)
     assert all(profile.model_name is None for profile in profiles)
-    assert all(profile.model_settings == ModelSettings() for profile in profiles)
 
 
 def test_child_profile_model_settings_keep_custom_overrides() -> None:
-    """per-run 派生保留 profile 自有模型参数覆盖。"""
+    """per-run 派生保留 profile 自有模型参数覆盖，不原地写共享单例。"""
 
-    child = _default_profiles()[0]
+    child = general_child_agent()
     custom = ModelSettings(temperature=0.2, thinking=True)
     child.model_settings = custom
 

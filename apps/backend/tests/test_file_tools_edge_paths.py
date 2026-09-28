@@ -179,7 +179,9 @@ def test_text_sample_rejects_non_utf8_content(tmp_path: Path) -> None:
 # payload at the first NUL and produces an empty (non-regular) file.
 def test_text_sample_rejects_nul_bytes(tmp_path: Path) -> None:
     weird = tmp_path / "nul.txt"
-    fd = os.open(weird, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_BINARY)
+    # ``os.O_BINARY`` 仅在 Windows 存在（POSIX 上语义等价于 0），故按平台取默认值，
+    # 否则本用例在 macOS/Linux 上会因 AttributeError 失败，而不是去验证 NUL 分支。
+    fd = os.open(weird, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0))
     try:
         os.write(fd, b"has\x00nul")
     finally:
