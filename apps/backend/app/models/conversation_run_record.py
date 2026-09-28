@@ -49,8 +49,9 @@ class ConversationRunRecord:
     end_reason: str | None = None
     final_output: str | None = None
     agent_id: str | None = None
-    provider_id: int | None = None
+    model_config_id: int | None = None
     model_name: str | None = None
+    context_window_k: int | None = None
     image_paths: list[str] | None = None
     reasoning_effort: str | None = None
     extra: ConversationRunExtra | None = None
@@ -83,8 +84,9 @@ class ConversationRunRecord:
             "image_paths": self.image_paths,
             "reasoning_effort": self.reasoning_effort,
             "agent_id": self.agent_id,
-            "provider_id": self.provider_id,
+            "model_config_id": self.model_config_id,
             "model_name": self.model_name,
+            "context_window_k": self.context_window_k,
             "extra": self.extra.to_dict() if self.extra is not None else None,
             "usage": self.usage,
             "error": self.error,
@@ -124,7 +126,8 @@ class ConversationRunRecord:
             image_paths=row.image_paths,
             reasoning_effort=row.reasoning_effort,
             model_name=row.model_name,
-            provider_id=row.provider_id,
+            model_config_id=row.model_config_id,
+            context_window_k=row.context_window_k,
             extra=ConversationRunExtra.from_dict(row.extra),
             usage=(
                 json.loads(row.usage_json)
@@ -151,8 +154,9 @@ class ConversationRunRecord:
             "end_reason": self.end_reason,
             "final_output": self.final_output,
             "agent_id": self.agent_id,
-            "provider_id": self.provider_id,
+            "model_config_id": self.model_config_id,
             "model_name": self.model_name,
+            "context_window_k": self.context_window_k,
             "image_paths": self.image_paths,
             "reasoning_effort": self.reasoning_effort,
             "extra": self.extra.to_dict() if self.extra is not None else None,

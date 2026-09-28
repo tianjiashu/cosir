@@ -15,7 +15,7 @@ import {
   DEFAULT_EFFORT_OPTIONS as BACKEND_REASONING_EFFORTS,
   type ModelOption,
 } from "@/components/model-selector";
-import { ProviderConfigPanel } from "@/components/assistant-ui/provider-config-panel";
+import { ModelConfigPanel } from "@/components/assistant-ui/model-config-panel";
 import { useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
 import {
   scopeSuffix,
@@ -50,16 +50,14 @@ function getSelection(
   const storedModel = stored
     ? models.find(
         (model) =>
-          model.providerId === stored.providerId &&
-          model.modelName === stored.modelName,
+          model.modelConfigId === stored.modelConfigId,
       )
     : undefined;
   const model = storedModel ?? models[0];
   if (!model) return null;
 
   return {
-    providerId: model.providerId,
-    modelName: model.modelName,
+    modelConfigId: model.modelConfigId,
     reasoningEffort: model.supportsReasoningEffort
       ? stored?.reasoningEffort ?? "high"
       : null,
@@ -70,8 +68,7 @@ function toOfficialModel(model: ModelCatalogModel): ModelOption {
   return {
     id: model.optionId,
     name: model.label,
-    description: model.providerDisplayName,
-    keywords: [model.providerDisplayName, model.modelName],
+    keywords: [model.configName, model.modelName],
     efforts: model.supportsReasoningEffort
       ? BACKEND_REASONING_EFFORTS
       : undefined,
@@ -97,8 +94,7 @@ function SelectorView({
   );
   const selectedModel = catalogModels.find(
     (model) =>
-      model.providerId === selection.providerId &&
-      model.modelName === selection.modelName,
+      model.modelConfigId === selection.modelConfigId,
   );
   const selectedOptionId = selectedModel?.optionId;
 
@@ -114,8 +110,7 @@ function SelectorView({
           const model = catalogModels.find((candidate) => candidate.optionId === optionId);
           if (!model) return;
           onSelectionChange({
-            providerId: model.providerId,
-            modelName: model.modelName,
+            modelConfigId: model.modelConfigId,
             reasoningEffort: model.supportsReasoningEffort
               ? selection.reasoningEffort ?? "high"
               : null,
@@ -148,7 +143,7 @@ function SelectorView({
           <OfficialModelSelectorList />
           <OfficialModelSelectorEffort label="推理强度" />
           <div className="border-border/60 mt-1 border-t pt-1">
-            <ProviderConfigPanel onChanged={onCatalogChanged} />
+            <ModelConfigPanel onChanged={onCatalogChanged} />
           </div>
         </OfficialModelSelectorContent>
       </OfficialModelSelectorRoot>
@@ -212,10 +207,10 @@ function StandaloneModelSelector(props: Omit<ModelSelectorProps, "runtimeModelCo
     return <span className="text-muted-foreground inline-flex h-8 items-center gap-1.5 px-2 text-xs"><SparklesIcon className="size-3.5 animate-pulse" />加载模型…</span>;
   }
   if (status === "error") {
-    return <div className="flex items-center gap-1"><button type="button" onClick={() => void retry()} className="text-destructive hover:bg-destructive/10 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs"><RefreshCwIcon className="size-3.5" />模型加载失败，重试</button><ProviderConfigPanel onChanged={() => void retry()} /></div>;
+    return <div className="flex items-center gap-1"><button type="button" onClick={() => void retry()} className="text-destructive hover:bg-destructive/10 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs"><RefreshCwIcon className="size-3.5" />模型加载失败，重试</button><ModelConfigPanel onChanged={() => void retry()} /></div>;
   }
   if (!catalog || !selection) {
-    return <div className="flex items-center gap-1"><span className="text-muted-foreground inline-flex h-8 items-center px-2 text-xs">暂无可用模型</span><ProviderConfigPanel onChanged={() => void retry()} /></div>;
+    return <div className="flex items-center gap-1"><span className="text-muted-foreground inline-flex h-8 items-center px-2 text-xs">暂无可用模型</span><ModelConfigPanel onChanged={() => void retry()} /></div>;
   }
 
   return <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />;
@@ -225,7 +220,7 @@ function RuntimeModelSelector(props: Omit<ModelSelectorProps, "runtimeModelConte
   const aui = useAui();
   const { catalog, status, retry, selection, updateSelection } = useScopedSelection(props.scope);
   const selectedModel = catalog?.models.find(
-    (model) => model.providerId === selection?.providerId && model.modelName === selection?.modelName,
+    (model) => model.modelConfigId === selection?.modelConfigId,
   );
 
   useEffect(() => {
@@ -245,7 +240,7 @@ function RuntimeModelSelector(props: Omit<ModelSelectorProps, "runtimeModelConte
   }, [props.onReadyChange, selection, status]);
 
   if (status === "error") {
-    return <div className="flex items-center gap-1"><button type="button" onClick={() => void retry()} className="text-destructive hover:bg-destructive/10 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs"><RefreshCwIcon className="size-3.5" />模型加载失败，重试</button><ProviderConfigPanel onChanged={() => void retry()} /></div>;
+    return <div className="flex items-center gap-1"><button type="button" onClick={() => void retry()} className="text-destructive hover:bg-destructive/10 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs"><RefreshCwIcon className="size-3.5" />模型加载失败，重试</button><ModelConfigPanel onChanged={() => void retry()} /></div>;
   }
   if (status !== "ready" || !catalog || !selection) {
     return <span className="text-muted-foreground inline-flex h-8 items-center gap-1.5 px-2 text-xs"><SparklesIcon className="size-3.5 animate-pulse" />加载模型…</span>;

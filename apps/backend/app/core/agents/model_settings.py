@@ -1,8 +1,8 @@
 """单个 Agent 的模型覆盖配置值对象。
 
-只承载该 Agent 的模型覆盖配置（生成参数 + 推理强度 + 可选接入覆盖），不参与模型构建。
-所有字段均为可选覆盖项：未提供（``None``）时由 ``ProviderCapability`` 注册表与
-``Constant.LLM``（请求超时 / 重试 / 种子）提供缺省值，``ModelSettings`` 仅覆盖显式给出的字段。
+只承载该 Agent 的模型覆盖配置（生成参数与推理强度），不参与模型构建。
+所有字段均为可选覆盖项：未提供（``None``）时由运行时默认值提供缺省值，
+``ModelSettings`` 仅覆盖显式给出的字段。
 
 序列化字段清单由 ``_fields()`` 从 dataclass 实际字段推导（唯一事实源），
 不再手工维护——手工清单曾与实际字段漂移（缺 ``response_format``、多 ``base_url``/
@@ -115,13 +115,11 @@ class ModelSettings:
     - 采样参数：``temperature`` / ``top_p`` / ``max_tokens``；
     - 推理强度：``reasoning_effort``（``low``/``high``/``max``，None 时不注入）；
     - thinking 开关：``thinking``（是否抽取/回传思考块）；
-    - 接入与能力覆盖：``provider_type``（注册表键，None 时按 model_name 推导）/
-      ``drop_params``（None 时回退 ``ProviderCapability.default_drop_params``）/
+    - 请求行为覆盖：``drop_params``（None 时使用运行时默认值）/
       ``stream``（None 时不覆盖）/ ``response_format``（text / json_object，None 时不注入）。
 
-    全局默认值（超时/重试/seed 等）归 ``app.config.constant.Constant.LLM`` 与
-    ``ProviderCapability`` 注册表；上下文窗口上限归 ``ModelCapability.context_window``（经
-    ``CapabilityService.get_model_context_window`` 解析），此处不为假想需求预留覆盖字段。
+    全局默认值（超时/重试/seed 等）归 ``app.config.constant.Constant.LLM``；上下文窗口由
+    模型连接配置的 ``context_window_k`` 提供，此处不重复声明。
     """
 
     temperature: float | None = None
@@ -130,8 +128,7 @@ class ModelSettings:
     thinking: bool | None = None
     # 可选厂商类型（注册表键，如 ``deepseek`` / ``azure``）：None 时由
     # ``factory.build_chat_model`` 按 model_name 前缀回退推导。
-    provider_type: str | None = None
-    # 可选是否丢弃不支持参数覆盖：None 时回退 ``ProviderCapability.default_drop_params``。
+    # 可选是否丢弃不支持参数覆盖：None 时使用运行时默认值。
     drop_params: bool | None = None
     # 可选流式开关覆盖：None 时不覆盖（沿用运行时默认流式）。
     stream: bool | None = None

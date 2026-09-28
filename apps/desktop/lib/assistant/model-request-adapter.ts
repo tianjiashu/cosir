@@ -14,8 +14,7 @@ export function selectionToTransportFields(
 ): Record<string, unknown> {
   if (!selection) return {};
   return {
-    providerId: selection.providerId,
-    modelName: selection.modelName,
+    modelConfigId: selection.modelConfigId,
     reasoningEffort: selection.reasoningEffort,
   };
 }
@@ -23,8 +22,7 @@ export function selectionToTransportFields(
 /**
  * 把 assistant-ui ModelContext.config 中的 UI option id 映射为后端字段。
  *
- * UI 只暴露全局目录生成的 option id；后端仍接收自己的 providerId、modelName
- * 和 reasoningEffort，避免把 UI 选择器内部标识泄漏为模型名称。
+ * UI 只暴露全局目录生成的 option id；后端只接收模型配置身份，模型名由后端配置事实读取。
  */
 export function modelContextToTransportFields(
   config: unknown,
@@ -46,8 +44,7 @@ export function modelContextToTransportFields(
         : null;
 
   return {
-    providerId: model.providerId,
-    modelName: model.modelName,
+    modelConfigId: model.modelConfigId,
     reasoningEffort,
   };
 }

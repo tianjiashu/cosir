@@ -86,7 +86,7 @@ def test_runtime_context_manager_owns_next_sequence_after_run_restart(monkeypatc
     manager = _manager(context_service, next_sequence=2)
     monkeypatch.setattr(
         "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
-        lambda _model_name: 8192,
+        lambda _model_name, **kwargs: 8192,
     )
 
     manager.begin_run(SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash"))
@@ -105,7 +105,7 @@ def test_runtime_context_manager_resume_keeps_persisted_run_entries(monkeypatch)
     manager._entries = list(context_service.loaded)
     monkeypatch.setattr(
         "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
-        lambda _model_name: 8192,
+        lambda _model_name, **kwargs: 8192,
     )
 
     manager.begin_run(
@@ -134,7 +134,7 @@ def test_runtime_context_manager_resume_keeps_tool_schemas_without_reprojecting(
     manager.add_change_listener(listener)
     monkeypatch.setattr(
         "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
-        lambda _model_name: 8192,
+        lambda _model_name, **kwargs: 8192,
     )
 
     manager.begin_run(
@@ -159,7 +159,7 @@ def test_runtime_context_manager_replaces_tool_schemas_between_runs(monkeypatch)
     manager = _manager(context_service)
     monkeypatch.setattr(
         "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
-        lambda _model_name: 8192,
+        lambda _model_name, **kwargs: 8192,
     )
 
     first_schema = {

@@ -207,7 +207,7 @@ def _request_body_summary(value: object) -> dict[str, Any]:
         "keys": sorted(str(key) for key in value),
         "json_type": "object",
     }
-    for key in ("taskId", "workspaceId", "threadId", "providerId", "modelName", "reasoningEffort"):
+    for key in ("taskId", "workspaceId", "threadId", "modelConfigId", "reasoningEffort"):
         if key in value and isinstance(value[key], str | int | float | bool):
             summary[key] = value[key]
 

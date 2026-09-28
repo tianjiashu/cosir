@@ -4,23 +4,28 @@ import { modelContextToTransportFields } from "@/lib/assistant/model-request-ada
 import { buildModelCatalog } from "@/lib/model-catalog";
 
 const catalog = buildModelCatalog([{
-  provider_id: 7,
-  provider_display_name: "Local OpenAI",
-  models: [{
-    model_name: "reasoning-model",
-    supports_thinking: true,
-    supports_image: false,
-    supports_video: false,
-    supports_reasoning_effort: true,
-  }],
+  config_id: 7,
+  config_name: "Local OpenAI",
+  base_url: "http://localhost:8000/v1",
+  api_key: "secret",
+  model_name: "reasoning-model",
+  context_window_k: 32,
+  api_key_configured: true,
+  enabled: true,
+  sort_order: 0,
+  created_at: "",
+  updated_at: "",
+  supports_thinking: true,
+  supports_image: false,
+  supports_video: false,
+  supports_reasoning_effort: true,
 }]);
 
 describe("ModelContext transport adapter", () => {
-  it("maps the official selector option id to backend model fields", () => {
+  it("maps the selector option id to only the model configuration identity", () => {
     const optionId = catalog.models[0]!.optionId;
     expect(modelContextToTransportFields({ modelName: optionId, reasoningEffort: "max" }, catalog)).toEqual({
-      providerId: 7,
-      modelName: "reasoning-model",
+      modelConfigId: 7,
       reasoningEffort: "max",
     });
   });

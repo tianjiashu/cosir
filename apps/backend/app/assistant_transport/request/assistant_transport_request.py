@@ -33,8 +33,7 @@ class AssistantTransportRequest(BaseModel):
     threadId: str = Field(pattern=r"^task-[1-9][0-9]*$")
     taskId: int = Field(ge=1)
     workspaceId: int | None = Field(default=None, ge=1)
-    providerId: int | None = Field(default=None, ge=1)
-    modelName: str | None = None
+    modelConfigId: int | None = Field(default=None, ge=1)
     reasoningEffort: str | None = Field(default=None)
     # 空 commands 用于恢复指定 run；编辑重跑的 add-message 也必须携带当前 runId。
     runId: int | None = Field(default=None)
@@ -65,8 +64,7 @@ class AssistantTransportRequest(BaseModel):
         - 唯一已定义的 custom 命令是与 add-message 同批的 ``BanToolsCommand``；
         - 空命令必须携带 ``runId`` 用于恢复已有 run；add-message 是否重放只由
           ``runId`` 是否存在决定，不能由 ``sourceId`` 推导；
-        - 含 ``add-message`` 时 ``providerId`` 与 ``modelName`` 必填且 ``modelName``
-          非空（启动对话必须确定执行上下文，原 service 内的同等校验已前移至此）；
+        - 含 ``add-message`` 时 ``modelConfigId`` 必填；模型名由后端配置事实读取；
         - ``taskId`` 始终是必填的已存在 Task 标识；``workspaceId`` 仅用于校验归属。
 
         参数:
@@ -119,8 +117,7 @@ class AssistantTransportRequest(BaseModel):
         ban_tools_commands = [
             command for command in self.commands if isinstance(command, BanToolsCommand)
         ]
-        # 首版运行模型在启动对话时必须同时确定厂商与模型，二者构成执行上下文；
-        # 缺失其一会让 Turn 无法绑定执行器，属纯 wire 契约约束，前移至此。
+        # 启动对话时只携带模型配置身份，具体模型名由后端配置事实解析。
         has_message = any(isinstance(command, AddMessageCommand) for command in self.commands)
         if ban_tools_commands and (not has_message or len(ban_tools_commands) != 1):
             raise TransportRequestError(
@@ -136,13 +133,11 @@ class AssistantTransportRequest(BaseModel):
                 message="没有新消息时必须提供 runId 以继续已有运行",
                 retryable=False,
             )
-        if has_message and (
-            self.providerId is None or self.modelName is None or not self.modelName.strip()
-        ):
+        if has_message and self.modelConfigId is None:
             raise TransportRequestError(
                 status_code=400,
                 code="MODEL_SELECTION_REQUIRED",
-                message="启动对话必须同时提供 providerId 与 modelName",
+                message="启动对话必须提供 modelConfigId",
                 retryable=False,
             )
         return self
@@ -187,8 +182,7 @@ class AssistantTransportRequest(BaseModel):
         )
         payload = {
             "commands": commands,
-            "providerId": self.providerId,
-            "modelName": self.modelName,
+            "modelConfigId": self.modelConfigId,
             "reasoningEffort": self.reasoningEffort,
             "runId": self.runId,
         }

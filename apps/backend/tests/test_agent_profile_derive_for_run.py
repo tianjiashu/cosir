@@ -21,7 +21,7 @@ class _RunRoute:
     """Conversation Run 的最小替身：只承载 ``derive_for_run`` 读取的两个路由字段。
 
     参数:
-        provider_id: 模型厂商标识。
+        model_config_id: 模型厂商标识。
         model_name: 模型名称。
 
     返回:
@@ -34,7 +34,7 @@ class _RunRoute:
         无。
     """
 
-    provider_id: int | None = None
+    model_config_id: int | None = None
     model_name: str | None = None
 
 
@@ -109,14 +109,14 @@ def test_derive_for_run_backfills_route_and_applies_model_settings_override() ->
     override = ModelSettings(temperature=0.3)
 
     derived = profile.derive_for_run(
-        run=_RunRoute(provider_id=3, model_name="glm-4.6"),  # type: ignore[arg-type]
+        run=_RunRoute(model_config_id=3, model_name="glm-4.6"),  # type: ignore[arg-type]
         model_settings=override,
     )
 
-    assert (derived.provider_id, derived.model_name) == (3, "glm-4.6")
+    assert (derived.model_config_id, derived.model_name) == (3, "glm-4.6")
     assert derived.model_settings is override
     # 原单例不被本次派生污染。
-    assert profile.provider_id is None
+    assert profile.model_config_id is None
     assert profile.model_name is None
     assert profile.model_settings != override
 
@@ -125,21 +125,21 @@ def test_derive_for_run_keeps_profile_explicit_route() -> None:
     """profile 已显式配置的模型路由优先于 run，不被回填覆盖。"""
 
     profile = _child_profile()
-    profile.provider_id = 9
+    profile.model_config_id = 9
     profile.model_name = "own-model"
 
     derived = profile.derive_for_run(
-        run=_RunRoute(provider_id=3, model_name="glm-4.6"),  # type: ignore[arg-type]
+        run=_RunRoute(model_config_id=3, model_name="glm-4.6"),  # type: ignore[arg-type]
     )
 
-    assert (derived.provider_id, derived.model_name) == (9, "own-model")
+    assert (derived.model_config_id, derived.model_name) == (9, "own-model")
 
 
 def test_derive_for_run_binds_run_to_copy_only() -> None:
     """``run`` 只绑定在副本上，共享单例的 ``run`` 字段保持为空。"""
 
     profile = _child_profile()
-    route: Any = _RunRoute(provider_id=1, model_name="m")
+    route: Any = _RunRoute(model_config_id=1, model_name="m")
 
     derived = profile.derive_for_run(run=route)
 

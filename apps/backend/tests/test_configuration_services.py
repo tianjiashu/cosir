@@ -12,11 +12,11 @@ from app.app import app
 from app.config.settings import Settings
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.define_agents import general_child_agent, main_agent
+from app.models.environment.environment_change import EnvironmentChange
 from app.service.configuration.agent_configuration_service import (
     AgentConfigurationError,
     AgentConfigurationService,
 )
-from app.models.environment.environment_change import EnvironmentChange
 from app.service.configuration.environment_configuration_service import (
     EnvironmentConfigurationError,
     EnvironmentConfigurationService,
@@ -87,14 +87,17 @@ def test_agent_configuration_round_trip_preserves_model_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FakeProviderService:
-        @staticmethod
-        def vaild_provider(provider_id: int | None, model_name: str | None) -> bool:
-            return provider_id == 7 and model_name == "model-a"
-
     monkeypatch.setattr(
-        "app.core.agents.agent_profile.get_provider_service",
-        lambda: FakeProviderService(),
+        "app.core.agents.agent_profile.get_model_config_service",
+        lambda: type(
+            "FakeModelConfigService",
+            (),
+            {
+                "get_config": staticmethod(
+                    lambda config_id: type("Config", (), {"model_name": "model-a"})()
+                )
+            },
+        )(),
     )
     monkeypatch.setattr(
         "app.service.configuration.agent_configuration_service.system_agent_config_dir",
@@ -109,8 +112,7 @@ def test_agent_configuration_round_trip_preserves_model_override(
             description="审查变更",
             system_prompt="只审查，不修改文件。",
             allowed_tools=["read_file"],
-            provider_id=None,
-            model_name=None,
+            model_config_id=None,
             model_settings={"temperature": 0.2},
         )
     )
@@ -121,11 +123,8 @@ def test_agent_configuration_round_trip_preserves_model_override(
     listed_ids = {item.agent_id for item in service.list_documents()}
     assert "reviewer" in listed_ids
     assert "main_agent" not in listed_ids
-    assert (
-        json.loads((tmp_path / "agents" / "reviewer.json").read_text(encoding="utf-8"))[
-            "model_name"
-        ]
-        is None
+    assert "model_name" not in json.loads(
+        (tmp_path / "agents" / "reviewer.json").read_text(encoding="utf-8")
     )
 
     updated = service.update_document(
@@ -136,13 +135,12 @@ def test_agent_configuration_round_trip_preserves_model_override(
             description="审查变更",
             system_prompt="只审查，不修改文件。",
             allowed_tools=["read_file"],
-            provider_id=7,
-            model_name="model-a",
+            model_config_id=7,
             model_settings={"temperature": 0.1},
         ),
     )
-    assert _document(service, "reviewer").model_name == "model-a"
-    assert updated.model_name == "model-a"
+    assert _document(service, "reviewer").model_config_id == 7
+    assert updated.model_config_id == 7
     assert (
         registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer").model_name == "model-a"
     )
@@ -379,7 +377,7 @@ def test_agent_operations_require_canonical_file_name(
                 "system_prompt": "只审查，不修改文件。",
                 "allowed_tools": ["read_file"],
                 "max_steps": 100,
-                "provider_id": None,
+                "model_config_id": None,
                 "model_name": None,
                 "model_settings": {},
             }

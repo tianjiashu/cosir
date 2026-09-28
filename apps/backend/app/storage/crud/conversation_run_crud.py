@@ -82,8 +82,9 @@ class ConversationRunCrud:
         input_text: str,
         status: str = ConversationRunStatus.PENDING.value,
         agent_id: str | None = None,
-        provider_id: int | None = None,
+        model_config_id: int | None = None,
         model_name: str | None = None,
+        context_window_k: int | None = None,
         image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
         extra: ConversationRunExtra | None = None,
@@ -100,8 +101,9 @@ class ConversationRunCrud:
             input_text: 本次运行的输入文本；不能为空白。
             status: 初始状态，默认 ``pending``。
             agent_id: 可选，本次运行绑定的 agent 标识。
-            provider_id: 可选，模型归属厂商标识（指向 ``providers.id``）；None 表示未指定。
+            model_config_id: 可选，模型连接配置标识；None 表示未指定。
             model_name: 可选，模型路由名。
+            context_window_k: 本次 Run 使用的上下文窗口，单位为 K 或 None。
             image_paths: 可选，本次输入的图片路径列表（供多模态通道）。
             reasoning_effort: 可选，思考努力等级；None 表示未指定。
             extra: 可选，运行期附加结构化数据。
@@ -130,8 +132,9 @@ class ConversationRunCrud:
                 input_text=input_text,
                 status=status,
                 agent_id=agent_id,
-                provider_id=provider_id,
+                model_config_id=model_config_id,
                 model_name=model_name,
+                context_window_k=context_window_k,
                 image_paths=image_paths,
                 reasoning_effort=reasoning_effort,
                 extra=extra,
@@ -145,8 +148,9 @@ class ConversationRunCrud:
                 input_text=input_text,
                 status=status,
                 agent_id=agent_id,
-                provider_id=provider_id,
+                model_config_id=model_config_id,
                 model_name=model_name,
+                context_window_k=context_window_k,
                 image_paths=image_paths,
                 reasoning_effort=reasoning_effort,
                 extra=extra,
@@ -162,8 +166,9 @@ class ConversationRunCrud:
         input_text: str,
         status: str,
         agent_id: str | None,
-        provider_id: int | None,
+        model_config_id: int | None,
         model_name: str | None,
+        context_window_k: int | None,
         image_paths: list[str] | None,
         reasoning_effort: str | None,
         extra: ConversationRunExtra | None,
@@ -182,7 +187,7 @@ class ConversationRunCrud:
             input_text: 输入文本（调用方已校验非空）。
             status: 初始状态字符串；空值回退 ``pending``。
             agent_id: agent 标识或 None。
-            provider_id: 厂商标识或 None。
+            model_config_id: 厂商标识或 None。
             model_name: 模型名或 None。
             image_paths: 图片路径列表或 None。
             reasoning_effort: 思考努力等级或 None。
@@ -207,8 +212,9 @@ class ConversationRunCrud:
             # 每条新 Run 必须拿到全新的 checkpoint 身份，不能复用任何已读到的历史身份。
             checkpoint_thread_id=str(uuid4()),
             agent_id=agent_id,
-            provider_id=provider_id,
+            model_config_id=model_config_id,
             model_name=model_name,
+            context_window_k=context_window_k,
             image_paths=image_paths,
             reasoning_effort=reasoning_effort,
             extra=extra.to_dict() if extra is not None else None,
@@ -281,7 +287,7 @@ class ConversationRunCrud:
             task_id=target_task_id,
             input_text=source.input_text,
             agent_id=source.agent_id,
-            provider_id=source.provider_id,
+            model_config_id=source.model_config_id,
             model_name=source.model_name,
             image_paths=copy.deepcopy(source.image_paths),
             reasoning_effort=source.reasoning_effort,
@@ -565,8 +571,9 @@ class ConversationRunCrud:
         checkpoint_thread_id: str,
         allowed_statuses: tuple[str, ...],
         session: Session | None = None,
-        provider_id: int | None = None,
+        model_config_id: int | None = None,
         model_name: str | None = None,
+        context_window_k: int | None = None,
         image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
         extra: ConversationRunExtra | None = None,
@@ -580,8 +587,9 @@ class ConversationRunCrud:
                 input_text,
                 checkpoint_thread_id,
                 allowed_statuses,
-                provider_id,
+                model_config_id,
                 model_name,
+                context_window_k,
                 image_paths,
                 reasoning_effort,
                 extra,
@@ -593,8 +601,9 @@ class ConversationRunCrud:
                 input_text,
                 checkpoint_thread_id,
                 allowed_statuses,
-                provider_id,
+                model_config_id,
                 model_name,
+                context_window_k,
                 image_paths,
                 reasoning_effort,
                 extra,
@@ -607,8 +616,9 @@ class ConversationRunCrud:
         input_text: str,
         checkpoint_thread_id: str,
         allowed_statuses: tuple[str, ...],
-        provider_id: int | None = None,
+        model_config_id: int | None = None,
         model_name: str | None = None,
+        context_window_k: int | None = None,
         image_paths: list[str] | None = None,
         reasoning_effort: str | None = None,
         extra: ConversationRunExtra | None = None,
@@ -625,8 +635,9 @@ class ConversationRunCrud:
                 input_text=input_text,
                 checkpoint_thread_id=checkpoint_thread_id,
                 status=ConversationRunStatus.PENDING.value,
-                provider_id=provider_id,
+                model_config_id=model_config_id,
                 model_name=model_name,
+                context_window_k=context_window_k,
                 image_paths=image_paths,
                 reasoning_effort=reasoning_effort,
                 extra=extra.to_dict() if extra is not None else None,

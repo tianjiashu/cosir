@@ -12,19 +12,18 @@ from app.storage.model.base import StorageBase
 class ConversationRunModel(StorageBase):
     """``conversation_runs`` 表模型：一次 Agent 运行的持久化事实。
 
-    Run 是「一次 Agent 执行」的独立实体：承载输入文本、模型路由（provider/model）、
+    Run 是「一次 Agent 执行」的独立实体：承载输入文本、模型连接配置与模型名、
     推理深度、终态原因、回复正文与工作流版本。运行标识
     即本行 ``id``，由 ``StorageBase`` 提供自增主键。
 
     职责边界：
-    - 负责：单次运行的输入、模型路由、状态机与终态结果。
+    - 负责：单次运行的输入、模型连接路由、状态机与终态结果。
     - 不负责：Transport 命令幂等占用（由 ``conversation_commands`` 表持有指向本表的
       ``run_id`` 外键）、消息/工具调用等 canonical 会话事实（各自独立表）。
 
-    模型路由事实分层：``model_name`` 是本次运行用过的模型名文本，属于 Run 历史事实，
-    永不随厂商配置变化；``provider_id`` 只是指向当时那个厂商配置行的弱引用，
-    厂商被删除时由 ``ON DELETE SET NULL`` 置空（该厂商配置行已不存在，续跑此类 Run
-    会因缺少 provider 配置而显式失败，而不是让删除厂商的操作被历史行挡住）。
+    模型路由事实分层：``model_name`` 与 ``context_window_k`` 是本次运行使用过的快照，
+    永不随模型连接配置变化；``model_config_id`` 只是指向当时配置行的弱引用，配置被
+    删除时由 ``ON DELETE SET NULL`` 置空，历史 Run 仍可读取。
     """
 
     __tablename__ = "conversation_runs"
@@ -47,10 +46,11 @@ class ConversationRunModel(StorageBase):
     )
     input_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     agent_id: Mapped[str | None] = mapped_column(Text)
-    provider_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("providers.id", ondelete="SET NULL")
+    model_config_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("model_configs.id", ondelete="SET NULL")
     )
     model_name: Mapped[str | None] = mapped_column(String)
+    context_window_k: Mapped[int | None] = mapped_column(Integer)
     image_paths: Mapped[list[str] | None] = mapped_column(JSON)
     reasoning_effort: Mapped[str | None] = mapped_column(Text)
     end_reason: Mapped[str | None] = mapped_column(Text)

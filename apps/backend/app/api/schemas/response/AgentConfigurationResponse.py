@@ -18,8 +18,7 @@ class AgentConfigurationResponse(BaseModel):
         system_prompt: 系统提示词正文。
         allowed_tool_groups: 允许使用的工具分组名称列表。
         max_steps: 单次运行的最大推理步数。
-        provider_id: 可选，模型归属厂商标识。
-        model_name: 可选，模型名。
+        model_config_id: 可选，数据库模型连接配置标识。
         model_settings: 模型参数覆盖项。
         source: 配置来源（内置或用户文件）。
         path: 配置文件路径；无文件时为 None。
@@ -45,8 +44,7 @@ class AgentConfigurationResponse(BaseModel):
     system_prompt: str
     allowed_tool_groups: list[str]
     max_steps: int
-    provider_id: int | None = None
-    model_name: str | None = None
+    model_config_id: int | None = None
     model_settings: dict[str, Any] = Field(default_factory=dict)
     source: str
     path: str | None = None
@@ -85,8 +83,7 @@ class AgentConfigurationResponse(BaseModel):
             system_prompt=document.system_prompt,
             allowed_tool_groups=allowed_tool_groups,
             max_steps=document.max_steps,
-            provider_id=document.provider_id,
-            model_name=document.model_name,
+            model_config_id=document.model_config_id,
             model_settings=document.model_settings,
             source=document.source,
             path=str(document.path) if document.path else None,

@@ -15,8 +15,7 @@ class AgentConfigurationRequest(BaseModel):
         system_prompt: 系统提示词正文。
         allowed_tool_groups: 该 Agent 允许使用的工具分组名称列表；后端会展开为工具名。
         max_steps: 单次运行的最大推理步数，默认 100。
-        provider_id: 可选，模型归属厂商标识（指向 ``providers.id``）。
-        model_name: 可选，模型名；None 表示未指定模型。
+        model_config_id: 可选，指向数据库模型连接配置的标识。
         model_settings: 可选，模型参数覆盖项。
 
     返回:
@@ -37,6 +36,5 @@ class AgentConfigurationRequest(BaseModel):
     system_prompt: str
     allowed_tool_groups: list[str]
     max_steps: int = 100
-    provider_id: int | None = None
-    model_name: str | None = None
+    model_config_id: int | None = None
     model_settings: dict[str, Any] = Field(default_factory=dict)

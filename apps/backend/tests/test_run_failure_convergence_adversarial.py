@@ -640,10 +640,10 @@ async def test_run_settles_exactly_once_when_settlement_raises(
 
 
 @pytest.mark.asyncio
-async def test_run_settles_even_when_provider_id_missing_branch_present(
+async def test_run_settles_even_when_model_config_id_missing_branch_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``provider_id`` 缺失分支落定后抛 ValueError，外层兜底不得再落定一次。
+    """``model_config_id`` 缺失分支落定后抛 ValueError，外层兜底不得再落定一次。
 
     潜在缺陷：内部分支落定成功（返回记录）后外层若再无脑落定，会命中「已非 running」
     分支产生多余日志；更重要的是若内部分支漏落定，外层必须补上——本用例两者都覆盖。
@@ -653,7 +653,7 @@ async def test_run_settles_even_when_provider_id_missing_branch_present(
     operations = _RecordingOperations()
 
     async def _boom(_self: ReactLikeWorkflow, *_args: object, **_kwargs: object) -> None:
-        raise ValueError("Conversation Run provider_id is required")
+        raise ValueError("Conversation Run model_config_id is required")
 
     monkeypatch.setattr(ReactLikeWorkflow, "_run_graph", _boom)
 

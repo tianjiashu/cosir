@@ -170,8 +170,7 @@ class AgentConfigurationService:
             system_prompt=profile.system_prompt,
             allowed_tools=list(profile.allowed_tools),
             max_steps=profile.max_steps,
-            provider_id=profile.provider_id,
-            model_name=profile.model_name,
+            model_config_id=profile.model_config_id,
             model_settings=profile.model_settings.to_dict(),
             source="builtin" if is_builtin else "user_file",
             path=path,
@@ -193,7 +192,7 @@ class AgentConfigurationService:
             return parse_agent_profile_document(
                 document.to_json_document(),
                 source,
-                strict_provider=True,
+                strict_model_config=True,
             )
         except Exception as exc:
             raise AgentConfigurationError(str(exc)) from exc

@@ -7,8 +7,7 @@ export type AgentConfiguration = {
   system_prompt: string;
   allowed_tool_groups: string[];
   max_steps: number;
-  provider_id: number | null;
-  model_name: string | null;
+  model_config_id: number | null;
   model_settings: Record<string, unknown>;
   source: "builtin" | "user_file" | string;
   path: string | null;
@@ -27,8 +26,7 @@ export type AgentConfigurationInput = Pick<
   | "system_prompt"
   | "allowed_tool_groups"
   | "max_steps"
-  | "provider_id"
-  | "model_name"
+  | "model_config_id"
   | "model_settings"
 >;
 

@@ -206,7 +206,7 @@ class ChildAgentSendTool(HandlerBase):
             child_run = self._run_service.create_run(
                 task_id=child_task_id,
                 agent_id=current_run.agent_id,
-                provider_id=current_run.provider_id,
+                model_config_id=current_run.model_config_id,
                 model_name=current_run.model_name,
                 reasoning_effort=current_run.reasoning_effort,
                 run_command=ConversationRunCommand(display_text=message),

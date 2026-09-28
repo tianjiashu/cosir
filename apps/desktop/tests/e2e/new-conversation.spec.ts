@@ -13,8 +13,8 @@ test("新对话 Assistant Transport 被拒绝时不导航、不丢输入并清�
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:workspace:7",
-      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+      "cosir:model-config-selection:workspace:7",
+      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
     );
   });
   await page.route("http://127.0.0.1:8000/assistant", async (route) => {
@@ -50,8 +50,8 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:workspace:7",
-      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+      "cosir:model-config-selection:workspace:7",
+      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
     );
   });
   const assistantRequests: Array<{ body: Record<string, unknown>; status: number }> = [];
@@ -60,19 +60,25 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
     const body = response.request().postDataJSON() as Record<string, unknown>;
     assistantRequests.push({ body, status: response.status() });
   });
-  await page.route("http://127.0.0.1:8000/models", async (route) => {
+  await page.route("http://127.0.0.1:8000/model-configs", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify([{
-        provider_id: 1,
-        provider_display_name: "Demo",
-        models: [{
-          model_name: "demo-model",
-          supports_thinking: false,
-          supports_image: false,
-          supports_video: false,
-          supports_reasoning_effort: false,
-        }],
+        config_id: 1,
+        config_name: "Demo",
+        base_url: "https://api.example.com",
+        api_key: "test-api-key",
+        model_name: "demo-model",
+        context_window_k: 128,
+        api_key_configured: true,
+        enabled: true,
+        sort_order: 0,
+        created_at: "",
+        updated_at: "",
+        supports_thinking: false,
+        supports_image: false,
+        supports_video: false,
+        supports_reasoning_effort: false,
       }]),
     });
   });
@@ -82,10 +88,10 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await page.getByRole("button", { name: "选择工作区" }).click();
   await page.getByRole("option", { name: /demo/ }).click();
   await expect(page.getByRole("combobox", { name: "选择模型" })).toContainText("demo-model");
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("cosir:model-selection:workspace:7"))).toBe(
-    JSON.stringify({ providerId: 1, modelName: "demo-model", reasoningEffort: null }),
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("cosir:model-config-selection:workspace:7"))).toBe(
+    JSON.stringify({ modelConfigId: 1, reasoningEffort: null }),
   );
-  expect(await page.evaluate(() => window.localStorage.getItem("cosir:model-selection:default"))).toBeNull();
+  expect(await page.evaluate(() => window.localStorage.getItem("cosir:model-config-selection:default"))).toBeNull();
   await page.getByText("禁用工具组").click();
   const fileToolGroup = page.locator("label").filter({ hasText: "文件" }).getByRole("checkbox");
   await expect(fileToolGroup).toBeVisible();
@@ -101,7 +107,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await page.getByRole("button", { name: "刷新工作区" }).click();
   expect(assistantRequests[0]?.status).toBe(200);
   expect(assistantRequests[0]?.body.workspaceId).toBe(7);
-  expect(assistantRequests[0]?.body.providerId).toBe(1);
+  expect(assistantRequests[0]?.body.modelConfigId).toBe(1);
   expect(assistantRequests[0]?.body.taskId).toBe(42);
   expect(assistantRequests[0]?.body.commands).toHaveLength(2);
   expect((assistantRequests[0]?.body.commands as Array<{ message?: { parts?: Array<{ text?: string }> } }>)[0]?.message?.parts?.[0]?.text).toBe("你好");
@@ -156,8 +162,8 @@ test("任务页面重挂载时自动恢复未结束的 run", async ({ page, requ
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:task:42",
-      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+      "cosir:model-config-selection:task:42",
+      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
     );
   });
 
@@ -183,8 +189,8 @@ test("不同 task 的 Assistant Transport 会话与消息互相隔离", async ({
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:task:100",
-      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+      "cosir:model-config-selection:task:100",
+      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
     );
   });
 
@@ -214,8 +220,8 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:task:102",
-      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+      "cosir:model-config-selection:task:102",
+      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
     );
   });
 
@@ -301,8 +307,8 @@ test("取消 ACK 后 SSE 断开时，前端独立读取快照并解除停止状�
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:task:103",
-      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+      "cosir:model-config-selection:task:103",
+      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
     );
   });
 
@@ -335,8 +341,8 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:task:103",
-      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+      "cosir:model-config-selection:task:103",
+      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
     );
   });
 
@@ -398,8 +404,8 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-selection:task:104",
-      JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }),
+      "cosir:model-config-selection:task:104",
+      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
     );
   });
 

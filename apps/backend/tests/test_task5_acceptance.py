@@ -438,7 +438,7 @@ def _start_or_attach_under_operation(
                 ConversationRunCommandInput(command_id="same-command", command_type="new")
             ],
             payload_hash="same-payload",
-            provider_id=None,
+            model_config_id=None,
             model_name=None,
             reasoning_effort=None,
             task_id=store.task.id,
@@ -501,7 +501,7 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
                 ConversationRunCommandInput(command_id="task-one-command", command_type="new")
             ],
             payload_hash="payload-one",
-            provider_id=None,
+            model_config_id=None,
             model_name=None,
             reasoning_effort=None,
             task_id=store.task.id,
@@ -513,7 +513,7 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
                 ConversationRunCommandInput(command_id="task-two-command", command_type="new")
             ],
             payload_hash="payload-two",
-            provider_id=None,
+            model_config_id=None,
             model_name=None,
             reasoning_effort=None,
             task_id=second_task.id,

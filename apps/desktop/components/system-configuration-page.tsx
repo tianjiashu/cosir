@@ -106,19 +106,16 @@ function toAgentModelOption(model: ModelCatalogModel): ModelOption {
   return {
     id: model.optionId,
     name: model.label,
-    description: model.providerDisplayName,
-    keywords: [model.providerDisplayName, model.modelName],
+    keywords: [model.configName, model.modelName],
   };
 }
 
 function AgentModelSelector({
-  providerId,
-  modelName,
+  modelConfigId,
   onChange,
 }: {
-  providerId: number | null;
-  modelName: string | null;
-  onChange: (providerId: number | null, modelName: string | null) => void;
+  modelConfigId: number | null;
+  onChange: (modelConfigId: number | null) => void;
 }) {
   const { catalog, status, retry } = useModelCatalog();
   const modelOptions = useMemo(() => {
@@ -126,14 +123,14 @@ function AgentModelSelector({
       { id: NO_AGENT_MODEL, name: "默认", description: "继承主Agent" },
       ...(catalog?.models.map(toAgentModelOption) ?? []),
     ];
-    if (providerId === null || !modelName) return options;
-    const currentModelId = modelOptionId(providerId, modelName);
+    if (modelConfigId === null) return options;
+    const currentModelId = modelOptionId(modelConfigId);
     if (options.some((option) => option.id === currentModelId)) return options;
     return [
       ...options,
-      { id: currentModelId, name: modelName, description: "当前配置（目录中不可用）" },
+      { id: currentModelId, name: String(modelConfigId), description: "当前配置（目录中不可用）" },
     ];
-  }, [catalog?.models, modelName, providerId]);
+  }, [catalog?.models, modelConfigId]);
 
   if (status === "loading" || status === "idle") {
     return <div className="border-input text-muted-foreground flex h-9 items-center rounded-lg border px-3 text-sm">加载模型…</div>;
@@ -145,18 +142,18 @@ function AgentModelSelector({
     return <div className="border-input text-muted-foreground flex h-9 items-center rounded-lg border px-3 text-sm">暂无可用模型</div>;
   }
 
-  const selectedId = providerId !== null && modelName ? modelOptionId(providerId, modelName) : NO_AGENT_MODEL;
+  const selectedId = modelConfigId !== null ? modelOptionId(modelConfigId) : NO_AGENT_MODEL;
   return (
     <ModelSelectorRoot
       models={modelOptions}
       value={selectedId}
       onValueChange={(nextId) => {
         if (nextId === NO_AGENT_MODEL) {
-          onChange(null, null);
+          onChange(null);
           return;
         }
         const selected = catalog.models.find((model) => model.optionId === nextId);
-        if (selected) onChange(selected.providerId, selected.modelName);
+        if (selected) onChange(selected.modelConfigId);
       }}
     >
       <ModelSelectorTrigger variant="outline" className="w-full max-w-none justify-between" aria-label="选择模型">
@@ -240,8 +237,7 @@ function AgentEditor({
     system_prompt: initial?.system_prompt ?? "",
     allowed_tool_groups: initial?.allowed_tool_groups ?? [],
     max_steps: initial?.max_steps ?? 100,
-    provider_id: initial?.provider_id ?? null,
-    model_name: initial?.model_name ?? null,
+    model_config_id: initial?.model_config_id ?? null,
     model_settings: initial?.model_settings ?? {},
   }));
   const [selectedToolGroups, setSelectedToolGroups] = useState(initial?.allowed_tool_groups ?? []);
@@ -261,10 +257,9 @@ function AgentEditor({
         ...form,
         allowed_tool_groups: selectedToolGroups,
         model_settings: modelSettingsFromForm(modelSettings),
-        provider_id: form.provider_id === null ? null : Number(form.provider_id),
-        model_name: form.model_name?.trim() || null,
+        model_config_id: form.model_config_id === null ? null : Number(form.model_config_id),
       };
-      if (input.provider_id !== null && (!Number.isInteger(input.provider_id) || input.provider_id <= 0)) throw new Error("Provider ID 必须是正整数");
+      if (input.model_config_id !== null && (!Number.isInteger(input.model_config_id) || input.model_config_id <= 0)) throw new Error("模型配置 ID 必须是正整数");
       const saved = initial
         ? await updateAgentConfiguration(initial.agent_id, input)
         : await createAgentConfiguration(input);
@@ -292,7 +287,7 @@ function AgentEditor({
         <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">系统提示词</span><Textarea className="min-h-36 resize-y" value={form.system_prompt} onChange={(event) => setField("system_prompt", event.target.value)} placeholder="定义该子 Agent 的边界、工作方式与输出要求…" /></label>
         <div className="grid gap-4 sm:grid-cols-3">
           <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">最大步数</span><Input type="number" min={1} max={10000} value={form.max_steps} onChange={(event) => setField("max_steps", Number(event.target.value))} /></label>
-          <div className="space-y-1.5 text-sm sm:col-span-2"><span className="text-muted-foreground">模型 <span className="text-muted-foreground/60">（可选）</span></span><AgentModelSelector providerId={form.provider_id} modelName={form.model_name} onChange={(providerId, modelName) => setForm((current) => ({ ...current, provider_id: providerId, model_name: modelName }))} /></div>
+          <div className="space-y-1.5 text-sm sm:col-span-2"><span className="text-muted-foreground">模型 <span className="text-muted-foreground/60">（可选）</span></span><AgentModelSelector modelConfigId={form.model_config_id} onChange={(modelConfigId) => setForm((current) => ({ ...current, model_config_id: modelConfigId }))} /></div>
         </div>
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-1.5 text-sm">
@@ -357,7 +352,7 @@ function AgentsPanel() {
       {configurationSaved && <div role="status" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">配置更改成功</div>}
       <div className="flex items-center justify-end"><Button onClick={() => setEditing(null)}><PlusIcon />新建 Agent</Button></div>
       <div className="grid gap-3 xl:grid-cols-2">
-        {agents.map((agent) => <article key={`${agent.source}:${agent.agent_id}`} className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm transition-shadow hover:shadow-md"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-xl"><Code2Icon className="size-4" /></div><div className="min-w-0"><div className="flex items-center gap-2"><h3 className="truncate font-medium">{agent.agent_id}</h3><span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-[10px]">{agent.source === "builtin" ? "内置" : "文件"}</span></div><p className="text-muted-foreground mt-1 truncate text-xs">{agent.description || "暂无描述"}</p></div></div>{agent.editable || agent.deletable ? <div className="flex gap-1">{agent.editable && <Button variant="ghost" size="icon-sm" onClick={() => setEditing(agent)} aria-label={`编辑 ${agent.agent_id}`}><Settings2Icon /></Button>}{agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => { if (window.confirm(`删除 Agent “${agent.agent_id}”？`)) void deleteAgentConfiguration(agent.agent_id).then(() => { setConfigurationSaved(true); setAgents((current) => current?.filter((item) => item.agent_id !== agent.agent_id) ?? null); }).catch((cause) => setError(cause instanceof Error ? cause.message : "删除失败")); }} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}</div> : <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置 Agent，不可编辑或删除" title="内置 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>}</div><div className="text-muted-foreground mt-4 flex flex-wrap gap-2 text-xs"><span className="bg-muted rounded-md px-2 py-1">{agent.role || "未指定角色"}</span><span className="bg-muted rounded-md px-2 py-1">{agent.allowed_tool_groups.length} 个工具组</span><span className="bg-muted rounded-md px-2 py-1">{agent.model_name ? `${agent.provider_id ?? "?"} / ${agent.model_name}` : "跟随默认模型"}</span></div>{agent.validation_status !== "valid" && <p className="text-destructive mt-3 text-xs">{agent.validation_error ?? "配置无效"}</p>}</article>)}
+        {agents.map((agent) => <article key={`${agent.source}:${agent.agent_id}`} className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm transition-shadow hover:shadow-md"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-xl"><Code2Icon className="size-4" /></div><div className="min-w-0"><div className="flex items-center gap-2"><h3 className="truncate font-medium">{agent.agent_id}</h3><span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-[10px]">{agent.source === "builtin" ? "内置" : "文件"}</span></div><p className="text-muted-foreground mt-1 truncate text-xs">{agent.description || "暂无描述"}</p></div></div>{agent.editable || agent.deletable ? <div className="flex gap-1">{agent.editable && <Button variant="ghost" size="icon-sm" onClick={() => setEditing(agent)} aria-label={`编辑 ${agent.agent_id}`}><Settings2Icon /></Button>}{agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => { if (window.confirm(`删除 Agent “${agent.agent_id}”？`)) void deleteAgentConfiguration(agent.agent_id).then(() => { setConfigurationSaved(true); setAgents((current) => current?.filter((item) => item.agent_id !== agent.agent_id) ?? null); }).catch((cause) => setError(cause instanceof Error ? cause.message : "删除失败")); }} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}</div> : <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置 Agent，不可编辑或删除" title="内置 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>}</div><div className="text-muted-foreground mt-4 flex flex-wrap gap-2 text-xs"><span className="bg-muted rounded-md px-2 py-1">{agent.role || "未指定角色"}</span><span className="bg-muted rounded-md px-2 py-1">{agent.allowed_tool_groups.length} 个工具组</span><span className="bg-muted rounded-md px-2 py-1">{agent.model_config_id ? `配置 ${agent.model_config_id}` : "跟随默认模型"}</span></div>{agent.validation_status !== "valid" && <p className="text-destructive mt-3 text-xs">{agent.validation_error ?? "配置无效"}</p>}</article>)}
       </div>
     </div>
   );

@@ -681,17 +681,23 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { task_id: taskId, deleted: true });
     return;
   }
-  if (req.method === "GET" && url.pathname === "/models") {
+  if (req.method === "GET" && url.pathname === "/model-configs") {
     jsonResponse(res, 200, [{
-      provider_id: 2,
-      provider_display_name: "Demo",
-      models: [{
-        model_name: "demo-model",
-        supports_thinking: false,
-        supports_image: false,
-        supports_video: false,
-        supports_reasoning_effort: false,
-      }],
+      config_id: 2,
+      config_name: "Demo",
+      base_url: "https://api.example.com",
+      api_key: "test-api-key",
+      model_name: "demo-model",
+      context_window_k: 128,
+      api_key_configured: true,
+      enabled: true,
+      sort_order: 0,
+      created_at: "",
+      updated_at: "",
+      supports_thinking: false,
+      supports_image: false,
+      supports_video: false,
+      supports_reasoning_effort: false,
     }]);
     return;
   }

@@ -16,8 +16,7 @@ describe("submitAssistantTransport", () => {
       text: "hello",
       imageAttachments: [],
       banTools: [],
-      providerId: 1,
-      modelName: "model",
+      modelConfigId: 1,
       reasoningEffort: "high",
     })).resolves.toBeUndefined();
 

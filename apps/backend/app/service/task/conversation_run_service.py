@@ -21,8 +21,6 @@ from sqlalchemy.orm import Session
 from app.assistant_transport.event import RunInitializedEvent
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.llm_provider.capability.model_capability import ModelCapability
-from app.core.llm_provider.capability.provider_capability import ProviderCapability
 from app.models import (
     ConversationRunAttachmentInput,
     ConversationRunCommand,
@@ -32,7 +30,7 @@ from app.models import (
     ConversationRunStatus,
 )
 from app.service import depends as service_depends
-from app.service.depends import get_provider_service
+from app.service.depends import get_model_config_service
 from app.service.task.conversation_run_state_service import terminal_error
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.store_engines import main_session_factory
@@ -212,7 +210,7 @@ class ConversationRunService:
         task_id: int,
         agent_id: str | None = None,
         status: str = "pending",
-        provider_id: int | None = None,
+        model_config_id: int | None = None,
         model_name: str | None = None,
         reasoning_effort: str | None = None,
         session: Session | None = None,
@@ -229,9 +227,9 @@ class ConversationRunService:
             status: 初始状态，默认 ``"pending"``。
             agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到默认 ``"main_agent"``
                 （与 Assistant Transport 主入口的默认值一致，非 ``"developer"``）。
-            provider_id: 可选，模型归属厂商标识（指向 ``providers.id``）；None 表示未指定。
-                与 ``model_name`` 配对出现：两者皆非 None 时按厂商能力校验模型；
-                仅 ``model_name`` 非 None 而 ``provider_id`` 为 None 视为契约不完整，
+            model_config_id: 可选，模型连接配置标识；None 表示未指定。
+                与 ``model_name`` 配对出现时，模型名称必须与配置事实一致；
+                仅 ``model_name`` 非 None 而 ``model_config_id`` 为 None 视为契约不完整，
                 抛 ``ValueError``。
             model_name: 可选，本次请求使用的模型名；None 表示用户
                 未选择模型（前端优先校验、后端兜底报错）。
@@ -258,24 +256,20 @@ class ConversationRunService:
             更新所属任务最新轮次信息；
             写入创建期图片构成日志。
         """
-        # 厂商-模型契约校验：仅当两者皆非 None 时按厂商能力校验模型归属。
-        # provider_id 为 None 但 model_name 已设，属契约不完整（前端应配对传入），
-        # 显式抛 ValueError（由 API 层映射为 400），避免 get_provider(None) 误报 404。
-        if model_name is not None and provider_id is None:
-            raise ValueError(
-                f"provider_id is required when model_name is set (model_name={model_name})"
-            )
+        # 模型连接配置是路由和模型名称的唯一输入；运行快照同时保存上下文窗口，
+        # 使配置后续修改或删除不会改变已经创建的 Run。
+        context_window_k = None
+        if model_config_id is not None:
+            config = get_model_config_service().get_config(model_config_id)
+            if model_name is not None and model_name != config.model_name:
+                raise ValueError("model_name must match the selected model configuration")
+            model_name = config.model_name
+            context_window_k = config.context_window_k
+        elif model_name is not None:
+            raise ValueError("model_config_id is required when model_name is set")
         input_text = None
         image_paths = None
         extra = None
-        if provider_id is not None:
-            provider = get_provider_service().get_provider(provider_id)
-            provider_capability = ProviderCapability.get_capability(provider.name)
-            if model_name not in provider_capability.models:
-                raise ValueError(
-                    f"model_name {model_name} not in provider capability "
-                    f"{provider_capability.models}"
-                )
         if run_command is not None:
             prepared = self._prepare_command(
                 task_id,
@@ -295,8 +289,9 @@ class ConversationRunService:
                 input_text,
                 status,
                 agent_id=agent_id,
-                provider_id=provider_id,
+                model_config_id=model_config_id,
                 model_name=model_name,
+                context_window_k=context_window_k,
                 image_paths=image_paths,
                 reasoning_effort=reasoning_effort,
                 extra=extra,
@@ -326,7 +321,7 @@ class ConversationRunService:
     def reset_run_for_edit(
         self,
         run_id: int,
-        provider_id: int | None = None,
+        model_config_id: int | None = None,
         model_name: str | None = None,
         reasoning_effort: str | None = None,
         session: Session | None = None,
@@ -357,6 +352,15 @@ class ConversationRunService:
             raise ValueError("input_text is required when run_command is not provided")
         if not input_text.strip() and not image_paths:
             raise ValueError("input_text must be a non-empty string")
+        context_window_k = None
+        if model_config_id is not None:
+            config = get_model_config_service().get_config(model_config_id)
+            if model_name is not None and model_name != config.model_name:
+                raise ValueError("model_name must match the selected model configuration")
+            model_name = config.model_name
+            context_window_k = config.context_window_k
+        elif model_name is not None:
+            raise ValueError("model_config_id is required when model_name is set")
         # 「可原地编辑」的前置状态即 Run 终态集合，引用唯一事实源而非另立字面量。
         allowed_statuses = tuple(Constant.Run.TERMINAL_STATUSES)
         return self._run.reset_for_edit(
@@ -364,8 +368,9 @@ class ConversationRunService:
             input_text=input_text,
             checkpoint_thread_id=str(uuid4()),
             allowed_statuses=allowed_statuses,
-            provider_id=provider_id,
+            model_config_id=model_config_id,
             model_name=model_name,
+            context_window_k=context_window_k,
             image_paths=image_paths,
             reasoning_effort=reasoning_effort,
             extra=extra,

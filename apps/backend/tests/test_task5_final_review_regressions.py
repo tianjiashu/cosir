@@ -26,7 +26,7 @@ from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.task_record import TaskRecord
-from app.service.provider.capability_service import CapabilityService
+from app.core.llm_provider.capability.capability_service import CapabilityService
 from app.service.task.conversation_run_service import ConversationRunService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.task_crud import TaskCrud

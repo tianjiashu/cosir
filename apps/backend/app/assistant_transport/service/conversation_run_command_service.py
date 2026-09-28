@@ -174,7 +174,7 @@ class ConversationRunCommandService:
         self,
         commands: Sequence[ConversationRunCommandInput],
         payload_hash: str,
-        provider_id: int | None,
+        model_config_id: int | None,
         model_name: str | None,
         reasoning_effort: str | None = None,
         task_id: int | None = None,
@@ -185,7 +185,7 @@ class ConversationRunCommandService:
         参数:
             commands: 本次请求全部命令的幂等标识和类型，按请求顺序持久化。
             payload_hash: 命令业务载荷指纹。
-            provider_id: 模型厂商标识。
+            model_config_id: 模型厂商标识。
             model_name: 模型名称。
             reasoning_effort: 可选推理深度。
             task_id: 所属任务标识。
@@ -225,7 +225,7 @@ class ConversationRunCommandService:
             run = self._conversation_run.create_run(
                 task_id=task_id,
                 agent_id="main_agent",
-                provider_id=provider_id,
+                model_config_id=model_config_id,
                 model_name=model_name,
                 reasoning_effort=reasoning_effort,
                 session=session,
@@ -287,7 +287,7 @@ class ConversationRunCommandService:
         payload_hash: str,
         task_id: int,
         run_id: int,
-        provider_id: int | None,
+        model_config_id: int | None,
         model_name: str | None,
         reasoning_effort: str | None = None,
         run_command: ConversationRunCommand | None = None,
@@ -303,7 +303,7 @@ class ConversationRunCommandService:
             payload_hash: 命令业务载荷指纹。
             task_id: 所属任务标识。
             run_id: 被编辑的 Conversation Run 标识（必须是该 task 的最近 run）。
-            provider_id: 模型厂商标识。
+            model_config_id: 模型厂商标识。
             model_name: 模型名称。
             reasoning_effort: 可选推理深度。
             run_command: 已由 Assistant Transport 转换的领域输入命令。
@@ -346,7 +346,7 @@ class ConversationRunCommandService:
             self._assert_no_active_run(task_id, session)
             reset = self._conversation_run.reset_run_for_edit(
                 latest_run.id,
-                provider_id=provider_id,
+                model_config_id=model_config_id,
                 model_name=model_name,
                 reasoning_effort=reasoning_effort,
                 session=session,

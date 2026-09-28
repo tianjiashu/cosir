@@ -121,11 +121,10 @@ def test_all_domain_routes_registered_on_same_app() -> None:
         "/tasks/{task_id}/attachments",
         "/tasks/{task_id}/attachments/{asset_id}",
         "/tasks/{task_id}/attachments/{asset_id}/content",
-        "/providers",
-        "/providers/catalog",
-        "/providers/{provider_id}",
-        "/providers/{provider_id}/test",
-        "/models",
+        "/model-configs",
+        "/model-configs/{config_id}",
+        "/model-configs/test",
+        "/model-configs/{config_id}/test",
         "/assistant",
         "/tasks/{task_id}/assistant/attach",
         "/tasks/{task_id}/assistant/state",
@@ -142,8 +141,7 @@ def test_domain_route_modules_share_the_singleton() -> None:
     for module_name in (
         "app.api.tasks_api",
         "app.api.workspaces_api",
-        "app.api.providers_api",
-        "app.api.models_api",
+        "app.api.model_configs_api",
         "app.assistant_transport.assistant_api",
     ):
         module = sys.modules.get(module_name) or importlib.import_module(module_name)

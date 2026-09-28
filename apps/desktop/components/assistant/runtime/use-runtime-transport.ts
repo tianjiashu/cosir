@@ -234,10 +234,9 @@ export function useRuntimeTransport(
     }),
     body: async () => {
       const selection = readStoredSelection({ kind: "task", id: context.taskId });
-      const completeSelection = selection?.providerId !== undefined && selection.modelName !== undefined
+      const completeSelection = selection?.modelConfigId !== undefined
         ? {
-            providerId: selection.providerId,
-            modelName: selection.modelName,
+            modelConfigId: selection.modelConfigId,
             reasoningEffort: selection.reasoningEffort ?? null,
           }
         : null;
@@ -260,8 +259,7 @@ export function useRuntimeTransport(
       );
       if (contextModel) {
         delete backendRequest.config;
-        delete backendRequest.providerId;
-        delete backendRequest.modelName;
+        delete backendRequest.modelConfigId;
         delete backendRequest.reasoningEffort;
         Object.assign(backendRequest, contextModel);
       }

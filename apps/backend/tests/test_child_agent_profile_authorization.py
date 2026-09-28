@@ -46,7 +46,7 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
                 id=11,
                 status="completed",
                 agent_id="main_agent",
-                provider_id=1,
+                model_config_id=1,
                 model_name="model",
                 reasoning_effort=None,
             )

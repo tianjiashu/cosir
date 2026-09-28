@@ -11,12 +11,12 @@ from app.storage.model.base import StorageBase
 from app.storage.model.conversation_command_model import ConversationCommandModel
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
-from app.storage.model.provider_model import ProviderModel
+from app.storage.model.model_config_model import ModelConfigModel
 from app.storage.model.task_model import TaskModel
 from app.storage.model.workspace_model import WorkspaceModel
 
 APP_MODELS = (
-    ProviderModel,
+    ModelConfigModel,
     WorkspaceModel,
     TaskModel,
     ConversationRunModel,
@@ -47,6 +47,7 @@ def initialize_app_schema(engine: Engine) -> None:
     _drop_legacy_models_table(engine)
     _ensure_context_tool_call_id_schema(engine)
     _ensure_context_streaming_schema(engine)
+    _ensure_conversation_run_model_config_schema(engine)
     _ensure_tasks_sqlite_autoincrement(engine)
     _remove_legacy_checkpoint_unique_constraint(engine)
 
@@ -81,6 +82,40 @@ def _drop_legacy_models_table(engine: Engine) -> None:
         return
     with engine.begin() as connection:
         connection.execute(text("DROP TABLE IF EXISTS models"))
+
+
+def _ensure_conversation_run_model_config_schema(engine: Engine) -> None:
+    """为已有本地主库补齐模型配置路由和上下文窗口列。
+
+    参数:
+        engine: 应用主库 SQLAlchemy 引擎。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: SQLite 修改表结构失败时抛出。
+
+    副作用:
+        仅在 SQLite 已存在旧 ``conversation_runs`` 表时增加当前 ORM 需要的列；旧列不
+        参与新的业务读写，历史运行继续保留自身的模型名称快照。
+    """
+
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "conversation_runs" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("conversation_runs")}
+    with engine.begin() as connection:
+        if "model_config_id" not in columns:
+            connection.execute(
+                text("ALTER TABLE conversation_runs ADD COLUMN model_config_id INTEGER")
+            )
+        if "context_window_k" not in columns:
+            connection.execute(
+                text("ALTER TABLE conversation_runs ADD COLUMN context_window_k INTEGER")
+            )
 
 
 def _ensure_context_tool_call_id_schema(engine: Engine) -> None:

@@ -6,8 +6,7 @@ class CreateTurnRequest(BaseModel):
 
     参数:
         input_text: 非空的本轮用户输入。
-        provider_id: 可选，模型归属的厂商标识（指向 ``providers.id``）；None 表示未选厂商。
-        model_name: 可选，本 turn 关联的模型名；None 表示未选模型。
+        model_config_id: 可选，模型连接配置标识；None 表示使用默认路由。
         reasoning_effort: 可选，本 turn 思考努力等级；None 表示 max。该值经
             ``conversation_run_state_service.create_run`` 透传落库到 ``turns.reasoning_effort``。
 
@@ -22,8 +21,7 @@ class CreateTurnRequest(BaseModel):
     """
 
     input_text: str
-    model_name: str | None = None
-    provider_id: int | None = None
+    model_config_id: int | None = None
     reasoning_effort: str | None = None
 
     @field_validator("input_text")
@@ -50,4 +48,3 @@ class CreateTurnRequest(BaseModel):
         if len(value) > 1000:
             raise ValueError("input_text must be less than 1000 characters")
         return value
-

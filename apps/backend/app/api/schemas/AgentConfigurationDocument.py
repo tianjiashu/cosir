@@ -40,8 +40,7 @@ class AgentConfigurationDocument:
     system_prompt: str = ""
     allowed_tools: list[str] = field(default_factory=list)
     max_steps: int = AgentProfile.max_steps
-    provider_id: int | None = None
-    model_name: str | None = None
+    model_config_id: int | None = None
     model_settings: dict[str, Any] = field(default_factory=dict)
     source: str = "user_file"
     path: Path | None = None
@@ -61,8 +60,7 @@ class AgentConfigurationDocument:
             "system_prompt": self.system_prompt,
             "allowed_tools": list(self.allowed_tools),
             "max_steps": self.max_steps,
-            "provider_id": self.provider_id,
-            "model_name": self.model_name,
+            "model_config_id": self.model_config_id,
             "model_settings": dict(self.model_settings),
         }
 
@@ -92,7 +90,6 @@ class AgentConfigurationDocument:
             system_prompt=payload.system_prompt,
             allowed_tools=allowed_tools,
             max_steps=payload.max_steps,
-            provider_id=payload.provider_id,
-            model_name=payload.model_name,
+            model_config_id=payload.model_config_id,
             model_settings=payload.model_settings,
         )

@@ -128,7 +128,7 @@ def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatc
     manager = _runtime_manager(service)
     monkeypatch.setattr(
         "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
-        lambda _model_name: 100,
+        lambda _model_name, **kwargs: 100,
     )
     # ensure_run_user_message 写完后经投影器推送事件（进程内投影器依赖存储单例，这里用空操作）。
     monkeypatch.setattr(

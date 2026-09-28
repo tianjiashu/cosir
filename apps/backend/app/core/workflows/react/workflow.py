@@ -30,7 +30,7 @@ from app.models.conversation_run_failure import (
     run_failure_message,
 )
 from app.service.depends import get_terminal_session_service
-from app.service.provider.capability_service import CapabilityService
+from app.core.llm_provider.capability.capability_service import CapabilityService
 
 from ...context.runtime_context_manager import RuntimeContextManager
 from ..agent_workflow import AgentWorkflow, build_checkpointer
@@ -303,7 +303,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             state 订阅事实变更。
 
         异常:
-            ValueError: Conversation Run 缺少 ``provider_id``——run 已先落 failed 终态。
+            ValueError: Conversation Run 缺少 ``model_config_id``——run 已先落 failed 终态。
             Exception: 模型解析失败或 graph 执行失败时，记 ``workflow_graph_failed`` /
                 ``model_resolve_failed``，经 ``_settle_failed_run`` 落定 failed 终态后原样向上
                 抛出；未被这些分支覆盖的异常再由外层 ``run`` 兜底落定。
@@ -366,16 +366,16 @@ class ReactLikeWorkflow(AgentWorkflow):
             )
             bound_model = base_model
 
-        if run.provider_id is None:
+        if run.model_config_id is None:
             # 配置缺失也属于「本轮无法开始」的失败：先落 failed 终态再抛出，避免异常逃逸后
             # run 永久停留在 running。
             self._settle_failed_run(
                 operations,
                 Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE,
             )
-            raise ValueError("Conversation Run provider_id is required")
-        thinking_channel = CapabilityService.get_thinking_channel(run.provider_id)
-        vision_input_format = CapabilityService.get_vision_input_format(run.provider_id)
+            raise ValueError("Conversation Run model_config_id is required")
+        thinking_channel = CapabilityService.get_thinking_channel()
+        vision_input_format = CapabilityService.get_vision_input_format()
 
         runtime_config = RuntimeConfig(
             operations=operations,

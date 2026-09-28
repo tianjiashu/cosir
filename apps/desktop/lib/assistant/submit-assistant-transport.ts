@@ -14,8 +14,7 @@ export type SubmitAssistantTransportInput = {
   text: string;
   imageAttachments: readonly NewConversationImageAttachment[];
   banTools: readonly string[];
-  providerId: number;
-  modelName: string;
+  modelConfigId: number;
   reasoningEffort: string | null;
 };
 
@@ -64,8 +63,7 @@ export async function submitAssistantTransport(
       taskId: input.taskId,
       workspaceId: input.workspaceId,
       threadId: `task-${input.taskId}`,
-      providerId: input.providerId,
-      modelName: input.modelName,
+      modelConfigId: input.modelConfigId,
       reasoningEffort: input.reasoningEffort,
       commands: [
         command,

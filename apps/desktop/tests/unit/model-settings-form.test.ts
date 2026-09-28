@@ -13,7 +13,6 @@ describe("model settings form conversion", () => {
       top_p: 0.8,
       max_tokens: 4096,
       thinking: true,
-      provider_type: "deepseek",
       drop_params: false,
       stream: true,
       reasoning_effort: "high",
@@ -23,7 +22,6 @@ describe("model settings form conversion", () => {
       top_p: "0.8",
       max_tokens: "4096",
       thinking: "true",
-      provider_type: "deepseek",
       drop_params: "false",
       stream: "true",
       reasoning_effort: "high",
@@ -35,7 +33,6 @@ describe("model settings form conversion", () => {
     const settings = {
       stream: true,
       response_format: "json_object",
-      provider_type: "deepseek",
       drop_params: false,
     };
 
@@ -48,7 +45,6 @@ describe("model settings form conversion", () => {
       top_p: "0.8",
       max_tokens: "4096",
       thinking: "true",
-      provider_type: "",
       drop_params: "",
       stream: "true",
       reasoning_effort: "high",

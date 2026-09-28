@@ -353,7 +353,7 @@ def test_start_or_attach_settles_run_when_projection_fails(
         service.start_or_attach(
             commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
             payload_hash="hash",
-            provider_id=None,
+            model_config_id=None,
             model_name=None,
             task_id=_TASK_ID,
             run_command=SimpleNamespace(),  # type: ignore[arg-type]
@@ -380,7 +380,7 @@ def test_start_or_attach_settles_run_when_claim_fails(
         service.start_or_attach(
             commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
             payload_hash="hash",
-            provider_id=None,
+            model_config_id=None,
             model_name=None,
             task_id=_TASK_ID,
             run_command=SimpleNamespace(),  # type: ignore[arg-type]
@@ -407,7 +407,7 @@ def test_start_or_attach_settles_run_when_snapshot_reread_fails(
         service.start_or_attach(
             commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
             payload_hash="hash",
-            provider_id=None,
+            model_config_id=None,
             model_name=None,
             task_id=_TASK_ID,
             run_command=SimpleNamespace(),  # type: ignore[arg-type]
@@ -437,7 +437,7 @@ def test_edit_or_restart_settles_run_when_post_commit_step_fails(
             payload_hash="hash",
             task_id=_TASK_ID,
             run_id=11,
-            provider_id=None,
+            model_config_id=None,
             model_name=None,
             run_command=SimpleNamespace(),  # type: ignore[arg-type]
         )
@@ -467,7 +467,7 @@ def test_settle_converge_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -
         service.start_or_attach(
             commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
             payload_hash="hash",
-            provider_id=None,
+            model_config_id=None,
             model_name=None,
             task_id=_TASK_ID,
             run_command=SimpleNamespace(),  # type: ignore[arg-type]

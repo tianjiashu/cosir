@@ -9,8 +9,7 @@
 import { REASONING_EFFORT_VALUES } from "@/lib/model-selection-constants";
 
 export type ModelSelection = {
-  providerId: number;
-  modelName: string;
+  modelConfigId: number;
   reasoningEffort: (typeof REASONING_EFFORT_VALUES)[number] | null;
 };
 
@@ -18,7 +17,7 @@ export type ModelSelectionScope =
   | { kind: "workspace"; id: number }
   | { kind: "task"; id: number };
 
-const STORAGE_KEY_PREFIX = "cosir:model-selection:";
+const STORAGE_KEY_PREFIX = "cosir:model-config-selection:";
 const DEFAULT_TASK_KEY = "default";
 const selectionSnapshotCache = new Map<string, {
   raw: string | null;
@@ -87,17 +86,14 @@ export function parseStoredSelection(
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
     if (
-      typeof value.providerId !== "number" ||
-      !Number.isInteger(value.providerId) ||
-      typeof value.modelName !== "string" ||
-      !value.modelName ||
+      typeof value.modelConfigId !== "number" ||
+      !Number.isInteger(value.modelConfigId) ||
       !isReasoningEffort(value.reasoningEffort)
     ) {
       return null;
     }
     return {
-      providerId: value.providerId,
-      modelName: value.modelName,
+      modelConfigId: value.modelConfigId,
       reasoningEffort: value.reasoningEffort,
     };
   } catch {

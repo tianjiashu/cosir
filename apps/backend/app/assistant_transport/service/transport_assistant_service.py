@@ -438,8 +438,8 @@ class TransportAssistantService:
                 for attachment in command.message.attachments
             ],
         )
-        provider_id = request.providerId
-        model_name = request.modelName
+        model_config_id = request.modelConfigId
+        model_name = None
         if mode == "edit":
             assert request.runId is not None
             return await asyncio.to_thread(
@@ -448,7 +448,7 @@ class TransportAssistantService:
                 payload_hash=payload_hash,
                 task_id=task_id,
                 run_id=request.runId,
-                provider_id=provider_id,
+                model_config_id=model_config_id,
                 model_name=model_name,
                 reasoning_effort=request.reasoningEffort,
                 run_command=run_command,
@@ -457,7 +457,7 @@ class TransportAssistantService:
             self._commands.start_or_attach,
             commands=commands,
             payload_hash=payload_hash,
-            provider_id=provider_id,
+            model_config_id=model_config_id,
             model_name=model_name,
             reasoning_effort=request.reasoningEffort,
             run_command=run_command,

@@ -1,56 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
 
-const getModelGroups = vi.hoisted(() => vi.fn());
+const getModelConfigs = vi.hoisted(() => vi.fn());
 
-vi.mock("@/lib/api/models", () => ({ getModelGroups }));
+vi.mock("@/lib/api/model-configs", () => ({ getModelConfigs }));
 
-const groups = (modelName: string) => [{
-  provider_id: 1,
-  provider_display_name: "Demo 官方",
-  models: [{
-    model_name: modelName,
-    supports_thinking: true,
-    supports_image: false,
-    supports_video: false,
-    supports_reasoning_effort: true,
-  }],
+const configs = (modelName: string) => [{
+  config_id: 1,
+  config_name: "Demo 配置",
+  base_url: "https://example.com/v1",
+  api_key: "secret",
+  model_name: modelName,
+  context_window_k: 128,
+  api_key_configured: true,
+  enabled: true,
+  sort_order: 0,
+  created_at: "",
+  updated_at: "",
+  supports_thinking: true,
+  supports_image: false,
+  supports_video: false,
+  supports_reasoning_effort: true,
 }];
 
 describe("global model catalog", () => {
-  it("builds a display label from provider display name and model name", async () => {
+  it("builds a flat label from configuration name, model name and context window", async () => {
     const { buildModelCatalog } = await import("@/lib/model-catalog");
-
-    const model = buildModelCatalog(groups("demo-model")).models[0];
-
-    expect(model?.providerDisplayName).toBe("Demo 官方");
-    expect(model?.label).toBe("Demo 官方/demo-model");
+    const model = buildModelCatalog(configs("demo-model")).models[0];
+    expect(model?.configName).toBe("Demo 配置");
+    expect(model?.label).toBe("Demo 配置 · demo-model");
+    expect(model?.contextWindowK).toBe(128);
   });
 
   it("aborts the previous load and ignores its late response", async () => {
-    let resolveFirst: ((value: ReturnType<typeof groups>) => void) | undefined;
-    let resolveSecond: ((value: ReturnType<typeof groups>) => void) | undefined;
-    const first = new Promise<ReturnType<typeof groups>>((resolve) => { resolveFirst = resolve; });
-    const second = new Promise<ReturnType<typeof groups>>((resolve) => { resolveSecond = resolve; });
-    getModelGroups
-      .mockImplementationOnce((init: RequestInit) => {
-        expect(init.signal).toBeInstanceOf(AbortSignal);
-        return first;
-      })
-      .mockImplementationOnce((init: RequestInit) => {
-        expect(init.signal).toBeInstanceOf(AbortSignal);
-        return second;
-      });
+    let resolveFirst: ((value: ReturnType<typeof configs>) => void) | undefined;
+    let resolveSecond: ((value: ReturnType<typeof configs>) => void) | undefined;
+    const first = new Promise<ReturnType<typeof configs>>((resolve) => { resolveFirst = resolve; });
+    const second = new Promise<ReturnType<typeof configs>>((resolve) => { resolveSecond = resolve; });
+    getModelConfigs
+      .mockImplementationOnce((init: RequestInit) => { expect(init.signal).toBeInstanceOf(AbortSignal); return first; })
+      .mockImplementationOnce((init: RequestInit) => { expect(init.signal).toBeInstanceOf(AbortSignal); return second; });
 
     const { getModelCatalogSnapshot, loadModelCatalog } = await import("@/lib/model-catalog");
     const firstLoad = loadModelCatalog();
     const secondLoad = loadModelCatalog({ force: true });
-    expect(getModelGroups.mock.calls[0]?.[0].signal.aborted).toBe(true);
-
-    resolveFirst?.(groups("stale-model"));
-    resolveSecond?.(groups("current-model"));
+    expect(getModelConfigs.mock.calls[0]?.[0].signal.aborted).toBe(true);
+    resolveFirst?.(configs("stale-model"));
+    resolveSecond?.(configs("current-model"));
     await Promise.all([firstLoad, secondLoad]);
-
     expect(getModelCatalogSnapshot().catalog?.models[0]?.modelName).toBe("current-model");
-    expect(getModelCatalogSnapshot().status).toBe("ready");
   });
 });

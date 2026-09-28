@@ -24,8 +24,7 @@ def _request(**extra: object) -> AssistantTransportRequest:
         commands=commands,
         threadId="task-1",
         taskId=1,
-        providerId=1,
-        modelName="deepseek-chat",
+        modelConfigId=1,
         **extra,
     )
 
@@ -83,8 +82,7 @@ def test_accepts_edit_command_with_source_id_and_current_run_id() -> None:
         ],
         threadId="task-1",
         taskId=1,
-        providerId=1,
-        modelName="deepseek-chat",
+        modelConfigId=1,
         runId=42,
     )
 
@@ -104,8 +102,7 @@ def test_accepts_add_message_with_run_id_without_source_id() -> None:
         ],
         threadId="task-1",
         taskId=1,
-        providerId=1,
-        modelName="deepseek-chat",
+        modelConfigId=1,
         runId=42,
     )
 
@@ -261,8 +258,7 @@ def test_accepts_explicit_ordinary_file_attachment_metadata() -> None:
         }],
         threadId="task-1",
         taskId=1,
-        providerId=1,
-        modelName="deepseek-chat",
+        modelConfigId=1,
     )
 
     assert request.commands[0].message.attachments[0].id == "file-1"

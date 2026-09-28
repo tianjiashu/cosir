@@ -29,7 +29,7 @@ if TYPE_CHECKING:
         ConversationRunExecutor,
     )
     from app.core.runtime.runner import AgentRuntime
-    from app.service.provider import ProviderService
+    from app.service.model_config import ModelConfigService
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_state_service import ConversationRunStateService
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from app.storage.crud.conversation_command_crud import ConversationCommandCrud
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-    from app.storage.crud.provider_crud import ProviderCrud
+    from app.storage.crud.model_config_crud import ModelConfigCrud
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.task_runtime.service.task_service import TaskService
@@ -289,25 +289,21 @@ def get_workspace_service() -> WorkspaceService:
 
 
 @lru_cache(maxsize=1)
-def get_provider_crud() -> ProviderCrud:
-    """返回进程级 ProviderCrud 单例。
+def get_model_config_crud() -> ModelConfigCrud:
+    """返回进程级模型连接配置 CRUD 单例。"""
 
-    参数:
-        无。
+    from app.storage.crud.model_config_crud import ModelConfigCrud
 
-    返回:
-        ProviderCrud 单例。
+    return ModelConfigCrud()
 
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
 
-    副作用:
-        首次调用时创建 ProviderCrud。
-    """
+@lru_cache(maxsize=1)
+def get_model_config_service() -> ModelConfigService:
+    """返回进程级模型连接配置服务单例。"""
 
-    from app.storage.crud.provider_crud import ProviderCrud
+    from app.service.model_config import ModelConfigService
 
-    return ProviderCrud()
+    return ModelConfigService()
 
 
 @lru_cache(maxsize=1)
@@ -423,28 +419,6 @@ def get_conversation_run_executor() -> ConversationRunExecutor:
     return executor
 
 
-@lru_cache(maxsize=1)
-def get_provider_service() -> ProviderService:
-    """返回进程级 ProviderService 单例。
-
-    参数:
-        无。
-
-    返回:
-        ProviderService 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 ProviderService（注入 ProviderCrud 单例）。
-    """
-
-    from app.service.provider import ProviderService
-
-    return ProviderService()
-
-
 def reset_service_dependencies() -> None:
     """Clear service-layer dependency singletons.
 
@@ -474,7 +448,7 @@ def reset_service_dependencies() -> None:
     get_workspace_crud.cache_clear()
     get_conversation_run_crud.cache_clear()
     get_task_crud.cache_clear()
-    get_provider_crud.cache_clear()
+    get_model_config_crud.cache_clear()
     get_conversation_command_crud.cache_clear()
     get_conversation_task_context_crud.cache_clear()
     get_conversation_run_command_service.cache_clear()
@@ -484,7 +458,7 @@ def reset_service_dependencies() -> None:
     get_conversation_event_projector.cache_clear()
     get_conversation_task_state_service.cache_clear()
     get_conversation_task_context_service.cache_clear()
-    get_provider_service.cache_clear()
+    get_model_config_service.cache_clear()
 
 
 def _shutdown_cached_runtime_before_reset() -> None:

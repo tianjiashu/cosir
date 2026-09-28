@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from app.config.logging.logger import log
 from app.core.agents.model_settings import ModelSettings
 from app.models import ConversationRunRecord
-from app.service.depends import get_provider_service
+from app.service.depends import get_model_config_service
 from app.utils.json_utils import read_json_object
 
 if TYPE_CHECKING:
@@ -112,8 +112,7 @@ _DOCUMENT_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "system_prompt": (str,),
     "allowed_tools": (list,),
     "max_steps": (int,),
-    "provider_id": (int, type(None)),
-    "model_name": (str, type(None)),
+    "model_config_id": (int, type(None)),
     "model_settings": (dict,),
 }
 _BLANK_REJECTED_TEXT_FIELDS = ("agent_id", "role", "description", "system_prompt")
@@ -228,8 +227,8 @@ class AgentProfile:
             主 Agent 不设置此字段。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         workflow: 执行策略（默认 ReAct-like，延迟导入打破循环依赖）。
-        provider_id: 模型厂商 id（None 时由 model_name 推导）。
-        model_name: 模型名称（可带 provider 前缀）。2026-08-18 决议：内置 profile 不内置
+        model_config_id: 模型连接配置 id（None 时继承本次 Run）。
+        model_name: 从模型连接配置派生的模型名称。内置 profile 不内置
             默认模型，默认 None；None 表示未配置，由前端优先校验、后端兜底报错。
         model_settings: 模型覆盖配置（``ModelSettings``）。
         agent_type: Agent 分类（``AgentProfileType``），决定其在运行时的暴露与调度方式。
@@ -246,7 +245,7 @@ class AgentProfile:
     agent_type: AgentProfileType = field(default=AgentProfileType.CHILD)
     description: str | None = field(default=None, kw_only=True)
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
-    provider_id: int | None = None
+    model_config_id: int | None = None
     model_name: str | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings.default_settings)
     max_steps: int = 100
@@ -268,7 +267,7 @@ class AgentProfile:
 
         参数:
             run: 本次执行的 Conversation Run 记录（必填，写入副本的 ``run`` 字段）；其
-                ``provider_id`` / ``model_name`` 用于回填副本上尚未配置的模型路由。
+                ``model_config_id`` / ``model_name`` 用于回填副本上尚未配置的模型路由。
             ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。传入时按工具名
                 从 ``allowed_tools`` 中差集收窄（``select_tools`` 同样按工具名过滤，
                 两处口径必须一致）。
@@ -288,8 +287,8 @@ class AgentProfile:
         if ban_tools is not None:
             banned = set(ban_tools)
             changes["allowed_tools"] = [t for t in self.allowed_tools if t not in banned]
-        if self.provider_id is None:
-            changes["provider_id"] = run.provider_id
+        if self.model_config_id is None:
+            changes["model_config_id"] = run.model_config_id
         if self.model_name is None:
             changes["model_name"] = run.model_name
         if model_settings is not None:
@@ -409,27 +408,27 @@ def parse_agent_profile_document(
     document: Mapping[str, Any],
     source: Path,
     *,
-    strict_provider: bool = False,
+    strict_model_config: bool = False,
 ) -> AgentProfile:
     """将已解析的 Agent JSON 文档严格转换为 CHILD profile。
 
-    ``vaild_agent_profile`` 使用默认的兼容运行时语义：无效 Provider/model 引用被记录后降为
-    未配置。配置中心写入时应传入 ``strict_provider=True``，让部分填写或不存在的引用直接失败，
+    ``vaild_agent_profile`` 使用默认的运行时语义：无效模型配置引用被记录后降为未配置。
+    配置中心写入时应传入 ``strict_model_config=True``，让不存在的引用直接失败，
     避免用户保存后配置被静默丢弃。
 
     参数:
         document: JSON 顶层对象。
         source: 配置来源路径，仅用于错误定位。
-        strict_provider: 是否拒绝无效 Provider/model 覆盖。
+        strict_model_config: 是否拒绝无效模型配置覆盖。
 
     返回:
-        已完成字段、工具名、模型设置和可选 Provider/model 校验的 CHILD profile。
+        已完成字段、工具名、模型设置和可选模型配置校验的 CHILD profile。
 
     异常:
-        AgentProfileConfigError: 文档字段、工具、步骤数或严格 Provider/model 校验失败。
+        AgentProfileConfigError: 文档字段、工具、步骤数或严格模型配置校验失败。
 
     副作用:
-        读取进程内 Provider service 以验证显式模型覆盖；不写文件、不修改 Registry。
+        读取进程内模型配置 service 以验证显式模型覆盖；不写文件、不修改 Registry。
     """
 
     _validate_document(document, source)
@@ -439,19 +438,23 @@ def parse_agent_profile_document(
     if max_steps is not None and max_steps <= 0:
         raise AgentProfileConfigError(f"Agent 配置无效，文件={source}，max_steps 必须是正整数")
     model_settings = ModelSettings.from_json(document.get("model_settings", {}))
-    provider_id = document.get("provider_id")
-    model_name = document.get("model_name")
-    has_provider_override = provider_id is not None or model_name is not None
-    provider_valid = not has_provider_override or get_provider_service().vaild_provider(
-        provider_id=provider_id,
-        model_name=model_name,
-    )
-    if not provider_valid and strict_provider:
+    model_config_id = document.get("model_config_id")
+    model_name = None
+    has_model_config_override = model_config_id is not None
+    model_config_valid = not has_model_config_override
+    if has_model_config_override and model_config_id is not None:
+        try:
+            model_name = get_model_config_service().get_config(model_config_id).model_name
+            model_config_valid = True
+        except KeyError:
+            model_config_valid = False
+    if not model_config_valid and strict_model_config:
         raise AgentProfileConfigError(
-            f"Agent 配置无效，文件={source}，provider_id 与 model_name 必须同时为空或引用有效模型"
+            f"Agent 配置无效，文件={source}，model_config_id 与 model_name "
+            "必须同时为空或引用有效模型"
         )
-    if not provider_valid:
-        provider_id = None
+    if not model_config_valid:
+        model_config_id = None
         model_name = None
     return AgentProfile(
         agent_id=document["agent_id"],
@@ -460,7 +463,7 @@ def parse_agent_profile_document(
         allowed_tools=allowed_tools,
         agent_type=AgentProfileType.CHILD,
         system_prompt=document["system_prompt"],
-        provider_id=provider_id,
+        model_config_id=model_config_id,
         model_name=model_name,
         model_settings=model_settings,
         max_steps=AgentProfile.max_steps if max_steps is None else max_steps,

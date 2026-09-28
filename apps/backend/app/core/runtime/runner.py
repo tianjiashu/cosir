@@ -276,7 +276,6 @@ class AgentRuntime:
         run: ConversationRunRecord,
         agent_profile: AgentProfile,
         tool_trace_recorder: ToolTraceRecorder | None = None,
-        agent_profile_registry: AgentProfileRegistry | None = None,
     ) -> WorkflowOperations:
         """为单个 run 构建运行时操作门面，按 workspace 解析工具边界。
 
@@ -307,7 +306,7 @@ class AgentRuntime:
         if execution_context is not None:
             runtime_dependencies = ToolRuntimeDependencies(
                 parent_agent_profile=agent_profile,
-                agent_profile_registry=agent_profile_registry,
+                agent_profile_registry=get_agent_registry(),
                 parent_task_is_child=task.is_child,
                 terminal_session_service=get_terminal_session_service(),
                 is_run_cancelled=cancellation_registry.is_cancelled,

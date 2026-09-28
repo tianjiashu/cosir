@@ -14,6 +14,6 @@
 避免「导入包即产生路由注册副作用」这种不可见行为。
 
 请求与响应 schema 位于 ``app.api.schemas.request`` / ``app.api.schemas.response``；文件事实由
-``app.service.configuration`` 下的 service 管理。Agent runtime、Provider CRUD 与 Assistant
+``app.service.configuration`` 下的 service 管理。Agent runtime、模型连接配置与 Assistant
 Transport 不经过本包。
 """

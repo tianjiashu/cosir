@@ -27,8 +27,7 @@ describe("configuration API", () => {
       system_prompt: "read only",
       allowed_tool_groups: ["文件"],
       max_steps: 100,
-      provider_id: null,
-      model_name: null,
+      model_config_id: null,
       model_settings: { temperature: 0.2 },
     });
 
@@ -37,7 +36,7 @@ describe("configuration API", () => {
       expect.objectContaining({ method: "PUT" }),
     );
     expect(jsonRequestInit).toHaveBeenCalledWith(
-      expect.objectContaining({ provider_id: null, model_name: null }),
+      expect.objectContaining({ model_config_id: null }),
       { method: "PUT" },
     );
     expect(jsonRequestInit.mock.calls[0][0]).not.toHaveProperty("version");

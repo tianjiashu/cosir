@@ -196,7 +196,7 @@ export function NewConversation({
     let provisionalTask: StartedConversation | null = null;
     try {
       const selection = readStoredSelection({ kind: "workspace", id: selectedWorkspaceId });
-      if (!selection?.providerId || !selection.modelName) throw new Error("请先选择模型");
+      if (!selection?.modelConfigId) throw new Error("请先选择模型");
       const task = await createWorkspaceTask(selectedWorkspaceId, {
         text: trimmedText,
         creationCommandId,
@@ -213,13 +213,11 @@ export function NewConversation({
         banTools: toolGroups
           .filter(({ group }) => selectedToolGroups.includes(group))
           .flatMap(({ tools }) => tools.map(({ name }) => name)),
-        providerId: selection.providerId,
-        modelName: selection.modelName,
+        modelConfigId: selection.modelConfigId,
         reasoningEffort: selection.reasoningEffort ?? null,
       });
       writeStoredSelection({ kind: "task", id: task.task_id }, {
-        providerId: selection.providerId,
-        modelName: selection.modelName,
+        modelConfigId: selection.modelConfigId,
         reasoningEffort: selection.reasoningEffort ?? null,
       });
       onStarted(
