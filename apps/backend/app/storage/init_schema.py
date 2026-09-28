@@ -11,14 +11,12 @@ from app.storage.model.base import StorageBase
 from app.storage.model.conversation_command_model import ConversationCommandModel
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
-from app.storage.model.model_entry_model import ModelEntryModel
 from app.storage.model.provider_model import ProviderModel
 from app.storage.model.task_model import TaskModel
 from app.storage.model.workspace_model import WorkspaceModel
 
 APP_MODELS = (
     ProviderModel,
-    ModelEntryModel,
     WorkspaceModel,
     TaskModel,
     ConversationRunModel,
@@ -38,13 +36,15 @@ def initialize_app_schema(engine: Engine) -> None:
         sqlalchemy.exc.SQLAlchemyError: 建表失败。
 
     副作用:
-        在当前数据库创建缺失的应用表，并清理当前版本仍需要处理的
-        ``conversation_runs.checkpoint_thread_id`` 旧全局唯一约束。
+        在当前数据库创建缺失的应用表，清理当前版本仍需要处理的
+        ``conversation_runs.checkpoint_thread_id`` 旧全局唯一约束，并删除已废弃的
+        ``models`` 表。
     """
 
     tables = [cast(Table, model.__table__) for model in APP_MODELS]
     StorageBase.metadata.create_all(engine, tables=tables)
     _drop_legacy_file_snapshot_table(engine)
+    _drop_legacy_models_table(engine)
     _ensure_context_tool_call_id_schema(engine)
     _ensure_context_streaming_schema(engine)
     _ensure_tasks_sqlite_autoincrement(engine)
@@ -58,6 +58,29 @@ def _drop_legacy_file_snapshot_table(engine: Engine) -> None:
         return
     with engine.begin() as connection:
         connection.execute(text("DROP TABLE IF EXISTS file_snapshots"))
+
+
+def _drop_legacy_models_table(engine: Engine) -> None:
+    """删除已废弃的 ``models`` 表（模型目录现由 capability JSON 提供）。
+
+    参数:
+        engine: 已初始化的主库 SQLAlchemy 引擎。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 删除失败。
+
+    副作用:
+        在 SQLite 上删除遗留的 ``models`` 表；表不存在时无操作。非 SQLite 方言不执行
+        （本地开发库固定为 SQLite）。
+    """
+
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS models"))
 
 
 def _ensure_context_tool_call_id_schema(engine: Engine) -> None:

@@ -1,8 +1,8 @@
 """模型厂商（Provider）域 HTTP 端点。
 
-承载厂商配置中心的后端接口（设计文档 §8.1）：厂商 CRUD + Provider 目录发现。
-模型条目（models 表）的导入与单条管理虽以 ``/providers/{id}/models`` 为部分
-路径前缀，但按「实体内聚」原则收口在 ``models_api``（模型条目实体归属）。
+承载厂商配置中心的后端接口（设计文档 §8.1）：厂商 CRUD、Provider 能力目录与连通性测试。
+模型目录（``GET /models``，见 ``models_api``）只读 Provider 配置与 capability 能力注册表，
+不读取数据库表，因此本模块不涉及模型条目的增删改。
 """
 
 from fastapi import Depends, HTTPException
@@ -160,7 +160,7 @@ async def delete_provider(
     provider_id: int,
     provider_service: ProviderService = Depends(get_provider_service),
 ) -> dict[str, object]:
-    """删除厂商（其下模型条目由 FK CASCADE 级联删除）。
+    """删除厂商。
 
     参数:
         provider_id: 来自路由的厂商标识。

@@ -57,6 +57,22 @@
               "type": "integer",
               "title": "Task Id"
             }
+          },
+          {
+            "name": "creationCommandId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Creationcommandid"
+            }
           }
         ],
         "responses": {
@@ -116,6 +132,55 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TaskResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/runs/{run_id}": {
+      "delete": {
+        "summary": "Delete Run",
+        "description": "删除单个 run 及其会话历史与产物。\n\n允许删除 task 内任意位置的 run（含中间），不重排剩余上下文序号。级联清理该 run 的\n会话消息、命令、委派记录、终端 session 与 run 行，提交后回收孤儿 LangGraph checkpoint。\n\n参数:\n    task_id: 来自路由的任务标识。\n    run_id: 来自路由的 Conversation Run 标识。\n    task_service: 通过依赖注入的任务 service（负责级联清理）。\n\n返回:\n    删除结果 ``DeleteRunResponse``。\n\n异常:\n    HTTPException: 404——task 或 run 不存在/不匹配；409——task 内存在运行中的 run\n        （不可删除）或删除闸门忙。\n\n副作用:\n    级联删除该 run 及其关联数据；与 delete_task 一致经 asyncio.to_thread 移出 event loop。",
+        "operationId": "delete_run_tasks__task_id__runs__run_id__delete",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteRunResponse"
                 }
               }
             }
@@ -391,7 +456,7 @@
       },
       "post": {
         "summary": "Create Provider",
-        "description": "新建模型厂商。\n\n参数:\n    payload: 包含 name / base_url / api_key 的请求体。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    创建后的 ``ProviderResponse``。\n\n异常:\n    HTTPException: 输入非法（400）或厂商重名（409）时抛出。\n\n副作用:\n    在存储中创建厂商（service 层写 ``provider_created`` 审计日志）。",
+        "description": "新建模型厂商。\n\n参数:\n    payload: 包含 name / display_name / base_url / api_key 的请求体。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    创建后的 ``ProviderResponse``。\n\n异常:\n    HTTPException: 输入非法（400）或配置显示名重名（409）时抛出。\n\n副作用:\n    在存储中创建厂商（service 层写 ``provider_created`` 审计日志）。",
         "operationId": "create_provider_providers_post",
         "requestBody": {
           "content": {
@@ -430,7 +495,7 @@
     "/providers/{provider_id}": {
       "put": {
         "summary": "Update Provider",
-        "description": "更新厂商字段（仅覆盖显式传入字段；启停即时生效）。\n\n参数:\n    provider_id: 来自路由的厂商标识。\n    payload: 待更新字段的请求体（None = 不更新，``\"\"`` = 清除）。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    更新后的 ``ProviderResponse``。\n\n异常:\n    HTTPException: 厂商不存在（404）、输入非法（400）或重名冲突（409）时抛出。\n\n副作用:\n    更新 ``providers`` 表对应行（service 层写 ``provider_updated`` 审计日志）。",
+        "description": "更新厂商字段（仅覆盖显式传入字段；启停即时生效）。\n\n参数:\n    provider_id: 来自路由的厂商标识。\n    payload: 待更新字段的请求体（None = 不更新，``\"\"`` = 清除）。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    更新后的 ``ProviderResponse``。\n\n异常:\n    HTTPException: 厂商不存在（404）、输入非法（400）或配置显示名冲突（409）时抛出。\n\n副作用:\n    更新 ``providers`` 表对应行（service 层写 ``provider_updated`` 审计日志）。",
         "operationId": "update_provider_providers__provider_id__put",
         "parameters": [
           {
@@ -478,7 +543,7 @@
       },
       "delete": {
         "summary": "Delete Provider",
-        "description": "删除厂商（其下模型条目由 FK CASCADE 级联删除）。\n\n参数:\n    provider_id: 来自路由的厂商标识。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    ``{\"provider_id\": ..., \"deleted\": true}``（幂等：厂商不存在也返回成功）。\n\n异常:\n    无。\n\n副作用:\n    级联删除厂商与其下模型条目（service 层写 ``provider_deleted`` 审计日志）。",
+        "description": "删除厂商。\n\n参数:\n    provider_id: 来自路由的厂商标识。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    ``{\"provider_id\": ..., \"deleted\": true}``（幂等：厂商不存在也返回成功）。\n\n异常:\n    HTTPException: 删除仍被其它事实引用而触发外键违约时抛 409，\n        并在 ``detail`` 中给出可操作原因（不暴露原始 SQL）。\n\n副作用:\n    级联删除厂商与其下模型条目；引用该厂商的 ``conversation_runs.provider_id``\n    由 FK ``ON DELETE SET NULL`` 置空（service 层写 ``provider_deleted`` 审计日志）。",
         "operationId": "delete_provider_providers__provider_id__delete",
         "parameters": [
           {
@@ -540,6 +605,315 @@
                 "schema": {
                   "type": "object",
                   "title": "Response Test Provider Connection Providers  Provider Id  Test Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/agents": {
+      "get": {
+        "summary": "List Configuration Agents",
+        "operationId": "list_configuration_agents_configuration_agents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentConfigurationResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Configuration Agents Configuration Agents Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Configuration Agent",
+        "operationId": "create_configuration_agent_configuration_agents_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentConfigurationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentConfigurationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/agents/{agent_id}": {
+      "put": {
+        "summary": "Update Configuration Agent",
+        "operationId": "update_configuration_agent_configuration_agents__agent_id__put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentConfigurationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentConfigurationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Configuration Agent",
+        "operationId": "delete_configuration_agent_configuration_agents__agent_id__delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Delete Configuration Agent Configuration Agents  Agent Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/global-instructions": {
+      "get": {
+        "summary": "Get Global Instruction Configuration",
+        "operationId": "get_global_instruction_configuration_configuration_global_instructions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalInstructionResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Global Instruction Configuration",
+        "operationId": "update_global_instruction_configuration_configuration_global_instructions_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalInstructionUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalInstructionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/main-agent-prompt": {
+      "get": {
+        "summary": "Get Main Agent Prompt Configuration",
+        "description": "读取主 Agent prompt，并返回当前有效正文。",
+        "operationId": "get_main_agent_prompt_configuration_configuration_main_agent_prompt_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MainAgentPromptResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Main Agent Prompt Configuration",
+        "description": "保存主 Agent prompt，并同步替换当前进程 Registry 中的 profile。",
+        "operationId": "update_main_agent_prompt_configuration_configuration_main_agent_prompt_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MainAgentPromptUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MainAgentPromptResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/environment": {
+      "get": {
+        "summary": "Get Environment Configuration",
+        "operationId": "get_environment_configuration_configuration_environment_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Environment Configuration",
+        "operationId": "update_environment_configuration_configuration_environment_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnvironmentUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentResponse"
                 }
               }
             }
@@ -718,10 +1092,30 @@
         }
       }
     },
+    "/tools/groups": {
+      "get": {
+        "summary": "Get Tool Groups",
+        "description": "返回主 Agent 可用的注册工具，并按 ``ToolDefinition.group`` 聚合为目录。\n\n前端工具组选择器与配置中心共用本接口：调用方需要「分组 + 组内工具的名称与描述」（选择器显示\n每个分组的工具数量，配置页由分组反推工具名），因此返回分组目录而非分组名列表。\n\n返回:\n    ``{\"groups\": [{\"group\": 分组名, \"tools\": [{\"name\": 工具名, \"description\": 描述}]}, ...]}``；\n    其中 ``...`` 表示更多组内工具或更多分组。分组按组名字典序排列，组内工具按名称字典序排列；\n    未声明分组的工具归入 ``其他工具``。\n\n异常:\n    HTTPException: 主 Agent profile 尚未初始化时抛出 503。\n\n副作用:\n    无；只读进程内 profile 与工具注册表，不修改运行时状态。",
+        "operationId": "get_tool_groups_tools_groups_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Get Tool Groups Tools Groups Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/assistant": {
       "post": {
         "summary": "Assistant Transport",
-        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。\n    state_service: 负责读取 Task Transport state 的唯一 owner。\n    run_service: 在一个事务中占用 command 并创建、绑定 Conversation Run 的 service。\n    run_executor: 进程级后台执行器，负责驱动 AgentRuntime 执行。\n\n返回:\n    使用 ``assistant-stream`` 编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；\n    运行期间更新数据库和 canonical conversation facts。",
+        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。\n    state_service: 负责读取 Task Transport state 的唯一 owner。\n    run_service: 在一个事务中占用 command 并创建、绑定 Conversation Run 的 service。\n\n返回:\n使用项目自有 frame 协议编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；\n    运行期间更新数据库和 canonical conversation facts。",
         "operationId": "assistant_transport_assistant_post",
         "requestBody": {
           "content": {
@@ -979,6 +1373,196 @@
         "title": "AddMessageCommand",
         "description": "校验首版支持的 ``add-message`` 命令。"
       },
+      "AgentConfigurationRequest": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "system_prompt": {
+            "type": "string",
+            "title": "System Prompt"
+          },
+          "allowed_tool_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Tool Groups"
+          },
+          "max_steps": {
+            "type": "integer",
+            "title": "Max Steps",
+            "default": 100
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "model_settings": {
+            "type": "object",
+            "title": "Model Settings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "agent_id",
+          "role",
+          "description",
+          "system_prompt",
+          "allowed_tool_groups"
+        ],
+        "title": "AgentConfigurationRequest",
+        "description": "校验 Agent 配置的创建与更新请求体。\n\n参数:\n    agent_id: Agent 标识，与配置文件身份一致。\n    role: Agent 角色描述。\n    description: Agent 用途说明。\n    system_prompt: 系统提示词正文。\n    allowed_tool_groups: 该 Agent 允许使用的工具分组名称列表；后端会展开为工具名。\n    max_steps: 单次运行的最大推理步数，默认 100。\n    provider_id: 可选，模型归属厂商标识（指向 ``providers.id``）。\n    model_name: 可选，模型名；None 表示未指定模型。\n    model_settings: 可选，模型参数覆盖项。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 字段类型不符或携带额外字段时由 Pydantic 校验抛出。\n\n副作用:\n    无（只做结构校验，不读写文件）。"
+      },
+      "AgentConfigurationResponse": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "system_prompt": {
+            "type": "string",
+            "title": "System Prompt"
+          },
+          "allowed_tool_groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Tool Groups"
+          },
+          "max_steps": {
+            "type": "integer",
+            "title": "Max Steps"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "model_settings": {
+            "type": "object",
+            "title": "Model Settings"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "editable": {
+            "type": "boolean",
+            "title": "Editable"
+          },
+          "deletable": {
+            "type": "boolean",
+            "title": "Deletable"
+          },
+          "validation_status": {
+            "type": "string",
+            "title": "Validation Status"
+          },
+          "validation_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Error"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "role",
+          "description",
+          "system_prompt",
+          "allowed_tool_groups",
+          "max_steps",
+          "source",
+          "editable",
+          "deletable",
+          "validation_status"
+        ],
+        "title": "AgentConfigurationResponse",
+        "description": "校验并序列化 Agent 配置响应。\n\n参数:\n    agent_id: Agent 标识。\n    role: Agent 角色描述。\n    description: Agent 用途说明。\n    system_prompt: 系统提示词正文。\n    allowed_tool_groups: 允许使用的工具分组名称列表。\n    max_steps: 单次运行的最大推理步数。\n    provider_id: 可选，模型归属厂商标识。\n    model_name: 可选，模型名。\n    model_settings: 模型参数覆盖项。\n    source: 配置来源（内置或用户文件）。\n    path: 配置文件路径；无文件时为 None。\n    editable: 是否可编辑。\n    deletable: 是否可删除。\n    validation_status: 配置校验状态。\n    validation_error: 校验失败原因；通过时为 None。\n    file_name: 配置文件名；缺失时为 None。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
       "AssistantAttachRequest": {
         "properties": {
           "commands": {
@@ -1107,21 +1691,14 @@
         "properties": {
           "commands": {
             "items": {
-              "oneOf": [
+              "anyOf": [
                 {
                   "$ref": "#/components/schemas/AddMessageCommand"
                 },
                 {
-                  "$ref": "#/components/schemas/CustomCommand"
+                  "$ref": "#/components/schemas/BanToolsCommand"
                 }
-              ],
-              "discriminator": {
-                "propertyName": "type",
-                "mapping": {
-                  "add-message": "#/components/schemas/AddMessageCommand",
-                  "custom": "#/components/schemas/CustomCommand"
-                }
-              }
+              ]
             },
             "type": "array",
             "maxItems": 32,
@@ -1268,7 +1845,7 @@
           "taskId"
         ],
         "title": "AssistantTransportRequest",
-        "description": "校验 Assistant Transport 请求。\n\n命令数组由服务端按顺序幂等处理；对话历史由 canonical facts 重建。"
+        "description": "校验 Assistant Transport 请求。\n\n当前受支持的命令共同构成一次 Run 请求；对话历史由 canonical facts 重建。"
       },
       "AssistantUserMessage": {
         "properties": {
@@ -1329,6 +1906,57 @@
         "title": "AssistantUserMessage",
         "description": "校验 Assistant UI 的用户消息。"
       },
+      "BanToolsCommand": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "custom",
+            "title": "Type"
+          },
+          "commandId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Commandid"
+          },
+          "name": {
+            "type": "string",
+            "const": "ban-tools",
+            "title": "Name"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/BanToolsPayload"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "commandId",
+          "name",
+          "payload"
+        ],
+        "title": "BanToolsCommand",
+        "description": "Assistant UI custom command that configures disabled tools for one Run.\n\nThis schema preserves the wire shape ``type=\"custom\"``, ``name=\"ban-tools\"`` and a typed\n``payload``. It validates command identity and payload shape only; the transport service\nvalidates tool names against the current main-agent catalog and persists them in Run Extra.\n\nRaises:\n    ValidationError: When the wire discriminator, command name, command ID, or payload is\n        malformed.\n\nSide effects:\n    None. Persistence and catalog lookup belong to the transport service."
+      },
+      "BanToolsPayload": {
+        "properties": {
+          "ban_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ban Tools"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ban_tools"
+        ],
+        "title": "BanToolsPayload",
+        "description": "Validated tool-name selection carried by ``BanToolsCommand``.\n\n``ban_tools`` may be empty to preserve the default where every tool remains available.\nNames must be unique, nonblank strings; availability against the current main-agent catalog\nis checked by the transport service after request parsing.\n\nRaises:\n    ValidationError: When a name is blank, duplicated, or not a string.\n\nSide effects:\n    None. This model only validates and stores the request payload."
+      },
       "Body_upload_attachment_tasks__task_id__attachments_post": {
         "properties": {
           "file": {
@@ -1380,6 +2008,16 @@
                 "type": "null"
               }
             ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStateError"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1388,10 +2026,11 @@
           "status",
           "endReason",
           "messages",
-          "usage"
+          "usage",
+          "error"
         ],
         "title": "ConversationRunSnapshot",
-        "description": "一个 Run 的完整 UI 投影。\n\n``runId`` 是内部消息、tool part 和 Run usage 的共同归属键；Run 的状态、终态原因、\n消息及累计模型 usage 必须在同一对象内保持一致。"
+        "description": "一个 Run 的完整 UI 投影。\n\n``runId`` 是内部消息、tool part 和 Run usage 的共同归属键；Run 的状态、终态原因、受控\n错误、消息及累计模型 usage 必须在同一对象内保持一致。\n\n``error`` 只在 Run 进入失败/取消终态时携带受控文案（``code`` + provider 无关的\n``message``），供前端展示失败原因；运行中、已结束成功或未发生错误时为 ``None``。它只服务\nUI 渲染与重连恢复，不是 Run 生命周期状态机的第二来源。"
       },
       "ConversationStateError": {
         "properties": {
@@ -1761,6 +2400,17 @@
             "type": "string",
             "title": "Text",
             "default": ""
+          },
+          "creationCommandId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creationcommandid"
           }
         },
         "type": "object",
@@ -1786,44 +2436,29 @@
         "title": "CreateWorkspaceRequest",
         "description": "校验工作区创建请求体。\n\n参数:\n    name: 非空的工作区名称。\n    root_path: 非空的工作区本地路径。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当名称或路径为空白时抛出。\n\n副作用:\n    无。"
       },
-      "CustomCommand": {
+      "DeleteRunResponse": {
         "properties": {
-          "type": {
-            "type": "string",
-            "const": "custom",
-            "title": "Type"
+          "task_id": {
+            "type": "integer",
+            "title": "Task Id"
           },
-          "commandId": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Commandid"
+          "run_id": {
+            "type": "integer",
+            "title": "Run Id"
           },
-          "name": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "payload": {
-            "anyOf": [
-              {},
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Payload"
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
           }
         },
-        "additionalProperties": true,
         "type": "object",
         "required": [
-          "type",
-          "commandId",
-          "name"
+          "task_id",
+          "run_id",
+          "deleted"
         ],
-        "title": "CustomCommand",
-        "description": "保留 Assistant Transport 扩展命令的显式、可审计边界。"
+        "title": "DeleteRunResponse",
+        "description": "校验并序列化单个 run 删除结果响应。\n\n参数:\n    task_id: run 所属任务标识。\n    run_id: 被删除的 Conversation Run 标识。\n    deleted: 是否删除成功。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "DeleteTaskResponse": {
         "properties": {
@@ -1863,6 +2498,258 @@
         "title": "DeleteWorkspaceResponse",
         "description": "校验并序列化工作区删除结果响应。\n\n参数:\n    workspace_id: 被删除的工作区标识。\n    deleted: 是否删除成功。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
+      "EnvironmentChangeRequest": {
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "replace",
+              "clear",
+              "unchanged"
+            ],
+            "title": "Operation"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operation"
+        ],
+        "title": "EnvironmentChangeRequest",
+        "description": "校验环境文件中单个字段的变更意图。\n\n参数:\n    operation: 变更类型：``replace`` 覆盖、``clear`` 清空、``unchanged`` 保持不变。\n    value: 新值；仅 ``replace`` 时使用，``clear`` / ``unchanged`` 忽略。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 字段类型不符、``operation`` 不在枚举内或携带额外字段时由 Pydantic 校验抛出。\n\n副作用:\n    无（只做结构校验，不读写文件）。"
+      },
+      "EnvironmentFieldResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "string",
+              "boolean"
+            ],
+            "title": "Type"
+          },
+          "component": {
+            "type": "string",
+            "enum": [
+              "input",
+              "password",
+              "checkbox",
+              "select"
+            ],
+            "title": "Component"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "secret": {
+            "type": "boolean",
+            "title": "Secret"
+          },
+          "default": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "disk_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disk Value"
+          },
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          },
+          "masked": {
+            "type": "boolean",
+            "title": "Masked"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "process",
+              "file",
+              "default"
+            ],
+            "title": "Source"
+          },
+          "process_override": {
+            "type": "boolean",
+            "title": "Process Override"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentOptionResponse"
+            },
+            "type": "array",
+            "title": "Options"
+          },
+          "placeholder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Placeholder"
+          },
+          "clearable": {
+            "type": "boolean",
+            "title": "Clearable"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "type",
+          "component",
+          "label",
+          "secret",
+          "default",
+          "value",
+          "disk_value",
+          "configured",
+          "masked",
+          "source",
+          "process_override",
+          "options",
+          "placeholder",
+          "clearable"
+        ],
+        "title": "EnvironmentFieldResponse",
+        "description": "单个环境变量的展示元数据与脱敏状态。\n\n``value`` 与 ``disk_value`` 对 secret 字段始终为 ``None``；调用方只能通过 ``masked``\n判断是否已经配置，不能从响应中恢复敏感值。"
+      },
+      "EnvironmentGroupResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentFieldResponse"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "description",
+          "fields"
+        ],
+        "title": "EnvironmentGroupResponse",
+        "description": "配置中心中的一组相关环境变量。"
+      },
+      "EnvironmentOptionResponse": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "EnvironmentOptionResponse",
+        "description": "下拉控件的一个可选项。"
+      },
+      "EnvironmentResponse": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentGroupResponse"
+            },
+            "type": "array",
+            "title": "Groups"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "groups"
+        ],
+        "title": "EnvironmentResponse",
+        "description": "环境配置读取与更新响应。\n\n分组、字段名称和控件类型均由后端返回；响应不包含 version 等并发控制字段。\n保存后由后端就地把新配置重载进内存（见 ``EnvironmentConfigurationService``），因此没有\n「需要重启才生效」的字段。"
+      },
+      "EnvironmentUpdateRequest": {
+        "properties": {
+          "changes": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/EnvironmentChangeRequest"
+            },
+            "type": "object",
+            "title": "Changes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "changes"
+        ],
+        "title": "EnvironmentUpdateRequest",
+        "description": "校验环境文件批量更新请求体。\n\n参数:\n    changes: 字段名到变更意图的映射；未出现的字段保持原值。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 字段类型不符或携带额外字段时由 Pydantic 校验抛出。\n\n副作用:\n    无（只做结构校验，不读写文件）。"
+      },
       "ForkTaskRequest": {
         "properties": {
           "runId": {
@@ -1876,6 +2763,56 @@
         ],
         "title": "ForkTaskRequest",
         "description": "校验历史 Run fork 请求。"
+      },
+      "GlobalInstructionResponse": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "token_length": {
+            "type": "integer",
+            "title": "Token Length"
+          },
+          "max_tokens": {
+            "type": "integer",
+            "title": "Max Tokens"
+          },
+          "effective_on": {
+            "type": "string",
+            "const": "next_run",
+            "title": "Effective On",
+            "default": "next_run"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "path",
+          "token_length",
+          "max_tokens"
+        ],
+        "title": "GlobalInstructionResponse",
+        "description": "校验并序列化全局指令响应。\n\n参数:\n    content: 全局指令正文。\n    path: 指令文件路径。\n    token_length: 正文 token 估算数。\n    max_tokens: 允许的最大 token 数。\n    effective_on: 生效时机，固定为下一次运行（``next_run``）。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "GlobalInstructionUpdateRequest": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "GlobalInstructionUpdateRequest",
+        "description": "校验全局指令更新请求体。\n\n参数:\n    content: 新的全局指令正文。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 字段类型不符或携带额外字段时由 Pydantic 校验抛出。\n\n副作用:\n    无（只做结构校验，不读写文件）。"
       },
       "HTTPValidationError": {
         "properties": {
@@ -1903,6 +2840,62 @@
         ],
         "title": "HealthResponse",
         "description": "后端存活探针响应。\n\n当前为最小占位实现：仅携带 ``status`` 字段标识进程存活，不探测子系统就绪态。\n真实探针（聚合 storage / 模型配置中心）为后续 TODO，\n届时将扩展字段并产出不含 secret 明文的健康摘要。\n\n参数:\n    status: 健康状态标识，占位实现固定为 ``\"health\"``。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "MainAgentPromptResponse": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "token_length": {
+            "type": "integer",
+            "title": "Token Length"
+          },
+          "max_tokens": {
+            "type": "integer",
+            "title": "Max Tokens"
+          },
+          "source": {
+            "type": "string",
+            "const": "user_file",
+            "title": "Source"
+          },
+          "effective_on": {
+            "type": "string",
+            "const": "next_run",
+            "title": "Effective On",
+            "default": "next_run"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "path",
+          "token_length",
+          "max_tokens",
+          "source"
+        ],
+        "title": "MainAgentPromptResponse",
+        "description": "把主 Agent prompt 配置文档投影为配置中心响应。"
+      },
+      "MainAgentPromptUpdateRequest": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "MainAgentPromptUpdateRequest",
+        "description": "校验主 Agent prompt 更新请求的字段形状。"
       },
       "ModelListItemResponse": {
         "properties": {
@@ -1987,6 +2980,10 @@
             "type": "string",
             "title": "Name"
           },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
           "model_name": {
             "type": "string",
             "title": "Model Name",
@@ -2022,10 +3019,11 @@
         },
         "type": "object",
         "required": [
-          "name"
+          "name",
+          "display_name"
         ],
         "title": "ProviderCreateRequest",
-        "description": "校验厂商创建请求体。\n\n参数:\n    name: 厂商显示名（全局唯一，deepseek、openai、ollama等）。\n    model_name: 模型名称,仅当name 为 custome 或 ollama 时有效。\n    base_url: 接入地址。\n    api_key: 可选 API Key 明文（DB 唯一事实来源，本地 SQLite 明文存储；\n        ``ollama`` 等不需 Key 的厂商可不填。\n    enabled: 启用开关，默认 True。\n    sort_order: 排序权重，默认 0。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 ``name`` / ``type`` 为空白或 ``type`` 不在允许枚举时抛出。\n\n副作用:\n    无。"
+        "description": "校验厂商创建请求体。\n\n参数:\n    name: 能力注册表名称（deepseek、openai、ollama等）；允许多个配置实例复用。\n    display_name: 用户可见的配置名称；用于区分同一厂商的不同接入配置。\n    model_name: 可选模型名称字段，当前 Provider 创建流程不据此建立模型条目。\n    base_url: 接入地址。\n    api_key: 可选 API Key 明文（DB 唯一事实来源，本地 SQLite 明文存储；\n        ``ollama`` 等不需 Key 的厂商可不填。\n    sort_order: 排序权重，默认 0。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 ``name`` / ``display_name`` 无效、Provider 未注册、或缺少必需的\n        API Key / Base URL 时抛出。\n\n副作用:\n    无。"
       },
       "ProviderModelGroupResponse": {
         "properties": {
@@ -2033,9 +3031,9 @@
             "type": "integer",
             "title": "Provider Id"
           },
-          "provider_name": {
+          "provider_display_name": {
             "type": "string",
-            "title": "Provider Name"
+            "title": "Provider Display Name"
           },
           "models": {
             "items": {
@@ -2048,7 +3046,7 @@
         "type": "object",
         "required": [
           "provider_id",
-          "provider_name",
+          "provider_display_name",
           "models"
         ],
         "title": "ProviderModelGroupResponse",
@@ -2063,6 +3061,10 @@
           "name": {
             "type": "string",
             "title": "Name"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
           },
           "base_url": {
             "anyOf": [
@@ -2085,11 +3087,6 @@
             "title": "Enabled",
             "default": true
           },
-          "model_count": {
-            "type": "integer",
-            "title": "Model Count",
-            "default": 0
-          },
           "sort_order": {
             "type": "integer",
             "title": "Sort Order",
@@ -2108,14 +3105,26 @@
         "required": [
           "provider_id",
           "name",
+          "display_name",
           "created_at",
           "updated_at"
         ],
         "title": "ProviderResponse",
-        "description": "序列化厂商配置响应（含聚合状态，设计文档 §8.1）。\n\n参数:\n    provider_id: 厂商标识。\n    name: 厂商名称。\n    base_url: 自定义接入地址（可空，空时使用 Provider 能力注册表默认地址）。\n    api_key_configured: Key 配置状态（不依赖 Key 的厂商类型恒 True，§8.4；\n        其余以 ``providers.api_key`` 非空为准）。响应永不回传 Key 明文。\n    enabled: 启用开关。\n    model_count: 该厂商下模型条目数（含禁用条目）。\n    sort_order: 排序权重。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "序列化厂商配置响应（含聚合状态，设计文档 §8.1）。\n\n参数:\n    provider_id: 厂商标识。\n    name: 能力注册表名称。\n    display_name: 用户可见的配置名称。\n    base_url: 自定义接入地址（可空，空时使用 Provider 能力注册表默认地址）。\n    api_key_configured: Key 配置状态（不依赖 Key 的厂商类型恒 True，§8.4；\n        其余以 ``providers.api_key`` 非空为准）。响应永不回传 Key 明文。\n    enabled: 启用开关。\n    sort_order: 排序权重。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "ProviderUpdateRequest": {
         "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
           "base_url": {
             "anyOf": [
               {
@@ -2163,7 +3172,7 @@
         },
         "type": "object",
         "title": "ProviderUpdateRequest",
-        "description": "校验厂商更新请求体（仅覆盖显式传入的字段）。\n\n参数:\n    name: 可选，新显示名。\n    type: 可选，新厂商类型（枚举校验）。\n    base_url: 可选，新接入地址；``\"\"`` 表示清除。\n    api_key: 可选，新 API Key 明文；``None`` 不更新，``\"\"`` 清除。\n    enabled: 可选，新启用状态（启停即时生效）。\n    sort_order: 可选，新排序权重。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 ``type`` 非空且不在允许枚举时抛出（由 pydantic 校验触发）。\n\n副作用:\n    无。"
+        "description": "校验厂商更新请求体（仅覆盖显式传入的字段）。\n\n参数:\n    display_name: 可选，新配置显示名。\n    base_url: 可选，新接入地址；``\"\"`` 表示清除。\n    api_key: 可选，新 API Key 明文；``None`` 不更新，``\"\"`` 清除。\n    enabled: 可选，新启用状态（启停即时生效）。\n    sort_order: 可选，新排序权重。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 display_name 由调用方传入空白值时由存储层拒绝。\n\n副作用:\n    无。"
       },
       "TaskResponse": {
         "properties": {
@@ -2284,7 +3293,7 @@
           "updated_at"
         ],
         "title": "TaskResponse",
-        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"fork\"`` 为历史分支，\n        ``\"delegation\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_run_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    context_usage_used: 最近一次上下文窗口已用 token（运行时回写，可能为 None）。\n    context_window_total: 该任务模型的上下文窗口上限 token（由 resolve_context_window\n        动态计算，可能为 None）。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"fork\"`` 为历史分支，\n        ``\"delegate_task\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_run_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    context_usage_used: 最近一次上下文窗口已用 token（运行时回写，可能为 None）。\n    context_window_total: 该任务模型的上下文窗口上限 token（由 resolve_context_window\n        动态计算，可能为 None）。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "ValidationError": {
         "properties": {

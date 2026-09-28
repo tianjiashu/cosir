@@ -7,8 +7,8 @@
 职责边界：
 - 负责：厂商读写、Key 配置状态判定（DB 是 Key 唯一事实来源，``providers.
   api_key`` 明文列，不做加密）。
-- 不负责：模型条目管理（``model_entry_service``）、Provider 目录发现
-  （``provider_discover_service``）、模型解析（``model_resolver_service``）。
+- 不负责：模型目录与模型能力（由 ``app.core.llm_provider.capability`` 的
+  ``ProviderCapability`` / ``ModelCapability`` 声明）。
 
 ``api_key_configured`` 语义（设计文档 §8.4）：不依赖 Key 的厂商类型
 （``ollama`` 等本地厂商）恒为 True；其余类型检查 ``providers.api_key``

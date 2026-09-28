@@ -29,7 +29,7 @@ if TYPE_CHECKING:
         ConversationRunExecutor,
     )
     from app.core.runtime.runner import AgentRuntime
-    from app.service.provider import ModelEntryService, ProviderService
+    from app.service.provider import ProviderService
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_state_service import ConversationRunStateService
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
@@ -38,7 +38,6 @@ if TYPE_CHECKING:
     from app.storage.crud.conversation_command_crud import ConversationCommandCrud
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-    from app.storage.crud.model_entry_crud import ModelEntryCrud
     from app.storage.crud.provider_crud import ProviderCrud
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
@@ -425,28 +424,6 @@ def get_conversation_run_executor() -> ConversationRunExecutor:
 
 
 @lru_cache(maxsize=1)
-def get_model_entry_crud() -> ModelEntryCrud:
-    """返回进程级 ModelEntryCrud 单例。
-
-    参数:
-        无。
-
-    返回:
-        ModelEntryCrud 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 ModelEntryCrud。
-    """
-
-    from app.storage.crud.model_entry_crud import ModelEntryCrud
-
-    return ModelEntryCrud()
-
-
-@lru_cache(maxsize=1)
 def get_provider_service() -> ProviderService:
     """返回进程级 ProviderService 单例。
 
@@ -466,28 +443,6 @@ def get_provider_service() -> ProviderService:
     from app.service.provider import ProviderService
 
     return ProviderService()
-
-
-@lru_cache(maxsize=1)
-def get_model_entry_service() -> ModelEntryService:
-    """返回进程级 ModelEntryService 单例。
-
-    参数:
-        无。
-
-    返回:
-        ModelEntryService 单例。
-
-    异常:
-        RuntimeError: 如果 storage 尚未初始化。
-
-    副作用:
-        首次调用时创建 ModelEntryService（注入 ModelEntryCrud 单例）。
-    """
-
-    from app.service.provider import ModelEntryService
-
-    return ModelEntryService()
 
 
 def reset_service_dependencies() -> None:
@@ -520,7 +475,6 @@ def reset_service_dependencies() -> None:
     get_conversation_run_crud.cache_clear()
     get_task_crud.cache_clear()
     get_provider_crud.cache_clear()
-    get_model_entry_crud.cache_clear()
     get_conversation_command_crud.cache_clear()
     get_conversation_task_context_crud.cache_clear()
     get_conversation_run_command_service.cache_clear()
@@ -531,7 +485,6 @@ def reset_service_dependencies() -> None:
     get_conversation_task_state_service.cache_clear()
     get_conversation_task_context_service.cache_clear()
     get_provider_service.cache_clear()
-    get_model_entry_service.cache_clear()
 
 
 def _shutdown_cached_runtime_before_reset() -> None:

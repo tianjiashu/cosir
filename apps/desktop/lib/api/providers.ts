@@ -7,7 +7,6 @@ export type Provider = {
   base_url: string | null;
   api_key_configured: boolean;
   enabled: boolean;
-  model_count: number;
   sort_order: number;
   created_at: string;
   updated_at: string;
