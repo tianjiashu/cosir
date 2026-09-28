@@ -94,8 +94,6 @@ class ProviderRecord:
             id=self.id,
             name=self.name,
             provider_type=self.provider_type,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
             base_url=self.base_url,
             api_key=self.api_key,
             enabled=self.enabled,

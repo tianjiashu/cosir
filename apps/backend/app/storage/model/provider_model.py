@@ -27,7 +27,7 @@ class ProviderModel(StorageBase):
 
     __tablename__ = "providers"
 
-    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
     provider_type: Mapped[str] = mapped_column("type", Text, nullable=True)
     base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
