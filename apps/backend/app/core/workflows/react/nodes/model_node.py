@@ -56,15 +56,19 @@ from app.utils.message_content import content_to_text
 def _build_continuation_prompt(finish_reason: str | None) -> str | None:
     """为未完成的模型输出构造一次模型可消费的继续提示。
 
-    ``length`` 类原因明确表示达到输出上限；缺失或未知原因则表示 Provider/适配器没有
-    提供可确认的正常结束信号。两类情况都不应把已有文本直接标记为最终回答，提示内容
-    要求模型从已有输出之后继续，避免重复已完成部分。
+    ``length`` 类原因（``Constant.Workflow.CONTINUATION_FINISH_REASONS``）只表示本轮达到输出
+    上限，已有文本本身可被模型自然延续，因此**不注入提示**（返回 ``None``）；缺失或未知原因
+    表示 Provider/适配器没有提供可确认的正常结束信号，此时必须显式追加继续提示，否则模型无
+    从得知上一轮未完成。
+
+    两类情况都不应把已有文本直接标记为最终回答，是否注入提示由本函数的返回值决定。
 
     参数:
         finish_reason: 已归一化的 Provider 完成原因，可为 ``None``。
 
     返回:
-        追加到 canonical context 的 ``SystemMessage`` 文本。
+        追加到 canonical context 的 ``SystemMessage`` 文本；``length`` 类截断返回 ``None``，
+        表示本轮无需注入提示、直接由调用方经 ``continue_model`` 回到模型节点。
 
     异常:
         无。
@@ -123,8 +127,9 @@ async def _model_node(state: ReactGraphState) -> dict:
           节点统一结算并注入修复 ``SystemMessage``（排在全部 ToolMessage 之后，避免产生
           ``AIMessage(tool_calls) -> SystemMessage -> ToolMessage`` 的非法顺序）；缺失 ``id``
           的非法调用无法对齐，仅记 warning。
-        - 模型没有工具调用时，只有 Provider 明确报告正常完成原因才标记最终回答；长度截断、
-          缺失或未知完成原因会追加继续提示并通过 ``continue_model`` 回到模型节点。
+        - 模型没有工具调用时，只有 Provider 明确报告正常完成原因才标记最终回答；长度截断直接经
+          ``continue_model`` 回到模型节点由模型自行延续，缺失或未知完成原因还会额外追加一次继续
+          提示（见 ``_build_continuation_prompt``）。
 
     异常:
         RuntimeError: 超步数收口时 ``RuntimeConfig`` 未携带 run id（见 ``_finalize_max_steps``）。
@@ -370,7 +375,8 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     if finish_reason not in Constant.Workflow.NORMAL_FINISH_REASONS:
         # 已有文本不代表模型完成：例如 finish_reason=length 只说明本轮达到输出上限。
-        # AIMessage 已先落库，SystemMessage 紧跟其后作为下一模型步的显式续写指令。
+        # length 类截断不注入提示，直接回到模型节点由模型自行延续；缺失/未知完成原因才把
+        # AIMessage 之后的 SystemMessage 作为下一模型步的显式续写指令。
         continuation_prompt = _build_continuation_prompt(finish_reason)
         if continuation_prompt is not None:
             task_space.defer_system_message(
@@ -379,7 +385,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         log.warning(
             "model_node_output_requires_continuation",
             extra={
-                "msg": "模型输出没有可接受的正常完成原因，追加继续提示并回到模型节点",
+                "msg": "模型输出没有可接受的正常完成原因，回到模型节点继续",
                 "data": {
                     "step_id": step_id,
                     "run_id": rc.run.id,

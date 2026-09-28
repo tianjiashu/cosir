@@ -143,7 +143,8 @@ def is_within_cosir(path: str | Path, workspace_root: str | Path | None) -> bool
         ``True`` 表示 ``path`` 等于 ``<workspace_root>/.cosir`` 或位于其下；否则 ``False``。
 
     异常:
-        无：``OSError``（路径非法、无法解析）归一化为 ``False``。
+        无：``OSError`` 与 ``ValueError``（路径非法或无法解析，例如含 NUL 字节的路径）一律
+        归一化为 ``False``，不向调用方抛出。
 
     副作用:
         无（只解析路径字符串，不读写文件）。
@@ -155,7 +156,7 @@ def is_within_cosir(path: str | Path, workspace_root: str | Path | None) -> bool
     try:
         cosir_root = os.path.normcase(os.path.realpath(str(workspace_cosir_dir(workspace_root))))
         candidate = os.path.normcase(os.path.realpath(text))
-    except OSError:
+    except (OSError, ValueError):
         return False
     return candidate == cosir_root or candidate.startswith(cosir_root + os.sep)
 

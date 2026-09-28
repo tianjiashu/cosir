@@ -79,11 +79,14 @@ class ApplyPatchTool(HandlerBase):
     """
 
     name = TOOL_APPLY_PATCH
-    description = "Apply a Git-style unified diff to modify the contents of existing UTF-8 text files inside "
-    "the active workspace. It only changes existing files: it cannot create, delete, or move "
-    "files, so use 'write_file' to create or replace a whole file, 'delete_file' to delete one, "
-    "and 'move_file' to move or rename one. The 'patch' parameter holds the diff text; its "
-    "description defines the accepted format."
+    description = (
+        "Apply a Git-style unified diff to modify the contents of existing UTF-8 "
+        "text files inside the active workspace. It only changes existing files: "
+        "it cannot create, delete, or move files, so use 'write_file' to create or "
+        "replace a whole file, 'delete_file' to delete one, and 'move_file' to move "
+        "or rename one. The 'patch' parameter holds the diff text; its description "
+        "defines the accepted format."
+    )
     permission = "file_write"
     args_model = ApplyPatchArgs
     timeout_seconds = 30.0
