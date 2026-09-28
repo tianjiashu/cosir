@@ -12,7 +12,7 @@
   E. ``app.utils.cosir_paths`` 可独立导入且 ``system_cosir_dir`` 读 ``paths.DATA_DIR``。
   F. ``app.storage.store_engines`` 的 ``init_storage`` / ``checkpoint_path`` 使用 ``paths`` 常量、
      路径变化后切换引擎、并在结束时复位避免污染。
-  G. 边界：``CODING_AGENT_DATA_DIR`` 为空串 / 纯空白（均按未设置回落仓库根）/ 相对路径的处理。
+  G. 边界：``CODING_AGENT_DATA_DIR`` 为空串 / 纯空白（均按未设置回落平台默认根）/ 相对路径的处理。
   H. 测试灵敏度自证（运行期内存突变，不落盘、不改生产文件）。
   I. ``paths`` 内部契约：推导表 ``_DERIVERS`` 与 ``__all__`` 同源、``_env_path`` 归一化、
      ``override`` 原子性与类型校验、脏 globals 复位。
@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -38,26 +39,32 @@ def _reset_paths() -> None:
     paths.reset()
 
 
+def _expected_default_data_dir() -> Path:
+    """返回当前平台未注入环境变量时的数据根预期。"""
+
+    return Path.home() if sys.platform in {"darwin", "win32"} else paths.repository_root()
+
+
 # ---------------------------------------------------------------------------
 # A. 默认推导契约
 # ---------------------------------------------------------------------------
 def test_default_constants_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 目的：未设环境变量时四个常量按「仓库根 + 固定子路径」推导。
+    # 目的：未设环境变量时四个常量按平台默认数据根和固定子路径推导。
     # 潜在缺陷：硬编码/相对路径/错拼文件名。
     monkeypatch.delenv("CODING_AGENT_DATA_DIR", raising=False)
     monkeypatch.delenv("CODING_AGENT_LOG_DIR", raising=False)
     try:
         paths.reset()
-        repo_root = paths.repository_root()
-        assert repo_root == paths.DATA_DIR
+        data_root = _expected_default_data_dir()
+        assert data_root == paths.DATA_DIR
         assert paths.DATA_DIR.is_absolute()
-        assert repo_root / ".cosir" / "logs" == paths.LOG_DIR
-        assert repo_root / ".cosir" / "storage" / "app.sqlite3" == paths.DATABASE_FILE
+        assert data_root / ".cosir" / "logs" == paths.LOG_DIR
+        assert data_root / ".cosir" / "storage" / "app.sqlite3" == paths.DATABASE_FILE
         assert (
-            repo_root / ".cosir" / "storage" / "langgraph_checkpoints.sqlite"
+            data_root / ".cosir" / "storage" / "langgraph_checkpoints.sqlite"
             == paths.CHECKPOINT_FILE
         )
-        assert repo_root / ".cosir" / "runtime" == paths.RUNTIME_DIR
+        assert data_root / ".cosir" / "runtime" == paths.RUNTIME_DIR
     finally:
         _reset_paths()
 
@@ -111,7 +118,7 @@ def test_reset_log_dir_is_always_nested_under_system_cosir(
 def test_reset_restores_after_monkeypatch_cleanup(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # 目的：monkeypatch 设置后 reset 生效，清理环境变量后再 reset 应回到仓库根。
+    # 目的：monkeypatch 设置后 reset 生效，清理环境变量后再 reset 应回到平台默认根。
     # 潜在缺陷：reset 缓存旧值或不重算。
     monkeypatch.setenv("CODING_AGENT_DATA_DIR", str(tmp_path / "d"))
     paths.reset()
@@ -120,8 +127,9 @@ def test_reset_restores_after_monkeypatch_cleanup(
     monkeypatch.delenv("CODING_AGENT_DATA_DIR", raising=False)
     monkeypatch.delenv("CODING_AGENT_LOG_DIR", raising=False)
     paths.reset()
-    assert paths.repository_root() == paths.DATA_DIR
-    assert paths.repository_root() / ".cosir" / "logs" == paths.LOG_DIR
+    data_root = _expected_default_data_dir()
+    assert data_root == paths.DATA_DIR
+    assert data_root / ".cosir" / "logs" == paths.LOG_DIR
 
 
 def test_reset_is_idempotent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -361,34 +369,36 @@ def test_init_storage_same_path_is_noop_reuse(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # G. 边界：空串 / 纯空白 DATA_DIR
 # ---------------------------------------------------------------------------
-def test_empty_data_dir_env_falls_back_to_repo_root(
+def test_empty_data_dir_env_falls_back_to_platform_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # 目的：CODING_AGENT_DATA_DIR 为空串时应回落仓库根（falsy 判定）。
+    # 目的：CODING_AGENT_DATA_DIR 为空串时应回落平台默认根（falsy 判定）。
     # 潜在缺陷：空串被当作 Path("") 落到当前目录。
     monkeypatch.setenv("CODING_AGENT_DATA_DIR", "")
     monkeypatch.delenv("CODING_AGENT_LOG_DIR", raising=False)
     try:
         paths.reset()
-        assert paths.repository_root() == paths.DATA_DIR
+        data_root = _expected_default_data_dir()
+        assert data_root == paths.DATA_DIR
         assert paths.DATA_DIR.is_absolute()
-        assert paths.repository_root() / ".cosir" / "logs" == paths.LOG_DIR
+        assert data_root / ".cosir" / "logs" == paths.LOG_DIR
     finally:
         _reset_paths()
 
 
-def test_whitespace_data_dir_env_falls_back_to_repo_root(
+def test_whitespace_data_dir_env_falls_back_to_platform_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # 目的：纯空白（"   "）按「未设置」处理并回落仓库根（env 取值先 strip）。
+    # 目的：纯空白（"   "）按「未设置」处理并回落平台默认根（env 取值先 strip）。
     # 潜在缺陷：空白被当作相对路径落到 cwd。
     monkeypatch.setenv("CODING_AGENT_DATA_DIR", "   ")
     monkeypatch.delenv("CODING_AGENT_LOG_DIR", raising=False)
     try:
         paths.reset()
-        assert paths.repository_root() == paths.DATA_DIR
+        data_root = _expected_default_data_dir()
+        assert data_root == paths.DATA_DIR
         assert paths.DATA_DIR.is_absolute()
-        assert paths.repository_root() / ".cosir" / "logs" == paths.LOG_DIR
+        assert data_root / ".cosir" / "logs" == paths.LOG_DIR
     finally:
         _reset_paths()
 
@@ -400,8 +410,9 @@ def test_reset_discards_prior_override(tmp_path: Path) -> None:
     assert tmp_path / "temp_logs" == paths.LOG_DIR
     try:
         paths.reset()
-        assert paths.repository_root() == paths.DATA_DIR
-        assert paths.repository_root() / ".cosir" / "logs" == paths.LOG_DIR
+        data_root = _expected_default_data_dir()
+        assert data_root == paths.DATA_DIR
+        assert data_root / ".cosir" / "logs" == paths.LOG_DIR
     finally:
         _reset_paths()
 
@@ -463,7 +474,7 @@ def test_sensitivity_to_data_dir_mutation_runtime(
     monkeypatch.delenv("CODING_AGENT_LOG_DIR", raising=False)
     try:
         paths.reset()
-        expected = paths.repository_root() / ".cosir" / "logs"
+        expected = _expected_default_data_dir() / ".cosir" / "logs"
         assert expected == paths.LOG_DIR
         # 注入错误的 LOG_DIR：正确断言必须失败（此处反向验证断言确实在比较）。
         paths.override(LOG_DIR=tmp_path / "wrong")

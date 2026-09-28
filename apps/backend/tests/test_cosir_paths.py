@@ -90,3 +90,36 @@ def test_paths_reset_derives_data_dir_from_env(
     finally:
         monkeypatch.delenv("CODING_AGENT_DATA_DIR", raising=False)
         paths.reset()
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_paths_reset_without_data_dir_uses_user_home_on_desktop_platforms(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    platform: str,
+) -> None:
+    """桌面平台未注入数据根时，系统级 ``.cosir`` 应锚定当前用户主目录。"""
+
+    monkeypatch.delenv("CODING_AGENT_DATA_DIR", raising=False)
+    monkeypatch.setattr(paths.sys, "platform", platform)
+    monkeypatch.setattr(paths.Path, "home", lambda: tmp_path / "user")
+    try:
+        paths.reset()
+        assert tmp_path / "user" == paths.DATA_DIR
+        assert tmp_path / "user" / ".cosir" == cosir_paths.system_cosir_dir()
+    finally:
+        paths.reset()
+
+
+def test_paths_reset_without_data_dir_uses_repository_root_on_other_platforms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非桌面平台未注入数据根时继续回落到仓库根目录。"""
+
+    monkeypatch.delenv("CODING_AGENT_DATA_DIR", raising=False)
+    monkeypatch.setattr(paths.sys, "platform", "linux")
+    try:
+        paths.reset()
+        assert paths.repository_root() == paths.DATA_DIR
+    finally:
+        paths.reset()

@@ -21,6 +21,7 @@ import contextlib
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -678,17 +679,21 @@ def test_paths_reset_derives_data_dir_from_env(
         paths.reset()
 
 
-def test_paths_reset_without_data_dir_falls_back_to_repo_root(
+def test_paths_reset_without_data_dir_uses_platform_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """未设置 CODING_AGENT_DATA_DIR 时 DATA_DIR 回落仓库根，系统 `.cosir` = 仓库根/".cosir"。"""
+    """未设置 CODING_AGENT_DATA_DIR 时按平台选择用户主目录或仓库根。"""
 
     monkeypatch.delenv("CODING_AGENT_DATA_DIR", raising=False)
     try:
         paths.reset()
-        repo_root = paths.repository_root()
-        assert repo_root == paths.DATA_DIR
-        assert cosir_paths.system_cosir_dir() == repo_root / cosir_paths.COSIR_DIR_NAME
+        if sys.platform in {"darwin", "win32"}:
+            assert paths.Path.home() == paths.DATA_DIR
+            assert cosir_paths.system_cosir_dir() == paths.Path.home() / cosir_paths.COSIR_DIR_NAME
+        else:
+            repo_root = paths.repository_root()
+            assert repo_root == paths.DATA_DIR
+            assert cosir_paths.system_cosir_dir() == repo_root / cosir_paths.COSIR_DIR_NAME
     finally:
         paths.reset()
 

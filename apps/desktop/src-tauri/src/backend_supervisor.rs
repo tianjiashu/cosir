@@ -11,7 +11,7 @@ use crate::backend_process::{
 };
 use crate::backend_readiness::wait_for_backend;
 use crate::backend_runtime::resolve_backend_runtime;
-use crate::data_paths::system_cosir_dir as resolve_system_cosir_dir;
+use crate::data_paths::{system_cosir_dir as resolve_system_cosir_dir, system_data_root};
 use crate::desktop_log::append_json_line;
 use crate::log_paths::app_log_dir;
 
@@ -134,10 +134,7 @@ impl BackendSupervisor {
         {
             return Ok(());
         }
-        let app_data_dir = app
-            .path()
-            .app_data_dir()
-            .map_err(|error| format!("无法解析 Cosir 数据目录：{error}"))?;
+        let data_root = system_data_root(app)?;
         let system_cosir_dir = resolve_system_cosir_dir(app)?;
         let runtime_dir = system_cosir_dir.join("runtime");
         let log_dir = app_log_dir(app)?;
@@ -183,7 +180,7 @@ impl BackendSupervisor {
                 bootstate_file: &bootstate,
                 launch_mode: backend_runtime.launch_mode(),
                 uv_cache_dir: backend_runtime.uv_cache_dir(),
-                data_dir: Some(app_data_dir.as_path()),
+                data_dir: Some(data_root.as_path()),
                 terminal_worker: backend_runtime.terminal_worker(),
                 log_file: &log_file,
             }) {

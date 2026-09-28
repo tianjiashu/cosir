@@ -1,8 +1,9 @@
 """进程固定路径常量。
 
-本模块是后端进程固定路径的唯一事实源。桌面宿主把系统级数据根
-``app_data_dir()`` 通过 ``CODING_AGENT_DATA_DIR`` 注入；后端再把所有运行期数据统一放入
-该根目录下的 ``.cosir`` 子目录。直接运行后端时，数据根回落到仓库根目录，便于开发和测试。
+本模块是后端进程固定路径的唯一事实源。桌面宿主把系统级数据根通过
+``CODING_AGENT_DATA_DIR`` 注入；macOS/Windows 使用用户主目录，后端再把所有运行期数据统一
+放入该根目录下的 ``.cosir`` 子目录。直接运行后端时，macOS/Windows 同样使用用户主目录，
+其他平台回落到仓库根目录。
 
 路径布局：
 
@@ -19,6 +20,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Final
@@ -59,11 +61,17 @@ def _env_path(name: str) -> Path | None:
 def _resolve_data_dir() -> Path:
     """解析系统应用数据根。
 
-    桌面模式使用 Tauri 注入的 ``CODING_AGENT_DATA_DIR``；直接运行后端时使用仓库根目录。
-    ``.cosir`` 子目录由本模块统一追加，不允许日志、数据库或 checkpoint 各自选择根目录。
+    桌面模式使用 Tauri 注入的 ``CODING_AGENT_DATA_DIR``；直接运行后端时，macOS 与
+    Windows 使用当前用户主目录，其他平台使用仓库根目录。``.cosir`` 子目录由本模块
+    统一追加，不允许日志、数据库或 checkpoint 各自选择根目录。
     """
 
-    return _env_path("CODING_AGENT_DATA_DIR") or repository_root()
+    configured = _env_path("CODING_AGENT_DATA_DIR")
+    if configured is not None:
+        return configured
+    if sys.platform in {"darwin", "win32"}:
+        return Path.home()
+    return repository_root()
 
 
 def _data_dir(data_dir: Path) -> Path:
