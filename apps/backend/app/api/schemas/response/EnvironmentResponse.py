@@ -27,7 +27,6 @@ class EnvironmentFieldResponse(BaseModel):
     type: Literal["string", "boolean"]
     component: Literal["input", "password", "checkbox", "select"]
     label: str
-    description: str
     secret: bool
     default: str | bool | None
     value: str | bool | None
@@ -55,7 +54,7 @@ class EnvironmentGroupResponse(BaseModel):
 class EnvironmentResponse(BaseModel):
     """环境配置读取与更新响应。
 
-    分组、字段名称、中文说明和控件类型均由后端返回；响应不包含 version 等并发控制字段。
+    分组、字段名称和控件类型均由后端返回；响应不包含 version 等并发控制字段。
     保存后由后端就地把新配置重载进内存（见 ``EnvironmentConfigurationService``），因此没有
     「需要重启才生效」的字段。
     """

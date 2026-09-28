@@ -4,6 +4,7 @@ import { Trash2Icon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import type { EnvironmentField, EnvironmentGroup } from "@/lib/api/configuration";
 
 export type EnvironmentFieldValue = string | boolean | undefined;
@@ -33,27 +34,33 @@ export function EnvironmentFieldControl({
   const enabled = value === true || value === "true";
 
   return (
-    <div className="border-border/70 bg-card/70 rounded-xl border px-3 py-3 shadow-sm">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
-        <div className="min-w-0 shrink-0 sm:w-64">
-          <label htmlFor={inputId} className="block text-sm font-medium">
-            {field.label}
-          </label>
-          <p className="text-muted-foreground mt-0.5 font-mono text-[10px]">{field.name}</p>
+    <div className="px-4 py-4">
+      <div className="grid gap-3 sm:grid-cols-[minmax(12rem,16rem)_minmax(0,1fr)] sm:items-center sm:gap-6">
+        <div className="min-w-0">
+          {field.component === "checkbox" ? (
+            <span id={`${inputId}-label`} className="block text-sm font-medium">
+              {field.label}
+            </span>
+          ) : (
+            <label htmlFor={inputId} className="block text-sm font-medium">
+              {field.label}
+            </label>
+          )}
+          <span className="text-muted-foreground mt-1 block truncate font-mono text-[11px]">
+            {field.name}
+          </span>
         </div>
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {field.component === "checkbox" ? (
-            <label className="border-input flex h-9 w-full cursor-pointer items-center gap-2 rounded-lg border px-3 text-sm">
-              <input
+            <div className="flex h-9 w-full items-center justify-between rounded-lg border border-transparent px-1 text-sm">
+              <span className="text-muted-foreground">{enabled ? "已启用" : "未启用"}</span>
+              <Switch
                 id={inputId}
-                type="checkbox"
                 checked={enabled}
-                onChange={onToggle}
-                aria-label={field.label}
-                className="accent-primary size-4"
+                onClick={onToggle}
+                aria-labelledby={`${inputId}-label`}
               />
-              <span>{enabled ? "已启用" : "未启用"}</span>
-            </label>
+            </div>
           ) : field.component === "select" ? (
             <select
               id={inputId}
@@ -94,7 +101,6 @@ export function EnvironmentFieldControl({
           )}
         </div>
       </div>
-      <p className="text-muted-foreground mt-2 text-xs sm:ml-68">{field.description}</p>
     </div>
   );
 }
@@ -121,16 +127,20 @@ export function EnvironmentConfigurationForm({
   onClear,
 }: EnvironmentConfigurationFormProps) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {groups.map((group) => (
-        <section key={group.id} aria-labelledby={`environment-group-${group.id}`} className="space-y-3">
-          <div>
+        <section
+          key={group.id}
+          aria-labelledby={`environment-group-${group.id}`}
+          className="border-border/70 bg-card/60 overflow-hidden rounded-2xl border shadow-sm"
+        >
+          <header className="border-border/70 bg-muted/20 border-b px-4 py-3">
             <h3 id={`environment-group-${group.id}`} className="font-medium">
               {group.label}
             </h3>
             <p className="text-muted-foreground mt-1 text-xs">{group.description}</p>
-          </div>
-          <div className="space-y-2">
+          </header>
+          <div className="divide-border/70 divide-y">
             {group.fields.map((field) => (
               <EnvironmentFieldControl
                 key={field.name}

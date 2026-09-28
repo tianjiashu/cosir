@@ -103,7 +103,6 @@ class EnvironmentConfigurationService:
                     "component": field.component,
                     "group_id": field.group_id,
                     "label": field.label,
-                    "description": field.description,
                     "secret": field.secret,
                     "default": None if field.secret else field.default,
                     "value": None if field.secret else process_value,

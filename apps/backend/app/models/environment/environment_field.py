@@ -18,7 +18,6 @@ class EnvironmentField:
     component: Literal["input", "password", "checkbox", "select"]
     group_id: str
     label: str
-    description: str
     secret: bool
     default: str | bool | None
     options: tuple[tuple[str, str], ...] = ()

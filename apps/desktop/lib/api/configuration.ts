@@ -54,7 +54,6 @@ export type EnvironmentField = {
   type: "string" | "boolean";
   component: "input" | "password" | "checkbox" | "select";
   label: string;
-  description: string;
   secret: boolean;
   default: string | boolean | null;
   value: string | boolean | null;
