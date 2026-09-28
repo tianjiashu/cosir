@@ -165,11 +165,11 @@ class ReactLikeWorkflow(AgentWorkflow):
 
     @staticmethod
     def _settle_failed_run(
-        operations: WorkflowOperations,
-        end_reason: str,
-        *,
-        usage_stats: ConversationRunUsageStats | None = None,
-        final_output: str | None = None,
+            operations: WorkflowOperations,
+            end_reason: str,
+            *,
+            usage_stats: ConversationRunUsageStats | None = None,
+            final_output: str | None = None,
     ) -> None:
         """把本轮的 running Run 落定为 failed 终态。
 
@@ -233,11 +233,11 @@ class ReactLikeWorkflow(AgentWorkflow):
         )
 
     async def run(
-        self,
-        operations: WorkflowOperations,
-        callbacks: list | None = None,
-        langfuse_trace_id: str | None = None,
-        execution_mode: ExecutionMode = "fresh",
+            self,
+            operations: WorkflowOperations,
+            callbacks: list | None = None,
+            langfuse_trace_id: str | None = None,
+            execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """执行一个任务，并在异常逃逸时把 Run 落定为 failed 终态。
 
@@ -273,11 +273,11 @@ class ReactLikeWorkflow(AgentWorkflow):
             raise
 
     async def _run_graph(
-        self,
-        operations: WorkflowOperations,
-        callbacks: list | None = None,
-        langfuse_trace_id: str | None = None,
-        execution_mode: ExecutionMode = "fresh",
+            self,
+            operations: WorkflowOperations,
+            callbacks: list | None = None,
+            langfuse_trace_id: str | None = None,
+            execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """驱动已编译 graph 执行一次任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -351,7 +351,8 @@ class ReactLikeWorkflow(AgentWorkflow):
         try:
             if len(tool_schemas) > 0:
                 bound_model = (
-                    base_model.bind_tools(tool_schemas, strict=True) if tool_schemas else base_model
+                    base_model.bind_tools(tool_schemas, strict=True,
+                                          parallel_tool_calls=True) if tool_schemas else base_model
                 )
             else:
                 bound_model = base_model
@@ -484,9 +485,9 @@ class ReactLikeWorkflow(AgentWorkflow):
                 )
             try:
                 async for mode, value in graph.astream(
-                    input_state,
-                    config,
-                    stream_mode=["values", "custom"],
+                        input_state,
+                        config,
+                        stream_mode=["values", "custom"],
                 ):
                     # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
                     # 统一写入 snapshot。两者都不是 Agent context 的来源。
@@ -521,12 +522,12 @@ class ReactLikeWorkflow(AgentWorkflow):
                 )
 
     async def _finalize_terminal_checkpoint(
-        self,
-        graph: Any,
-        config: dict[str, Any],
-        run_id: int,
-        *,
-        reason: str,
+            self,
+            graph: Any,
+            config: dict[str, Any],
+            run_id: int,
+            *,
+            reason: str,
     ) -> bool:
         """关闭 Run 的 terminal 并把 checkpoint 中的活跃元数据收敛为终态。
 
@@ -564,10 +565,10 @@ class ReactLikeWorkflow(AgentWorkflow):
             return False
 
     async def recover_orphaned_terminal_checkpoints(
-        self,
-        runs: Iterable[object],
-        *,
-        reason: str = "runtime_restarted",
+            self,
+            runs: Iterable[object],
+            *,
+            reason: str = "runtime_restarted",
     ) -> int:
         """扫描最近 Run 的 checkpoint 并关闭遗留的活跃 terminal 元数据。
 

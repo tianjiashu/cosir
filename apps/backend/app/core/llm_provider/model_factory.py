@@ -35,41 +35,6 @@ __all__ = [
     "resolve_chat_model",
 ]
 
-
-def _resolve_effort(
-    model_name: str,
-    requested_effort: str,
-    effort_cap: ReasoningEffortCapability,
-) -> str | None:
-    """把内部推理强度档位翻译成厂商原始档位。
-
-    内部档位（``low`` / ``high`` / ``max``）需经模型 ``effort_map`` 翻译成厂商原始档位
-    （不同厂商档位取值不同，如 ``qwen-3.8-max`` 的 ``high``->``medium``、``max``->``xhigh``）
-    再透传。未命中映射（模型声明支持推理但不支持该具体档位）返回 None，由调用方跳过注入。
-
-    参数:
-        model_name: 模型名（仅用于日志上下文，便于排查未命中）。
-        requested_effort: 调用方请求的内部档位（已确认非 None）。
-        effort_cap: 该模型的推理强度能力元数据（含 effort_map）。
-
-    返回:
-        翻译后的厂商原始档位字符串；未命中映射时返回 None。
-    """
-    resolved = effort_cap.effort_map.get(requested_effort)
-    if resolved is None:
-        log.warning(
-            "llm_reasoning_effort_unmapped",
-            extra={
-                "msg": "推理强度档位无对应厂商映射，跳过注入",
-                "data": {
-                    "model": model_name,
-                    "requested_effort": requested_effort,
-                },
-            },
-        )
-    return resolved
-
-
 def build_chat_model(
     provider_id: int,
     model_name: str,
@@ -115,6 +80,7 @@ def build_chat_model(
 
     provider = get_provider_service().get_provider(provider_id)
     provider_capability: ProviderCapability = ProviderCapability.get_capability(provider.name)
+    enable_thinking = model_settings.thinking if model_settings.thinking is not None else True
 
     if model_name not in provider_capability.models:
         raise ValueError(f"model_name: {model_name} not in provider_capability.models")
@@ -170,9 +136,16 @@ def build_chat_model(
     )
 
 
-    #千问reasoning_content需要在extra_body中传递reasoning_content
-    extra_body = provider_capability.extra_body or None
+
+    extra_body = {}
+    # 千问reasoning_content需要在extra_body中传递reasoning_content
     extra_body["reasoning_content"] = resolved_effort
+    # deepseek thinking 需要在extra_body中传递thinking
+    extra_body["thinking"] = {"type": "enabled" if enable_thinking else "disabled"}
+    #千问 开启思考
+    extra_body["enable_thinking"] = enable_thinking
+    #千问【多轮对话中传递思考过程】
+    extra_body["preserve_thinking"] = enable_thinking
 
     return chat_model_class(
         model=model_name,
@@ -181,13 +154,13 @@ def build_chat_model(
         api_key=chat_api_key,
         base_url=base_url,
         # None 表示未覆盖，沿用系统默认的流式行为；False 才是显式关闭。
-        streaming=model_settings.stream if model_settings.stream is not None else True,
+        streaming=True,
         http_client=http_client,
         http_async_client=http_async_client,
         stream_usage=True,
         max_retries=Constant.LLM.MAX_RETRIES,
         timeout=Constant.LLM.REQUEST_TIMEOUT_SECONDS,
-        extra_body=provider_capability.extra_body or None,
+        extra_body=extra_body,
         disabled_params=provider_capability.disabled_params or None,
         seed=Constant.LLM.SEED,
         temperature=model_settings.temperature,
@@ -227,7 +200,7 @@ def resolve_chat_model(
         raise ValueError("agent_profile is required")
     if run is None:
         raise ValueError("run is required")
-    model_settings: ModelSettings = replace(agent_profile.model_settings)
+    model_settings: ModelSettings = agent_profile.model_settings
     model_name = agent_profile.model_name
     provider_id = agent_profile.provider_id
     if run.model_name is not None:
