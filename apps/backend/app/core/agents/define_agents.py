@@ -85,6 +85,7 @@ def general_child_agent() -> AgentProfile:
             "General-purpose child agent for a focused task that does not fit a more specialized "
             "agent. Choose this for bounded implementation, investigation, or analysis work."
         ),
+        #不可以使用子Agent、可交互终端tool
         allowed_tools= [
             TOOL_READ_FILE,
             TOOL_WRITE_FILE,
