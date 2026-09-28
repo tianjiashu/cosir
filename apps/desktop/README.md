@@ -14,7 +14,10 @@ npm install
 npm run tauri:dev
 ```
 
-The Tauri host starts the Vite development server, then starts the Python backend.
+The development entry builds the root Cargo workspace's Terminal Worker first,
+injects its absolute path into the Tauri process, then starts Vite and the Python
+backend. Missing worker artifacts fail startup instead of silently disabling the
+terminal capability.
 For browser-only UI work, set `VITE_BACKEND_URL` and run `npm run dev`.
 
 ## Build
@@ -28,10 +31,13 @@ desktop process boundary is Tauri → Python/FastAPI; application data and canon
 conversation state remain owned by the backend storage layer.
 
 For a desktop bundle, `npm run tauri:build` runs `build:bundle` first. That command
-builds the platform-specific Rust Terminal Worker in release mode and stages it at
+builds the platform-specific Rust Terminal Worker from the root Cargo workspace
+in release mode and stages it at
 `target/resources/terminal-worker/`; the Python backend is staged under
 `target/resources/backend/`, and Tauri copies both directories into the application
-resources. `npm run test:terminal-worker-bundle` verifies the staged or
+resources. All Rust and staging scripts use the repository-level `target/` as the
+single Cargo target directory, even when the caller exports `CARGO_TARGET_DIR`.
+`npm run test:terminal-worker-bundle` verifies the staged or
 installed resource by starting it through the stdio protocol. Set
 `COSIR_TERMINAL_VERIFY_PACKAGED=true` and `COSIR_TERMINAL_RESOURCE_DIR` to an
 installed bundle's resource directory when verifying an actual packaged

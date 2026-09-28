@@ -10,17 +10,17 @@ pub enum BackendRuntime {
         launcher: PathBuf,
         backend_dir: PathBuf,
         cache_dir: PathBuf,
-        terminal_worker: Option<PathBuf>,
+        terminal_worker: PathBuf,
     },
     Interpreter {
         launcher: PathBuf,
         backend_dir: PathBuf,
-        terminal_worker: Option<PathBuf>,
+        terminal_worker: PathBuf,
     },
     FrozenExecutable {
         launcher: PathBuf,
         backend_dir: PathBuf,
-        terminal_worker: Option<PathBuf>,
+        terminal_worker: PathBuf,
     },
 }
 
@@ -56,7 +56,7 @@ impl BackendRuntime {
         }
     }
 
-    pub fn terminal_worker(&self) -> Option<&Path> {
+    pub fn terminal_worker(&self) -> &Path {
         match self {
             Self::UvProject {
                 terminal_worker, ..
@@ -66,7 +66,7 @@ impl BackendRuntime {
             }
             | Self::FrozenExecutable {
                 terminal_worker, ..
-            } => terminal_worker.as_deref(),
+            } => terminal_worker,
         }
     }
 }
@@ -80,11 +80,12 @@ pub fn resolve_backend_runtime(
         let backend_dir = std::env::var_os("COSIR_BACKEND_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(default_backend_dir);
+        let terminal_worker = development_terminal_worker()?;
         if let Some(launcher) = std::env::var_os("COSIR_BACKEND_PYTHON").map(PathBuf::from) {
             return Ok(BackendRuntime::Interpreter {
                 launcher,
                 backend_dir,
-                terminal_worker: development_terminal_worker(),
+                terminal_worker,
             });
         }
         if std::process::Command::new("uv")
@@ -110,7 +111,7 @@ pub fn resolve_backend_runtime(
             launcher: PathBuf::from("uv"),
             backend_dir,
             cache_dir,
-            terminal_worker: development_terminal_worker(),
+            terminal_worker,
         });
     }
 
@@ -118,7 +119,7 @@ pub fn resolve_backend_runtime(
         .path()
         .resource_dir()
         .map_err(|error| format!("无法解析随应用交付的后端运行时目录：{error}"))?;
-    let backend_dir = resource_dir.join("backend");
+    let backend_dir = resource_dir.join("app-resources").join("backend");
     if !backend_dir.is_dir() {
         return Err(format!(
             "随应用交付的后端运行目录不存在：{}",
@@ -142,7 +143,7 @@ pub fn resolve_backend_runtime(
     Ok(BackendRuntime::FrozenExecutable {
         launcher,
         backend_dir,
-        terminal_worker: Some(terminal_worker),
+        terminal_worker,
     })
 }
 
@@ -176,30 +177,31 @@ fn terminal_worker_filename() -> &'static str {
     }
 }
 
-/// 解析开发模式下可用的 Terminal Worker 可执行文件。
+/// 读取开发编排器注入的 Terminal Worker 路径并确认产物存在。
 ///
-/// 优先使用 `CODING_AGENT_TERMINAL_WORKER` 环境变量；否则回退到仓库统一的
-/// Cargo 构建目录 `target/debug`（由仓库根 `.cargo/config.toml` 的
-/// `target-dir` 指定），而不是各 crate 目录下的 `apps/terminal-worker/target`。
+/// 开发模式不再根据当前工作目录、crate 目录或历史 target 目录猜测路径；
+/// 唯一合法来源是桌面开发编排器设置的 ``CODING_AGENT_TERMINAL_WORKER``。
+/// 路径不存在时直接阻止后端启动，避免进入没有终端能力的半可用状态。
 ///
-/// 候选文件不存在时返回 `None`，由调用方按“无 Terminal Worker”降级处理，
-/// 不会中断后端启动。
-fn development_terminal_worker() -> Option<PathBuf> {
-    if let Some(configured) = std::env::var_os("CODING_AGENT_TERMINAL_WORKER") {
-        return Some(PathBuf::from(configured));
+/// 返回：已存在的 Worker 可执行文件路径。
+///
+/// 异常：环境变量缺失或路径不是文件时返回启动错误，由 supervisor 呈现给桌面层。
+fn development_terminal_worker() -> Result<PathBuf, String> {
+    let configured = std::env::var_os("CODING_AGENT_TERMINAL_WORKER")
+        .ok_or_else(|| "开发模式未注入 CODING_AGENT_TERMINAL_WORKER".to_string())?;
+    let worker = PathBuf::from(configured);
+    if !worker.is_file() {
+        return Err(format!(
+            "开发模式 Terminal Worker 不存在：{}",
+            worker.display()
+        ));
     }
-    let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("..")
-        .join("target")
-        .join("debug")
-        .join(terminal_worker_filename());
-    candidate.is_file().then_some(candidate)
+    Ok(worker)
 }
 
 fn packaged_terminal_worker(resource_dir: &Path) -> PathBuf {
     resource_dir
+        .join("app-resources")
         .join("terminal-worker")
         .join(terminal_worker_filename())
 }
@@ -215,7 +217,7 @@ mod tests {
             launcher: PathBuf::from("uv"),
             backend_dir: PathBuf::from("backend"),
             cache_dir: PathBuf::from("runtime/uv-cache"),
-            terminal_worker: None,
+            terminal_worker: PathBuf::from("terminal-worker"),
         };
         assert_eq!(
             runtime.uv_cache_dir(),
@@ -238,7 +240,7 @@ mod tests {
         let runtime = BackendRuntime::FrozenExecutable {
             launcher: PathBuf::from("resources/backend/cosir-backend.exe"),
             backend_dir: PathBuf::from("resources/backend"),
-            terminal_worker: None,
+            terminal_worker: PathBuf::from("resources/terminal-worker/terminal-worker"),
         };
         assert_eq!(
             runtime.launch_mode(),

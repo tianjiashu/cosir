@@ -35,8 +35,8 @@
       "icons/128x128@2x.png"
     ],
     "resources": {
-      "../../../target/resources/terminal-worker/": "terminal-worker/",
-      "../../../target/resources/backend/": "backend/"
+      "../../../target/resources/terminal-worker/": "app-resources/terminal-worker/",
+      "../../../target/resources/backend/": "app-resources/backend/"
     }
   }
 }

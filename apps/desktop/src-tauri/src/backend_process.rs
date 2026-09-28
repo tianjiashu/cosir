@@ -26,7 +26,7 @@ pub struct BackendLaunchConfig<'a> {
     pub launch_mode: BackendLaunchMode,
     pub uv_cache_dir: Option<&'a Path>,
     pub data_dir: Option<&'a Path>,
-    pub terminal_worker: Option<&'a Path>,
+    pub terminal_worker: &'a Path,
     pub log_file: &'a Path,
 }
 
@@ -63,9 +63,7 @@ pub fn spawn_backend(config: &BackendLaunchConfig<'_>) -> Result<BackendProcess,
     if let Some(cache_dir) = config.uv_cache_dir {
         command.env("UV_CACHE_DIR", cache_dir);
     }
-    if let Some(worker) = config.terminal_worker {
-        command.env("CODING_AGENT_TERMINAL_WORKER", worker);
-    }
+    command.env("CODING_AGENT_TERMINAL_WORKER", config.terminal_worker);
     if let Some(data_dir) = config.data_dir {
         command.env("CODING_AGENT_DATA_DIR", data_dir);
     }

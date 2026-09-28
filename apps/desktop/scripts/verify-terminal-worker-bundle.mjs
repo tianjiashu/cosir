@@ -3,36 +3,32 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { projectTargetDirectory, targetUsesWindowsExecutable } from "./cargo-target.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(desktopRoot, "..", "..");
-const executableName = process.platform === "win32" ? "terminal-worker.exe" : "terminal-worker";
+const targetDirectory = projectTargetDirectory(repositoryRoot);
+const targetTriple = (
+  process.env.COSIR_TERMINAL_WORKER_TARGET || process.env.TAURI_ENV_TARGET_TRIPLE || ""
+).trim();
+const executableName = targetUsesWindowsExecutable(targetTriple)
+  ? "terminal-worker.exe"
+  : "terminal-worker";
 const instanceId = `bundle-smoke-${Date.now()}`;
 const verifyPackaged = process.env.COSIR_TERMINAL_VERIFY_PACKAGED === "true";
 
-const packagedResourceRoots = [
-  process.env.COSIR_TERMINAL_RESOURCE_DIR,
-  path.join(repositoryRoot, "target", "resources"),
-  path.join(repositoryRoot, "target"),
-  process.env.COSIR_TERMINAL_WORKER_TARGET &&
-    path.join(
-      repositoryRoot,
-      "target",
-      process.env.COSIR_TERMINAL_WORKER_TARGET,
-      "debug",
-    ),
-  process.env.COSIR_TERMINAL_WORKER_TARGET &&
-    path.join(
-      repositoryRoot,
-      "target",
-      process.env.COSIR_TERMINAL_WORKER_TARGET,
-      "release",
-    ),
-];
-const candidateResourceRoots = (verifyPackaged
-  ? packagedResourceRoots
-  : [process.env.COSIR_TERMINAL_RESOURCE_DIR, path.join(repositoryRoot, "target", "resources")]
-).filter(Boolean).map((candidate) => path.resolve(candidate));
+if (verifyPackaged && !process.env.COSIR_TERMINAL_RESOURCE_DIR) {
+  throw new Error(
+    "打包资源验证必须通过 COSIR_TERMINAL_RESOURCE_DIR 显式指定安装包资源目录",
+  );
+}
+const candidateResourceRoots = (
+  verifyPackaged
+    ? [process.env.COSIR_TERMINAL_RESOURCE_DIR]
+    : [process.env.COSIR_TERMINAL_RESOURCE_DIR, path.join(targetDirectory, "resources")]
+)
+  .filter(Boolean)
+  .map((candidate) => path.resolve(candidate));
 const resourceRoot = findResourceRoot(candidateResourceRoots);
 assert.ok(resourceRoot, `未找到 Tauri Terminal Worker resource，检查路径：${candidateResourceRoots.join(", ")}`);
 const workerPath = path.join(resourceRoot, "terminal-worker", executableName);

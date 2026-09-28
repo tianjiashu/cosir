@@ -131,7 +131,7 @@ if (-not (Test-Path (Join-Path $desktopRoot "node_modules"))) {
     throw "apps/desktop/node_modules was not found. Run npm install from the repository root first."
 }
 
-Write-Step "Starting Tauri; Vite and the local FastAPI backend are managed by the app lifecycle."
+Write-Step "Starting Tauri; the development Terminal Worker, Vite, and local FastAPI backend are managed by the app lifecycle."
 Push-Location $desktopRoot
 try {
     & $npm.Source run tauri:dev

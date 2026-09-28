@@ -1,36 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { projectTargetDirectory, targetUsesWindowsExecutable } from "./cargo-target.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(desktopRoot, "..", "..");
-const manifestPath = path.join(desktopRoot, "src-tauri", "Cargo.toml");
-const artifactsRoot = path.join(repositoryRoot, "target");
+const artifactsRoot = projectTargetDirectory(repositoryRoot);
+const targetTriple = (
+  process.env.COSIR_TERMINAL_WORKER_TARGET || process.env.TAURI_ENV_TARGET_TRIPLE || ""
+).trim();
 const resourcesRoot = path.join(artifactsRoot, "resources");
 const portableRoot = path.join(artifactsRoot, "Cosir-portable");
-const appExecutable = process.platform === "win32" ? "Cosir.exe" : "Cosir";
-const sourceExecutableName = process.platform === "win32" ? "cosir-desktop.exe" : "cosir-desktop";
+const targetIsWindows = targetUsesWindowsExecutable(targetTriple);
+const appExecutable = targetIsWindows ? "Cosir.exe" : "Cosir";
+const sourceExecutableName = targetIsWindows ? "cosir-desktop.exe" : "cosir-desktop";
 
 function assertWithin(parent, candidate, label) {
   const relative = path.relative(parent, candidate);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error(`拒绝操作仓库目录之外的${label}：${candidate}`);
   }
-}
-
-function resolveCargoTargetDir() {
-  const result = spawnSync(process.platform === "win32" ? "cargo.exe" : "cargo", [
-    "metadata",
-    "--manifest-path",
-    manifestPath,
-    "--no-deps",
-    "--format-version",
-    "1",
-  ], { cwd: repositoryRoot, stdio: ["ignore", "pipe", "inherit"], windowsHide: true });
-  if (result.error) throw new Error(`无法启动 cargo metadata：${result.error.message}`);
-  if (result.status !== 0) throw new Error(`cargo metadata 失败，退出码：${result.status}`);
-  return JSON.parse(result.stdout.toString("utf-8")).target_directory;
 }
 
 function copyResourceDirectory(source, destination, label) {
@@ -44,7 +33,9 @@ function copyResourceDirectory(source, destination, label) {
   }
 }
 
-const releaseRoot = path.join(resolveCargoTargetDir(), "release");
+const releaseRoot = targetTriple
+  ? path.join(artifactsRoot, targetTriple, "release")
+  : path.join(artifactsRoot, "release");
 const sourceExecutable = path.join(releaseRoot, sourceExecutableName);
 if (!fs.existsSync(sourceExecutable)) {
   throw new Error(`未找到 Tauri 发布版程序：${sourceExecutable}`);
@@ -55,18 +46,22 @@ assertWithin(artifactsRoot, portableRoot, "便携包目录");
 fs.rmSync(portableRoot, { recursive: true, force: true });
 fs.mkdirSync(portableRoot, { recursive: true });
 fs.copyFileSync(sourceExecutable, path.join(portableRoot, appExecutable));
-copyResourceDirectory(path.join(resourcesRoot, "backend"), path.join(portableRoot, "backend"), "Python 后端");
 copyResourceDirectory(
   path.join(resourcesRoot, "terminal-worker"),
-  path.join(portableRoot, "terminal-worker"),
+  path.join(portableRoot, "app-resources", "terminal-worker"),
   "Terminal Worker",
+);
+copyResourceDirectory(
+  path.join(resourcesRoot, "backend"),
+  path.join(portableRoot, "app-resources", "backend"),
+  "Python 后端运行目录",
 );
 
 const readme = [
   "Cosir Windows portable build",
   "",
   "Double-click Cosir.exe to start the desktop app.",
-  "Keep the backend and terminal-worker folders beside Cosir.exe.",
+  "Keep the app-resources folder beside Cosir.exe.",
   "App data and SQLite databases are stored in the current Windows user data directory.",
   "",
 ].join("\r\n");

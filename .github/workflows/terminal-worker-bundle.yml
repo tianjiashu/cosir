@@ -8,6 +8,8 @@ on:
       - "apps/backend/**"
       - "apps/desktop/**"
       - "apps/terminal-worker/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/terminal-worker-bundle.yml"
   pull_request:
     branches:
@@ -16,6 +18,8 @@ on:
       - "apps/backend/**"
       - "apps/desktop/**"
       - "apps/terminal-worker/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/terminal-worker-bundle.yml"
   workflow_dispatch:
 
@@ -89,3 +93,4 @@ jobs:
         env:
           COSIR_TERMINAL_VERIFY_PACKAGED: "true"
           COSIR_TERMINAL_WORKER_TARGET: ${{ matrix.target }}
+          COSIR_TERMINAL_RESOURCE_DIR: ../../target/${{ matrix.target }}/release

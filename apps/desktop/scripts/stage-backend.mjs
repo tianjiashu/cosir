@@ -2,12 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { projectCargoEnvironment, projectTargetDirectory } from "./cargo-target.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(desktopRoot, "..", "..");
 const backendRoot = path.join(repositoryRoot, "apps", "backend");
 const packagingEnvironment = path.join(backendRoot, ".venv-packaging");
-const buildArtifactsRoot = path.join(repositoryRoot, "target");
+const buildArtifactsRoot = projectTargetDirectory(repositoryRoot);
 const distributionRoot = path.join(buildArtifactsRoot, "backend");
 const buildRoot = path.join(buildArtifactsRoot, "pyinstaller");
 const appName = "cosir-backend";
@@ -116,7 +117,7 @@ const unixPyinstallerPath = path.join(packagingEnvironment, "bin", pyinstallerEx
 const actualPyinstallerPath = process.platform === "win32" ? pyinstallerPath : unixPyinstallerPath;
 
 const syncEnvironment = {
-  ...process.env,
+  ...projectCargoEnvironment(repositoryRoot),
   UV_PROJECT_ENVIRONMENT: packagingEnvironment,
   UV_CACHE_DIR: process.env.UV_CACHE_DIR || path.join(repositoryRoot, ".uv-cache"),
 };
