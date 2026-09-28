@@ -158,6 +158,6 @@ workspace 配置有误时，当前 Run 的主 Agent 仍可运行，但工具列�
 - `apps/backend/app/core/tools/tool_handler/child_task/child_agent_send.py`：创建 follow-up child Run 前按其 workspace 校验 profile 仍可解析。
 - `apps/backend/app/core/tools/schemas/tool_runtime_dependencies.py`：为当前 Run 的委派执行携带共享 Registry；作用域由工具执行上下文提供。
 - `apps/backend/app/assistant_transport/service/conversation_task_state_rebuilder.py`：冷重建时恢复持久化 role 或按 child workspace 解析。
-- `apps/backend/app/core/agents/define_agents.py` 与 `apps/backend/app/core/context/system_prompt/`：移除配置型子 Agent 的旧事实源；保留通用子 Agent、主 Agent 和隐藏 Agent 的代码及其提示词来源。
+- `apps/backend/app/core/agents/define_agents.py` 与 `apps/backend/app/core/context/system_prompt/`：移除配置型子 Agent 的旧事实源；保留通用子 Agent、主 Agent 和隐藏 Agent 的代码及其提示词来源。（后续变更：主 Agent 系统预设改由用户文件 `<system_cosir_dir>/main_agent_system_prompt.md` 提供，未配置时主 Agent 无 `<agent_layer>`；通用子 Agent 系统预设改为 `define_agents.py` 内的代码常量，`system_prompt/` 资源目录已整体删除。）
 
 `delegate_task` 当前在 `ToolSystem.build_tool_system()` 启动装配时创建全局 `ToolDefinition`；而 `AgentRuntime._build_operations` 每个 Run 构造自己的模型工具列表，workflow 随后按该列表绑定模型工具。因此保留全局 handler/基础定义，在 Run 级列表中按 workspace 查询内存 Registry 并投影 workspace 专属副本。`DelegateTaskArgs` 的现有全局 registry validator/schema override 必须同步移除或重构，否则会与 workspace schema 冲突。

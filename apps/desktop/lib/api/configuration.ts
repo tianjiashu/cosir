@@ -45,7 +45,7 @@ export type MainAgentPromptConfiguration = {
   path: string;
   token_length: number;
   max_tokens: number;
-  source: "user_file" | "builtin_default" | "builtin_fallback" | string;
+  source: "user_file" | string;
   effective_on: "next_run";
 };
 

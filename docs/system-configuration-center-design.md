@@ -101,10 +101,11 @@ JSON 文件实际都被解析为 `CHILD`，其文件字段仍包含 `system_prom
 
 ### 2.4 主 Agent 系统提示词
 
-主 Agent prompt 的用户配置文件是 `<system_cosir_dir>/main_agent_system_prompt.md`，内置
-`app/core/context/system_prompt/main_agent.md` 只作为默认模板和无效配置的安全回退。配置 service
-负责空文本、token 预算、路径边界和原子写入校验；`SystemPromptBuilder` 继续把有效正文放在
-`<agent_layer>`，不会让子 Agent 继承主 Agent 专属协议。
+主 Agent prompt 的唯一事实源是用户配置文件 `<system_cosir_dir>/main_agent_system_prompt.md`，不再有
+随应用分发的内置模板。配置 service 负责文件创建、读取、token 预算、路径边界和原子写入校验：文件
+不存在时创建空白文件并返回空正文（读取侧不阻断启动），写入侧仍拒绝空白文本和超预算正文。
+`SystemPromptBuilder` 把有效正文放在 `<agent_layer>`，正文为空时整层不出现，不会让子 Agent 继承
+主 Agent 专属协议；未配置时主 Agent 的基础身份与运行期事实由动态变量层提供。
 
 系统 prompt 是 Task 级内存事实。配置更新时不修改正在运行的 `RuntimeContextManager`；下一次 Run
 取得 Task context 时比较 profile 来源签名，发现主 Agent prompt 变化后重新装配 system entry。

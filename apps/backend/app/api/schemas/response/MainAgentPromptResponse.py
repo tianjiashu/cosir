@@ -16,7 +16,7 @@ class MainAgentPromptResponse(BaseModel):
     path: str
     token_length: int
     max_tokens: int
-    source: Literal["user_file", "builtin_default", "builtin_fallback"]
+    source: Literal["user_file"]
     effective_on: Literal["next_run"] = "next_run"
 
     @staticmethod

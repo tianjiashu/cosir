@@ -69,7 +69,7 @@ def get_agent_registry() -> AgentProfileRegistry:
     return _AGENT_REGISTRY
 
 
-def build_agent_registry(main_agent_system_prompt: str | None = None) -> AgentProfileRegistry:
+def build_agent_registry(main_agent_system_prompt: str = "") -> AgentProfileRegistry:
     """构建只包含代码内置 profile 的进程级 Registry。
 
     内置 agent 构造器在本地延迟导入（``app.core.agents.define_agents`` 在模块级又会
@@ -77,8 +77,9 @@ def build_agent_registry(main_agent_system_prompt: str | None = None) -> AgentPr
     构造器，故在此处导入即可打破循环且不改变任何职责边界）。
 
 
-    通用子 Agent 和主 Agent 由代码构造并注册到 `system` 作用域；主 Agent prompt 可由系统
-    配置 service 注入，系统与 workspace JSON 由生命周期启动阶段一次性读取到同一个 Registry。
+    通用子 Agent 和主 Agent 由代码构造并注册到 `system` 作用域；主 Agent prompt 由系统配置
+    service 从用户文件读取后注入，用户尚未配置时传空串（主 Agent 不生成 ``<agent_layer>``）。
+    系统与 workspace JSON 由生命周期启动阶段一次性读取到同一个 Registry。
 
     返回:
         已播种完成的 ``AgentProfileRegistry``。

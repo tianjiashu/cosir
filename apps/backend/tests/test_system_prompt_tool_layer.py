@@ -158,7 +158,9 @@ def test_build_orders_tool_layer_between_agent_and_global(
         lambda: _registry_with(_child_profile()),
     )
 
-    prompt = spb.SystemPromptBuilder.build(main_agent(), str(workspace))
+    prompt = spb.SystemPromptBuilder.build(
+        main_agent(system_prompt="主 Agent 协议"), str(workspace)
+    )
 
     assert prompt.index("<agent_layer>") < prompt.index("<tool_layer>")
     assert prompt.index("<tool_layer>") < prompt.index("<global_layer>")

@@ -66,7 +66,7 @@ def test_generic_child_profile_keeps_code_prompt(monkeypatch) -> None:
     assert profile.agent_id == "general-assistant"
     assert profile.system_prompt.strip()
     assert not hasattr(profile, "prompt_file_path")
-    assert "general-purpose child agent" in prompt
+    assert "You handle exactly one focused task delegated by the parent agent." in prompt
 
 
 def test_builtin_child_profiles_are_general_assistant_only(
@@ -107,10 +107,12 @@ def test_system_registry_contains_only_code_defined_children(
     assert registry.child_agent_ids(tmp_path / "workspace") == {"general-assistant"}
 
 
-def test_main_profile_uses_own_prompt_and_child_catalog_follows_allowed_tools(monkeypatch) -> None:
-    """主 Agent 使用独立提示词；子 Agent 目录只在 allowed_tools 含委派工具时进入工具层。"""
+def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools(
+    monkeypatch,
+) -> None:
+    """主 Agent 提示词来自配置注入；子 Agent 目录只在 allowed_tools 含委派工具时进入工具层。"""
 
-    profile = main_agent()
+    profile = main_agent(system_prompt="主 Agent 执行协议")
     workspace_root = str(Path(__file__).resolve())
 
     def _fail() -> None:
@@ -119,6 +121,8 @@ def test_main_profile_uses_own_prompt_and_child_catalog_follows_allowed_tools(mo
     monkeypatch.setattr("app.config.configuration.get_agent_registry", _fail)
     profile_without_delegation = replace(profile, allowed_tools=["read_file"])
     prompt_without_tools = SystemPromptBuilder.build(profile_without_delegation, workspace_root)
+    assert "<agent_layer>" in prompt_without_tools
+    assert "主 Agent 执行协议" in prompt_without_tools
     assert "<tool_layer>" not in prompt_without_tools
     assert "general-assistant" not in prompt_without_tools
 
@@ -131,12 +135,18 @@ def test_main_profile_uses_own_prompt_and_child_catalog_follows_allowed_tools(mo
     prompt_with_delegation = SystemPromptBuilder.build(profile, workspace_root)
 
     assert profile.description is None
-    assert profile.system_prompt.strip()
     assert not hasattr(profile, "prompt_file_path")
-    assert "主 Agent" in prompt_with_delegation
-    assert "用户明确限定修改范围时，范围是硬约束" in prompt_with_delegation
     assert "<tool_layer>" in prompt_with_delegation
     assert "general-assistant" in prompt_with_delegation
+
+
+def test_main_profile_without_configured_prompt_skips_agent_layer() -> None:
+    """未配置主 Agent prompt 时 profile 不带系统预设，Agent 预设层不生成。"""
+
+    profile = main_agent()
+
+    assert profile.system_prompt == ""
+    assert SystemPromptBuilder._build_agent_layer(profile) == ""
 
 
 def test_registry_projects_only_child_profiles() -> None:

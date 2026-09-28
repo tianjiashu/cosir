@@ -21,22 +21,21 @@ from app.service.configuration.main_agent_prompt_configuration_service import (
 )
 
 
-def test_missing_main_prompt_is_seeded_from_packaged_default(tmp_path: Path) -> None:
-    """缺少用户配置时应原子安装默认模板并返回 builtin 来源。"""
+def test_missing_main_prompt_creates_blank_user_file(tmp_path: Path) -> None:
+    """缺少用户配置时应创建空白文件，并返回空正文而非任何内置模板。"""
 
     target = tmp_path / ".cosir" / "main_agent_system_prompt.md"
-    default = tmp_path / "main_agent.md"
-    default.write_text("默认主 Agent 协议", encoding="utf-8")
 
     document = MainAgentPromptConfigurationService(
         path=target,
-        default_path=default,
         root=target.parent,
     ).read()
 
-    assert document.content == "默认主 Agent 协议"
-    assert document.source == "builtin_default"
-    assert target.read_text(encoding="utf-8") == document.content
+    assert document.content == ""
+    assert document.token_length == 0
+    assert document.source == "user_file"
+    assert target.is_file()
+    assert target.read_text(encoding="utf-8") == ""
     assert document.path == target
 
 
@@ -58,11 +57,8 @@ def test_main_prompt_update_validates_budget_and_writes_atomically(tmp_path: Pat
     """主 Agent prompt 保存应拒绝空文案和超预算正文。"""
 
     target = tmp_path / ".cosir" / "main_agent_system_prompt.md"
-    default = tmp_path / "main_agent.md"
-    default.write_text("默认协议", encoding="utf-8")
     service = MainAgentPromptConfigurationService(
         path=target,
-        default_path=default,
         root=target.parent,
     )
 
@@ -129,11 +125,8 @@ def test_update_api_replaces_registry_profile_after_file_save(
     """PUT 配置成功后应同时返回新正文并替换进程内主 Agent profile。"""
 
     target = tmp_path / ".cosir" / "main_agent_system_prompt.md"
-    default = tmp_path / "main_agent.md"
-    default.write_text("默认协议", encoding="utf-8")
     service = MainAgentPromptConfigurationService(
         path=target,
-        default_path=default,
         root=target.parent,
     )
     registry = build_agent_registry("旧协议")
@@ -164,11 +157,8 @@ def test_update_api_is_registered_as_http_endpoint(
     """配置中心应把主 Agent prompt 更新暴露为标准 HTTP 接口。"""
 
     target = tmp_path / ".cosir" / "main_agent_system_prompt.md"
-    default = tmp_path / "main_agent.md"
-    default.write_text("默认协议", encoding="utf-8")
     service = MainAgentPromptConfigurationService(
         path=target,
-        default_path=default,
         root=target.parent,
     )
     registry = build_agent_registry("旧协议")

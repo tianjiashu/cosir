@@ -1,38 +1,26 @@
 """定义必须保留在代码中的内置 Agent profile。"""
 
-from pathlib import Path
-
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings
 from app.core.tools.schemas.tool_names import *
-from app.utils.file_utils import read_text_file
 
+# 通用子 Agent 的系统预设正文（唯一事实源，装配时直接写入 profile）。
+#
+# 只承载该 profile 专属的执行协议，避免与 SystemPromptBuilder 其它层重复或冲突：身份与角色、
+# 操作系统、工作区根目录与写入边界、可用工具集合、用户语言都在 ``<runtime_context>`` 层声明；
+# 全局指令与 workspace 指令各自成层注入。故此处不复述这些事实，只声明「如何完成被委派的任务」。
+_GENERAL_CHILD_AGENT_SYSTEM_PROMPT = """\
+You handle exactly one focused task delegated by the parent agent.
 
-def _load_system_prompt(filename: str) -> str:
-    """读取内置 Agent 的系统提示词正文。
-
-    参数:
-        filename: 位于 `app/core/context/system_prompt` 下的文件名。
-
-    返回:
-        已读取的非空 UTF-8 系统提示词正文。
-
-    异常:
-        RuntimeError: 提示词资源缺失、不可读、编码无效或内容为空；启动装配应失败，避免
-            Agent 使用空提示词运行。
-
-    副作用:
-        读取随应用分发的内置提示词文件。
-    """
-
-    path = Path(__file__).resolve().parent.parent / "context" / "system_prompt" / filename
-    try:
-        prompt = read_text_file(path)
-    except (OSError, UnicodeDecodeError) as exc:
-        raise RuntimeError(f"内置 Agent 系统提示词无法读取: {path}") from exc
-    if not prompt.strip():
-        raise RuntimeError(f"内置 Agent 系统提示词为空: {path}")
-    return prompt
+- Work only on the delegated task: do not widen its scope, refactor unrelated code, or change
+  anything the task did not ask for.
+- You have no sub-agents and must never delegate; do the work yourself.
+- Treat the global and workspace instructions in your context as binding.
+- If the task is ambiguous, blocked, or needs a decision only the parent can make, stop and
+  report what is missing instead of guessing.
+- End with a concise report: the result, the files or evidence involved, how you verified it, and
+  anything left unfinished.
+"""
 
 
 def _all_tool_names() -> list[str]:
@@ -41,35 +29,30 @@ def _all_tool_names() -> list[str]:
     return list(ALL_TOOL_NAMES)
 
 
-def main_agent(*, system_prompt: str | None = None) -> AgentProfile:
+def main_agent(*, system_prompt: str = "") -> AgentProfile:
     """构建负责理解用户目标、编排工作并汇总结果的主 Agent。
 
     参数：
-        system_prompt: 已完成校验的有效 prompt。未提供时读取随应用分发的默认模板；配置装配
-            层负责在启动或保存后传入用户配置内容。
+        system_prompt: 主 Agent 系统预设正文。由配置装配层从用户配置文件
+            ``<system_cosir_dir>/main_agent_system_prompt.md`` 读取后传入；用户尚未配置或读取
+            失败时为空串，表示系统提示词不注入 ``<agent_layer>``。
 
     返回：
         一个新的主 Agent profile，不共享可变运行态。
 
     异常：
-        RuntimeError: 未传入 prompt 且默认模板缺失、不可读或为空。
+        无（不读取任何内置模板文件，空正文由系统提示词构建层跳过该层）。
 
     副作用：
-        未传入 prompt 时读取默认模板；传入 prompt 时不访问文件系统。
+        无文件系统访问。
     """
-
-    effective_prompt = (
-        _load_system_prompt("main_agent.md") if system_prompt is None else system_prompt
-    )
-    if not effective_prompt.strip():
-        raise RuntimeError("主 Agent 系统提示词不能为空")
 
     return AgentProfile(
         agent_id="main_agent",
         role="main_agent",
         allowed_tools=_all_tool_names(),
         agent_type=AgentProfileType.MAIN,
-        system_prompt=effective_prompt,
+        system_prompt=system_prompt,
         max_steps=300,
         model_settings=ModelSettings(thinking=True, stream=True, reasoning_effort="high"),
     )
@@ -85,13 +68,14 @@ def general_child_agent() -> AgentProfile:
         无。
 
     返回:
-        通用 CHILD profile。
+        通用 CHILD profile，其 ``system_prompt`` 取自本模块的代码内常量
+        ``_GENERAL_CHILD_AGENT_SYSTEM_PROMPT``。
 
     异常:
-        RuntimeError: 通用子 Agent 的内置提示词资源无法读取或内容为空。
+        无。
 
     副作用:
-        读取通用子 Agent 随应用分发的提示词文件，并将正文放入 profile。
+        无文件系统访问（提示词正文写死在代码中，不读取任何 Markdown 资源）。
     """
 
     return AgentProfile(
@@ -116,7 +100,7 @@ def general_child_agent() -> AgentProfile:
             TOOL_WEB_EXTRACT,
         ],
         agent_type=AgentProfileType.CHILD,
-        system_prompt=_load_system_prompt("general_child_agent.md"),
+        system_prompt=_GENERAL_CHILD_AGENT_SYSTEM_PROMPT,
         max_steps=300,
         model_settings=ModelSettings(thinking=True, stream=True, reasoning_effort="high")
     )
