@@ -102,7 +102,9 @@ def test_workspace_layer_contains_only_selected_file(tmp_path: Path) -> None:
 
     layer = SystemPromptBuilder._build_workspace_layer(str(tmp_path))
 
-    assert layer.startswith("<workspace_layer>\n# ./AGENTS.md\n")
+    assert layer.startswith(
+        "<workspace_layer>\n# Loaded AGENTS.md from workspace path: ./AGENTS.md\n"
+    )
     assert layer.endswith("\n</workspace_layer>")
     assert "ROOT-AGENTS" in layer
     assert "DEEP-CLAUDE" not in layer

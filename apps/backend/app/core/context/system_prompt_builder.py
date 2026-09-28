@@ -298,7 +298,8 @@ class SystemPromptBuilder:
             workspace_root: 当前工作区根目录。
 
         返回:
-            包裹在 ``<workspace_layer>`` 标签内的单个指令文件文本；无命中文件时返回 ``""``。
+            包裹在 ``<workspace_layer>`` 标签内的单个指令文件文本，首行英文标题标明指令来源
+            相对路径；无命中文件时返回 ``""``。
 
         异常:
             无（定位/读取失败均容错，记日志并降级为空字符串）。
@@ -319,7 +320,12 @@ class SystemPromptBuilder:
         content = SystemPromptBuilder._enforce_budget(
             raw, Constant.SystemPrompt.WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS
         )
-        return "<workspace_layer>\n" f"# ./{rel.as_posix()}\n{content}\n</workspace_layer>"
+        return (
+            f"<workspace_layer>\n"
+            f"# Loaded AGENTS.md from workspace path: ./{rel.as_posix()}\n"
+            f"{content}\n"
+            f"</workspace_layer>"
+        )
 
     @staticmethod
     def _find_instruction_file(root: Path) -> tuple[Path, Path] | None:
