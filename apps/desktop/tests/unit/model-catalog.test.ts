@@ -6,7 +6,7 @@ vi.mock("@/lib/api/models", () => ({ getModelGroups }));
 
 const groups = (modelName: string) => [{
   provider_id: 1,
-  provider_name: "demo",
+  provider_display_name: "Demo 官方",
   models: [{
     model_name: modelName,
     supports_thinking: true,
@@ -17,6 +17,15 @@ const groups = (modelName: string) => [{
 }];
 
 describe("global model catalog", () => {
+  it("builds a display label from provider display name and model name", async () => {
+    const { buildModelCatalog } = await import("@/lib/model-catalog");
+
+    const model = buildModelCatalog(groups("demo-model")).models[0];
+
+    expect(model?.providerDisplayName).toBe("Demo 官方");
+    expect(model?.label).toBe("Demo 官方/demo-model");
+  });
+
   it("aborts the previous load and ignores its late response", async () => {
     let resolveFirst: ((value: ReturnType<typeof groups>) => void) | undefined;
     let resolveSecond: ((value: ReturnType<typeof groups>) => void) | undefined;

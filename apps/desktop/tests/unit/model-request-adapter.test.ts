@@ -5,7 +5,7 @@ import { buildModelCatalog } from "@/lib/model-catalog";
 
 const catalog = buildModelCatalog([{
   provider_id: 7,
-  provider_name: "local-openai",
+  provider_display_name: "Local OpenAI",
   models: [{
     model_name: "reasoning-model",
     supports_thinking: true,

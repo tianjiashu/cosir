@@ -49,6 +49,7 @@ def test_delete_provider_clears_run_reference_and_keeps_model_name(storage) -> N
 
     provider = get_provider_service().create_provider(
         name="deepseek",
+        display_name="DeepSeek 删除测试",
         base_url="https://api.deepseek.com",
         api_key="secret-key",
     )

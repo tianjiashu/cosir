@@ -34,9 +34,9 @@
 
 ### 2.1 路径与数据根
 
-系统数据根由 Tauri 通过 `CODING_AGENT_DATA_DIR` 注入，后端在
+系统数据根由 Tauri 通过 `CODING_AGENT_DATA_DIR` 注入，macOS/Windows 使用用户主目录，后端在
 [`apps/backend/app/utils/paths.py`](../apps/backend/app/utils/paths.py) 中推导
-`SYSTEM_COSIR_DIR`；绕过 Tauri 运行时回落到仓库根目录。`.cosir` 基名和系统/工作区子目录由
+`SYSTEM_COSIR_DIR`；绕过 Tauri 运行时 macOS/Windows 同样使用用户主目录，其他平台回落到仓库根目录。`.cosir` 基名和系统/工作区子目录由
 [`apps/backend/app/utils/cosir_paths.py`](../apps/backend/app/utils/cosir_paths.py) 集中定义。
 
 当前相关路径为：
@@ -472,7 +472,7 @@ workspace 级配置、配置历史、导入导出、实时 Agent Registry 热更
 ### 9.1 路径与事实源
 
 - [ ] 桌面模式下所有配置读取路径都来自 `CODING_AGENT_DATA_DIR/.cosir`。
-- [ ] 直跑后端时路径仍遵循现有仓库根目录回落规则。
+- [ ] 直跑后端时 macOS/Windows 使用用户主目录，其他平台回落到仓库根目录。
 - [ ] 新增代码没有手工拼接第二套 `.cosir` 路径。
 - [ ] Agent、主 Agent prompt、全局指令、env 的持久化事实仍分别是 JSON、Markdown、Markdown、env 文件。
 - [ ] 没有新增 SQLite 配置表或前端 localStorage 配置事实。

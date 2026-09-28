@@ -9,8 +9,9 @@ import {
 export type ModelCatalogModel = {
   optionId: string;
   providerId: number;
-  providerName: string;
+  providerDisplayName: string;
   modelName: string;
+  label: string;
   supportsReasoningEffort: boolean;
   supportsImage: boolean;
   supportsVideo: boolean;
@@ -56,8 +57,9 @@ function mapModel(provider: ProviderModelGroup, model: ModelListItem): ModelCata
   return {
     optionId: modelOptionId(provider.provider_id, model.model_name),
     providerId: provider.provider_id,
-    providerName: provider.provider_name,
+    providerDisplayName: provider.provider_display_name,
     modelName: model.model_name,
+    label: `${provider.provider_display_name}/${model.model_name}`,
     supportsReasoningEffort: model.supports_reasoning_effort,
     supportsImage: model.supports_image,
     supportsVideo: model.supports_video,

@@ -10,25 +10,27 @@ class ProviderCreateRequest(BaseModel):
     """校验厂商创建请求体。
 
     参数:
-        name: 厂商显示名（全局唯一，deepseek、openai、ollama等）。
-        model_name: 模型名称,仅当name 为 custome 或 ollama 时有效。
+        name: 能力注册表名称（deepseek、openai、ollama等）；允许多个配置实例复用。
+        display_name: 用户可见的配置名称；用于区分同一厂商的不同接入配置。
+        model_name: 可选模型名称字段，当前 Provider 创建流程不据此建立模型条目。
         base_url: 接入地址。
         api_key: 可选 API Key 明文（DB 唯一事实来源，本地 SQLite 明文存储；
             ``ollama`` 等不需 Key 的厂商可不填。
-        enabled: 启用开关，默认 True。
         sort_order: 排序权重，默认 0。
 
     返回:
         Pydantic 请求模型。
 
     异常:
-        ValueError: 当 ``name`` / ``type`` 为空白或 ``type`` 不在允许枚举时抛出。
+        ValueError: 当 ``name`` / ``display_name`` 无效、Provider 未注册、或缺少必需的
+            API Key / Base URL 时抛出。
 
     副作用:
         无。
     """
 
     name: str
+    display_name: str
     model_name: str = ""
     base_url: str | None = None
     api_key: str | None = None
@@ -41,6 +43,9 @@ class ProviderCreateRequest(BaseModel):
         self.name = self.name.strip().lower()
         if self.name not in _SUPPORT_PROVIDERS:
             raise ValueError(f"Provider {self.name} is not supported")
+        self.display_name = self.display_name.strip()
+        if not self.display_name:
+            raise ValueError("Provider display_name must not be blank")
 
         capability = ProviderCapability.get_capability(self.name)
         if capability.requires_api_key and not self.api_key:

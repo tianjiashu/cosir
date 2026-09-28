@@ -132,6 +132,7 @@ class ProviderService:
     def create_provider(
             self,
             name: str,
+            display_name: str,
             base_url: str | None = None,
             api_key: str | None = None,
             sort_order: int = 0,
@@ -139,21 +140,19 @@ class ProviderService:
         """新建模型厂商并写 ``provider_created`` 审计日志。
 
         参数:
-            name: 厂商显示名（全局唯一）。
-            provider_type: 厂商类型（``deepseek`` / ``openai-compatible`` /
-                ``anthropic`` / ``ollama`` / ``custom``）。
+            name: 能力注册表名称；同一名称可以有多个配置实例。
+            display_name: 用户可见的配置名称。
             base_url: 可选自定义接入地址；为空时使用 Provider 能力注册表中的默认地址。
             api_key: 可选 API Key 明文（DB 唯一事实来源，本地 SQLite 明文存储；
                 日志与响应不回传明文）。
-            enabled: 启用开关，默认 True。
             sort_order: 排序权重，默认 0。
 
         返回:
             落库成功的 ``ProviderRecord``。
 
         异常:
-            ValueError: 如果 name / provider_type 为空白。
-            sqlalchemy.exc.IntegrityError: 如果 name 与既有厂商重名。
+            ValueError: 如果 name 未注册或 display_name 归一后为空。
+            sqlalchemy.exc.IntegrityError: 如果 display_name 与既有配置重名。
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
@@ -163,6 +162,7 @@ class ProviderService:
         capability = ProviderCapability.get_capability(name)
         record = self._provider_crud.create(
             name=name,
+            display_name=display_name,
             provider_type=capability.provider_type,
             base_url=base_url,
             api_key=api_key,
@@ -185,6 +185,7 @@ class ProviderService:
             self,
             provider_id: int,
             *,
+            display_name: str | None = None,
             base_url: str | None = None,
             api_key: str | None = None,
             enabled: bool | None = None,
@@ -197,6 +198,7 @@ class ProviderService:
 
         参数:
             provider_id: 厂商标识。
+            display_name: 可选，新配置名称；传空白时拒绝。
             base_url: 可选，新接入地址；传 ``""`` 表示清除。
             api_key: 可选，新 API Key 明文；传 ``None`` 不更新、传 ``""``
                 清除（日志与响应不回传明文）。
@@ -208,7 +210,7 @@ class ProviderService:
 
         异常:
             KeyError: 如果指定厂商不存在。
-            ValueError: 如果 name / provider_type 归一后为空。
+            ValueError: 如果 display_name 归一后为空。
             sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
 
         副作用:
@@ -218,6 +220,7 @@ class ProviderService:
         provided = {
             key: value
             for key, value in (
+                ("display_name", display_name),
                 ("base_url", base_url),
                 ("api_key", api_key),
                 ("enabled", enabled),
@@ -227,6 +230,7 @@ class ProviderService:
         }
         record = self._provider_crud.update(
             provider_id,
+            display_name=display_name,
             base_url=base_url,
             api_key=api_key,
             enabled=enabled,

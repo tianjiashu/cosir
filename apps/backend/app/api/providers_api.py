@@ -75,14 +75,14 @@ async def create_provider(
     """新建模型厂商。
 
     参数:
-        payload: 包含 name / base_url / api_key 的请求体。
+        payload: 包含 name / display_name / base_url / api_key 的请求体。
         provider_service: 通过依赖注入的厂商 service。
 
     返回:
         创建后的 ``ProviderResponse``。
 
     异常:
-        HTTPException: 输入非法（400）或厂商重名（409）时抛出。
+        HTTPException: 输入非法（400）或配置显示名重名（409）时抛出。
 
     副作用:
         在存储中创建厂商（service 层写 ``provider_created`` 审计日志）。
@@ -91,6 +91,7 @@ async def create_provider(
     try:
         record = provider_service.create_provider(
             name=payload.name,
+            display_name=payload.display_name,
             base_url=payload.base_url,
             api_key=payload.api_key,
             sort_order=payload.sort_order,
@@ -98,11 +99,11 @@ async def create_provider(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except IntegrityError as exc:
-        if "providers.name" not in str(exc.orig):
+        if "providers.display_name" not in str(exc.orig):
             raise HTTPException(status_code=500, detail="provider persistence failed") from exc
         raise HTTPException(
             status_code=409,
-            detail=f"provider name conflict: {payload.name}",
+            detail=f"provider display name conflict: {payload.display_name}",
         ) from exc
     return ProviderResponse.from_record(
         record,
@@ -127,7 +128,7 @@ async def update_provider(
         更新后的 ``ProviderResponse``。
 
     异常:
-        HTTPException: 厂商不存在（404）、输入非法（400）或重名冲突（409）时抛出。
+        HTTPException: 厂商不存在（404）、输入非法（400）或配置显示名冲突（409）时抛出。
 
     副作用:
         更新 ``providers`` 表对应行（service 层写 ``provider_updated`` 审计日志）。
@@ -136,6 +137,7 @@ async def update_provider(
     try:
         record = provider_service.update_provider(
             provider_id,
+            display_name=payload.display_name,
             base_url=payload.base_url,
             api_key=payload.api_key,
             enabled=payload.enabled,
@@ -146,7 +148,7 @@ async def update_provider(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="provider name conflict") from exc
+        raise HTTPException(status_code=409, detail="provider display name conflict") from exc
     return ProviderResponse.from_record(
         record,
         api_key_configured=provider_service.api_key_configured(record),

@@ -9,5 +9,5 @@ class ProviderModelGroupResponse(BaseModel):
     """描述一个厂商及其模型目录。"""
 
     provider_id: int
-    provider_name: str
+    provider_display_name: str
     models: list[ModelListItemResponse]

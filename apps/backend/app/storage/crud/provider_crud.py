@@ -46,6 +46,7 @@ class ProviderCrud:
     def create(
         self,
         name: str,
+        display_name: str,
         provider_type: str = "api",
         base_url: str | None = None,
         api_key: str | None = None,
@@ -53,12 +54,12 @@ class ProviderCrud:
     ) -> ProviderRecord:
         """新建一个模型厂商并落库。
 
-        主键 ``id`` 由存储引擎自增分配；name / base_url / api_key /
-        去除首尾空白后存储，空白字符串归一为 None。
+        主键 ``id`` 由存储引擎自增分配；name / display_name 去除首尾空白后存储，
+        display_name 不能为空；base_url / api_key 的空白字符串归一为 None。
 
         参数:
-            name: 厂商显示名（如 "DeepSeek "）；不能为空白，对应 ``providers.name``
-                唯一约束。
+            name: 能力注册表名称（如 ``deepseek``）；同一名称允许存在多个配置实例。
+            display_name: 用户可见的配置名称；不能为空白且全局唯一。
             provider_type: Provider 能力注册表中的接入类型。
             base_url: 可选自定义接入地址；为空时使用 Provider 能力注册表默认地址，落库到
                 ``providers.base_url``。
@@ -71,16 +72,17 @@ class ProviderCrud:
             落库成功的 ``ProviderRecord``（含自增分配的 id）。
 
         异常:
-            ValueError: 如果 name 去除首尾空白后为空。
-            sqlalchemy.exc.IntegrityError: 如果 name 与既有厂商重名（唯一约束）。
+            ValueError: 如果 name 或 display_name 去除首尾空白后为空。
+            sqlalchemy.exc.IntegrityError: 如果 display_name 与既有配置重名。
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
             向 ``providers`` 表插入一行（``type`` 列由 ``ProviderRecord`` 默认
-            ``openai-compatible`` 填充，``created_at`` / ``updated_at`` 由应用层默认值填充）。
+            值或调用方传入值填充，``created_at`` / ``updated_at`` 由应用层默认值填充）。
         """
         record = ProviderRecord(
             name=name,
+            display_name=self._normalize_required(display_name),
             provider_type=provider_type,
             base_url=self._normalize_optional(base_url),
             api_key=self._normalize_optional(api_key),
@@ -150,6 +152,7 @@ class ProviderCrud:
     def update(
         self,
         provider_id: int,
+        display_name: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
         enabled: bool | None = None,
@@ -159,10 +162,11 @@ class ProviderCrud:
 
         ``base_url`` / ``api_key`` 传入非 None 值时覆盖（空字符串
         归一为 None）；置空须显式传 ``""``。本方法仅覆盖显式传入的字段，
-        ``name`` / ``type`` 列不在更新范围内（由新建语义保证）。
+        ``name`` / ``type`` 列不在更新范围内（能力类型不可在配置实例上变更）。
 
         参数:
             provider_id: 厂商标识。
+            display_name: 可选的新配置名称；传入空白时拒绝。
             base_url: 可选，新接入地址；传 ``""`` 表示清除。
             api_key: 可选，新 API Key 明文；传 ``""`` 表示清除。
             enabled: 可选，新启用状态。
@@ -180,6 +184,8 @@ class ProviderCrud:
         """
 
         values: dict[str, object] = {}
+        if display_name is not None:
+            values["display_name"] = self._normalize_required(display_name)
         if base_url is not None:
             values["base_url"] = self._normalize_optional(base_url)
         if api_key is not None:
@@ -238,3 +244,25 @@ class ProviderCrud:
             return None
         normalized = value.strip()
         return normalized or None
+
+    @staticmethod
+    def _normalize_required(value: str) -> str:
+        """去除必填文本首尾空白并拒绝空字符串。
+
+        参数:
+            value: 必填文本。
+
+        返回:
+            去除首尾空白后的非空文本。
+
+        异常:
+            ValueError: 文本为空白。
+
+        副作用:
+            无。
+        """
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("display_name must not be blank")
+        return normalized

@@ -11,23 +11,27 @@ CRUD 收口在 ``app.storage.crud.provider_crud``，值对象在
   SQLite 明文存储，不做加密）；``init_schema`` 的「加列不删列」机制负责
   存量库补齐该列。运行时经 ``LLMRuntimeConfig`` 透传到
   ``factory.build_chat_model``，本表是 Key 唯一落点。
-- ``provider_type`` 属性对应列名 ``type``（避免属性名遮蔽 Python 内置
-  ``type``），取 ``deepseek`` / ``openai-compatible`` / ``anthropic`` /
-  ``ollama`` / ``custom`` 之一，决定 Provider 能力注册表中的默认 base_url。
+- ``name`` 是 ``llm_provider.json`` 的能力注册表名称（例如 ``deepseek``），允许
+  多行配置复用；``provider_type`` 属性对应列名 ``type``，表示接入协议分类。
 """
 
-from sqlalchemy import Boolean, Integer, Text, text
+from sqlalchemy import Boolean, Index, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase
 
 
 class ProviderModel(StorageBase):
-    """``providers`` 表：模型厂商配置行。"""
+    """``providers`` 表：一个可独立路由的模型厂商配置实例。"""
 
     __tablename__ = "providers"
+    __table_args__ = (
+        # 同一能力类型允许配置多个实例，但用户可见名称必须可区分。
+        Index("uq_providers_display_name", "display_name", unique=True),
+    )
 
     name: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
     provider_type: Mapped[str] = mapped_column("type", Text, nullable=True)
     base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     api_key: Mapped[str | None] = mapped_column(Text, nullable=True)

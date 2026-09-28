@@ -1,7 +1,6 @@
 """SQLite schema 初始化。
 
-数据库以当前 SQLAlchemy metadata 为准；仅保留 fork 所需的一个窄范围 schema 正规化，
-用于移除本机开发库遗留的 checkpoint 全局唯一约束。
+数据库以当前 SQLAlchemy metadata 为准；仅保留当前版本仍需要的少量 SQLite schema 正规化。
 """
 
 from typing import cast
@@ -39,8 +38,8 @@ def initialize_app_schema(engine: Engine) -> None:
         sqlalchemy.exc.SQLAlchemyError: 建表失败。
 
     副作用:
-        在当前数据库创建缺失的应用表，并清理当前版本仍可能存在的
-        ``conversation_runs.checkpoint_thread_id`` 全局唯一约束。
+        在当前数据库创建缺失的应用表，并清理当前版本仍需要处理的
+        ``conversation_runs.checkpoint_thread_id`` 旧全局唯一约束。
     """
 
     tables = [cast(Table, model.__table__) for model in APP_MODELS]

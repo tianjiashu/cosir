@@ -222,7 +222,7 @@ test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", 
   await page.route("http://127.0.0.1:8000/workspaces/8/tasks", (route) => route.fulfill({ json: [{ task_id: 43, workspace_id: 8, title: "任务 B", execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
   await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)$/, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", fork_available: true, execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
   await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)\/assistant\/state/, (route) => route.fulfill({ json: emptyState() }));
-  await page.route("http://127.0.0.1:8000/models", (route) => route.fulfill({ json: [{ provider_id: 2, provider_name: "demo", models: [{ model_name: "demo-model", supports_thinking: false, supports_image: false, supports_video: false, supports_reasoning_effort: false }] }] }));
+  await page.route("http://127.0.0.1:8000/models", (route) => route.fulfill({ json: [{ provider_id: 2, provider_display_name: "Demo", models: [{ model_name: "demo-model", supports_thinking: false, supports_image: false, supports_video: false, supports_reasoning_effort: false }] }] }));
   const requestBodies: Array<Record<string, unknown>> = [];
   await page.route("http://127.0.0.1:8000/assistant", async (route) => {
     requestBodies.push(route.request().postDataJSON() as Record<string, unknown>);
@@ -260,7 +260,7 @@ test("同一侧栏内切换 Task 不会重新加载整个侧栏", async ({ page,
     workspaceTaskRequestCount += 1;
     await route.continue();
   });
-  await page.route("http://127.0.0.1:8000/models", (route) => route.fulfill({ json: [{ provider_id: 2, provider_name: "demo", models: [{ model_name: "demo-model", supports_thinking: false, supports_image: false, supports_video: false, supports_reasoning_effort: false }] }] }));
+  await page.route("http://127.0.0.1:8000/models", (route) => route.fulfill({ json: [{ provider_id: 2, provider_display_name: "Demo", models: [{ model_name: "demo-model", supports_thinking: false, supports_image: false, supports_video: false, supports_reasoning_effort: false }] }] }));
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem("cosir:model-selection:task:42", JSON.stringify({ providerId: 2, modelName: "demo-model", reasoningEffort: null }));
@@ -316,7 +316,7 @@ test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace �
   await page.route("http://127.0.0.1:8000/workspaces/8/tasks", (route) => route.fulfill({ json: [{ task_id: 43, workspace_id: 8, title: "任务 B", execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
   await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)$/, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", fork_available: true, execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
   await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)\/assistant\/state/, (route) => route.fulfill({ json: emptyState() }));
-  await page.route("http://127.0.0.1:8000/models", (route) => route.fulfill({ json: [{ provider_id: 2, provider_name: "demo", models: [{ model_name: "demo-model", supports_thinking: false, supports_image: false, supports_video: false, supports_reasoning_effort: false }] }] }));
+  await page.route("http://127.0.0.1:8000/models", (route) => route.fulfill({ json: [{ provider_id: 2, provider_display_name: "Demo", models: [{ model_name: "demo-model", supports_thinking: false, supports_image: false, supports_video: false, supports_reasoning_effort: false }] }] }));
   const requestBodies: Array<Record<string, unknown>> = [];
   await page.route("http://127.0.0.1:8000/assistant", async (route) => {
     requestBodies.push(route.request().postDataJSON() as Record<string, unknown>);

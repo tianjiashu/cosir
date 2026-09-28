@@ -10,7 +10,7 @@ export type ModelListItem = {
 
 export type ProviderModelGroup = {
   provider_id: number;
-  provider_name: string;
+  provider_display_name: string;
   models: ModelListItem[];
 };
 

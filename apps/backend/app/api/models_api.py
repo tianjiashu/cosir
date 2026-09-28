@@ -46,7 +46,7 @@ async def list_models(
                 "models_provider_id_missing",
                 extra={
                     "msg": "模型目录跳过缺少 id 的 Provider",
-                    "data": {"provider_name": provider.name},
+                    "data": {"provider_display_name": provider.display_name},
                 },
             )
             continue
@@ -59,7 +59,7 @@ async def list_models(
                     "msg": "模型目录跳过未注册能力的 Provider",
                     "data": {
                         "provider_id": provider.id,
-                        "provider_name": provider.name,
+                        "provider_display_name": provider.display_name,
                     },
                 },
             )
@@ -86,7 +86,7 @@ async def list_models(
             responses.append(
                 ProviderModelGroupResponse(
                     provider_id=provider.id,
-                    provider_name=provider.name,
+                    provider_display_name=provider.display_name,
                     models=models,
                 )
             )

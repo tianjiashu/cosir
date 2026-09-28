@@ -65,7 +65,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
       contentType: "application/json",
       body: JSON.stringify([{
         provider_id: 1,
-        provider_name: "demo",
+        provider_display_name: "Demo",
         models: [{
           model_name: "demo-model",
           supports_thinking: false,

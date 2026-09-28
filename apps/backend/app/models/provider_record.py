@@ -17,9 +17,10 @@ from app.utils.datetime_utils import from_text
 
 @dataclass
 class ProviderRecord:
-    """表示一个模型厂商配置行。"""
+    """表示一个可独立选择和路由的模型厂商配置实例。"""
 
     name: str
+    display_name: str
     provider_type: str = "api"
     id: int | None = None
     created_at: datetime | None = None
@@ -52,6 +53,7 @@ class ProviderRecord:
         return {
             "id": self.id,
             "name": self.name,
+            "display_name": self.display_name,
             "provider_type": self.provider_type,
             "base_url": self.base_url,
             "enabled": self.enabled,
@@ -79,6 +81,7 @@ class ProviderRecord:
         return cls(
             id=row.id,
             name=row.name,
+            display_name=row.display_name,
             provider_type=row.provider_type,
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
@@ -93,6 +96,7 @@ class ProviderRecord:
         return ProviderModel(
             id=self.id,
             name=self.name,
+            display_name=self.display_name,
             provider_type=self.provider_type,
             base_url=self.base_url,
             api_key=self.api_key,

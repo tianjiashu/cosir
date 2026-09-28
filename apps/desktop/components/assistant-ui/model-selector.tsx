@@ -69,9 +69,9 @@ function getSelection(
 function toOfficialModel(model: ModelCatalogModel): ModelOption {
   return {
     id: model.optionId,
-    name: model.modelName,
-    description: model.providerName,
-    keywords: [model.providerName],
+    name: model.label,
+    description: model.providerDisplayName,
+    keywords: [model.providerDisplayName, model.modelName],
     efforts: model.supportsReasoningEffort
       ? BACKEND_REASONING_EFFORTS
       : undefined,

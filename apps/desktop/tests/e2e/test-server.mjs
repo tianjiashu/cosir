@@ -684,7 +684,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && url.pathname === "/models") {
     jsonResponse(res, 200, [{
       provider_id: 2,
-      provider_name: "demo",
+      provider_display_name: "Demo",
       models: [{
         model_name: "demo-model",
         supports_thinking: false,

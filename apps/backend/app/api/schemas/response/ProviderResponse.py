@@ -8,7 +8,8 @@ class ProviderResponse(BaseModel):
 
     参数:
         provider_id: 厂商标识。
-        name: 厂商名称。
+        name: 能力注册表名称。
+        display_name: 用户可见的配置名称。
         base_url: 自定义接入地址（可空，空时使用 Provider 能力注册表默认地址）。
         api_key_configured: Key 配置状态（不依赖 Key 的厂商类型恒 True，§8.4；
             其余以 ``providers.api_key`` 非空为准）。响应永不回传 Key 明文。
@@ -30,6 +31,7 @@ class ProviderResponse(BaseModel):
 
     provider_id: int
     name: str
+    display_name: str
     base_url: str | None = None
     api_key_configured: bool = True
     enabled: bool = True
@@ -69,6 +71,7 @@ class ProviderResponse(BaseModel):
         return cls(
             provider_id=record.id,
             name=record.name,
+            display_name=record.display_name,
             base_url=record.base_url,
             api_key_configured=api_key_configured,
             enabled=record.enabled,

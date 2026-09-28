@@ -104,9 +104,9 @@ const NO_AGENT_MODEL = "__agent_model_default__";
 function toAgentModelOption(model: ModelCatalogModel): ModelOption {
   return {
     id: model.optionId,
-    name: model.modelName,
-    description: model.providerName,
-    keywords: [model.providerName],
+    name: model.label,
+    description: model.providerDisplayName,
+    keywords: [model.providerDisplayName, model.modelName],
   };
 }
 

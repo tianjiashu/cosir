@@ -25,11 +25,12 @@ import { HttpError } from "@/lib/http/errors";
 
 type FormState = {
   name: string;
+  displayName: string;
   baseUrl: string;
   apiKey: string;
 };
 
-const emptyForm: FormState = { name: "deepseek", baseUrl: "", apiKey: "" };
+const emptyForm: FormState = { name: "deepseek", displayName: "", baseUrl: "", apiKey: "" };
 
 export function ProviderConfigPanel({
   onChanged,
@@ -76,11 +77,13 @@ export function ProviderConfigPanel({
       if (editingId === null) {
         await createProvider({
           name: form.name.trim().toLowerCase(),
+          display_name: form.displayName.trim(),
           base_url: form.baseUrl.trim() || undefined,
           api_key: form.apiKey || undefined,
         });
       } else {
         await updateProvider(editingId, {
+          display_name: form.displayName.trim(),
           base_url: form.baseUrl.trim(),
           ...(form.apiKey ? { api_key: form.apiKey } : {}),
         });
@@ -161,7 +164,7 @@ export function ProviderConfigPanel({
               <div key={provider.provider_id} className="border-border/60 flex items-center justify-between rounded-md border p-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 text-sm font-medium">
-                    {provider.name}
+                    {provider.display_name}
                     {provider.enabled && provider.api_key_configured ? <CheckCircle2Icon className="text-emerald-600 size-4" /> : <XCircleIcon className="text-muted-foreground size-4" />}
                   </div>
                   <p className="text-muted-foreground truncate text-xs">{provider.base_url ?? "使用默认地址"}</p>
@@ -171,7 +174,7 @@ export function ProviderConfigPanel({
                     {testingId === provider.provider_id && <Loader2Icon className="animate-spin" />}
                     测试
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => { setEditingId(provider.provider_id); setForm({ name: provider.name, baseUrl: provider.base_url ?? "", apiKey: "" }); }}>
+                  <Button variant="ghost" size="sm" onClick={() => { setEditingId(provider.provider_id); setForm({ name: provider.name, displayName: provider.display_name, baseUrl: provider.base_url ?? "", apiKey: "" }); }}>
                     编辑
                   </Button>
                   <Button variant="ghost" size="icon-sm" disabled={busy} onClick={() => void remove(provider)} aria-label={`删除 ${provider.name}`}>
@@ -196,6 +199,10 @@ export function ProviderConfigPanel({
               </label>
             </div>
             <label className="grid gap-1 text-xs">
+              配置名称
+              <input className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} placeholder="例如：DeepSeek 官方" />
+            </label>
+            <label className="grid gap-1 text-xs">
               API Base URL（可选）
               <input className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="留空使用默认地址" />
             </label>
@@ -203,7 +210,7 @@ export function ProviderConfigPanel({
               API Key {editingId !== null && <span className="text-muted-foreground">（留空表示不修改）</span>}
               <input type="password" className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder="不会回显已保存 Key" />
             </label>
-            <Button className="w-full" disabled={busy || catalog.length === 0 || !form.name || (editingId === null && !form.apiKey)} onClick={() => void save()}>
+            <Button className="w-full" disabled={busy || catalog.length === 0 || !form.name || !form.displayName.trim() || (editingId === null && !form.apiKey)} onClick={() => void save()}>
               {busy && <Loader2Icon className="animate-spin" />}
               保存配置
             </Button>

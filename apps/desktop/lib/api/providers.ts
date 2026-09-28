@@ -3,6 +3,7 @@ import { postJson, requestJson, sendJson } from "@/lib/http/client";
 export type Provider = {
   provider_id: number;
   name: string;
+  display_name: string;
   base_url: string | null;
   api_key_configured: boolean;
   enabled: boolean;
@@ -22,6 +23,7 @@ export type ProviderCatalogItem = {
 
 export type ProviderCreateInput = {
   name: string;
+  display_name: string;
   model_name?: string;
   base_url?: string;
   api_key?: string;
@@ -29,6 +31,7 @@ export type ProviderCreateInput = {
 };
 
 export type ProviderUpdateInput = {
+  display_name?: string;
   base_url?: string;
   api_key?: string;
   enabled?: boolean;
