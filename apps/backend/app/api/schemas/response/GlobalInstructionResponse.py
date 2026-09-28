@@ -15,7 +15,6 @@ class GlobalInstructionResponse(BaseModel):
         path: 指令文件路径。
         token_length: 正文 token 估算数。
         max_tokens: 允许的最大 token 数。
-        restart_required: 是否需要重启后生效，默认 False。
         effective_on: 生效时机，固定为下一次运行（``next_run``）。
 
     返回:
@@ -32,7 +31,6 @@ class GlobalInstructionResponse(BaseModel):
     path: str
     token_length: int
     max_tokens: int
-    restart_required: bool = False
     effective_on: Literal["next_run"] = "next_run"
 
     @staticmethod

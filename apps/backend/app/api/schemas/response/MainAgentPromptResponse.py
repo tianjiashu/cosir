@@ -17,7 +17,6 @@ class MainAgentPromptResponse(BaseModel):
     token_length: int
     max_tokens: int
     source: Literal["user_file", "builtin_default", "builtin_fallback"]
-    restart_required: bool = False
     effective_on: Literal["next_run"] = "next_run"
 
     @staticmethod

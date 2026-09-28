@@ -266,7 +266,7 @@ def test_settings_loads_environment_from_system_cosir(
     monkeypatch.delenv("DEFAULT_LANGUAGE", raising=False)
     paths.reset()
     try:
-        Settings._load_local_env()
+        Settings._load_env_file()
         assert os.environ["DEFAULT_LANGUAGE"] == "en"
     finally:
         monkeypatch.delenv("DEFAULT_LANGUAGE", raising=False)

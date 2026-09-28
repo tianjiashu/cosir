@@ -13,7 +13,7 @@
 1. 系统级子 Agent JSON 配置：`<DATA_DIR>/.cosir/agents/*.json`。
 2. 主 Agent 系统提示词：`<DATA_DIR>/.cosir/main_agent_system_prompt.md`。
 3. 系统级全局指令：`<DATA_DIR>/.cosir/AGENTS.md`。
-4. 系统级运行环境配置：`<DATA_DIR>/.cosir/.env` 与 `<DATA_DIR>/.cosir/.env.local`。
+4. 系统级运行环境配置：`<DATA_DIR>/.cosir/.env`（单文件，配置中心与手写配置共用）。
 
 配置界面应当让用户知道配置的来源、校验状态和生效时机；保存失败必须可定位，不能静默降级。
 
@@ -46,7 +46,6 @@
 <DATA_DIR>/.cosir/main_agent_system_prompt.md
 <DATA_DIR>/.cosir/AGENTS.md
 <DATA_DIR>/.cosir/.env
-<DATA_DIR>/.cosir/.env.local
 ```
 
 `cosir_paths.py` 是路径计算模块，不创建目录、不读写文件、不依赖业务模型。这个边界必须保持：
@@ -113,25 +112,31 @@ JSON 文件实际都被解析为 `CHILD`，其文件字段仍包含 `system_prom
 ### 2.5 env 配置
 
 [`apps/backend/app/config/settings.py`](../apps/backend/app/config/settings.py) 通过
-`paths.env_files()` 读取系统级 `.env` 和 `.env.local`：
+`paths.env_file()` 读取系统级 `.env`：
 
-- `.env` 是基础配置。
-- `.env.local` 按同名键覆盖 `.env`。
-- 已存在的进程环境变量优先于文件值。
+- 只有一个系统级 env 文件：配置中心与手写配置共用 `<数据根>/.cosir/.env`。
+- 已存在的进程环境变量优先于文件值（`os.environ.setdefault` 语义）。
 - `Settings.load()` 在启动阶段加载配置并填充类级静态属性。
+
+> 早期设计把配置拆成「基础 `.env` + 本地覆盖 `.env.local`」，但两个文件都在数据根下、都不进版本
+> 控制，覆盖层没有实际用途，却带来「清除 override 后基础值又出现」的困惑，故合并为单文件。配置
+> 中心写入只重写白名单内的键，注释、未知键与未管理行原样保留。
 
 第一期只暴露后端明确声明的白名单字段：
 
 ```text
 DEFAULT_LANGUAGE
-WEB_BACKEND
-WEB_SEARCH_BACKEND
-WEB_EXTRACT_BACKEND
+FIRECRAWL_API_KEY
+FIRECRAWL_API_URL
 LANGFUSE_ENABLED
 LANGFUSE_PUBLIC_KEY
 LANGFUSE_SECRET_KEY
 LANGFUSE_BASE_URL
 ```
+
+`WEB_BACKEND` / `WEB_SEARCH_BACKEND` / `WEB_EXTRACT_BACKEND` 不在白名单内：当前内置 Web Provider
+只有 `firecrawl` 一个实现，三者留空即由回退优先级命中同一实现，显式赋值不改变结果；因此它们作为
+固定值保留在 `Settings` 中，既不经环境变量覆盖也不暴露给配置界面。接入第二个实现后再开放。
 
 Provider CRUD、模型目录和 Provider API Key 不属于本次配置界面；它们继续由现有 Provider service、
 模型 API 和模型选择器管理。子 Agent 配置可以引用已有的 Provider/model 作为可选覆盖：
@@ -140,8 +145,10 @@ Provider CRUD、模型目录和 Provider API Key 不属于本次配置界面；�
 会将两项降为 `None`；配置 service 不应沿用这种对用户不可见的静默丢弃，而应在保存前对“只填一项”
 或引用不存在的 Provider/model 返回明确错误。
 
-env 保存后必须重启后端才能完整生效，因为 Settings、Provider、工具系统和 Agent Registry 都在启动
-阶段装配。前端应复用现有 Tauri `restart_backend` 控制面，不新增 HTTP 重启端点。
+env 保存后由后端就地把新配置重载进内存，不需要重启：`Settings.load()` 刷新 `Settings` 与进程环境后，
+重装配工具系统（工具是否注册在装配期按当时的 `Settings` 判定，例如 Web 工具要求本地已配置 Provider
+凭证）并刷新运行时持有的执行器。重载只影响尚未开始的 Run，运行中的 Run 保持原有行为。Agent Registry
+不参与重载，它只由 Agent profile 文件决定。
 
 ## 3. 总体架构
 
@@ -171,8 +178,7 @@ configuration services
   ├─ agents/*.json
   ├─ main_agent_system_prompt.md
   ├─ AGENTS.md
-  ├─ .env
-  └─ .env.local
+  └─ .env
 ```
 
 ### 3.1 后端目录建议
@@ -202,7 +208,7 @@ apps/backend/app/api/schemas/response/...
 - Agent service：文件枚举、复用 Agent 校验、序列化、原子写入、状态汇总。
 - Main Agent prompt service：默认模板安装、正文校验、原子写入和有效 prompt 投影。
 - Instruction service：固定文件的读取、token 预检查、原子写入。
-- Environment service：白名单 schema、来源解析、敏感字段脱敏、`.env.local` override 写入。
+- Environment service：白名单 schema、来源解析、敏感字段脱敏、系统 `.env` 写入。
 
 `cosir_paths.py` 可以补充以下纯路径函数，使配置目录布局清晰且集中：
 
@@ -315,7 +321,6 @@ PUT /configuration/global-instructions
 - `path`
 - `token_length`
 - `max_tokens`
-- `restart_required: false`
 - `effective_on: next_run`
 
 配置 service 必须复用 `Constant.SystemPrompt.GLOBAL_INSTRUCTION_MAX_FILE_TOKENS` 作为保存前校验的
@@ -335,21 +340,19 @@ PUT /configuration/environment
 - 类型
 - 当前磁盘配置的有效值（Secret 不返回原文）
 - 当前进程实际值（Secret 只返回 `configured` 和 `masked`）
-- 重启后预计值（Secret 只返回 `configured` 和 `masked`）
 - `configured`
 - `source`：`process`、`env`、`env_local` 或 `default`
 - `masked`：是否存在已保存但不回显的 Secret
 - 默认值
-- 是否需要重启
 
 写入请求只接受白名单字段，每个字段必须明确使用以下一种操作语义：
 
 - `replace`：写入新值；Secret 的原文只存在于请求处理和文件写入过程，不进入响应或日志。
-- `clear`：删除 `.env.local` 中的 override；如果 `.env` 或进程环境仍有值，清除后不会变成未配置。
+- `clear`：删除 `.env` 中的该键（写回时该行被移除）；如果进程环境仍有同名值，清除后不会变成未配置。
 - `unchanged`：不修改 Secret，适用于表单未重新输入 Secret 的更新请求。
 
-所有由设置页管理的值写入 `.env.local`，不覆盖用户手工维护的 `.env` 基础文件；若当前有进程环境
-变量覆盖文件，页面必须显示“进程环境优先，重启后仍可能不使用文件值”的警告。
+所有由设置页管理的值写入系统 `.env`，写入只重写白名单内的键，用户手写的注释、未知键与未管理行原样
+保留；若当前有进程环境变量覆盖文件，页面必须显示“进程环境优先，重启后仍可能不使用文件值”的警告。
 
 ## 5. 前端界面方案
 
@@ -413,9 +416,10 @@ Thread、模型选择器和工具 UI。
 | --- | --- | --- | --- |
 | 系统子 Agent JSON | 写入文件，标记待重启 | 不修改 | 需要 |
 | 全局 `AGENTS.md` | 写入文件 | 不修改 | 不需要，对后续 Run 生效 |
-| env `.env.local` | 写入 override | 不修改 | 需要 |
+| 系统 env `.env` | 写入白名单键 | 不修改 | 不需要，就地重载后对后续 Run 生效 |
 
-前端不应在保存 Agent 或 env 后私自重启；用户点击“保存并重启”后才调用 Tauri 现有重启控制面。
+env 保存由后端就地重载（`Settings.load` + 重建工具系统 + 刷新运行时执行器），不需要重启；前端不应
+在保存 Agent 后私自重启，用户点击“保存并重启”后才调用 Tauri 现有重启控制面。
 重启期间沿用当前 boot gate 的 `starting / ready / failed` 状态。后端重启失败必须回到现有失败页面和
 日志链路。界面要区分“文件已保存”和“新配置已生效”，不能把保存成功显示成服务已使用新配置。
 
@@ -456,7 +460,7 @@ Thread、模型选择器和工具 UI。
 
 - 增加 Agent JSON 新建/编辑/删除。
 - 增加全局 `AGENTS.md` 原子保存。
-- 增加 `.env.local` 白名单写入和 override 清除。
+- 增加系统 `.env` 白名单写入与键清除。
 - 增加后端单元测试、API 测试和前端模块测试。
 
 ### Phase 3：重启闭环
@@ -514,15 +518,14 @@ workspace 级配置、配置历史、导入导出、实时 Agent Registry 热更
 ### 9.4 env 配置
 
 - [ ] 页面只允许编辑明确白名单字段。
-- [ ] `.env.local` 覆盖 `.env` 的事实在页面中可见。
 - [ ] Secret 不会在 API 响应、前端日志或后端日志中明文出现。
 - [ ] Secret 响应只包含 `configured`/`masked`/`source` 等元数据。
 - [ ] Secret 更新能区分 `replace`、`clear`、`unchanged`，空输入不会误清除已有值。
-- [ ] 保存写入 `.env.local`，不覆盖 `.env` 基础文件。
-- [ ] 清除 override 后恢复基础值或默认值。
+- [ ] 保存写入系统 `.env`，只重写白名单键，用户手写内容不被破坏。
+- [ ] 清除后该键回到默认值或进程环境值。
 - [ ] 布尔值和其他类型按后端 Settings 语义校验。
-- [ ] 保存后明确提示需要重启。
-- [ ] 页面能区分磁盘值、当前进程值、重启后预计值和重启失败状态。
+- [ ] 保存后就地重载，页面不提示“需要重启”。
+- [ ] 页面能区分磁盘值与当前进程值。
 - [ ] Provider CRUD、模型目录、Provider API Key 和全局默认模型不出现在本次配置界面；现有 Provider
       配置域仍保持原有入口和行为。
 
@@ -537,10 +540,10 @@ workspace 级配置、配置历史、导入导出、实时 Agent Registry 热更
 
 ### 9.6 测试验收
 
-- [ ] 后端路径函数有单元测试，覆盖桌面数据根、直跑回落和 `.env/.env.local` 路径。
+- [ ] 后端路径函数有单元测试，覆盖桌面数据根、直跑回落和系统 `.env` 路径。
 - [ ] Agent service 有有效配置、未知字段、未知工具、冲突、删除和原子写入失败测试。
 - [ ] Instruction service 有空文件、预算超限、编码/权限失败和保存后读取测试。
-- [ ] Environment service 有白名单、来源优先级、secret 脱敏、类型校验和 override 清除测试。
+- [ ] Environment service 有白名单、来源优先级、secret 脱敏、类型校验和键清除测试。
 - [ ] API 测试覆盖成功、400、404、409、文件读写失败映射。
 - [ ] API 模块已加入 `apps/backend/app/app.py` 的显式路由注册，并有路由可达性测试。
 - [ ] 前端测试覆盖加载、保存、校验错误、secret 不回显、待重启状态和重启失败提示。

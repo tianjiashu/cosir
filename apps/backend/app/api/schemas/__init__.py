@@ -19,7 +19,12 @@ from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurati
 from app.api.schemas.response.DeleteRunResponse import DeleteRunResponse
 from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse
-from app.api.schemas.response.EnvironmentResponse import EnvironmentResponse
+from app.api.schemas.response.EnvironmentResponse import (
+    EnvironmentFieldResponse,
+    EnvironmentGroupResponse,
+    EnvironmentOptionResponse,
+    EnvironmentResponse,
+)
 from app.api.schemas.response.GlobalInstructionResponse import GlobalInstructionResponse
 from app.api.schemas.response.HealthResponse import HealthResponse
 from app.api.schemas.response.TaskResponse import TaskResponse
@@ -36,6 +41,9 @@ __all__ = [
     "DeleteTaskResponse",
     "DeleteWorkspaceResponse",
     "EnvironmentChangeRequest",
+    "EnvironmentFieldResponse",
+    "EnvironmentGroupResponse",
+    "EnvironmentOptionResponse",
     "EnvironmentResponse",
     "EnvironmentUpdateRequest",
     "ForkTaskRequest",

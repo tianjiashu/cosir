@@ -37,7 +37,6 @@ export type GlobalInstructionConfiguration = {
   path: string;
   token_length: number;
   max_tokens: number;
-  restart_required: boolean;
   effective_on: "next_run";
 };
 
@@ -47,23 +46,33 @@ export type MainAgentPromptConfiguration = {
   token_length: number;
   max_tokens: number;
   source: "user_file" | "builtin_default" | "builtin_fallback" | string;
-  restart_required: boolean;
   effective_on: "next_run";
 };
 
 export type EnvironmentField = {
   name: string;
-  type: "string" | "boolean" | string;
+  type: "string" | "boolean";
+  component: "input" | "password" | "checkbox" | "select";
+  label: string;
+  description: string;
   secret: boolean;
   default: string | boolean | null;
   value: string | boolean | null;
   disk_value: string | boolean | null;
-  restart_value: string | boolean | null;
   configured: boolean;
   masked: boolean;
-  source: "process" | "env_local" | "env" | "default" | string;
-  restart_required: boolean;
+  source: "process" | "file" | "default";
   process_override: boolean;
+  options: Array<{ value: string; label: string }>;
+  placeholder: string | null;
+  clearable: boolean;
+};
+
+export type EnvironmentGroup = {
+  id: string;
+  label: string;
+  description: string;
+  fields: EnvironmentField[];
 };
 
 export async function getAgentConfigurations(): Promise<AgentConfiguration[]> {
@@ -98,10 +107,10 @@ export function updateMainAgentPromptConfiguration(content: string): Promise<Mai
   return requestJson<MainAgentPromptConfiguration>("/configuration/main-agent-prompt", jsonRequestInit({ content }, { method: "PUT" }));
 }
 
-export function getEnvironmentConfiguration(): Promise<{ fields: EnvironmentField[]; restart_required: boolean }> {
+export function getEnvironmentConfiguration(): Promise<{ groups: EnvironmentGroup[] }> {
   return requestJson("/configuration/environment");
 }
 
-export function updateEnvironmentConfiguration(changes: Record<string, { operation: "replace" | "clear" | "unchanged"; value?: unknown }>): Promise<{ fields: EnvironmentField[]; restart_required: boolean }> {
+export function updateEnvironmentConfiguration(changes: Record<string, { operation: "replace" | "clear" | "unchanged"; value?: unknown }>): Promise<{ groups: EnvironmentGroup[] }> {
   return requestJson("/configuration/environment", jsonRequestInit({ changes }, { method: "PUT" }));
 }

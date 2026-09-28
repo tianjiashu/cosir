@@ -45,7 +45,7 @@ describe("configuration API", () => {
   });
 
   it("preserves clear/unchanged environment operations without version metadata", async () => {
-    requestJson.mockResolvedValueOnce({ fields: [] });
+    requestJson.mockResolvedValueOnce({ groups: [] });
     const { updateEnvironmentConfiguration } = await import("@/lib/api/configuration");
     await updateEnvironmentConfiguration({
       LANGFUSE_SECRET_KEY: { operation: "unchanged" },

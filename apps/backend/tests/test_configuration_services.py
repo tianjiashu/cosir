@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
+from app.api.schemas.response.EnvironmentResponse import EnvironmentResponse
 from app.app import app
 from app.config.settings import Settings
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
@@ -15,8 +16,8 @@ from app.service.configuration.agent_configuration_service import (
     AgentConfigurationError,
     AgentConfigurationService,
 )
+from app.models.environment.environment_change import EnvironmentChange
 from app.service.configuration.environment_configuration_service import (
-    EnvironmentChange,
     EnvironmentConfigurationError,
     EnvironmentConfigurationService,
 )
@@ -193,6 +194,19 @@ def test_global_instruction_enforces_token_budget(
     assert (tmp_path / "root" / "AGENTS.md").read_text(encoding="utf-8") == "合规内容"
 
 
+def _bind_env_file(monkeypatch: pytest.MonkeyPatch, env_file: Path) -> None:
+    """把 service 使用的 env 文件位置指向测试临时目录。
+
+    service 不接受路径参数（位置唯一由 ``cosir_paths`` 决定），故测试改为替换本模块引用的路径
+    解析函数来完成文件系统隔离。
+    """
+
+    monkeypatch.setattr(
+        "app.service.configuration.environment_configuration_service.system_env_file",
+        lambda: env_file,
+    )
+
+
 def test_environment_service_masks_secrets_and_preserves_unknown_lines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -202,11 +216,13 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
         "app.service.configuration.environment_configuration_service.system_cosir_dir",
         lambda: root,
     )
-    env_path = root / ".env"
-    local_path = root / ".env.local"
-    env_path.write_text("DEFAULT_LANGUAGE=en\nCUSTOM=value\n", encoding="utf-8")
-    local_path.write_text("LANGFUSE_SECRET_KEY=old-secret\n", encoding="utf-8")
-    service = EnvironmentConfigurationService(env_path=env_path, local_path=local_path)
+    env_file = root / ".env"
+    _bind_env_file(monkeypatch, env_file)
+    env_file.write_text(
+        "DEFAULT_LANGUAGE=en\nCUSTOM=value\nLANGFUSE_SECRET_KEY=old-secret\n",
+        encoding="utf-8",
+    )
+    service = EnvironmentConfigurationService()
     monkeypatch.setattr(Settings, "DEFAULT_LANGUAGE", "process-old")
 
     fields = service.read()
@@ -214,14 +230,53 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
     assert secret["value"] is None
     assert secret["masked"] is True
 
+    groups = service.read_grouped()
+    assert [group["id"] for group in groups] == ["general", "web", "langfuse"]
+    langfuse = next(group for group in groups if group["id"] == "langfuse")
+    response = EnvironmentResponse(groups=groups)
+    assert response.groups[0].fields[0].name == "DEFAULT_LANGUAGE"
+    assert [field["name"] for field in langfuse["fields"]] == [
+        "LANGFUSE_ENABLED",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_BASE_URL",
+    ]
+    assert (
+        next(field for field in langfuse["fields"] if field["name"] == "LANGFUSE_ENABLED")[
+            "component"
+        ]
+        == "checkbox"
+    )
+    assert (
+        next(field for field in langfuse["fields"] if field["name"] == "LANGFUSE_SECRET_KEY")[
+            "component"
+        ]
+        == "password"
+    )
+    web = next(group for group in groups if group["id"] == "web")
+    assert [field["name"] for field in web["fields"]] == [
+        "FIRECRAWL_API_KEY",
+        "FIRECRAWL_API_URL",
+    ]
+    api_key = next(field for field in web["fields"] if field["name"] == "FIRECRAWL_API_KEY")
+    assert api_key["component"] == "password"
+    assert api_key["secret"] is True
+    assert api_key["value"] is None
+    api_url = next(field for field in web["fields"] if field["name"] == "FIRECRAWL_API_URL")
+    assert api_url["component"] == "input"
+    assert api_url["secret"] is False
+    # 保存即就地重载，故契约里不再有「重启后生效」相关字段。
+    assert "restart_required" not in api_url
+    assert "restart_value" not in api_url
+
     service.update(
         {"DEFAULT_LANGUAGE": EnvironmentChange("replace", "zh")},
     )
-    assert "CUSTOM=value" in env_path.read_text(encoding="utf-8")
-    assert 'DEFAULT_LANGUAGE="zh"' in local_path.read_text(encoding="utf-8")
+    assert "CUSTOM=value" in env_file.read_text(encoding="utf-8")
+    assert 'DEFAULT_LANGUAGE="zh"' in env_file.read_text(encoding="utf-8")
     language = next(field for field in service.read() if field["name"] == "DEFAULT_LANGUAGE")
     assert language["value"] == "process-old"
-    assert language["restart_value"] == "zh"
+    assert language["disk_value"] == "zh"
     service.update(
         {"LANGFUSE_SECRET_KEY": EnvironmentChange("clear")},
     )
@@ -231,13 +286,45 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
     )
     with pytest.raises(EnvironmentConfigurationError):
         service.update({"NOT_ALLOWED": EnvironmentChange("replace", "x")})
+    with pytest.raises(EnvironmentConfigurationError):
+        service.update({"DEFAULT_LANGUAGE": EnvironmentChange("replace", "fr")})
+    # Web Provider 选择是固定值，不属于可编辑白名单：当前只有 firecrawl 一个实现，
+    # 显式赋值只会引入「填错名字就选不到 Provider」的失败路径。
+    for backend_field in ("WEB_BACKEND", "WEB_SEARCH_BACKEND", "WEB_EXTRACT_BACKEND"):
+        with pytest.raises(EnvironmentConfigurationError):
+            service.update({backend_field: EnvironmentChange("replace", "firecrawl")})
+
+
+def test_web_provider_selection_is_not_env_overridable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Web Provider 选择是固定值：同名环境变量不得改变 ``Settings``。
+
+    当前内置 Web Provider 只有 firecrawl 一个实现，这三项既不对外配置也无需按环境覆盖。
+    本用例锁住「``Settings.load`` 不读这三个环境变量」这一事实，避免后续误加回读取后，
+    与配置中心白名单对「谁能配置」产生两套口径。
+    """
+
+    # 隔离文件来源与路径重算，使本用例只验证「环境变量是否被读取」这一件事。
+    monkeypatch.setattr("app.config.settings.paths.env_file", lambda: tmp_path / "absent.env")
+    monkeypatch.setattr("app.config.settings.paths.reset", lambda: None)
+    monkeypatch.setenv("WEB_BACKEND", "unregistered")
+    monkeypatch.setenv("WEB_SEARCH_BACKEND", "unregistered")
+    monkeypatch.setenv("WEB_EXTRACT_BACKEND", "unregistered")
+
+    Settings.load()
+
+    assert Settings.WEB_BACKEND == ""
+    assert Settings.WEB_SEARCH_BACKEND == ""
+    assert Settings.WEB_EXTRACT_BACKEND == ""
 
 
 def test_environment_update_can_reload_runtime_settings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """保存环境配置时按请求选择重载当前进程配置。"""
+    """保存环境配置时按请求就地重载：刷新 Settings、重建工具系统并刷新运行时执行器。"""
 
     root = tmp_path / "root"
     root.mkdir()
@@ -245,23 +332,31 @@ def test_environment_update_can_reload_runtime_settings(
         "app.service.configuration.environment_configuration_service.system_cosir_dir",
         lambda: root,
     )
-    env_path = root / ".env"
-    local_path = root / ".env.local"
-    service = EnvironmentConfigurationService(env_path=env_path, local_path=local_path)
-    reload_calls = 0
+    env_file = root / ".env"
+    _bind_env_file(monkeypatch, env_file)
+    service = EnvironmentConfigurationService()
+    events: list[str] = []
 
-    def fake_reload() -> None:
-        nonlocal reload_calls
-        reload_calls += 1
+    monkeypatch.setattr(Settings, "load", staticmethod(lambda: events.append("settings")))
+    monkeypatch.setattr(
+        "app.config.configuration.rebuild_tool_system",
+        lambda: events.append("tool_system"),
+    )
 
-    monkeypatch.setattr(Settings, "load", staticmethod(fake_reload))
+    class _Runtime:
+        def reload_tool_executor(self) -> None:
+            events.append("runtime")
+
+    monkeypatch.setattr("app.service.depends.get_runtime", lambda: _Runtime())
+
     service.update(
         {"DEFAULT_LANGUAGE": EnvironmentChange("replace", "en")},
         reload_after_write=True,
     )
 
-    assert reload_calls == 1
-    assert 'DEFAULT_LANGUAGE="en"' in local_path.read_text(encoding="utf-8")
+    # 顺序即语义：工具是否注册由工具系统装配期的 Settings 决定，必须先刷新配置再重建工具系统。
+    assert events == ["settings", "tool_system", "runtime"]
+    assert 'DEFAULT_LANGUAGE="en"' in env_file.read_text(encoding="utf-8")
 
 
 def test_agent_operations_require_canonical_file_name(
@@ -348,14 +443,14 @@ def test_agent_configuration_lists_only_registered_profiles(
 def test_settings_preserves_file_source_across_repeated_loads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    env_path = tmp_path / ".env"
-    env_path.write_text("DEFAULT_LANGUAGE=zh\n", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text("DEFAULT_LANGUAGE=zh\n", encoding="utf-8")
     monkeypatch.delenv("DEFAULT_LANGUAGE", raising=False)
-    monkeypatch.setattr("app.config.settings.paths.env_files", lambda: [env_path])
+    monkeypatch.setattr("app.config.settings.paths.env_file", lambda: env_file)
     monkeypatch.setattr("app.config.settings.paths.SYSTEM_COSIR_DIR", tmp_path)
     monkeypatch.setattr(Settings, "_LOADED_ENV_VALUES", {})
-    Settings._load_local_env()
-    Settings._load_local_env()
+    Settings._load_env_file()
+    Settings._load_env_file()
     assert Settings.is_file_loaded_value("DEFAULT_LANGUAGE") is True
 
 
@@ -369,10 +464,8 @@ def test_environment_configuration_schema_error(
         "app.service.configuration.environment_configuration_service.system_cosir_dir",
         lambda: root,
     )
-    service = EnvironmentConfigurationService(
-        env_path=root / ".env",
-        local_path=root / ".env.local",
-    )
+    _bind_env_file(monkeypatch, root / ".env")
+    service = EnvironmentConfigurationService()
     service.update({"DEFAULT_LANGUAGE": EnvironmentChange("replace", "en")})
     service.update({"DEFAULT_LANGUAGE": EnvironmentChange("replace", "zh")})
 

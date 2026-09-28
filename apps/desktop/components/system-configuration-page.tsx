@@ -17,6 +17,7 @@ import {
   Trash2Icon,
 } from "lucide-react";
 
+import { EnvironmentConfigurationForm, type EnvironmentFieldValue } from "@/components/environment-configuration-form";
 import {
   ModelSelectorContent,
   ModelSelectorList,
@@ -45,7 +46,7 @@ import {
   getMainAgentPromptConfiguration,
   type AgentConfiguration,
   type AgentConfigurationInput,
-  type EnvironmentField,
+  type EnvironmentGroup,
   type GlobalInstructionConfiguration,
   type MainAgentPromptConfiguration,
   updateAgentConfiguration,
@@ -58,7 +59,7 @@ type ConfigurationTab = "agents" | "main-agent" | "instructions" | "environment"
 
 const tabItems: { id: ConfigurationTab; label: string; description: string; icon: typeof Settings2Icon }[] = [
   { id: "agents", label: "子 Agent配置", description: "", icon: SlidersHorizontalIcon },
-  { id: "main-agent", label: "主 Agentprompt配置", description: "", icon: BotIcon },
+  { id: "main-agent", label: "主 Agent prompt配置", description: "", icon: BotIcon },
   { id: "instructions", label: "全局AGENTS.md配置", description: "", icon: FileTextIcon },
   { id: "environment", label: "环境变量", description: "", icon: KeyRoundIcon },
 ];
@@ -392,94 +393,62 @@ function MainAgentPromptPanel() {
   return <div className="space-y-4"><div><h2 className="font-medium">主 Agent 系统提示词</h2></div><ErrorNotice message={error} /><section className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm"><Textarea className="min-h-[28rem] resize-y border-0 bg-transparent p-2 font-mono text-sm shadow-none focus-visible:ring-0" value={content} onChange={(event) => { setContent(event.target.value); setSaved(false); }} placeholder="定义主 Agent 的执行协议…" /><div className="mt-4 grid gap-3 border-t pt-4 sm:grid-cols-2"><div><p className="text-muted-foreground text-xs">估算 Token</p><p className={`mt-1 font-mono text-sm ${tokenRatio >= 1 ? "text-destructive" : ""}`}>{estimatedTokens.toLocaleString()} / {document.max_tokens.toLocaleString()}</p></div><div className="flex items-end justify-end gap-2 sm:col-span-1">{saved && <span className="text-muted-foreground self-center text-xs">已保存</span>}<Button onClick={() => void save()} disabled={saving || !content.trim() || estimatedTokens > document.max_tokens}>{saving ? <Loader2Icon className="animate-spin" /> : saved ? <CheckIcon /> : <SaveIcon />}保存主 Agent prompt</Button></div></div></section></div>;
 }
 
-function EnvironmentFieldRow({
-  field,
-  value,
-  onChange,
-  onToggle,
-  onClear,
-}: {
-  field: EnvironmentField;
-  value: string | boolean | undefined;
-  onChange: (value: string) => void;
-  onToggle: () => void;
-  onClear: () => void;
-}) {
-  const inputId = `environment-${field.name}`;
-  const enabled = value === true || value === "true";
-
-  return (
-    <div className="border-border/70 bg-card/70 flex flex-col gap-2 rounded-xl border px-3 py-2.5 shadow-sm sm:flex-row sm:items-center sm:gap-4">
-      <label htmlFor={inputId} className="min-w-0 shrink-0 font-mono text-xs font-medium sm:w-64">
-        {field.name}
-      </label>
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        {field.type === "boolean" ? (
-          <button
-            id={inputId}
-            type="button"
-            className={`flex h-9 w-full items-center justify-between rounded-lg border px-3 text-sm ${enabled ? "border-primary/50 bg-primary/10" : "border-input"}`}
-            onClick={onToggle}
-            aria-label={field.name}
-          >
-            <span>{enabled ? "已启用" : "未启用"}</span>
-            <span className="bg-muted rounded-full px-2 py-0.5 text-xs">切换</span>
-          </button>
-        ) : (
-          <Input
-            id={inputId}
-            className="h-9"
-            type={field.secret ? "password" : "text"}
-            value={String(value ?? "")}
-            placeholder={field.secret && field.masked ? "已配置（留空保持不变）" : "未配置"}
-            onChange={(event) => onChange(event.target.value)}
-          />
-        )}
-        {field.secret && field.masked && (
-          <Button type="button" variant="ghost" size="icon-sm" className="text-destructive shrink-0" onClick={onClear} aria-label={`清除 ${field.name}`} title="清除已保存值">
-            <Trash2Icon />
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function EnvironmentPanel() {
-  const [fields, setFields] = useState<EnvironmentField[] | null>(null);
+  const [groups, setGroups] = useState<EnvironmentGroup[] | null>(null);
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [clearSecrets, setClearSecrets] = useState<Set<string>>(new Set());
   const [dirty, setDirty] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const load = async () => { try { setError(null); const result = await getEnvironmentConfiguration(); setFields(result.fields); setValues(Object.fromEntries(result.fields.map((field) => [field.name, field.secret ? "" : String(field.value ?? "")]))); setDirty(new Set()); setClearSecrets(new Set()); setSaved(false); } catch (cause) { setError(cause instanceof Error ? cause.message : "读取环境变量失败"); } };
+  const load = async () => {
+    try {
+      setError(null);
+      const result = await getEnvironmentConfiguration();
+      setGroups(result.groups);
+      const fields = result.groups.flatMap((group) => group.fields);
+      setValues(Object.fromEntries(fields.map((field) => [
+        field.name,
+        field.secret ? "" : field.type === "boolean" ? Boolean(field.value) : String(field.value ?? ""),
+      ])));
+      setDirty(new Set());
+      setClearSecrets(new Set());
+      setSaved(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "读取环境变量失败");
+    }
+  };
   useEffect(() => { void load(); }, []);
   const save = async () => {
     setSaving(true);
     setError(null);
     try {
       const changes: Record<string, { operation: "replace" | "clear" | "unchanged"; value?: unknown }> = Object.fromEntries([...dirty].map((name) => {
-        const field = fields?.find((item) => item.name === name);
+        const field = groups?.flatMap((group) => group.fields).find((item) => item.name === name);
         const value = values[name];
-        const operation = field?.secret
-          ? clearSecrets.has(name) ? "clear" : value === "" ? "unchanged" : "replace"
-          : value === "" ? "clear" : "replace";
-        return [name, { operation, value: field?.type === "boolean" ? value === true || value === "true" : value }];
+        if (!field) return [name, { operation: "unchanged" }];
+        const operation = field.secret
+          ? clearSecrets.has(name) && field.clearable ? "clear" : value === "" ? "unchanged" : "replace"
+          : field.type === "boolean" ? "replace" : value === "" && field.clearable ? "clear" : "replace";
+        return [name, { operation, value: field.type === "boolean" ? value === true || value === "true" : value }];
       }));
       const result = await updateEnvironmentConfiguration(changes);
-      setFields(result.fields);
+      setGroups(result.groups);
       setDirty(new Set());
       setClearSecrets(new Set());
       setSaved(true);
-      setValues(Object.fromEntries(result.fields.map((field) => [field.name, field.secret ? "" : String(field.value ?? "")])))
+      const fields = result.groups.flatMap((group) => group.fields);
+      setValues(Object.fromEntries(fields.map((field) => [
+        field.name,
+        field.secret ? "" : field.type === "boolean" ? Boolean(field.value) : String(field.value ?? ""),
+      ])));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存环境变量失败");
     } finally {
       setSaving(false);
     }
   };
-  if (!fields) return error ? <LoadErrorState message={error} onRetry={() => void load()} /> : <LoadingState />;
+  if (!groups) return error ? <LoadErrorState message={error} onRetry={() => void load()} /> : <LoadingState />;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -493,36 +462,31 @@ function EnvironmentPanel() {
         </div>
       </div>
       <ErrorNotice message={error} />
-      <div className="space-y-2">
-        {fields.map((field) => (
-          <EnvironmentFieldRow
-            key={field.name}
-            field={field}
-            value={values[field.name]}
-            onChange={(value) => {
-              setValues((current) => ({ ...current, [field.name]: value }));
-              setSaved(false);
-              setClearSecrets((current) => {
-                const next = new Set(current);
-                next.delete(field.name);
-                return next;
-              });
-              setDirty((current) => new Set(current).add(field.name));
-            }}
-            onToggle={() => {
-              setValues((current) => ({ ...current, [field.name]: !(current[field.name] === true || current[field.name] === "true") }));
-              setSaved(false);
-              setDirty((current) => new Set(current).add(field.name));
-            }}
-            onClear={() => {
-              setClearSecrets((current) => new Set(current).add(field.name));
-              setValues((current) => ({ ...current, [field.name]: "" }));
-              setSaved(false);
-              setDirty((current) => new Set(current).add(field.name));
-            }}
-          />
-        ))}
-      </div>
+      <EnvironmentConfigurationForm
+        groups={groups}
+        values={values as Record<string, EnvironmentFieldValue>}
+        onChange={(field, value) => {
+          setValues((current) => ({ ...current, [field.name]: value }));
+          setSaved(false);
+          setClearSecrets((current) => {
+            const next = new Set(current);
+            next.delete(field.name);
+            return next;
+          });
+          setDirty((current) => new Set(current).add(field.name));
+        }}
+        onToggle={(field) => {
+          setValues((current) => ({ ...current, [field.name]: !(current[field.name] === true || current[field.name] === "true") }));
+          setSaved(false);
+          setDirty((current) => new Set(current).add(field.name));
+        }}
+        onClear={(field) => {
+          setClearSecrets((current) => new Set(current).add(field.name));
+          setValues((current) => ({ ...current, [field.name]: "" }));
+          setSaved(false);
+          setDirty((current) => new Set(current).add(field.name));
+        }}
+      />
     </div>
   );
 }

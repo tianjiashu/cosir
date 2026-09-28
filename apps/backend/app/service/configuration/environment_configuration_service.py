@@ -1,7 +1,11 @@
 """系统级 env 配置 service。
 
 只允许编辑 Settings 已声明的白名单字段。读取结果同时表达磁盘值、进程有效值和来源，Secret
-只返回配置状态，不返回原文。UI 写入统一落到 `.env.local`，基础 `.env` 保留为用户维护文件。
+只返回配置状态，不返回原文。配置中心与手写配置共用同一个系统文件（``<数据根>/.cosir/.env``）：
+写入只重写本白名单内的键，注释、未知键与未被管理的行为原样保留。
+
+白名单字段目录与字段、分组、变更意图的值对象定义在 ``app.models.environment``，本模块只消费它们，
+不承担字段登记职责。
 """
 
 from __future__ import annotations
@@ -10,107 +14,137 @@ import json
 import os
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from dotenv import dotenv_values
 
 from app.config.logging.logger import log
 from app.config.settings import Settings
+from app.models.environment.environment_change import EnvironmentChange
+from app.models.environment.environment_field import EnvironmentField
+from app.config.environment_field_catalog import (
+    ENVIRONMENT_FIELDS,
+    ENVIRONMENT_GROUPS,
+)
 from app.service.configuration.file_store import ConfigurationFileStore
-from app.utils.cosir_paths import system_cosir_dir, system_env_file, system_env_local_file
+from app.utils.cosir_paths import system_cosir_dir, system_env_file
 
 
 class EnvironmentConfigurationError(ValueError):
     """env 配置字段、类型或操作不符合白名单契约。"""
 
 
-@dataclass(frozen=True)
-class EnvironmentField:
-    name: str
-    value_type: str
-    secret: bool
-    default: str | bool | None
-
-
-@dataclass(frozen=True)
-class EnvironmentChange:
-    operation: Literal["replace", "clear", "unchanged"]
-    value: Any = None
-
-
-_FIELDS: dict[str, EnvironmentField] = {
-    "DEFAULT_LANGUAGE": EnvironmentField("DEFAULT_LANGUAGE", "string", False, "zh"),
-    "WEB_BACKEND": EnvironmentField("WEB_BACKEND", "string", False, ""),
-    "WEB_SEARCH_BACKEND": EnvironmentField("WEB_SEARCH_BACKEND", "string", False, ""),
-    "WEB_EXTRACT_BACKEND": EnvironmentField("WEB_EXTRACT_BACKEND", "string", False, ""),
-    "LANGFUSE_ENABLED": EnvironmentField("LANGFUSE_ENABLED", "boolean", False, False),
-    "LANGFUSE_PUBLIC_KEY": EnvironmentField("LANGFUSE_PUBLIC_KEY", "string", True, None),
-    "LANGFUSE_SECRET_KEY": EnvironmentField("LANGFUSE_SECRET_KEY", "string", True, None),
-    "LANGFUSE_BASE_URL": EnvironmentField(
-        "LANGFUSE_BASE_URL", "string", False, "http://124.220.55.187"
-    ),
-}
+# ``.env`` 的行内 ``KEY=`` 语法只服务于本模块的写回逻辑，属该文件的持久化格式细节，
+# 因此不随白名单字段目录一起移入 ``app.models``。
 _ENV_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=")
 
 
 class EnvironmentConfigurationService:
-    """读取和更新 `.env.local` 白名单覆盖，并按调用方要求重载运行时配置。"""
+    """读取和更新 `.env` 白名单字段，并按调用方要求重载运行时配置。"""
 
-    def __init__(
-        self,
-        *,
-        env_path: Path | None = None,
-        local_path: Path | None = None,
-    ) -> None:
-        self.env_path = env_path or system_env_file()
-        self.local_path = local_path or system_env_local_file()
+    def __init__(self) -> None:
+        """初始化系统环境配置 service。
+
+        env 文件位置唯一由 ``app.utils.cosir_paths`` 决定（``<数据根>/.cosir/.env``），因此不接受
+        路径参数，避免出现第二套位置口径；测试若要隔离文件系统，应替换本模块引用的
+        ``system_env_file``。
+
+        参数:
+            无。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            解析系统 ``.cosir`` 目录与 env 文件路径；不读取文件内容。
+        """
+
+        self.env_file = system_env_file()
         self.root = system_cosir_dir()
         self.store = ConfigurationFileStore()
 
     def read(self) -> list[dict[str, Any]]:
-        """返回白名单字段的脱敏来源快照。"""
+        """返回白名单字段的脱敏来源快照。
 
-        self.store.assert_safe_child(self.root, self.env_path)
-        self.store.assert_safe_child(self.root, self.local_path)
-        base = self._read_values(self.env_path)
-        local = self._read_values(self.local_path)
+        返回值包含字段的展示元数据和当前状态，但不返回 secret 明文。分组投影由
+        ``read_grouped`` 完成；这样 service 的值读取测试仍可按字段检查，而 API 只暴露完整的
+        分组契约。
+        """
+
+        self.store.assert_safe_child(self.root, self.env_file)
+        file_values = self._read_values(self.env_file)
         result: list[dict[str, Any]] = []
-        for field in _FIELDS.values():
+        for field in ENVIRONMENT_FIELDS.values():
             process_value = Settings.__dict__.get(field.name, field.default)
-            process_override = (
-                os.environ.get(field.name) is not None
-                and not Settings.is_file_loaded_value(field.name)
-            )
+            process_override = os.environ.get(
+                field.name
+            ) is not None and not Settings.is_file_loaded_value(field.name)
             if process_override:
                 source = "process"
-            elif field.name in local:
-                source = "env_local"
-            elif field.name in base:
-                source = "env"
+            elif field.name in file_values:
+                source = "file"
             else:
                 source = "default"
-            disk_value = local.get(field.name, base.get(field.name, field.default))
-            restart_value = local.get(field.name, base.get(field.name, field.default))
+            disk_value = file_values.get(field.name, field.default)
+            options = list(field.options)
+            if field.component == "select" and not field.secret and process_value is not None:
+                process_text = str(process_value)
+                if process_text not in {value for value, _ in options}:
+                    options.append((process_text, f"当前值（{process_text}）"))
             result.append(
                 {
                     "name": field.name,
                     "type": field.value_type,
+                    "component": field.component,
+                    "group_id": field.group_id,
+                    "label": field.label,
+                    "description": field.description,
                     "secret": field.secret,
                     "default": None if field.secret else field.default,
                     "value": None if field.secret else process_value,
                     "disk_value": None if field.secret else disk_value,
-                    "restart_value": None if field.secret else restart_value,
                     "configured": process_value is not None and str(process_value) != "",
                     "masked": field.secret and disk_value is not None and str(disk_value) != "",
                     "source": source,
-                    "restart_required": False,
                     "process_override": process_override,
+                    "options": [{"value": value, "label": label} for value, label in options],
+                    "placeholder": field.placeholder,
+                    "clearable": field.clearable,
                 }
             )
         return result
+
+    def read_grouped(self) -> list[dict[str, Any]]:
+        """返回供配置中心 API 使用的分组字段快照。
+
+        分组顺序和字段顺序由后端注册表决定，前端只负责渲染，不需要复制字段分类规则。
+        未注册到分组表的字段不会被静默丢弃，而是触发配置契约错误，避免新增字段后 UI 无法
+        展示却仍可被写入。
+        """
+
+        fields_by_group = {group.id: [] for group in ENVIRONMENT_GROUPS}
+        for field in self.read():
+            group_id = field["group_id"]
+            if group_id not in fields_by_group:
+                raise EnvironmentConfigurationError(f"环境配置字段未注册分组: {field['name']}")
+            fields_by_group[group_id].append(
+                {key: value for key, value in field.items() if key != "group_id"}
+            )
+        return [
+            {
+                "id": group.id,
+                "label": group.label,
+                "description": group.description,
+                "fields": fields_by_group[group.id],
+            }
+            for group in ENVIRONMENT_GROUPS
+            if fields_by_group[group.id]
+        ]
 
     def update(
         self,
@@ -118,7 +152,7 @@ class EnvironmentConfigurationService:
         *,
         reload_after_write: bool = False,
     ) -> list[dict[str, Any]]:
-        """校验并更新 `.env.local`，可选地重载当前进程配置后返回脱敏快照。
+        """校验并更新 `.env`，可选地重载当前进程配置后返回脱敏快照。
 
         参数:
             changes: 字段名到变更意图的映射；未出现的字段保持原值。
@@ -134,16 +168,16 @@ class EnvironmentConfigurationService:
                 失败并提示用户检查运行时状态。
 
         副作用:
-            在系统 `.env.local` 中原子写入配置；``reload_after_write`` 为 ``True`` 时还会更新
-            当前进程的 ``Settings`` 类级配置与由其派生的路径环境。
+            在系统 `.env` 中原子写入配置（只重写受管键，其余行原样保留）；``reload_after_write``
+            为 ``True`` 时还会更新当前进程的 ``Settings`` 类级配置与由其派生的路径环境。
         """
 
-        unknown = sorted(set(changes) - set(_FIELDS))
+        unknown = sorted(set(changes) - set(ENVIRONMENT_FIELDS))
         if unknown:
             raise EnvironmentConfigurationError(f"不允许的环境配置字段: {', '.join(unknown)}")
         values: dict[str, str | None] = {}
         for name, change in changes.items():
-            field = _FIELDS[name]
+            field = ENVIRONMENT_FIELDS[name]
             if change.operation == "unchanged":
                 continue
             if change.operation == "clear":
@@ -152,15 +186,15 @@ class EnvironmentConfigurationService:
             if change.operation != "replace":
                 raise EnvironmentConfigurationError(f"不支持的环境配置操作: {change.operation}")
             values[name] = self._validate_value(field, change.value)
-        self.store.assert_safe_child(self.root, self.local_path)
-        with self.store.locked(self.local_path):
+        self.store.assert_safe_child(self.root, self.env_file)
+        with self.store.locked(self.env_file):
             current = (
-                self.store.read_text(self.local_path, root=self.root)
-                if self.local_path.exists()
+                self.store.read_text(self.env_file, root=self.root)
+                if self.env_file.exists()
                 else ""
             )
             next_content = self._apply_values(current, values)
-            self.store.write_text_atomic(self.local_path, next_content, root=self.root)
+            self.store.write_text_atomic(self.env_file, next_content, root=self.root)
         if reload_after_write:
             self.reload_runtime_settings()
         log.info(
@@ -171,19 +205,24 @@ class EnvironmentConfigurationService:
 
     @staticmethod
     def reload_runtime_settings() -> None:
-        """重新加载当前后端进程的系统环境配置。
+        """重新加载当前后端进程的系统环境配置，并重装配受其影响的进程级组件。
 
-        该方法只负责调用运行时配置的唯一加载入口，不重建 Agent、工具系统或其他生命周期资源；
-        这些组件读取的 Web provider、语言和观测配置会在后续调用中使用最新的 ``Settings`` 值。
+        先经运行时配置的唯一加载入口 ``Settings.load`` 刷新 ``Settings`` 与进程环境，再重建工具
+        系统并刷新运行时持有的执行器：工具是否注册在工具系统装配期按当时的 ``Settings`` 判定
+        （Web 工具要求本地已配置 Provider 凭证），不重建则新配置对后续 Run 不生效。
+
+        不重建 Agent Registry：它只由 Agent profile 文件决定，与环境配置无关。
 
         返回:
             无。
 
         异常:
             OSError / ValueError: 配置文件读取失败或配置值无法解析，交由 API 层映射为配置错误。
+            RuntimeError: 工具系统或运行时尚未装配时抛出（配置早于装配完成时才会出现）。
 
         副作用:
-            重新读取系统 `.env` / `.env.local`，更新 ``Settings`` 类级字段，并同步路径配置。
+            重新读取系统 `.env`，更新 ``Settings`` 类级字段与派生路径，替换进程级工具系统单例，
+            并刷新运行时执行器引用；不改动运行中的 Run。
         """
 
         Settings.load()
@@ -207,6 +246,8 @@ class EnvironmentConfigurationService:
             raise EnvironmentConfigurationError(f"{field.name} 必须是布尔值")
         if not isinstance(value, str):
             raise EnvironmentConfigurationError(f"{field.name} 必须是字符串")
+        if field.component == "select" and value not in {option for option, _ in field.options}:
+            raise EnvironmentConfigurationError(f"{field.name} 的值不在可选范围内")
         return value
 
     def _read_values(self, path: Path) -> dict[str, str]:

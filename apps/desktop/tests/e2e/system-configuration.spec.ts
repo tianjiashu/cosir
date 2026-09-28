@@ -49,7 +49,6 @@ test("系统配置中心从 settings 路由打开并展示三类配置", async (
       path: ".cosir/AGENTS.md",
       token_length: 4,
       max_tokens: 32768,
-      restart_required: false,
       effective_on: "next_run",
     },
   }));
@@ -60,27 +59,54 @@ test("系统配置中心从 settings 路由打开并展示三类配置", async (
       token_length: 5,
       max_tokens: 2000,
       source: "user_file",
-      restart_required: false,
       effective_on: "next_run",
     },
   }));
   await page.route("http://127.0.0.1:8000/configuration/environment", (route) => route.fulfill({
     json: {
-      fields: [{
-        name: "LANGFUSE_SECRET_KEY",
-        type: "string",
-        secret: true,
-        default: null,
-        value: null,
-        disk_value: null,
-        restart_value: null,
-        configured: false,
-        masked: false,
-        source: "default",
-        restart_required: false,
-        process_override: false,
+      groups: [{
+        id: "langfuse",
+        label: "Langfuse 可观测性",
+        description: "配置 Agent 与工具调用链路追踪。",
+        fields: [
+          {
+            name: "LANGFUSE_ENABLED",
+            type: "boolean",
+            component: "checkbox",
+            label: "启用 Langfuse",
+            description: "记录 Agent、模型和工具调用的可观测性数据。",
+            secret: false,
+            default: false,
+            value: false,
+            disk_value: false,
+            configured: false,
+            masked: false,
+            source: "default",
+            process_override: false,
+            options: [],
+            placeholder: null,
+            clearable: true,
+          },
+          {
+            name: "LANGFUSE_SECRET_KEY",
+            type: "string",
+            component: "password",
+            label: "Secret Key",
+            description: "Langfuse 项目的私密访问密钥。",
+            secret: true,
+            default: null,
+            value: null,
+            disk_value: null,
+            configured: false,
+            masked: false,
+            source: "default",
+            process_override: false,
+            options: [],
+            placeholder: "请输入 Secret Key",
+            clearable: true,
+          },
+        ],
       }],
-      restart_required: false,
     },
   }));
 
@@ -134,15 +160,17 @@ test("系统配置中心从 settings 路由打开并展示三类配置", async (
   await expect(page.locator("textarea").first()).toHaveValue("# 主 Agent 协议");
 
   await page.getByRole("button", { name: /环境变量/ }).click();
-  await expect(page.getByText("LANGFUSE_SECRET_KEY", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Langfuse 可观测性" })).toBeVisible();
+  await expect(page.getByText("Secret Key", { exact: true })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "启用 Langfuse" })).toBeVisible();
   await expect(page.getByRole("button", { name: "重启后端" })).toHaveCount(0);
   await expect(page.getByText("当前进程", { exact: true })).toHaveCount(0);
   await expect(page.getByText("重启后预计（已保存文件）", { exact: true })).toHaveCount(0);
   await expect(page.getByText("默认值", { exact: true })).toHaveCount(0);
-  await expect(page.getByPlaceholder("未配置", { exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder("请输入 Secret Key", { exact: true })).toBeVisible();
   await expect(page.getByText("输入新值将覆盖当前密钥；留空表示不变，点击清除按钮可删除已保存值。", { exact: true })).toHaveCount(0);
 
-  await page.getByPlaceholder("未配置", { exact: true }).fill("new-secret");
+  await page.getByPlaceholder("请输入 Secret Key", { exact: true }).fill("new-secret");
   await page.getByRole("button", { name: /保存变量/ }).click();
   await expect(page.getByRole("button", { name: "已保存" })).toBeVisible();
 });

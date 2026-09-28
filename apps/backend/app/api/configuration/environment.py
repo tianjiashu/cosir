@@ -11,8 +11,8 @@ from app.api.configuration.errors import raise_configuration_error
 from app.api.schemas.request.EnvironmentUpdateRequest import EnvironmentUpdateRequest
 from app.api.schemas.response.EnvironmentResponse import EnvironmentResponse
 from app.app import app
+from app.models.environment.environment_change import EnvironmentChange
 from app.service.configuration.environment_configuration_service import (
-    EnvironmentChange,
     EnvironmentConfigurationService,
 )
 
@@ -21,7 +21,7 @@ from app.service.configuration.environment_configuration_service import (
 async def get_environment_configuration() -> EnvironmentResponse:
     try:
         service = EnvironmentConfigurationService()
-        return EnvironmentResponse(fields=service.read())
+        return EnvironmentResponse(groups=service.read_grouped())
     except Exception as exc:
         raise_configuration_error(exc)
 
@@ -36,11 +36,7 @@ async def update_environment_configuration(
             for name, item in payload.changes.items()
         }
         service = EnvironmentConfigurationService()
-        return EnvironmentResponse(
-            fields=service.update(
-                changes,
-                reload_after_write=True,
-            ),
-        )
+        service.update(changes, reload_after_write=True)
+        return EnvironmentResponse(groups=service.read_grouped())
     except Exception as exc:
         raise_configuration_error(exc)
