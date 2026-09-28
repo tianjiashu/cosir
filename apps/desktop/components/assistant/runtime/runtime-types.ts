@@ -3,6 +3,7 @@ import type { CreateAttachment } from "@assistant-ui/core";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
 
 import type { TransportState } from "@/lib/assistant/contract";
+import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportIssue } from "@/components/assistant/transport-status";
 
 export type AssistantRuntimeProps = {
@@ -40,6 +41,7 @@ export type RuntimeSessionContext = {
   backendRuntimeGeneration: number;
   backendRuntimeAvailable: boolean;
   traceId: string;
+  performanceProbe: AssistantPerformanceProbe | null;
   setIssue: (issue: TransportIssue | null) => void;
   onTaskStateChanged?: () => void;
   latestStateRef: MutableRefObject<TransportState>;

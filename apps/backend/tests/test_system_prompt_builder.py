@@ -88,6 +88,16 @@ def test_enforce_budget_is_unlimited_without_token_limit():
     assert spb.SystemPromptBuilder._enforce_budget(body) == body
 
 
+def test_runtime_context_advertises_markdown_rendering_capabilities():
+    out = spb.SystemPromptBuilder._build_runtime_context(_profile(), "/workspace")
+
+    assert (
+        "- Markdown output: LaTeX math (`$$...$$`), Mermaid diagrams (including "
+        "`sequenceDiagram`), CJK-friendly formatting, and syntax-highlighted fenced "
+        "code are supported; use them when helpful."
+    ) in out
+
+
 def test_build_includes_global_layer_in_order(redirect_system_cosir: Path, tmp_path: Path):
     _write_global(redirect_system_cosir, "GLOBAL INSTRUCTION BODY")
     workspace_root = tmp_path / "ws"

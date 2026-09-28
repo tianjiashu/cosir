@@ -1,28 +1,20 @@
-import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { type TransportIssue } from "@/components/assistant/transport-status";
-import {
-  ComposerRestoreBridge,
-  InitialMessageBridge,
-  RuntimeControlBridge,
-  RuntimeRenderDiagnostics,
-  TaskStateBridge,
-} from "@/components/assistant/runtime/assistant-runtime-bridges";
+import { AssistantRuntimeTransportHost } from "@/components/assistant/runtime/assistant-runtime-transport-host";
 import { useRuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
 import { useRuntimeDiagnostics } from "@/components/assistant/runtime/use-runtime-diagnostics";
 import { useBusinessResume } from "@/components/assistant/runtime/use-business-resume";
 import { useCancellationConfirmation } from "@/components/assistant/runtime/use-cancellation-confirmation";
 import { useRuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
-import { useRuntimeTransport } from "@/components/assistant/runtime/use-runtime-transport";
 import type {
   AssistantRuntimeProps,
   ComposerRestore,
   RuntimeControls,
   RuntimeSessionContext,
 } from "@/components/assistant/runtime/runtime-types";
-import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
+import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
 import { getToolGroups, toolNamesForGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import {
@@ -34,7 +26,7 @@ type RuntimeSessionProps = AssistantRuntimeProps & {
   setIssue: (issue: TransportIssue | null) => void;
 };
 
-/** Compose the backend transport runtime, lifecycle hooks, bridges, and thread UI. */
+/** 组装后端 Transport runtime、生命周期协调器和独立的对话渲染宿主。 */
 export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   taskId,
   workspaceId,
@@ -62,6 +54,18 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     available: backendRuntimeAvailable,
   } = backendRuntime;
   const [traceId] = useState(() => newTraceId());
+  const performanceProbe = useMemo(() => {
+    if (!import.meta.env.DEV) return null;
+    return createAssistantPerformanceProbe({
+      enabled: true,
+      onReport: (report) => {
+        void frontendLog("INFO", "assistant_render_performance_report", "Assistant 开发期渲染性能报告已采集", {
+          traceId,
+          data: { taskId, ...report },
+        });
+      },
+    });
+  }, [taskId, traceId]);
   const [toolGroups, setToolGroups] = useState<ToolGroupCatalog[]>([]);
   const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>(() => initialDisabledToolGroups ?? []);
   const [toolGroupsLoading, setToolGroupsLoading] = useState(true);
@@ -125,6 +129,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     backendRuntimeGeneration,
     backendRuntimeAvailable,
     traceId,
+    performanceProbe,
     setIssue,
     onTaskStateChanged: notifyTaskStateChanged,
     latestStateRef,
@@ -138,6 +143,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     backendRuntimeGeneration,
     backendRuntimeAvailable,
     notifyTaskStateChanged,
+    performanceProbe,
     sessionInitialState,
     setIssue,
     taskId,
@@ -162,48 +168,32 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     latestStateRef.current = state;
     cancellation.onStateCommitted(state);
   }, [cancellation.onStateCommitted, sessionInitialState]);
-  const runtime = useRuntimeTransport(context, recovery, commitTransportState, selectedBanTools);
-
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <RuntimeControlBridge
-        register={registerRuntimeControls}
-        backendAvailable={backendRuntimeAvailable}
-        backendGeneration={backendRuntimeGeneration}
-        resumeOnMount={currentTransportRun(sessionInitialState)?.status === "pending" || currentTransportRun(sessionInitialState)?.status === "running"}
-        taskId={taskId}
-        attachTransportRef={attachTransportRef}
-      />
-      <ComposerRestoreBridge register={registerComposerRestore} />
-      <TaskStateBridge onRunStateChange={onRunStateChange} />
-      <RuntimeRenderDiagnostics taskId={taskId} />
-      <div className="flex h-full min-h-0 flex-col">
-        <Thread
-          taskId={taskId}
-          toolGroups={toolGroups}
-          selectedToolGroups={selectedToolGroups}
-          onSelectedToolGroupsChange={setSelectedToolGroups}
-          toolGroupsLoading={toolGroupsLoading}
-          toolGroupsError={toolGroupsError}
-          workspaceRoot={workspaceRoot}
-          forkAvailable={forkAvailable}
-          forkingRunId={forkingRunId}
-          onForkRun={onForkRun}
-          onResumeBusiness={businessResume.resumeBusinessRun}
-          onCancelRequested={cancellation.onRequested}
-          onCancelResult={cancellation.onResult}
-          cancellingRunId={cancellation.cancellingRunId}
-        />
-      </div>
-      <InitialMessageBridge
-        text={initialMessage}
-        attachments={initialAttachments}
-        sentRef={initialMessageSentRef}
-        initialState={sessionInitialState}
-        taskId={taskId}
-        traceId={traceId}
-        onError={handleInitialMessageError}
-      />
-    </AssistantRuntimeProvider>
+    <AssistantRuntimeTransportHost
+      context={context}
+      recovery={recovery}
+      commitTransportState={commitTransportState}
+      selectedBanTools={selectedBanTools}
+      registerRuntimeControls={registerRuntimeControls}
+      registerComposerRestore={registerComposerRestore}
+      initialMessageSentRef={initialMessageSentRef}
+      toolGroups={toolGroups}
+      selectedToolGroups={selectedToolGroups}
+      onSelectedToolGroupsChange={setSelectedToolGroups}
+      toolGroupsLoading={toolGroupsLoading}
+      toolGroupsError={toolGroupsError}
+      initialMessage={initialMessage}
+      initialAttachments={initialAttachments}
+      forkAvailable={forkAvailable}
+      forkingRunId={forkingRunId}
+      onForkRun={onForkRun}
+      onRunStateChange={onRunStateChange}
+      onResumeBusiness={businessResume.resumeBusinessRun}
+      onInitialMessageError={handleInitialMessageError}
+      onCancelRequested={cancellation.onRequested}
+      onCancelResult={cancellation.onResult}
+      cancellingRunId={cancellation.cancellingRunId}
+      performanceProbe={performanceProbe}
+    />
   );
 });

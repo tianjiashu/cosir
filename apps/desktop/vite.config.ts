@@ -45,13 +45,18 @@ function getPackageName(moduleId: string): string | null {
 }
 
 function isMarkdownPackage(packageName: string): boolean {
-  return packageName === "parse5" || packageName === "streamdown" || packageName === "marked"
+  return packageName === "parse5" || packageName === "streamdown" || packageName.startsWith("@streamdown/")
+    || packageName === "marked" || packageName === "katex" || packageName === "mermaid"
+    || packageName.startsWith("@mermaid-js/") || packageName === "shiki" || packageName.startsWith("@shikijs/")
     || MARKDOWN_PACKAGE_PREFIXES.some((prefix) => packageName.startsWith(prefix));
 }
 
 function getVendorChunk(packageName: string): string {
   if (["react", "react-dom", "scheduler", "use-sync-external-store"].includes(packageName)) {
     return "vendor-react";
+  }
+  if (["@assistant-ui/react-markdown", "@assistant-ui/react-streamdown"].includes(packageName)) {
+    return "vendor-markdown";
   }
   if (packageName.startsWith("@assistant-ui/") || packageName === "assistant-stream") {
     return "vendor-assistant-ui";

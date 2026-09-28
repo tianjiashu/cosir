@@ -2,28 +2,29 @@
 
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import {
-  ThreadPrimitive,
   unstable_useThreadMessageIds,
   useAuiState,
 } from "@assistant-ui/react";
-import { useMemo, type ComponentProps, type FC, type RefObject } from "react";
-
-type MessageComponents = ComponentProps<typeof ThreadPrimitive.Unstable_MessageById>["components"];
+import { memo, useCallback, useMemo, type FC, type RefObject } from "react";
+import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
+import { VirtualizedThreadMessageRow, type MessageComponents } from "@/components/assistant-ui/elements/virtualized-thread-message-row";
 
 type VirtualizedThreadMessagesProps = {
   scrollElementRef: RefObject<HTMLDivElement | null>;
   components: MessageComponents;
   rowPaddingBottom: string;
   keepActiveTail?: boolean;
+  performanceProbe?: AssistantPerformanceProbe | null;
 };
 
-/** Shared assistant-ui message-id virtualizer for writable and readonly threads. */
-export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = ({
+/** 为可写和只读对话共享按消息 id 定位的虚拟列表；不负责消息内容状态维护。 */
+export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = memo(function VirtualizedThreadMessages({
   scrollElementRef,
   components,
   rowPaddingBottom,
   keepActiveTail = false,
-}) => {
+  performanceProbe = null,
+}) {
   const messageIds = unstable_useThreadMessageIds();
   const activeMessageIds = useAuiState((state) => keepActiveTail && state.thread.isRunning
     ? state.thread.messages.slice(-2).map((message) => message.id).join("|")
@@ -48,6 +49,10 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = ({
   const virtualItems = virtualizer.getVirtualItems();
   const firstItem = virtualItems[0];
   const lastItem = virtualItems.at(-1);
+  const measureElement = useCallback(
+    (element: HTMLDivElement | null) => virtualizer.measureElement(element),
+    [virtualizer],
+  );
 
   return (
     <div
@@ -61,20 +66,17 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = ({
         const messageId = messageIds[item.index];
         if (!messageId) return null;
         return (
-          <div
+          <VirtualizedThreadMessageRow
             key={messageId}
-            data-index={item.index}
-            ref={virtualizer.measureElement}
-            className="w-full"
-            style={{ paddingBottom: rowPaddingBottom }}
-          >
-            <ThreadPrimitive.Unstable_MessageById
-              messageId={messageId}
-              components={components}
-            />
-          </div>
+            index={item.index}
+            messageId={messageId}
+            components={components}
+            rowPaddingBottom={rowPaddingBottom}
+            measureElement={measureElement}
+            performanceProbe={performanceProbe}
+          />
         );
       })}
     </div>
   );
-};
+});

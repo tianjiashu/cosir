@@ -136,7 +136,6 @@ class SystemPromptBuilder:
             读取 ``Settings``（用户语言）与 ``platform.system()``；不读任何用户/workspace 文件。
         """
         language = Settings.DEFAULT_LANGUAGE
-        allowed = ", ".join(agent_profile.allowed_tools) or "none"
         lines = [
             "<runtime_context>",
             (
@@ -153,7 +152,11 @@ class SystemPromptBuilder:
                 "may read it, but writing, editing, deleting, or moving anything inside it "
                 "is rejected."
             ),
-            f"- Tools available: {allowed}",
+            (
+                "- Markdown output: LaTeX math (`$$...$$`), Mermaid diagrams (including "
+                "`sequenceDiagram`), CJK-friendly formatting, and syntax-highlighted fenced "
+                "code are supported; use them when helpful."
+            ),
             (
                 f"- User language: {language}. Reply in that language in a friendly tone; do "
                 "not use emoji unless the user asks."

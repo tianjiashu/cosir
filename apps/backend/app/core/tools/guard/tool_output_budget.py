@@ -1,4 +1,18 @@
-"""统一限制 ToolObservation 正文并在 workspace 内保存超大输出。"""
+"""统一限制 ToolObservation 正文并在 workspace 内保存超大输出。
+
+截断策略：模型可见 ``content`` 受 ``Constant.Tools.MAX_OUTPUT_CHARS`` 约束。超限时保留
+**头尾两端**、中间以一行截断标记替代，而不是只留开头——终端日志、测试结果等工具输出的
+结论与报错通常落在末尾，只留开头会让模型看不到关键信息。标记同时给出省略的字符数/行数
+以及承载完整原文的 artifact 路径，模型可据此按需读取全文。
+
+预算口径：``头 + 标记 + 尾`` 的总长度不超过 ``max_chars``；头尾按 ``_HEAD_BUDGET_RATIO``
+分配，切口回退/前推到整行边界，避免留下半行。标记长度取决于省略量、省略量又取决于预算，
+为避免循环依赖，先按「最大可能位数」渲染标记取保守上界，再据此分配头尾预算；预算连标记都
+装不下时退化为「只保留裁到预算内的标记」。
+
+边界：截断只发生在模型通道。落盘 artifact 与 ``display_data``（客户端展示）都保持完整原文，
+见 ``ToolObservationBudget`` 与 ``tool_ui_display_contract.md``。
+"""
 
 from __future__ import annotations
 
@@ -12,6 +26,62 @@ from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 from app.core.tools.tool_handler.patch_write.atomic_write import atomic_write_text
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.utils.cosir_paths import workspace_tool_artifact_dir
+
+# 头尾预算分配：头部占比，其余给尾部。工具输出的结论/报错通常落在末尾，尾部必须保留；
+# 该常量是头尾配比的唯一调节点。
+_HEAD_BUDGET_RATIO = 0.5
+
+
+def _render_truncation_marker(
+    total_chars: int,
+    omitted_chars: int,
+    omitted_lines: int,
+    artifact_path: str,
+) -> str:
+    """渲染夹在头尾之间的截断标记（纯函数，零 I/O）。
+
+    参数:
+        total_chars: 截断前正文的总字符数。
+        omitted_chars: 被省略的字符数。
+        omitted_lines: 被省略的行数（按 ``\\n`` 计）。
+        artifact_path: 完整原文的 workspace 相对路径；为空表示未落盘。
+
+    返回:
+        形如 ``"... [output truncated: omitted 3 of 5000 characters (7 lines); full
+        output: <path>] ..."`` 的标记文本，首尾各带空行以便与正文分离。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    location = f"full output: {artifact_path}" if artifact_path else "full output unavailable"
+    return (
+        f"\n\n... [output truncated: omitted {omitted_chars} of {total_chars} characters "
+        f"({omitted_lines} lines); {location}] ...\n\n"
+    )
+
+
+def _snap_head_to_line_end(head: str) -> str:
+    """把头部末端回退到最后一个换行之后，避免头部停在半行。"""
+
+    cut = head.rfind("\n")
+    return head[: cut + 1] if cut >= 0 else head
+
+
+def _snap_tail_to_line_start(tail: str) -> str:
+    """把尾部起点前推到第一个换行之后，避免尾部从半行开始。
+
+    仅当换行之后还有内容时才前推：预算小于末行长度时，尾切片里唯一的换行就在末尾，
+    此时前推会把尾部清空，反而不如保留这段半行。
+    """
+
+    cut = tail.find("\n")
+    if 0 <= cut < len(tail) - 1:
+        return tail[cut + 1 :]
+    return tail
 
 
 class ToolOutputBudget:
@@ -50,7 +120,8 @@ class ToolOutputBudget:
             execution_context: 当前 task/workspace 上下文。
 
         返回:
-            未超限时返回原对象；超限时返回带截断标记和 artifact 元数据的新对象。
+            未超限时返回原对象；超限时返回「头 + 截断标记 + 尾」的新对象，正文长度不超过
+            ``max_chars``，并在 ``artifact_data`` 中带截断标记与 artifact 路径。
 
         异常:
             无。artifact 写入失败仅记日志并退化为纯截断。
@@ -66,18 +137,12 @@ class ToolOutputBudget:
             else replace(observation, content=content)
         )
 
-        # 如果内容长度小于预算，则直接返回
+        # 未超限：原样返回，不加标记、不做复制。
         if len(content) <= self._max_chars:
             return normalized_observation
 
-        # 如果内容长度大于预算，则写入 artifact 文件，并返回带 artifact 路径的截断内容
+        # 超限：先把完整原文落盘，再把模型可见正文截断为「头 + 标记 + 尾」。
         artifact_path = self._write_artifact(normalized_observation, execution_context)
-        if artifact_path:
-            hint = f"\n... [output truncated; full output: {artifact_path}]"
-        else:
-            hint = "\n... [output truncated by global tool budget]"
-        visible_hint = hint[: self._max_chars]
-        visible_prefix = content[: max(0, self._max_chars - len(visible_hint))]
         artifact_data = dict(normalized_observation.artifact_data or {})
         artifact_data.update(
             {
@@ -88,9 +153,52 @@ class ToolOutputBudget:
         )
         return replace(
             normalized_observation,
-            content=visible_prefix + visible_hint,
+            content=self._truncate_content(content, artifact_path),
             artifact_data=artifact_data,
         )
+
+    def _truncate_content(self, content: str, artifact_path: str) -> str:
+        """把超限正文截断为「头 + 标记 + 尾」。
+
+        参数:
+            content: 截断前的完整正文。
+            artifact_path: 完整原文的 artifact 路径，供标记引用；为空时标记说明未落盘。
+
+        返回:
+            保留头尾两端、中间带截断标记的正文；长度恒定不超过 ``self._max_chars``。
+
+        异常:
+            无。
+
+        副作用:
+            无（纯字符串处理）。
+        """
+
+        max_chars = self._max_chars
+        total = len(content)
+        total_lines = content.count("\n")
+        digits = len(str(total))
+        # 标记里同时含省略字符数与省略行数，二者都不超过 total；用最大位数占位渲染出标记
+        # 长度的保守上界，避免「标记长度 ↔ 省略量」的循环依赖。
+        marker_upper_bound = _render_truncation_marker(
+            total, 10**digits - 1, 10**digits - 1, artifact_path
+        )
+        if max_chars <= len(marker_upper_bound):
+            # 预算连标记都装不下：退化为只保留标记本身（裁到预算内），不保留正文。
+            return _render_truncation_marker(total, total, total_lines, artifact_path)[:max_chars]
+
+        budget = max_chars - len(marker_upper_bound)
+        head_len = min(budget, max(0, int(budget * _HEAD_BUDGET_RATIO)))
+        tail_len = budget - head_len
+        head = _snap_head_to_line_end(content[:head_len])
+        tail = _snap_tail_to_line_start(content[total - tail_len :]) if tail_len else ""
+        marker = _render_truncation_marker(
+            total,
+            total - len(head) - len(tail),
+            total_lines - head.count("\n") - tail.count("\n"),
+            artifact_path,
+        )
+        return head + marker + tail
 
     def _write_artifact(
         self,

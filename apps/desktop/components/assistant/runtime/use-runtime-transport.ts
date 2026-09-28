@@ -39,7 +39,7 @@ function findTransportRun(state: TransportState, runId: number | null) {
   return runId === null ? undefined : state.runs.find((run) => run.runId === runId);
 }
 
-/** Build the Assistant Transport runtime and keep transport-only policy here. */
+/** 创建 Assistant Transport runtime，并集中承载只属于 Transport 的策略。 */
 export function useRuntimeTransport(
   context: RuntimeSessionContext,
   recovery: RuntimeRecovery,
@@ -164,12 +164,11 @@ export function useRuntimeTransport(
       ) return;
       context.latestStateRef.current = snapshot;
       params.updateState(() => snapshot);
-      // An attach-only resume failure must recover through the existing bounded
-      // transport recovery path. It must never re-enter the business-resume
-      // POST /assistant path.
+      // attach-only resume 失败必须回到已有的有界 Transport recovery 路径，不能重新进入
+      // business-resume 的 POST /assistant 请求。
       if (params.commands.length === 0) void recovery.reconcileAfterTransportFinish();
     } catch {
-      // Preserve the original transport issue when recovery also fails.
+      // recovery 也失败时保留原始 Transport issue。
     } finally {
       clear();
       if (errorSnapshotAbortControllerRef.current === controller) {
@@ -291,9 +290,8 @@ export function useRuntimeTransport(
           payload: { ban_tools: [...selectedBanTools] },
         });
       }
-      // A new user command starts a fresh transport recovery budget. Empty
-      // command batches are attach/resume operations and must not reset the
-      // bounded EOF protection.
+      // 新用户命令开始新的 Transport recovery 预算；空 command batch 属于 attach/resume，
+      // 不能重置有界 EOF 保护。
       if (commands.length > 0) recovery.resetTransportRecoveryBudget();
       const hasEditCommand = commands.some((command) => getUserAddMessageSourceId(command) !== null);
       const requestRunId = commands.length === 0 || hasEditCommand
@@ -422,5 +420,6 @@ export function useRuntimeTransport(
     },
     onAttachReady,
     onStateCommit,
+    performanceProbe: context.performanceProbe,
   });
 }

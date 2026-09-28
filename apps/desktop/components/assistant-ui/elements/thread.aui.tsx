@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon } from "lucide-react";
-import { useContext, createContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FC, type ReactNode } from "react";
+import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FC, type ReactNode } from "react";
 import {
   AuiIf,
   ActionBarPrimitive,
@@ -66,6 +66,7 @@ import { cn } from "@/lib/utils";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
 import { AttachmentTaskContext } from "@/components/assistant-ui/elements/attachment-context";
 import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/virtualized-thread-messages";
+import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { UserMessageAttachments } from "@/components/assistant-ui/elements/user-message-attachments";
 import {
   ComposerAttachmentButton,
@@ -82,7 +83,7 @@ export type ThreadComponents = {
 export type ThreadProps = {
   components?: ThreadComponents;
   autoFocus?: boolean;
-  /** Render the canonical message UI without any write affordances. */
+  /** 只渲染 canonical message UI，不提供写入操作。 */
   readonly?: boolean;
   taskId?: number;
   toolGroups?: ToolGroupCatalog[];
@@ -98,6 +99,7 @@ export type ThreadProps = {
   onCancelRequested?: (runId: number) => void;
   onCancelResult?: (runId: number, accepted: boolean) => void;
   cancellingRunId?: number | null;
+  performanceProbe?: AssistantPerformanceProbe | null;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
@@ -114,12 +116,11 @@ type ToolTraceGroupProps = {
 };
 
 /**
- * Render a grouped tool trace using each tool's backend lifecycle status.
+ * 使用各工具的后端生命周期状态渲染聚合后的工具轨迹。
  *
- * assistant-ui derives a tool part's standard status from the assistant
- * message status when no tool result is present. That makes completed tools
- * appear running while the assistant continues with a later step, so this
- * component deliberately reads the transport artifact for the aggregate.
+ * 没有工具结果时，assistant-ui 会从 assistant message status 推导工具状态；
+ * assistant 继续后续步骤时，已完成的工具可能因此仍显示运行中，所以这里直接读取
+ * Transport artifact 计算聚合状态。
  */
 const ToolTraceGroup: FC<ToolTraceGroupProps> = ({ indices, children }) => {
   const statusKey = useAuiState((state) => indices.map((index) => {
@@ -153,7 +154,7 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null }) => {
+export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null }) {
   const isEmpty = useAuiState(isNewChatView);
   const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
@@ -163,13 +164,10 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
       <AttachmentTaskContext.Provider value={taskId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/*
-          Top anchor pins the turn's user message while the answer grows below
-          it, so streaming no longer re-pins the scroll position on every
-          chunk. autoScroll is stated explicitly because it defaults to false
-          in this mode: following the bottom mid-stream is deliberately traded
-          for a stable viewport. Message roots below additionally skip
-          off-screen layout and paint through content-visibility utilities
-          (intrinsic size is not calibrated yet).
+          顶部锚点固定本轮用户消息，答案在其下方增长，流式 token 不会持续把滚动位置重新
+          钉回底部。这里显式关闭 autoScroll，因为该模式默认值为 false；中途追踪底部会
+          换取稳定视口。消息根节点另外通过 content-visibility 工具跳过屏幕外布局和绘制，
+          当前尚未校准 intrinsic size。
         */}
         <ThreadPrimitive.Viewport ref={viewportRef} turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth">
             <div className={cn("mx-auto flex min-w-0 w-full max-w-3xl flex-1 flex-col px-4 pt-4", isEmpty && "justify-center")}>
@@ -178,6 +176,7 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
                 components={messageComponents}
                 rowPaddingBottom="1.5rem"
                 keepActiveTail
+                performanceProbe={performanceProbe}
               />
               {!readonly && (
                 <ThreadPrimitive.ViewportFooter className={cn("bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6", !isEmpty && "rounded-t-3xl")}>
@@ -186,7 +185,12 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
                   >
                     <ArrowDownIcon />
                   </ThreadPrimitive.ScrollToBottom>
-                  <Composer autoFocus={autoFocus} taskId={taskId} workspaceRoot={workspaceRoot} />
+                  <ComposerBoundary
+                    autoFocus={autoFocus}
+                    taskId={taskId}
+                    workspaceRoot={workspaceRoot}
+                    performanceProbe={performanceProbe}
+                  />
                 </ThreadPrimitive.ViewportFooter>
               )}
             </div>
@@ -196,9 +200,38 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS, autoFoc
     </ThreadComponentsContext.Provider>
     </ThreadContext.Provider>
   );
-};
+});
 
-const Composer: FC<{ autoFocus: boolean; taskId?: number; workspaceRoot?: string }> = ({ autoFocus, taskId, workspaceRoot }) => (
+const ComposerBoundary = memo(function ComposerBoundary({
+  autoFocus,
+  taskId,
+  workspaceRoot,
+  performanceProbe,
+}: {
+  autoFocus: boolean;
+  taskId?: number;
+  workspaceRoot?: string;
+  performanceProbe?: AssistantPerformanceProbe | null;
+}) {
+  const composer = <Composer autoFocus={autoFocus} taskId={taskId} workspaceRoot={workspaceRoot} />;
+  if (!performanceProbe) return composer;
+  return (
+    <Profiler
+      id="assistant-composer"
+      onRender={(_, phase, actualDuration) => performanceProbe.recordReactCommit({
+        scope: "composer",
+        id: "assistant-composer",
+        phase,
+        actualDurationMs: actualDuration,
+      })}
+    >
+      {composer}
+    </Profiler>
+  );
+});
+
+const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { autoFocus: boolean; taskId?: number; workspaceRoot?: string }) {
+  return (
   <InlineComposerInsertionProvider>
     <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
       <div className="flex min-w-0 items-center px-1">
@@ -228,7 +261,8 @@ const Composer: FC<{ autoFocus: boolean; taskId?: number; workspaceRoot?: string
       </div>
     </ComposerPrimitive.Root>
   </InlineComposerInsertionProvider>
-);
+  );
+});
 
 const ComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = false }) => {
   const composer = unstable_useComposerInput();
@@ -370,9 +404,8 @@ const UserMessageView: FC = () => {
       messageId,
     )) return false;
 
-    // The transport runtime may render a new user command optimistically
-    // before its canonical snapshot arrives. During that window the old
-    // snapshot must not make the previous user message editable again.
+    // Transport runtime 可能在 canonical snapshot 到达前乐观渲染新的用户命令；
+    // 此期间不能因为旧 snapshot 仍在，就把上一条用户消息重新标记为可编辑。
     const latestRenderedUserMessageId = [...state.thread.messages]
       .reverse()
       .find((message) => message.role === "user")?.id;

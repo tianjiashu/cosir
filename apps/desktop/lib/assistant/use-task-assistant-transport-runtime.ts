@@ -10,6 +10,7 @@ import type { ReadonlyJSONValue } from "assistant-stream/utils";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import type { TransportState } from "@/lib/assistant/contract";
+import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import {
   convertFrameStoreItem,
   parseTransportFrame,
@@ -46,35 +47,47 @@ export type TaskAssistantTransportOptions = {
   onAttachReady?: (attach: (() => Promise<void>) | null) => void;
   readonly?: boolean;
   onStateCommit?: (state: TransportState) => void;
+  performanceProbe?: AssistantPerformanceProbe | null;
 };
 
 type StreamCallbacks = {
   commands: readonly unknown[];
   controller: AbortController;
+  performanceStarted: boolean;
 };
 
 /**
- * Build one assistant-ui external adapter on one task frame store.
+ * 为单个 task 的 frame store 创建 assistant-ui external adapter。
  *
- * The store is the only stream projection owner. This hook owns request/connection lifetime;
- * a superseded AbortController and object identity check isolate an old SSE connection from a
- * newer attach/send without introducing protocol version fields. It does not create a runtime
- * or persist task state; the exported runtime hooks choose the appropriate assistant-ui host.
+ * frame store 是唯一的流式投影持有者；本 hook 负责请求与连接生命周期，通过被替换的
+ * AbortController 和对象身份检查隔离旧 SSE 连接，不引入协议版本字段。它不创建业务
+ * 持久化状态，导出的 runtime hook 再选择合适的 assistant-ui 宿主。
  */
 function useTaskAssistantTransportAdapter(
   taskId: number,
   options: TaskAssistantTransportOptions,
 ) {
-  const store = useMemo(() => new TransportFrameStore(options.initialState), [taskId]);
+  const store = useMemo(() => new TransportFrameStore(options.initialState, {
+    performanceProbe: options.performanceProbe ?? undefined,
+  }), [options.initialState, options.performanceProbe, taskId]);
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const activeStreamRef = useRef<StreamCallbacks | null>(null);
   const optionsRef = useRef(options);
   optionsRef.current = options;
 
   const closeActiveStream = useCallback(() => {
-    activeStreamRef.current?.controller.abort();
+    const callbacks = activeStreamRef.current;
+    if (callbacks?.performanceStarted) {
+      const snapshot = store.getSnapshot();
+      optionsRef.current.performanceProbe?.finishStream({
+        targetRunId: snapshot.targetRunId,
+        targetRunStatus: snapshot.targetRunStatus,
+      });
+      callbacks.performanceStarted = false;
+    }
+    callbacks?.controller.abort();
     activeStreamRef.current = null;
-  }, []);
+  }, [store]);
 
   const readSse = useCallback(async (response: Response, callbacks: StreamCallbacks) => {
     if (!response.body) throw new Error("Assistant frame SSE response has no body");
@@ -102,6 +115,9 @@ function useTaskAssistantTransportAdapter(
       const data = buffer.split("\n").find((line) => line.startsWith("data:"))?.slice(5).trim();
       if (data && data !== "[DONE]") store.applyFrame(parseTransportFrame(JSON.parse(data)));
     }
+    // SSE EOF 可能早于宿主 WebView 的下一次动画帧；先提交最后一批 active row 内容，再让完成回调
+    // 读取最新的 Transport state，避免终态收敛基于上一个动画帧的旧快照。
+    if (activeStreamRef.current === callbacks) store.flushScheduledPublication();
   }, [store]);
 
   const openStream = useCallback(async (
@@ -111,7 +127,7 @@ function useTaskAssistantTransportAdapter(
   ) => {
     closeActiveStream();
     const controller = new AbortController();
-    const callbacks: StreamCallbacks = { commands, controller };
+    const callbacks: StreamCallbacks = { commands, controller, performanceStarted: false };
     activeStreamRef.current = callbacks;
     let accepted = false;
     try {
@@ -123,17 +139,24 @@ function useTaskAssistantTransportAdapter(
       });
       if (!response.ok) {
         const body = await response.text();
-        // Preserve the existing structured HTTP error boundary used by runtime recovery.
-        // The body is parsed by parseTransportError and only its allow-listed message reaches UI.
+        // 保持 runtime recovery 使用的结构化 HTTP 错误边界；响应体由 parseTransportError
+        // 解析，只有白名单消息可以进入界面。
         throw new Error(`Status ${response.status}: ${body}`);
       }
       if (activeStreamRef.current !== callbacks) return;
       accepted = true;
+      callbacks.performanceStarted = true;
+      optionsRef.current.performanceProbe?.beginStream();
       optionsRef.current.onResponse?.(response);
       await readSse(response, callbacks);
       if (activeStreamRef.current === callbacks) {
         activeStreamRef.current = null;
         const snapshot = store.getSnapshot();
+        optionsRef.current.performanceProbe?.finishStream({
+          targetRunId: snapshot.targetRunId,
+          targetRunStatus: snapshot.targetRunStatus,
+        });
+        callbacks.performanceStarted = false;
         optionsRef.current.onFinish?.({
           targetRunId: snapshot.targetRunId,
           targetRunStatus: snapshot.targetRunStatus,
@@ -143,6 +166,14 @@ function useTaskAssistantTransportAdapter(
       if (controller.signal.aborted || activeStreamRef.current !== callbacks) return;
       activeStreamRef.current = null;
       const normalized = error instanceof Error ? error : new Error(String(error));
+      if (accepted) {
+        const snapshot = store.getSnapshot();
+        optionsRef.current.performanceProbe?.finishStream({
+          targetRunId: snapshot.targetRunId,
+          targetRunStatus: snapshot.targetRunStatus,
+        });
+        callbacks.performanceStarted = false;
+      }
       await optionsRef.current.onError?.(normalized, {
         commands,
         phase: accepted ? "accepted-stream-failed" : "request-rejected",
@@ -240,15 +271,15 @@ function useTaskAssistantTransportAdapter(
       convertMessage: convertFrameStoreItem,
       adapters: options.adapters,
     };
-    // The library type models onNew as mandatory for writable runtimes. Readonly runtimes
-    // intentionally omit it at runtime so Assistant UI does not advertise a write handler.
+    // 库类型把 onNew 建模为 writable runtime 的必填项；readonly runtime 有意在运行时省略，
+    // 使 Assistant UI 不暴露写入处理器。
     return base as unknown as ExternalStoreAdapter<FrameStoreItem>;
   }, [onCancel, onEdit, onNew, onRefetchThread, options.adapters, options.readonly, store, view]);
 
   return adapter;
 }
 
-/** Build the writable persisted-task runtime with its remote thread-list identity. */
+/** 创建带有远程 thread-list 身份的可写持久化 task runtime。 */
 export function useTaskAssistantTransportRuntime(
   taskId: number,
   options: TaskAssistantTransportOptions,
@@ -271,7 +302,7 @@ export function useTaskAssistantTransportRuntime(
   });
 }
 
-/** Build a readonly Workbench runtime without mounting a nested remote thread list. */
+/** 创建不挂载嵌套远程 thread list 的只读 Workbench runtime。 */
 export function useTaskAssistantReadonlyTransportRuntime(
   taskId: number,
   options: TaskAssistantTransportOptions,
@@ -305,11 +336,9 @@ export function toAddMessageCommand(message: AppendMessage): UserAddMessageComma
     }
   }
 
-  // assistant-ui keeps uploaded attachments in `message.attachments`; they
-  // are not copied into `message.content` by the composer. Images therefore
-  // have to cross the transport boundary from the attachment content here,
-  // otherwise they are visible in the composer but silently absent from the
-  // add-message command and the canonical user snapshot.
+    // assistant-ui 将上传附件保存在 `message.attachments`，composer 不会把它们复制到
+    // `message.content`。因此图片必须在这里从附件内容跨过 Transport 边界，否则输入框
+    // 看得到图片，但 add-message command 和 canonical user snapshot 会静默缺少它。
   const seenImages = new Set(
     parts
       .filter((part): part is { type: "image"; image: string } => part.type === "image")
