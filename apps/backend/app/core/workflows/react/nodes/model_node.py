@@ -148,6 +148,7 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     task_id = operations.get_current_task().id
     run_id = operations.get_current_run().id
+    workspace_id = operations.get_current_workspace().id
 
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -182,9 +183,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     messages = await asyncio.to_thread(
         resolve_messages_for_model,
         messages,
-        task_id=task_id,
-        model_name=getattr(rc.run, "model_name", None) or "",
-        vision_input_format=getattr(rc, "vision_input_format", "openai_url"),
+        workspace_id=workspace_id,
     )
 
     log.info(

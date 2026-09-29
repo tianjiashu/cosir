@@ -25,6 +25,7 @@ from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.llm_provider.model_failure import classify_model_failure
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_run_failure import (
     run_failure_message,
@@ -35,7 +36,6 @@ from ...context.runtime_context_manager import RuntimeContextManager
 from ..agent_workflow import AgentWorkflow, build_checkpointer
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
-from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -302,7 +302,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             state 订阅事实变更。
 
         异常:
-            ValueError: Conversation Run 缺少 ``model_config_id``——run 已先落 failed 终态。
+            ValueError: Agent profile 的 ModelSettings 未物化或不满足模型能力约束——run 已先落
+                failed 终态。
             Exception: 模型解析失败或 graph 执行失败时，记 ``workflow_graph_failed`` /
                 ``model_resolve_failed``，经 ``_settle_failed_run`` 落定 failed 终态后原样向上
                 抛出；未被这些分支覆盖的异常再由外层 ``run`` 兜底落定。
@@ -317,13 +318,13 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         # Agent 执行主体
         agent_profile = operations.agent_profile
-        # 构建模型：按 run.model_name 运行期兜底解析（None 时回退 agent_profile.model_name），
-        # 失败记 ``model_resolve_failed`` 后抛出，由外层 graph.astream 异常分支收敛为 RUN_FAILED。
+        # 构建模型：所有连接字段和能力字段都已在 runner 的 per-run 派生边界写入
+        # AgentProfile.model_settings；工厂只消费该值对象，不回查 Run 或配置服务。
         try:
-            base_model = resolve_chat_model(
-                run=run,
+            resolved_model = resolve_chat_model(
                 agent_profile=agent_profile,
             )
+            base_model = resolved_model.model
         except Exception as exc:
             log.exception(
                 "model_resolve_failed",
@@ -332,7 +333,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                     "data": {
                         "task_id": current_task.id,
                         "run_id": run.id,
-                        "model": run.model_name or agent_profile.model_name,
+                        "model": agent_profile.model_settings.model_name,
                     },
                 },
             )
@@ -365,19 +366,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             )
             bound_model = base_model
 
-        if run.model_config_id is None:
-            # 配置缺失也属于「本轮无法开始」的失败：先落 failed 终态再抛出，避免异常逃逸后
-            # run 永久停留在 running。
-            self._settle_failed_run(
-                operations,
-                Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE,
-            )
-            raise ValueError("Conversation Run model_config_id is required")
-        model_snapshot = run.extra.model_snapshot if run.extra is not None else None
-        if model_snapshot is None:
-            raise ValueError("Conversation Run model snapshot is required")
-        thinking_channel = "reasoning_content" if model_snapshot.supports_thinking else ""
+        thinking_channel = "reasoning_content" if resolved_model.supports_thinking else ""
 
+        current_workspace = operations.get_current_workspace()
         runtime_config = RuntimeConfig(
             operations=operations,
             run=run,
@@ -386,10 +377,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             usage_stats=ConversationRunUsageStats(),
             langfuse_trace_id=langfuse_trace_id,
             thinking_channel=thinking_channel,
-            supports_image=model_snapshot.supports_image,
             execution_mode=execution_mode,
         )
-        current_workspace = operations.get_current_workspace()
         # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
         # 读写唯一入口，并挂载上下文占用订阅者。
         runtime_context_manager = RuntimeContextManager.ensure_get_runtime_context_manager(
@@ -402,6 +391,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         runtime_context_manager.begin_run(
             run,
             execution_mode,
+            context_window_k=resolved_model.context_window_k,
             tool_schemas=tool_schemas,
         )
         # 本 Run 的初始 user 消息属于该 Run 的 canonical 上下文事实：fresh 时

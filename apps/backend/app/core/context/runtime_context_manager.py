@@ -212,10 +212,12 @@ class RuntimeContextManager:
         return get_conversation_task_context_service()
 
     def begin_run(
-            self,
-            run: ConversationRunRecord,
-            execution_mode: ExecutionMode = "fresh",
-            tool_schemas: Sequence[Mapping[str, Any]] = (),
+        self,
+        run: ConversationRunRecord,
+        execution_mode: ExecutionMode = "fresh",
+        *,
+        context_window_k: int,
+        tool_schemas: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """绑定 run，并从 context 中分离历史与当前 run 条目。
 
@@ -223,6 +225,8 @@ class RuntimeContextManager:
             run: 待执行的 Conversation Run。
             execution_mode: ``fresh`` 清理该 run 的旧消息；``resume`` 保留并重新加载
                 该 run 已持久化的消息。
+            context_window_k: 本次解析得到的模型上下文窗口，单位为 K；来自模型配置，
+                不从 Run 记录重复读取。
             tool_schemas: 当前 Run 实际绑定给模型的模型侧工具 schema；只保存在运行时，
                 不写入 Task context 持久化记录。
 
@@ -258,7 +262,7 @@ class RuntimeContextManager:
         # SQLite 读取最后序号并推进一次，后续消息只由 ``add_message`` 自增。否则首轮
         # 使用 0/1 后，第二轮会再次尝试写入 1，触发 (task_id, sequence) 唯一约束。
         self.current_run_id = run.id
-        self.total_tokens = (run.context_window_k or 0) * 1000
+        self.total_tokens = context_window_k * 1000
 
     def add_change_listener(self, listener: ContextListener) -> RuntimeContextManager:
         """注册一个按 order 执行的 context listener。
