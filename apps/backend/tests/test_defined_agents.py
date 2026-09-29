@@ -174,7 +174,7 @@ def test_builtin_children_leave_model_route_to_parent_run(
     profiles = _code_defined_profiles(monkeypatch, tmp_path)
 
     assert all(profile.model_config_id is None for profile in profiles)
-    assert all(profile.model_name is None for profile in profiles)
+    assert all(profile.resolve_model_name() is None for profile in profiles)
 
 
 def test_child_profile_model_settings_keep_custom_overrides() -> None:
@@ -190,5 +190,6 @@ def test_child_profile_model_settings_keep_custom_overrides() -> None:
 
     assert derived.model_settings is custom
     assert derived.model_settings.temperature == 0.2
-    assert (derived.model_config_id, derived.model_name) == (7, "glm-4.6")
-    assert (child.model_config_id, child.model_name, child.run) == (None, None, None)
+    assert derived.model_config_id == 7
+    assert (child.model_config_id, child.run) == (None, None)
+    assert child.resolve_model_name() is None

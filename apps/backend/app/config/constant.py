@@ -179,10 +179,12 @@ class Constant:
     class Attachment:
         """附件上传与图片归一化的共享常量。"""
 
-        # 单张图片从上传到模型输入都遵守的原始字节上限。
+        # 单张原始上传图片的流式字节上限。
         MAX_UPLOAD_BYTES: int = 20 * 1024 * 1024
-        # 产品统一支持的图片协议格式；其它本地图片格式不作为上传输入接受。
-        IMAGE_FORMATS: frozenset[str] = frozenset({"jpeg", "png", "gif", "webp"})
+        # 单张规范化后图片的最终存储字节上限。
+        MAX_IMAGE_BYTES: int = 20 * 1024 * 1024
+        # 产品统一支持的图片格式；上传阶段只接受 JPEG 与 PNG。
+        IMAGE_FORMATS: frozenset[str] = frozenset({"jpeg", "png"})
         # 一次模型请求最多携带的图片数量。
         MAX_IMAGES_PER_REQUEST: int = 20
         # 一次模型请求中所有图片的总字节上限。
@@ -191,16 +193,14 @@ class Constant:
         MAX_IMAGE_SIDE_PX: int = 8192
         # 资源 ID 格式：64 位小写十六进制。
         ASSET_ID: "re.Pattern[str]" = re.compile(r"^[0-9a-f]{64}$")
-        # 资源文件名格式：``<asset_id>[.source].<extension>``。
+        # 资源文件名格式：``<asset_id>.<extension>``。
         ASSET_FILE: "re.Pattern[str]" = re.compile(
-            r"^(?P<asset_id>[0-9a-f]{64})(?:\.source)?\.(?P<extension>[A-Za-z0-9]+)$"
+            r"^(?P<asset_id>[0-9a-f]{64})\.(?P<extension>jpeg|png)$"
         )
         # 图片 MIME 类型映射（格式 -> content-type），以只读映射展示。
         CONTENT_TYPES: ClassVar[Mapping[str, str]] = {
             "jpeg": "image/jpeg",
             "png": "image/png",
-            "gif": "image/gif",
-            "webp": "image/webp",
         }
 
     class Cosir:

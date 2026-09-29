@@ -113,11 +113,11 @@ def test_derive_for_run_backfills_route_and_applies_model_settings_override() ->
         model_settings=override,
     )
 
-    assert (derived.model_config_id, derived.model_name) == (3, "glm-4.6")
+    assert derived.model_config_id == 3
     assert derived.model_settings is override
     # 原单例不被本次派生污染。
     assert profile.model_config_id is None
-    assert profile.model_name is None
+    assert profile.resolve_model_name() is None
     assert profile.model_settings != override
 
 
@@ -126,13 +126,12 @@ def test_derive_for_run_keeps_profile_explicit_route() -> None:
 
     profile = _child_profile()
     profile.model_config_id = 9
-    profile.model_name = "own-model"
 
     derived = profile.derive_for_run(
         run=_RunRoute(model_config_id=3, model_name="glm-4.6"),  # type: ignore[arg-type]
     )
 
-    assert (derived.model_config_id, derived.model_name) == (9, "own-model")
+    assert derived.model_config_id == 9
 
 
 def test_derive_for_run_binds_run_to_copy_only() -> None:

@@ -54,7 +54,7 @@ def main_agent(*, system_prompt: str = "") -> AgentProfile:
         agent_type=AgentProfileType.MAIN,
         system_prompt=system_prompt,
         max_steps=300,
-        model_settings=ModelSettings(thinking=True, stream=True, reasoning_effort="high"),
+        model_settings=ModelSettings(stream=True, reasoning_effort="high"),
     )
 
 
@@ -103,5 +103,5 @@ def general_child_agent() -> AgentProfile:
         agent_type=AgentProfileType.CHILD,
         system_prompt=_GENERAL_CHILD_AGENT_SYSTEM_PROMPT,
         max_steps=300,
-        model_settings=ModelSettings(thinking=True, stream=True, reasoning_effort="high")
+        model_settings=ModelSettings(stream=True, reasoning_effort="high")
     )

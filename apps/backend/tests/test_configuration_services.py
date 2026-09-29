@@ -142,7 +142,8 @@ def test_agent_configuration_round_trip_preserves_model_override(
     assert _document(service, "reviewer").model_config_id == 7
     assert updated.model_config_id == 7
     assert (
-        registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer").model_name == "model-a"
+        registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer").resolve_model_name()
+        == "model-a"
     )
     service.delete_document("reviewer")
     assert registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer") is None

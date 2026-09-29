@@ -114,7 +114,6 @@ class ModelSettings:
     字段分类：
     - 采样参数：``temperature`` / ``top_p`` / ``max_tokens``；
     - 推理强度：``reasoning_effort``（``low``/``high``/``max``，None 时不注入）；
-    - thinking 开关：``thinking``（是否抽取/回传思考块）；
     - 请求行为覆盖：``drop_params``（None 时使用运行时默认值）/
       ``stream``（None 时不覆盖）/ ``response_format``（text / json_object，None 时不注入）。
 
@@ -125,7 +124,6 @@ class ModelSettings:
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None
-    thinking: bool | None = None
     # 可选厂商类型（注册表键，如 ``deepseek`` / ``azure``）：None 时由
     # ``factory.build_chat_model`` 按 model_name 前缀回退推导。
     # 可选是否丢弃不支持参数覆盖：None 时使用运行时默认值。
@@ -140,11 +138,7 @@ class ModelSettings:
 
     @classmethod
     def default_settings(cls) -> "ModelSettings":
-        return cls(
-            stream = True,
-            reasoning_effort="high",
-            thinking=True
-        )
+        return cls(stream=True, reasoning_effort="high")
 
     def to_dict(self) -> dict[str, Any]:
         """序列化为 JSON 可序列化字典（仅含非 ``None`` 字段）。
