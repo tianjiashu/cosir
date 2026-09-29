@@ -4,7 +4,7 @@
 
 **目标：** 修正 Assistant Transport 请求在“尚未被后端接受”时的前端状态，使新建对话不提前进入 Task 页面，普通发送和编辑重跑不把被拒绝的消息显示到对话中，并统一通过弹窗展示结构化错误，同时完整保留用户输入、图片和文件附件。
 
-**架构：** 不新增 task-less Assistant Transport wire 模式，也不改造图片 locator。NewConversation 先通过现有 Task 创建 API 创建一个带 `creation_command_id` 的 provisional Task，但不导航；随后复用现有 Task-scoped attachment 上传和 `/assistant` 请求。`/assistant` 在 2xx 前失败时，前端使用 `taskId + creationCommandId` 调用现有 `delete_task` API 的受控清理分支；后端只在标记匹配且未形成已接受业务事实时删除 provisional Task，FastAPI schema/request parsing failure 也沿用同一前端清理路径。清理失败只记录结构化日志，不覆盖原始错误。前端只有收到 2xx 后才导航。前端引入明确的“尚未接受 / 已接受 / canonical”请求阶段，只对“尚未接受”的请求执行 optimistic 回滚。SSE 在后端接受后断开不再被误判为业务拒绝，也不删除 Task 或 Run，而是通过现有 snapshot/attach 恢复。
+**架构：** 不新增 task-less Assistant Transport wire 模式，也不改造图片 locator。NewConversation 先通过现有 Task 创建 API 创建一个带 `creation_command_id` 的 provisional Task，但不导航；随后使用 workspace 级附件上传和 `/assistant` 请求。`/assistant` 在 2xx 前失败时，前端使用 `taskId + creationCommandId` 调用现有 `delete_task` API 的受控清理分支；后端只在标记匹配且未形成已接受业务事实时删除 provisional Task，FastAPI schema/request parsing failure 也沿用同一前端清理路径。清理失败只记录结构化日志，不覆盖原始错误。前端只有收到 2xx 后才导航。前端引入明确的“尚未接受 / 已接受 / canonical”请求阶段，只对“尚未接受”的请求执行 optimistic 回滚。SSE 在后端接受后断开不再被误判为业务拒绝，也不删除 Task 或 Run，而是通过现有 snapshot/attach 恢复。
 
 **技术栈：** FastAPI/Pydantic、SQLAlchemy/SQLite、React、assistant-ui external store runtime、SSE、Vitest、Playwright。
 
@@ -17,13 +17,13 @@
 2xx 后 SSE 失败	不回滚	不伪造恢复	attach/snapshot 对账
 
 - 图片附件接口不需要改；`/assistant` 失败时不补偿删除已上传图片，图片文件继续保留。
-- `DELETE /tasks/{task_id}` 不负责删除图片附件：无论普通任务删除还是 provisional cleanup，都不得调用 `AttachmentService.delete()` 或 `collect_workspace_attachment_orphans()`；附件清理不属于本次 Task 删除，未来如需清理必须另行设计明确入口。
+- `DELETE /tasks/{task_id}` 不负责删除图片附件：无论普通任务删除还是 provisional cleanup，都不得调用任何附件删除或清理逻辑；附件永久保留不属于本次 Task 删除。
 - 后端 `ConversationRunModel.status` 仍是 Run 生命周期唯一事实源。
 - 前端不得把 assistant-ui optimistic message 写回后端事实；pending command 只能存在于 Transport runtime-local projection。
 - HTTP/SSE 断开不自动取消业务 Run；只有明确的 business cancel 才能取消 Run。
 - 错误响应继续使用 `{error:{code,message,retryable}}`；原始异常、堆栈、凭据和完整请求正文不得返回前端。
 - provisional Task 容器创建是独立的容器用例；该阶段不创建 command、Run、context 或 snapshot baseline。`/assistant` 接受已有 provisional Task 后，command、Run 和数据库 context 事实仍由同一应用用例事务编排；CRUD 不承载跨表状态迁移。
-- 新建流程允许先落一个 provisional Task 作为附件上传容器；它不是用户可见的成功对话，只有 `/assistant` 2xx 后才允许前端导航。失败清理必须校验 `creation_command_id`，不能按裸 `task_id` 删除。清理 provisional Task 时保留已经上传的图片；Task 删除 API 本身不删除附件。
+- 新建流程允许先落一个 provisional Task 作为 Assistant Transport 的运行目标；它不是用户可见的成功对话，只有 `/assistant` 2xx 后才允许前端导航。失败清理必须校验 `creation_command_id`，不能按裸 `task_id` 删除。图片已由 workspace 级附件接口保存；清理 provisional Task 时不删除 workspace 附件，Task 删除 API 本身也不删除附件。
 - 本地单用户场景接受极少量清理失败后的死记录；清理失败必须有结构化日志，且不能阻塞原始错误返回。死记录不应成为正常前端导航目标。
 - “消息绝不显示”严格适用于收到 2xx 之前的 request rejection。2xx 后 SSE 失败表示业务已接受，不能安全回滚 canonical facts；若产品要求该阶段也绝不显示消息，必须另增两阶段 admission/commit 协议，本方案不把它伪装成前端回滚。
 - 不新增第二套业务状态机；请求阶段只属于前端 Transport 控制状态，不进入 SQLite、context 或 snapshot。
@@ -48,9 +48,9 @@
 
 `TaskService.get_or_create_task()` 当前没有按 `(workspace_id, creation_command_id)` 查找已有 Task 的逻辑；本方案只需为 provisional cleanup 增加受控的创建标记校验，不把现有创建方法描述成 Assistant Transport 的 new-task 幂等用例。
 
-### 2. 图片上传接口按 Task 定位 workspace，但附件文件实际存储在 workspace
+### 2. 图片上传接口按 workspace 保存附件，消息发送阶段再绑定 Task
 
-前端图片 adapter 通过 `POST /tasks/{taskId}/attachments` 上传，接口借助 `taskId` 定位所属 workspace；Assistant Transport 图片 part 只接受 `cosir-attachment://...` locator。先创建 provisional Task 是复用现有接口的最小路径：图片仍按当前 Task-scoped API 上传，不新增 staged attachment、descriptor、TTL 或新的 locator 格式。图片文件实际位于 workspace 附件目录，没有 SQLite 附件元数据表；该接口按图片字节的 SHA-256 自动复用同一 asset，重试同一图片会得到同一 asset/locator。这里的幂等是内容去重语义，不新增 request-level `commandId` 上传协议，文件名等展示元数据仍沿用当前请求。provisional Task 记录清理不会删除已上传图片。
+前端图片 adapter 通过 `POST /workspaces/{workspaceId}/attachments` 上传；上传接口只校验图片并按图片字节的 SHA-256 幂等保存到 workspace 附件目录，不创建 Task/Run 引用，也不新增附件数据库表。Assistant Transport 图片 part 只接受 `cosir-attachment://...` locator。消息发送阶段由 `task_id` 推导所属 workspace，校验 locator 后再把图片绑定到 Run。重试同一图片会得到同一 asset/locator；这里的幂等是内容去重语义，不新增 request-level `commandId` 上传协议。
 
 ### 3. 新建页面当前先创建 Task，再异步发送首条消息
 
@@ -144,7 +144,7 @@ accepted ──SSE/attach 断开→ reconciling
 - [ ] 让 workspace service 透传 `creation_command_id`，复用已有 TaskModel 字段和 Task 创建事务。
 - [ ] 在 TaskService 增加显式 `cleanup_provisional_task(task_id, creation_command_id)` 用例：校验创建标记、workspace/task 闸门和没有已接受业务事实后，复用现有 Task 树删除核心。
 - [ ] 让现有 `DELETE /tasks/{task_id}` 支持带 `creationCommandId` 的受控 provisional cleanup 分支；该分支只允许删除匹配标记的临时 Task，不允许把它当作普通 Task 删除的绕过参数。
-- [ ] 复用 Task 树删除核心，并明确 Task 删除 API 的统一附件边界：跳过 `collect_workspace_attachment_orphans()`，不调用 `AttachmentService.delete()`；不为 Task 删除增加任何附件补偿删除分支。
+- [ ] 复用 Task 树删除核心，并明确 Task 删除 API 的统一附件边界：不调用任何附件删除或清理逻辑；不为 Task 删除增加任何附件补偿删除分支。
 - [ ] 清理失败使用后端结构化日志和前端 `frontendLog` 记录 `task_id`、`command_id` 和原因，不覆盖原始 Assistant Transport 错误；已上传图片不作为清理失败的补偿对象。
 - [ ] 运行后端任务创建/清理测试，确认普通 Task 的数据库删除行为和已有 Task 不受受控清理影响，并确认 Task 删除不触发附件删除。
 
@@ -164,14 +164,14 @@ accepted ──SSE/attach 断开→ reconciling
 - `/assistant` 不负责 provisional Task 清理，保持现有 Assistant Transport 的错误映射、Run 收敛和 SSE 生命周期边界。
 - 只有 NewConversation 持有 `creationCommandId` 的 provisional 流程，才可在 Assistant Transport 收到非 2xx、请求失败或附件预上传失败时调用现有 `DELETE /tasks/{task_id}`；普通 Task 发送和编辑重跑不得调用该删除 API。不允许裸 `taskId` 清理 provisional Task。
 - delete_task API 在带 `creationCommandId` 时进入受控清理分支：必须满足 `Task.creation_command_id == creationCommandId`，且不存在已接受的其它 command/Run/canonical 用户消息；否则拒绝清理，防止网络竞态或错误重试删除正式 Task。
-- provisional Task 清理只删除 Task、Run、command、context 等数据库事实和进程内 Task runtime；不调用 `AttachmentService.delete()`，也不执行 `collect_workspace_attachment_orphans()`。已经上传的图片文件保持存在；附件清理不属于本次 Task 删除。
+- provisional Task 清理只删除 Task、Run、command、context 等数据库事实和进程内 Task runtime；不调用任何附件删除或清理逻辑。已经上传的图片文件保持存在；附件清理不属于本次 Task 删除。
 - `/assistant` 返回 2xx 后，前端不得再调用该删除分支；SSE 断开、客户端断开或 workflow 失败不删除 Task/Run，只按现有状态和 snapshot/attach 机制处理。
 - 清理成功不改变前端原始错误展示；清理失败只记录结构化日志并保留原始错误。允许本地单用户环境留下少量死记录，但不能让它们成为当前导航目标。
 
 **实现步骤：**
 
 - [ ] 先补 delete_task API 的 provisional cleanup 测试：匹配标记可删除、已有 Task 不删除、同 Task 存在已接受 Run/command 时拒绝删除。
-- [ ] 补测试确认普通 Task 删除和 provisional cleanup 都不调用附件删除/孤儿 GC，已上传图片仍保留。
+- [ ] 补测试确认普通 Task 删除和 provisional cleanup 都不调用附件删除或清理逻辑，已上传图片仍保留。
 - [ ] 补前端测试确认 Assistant Transport 非 2xx、网络失败和附件预上传失败都会 best-effort 调用带 `creationCommandId` 的 delete_task API。
 - [ ] 补测试确认清理失败不覆盖原始 Assistant Transport 错误，并记录结构化日志。
 - [ ] 明确 `/assistant` 不包清理逻辑、不使用无条件 `finally` 删除 Task；前端只对未 accepted 的请求执行清理。
@@ -275,7 +275,7 @@ type TransportErrorParams = {
 1. 固定保存当前输入框、图片、文件和工具组选择的不可变发送快照；
 2. 生成本次尝试唯一的 UUID，同时作为 `creationCommandId` 和首个 `add-message.commandId`；
 3. 调用现有 `createWorkspaceTask()`，携带 `creationCommandId`，得到 provisional `taskId`，但不导航；
-4. 复用已有 Task-scoped attachment adapter，以该 `taskId` 上传图片；文件继续使用当前本机文件引用；
+4. 复用已有 workspace-scoped attachment adapter，以该 `workspaceId` 上传图片；文件继续使用当前本机文件引用；
 5. 从发送快照构造完整 `add-message + ban-tools` 命令，使用 `threadId=task-{taskId}` 调用共享的非 React Assistant Transport submitter；
 6. submitter 收到 2xx 且确认 `X-Cosir-Task-Id` 与 provisional `taskId` 一致后，停止读取当前 SSE subscription 并返回 accepted 结果；不得调用 business cancel；
 7. 只有 accepted 结果返回后才导航到 `/tasks/{taskId}`；Task 页面随后通过现有 snapshot/attach 重新订阅同一 Run；
@@ -382,7 +382,7 @@ type TransportErrorParams = {
 不做以下改造：
 
 - 不新增独立的前端业务消息队列；
-- 允许前端在未 accepted 的 Assistant Transport 失败路径调用带 `creationCommandId` 的 Task 删除 API；`DELETE /tasks/{task_id}` 只删除受控的 Task 业务记录，不删除图片附件，也不触发附件孤儿 GC；
+- 允许前端在未 accepted 的 Assistant Transport 失败路径调用带 `creationCommandId` 的 Task 删除 API；`DELETE /tasks/{task_id}` 只删除受控的 Task 业务记录，不删除图片附件，也不触发任何附件清理；
 - 不新增 task-less Assistant Transport wire 模式、staged attachment descriptor 或新的图片 locator；
 - 不把 Assistant UI message 直接持久化到后端；
 - 不修改 canonical snapshot 结构来携带前端 pending 状态；
@@ -395,8 +395,8 @@ type TransportErrorParams = {
 - “输入文本/图片/文件不变”由 Task 5、Task 6 的 composer 快照与附件测试覆盖；
 - “普通发送失败不显示消息”由 Task 4、Task 6 的 pending 清理和 E2E 覆盖；
 - “编辑重跑失败不修改历史且恢复编辑框”由 Task 6 覆盖；
-- “后端改动尽量少”通过复用现有 Task 创建、Task-scoped attachment、`/assistant`、Run/Command/context 事务、`TaskModel.creation_command_id` 和 Task 删除 API/核心；新增范围仅是 provisional 标记透传、delete_task 受控清理分支和前端失败调用；`/assistant` 不增加清理职责；
+- “后端改动尽量少”通过复用现有 Task 创建、workspace-scoped attachment、`/assistant`、Run/Command/context 事务、`TaskModel.creation_command_id` 和 Task 删除 API/核心；新增范围仅是 provisional 标记透传、delete_task 受控清理分支和前端失败调用；`/assistant` 不增加清理职责；
 - “不把 accepted 断流误回滚”由请求阶段契约和断流 E2E 覆盖；
-- “new task 图片不丢失”由 provisional Task 在导航前承载现有附件上传、前端本地 composer 快照和失败恢复测试覆盖；
+- “new task 图片不丢失”由 workspace 级附件在导航前完成上传、前端本地 composer 快照和失败恢复测试覆盖；provisional Task 只承载后续 Assistant Transport 的 Run 目标。
 - 如果验收标准把 accepted 后 SSE 失败也定义为“消息不得显示”，本方案判定为协议需求未决，不宣称现有改造已经满足；
 - 不需要新增 Transport snapshot 事实字段，也不需要引入新的持久化状态机。
