@@ -13,7 +13,7 @@ class ConversationRunModel(StorageBase):
     """``conversation_runs`` 表模型：一次 Agent 运行的持久化事实。
 
     Run 是「一次 Agent 执行」的独立实体：承载输入文本、模型连接配置与模型名、
-    推理深度、终态原因、回复正文与工作流版本。运行标识
+    终态原因、回复正文与运行附加事实。运行标识
     即本行 ``id``，由 ``StorageBase`` 提供自增主键。
 
     职责边界：
@@ -22,7 +22,8 @@ class ConversationRunModel(StorageBase):
       ``run_id`` 外键）、消息/工具调用等 canonical 会话事实（各自独立表）。
 
     模型路由事实分层：``model_name`` 与 ``context_window_k`` 是本次运行使用过的快照，
-    永不随模型连接配置变化；``model_config_id`` 只是指向当时配置行的弱引用，配置被
+    永不随模型连接配置变化；模型能力和 Run 显式偏好快照位于 ``extra`` JSON，避免再
+    拆出第二套 Run 专用字段；``model_config_id`` 只是指向当时配置行的弱引用，配置被
     删除时由 ``ON DELETE SET NULL`` 置空，历史 Run 仍可读取。
     """
 
@@ -52,7 +53,6 @@ class ConversationRunModel(StorageBase):
     model_name: Mapped[str | None] = mapped_column(String)
     context_window_k: Mapped[int | None] = mapped_column(Integer)
     image_paths: Mapped[list[str] | None] = mapped_column(JSON)
-    reasoning_effort: Mapped[str | None] = mapped_column(Text)
     end_reason: Mapped[str | None] = mapped_column(Text)
     final_output: Mapped[str | None] = mapped_column(Text)
     extra: Mapped[dict | None] = mapped_column(JSON)

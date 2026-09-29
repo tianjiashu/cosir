@@ -12,9 +12,9 @@
 全部为纯转换，便于独立测试。chunk 累积与 ``AIMessage`` 收口由
 ``RuntimeContextManager.add_message_chunk`` 负责（本处理器不参与）。
 
-构造时持有 per-run 的 ``thinking_channel``（``RuntimeConfig.thinking_channel``，由 provider 能力
-目录解析得到），免去调用方每次传通道；思考字段的回传 / 剥离策略不在本处理器处置，由下游持久化
-与回传边界负责。
+构造时持有 per-run 的 ``thinking_channel``（``RuntimeConfig.thinking_channel``，由 Run 快照中
+用户声明的模型能力决定），免去调用方每次传通道；思考字段的回传 / 剥离策略不在本处理器处置，
+由下游持久化与回传边界负责。
 """
 
 from typing import Any

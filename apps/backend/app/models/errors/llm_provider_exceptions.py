@@ -18,7 +18,7 @@ from __future__ import annotations
 class VisionNotSupportedError(ValueError):
     """模型或厂商当前不支持视觉输入。
 
-    触发场景：``create_run`` 构建期校验到 ``ModelCapability.supports_image`` 为 False；
+    触发场景：``create_run`` 构建期校验到 Run 快照声明模型不支持图片输入；
     或运行期 workflow 转抛的「厂商视觉格式未实现 / 聚合体积超限」等，统一归一到此类型，
     由 API 层捕获为 HTTP 4xx + 中文引导。
     """

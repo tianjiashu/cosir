@@ -62,7 +62,7 @@ def _drop_legacy_file_snapshot_table(engine: Engine) -> None:
 
 
 def _drop_legacy_models_table(engine: Engine) -> None:
-    """删除已废弃的 ``models`` 表（模型目录现由 capability JSON 提供）。
+    """删除已废弃的 ``models`` 表，模型连接事实统一由 ``model_configs`` 承载。
 
     参数:
         engine: 已初始化的主库 SQLAlchemy 引擎。

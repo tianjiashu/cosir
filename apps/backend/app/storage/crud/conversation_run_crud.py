@@ -86,7 +86,6 @@ class ConversationRunCrud:
         model_name: str | None = None,
         context_window_k: int | None = None,
         image_paths: list[str] | None = None,
-        reasoning_effort: str | None = None,
         extra: ConversationRunExtra | None = None,
         usage: ConversationRunUsage | None = None,
         error: ConversationRunError | None = None,
@@ -105,7 +104,6 @@ class ConversationRunCrud:
             model_name: 可选，模型路由名。
             context_window_k: 本次 Run 使用的上下文窗口，单位为 K 或 None。
             image_paths: 可选，本次输入的图片路径列表（供多模态通道）。
-            reasoning_effort: 可选，思考努力等级；None 表示未指定。
             extra: 可选，运行期附加结构化数据。
             usage: 可选，符合六键契约的运行 token 用量。
             error: 可选，结构化运行错误。
@@ -136,7 +134,6 @@ class ConversationRunCrud:
                 model_name=model_name,
                 context_window_k=context_window_k,
                 image_paths=image_paths,
-                reasoning_effort=reasoning_effort,
                 extra=extra,
                 usage=usage,
                 error=error,
@@ -152,7 +149,6 @@ class ConversationRunCrud:
                 model_name=model_name,
                 context_window_k=context_window_k,
                 image_paths=image_paths,
-                reasoning_effort=reasoning_effort,
                 extra=extra,
                 usage=usage,
                 error=error,
@@ -170,7 +166,6 @@ class ConversationRunCrud:
         model_name: str | None,
         context_window_k: int | None,
         image_paths: list[str] | None,
-        reasoning_effort: str | None,
         extra: ConversationRunExtra | None,
         usage: ConversationRunUsage | None,
         error: ConversationRunError | None,
@@ -190,7 +185,6 @@ class ConversationRunCrud:
             model_config_id: 厂商标识或 None。
             model_name: 模型名或 None。
             image_paths: 图片路径列表或 None。
-            reasoning_effort: 思考努力等级或 None。
             extra: 附加结构化数据或 None。
             usage: 初始 token 用量或 None。
             error: 初始结构化错误或 None。
@@ -216,7 +210,6 @@ class ConversationRunCrud:
             model_name=model_name,
             context_window_k=context_window_k,
             image_paths=image_paths,
-            reasoning_effort=reasoning_effort,
             extra=extra.to_dict() if extra is not None else None,
             usage_json=_serialize_typed_json(usage),
             error_json=_serialize_typed_json(error),
@@ -290,7 +283,6 @@ class ConversationRunCrud:
             model_config_id=source.model_config_id,
             model_name=source.model_name,
             image_paths=copy.deepcopy(source.image_paths),
-            reasoning_effort=source.reasoning_effort,
             end_reason=source.end_reason,
             final_output=source.final_output,
             extra=(source.extra.to_dict() if source.extra is not None else None),
@@ -575,7 +567,6 @@ class ConversationRunCrud:
         model_name: str | None = None,
         context_window_k: int | None = None,
         image_paths: list[str] | None = None,
-        reasoning_effort: str | None = None,
         extra: ConversationRunExtra | None = None,
     ) -> ConversationRunRecord | None:
         """原子替换一个非活动 run 的输入与执行基线。"""
@@ -591,9 +582,9 @@ class ConversationRunCrud:
                 model_name,
                 context_window_k,
                 image_paths,
-                reasoning_effort,
                 extra,
             )
+
         with self._session_factory.begin() as managed_session:
             return self.reset_for_edit_in_session(
                 managed_session,
@@ -605,9 +596,52 @@ class ConversationRunCrud:
                 model_name,
                 context_window_k,
                 image_paths,
-                reasoning_effort,
                 extra,
             )
+
+    def update_extra(
+        self,
+        run_id: int,
+        extra: ConversationRunExtra,
+        session: Session | None = None,
+    ) -> ConversationRunRecord:
+        """更新 Run 的扩展事实并返回最新记录。
+
+        该方法只负责 ``conversation_runs.extra`` 单列写入，不解释模型偏好或附件语义；
+        快照何时冻结由上层 Run 用例决定。传入外部 session 时加入调用方事务且不提交，
+        未传入时自行开启并提交一次单表事务。
+
+        参数:
+            run_id: 要更新的 Run 标识。
+            extra: 已通过领域值对象校验的扩展事实。
+            session: 可选外部事务会话。
+
+        返回:
+            更新后的 ``ConversationRunRecord``。
+
+        异常:
+            KeyError: Run 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 数据库更新失败。
+
+        副作用:
+            更新 ``conversation_runs.extra`` JSON 列；不发布事件、不修改 Run 状态。
+        """
+
+        def update_in_session(current_session: Session) -> ConversationRunRecord:
+            result = current_session.execute(
+                update(ConversationRunModel)
+                .where(ConversationRunModel.id == run_id)
+                .values(extra=extra.to_dict())
+            )
+            if not result.rowcount:
+                raise KeyError(run_id)
+            current_session.flush()
+            return self.get_in_session(current_session, run_id)
+
+        if session is not None:
+            return update_in_session(session)
+        with self._session_factory.begin() as managed_session:
+            return update_in_session(managed_session)
 
     @staticmethod
     def reset_for_edit_in_session(
@@ -620,7 +654,6 @@ class ConversationRunCrud:
         model_name: str | None = None,
         context_window_k: int | None = None,
         image_paths: list[str] | None = None,
-        reasoning_effort: str | None = None,
         extra: ConversationRunExtra | None = None,
     ) -> ConversationRunRecord | None:
         """在外部事务中把 run 重置为待执行，并清空旧输出。"""
@@ -639,7 +672,6 @@ class ConversationRunCrud:
                 model_name=model_name,
                 context_window_k=context_window_k,
                 image_paths=image_paths,
-                reasoning_effort=reasoning_effort,
                 extra=extra.to_dict() if extra is not None else None,
                 end_reason=None,
                 final_output=None,

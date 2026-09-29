@@ -53,7 +53,6 @@ class ConversationRunRecord:
     model_name: str | None = None
     context_window_k: int | None = None
     image_paths: list[str] | None = None
-    reasoning_effort: str | None = None
     extra: ConversationRunExtra | None = None
     usage: ConversationRunUsage | None = None
     error: ConversationRunError | None = None
@@ -82,7 +81,6 @@ class ConversationRunRecord:
             "end_reason": self.end_reason,
             "final_output": self.final_output,
             "image_paths": self.image_paths,
-            "reasoning_effort": self.reasoning_effort,
             "agent_id": self.agent_id,
             "model_config_id": self.model_config_id,
             "model_name": self.model_name,
@@ -124,7 +122,6 @@ class ConversationRunRecord:
             final_output=row.final_output,
             agent_id=row.agent_id,
             image_paths=row.image_paths,
-            reasoning_effort=row.reasoning_effort,
             model_name=row.model_name,
             model_config_id=row.model_config_id,
             context_window_k=row.context_window_k,
@@ -158,7 +155,6 @@ class ConversationRunRecord:
             "model_name": self.model_name,
             "context_window_k": self.context_window_k,
             "image_paths": self.image_paths,
-            "reasoning_effort": self.reasoning_effort,
             "extra": self.extra.to_dict() if self.extra is not None else None,
             "usage_json": json.dumps(
                 self.usage, ensure_ascii=False, sort_keys=True, allow_nan=False

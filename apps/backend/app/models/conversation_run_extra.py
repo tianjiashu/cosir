@@ -6,13 +6,15 @@ from dataclasses import dataclass, field
 
 from app.config.constant import Constant
 from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
+from app.models.conversation_run_model_snapshot import ConversationRunModelSnapshot
 
 
 @dataclass(frozen=True, slots=True)
 class ConversationRunExtra:
     """一次 Conversation Run 的扩展输入事实。
 
-    字段承载 Assistant 用户可见文本、普通本机文件附件引用和本次 Run 禁用的工具名。
+    字段承载 Assistant 用户可见文本、普通本机文件附件引用、本次 Run 禁用的工具名和
+    模型执行快照。
     该类是内存中的领域值对象；写入 ``conversation_runs.extra`` 时由 ``to_dict`` 转成
     JSON 对象，从数据库读取时由 ``from_dict`` 恢复。它不保存附件二进制，也不负责检查
     路径是否仍然存在或是否属于当前工作区。
@@ -20,6 +22,7 @@ class ConversationRunExtra:
 
     display_text: str
     attachments: list[ConversationRunFileAttachment]
+    model_snapshot: ConversationRunModelSnapshot
     ban_tools: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -71,6 +74,8 @@ class ConversationRunExtra:
         if token_ids != [attachment["id"] for attachment in normalized]:
             raise ValueError("display_text attachment tokens do not match attachments")
         object.__setattr__(self, "attachments", normalized)
+        if not isinstance(self.model_snapshot, ConversationRunModelSnapshot):
+            raise TypeError("model_snapshot must be a ConversationRunModelSnapshot")
 
     def to_dict(self) -> dict[str, object]:
         """转换为 ``conversation_runs.extra`` 使用的 JSON 对象。"""
@@ -79,38 +84,36 @@ class ConversationRunExtra:
             "display_text": self.display_text,
             "attachments": [dict(attachment) for attachment in self.attachments],
             "ban_tools": list(self.ban_tools),
+            "model_snapshot": self.model_snapshot.to_dict(),
         }
 
     @classmethod
     def from_dict(cls, value: object) -> ConversationRunExtra | None:
-        """从数据库 JSON 恢复扩展事实；非法或未知旧结构返回 ``None``。
+        """从当前数据库 JSON 恢复扩展事实；缺失扩展值返回 None，结构错误直接暴露。"""
 
-        当前格式为顶层 ``display_text`` / ``attachments``。为避免已有工作树或历史
-        数据丢失，读取阶段兼容旧的 ``assistant_input`` 包装和 ``version=1``；新写入
-        永远不再输出这两个旧字段。
-        """
+        if value is None:
+            return None
 
         if not isinstance(value, dict):
-            return None
+            raise TypeError("run extra must be an object")
 
-        candidate: object = value
-        legacy = value.get("assistant_input")
-        if legacy is not None:
-            if not isinstance(legacy, dict) or legacy.get("version") != 1:
-                return None
-            candidate = legacy
-        if not isinstance(candidate, dict):
-            return None
-
-        display_text = candidate.get("display_text")
-        attachments = candidate.get("attachments")
-        ban_tools = candidate.get("ban_tools", [])
-        if not isinstance(display_text, str) or not isinstance(attachments, list):
-            return None
-        try:
-            return cls(display_text=display_text, attachments=attachments, ban_tools=ban_tools)
-        except (TypeError, ValueError):
-            return None
+        expected = {"display_text", "attachments", "ban_tools", "model_snapshot"}
+        unknown = set(value) - expected
+        missing = expected - set(value)
+        if unknown or missing:
+            raise ValueError(
+                f"run extra fields invalid; unknown={sorted(unknown)}, missing={sorted(missing)}"
+            )
+        display_text = value["display_text"]
+        attachments = value["attachments"]
+        ban_tools = value["ban_tools"]
+        model_snapshot_value = value["model_snapshot"]
+        return cls(
+            display_text=display_text,
+            attachments=attachments,
+            ban_tools=ban_tools,
+            model_snapshot=ConversationRunModelSnapshot.from_dict(model_snapshot_value),
+        )
 
 
 __all__ = ["ConversationRunExtra"]
