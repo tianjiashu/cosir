@@ -289,11 +289,11 @@ class AgentProfile:
             banned = set(ban_tools)
             changes["allowed_tools"] = [t for t in self.allowed_tools if t not in banned]
         effective_model_settings = (
-            model_settings.with_overrides(self.model_settings)
+            self.model_settings.with_overrides(model_settings)
             if model_settings is not None
             else replace(self.model_settings)
         )
-        extra = getattr(run, "extra", None)
+        extra = run.extra
         if extra is not None and extra.reasoning_effort is not None:
             effective_model_settings = effective_model_settings.with_overrides(
                 ModelSettings(reasoning_effort=run.extra.reasoning_effort)

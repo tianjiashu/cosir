@@ -28,6 +28,7 @@ from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependen
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
+    get_model_config_service,
     get_task_service,
     get_terminal_session_service,
     get_workspace_service,
@@ -89,7 +90,6 @@ class AgentRuntime:
         *,
         execution_mode: ExecutionMode = "fresh",
         ban_tools: list[str] | None = None,
-        model_settings: ModelSettings | None = None,
     ) -> None:
         """执行一个已被 ConversationRunExecutor 认领（pending→running）的 run。
 
@@ -108,7 +108,6 @@ class AgentRuntime:
             execution_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``）；
                 透传给 workflow，由其决定是否清空旧上下文与如何构造 graph 输入。
             ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
-            model_settings: 可选的模型参数覆盖；``None`` 表示沿用 agent profile 的配置。
 
         异常:
             RuntimeError: 轮次绑定的 agent profile 不可用时抛出，由执行器捕获收束为 failed。
@@ -129,25 +128,30 @@ class AgentRuntime:
             ) from exc
         if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for run {run_id}")
+        # Run 选择的模型配置在 per-run 派生边界物化；进入 workflow 后只允许消费
+        # AgentProfile.model_settings，不再让模型工厂回查 model_config_id。
+        runtime_model_settings = None
+        if run.model_config_id is not None:
+            runtime_model_settings = ModelSettings.from_model_config_record(
+                get_model_config_service().get_config(run.model_config_id)
+            )
+
         # 派生 per-run 副本承载本次 run：共享注册表单例不被原地写，并发 run 互不串扰。
-        # Existing child-agent restrictions still use this input. Conversation
-        # group bans are persisted on Run Extra and handled in ToolCallLifecycleManager,
-        # so the Assistant Transport path leaves this parameter unset and preserves bind_tools.
         agent_profile = agent_profile.derive_for_run(
-            run, ban_tools=ban_tools, model_settings=model_settings
+            run,
+            ban_tools=ban_tools,
+            model_settings=runtime_model_settings,
         )
         await self.run_agent(
             agent_profile,
             execution_mode=execution_mode,
-            agent_profile_registry=self._agent_registry,
         )
 
     async def run_agent(
         self,
         agent: AgentProfile,
         *,
-        execution_mode: ExecutionMode = "fresh",
-        agent_profile_registry: AgentProfileRegistry | None = None,
+        execution_mode: ExecutionMode = "fresh"
     ) -> None:
         """驱动一次 agent run 执行并提交 canonical conversation facts。
 
