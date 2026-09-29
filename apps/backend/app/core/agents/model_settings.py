@@ -1,104 +1,59 @@
-"""单个 Agent 的模型覆盖配置值对象。
+"""Agent 模型运行配置值对象。
 
-只承载该 Agent 的模型覆盖配置（生成参数与推理强度），不参与模型构建。
-所有字段均为可选覆盖项：未提供（``None``）时由运行时默认值提供缺省值，
-``ModelSettings`` 仅覆盖显式给出的字段。
+``ModelSettings`` 同时承载两类不同来源、但在模型构建时必须完整可用的事实：
 
-序列化字段清单由 ``_fields()`` 从 dataclass 实际字段推导（唯一事实源），
-不再手工维护——手工清单曾与实际字段漂移（缺 ``response_format``、多 ``base_url``/
-``api_key``），导致 JSON 往返静默丢字段。
+* 用户可覆盖的请求参数，例如采样参数和推理强度；
+* 已从 ``ModelConfigRecord`` 物化的模型连接与能力字段。
 
-用户手写配置的严格校验也归本模块：``ModelSettings.from_json`` 是「JSON 覆盖项对象 →
-``ModelSettings``」的唯一入口（未知字段、类型不符、非有限数值一律拒绝），字段类型从
-dataclass 注解推导，避免校验规则与值对象漂移。
+模型配置 ID 不属于本值对象。它只在配置编辑和 Run 选择边界存在，进入运行时后立即
+转换为这里的字段，保证模型构建不需要再次回查配置服务。用户配置 JSON 只允许写入
+覆盖项，连接密钥等运行时字段不会被序列化或接受为用户输入。
 """
+
+from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, fields
-from typing import Any, get_args, get_type_hints
+from dataclasses import dataclass, field, fields, replace
+from typing import TYPE_CHECKING, Any, get_args, get_type_hints
 
-# 序列化权威字段清单：与 ModelSettings 全部字段一一对应，新增字段须同步追加。
-# 由 ``_fields()`` 从 dataclass 实际字段推导，避免注解漂移（此前手工维护清单
-# 缺 ``response_format``、多 ``base_url``/``api_key``，导致 JSON 往返静默丢字段）。
-_LEGACY_EXTRA_FIELDS = ()
+if TYPE_CHECKING:
+    from app.models.model_config_record import ModelConfigRecord
 
 
-def _fields() -> tuple[str, ...]:
-    """返回序列化权威字段清单（唯一事实源：dataclass 实际声明的字段）。
-
-    参数:
-        无。
-
-    返回:
-        按声明顺序排列的字段名元组。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    return tuple(f.name for f in fields(ModelSettings)) + _LEGACY_EXTRA_FIELDS
+# 这些字段来自模型连接配置，是运行时构建模型的完整输入，不属于用户 JSON 覆盖项。
+_RUNTIME_FIELDS = (
+    "base_url",
+    "api_key",
+    "model_name",
+    "context_window_k",
+    "supports_thinking",
+    "supports_reasoning_effort",
+    "supports_image",
+)
 
 
-class ModelSettingsError(ValueError):
-    """表示 JSON ``model_settings`` 覆盖项不满足本值对象的字段契约。
+def _override_fields() -> tuple[str, ...]:
+    """返回可由 Agent JSON 配置覆盖的字段清单。"""
 
-    由 :meth:`ModelSettings.from_json` 抛出（未知字段、值类型不符、非有限数值、构造失败）。
-    消息只描述字段级原因、不含文件路径——配置来源路径由调用方
-    （``AgentProfile.vaild_agent_profile``）写进 ``agent_profile_config_invalid`` 日志的
-    ``file`` 字段。
-    """
+    runtime_fields = set(_RUNTIME_FIELDS)
+    return tuple(field.name for field in fields(ModelSettings) if field.name not in runtime_fields)
 
 
 def _accepted_value_types() -> dict[str, tuple[type, ...]]:
-    """返回 ``ModelSettings`` 每个覆盖字段可接受的 JSON 值类型。
-
-    类型从 ``ModelSettings`` 的字段注解推导（唯一事实源），不手工维护字段名到类型的
-    映射表，避免新增字段时校验与值对象漂移。
-
-    参数:
-        无。
-
-    返回:
-        字段名 → 去掉 ``None`` 后的注解类型元组。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
+    """根据字段注解返回用户覆盖项的 JSON 类型契约。"""
 
     accepted: dict[str, tuple[type, ...]] = {}
-    for name, annotation in get_type_hints(ModelSettings).items():
+    type_hints = get_type_hints(ModelSettings)
+    for name in _override_fields():
+        annotation = type_hints[name]
         members = tuple(member for member in get_args(annotation) if member is not type(None))
         accepted[name] = members or (annotation,)
     return accepted
 
 
 def _accepts_value(value: Any, accepted: tuple[type, ...]) -> bool:
-    """判断 JSON 值是否落在字段注解允许的类型内。
-
-    参数:
-        value: 从 JSON 反序列化得到的值。
-        accepted: 该字段允许的类型元组（由 :func:`_accepted_value_types` 推导）。
-
-    返回:
-        值类型合法时为 ``True``。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-
-    说明:
-        ``bool`` 是 ``int`` 的子类，必须优先单独判定；整数字面量对 ``float`` 覆盖项
-        视为合法（JSON 数字不区分 ``1`` 与 ``1.0``）。
-    """
+    """判断一个 JSON 值是否符合字段类型，避免把 bool 当作 int。"""
 
     if isinstance(value, bool):
         return bool in accepted
@@ -107,102 +62,121 @@ def _accepts_value(value: Any, accepted: tuple[type, ...]) -> bool:
     return isinstance(value, accepted)
 
 
+class ModelSettingsError(ValueError):
+    """表示用户模型覆盖项或运行时模型配置不满足值对象契约。"""
+
+
 @dataclass
 class ModelSettings:
-    """单个 Agent 的模型覆盖配置值对象（声明式覆盖项，不参与模型构建）。
+    """构建一次聊天模型所需的完整运行配置。
 
-    字段分类：
-    - 采样参数：``temperature`` / ``top_p`` / ``max_tokens``；
-    - 推理强度：``reasoning_effort``（``low``/``high``/``max``，None 时不注入）；
-    - 请求行为覆盖：``drop_params``（None 时使用运行时默认值）/
-      ``stream``（None 时不覆盖）/ ``response_format``（text / json_object，None 时不注入）。
-
-    全局默认值（超时/重试/seed 等）归 ``app.config.constant.Constant.LLM``；上下文窗口由
-    模型连接配置的 ``context_window_k`` 提供，此处不重复声明。
+    用户覆盖字段只表达“用户明确指定的请求偏好”，值为 ``None`` 时交给统一运行时
+    默认值处理。运行时字段由模型连接配置物化而来，供 ``resolve_chat_model`` 唯一消费；
+    其中 ``api_key`` 仅存在于进程内，不参与序列化和日志输出。
     """
 
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None
-    # 可选厂商类型（注册表键，如 ``deepseek`` / ``azure``）：None 时由
-    # ``factory.build_chat_model`` 按 model_name 前缀回退推导。
-    # 可选是否丢弃不支持参数覆盖：None 时使用运行时默认值。
     drop_params: bool | None = None
-    # 可选流式开关覆盖：None 时不覆盖（沿用运行时默认流式）。
     stream: bool | None = None
-    # 可选推理强度覆盖（``low`` / ``high`` / ``max``）：None 时不注入。
     reasoning_effort: str | None = None
-    # 可选响应格式覆盖：None 时不注入。text / json_object
     response_format: str | None = None
 
+    base_url: str | None = None
+    api_key: str | None = field(default=None, repr=False)
+    model_name: str | None = None
+    context_window_k: int | None = None
+    supports_thinking: bool | None = None
+    supports_reasoning_effort: bool | None = None
+    supports_image: bool | None = None
 
     @classmethod
-    def default_settings(cls) -> "ModelSettings":
+    def default_settings(cls) -> ModelSettings:
+        """返回系统默认的用户覆盖项。"""
+
         return cls(stream=True, reasoning_effort="high")
 
+    @classmethod
+    def from_model_config_record(cls, config: ModelConfigRecord) -> ModelSettings:
+        """把模型连接配置物化为不含模型配置 ID 的运行设置。
+
+        该转换只写入连接字段和能力字段，不隐式写入 Agent/Run 的运行偏好。
+        """
+
+        if not config.model_name or config.context_window_k <= 0:
+            raise ModelSettingsError("模型连接配置缺少有效的 model_name 或 context_window_k")
+        return cls(
+            base_url=config.base_url,
+            api_key=config.api_key,
+            model_name=config.model_name,
+            context_window_k=config.context_window_k,
+            supports_thinking=config.supports_thinking,
+            supports_reasoning_effort=config.supports_reasoning_effort,
+            supports_image=config.supports_image,
+        )
+
+    def with_overrides(self, overrides: ModelSettings | None) -> ModelSettings:
+        """将另一个设置中的用户覆盖项合并到当前运行设置。
+
+        运行时模型字段始终由当前对象保留，避免调用方通过一个未物化的覆盖对象清空
+        连接能力或密钥。该方法返回新对象，不修改任一输入。
+        """
+
+        if overrides is None:
+            return replace(self)
+        changes = {
+            name: getattr(overrides, name)
+            for name in _override_fields()
+            if getattr(overrides, name) is not None
+        }
+        return replace(self, **changes)
+
+    def require_runtime_config(self) -> ModelSettings:
+        """断言当前设置已具备模型构建所需的物化字段。"""
+
+        required = (
+            "model_name",
+            "base_url",
+            "context_window_k",
+            "supports_thinking",
+            "supports_reasoning_effort",
+            "supports_image",
+        )
+        missing = [name for name in required if getattr(self, name) is None]
+        if missing:
+            raise ModelSettingsError(
+                "模型运行配置未物化，缺少字段: " + ", ".join(missing)
+            )
+        if self.context_window_k <= 0:
+            raise ModelSettingsError("模型运行配置的 context_window_k 必须为正整数")
+        return self
+
     def to_dict(self) -> dict[str, Any]:
-        """序列化为 JSON 可序列化字典（仅含非 ``None`` 字段）。
+        """序列化用户可持久化的非空覆盖项，不输出运行时字段和 API Key。"""
 
-        参数:
-            无。
-
-        返回:
-            字段名到值的字典；值为 ``None`` 的覆盖项被省略（表示「不覆盖」）。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return {k: getattr(self, k) for k in _fields() if getattr(self, k) is not None}
+        return {
+            name: getattr(self, name)
+            for name in _override_fields()
+            if getattr(self, name) is not None
+        }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ModelSettings":
-        """从字典重建，忽略未知键（前向兼容，缺失键沿用字段默认值）。
+    def from_dict(cls, data: Mapping[str, Any]) -> ModelSettings:
+        """从内部字典构造用户覆盖项，忽略非覆盖字段。"""
 
-        参数:
-            data: 待反序列化的字典（通常为 :meth:`to_dict` 的产物）。
-
-        返回:
-            重建后的 ``ModelSettings`` 实例。
-
-        异常:
-            TypeError: 若字典中存在 dataclass 未声明的字段且值无法接受（理论上被
-                ``_fields()`` 过滤，不会发生）。
-
-        副作用:
-            无。
-        """
-
-        return cls(**{k: data[k] for k in _fields() if k in data})
+        return cls(**{name: data[name] for name in _override_fields() if name in data})
 
     @classmethod
-    def from_json(cls, values: Mapping[str, Any]) -> "ModelSettings":
-        """严格校验用户手写 JSON 的 ``model_settings`` 覆盖项并构造实例。
+    def from_json(cls, values: Mapping[str, Any] | None) -> ModelSettings:
+        """严格校验用户 JSON 覆盖项并构造设置。
 
-        与 :meth:`from_dict` 的宽松语义相对：本方法服务配置文件输入，未知字段、类型不符、
-        非有限数值一律拒绝，且不做隐式类型转换（``"1"`` 不会变成 ``1``，``true`` 不会
-        变成 ``1``）。
-
-        参数:
-            values: 从 JSON 配置文件反序列化得到的 ``model_settings`` 对象（键为字段名，
-                值为 JSON 标量）。允许为空对象，表示不覆盖任何字段。
-
-        返回:
-            由覆盖项构造的 ``ModelSettings``；未出现的字段沿用字段默认值。
-
-        异常:
-            ModelSettingsError: 含未知字段、值类型不符、出现非有限数值（``NaN`` /
-                ``Infinity``），或值对象构造失败。消息为字段级原因，不含文件路径。
-
-        副作用:
-            无（不读取文件、不写运行时状态）。
+        运行时连接字段即使出现在 JSON 中也会按未知字段拒绝；这保证 API Key、能力声明
+        和模型连接地址只能来自受控的模型配置 service，而不是 Agent 文件自行伪造。
         """
+
         if values is None or len(values) == 0:
-            return ModelSettings.default_settings()
-
+            return cls.default_settings()
         accepted_types = _accepted_value_types()
         unknown = sorted(set(values) - set(accepted_types))
         if unknown:

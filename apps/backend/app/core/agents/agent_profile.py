@@ -227,8 +227,7 @@ class AgentProfile:
             主 Agent 不设置此字段。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         workflow: 执行策略（默认 ReAct-like，延迟导入打破循环依赖）。
-        model_config_id: 模型连接配置 id（None 时继承本次 Run）。
-        model_settings: 模型覆盖配置（``ModelSettings``）。
+        model_settings: 已物化的模型运行配置；连接配置 ID 不进入运行时 profile。
         agent_type: Agent 分类（``AgentProfileType``），决定其在运行时的暴露与调度方式。
         max_steps: 单 run 最大步骤数。
         run: 当前所属 Conversation Run 记录（经 ``derive_for_run`` 注入 per-run 副本；
@@ -243,7 +242,6 @@ class AgentProfile:
     agent_type: AgentProfileType = field(default=AgentProfileType.CHILD)
     description: str | None = field(default=None, kw_only=True)
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
-    model_config_id: int | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings.default_settings)
     max_steps: int = 100
     run: ConversationRunRecord | None = None
@@ -264,11 +262,12 @@ class AgentProfile:
 
         参数:
             run: 本次执行的 Conversation Run 记录（必填，写入副本的 ``run`` 字段）；其
-                ``model_config_id`` 用于回填副本上尚未配置的模型路由。
+                ``model_settings`` 参数用于写入本次 Run 解析出的完整运行模型配置。
             ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。传入时按工具名
                 从 ``allowed_tools`` 中差集收窄（``select_tools`` 同样按工具名过滤，
                 两处口径必须一致）。
-            model_settings: 模型参数覆盖；``None`` 表示沿用副本当前值。
+            model_settings: 本次 Run 已解析出的完整运行配置；``None`` 表示沿用 profile
+                当前已物化的配置。
 
         返回:
             绑定当前 run 的独立 ``AgentProfile`` 副本；``self`` 原实例不被修改。
@@ -284,10 +283,17 @@ class AgentProfile:
         if ban_tools is not None:
             banned = set(ban_tools)
             changes["allowed_tools"] = [t for t in self.allowed_tools if t not in banned]
-        if self.model_config_id is None:
-            changes["model_config_id"] = run.model_config_id
-        if model_settings is not None:
-            changes["model_settings"] = model_settings
+        effective_model_settings = (
+            model_settings.with_overrides(self.model_settings)
+            if model_settings is not None
+            else replace(self.model_settings)
+        )
+        extra = getattr(run, "extra", None)
+        if extra is not None and extra.reasoning_effort is not None:
+            effective_model_settings = effective_model_settings.with_overrides(
+                ModelSettings(reasoning_effort=run.extra.reasoning_effort)
+            )
+        changes["model_settings"] = effective_model_settings
         return replace(self, **changes)
 
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
@@ -340,34 +346,6 @@ class AgentProfile:
             "workflow": self.workflow.workflow_id,
             "max_steps": self.max_steps,
         }
-
-    def resolve_model_name(self) -> str | None:
-        """从 ``model_config_id`` 派生模型名称；未配置连接配置时返回 ``None``（由 Run 兜底）。
-
-        模型名称是模型连接配置的派生展示值，不单独持久化于 profile；运行时需要名称时
-        （如 ``model_factory`` / ``child_agent`` 路由）统一经本方法落回配置服务，避免冗余
-        缓存与配置漂移。
-
-        参数:
-            无。
-
-        返回:
-            ``model_config_id`` 对应的 ``model_name``；``model_config_id`` 为 ``None`` 或引用
-            失效时返回 ``None``。
-
-        异常:
-            无（引用失效静默降级为 ``None``，与 ``derive_for_run`` 回填语义一致）。
-
-        副作用:
-            读取进程内模型配置 service；不写配置、不改 profile。
-        """
-
-        if self.model_config_id is None:
-            return None
-        try:
-            return get_model_config_service().get_config(self.model_config_id).model_name
-        except KeyError:
-            return None
 
     @staticmethod
     def vaild_agent_profile(path: Path) -> AgentProfile | None:
@@ -444,13 +422,13 @@ def parse_agent_profile_document(
         strict_model_config: 是否拒绝无效模型配置覆盖。
 
     返回:
-        已完成字段、工具名、模型设置和可选模型配置校验的 CHILD profile。
+    已完成字段、工具名校验，并把可选模型连接配置物化进 ``ModelSettings`` 的 CHILD profile。
 
     异常:
         AgentProfileConfigError: 文档字段、工具、步骤数或严格模型配置校验失败。
 
     副作用:
-        读取进程内模型配置 service 以验证显式模型覆盖；不写文件、不修改 Registry。
+        读取进程内模型配置 service 以验证并物化显式模型选择；不写文件、不修改 Registry。
     """
 
     _validate_document(document, source)
@@ -465,7 +443,10 @@ def parse_agent_profile_document(
     model_config_valid = not has_model_config_override
     if has_model_config_override and model_config_id is not None:
         try:
-            get_model_config_service().get_config(model_config_id)  # 仅校验引用有效
+            config = get_model_config_service().get_config(model_config_id)
+            model_settings = ModelSettings.from_model_config_record(config).with_overrides(
+                model_settings
+            )
             model_config_valid = True
         except KeyError:
             model_config_valid = False
@@ -474,7 +455,8 @@ def parse_agent_profile_document(
             f"Agent 配置无效，文件={source}，model_config_id 必须为空或引用有效模型"
         )
     if not model_config_valid:
-        model_config_id = None
+        # 非严格加载允许无效选择降级为未物化 profile；真正运行时会由 Run 选择配置。
+        model_settings = ModelSettings.from_json(document.get("model_settings", {}))
     return AgentProfile(
         agent_id=document["agent_id"],
         role=document["role"],
@@ -482,7 +464,6 @@ def parse_agent_profile_document(
         allowed_tools=allowed_tools,
         agent_type=AgentProfileType.CHILD,
         system_prompt=document["system_prompt"],
-        model_config_id=model_config_id,
         model_settings=model_settings,
         max_steps=AgentProfile.max_steps if max_steps is None else max_steps,
     )
