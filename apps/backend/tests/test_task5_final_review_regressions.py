@@ -318,9 +318,6 @@ def test_task_service_reads_persisted_context_window_without_capability_lookup(
     persisted_task.context_window_total = 8192
     service = TaskService.__new__(TaskService)
     service._task = SimpleNamespace(get=lambda _task_id: persisted_task)
-    service._turn = SimpleNamespace(
-        get_latest_by_task=lambda _task_id: SimpleNamespace(model_name="unavailable-model")
-    )
     assert service.get_context_window_total(7) == 8192
 
 

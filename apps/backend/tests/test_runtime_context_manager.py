@@ -85,7 +85,8 @@ def test_runtime_context_manager_owns_next_sequence_after_run_restart() -> None:
     context_service = _ContextService(max_sequence=1)
     manager = _manager(context_service, next_sequence=2)
     manager.begin_run(
-        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash", context_window_k=8)
+        SimpleNamespace(task_id=7, id=2),
+        context_window_k=8,
     )
     manager.add_message(HumanMessage(content="second message"))
 
@@ -101,8 +102,9 @@ def test_runtime_context_manager_resume_keeps_persisted_run_entries() -> None:
     manager = _manager(context_service, next_sequence=5)
     manager._entries = list(context_service.loaded)
     manager.begin_run(
-        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash", context_window_k=8),
+        SimpleNamespace(task_id=7, id=2),
         execution_mode="resume",
+        context_window_k=8,
     )
 
     assert context_service.deleted == []
@@ -124,8 +126,9 @@ def test_runtime_context_manager_resume_keeps_tool_schemas_without_reprojecting(
     listener = _RecordingListener()
     manager.add_change_listener(listener)
     manager.begin_run(
-        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash", context_window_k=8),
+        SimpleNamespace(task_id=7, id=2),
         execution_mode="resume",
+        context_window_k=8,
         tool_schemas=(
             {
                 "name": "read_file",
@@ -150,13 +153,15 @@ def test_runtime_context_manager_replaces_tool_schemas_between_runs() -> None:
         "parameters": {"type": "object", "properties": {}},
     }
     manager.begin_run(
-        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash", context_window_k=8),
+        SimpleNamespace(task_id=7, id=2),
+        context_window_k=8,
         tool_schemas=(first_schema,),
     )
     assert manager._tool_schemas[0]["name"] == "read_file"
 
     manager.begin_run(
-        SimpleNamespace(task_id=7, id=3, model_name="deepseek-v4-flash", context_window_k=8),
+        SimpleNamespace(task_id=7, id=3),
+        context_window_k=8,
     )
 
     assert manager._tool_schemas == ()
@@ -242,4 +247,3 @@ def test_flush_message_chunk_cancel_drops_state_but_persists_partial() -> None:
     assert record.include_in_context is False
     # 返回截至当前的聚合消息
     assert result is not None and result.content == "你好，世界"
-

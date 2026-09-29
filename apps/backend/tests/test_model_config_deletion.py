@@ -38,7 +38,7 @@ def storage(tmp_path: Path) -> Iterator[None]:
 
 
 def test_delete_model_config_keeps_run_history(storage) -> None:
-    """删除配置后，Run 保留模型和上下文窗口快照，只清空弱引用。"""
+    """删除配置后，Run 保留自身事实，只清空模型配置弱引用。"""
 
     service = get_model_config_service()
     config = service.create_config(
@@ -55,14 +55,10 @@ def test_delete_model_config_keeps_run_history(storage) -> None:
         "你好",
         status="failed",
         model_config_id=config.id,
-        model_name=config.model_name,
-        context_window_k=config.context_window_k,
     )
 
     service.delete_config(config.id)
 
     stored_run = get_conversation_run_crud().get(run.id)
-    assert stored_run.model_name == "deepseek-chat"
-    assert stored_run.context_window_k == 64
     assert stored_run.model_config_id is None
     assert all(item.id != config.id for item in service.list_configs())

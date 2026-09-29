@@ -7,7 +7,7 @@ CHILD 通过配置中心写入运行时的 ``system_agent_config_dir``。本模�
 能解析出哪些内置 profile」为断言对象，并用配置中心目录作为 JSON 装载路径。
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -40,14 +40,6 @@ def _code_defined_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> l
     )
     registry = build_agent_registry()
     return registry.list(AgentProfileRegistry.SYSTEM_WORKSPACE)
-
-
-@dataclass(frozen=True)
-class _RunRoute:
-    """Conversation Run 的最小替身：只承载 `derive_for_run` 读取的路由字段。"""
-
-    model_config_id: int | None = None
-    model_name: str | None = None
 
 
 def test_generic_child_profile_keeps_code_prompt(monkeypatch) -> None:
@@ -173,8 +165,8 @@ def test_builtin_children_leave_model_route_to_parent_run(
 
     profiles = _code_defined_profiles(monkeypatch, tmp_path)
 
-    assert all(profile.model_config_id is None for profile in profiles)
-    assert all(profile.resolve_model_name() is None for profile in profiles)
+    assert all(not hasattr(profile, "model_config_id") for profile in profiles)
+    assert all(profile.model_settings.model_name is None for profile in profiles)
 
 
 def test_child_profile_model_settings_keep_custom_overrides() -> None:
@@ -184,12 +176,9 @@ def test_child_profile_model_settings_keep_custom_overrides() -> None:
     custom = ModelSettings(temperature=0.2)
     child.model_settings = custom
 
-    derived = child.derive_for_run(
-        run=_RunRoute(model_config_id=7, model_name="glm-4.6"),  # type: ignore[arg-type]
-    )
+    derived = child.derive_for_run(run=object())  # type: ignore[arg-type]
 
-    assert derived.model_settings is custom
     assert derived.model_settings.temperature == 0.2
-    assert derived.model_config_id == 7
-    assert (child.model_config_id, child.run) == (None, None)
-    assert child.resolve_model_name() is None
+    assert derived.model_settings is not custom
+    assert not hasattr(child, "model_config_id")
+    assert child.run is None

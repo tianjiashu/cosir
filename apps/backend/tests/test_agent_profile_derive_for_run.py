@@ -14,15 +14,15 @@ from typing import Any
 
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings
+from app.models.conversation_run_extra import ConversationRunExtra
 
 
 @dataclass(frozen=True)
 class _RunRoute:
-    """Conversation Run 的最小替身：只承载 ``derive_for_run`` 读取的两个路由字段。
+    """Conversation Run 的最小替身：承载 per-run 派生需要的用户推理偏好。
 
     参数:
-        model_config_id: 模型厂商标识。
-        model_name: 模型名称。
+        extra: Run 用户运行偏好。
 
     返回:
         无（数据承载类型）。
@@ -34,8 +34,7 @@ class _RunRoute:
         无。
     """
 
-    model_config_id: int | None = None
-    model_name: str | None = None
+    extra: ConversationRunExtra | None = None
 
 
 def _child_profile() -> AgentProfile:
@@ -102,43 +101,58 @@ def test_derive_for_run_without_ban_tools_keeps_allowed_tools() -> None:
     assert derived.allowed_tools == profile.allowed_tools
 
 
-def test_derive_for_run_backfills_route_and_applies_model_settings_override() -> None:
-    """未配置路由的 profile 从 run 回填 provider/model，显式覆盖模型参数生效。"""
+def test_derive_for_run_materializes_runtime_settings_and_applies_override() -> None:
+    """per-run 已物化设置覆盖模型连接，profile 的用户覆盖仍然保留。"""
 
     profile = _child_profile()
     override = ModelSettings(temperature=0.3)
 
+    runtime = ModelSettings(
+        base_url="https://example.test",
+        api_key="secret",
+        model_name="run-model",
+        context_window_k=128,
+        supports_thinking=True,
+        supports_reasoning_effort=True,
+        supports_image=False,
+    )
     derived = profile.derive_for_run(
-        run=_RunRoute(model_config_id=3, model_name="glm-4.6"),  # type: ignore[arg-type]
-        model_settings=override,
+        run=_RunRoute(),
+        model_settings=runtime.with_overrides(override),
     )
 
-    assert derived.model_config_id == 3
-    assert derived.model_settings is override
+    assert derived.model_settings.model_name == "run-model"
+    assert derived.model_settings.api_key == "secret"
+    assert derived.model_settings.temperature == 0.3
     # 原单例不被本次派生污染。
-    assert profile.model_config_id is None
-    assert profile.resolve_model_name() is None
-    assert profile.model_settings != override
+    assert not hasattr(profile, "model_config_id")
+    assert profile.model_settings.temperature is None
 
 
-def test_derive_for_run_keeps_profile_explicit_route() -> None:
-    """profile 已显式配置的模型路由优先于 run，不被回填覆盖。"""
+def test_derive_for_run_run_reasoning_effort_overrides_profile() -> None:
+    """Run 的推理强度是本次执行的最终用户偏好。"""
 
     profile = _child_profile()
-    profile.model_config_id = 9
+    profile.model_settings = ModelSettings(reasoning_effort="high")
 
     derived = profile.derive_for_run(
-        run=_RunRoute(model_config_id=3, model_name="glm-4.6"),  # type: ignore[arg-type]
+        run=_RunRoute(
+            extra=ConversationRunExtra(
+                display_text="hello",
+                attachments=[],
+                reasoning_effort="low",
+            )
+        ),
     )
 
-    assert derived.model_config_id == 9
+    assert derived.model_settings.reasoning_effort == "low"
 
 
 def test_derive_for_run_binds_run_to_copy_only() -> None:
     """``run`` 只绑定在副本上，共享单例的 ``run`` 字段保持为空。"""
 
     profile = _child_profile()
-    route: Any = _RunRoute(model_config_id=1, model_name="m")
+    route: Any = _RunRoute()
 
     derived = profile.derive_for_run(run=route)
 

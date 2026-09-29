@@ -192,7 +192,6 @@ def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
         7,
         command,
         run_id=None,
-        model_name=None,
         supports_image=False,
         reasoning_effort=None,
     )
@@ -215,7 +214,6 @@ def test_run_service_persists_banned_tools_without_other_extra_fields() -> None:
         7,
         command,
         run_id=None,
-        model_name=None,
         supports_image=False,
         reasoning_effort=None,
     )
@@ -245,7 +243,6 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
         7,
         command,
         run_id=None,
-        model_name=None,
         supports_image=False,
         reasoning_effort=None,
     )
@@ -295,7 +292,6 @@ def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
         7,
         command,
         run_id=11,
-        model_name=None,
         supports_image=False,
         reasoning_effort=None,
     )

@@ -93,8 +93,20 @@ def test_agent_configuration_round_trip_preserves_model_override(
             "FakeModelConfigService",
             (),
             {
-                "get_config": staticmethod(
-                    lambda config_id: type("Config", (), {"model_name": "model-a"})()
+                    "get_config": staticmethod(
+                        lambda config_id: type(
+                            "Config",
+                            (),
+                            {
+                                "model_name": "model-a",
+                                "base_url": "https://example.test",
+                                "api_key": "secret",
+                                "context_window_k": 128,
+                                "supports_thinking": True,
+                                "supports_reasoning_effort": True,
+                                "supports_image": False,
+                            },
+                        )()
                 )
             },
         )(),
@@ -142,7 +154,9 @@ def test_agent_configuration_round_trip_preserves_model_override(
     assert _document(service, "reviewer").model_config_id == 7
     assert updated.model_config_id == 7
     assert (
-        registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer").resolve_model_name()
+        registry.resolve(
+            AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer"
+        ).model_settings.model_name
         == "model-a"
     )
     service.delete_document("reviewer")

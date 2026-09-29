@@ -136,11 +136,10 @@ def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatc
         SimpleNamespace(
             id=11,
             task_id=7,
-            model_name="model-x",
-            context_window_k=1,
             input_text="hello",
         ),
         "fresh",
+        context_window_k=1,
     )
     # 与 workflow 一致：graph 启动前补写 canonical user 消息（begin_run 已清空该 run 旧条目）。
     manager.ensure_run_user_message("hello")
@@ -482,8 +481,21 @@ def test_create_run_writes_user_context_and_task_current_run_before_projector(mo
     monkeypatch.setattr(
         "app.service.depends.get_conversation_event_projector", lambda: _Projector()
     )
+    monkeypatch.setattr(
+        "app.service.task.conversation_run_service.get_model_config_service",
+        lambda: SimpleNamespace(
+            get_config=lambda _config_id: SimpleNamespace(
+                supports_reasoning_effort=False,
+                supports_image=False,
+            )
+        ),
+    )
 
-    result = service.create_run(7, run_command=ConversationRunCommand(display_text="hello"))
+    result = service.create_run(
+        7,
+        model_config_id=1,
+        run_command=ConversationRunCommand(display_text="hello"),
+    )
 
     assert result is run
     # create_run 只落 Run/Task 事实与 run_initialized 事件：用户消息由 canonical 写入路径
@@ -521,9 +533,21 @@ def test_create_run_with_external_session_defers_initialization_events_to_owner(
     monkeypatch.setattr(
         "app.service.depends.get_conversation_event_projector", lambda: _Projector()
     )
+    monkeypatch.setattr(
+        "app.service.task.conversation_run_service.get_model_config_service",
+        lambda: SimpleNamespace(
+            get_config=lambda _config_id: SimpleNamespace(
+                supports_reasoning_effort=False,
+                supports_image=False,
+            )
+        ),
+    )
 
     result = service.create_run(
-        7, run_command=ConversationRunCommand(display_text="hello"), session=object()
+        7,
+        model_config_id=1,
+        run_command=ConversationRunCommand(display_text="hello"),
+        session=object(),
     )
 
     assert result is run

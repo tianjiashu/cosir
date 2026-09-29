@@ -439,7 +439,6 @@ def _start_or_attach_under_operation(
             ],
             payload_hash="same-payload",
             model_config_id=None,
-            model_name=None,
             reasoning_effort=None,
             task_id=store.task.id,
             run_command=ConversationRunCommand(display_text="hello"),
@@ -502,7 +501,6 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
             ],
             payload_hash="payload-one",
             model_config_id=None,
-            model_name=None,
             reasoning_effort=None,
             task_id=store.task.id,
             run_command=ConversationRunCommand(display_text="one"),
@@ -514,7 +512,6 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
             ],
             payload_hash="payload-two",
             model_config_id=None,
-            model_name=None,
             reasoning_effort=None,
             task_id=second_task.id,
             run_command=ConversationRunCommand(display_text="two"),
@@ -616,6 +613,5 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     assert {call_id: part["status"] for call_id, part in repaired_parts.items()} == {
         "call-interrupted": "cancelled"
     }
-
 
 
