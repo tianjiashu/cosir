@@ -964,19 +964,19 @@
         }
       }
     },
-    "/tasks/{task_id}/attachments": {
+    "/workspaces/{workspace_id}/attachments": {
       "post": {
         "summary": "Upload Attachment",
-        "description": "上传并暂存一张图片；相同字节由 SHA-256 自动复用。",
-        "operationId": "upload_attachment_tasks__task_id__attachments_post",
+        "description": "上传并规范化一张 JPEG/PNG 图片；相同规范化内容由 SHA-256 自动复用。",
+        "operationId": "upload_attachment_workspaces__workspace_id__attachments_post",
         "parameters": [
           {
-            "name": "task_id",
+            "name": "workspace_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "Task Id"
+              "title": "Workspace Id"
             }
           }
         ],
@@ -985,7 +985,7 @@
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/Body_upload_attachment_tasks__task_id__attachments_post"
+                "$ref": "#/components/schemas/Body_upload_attachment_workspaces__workspace_id__attachments_post"
               }
             }
           }
@@ -997,7 +997,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "title": "Response Upload Attachment Tasks  Task Id  Attachments Post"
+                  "title": "Response Upload Attachment Workspaces  Workspace Id  Attachments Post"
                 }
               }
             }
@@ -1015,59 +1015,18 @@
         }
       }
     },
-    "/tasks/{task_id}/attachments/{asset_id}": {
-      "delete": {
-        "summary": "Delete Attachment",
-        "operationId": "delete_attachment_tasks__task_id__attachments__asset_id__delete",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          },
-          {
-            "name": "asset_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Asset Id"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/tasks/{task_id}/attachments/{asset_id}/content": {
+    "/workspaces/{workspace_id}/attachments/{asset_id}/content": {
       "get": {
         "summary": "Get Attachment Content",
-        "operationId": "get_attachment_content_tasks__task_id__attachments__asset_id__content_get",
+        "operationId": "get_attachment_content_workspaces__workspace_id__attachments__asset_id__content_get",
         "parameters": [
           {
-            "name": "task_id",
+            "name": "workspace_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "Task Id"
+              "title": "Workspace Id"
             }
           },
           {
@@ -1084,8 +1043,17 @@
           "200": {
             "description": "Successful Response",
             "content": {
-              "application/json": {
-                "schema": {}
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -1934,7 +1902,7 @@
         "title": "BanToolsPayload",
         "description": "Validated tool-name selection carried by ``BanToolsCommand``.\n\n``ban_tools`` may be empty to preserve the default where every tool remains available.\nNames must be unique, nonblank strings; availability against the current main-agent catalog\nis checked by the transport service after request parsing.\n\nRaises:\n    ValidationError: When a name is blank, duplicated, or not a string.\n\nSide effects:\n    None. This model only validates and stores the request payload."
       },
-      "Body_upload_attachment_tasks__task_id__attachments_post": {
+      "Body_upload_attachment_workspaces__workspace_id__attachments_post": {
         "properties": {
           "file": {
             "type": "string",
@@ -1946,7 +1914,7 @@
         "required": [
           "file"
         ],
-        "title": "Body_upload_attachment_tasks__task_id__attachments_post"
+        "title": "Body_upload_attachment_workspaces__workspace_id__attachments_post"
       },
       "ConversationRunSnapshot": {
         "properties": {

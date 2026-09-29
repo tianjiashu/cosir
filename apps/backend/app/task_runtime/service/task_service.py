@@ -598,30 +598,6 @@ class TaskService:
             extra={"msg": "run deleted", "data": {"task_id": task_id, "run_id": run_id}},
         )
 
-    def collect_workspace_attachment_orphans(self, workspace_id: int, root_path: str) -> None:
-        """在删除任务或工作区后清理未被剩余 Run 引用的 workspace 附件。
-
-        这是提交后的旁路清理；任何文件系统异常都会记录并放弃本次清理，不影响已经提交
-        的数据库删除结果。调用方应在 workspace 闸门内调用，以避免与任务删除并发。
-        """
-
-        try:
-            from app.service.attachment.attachment_service import collect_workspace_orphans
-
-            references: list[str] = []
-            for remaining_task_id in self._task.list_ids_by_workspace(workspace_id):
-                for run in self._turn.list_by_task(remaining_task_id):
-                    references.extend(run.image_paths or [])
-            collect_workspace_orphans(root_path, references)
-        except Exception:
-            log.exception(
-                "attachment_orphan_gc_failed",
-                extra={
-                    "msg": "图片附件孤儿清理失败，保留文件供后续恢复",
-                    "data": {"workspace_id": workspace_id},
-                },
-            )
-
     def _collect_task_ancestor_ids(self, task_id: int) -> set[int]:
         """收集 task 自身以上的父 task 标识。
 
