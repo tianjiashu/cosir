@@ -14,7 +14,6 @@ export type ModelConfig = {
   updated_at: string;
   supports_thinking: boolean;
   supports_image: boolean;
-  supports_video: boolean;
   supports_reasoning_effort: boolean;
 };
 
@@ -24,6 +23,9 @@ export type ModelConfigCreateInput = {
   api_key: string;
   model_name: string;
   context_window_k: number;
+  supports_thinking: boolean;
+  supports_reasoning_effort: boolean;
+  supports_image: boolean;
   sort_order?: number;
 };
 

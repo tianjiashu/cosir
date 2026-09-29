@@ -11,7 +11,6 @@ export type ModelCatalogModel = {
   label: string;
   supportsReasoningEffort: boolean;
   supportsImage: boolean;
-  supportsVideo: boolean;
 };
 
 export type ModelCatalog = {
@@ -55,7 +54,6 @@ function mapModel(config: ModelConfig): ModelCatalogModel {
     label: `${config.config_name} · ${config.model_name}`,
     supportsReasoningEffort: config.supports_reasoning_effort,
     supportsImage: config.supports_image,
-    supportsVideo: config.supports_video,
   };
 }
 

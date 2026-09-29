@@ -409,11 +409,11 @@
         }
       }
     },
-    "/providers/catalog": {
+    "/model-configs": {
       "get": {
-        "summary": "List Provider Catalog",
-        "description": "返回由 ``llm_provider.json`` 注册的可配置 Provider 目录。",
-        "operationId": "list_provider_catalog_providers_catalog_get",
+        "summary": "List Model Configs",
+        "description": "返回启用和停用的模型连接配置摘要。",
+        "operationId": "list_model_configs_model_configs_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -421,33 +421,10 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/ProviderCapabilityResponse"
+                    "$ref": "#/components/schemas/ModelConfigResponse"
                   },
                   "type": "array",
-                  "title": "Response List Provider Catalog Providers Catalog Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/providers": {
-      "get": {
-        "summary": "List Providers",
-        "description": "返回 Provider 配置列表（模型中心管理面板的数据源）。\n\n参数:\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    Provider 配置列表。响应只包含 API Key 是否已配置，不返回 Key 明文。\n\n异常:\n    无。\n\n副作用:\n    只读 Provider 配置。",
-        "operationId": "list_providers_providers_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ProviderResponse"
-                  },
-                  "type": "array",
-                  "title": "Response List Providers Providers Get"
+                  "title": "Response List Model Configs Model Configs Get"
                 }
               }
             }
@@ -455,14 +432,14 @@
         }
       },
       "post": {
-        "summary": "Create Provider",
-        "description": "新建模型厂商。\n\n参数:\n    payload: 包含 name / display_name / base_url / api_key 的请求体。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    创建后的 ``ProviderResponse``。\n\n异常:\n    HTTPException: 输入非法（400）或配置显示名重名（409）时抛出。\n\n副作用:\n    在存储中创建厂商（service 层写 ``provider_created`` 审计日志）。",
-        "operationId": "create_provider_providers_post",
+        "summary": "Create Model Config",
+        "description": "创建模型连接配置。",
+        "operationId": "create_model_config_model_configs_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ProviderCreateRequest"
+                "$ref": "#/components/schemas/ModelConfigCreateRequest"
               }
             }
           },
@@ -474,7 +451,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProviderResponse"
+                  "$ref": "#/components/schemas/ModelConfigResponse"
                 }
               }
             }
@@ -492,19 +469,19 @@
         }
       }
     },
-    "/providers/{provider_id}": {
+    "/model-configs/{config_id}": {
       "put": {
-        "summary": "Update Provider",
-        "description": "更新厂商字段（仅覆盖显式传入字段；启停即时生效）。\n\n参数:\n    provider_id: 来自路由的厂商标识。\n    payload: 待更新字段的请求体（None = 不更新，``\"\"`` = 清除）。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    更新后的 ``ProviderResponse``。\n\n异常:\n    HTTPException: 厂商不存在（404）、输入非法（400）或配置显示名冲突（409）时抛出。\n\n副作用:\n    更新 ``providers`` 表对应行（service 层写 ``provider_updated`` 审计日志）。",
-        "operationId": "update_provider_providers__provider_id__put",
+        "summary": "Update Model Config",
+        "description": "更新模型连接配置的显式字段。",
+        "operationId": "update_model_config_model_configs__config_id__put",
         "parameters": [
           {
-            "name": "provider_id",
+            "name": "config_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "Provider Id"
+              "title": "Config Id"
             }
           }
         ],
@@ -513,7 +490,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ProviderUpdateRequest"
+                "$ref": "#/components/schemas/ModelConfigUpdateRequest"
               }
             }
           }
@@ -524,7 +501,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProviderResponse"
+                  "$ref": "#/components/schemas/ModelConfigResponse"
                 }
               }
             }
@@ -542,17 +519,17 @@
         }
       },
       "delete": {
-        "summary": "Delete Provider",
-        "description": "删除厂商。\n\n参数:\n    provider_id: 来自路由的厂商标识。\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    ``{\"provider_id\": ..., \"deleted\": true}``（幂等：厂商不存在也返回成功）。\n\n异常:\n    HTTPException: 删除仍被其它事实引用而触发外键违约时抛 409，\n        并在 ``detail`` 中给出可操作原因（不暴露原始 SQL）。\n\n副作用:\n    级联删除厂商与其下模型条目；引用该厂商的 ``conversation_runs.provider_id``\n    由 FK ``ON DELETE SET NULL`` 置空（service 层写 ``provider_deleted`` 审计日志）。",
-        "operationId": "delete_provider_providers__provider_id__delete",
+        "summary": "Delete Model Config",
+        "description": "幂等删除模型连接配置。",
+        "operationId": "delete_model_config_model_configs__config_id__delete",
         "parameters": [
           {
-            "name": "provider_id",
+            "name": "config_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "Provider Id"
+              "title": "Config Id"
             }
           }
         ],
@@ -563,7 +540,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "title": "Response Delete Provider Providers  Provider Id  Delete"
+                  "title": "Response Delete Model Config Model Configs  Config Id  Delete"
                 }
               }
             }
@@ -581,19 +558,67 @@
         }
       }
     },
-    "/providers/{provider_id}/test": {
+    "/model-configs/test": {
       "post": {
-        "summary": "Test Provider Connection",
-        "description": "对厂商发起一次最小 chat 请求验证凭据 / 端点可用性（设计文档 §三 用户视角三件套）。\n\n用已配置参数（``base_url`` / ``api_key``）发起一次\n``max_tokens=1`` 的 ping 请求，返回 ``success`` ``elapsed_ms``。**失败是正常结果之一**（区别于\ndiscover 的 502：测试本身就是「试错」语义），故失败也返回 200 携带\n``success=False``，由前端据 ``error_code`` 给出修复引导。\n\n参数:\n    provider_id: 来自路由的厂商标识。\n    provider_service: 通过依赖注入的厂商 service（存在性守卫）。\n    connection_test_service: 通过依赖注入的连通性测试 service。\n\n返回:\n    ``ConnectionTestResult`` 字段平铺的字典（``provider_id`` / ``success`` /\n    ``elapsed_ms`` / ``error_code`` / ``error_message``）。骨架阶段恒抛\n    ``NotImplementedError`` 由 FastAPI 转 501（阶段 2 实施后改为正常返回）。\n\n异常:\n    HTTPException: 厂商不存在（404）或骨架阶段未实现（501）时抛出。\n\n副作用:\n    发起一次到厂商端点的网络请求（阶段 2 实施后）；写 info 级\n    ``provider_connection_test_*`` 日志（由 service 层记录）。",
-        "operationId": "test_provider_connection_providers__provider_id__test_post",
+        "summary": "Test Draft Model Config",
+        "description": "对尚未保存的配置执行一次真实 OpenAI 兼容请求。",
+        "operationId": "test_draft_model_config_model_configs_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelConfigTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {},
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": "object",
+                  "title": "Response Test Draft Model Config Model Configs Test Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/model-configs/{config_id}/test": {
+      "post": {
+        "summary": "Test Model Config",
+        "description": "对已保存的配置执行一次真实 OpenAI 兼容请求。",
+        "operationId": "test_model_config_model_configs__config_id__test_post",
         "parameters": [
           {
-            "name": "provider_id",
+            "name": "config_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "Provider Id"
+              "title": "Config Id"
             }
           }
         ],
@@ -604,7 +629,15 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "title": "Response Test Provider Connection Providers  Provider Id  Test Post"
+                  "additionalProperties": {
+                    "anyOf": [
+                      {},
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "title": "Response Test Model Config Model Configs  Config Id  Test Post"
                 }
               }
             }
@@ -924,29 +957,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/models": {
-      "get": {
-        "summary": "List Models",
-        "description": "返回按启用模型厂商聚合的模型目录。\n\n参数:\n    provider_service: 通过依赖注入的厂商 service。\n\n返回:\n    Provider 分组列表。每个模型只返回模型名和前端选择所需的静态能力标记。\n\n异常:\n    无。未注册 Provider 能力的 Provider 不贡献模型分组，并记录可排查日志。\n\n副作用:\n    只读 Provider 配置和进程内能力注册表。",
-        "operationId": "list_models_models_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ProviderModelGroupResponse"
-                  },
-                  "type": "array",
-                  "title": "Response List Models Models Get"
                 }
               }
             }
@@ -1403,7 +1413,7 @@
             "title": "Max Steps",
             "default": 100
           },
-          "provider_id": {
+          "model_config_id": {
             "anyOf": [
               {
                 "type": "integer"
@@ -1412,18 +1422,7 @@
                 "type": "null"
               }
             ],
-            "title": "Provider Id"
-          },
-          "model_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model Name"
+            "title": "Model Config Id"
           },
           "model_settings": {
             "type": "object",
@@ -1440,7 +1439,7 @@
           "allowed_tool_groups"
         ],
         "title": "AgentConfigurationRequest",
-        "description": "校验 Agent 配置的创建与更新请求体。\n\n参数:\n    agent_id: Agent 标识，与配置文件身份一致。\n    role: Agent 角色描述。\n    description: Agent 用途说明。\n    system_prompt: 系统提示词正文。\n    allowed_tool_groups: 该 Agent 允许使用的工具分组名称列表；后端会展开为工具名。\n    max_steps: 单次运行的最大推理步数，默认 100。\n    provider_id: 可选，模型归属厂商标识（指向 ``providers.id``）。\n    model_name: 可选，模型名；None 表示未指定模型。\n    model_settings: 可选，模型参数覆盖项。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 字段类型不符或携带额外字段时由 Pydantic 校验抛出。\n\n副作用:\n    无（只做结构校验，不读写文件）。"
+        "description": "校验 Agent 配置的创建与更新请求体。\n\n参数:\n    agent_id: Agent 标识，与配置文件身份一致。\n    role: Agent 角色描述。\n    description: Agent 用途说明。\n    system_prompt: 系统提示词正文。\n    allowed_tool_groups: 该 Agent 允许使用的工具分组名称列表；后端会展开为工具名。\n    max_steps: 单次运行的最大推理步数，默认 100。\n    model_config_id: 可选，指向数据库模型连接配置的标识。\n    model_settings: 可选，模型参数覆盖项。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 字段类型不符或携带额外字段时由 Pydantic 校验抛出。\n\n副作用:\n    无（只做结构校验，不读写文件）。"
       },
       "AgentConfigurationResponse": {
         "properties": {
@@ -1471,7 +1470,7 @@
             "type": "integer",
             "title": "Max Steps"
           },
-          "provider_id": {
+          "model_config_id": {
             "anyOf": [
               {
                 "type": "integer"
@@ -1480,18 +1479,7 @@
                 "type": "null"
               }
             ],
-            "title": "Provider Id"
-          },
-          "model_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model Name"
+            "title": "Model Config Id"
           },
           "model_settings": {
             "type": "object",
@@ -1561,7 +1549,7 @@
           "validation_status"
         ],
         "title": "AgentConfigurationResponse",
-        "description": "校验并序列化 Agent 配置响应。\n\n参数:\n    agent_id: Agent 标识。\n    role: Agent 角色描述。\n    description: Agent 用途说明。\n    system_prompt: 系统提示词正文。\n    allowed_tool_groups: 允许使用的工具分组名称列表。\n    max_steps: 单次运行的最大推理步数。\n    provider_id: 可选，模型归属厂商标识。\n    model_name: 可选，模型名。\n    model_settings: 模型参数覆盖项。\n    source: 配置来源（内置或用户文件）。\n    path: 配置文件路径；无文件时为 None。\n    editable: 是否可编辑。\n    deletable: 是否可删除。\n    validation_status: 配置校验状态。\n    validation_error: 校验失败原因；通过时为 None。\n    file_name: 配置文件名；缺失时为 None。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化 Agent 配置响应。\n\n参数:\n    agent_id: Agent 标识。\n    role: Agent 角色描述。\n    description: Agent 用途说明。\n    system_prompt: 系统提示词正文。\n    allowed_tool_groups: 允许使用的工具分组名称列表。\n    max_steps: 单次运行的最大推理步数。\n    model_config_id: 可选，数据库模型连接配置标识。\n    model_settings: 模型参数覆盖项。\n    source: 配置来源（内置或用户文件）。\n    path: 配置文件路径；无文件时为 None。\n    editable: 是否可编辑。\n    deletable: 是否可删除。\n    validation_status: 配置校验状态。\n    validation_error: 校验失败原因；通过时为 None。\n    file_name: 配置文件名；缺失时为 None。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "AssistantAttachRequest": {
         "properties": {
@@ -1727,7 +1715,7 @@
             ],
             "title": "Workspaceid"
           },
-          "providerId": {
+          "modelConfigId": {
             "anyOf": [
               {
                 "type": "integer",
@@ -1737,18 +1725,7 @@
                 "type": "null"
               }
             ],
-            "title": "Providerid"
-          },
-          "modelName": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Modelname"
+            "title": "Modelconfigid"
           },
           "reasoningEffort": {
             "anyOf": [
@@ -2415,7 +2392,7 @@
         },
         "type": "object",
         "title": "CreateTaskRequest",
-        "description": "校验任务创建请求体（仅建 task 容器，不含首轮次）。\n\n任务创建与首轮次创建已解耦：本请求只携带建 task 容器所需的最小字段\n（``text`` 派生标题）。工作区归属由 URL 路径提供。agent / 模型 / 附件等\n属于 turn 维度的字段由 ``CreateTurnRequest`` 承载，调用方在创建首 turn 时单独传递。\n\n参数:\n    text: 可选的纯文本任务输入；纯附件新对话允许为空。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    无。空文本由 workspace API 转换为默认任务标题。\n\n副作用:\n    无。"
+        "description": "校验任务创建请求体（仅建 task 容器，不含首轮次）。\n\n任务创建与首轮次创建已解耦：本请求只携带建 task 容器所需的最小字段\n（``text`` 派生标题）。工作区归属由 URL 路径提供。agent / 模型 / 附件等\n首条用户输入与模型运行偏好由 Assistant Transport 请求承载，任务创建只负责任务事实。\n\n参数:\n    text: 可选的纯文本任务输入；纯附件新对话允许为空。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    无。空文本由 workspace API 转换为默认任务标题。\n\n副作用:\n    无。"
       },
       "CreateWorkspaceRequest": {
         "properties": {
@@ -2897,200 +2874,98 @@
         "title": "MainAgentPromptUpdateRequest",
         "description": "校验主 Agent prompt 更新请求的字段形状。"
       },
-      "ModelListItemResponse": {
+      "ModelConfigCreateRequest": {
         "properties": {
+          "config_name": {
+            "type": "string",
+            "title": "Config Name"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          },
           "model_name": {
             "type": "string",
             "title": "Model Name"
           },
+          "context_window_k": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Context Window K"
+          },
           "supports_thinking": {
             "type": "boolean",
-            "title": "Supports Thinking"
-          },
-          "supports_image": {
-            "type": "boolean",
-            "title": "Supports Image"
-          },
-          "supports_video": {
-            "type": "boolean",
-            "title": "Supports Video"
+            "title": "Supports Thinking",
+            "default": false
           },
           "supports_reasoning_effort": {
             "type": "boolean",
-            "title": "Supports Reasoning Effort"
-          }
-        },
-        "type": "object",
-        "required": [
-          "model_name",
-          "supports_thinking",
-          "supports_image",
-          "supports_video",
-          "supports_reasoning_effort"
-        ],
-        "title": "ModelListItemResponse",
-        "description": "描述一个可展示的模型及其静态能力。"
-      },
-      "ProviderCapabilityResponse": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
+            "title": "Supports Reasoning Effort",
+            "default": false
           },
-          "provider_type": {
-            "type": "string",
-            "title": "Provider Type"
-          },
-          "default_base_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Default Base Url"
-          },
-          "requires_api_key": {
+          "supports_image": {
             "type": "boolean",
-            "title": "Requires Api Key",
-            "default": true
+            "title": "Supports Image",
+            "default": false
           },
-          "models": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Models"
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order",
+            "default": 0
           }
         },
         "type": "object",
         "required": [
-          "name",
-          "provider_type",
-          "models"
+          "config_name",
+          "base_url",
+          "api_key",
+          "model_name",
+          "context_window_k"
         ],
-        "title": "ProviderCapabilityResponse",
-        "description": "描述能力注册表中一个可配置的 Provider。"
+        "title": "ModelConfigCreateRequest",
+        "description": "校验模型连接配置的连接字段和必填上下文窗口。"
       },
-      "ProviderCreateRequest": {
+      "ModelConfigResponse": {
         "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
+          "config_id": {
+            "type": "integer",
+            "title": "Config Id"
           },
-          "display_name": {
+          "config_name": {
             "type": "string",
-            "title": "Display Name"
-          },
-          "model_name": {
-            "type": "string",
-            "title": "Model Name",
-            "default": ""
+            "title": "Config Name"
           },
           "base_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
             "title": "Base Url"
           },
           "api_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
             "title": "Api Key"
           },
-          "sort_order": {
-            "type": "integer",
-            "title": "Sort Order",
-            "default": 0
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "display_name"
-        ],
-        "title": "ProviderCreateRequest",
-        "description": "校验厂商创建请求体。\n\n参数:\n    name: 能力注册表名称（deepseek、openai、ollama等）；允许多个配置实例复用。\n    display_name: 用户可见的配置名称；用于区分同一厂商的不同接入配置。\n    model_name: 可选模型名称字段，当前 Provider 创建流程不据此建立模型条目。\n    base_url: 接入地址。\n    api_key: 可选 API Key 明文（DB 唯一事实来源，本地 SQLite 明文存储；\n        ``ollama`` 等不需 Key 的厂商可不填。\n    sort_order: 排序权重，默认 0。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 ``name`` / ``display_name`` 无效、Provider 未注册、或缺少必需的\n        API Key / Base URL 时抛出。\n\n副作用:\n    无。"
-      },
-      "ProviderModelGroupResponse": {
-        "properties": {
-          "provider_id": {
-            "type": "integer",
-            "title": "Provider Id"
-          },
-          "provider_display_name": {
+          "model_name": {
             "type": "string",
-            "title": "Provider Display Name"
+            "title": "Model Name"
           },
-          "models": {
-            "items": {
-              "$ref": "#/components/schemas/ModelListItemResponse"
-            },
-            "type": "array",
-            "title": "Models"
-          }
-        },
-        "type": "object",
-        "required": [
-          "provider_id",
-          "provider_display_name",
-          "models"
-        ],
-        "title": "ProviderModelGroupResponse",
-        "description": "描述一个厂商及其模型目录。"
-      },
-      "ProviderResponse": {
-        "properties": {
-          "provider_id": {
+          "context_window_k": {
             "type": "integer",
-            "title": "Provider Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "display_name": {
-            "type": "string",
-            "title": "Display Name"
-          },
-          "base_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Base Url"
+            "title": "Context Window K"
           },
           "api_key_configured": {
             "type": "boolean",
-            "title": "Api Key Configured",
-            "default": true
+            "title": "Api Key Configured"
           },
           "enabled": {
             "type": "boolean",
-            "title": "Enabled",
-            "default": true
+            "title": "Enabled"
           },
           "sort_order": {
             "type": "integer",
-            "title": "Sort Order",
-            "default": 0
+            "title": "Sort Order"
           },
           "created_at": {
             "type": "string",
@@ -3099,22 +2974,67 @@
           "updated_at": {
             "type": "string",
             "title": "Updated At"
+          },
+          "supports_thinking": {
+            "type": "boolean",
+            "title": "Supports Thinking",
+            "default": false
+          },
+          "supports_image": {
+            "type": "boolean",
+            "title": "Supports Image",
+            "default": false
+          },
+          "supports_reasoning_effort": {
+            "type": "boolean",
+            "title": "Supports Reasoning Effort",
+            "default": false
           }
         },
         "type": "object",
         "required": [
-          "provider_id",
-          "name",
-          "display_name",
+          "config_id",
+          "config_name",
+          "base_url",
+          "api_key",
+          "model_name",
+          "context_window_k",
+          "api_key_configured",
+          "enabled",
+          "sort_order",
           "created_at",
           "updated_at"
         ],
-        "title": "ProviderResponse",
-        "description": "序列化厂商配置响应（含聚合状态，设计文档 §8.1）。\n\n参数:\n    provider_id: 厂商标识。\n    name: 能力注册表名称。\n    display_name: 用户可见的配置名称。\n    base_url: 自定义接入地址（可空，空时使用 Provider 能力注册表默认地址）。\n    api_key_configured: Key 配置状态（不依赖 Key 的厂商类型恒 True，§8.4；\n        其余以 ``providers.api_key`` 非空为准）。响应永不回传 Key 明文。\n    enabled: 启用开关。\n    sort_order: 排序权重。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "title": "ModelConfigResponse",
+        "description": "返回本机模型配置及编辑所需的 API Key。\n\n该响应只在本机桌面应用的 HTTP 边界内使用。API Key 不进入日志、事件或\n``ModelConfigRecord.to_dict``；前端收到后默认以密码态展示，仅用于配置编辑。"
       },
-      "ProviderUpdateRequest": {
+      "ModelConfigTestRequest": {
         "properties": {
-          "display_name": {
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          },
+          "model_name": {
+            "type": "string",
+            "title": "Model Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_url",
+          "api_key",
+          "model_name"
+        ],
+        "title": "ModelConfigTestRequest",
+        "description": "承载一次不落库的真实 OpenAI 兼容连接测试参数。"
+      },
+      "ModelConfigUpdateRequest": {
+        "properties": {
+          "config_name": {
             "anyOf": [
               {
                 "type": "string"
@@ -3123,7 +3043,7 @@
                 "type": "null"
               }
             ],
-            "title": "Display Name"
+            "title": "Config Name"
           },
           "base_url": {
             "anyOf": [
@@ -3146,6 +3066,62 @@
               }
             ],
             "title": "Api Key"
+          },
+          "model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Name"
+          },
+          "context_window_k": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Window K"
+          },
+          "supports_thinking": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supports Thinking"
+          },
+          "supports_reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supports Reasoning Effort"
+          },
+          "supports_image": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supports Image"
           },
           "enabled": {
             "anyOf": [
@@ -3171,8 +3147,8 @@
           }
         },
         "type": "object",
-        "title": "ProviderUpdateRequest",
-        "description": "校验厂商更新请求体（仅覆盖显式传入的字段）。\n\n参数:\n    display_name: 可选，新配置显示名。\n    base_url: 可选，新接入地址；``\"\"`` 表示清除。\n    api_key: 可选，新 API Key 明文；``None`` 不更新，``\"\"`` 清除。\n    enabled: 可选，新启用状态（启停即时生效）。\n    sort_order: 可选，新排序权重。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当 display_name 由调用方传入空白值时由存储层拒绝。\n\n副作用:\n    无。"
+        "title": "ModelConfigUpdateRequest",
+        "description": "只覆盖显式传入的模型连接配置字段。"
       },
       "TaskResponse": {
         "properties": {

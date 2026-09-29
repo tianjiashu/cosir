@@ -196,15 +196,7 @@ function ModelSettingsEditor({
           <Input type="number" min="1" step="1" value={value.max_tokens} placeholder="不覆盖" onChange={(event) => setField("max_tokens", event.target.value)} />
         </label>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">思考模式</span>
-          <select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={value.thinking} onChange={(event) => setField("thinking", event.target.value as ModelSettingsForm["thinking"])}>
-            <option value="">跟随默认</option>
-            <option value="true">启用</option>
-            <option value="false">关闭</option>
-          </select>
-        </label>
+      <div className="grid gap-3 sm:grid-cols-1">
         <label className="space-y-1 text-xs">
           <span className="text-muted-foreground">推理强度</span>
           <select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={value.reasoning_effort} onChange={(event) => setField("reasoning_effort", event.target.value)}>

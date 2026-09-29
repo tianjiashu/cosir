@@ -9,7 +9,6 @@ export type ModelSettingsForm = {
   temperature: string;
   top_p: string;
   max_tokens: string;
-  thinking: TriStateValue;
   drop_params: TriStateValue;
   stream: TriStateValue;
   reasoning_effort: string;
@@ -22,7 +21,6 @@ export function emptyModelSettingsForm(): ModelSettingsForm {
     temperature: "",
     top_p: "",
     max_tokens: "",
-    thinking: "",
     drop_params: "",
     stream: "",
     reasoning_effort: "",
@@ -47,7 +45,6 @@ export function modelSettingsToForm(settings: Record<string, unknown> | null | u
     temperature: stringValue(source.temperature),
     top_p: stringValue(source.top_p),
     max_tokens: stringValue(source.max_tokens),
-    thinking: stringValue(source.thinking) as TriStateValue,
     drop_params: stringValue(source.drop_params) as TriStateValue,
     stream: stringValue(source.stream) as TriStateValue,
     reasoning_effort: stringValue(source.reasoning_effort),
@@ -89,10 +86,8 @@ export function modelSettingsFromForm(form: ModelSettingsForm): Record<string, u
   if (topP !== undefined) settings.top_p = topP;
   if (maxTokens !== undefined) settings.max_tokens = maxTokens;
 
-  const thinking = parseBoolean(form.thinking);
   const dropParams = parseBoolean(form.drop_params);
   const stream = parseBoolean(form.stream);
-  if (thinking !== undefined) settings.thinking = thinking;
   if (dropParams !== undefined) settings.drop_params = dropParams;
   if (stream !== undefined) settings.stream = stream;
   if (form.reasoning_effort.trim()) settings.reasoning_effort = form.reasoning_effort.trim();

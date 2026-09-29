@@ -13,7 +13,7 @@ Cosir 是一个**单用户、本机运行**的桌面应用。它使用 Tauri 承
 ## 能做什么
 
 - **按工作区组织任务**：选择本地文件夹，为项目创建和继续多个任务对话；除终端外，所有工具都被约束在所选工作区边界内，文件写入不会越出工作区。
-- **连接自己的模型服务**：目前只验证了 DeepSeek。厂商端点、模型清单与能力事实（思考通道、视觉输入格式、错误码文案等）都在 `core/llm_provider/capability/*.json` 中声明，运行时由 `model_factory` 统一构建 LangChain chat model，新增厂商通常只需补一份配置。
+- **连接自己的模型服务**：在模型配置面板中填写 OpenAI-compatible 端点、模型名、上下文窗口，以及是否支持 thinking、统一推理强度和图片输入；协议与图片安全限制由程序统一实现。
 - **理解和修改代码**：读取文件、搜索代码、创建或修改文件，并查看变更差异。
 - **执行开发命令**：目前支持在Windows和Mac系统下执行终端命令 或者 开启可交互终端。
 - **处理参考资料**：在对话中附加图片或文件；按需使用网页搜索和内容提取工具。
@@ -113,11 +113,11 @@ Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 **模型接入（`core/llm_provider/`）**
 
 - `model_factory`（`llm_provider/model_factory.py`）：按模型名构建 LangChain chat model 的单一收口，只做"按名取模型 + 透传采样与接入参数"。
-- `capability/`（`llm_provider/capability/`）：静态能力事实源——`ProviderCapability` 读 `llm_provider.json`（厂商端点、模型清单、思考通道与错误码文案），`ModelCapability` 读 `model_capabilities.json`（上下文窗口与推理能力）。
+- `model_configs`：用户维护的模型连接与能力声明，包含是否支持 thinking、统一推理强度和图片输入；Run 创建时把声明快照写入 `conversation_runs.extra`。
 - `reasoning_chat_openai.py`：保留 OpenAI 兼容 thinking 流式字段的 `ChatOpenAI` 适配器，只补这一处响应字段。
 - `model_failure.py`：把模型调用异常归类为稳定的 `ErrorKind`；只归类，不决定是否终止 Run、不生成文案、不落库。
 
-扩展模型时优先补 `capability/*.json`；需要不同协议时新增适配器并接入 `model_factory`。
+扩展模型时直接新增或编辑模型连接配置；协议字段、图片格式与安全限制由后端统一实现，不按模型目录分叉。
 
 ## 运行方式与数据
 

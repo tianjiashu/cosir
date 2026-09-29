@@ -28,6 +28,9 @@ type FormState = {
   apiKey: string;
   modelName: string;
   contextWindowK: string;
+  supportsThinking: boolean;
+  supportsReasoningEffort: boolean;
+  supportsImage: boolean;
 };
 
 const emptyForm: FormState = {
@@ -36,6 +39,9 @@ const emptyForm: FormState = {
   apiKey: "",
   modelName: "",
   contextWindowK: "128",
+  supportsThinking: false,
+  supportsReasoningEffort: false,
+  supportsImage: false,
 };
 
 export function ModelConfigPanel({
@@ -85,6 +91,9 @@ export function ModelConfigPanel({
         api_key: form.apiKey,
         model_name: form.modelName.trim(),
         context_window_k: Number(form.contextWindowK),
+        supports_thinking: form.supportsThinking,
+        supports_reasoning_effort: form.supportsReasoningEffort,
+        supports_image: form.supportsImage,
       };
       let savedConfig: ModelConfig;
       if (editingId === null) {
@@ -208,7 +217,7 @@ export function ModelConfigPanel({
                     {testingId === config.config_id && <Loader2Icon className="animate-spin" />}
                     测试
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => { setEditingId(config.config_id); setForm({ configName: config.config_name, baseUrl: config.base_url, apiKey: config.api_key, modelName: config.model_name, contextWindowK: String(config.context_window_k) }); setShowApiKey(false); }}>
+                  <Button variant="ghost" size="sm" onClick={() => { setEditingId(config.config_id); setForm({ configName: config.config_name, baseUrl: config.base_url, apiKey: config.api_key, modelName: config.model_name, contextWindowK: String(config.context_window_k), supportsThinking: config.supports_thinking, supportsReasoningEffort: config.supports_reasoning_effort, supportsImage: config.supports_image }); setShowApiKey(false); }}>
                     编辑
                   </Button>
                   <Button variant="ghost" size="icon-sm" disabled={busy} onClick={() => void remove(config)} aria-label={`删除 ${config.config_name}`}>
@@ -230,6 +239,11 @@ export function ModelConfigPanel({
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="grid gap-1 text-xs">模型名称<input className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.modelName} onChange={(event) => setForm({ ...form, modelName: event.target.value })} placeholder="例如：deepseek-chat" /></label>
               <label className="grid gap-1 text-xs">上下文窗口（K）<input type="number" min="1" step="1" className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.contextWindowK} onChange={(event) => setForm({ ...form, contextWindowK: event.target.value })} placeholder="例如：128" /></label>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.supportsThinking} onChange={(event) => setForm({ ...form, supportsThinking: event.target.checked })} />支持思考</label>
+              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.supportsReasoningEffort} onChange={(event) => setForm({ ...form, supportsReasoningEffort: event.target.checked })} />支持推理强度</label>
+              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.supportsImage} onChange={(event) => setForm({ ...form, supportsImage: event.target.checked })} />支持图片输入</label>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <Button variant="outline" disabled={busy || testingDraft || !form.baseUrl.trim() || !form.apiKey || !form.modelName.trim()} onClick={() => void testDraft()}>{testingDraft && <Loader2Icon className="animate-spin" />}测试连接</Button>
