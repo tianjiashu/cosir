@@ -49,7 +49,7 @@ def _schema(con: sqlite3.Connection) -> None:
             context_window_total INTEGER, created_at TEXT, updated_at TEXT, extra TEXT);
         CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, task_id INTEGER,
             status TEXT, agent_id TEXT, provider_id INTEGER, model_name TEXT,
-            reasoning_effort TEXT, end_reason TEXT, input_text TEXT, final_output TEXT,
+            end_reason TEXT, input_text TEXT, final_output TEXT,
             usage_json TEXT, error_json TEXT, created_at TEXT, updated_at TEXT,
             checkpoint_thread_id TEXT);
         CREATE TABLE conversation_commands (id INTEGER PRIMARY KEY, task_id INTEGER,
@@ -72,13 +72,13 @@ def _schema(con: sqlite3.Connection) -> None:
             api_key TEXT, enabled BOOLEAN, sort_order INTEGER);
         CREATE TABLE models (id INTEGER PRIMARY KEY, provider_id INTEGER, model_name TEXT,
             display_name TEXT, max_context_window INTEGER, supports_thinking BOOLEAN,
-            supports_image BOOLEAN, supports_video BOOLEAN, enabled BOOLEAN, sort_order INTEGER);
+            supports_image BOOLEAN, enabled BOOLEAN, sort_order INTEGER);
         """
     )
     con.execute("INSERT INTO workspaces VALUES (1,'ws1','/tmp/ws1','t','t')")
     con.execute("INSERT INTO tasks VALUES (1,1,'t1','chat',NULL,NULL,1,NULL,0,100,'t','t',NULL)")
     con.execute(
-        "INSERT INTO conversation_runs VALUES (1,1,'completed','a',1,'m',NULL,'done','i','o','{}','{}','t','t',NULL)"
+        "INSERT INTO conversation_runs VALUES (1,1,'completed','a',1,'m','done','i','o','{}','{}','t','t',NULL)"
     )
     con.commit()
 
@@ -246,8 +246,8 @@ class TestAgentFacts:
 
     # 目的：models provider_id 过滤生效。潜在缺陷：过滤被忽略。
     def test_models_provider_filter(self, con: sqlite3.Connection) -> None:
-        con.execute("INSERT INTO models VALUES (1,1,'m1','M1',100,0,0,0,1,0)")
-        con.execute("INSERT INTO models VALUES (2,2,'m2','M2',100,0,0,0,1,1)")
+        con.execute("INSERT INTO models VALUES (1,1,'m1','M1',100,0,0,1,0)")
+        con.execute("INSERT INTO models VALUES (2,2,'m2','M2',100,0,0,1,1)")
         con.commit()
         assert [r["id"] for r in list_models(con, limit=10, provider_id=2)] == [2]
         assert len(list_models(con, limit=10)) == 2
@@ -317,7 +317,7 @@ class TestSnapshots:
     # 目的：run_snapshot 的 task_id 从 run 行取，task_id=0 不崩溃。潜在缺陷：孤儿 run 触发异常。
     def test_run_snapshot_orphan_run(self, con: sqlite3.Connection) -> None:
         con.execute(
-            "INSERT INTO conversation_runs VALUES (9,777,'completed','a',1,'m',NULL,'d','i','o','{}','{}','t','t',NULL)"
+            "INSERT INTO conversation_runs VALUES (9,777,'completed','a',1,'m','d','i','o','{}','{}','t','t',NULL)"
         )
         con.commit()
         snap = run_snapshot(con, run_id=9, limit=10)

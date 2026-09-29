@@ -26,7 +26,6 @@ from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.task_record import TaskRecord
-from app.core.llm_provider.capability.capability_service import CapabilityService
 from app.service.task.conversation_run_service import ConversationRunService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -322,14 +321,6 @@ def test_task_service_reads_persisted_context_window_without_capability_lookup(
     service._turn = SimpleNamespace(
         get_latest_by_task=lambda _task_id: SimpleNamespace(model_name="unavailable-model")
     )
-    monkeypatch.setattr(
-        CapabilityService,
-        "get_model_context_window",
-        lambda _model: (_ for _ in ()).throw(
-            AssertionError("cold read must not resolve capability")
-        ),
-    )
-
     assert service.get_context_window_total(7) == 8192
 
 

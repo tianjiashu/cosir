@@ -126,10 +126,6 @@ def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatc
 
     service = _FreshContextService()
     manager = _runtime_manager(service)
-    monkeypatch.setattr(
-        "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
-        lambda _model_name, **kwargs: 100,
-    )
     # ensure_run_user_message 写完后经投影器推送事件（进程内投影器依赖存储单例，这里用空操作）。
     monkeypatch.setattr(
         "app.core.context.runtime_context_manager.get_conversation_event_projector",
@@ -137,7 +133,13 @@ def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatc
     )
 
     manager.begin_run(
-        SimpleNamespace(id=11, task_id=7, model_name="model-x", input_text="hello"),
+        SimpleNamespace(
+            id=11,
+            task_id=7,
+            model_name="model-x",
+            context_window_k=1,
+            input_text="hello",
+        ),
         "fresh",
     )
     # 与 workflow 一致：graph 启动前补写 canonical user 消息（begin_run 已清空该 run 旧条目）。

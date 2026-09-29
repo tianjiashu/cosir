@@ -50,7 +50,6 @@ from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.service.terminal.terminal_session_service import TerminalSessionService
 from app.utils import cosir_paths
 
-_VISION_MODEL = "deepseek-flash"
 _ASSET = "a" * 64
 
 
@@ -124,10 +123,10 @@ async def test_resolve_for_model_resolves_run_referenced_cosir_attachment(tmp_pa
     uploaded = await service.upload(7, _upload(data))
     assert uploaded.asset_id == asset_id
     # upload 仅把字节落到 .uploading 暂存；finalize 才把文件落进 Attachment/。
-    service.finalize(7, asset_id, _VISION_MODEL)
+    service.finalize(7, asset_id)
 
     # 模拟 Run 引用：workspace 相对的 .cosir/Attachment/<sha>.png
-    normalized = service.resolve_for_model(7, f".cosir/Attachment/{asset_id}.png", _VISION_MODEL)
+    normalized = service.resolve_for_model(7, f".cosir/Attachment/{asset_id}.png")
 
     assert normalized.path.is_file()
     assert normalized.path.parent == (tmp_path / ".cosir" / "Attachment").resolve()
@@ -205,7 +204,7 @@ def test_resolve_for_model_rejects_path_outside_attachment(tmp_path: Path) -> No
     (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
 
     with pytest.raises(ImageNormalizationError) as error:
-        service.resolve_for_model(7, "notes.txt", _VISION_MODEL)
+        service.resolve_for_model(7, "notes.txt")
 
     # 非附件目录内的路径由 _inside 的 containment 拒绝（越界先于存在性判定）。
     assert error.value.code == "ATTACHMENT_NOT_OWNED"
@@ -222,9 +221,7 @@ def test_resolve_for_model_rejects_traversal_escape(tmp_path: Path) -> None:
     (tmp_path / ".cosir" / "Attachment").mkdir(parents=True)
 
     with pytest.raises(ImageNormalizationError):
-        service.resolve_for_model(
-            7, f".cosir/Attachment/../../../{_ASSET}.png", _VISION_MODEL
-        )
+        service.resolve_for_model(7, f".cosir/Attachment/../../../{_ASSET}.png")
 
 
 # --- B. 等价性：修复前 directory.parent.parent == 修复后 workspace 记录基准 --------------
@@ -275,9 +272,7 @@ def test_resolve_for_model_equivalent_when_root_is_symlink(tmp_path: Path) -> No
     (attachment_dir / f"{asset_id}.png").write_bytes(data)
 
     service = _service(link_root)
-    normalized = service.resolve_for_model(
-        7, f".cosir/Attachment/{asset_id}.png", _VISION_MODEL
-    )
+    normalized = service.resolve_for_model(7, f".cosir/Attachment/{asset_id}.png")
 
     assert normalized.path.is_file()
     assert normalized.path.read_bytes() == data
@@ -573,13 +568,13 @@ async def test_roundtrip_upload_relative_path_then_resolve(tmp_path: Path) -> No
 
     # 用户发送消息时 finalize 得到 workspace 相对路径（模拟 conversation_run_service 行为）
     asset_id = hashlib.sha256(data).hexdigest()
-    finalized = service.finalize(7, asset_id, _VISION_MODEL)
+    finalized = service.finalize(7, asset_id)
     rel = service.relative_path(7, finalized.path)
     assert rel == f".cosir/Attachment/{asset_id}.png"
 
     # 运行期按该相对路径解析回图片
-    normalized = service.resolve_for_model(7, rel, _VISION_MODEL)
-    again = service.resolve_for_model(7, rel, _VISION_MODEL)
+    normalized = service.resolve_for_model(7, rel)
+    again = service.resolve_for_model(7, rel)
     assert normalized.path.read_bytes() == again.path.read_bytes() == data
     assert normalized.width == 4 and normalized.height == 3
 
@@ -680,7 +675,7 @@ async def test_get_descriptor_and_resolve_content_after_finalize(tmp_path: Path)
     data = _png_bytes()
     asset_id = hashlib.sha256(data).hexdigest()
     await service.upload(7, _upload(data))
-    service.finalize(7, asset_id, _VISION_MODEL)
+    service.finalize(7, asset_id)
 
     descriptor = service.get_descriptor(7, asset_id)
     assert descriptor.asset_id == asset_id

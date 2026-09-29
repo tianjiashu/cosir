@@ -38,7 +38,7 @@ def _build_app_db(path: Path) -> None:
             context_window_total INTEGER, created_at TEXT, updated_at TEXT, extra TEXT);
         CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, task_id INTEGER,
             status TEXT, agent_id TEXT, provider_id INTEGER, model_name TEXT,
-            reasoning_effort TEXT, end_reason TEXT, input_text TEXT, final_output TEXT,
+            end_reason TEXT, input_text TEXT, final_output TEXT,
             usage_json TEXT, error_json TEXT, created_at TEXT, updated_at TEXT,
             checkpoint_thread_id TEXT);
         CREATE TABLE conversation_commands (id INTEGER PRIMARY KEY, task_id INTEGER,
@@ -61,7 +61,7 @@ def _build_app_db(path: Path) -> None:
             api_key TEXT, enabled BOOLEAN, sort_order INTEGER);
         CREATE TABLE models (id INTEGER PRIMARY KEY, provider_id INTEGER, model_name TEXT,
             display_name TEXT, max_context_window INTEGER, supports_thinking BOOLEAN,
-            supports_image BOOLEAN, supports_video BOOLEAN, enabled BOOLEAN, sort_order INTEGER);
+            supports_image BOOLEAN, enabled BOOLEAN, sort_order INTEGER);
         """
     )
     con.execute("INSERT INTO workspaces VALUES (1,'ws1','/tmp/ws1','t','t')")
@@ -69,7 +69,7 @@ def _build_app_db(path: Path) -> None:
         "INSERT INTO tasks VALUES (1,1,'中文任务😀','chat',NULL,NULL,1,NULL,0,100,'t','t',NULL)"
     )
     con.execute(
-        "INSERT INTO conversation_runs VALUES (1,1,'completed','a',1,'m',NULL,'done','i','o','{}','{}','t','t',NULL)"
+        "INSERT INTO conversation_runs VALUES (1,1,'completed','a',1,'m','done','i','o','{}','{}','t','t',NULL)"
     )
     import json as _json
 

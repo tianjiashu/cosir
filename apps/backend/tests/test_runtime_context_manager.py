@@ -79,37 +79,29 @@ class _RecordingListener:
         self.events.append(event)
 
 
-def test_runtime_context_manager_owns_next_sequence_after_run_restart(monkeypatch) -> None:
+def test_runtime_context_manager_owns_next_sequence_after_run_restart() -> None:
     """序号游标由 manager 独占：构造时从持久化最大序号推进一步，之后只由写入自增。"""
 
     context_service = _ContextService(max_sequence=1)
     manager = _manager(context_service, next_sequence=2)
-    monkeypatch.setattr(
-        "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
-        lambda _model_name, **kwargs: 8192,
+    manager.begin_run(
+        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash", context_window_k=8)
     )
-
-    manager.begin_run(SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash"))
     manager.add_message(HumanMessage(content="second message"))
 
     assert context_service.appended[0][3] == 2
     assert manager._message_sequence == 3
 
 
-def test_runtime_context_manager_resume_keeps_persisted_run_entries(monkeypatch) -> None:
+def test_runtime_context_manager_resume_keeps_persisted_run_entries() -> None:
     context_service = _ContextService(max_sequence=4)
     context_service.loaded = [
         ContextEntry(HumanMessage(content="existing"), 2, 3),
     ]
     manager = _manager(context_service, next_sequence=5)
     manager._entries = list(context_service.loaded)
-    monkeypatch.setattr(
-        "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
-        lambda _model_name, **kwargs: 8192,
-    )
-
     manager.begin_run(
-        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash"),
+        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash", context_window_k=8),
         execution_mode="resume",
     )
 
@@ -120,7 +112,6 @@ def test_runtime_context_manager_resume_keeps_persisted_run_entries(monkeypatch)
 
 
 def test_runtime_context_manager_resume_keeps_tool_schemas_without_reprojecting(
-    monkeypatch,
 ) -> None:
     """resume 只装配本 Run 的 tool schema，不在绑定阶段投影事件（占用由写入/冷读对齐）。"""
 
@@ -132,13 +123,8 @@ def test_runtime_context_manager_resume_keeps_tool_schemas_without_reprojecting(
     manager._entries = list(context_service.loaded)
     listener = _RecordingListener()
     manager.add_change_listener(listener)
-    monkeypatch.setattr(
-        "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
-        lambda _model_name, **kwargs: 8192,
-    )
-
     manager.begin_run(
-        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash"),
+        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash", context_window_k=8),
         execution_mode="resume",
         tool_schemas=(
             {
@@ -150,17 +136,13 @@ def test_runtime_context_manager_resume_keeps_tool_schemas_without_reprojecting(
     )
 
     assert listener.events == []
-    assert manager.total_tokens == 8192
+    assert manager.total_tokens == 8000
     assert manager._tool_schemas[0]["name"] == "read_file"
 
 
-def test_runtime_context_manager_replaces_tool_schemas_between_runs(monkeypatch) -> None:
+def test_runtime_context_manager_replaces_tool_schemas_between_runs() -> None:
     context_service = _ContextService(max_sequence=0)
     manager = _manager(context_service)
-    monkeypatch.setattr(
-        "app.core.context.runtime_context_manager.CapabilityService.get_model_context_window",
-        lambda _model_name, **kwargs: 8192,
-    )
 
     first_schema = {
         "name": "read_file",
@@ -168,13 +150,13 @@ def test_runtime_context_manager_replaces_tool_schemas_between_runs(monkeypatch)
         "parameters": {"type": "object", "properties": {}},
     }
     manager.begin_run(
-        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash"),
+        SimpleNamespace(task_id=7, id=2, model_name="deepseek-v4-flash", context_window_k=8),
         tool_schemas=(first_schema,),
     )
     assert manager._tool_schemas[0]["name"] == "read_file"
 
     manager.begin_run(
-        SimpleNamespace(task_id=7, id=3, model_name="deepseek-v4-flash"),
+        SimpleNamespace(task_id=7, id=3, model_name="deepseek-v4-flash", context_window_k=8),
     )
 
     assert manager._tool_schemas == ()
@@ -260,6 +242,4 @@ def test_flush_message_chunk_cancel_drops_state_but_persists_partial() -> None:
     assert record.include_in_context is False
     # 返回截至当前的聚合消息
     assert result is not None and result.content == "你好，世界"
-
-
 

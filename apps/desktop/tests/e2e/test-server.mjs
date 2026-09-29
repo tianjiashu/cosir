@@ -696,7 +696,6 @@ const server = createServer(async (req, res) => {
       updated_at: "",
       supports_thinking: false,
       supports_image: false,
-      supports_video: false,
       supports_reasoning_effort: false,
     }]);
     return;

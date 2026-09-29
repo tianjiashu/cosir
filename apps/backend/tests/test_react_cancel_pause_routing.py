@@ -68,7 +68,8 @@ def test_model_node_interrupts_when_run_was_cancelled_before_request(
         ),
         run=current_run,
         model=object(),
-        thinking_channel=None,
+        supports_image=False,
+        thinking_channel="",
         usage_stats=usage_stats,
     )
 

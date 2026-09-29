@@ -12,7 +12,6 @@ describe("model settings form conversion", () => {
       temperature: 0.2,
       top_p: 0.8,
       max_tokens: 4096,
-      thinking: true,
       drop_params: false,
       stream: true,
       reasoning_effort: "high",
@@ -21,7 +20,6 @@ describe("model settings form conversion", () => {
       temperature: "0.2",
       top_p: "0.8",
       max_tokens: "4096",
-      thinking: "true",
       drop_params: "false",
       stream: "true",
       reasoning_effort: "high",
@@ -44,7 +42,6 @@ describe("model settings form conversion", () => {
       temperature: "",
       top_p: "0.8",
       max_tokens: "4096",
-      thinking: "true",
       drop_params: "",
       stream: "true",
       reasoning_effort: "high",
@@ -54,7 +51,6 @@ describe("model settings form conversion", () => {
     expect(modelSettingsFromForm(form)).toEqual({
       top_p: 0.8,
       max_tokens: 4096,
-      thinking: true,
       stream: true,
       reasoning_effort: "high",
     });

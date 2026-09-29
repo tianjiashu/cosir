@@ -5,7 +5,6 @@ from typing import Any
 from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
 
-from app.core.llm_provider.capability.provider_capability import ProviderCapability
 from app.core.llm_provider.reasoning_chat_openai import ReasoningChatOpenAI
 
 
@@ -76,12 +75,3 @@ def test_standard_content_and_tool_calls_still_use_parent_conversion() -> None:
     assert isinstance(message, AIMessageChunk)
     assert message.content == "完成。"
     assert message.tool_call_chunks[0]["id"] == "call-1"
-
-
-def test_deepseek_capability_enables_thinking_request_body() -> None:
-    """DeepSeek 能力配置应开启官方 thinking 请求参数。"""
-
-    capability = ProviderCapability.get_capability("deepseek")
-
-    assert capability.thinking_channel == "reasoning_content"
-    assert capability.extra_body == {"thinking": {"type": "enabled"}}

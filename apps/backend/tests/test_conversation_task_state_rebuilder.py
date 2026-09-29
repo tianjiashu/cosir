@@ -16,6 +16,7 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.models.conversation_run_extra import ConversationRunExtra
+from app.models.conversation_run_model_snapshot import ConversationRunModelSnapshot
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
@@ -23,6 +24,15 @@ from app.models.task_record import TaskRecord
 
 def _timestamp() -> datetime:
     return datetime(2026, 9, 12, tzinfo=UTC)
+
+
+def _model_snapshot() -> ConversationRunModelSnapshot:
+    return ConversationRunModelSnapshot(
+        supports_thinking=True,
+        supports_reasoning_effort=True,
+        supports_image=True,
+        reasoning_effort=None,
+    )
 
 
 def _task(task_id: int = 7) -> TaskRecord:
@@ -321,6 +331,7 @@ def test_rebuild_restores_ordinary_file_from_run_extra() -> None:
                     "path": "C:/workspace/notes.md",
                 }
             ],
+            model_snapshot=_model_snapshot(),
         ),
     )
     row = ConversationTaskContextRecord(
@@ -366,6 +377,7 @@ def test_rebuild_restores_user_file_when_context_write_was_interrupted() -> None
                     "path": "C:/workspace/notes.md",
                 }
             ],
+            model_snapshot=_model_snapshot(),
         ),
     )
 
@@ -380,45 +392,25 @@ def test_rebuild_restores_user_file_when_context_write_was_interrupted() -> None
     validate_snapshot(state)
 
 
-def test_malformed_conversation_run_extra_is_ignored() -> None:
-    assert (
-        ConversationRunExtra.from_dict(
-            {
-                "assistant_input": {
-                    "version": 1,
-                    "display_text": "请查看 [[cosir-file:bad:id]]",
-                    "attachments": [
-                        {
-                            "id": "bad:id",
-                            "name": "notes.md",
-                            "content_type": "text/markdown",
-                            "path": "C:/workspace/notes.md",
-                        }
-                    ],
-                }
-            }
-        )
-        is None
-    )
+def test_malformed_conversation_run_extra_is_rejected() -> None:
+    with pytest.raises((TypeError, ValueError)):
+        ConversationRunExtra.from_dict({"assistant_input": {}})
 
 
-def test_blank_file_path_is_treated_as_malformed_extra() -> None:
-    assert (
+def test_blank_file_path_is_rejected() -> None:
+    with pytest.raises((TypeError, ValueError)):
         ConversationRunExtra.from_dict(
             {
-                "assistant_input": {
-                    "version": 1,
-                    "display_text": "请查看 [[cosir-file:file-1]]",
-                    "attachments": [
-                        {
-                            "id": "file-1",
-                            "name": "notes.md",
-                            "content_type": "text/markdown",
-                            "path": "   ",
-                        }
-                    ],
-                }
+                "display_text": "请查看 [[cosir-file:file-1]]",
+                "attachments": [
+                    {
+                        "id": "file-1",
+                        "name": "notes.md",
+                        "content_type": "text/markdown",
+                        "path": "   ",
+                    }
+                ],
+                "ban_tools": [],
+                "model_snapshot": _model_snapshot().to_dict(),
             }
         )
-        is None
-    )

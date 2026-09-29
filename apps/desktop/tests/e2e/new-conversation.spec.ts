@@ -77,7 +77,6 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
         updated_at: "",
         supports_thinking: false,
         supports_image: false,
-        supports_video: false,
         supports_reasoning_effort: false,
       }]),
     });

@@ -106,8 +106,8 @@ class _ModelHarness:
         self.runtime_config = SimpleNamespace(
             operations=self.operations,
             model=SimpleNamespace(astream=self._astream),
+            supports_image=False,
             thinking_channel="",
-            thinking_roundtrip=True,
             # model 节点读 run.extra.ban_tools 构造禁用工具集；无禁用工具时 extra 为 None。
             run=SimpleNamespace(task_id=1, id=2, extra=None),
             usage_stats=SimpleNamespace(
@@ -173,7 +173,11 @@ def _observe_harness(
         get_current_run=lambda: SimpleNamespace(id=2),
         is_current_run_cancelled=lambda: False,
     )
-    runtime_config = SimpleNamespace(operations=operations, usage_stats=None)
+    runtime_config = SimpleNamespace(
+        operations=operations,
+        supports_image=False,
+        usage_stats=None,
+    )
 
     def add_message(message: Any, **_kwargs: Any) -> None:
         messages.append(message)
@@ -473,7 +477,11 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
             ),
         ),
     )
-    runtime_config = SimpleNamespace(operations=observe_harness.operations, usage_stats=None)
+    runtime_config = SimpleNamespace(
+        operations=observe_harness.operations,
+        supports_image=False,
+        usage_stats=None,
+    )
 
     def add_message(message: Any, **_kwargs: Any) -> None:
         observe_harness.messages.append(message)

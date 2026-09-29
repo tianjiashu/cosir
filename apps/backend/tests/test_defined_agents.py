@@ -181,7 +181,7 @@ def test_child_profile_model_settings_keep_custom_overrides() -> None:
     """per-run 派生保留 profile 自有模型参数覆盖，不原地写共享单例。"""
 
     child = general_child_agent()
-    custom = ModelSettings(temperature=0.2, thinking=True)
+    custom = ModelSettings(temperature=0.2)
     child.model_settings = custom
 
     derived = child.derive_for_run(
@@ -190,6 +190,5 @@ def test_child_profile_model_settings_keep_custom_overrides() -> None:
 
     assert derived.model_settings is custom
     assert derived.model_settings.temperature == 0.2
-    assert derived.model_settings.thinking is True
     assert (derived.model_config_id, derived.model_name) == (7, "glm-4.6")
     assert (child.model_config_id, child.model_name, child.run) == (None, None, None)

@@ -15,7 +15,6 @@ test("模型配置编辑回显密码态 API Key，保存后保持窗口打开", 
     updated_at: "",
     supports_thinking: false,
     supports_image: false,
-    supports_video: false,
     supports_reasoning_effort: false,
   };
   let saved = false;

@@ -17,7 +17,6 @@ const catalog = buildModelCatalog([{
   updated_at: "",
   supports_thinking: true,
   supports_image: false,
-  supports_video: false,
   supports_reasoning_effort: true,
 }]);
 

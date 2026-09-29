@@ -195,7 +195,7 @@ def _base_schema(con: sqlite3.Connection) -> None:
             context_window_total INTEGER, created_at TEXT, updated_at TEXT, extra TEXT);
         CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, task_id INTEGER,
             status TEXT, agent_id TEXT, provider_id INTEGER, model_name TEXT,
-            reasoning_effort TEXT, end_reason TEXT, input_text TEXT, final_output TEXT,
+            end_reason TEXT, input_text TEXT, final_output TEXT,
             usage_json TEXT, error_json TEXT, created_at TEXT, updated_at TEXT,
             checkpoint_thread_id TEXT);
         CREATE TABLE conversation_commands (id INTEGER PRIMARY KEY, task_id INTEGER,
@@ -218,16 +218,16 @@ def _base_schema(con: sqlite3.Connection) -> None:
             api_key TEXT, enabled BOOLEAN, sort_order INTEGER);
         CREATE TABLE models (id INTEGER PRIMARY KEY, provider_id INTEGER, model_name TEXT,
             display_name TEXT, max_context_window INTEGER, supports_thinking BOOLEAN,
-            supports_image BOOLEAN, supports_video BOOLEAN, enabled BOOLEAN, sort_order INTEGER);
+            supports_image BOOLEAN, enabled BOOLEAN, sort_order INTEGER);
         """
     )
     con.execute("INSERT INTO workspaces VALUES (1,'ws1','/tmp/ws1','t','t')")
     con.execute("INSERT INTO tasks VALUES (1,1,'t1','chat',NULL,NULL,1,NULL,0,100,'t','t',NULL)")
     con.execute(
-        "INSERT INTO conversation_runs VALUES (1,1,'completed','a',1,'m',NULL,'done','i','o','{}','{}','t','t',NULL)"
+        "INSERT INTO conversation_runs VALUES (1,1,'completed','a',1,'m','done','i','o','{}','{}','t','t',NULL)"
     )
     con.execute(
-        "INSERT INTO conversation_runs VALUES (2,1,'running','a',1,'m',NULL,NULL,'i',NULL,'{}','{}','t','t',NULL)"
+        "INSERT INTO conversation_runs VALUES (2,1,'running','a',1,'m',NULL,'i',NULL,'{}','{}','t','t',NULL)"
     )
     con.commit()
 
@@ -506,7 +506,7 @@ class TestToolCallPairing:
             )
         # run 3 未在基础 schema 中，补一行
         con.execute(
-            "INSERT INTO conversation_runs VALUES (3,1,'completed','a',1,'m',NULL,'done','i','o','{}','{}','t','t',NULL)"
+            "INSERT INTO conversation_runs VALUES (3,1,'completed','a',1,'m','done','i','o','{}','{}','t','t',NULL)"
         )
         con.commit()
         rows = summarize_tool_calls(con, task_id=1, limit=50)

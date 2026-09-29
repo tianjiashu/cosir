@@ -5,22 +5,19 @@ from PIL import Image
 
 from app.assistant_transport.event import RunInitializedEvent, UserInputAppendedEvent
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
-from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.service.attachment.attachment_service import collect_workspace_orphans
+from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
 from app.service.attachment.image_normalizer import (
     ImageNormalizationError,
     normalize_image,
 )
-
-VISION_MODEL = "deepseek-flash"
-
 
 def test_normalize_static_image_to_model_supported_format(tmp_path: Path) -> None:
     source = tmp_path / "source.bmp"
     target = tmp_path / ".normalized.part"
     Image.new("RGB", (8, 6), (20, 40, 60)).save(source, format="BMP")
 
-    result = normalize_image(source, target, VISION_MODEL)
+    result = normalize_image(source, target)
 
     assert result.source_format == "bmp"
     assert result.target_format == "jpeg"
@@ -36,30 +33,20 @@ def test_normalize_preserves_already_supported_png(tmp_path: Path) -> None:
     target = tmp_path / ".normalized.part"
     Image.new("RGBA", (4, 3), (20, 40, 60, 120)).save(source, format="PNG")
 
-    result = normalize_image(source, target, VISION_MODEL)
+    result = normalize_image(source, target)
 
     assert result.source_format == "png"
     assert result.target_format == "png"
     assert target.read_bytes() == source.read_bytes()
 
 
-def test_normalize_rejects_image_for_non_vision_model(tmp_path: Path) -> None:
-    source = tmp_path / "source.bmp"
-    target = tmp_path / ".normalized.part"
-    Image.new("RGB", (2, 2), "white").save(source, format="BMP")
-    non_vision_model = "deepseek-v4-pro"
-
-    with pytest.raises(ImageNormalizationError) as error:
-        normalize_image(source, target, non_vision_model)
-
-    assert error.value.code == "VISION_NOT_SUPPORTED"
-    assert not target.exists()
-
-
-def test_normalize_uses_model_capability_as_format_source() -> None:
-    capability = ModelCapability.get_capability(VISION_MODEL)
-
-    assert set(capability.image_limit.supported_formats) == {"jpeg", "png", "gif", "webp"}
+def test_normalize_uses_unified_image_policy_as_format_source() -> None:
+    assert DEFAULT_IMAGE_INPUT_POLICY.supported_formats == {
+        "jpeg",
+        "png",
+        "gif",
+        "webp",
+    }
 
 
 def test_run_initialized_creates_empty_user_skeleton_and_input_event_projects_image() -> None:
@@ -147,6 +134,6 @@ def test_normalizer_does_not_follow_existing_target_symlink(tmp_path: Path) -> N
         pytest.skip(f"symlink unavailable: {exc}")
 
     with pytest.raises(ImageNormalizationError):
-        normalize_image(source, target, VISION_MODEL)
+        normalize_image(source, target)
 
     assert outside.read_bytes() == b"outside"
