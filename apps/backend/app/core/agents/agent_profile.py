@@ -228,8 +228,6 @@ class AgentProfile:
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         workflow: 执行策略（默认 ReAct-like，延迟导入打破循环依赖）。
         model_config_id: 模型连接配置 id（None 时继承本次 Run）。
-        model_name: 从模型连接配置派生的模型名称。内置 profile 不内置
-            默认模型，默认 None；None 表示未配置，由前端优先校验、后端兜底报错。
         model_settings: 模型覆盖配置（``ModelSettings``）。
         agent_type: Agent 分类（``AgentProfileType``），决定其在运行时的暴露与调度方式。
         max_steps: 单 run 最大步骤数。
@@ -246,7 +244,6 @@ class AgentProfile:
     description: str | None = field(default=None, kw_only=True)
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
     model_config_id: int | None = None
-    model_name: str | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings.default_settings)
     max_steps: int = 100
     run: ConversationRunRecord | None = None
@@ -267,7 +264,7 @@ class AgentProfile:
 
         参数:
             run: 本次执行的 Conversation Run 记录（必填，写入副本的 ``run`` 字段）；其
-                ``model_config_id`` / ``model_name`` 用于回填副本上尚未配置的模型路由。
+                ``model_config_id`` 用于回填副本上尚未配置的模型路由。
             ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。传入时按工具名
                 从 ``allowed_tools`` 中差集收窄（``select_tools`` 同样按工具名过滤，
                 两处口径必须一致）。
@@ -289,8 +286,6 @@ class AgentProfile:
             changes["allowed_tools"] = [t for t in self.allowed_tools if t not in banned]
         if self.model_config_id is None:
             changes["model_config_id"] = run.model_config_id
-        if self.model_name is None:
-            changes["model_name"] = run.model_name
         if model_settings is not None:
             changes["model_settings"] = model_settings
         return replace(self, **changes)
@@ -343,9 +338,36 @@ class AgentProfile:
             "allowed_tools": self.allowed_tools,
             "agent_type": self.agent_type.value,
             "workflow": self.workflow.workflow_id,
-            "model_name": self.model_name,
             "max_steps": self.max_steps,
         }
+
+    def resolve_model_name(self) -> str | None:
+        """从 ``model_config_id`` 派生模型名称；未配置连接配置时返回 ``None``（由 Run 兜底）。
+
+        模型名称是模型连接配置的派生展示值，不单独持久化于 profile；运行时需要名称时
+        （如 ``model_factory`` / ``child_agent`` 路由）统一经本方法落回配置服务，避免冗余
+        缓存与配置漂移。
+
+        参数:
+            无。
+
+        返回:
+            ``model_config_id`` 对应的 ``model_name``；``model_config_id`` 为 ``None`` 或引用
+            失效时返回 ``None``。
+
+        异常:
+            无（引用失效静默降级为 ``None``，与 ``derive_for_run`` 回填语义一致）。
+
+        副作用:
+            读取进程内模型配置 service；不写配置、不改 profile。
+        """
+
+        if self.model_config_id is None:
+            return None
+        try:
+            return get_model_config_service().get_config(self.model_config_id).model_name
+        except KeyError:
+            return None
 
     @staticmethod
     def vaild_agent_profile(path: Path) -> AgentProfile | None:
@@ -439,23 +461,20 @@ def parse_agent_profile_document(
         raise AgentProfileConfigError(f"Agent 配置无效，文件={source}，max_steps 必须是正整数")
     model_settings = ModelSettings.from_json(document.get("model_settings", {}))
     model_config_id = document.get("model_config_id")
-    model_name = None
     has_model_config_override = model_config_id is not None
     model_config_valid = not has_model_config_override
     if has_model_config_override and model_config_id is not None:
         try:
-            model_name = get_model_config_service().get_config(model_config_id).model_name
+            get_model_config_service().get_config(model_config_id)  # 仅校验引用有效
             model_config_valid = True
         except KeyError:
             model_config_valid = False
     if not model_config_valid and strict_model_config:
         raise AgentProfileConfigError(
-            f"Agent 配置无效，文件={source}，model_config_id 与 model_name "
-            "必须同时为空或引用有效模型"
+            f"Agent 配置无效，文件={source}，model_config_id 必须为空或引用有效模型"
         )
     if not model_config_valid:
         model_config_id = None
-        model_name = None
     return AgentProfile(
         agent_id=document["agent_id"],
         role=document["role"],
@@ -464,7 +483,6 @@ def parse_agent_profile_document(
         agent_type=AgentProfileType.CHILD,
         system_prompt=document["system_prompt"],
         model_config_id=model_config_id,
-        model_name=model_name,
         model_settings=model_settings,
         max_steps=AgentProfile.max_steps if max_steps is None else max_steps,
     )
