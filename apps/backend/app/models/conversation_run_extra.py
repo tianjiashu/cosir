@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from app.config.constant import Constant
 from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
-from app.models.conversation_run_model_snapshot import ConversationRunModelSnapshot
+
+ReasoningEffort = Literal["low", "high", "max"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,15 +16,16 @@ class ConversationRunExtra:
     """一次 Conversation Run 的扩展输入事实。
 
     字段承载 Assistant 用户可见文本、普通本机文件附件引用、本次 Run 禁用的工具名和
-    模型执行快照。
+    用户显式指定的推理强度。
     该类是内存中的领域值对象；写入 ``conversation_runs.extra`` 时由 ``to_dict`` 转成
     JSON 对象，从数据库读取时由 ``from_dict`` 恢复。它不保存附件二进制，也不负责检查
-    路径是否仍然存在或是否属于当前工作区。
+    路径是否仍然存在或是否属于当前工作区；模型能力由 ``model_config_id`` 指向的模型
+    配置统一提供。
     """
 
     display_text: str
     attachments: list[ConversationRunFileAttachment]
-    model_snapshot: ConversationRunModelSnapshot
+    reasoning_effort: ReasoningEffort | None = None
     ban_tools: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -74,8 +77,8 @@ class ConversationRunExtra:
         if token_ids != [attachment["id"] for attachment in normalized]:
             raise ValueError("display_text attachment tokens do not match attachments")
         object.__setattr__(self, "attachments", normalized)
-        if not isinstance(self.model_snapshot, ConversationRunModelSnapshot):
-            raise TypeError("model_snapshot must be a ConversationRunModelSnapshot")
+        if self.reasoning_effort not in (None, "low", "high", "max"):
+            raise ValueError("reasoning_effort must be one of low/high/max")
 
     def to_dict(self) -> dict[str, object]:
         """转换为 ``conversation_runs.extra`` 使用的 JSON 对象。"""
@@ -84,7 +87,7 @@ class ConversationRunExtra:
             "display_text": self.display_text,
             "attachments": [dict(attachment) for attachment in self.attachments],
             "ban_tools": list(self.ban_tools),
-            "model_snapshot": self.model_snapshot.to_dict(),
+            "reasoning_effort": self.reasoning_effort,
         }
 
     @classmethod
@@ -97,7 +100,7 @@ class ConversationRunExtra:
         if not isinstance(value, dict):
             raise TypeError("run extra must be an object")
 
-        expected = {"display_text", "attachments", "ban_tools", "model_snapshot"}
+        expected = {"display_text", "attachments", "ban_tools", "reasoning_effort"}
         unknown = set(value) - expected
         missing = expected - set(value)
         if unknown or missing:
@@ -107,13 +110,12 @@ class ConversationRunExtra:
         display_text = value["display_text"]
         attachments = value["attachments"]
         ban_tools = value["ban_tools"]
-        model_snapshot_value = value["model_snapshot"]
         return cls(
             display_text=display_text,
             attachments=attachments,
             ban_tools=ban_tools,
-            model_snapshot=ConversationRunModelSnapshot.from_dict(model_snapshot_value),
+            reasoning_effort=value["reasoning_effort"],
         )
 
 
-__all__ = ["ConversationRunExtra"]
+__all__ = ["ConversationRunExtra", "ReasoningEffort"]

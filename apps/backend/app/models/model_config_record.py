@@ -1,4 +1,4 @@
-"""模型连接配置领域值对象。"""
+"""模型连接配置及用户声明能力的领域值对象。"""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,6 +20,9 @@ class ModelConfigRecord:
     api_key: str
     model_name: str
     context_window_k: int
+    supports_thinking: bool = False
+    supports_reasoning_effort: bool = False
+    supports_image: bool = False
     id: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -35,6 +38,9 @@ class ModelConfigRecord:
             "base_url": self.base_url,
             "model_name": self.model_name,
             "context_window_k": self.context_window_k,
+            "supports_thinking": self.supports_thinking,
+            "supports_reasoning_effort": self.supports_reasoning_effort,
+            "supports_image": self.supports_image,
             "enabled": self.enabled,
             "sort_order": self.sort_order,
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -52,6 +58,9 @@ class ModelConfigRecord:
             api_key=row.api_key,
             model_name=row.model_name,
             context_window_k=row.context_window_k,
+            supports_thinking=bool(row.supports_thinking),
+            supports_reasoning_effort=bool(row.supports_reasoning_effort),
+            supports_image=bool(row.supports_image),
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
             enabled=bool(row.enabled),
@@ -68,6 +77,9 @@ class ModelConfigRecord:
             api_key=self.api_key,
             model_name=self.model_name,
             context_window_k=self.context_window_k,
+            supports_thinking=self.supports_thinking,
+            supports_reasoning_effort=self.supports_reasoning_effort,
+            supports_image=self.supports_image,
             enabled=self.enabled,
             sort_order=self.sort_order,
         )
