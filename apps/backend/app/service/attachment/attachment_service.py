@@ -1,8 +1,7 @@
-"""Workspace ``.cosir/Attachment`` image storage.
+"""Workspace ``.cosir/Attachment`` 图片存储。
 
-The file bytes are the source of truth.  The lowercase SHA-256 digest of the
-uploaded bytes is both the asset identifier and the filename stem; no
-attachment database table is involved.
+规范化后的文件字节是附件事实源；其小写 SHA-256 摘要同时作为资源标识和文件名主体，
+不使用附件数据库表。
 """
 
 from __future__ import annotations
@@ -10,9 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
-from collections.abc import Iterable
 from dataclasses import dataclass
-from mimetypes import guess_type
 from pathlib import Path
 from uuid import uuid4
 
@@ -23,18 +20,15 @@ from app.config.logging.logger import log
 from app.service import depends as service_depends
 from app.service.attachment.image_normalizer import (
     ImageNormalizationError,
-    NormalizedImage,
+    StoredImage,
     normalize_image,
 )
+from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
 from app.utils.cosir_paths import (
     workspace_attachment_dir,
     workspace_attachment_staging_dir,
     workspace_cosir_dir,
 )
-
-
-def _normal_path(path: Path) -> str:
-    return os.path.normcase(os.path.abspath(path))
 
 
 def _is_reparse_point(path: Path) -> bool:
@@ -47,8 +41,14 @@ def _is_reparse_point(path: Path) -> bool:
     )
 
 
+def _normal_path(path: Path) -> str:
+    """返回用于比较目录真实位置的规范化绝对路径。"""
+
+    return os.path.normcase(os.path.abspath(path))
+
+
 def _assert_real_directory(path: Path, *, create: bool) -> Path:
-    """Reject workspace-controlled links before touching the attachment tree."""
+    """确保附件目录是普通目录，并拒绝符号链接或 reparse point。"""
 
     if path.exists() or _is_reparse_point(path):
         if _is_reparse_point(path) or _normal_path(path.resolve(strict=False)) != _normal_path(path):
@@ -67,62 +67,14 @@ def _assert_real_directory(path: Path, *, create: bool) -> Path:
     return path
 
 
-def _attachment_directory(root_path: str | Path, *, create: bool) -> Path:
-    """Return the real workspace attachment directory."""
-
-    root = Path(root_path).resolve()
-    cosir = workspace_cosir_dir(root)
-    directory = workspace_attachment_dir(root)
-    staging = workspace_attachment_staging_dir(root)
-    if create:
-        _assert_real_directory(cosir, create=True)
-        _assert_real_directory(directory, create=True)
-        _assert_real_directory(staging, create=True)
-    else:
-        for candidate in (cosir, directory, staging):
-            if candidate.exists() or _is_reparse_point(candidate):
-                _assert_real_directory(candidate, create=False)
-    return directory
-
-
 def _asset_id_from_name(name: str) -> str | None:
     match = Constant.Attachment.ASSET_FILE.fullmatch(name)
     return match.group("asset_id") if match else None
 
 
-def collect_workspace_orphans(root_path: str | Path, referenced_paths: Iterable[str]) -> int:
-    """Remove unreferenced hash-named files from one workspace attachment tree."""
-
-    directory = _attachment_directory(root_path, create=False)
-    if not directory.is_dir():
-        return 0
-    referenced_ids = {
-        asset_id
-        for path in referenced_paths
-        if (asset_id := _asset_id_from_name(Path(str(path)).name)) is not None
-    }
-    removed = 0
-    for candidate_dir in (directory, workspace_attachment_staging_dir(root_path)):
-        if not candidate_dir.is_dir() or _is_reparse_point(candidate_dir):
-            continue
-        for candidate in candidate_dir.iterdir():
-            asset_id = _asset_id_from_name(candidate.name)
-            if asset_id is None or asset_id in referenced_ids or _is_reparse_point(candidate):
-                continue
-            if candidate.is_file():
-                candidate.unlink()
-                removed += 1
-    if removed:
-        log.info(
-            "attachment_orphans_collected",
-            extra={"msg": "已清理未被 Run 引用的图片附件", "data": {"removed": removed}},
-        )
-    return removed
-
-
 @dataclass(frozen=True, slots=True)
 class AttachmentDescriptor:
-    """Metadata returned by the image upload/content API."""
+    """图片上传和内容接口返回的附件元数据。"""
 
     asset_id: str
     name: str
@@ -135,41 +87,40 @@ class AttachmentDescriptor:
 
 
 @dataclass(frozen=True, slots=True)
-class _TaskAttachmentDirs:
-    """一次 task 所属 workspace 的根目录与附件落盘目录（仅本模块内部使用）。"""
+class _WorkspaceAttachmentDirs:
+    """一个 workspace 的根目录与附件落盘目录（仅本模块内部使用）。"""
 
     workspace_root: Path
     attachment_dir: Path
 
 
 class AttachmentService:
-    """Own local image bytes, deduplicated by their SHA-256 digest.
+    """管理永久保留的 workspace 级图片资源。
 
-    The service performs workspace ownership and reparse-point checks, writes
-    bytes atomically, normalizes images for a model, and checks Run references
-    before deletion. It does not persist attachment metadata in SQLite.
+    上传、读取和归一化只以 ``workspace_id`` 为资源边界：图片按 SHA-256
+    幂等保存到该 workspace 的 ``.cosir/Attachment`` 目录，不创建附件数据库
+    记录，也不依赖 Task 或 Run 才能完成上传。附件一旦成功发布便永久保留，
+    不因 Composer、Run、Task 或 workspace 的引用变化而删除。
     """
 
     def __init__(self) -> None:
-        self._tasks = service_depends.get_task_service()
         self._workspaces = service_depends.get_workspace_service()
-        self._runs = service_depends.get_conversation_run_state_service()
 
-    def _dirs(self, task_id: int) -> _TaskAttachmentDirs:
-        """返回该 task 所属 workspace 的根目录与附件落盘目录。
+    def _dirs(self, workspace_id: int) -> _WorkspaceAttachmentDirs:
+        """返回 workspace 根目录与附件落盘目录。
 
         ``workspace_root`` 直接取自 workspace 记录，**不**由附件目录反推——避免把 ``.cosir``
         的目录层级知识散落到本模块（层级规则由 ``app.utils.cosir_paths`` 独占）。
 
         参数:
-            task_id: 任务标识。
+            workspace_id: 工作区标识。
 
         返回:
-            ``_TaskAttachmentDirs``：``workspace_root`` 为解析后的 workspace 根，
+            ``_WorkspaceAttachmentDirs``：``workspace_root`` 为解析后的 workspace 根，
             ``attachment_dir`` 为 ``<root>/.cosir/Attachment``。
 
         异常:
-            KeyError: task 或 workspace 不存在（由依赖 service 抛出）。
+            KeyError: workspace 不存在（由依赖 service 抛出）。
             ImageNormalizationError: 附件目录不可用（reparse point / 创建失败）。
 
         副作用:
@@ -177,11 +128,18 @@ class AttachmentService:
             ``<root>/.cosir/Attachment/.uploading``。
         """
 
-        task = self._tasks.get_task(task_id)
-        workspace = self._workspaces.get_workspace(task.workspace_id)
-        return _TaskAttachmentDirs(
+        workspace = self._workspaces.get_workspace(workspace_id)
+        root = Path(workspace.root_path).resolve()
+        cosir = workspace_cosir_dir(root)
+        directory = workspace_attachment_dir(root)
+        staging = workspace_attachment_staging_dir(root)
+        _assert_real_directory(cosir, create=True)
+        _assert_real_directory(directory, create=True)
+        _assert_real_directory(staging, create=True)
+
+        return _WorkspaceAttachmentDirs(
             workspace_root=Path(workspace.root_path).resolve(),
-            attachment_dir=_attachment_directory(workspace.root_path, create=True),
+            attachment_dir=directory,
         )
 
     @staticmethod
@@ -212,189 +170,185 @@ class AttachmentService:
                 files.append(self._inside(directory, path))
         return files
 
-    @staticmethod
-    def _descriptor(asset_id: str, name: str, content_type: str, byte_size: int, width: int, height: int, status: str) -> AttachmentDescriptor:
-        return AttachmentDescriptor(
-            asset_id=asset_id,
-            name=name,
-            content_type=content_type,
-            byte_size=byte_size,
-            width=width,
-            height=height,
-            locator=f"cosir-attachment://{asset_id}",
-            status=status,
-        )
+    async def upload(self, workspace_id: int, file: UploadFile) -> AttachmentDescriptor:
+        """校验、规范化并幂等保存一张 workspace 级 JPEG/PNG 图片。
 
-    def get_descriptor(self, task_id: int, asset_id: str, *, expected_kind: str | None = None) -> AttachmentDescriptor:
-        """Return metadata for an existing image identified by its digest."""
+        上传不要求 Task 或 Run 已存在，也不建立任何消息引用。方法先把原始流写入
+        workspace 临时目录，再按统一策略处理 EXIF 方向和最长边，最后以规范化后
+        字节的 SHA-256 作为资源标识，将最终图片原子发布到正式附件目录。
 
-        if expected_kind not in (None, "image"):
-            raise ImageNormalizationError("ATTACHMENT_TYPE_UNSUPPORTED", "附件类型不匹配")
-        safe_asset_id = self._safe_asset_id(asset_id)
-        directory = self._dirs(task_id).attachment_dir
-        files = self._files(directory, safe_asset_id)
-        if not files:
-            raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "附件不存在")
-        source = next((path for path in files if ".source." not in path.name), files[0])
-        return self._descriptor(
-            safe_asset_id,
-            source.name,
-            guess_type(source.name)[0] or "application/octet-stream",
-            source.stat().st_size,
-            0,
-            0,
-            "ready" if ".uploading" not in source.parts else "staged",
-        )
+        参数:
+            workspace_id: 附件归属的工作区标识。
+            file: FastAPI 上传文件流。
 
-    async def upload(self, task_id: int, file: UploadFile) -> AttachmentDescriptor:
-        """Stream an image, hash its exact bytes, and atomically deduplicate it."""
+        返回:
+            ``AttachmentDescriptor``，包含稳定的 asset id 和
+            ``cosir-attachment://`` locator。
 
-        dirs = self._dirs(task_id)
-        directory = dirs.attachment_dir
-        staging_dir = workspace_attachment_staging_dir(dirs.workspace_root)
-        _assert_real_directory(staging_dir, create=True)
-        temp_path = staging_dir / f".{uuid4().hex}.part"
+        异常:
+            ``KeyError``: workspace 不存在。
+            ``ImageNormalizationError``: 文件过大、内容不是有效图片、格式不支持、
+                规范化后文件过大或 workspace 附件目录不可用。
+
+        副作用:
+            在 workspace 的 ``.cosir/Attachment`` 下写入或复用图片文件；不写入
+            SQLite，不绑定 Task/Run。已发布文件不会由附件服务回收。
+        """
+
+        workspace_dirs = self._dirs(workspace_id)
+        directory = workspace_dirs.attachment_dir
+        staging_dir = workspace_attachment_staging_dir(workspace_dirs.workspace_root)
+        source_tmp = staging_dir / f".{uuid4().hex}.raw.part"
+        normalized_tmp: Path | None = None
+        source_created = False
+        normalized_created = False
         total = 0
-        digest = hashlib.sha256()
         try:
-            with temp_path.open("wb") as output:
+            with source_tmp.open("xb") as output:
+                source_created = True
                 while chunk := await file.read(1024 * 1024):
                     total += len(chunk)
                     if total > Constant.Attachment.MAX_UPLOAD_BYTES:
                         raise ImageNormalizationError("ATTACHMENT_FILE_TOO_LARGE", "附件文件过大")
                     output.write(chunk)
+
+            normalized_tmp = staging_dir / f".{uuid4().hex}.normalized.part"
+            normalized = normalize_image(source_tmp, normalized_tmp)
+            normalized_created = True
+            if normalized.byte_size > DEFAULT_IMAGE_INPUT_POLICY.single_image_max_bytes:
+                raise ImageNormalizationError("ATTACHMENT_FILE_TOO_LARGE", "规范化后的图片过大")
+
+            digest = hashlib.sha256()
+            with normalized.path.open("rb") as normalized_file:
+                for chunk in iter(lambda: normalized_file.read(1024 * 1024), b""):
                     digest.update(chunk)
-
-            from PIL import Image
-
-            try:
-                with Image.open(temp_path) as image:
-                    image.verify()
-                with Image.open(temp_path) as image:
-                    source_format = (image.format or "").lower()
-                    width, height = image.size
-            except Exception as exc:
-                raise ImageNormalizationError("ATTACHMENT_IMAGE_INVALID", "上传内容不是有效图片") from exc
-            if source_format not in Constant.Attachment.IMAGE_FORMATS:
-                raise ImageNormalizationError("ATTACHMENT_TYPE_UNSUPPORTED", "暂不支持该图片格式")
-
             asset_id = digest.hexdigest()
-            source_extension = ".jpeg" if source_format == "jpeg" else f".{source_format}"
-            staged_path = staging_dir / f"{asset_id}{source_extension}"
+            target = directory / f"{asset_id}.{normalized.target_format}"
             try:
-                # Hard-link is the no-replace claim: concurrent uploads of the
-                # same digest leave exactly one staged file on disk.
-                os.link(temp_path, staged_path)
+                # Hard-link 是不覆盖发布：并发上传相同规范化内容时只保留一个正式文件。
+                os.link(normalized.path, target)
             except FileExistsError:
                 pass
             finally:
-                temp_path.unlink(missing_ok=True)
+                normalized.path.unlink(missing_ok=True)
             files = self._files(directory, asset_id)
-            if not files:
+            if not files or target not in files:
                 raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用")
-            descriptor = self._descriptor(
-                asset_id,
-                file.filename or f"{asset_id}{source_extension}",
-                f"image/{'jpeg' if source_format == 'jpeg' else source_format}",
-                total,
-                width,
-                height,
-                "ready" if any(".uploading" not in path.parts for path in files) else "staged",
+
+            descriptor = AttachmentDescriptor(
+                asset_id=asset_id,
+                name=file.filename or f"{asset_id}.{normalized.target_format}",
+                content_type=normalized.content_type,
+                byte_size=normalized.byte_size,
+                width=normalized.width,
+                height=normalized.height,
+                locator=f"cosir-attachment://{asset_id}",
+                status="ready",
             )
             log.info(
                 "attachment_uploaded",
-                extra={"msg": "图片附件已按 SHA-256 保存", "data": {"task_id": task_id, "asset_id": asset_id}},
+                extra={
+                    "msg": "图片附件已规范化并按 SHA-256 保存",
+                    "data": {
+                        "workspace_id": workspace_id,
+                        "asset_id": asset_id,
+                        "source_bytes": total,
+                        "stored_bytes": normalized.byte_size,
+                        "width": normalized.width,
+                        "height": normalized.height,
+                    },
+                },
             )
             return descriptor
         except OSError as exc:
-            temp_path.unlink(missing_ok=True)
+            if source_created:
+                source_tmp.unlink(missing_ok=True)
+            if normalized_created and normalized_tmp is not None:
+                normalized_tmp.unlink(missing_ok=True)
             raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用") from exc
         finally:
+            if source_created:
+                source_tmp.unlink(missing_ok=True)
+            if normalized_created and normalized_tmp is not None:
+                normalized_tmp.unlink(missing_ok=True)
             await file.close()
 
-    def finalize(self, task_id: int, asset_id: str, model_name: str) -> NormalizedImage:
-        """Normalize a digest-named image and return its workspace-relative path."""
+    def resolve_content(self, workspace_id: int, asset_id: str, *, expected_kind: str | None = None) -> tuple[Path, str]:
+        """返回已发布图片文件及其 MIME 类型，不重新解析图片内容。"""
 
-        directory = self._dirs(task_id).attachment_dir
-        asset_id = self._safe_asset_id(asset_id)
-        files = self._files(directory, asset_id)
-        source = next((path for path in files if ".source." in path.name), None)
-        source = source or next((path for path in files if ".uploading" in path.parts), None)
-        source = source or next((path for path in files if ".source." not in path.name), None)
-        if source is None:
-            raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "附件不存在")
+        if expected_kind not in (None, "image"):
+            raise ImageNormalizationError("ATTACHMENT_TYPE_UNSUPPORTED", "附件类型不匹配")
+        stored = self._stored_image(workspace_id, asset_id)
+        return stored.path, stored.content_type
 
-        target_tmp = directory / f".{asset_id}.{uuid4().hex}.normalized.part"
-        try:
-            normalized = normalize_image(source, target_tmp, model_name)
-            target = directory / f"{asset_id}.{normalized.target_format}"
-            if target.exists() and not _is_reparse_point(target):
-                target_tmp.unlink(missing_ok=True)
-            else:
-                os.replace(target_tmp, target)
-            if source.parent.name == ".uploading":
-                if normalized.source_format != normalized.target_format:
-                    os.replace(source, directory / f"{asset_id}.source.{normalized.source_format}")
-                else:
-                    source.unlink(missing_ok=True)
-            return NormalizedImage(
-                source_format=normalized.source_format,
-                target_format=normalized.target_format,
-                content_type=normalized.content_type,
-                path=target,
-                width=normalized.width,
-                height=normalized.height,
-                byte_size=normalized.byte_size,
-            )
-        except OSError as exc:
-            raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用") from exc
-        finally:
-            target_tmp.unlink(missing_ok=True)
+    def _stored_image(self, workspace_id: int, asset_id: str) -> StoredImage:
+        """解析一个已发布的 workspace 图片，不触发 Pillow 解析或格式转换。"""
 
-    def resolve_content(self, task_id: int, asset_id: str, *, expected_kind: str | None = None) -> tuple[Path, str]:
-        """Return an existing image file and its MIME type for local content reads."""
-
-        descriptor = self.get_descriptor(task_id, asset_id, expected_kind=expected_kind)
-        directory = self._dirs(task_id).attachment_dir
-        files = self._files(directory, descriptor.asset_id)
-        path = next((item for item in files if ".uploading" not in item.parts and ".source." not in item.name), None)
-        path = path or next((item for item in files if ".uploading" in item.parts), None)
+        safe_asset_id = self._safe_asset_id(asset_id)
+        directory = self._dirs(workspace_id).attachment_dir
+        path = next(
+            (
+                item
+                for item in self._files(directory, safe_asset_id)
+                if ".uploading" not in item.parts
+            ),
+            None,
+        )
         if path is None:
             raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "附件不存在")
-        return path, descriptor.content_type
+        match = Constant.Attachment.ASSET_FILE.fullmatch(path.name)
+        if match is None:
+            raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "附件不存在")
+        content_type = Constant.Attachment.CONTENT_TYPES[match.group("extension")]
+        return StoredImage(path=path, content_type=content_type, byte_size=path.stat().st_size)
 
-    def resolve_for_model(self, task_id: int, image_path: str, model_name: str) -> NormalizedImage:
-        """Validate a Run image path and normalize the digest it names."""
+    def resolve_image_assets_for_run(self, workspace_id: int, asset_ids: list[str]) -> list[str]:
+        """校验本次 Run 的图片聚合限制并返回已发布图片的 workspace 相对路径。
 
-        dirs = self._dirs(task_id)
+        单张图片的格式、内容、尺寸和单文件大小在上传阶段已经完成；本方法只处理一次
+        Run 的图片数量与总字节限制，并确认资源仍属于当前 workspace。它不读取图片内容，
+        也不执行规范化。
+
+        异常:
+            ImageNormalizationError: 图片数量或总大小超限、资源不存在、格式不符合策略，
+                或附件存储目录不可用。
+        """
+
+        if len(asset_ids) > DEFAULT_IMAGE_INPUT_POLICY.max_images_per_request:
+            raise ImageNormalizationError("ATTACHMENT_TOO_MANY_IMAGES", "图片数量超过统一输入限制")
+        total_bytes = 0
+        paths: list[str] = []
+        for asset_id in asset_ids:
+            stored = self._stored_image(workspace_id, asset_id)
+            total_bytes += stored.byte_size
+            paths.append(self.relative_path(workspace_id, stored.path))
+        if total_bytes > DEFAULT_IMAGE_INPUT_POLICY.request_total_max_bytes:
+            raise ImageNormalizationError("ATTACHMENT_REQUEST_TOO_LARGE", "图片总大小超过统一输入限制")
+        return paths
+
+    def resolve_for_model(self, workspace_id: int, image_path: str) -> StoredImage:
+        """校验 Run 图片路径并返回已规范化的附件，不重复执行图片策略校验。"""
+
+        dirs = self._dirs(workspace_id)
         directory = dirs.attachment_dir
-        candidate = self._inside(directory, dirs.workspace_root / image_path)
+        try:
+            candidate = self._inside(directory, dirs.workspace_root / image_path)
+        except ImageNormalizationError:
+            raise
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "运行引用的图片不存在") from exc
         if candidate.parent != directory or not candidate.is_file():
             raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "运行引用的图片不存在")
         asset_id = _asset_id_from_name(candidate.name)
         if asset_id is None:
             raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "运行引用的图片不存在")
-        return self.finalize(task_id, asset_id, model_name)
+        return self._stored_image(workspace_id, asset_id)
 
-    def relative_path(self, task_id: int, path: Path) -> str:
-        """Convert a checked attachment path to a stable workspace-relative path."""
+    def relative_path(self, workspace_id: int, path: Path) -> str:
+        """将已完成安全检查的附件路径转换为稳定的 workspace 相对路径。"""
 
-        dirs = self._dirs(task_id)
+        dirs = self._dirs(workspace_id)
         checked = self._inside(dirs.attachment_dir, path)
         return checked.relative_to(dirs.workspace_root).as_posix()
 
-    def delete(self, task_id: int, asset_id: str) -> None:
-        """Delete a digest asset only when no task in its workspace references it."""
-
-        directory = self._dirs(task_id).attachment_dir
-        asset_id = self._safe_asset_id(asset_id)
-        task = self._tasks.get_task(task_id)
-        for sibling in self._tasks.list_tasks_for_workspace(task.workspace_id):
-            for run in self._runs.list_runs_for_task(sibling.id):
-                if any(_asset_id_from_name(Path(str(path)).name) == asset_id for path in (run.image_paths or [])):
-                    raise ImageNormalizationError("ATTACHMENT_NOT_OWNED", "已发送消息仍在使用该附件")
-        for path in self._files(directory, asset_id):
-            path.unlink(missing_ok=True)
-
-
-__all__ = ["AttachmentDescriptor", "AttachmentService", "collect_workspace_orphans"]
+__all__ = ["AttachmentDescriptor", "AttachmentService"]
