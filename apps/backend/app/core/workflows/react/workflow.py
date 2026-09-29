@@ -30,7 +30,6 @@ from app.models.conversation_run_failure import (
     run_failure_message,
 )
 from app.service.depends import get_terminal_session_service
-from app.core.llm_provider.capability.capability_service import CapabilityService
 
 from ...context.runtime_context_manager import RuntimeContextManager
 from ..agent_workflow import AgentWorkflow, build_checkpointer
@@ -374,8 +373,10 @@ class ReactLikeWorkflow(AgentWorkflow):
                 Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE,
             )
             raise ValueError("Conversation Run model_config_id is required")
-        thinking_channel = CapabilityService.get_thinking_channel()
-        vision_input_format = CapabilityService.get_vision_input_format()
+        model_snapshot = run.extra.model_snapshot if run.extra is not None else None
+        if model_snapshot is None:
+            raise ValueError("Conversation Run model snapshot is required")
+        thinking_channel = "reasoning_content" if model_snapshot.supports_thinking else ""
 
         runtime_config = RuntimeConfig(
             operations=operations,
@@ -385,8 +386,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             usage_stats=ConversationRunUsageStats(),
             langfuse_trace_id=langfuse_trace_id,
             thinking_channel=thinking_channel,
-            thinking_roundtrip=True,
-            vision_input_format=vision_input_format,
+            supports_image=model_snapshot.supports_image,
             execution_mode=execution_mode,
         )
         current_workspace = operations.get_current_workspace()

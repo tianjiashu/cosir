@@ -179,12 +179,16 @@ class Constant:
     class Attachment:
         """附件上传与图片归一化的共享常量。"""
 
-        # 单附件最大上传字节数。
-        MAX_UPLOAD_BYTES: int = 32 * 1024 * 1024
-        # 支持的图片格式集合。
-        IMAGE_FORMATS: frozenset[str] = frozenset(
-            {"jpeg", "png", "gif", "webp", "bmp", "tiff"}
-        )
+        # 单张图片从上传到模型输入都遵守的原始字节上限。
+        MAX_UPLOAD_BYTES: int = 20 * 1024 * 1024
+        # 产品统一支持的图片协议格式；其它本地图片格式不作为上传输入接受。
+        IMAGE_FORMATS: frozenset[str] = frozenset({"jpeg", "png", "gif", "webp"})
+        # 一次模型请求最多携带的图片数量。
+        MAX_IMAGES_PER_REQUEST: int = 20
+        # 一次模型请求中所有图片的总字节上限。
+        REQUEST_TOTAL_MAX_BYTES: int = 48 * 1024 * 1024
+        # 单张图片允许的最长边像素数。
+        MAX_IMAGE_SIDE_PX: int = 8192
         # 资源 ID 格式：64 位小写十六进制。
         ASSET_ID: "re.Pattern[str]" = re.compile(r"^[0-9a-f]{64}$")
         # 资源文件名格式：``<asset_id>[.source].<extension>``。
@@ -197,8 +201,6 @@ class Constant:
             "png": "image/png",
             "gif": "image/gif",
             "webp": "image/webp",
-            "bmp": "image/bmp",
-            "tiff": "image/tiff",
         }
 
     class Cosir:

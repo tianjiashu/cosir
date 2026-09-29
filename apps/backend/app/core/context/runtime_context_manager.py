@@ -37,7 +37,6 @@ from app.core.context.tool_call_closure import (
     build_placeholder_tool_message,
     plan_tool_call_closure,
 )
-from app.core.llm_provider.capability.capability_service import CapabilityService
 from app.core.runtime.execution_mode import ExecutionMode
 from app.models import (
     ConversationRunFileAttachment,
@@ -259,10 +258,7 @@ class RuntimeContextManager:
         # SQLite 读取最后序号并推进一次，后续消息只由 ``add_message`` 自增。否则首轮
         # 使用 0/1 后，第二轮会再次尝试写入 1，触发 (task_id, sequence) 唯一约束。
         self.current_run_id = run.id
-        self.total_tokens = CapabilityService.get_model_context_window(
-            run.model_name or "",
-            context_window_k=getattr(run, "context_window_k", None),
-        )
+        self.total_tokens = (run.context_window_k or 0) * 1000
 
     def add_change_listener(self, listener: ContextListener) -> RuntimeContextManager:
         """注册一个按 order 执行的 context listener。

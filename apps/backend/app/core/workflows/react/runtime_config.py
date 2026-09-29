@@ -35,15 +35,8 @@ class RuntimeConfig:
             累加进来，run 终态事件读取后下发给前端。
         langfuse_trace_id: 本 run 的 Langfuse trace 标识；由 runner 在启用 tracing 时注入。
             **当前 workflow 节点不读取该字段**（终态事件不再由 workflow 生产）。
-        thinking_channel: 按厂商分派的 thinking 抽取通道（如 ``"reasoning_content"`` /
-            ``"thought"`` / ``"thinking_blocks"`` / ``"reasoning"``）；model 节点据此构造
-            ``ModelChunkProcessor`` 选择 reasoning 抽取通道。空串表示不抽取独立 thinking 通道。
-        thinking_roundtrip: 是否将 thinking 内容回传模型（多轮推理闭环）。当前
-            ``ReactLikeWorkflow.run`` 固定传 ``True``，节点侧**尚未读取**，字段保留待用。
-        vision_input_format: 按 provider 分派的视觉输入格式（如 ``"openai_url"``）；model 节点
-            把它传给 ``resolve_messages_for_model`` 选择图片 block 的拼装方式。空串表示该
-            provider 的格式尚未实现，真正要发图片时由 ``resolve_messages_for_model`` 抛
-            ``VisionFormatNotSupportedError``。
+        thinking_channel: 统一 OpenAI-compatible reasoning 输出字段；模型不支持思考时为空串。
+        supports_image: Run 快照中的用户模型图片能力声明。
         execution_mode: 本次 graph 是新运行（``fresh``）还是从既有 checkpoint 恢复
             （``resume``），并据此决定是否清空该 run 的旧上下文条目（``fresh`` 清、
             ``resume`` 保留，见 ``RuntimeContextManager.begin_run``）。工作流据此选择
@@ -60,6 +53,5 @@ class RuntimeConfig:
     usage_stats: ConversationRunUsageStats = field(default_factory=ConversationRunUsageStats)
     langfuse_trace_id: str | None = None
     thinking_channel: str = ""
-    thinking_roundtrip: bool = True
-    vision_input_format: str = ""
+    supports_image: bool = False
     execution_mode: ExecutionMode = "fresh"
