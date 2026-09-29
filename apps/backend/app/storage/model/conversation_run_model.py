@@ -12,7 +12,7 @@ from app.storage.model.base import StorageBase
 class ConversationRunModel(StorageBase):
     """``conversation_runs`` 表模型：一次 Agent 运行的持久化事实。
 
-    Run 是「一次 Agent 执行」的独立实体：承载输入文本、模型连接配置与模型名、
+    Run 是「一次 Agent 执行」的独立实体：承载输入文本、模型连接配置、图片输入、
     终态原因、回复正文与运行附加事实。运行标识
     即本行 ``id``，由 ``StorageBase`` 提供自增主键。
 
@@ -21,9 +21,9 @@ class ConversationRunModel(StorageBase):
     - 不负责：Transport 命令幂等占用（由 ``conversation_commands`` 表持有指向本表的
       ``run_id`` 外键）、消息/工具调用等 canonical 会话事实（各自独立表）。
 
-    模型路由事实分层：``model_name`` 与 ``context_window_k`` 是本次运行使用过的快照，
-    Run 的显式推理强度位于 ``extra`` JSON；模型能力始终由 ``model_config_id`` 指向的
-    当前配置提供，不在 Run 内复制。``model_config_id`` 是配置行的弱引用，配置被删除时
+    模型路由事实分层：Run 只保存 ``model_config_id`` 和 ``extra`` 中的用户运行偏好；
+    模型名称、上下文窗口和模型能力始终由模型配置解析得到，不在 Run 内复制。
+    ``model_config_id`` 是配置行的弱引用，配置被删除时
     由 ``ON DELETE SET NULL`` 置空，历史 Run 仍可读取其已保存的基础事实。
     """
 
@@ -50,8 +50,6 @@ class ConversationRunModel(StorageBase):
     model_config_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("model_configs.id", ondelete="SET NULL")
     )
-    model_name: Mapped[str | None] = mapped_column(String)
-    context_window_k: Mapped[int | None] = mapped_column(Integer)
     image_paths: Mapped[list[str] | None] = mapped_column(JSON)
     end_reason: Mapped[str | None] = mapped_column(Text)
     final_output: Mapped[str | None] = mapped_column(Text)

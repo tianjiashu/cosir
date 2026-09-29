@@ -83,8 +83,6 @@ class ConversationRunCrud:
         status: str = ConversationRunStatus.PENDING.value,
         agent_id: str | None = None,
         model_config_id: int | None = None,
-        model_name: str | None = None,
-        context_window_k: int | None = None,
         image_paths: list[str] | None = None,
         extra: ConversationRunExtra | None = None,
         usage: ConversationRunUsage | None = None,
@@ -101,8 +99,6 @@ class ConversationRunCrud:
             status: 初始状态，默认 ``pending``。
             agent_id: 可选，本次运行绑定的 agent 标识。
             model_config_id: 可选，模型连接配置标识；None 表示未指定。
-            model_name: 可选，模型路由名。
-            context_window_k: 本次 Run 使用的上下文窗口，单位为 K 或 None。
             image_paths: 可选，本次输入的图片路径列表（供多模态通道）。
             extra: 可选，运行期附加结构化数据。
             usage: 可选，符合六键契约的运行 token 用量。
@@ -131,8 +127,6 @@ class ConversationRunCrud:
                 status=status,
                 agent_id=agent_id,
                 model_config_id=model_config_id,
-                model_name=model_name,
-                context_window_k=context_window_k,
                 image_paths=image_paths,
                 extra=extra,
                 usage=usage,
@@ -146,8 +140,6 @@ class ConversationRunCrud:
                 status=status,
                 agent_id=agent_id,
                 model_config_id=model_config_id,
-                model_name=model_name,
-                context_window_k=context_window_k,
                 image_paths=image_paths,
                 extra=extra,
                 usage=usage,
@@ -163,8 +155,6 @@ class ConversationRunCrud:
         status: str,
         agent_id: str | None,
         model_config_id: int | None,
-        model_name: str | None,
-        context_window_k: int | None,
         image_paths: list[str] | None,
         extra: ConversationRunExtra | None,
         usage: ConversationRunUsage | None,
@@ -183,7 +173,6 @@ class ConversationRunCrud:
             status: 初始状态字符串；空值回退 ``pending``。
             agent_id: agent 标识或 None。
             model_config_id: 厂商标识或 None。
-            model_name: 模型名或 None。
             image_paths: 图片路径列表或 None。
             extra: 附加结构化数据或 None。
             usage: 初始 token 用量或 None。
@@ -207,8 +196,6 @@ class ConversationRunCrud:
             checkpoint_thread_id=str(uuid4()),
             agent_id=agent_id,
             model_config_id=model_config_id,
-            model_name=model_name,
-            context_window_k=context_window_k,
             image_paths=image_paths,
             extra=extra.to_dict() if extra is not None else None,
             usage_json=_serialize_typed_json(usage),
@@ -281,7 +268,6 @@ class ConversationRunCrud:
             input_text=source.input_text,
             agent_id=source.agent_id,
             model_config_id=source.model_config_id,
-            model_name=source.model_name,
             image_paths=copy.deepcopy(source.image_paths),
             end_reason=source.end_reason,
             final_output=source.final_output,
@@ -564,8 +550,6 @@ class ConversationRunCrud:
         allowed_statuses: tuple[str, ...],
         session: Session | None = None,
         model_config_id: int | None = None,
-        model_name: str | None = None,
-        context_window_k: int | None = None,
         image_paths: list[str] | None = None,
         extra: ConversationRunExtra | None = None,
     ) -> ConversationRunRecord | None:
@@ -579,8 +563,6 @@ class ConversationRunCrud:
                 checkpoint_thread_id,
                 allowed_statuses,
                 model_config_id,
-                model_name,
-                context_window_k,
                 image_paths,
                 extra,
             )
@@ -593,8 +575,6 @@ class ConversationRunCrud:
                 checkpoint_thread_id,
                 allowed_statuses,
                 model_config_id,
-                model_name,
-                context_window_k,
                 image_paths,
                 extra,
             )
@@ -651,8 +631,6 @@ class ConversationRunCrud:
         checkpoint_thread_id: str,
         allowed_statuses: tuple[str, ...],
         model_config_id: int | None = None,
-        model_name: str | None = None,
-        context_window_k: int | None = None,
         image_paths: list[str] | None = None,
         extra: ConversationRunExtra | None = None,
     ) -> ConversationRunRecord | None:
@@ -669,8 +647,6 @@ class ConversationRunCrud:
                 checkpoint_thread_id=checkpoint_thread_id,
                 status=ConversationRunStatus.PENDING.value,
                 model_config_id=model_config_id,
-                model_name=model_name,
-                context_window_k=context_window_k,
                 image_paths=image_paths,
                 extra=extra.to_dict() if extra is not None else None,
                 end_reason=None,

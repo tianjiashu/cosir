@@ -48,6 +48,7 @@ def initialize_app_schema(engine: Engine) -> None:
     _ensure_context_tool_call_id_schema(engine)
     _ensure_context_streaming_schema(engine)
     _ensure_conversation_run_model_config_schema(engine)
+    _drop_legacy_conversation_run_model_fields(engine)
     _ensure_tasks_sqlite_autoincrement(engine)
     _remove_legacy_checkpoint_unique_constraint(engine)
 
@@ -85,7 +86,7 @@ def _drop_legacy_models_table(engine: Engine) -> None:
 
 
 def _ensure_conversation_run_model_config_schema(engine: Engine) -> None:
-    """为已有本地主库补齐模型配置路由和上下文窗口列。
+    """为已有本地主库补齐模型配置路由列。
 
     参数:
         engine: 应用主库 SQLAlchemy 引擎。
@@ -97,8 +98,7 @@ def _ensure_conversation_run_model_config_schema(engine: Engine) -> None:
         sqlalchemy.exc.SQLAlchemyError: SQLite 修改表结构失败时抛出。
 
     副作用:
-        仅在 SQLite 已存在旧 ``conversation_runs`` 表时增加当前 ORM 需要的列；旧列不
-        参与新的业务读写，历史运行继续保留自身的模型名称快照。
+        仅在 SQLite 已存在旧 ``conversation_runs`` 表时增加当前 ORM 需要的模型配置列。
     """
 
     if engine.dialect.name != "sqlite":
@@ -112,9 +112,38 @@ def _ensure_conversation_run_model_config_schema(engine: Engine) -> None:
             connection.execute(
                 text("ALTER TABLE conversation_runs ADD COLUMN model_config_id INTEGER")
             )
-        if "context_window_k" not in columns:
+
+
+def _drop_legacy_conversation_run_model_fields(engine: Engine) -> None:
+    """从本地主库删除已不属于 Run 事实的模型冗余列。
+
+    参数:
+        engine: 应用主库 SQLAlchemy 引擎。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: SQLite 删除列失败时抛出。
+
+    副作用:
+        在 SQLite 的 ``conversation_runs`` 表中删除 ``model_name`` 和
+        ``context_window_k``；两列是旧 Run 快照，不再属于当前模型配置路由事实。
+        该操作是当前绿地 schema 的破坏性收敛，不保留旧列数据。
+    """
+
+    if engine.dialect.name != "sqlite":
+        return
+    inspector = inspect(engine)
+    if "conversation_runs" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("conversation_runs")}
+    with engine.begin() as connection:
+        if "model_name" in columns:
+            connection.execute(text("ALTER TABLE conversation_runs DROP COLUMN model_name"))
+        if "context_window_k" in columns:
             connection.execute(
-                text("ALTER TABLE conversation_runs ADD COLUMN context_window_k INTEGER")
+                text("ALTER TABLE conversation_runs DROP COLUMN context_window_k")
             )
 
 
