@@ -249,23 +249,15 @@ class DelegateTaskTool(HandlerBase):
                 parent_run_id=execution_context.run_id,
             )
 
-            model_config_id = (
-                child_agent_profile.model_config_id
-                if child_agent_profile.model_config_id is not None
-                else parent_profile.model_config_id
-            )
-            model_name = (
-                child_agent_profile.model_name
-                if child_agent_profile.model_name is not None
-                else parent_profile.model_name
-            )
-            reasoning_effort = parent_run.reasoning_effort
-
+            reasoning_effort = (child_agent_profile.model_settings.reasoning_effort
+                                if child_agent_profile.model_settings is not None
+                                else None)
+            child_agent_model_config_id = child_agent_profile.model_config_id
+            model_config_id = child_agent_model_config_id or parent_run.model_config_id
             child_run = self.run_setvice.create_run(
                 task_id=child_task.id,
                 agent_id=child_agent_id,
                 model_config_id=model_config_id,
-                model_name=model_name,
                 reasoning_effort=reasoning_effort,
                 run_command=ConversationRunCommand(display_text=message),
             )
@@ -287,7 +279,9 @@ class DelegateTaskTool(HandlerBase):
                 )
             future = asyncio.run_coroutine_threadsafe(
                 self.run_exector.start(
-                    child_run.id, start_mode="fresh", ban_tools=list(CHILD_BANNED_TOOLS)
+                    child_run.id,
+                    start_mode="fresh",
+                    ban_tools=list(CHILD_BANNED_TOOLS),
                 ),
                 loop,
             )

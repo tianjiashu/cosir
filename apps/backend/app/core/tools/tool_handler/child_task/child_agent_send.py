@@ -169,8 +169,8 @@ class ChildAgentSendTool(HandlerBase):
             workspace = self._workspace_service.get_workspace(child_task.workspace_id)
             from app.config.configuration import get_agent_registry
 
-            current_agent_registry = get_agent_registry()
-            current_profile = current_agent_registry.resolve(
+
+            current_profile = get_agent_registry().resolve(
                 workspace.root_path,
                 current_run.agent_id or "",
             )
@@ -203,12 +203,15 @@ class ChildAgentSendTool(HandlerBase):
             )
 
         try:
+            reasoning_effort = (current_profile.model_settings.reasoning_effort
+                                if current_profile.model_settings is not None
+                                else None)
+            model_config_id = current_profile.model_config_id or current_run.model_config_id
             child_run = self._run_service.create_run(
                 task_id=child_task_id,
                 agent_id=current_run.agent_id,
-                model_config_id=current_run.model_config_id,
-                model_name=current_run.model_name,
-                reasoning_effort=current_run.reasoning_effort,
+                model_config_id=model_config_id,
+                reasoning_effort=reasoning_effort,
                 run_command=ConversationRunCommand(display_text=message),
             )
             claimed = self._run_state_service.claim_pending_run(child_run.id)
@@ -225,7 +228,11 @@ class ChildAgentSendTool(HandlerBase):
                 )
             # 执行器入口是协程：在父 Run 的事件循环上调度，并只等待登记完成。
             future = asyncio.run_coroutine_threadsafe(
-                self._run_executor.start(child_run.id, "fresh", ban_tools=list(CHILD_BANNED_TOOLS)),
+                self._run_executor.start(
+                    child_run.id,
+                    "fresh",
+                    ban_tools=list(CHILD_BANNED_TOOLS),
+                ),
                 loop,
             )
             future.result(timeout=_START_ACK_TIMEOUT_SECONDS)
