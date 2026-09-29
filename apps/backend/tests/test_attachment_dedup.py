@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from PIL import Image
 from starlette.datastructures import UploadFile
 
@@ -21,38 +22,10 @@ def _image_upload(name: str = "image.png") -> UploadFile:
 
 def _service(root: Path) -> AttachmentService:
     service = AttachmentService.__new__(AttachmentService)
-    service._tasks = SimpleNamespace(
-        get_task=lambda _task_id: SimpleNamespace(workspace_id=7),
-        list_tasks_for_workspace=lambda _workspace_id: [],
-    )
     service._workspaces = SimpleNamespace(
         get_workspace=lambda _workspace_id: SimpleNamespace(root_path=str(root))
     )
-    service._runs = SimpleNamespace(list_runs_for_task=lambda _task_id: [])
     return service
-
-
-def test_delete_protects_hash_referenced_by_another_task_in_same_workspace(tmp_path: Path) -> None:
-    asset_id = "a" * 64
-    service = _service(tmp_path)
-    service._tasks.list_tasks_for_workspace = lambda _workspace_id: [
-        SimpleNamespace(id=7),
-        SimpleNamespace(id=8),
-    ]
-    service._runs.list_runs_for_task = lambda task_id: [
-        SimpleNamespace(image_paths=[f".cosir/Attachment/{asset_id}.png"])
-    ] if task_id == 8 else []
-    attachment_dir = tmp_path / ".cosir" / "Attachment"
-    attachment_dir.mkdir(parents=True)
-    (attachment_dir / f"{asset_id}.png").write_bytes(b"image")
-
-    try:
-        service.delete(7, asset_id)
-    except ImageNormalizationError as error:
-        assert error.code == "ATTACHMENT_NOT_OWNED"
-    else:
-        raise AssertionError("a shared image must not be deleted")
-    assert (attachment_dir / f"{asset_id}.png").exists()
 
 
 async def test_upload_uses_sha256_as_asset_id_and_deduplicates_bytes(tmp_path: Path) -> None:
@@ -62,12 +35,45 @@ async def test_upload_uses_sha256_as_asset_id_and_deduplicates_bytes(tmp_path: P
     second = await service.upload(7, _image_upload("renamed.png"))
 
     expected = hashlib.sha256(
-        next(iter((tmp_path / ".cosir" / "Attachment" / ".uploading").glob("*.png"))).read_bytes()
+        next(iter((tmp_path / ".cosir" / "Attachment").glob("*.png"))).read_bytes()
     ).hexdigest()
     assert first.asset_id == second.asset_id == expected
-    assert len(list((tmp_path / ".cosir" / "Attachment" / ".uploading").glob("*.png"))) == 1
+    assert len(list((tmp_path / ".cosir" / "Attachment").glob("*.png"))) == 1
+    assert not list((tmp_path / ".cosir" / "Attachment" / ".uploading").glob("*"))
     assert len(first.asset_id) == 64
     assert first.asset_id == first.asset_id.lower()
+
+
+async def test_upload_resizes_image_before_publishing_final_attachment(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    stream = BytesIO()
+    Image.new("RGB", (10_000, 5_000), (20, 40, 60)).save(stream, format="JPEG")
+    stream.seek(0)
+
+    uploaded = await service.upload(
+        7,
+        UploadFile(file=stream, filename="large.jpg", headers=None),
+    )
+
+    assert uploaded.status == "ready"
+    assert uploaded.width == 8_192
+    assert uploaded.height == 4_096
+    assert (tmp_path / ".cosir" / "Attachment" / f"{uploaded.asset_id}.jpeg").is_file()
+    assert not list((tmp_path / ".cosir" / "Attachment" / ".uploading").glob("*"))
+
+
+async def test_upload_rejects_gif_and_webp_inputs(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    for image_format, suffix in (("GIF", ".gif"), ("WEBP", ".webp")):
+        stream = BytesIO()
+        Image.new("RGB", (4, 3), (20, 40, 60)).save(stream, format=image_format)
+        stream.seek(0)
+        upload = UploadFile(file=stream, filename=f"image{suffix}", headers=None)
+
+        with pytest.raises(ImageNormalizationError) as error:
+            await service.upload(7, upload)
+
+        assert error.value.code == "ATTACHMENT_TYPE_UNSUPPORTED"
 
 
 async def test_upload_rejects_non_image_bytes(tmp_path: Path) -> None:

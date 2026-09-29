@@ -4,7 +4,7 @@
 
 本轮针对开发者收到上一轮独立审查意见后的**修复性改动**做回归：
 
-1. ``attachment_service`` 新增 ``_TaskAttachmentDirs`` 冻结 dataclass 与 ``_dirs(task_id)``
+1. ``attachment_service`` 使用 ``_WorkspaceAttachmentDirs`` 冻结 dataclass 与 ``_dirs(workspace_id)``
    （替换旧 ``_directory``）；``workspace_root`` 直接取自 workspace 记录，不再用
    ``directory.parent.parent`` 反推。7 个调用点全部迁移。
 2. ``is_within_cosir`` 新增空白路径短路：``""`` / ``"   "`` / ``Path("")`` 必须返回 ``False``。
@@ -73,20 +73,13 @@ def _upload(data: bytes, name: str = "image.png") -> UploadFile:
     return UploadFile(file=BytesIO(data), filename=name, headers=None)
 
 
-def _service(
-    root_path: str | Path, *, workspace_id: int = 7, task_id: int = 7
-) -> AttachmentService:
+def _service(root_path: str | Path) -> AttachmentService:
     """构造仅注入轻量桩的 ``AttachmentService``（不触网、不落库）。"""
 
     service = AttachmentService.__new__(AttachmentService)
-    service._tasks = SimpleNamespace(
-        get_task=lambda _task_id: SimpleNamespace(workspace_id=workspace_id, id=task_id),
-        list_tasks_for_workspace=lambda _workspace_id: [],
-    )
     service._workspaces = SimpleNamespace(
         get_workspace=lambda _workspace_id: SimpleNamespace(root_path=str(root_path))
     )
-    service._runs = SimpleNamespace(list_runs_for_task=lambda _task_id: [])
     return service
 
 
@@ -107,11 +100,11 @@ def _symlinks_supported(base: Path) -> bool:
     return True
 
 
-# --- A. 附件功能回归：resolve_for_model / relative_path / upload staging ------------------
+# --- A. 附件功能回归：resolve_for_model / relative_path / upload publish ------------------
 
 
 async def test_resolve_for_model_resolves_run_referenced_cosir_attachment(tmp_path: Path) -> None:
-    """run 引用的 ``.cosir/Attachment/<sha256>.png`` 能被 resolve_for_model 正确解析并归一化。
+    """run 引用的 ``.cosir/Attachment/<sha256>.png`` 能解析为已规范化图片。
 
     潜在缺陷类型：修复把 ``root`` 从 ``directory.parent.parent`` 改为 workspace 记录后，
     基准若不一致会导致 run 引用解析失败（附件视觉通道整体回归）。
@@ -122,8 +115,6 @@ async def test_resolve_for_model_resolves_run_referenced_cosir_attachment(tmp_pa
     asset_id = hashlib.sha256(data).hexdigest()
     uploaded = await service.upload(7, _upload(data))
     assert uploaded.asset_id == asset_id
-    # upload 仅把字节落到 .uploading 暂存；finalize 才把文件落进 Attachment/。
-    service.finalize(7, asset_id)
 
     # 模拟 Run 引用：workspace 相对的 .cosir/Attachment/<sha>.png
     normalized = service.resolve_for_model(7, f".cosir/Attachment/{asset_id}.png")
@@ -131,8 +122,8 @@ async def test_resolve_for_model_resolves_run_referenced_cosir_attachment(tmp_pa
     assert normalized.path.is_file()
     assert normalized.path.parent == (tmp_path / ".cosir" / "Attachment").resolve()
     assert normalized.path.name == f"{asset_id}.png"
-    assert normalized.target_format == "png"
     assert normalized.content_type == "image/png"
+    assert normalized.byte_size == len(data)
 
 
 def test_relative_path_returns_cosir_attachment_workspace_relative(tmp_path: Path) -> None:
@@ -155,22 +146,21 @@ def test_relative_path_returns_cosir_attachment_workspace_relative(tmp_path: Pat
     assert "\\" not in result
 
 
-async def test_upload_staging_directory_is_cosir_uploading(tmp_path: Path) -> None:
-    """``upload`` 的 staging 目录必须仍是 ``<root>/.cosir/Attachment/.uploading``。
+async def test_upload_publishes_final_attachment_and_cleans_staging(tmp_path: Path) -> None:
+    """``upload`` 应把最终图片发布到 Attachment/，只把 .uploading 作为临时目录。
 
     潜在缺陷类型：staging 目录改为 workspace 记录基准后若拼错层级，会写到别处或新建额外目录。
     """
 
     service = _service(tmp_path)
     data = _png_bytes()
-    asset_id = hashlib.sha256(data).hexdigest()
-
-    await service.upload(7, _upload(data))
+    uploaded = await service.upload(7, _upload(data))
 
     staging = tmp_path / ".cosir" / "Attachment" / ".uploading"
-    staged = staging / f"{asset_id}.png"
-    assert staged.is_file()
-    assert staged.read_bytes() == data
+    published = tmp_path / ".cosir" / "Attachment" / f"{uploaded.asset_id}.png"
+    assert published.is_file()
+    assert published.read_bytes() == data
+    assert not list(staging.glob("*"))
     # 不得在工作区根直接留下散落的 staging 目录。
     assert not (tmp_path / ".uploading").exists()
 
@@ -222,6 +212,18 @@ def test_resolve_for_model_rejects_traversal_escape(tmp_path: Path) -> None:
 
     with pytest.raises(ImageNormalizationError):
         service.resolve_for_model(7, f".cosir/Attachment/../../../{_ASSET}.png")
+
+
+def test_resolve_for_model_maps_invalid_path_bytes_to_attachment_error(tmp_path: Path) -> None:
+    """模型输入路径含 NUL 等非法字节时必须转换为稳定附件错误。"""
+
+    service = _service(tmp_path)
+    (tmp_path / ".cosir" / "Attachment").mkdir(parents=True)
+
+    with pytest.raises(ImageNormalizationError) as error:
+        service.resolve_for_model(7, ".cosir/Attachment/\x00.png")
+
+    assert error.value.code == "ATTACHMENT_NOT_FOUND"
 
 
 # --- B. 等价性：修复前 directory.parent.parent == 修复后 workspace 记录基准 --------------
@@ -566,17 +568,16 @@ async def test_roundtrip_upload_relative_path_then_resolve(tmp_path: Path) -> No
     data = _png_bytes()
     await service.upload(7, _upload(data))
 
-    # 用户发送消息时 finalize 得到 workspace 相对路径（模拟 conversation_run_service 行为）
     asset_id = hashlib.sha256(data).hexdigest()
-    finalized = service.finalize(7, asset_id)
-    rel = service.relative_path(7, finalized.path)
+    stored = service.resolve_for_model(7, f".cosir/Attachment/{asset_id}.png")
+    rel = service.relative_path(7, stored.path)
     assert rel == f".cosir/Attachment/{asset_id}.png"
 
     # 运行期按该相对路径解析回图片
     normalized = service.resolve_for_model(7, rel)
     again = service.resolve_for_model(7, rel)
     assert normalized.path.read_bytes() == again.path.read_bytes() == data
-    assert normalized.width == 4 and normalized.height == 3
+    assert normalized.byte_size == len(data)
 
 
 def test_artifact_path_text_matches_os_separator_handling(tmp_path: Path) -> None:
@@ -598,7 +599,7 @@ def test_artifact_path_text_matches_os_separator_handling(tmp_path: Path) -> Non
 def test_dirs_returns_frozen_workspace_root_and_attachment_dir(tmp_path: Path) -> None:
     """``_dirs`` 必须返回 workspace 记录解析根 + ``<root>/.cosir/Attachment``，且不可变。
 
-    潜在缺陷类型：``_TaskAttachmentDirs`` 误标 mutable，或实现里 workspace_root 与
+    潜在缺陷类型：``_WorkspaceAttachmentDirs`` 误标 mutable，或实现里 workspace_root 与
     attachment_dir 取自不同基准导致二者不自洽。
     """
 
@@ -614,15 +615,15 @@ def test_dirs_returns_frozen_workspace_root_and_attachment_dir(tmp_path: Path) -
         dirs.workspace_root = tmp_path  # type: ignore[misc]
 
 
-def test_dirs_propagates_missing_task_keyerror(tmp_path: Path) -> None:
-    """task 不存在时 ``_dirs`` 必须让 KeyError 透出（docstring 声明），不得吞掉。"""
+def test_dirs_propagates_missing_workspace_keyerror(tmp_path: Path) -> None:
+    """workspace 不存在时 ``_dirs`` 必须让 KeyError 透出，不得吞掉。"""
 
     service = _service(tmp_path)
 
-    def _missing(_task_id: int) -> object:
-        raise KeyError(_task_id)
+    def _missing(_workspace_id: int) -> object:
+        raise KeyError(_workspace_id)
 
-    service._tasks.get_task = _missing  # type: ignore[assignment]
+    service._workspaces.get_workspace = _missing  # type: ignore[assignment]
 
     with pytest.raises(KeyError):
         service._dirs(999)  # type: ignore[attr-defined]
@@ -665,39 +666,21 @@ def test_dirs_creates_cosir_attachment_and_staging(tmp_path: Path) -> None:
     assert (root / ".cosir" / "Attachment" / ".uploading").is_dir()
 
 
-# --- H. get_descriptor / resolve_content 回归（同属 7 个调用点） -------------------------
+# --- H. resolve_content 回归（同属 7 个调用点） -------------------------
 
 
-async def test_get_descriptor_and_resolve_content_after_finalize(tmp_path: Path) -> None:
-    """finalize 后 get_descriptor / resolve_content 必须能在 ``.cosir/Attachment`` 定位文件。"""
+async def test_resolve_content_after_upload(tmp_path: Path) -> None:
+    """upload 后 resolve_content 必须能在 ``.cosir/Attachment`` 定位文件。"""
 
     service = _service(tmp_path)
     data = _png_bytes()
     asset_id = hashlib.sha256(data).hexdigest()
     await service.upload(7, _upload(data))
-    service.finalize(7, asset_id)
-
-    descriptor = service.get_descriptor(7, asset_id)
-    assert descriptor.asset_id == asset_id
-    assert descriptor.locator == f"cosir-attachment://{asset_id}"
-    assert descriptor.status == "ready"
 
     path, content_type = service.resolve_content(7, asset_id)
     assert path.parent == (tmp_path / ".cosir" / "Attachment").resolve()
     assert path.read_bytes() == data
     assert content_type == "image/png"
-
-
-def test_get_descriptor_unknown_asset_not_found(tmp_path: Path) -> None:
-    """未知 asset_id 的 get_descriptor 必须抛 ATTACHMENT_NOT_FOUND。"""
-
-    service = _service(tmp_path)
-    service._dirs(7)  # 确保目录存在  # type: ignore[attr-defined]
-
-    with pytest.raises(ImageNormalizationError) as error:
-        service.get_descriptor(7, "b" * 64)
-
-    assert error.value.code == "ATTACHMENT_NOT_FOUND"
 
 
 # --- I. image_utils 行为回归（is_image_path + is_trusted_cosir_path） -------------------

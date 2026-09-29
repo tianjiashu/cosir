@@ -25,6 +25,27 @@ describe("assistant attachment adapter", () => {
     });
   });
 
+  it("rejects unsupported GIF image uploads before the HTTP request", async () => {
+    const file = new File(["image"], "animation.gif", { type: "image/gif" });
+    const attachment = await createAttachmentAdapter(7).add({ file });
+
+    expect(attachment.type).toBe("file");
+    await expect(createAttachmentAdapter(7).send(attachment)).rejects.toThrow("JPEG 和 PNG");
+  });
+
+  it("removes only the Composer reference without deleting the workspace asset", async () => {
+    const attachment = {
+      id: "a".repeat(64),
+      type: "image" as const,
+      name: "photo.png",
+      contentType: "image/png",
+      status: { type: "complete" as const },
+      content: [{ type: "image" as const, image: `cosir-attachment://${"a".repeat(64)}` }],
+    };
+
+    await expect(createAttachmentAdapter(7).remove(attachment)).resolves.toBeUndefined();
+  });
+
   it("reuses the local registry ID for ordinary file attachment tokens", async () => {
     const file = registerLocalAttachment(
       new File([], "leftHook.yml", { type: "application/yaml" }),

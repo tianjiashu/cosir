@@ -36,7 +36,7 @@ export async function submitAssistantTransport(
 ): Promise<void> {
   const uploadedImages: UploadedAttachment[] = [];
   for (const attachment of input.imageAttachments) {
-    uploadedImages.push(await uploadAttachment(input.taskId, attachment.file));
+    uploadedImages.push(await uploadAttachment(input.workspaceId, attachment.file));
   }
 
   const command = prepareUserCommand({

@@ -204,6 +204,7 @@ def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
         run_id=None,
         model_name=None,
         model_snapshot=_model_snapshot(),
+        supports_image=False,
     )
 
     assert prepared.input_text == f"请阅读 {attachment_path}"
@@ -226,6 +227,7 @@ def test_run_service_persists_banned_tools_without_other_extra_fields() -> None:
         run_id=None,
         model_name=None,
         model_snapshot=_model_snapshot(),
+        supports_image=False,
     )
 
     assert prepared.extra is not None
@@ -255,6 +257,7 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
         run_id=None,
         model_name=None,
         model_snapshot=_model_snapshot(),
+        supports_image=False,
     )
 
     assert prepared.input_text == f"请检查 {attachment_path}"
@@ -304,6 +307,7 @@ def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
         run_id=11,
         model_name=None,
         model_snapshot=_model_snapshot(),
+        supports_image=False,
     )
 
     assert prepared.input_text == f"请再次阅读 {attachment_path}"

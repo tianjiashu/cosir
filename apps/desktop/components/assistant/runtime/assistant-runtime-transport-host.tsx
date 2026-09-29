@@ -79,6 +79,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
     <AssistantRuntimeProvider runtime={runtime}>
       <AssistantThreadSurface
         taskId={context.taskId}
+        workspaceId={context.workspaceId}
         workspaceRoot={context.workspaceRoot}
         initialMessage={initialMessage}
         initialAttachments={initialAttachments}

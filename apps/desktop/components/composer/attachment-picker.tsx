@@ -13,6 +13,7 @@ import {
   DIRECTORY_CONTENT_TYPE,
   fileName,
   isImagePath,
+  isUnsupportedImagePath,
 } from "@/components/composer/attachment-policy";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 
@@ -64,6 +65,10 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
         const path = await invoke<string>("resolve_selected_attachment_path", { path: selectedPath });
         const name = fileName(path);
         const contentType = contentTypeFor(path);
+        if (isUnsupportedImagePath(path, contentType)) {
+          onError?.("图片附件仅支持 JPEG 和 PNG 格式");
+          continue;
+        }
         if (isImagePath(path, contentType)) {
           const file = await readSelectedFile(path, name);
           const id = crypto.randomUUID();

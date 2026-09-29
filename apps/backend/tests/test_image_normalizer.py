@@ -5,27 +5,35 @@ from PIL import Image
 
 from app.assistant_transport.event import RunInitializedEvent, UserInputAppendedEvent
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
-from app.service.attachment.attachment_service import collect_workspace_orphans
 from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
 from app.service.attachment.image_normalizer import (
     ImageNormalizationError,
     normalize_image,
 )
 
-def test_normalize_static_image_to_model_supported_format(tmp_path: Path) -> None:
+def test_normalize_rejects_unsupported_bmp(tmp_path: Path) -> None:
     source = tmp_path / "source.bmp"
     target = tmp_path / ".normalized.part"
     Image.new("RGB", (8, 6), (20, 40, 60)).save(source, format="BMP")
 
+    with pytest.raises(ImageNormalizationError) as error:
+        normalize_image(source, target)
+
+    assert error.value.code == "ATTACHMENT_TYPE_UNSUPPORTED"
+
+
+def test_normalize_resizes_image_by_longest_side(tmp_path: Path) -> None:
+    source = tmp_path / "source.jpeg"
+    target = tmp_path / ".normalized.part"
+    Image.new("RGB", (10_000, 5_000), (20, 40, 60)).save(source, format="JPEG")
+
     result = normalize_image(source, target)
 
-    assert result.source_format == "bmp"
     assert result.target_format == "jpeg"
-    assert result.content_type == "image/jpeg"
-    assert result.path == target
+    assert result.width == DEFAULT_IMAGE_INPUT_POLICY.max_image_side_px
+    assert result.height == 4_096
     with Image.open(target) as output:
-        assert output.format == "JPEG"
-        assert output.size == (8, 6)
+        assert output.size == (DEFAULT_IMAGE_INPUT_POLICY.max_image_side_px, 4_096)
 
 
 def test_normalize_preserves_already_supported_png(tmp_path: Path) -> None:
@@ -44,8 +52,6 @@ def test_normalize_uses_unified_image_policy_as_format_source() -> None:
     assert DEFAULT_IMAGE_INPUT_POLICY.supported_formats == {
         "jpeg",
         "png",
-        "gif",
-        "webp",
     }
 
 
@@ -65,61 +71,6 @@ def test_run_initialized_creates_empty_user_skeleton_and_input_event_projects_im
     assert mutations[0].value == [
         {"type": "image", "image": "cosir-attachment://" + "1" * 64}
     ]
-
-
-def test_collect_workspace_orphans_keeps_referenced_asset_family(tmp_path: Path) -> None:
-    attachment_dir = tmp_path / ".cosir" / "Attachment"
-    staging_dir = attachment_dir / ".uploading"
-    staging_dir.mkdir(parents=True)
-    keep_id = "1" * 64
-    orphan_id = "2" * 64
-    (attachment_dir / f"{keep_id}.jpeg").write_bytes(b"keep")
-    (attachment_dir / f"{keep_id}.source.bmp").write_bytes(b"keep-source")
-    (attachment_dir / f"{orphan_id}.jpeg").write_bytes(b"orphan")
-    (staging_dir / f"{orphan_id}.png").write_bytes(b"orphan-staging")
-
-    removed = collect_workspace_orphans(
-        tmp_path,
-        [f".cosir/Attachment/{keep_id}.jpeg"],
-    )
-
-    assert removed == 2
-    assert (attachment_dir / f"{keep_id}.jpeg").exists()
-    assert (attachment_dir / f"{keep_id}.source.bmp").exists()
-    assert not (attachment_dir / f"{orphan_id}.jpeg").exists()
-    assert not (staging_dir / f"{orphan_id}.png").exists()
-
-
-def test_collect_workspace_orphans_rejects_attachment_symlink(tmp_path: Path) -> None:
-    target = tmp_path / "outside"
-    target.mkdir()
-    attachment_dir = tmp_path / ".cosir" / "Attachment"
-    attachment_dir.parent.mkdir()
-    try:
-        attachment_dir.symlink_to(target, target_is_directory=True)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"symlink unavailable: {exc}")
-
-    with pytest.raises(ImageNormalizationError) as error:
-        collect_workspace_orphans(tmp_path, [])
-
-    assert error.value.code == "ATTACHMENT_STORAGE_UNAVAILABLE"
-
-
-def test_collect_workspace_orphans_rejects_uploading_symlink(tmp_path: Path) -> None:
-    target = tmp_path / "outside"
-    target.mkdir()
-    attachment_dir = tmp_path / ".cosir" / "Attachment"
-    attachment_dir.mkdir(parents=True)
-    try:
-        (attachment_dir / ".uploading").symlink_to(target, target_is_directory=True)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"symlink unavailable: {exc}")
-
-    with pytest.raises(ImageNormalizationError) as error:
-        collect_workspace_orphans(tmp_path, [])
-
-    assert error.value.code == "ATTACHMENT_STORAGE_UNAVAILABLE"
 
 
 def test_normalizer_does_not_follow_existing_target_symlink(tmp_path: Path) -> None:

@@ -111,6 +111,27 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
     assert _count(WorkspaceModel) == 1
 
 
+def test_task_and_workspace_deletion_preserve_workspace_attachments(
+    storage, tmp_path: Path
+) -> None:
+    """删除 Task 或 Workspace 业务事实时，workspace 图片文件保持永久保留。"""
+
+    root = tmp_path / "workspace-with-attachments"
+    root.mkdir()
+    workspace = get_workspace_crud().create("attachments", str(root))
+    task = get_task_crud().create(workspace.id, "root")
+    attachment_dir = root / ".cosir" / "Attachment"
+    attachment_dir.mkdir(parents=True)
+    attachment = attachment_dir / ("a" * 64 + ".png")
+    attachment.write_bytes(b"published image")
+
+    get_task_service().delete_task(task.id)
+    assert attachment.exists()
+
+    get_workspace_service().delete_workspace(workspace.id)
+    assert attachment.exists()
+
+
 def test_delete_missing_task_does_not_create_runtime_space(storage) -> None:
     missing_id = 987654
 

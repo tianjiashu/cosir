@@ -7,11 +7,11 @@ import { getApiBaseUrl } from "@/lib/http/client";
 
 export const resolveTransportImageSrc = (
   src: string,
-  taskId?: number,
+  workspaceId?: number,
 ): string | undefined => {
   const locator = src.match(/^cosir-attachment:\/\/([0-9a-f]{64})$/)?.[1];
-  if (locator && taskId !== undefined) {
-    return `${getApiBaseUrl()}/tasks/${taskId}/attachments/${locator}/content`;
+  if (locator && workspaceId !== undefined) {
+    return `${getApiBaseUrl()}/workspaces/${workspaceId}/attachments/${locator}/content`;
   }
   return /^(?:data:|blob:|https?:\/\/)/i.test(src) ? src : undefined;
 };
@@ -36,7 +36,7 @@ const useFileSrc = (file: File | undefined) => {
   return file && entry && entry.file === file ? entry.url : undefined;
 };
 
-export const useAttachmentSrc = (taskId?: number) => {
+export const useAttachmentSrc = (workspaceId?: number) => {
   const { file, src } = useAuiState(
     useShallow((s): { file?: File; src?: string } => {
       if (s.attachment.type !== "image") return {};
@@ -48,5 +48,5 @@ export const useAttachmentSrc = (taskId?: number) => {
     }),
   );
 
-  return useFileSrc(file) ?? (src ? resolveTransportImageSrc(src, taskId) : undefined);
+  return useFileSrc(file) ?? (src ? resolveTransportImageSrc(src, workspaceId) : undefined);
 };

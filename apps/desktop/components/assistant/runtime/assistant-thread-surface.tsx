@@ -20,6 +20,7 @@ import type { ToolGroupCatalog } from "@/lib/api/tools";
 type AssistantThreadSurfaceProps = Pick<
   AssistantRuntimeProps,
   | "taskId"
+  | "workspaceId"
   | "workspaceRoot"
   | "initialMessage"
   | "initialAttachments"
@@ -59,6 +60,7 @@ type AssistantThreadSurfaceProps = Pick<
  */
 export const AssistantThreadSurface = memo(function AssistantThreadSurface({
   taskId,
+  workspaceId,
   workspaceRoot,
   initialMessage,
   initialAttachments,
@@ -103,6 +105,7 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
       <div className="flex h-full min-h-0 flex-col">
         <Thread
           taskId={taskId}
+          workspaceId={workspaceId}
           toolGroups={toolGroups}
           selectedToolGroups={selectedToolGroups}
           onSelectedToolGroupsChange={onSelectedToolGroupsChange}

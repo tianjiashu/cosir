@@ -2,22 +2,14 @@ export const IMAGE_EXTENSIONS = new Set([
   "jpg",
   "jpeg",
   "png",
-  "gif",
-  "webp",
-  "bmp",
-  "tif",
-  "tiff",
 ]);
+
+const UNSUPPORTED_IMAGE_EXTENSIONS = new Set(["gif", "webp", "bmp", "tif", "tiff"]);
 
 const MIME_TYPES: Record<string, string> = {
   jpg: "image/jpeg",
   jpeg: "image/jpeg",
   png: "image/png",
-  gif: "image/gif",
-  webp: "image/webp",
-  bmp: "image/bmp",
-  tif: "image/tiff",
-  tiff: "image/tiff",
 };
 
 /** MIME-like marker used for a directory represented as a regular attachment. */
@@ -37,4 +29,11 @@ export function contentTypeFor(path: string): string {
 export function isImagePath(path: string, contentType = contentTypeFor(path)): boolean {
   return contentType.startsWith("image/")
     || IMAGE_EXTENSIONS.has(fileName(path).split(".").pop()?.toLowerCase() ?? "");
+}
+
+/** 判断原生选择路径是否是已识别但当前不支持的图片格式。 */
+export function isUnsupportedImagePath(path: string, contentType = contentTypeFor(path)): boolean {
+  const extension = fileName(path).split(".").pop()?.toLowerCase() ?? "";
+  const supported = contentType === "image/jpeg" || contentType === "image/png";
+  return !supported && (contentType.startsWith("image/") || UNSUPPORTED_IMAGE_EXTENSIONS.has(extension));
 }

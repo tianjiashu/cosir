@@ -5,8 +5,12 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/core";
 
-import { requestRaw } from "@/lib/http/client";
-import { uploadAttachment, type UploadedImage } from "./attachment-upload";
+import {
+  isSupportedImageFile,
+  isUnsupportedImageFile,
+  uploadAttachment,
+  type UploadedAttachment,
+} from "./attachment-upload";
 import {
   getLocalAttachment,
   getLocalAttachmentById,
@@ -16,7 +20,7 @@ import {
 import { LOCAL_IMAGE_LOCATOR_PREFIX } from "./local-file-token";
 
 const locatorFor = (assetId: string) => `${LOCAL_IMAGE_LOCATOR_PREFIX}${assetId}`;
-const uploadByDigest = new Map<string, Promise<UploadedImage>>();
+const uploadByDigest = new Map<string, Promise<UploadedAttachment>>();
 
 async function digestFile(file: File): Promise<string> {
   const bytes = await file.arrayBuffer();
@@ -24,7 +28,7 @@ async function digestFile(file: File): Promise<string> {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-export function createAttachmentAdapter(taskId: number): AttachmentAdapter {
+export function createAttachmentAdapter(workspaceId: number): AttachmentAdapter {
   return {
     // assistant-ui uses `*` as the all-file wildcard. `*/*` is parsed as a
     // literal MIME pattern and rejects otherwise valid image/jpeg files.
@@ -35,7 +39,7 @@ export function createAttachmentAdapter(taskId: number): AttachmentAdapter {
         // The inline composer token is keyed by this ID. Reuse the registry
         // ID so send, restore, and DOM rendering all address one attachment.
         id: local?.id ?? `pending-attachment:${crypto.randomUUID()}`,
-        type: file.type.startsWith("image/") ? "image" : "file",
+        type: isSupportedImageFile(file) ? "image" : "file",
         name: file.name,
         contentType: file.type,
         file,
@@ -44,6 +48,9 @@ export function createAttachmentAdapter(taskId: number): AttachmentAdapter {
     },
     async send(attachment: PendingAttachment): Promise<CompleteAttachment> {
       const local = getLocalAttachment(attachment.file) ?? getLocalAttachmentById(attachment.id);
+      if (isUnsupportedImageFile(attachment.file)) {
+        throw new Error("图片附件仅支持 JPEG 和 PNG 格式");
+      }
       if (local?.kind === "file") {
         return {
           id: local.id,
@@ -60,14 +67,14 @@ export function createAttachmentAdapter(taskId: number): AttachmentAdapter {
           }],
         };
       }
-      if (!attachment.file.type.startsWith("image/")) {
+      if (!isSupportedImageFile(attachment.file)) {
         throw new LocalAttachmentUnavailableError();
       }
       const digest = await digestFile(attachment.file);
-      const cacheKey = `${taskId}:${digest}`;
+      const cacheKey = `${workspaceId}:${digest}`;
       let upload = uploadByDigest.get(cacheKey);
       if (!upload) {
-        upload = uploadAttachment(taskId, attachment.file);
+        upload = uploadAttachment(workspaceId, attachment.file);
         uploadByDigest.set(cacheKey, upload);
         void upload.catch(() => {
           if (uploadByDigest.get(cacheKey) === upload) uploadByDigest.delete(cacheKey);
@@ -83,15 +90,9 @@ export function createAttachmentAdapter(taskId: number): AttachmentAdapter {
         content: [{ type: "image", image: locatorFor(uploaded.id) }],
       };
     },
-    async remove(attachment: Attachment) {
-      if (attachment.type !== "image" || attachment.id.startsWith("pending-attachment:")) return;
-      const response = await requestRaw(`/tasks/${taskId}/attachments/${encodeURIComponent(attachment.id)}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("删除附件失败");
+    async remove(_attachment: Attachment) {
+      // 图片是 workspace 级永久资源；移除动作只改变当前 Composer 的引用。
+      // Run 编辑提交时会通过新的 image_asset_ids 重建 image_paths，不删除物理文件。
     },
   };
 }
-
-/** Backwards-compatible export for callers that still use the old image-only name. */
-export const createImageAttachmentAdapter = createAttachmentAdapter;

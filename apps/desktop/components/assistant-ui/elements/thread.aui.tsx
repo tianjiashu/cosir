@@ -64,7 +64,7 @@ import type { TransportState, TransportToolStatus } from "@/lib/assistant/contra
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
-import { AttachmentTaskContext } from "@/components/assistant-ui/elements/attachment-context";
+import { AttachmentWorkspaceContext } from "@/components/assistant-ui/elements/attachment-context";
 import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/virtualized-thread-messages";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { UserMessageAttachments } from "@/components/assistant-ui/elements/user-message-attachments";
@@ -86,6 +86,7 @@ export type ThreadProps = {
   /** 只渲染 canonical message UI，不提供写入操作。 */
   readonly?: boolean;
   taskId?: number;
+  workspaceId?: number | null;
   toolGroups?: ToolGroupCatalog[];
   selectedToolGroups?: string[];
   onSelectedToolGroupsChange?: (groups: string[]) => void;
@@ -154,14 +155,14 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null }) {
+export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null }) {
   const isEmpty = useAuiState(isNewChatView);
   const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
     <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly }}>
     <ThreadComponentsContext.Provider value={components}>
-      <AttachmentTaskContext.Provider value={taskId}>
+      <AttachmentWorkspaceContext.Provider value={workspaceId ?? undefined}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/*
           顶部锚点固定本轮用户消息，答案在其下方增长，流式 token 不会持续把滚动位置重新
@@ -196,7 +197,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY
             </div>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
-      </AttachmentTaskContext.Provider>
+      </AttachmentWorkspaceContext.Provider>
     </ThreadComponentsContext.Provider>
     </ThreadContext.Provider>
   );

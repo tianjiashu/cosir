@@ -405,7 +405,7 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
     runtime_config = SimpleNamespace(
         operations=operations,
         model=SimpleNamespace(astream=_astream),
-        supports_image=False,
+        workspace_id=1,
         thinking_channel="",
         # model 节点读 run.extra.ban_tools 构造禁用工具集；无禁用工具时 extra 为 None。
         run=SimpleNamespace(task_id=1, id=2, extra=None),

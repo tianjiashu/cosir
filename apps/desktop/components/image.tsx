@@ -27,7 +27,7 @@ import type {
   ImageMessagePartComponent,
 } from "@assistant-ui/react";
 import { cn } from "@/lib/utils";
-import { useAttachmentTaskId } from "@/components/assistant-ui/elements/attachment-context";
+import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
 import { resolveTransportImageSrc } from "@/hooks/use-attachment-src";
 
 const extensionForMimeType = (mimeType?: string): string => {
@@ -487,7 +487,7 @@ function ImageActions({ part, onRegenerate, className }: ImageActionsProps) {
 
 const ImageImpl = (props: ImageImplProps) => {
   const { image, filename, status, display = "default" } = props;
-  const imageSrc = resolveTransportImageSrc(image, useAttachmentTaskId());
+  const imageSrc = resolveTransportImageSrc(image, useAttachmentWorkspaceId());
   const isMessageThumbnail = display === "message-thumbnail";
   const rootClassName = isMessageThumbnail
     ? "h-32 w-40 max-w-full border-border/70 bg-muted/40 shadow-none"

@@ -34,11 +34,12 @@ import {
 } from "@/components/ui/dialog";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { useAttachmentSrc } from "@/hooks/use-attachment-src";
-import { useAttachmentTaskId } from "@/components/assistant-ui/elements/attachment-context";
+import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
+import { isUnsupportedImageFile } from "@/lib/assistant/attachments/attachment-upload";
 import {
   InlineAttachmentInput,
   useInlineComposerInsertion,
@@ -69,7 +70,7 @@ const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
 };
 
 const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
-  const src = useAttachmentSrc(useAttachmentTaskId());
+  const src = useAttachmentSrc(useAttachmentWorkspaceId());
 
   if (!src) return children;
 
@@ -99,7 +100,7 @@ const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
 };
 
 const AttachmentThumb: FC = () => {
-  const src = useAttachmentSrc(useAttachmentTaskId());
+  const src = useAttachmentSrc(useAttachmentWorkspaceId());
   return <ImageAttachmentCard src={src} name="图片附件" className="aui-attachment-tile-avatar rounded-none border-0 shadow-none" />;
 };
 
@@ -335,6 +336,15 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
     const existingIds = new Set(aui.composer.getState().attachments.map((attachment) => attachment.id));
     const insertedFiles: InlineFileAttachment[] = [];
     for (const file of files) {
+      if (isUnsupportedImageFile(file)) {
+        void frontendLog(
+          "WARNING",
+          "attachment_external_file_rejected",
+          "图片附件仅支持 JPEG 和 PNG 格式",
+          { data: { name: file.name, contentType: file.type } },
+        );
+        continue;
+      }
       await aui.composer.addAttachment(file);
       const added = aui.composer.getState().attachments.find(
         (attachment) => attachment.file === file && !existingIds.has(attachment.id),

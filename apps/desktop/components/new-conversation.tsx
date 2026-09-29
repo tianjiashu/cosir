@@ -23,6 +23,10 @@ import { AttachmentPicker, type PickedComposerAttachment } from "@/components/co
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import { submitAssistantTransport, AssistantTransportProtocolError } from "@/lib/assistant/submit-assistant-transport";
+import {
+  isSupportedImageFile,
+  isUnsupportedImageFile,
+} from "@/lib/assistant/attachments/attachment-upload";
 import { parseTransportError } from "@/lib/assistant/transport-error";
 import { safeFrontendErrorMessage, frontendLog } from "@/lib/logging/frontend-log";
 import {
@@ -35,7 +39,7 @@ export type InitialConversationAttachment = PickedComposerAttachment;
 
 function clipboardAttachment(file: File): PickedComposerAttachment {
   const id = crypto.randomUUID();
-  const kind = file.type.startsWith("image/") ? "image" : "file";
+  const kind = isSupportedImageFile(file) ? "image" : "file";
   const name = file.name || (kind === "image" ? `粘贴图片-${id}.png` : `粘贴附件-${id}`);
   const path = `clipboard:${id}`;
   const namedFile = file.name ? file : new File([file], name, { type: file.type, lastModified: file.lastModified });
@@ -301,7 +305,13 @@ export function NewConversation({
             }}
             attachments={fileAttachments}
             onExternalFiles={(files) => {
-              const picked = files.map(clipboardAttachment);
+              const picked = files
+                .filter((file) => {
+                  if (!isUnsupportedImageFile(file)) return true;
+                  setError("图片附件仅支持 JPEG 和 PNG 格式");
+                  return false;
+                })
+                .map(clipboardAttachment);
               setAttachments((current) => {
                 const existing = new Set(current.map((attachment) => attachment.path.toLowerCase()));
                 return [...current, ...picked.filter((attachment) => !existing.has(attachment.path.toLowerCase()))];

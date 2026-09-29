@@ -55,8 +55,8 @@ def test_create_task_preserves_creation_command_id(storage: Path) -> None:
     assert get_task_crud().get(task.id).creation_command_id == "creation-1"
 
 
-def test_cleanup_provisional_task_keeps_uploaded_attachment_and_skips_gc(
-    storage: Path, monkeypatch: pytest.MonkeyPatch
+def test_cleanup_provisional_task_keeps_uploaded_attachment(
+    storage: Path,
 ) -> None:
     workspace = _workspace(storage)
     task = get_workspace_service().create_task(
@@ -68,10 +68,6 @@ def test_cleanup_provisional_task_keeps_uploaded_attachment_and_skips_gc(
     attachment.write_bytes(b"image")
     service = get_task_service()
 
-    def fail_if_called(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("Task deletion must not run attachment orphan GC")
-
-    monkeypatch.setattr(service, "collect_workspace_attachment_orphans", fail_if_called)
     service.cleanup_provisional_task(task.id, "creation-1")
 
     with pytest.raises(KeyError):

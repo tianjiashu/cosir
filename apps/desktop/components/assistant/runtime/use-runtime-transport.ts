@@ -47,8 +47,8 @@ export function useRuntimeTransport(
   selectedBanTools: readonly string[],
 ): RuntimeTransport {
   const attachmentAdapter = useMemo(
-    () => createAttachmentAdapter(context.taskId),
-    [context.taskId],
+    () => context.workspaceId == null ? null : createAttachmentAdapter(context.workspaceId),
+    [context.workspaceId],
   );
   const finishCountRef = useRef(0);
   const recoveryIssueTimerRef = useRef<number | null>(null);
@@ -224,7 +224,7 @@ export function useRuntimeTransport(
 
   return useTaskAssistantTransportRuntime(context.taskId, {
     initialState: context.initialState,
-    adapters: { attachments: attachmentAdapter },
+    adapters: attachmentAdapter == null ? undefined : { attachments: attachmentAdapter },
     api: `${context.backendBaseUrl}/assistant`,
     resumeApi: `${context.backendBaseUrl}/tasks/${context.taskId}/assistant/attach`,
     headers: async () => ({
