@@ -43,7 +43,6 @@ _RUN_COLUMNS = (
     "agent_id",
     "provider_id",
     "model_name",
-    "reasoning_effort",
     "end_reason",
     "input_text",
     "final_output",
@@ -292,7 +291,7 @@ def list_models(
     params.append(limit)
     sql = (
         "SELECT id, provider_id, model_name, display_name, max_context_window, "  # noqa: S608
-        "supports_thinking, supports_image, supports_video, enabled, sort_order "
+        "supports_thinking, supports_image, enabled, sort_order "
         f"FROM models{where} ORDER BY sort_order ASC, id ASC LIMIT ?"
     )
     return query_rows(connection, sql, tuple(params))
