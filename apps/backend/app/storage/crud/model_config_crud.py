@@ -23,6 +23,9 @@ class ModelConfigCrud:
         api_key: str,
         model_name: str,
         context_window_k: int,
+        supports_thinking: bool = False,
+        supports_reasoning_effort: bool = False,
+        supports_image: bool = False,
         sort_order: int = 0,
     ) -> ModelConfigRecord:
         """创建模型连接配置并返回含数据库主键的记录。"""
@@ -33,6 +36,9 @@ class ModelConfigCrud:
             api_key=self._required(api_key, "api_key"),
             model_name=self._required(model_name, "model_name"),
             context_window_k=self._positive(context_window_k, "context_window_k"),
+            supports_thinking=bool(supports_thinking),
+            supports_reasoning_effort=bool(supports_reasoning_effort),
+            supports_image=bool(supports_image),
             sort_order=sort_order,
         )
         with self._session_factory.begin() as session:

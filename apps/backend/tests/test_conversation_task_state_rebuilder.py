@@ -16,7 +16,6 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.models.conversation_run_extra import ConversationRunExtra
-from app.models.conversation_run_model_snapshot import ConversationRunModelSnapshot
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
@@ -24,15 +23,6 @@ from app.models.task_record import TaskRecord
 
 def _timestamp() -> datetime:
     return datetime(2026, 9, 12, tzinfo=UTC)
-
-
-def _model_snapshot() -> ConversationRunModelSnapshot:
-    return ConversationRunModelSnapshot(
-        supports_thinking=True,
-        supports_reasoning_effort=True,
-        supports_image=True,
-        reasoning_effort=None,
-    )
 
 
 def _task(task_id: int = 7) -> TaskRecord:
@@ -331,7 +321,7 @@ def test_rebuild_restores_ordinary_file_from_run_extra() -> None:
                     "path": "C:/workspace/notes.md",
                 }
             ],
-            model_snapshot=_model_snapshot(),
+            reasoning_effort=None,
         ),
     )
     row = ConversationTaskContextRecord(
@@ -377,7 +367,7 @@ def test_rebuild_restores_user_file_when_context_write_was_interrupted() -> None
                     "path": "C:/workspace/notes.md",
                 }
             ],
-            model_snapshot=_model_snapshot(),
+            reasoning_effort=None,
         ),
     )
 
@@ -411,6 +401,6 @@ def test_blank_file_path_is_rejected() -> None:
                     }
                 ],
                 "ban_tools": [],
-                "model_snapshot": _model_snapshot().to_dict(),
+                "reasoning_effort": None,
             }
         )

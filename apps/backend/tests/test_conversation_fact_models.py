@@ -13,7 +13,6 @@ from app.assistant_transport.event import RunStatusChangedEvent
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_extra import ConversationRunExtra
-from app.models.conversation_run_model_snapshot import ConversationRunModelSnapshot
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
@@ -31,15 +30,6 @@ from app.storage.model.task_model import TaskModel
 
 def _timestamp() -> datetime:
     return datetime.now(UTC)
-
-
-def _model_snapshot() -> ConversationRunModelSnapshot:
-    return ConversationRunModelSnapshot(
-        supports_thinking=True,
-        supports_reasoning_effort=True,
-        supports_image=True,
-        reasoning_effort=None,
-    )
 
 
 def test_context_record_round_trips_with_row_identity_and_transport_metadata() -> None:
@@ -149,7 +139,7 @@ def test_run_extra_serializes_direct_shape_without_version() -> None:
                 "path": "attachments/readme.md",
             }
         ],
-        model_snapshot=_model_snapshot(),
+        reasoning_effort="high",
     )
 
     serialized = extra.to_dict()
@@ -164,7 +154,7 @@ def test_run_extra_serializes_direct_shape_without_version() -> None:
             }
         ],
         "ban_tools": [],
-        "model_snapshot": _model_snapshot().to_dict(),
+        "reasoning_effort": "high",
     }
     assert "version" not in serialized
     assert ConversationRunExtra.from_dict(serialized) == extra
@@ -203,8 +193,8 @@ def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
         command,
         run_id=None,
         model_name=None,
-        model_snapshot=_model_snapshot(),
         supports_image=False,
+        reasoning_effort=None,
     )
 
     assert prepared.input_text == f"请阅读 {attachment_path}"
@@ -226,8 +216,8 @@ def test_run_service_persists_banned_tools_without_other_extra_fields() -> None:
         command,
         run_id=None,
         model_name=None,
-        model_snapshot=_model_snapshot(),
         supports_image=False,
+        reasoning_effort=None,
     )
 
     assert prepared.extra is not None
@@ -256,8 +246,8 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
         command,
         run_id=None,
         model_name=None,
-        model_snapshot=_model_snapshot(),
         supports_image=False,
+        reasoning_effort=None,
     )
 
     assert prepared.input_text == f"请检查 {attachment_path}"
@@ -284,7 +274,7 @@ def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
                 "path": str(attachment_path),
             }
         ],
-        model_snapshot=_model_snapshot(),
+        reasoning_effort=None,
     )
     service = ConversationRunService.__new__(ConversationRunService)
     service._run = SimpleNamespace(
@@ -306,8 +296,8 @@ def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
         command,
         run_id=11,
         model_name=None,
-        model_snapshot=_model_snapshot(),
         supports_image=False,
+        reasoning_effort=None,
     )
 
     assert prepared.input_text == f"请再次阅读 {attachment_path}"

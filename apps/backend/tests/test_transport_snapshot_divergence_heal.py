@@ -172,7 +172,6 @@ def _start_or_attach(service: ConversationRunCommandService) -> object:
         commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
         payload_hash="hash",
         model_config_id=None,
-        model_name=None,
         task_id=_TASK_ID,
         run_command=SimpleNamespace(),  # type: ignore[arg-type]
     )
@@ -185,7 +184,6 @@ def _edit_or_restart(service: ConversationRunCommandService) -> object:
         task_id=_TASK_ID,
         run_id=_RUN_ID,
         model_config_id=None,
-        model_name=None,
         run_command=SimpleNamespace(),  # type: ignore[arg-type]
     )
 

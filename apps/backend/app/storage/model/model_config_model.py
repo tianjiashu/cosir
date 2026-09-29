@@ -11,7 +11,7 @@ from app.storage.model.base import StorageBase
 
 
 class ModelConfigModel(StorageBase):
-    """``model_configs`` 表：模型名称、连接地址、密钥和上下文窗口的持久化记录。"""
+    """``model_configs`` 表：连接信息、上下文窗口及用户声明的模型能力。"""
 
     __tablename__ = "model_configs"
     __table_args__ = (Index("uq_model_configs_config_name", "config_name", unique=True),)
@@ -21,6 +21,15 @@ class ModelConfigModel(StorageBase):
     api_key: Mapped[str] = mapped_column(Text, nullable=False)
     model_name: Mapped[str] = mapped_column(Text, nullable=False)
     context_window_k: Mapped[int] = mapped_column(Integer, nullable=False)
+    supports_thinking: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0")
+    )
+    supports_reasoning_effort: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0")
+    )
+    supports_image: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0")
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("1")
     )

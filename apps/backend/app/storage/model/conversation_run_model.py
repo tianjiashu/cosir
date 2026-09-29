@@ -22,9 +22,9 @@ class ConversationRunModel(StorageBase):
       ``run_id`` 外键）、消息/工具调用等 canonical 会话事实（各自独立表）。
 
     模型路由事实分层：``model_name`` 与 ``context_window_k`` 是本次运行使用过的快照，
-    永不随模型连接配置变化；模型能力和 Run 显式偏好快照位于 ``extra`` JSON，避免再
-    拆出第二套 Run 专用字段；``model_config_id`` 只是指向当时配置行的弱引用，配置被
-    删除时由 ``ON DELETE SET NULL`` 置空，历史 Run 仍可读取。
+    Run 的显式推理强度位于 ``extra`` JSON；模型能力始终由 ``model_config_id`` 指向的
+    当前配置提供，不在 Run 内复制。``model_config_id`` 是配置行的弱引用，配置被删除时
+    由 ``ON DELETE SET NULL`` 置空，历史 Run 仍可读取其已保存的基础事实。
     """
 
     __tablename__ = "conversation_runs"
