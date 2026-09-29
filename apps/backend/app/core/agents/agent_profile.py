@@ -227,7 +227,8 @@ class AgentProfile:
             主 Agent 不设置此字段。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         workflow: 执行策略（默认 ReAct-like，延迟导入打破循环依赖）。
-        model_settings: 已物化的模型运行配置；连接配置 ID 不进入运行时 profile。
+        model_config_id: 该 Agent 的模型选择元数据，不参与模型构建。
+        model_settings: 已物化的模型运行配置，供模型工厂唯一消费。
         agent_type: Agent 分类（``AgentProfileType``），决定其在运行时的暴露与调度方式。
         max_steps: 单 run 最大步骤数。
         run: 当前所属 Conversation Run 记录（经 ``derive_for_run`` 注入 per-run 副本；
@@ -242,6 +243,7 @@ class AgentProfile:
     agent_type: AgentProfileType = field(default=AgentProfileType.CHILD)
     description: str | None = field(default=None, kw_only=True)
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
+    model_config_id: int | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings.default_settings)
     max_steps: int = 100
     run: ConversationRunRecord | None = None
@@ -262,7 +264,7 @@ class AgentProfile:
 
         参数:
             run: 本次执行的 Conversation Run 记录（必填，写入副本的 ``run`` 字段）；其
-                ``model_settings`` 参数用于写入本次 Run 解析出的完整运行模型配置。
+                ``model_config_id`` 用于记录本次 Run 选择的模型配置。
             ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。传入时按工具名
                 从 ``allowed_tools`` 中差集收窄（``select_tools`` 同样按工具名过滤，
                 两处口径必须一致）。
@@ -280,6 +282,9 @@ class AgentProfile:
         """
 
         changes: dict = {"run": run}
+        changes["model_config_id"] = (
+            run.model_config_id if run.model_config_id is not None else self.model_config_id
+        )
         if ban_tools is not None:
             banned = set(ban_tools)
             changes["allowed_tools"] = [t for t in self.allowed_tools if t not in banned]
@@ -457,6 +462,7 @@ def parse_agent_profile_document(
     if not model_config_valid:
         # 非严格加载允许无效选择降级为未物化 profile；真正运行时会由 Run 选择配置。
         model_settings = ModelSettings.from_json(document.get("model_settings", {}))
+        model_config_id = None
     return AgentProfile(
         agent_id=document["agent_id"],
         role=document["role"],
@@ -465,5 +471,6 @@ def parse_agent_profile_document(
         agent_type=AgentProfileType.CHILD,
         system_prompt=document["system_prompt"],
         model_settings=model_settings,
+        model_config_id=model_config_id,
         max_steps=AgentProfile.max_steps if max_steps is None else max_steps,
     )

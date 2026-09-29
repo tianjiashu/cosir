@@ -22,6 +22,7 @@ class _RunRoute:
     """Conversation Run 的最小替身：承载 per-run 派生需要的用户推理偏好。
 
     参数:
+        model_config_id: 本次 Run 选择的模型配置标识。
         extra: Run 用户运行偏好。
 
     返回:
@@ -34,6 +35,7 @@ class _RunRoute:
         无。
     """
 
+    model_config_id: int | None = None
     extra: ConversationRunExtra | None = None
 
 
@@ -117,7 +119,7 @@ def test_derive_for_run_materializes_runtime_settings_and_applies_override() -> 
         supports_image=False,
     )
     derived = profile.derive_for_run(
-        run=_RunRoute(),
+        run=_RunRoute(model_config_id=3),
         model_settings=runtime.with_overrides(override),
     )
 
@@ -125,7 +127,8 @@ def test_derive_for_run_materializes_runtime_settings_and_applies_override() -> 
     assert derived.model_settings.api_key == "secret"
     assert derived.model_settings.temperature == 0.3
     # 原单例不被本次派生污染。
-    assert not hasattr(profile, "model_config_id")
+    assert derived.model_config_id == 3
+    assert profile.model_config_id is None
     assert profile.model_settings.temperature is None
 
 

@@ -75,7 +75,6 @@ class ConversationRunService:
         command: ConversationRunCommand,
         *,
         run_id: int | None,
-        model_name: str | None,
         supports_image: bool,
         reasoning_effort: str | None,
     ) -> _PreparedConversationRunInput:
@@ -96,11 +95,8 @@ class ConversationRunService:
         )
         input_text = self._resolve_file_tokens(command.display_text, file_attachments)
 
-        if command.image_asset_ids:
-            if not model_name:
-                raise ValueError("model_name is required when image attachments are present")
-            if not supports_image:
-                raise ValueError("model does not support image")
+        if command.image_asset_ids and not supports_image:
+            raise ValueError("model does not support image")
         image_paths = self._resolve_image_assets(
             workspace_id,
             command.image_asset_ids,
@@ -242,7 +238,7 @@ class ConversationRunService:
 
         副作用:
             将命令行更新为一次持久化 Conversation Run（正文与附件结构化分离、
-            ``image_paths`` 仅图片、``model_name`` 由模型连接配置派生）；
+            ``image_paths`` 仅图片，模型名称由模型连接配置解析）；
             更新所属任务最新轮次信息；
             写入创建期图片构成日志。
         """
@@ -251,8 +247,6 @@ class ConversationRunService:
         config = get_model_config_service().get_config(model_config_id)
         if reasoning_effort is not None and not config.supports_reasoning_effort:
             raise ValueError("reasoning_effort is not supported by the selected model")
-        model_name = config.model_name
-        context_window_k = config.context_window_k
         supports_image = config.supports_image
         input_text = None
         image_paths = None
@@ -267,7 +261,6 @@ class ConversationRunService:
                 workspace_id,
                 run_command,
                 run_id=None,
-                model_name=model_name,
                 supports_image=supports_image,
                 reasoning_effort=reasoning_effort,
             )
@@ -291,8 +284,6 @@ class ConversationRunService:
                 status,
                 agent_id=agent_id,
                 model_config_id=model_config_id,
-                model_name=model_name,
-                context_window_k=context_window_k,
                 image_paths=image_paths,
                 extra=extra,
                 session=persist_session,
@@ -341,8 +332,6 @@ class ConversationRunService:
         config = get_model_config_service().get_config(model_config_id)
         if reasoning_effort is not None and not config.supports_reasoning_effort:
             raise ValueError("reasoning_effort is not supported by the selected model")
-        model_name = config.model_name
-        context_window_k = config.context_window_k
         supports_image = config.supports_image
         if run_command is not None:
             existing_run = self._run.get(run_id)
@@ -355,7 +344,6 @@ class ConversationRunService:
                 workspace_id,
                 run_command,
                 run_id=run_id,
-                model_name=model_name,
                 supports_image=supports_image,
                 reasoning_effort=reasoning_effort,
             )
@@ -380,8 +368,6 @@ class ConversationRunService:
             checkpoint_thread_id=str(uuid4()),
             allowed_statuses=allowed_statuses,
             model_config_id=model_config_id,
-            model_name=model_name,
-            context_window_k=context_window_k,
             image_paths=image_paths,
             extra=extra,
             session=session,

@@ -82,7 +82,10 @@ class AgentConfigurationService:
             if target.exists() or target.is_symlink():
                 raise FileExistsError(document.agent_id)
             profile = self._profile_from_document(document, target)
-            if not self.registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, profile):
+            if not self.registry.register(
+                AgentProfileRegistry.SYSTEM_WORKSPACE,
+                profile,
+            ):
                 raise AgentConfigurationError(f"Agent 已注册，不允许重复创建: {document.agent_id}")
             try:
                 self.store.write_text_atomic(
@@ -121,7 +124,10 @@ class AgentConfigurationService:
                 self._encode(document.to_json_document()),
                 root=self.directory,
             )
-            self.registry.replace(AgentProfileRegistry.SYSTEM_WORKSPACE, profile)
+            self.registry.replace(
+                AgentProfileRegistry.SYSTEM_WORKSPACE,
+                profile,
+            )
         saved = self._from_profile(profile, path=target)
         log.info(
             "configuration_agent_written",
@@ -157,7 +163,11 @@ class AgentConfigurationService:
             *,
             path: Path | None = None,
     ) -> AgentConfigurationDocument:
-        """将注册表 profile 投影为配置中心文档，不重新读取磁盘。"""
+        """将注册表 profile 与配置文件中的模型选择字段投影为配置中心文档。
+
+        ``AgentProfile`` 同时保存模型选择 ID 和已物化的 ``ModelSettings``；配置中心直接
+        投影选择 ID，避免重新读取配置文件。
+        """
 
         is_builtin = self._is_builtin(profile.agent_id)
         if path is None and not is_builtin:

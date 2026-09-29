@@ -36,7 +36,6 @@ class RuntimeConfig:
         langfuse_trace_id: 本 run 的 Langfuse trace 标识；由 runner 在启用 tracing 时注入。
             **当前 workflow 节点不读取该字段**（终态事件不再由 workflow 生产）。
         thinking_channel: 统一 OpenAI-compatible reasoning 输出字段；模型不支持思考时为空串。
-        supports_image: Run 快照中的用户模型图片能力声明。
         execution_mode: 本次 graph 是新运行（``fresh``）还是从既有 checkpoint 恢复
             （``resume``），并据此决定是否清空该 run 的旧上下文条目（``fresh`` 清、
             ``resume`` 保留，见 ``RuntimeContextManager.begin_run``）。工作流据此选择
@@ -53,5 +52,4 @@ class RuntimeConfig:
     usage_stats: ConversationRunUsageStats = field(default_factory=ConversationRunUsageStats)
     langfuse_trace_id: str | None = None
     thinking_channel: str = ""
-    supports_image: bool = False
     execution_mode: ExecutionMode = "fresh"

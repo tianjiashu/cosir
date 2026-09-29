@@ -439,7 +439,6 @@ class TransportAssistantService:
             ],
         )
         model_config_id = request.modelConfigId
-        model_name = None
         if mode == "edit":
             assert request.runId is not None
             return await asyncio.to_thread(
@@ -449,20 +448,18 @@ class TransportAssistantService:
                 task_id=task_id,
                 run_id=request.runId,
                 model_config_id=model_config_id,
-                model_name=model_name,
                 reasoning_effort=request.reasoningEffort,
                 run_command=run_command,
             )
         return await asyncio.to_thread(
             self._commands.start_or_attach,
-            commands=commands,
-            payload_hash=payload_hash,
-            model_config_id=model_config_id,
-            model_name=model_name,
-            reasoning_effort=request.reasoningEffort,
-            run_command=run_command,
-            task_id=task_id,
-        )
+                commands=commands,
+                payload_hash=payload_hash,
+                model_config_id=model_config_id,
+                reasoning_effort=request.reasoningEffort,
+                run_command=run_command,
+                task_id=task_id,
+            )
 
     async def attach_run(
             self,

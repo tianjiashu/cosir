@@ -9,6 +9,7 @@ CHILD 通过配置中心写入运行时的 ``system_agent_config_dir``。本模�
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -165,7 +166,7 @@ def test_builtin_children_leave_model_route_to_parent_run(
 
     profiles = _code_defined_profiles(monkeypatch, tmp_path)
 
-    assert all(not hasattr(profile, "model_config_id") for profile in profiles)
+    assert all(profile.model_config_id is None for profile in profiles)
     assert all(profile.model_settings.model_name is None for profile in profiles)
 
 
@@ -176,9 +177,10 @@ def test_child_profile_model_settings_keep_custom_overrides() -> None:
     custom = ModelSettings(temperature=0.2)
     child.model_settings = custom
 
-    derived = child.derive_for_run(run=object())  # type: ignore[arg-type]
+    derived = child.derive_for_run(run=SimpleNamespace(model_config_id=7, extra=None))
 
     assert derived.model_settings.temperature == 0.2
     assert derived.model_settings is not custom
-    assert not hasattr(child, "model_config_id")
+    assert derived.model_config_id == 7
+    assert child.model_config_id is None
     assert child.run is None
