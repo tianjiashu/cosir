@@ -6,7 +6,7 @@ class CreateTaskRequest(BaseModel):
 
     任务创建与首轮次创建已解耦：本请求只携带建 task 容器所需的最小字段
     （``text`` 派生标题）。工作区归属由 URL 路径提供。agent / 模型 / 附件等
-    属于 turn 维度的字段由 ``CreateTurnRequest`` 承载，调用方在创建首 turn 时单独传递。
+    首条用户输入与模型运行偏好由 Assistant Transport 请求承载，任务创建只负责任务事实。
 
     参数:
         text: 可选的纯文本任务输入；纯附件新对话允许为空。

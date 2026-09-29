@@ -11,6 +11,9 @@ class ModelConfigUpdateRequest(BaseModel):
     api_key: str | None = None
     model_name: str | None = None
     context_window_k: int | None = Field(default=None, gt=0)
+    supports_thinking: bool | None = None
+    supports_reasoning_effort: bool | None = None
+    supports_image: bool | None = None
     enabled: bool | None = None
     sort_order: int | None = None
 

@@ -11,6 +11,9 @@ class ModelConfigCreateRequest(BaseModel):
     api_key: str
     model_name: str
     context_window_k: int = Field(gt=0)
+    supports_thinking: bool = False
+    supports_reasoning_effort: bool = False
+    supports_image: bool = False
     sort_order: int = 0
 
     @field_validator("config_name", "base_url", "api_key", "model_name")

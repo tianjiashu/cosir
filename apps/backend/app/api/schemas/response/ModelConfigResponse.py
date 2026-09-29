@@ -25,7 +25,6 @@ class ModelConfigResponse(BaseModel):
     updated_at: str
     supports_thinking: bool = False
     supports_image: bool = False
-    supports_video: bool = False
     supports_reasoning_effort: bool = False
 
     @classmethod
@@ -46,4 +45,7 @@ class ModelConfigResponse(BaseModel):
             sort_order=record.sort_order,
             created_at=record.created_at.isoformat() if record.created_at else "",
             updated_at=record.updated_at.isoformat() if record.updated_at else "",
+            supports_thinking=record.supports_thinking,
+            supports_image=record.supports_image,
+            supports_reasoning_effort=record.supports_reasoning_effort,
         )

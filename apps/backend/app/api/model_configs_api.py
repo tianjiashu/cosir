@@ -13,21 +13,14 @@ from app.api.schemas.request.ModelConfigTestRequest import ModelConfigTestReques
 from app.api.schemas.request.ModelConfigUpdateRequest import ModelConfigUpdateRequest
 from app.api.schemas.response.ModelConfigResponse import ModelConfigResponse
 from app.app import app
-from app.core.llm_provider.capability.model_capability import ModelCapability
 from app.service.depends import get_model_config_service
 from app.service.model_config import ModelConfigService
 
 
 def _response(record) -> ModelConfigResponse:
-    """将配置记录和可选静态模型能力合并为前端选择器响应。"""
+    """把模型配置记录直接投影为前端响应，不读取静态模型目录。"""
 
-    response = ModelConfigResponse.from_record(record)
-    capability = ModelCapability.get_capability(record.model_name)
-    response.supports_thinking = capability.supports_thinking
-    response.supports_image = capability.supports_image
-    response.supports_video = capability.supports_video
-    response.supports_reasoning_effort = capability.reasoning_effort.supported
-    return response
+    return ModelConfigResponse.from_record(record)
 
 
 @app.get("/model-configs", response_model=list[ModelConfigResponse])

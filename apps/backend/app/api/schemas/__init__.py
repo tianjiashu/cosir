@@ -9,7 +9,6 @@ FastAPI/Pydantic 把模块当作类型注解从而报错）。
 from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.api.schemas.request.AgentConfigurationRequest import AgentConfigurationRequest
 from app.api.schemas.request.CreateTaskRequest import CreateTaskRequest
-from app.api.schemas.request.CreateTurnRequest import CreateTurnRequest
 from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceRequest
 from app.api.schemas.request.EnvironmentChangeRequest import EnvironmentChangeRequest
 from app.api.schemas.request.EnvironmentUpdateRequest import EnvironmentUpdateRequest
@@ -39,7 +38,6 @@ __all__ = [
     "AgentConfigurationRequest",
     "AgentConfigurationResponse",
     "CreateTaskRequest",
-    "CreateTurnRequest",
     "CreateWorkspaceRequest",
     "DeleteRunResponse",
     "DeleteTaskResponse",
