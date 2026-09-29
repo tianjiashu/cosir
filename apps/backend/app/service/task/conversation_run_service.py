@@ -71,19 +71,22 @@ class ConversationRunService:
 
     def _prepare_command(
         self,
-        task_id: int,
+        workspace_id: int | None,
         command: ConversationRunCommand,
         *,
         run_id: int | None,
         model_name: str | None,
+        supports_image: bool,
+        reasoning_effort: str | None,
     ) -> _PreparedConversationRunInput:
         """把领域输入命令解析为 Run 持久化所需的最终事实。
 
         普通附件 token 只保留在 ``ConversationRunExtra.display_text``；传给模型的
         ``input_text`` 则把 token 替换为已经校验存在的本机文件或目录路径。图片顺序 marker 同样
         只存在于既有 ``display_text`` JSON 值中，并在模型输入边界移除。编辑命令可以从旧
-        Run 恢复请求中省略的附件路径。图片附件在这里 finalize 为 workspace-relative
-        路径，避免 ``ConversationRunCommandService`` 和其它入口重复实现该规则。
+        Run 恢复请求中省略的附件路径。图片附件在这里完成本次请求的数量、总大小和
+        workspace 归属校验，并解析为 workspace-relative 路径；图片格式和尺寸规范化
+        已经在上传边界完成。
         """
 
         file_attachments = self._resolve_file_attachments(
@@ -96,12 +99,11 @@ class ConversationRunService:
         if command.image_asset_ids:
             if not model_name:
                 raise ValueError("model_name is required when image attachments are present")
-            if not ModelCapability.get_capability(model_name).supports_image:
+            if not supports_image:
                 raise ValueError("model does not support image")
-        image_paths = self._finalize_image_assets(
-            task_id,
+        image_paths = self._resolve_image_assets(
+            workspace_id,
             command.image_asset_ids,
-            model_name,
         )
         if not input_text.strip() and not image_paths:
             raise ValueError("input_text must be a non-empty string")
@@ -112,6 +114,7 @@ class ConversationRunService:
             extra=ConversationRunExtra(
                 display_text=command.display_text,
                 attachments=file_attachments,
+                reasoning_effort=reasoning_effort,
                 ban_tools=command.ban_tools,
             ),
         )
@@ -187,23 +190,19 @@ class ConversationRunService:
         )
 
     @staticmethod
-    def _finalize_image_assets(
-        task_id: int,
+    def _resolve_image_assets(
+        workspace_id: int | None,
         image_asset_ids: list[str],
-        model_name: str | None,
     ) -> list[str]:
-        """把图片附件 id finalize 为模型使用的 workspace-relative 路径。"""
+        """校验本次图片聚合限制，并返回已上传图片的 workspace-relative 路径。"""
 
         if not image_asset_ids:
             return []
+        if workspace_id is None:
+            raise ValueError("workspace_id is required when image attachments are present")
         from app.service.attachment.attachment_service import AttachmentService
 
-        attachment_service = AttachmentService()
-        finalized = [
-            attachment_service.finalize(task_id, asset_id, model_name or "")
-            for asset_id in image_asset_ids
-        ]
-        return [attachment_service.relative_path(task_id, result.path) for result in finalized]
+        return AttachmentService().resolve_image_assets_for_run(workspace_id, image_asset_ids)
 
     def create_run(
         self,
@@ -211,77 +210,79 @@ class ConversationRunService:
         agent_id: str | None = None,
         status: str = "pending",
         model_config_id: int | None = None,
-        model_name: str | None = None,
         reasoning_effort: str | None = None,
         session: Session | None = None,
         run_command: ConversationRunCommand | None = None,
     ) -> ConversationRunRecord:
-        """Create a Conversation Run and initialize its canonical context.
+        """创建 Conversation Run 并初始化 canonical context。
 
         图片在创建阶段保存为 workspace-relative 路径；普通文件的展示文本与本机
         引用通过 ``ConversationRunExtra`` 保存，不新增附件表。
 
         参数:
             task_id: 所属任务标识。
-            input_text: 本轮用户输入文本；传入 ``run_command`` 时由领域命令解析结果替代。
             status: 初始状态，默认 ``"pending"``。
             agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到默认 ``"main_agent"``
                 （与 Assistant Transport 主入口的默认值一致，非 ``"developer"``）。
-            model_config_id: 可选，模型连接配置标识；None 表示未指定。
-                与 ``model_name`` 配对出现时，模型名称必须与配置事实一致；
-                仅 ``model_name`` 非 None 而 ``model_config_id`` 为 None 视为契约不完整，
-                抛 ``ValueError``。
-            model_name: 可选，本次请求使用的模型名；None 表示用户
-                未选择模型（前端优先校验、后端兜底报错）。
-            image_paths: 已按最终模型 capability 归一化后的 workspace-relative 图片路径。
-            reasoning_effort: 可选，思考努力等级（low/high/max）；None 表示用户未指定。
-            extra: 可选的 Run 扩展值对象；Assistant Transport 用其保存普通附件输入元数据。
+            model_config_id: 必填，模型连接配置标识；模型名称由该配置派生，不单独入参。
+            reasoning_effort: 可选，统一推理强度（low/high/max）；None 表示用户未指定。
             session: 可选，由上层跨表事务传入的数据库会话。传入时本方法不提交事务，
                 由调用方统一提交；未传入时保持独立创建事务的行为。
-            run_command: 可选的已归一化领域输入命令。传入时由本方法负责处理图片和普通
-                文件附件，并覆盖 ``input_text``、``image_paths`` 与 ``extra``。
+            run_command: 可选的已归一化领域输入命令。传入时由本方法解析普通附件，
+                校验图片批次限制和模型图片能力，并生成最终 Run 输入事实。
 
         返回:
             新创建的 ``ConversationRunRecord``；``input_text`` 保持正文，图片通过
             ``image_paths`` 结构化保存。
 
         异常:
-            ValueError: 如果 ``input_text`` 为空或全空白，或模型不在厂商能力范围内。
-            VisionNotSupportedError: 如果携带图片附件但模型不支持视觉输入。
+            ValueError: 如果输入为空、模型配置契约不完整，或携带图片但模型未配置图片能力。
+            ImageNormalizationError: 图片附件不存在、越过 workspace 边界或违反统一批次限制。
             sqlalchemy.exc.SQLAlchemyError: 如果底层写入失败。
 
         副作用:
             将命令行更新为一次持久化 Conversation Run（正文与附件结构化分离、
-            ``image_paths`` 仅图片、``model_name`` 为解析后的最终模型名）；
+            ``image_paths`` 仅图片、``model_name`` 由模型连接配置派生）；
             更新所属任务最新轮次信息；
             写入创建期图片构成日志。
         """
-        # 模型连接配置是路由和模型名称的唯一输入；运行快照同时保存上下文窗口，
-        # 使配置后续修改或删除不会改变已经创建的 Run。
-        context_window_k = None
-        if model_config_id is not None:
-            config = get_model_config_service().get_config(model_config_id)
-            if model_name is not None and model_name != config.model_name:
-                raise ValueError("model_name must match the selected model configuration")
-            model_name = config.model_name
-            context_window_k = config.context_window_k
-        elif model_name is not None:
-            raise ValueError("model_config_id is required when model_name is set")
+        if model_config_id is None:
+            raise ValueError("model_config_id is required")
+        config = get_model_config_service().get_config(model_config_id)
+        if reasoning_effort is not None and not config.supports_reasoning_effort:
+            raise ValueError("reasoning_effort is not supported by the selected model")
+        model_name = config.model_name
+        context_window_k = config.context_window_k
+        supports_image = config.supports_image
         input_text = None
         image_paths = None
         extra = None
         if run_command is not None:
+            workspace_id = (
+                self._task.get(task_id).workspace_id
+                if run_command.image_asset_ids
+                else None
+            )
             prepared = self._prepare_command(
-                task_id,
+                workspace_id,
                 run_command,
                 run_id=None,
                 model_name=model_name,
+                supports_image=supports_image,
+                reasoning_effort=reasoning_effort,
             )
             input_text = prepared.input_text
             image_paths = prepared.image_paths
             extra = prepared.extra
         if input_text is None:
             raise ValueError("input_text is required when run_command is not provided")
+
+        extra = ConversationRunExtra(
+            display_text=extra.display_text if extra is not None else input_text,
+            attachments=extra.attachments if extra is not None else [],
+            ban_tools=extra.ban_tools if extra is not None else [],
+            reasoning_effort=reasoning_effort,
+        )
 
         def persist_facts(persist_session: Session | None) -> ConversationRunRecord:
             run = self._run.create(
@@ -293,7 +294,6 @@ class ConversationRunService:
                 model_name=model_name,
                 context_window_k=context_window_k,
                 image_paths=image_paths,
-                reasoning_effort=reasoning_effort,
                 extra=extra,
                 session=persist_session,
             )
@@ -322,7 +322,6 @@ class ConversationRunService:
         self,
         run_id: int,
         model_config_id: int | None = None,
-        model_name: str | None = None,
         reasoning_effort: str | None = None,
         session: Session | None = None,
         run_command: ConversationRunCommand | None = None,
@@ -337,13 +336,28 @@ class ConversationRunService:
         input_text = None
         image_paths = None
         extra = None
+        if model_config_id is None:
+            raise ValueError("model_config_id is required")
+        config = get_model_config_service().get_config(model_config_id)
+        if reasoning_effort is not None and not config.supports_reasoning_effort:
+            raise ValueError("reasoning_effort is not supported by the selected model")
+        model_name = config.model_name
+        context_window_k = config.context_window_k
+        supports_image = config.supports_image
         if run_command is not None:
             existing_run = self._run.get(run_id)
+            workspace_id = (
+                self._task.get(existing_run.task_id).workspace_id
+                if run_command.image_asset_ids
+                else None
+            )
             prepared = self._prepare_command(
-                existing_run.task_id,
+                workspace_id,
                 run_command,
                 run_id=run_id,
                 model_name=model_name,
+                supports_image=supports_image,
+                reasoning_effort=reasoning_effort,
             )
             input_text = prepared.input_text
             image_paths = prepared.image_paths
@@ -352,17 +366,14 @@ class ConversationRunService:
             raise ValueError("input_text is required when run_command is not provided")
         if not input_text.strip() and not image_paths:
             raise ValueError("input_text must be a non-empty string")
-        context_window_k = None
-        if model_config_id is not None:
-            config = get_model_config_service().get_config(model_config_id)
-            if model_name is not None and model_name != config.model_name:
-                raise ValueError("model_name must match the selected model configuration")
-            model_name = config.model_name
-            context_window_k = config.context_window_k
-        elif model_name is not None:
-            raise ValueError("model_config_id is required when model_name is set")
         # 「可原地编辑」的前置状态即 Run 终态集合，引用唯一事实源而非另立字面量。
         allowed_statuses = tuple(Constant.Run.TERMINAL_STATUSES)
+        extra = ConversationRunExtra(
+            display_text=extra.display_text if extra is not None else input_text,
+            attachments=extra.attachments if extra is not None else [],
+            ban_tools=extra.ban_tools if extra is not None else [],
+            reasoning_effort=reasoning_effort,
+        )
         return self._run.reset_for_edit(
             run_id=run_id,
             input_text=input_text,
@@ -372,7 +383,6 @@ class ConversationRunService:
             model_name=model_name,
             context_window_k=context_window_k,
             image_paths=image_paths,
-            reasoning_effort=reasoning_effort,
             extra=extra,
             session=session,
         )
