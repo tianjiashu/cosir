@@ -7,6 +7,7 @@ qwen / kimi 等国内厂商的 OpenAI 兼容端点契合度较高。返回的模
 缺 Key 拦截在构建期之前的解析链完成，构建期不读环境变量、不抛缺 Key 错误。
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -16,68 +17,61 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.model_settings import ModelSettings
-from app.core.llm_provider.capability.capability_service import CapabilityService
 from app.core.llm_provider.reasoning_chat_openai import ReasoningChatOpenAI
-from app.models import ConversationRunRecord
-from app.service.depends import get_model_config_service
 from app.utils.http_proxy import build_proxy_async_client, build_proxy_client
 
 __all__ = [
+    "ResolvedChatModel",
     "build_chat_model",
     "resolve_chat_model",
 ]
 
-def build_chat_model(
-    model_config_id: int,
-    model_name: str,
-    model_settings: ModelSettings,
-) -> BaseChatModel:
-    """按模型名构建 ``ChatOpenAI`` 实例（OpenAI-compatible 单一收口）。
 
-    职责边界：只负责「按名取模型 + 透传采样/接入参数」，不掺入编排、工具绑定或事件翻译。
-    ``model_name`` 来自模型连接配置；连接路由由配置行中的 ``base_url`` 与 ``api_key`` 决定，
-    不再要求模型存在于厂商 JSON 目录。
+@dataclass(frozen=True, slots=True)
+class ResolvedChatModel:
+    """一次 Run 解析后的模型及其能力事实。
 
-    参数透传分层：
-    - OpenAI 标准参数（``temperature`` / ``top_p`` / ``max_tokens`` / ``max_retries`` /
-      ``request_timeout`` / ``reasoning_effort`` / ``seed``）作为 ``ChatOpenAI`` 顶层命名参数
-      直接传入；``max_retries`` / ``request_timeout`` / ``seed`` 取 ``Constant.LLM``
-      （所有模型一致，无按模型覆盖路径）。
-    - 不猜测厂商私有参数，只发送 OpenAI-compatible 标准参数；
-    - ``reasoning_effort`` 命中模型能力时与 ``temperature`` 互斥，强制不传 ``temperature``；
-      内部档位（``low``/``high``/``max``）经 ``effort_map`` 翻译（见 ``_resolve_effort``），
-      未命中映射则跳过注入并记录 warning，不抛错。
-
-    参数:
-        model_config_id: 模型连接配置标识。
-        model_name: 模型名；必须与配置中的模型名一致。
-        model_settings: Agent 级模型覆盖配置（采样参数 / 流式 / 推理强度）。
-
-    返回:
-        配置完成的 ``ChatOpenAI`` 实例（同时支持 ``.astream()`` 与 ``.ainvoke()``）。
-
-    异常:
-        ValueError: 配置不存在或模型名与配置不一致。
-
-    副作用:
-        创建供 OpenAI-compatible SDK 使用的 HTTP 客户端；写入一次 ``llm_model_selected``
-        info 日志（不输出 api_key 明文）；
-        ``api_key`` 以 ``SecretStr`` 封装传入（None 时透传 None，由端点决定鉴权）。
+    模型对象和能力来自同一个已物化 ``ModelSettings``，供 Workflow 同时使用，避免模型
+    构建与思考通道解析各自读取配置而产生两套口径。该值对象不持有数据库 session，也不
+    负责 Run 状态迁移或模型调用。
     """
 
-    config = get_model_config_service().get_config(model_config_id)
-    if model_name != config.model_name:
-        raise ValueError("model_name must match the selected model configuration")
+    model: BaseChatModel
+    model_name: str
+    context_window_k: int
+    supports_thinking: bool
+    supports_reasoning_effort: bool
+    supports_image: bool
 
-    api_key = config.api_key
+def build_chat_model(
+    model_settings: ModelSettings,
+) -> BaseChatModel:
+    """使用已物化的模型运行设置构建模型。
+
+    参数:
+        model_settings: 同时包含连接字段、能力字段和用户覆盖项的运行配置。
+
+    返回:
+        已配置 HTTP 客户端和请求参数的聊天模型实例。
+
+    异常:
+        ModelSettingsError: 运行设置没有完成物化。
+
+    副作用:
+        创建模型使用的同步和异步 HTTP 客户端；不读取配置数据库。
+    """
+
+    model_settings.require_runtime_config()
+
+    api_key = model_settings.api_key
     # ChatOpenAI 的 api_key 字段期望 SecretStr（避免明文在 repr/日志泄露）；None 时透传 None。
     chat_api_key: SecretStr | None = SecretStr(api_key) if api_key else None
-    base_url = config.base_url
+    base_url = model_settings.base_url
 
-    resolved_effort = CapabilityService.resolve_reasoning_effort(
-        model_name,
-        model_settings.reasoning_effort,
-    )
+
+
+
+    resolved_effort = model_settings.reasoning_effort if model_settings.supports_reasoning_effort else None
 
     model_kwargs: dict[str, Any] = {}
     if model_settings.max_tokens is not None:
@@ -88,10 +82,9 @@ def build_chat_model(
         extra={
             "msg": "选用 ChatOpenAI 构建模型",
             "data": {
-                "model": model_name,
+                "model": model_settings.model_name,
                 "base_url": base_url,
                 "api_key_provided": api_key is not None,
-                "model_config_id": model_config_id,
             },
         },
     )
@@ -111,7 +104,7 @@ def build_chat_model(
     )
 
     return ReasoningChatOpenAI(
-        model=model_name,
+        model=model_settings.model_name,
         # api_key 以 SecretStr 封装传入（langchain 推荐做法，防止明文在 repr/日志泄露）；
         # 包装逻辑见上方 ``chat_api_key`` 构造（None 时直接透传 None）。
         api_key=chat_api_key,
@@ -135,39 +128,37 @@ def build_chat_model(
 
 def resolve_chat_model(
     *,
-    run: ConversationRunRecord | None = None,
-    agent_profile: AgentProfile | None = None,
-) -> BaseChatModel:
-    """解析任务/轮次/智能体配置，返回 ``ChatOpenAI`` 实例。
+    agent_profile: AgentProfile,
+) -> ResolvedChatModel:
+    """从 Agent profile 的已物化 ModelSettings 构建模型及能力事实。
 
     参数:
-        run: 本次执行的 Conversation Run，提供模型连接配置和推理强度覆盖值。
-        agent_profile: 本次执行的 Agent profile，提供未被 Run 覆盖的模型配置。
+        agent_profile: 本次执行的 per-Run Agent profile；其 ``model_settings`` 必须已包含
+            模型连接字段和能力字段。
 
     返回:
-        已绑定模型连接配置的 ``BaseChatModel``。
+        已绑定模型连接配置的 ``ResolvedChatModel``，其中模型对象和能力字段来自同一个
+        ``ModelSettings``。
 
     异常:
-        ValueError: profile、Run 或最终模型连接配置缺失，或配置中的模型名不一致。
+        ValueError: profile 未提供或推理强度不被物化的模型能力支持。
 
     副作用:
-        查询模型静态能力并创建一个供本次 Run 使用的 HTTP client；不修改共享 profile。
-
-    以 ``agent_profile`` 的 ``model_name`` / ``model_config_id`` / ``model_settings`` 为默认；
-    当 ``run`` 提供 ``model_name`` / ``model_config_id`` / ``reasoning_effort`` 时，运行时覆盖
-    默认值（其余采样参数仍取 agent_profile）。最终委托 ``build_chat_model`` 构建。
+        创建一个供本次 Run 使用的 HTTP client；不修改共享 profile，也不读取配置服务。
     """
-    if agent_profile is None:
-        raise ValueError("agent_profile is required")
-    if run is None:
-        raise ValueError("run is required")
-    model_settings: ModelSettings = agent_profile.model_settings
-    model_name = run.model_name or agent_profile.model_name
-    model_config_id = run.model_config_id or agent_profile.model_config_id
-    if run.reasoning_effort is not None:
-        model_settings.reasoning_effort = run.reasoning_effort
-
-    if model_config_id is None:
-        raise ValueError("model_config_id must be configured")
-    model_name = get_model_config_service().get_config(model_config_id).model_name
-    return build_chat_model(model_config_id, model_name, model_settings=model_settings)
+    model_settings = agent_profile.model_settings.require_runtime_config()
+    if (
+        model_settings.reasoning_effort is not None
+        and not model_settings.supports_reasoning_effort
+    ):
+        raise ValueError(
+            "reasoning_effort preference is not supported by the selected model"
+        )
+    return ResolvedChatModel(
+        model=build_chat_model(model_settings),
+        model_name=model_settings.model_name,
+        context_window_k=model_settings.context_window_k,
+        supports_thinking=model_settings.supports_thinking,
+        supports_reasoning_effort=model_settings.supports_reasoning_effort,
+        supports_image=model_settings.supports_image,
+    )
