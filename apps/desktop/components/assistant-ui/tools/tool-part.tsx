@@ -1,90 +1,20 @@
 import { memo } from "react";
-import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { DetailsTool } from "./details-tool";
-import { DiffTool } from "./diff-tool";
-import { TerminalTool } from "./terminal-tool";
-import { TerminalSessionTool } from "./terminal-session-tool";
-import { ToolFallback } from "./tool-fallback";
-import { DelegationToolRow } from "./delegation-tool-row";
-import { readChildAgentResultDisplay, readChildAgentWaitDisplay, readDelegationDisplay } from "./child-agent-display";
-import { asRecord, readToolArtifact } from "./types";
+import {
+  resolveToolRenderer,
+  type ToolPartRendererProps,
+} from "./tool-renderer-registry";
 
-export type ToolPartRoute = "diff" | "terminal" | "terminal-session" | "delegation" | "details" | "fallback";
-const KNOWN_DISPLAY_KINDS = new Set([
-  "read-file-meta",
-  "file-list",
-  "content-search-results",
-  "directory-list",
-  "file-changes",
-  "web-search-results",
-  "web-extract-urls",
-  "terminal-result",
-  "terminal-session",
-  "delegation-result",
-  "child-agent-wait-result",
-  "child-agent-result",
-  "repeated-call",
-]);
+export { routeToolPart } from "./tool-renderer-registry";
 
 /**
- * 依据后端稳定工具名、data.kind 和 presentation 语义选择只读 renderer。
- * `expand_layout=none` 只决定紧凑展示，不决定工具语义。
+ * 工具 part 的唯一展示入口。
+ *
+ * 路由选择由纯注册表完成，具体 renderer 的异常由调用方的
+ * `PartRenderBoundary` 隔离；本组件不执行工具、不改变后端状态。
  */
-export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartRoute {
-  // Keep the stable call shape for callers; routing intentionally ignores tool names.
-  void toolName;
-  const artifact = readToolArtifact(rawArtifact);
-  if (artifact.display_data !== null && Object.keys(asRecord(artifact.display_data)).length === 0) return "fallback";
-  const displayData = asRecord(artifact.display_data);
-  if (artifact.display_data !== null && "kind" in displayData && typeof displayData.kind !== "string") return "fallback";
-  const kind = typeof displayData.kind === "string" ? displayData.kind : undefined;
-  if (kind !== undefined && !KNOWN_DISPLAY_KINDS.has(kind)) return "fallback";
-  if (kind === "delegation-result" && readDelegationDisplay(artifact.display_data) === null) return "fallback";
-  if (kind === "child-agent-wait-result" && readChildAgentWaitDisplay(artifact.display_data) === null) return "fallback";
-  if (kind === "child-agent-result" && readChildAgentResultDisplay(artifact.display_data) === null) return "fallback";
-  if (kind === "delegation-result") return "delegation";
-  if (kind === "file-changes" || artifact.presentation.expand_layout === "diff") return "diff";
-  if (kind === "terminal-session") return "terminal-session";
-  if (kind === "terminal-result" || artifact.presentation.expand_layout === "terminal") return "terminal";
-  if (
-    kind === "read-file-meta" ||
-    kind === "directory-list" ||
-    kind === "file-list" ||
-    kind === "content-search-results" ||
-    artifact.presentation.expand_layout === "details" ||
-    artifact.presentation.expand_layout === "list" ||
-    artifact.presentation.expand_layout === "write" ||
-    artifact.presentation.expand_layout === "none" ||
-    artifact.presentation.verb !== undefined ||
-    artifact.presentation.icon !== undefined
-  ) return "details";
-  return "fallback";
-}
-
-type ToolPartProps = ToolCallMessagePartProps & {
-  /** Run owning the message; absent in read-only surfaces that cannot cancel tools. */
-  runId?: number | null;
-  /** Whole-run cancellation is already in progress. */
-  runCancelling?: boolean;
-  /** Task owning the tool part, used only to open its task-scoped preview panel. */
-  taskId?: number;
-};
-
-const ToolPartImpl = (props: ToolPartProps) => {
-  switch (routeToolPart(props.toolName, props.artifact)) {
-    case "diff":
-      return <DiffTool {...props} />;
-    case "terminal":
-      return <TerminalTool {...props} />;
-    case "terminal-session":
-      return <TerminalSessionTool {...props} />;
-    case "delegation":
-      return <DelegationToolRow {...props} />;
-    case "details":
-      return <DetailsTool {...props} />;
-    case "fallback":
-      return <ToolFallback {...props} />;
-  }
+const ToolPartImpl = (props: ToolPartRendererProps) => {
+  const Renderer = resolveToolRenderer(props.toolName, props.artifact).renderer;
+  return <Renderer {...props} />;
 };
 
 export const ToolPart = memo(ToolPartImpl);

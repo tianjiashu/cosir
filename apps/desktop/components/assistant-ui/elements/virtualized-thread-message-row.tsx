@@ -4,6 +4,8 @@ import { ThreadPrimitive } from "@assistant-ui/react";
 import { memo, Profiler, type ComponentProps } from "react";
 
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
+import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
+import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 
 export type MessageComponents = ComponentProps<typeof ThreadPrimitive.Unstable_MessageById>["components"];
 
@@ -58,8 +60,16 @@ export const VirtualizedThreadMessageRow = memo(function VirtualizedThreadMessag
       className="w-full"
       style={{ paddingBottom: rowPaddingBottom }}
     >
-      {content}
+      <RenderIsolationBoundary
+        scope="message"
+        resetKey={messageId}
+        metadata={{ messageId, renderer: "message-row" }}
+        fallback={({ onRetry }) => (
+          <RenderErrorCard scope="message" onRetry={onRetry} />
+        )}
+      >
+        {content}
+      </RenderIsolationBoundary>
     </div>
   );
 });
-

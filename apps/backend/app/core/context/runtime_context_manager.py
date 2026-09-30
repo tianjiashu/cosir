@@ -85,42 +85,6 @@ class RuntimeContextManager:
         default_factory=dict, init=False
     )
 
-    @staticmethod
-    def ensure_get_runtime_context_manager(
-            agent_profile: AgentProfile,
-            current_workspace: WorkspaceRecord,
-            current_task: TaskRecord,
-    ) -> RuntimeContextManager:
-        """获取或创建 task 级 context 管理器。
-
-        参数:
-            agent_profile: 当前 Agent 档案。
-            current_workspace: 当前工作区记录。
-            current_task: 当前任务记录。
-
-            纯内存测试可通过在实例上挂载 ``context_service`` 属性注入 mock，由
-            ``_require_context_service`` 优先采用，从而绕过全局 service 装配。
-
-            ** agent启动时已经有task锁，无需再加锁。**
-
-        返回:
-            与 task 绑定的 context 管理器。
-
-        异常:
-            无。
-
-        副作用:
-            首次创建时加载 Task context，并注册占用统计 listener。
-        """
-
-        from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-
-        return task_runtime_spaces.get_or_create(current_task.id).get_context_manager(
-            agent_profile=agent_profile,
-            current_workspace=current_workspace,
-            current_task=current_task,
-        )
-
     def fork_context_manager(self, task_id: int) -> RuntimeContextManager:
         """为已复制 context 的目标 Task 创建独立的 fork manager。
 

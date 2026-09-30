@@ -316,7 +316,7 @@ class TaskService:
                 },
             )
         source_space = task_runtime_spaces.get_or_create(source_task_id)
-        source_manager = source_space.existing_context_manager()
+        source_manager = source_space.get_context_manager()
         if source_manager is not None:
             try:
                 task_runtime_spaces.get_or_create(target.id).install_fork_context_manager(

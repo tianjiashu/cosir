@@ -3,15 +3,16 @@
 import { MessagePrimitive, useAuiState } from "@assistant-ui/react";
 import { Image } from "@/components/image";
 import { UserMessageFilePart } from "@/components/assistant-ui/elements/attachment.aui";
+import { PartRenderBoundary } from "@/components/assistant-ui/elements/part-render-boundary";
+import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 
 /**
- * Render non-text parts of a user message as a separate attachment surface.
+ * 将用户消息中的非文本 part 渲染为独立的附件区域。
  *
- * Images use the shared Image element so loading, failed-resource handling,
- * transport locator resolution, and click-to-zoom remain consistent with the
- * rest of the application. This component owns only the message-level layout:
- * attachments are right-aligned above the text bubble and never participate in
- * the bubble's text wrapping. It does not upload, mutate, or persist files.
+ * 图片复用共享 Image 组件，以保持加载失败处理、transport 定位解析和点击
+ * 放大行为一致。本组件只负责消息级布局：附件位于文本气泡上方并右对齐，
+ * 不参与气泡文字换行；每个附件的渲染异常由独立 Boundary 隔离。本组件不
+ * 上传、修改或持久化文件事实。
  */
 export function UserMessageAttachments() {
   const hasAttachments = useAuiState((state) => state.message.parts.some(
@@ -29,19 +30,35 @@ export function UserMessageAttachments() {
         switch (part.type) {
           case "image":
             return (
-              <Image
-                type="image"
-                image={part.image}
-                status={{ type: "complete" }}
-                display="message-thumbnail"
-              />
+              <PartRenderBoundary
+                renderer="图片附件"
+                metadata={{ attachmentType: "image" }}
+                fallback={({ onRetry }) => (
+                  <RenderErrorCard scope="attachment" label="图片附件" onRetry={onRetry} />
+                )}
+              >
+                <Image
+                  type="image"
+                  image={part.image}
+                  status={{ type: "complete" }}
+                  display="message-thumbnail"
+                />
+              </PartRenderBoundary>
             );
           case "file":
             return (
-              <UserMessageFilePart
-                filename={part.filename ?? "附件"}
-                mimeType={part.mimeType}
-              />
+              <PartRenderBoundary
+                renderer="文件附件"
+                metadata={{ attachmentType: "file" }}
+                fallback={({ onRetry }) => (
+                  <RenderErrorCard scope="attachment" label="文件附件" onRetry={onRetry} />
+                )}
+              >
+                <UserMessageFilePart
+                  filename={part.filename ?? "附件"}
+                  mimeType={part.mimeType}
+                />
+              </PartRenderBoundary>
             );
           default:
             return null;

@@ -381,11 +381,12 @@ class ReactLikeWorkflow(AgentWorkflow):
         )
         # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
         # 读写唯一入口，并挂载上下文占用订阅者。
-        runtime_context_manager = RuntimeContextManager.ensure_get_runtime_context_manager(
-            agent_profile,
-            current_workspace,
-            current_task,
+        from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+        runtime_context_manager = task_runtime_spaces.get_or_create(current_task.id).get_context_manager(
+            agent_profile=agent_profile
         )
+
 
         # 每个新 ConversationRun 都从 canonical history 建立 fresh 上下文。
         runtime_context_manager.begin_run(

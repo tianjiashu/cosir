@@ -22,6 +22,9 @@ import { ComposerControls } from "@/components/composer/composer-controls";
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
 import { ToolGroupSelector as ToolGroupSelectorControl } from "@/components/composer/tool-group-selector";
 import { MarkdownText } from "@/components/markdown-text";
+import { PartRenderBoundary } from "@/components/assistant-ui/elements/part-render-boundary";
+import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
+import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import {
   Reasoning,
   ReasoningContent,
@@ -424,9 +427,21 @@ const UserMessageView: FC = () => {
         <UserMessageAttachments />
         {hasText && (
           <div className="bg-primary/10 text-foreground rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
-            <MessagePrimitive.Parts>{({ part }) => (
-              part.type === "text" ? <MarkdownText status={part.status} /> : null
-            )}</MessagePrimitive.Parts>
+            <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? (
+              <PartRenderBoundary
+                renderer="用户 Markdown"
+                fallback={({ onRetry }) => (
+                  <RenderErrorCard
+                    scope="markdown"
+                    label="用户内容"
+                    fallbackText={part.text}
+                    onRetry={onRetry}
+                  />
+                )}
+              >
+                <MarkdownText status={part.status} />
+              </PartRenderBoundary>
+            ) : null}</MessagePrimitive.Parts>
           </div>
         )}
       </div>
@@ -696,25 +711,87 @@ const AssistantMessageDefault: FC = () => {
           {({ part, children }) => {
             switch (part.type) {
               case "group-tool-trace": {
-                return <ToolTraceGroup indices={part.indices}>{children}</ToolTraceGroup>;
+                return (
+                  <RenderIsolationBoundary
+                    scope="part"
+                    resetKey={`tool-trace:${part.indices.join(",")}`}
+                    metadata={{ renderer: "tool-trace-group", partIndices: part.indices }}
+                    fallback={({ onRetry }) => (
+                      <RenderErrorCard scope="part" label="工具分组" onRetry={onRetry} />
+                    )}
+                  >
+                    <ToolTraceGroup indices={part.indices}>{children}</ToolTraceGroup>
+                  </RenderIsolationBoundary>
+                );
               }
               case "group-reasoning": {
                 const isReasoningStreaming = part.status.type === "running";
                 return (
-                  <ReasoningRoot variant="ghost" streaming={isReasoningStreaming}>
-                    <ReasoningTrigger active={isReasoningStreaming} />
-                    <ReasoningContent aria-busy={isReasoningStreaming}>
-                      <ReasoningText>{children}</ReasoningText>
-                    </ReasoningContent>
-                  </ReasoningRoot>
+                  <RenderIsolationBoundary
+                    scope="part"
+                    resetKey={`reasoning:${part.indices.join(",")}`}
+                    metadata={{ renderer: "reasoning-group", partIndices: part.indices }}
+                    fallback={({ onRetry }) => (
+                      <RenderErrorCard scope="part" label="推理分组" onRetry={onRetry} />
+                    )}
+                  >
+                    <ReasoningRoot variant="ghost" streaming={isReasoningStreaming}>
+                      <ReasoningTrigger active={isReasoningStreaming} />
+                      <ReasoningContent aria-busy={isReasoningStreaming}>
+                        <ReasoningText>{children}</ReasoningText>
+                      </ReasoningContent>
+                    </ReasoningRoot>
+                  </RenderIsolationBoundary>
                 );
               }
               case "text":
-                return <MarkdownText status={part.status} />;
+                return (
+                  <PartRenderBoundary
+                    renderer="Assistant Markdown"
+                    fallback={({ onRetry }) => (
+                      <RenderErrorCard
+                        scope="markdown"
+                        label="Assistant 内容"
+                        fallbackText={part.text}
+                        onRetry={onRetry}
+                      />
+                    )}
+                  >
+                    <MarkdownText status={part.status} />
+                  </PartRenderBoundary>
+                );
               case "reasoning":
-                return <Reasoning {...part} />;
+                return (
+                  <PartRenderBoundary
+                    renderer="推理 Markdown"
+                    fallback={({ onRetry }) => (
+                      <RenderErrorCard
+                        scope="markdown"
+                        label="推理内容"
+                        fallbackText={part.text}
+                        onRetry={onRetry}
+                      />
+                    )}
+                  >
+                    <Reasoning {...part} />
+                  </PartRenderBoundary>
+                );
               case "tool-call":
-                return <ToolPart {...part} taskId={taskId} runId={runId} runCancelling={cancellingRunId === runId} />;
+                return (
+                  <PartRenderBoundary
+                    renderer="工具 renderer"
+                    metadata={{ toolName: part.toolName }}
+                    fallback={({ onRetry }) => (
+                      <RenderErrorCard
+                        scope="tool"
+                        label={part.toolName}
+                        onRetry={onRetry}
+                      />
+                    )}
+                  >
+                    <ToolPart {...part} taskId={taskId} runId={runId} runCancelling={cancellingRunId === runId} />
+                  </PartRenderBoundary>
+                );
               case "file":
               case "image":
               case "data":

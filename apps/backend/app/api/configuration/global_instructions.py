@@ -14,6 +14,11 @@ from app.app import app
 from app.service.configuration.instruction_configuration_service import (
     InstructionConfigurationService,
 )
+from app.service.configuration.system_prompt_update_broadcaster import (
+    broadcast_system_prompt_delta,
+    build_system_prompt_delta,
+)
+from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 
 
 @app.get("/configuration/global-instructions", response_model=GlobalInstructionResponse)
@@ -29,10 +34,16 @@ async def update_global_instruction_configuration(
     payload: GlobalInstructionUpdateRequest,
 ) -> GlobalInstructionResponse:
     try:
-        return GlobalInstructionResponse.from_document(
-            InstructionConfigurationService().update(
-                payload.content,
-            )
+        service = InstructionConfigurationService()
+        previous = service.read().content
+        document = service.update(payload.content)
+        delta = build_system_prompt_delta(
+            source=SystemPromptDeltaSource.GLOBAL_INSTRUCTIONS,
+            previous=previous,
+            current=document.content,
         )
+        if delta is not None:
+            broadcast_system_prompt_delta(delta)
+        return GlobalInstructionResponse.from_document(document)
     except Exception as exc:
         raise_configuration_error(exc)

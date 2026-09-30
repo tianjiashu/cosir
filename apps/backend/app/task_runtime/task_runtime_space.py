@@ -44,13 +44,14 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from langchain_core.messages import SystemMessage
 
 from app.core.context.context_listener.context_compress_listener import ContextCompressListener
+from app.service.depends import get_task_service, get_workspace_service
+from app.task_runtime.system_prompt_delta import SystemPromptDelta
 
 if TYPE_CHECKING:
     from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
     from app.core.agents.agent_profile import AgentProfile
     from app.core.context.runtime_context_manager import RuntimeContextManager
     from app.models import TaskRecord, WorkspaceRecord
-
 
 _T = TypeVar("_T")
 
@@ -89,17 +90,22 @@ class TaskRuntimeSpace:
     # 该字段刻意不配内部锁：所有访问经 ``ConversationTaskStateService._lock`` 串行化。
     _snapshot: ConversationStateSnapshot | None = field(default=None, init=False)
     _context_guard: threading.Lock = field(init=False)
-    # 延迟注入的「修复类系统消息」队列（FIFO）：跨同 task 内的 run 共享，run 间串行由 Task 操作
-    # 闸门保证；用标准库 SimpleQueue 提供并发安全，不额外加锁。
+    # 延迟系统消息队列（FIFO）：既承载原有修复类提示，也承载系统提示词增量通知。队列由
+    # 标准库 SimpleQueue 提供并发安全；通知消费后由模型节点统一写入 Task context。
     system_queue: SimpleQueue[SystemMessage] = field(
         default_factory=SimpleQueue, init=False, repr=False, compare=False
     )
+    agent_profile: AgentProfile = None
+    current_workspace: WorkspaceRecord = None
+    current_task: TaskRecord = None
 
     def __post_init__(self) -> None:
         """初始化统一执行闸门与 context manager 槽位锁。"""
 
         self.lock = threading.Lock()
         self._context_guard = threading.Lock()
+        self.current_task = get_task_service().get_task(self.task_id)
+        self.current_workspace = get_workspace_service().get_workspace(self.current_task.workspace_id)
 
     def _acquire_lock(self, timeout: float | None) -> bool:
         """在同步线程中取得 Task 操作闸门。"""
@@ -179,7 +185,7 @@ class TaskRuntimeSpace:
             self._context_manager = None
 
     def get_snapshot(
-        self, loader: Callable[[], ConversationStateSnapshot]
+            self, loader: Callable[[], ConversationStateSnapshot]
     ) -> ConversationStateSnapshot:
         """返回 task snapshot；首次调用时从 canonical records 懒加载重建。
 
@@ -210,7 +216,7 @@ class TaskRuntimeSpace:
         return copy.deepcopy(self._snapshot)
 
     def get_working_snapshot(
-        self, loader: Callable[[], ConversationStateSnapshot]
+            self, loader: Callable[[], ConversationStateSnapshot]
     ) -> ConversationStateSnapshot:
         """Return the task-local mutable snapshot to its owning state service.
 
@@ -257,11 +263,9 @@ class TaskRuntimeSpace:
         self._snapshot = None
 
     def get_context_manager(
-        self,
-        *,
-        agent_profile: AgentProfile,
-        current_workspace: WorkspaceRecord,
-        current_task: TaskRecord,
+            self,
+            *,
+            agent_profile: AgentProfile | None = None,
     ) -> RuntimeContextManager:
         """返回 task context manager；首次执行时才创建并加载它。
 
@@ -301,30 +305,22 @@ class TaskRuntimeSpace:
             if manager is None:
                 from app.core.context.runtime_context_manager import RuntimeContextManager
 
+
+                if agent_profile is not None:
+                    self.agent_profile = agent_profile
+
+
                 manager = (
                     RuntimeContextManager(
-                        current_task_id=current_task.id,
-                        agent_profile=agent_profile,
-                        workspace_root=current_workspace.root_path,
-                        is_fork=current_task.task_type == "fork",
+                        current_task_id=self.current_task.id,
+                        agent_profile=self.agent_profile,
+                        workspace_root=self.current_workspace.root_path,
+                        is_fork=self.current_task.task_type == "fork",
                     )
                     .add_change_listener(ContextCompressListener())
                 )
                 self._context_manager = _weak_ref(manager)
             return manager
-
-    def existing_context_manager(self) -> RuntimeContextManager | None:
-        """返回已物化的 context manager；不因查询而触发懒加载。
-
-        当弱引用已失效（外部不再持有 manager）时返回 None。
-
-        并发:
-            经 ``_context_guard`` 快照弱引用；调用方（task fork / task 删除）本已持有
-            Task 操作闸门，此处的锁仅保证与 ``install_fork_context_manager`` 的写入不交叉。
-        """
-
-        with self._context_guard:
-            return self._context_manager() if self._context_manager is not None else None
 
     def install_fork_context_manager(self, manager: RuntimeContextManager) -> None:
         """安装已由源 manager fork 出来的目标 context manager。
@@ -353,12 +349,32 @@ class TaskRuntimeSpace:
 
         self.system_queue.put(message)
 
+    def defer_system_prompt_delta(self, delta: SystemPromptDelta) -> None:
+        """把系统提示词增量放入本 Task 的进程内通知队列。
+
+        参数:
+            delta: 已完成配置校验并带有 unified diff 的系统提示词变更。
+
+        返回:
+            无。
+
+        异常:
+            ValueError: ``delta.diff`` 为空白时由消息映射层抛出。
+
+        副作用:
+            向当前 Task 的 FIFO 队列加入一条通知；通知不会立即修改 context，也不会创建新的
+            run。模型节点下一次消费队列时会按普通延迟系统消息写入 context。
+        """
+
+        self.system_queue.put(delta.to_message())
+
     def take_deferred_system_messages(self, *, run_id: int | None = None) -> list[SystemMessage]:
         """取出当前 Run 可消费的延迟系统消息，并清理旧 Run 的消息（FIFO）。
 
-        没有 ``run_id`` 标记的消息属于既有 task 级修复提示，任何 Run 都可消费；带有
-        ``run_id`` 标记的消息只允许对应 Run 消费，旧 Run 的消息会在本次取队列时丢弃，
-        避免取消或异常后的终端背压提示污染后续 Run。
+        系统提示词增量通知与普通 task 级系统消息一样返回，由模型节点写入 Task context，
+        因此后续 Run 会随历史 context 一起读取。没有 ``run_id`` 标记的消息属于既有 task 级
+        提示，任何 Run 都可消费；带有 ``run_id`` 标记的消息只允许对应 Run 消费，旧 Run 的
+        消息会在本次取队列时丢弃，避免取消或异常后的终端背压提示污染后续 Run。
 
         参数:
             run_id: 当前模型节点所属 Run；省略时保留无条件取队列行为。

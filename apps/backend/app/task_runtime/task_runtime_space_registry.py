@@ -54,6 +54,24 @@ class TaskRuntimeSpaceRegistry:
         with self._guard:
             return self._spaces.get(task_id)
 
+    def existing_spaces(self) -> tuple[TaskRuntimeSpace, ...]:
+        """返回当前进程中已经物化的 Task runtime space 快照。
+
+        返回:
+            按登记快照复制出的 space 元组。返回值不会包含尚未运行过的 Task，也不会触发新的
+            space 创建；调用方可以在释放 registry 锁后执行通知过滤和入队。
+
+        异常:
+            无。
+
+        副作用:
+            无。返回的是既有 ``TaskRuntimeSpace`` 实例引用，space 自身生命周期仍由 registry
+            管理。
+        """
+
+        with self._guard:
+            return tuple(self._spaces.values())
+
     def mark_deleted(self, task_id: int) -> None:
         """禁止已删除 Task 再次惰性创建 runtime space。"""
 
