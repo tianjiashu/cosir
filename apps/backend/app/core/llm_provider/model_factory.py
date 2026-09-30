@@ -71,7 +71,7 @@ def build_chat_model(
 
 
 
-    resolved_effort = model_settings.reasoning_effort if model_settings.supports_reasoning_effort else None
+    resolved_effort = model_settings.reasoning_effort if model_settings.supports_reasoning_effort else "max"
 
     model_kwargs: dict[str, Any] = {}
     if model_settings.max_tokens is not None:
@@ -102,6 +102,21 @@ def build_chat_model(
     http_async_client = build_proxy_async_client(
         base_url=resolved_base_url, timeout=Constant.LLM.REQUEST_TIMEOUT_SECONDS
     )
+    extra = {
+        "thinking":{
+            "type":"enabled",
+        },
+        "reasoning_effort":resolved_effort
+    }
+
+    if "glm" in model_settings.model_name.lower():
+        extra["thinking"]["clear_thinking"] = False
+
+    if "glm-5.3-flash" in model_settings.model_name.lower():
+        model_settings.temperature = 1
+        model_settings.top_p = 0.95
+    if "minimax" in model_settings.model_name.lower():
+        extra["reasoning_split"] = True
 
     return ReasoningChatOpenAI(
         model=model_settings.model_name,
@@ -114,6 +129,7 @@ def build_chat_model(
         http_client=http_client,
         http_async_client=http_async_client,
         stream_usage=True,
+        extra_body=extra,
         max_retries=Constant.LLM.MAX_RETRIES,
         timeout=Constant.LLM.REQUEST_TIMEOUT_SECONDS,
         seed=Constant.LLM.SEED,

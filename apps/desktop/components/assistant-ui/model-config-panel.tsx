@@ -19,7 +19,7 @@ import {
   updateModelConfig,
   type ModelConfig,
 } from "@/lib/api/model-configs";
-import { HttpError } from "@/lib/http/errors";
+import { httpErrorMessage } from "@/lib/http/errors";
 
 type FormState = {
   configName: string;
@@ -121,8 +121,10 @@ export function ModelConfigPanel({
       if (editingId === null) setEditingId(savedConfig.config_id);
       setShowApiKey(false);
       setMessage({ ok: true, text: "模型配置已保存" });
-    } catch {
-      setMessage({ ok: false, text: "保存失败，请检查配置后重试" });
+    } catch (cause) {
+      // 后端对可纠正的拒绝（如 409 名称重复）会给出明确原因，必须原样展示，否则用户无从
+      // 知道该改什么。
+      setMessage({ ok: false, text: httpErrorMessage(cause, "保存失败，请检查配置后重试") });
     } finally {
       setBusy(false);
     }
@@ -159,10 +161,7 @@ export function ModelConfigPanel({
       await loadConfigs();
       setMessage({ ok: true, text: "模型配置已删除" });
     } catch (cause) {
-      setMessage({
-        ok: false,
-        text: cause instanceof HttpError && cause.message ? cause.message : "删除失败，请重试",
-      });
+      setMessage({ ok: false, text: httpErrorMessage(cause, "删除失败，请重试") });
     } finally {
       setBusy(false);
     }

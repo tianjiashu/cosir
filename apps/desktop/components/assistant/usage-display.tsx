@@ -1,6 +1,6 @@
 "use client";
 
-import { GaugeIcon, InfoIcon, ZapIcon } from "lucide-react";
+import { GaugeIcon, ZapIcon } from "lucide-react";
 import type { ReactElement } from "react";
 import { useAuiState } from "@assistant-ui/react";
 
@@ -211,10 +211,6 @@ export function TaskContextUsage(): ReactElement {
           className="bg-muted h-2 overflow-hidden rounded-full"
         >
           <div className={cn("h-full rounded-full transition-[width]", toneClass(presentation.tone))} style={{ width: `${percent}%` }} />
-        </div>
-        <div className="text-muted-foreground flex items-start gap-1.5 text-xs">
-          <InfoIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-          <span>按最后一个 Run 的 provider 输入 token 计算，不等同于计费总 token。</span>
         </div>
       </PopoverContent>
     </Popover>

@@ -62,6 +62,18 @@ export async function parseHttpError(response: Response): Promise<HttpError> {
   });
 }
 
+/**
+ * 把 HTTP 层错误转换为用户可见文案。
+ *
+ * 与 `safeFrontendErrorMessage`（`@/lib/logging/frontend-log`）的区别：本函数透出后端给出的
+ * 可行动原因（例如 409 的「模型配置名称已存在」），仅当缺少可读原因时才回退兜底文案；后者按
+ * 安全默认值收敛，适合无法给出可行动信息的场景。两者职责不同，调用方按「用户能否据此纠正」
+ * 选择，避免出现「后端已说明原因、界面只说请重试」。
+ */
+export function httpErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof HttpError && error.message ? error.message : fallback;
+}
+
 /** 从后端错误响应的不同包装形式中提取统一结构化错误。 */
 export function parseStructuredHttpError(value: unknown): StructuredHttpError | null {
   if (!isRecord(value)) return null;
