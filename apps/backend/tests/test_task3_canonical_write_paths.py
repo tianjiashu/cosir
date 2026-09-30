@@ -18,11 +18,6 @@ from langchain_core.messages import (
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 from app.assistant_transport.event import RunStatusChangedEvent
 from app.core.context.context_entry import ContextEntry
-from app.core.context.context_listener.context_usage_compute_listener import (
-    ContextUsageComputeListener,
-)
-from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
-from app.core.context.context_listener.listener_result import ListenerResult
 from app.core.context.runtime_context_manager import RuntimeContextManager, _as_ai_message
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.react.node_helper.tool_call_lifecycle import (
@@ -60,8 +55,6 @@ def _runtime_manager(service: _RecordingContextService) -> RuntimeContextManager
     manager.current_task_id = 7
     manager.agent_profile = SimpleNamespace()
     manager.workspace_root = ""
-    manager.total_tokens = 0
-    manager.used_tokens = 0
     manager.compressor = None
     manager.context_service = service
     manager.current_run_id = 11
@@ -70,7 +63,6 @@ def _runtime_manager(service: _RecordingContextService) -> RuntimeContextManager
     manager._entries = []
     manager._message_sequence = 1
     manager._listeners = []
-    manager._tool_schemas = ()
     manager._streaming_messages = {}
     manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
     return manager
@@ -139,7 +131,6 @@ def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatc
             input_text="hello",
         ),
         "fresh",
-        context_window_k=1,
     )
     # 与 workflow 一致：graph 启动前补写 canonical user 消息（begin_run 已清空该 run 旧条目）。
     manager.ensure_run_user_message("hello")
@@ -484,10 +475,11 @@ def test_create_run_writes_user_context_and_task_current_run_before_projector(mo
     monkeypatch.setattr(
         "app.service.task.conversation_run_service.get_model_config_service",
         lambda: SimpleNamespace(
-            get_config=lambda _config_id: SimpleNamespace(
-                supports_reasoning_effort=False,
-                supports_image=False,
-            )
+                get_config=lambda _config_id: SimpleNamespace(
+                    supports_reasoning_effort=False,
+                    supports_image=False,
+                    context_window_k=128,
+                )
         ),
     )
 
@@ -536,10 +528,11 @@ def test_create_run_with_external_session_defers_initialization_events_to_owner(
     monkeypatch.setattr(
         "app.service.task.conversation_run_service.get_model_config_service",
         lambda: SimpleNamespace(
-            get_config=lambda _config_id: SimpleNamespace(
-                supports_reasoning_effort=False,
-                supports_image=False,
-            )
+                get_config=lambda _config_id: SimpleNamespace(
+                    supports_reasoning_effort=False,
+                    supports_image=False,
+                    context_window_k=128,
+                )
         ),
     )
 
@@ -652,43 +645,3 @@ def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> 
         depends.get_conversation_event_projector = original_getter
 
     assert committed == ["database"]
-
-
-def test_context_usage_persists_window_before_publishing_event(monkeypatch) -> None:
-    order: list[str] = []
-
-    class _TaskService:
-        def update_context_usage(self, task_id: int, used: int, total: int) -> None:
-            order.append("database")
-            assert task_id == 7
-            assert used >= 0
-            assert total == 100
-
-    class _Projector:
-        def process(self, event: Any) -> None:
-            order.append("event")
-            assert event.type == "context_usage_updated"
-
-    monkeypatch.setattr(
-        "app.core.context.context_listener.context_usage_compute_listener.get_task_service",
-        lambda: _TaskService(),
-    )
-    monkeypatch.setattr(
-        "app.core.context.context_listener.context_usage_compute_listener.get_conversation_event_projector",
-        lambda: _Projector(),
-    )
-    listener = ContextUsageComputeListener(7, 11)
-    listener.event_projector = _Projector()
-    result = ListenerResult(0)
-    listener.listen(
-        ListenerEvent(
-            ContextEventType.ADD_MESSAGE,
-            [ContextEntry(HumanMessage(content="hello"), 11, 1)],
-            0,
-            100,
-            (),
-        ),
-        result,
-    )
-
-    assert order == ["database", "event"]

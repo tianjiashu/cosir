@@ -4,8 +4,6 @@ const emptyState = () => ({
   runs: [],
   current_run_id: null,
   approvals: {},
-  context_usage_ratio: null,
-  context_usage_used: null,
   context_window_total: null,
   error: null,
 });
@@ -163,26 +161,26 @@ test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage foo
 
   await input.fill("usage-regression-first");
   await page.getByRole("button", { name: "发送" }).click();
-  await expect(contextMeter).toContainText("上下文 70%");
+  await expect(contextMeter).toContainText("上下文 1%");
   await expect(page.getByTestId("run-usage-display")).toContainText("本次用量 1.5k tokens");
   await page.getByTestId("run-usage-display").hover();
   const cacheMissRow = page.locator("dt").filter({ hasText: "缓存未命中" }).locator("xpath=following-sibling::dd[1]");
   await expect(cacheMissRow).toHaveText("—");
   await page.mouse.move(10, 10);
-  await expect(contextMeter).toHaveAttribute("aria-label", "上下文 70%");
+  await expect(contextMeter).toHaveAttribute("aria-label", "上下文 1%");
   await contextMeter.focus();
   await expect(contextMeter).toBeFocused();
   await contextMeter.press("Enter");
   const contextProgress = page.getByRole("progressbar", { name: "上下文窗口占用" });
   await expect(contextProgress).toBeVisible();
-  await expect(contextProgress).toHaveAttribute("aria-valuetext", "上下文 70%");
+  await expect(contextProgress).toHaveAttribute("aria-valuetext", "上下文 1%");
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 360, height: 720 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
   await input.fill("usage-regression-second");
   await page.getByRole("button", { name: "发送" }).click();
-  await expect(contextMeter).toContainText("上下文 80%");
+  await expect(contextMeter).toContainText("上下文 2%");
   await expect(page.getByTestId("run-usage-display").last()).toContainText("本次用量 2.5k tokens");
   await expect(page.getByTestId("run-usage-display")).toHaveCount(2);
   await expect(page.getByTestId("run-usage-display").first()).toContainText("本次用量 1.5k tokens");

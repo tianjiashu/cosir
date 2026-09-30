@@ -47,8 +47,6 @@ def _snapshot(
         "runs": runs,
         "current_run_id": run_id,
         "approvals": {},
-        "context_usage_ratio": None,
-        "context_usage_used": None,
         "context_window_total": None,
         "error": None,
     }
@@ -130,7 +128,6 @@ async def test_task_endpoint_returns_task_response_with_fork_status() -> None:
         parent_task_id=None,
         parent_run_id=None,
         delegation_id=None,
-        context_usage_used=None,
         created_at=now,
         updated_at=now,
     )
@@ -374,8 +371,6 @@ async def test_state_endpoint_returns_nested_run_snapshot() -> None:
         "runs",
         "current_run_id",
         "approvals",
-        "context_usage_ratio",
-        "context_usage_used",
         "context_window_total",
         "error",
     }

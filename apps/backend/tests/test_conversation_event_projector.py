@@ -12,7 +12,6 @@ import pytest
 from app.assistant_transport.event import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
-    ContextUsageUpdatedEvent,
     RunInitializedEvent,
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
@@ -95,8 +94,10 @@ def projector() -> tuple[ConversationEventProjector, InMemorySnapshotService]:
     return ConversationEventProjector(snapshots), snapshots
 
 
-def _start(projector: ConversationEventProjector) -> None:
-    projector.process(RunInitializedEvent(task_id=1, run_id=1))
+def _start(projector: ConversationEventProjector, context_window_total: int | None = None) -> None:
+    projector.process(
+        RunInitializedEvent(task_id=1, run_id=1, context_window_total=context_window_total)
+    )
 
 
 def _run(state: ConversationStateSnapshot, run_id: int) -> dict[str, Any]:
@@ -468,20 +469,11 @@ def test_tool_status_change_without_part_is_skipped(
     }
 
 
-def test_run_status_usage_and_context_usage(
+def test_run_status_usage_is_projected(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
     event_projector, snapshots = projector
-    _start(event_projector)
-    event_projector.process(
-        ContextUsageUpdatedEvent(
-            task_id=1,
-            run_id=1,
-            ratio=0.42,
-            used_tokens=42,
-            context_window_tokens=100,
-        )
-    )
+    _start(event_projector, context_window_total=100)
     event_projector.process(
         RunStatusChangedEvent(
             task_id=1,
@@ -495,8 +487,6 @@ def test_run_status_usage_and_context_usage(
     state = snapshots.states[1]
     assert _run(state, 1)["usage"]["total_tokens"] == 14
     assert state["current_run_id"] == 1
-    assert state["context_usage_ratio"] == 0.42
-    assert state["context_usage_used"] == 42
     assert state["context_window_total"] == 100
     assert _run(state, 1)["status"] == "completed"
 
@@ -538,7 +528,6 @@ def test_new_run_clears_previous_run_usage(
     state = snapshots.states[1]
     assert _run(state, 1)["usage"]["total_tokens"] == 14
     assert _run(state, 2)["usage"] is None
-    assert state["context_usage_used"] is None
     assert state["context_window_total"] is None
 
 
@@ -624,56 +613,6 @@ def test_late_run_initialization_cannot_rewind_terminal_newer_run(
     )
     event_projector.process(RunInitializedEvent(task_id=1, run_id=1))
     assert _run(snapshots.states[1], 2)["status"] == "completed"
-
-
-def test_unknown_context_measurement_clears_stale_absolute_values(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event_projector.process(
-        ContextUsageUpdatedEvent(
-            task_id=1,
-            run_id=1,
-            ratio=0.9,
-            used_tokens=90,
-            context_window_tokens=100,
-        )
-    )
-    event_projector.process(ContextUsageUpdatedEvent(task_id=1, run_id=1, ratio=0.0))
-    state = snapshots.states[1]
-    assert state["context_usage_ratio"] == 0.0
-    assert state["context_usage_used"] is None
-    assert state["context_window_total"] is None
-
-
-def test_context_reprojection_replaces_task_usage(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event_projector.process(
-        ContextUsageUpdatedEvent(
-            task_id=1,
-            run_id=1,
-            ratio=0.9,
-            used_tokens=90,
-            context_window_tokens=100,
-        )
-    )
-    event_projector.process(
-        ContextUsageUpdatedEvent(
-            task_id=1,
-            run_id=1,
-            ratio=0.4,
-            used_tokens=40,
-            context_window_tokens=100,
-            reproject=True,
-        )
-    )
-    state = snapshots.states[1]
-    assert state["context_usage_ratio"] == 0.4
-    assert state["context_usage_used"] == 40
 
 
 def test_unknown_event_is_ignored(
@@ -848,13 +787,6 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
         event_projector,
         snapshots,
         lambda: AssistantPartClosedEvent(task_id=1, run_id=1, part="text"),
-    )
-    _assert_reapply_changes_nothing(
-        event_projector,
-        snapshots,
-        lambda: ContextUsageUpdatedEvent(
-            task_id=1, run_id=1, ratio=0.5, used_tokens=10, context_window_tokens=20
-        ),
     )
 
 

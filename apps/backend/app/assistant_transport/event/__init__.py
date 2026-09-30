@@ -17,7 +17,7 @@
 - ``run_event``：run 骨架建立、执行状态迁移、用户输入有序 parts。
 - ``message_event``：消息内 text / reasoning part 的内容追加与阶段收口。
 - ``tool_call_event``：工具调用生命周期与终态批量收束。
-- ``usage_event``：token 消耗与上下文占用。
+- Run 的 token 用量随 ``run_status_changed`` 事件投影，不单独建立 Task usage 事件。
 - ``conversation_event``：判别式联合总入口。
 """
 
@@ -44,15 +44,11 @@ from app.assistant_transport.event.tool_runtime_event import (
     TerminalOutputDeltaData,
     ToolCallRuntimeUpdateEvent,
 )
-from app.assistant_transport.event.usage_event import (
-    ContextUsageUpdatedEvent,
-)
 
 __all__ = [
     "AssistantPartClosedEvent",
     "AssistantTextDeltaEvent",
     "AssistantTextPartKind",
-    "ContextUsageUpdatedEvent",
     "ConversationEvent",
     "ConversationEventEnvelope",
     "RunInitializedEvent",

@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import Field, model_validator
+from pydantic import Field, StrictInt, model_validator
 
 from app.assistant_transport.event.conversation_event_envelope import (
     ConversationEventEnvelope,
@@ -68,6 +68,7 @@ class RunInitializedEvent(ConversationEventEnvelope):
     # 判别式字段显式给出默认值：生产者不必重复书写字面量，判别式路由行为不变。
     type: Literal["run_initialized"] = "run_initialized"
     replace_existing: bool = False
+    context_window_total: StrictInt | None = Field(default=None, ge=0)
 
     def plan(
         self,
@@ -103,9 +104,9 @@ class RunInitializedEvent(ConversationEventEnvelope):
                     self._run_snapshot(),
                 ),
                 ConversationStateMutation("set", ("current_run_id",), self.run_id),
-                ConversationStateMutation("set", ("context_usage_ratio",), None),
-                ConversationStateMutation("set", ("context_usage_used",), None),
-                ConversationStateMutation("set", ("context_window_total",), None),
+                ConversationStateMutation(
+                    "set", ("context_window_total",), self.context_window_total
+                ),
                 ConversationStateMutation("set", ("error",), None),
             ]
 
@@ -149,9 +150,9 @@ class RunInitializedEvent(ConversationEventEnvelope):
                 },
             ),
             ConversationStateMutation("set", ("current_run_id",), self.run_id),
-            ConversationStateMutation("set", ("context_usage_ratio",), None),
-            ConversationStateMutation("set", ("context_usage_used",), None),
-            ConversationStateMutation("set", ("context_window_total",), None),
+            ConversationStateMutation(
+                "set", ("context_window_total",), self.context_window_total
+            ),
             ConversationStateMutation("set", ("error",), None),
         ]
 

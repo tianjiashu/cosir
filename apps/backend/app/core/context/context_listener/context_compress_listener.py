@@ -8,7 +8,6 @@ system / 近期上下文）。当前无任何压缩算法，故 :meth:`listen` �
 
 from app.core.context.context_listener.context_listener import ContextListener
 from app.core.context.context_listener.listener_event import ListenerEvent
-from app.core.context.context_listener.listener_result import ListenerResult
 
 
 class ContextCompressListener(ContextListener):
@@ -31,12 +30,11 @@ class ContextCompressListener(ContextListener):
             无。
         """
 
-    def listen(self, event: ListenerEvent, result: ListenerResult) -> None:
+    def listen(self, event: ListenerEvent) -> None:
         """接收上下文变化事件但不执行任何动作（压缩占位）。
 
         参数:
             event: 监听事件（含事件类型、变更条目、已有占用与窗口上限）。
-            result: 累计结果；本实现不修改它。
 
         返回:
             无。

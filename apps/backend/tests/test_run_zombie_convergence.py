@@ -271,7 +271,8 @@ def _build_command_service(
     service._run_state = run_state
     service._state = state_service
     service._task = SimpleNamespace(
-        get_latest_run=lambda _task_id: SimpleNamespace(id=11, status="cancelled")
+        get_latest_run=lambda _task_id: SimpleNamespace(id=11, status="cancelled"),
+        get_context_window_total=lambda _task_id: None,
     )
     return service
 
@@ -280,8 +281,6 @@ _SNAPSHOT = {
     "runs": [],
     "current_run_id": None,
     "approvals": {},
-    "context_usage_ratio": None,
-    "context_usage_used": None,
     "context_window_total": None,
     "error": None,
 }

@@ -250,7 +250,11 @@ class ConversationRunCommandService:
         )
         try:
             service_depends.get_conversation_event_projector().process(
-                RunInitializedEvent(task_id=task_id, run_id=run.id)
+                RunInitializedEvent(
+                    task_id=task_id,
+                    run_id=run.id,
+                    context_window_total=self._task.get_context_window_total(task_id),
+                )
             )
             self._ensure_run_visible(task_id, run.id)
             running_run = self._run_state.claim_pending_run(run.id)
@@ -375,6 +379,7 @@ class ConversationRunCommandService:
                     task_id=task_id,
                     run_id=reset.id,
                     replace_existing=True,
+                    context_window_total=self._task.get_context_window_total(task_id),
                 )
             )
             self._ensure_run_visible(task_id, reset.id)
@@ -561,4 +566,3 @@ class ConversationRunCommandService:
                     "data": {"run_id": run_id},
                 },
             )
-

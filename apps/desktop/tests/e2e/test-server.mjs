@@ -53,8 +53,6 @@ const emptyState = () => ({
   runs: [],
   current_run_id: null,
   approvals: {},
-  context_usage_ratio: null,
-  context_usage_used: null,
   context_window_total: null,
   error: null,
 });
@@ -114,7 +112,6 @@ function applyUsageFixture(state, runId, secondRun) {
   const input = secondRun ? 2_000 : 1_000;
   const output = secondRun ? 500 : 500;
   const total = input + output;
-  const contextUsed = secondRun ? 80_000 : 70_000;
   const run = state.runs.find((candidate) => candidate.runId === runId);
   run.usage = {
     input_tokens: input,
@@ -124,8 +121,6 @@ function applyUsageFixture(state, runId, secondRun) {
     cache_miss_tokens: secondRun ? 50 : null,
     reasoning_tokens: secondRun ? 40 : 20,
   };
-  state.context_usage_ratio = contextUsed / 100_000;
-  state.context_usage_used = contextUsed;
   state.context_window_total = 100_000;
 }
 
@@ -177,8 +172,6 @@ function toolTraceState() {
     }],
     current_run_id: 77,
     approvals: {},
-    context_usage_ratio: null,
-    context_usage_used: null,
     context_window_total: null,
     error: null,
   };
@@ -233,8 +226,6 @@ function webSearchState() {
     }],
     current_run_id: 78,
     approvals: {},
-    context_usage_ratio: null,
-    context_usage_used: null,
     context_window_total: null,
     error: null,
   };
@@ -289,8 +280,6 @@ function delegationState() {
     }],
     current_run_id: 500,
     approvals: {},
-    context_usage_ratio: null,
-    context_usage_used: null,
     context_window_total: null,
     error: null,
   };

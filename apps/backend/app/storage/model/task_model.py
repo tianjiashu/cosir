@@ -31,16 +31,11 @@ class TaskModel(StorageBase):
         nullable=True,
         index=True,
     )
-    context_usage_used: Mapped[int | None] = mapped_column(
-        Integer,
-        default=0,
-        comment="最近一次上下文窗口已用 token",
-    )
     context_window_total: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
         default=None,
-        comment="当前任务上下文窗口总 token 数",
+        comment="最后一个 Run 使用的模型上下文窗口总 token 数",
     )
 
     __table_args__ = (

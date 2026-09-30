@@ -34,7 +34,6 @@ def _task() -> TaskRecord:
         created_at=now,
         updated_at=now,
         current_run_id=2,
-        context_usage_used=42,
         context_window_total=100,
     )
 
@@ -104,8 +103,6 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
     state = service.get_state(7)
 
     assert state["current_run_id"] == 2
-    assert state["context_usage_used"] == 42
-    assert state["context_usage_ratio"] == 0.42
     assert [run["runId"] for run in state["runs"]] == [1, 2]
     # user 消息文本取自 runs 行的 ``input_text``（``extra.display_text`` 优先），
     # context 行只承载喂给模型的上下文序列，不参与 user 消息文本的重建。
@@ -276,8 +273,6 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
         ],
         "current_run_id": 2,
         "approvals": {},
-        "context_usage_ratio": None,
-        "context_usage_used": None,
         "context_window_total": None,
         "error": None,
     })

@@ -276,6 +276,7 @@ class ConversationRunService:
             ban_tools=extra.ban_tools if extra is not None else [],
             reasoning_effort=reasoning_effort,
         )
+        context_window_total = config.context_window_k * 1000
 
         def persist_facts(persist_session: Session | None) -> ConversationRunRecord:
             run = self._run.create(
@@ -288,7 +289,12 @@ class ConversationRunService:
                 extra=extra,
                 session=persist_session,
             )
-            self._task.set_current_run_id(task_id, run.id, session=persist_session)
+            self._task.set_current_run_id(
+                task_id,
+                run.id,
+                context_window_total=context_window_total,
+                session=persist_session,
+            )
             return run
 
         if session is not None:
@@ -305,7 +311,11 @@ class ConversationRunService:
         # would expose uncommitted facts and duplicate the owner's events.
         if session is None:
             service_depends.get_conversation_event_projector().process(
-                RunInitializedEvent(task_id=task_id, run_id=run.id),
+                RunInitializedEvent(
+                    task_id=task_id,
+                    run_id=run.id,
+                    context_window_total=context_window_total,
+                ),
             )
         return run
 
@@ -362,16 +372,34 @@ class ConversationRunService:
             ban_tools=extra.ban_tools if extra is not None else [],
             reasoning_effort=reasoning_effort,
         )
-        return self._run.reset_for_edit(
-            run_id=run_id,
-            input_text=input_text,
-            checkpoint_thread_id=str(uuid4()),
-            allowed_statuses=allowed_statuses,
-            model_config_id=model_config_id,
-            image_paths=image_paths,
-            extra=extra,
-            session=session,
-        )
+        context_window_total = config.context_window_k * 1000
+
+        def reset_facts(persist_session: Session | None) -> ConversationRunRecord | None:
+            reset = self._run.reset_for_edit(
+                run_id=run_id,
+                input_text=input_text,
+                checkpoint_thread_id=str(uuid4()),
+                allowed_statuses=allowed_statuses,
+                model_config_id=model_config_id,
+                image_paths=image_paths,
+                extra=extra,
+                session=persist_session,
+            )
+            if reset is not None:
+                self._task.set_current_run_id(
+                    reset.task_id,
+                    reset.id,
+                    context_window_total=context_window_total,
+                    session=persist_session,
+                )
+            return reset
+
+        if session is not None:
+            return reset_facts(session)
+        if self._session_factory is not None:
+            with self._session_factory.begin() as owned_session:
+                return reset_facts(owned_session)
+        return reset_facts(None)
 
     def recover_orphaned_runs(
         self, end_reason: str = "runtime_restarted"

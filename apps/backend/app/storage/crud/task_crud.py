@@ -156,7 +156,6 @@ class TaskCrud:
             parent_run_id=parent_run_id,
             creation_command_id=creation_command_id,
             extra=extra,
-            context_usage_used=0,
             current_run_id=None,
             context_window_total=None,
         )
@@ -266,14 +265,28 @@ class TaskCrud:
         return TaskRecord.from_model(row)
 
     def set_current_run_id(
-            self, task_id: int, run_id: int, session: Session | None = None
+            self,
+            task_id: int,
+            run_id: int,
+            context_window_total: int | None = None,
+            session: Session | None = None,
     ) -> TaskRecord:
-        """在 task 事实中记录当前 Run；可复用调用方事务。"""
+        """在同一事务中记录当前 Run 及其上下文窗口总量。
 
+        上下文窗口总量必须与当前 Run 使用的模型保持一致，不能依赖上下文消息变化时的
+        token 估算 listener 旁路回写。
+        """
+
+        values: dict[str, object] = {
+            "current_run_id": run_id,
+            "updated_at": to_text(utc_now()),
+        }
+        if context_window_total is not None:
+            values["context_window_total"] = context_window_total
         statement = (
             update(TaskModel)
             .where(TaskModel.id == task_id)
-            .values(current_run_id=run_id)
+            .values(**values)
         )
         if session is not None:
             result = session.execute(statement)
@@ -287,45 +300,6 @@ class TaskCrud:
             result = owned_session.execute(statement)
             if not result.rowcount:
                 raise KeyError(task_id)
-        return self.get(task_id)
-
-    def update_context_usage(
-            self, task_id: int, used: int, context_window_total: int | None = None
-    ) -> TaskRecord:
-        """更新 task 最近一次上下文窗口已用 token 并刷新更新时间。
-
-        先校验 task 存在（不存在则抛出），再更新 ``context_usage_used`` 与 ``updated_at``。
-        供运行时在每次模型步产出上下文占用事件后持久化，使「打开历史任务」时可回显
-        该任务最近一次的真实占用与模型窗口。
-
-        参数:
-            task_id: 任务标识（整数 id）。
-            used: 最近一次上下文窗口已用 token 数。
-            context_window_total: 本次 Run 使用的模型上下文窗口上限。
-
-        返回:
-            更新后的 ``TaskRecord``。
-
-        异常:
-            KeyError: 如果指定 task 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            更新 ``tasks`` 表中对应行的 context_usage_used 与 updated_at。
-        """
-        self.get(task_id)
-        values: dict[str, object] = {
-            "context_usage_used": used,
-            "updated_at": to_text(utc_now()),
-        }
-        if context_window_total is not None:
-            values["context_window_total"] = context_window_total
-        with self._session_factory.begin() as session:
-            session.execute(
-                update(TaskModel)
-                .where(TaskModel.id == task_id)
-                .values(**values)
-            )
         return self.get(task_id)
 
     def list_ids_by_workspace(self, workspace_id: int, session: Session | None = None) -> list[int]:

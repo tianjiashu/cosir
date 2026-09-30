@@ -174,17 +174,30 @@ export type TransportError = {
   message: string;
 };
 
+/**
+ * Run 已经结束且不会继续产生运行中内容的状态集合。
+ *
+ * 该集合与后端 ``Constant.Run.TERMINAL_STATUSES`` 对齐。前端只用它判断展示和
+ * 传输收敛，不承担 Run 生命周期迁移或状态修复。
+ */
+export const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+/** 判断 Run 是否进入后端定义的终态。 */
+export function isTerminalRunStatus(status: string | null | undefined): boolean {
+  return status !== null && status !== undefined && TERMINAL_RUN_STATUSES.has(status);
+}
+
 /** Task 级 Transport state；Run 事实全部按 Run 保存在 `runs` 中。 */
 export type TransportState = {
   runs: TransportRun[];
   current_run_id: number | null;
   /** 审批预留；当前固定为空对象。 */
   approvals: Record<string, never>;
-  /** 当前 Task 上下文窗口占用比例；允许大于 1 表示超额。 */
-  context_usage_ratio: number | null;
-  /** 当前有效上下文已用 token；null 表示尚未完成有效测量。 */
-  context_usage_used: number | null;
-  /** 当前有效上下文窗口上限；null 表示后端暂时无法确定。 */
+  /** 最后一个 Run 使用的模型上下文窗口上限。 */
   context_window_total: number | null;
   /** 运行期错误；无错误时为 null。 */
   error: TransportError | null;

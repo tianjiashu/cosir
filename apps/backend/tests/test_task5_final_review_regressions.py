@@ -219,9 +219,22 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     service._task = TaskCrud()
     service._session_factory = None
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: Projector())
+    monkeypatch.setattr(
+        "app.service.task.conversation_run_service.get_model_config_service",
+        lambda: SimpleNamespace(
+            get_config=lambda _config_id: SimpleNamespace(
+                supports_reasoning_effort=False,
+                supports_image=False,
+                context_window_k=128,
+            )
+        ),
+    )
 
     service.create_run(
-        7, run_command=ConversationRunCommand(display_text="hello"), agent_id="child_agent"
+        7,
+        model_config_id=1,
+        run_command=ConversationRunCommand(display_text="hello"),
+        agent_id="child_agent",
     )
 
     assert [getattr(event, "type", None) for event in events] == ["run_initialized"]

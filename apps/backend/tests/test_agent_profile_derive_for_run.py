@@ -1,8 +1,8 @@
 """``AgentProfile.derive_for_run`` 的 per-run 派生契约单元测试。
 
-单一职责：只验证该函数自身的四条契约——``ban_tools`` 按工具名收窄、共享单例不被原地写、
-模型路由按 run 回填、``model_settings`` 显式覆盖。不覆盖 runner/workflow 链路（由各自的
-集成测试负责）。
+单一职责：只验证该函数自身的五条契约——``ban_tools`` 按工具名收窄、共享单例不被原地写、
+模型路由按 run 回填、``model_settings`` 分层合并（运行时字段只来自传参、偏好按「传参优先、
+profile 补缺」）、Run 推理强度最终覆盖。不覆盖 runner/workflow 链路（由各自的集成测试负责）。
 
 背景：``ban_tools`` 分支曾写成 ``changes["allowed_tools"] - ban_tools``，既读未初始化的
 key（必抛 ``KeyError``）又把列表当集合做差集，导致所有传 ``ban_tools`` 的 child run 在进入
@@ -130,6 +130,74 @@ def test_derive_for_run_materializes_runtime_settings_and_applies_override() -> 
     assert derived.model_config_id == 3
     assert profile.model_config_id is None
     assert profile.model_settings.temperature is None
+
+
+def test_derive_for_run_run_model_preferences_win_over_profile() -> None:
+    """传入的运行时参数优先级高于 profile：已设偏好保留，profile 只补未设置的项。"""
+
+    profile = _child_profile()
+    profile.model_settings = ModelSettings(
+        temperature=0.2,
+        top_p=0.5,
+        reasoning_effort="high",
+    )
+    runtime = ModelSettings(
+        base_url="https://example.test",
+        api_key="secret",
+        model_name="run-model",
+        context_window_k=128,
+        supports_thinking=True,
+        supports_reasoning_effort=True,
+        supports_image=False,
+        temperature=0.9,
+    )
+
+    derived = profile.derive_for_run(
+        run=_RunRoute(model_config_id=3),
+        model_settings=runtime,
+    )
+
+    # 传参显式设置的偏好优先于 profile 的同名字段。
+    assert derived.model_settings.temperature == 0.9
+    # 传参未设置的偏好项由 profile 补齐。
+    assert derived.model_settings.top_p == 0.5
+    assert derived.model_settings.reasoning_effort == "high"
+    assert derived.model_settings.model_name == "run-model"
+
+
+def test_derive_for_run_runtime_fields_never_fall_back_to_profile() -> None:
+    """即使 profile 自身已物化，本次 Run 的连接与能力字段仍独占结果。"""
+
+    profile = _child_profile()
+    profile.model_settings = ModelSettings(
+        base_url="https://profile.test",
+        api_key="profile-key",
+        model_name="profile-model",
+        context_window_k=8,
+        supports_thinking=False,
+        supports_reasoning_effort=False,
+        supports_image=False,
+    )
+    runtime = ModelSettings(
+        base_url="https://run.test",
+        api_key="run-key",
+        model_name="run-model",
+        context_window_k=64,
+        supports_thinking=True,
+        supports_reasoning_effort=True,
+        supports_image=True,
+    )
+
+    derived = profile.derive_for_run(
+        run=_RunRoute(model_config_id=9),
+        model_settings=runtime,
+    )
+
+    assert derived.model_settings.base_url == "https://run.test"
+    assert derived.model_settings.api_key == "run-key"
+    assert derived.model_settings.model_name == "run-model"
+    assert derived.model_settings.context_window_k == 64
+    assert derived.model_settings.supports_image is True
 
 
 def test_derive_for_run_run_reasoning_effort_overrides_profile() -> None:

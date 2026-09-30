@@ -131,16 +131,16 @@ export function shouldDisplayRunUsage(
     && runExists;
 }
 
-function stateNumber(state: unknown, key: string): number | null {
+function currentRunUsageInput(state: unknown): number | null {
   if (typeof state !== "object" || state === null) return null;
-  const value = (state as Record<string, unknown>)[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function stateNullableNumber(state: unknown, key: string): number | null {
-  if (typeof state !== "object" || state === null) return null;
-  const value = (state as Record<string, unknown>)[key];
-  return value === null ? null : stateNumber(state, key);
+  const transportState = state as TransportState;
+  const run = transportState.current_run_id === null
+    ? null
+    : transportState.runs.find((candidate) => candidate.runId === transportState.current_run_id);
+  const inputTokens = run?.usage?.input_tokens;
+  return typeof inputTokens === "number" && Number.isFinite(inputTokens) && inputTokens >= 0
+    ? inputTokens
+    : null;
 }
 
 function toneClass(tone: UsageTone): string {
@@ -159,9 +159,12 @@ function statusLabel(status: ContextUsagePresentation["status"]): string {
 }
 
 export function TaskContextUsage(): ReactElement {
-  const ratio = useAuiState((state) => stateNullableNumber(state.thread.state, "context_usage_ratio"));
-  const used = useAuiState((state) => stateNullableNumber(state.thread.state, "context_usage_used"));
-  const total = useAuiState((state) => stateNullableNumber(state.thread.state, "context_window_total"));
+  const used = useAuiState((state) => currentRunUsageInput(state.thread.state));
+  const total = useAuiState((state) => {
+    const value = (state.thread.state as unknown as TransportState).context_window_total;
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  });
+  const ratio = used !== null && total !== null && total > 0 ? used / total : Number.NaN;
   const presentation = getContextUsagePresentation(ratio ?? Number.NaN, used, total);
   const percent = presentation.percent === null ? 0 : Math.min(100, Math.max(0, presentation.percent));
 
@@ -221,7 +224,7 @@ export function TaskContextUsage(): ReactElement {
         </div>
         <div className="text-muted-foreground flex items-start gap-1.5 text-xs">
           <InfoIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-          <span>按当前有效上下文估算，不等同于计费 token。</span>
+          <span>按最后一个 Run 的 provider 输入 token 计算，不等同于计费总 token。</span>
         </div>
       </PopoverContent>
     </Popover>

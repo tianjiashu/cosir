@@ -141,8 +141,6 @@ describe("parseTransportState Run 级 error 严格校验对抗", () => {
     runs: [{ ...baseRun, error } as unknown as TransportRun],
     current_run_id: 1,
     approvals: {},
-    context_usage_ratio: null,
-    context_usage_used: null,
     context_window_total: null,
     error: null,
   });

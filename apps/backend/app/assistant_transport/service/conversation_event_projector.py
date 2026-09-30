@@ -27,7 +27,6 @@ _KNOWN_EVENT_TYPES = {
     "tool_call_created",
     "tool_call_status_changed",
     "tool_calls_settled",
-    "context_usage_updated",
     "tool_call_runtime_update",
 }
 

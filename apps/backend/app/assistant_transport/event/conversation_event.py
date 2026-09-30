@@ -2,7 +2,7 @@
 
 本模块只承载「把所有域事件收成一个可判别、可校验的类型」这一单一职责，不含任何事件定义本身。
 各域事件按职责分布在其域模块中（``run_event`` / ``message_event`` / ``tool_call_event`` /
-``tool_runtime_event`` / ``usage_event``），每个事件类自行实现 ``plan``（继承自
+``tool_runtime_event``），每个事件类自行实现 ``plan``（继承自
 ``ConversationEventEnvelope`` 的抽象方法），因此 projector 无需按类型分派。
 
 判别式联合的价值：
@@ -32,9 +32,8 @@ from app.assistant_transport.event.tool_call_event import (
     ToolCallStatusChangedEvent,
 )
 from app.assistant_transport.event.tool_runtime_event import ToolCallRuntimeUpdateEvent
-from app.assistant_transport.event.usage_event import ContextUsageUpdatedEvent
 
-# 按「产生顺序」而非字母序排列：run 建立 → 用户输入 → assistant 输出 → 工具 → 状态/计量，
+# 按「产生顺序」而非字母序排列：run 建立 → 用户输入 → assistant 输出 → 工具 → 状态，
 # 使本清单同时充当一次 run 的时间线说明。
 ConversationEvent = Annotated[
     RunInitializedEvent
@@ -45,8 +44,7 @@ ConversationEvent = Annotated[
     | ToolCallCreatedEvent
     | ToolCallStatusChangedEvent
     | ToolCallsSettledEvent
-    | ToolCallRuntimeUpdateEvent
-    | ContextUsageUpdatedEvent,
+    | ToolCallRuntimeUpdateEvent,
     Field(discriminator="type"),
 ]
 """任意一条 conversation 事实；``type`` 字段为判别式。"""

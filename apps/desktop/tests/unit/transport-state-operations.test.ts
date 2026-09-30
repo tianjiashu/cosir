@@ -35,8 +35,6 @@ function state(): TransportState {
     ],
     current_run_id: 1,
     approvals: {},
-    context_usage_ratio: null,
-    context_usage_used: null,
     context_window_total: null,
     error: null,
   };

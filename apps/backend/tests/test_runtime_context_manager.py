@@ -54,8 +54,6 @@ def _manager(context_service: _ContextService, *, next_sequence: int = 0) -> Run
     manager.current_task_id = 7
     manager.agent_profile = SimpleNamespace()
     manager.workspace_root = ""
-    manager.total_tokens = 0
-    manager.used_tokens = 0
     manager.compressor = None
     manager.context_service = context_service
     manager.current_run_id = None
@@ -63,7 +61,6 @@ def _manager(context_service: _ContextService, *, next_sequence: int = 0) -> Run
     manager._entries = []
     manager._message_sequence = next_sequence
     manager._listeners = []
-    manager._tool_schemas = ()
     manager._streaming_messages = {}
     return manager
 
@@ -75,7 +72,7 @@ class _RecordingListener:
     def __init__(self) -> None:
         self.events = []
 
-    def listen(self, event, result) -> None:
+    def listen(self, event) -> None:
         self.events.append(event)
 
 
@@ -86,7 +83,6 @@ def test_runtime_context_manager_owns_next_sequence_after_run_restart() -> None:
     manager = _manager(context_service, next_sequence=2)
     manager.begin_run(
         SimpleNamespace(task_id=7, id=2),
-        context_window_k=8,
     )
     manager.add_message(HumanMessage(content="second message"))
 
@@ -104,67 +100,12 @@ def test_runtime_context_manager_resume_keeps_persisted_run_entries() -> None:
     manager.begin_run(
         SimpleNamespace(task_id=7, id=2),
         execution_mode="resume",
-        context_window_k=8,
     )
 
     assert context_service.deleted == []
     assert manager.current_run_id == 2
     assert manager._entries == context_service.loaded
     assert manager._message_sequence == 5
-
-
-def test_runtime_context_manager_resume_keeps_tool_schemas_without_reprojecting(
-) -> None:
-    """resume 只装配本 Run 的 tool schema，不在绑定阶段投影事件（占用由写入/冷读对齐）。"""
-
-    context_service = _ContextService(max_sequence=4)
-    context_service.loaded = [
-        ContextEntry(HumanMessage(content="existing context"), 2, 3),
-    ]
-    manager = _manager(context_service, next_sequence=5)
-    manager._entries = list(context_service.loaded)
-    listener = _RecordingListener()
-    manager.add_change_listener(listener)
-    manager.begin_run(
-        SimpleNamespace(task_id=7, id=2),
-        execution_mode="resume",
-        context_window_k=8,
-        tool_schemas=(
-            {
-                "name": "read_file",
-                "description": "Read a file.",
-                "parameters": {"type": "object", "properties": {}},
-            },
-        ),
-    )
-
-    assert listener.events == []
-    assert manager.total_tokens == 8000
-    assert manager._tool_schemas[0]["name"] == "read_file"
-
-
-def test_runtime_context_manager_replaces_tool_schemas_between_runs() -> None:
-    context_service = _ContextService(max_sequence=0)
-    manager = _manager(context_service)
-
-    first_schema = {
-        "name": "read_file",
-        "description": "Read a file.",
-        "parameters": {"type": "object", "properties": {}},
-    }
-    manager.begin_run(
-        SimpleNamespace(task_id=7, id=2),
-        context_window_k=8,
-        tool_schemas=(first_schema,),
-    )
-    assert manager._tool_schemas[0]["name"] == "read_file"
-
-    manager.begin_run(
-        SimpleNamespace(task_id=7, id=3),
-        context_window_k=8,
-    )
-
-    assert manager._tool_schemas == ()
 
 
 def test_load_message_moves_existing_tool_result_before_later_human_message() -> None:

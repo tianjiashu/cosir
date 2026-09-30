@@ -43,8 +43,6 @@ def test_rebuild_empty_task_returns_valid_empty_snapshot() -> None:
         "runs": [],
         "current_run_id": None,
         "approvals": {},
-        "context_usage_ratio": None,
-        "context_usage_used": None,
         "context_window_total": None,
         "error": None,
     }
@@ -55,8 +53,6 @@ def test_validate_snapshot_rejects_current_run_that_is_not_present() -> None:
         "runs": [],
         "current_run_id": 99,
         "approvals": {},
-        "context_usage_ratio": None,
-        "context_usage_used": None,
         "context_window_total": None,
         "error": None,
     }
@@ -112,8 +108,6 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
         ],
         "current_run_id": 1,
         "approvals": {},
-        "context_usage_ratio": None,
-        "context_usage_used": None,
         "context_window_total": None,
         "error": None,
     }

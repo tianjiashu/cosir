@@ -235,7 +235,7 @@ function validateMessage(value: unknown, path: string, seenIds: Set<string>): vo
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["runs", "current_run_id", "approvals", "context_usage_ratio", "context_usage_used", "context_window_total", "error"], "snapshot");
+  requireExactKeys(state, ["runs", "current_run_id", "approvals", "context_window_total", "error"], "snapshot");
   if (!Array.isArray(state.runs)) throw new TransportSnapshotValidationError("runs", "数组");
   const runIds = new Set<number>();
   const activeRunIds: number[] = [];
@@ -262,9 +262,6 @@ export function parseTransportState(value: unknown): TransportState {
     throw new TransportSnapshotValidationError("current_run_id", "必须指向唯一的 active Run");
   }
   if (!isRecord(state.approvals) || Object.keys(state.approvals).length !== 0) throw new TransportSnapshotValidationError("approvals", "空对象");
-  const ratio = state.context_usage_ratio;
-  if (ratio !== null && (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 0)) throw new TransportSnapshotValidationError("context_usage_ratio", "非负有限数字或 null");
-  requireNullableNonNegativeInteger(state.context_usage_used, "context_usage_used");
   requireNullableNonNegativeInteger(state.context_window_total, "context_window_total");
   if (state.error !== null) validateError(state.error, "error");
   return state as unknown as TransportState;

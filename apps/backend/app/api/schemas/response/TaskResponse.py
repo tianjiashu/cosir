@@ -19,9 +19,7 @@ class TaskResponse(BaseModel):
         parent_task_id: 父任务标识，仅委派子任务有值。
         parent_run_id: 父轮次标识，仅委派子任务有值。
         delegation_id: 所属委派标识，仅委派子任务有值。
-        context_usage_used: 最近一次上下文窗口已用 token（运行时回写，可能为 None）。
-        context_window_total: 该任务模型的上下文窗口上限 token（由 resolve_context_window
-            动态计算，可能为 None）。
+        context_window_total: 最后一个 Run 使用的模型上下文窗口上限 token，可能为 None。
         created_at: 创建时间文本。
         updated_at: 更新时间文本。
 
@@ -45,7 +43,6 @@ class TaskResponse(BaseModel):
     parent_task_id: int | None = None
     parent_run_id: int | None = None
     delegation_id: int | None = None
-    context_usage_used: int | None = None
     context_window_total: int | None = None
     created_at: str
     updated_at: str
@@ -62,13 +59,12 @@ class TaskResponse(BaseModel):
 
         把领域值对象前向映射为 API 响应模型，避免 ``**to_dict()`` 因字典值类型
         被推断为 ``str | None`` 而与必填 ``str`` 字段冲突（mypy 报错），同时消除
-        重复的字段拆解逻辑。``context_window_total`` 为 API 层动态计算的上下文窗口
-        上限，不来自 ``TaskRecord``（record 仅持有已用 token），故以关键字参数注入。
+        重复的字段拆解逻辑。``context_window_total`` 为 Task 持久化的最后一个 Run
+        上下文窗口事实，API 层只负责显式映射。
 
         参数:
             record: 待转换的任务记录。
-            context_window_total: 该任务模型经 ``resolve_context_window`` 计算得到的
-                上下文窗口上限 token；无法解析时为 None。
+            context_window_total: 最后一个 Run 使用的模型上下文窗口上限。
 
         返回:
             与记录字段对齐的 ``TaskResponse`` 实例。
@@ -90,7 +86,6 @@ class TaskResponse(BaseModel):
             parent_task_id=record.parent_task_id,
             parent_run_id=record.parent_run_id,
             delegation_id=record.delegation_id,
-            context_usage_used=record.context_usage_used,
             context_window_total=context_window_total,
             created_at=to_text(record.created_at),
             updated_at=to_text(record.updated_at),

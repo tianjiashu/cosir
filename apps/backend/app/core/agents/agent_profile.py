@@ -268,8 +268,12 @@ class AgentProfile:
             ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。传入时按工具名
                 从 ``allowed_tools`` 中差集收窄（``select_tools`` 同样按工具名过滤，
                 两处口径必须一致）。
-            model_settings: 本次 Run 已解析出的完整运行配置；``None`` 表示沿用 profile
-                当前已物化的配置。
+            model_settings: 本次 Run 已物化的完整运行配置（由 ``run.model_config_id``
+                解析而来），即本次执行的运行时参数，优先级高于本 profile：其连接与能力
+                字段独占结果（不回落 profile），其已设置的用户偏好也优先。profile 只在
+                传参未设置某项偏好时充当默认值，因此传参方必须提供含连接与能力字段的
+                对象。``None`` 表示本 Run 未物化配置，沿用 profile 自身的设置（未物化时
+                后续 ``require_runtime_config`` 会失败）。
 
         返回:
             绑定当前 run 的独立 ``AgentProfile`` 副本；``self`` 原实例不被修改。
@@ -288,8 +292,12 @@ class AgentProfile:
         if ban_tools is not None:
             banned = set(ban_tools)
             changes["allowed_tools"] = [t for t in self.allowed_tools if t not in banned]
+        # 分层合并，优先级从高到低：run.extra.reasoning_effort（下方单独叠加）> 传参
+        # （本 Run 由 run.model_config_id 物化的运行时参数）> profile 用户偏好默认值。
+        # 只有「本 Run 的运行时参数」能提供 base_url/api_key/model_name 等字段，profile
+        # 既不能覆盖也不能顶替它们；传参未设置的偏好项才由 profile 补齐。
         effective_model_settings = (
-            self.model_settings.with_overrides(model_settings)
+            model_settings.with_preference_defaults(self.model_settings)
             if model_settings is not None
             else replace(self.model_settings)
         )

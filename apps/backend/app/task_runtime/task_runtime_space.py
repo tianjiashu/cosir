@@ -44,9 +44,6 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from langchain_core.messages import SystemMessage
 
 from app.core.context.context_listener.context_compress_listener import ContextCompressListener
-from app.core.context.context_listener.context_usage_compute_listener import (
-    ContextUsageComputeListener,
-)
 
 if TYPE_CHECKING:
     from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
@@ -316,7 +313,6 @@ class TaskRuntimeSpace:
                         workspace_root=current_workspace.root_path,
                         is_fork=current_task.task_type == "fork",
                     )
-                    .add_change_listener(ContextUsageComputeListener(current_task.id))
                     .add_change_listener(ContextCompressListener())
                 )
                 self._context_manager = _weak_ref(manager)
@@ -349,8 +345,7 @@ class TaskRuntimeSpace:
             if self._context_manager is not None and self._context_manager() is not None:
                 return
             installed = (
-                manager.add_change_listener(ContextUsageComputeListener(self.task_id))
-                .add_change_listener(ContextCompressListener())
+                manager.add_change_listener(ContextCompressListener())
             )
             self._context_manager = _weak_ref(installed)
 

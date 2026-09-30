@@ -20,7 +20,7 @@ class ConversationEventEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     task_id: int = Field(ge=1)
-    # ContextUsageUpdatedEvent 不携带 run_id；其余 Run 内事件必须携带。
+    # 所有当前事件都属于某个 Run；保留可空类型以复用底层事件信封契约。
     run_id: int | None = None
     event_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1)
     step_id: str | None = None

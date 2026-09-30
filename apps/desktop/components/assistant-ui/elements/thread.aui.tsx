@@ -16,6 +16,7 @@ import {
 } from "@assistant-ui/react";
 
 import { StopButton } from "@/components/assistant/stop-button";
+import { RunIdentityDisplay } from "@/components/assistant/run-identity-display";
 import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-display";
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
@@ -672,6 +673,12 @@ const AssistantMessageDefault: FC = () => {
   const custom = useAuiState((state) => state.message.metadata.custom);
   const isLastRunMessage = custom?.isLastRunMessage === true;
   const runId = typeof custom?.runId === "number" ? custom.runId : null;
+  const runStatus = useAuiState((state) => {
+    const transportState = state.thread.state as unknown as TransportState;
+    return runId === null
+      ? null
+      : transportState.runs.find((candidate) => candidate.runId === runId)?.status ?? null;
+  });
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const { forkAvailable = false, forkingRunId = null, onForkRun, cancellingRunId = null, taskId, readonly = false } = useContext(ThreadContext);
   const canFork = !readonly && isLastRunMessage && runId !== null && forkAvailable && !isRunning;
@@ -720,6 +727,12 @@ const AssistantMessageDefault: FC = () => {
         </MessagePrimitive.GroupedParts>
         <MessageError />
       </div>
+      <RunIdentityDisplay
+        taskId={taskId}
+        runId={runId}
+        status={runStatus}
+        visible={isLastRunMessage}
+      />
       {!readonly && <RunUsageDisplay runId={runId} visible={isLastRunMessage} />}
       <ActionBarPrimitive.Root hideWhenRunning className="mt-1 flex gap-1">
         <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>

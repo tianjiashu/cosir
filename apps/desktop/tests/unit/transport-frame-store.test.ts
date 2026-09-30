@@ -20,8 +20,6 @@ const state = (messages: TransportMessage[]): TransportState => ({
   }],
   current_run_id: 1,
   approvals: {},
-  context_usage_ratio: null,
-  context_usage_used: null,
   context_window_total: null,
   error: null,
 });
@@ -301,7 +299,7 @@ describe("TransportFrameStore", () => {
     store.applyFrame({
       task_id: 1,
       kind: "mutation",
-      mutations: [{ kind: "set", path: ["context_usage_used"], value: 12 }],
+      mutations: [{ kind: "set", path: ["context_window_total"], value: 120_000 }],
       target_run_id: 1,
       target_run_status: "running",
     });

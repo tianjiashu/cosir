@@ -44,6 +44,7 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.init_schema import APP_MODELS, initialize_app_schema
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
+from app.storage.model.model_config_model import ModelConfigModel
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 _USAGE = {
@@ -411,7 +412,10 @@ def _command_service(store) -> ConversationRunCommandService:
     service._run_state = run_state_service
     service._state = store.state
     service._context = store.context
-    service._task = SimpleNamespace()
+    service._task = SimpleNamespace(
+        get_latest_run=store.runs.get_latest_by_task,
+        get_context_window_total=lambda task_id: store.tasks.get(task_id).context_window_total,
+    )
     return service
 
 
@@ -438,7 +442,7 @@ def _start_or_attach_under_operation(
                 ConversationRunCommandInput(command_id="same-command", command_type="new")
             ],
             payload_hash="same-payload",
-            model_config_id=None,
+            model_config_id=1,
             reasoning_effort=None,
             task_id=store.task.id,
             run_command=ConversationRunCommand(display_text="hello"),
@@ -457,6 +461,26 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
         "app.assistant_transport.service.conversation_run_command_service.main_session_factory",
         lambda: store.factory,
     )
+    monkeypatch.setattr(
+        "app.service.task.conversation_run_service.get_model_config_service",
+        lambda: SimpleNamespace(
+            get_config=lambda _config_id: SimpleNamespace(
+                supports_reasoning_effort=False,
+                supports_image=False,
+                context_window_k=128,
+            )
+        ),
+    )
+    with store.factory.begin() as session:
+        session.add(
+            ModelConfigModel(
+                config_name="acceptance-model",
+                base_url="http://localhost",
+                api_key="test-key",
+                model_name="acceptance-model",
+                context_window_k=128,
+            )
+        )
     task_runtime_spaces.close()
     # Task 操作闸门在重构后收口到 API 层（见 assistant_api 的 ``task_run_operation``），
     # ``start_or_attach`` 变成假定调用方已持闸的内部原语。因此这里按生产调用方的方式在
@@ -500,7 +524,7 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
                 ConversationRunCommandInput(command_id="task-one-command", command_type="new")
             ],
             payload_hash="payload-one",
-            model_config_id=None,
+            model_config_id=1,
             reasoning_effort=None,
             task_id=store.task.id,
             run_command=ConversationRunCommand(display_text="one"),
@@ -511,7 +535,7 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
                 ConversationRunCommandInput(command_id="task-two-command", command_type="new")
             ],
             payload_hash="payload-two",
-            model_config_id=None,
+            model_config_id=1,
             reasoning_effort=None,
             task_id=second_task.id,
             run_command=ConversationRunCommand(display_text="two"),
@@ -613,5 +637,3 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     assert {call_id: part["status"] for call_id, part in repaired_parts.items()} == {
         "call-interrupted": "cancelled"
     }
-
-

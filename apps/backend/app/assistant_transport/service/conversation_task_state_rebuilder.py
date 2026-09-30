@@ -328,16 +328,11 @@ class ConversationTaskStateRebuilder:
                     error=ConversationTaskStateRebuilder.build_run_error(run),
                 )
             )
-        used = task.context_usage_used
-        total = task.context_window_total
-        ratio = None if used is None or total is None or total == 0 else used / total
         return ConversationStateSnapshot(
             runs=snapshot_runs,
             current_run_id=task.current_run_id,
-            context_usage_used=used,
-            context_window_total=total,
+            context_window_total=task.context_window_total,
             error=None,
-            context_usage_ratio=ratio,
             approvals={},
         )
 

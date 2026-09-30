@@ -31,7 +31,6 @@ from app.core.context.context_compressor.context_compressor import ContextCompre
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_listener.context_listener import ContextListener
 from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
-from app.core.context.context_listener.listener_result import ListenerResult
 from app.core.context.streaming_message_state import StreamingMessageState
 from app.core.context.tool_call_closure import (
     build_placeholder_tool_message,
@@ -66,8 +65,6 @@ class RuntimeContextManager:
     current_task_id: int
     agent_profile: AgentProfile
     workspace_root: str = ""
-    total_tokens: int = 0
-    used_tokens: int = 0
     compressor: ContextCompressor | None = None
     current_run_id: int | None = None
     # fork Task 的运行时标记；它只描述 Task 身份，不改变 context 持久化规则。
@@ -83,8 +80,6 @@ class RuntimeContextManager:
     _message_sequence: int = field(default=0, init=False)
     # 上下文变化订阅者列表：按 order 排序，按需插入。
     _listeners: list[ContextListener] = field(default_factory=list, init=False)
-    # 当前 Conversation Run 实际暴露给模型的工具 schema；只保存运行时配置，不落库。
-    _tool_schemas: tuple[Mapping[str, Any], ...] = field(default_factory=tuple, init=False)
     # key=(run_id, stream_id) → 一条流式草稿的进程内聚合状态。复合 key 区分不同 run / step
     # 的草稿；partial 不进 _entries，避免被下一次模型调用误读。
     _streaming_messages: dict[tuple[int | None, str], StreamingMessageState] = field(
@@ -215,9 +210,6 @@ class RuntimeContextManager:
         self,
         run: ConversationRunRecord,
         execution_mode: ExecutionMode = "fresh",
-        *,
-        context_window_k: int,
-        tool_schemas: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """绑定 run，并从 context 中分离历史与当前 run 条目。
 
@@ -225,11 +217,6 @@ class RuntimeContextManager:
             run: 待执行的 Conversation Run。
             execution_mode: ``fresh`` 清理该 run 的旧消息；``resume`` 保留并重新加载
                 该 run 已持久化的消息。
-            context_window_k: 本次解析得到的模型上下文窗口，单位为 K；来自模型配置，
-                不从 Run 记录重复读取。
-            tool_schemas: 当前 Run 实际绑定给模型的模型侧工具 schema；只保存在运行时，
-                不写入 Task context 持久化记录。
-
         返回:
             无。
 
@@ -237,14 +224,11 @@ class RuntimeContextManager:
             ValueError: run 不属于当前 task。
 
         副作用:
-            更新 run 归属、模型窗口并通知 listener 当前 Task context。
+            更新 run 归属并准备当前 Task context。
         """
 
         if run.task_id != self.current_task_id:
             raise ValueError(f"run {run.id} belongs to task {run.task_id}")
-
-        # manager 跨 Run 复用，必须在绑定新 Run 时替换而不是沿用旧工具集合。
-        self._tool_schemas = tuple(copy.deepcopy(schema) for schema in tool_schemas)
 
         if execution_mode == "fresh":
             # fresh 仍按持久化 run 身份清理，而不是依赖进程内指针，避免重跑时重复
@@ -262,7 +246,6 @@ class RuntimeContextManager:
         # SQLite 读取最后序号并推进一次，后续消息只由 ``add_message`` 自增。否则首轮
         # 使用 0/1 后，第二轮会再次尝试写入 1，触发 (task_id, sequence) 唯一约束。
         self.current_run_id = run.id
-        self.total_tokens = context_window_k * 1000
 
     def add_change_listener(self, listener: ContextListener) -> RuntimeContextManager:
         """注册一个按 order 执行的 context listener。
@@ -730,19 +713,11 @@ class RuntimeContextManager:
     ) -> None:
         """向 listener 发布 context 完整快照。"""
 
-        result = ListenerResult(self.used_tokens)
         snapshot = copy.deepcopy(entries)
         for listener in self._listeners:
             try:
                 listener.listen(
-                    ListenerEvent(
-                        event_type,
-                        snapshot,
-                        self.used_tokens,
-                        self.total_tokens,
-                        self._tool_schemas,
-                    ),
-                    result,
+                    ListenerEvent(event_type, snapshot),
                 )
             except Exception:
                 log.exception(
@@ -757,7 +732,6 @@ class RuntimeContextManager:
                         },
                     },
                 )
-        self.used_tokens = result.usage
 
 
 def _as_ai_message(chunk: AIMessageChunk) -> AIMessage:

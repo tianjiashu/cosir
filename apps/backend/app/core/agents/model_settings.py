@@ -132,6 +132,33 @@ class ModelSettings:
         }
         return replace(self, **changes)
 
+    def with_preference_defaults(self, fallback: ModelSettings | None) -> ModelSettings:
+        """用另一份设置补齐本对象缺失的用户覆盖项。
+
+        与 :meth:`with_overrides` 的区别：本对象（通常是本次 Run 物化出的运行配置）的
+        运行时字段与已设置的覆盖项全部保留，``fallback`` 只在对应覆盖项为 ``None`` 时
+        提供默认值，**不会覆盖**本对象已有的偏好。运行时字段不参与补齐，因此不会用
+        一份未物化对象的连接信息顶替本对象的连接配置。
+
+        参数:
+            fallback: 偏好默认值来源（通常是 Agent profile 的用户覆盖项）；``None``
+                表示没有默认值可补，返回本对象的等值副本。
+
+        返回:
+            补齐后的新对象；``self`` 与 ``fallback`` 均不被修改。
+        """
+
+        if fallback is None:
+            return replace(self)
+        changes = {
+            name: getattr(fallback, name)
+            for name in _override_fields()
+            if getattr(self, name) is None and getattr(fallback, name) is not None
+        }
+        if not changes:
+            return replace(self)
+        return replace(self, **changes)
+
     def require_runtime_config(self) -> ModelSettings:
         """断言当前设置已具备模型构建所需的物化字段。"""
 

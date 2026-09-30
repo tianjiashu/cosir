@@ -70,8 +70,6 @@ export type TransportFrameStoreOptions = {
   performanceProbe?: AssistantPerformanceProbe;
 };
 
-const TERMINAL_STATUSES = new Set(["idle", "completed", "failed", "cancelled", "interrupted"]);
-
 /**
  * 在投影存储接收 SSE frame 前校验并归一化轻量 envelope。
  * 完整 state 仍由 snapshot validator 负责；这里仅负责 frame 元数据和 mutation 形状，
@@ -552,3 +550,4 @@ function updateAtPath(
   next[key as string] = updateAtPath(next[key as string], rest, kind, value);
   return next;
 }
+const TERMINAL_STATUSES = new Set(["idle", "completed", "failed", "cancelled", "interrupted"]);

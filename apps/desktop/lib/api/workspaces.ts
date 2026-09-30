@@ -25,7 +25,6 @@ export type WorkspaceTask = {
   } | null;
   fork_available: boolean;
   execution_status: string | null;
-  context_usage_used: number | null;
   context_window_total: number | null;
   created_at: string;
   updated_at: string;

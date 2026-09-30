@@ -1,6 +1,4 @@
 """Conversation Transport Task snapshot 的中性 JSON 契约。"""
-import math
-
 from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
@@ -11,8 +9,6 @@ _SNAPSHOT_KEYS = {
     "runs",
     "current_run_id",
     "approvals",
-    "context_usage_ratio",
-    "context_usage_used",
     "context_window_total",
     "error",
 }
@@ -51,15 +47,13 @@ _USAGE_KEYS = {
 class ConversationStateSnapshot(TypedDict):
     """一个 Task 的完整 Transport state。
 
-    Task 只持有当前 context window 测量结果；每个 Run 的消息、生命周期和模型 token
-    usage 均位于 ``runs`` 中。该结构是 0-1 契约，不提供旧平铺 snapshot 兼容迁移。
+    Task 只持有最后一个 Run 的上下文窗口总量；每个 Run 的消息、生命周期和模型 token
+    usage 均位于 ``runs`` 中。Task usage 展示直接读取当前 Run 的 usage，不复制为平铺字段。
     """
 
     runs: list[ConversationRunSnapshot]
     current_run_id: int | None
     approvals: dict[str, object]
-    context_usage_ratio: float | None
-    context_usage_used: int | None
     context_window_total: int | None
     error: ConversationStateError | None
 
@@ -71,8 +65,6 @@ def empty_snapshot() -> ConversationStateSnapshot:
         "runs": [],
         "current_run_id": None,
         "approvals": {},
-        "context_usage_ratio": None,
-        "context_usage_used": None,
         "context_window_total": None,
         "error": None,
     }
@@ -108,8 +100,7 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
 
     if not isinstance(state, dict) or set(state) != _SNAPSHOT_KEYS:
         raise ValueError(
-            "snapshot must contain runs, current_run_id, approvals, context_usage_ratio, "
-            "context_usage_used, context_window_total and error"
+            "snapshot must contain runs, current_run_id, approvals, context_window_total and error"
         )
     if not isinstance(state["runs"], list) or not isinstance(state["approvals"], dict):
         raise ValueError("snapshot runs and approvals must be arrays/object")
@@ -121,22 +112,11 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     ):
         raise ValueError("snapshot current_run_id must be a non-negative integer or null")
 
-    ratio = state["context_usage_ratio"]
-    if ratio is not None and (
-        not isinstance(ratio, int | float)
-        or isinstance(ratio, bool)
-        or ratio < 0
-        or not math.isfinite(ratio)
+    value = state["context_window_total"]
+    if value is not None and (
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
     ):
-        raise ValueError(
-            "snapshot context_usage_ratio must be a finite non-negative number or null"
-        )
-    for field in ("context_usage_used", "context_window_total"):
-        value = state[field]
-        if value is not None and (
-            not isinstance(value, int) or isinstance(value, bool) or value < 0
-        ):
-            raise ValueError(f"snapshot {field} must be a non-negative integer or null")
+        raise ValueError("snapshot context_window_total must be a non-negative integer or null")
 
     seen_run_ids: set[int] = set()
     for run in state["runs"]:

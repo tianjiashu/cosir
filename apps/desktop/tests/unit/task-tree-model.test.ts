@@ -16,7 +16,6 @@ function task(taskId: number, title: string, options: Partial<WorkspaceTask> = {
     task_type: "user",
     fork_available: true,
     execution_status: null,
-    context_usage_used: null,
     context_window_total: null,
     created_at: `2026-01-0${taskId}T00:00:00.000Z`,
     updated_at: `2026-01-0${taskId}T00:00:00.000Z`,

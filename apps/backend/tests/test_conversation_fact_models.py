@@ -512,7 +512,6 @@ def test_task_record_round_trips_current_run_and_context_window() -> None:
         title="task",
         task_type="user",
         current_run_id=11,
-        context_usage_used=90,
         context_window_total=128,
         created_at=now.isoformat(),
         updated_at=now.isoformat(),
@@ -521,7 +520,6 @@ def test_task_record_round_trips_current_run_and_context_window() -> None:
     record = TaskRecord.from_model(model)
 
     assert record.current_run_id == 11
-    assert record.context_usage_used == 90
     assert record.context_window_total == 128
     assert record.to_dict()["current_run_id"] == 11
     assert record.to_dict()["context_window_total"] == 128
@@ -547,7 +545,6 @@ def test_task_crud_new_task_has_empty_run_and_window_defaults() -> None:
                 extra=None,
             )
 
-        assert record.context_usage_used == 0
         assert record.current_run_id is None
         assert record.context_window_total is None
     finally:

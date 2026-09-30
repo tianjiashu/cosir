@@ -391,8 +391,6 @@ class ReactLikeWorkflow(AgentWorkflow):
         runtime_context_manager.begin_run(
             run,
             execution_mode,
-            context_window_k=resolved_model.context_window_k,
-            tool_schemas=tool_schemas,
         )
         # 本 Run 的初始 user 消息属于该 Run 的 canonical 上下文事实：fresh 时
         # ``begin_run`` 已清空该 Run 的旧条目，这里补写基线；resume 时同一 Run 的
