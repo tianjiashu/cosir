@@ -367,7 +367,9 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
     <InlineAttachmentInput
       value={composer.value}
       onChange={composer.setText}
-      onSubmit={() => composer.send()}
+      onSubmit={() => {
+        if (composer.canSend) composer.send();
+      }}
       attachments={fileAttachments}
       onExternalFiles={addExternalFiles}
       onRemoveAttachment={removeAttachment}
@@ -391,9 +393,23 @@ export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: b
     for (const attachment of picked) {
       if (existingIds.has(attachment.id)) continue;
       await aui.composer.addAttachment(attachment.file);
-      existingIds.add(attachment.id);
-      if (attachment.kind === "file") {
-        insertedFiles.push({ id: attachment.id, name: attachment.name, kind: "file" });
+      const added = aui.composer.getState().attachments.find(
+        (candidate) => candidate.file === attachment.file && !existingIds.has(candidate.id),
+      );
+      if (!added) {
+        void frontendLog("WARNING", "composer_picker_attachment_identity_missing", "附件已加入 composer，但未找到实际附件身份", {
+          data: { pickedId: attachment.id, name: attachment.name },
+        });
+        continue;
+      }
+      existingIds.add(added.id);
+      if (added.type !== "image") {
+        insertedFiles.push({
+          id: added.id,
+          name: added.name,
+          kind: "file",
+          tokenId: inlineAttachmentTokenId(added),
+        });
       }
     }
     insertion.insert(insertedFiles);

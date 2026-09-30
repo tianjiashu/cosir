@@ -78,7 +78,10 @@ import {
   ComposerAttachments,
   InlineComposerInput,
 } from "@/components/assistant-ui/elements/attachment.aui";
-import { InlineComposerInsertionProvider } from "@/components/composer/inline-attachment-input";
+import {
+  INLINE_ATTACHMENT_INPUT_CLASS_NAME,
+  InlineComposerInsertionProvider,
+} from "@/components/composer/inline-attachment-input";
 
 export type ThreadComponents = {
   AssistantMessage?: ComponentType;
@@ -239,7 +242,7 @@ const ComposerBoundary = memo(function ComposerBoundary({
 const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { autoFocus: boolean; taskId?: number; workspaceRoot?: string }) {
   return (
   <InlineComposerInsertionProvider>
-    <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
+    <ComposerPrimitive.Root className="border-border/60 bg-card focus-within:ring-ring/20 focus-within:ring-2 flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
       <div className="flex min-w-0 items-center px-1">
         <ComposerPromptToolbar />
       </div>
@@ -247,7 +250,7 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
         <ComposerAttachments />
         <InlineComposerInput
           placeholder="输入任务，例如：帮我查找登录相关代码…"
-          className="text-foreground placeholder:text-muted-foreground/60 max-h-48 min-h-20 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
+          className={INLINE_ATTACHMENT_INPUT_CLASS_NAME}
           autoFocus={autoFocus}
           aria-label="消息输入"
         />
@@ -642,14 +645,14 @@ const UserEditMessage: FC = () => {
       }}
     >
       <InlineComposerInsertionProvider>
-        <ComposerPrimitive.Root className="border-border/60 bg-card flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
+        <ComposerPrimitive.Root className="border-border/60 bg-card focus-within:ring-ring/20 focus-within:ring-2 flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
           <div className="flex min-w-0 items-center px-1">
             <ComposerPromptToolbar disabled={isHydrating || isRecoveryActive} />
           </div>
           <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
             <ComposerAttachments />
             <InlineComposerInput
-              className="text-foreground placeholder:text-muted-foreground/60 max-h-48 min-h-20 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
+              className={INLINE_ATTACHMENT_INPUT_CLASS_NAME}
               autoFocus
               suspendAttachmentReconciliation={isHydrating || isRecoveryActive}
               aria-label="编辑消息"

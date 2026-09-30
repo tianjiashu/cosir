@@ -4,7 +4,10 @@ import {
   shouldSubmitOnEnter,
   FILE_ATTACHMENT_TOKEN_PREFIX,
   FILE_ATTACHMENT_TOKEN_SUFFIX,
+  insertInlineAttachmentsAtOffset,
+  isCurrentEditorRevision,
   renderInlineAttachmentHtml,
+  shouldPreservePendingEditorValue,
 } from "@/components/composer/inline-attachment-input";
 
 function enterEvent(overrides: Partial<{
@@ -45,6 +48,38 @@ describe("composer Enter submission guard", () => {
   it("keeps Shift+Enter and already-handled events out of submission", () => {
     expect(shouldSubmitOnEnter(enterEvent({ shiftKey: true }), false)).toBe(false);
     expect(shouldSubmitOnEnter(enterEvent({ defaultPrevented: true }), false)).toBe(false);
+  });
+});
+
+describe("异步附件插入时序契约", () => {
+  it("在异步附件完成时基于最新文本和光标合并 token", () => {
+    const beforeAttachment = insertInlineAttachmentsAtOffset("初始", 1, [
+      { id: "file-1", name: "设计说明.md" },
+    ]);
+    const afterUserContinuesTyping = insertInlineAttachmentsAtOffset("初始继续输入", 4, [
+      { id: "file-1", name: "设计说明.md" },
+    ]);
+
+    expect(beforeAttachment.value).toBe("初[[cosir-file:file-1]]始");
+    expect(afterUserContinuesTyping.value).toBe("初始继续[[cosir-file:file-1]]输入");
+    expect(afterUserContinuesTyping.caretOffset).toBe("初始继续".length + "[[cosir-file:file-1]]".length);
+  });
+
+  it("用户继续编辑后，旧的光标恢复任务失效", () => {
+    const scheduledRevision = 3;
+
+    expect(isCurrentEditorRevision(scheduledRevision, scheduledRevision)).toBe(true);
+    expect(isCurrentEditorRevision(scheduledRevision + 1, scheduledRevision)).toBe(false);
+  });
+
+  it("用户继续输入后仍保留本地最新值，直到受控 value 追上", () => {
+    const lastPropValue = "初始";
+    const pendingAfterAttachment = "初始[[cosir-file:file-1]]";
+    const pendingAfterTyping = `${pendingAfterAttachment}继续`;
+
+    expect(shouldPreservePendingEditorValue("初始", lastPropValue, pendingAfterAttachment)).toBe(true);
+    expect(shouldPreservePendingEditorValue("初始", lastPropValue, pendingAfterTyping)).toBe(true);
+    expect(shouldPreservePendingEditorValue(pendingAfterTyping, lastPropValue, pendingAfterTyping)).toBe(false);
   });
 });
 
@@ -96,6 +131,17 @@ describe("inline attachment HTML rendering", () => {
     expect(html).toContain("cosir-inline-image-token");
     expect(html).toContain("图片：截图.png");
     expect(html).toContain(`data-attachment-id="cosir-attachment://${imageId}"`);
+  });
+
+  it("重新计算附件 token 身份时能渲染变更后的 token", () => {
+    const value = "[[cosir-file:new-id]]";
+    const html = renderInlineAttachmentHtml(value, [
+      { id: "attachment-id", name: "说明.md", tokenId: "new-id" },
+    ]);
+
+    expect(html).toContain('data-token-id="new-id"');
+    expect(html).toContain("说明.md");
+    expect(html).not.toContain("附件已失效");
   });
 
   it("renders an unmatched token as synchronizing while the draft is still being written", () => {

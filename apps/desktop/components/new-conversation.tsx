@@ -7,6 +7,7 @@ import { ComposerControls } from "@/components/composer/composer-controls";
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
 import { ToolGroupSelector } from "@/components/composer/tool-group-selector";
 import {
+  INLINE_ATTACHMENT_INPUT_CLASS_NAME,
   InlineAttachmentInput,
   InlineComposerInsertionProvider,
   useInlineComposerInsertion,
@@ -324,7 +325,7 @@ export function NewConversation({
               setAttachments((current) => current.filter((attachment) => attachment.id !== fileId));
             }}
             placeholder="你想让我们在这个工作区中构建什么？"
-            className="min-h-24 w-full resize-none bg-transparent px-2 py-1 text-base outline-none"
+            className={INLINE_ATTACHMENT_INPUT_CLASS_NAME}
             disabled={submitting}
             aria-label="新对话内容"
             autoFocus

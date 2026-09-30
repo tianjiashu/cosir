@@ -303,7 +303,36 @@
     max-height: calc(100dvh - 2rem);
   }
 
-  .cosir-inline-file-token {
+  /* contenteditable 没有原生 placeholder，使用受控的 data-empty 状态呈现提示。 */
+  [contenteditable="true"][data-placeholder][data-empty="true"]::before,
+  [contenteditable="false"][data-placeholder][data-empty="true"]::before {
+    content: attr(data-placeholder);
+    display: block;
+    color: var(--muted-foreground);
+    opacity: 0.65;
+    pointer-events: none;
+    white-space: pre-wrap;
+  }
+
+  [contenteditable="true"][data-placeholder][data-empty="true"]:focus::before {
+    opacity: 0.8;
+  }
+
+  [contenteditable="false"][data-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  [contenteditable][data-disabled="true"] .cosir-inline-file-token-remove {
+    pointer-events: none;
+  }
+
+  [contenteditable][data-disabled="true"] .cosir-inline-file-token-remove {
+    pointer-events: none;
+  }
+
+  .cosir-inline-file-token,
+  .cosir-inline-image-token {
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
@@ -320,7 +349,8 @@
     transition: background-color 0.15s ease, border-color 0.15s ease;
   }
 
-  .cosir-inline-file-token:hover {
+  .cosir-inline-file-token:hover,
+  .cosir-inline-image-token:hover {
     border-color: color-mix(in oklab, var(--foreground) 18%, var(--border));
   }
 

@@ -30,6 +30,15 @@ export type InlineFileAttachment = {
   tokenId?: string;
 };
 
+/**
+ * 三种 composer 输入场景共用的编辑区视觉契约。
+ *
+ * 高度、内边距、字体和焦点轮廓集中在这里，调用方只补充场景级布局，不再分别维护
+ * 新建会话、主会话和编辑消息的输入框尺寸。
+ */
+export const INLINE_ATTACHMENT_INPUT_CLASS_NAME =
+  "text-foreground min-h-20 w-full bg-transparent px-2.5 py-2 text-base leading-6 outline-none focus-visible:outline-none data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-60";
+
 type InlineComposerInsertionContextValue = {
   register: (handler: (attachments: readonly InlineFileAttachment[]) => void) => () => void;
   insert: (attachments: readonly InlineFileAttachment[]) => void;
@@ -285,6 +294,83 @@ function removePlaceholder(value: string, kind: "file" | "image", tokenId: strin
   return value.replace(hiddenToken, "").replace(plainToken, "");
 }
 
+/**
+ * 在逻辑文本的指定偏移处插入附件 token。
+ *
+ * 负责什么：按调用方提供的顺序，把附件转换为内联 token 并返回新文本与新光标位置。
+ * 不负责什么：不修改附件对象、不写入 composer，也不判断附件是否已完成上传。
+ *
+ * 参数:
+ *     value: 当前受控文本，可能已经包含普通文本和已有 token。
+ *     offset: 逻辑文本中的插入偏移；超出范围时收敛到文本边界。
+ *     attachments: 要插入的附件视图，`kind` 与 `tokenId` 决定 token 身份。
+ *
+ * 返回:
+ *     插入后的文本以及位于最后一个新 token 之后的逻辑光标偏移。
+ *
+ * 异常/副作用:
+ *     无；纯函数。
+ */
+export function insertInlineAttachmentsAtOffset(
+  value: string,
+  offset: number,
+  attachments: readonly InlineFileAttachment[],
+): { value: string; caretOffset: number } {
+  let nextValue = value;
+  let nextOffset = Math.min(Math.max(0, offset), value.length);
+  for (const attachment of attachments) {
+    const kind = attachment.kind ?? "file";
+    const tokenId = attachment.tokenId ?? attachment.id;
+    const token = `[[cosir-${kind}:${tokenId}]]`;
+    nextValue = `${nextValue.slice(0, nextOffset)}${token}${nextValue.slice(nextOffset)}`;
+    nextOffset += token.length;
+  }
+  return { value: nextValue, caretOffset: nextOffset };
+}
+
+/**
+ * 判断异步操作排队的光标恢复是否仍属于当前编辑代际。
+ *
+ * 负责什么：阻止旧的 requestAnimationFrame 在用户已经继续编辑后抢回光标。
+ * 不负责什么：不执行恢复、不管理 revision 的递增；revision 由输入事件和程序化写入边界维护。
+ *
+ * 参数:
+ *     currentRevision: 当前编辑器 revision。
+ *     scheduledRevision: 排队恢复光标时记录的 revision。
+ *
+ * 返回:
+ *     仅当两者相等时返回 true。
+ *
+ * 异常/副作用:
+ *     无；纯函数。
+ */
+export function isCurrentEditorRevision(currentRevision: number, scheduledRevision: number): boolean {
+  return currentRevision === scheduledRevision;
+}
+
+/**
+ * 判断受控父组件的旧 value 是否应暂时让位于编辑器本地值。
+ *
+ * 负责什么：覆盖 React 受控更新尚未回传、但 DOM 已经完成用户输入或程序化插入的短窗口。
+ * 不负责什么：不修改 ref、不决定外部 value 是否最终接受；外部 value 发生真实变化时由调用方
+ * 清理 pending 值并执行同步。
+ *
+ * 返回:
+ *     true 表示当前 prop 仍是旧值，应保留编辑器本地 DOM。
+ *
+ * 异常/副作用:
+ *     无；纯函数。
+ */
+export function shouldPreservePendingEditorValue(
+  propValue: string,
+  lastPropValue: string,
+  pendingInternalValue: string | null,
+): boolean {
+  return pendingInternalValue !== null
+    && propValue === lastPropValue
+    && propValue !== pendingInternalValue;
+}
+
 export function InlineAttachmentInput({
   value,
   onChange,
@@ -304,15 +390,31 @@ export function InlineAttachmentInput({
   const lastMarkupSignature = useRef("");
   const caretOffset = useRef<number | null>(null);
   const currentValue = useRef(value);
+  const lastPropValue = useRef(value);
+  const pendingInternalValue = useRef<string | null>(null);
+  const editorRevision = useRef(0);
+  const disabledRef = useRef(disabled);
   const insertion = useInlineComposerInsertion();
-  const attachmentSignature = attachments.map((attachment) => `${attachment.id}:${attachment.name}`).join("\u001f");
+  const attachmentSignature = JSON.stringify(attachments.map((attachment) => ({
+    id: attachment.id,
+    name: attachment.name,
+    kind: attachment.kind ?? "file",
+    tokenId: attachment.tokenId ?? attachment.id,
+  })));
 
-  currentValue.current = value;
+  // 内部插入先更新 ref，再通知受控父组件。父组件可能在同一轮渲染中暂时仍返回旧 value，
+  // 此时不能用旧 prop 覆盖刚合并完成的 token；只有观察到 prop 真正变化时才同步外部值。
+  if (value !== lastPropValue.current) {
+    currentValue.current = value;
+    lastPropValue.current = value;
+    pendingInternalValue.current = null;
+  }
+  disabledRef.current = disabled;
 
   // 文本 token 与附件对象是两条独立写入路径，任一侧滞后都会影响内联胶囊的呈现。这里
   // 统一算一次对账结果，供渲染（区分「同步中」与「已失效」）与诊断日志共用。
-  // 依赖包含 `attachments`（每次渲染的新数组）：键计算必须读取附件内容，无法避免；
-  // 重算成本可忽略，真正用于去抖的是下游日志 effect 的签名比较。
+  // 依赖只使用附件内容签名和文本值；签名覆盖真正参与匹配的 kind、tokenId、id、name，
+  // 避免仅因父组件创建了新数组就重复计算。
   const reconciliation = useMemo(() => {
     const attachmentKeys = attachments.map(
       (attachment) => inlineAttachmentKey(attachment.kind ?? "file", attachment.tokenId ?? attachment.id),
@@ -326,7 +428,7 @@ export function InlineAttachmentInput({
       unmatchedTokenKeys: tokenKeys.filter((key) => !attachmentKeySet.has(key)),
       tokenlessAttachmentKeys: attachmentKeys.filter((key) => !tokenKeySet.has(key)),
     };
-  }, [attachmentSignature, attachments, value]);
+  }, [attachmentSignature, value]);
 
   const lastReconcileSignature = useRef("");
 
@@ -372,6 +474,7 @@ export function InlineAttachmentInput({
     range.selectNodeContents(editor);
     range.setEnd(selection.anchorNode, selection.anchorOffset);
     caretOffset.current = serializeNode(range.cloneContents()).length;
+    editorRevision.current += 1;
   }, []);
 
   const restoreCaret = useCallback((offset: number) => {
@@ -392,6 +495,11 @@ export function InlineAttachmentInput({
       }
       if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.attachmentToken === "true") {
         const length = serializeNode(node).length;
+        if (remaining === 0) {
+          range.setStartBefore(node);
+          range.collapse(true);
+          return true;
+        }
         if (remaining <= length) {
           range.setStartAfter(node);
           range.collapse(true);
@@ -416,33 +524,55 @@ export function InlineAttachmentInput({
   }, []);
 
   const insertAttachmentsAtCaret = useCallback((newAttachments: readonly InlineFileAttachment[]) => {
-    if (disabled || newAttachments.length === 0) return;
-    let nextValue = currentValue.current;
-    let offset = caretOffset.current ?? nextValue.length;
-    for (const attachment of newAttachments) {
-      const kind = attachment.kind ?? "file";
-      const tokenId = attachment.tokenId ?? attachment.id;
-      const token = `[[cosir-${kind}:${tokenId}]]`;
-      nextValue = `${nextValue.slice(0, offset)}${token}${nextValue.slice(offset)}`;
-      offset += token.length;
+    if (disabledRef.current || newAttachments.length === 0) return;
+    const result = insertInlineAttachmentsAtOffset(
+      currentValue.current,
+      caretOffset.current ?? currentValue.current.length,
+      newAttachments,
+    );
+    currentValue.current = result.value;
+    caretOffset.current = result.caretOffset;
+    pendingInternalValue.current = result.value;
+    lastMarkupSignature.current = `${result.value}\u0000${attachmentSignature}`;
+    const editor = editorRef.current;
+    if (editor) {
+      editor.innerHTML = renderInlineAttachmentHtml(result.value, [...attachments, ...newAttachments], {
+        unmatchedAsPending: true,
+      });
     }
-    caretOffset.current = offset;
-    onChange(nextValue);
-    requestAnimationFrame(() => restoreCaret(offset));
-  }, [disabled, onChange, restoreCaret]);
+    editorRevision.current += 1;
+    const scheduledRevision = editorRevision.current;
+    onChange(result.value);
+    requestAnimationFrame(() => {
+      if (!isCurrentEditorRevision(editorRevision.current, scheduledRevision)) return;
+      restoreCaret(result.caretOffset);
+    });
+  }, [attachmentSignature, attachments, onChange, restoreCaret]);
 
   const insertTextAtCaret = useCallback((text: string) => {
-    if (disabled || text.length === 0) return;
+    if (disabledRef.current || text.length === 0) return;
     const current = currentValue.current;
     const offset = Math.min(Math.max(0, caretOffset.current ?? current.length), current.length);
     const nextValue = `${current.slice(0, offset)}${text}${current.slice(offset)}`;
     const nextOffset = offset + text.length;
     currentValue.current = nextValue;
     caretOffset.current = nextOffset;
+    pendingInternalValue.current = nextValue;
     lastMarkupSignature.current = `${nextValue}\u0000${attachmentSignature}`;
+    const editor = editorRef.current;
+    if (editor) {
+      editor.innerHTML = renderInlineAttachmentHtml(nextValue, attachments, {
+        unmatchedAsPending: true,
+      });
+    }
+    editorRevision.current += 1;
+    const scheduledRevision = editorRevision.current;
     onChange(nextValue);
-    requestAnimationFrame(() => restoreCaret(nextOffset));
-  }, [attachmentSignature, disabled, onChange, restoreCaret]);
+    requestAnimationFrame(() => {
+      if (!isCurrentEditorRevision(editorRevision.current, scheduledRevision)) return;
+      restoreCaret(nextOffset);
+    });
+  }, [attachmentSignature, attachments, onChange, restoreCaret]);
 
   useEffect(() => insertion.register(insertAttachmentsAtCaret), [insertAttachmentsAtCaret, insertion]);
   useEffect(
@@ -478,8 +608,14 @@ export function InlineAttachmentInput({
     if (!editor) return;
     const currentValue = serializeEditor(editor);
     const signature = `${value}\u0000${attachmentSignature}`;
+    // 内部插入已经立即更新 DOM，但受控父组件可能尚未提交新 value。此时跳过旧 prop
+    // 的回写，等待父组件确认内部值；否则异步附件 token 会被一帧内的旧草稿覆盖。
+    if (shouldPreservePendingEditorValue(value, lastPropValue.current, pendingInternalValue.current)) {
+      return;
+    }
     if (currentValue !== value || lastMarkupSignature.current !== signature) {
       // 草稿写入尚未完成时，未匹配 token 按「同步中」呈现，避免把同步延迟误报为失效。
+      editorRevision.current += 1;
       editor.innerHTML = renderInlineAttachmentHtml(value, attachments, {
         unmatchedAsPending: suspendAttachmentReconciliation,
       });
@@ -502,8 +638,11 @@ export function InlineAttachmentInput({
       role="textbox"
       aria-label={ariaLabel}
       aria-multiline="true"
+      aria-disabled={disabled}
       data-placeholder={placeholder}
-      className={cn("min-w-0 max-h-48 overflow-y-auto", className)}
+      data-empty={value.trim().length === 0 ? "true" : "false"}
+      data-disabled={disabled ? "true" : "false"}
+      className={cn("min-w-0 min-h-20 max-h-48 w-full overflow-y-auto", className)}
       onInput={(event) => {
         const removedTags = removeUnsupportedEmbeddedContent(event.currentTarget);
         if (removedTags.length > 0) {
@@ -516,6 +655,7 @@ export function InlineAttachmentInput({
         }
         const nextValue = serializeEditor(event.currentTarget);
         currentValue.current = nextValue;
+        pendingInternalValue.current = nextValue;
         rememberCaret();
         lastMarkupSignature.current = `${nextValue}\u0000${attachmentSignature}`;
         onChange(nextValue);
@@ -536,6 +676,7 @@ export function InlineAttachmentInput({
           if (removedTags.length === 0) return;
           const nextValue = serializeEditor(editor);
           currentValue.current = nextValue;
+          pendingInternalValue.current = nextValue;
           lastMarkupSignature.current = `${nextValue}\u0000${attachmentSignature}`;
           onChange(nextValue);
           rememberCaret();
@@ -584,13 +725,19 @@ export function InlineAttachmentInput({
           return;
         }
         event.preventDefault();
-        const nextValue = removePlaceholder(value, kind, tokenId);
+        const currentText = currentValue.current;
+        const nextValue = removePlaceholder(currentText, kind, tokenId);
+        token?.remove();
+        currentValue.current = nextValue;
+        pendingInternalValue.current = nextValue;
+        editorRevision.current += 1;
+        lastMarkupSignature.current = `${nextValue}\u0000${attachmentSignature}`;
         void frontendLog("INFO", "inline_attachment_remove_requested", "请求移除内联附件 token", {
           data: {
             kind,
             tokenId,
             attachmentId,
-            textLengthBefore: value.length,
+            textLengthBefore: currentText.length,
             textLengthAfter: nextValue.length,
             remainingTokenKeys: textAttachmentTokenKeys(nextValue),
           },
