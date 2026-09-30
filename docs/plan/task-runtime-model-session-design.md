@@ -103,14 +103,14 @@ SQLite 保存声明式 Run 配置；`BaseChatModel`、Runnable、HTTP client、T
 
 `RuntimeContextManager` 保存 Task 级 canonical context working copy，`begin_run()` 接收当前 Run 的 tool schemas。`ContextUsageComputeListener` 负责按事件重新计算 context usage。
 
-改造后，Run 开始时必须从 `RunModelBinding` 设置：
+改造后，Run 开始时从 `RunModelBinding` 设置：
 
 - 最终有效工具的 tool schemas；
-- 当前 Run 的 system prompt 工具输入；
 - 当前模型的 context window；
 - listener 计算所需的完整输入。
 
-不增加 Task session token counter，也不把 system prompt 重复写入 canonical history。
+固定 system prompt 从 Task context 持久化记录读取，不增加 Task session token counter，也不把它重复追加为
+Run 消息；模型输入按固定 prompt、canonical history、当前 Run tool schemas 组合。
 
 ## 3. 持久化模型
 
@@ -416,18 +416,17 @@ runtime_context.begin_run(
 )
 ```
 
-实际参数名按最终代码接口调整，但语义必须保持：system prompt、tool schemas、model context window 和 model binding 都来自同一个 Run。
+实际参数名按最终代码接口调整。system prompt 从 Task 持久化 context 读取；tool schemas、model context window 和 model binding 则来自当前 Run。
 
 ### 8.2 system prompt
 
-当前 `RuntimeContextManager` 初始化时会根据首次传入的 `AgentProfile.allowed_tools` 构建 system entry。改造后不能继续只依赖 profile，因为后续 Run 的工具集合可能变化。
+完整 system prompt 是 Task context 的持久化事实，保存在 `conversation_task_contexts` sequence 0，
+首次构建后不随后续 Run 的模型配置、工具 schema 或配置文件变化而重建。Task 重启后从该记录恢复；
+Fork 在同一事务中复制该记录。这样同一 Task 的模型输入始终保持稳定的 system prompt 前缀。
 
-每次 Run 开始都应使用最终有效工具集合重建本次 Run 的非持久化 system entry：
-
-- system prompt 展示实际可用工具；
-- 不把 system prompt 追加为历史消息；
-- 不修改 canonical context history；
-- 旧 Run 不读取新 Run 的工具集合。
+每个 Run 的有效工具集合仍属于 Run 级模型绑定，并通过对应的 tool schemas 传给模型；它不再通过重建
+system prompt 注入。若未来需要改变 Task 的系统协议，应设计显式的新 Task 或经用户确认的上下文迁移，
+而不能静默覆盖既有 sequence 0。
 
 ### 8.3 listener 负责全部 usage 计算
 
@@ -435,7 +434,7 @@ runtime_context.begin_run(
 
 ```text
 used_tokens = tokenize(
-    current system prompt
+    persisted Task system prompt
     + canonical context messages
     + current Run tool schemas
 )
@@ -722,8 +721,8 @@ backend 重启时不自动重放旧模型调用或工具调用。遗留 active R
 
 ### Phase 3：Context 和 usage
 
-1. Run 开始使用 binding 设置 system prompt 工具输入。
-2. 设置 tool schemas 和 context window。
+1. Run 开始设置 tool schemas 和 context window。
+2. 从 Task 持久化 context 恢复固定 system prompt。
 3. 由 ContextUsageComputeListener 计算 system prompt、messages 和 tool schemas。
 4. 根据产品决定 child Run 是否纳入 listener 统计。
 
@@ -761,15 +760,17 @@ backend 重启时不自动重放旧模型调用或工具调用。遗留 active R
 - child Run 使用 `decision.effective_tools`，不使用未收窄的 child profile 原始工具集合。
 - child Run 的 model_runtime 与主 Run 使用同一 JSON 结构。
 - fork cloned Run 复制源 Run.extra。
+- fork 在同一事务中复制源 Task 的固定 system prompt。
 - fork 后新 Run 无配置时继承最近 cloned Run 的配置。
 
 ### 15.4 Context 和 usage
 
-- system prompt 展示本次 Run 最终工具集合。
+- Task 首次初始化时持久化 sequence 0 system prompt，后续 Run 和后端重启保持内容不变。
+- system prompt 不因 Run 工具集合或配置文件变化而重建。
 - tool schemas 计入 listener 的 used tokens。
 - system prompt 计入 listener 的 used tokens。
 - 新 Run 的 context window 影响 total tokens 和 ratio。
-- system prompt 不重复写入 canonical history。
+- system prompt 只在 Task context 中保留一条，不重复追加到每个 Run 的消息历史。
 - 已固定 Run 不受 ToolRegistry 后续变化影响。
 
 ### 15.5 生命周期清理

@@ -249,10 +249,13 @@ class ConversationTaskStateRebuilder:
         """
 
         run_records = list(runs)
+        # Task 系统提示词是模型上下文事实，不属于任何 Conversation Run，也不应出现在
+        # Assistant Transport 快照中。其合法的 ``run_id=None`` 不能参与下方的整数分组排序。
+        run_context_rows = [row for row in context_rows if row.run_id is not None]
         run_groups = {
             run_id: list(rows)
             for run_id, rows in groupby(
-                sorted(context_rows, key=attrgetter("run_id")),
+                sorted(run_context_rows, key=attrgetter("run_id")),
                 key=attrgetter("run_id"),
             )
         }

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
@@ -107,6 +107,58 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
     # user 消息文本取自 runs 行的 ``input_text``（``extra.display_text`` 优先），
     # context 行只承载喂给模型的上下文序列，不参与 user 消息文本的重建。
     assert state["runs"][1]["messages"][0]["parts"][0]["text"] == "input-2"
+
+
+def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
+    """快照重建应忽略 Task 系统提示词，只投影绑定 Run 的会话消息。"""
+
+    task = _task()
+    run = _run(2, "completed")
+    rows = [
+        ConversationTaskContextRecord(
+            id=10,
+            task_id=7,
+            run_id=None,
+            message=SystemMessage(content="internal system prompt"),
+            include_in_context=True,
+            sequence=0,
+        ),
+        ConversationTaskContextRecord(
+            id=11,
+            task_id=7,
+            run_id=2,
+            message=HumanMessage(content="canonical user message"),
+            include_in_context=True,
+            sequence=1,
+        ),
+        ConversationTaskContextRecord(
+            id=12,
+            task_id=7,
+            run_id=2,
+            message=AIMessage(content="canonical assistant message"),
+            include_in_context=True,
+            sequence=2,
+        ),
+    ]
+
+    class CanonicalSources:
+        def get(
+            self, _task_id: int, include_in_context: bool = True
+        ) -> TaskRecord | list[ConversationTaskContextRecord]:
+            return task if include_in_context else rows
+
+        def list_by_task(self, _task_id: int) -> list[ConversationRunRecord]:
+            return [run]
+
+    service = _make_state_service(
+        CanonicalSources(), CanonicalSources(), CanonicalSources()
+    )
+
+    state = service.get_state(7)
+
+    messages = state["runs"][0]["messages"]
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert messages[1]["parts"][0]["text"] == "canonical assistant message"
 
 
 def test_state_snapshot_is_lazily_rebuilt_once_per_task_runtime_space() -> None:

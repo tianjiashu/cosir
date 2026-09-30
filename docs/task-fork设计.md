@@ -289,7 +289,8 @@ SQLite 表 / 唯一索引重建，确保旧的 `UNIQUE(checkpoint_thread_id)` �
 - `message_json` 使用已有 LangChain 序列化结果复制；
 - `include_in_context` 原样保留；
 - sequence 在目标 Task 中重新分配，起始值不作业务约束，但必须保持严格递增且无重复；
-- system prompt 不从源 manager 的内存对象复制，由目标 Task 的 `RuntimeContextManager` 重新构建；
+- 源 Task 的完整 system prompt 作为 sequence 0 在同一事务中复制到目标 Task；不从当前配置重新构建，
+  保证 fork 继承源 Task 的固定提示词前缀；
 - 不共享源 Task 的 `_entries`、listener 或 current run 状态。
 
 `RuntimeContextManager.fork_context_manager(task_id, run_id)` 的建议职责是：

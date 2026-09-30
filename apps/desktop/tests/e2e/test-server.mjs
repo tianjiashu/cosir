@@ -231,6 +231,20 @@ function webSearchState() {
   };
 }
 
+const mermaidSequenceDiagram = [
+  "```mermaid",
+  "sequenceDiagram",
+  "    participant C as 客户端",
+  "    participant S as 服务端",
+  "    C->>S: 请求数据",
+  "    S-->>C: 返回数据",
+  "```",
+].join("\n");
+
+function mermaidState() {
+  return stateWithExchange(emptyState(), "查看时序图", 79, mermaidSequenceDiagram, "completed");
+}
+
 function delegationState() {
   return {
     runs: [{
@@ -765,6 +779,19 @@ const server = createServer(async (req, res) => {
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(TASK_ID, webSearchState());
+    jsonResponse(res, 200, { task_id: TASK_ID });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/__test__/seed-mermaid") {
+    tasks.set(TASK_ID, {
+      task_id: TASK_ID,
+      workspace_id: WORKSPACE_ID,
+      title: "Mermaid 全屏回归",
+      execution_status: null,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+    states.set(TASK_ID, mermaidState());
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
   }

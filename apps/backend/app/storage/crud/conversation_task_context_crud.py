@@ -52,6 +52,40 @@ class ConversationTaskContextCrud:
                 rows = session.scalars(stmt).all()
         return [ConversationTaskContextRecord._from_model(row) for row in rows]
 
+    def get_by_task_sequence(
+        self,
+        task_id: int,
+        sequence: int,
+        session: Session | None = None,
+    ) -> ConversationTaskContextRecord | None:
+        """按 Task 与全局序号读取唯一 context 行。
+
+        参数:
+            task_id: context 所属 Task。
+            sequence: Task 范围内唯一的消息序号。
+            session: 外部事务 Session；为 None 时自建只读事务。
+
+        返回:
+            匹配记录；不存在时返回 None。
+
+        异常:
+            sqlalchemy.exc.MultipleResultsFound: 若数据库唯一约束损坏导致出现重复行。
+
+        副作用:
+            无；只读取并反序列化一条记录。
+        """
+
+        statement = select(ConversationTaskContextModel).where(
+            ConversationTaskContextModel.task_id == task_id,
+            ConversationTaskContextModel.sequence == sequence,
+        )
+        if session is not None:
+            row = session.scalars(statement).one_or_none()
+        else:
+            with self._session_factory.begin() as owned_session:
+                row = owned_session.scalars(statement).one_or_none()
+        return ConversationTaskContextRecord._from_model(row) if row is not None else None
+
     def max_sequence(self, task_id: int, session: Session | None = None) -> int:
         """返回指定 task 下 ``sequence`` 列的最大值；无行时返回 0。
 

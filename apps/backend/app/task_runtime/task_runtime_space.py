@@ -271,8 +271,8 @@ class TaskRuntimeSpace:
             current_task: 当前 task 记录，提供上下文归属的 task id。
 
         返回:
-            已创建或已缓存的 ``RuntimeContextManager`` 实例；如果传入 profile 的系统提示词
-            来源已变化，则在当前 Task 操作边界内重新创建并从持久化 context 恢复。
+            已创建或已缓存的 ``RuntimeContextManager`` 实例。该 manager 恢复 Task 已持久化的
+            固定系统提示词；当前 profile 只用于首次创建 Task 提示词。
 
         异常:
             ``RuntimeContextManager`` 构造或其 listener 装配失败时原样向上抛出，本方法不兜底；
@@ -280,9 +280,8 @@ class TaskRuntimeSpace:
 
         副作用:
             首次调用时在持有 ``_context_guard`` 的前提下惰性构造并以**弱引用**缓存 context
-            manager；后续调用在系统提示词来源未变化时返回仍存活的缓存实例。配置更新后，
-            下一次 Run 会因来源签名不匹配而重新创建 manager；当外部不再持有该 manager 时
-            弱引用也会自然失效，下次访问重新创建。
+            manager；后续调用返回仍存活的缓存实例。配置更新不会替换 Task 已持久化的系统提示词；
+            当外部不再持有该 manager 时弱引用自然失效，下次访问从持久化 context 恢复。
 
         并发:
             锁外快路径 + 锁内重检是刻意保留的 double-checked locking，**不是重复判断**：
@@ -294,16 +293,12 @@ class TaskRuntimeSpace:
         manager_ref = self._context_manager
         if manager_ref is not None:
             manager = manager_ref()
-            if manager is not None and manager.matches_system_prompt_source(
-                agent_profile, current_workspace.root_path
-            ):
+            if manager is not None:
                 return manager
         with self._context_guard:
             manager_ref = self._context_manager
             manager = manager_ref() if manager_ref is not None else None
-            if manager is None or not manager.matches_system_prompt_source(
-                agent_profile, current_workspace.root_path
-            ):
+            if manager is None:
                 from app.core.context.runtime_context_manager import RuntimeContextManager
 
                 manager = (

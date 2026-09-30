@@ -77,6 +77,30 @@ test("网页搜索结果只显示标题并保留标题链接", async ({ page, re
   await expect(assistant.getByText("https://assistant-ui.com/docs", { exact: true })).toHaveCount(0);
 });
 
+test("Mermaid 时序图全屏后仍保留可见 SVG", async ({ page, request }) => {
+  await request.post("http://127.0.0.1:8000/__test__/seed-mermaid");
+  await page.goto("/tasks/42");
+
+  const diagram = page.locator('[data-streamdown="mermaid-block"]').last();
+  const inlineSvg = diagram.locator('[data-streamdown="mermaid"] [aria-label="Mermaid chart"] > svg');
+  await expect(inlineSvg).toHaveCount(1);
+  await expect(inlineSvg).toBeVisible();
+
+  await diagram.getByRole("button", { name: "View fullscreen" }).click();
+
+  const fullscreen = page.locator('[data-streamdown="mermaid-fullscreen"]');
+  await expect(fullscreen).toBeVisible();
+  const chart = fullscreen.locator('[aria-label="Mermaid chart"]');
+  await expect.poll(async () => chart.evaluate((element) => getComputedStyle(element).flexDirection)).toBe("column");
+  const fullscreenSvg = fullscreen.locator('[aria-label="Mermaid chart"] > svg');
+  await expect(fullscreenSvg).toHaveCount(1);
+  await expect.poll(async () => fullscreenSvg.evaluate((element) => element.children.length)).toBeGreaterThan(0);
+  await expect.poll(async () => fullscreenSvg.evaluate((element) => {
+    const { width, height } = element.getBoundingClientRect();
+    return width > 0 && height > 0;
+  })).toBe(true);
+});
+
 test("Reasoning 在真实流式完成后自动收起且仍可手动展开", async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "Reasoning 状态回归" } });
   await page.goto("/tasks/42");

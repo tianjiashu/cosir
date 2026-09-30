@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
@@ -16,6 +16,8 @@ from app.core.context.tool_call_closure import (
 from app.models.conversation_task_context import ConversationTaskContextRecord, TransportMetadata
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 
+TASK_SYSTEM_PROMPT_SEQUENCE = 0
+
 
 class ConversationTaskContextService:
     """维护 LangChain 原生消息的 Task 级有序 context。
@@ -25,8 +27,8 @@ class ConversationTaskContextService:
     运行时仅经 CRUD 读写，不存在进程内 context working copy（避免与数据库双写漂移）。
 
     职责边界：
-    - 负责：消息与 Transport metadata 的追加、assistant 草稿原地替换、按 run 删除、
-      序列号分配、纳入过滤读取。
+    - 负责：固定 Task system prompt 的首次持久化、消息与 Transport metadata 的追加、
+      assistant 草稿原地替换、按 run 删除、序列号分配、纳入过滤读取。
     - 不负责：消息内容语义校验、压缩策略（由上下文管理器负责）。
     """
 
@@ -146,6 +148,85 @@ class ConversationTaskContextService:
             for record in records
         ]
 
+    def get_system_prompt(self, task_id: int) -> ContextEntry | None:
+        """读取 Task 固定系统提示词；尚未初始化时返回 None。
+
+        参数:
+            task_id: 提示词所属 Task。
+
+        返回:
+            sequence 固定为 0、``run_id`` 为 None 的 canonical system entry；记录不存在时
+            返回 None。提示词始终来自数据库，不因当前 profile 或配置变化而替换。
+
+        异常:
+            RuntimeError: sequence 0 已被非系统提示词记录占用，或记录违反 Task system
+                prompt 的持久化约束。
+
+        副作用:
+            不修改数据库。
+        """
+
+        existing = self._crud.get_by_task_sequence(task_id, TASK_SYSTEM_PROMPT_SEQUENCE)
+        if existing is None:
+            return None
+        return self._system_prompt_entry(task_id, existing)
+
+    @staticmethod
+    def _system_prompt_entry(
+        task_id: int,
+        record: ConversationTaskContextRecord,
+    ) -> ContextEntry:
+        """校验并映射 sequence 0 的 Task 系统提示词记录。"""
+
+        if (
+            record.run_id is not None
+            or not isinstance(record.message, SystemMessage)
+            or not record.include_in_context
+            or record.is_streaming
+        ):
+            raise RuntimeError(
+                f"task {task_id} sequence {TASK_SYSTEM_PROMPT_SEQUENCE} "
+                "is not a valid system prompt entry"
+            )
+        return ContextEntry(record.message, record.run_id, record.sequence)
+
+    def create_system_prompt(self, task_id: int, prompt: SystemMessage) -> ContextEntry:
+        """持久化新 Task 的完整系统提示词并返回其 canonical entry。
+
+        参数:
+            task_id: 提示词所属 Task。
+            prompt: 由 ``SystemPromptBuilder`` 生成的完整系统提示词。
+
+        返回:
+            sequence 固定为 0、``run_id`` 为 None 的新 system entry。
+
+        异常:
+            sqlalchemy.exc.IntegrityError: sequence 0 已被并发初始化占用；调用方的 Task
+                操作锁应保证此异常不发生。
+            持久化异常: CRUD 写入失败时向上传播。
+
+        副作用:
+            新增一条纳入模型上下文的持久化记录并写入结构化日志。调用方须在 Task 操作边界内
+            串行化首次初始化。
+        """
+        record = ConversationTaskContextRecord(
+            task_id=task_id,
+            run_id=None,
+            message=prompt,
+            include_in_context=True,
+            sequence=TASK_SYSTEM_PROMPT_SEQUENCE,
+            is_streaming=False,
+        )
+        self._crud.create(record)
+        log.info(
+            "task_system_prompt_persisted",
+            extra={
+                "msg": "Task 首次系统提示词已持久化",
+                "data": {"task_id": task_id, "sequence": TASK_SYSTEM_PROMPT_SEQUENCE},
+            },
+        )
+        return ContextEntry(prompt, None, TASK_SYSTEM_PROMPT_SEQUENCE)
+
     def max_sequence(self, task_id: int, session: Session | None = None) -> int:
         """返回 Task 当前最大 sequence；无记录时为 0。"""
 
@@ -160,10 +241,10 @@ class ConversationTaskContextService:
         run_id_map: dict[int, int],
         session: Session,
     ) -> int:
-        """在外部事务中复制指定 Run 前缀的全部 context entries。
+        """在外部事务中复制 Task 固定提示词和指定 Run 前缀的 context entries。
 
-        目标序号从 1 重新分配；序号数值不属于业务契约，只保证目标 Task 内严格递增且
-        不重复。system prompt 是 Task 级事实，不属于任一 Run，因此不会从源 Task 复制。
+        system prompt 保留 sequence 0；Run context 从 1 开始重新分配。提示词不在目标 Task
+        重建，避免 fork 后改变源 Task 的系统指令。
         """
 
         source_entries = self._crud.get(
@@ -173,7 +254,25 @@ class ConversationTaskContextService:
         )
         next_sequence = 1
         cloned_count = 0
+        system_prompt_found = False
         for source_entry in source_entries:
+            if source_entry.sequence == TASK_SYSTEM_PROMPT_SEQUENCE:
+                self._system_prompt_entry(source_task_id, source_entry)
+                self._crud.create(
+                    ConversationTaskContextRecord(
+                        task_id=target_task_id,
+                        run_id=None,
+                        message=copy.deepcopy(source_entry.message),
+                        include_in_context=True,
+                        sequence=TASK_SYSTEM_PROMPT_SEQUENCE,
+                        transport_metadata=copy.deepcopy(source_entry.transport_metadata),
+                        is_streaming=False,
+                    ),
+                    session=session,
+                )
+                cloned_count += 1
+                system_prompt_found = True
+                continue
             if source_entry.run_id not in run_id_map:
                 continue
             created = self._crud.create(
@@ -191,6 +290,8 @@ class ConversationTaskContextService:
             if created:
                 cloned_count += 1
             next_sequence += 1
+        if not system_prompt_found:
+            raise RuntimeError(f"task {source_task_id} has no persisted system prompt")
         return cloned_count
 
     def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:

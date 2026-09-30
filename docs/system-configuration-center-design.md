@@ -107,8 +107,11 @@ JSON 文件实际都被解析为 `CHILD`，其文件字段仍包含 `system_prom
 `SystemPromptBuilder` 把有效正文放在 `<agent_layer>`，正文为空时整层不出现，不会让子 Agent 继承
 主 Agent 专属协议；未配置时主 Agent 的基础身份与运行期事实由动态变量层提供。
 
-系统 prompt 是 Task 级内存事实。配置更新时不修改正在运行的 `RuntimeContextManager`；下一次 Run
-取得 Task context 时比较 profile 来源签名，发现主 Agent prompt 变化后重新装配 system entry。
+完整系统提示词是 Task 级持久化事实，保存在 `conversation_task_contexts` 的 sequence 0，且不归属
+任何 Run。Task 首次创建 context 时，使用当时的 Agent profile、工具目录、全局指令、workspace 指令和运行期
+信息构建并持久化；后续 Run、manager 重建及后端重启都从该记录恢复，不因配置变化重新生成。配置更新只对
+尚未初始化 context 的新 Task 生效。Fork 在同一数据库事务中复制源 Task 的固定系统提示词，确保 fork 前缀
+与源任务一致。
 
 ### 2.5 env 配置
 

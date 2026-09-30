@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -359,6 +359,15 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
         service._crud = crud
         with Session(engine) as session:
             session.add(
+                ConversationTaskContextRecord(
+                    task_id=7,
+                    run_id=None,
+                    message=SystemMessage(content="fixed system prompt"),
+                    include_in_context=True,
+                    sequence=0,
+                )._to_model()
+            )
+            session.add(
                 ConversationTaskContextModel(
                     id=41,
                     task_id=7,
@@ -376,7 +385,8 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
             service.clone_for_fork(7, 8, {11: 22}, session)
             cloned_row = session.scalar(
                 select(ConversationTaskContextModel).where(
-                    ConversationTaskContextModel.task_id == 8
+                    ConversationTaskContextModel.task_id == 8,
+                    ConversationTaskContextModel.sequence == 3,
                 )
             )
 

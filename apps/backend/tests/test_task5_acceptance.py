@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy import inspect, update
 from sqlalchemy.orm import sessionmaker
 
@@ -555,6 +555,10 @@ def test_real_sqlite_fork_and_edit_preserve_canonical_identity(
     source_run = _create_run(store, current=True)
     _append_user_ai_tool(store, source_run, "call-fork", "success")
     _settle_run(store, source_run, "completed", "done")
+    store.context.create_system_prompt(
+        store.task.id,
+        SystemMessage(content="fixed system prompt"),
+    )
     target = store.tasks.create(store.workspace.id, "fork")
     with store.factory.begin() as session:
         target_run = store.runs.clone_for_task(session, source_run, target.id)

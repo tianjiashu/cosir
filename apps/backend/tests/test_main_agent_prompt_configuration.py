@@ -1,4 +1,4 @@
-"""主 Agent 系统提示词配置、Registry 注入与运行时刷新契约测试。"""
+"""主 Agent 系统提示词配置与 Registry 注入契约测试。"""
 
 import asyncio
 from pathlib import Path
@@ -12,9 +12,8 @@ from app.app import app
 from app.config.configuration import build_agent_registry
 from app.config.constant import Constant
 from app.core.agents import agent_profile_config
-from app.core.agents.agent_profile import AgentProfile, AgentProfileType
+from app.core.agents.agent_profile import AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.context.runtime_context_manager import RuntimeContextManager
 from app.service.configuration.main_agent_prompt_configuration_service import (
     MainAgentPromptConfigurationError,
     MainAgentPromptConfigurationService,
@@ -82,40 +81,6 @@ def test_build_agent_registry_uses_configured_main_prompt() -> None:
     assert profile is not None
     assert profile.system_prompt == "用户配置的主 Agent 协议"
     assert profile.agent_type is AgentProfileType.MAIN
-
-
-def test_runtime_context_manager_detects_main_prompt_change(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """已有 manager 应能识别 Registry 中主 Agent prompt 的变更。"""
-
-    original = AgentProfile(
-        agent_id="main_agent",
-        role="main_agent",
-        system_prompt="旧协议",
-        allowed_tools=["read_file"],
-        agent_type=AgentProfileType.MAIN,
-        workflow=None,  # type: ignore[arg-type]
-    )
-    changed = AgentProfile(
-        agent_id="main_agent",
-        role="main_agent",
-        system_prompt="新协议",
-        allowed_tools=["read_file"],
-        agent_type=AgentProfileType.MAIN,
-        workflow=None,  # type: ignore[arg-type]
-    )
-    manager = RuntimeContextManager.__new__(RuntimeContextManager)
-    manager.agent_profile = original
-    manager.workspace_root = "/workspace"
-    monkeypatch.setattr(
-        "app.core.context.runtime_context_manager.SystemPromptBuilder.build",
-        lambda profile, _workspace_root: profile.system_prompt,
-    )
-    manager._system_prompt_source = manager._build_system_prompt_source(original.system_prompt)
-
-    assert manager.matches_system_prompt_source(original, "/workspace")
-    assert not manager.matches_system_prompt_source(changed, "/workspace")
 
 
 def test_update_api_replaces_registry_profile_after_file_save(
