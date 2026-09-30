@@ -150,7 +150,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 | 表 | 承载事实 | 典型症状 / 排查点 |
 |----|----------|-------------------|
 | `workspaces` | 工作区身份与根路径 | 路径越界、找不到文件、工作区切换异常 |
-| `tasks` | 任务身份、`task_type`（`user` / `fork` / `delegate_task`）、委派关系 `parent_task_id` / `parent_run_id`（`fork` 任务**不写**这两列，来源记在 `extra.fork.source_task_id` / `source_run_id`）、`current_run_id`、上下文窗口用量（`context_usage_used` / `context_window_total`）；`extra` 为自由 JSON | 任务列表状态不对、上下文占用异常、委派链路、fork 来源 |
+| `tasks` | 任务身份、`task_type`（`user` / `fork` / `delegate_task`）、委派关系 `parent_task_id` / `parent_run_id`（`fork` 任务**不写**这两列，来源记在 `extra.fork.source_task_id` / `source_run_id`）、`current_run_id`、最后一个 Run 的上下文窗口上限 `context_window_total`；最后一个 Run 的 provider usage 从 `conversation_runs.usage_json` 读取；`extra` 为自由 JSON | 任务列表状态不对、上下文占用异常、委派链路、fork 来源 |
 | `conversation_runs` | **Run 生命周期唯一事实源**：`status` / `end_reason` / `error_json` / `final_output` / `usage_json` / `agent_id` / `model_config_id`（模型名与能力不复制进 Run，由 `model_configs` 派生）/ `checkpoint_thread_id` | 一直转圈、失败原因、用量与成本、模型路由错 |
 | `conversation_commands` | Transport 命令幂等占用：`(task_id, command_id)` 唯一、`payload_hash`、`error_code` | 重复提交被拒、幂等冲突、命令失败码 |
 | `conversation_task_contexts` | **canonical 上下文消息**：`message_json` / `transport_metadata_json` / `sequence` / `tool_call_id` / `is_streaming` / `include_in_context` | Agent 回放、工具调用与结果、上下文缺口、工具状态不符 |

@@ -35,7 +35,6 @@ _TASK_COLUMNS = (
     "t.parent_task_id",
     "t.parent_run_id",
     "t.current_run_id",
-    "t.context_usage_used",
     "t.context_window_total",
     "t.created_at",
     "t.updated_at",
@@ -101,8 +100,9 @@ def recent_tasks(
         contains: 可选标题 / 标识模糊搜索。
 
     返回:
-        任务行列表，每行额外含 ``current_run_status``、``current_model_config_id`` 与
-        ``current_model_name``（``current_run_id`` 为空、指向缺失行或 Run 未绑定配置时为 None）。
+        任务行列表，每行额外含 ``current_run_status``、``current_model_config_id``、
+        ``current_run_usage_json`` 与 ``current_model_name``（``current_run_id`` 为空、
+        指向缺失行或 Run 未绑定配置时对应值为 None）。Task usage 不在 tasks 表重复保存。
 
     异常:
         ValueError: ``tasks`` / ``conversation_runs`` / ``model_configs`` 表缺失。
@@ -126,6 +126,7 @@ def recent_tasks(
     sql = (
         f"SELECT {', '.join(_TASK_COLUMNS)}, "  # noqa: S608 - 列名来自本模块常量，值走占位符
         "r.status AS current_run_status, r.model_config_id AS current_model_config_id, "
+        "r.usage_json AS current_run_usage_json, "
         "mc.model_name AS current_model_name "
         "FROM tasks t "
         "LEFT JOIN conversation_runs r ON r.id = t.current_run_id "
@@ -284,7 +285,7 @@ def list_child_tasks(
     params.append(limit)
     sql = (
         "SELECT id, title, task_type, parent_task_id, parent_run_id, current_run_id, "  # noqa: S608
-        "context_usage_used, context_window_total, created_at, updated_at "
+        "context_window_total, created_at, updated_at "
         f"FROM tasks WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT ?"
     )
     return query_rows(connection, sql, tuple(params))

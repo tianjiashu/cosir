@@ -199,7 +199,7 @@ def _base_schema(con: sqlite3.Connection) -> None:
         CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL,
             creation_command_id TEXT, title TEXT NOT NULL, extra TEXT,
             task_type TEXT NOT NULL, parent_task_id INTEGER, parent_run_id INTEGER,
-            current_run_id INTEGER, context_usage_used INTEGER, context_window_total INTEGER,
+            current_run_id INTEGER, context_window_total INTEGER,
             created_at TEXT, updated_at TEXT);
         CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL,
             checkpoint_thread_id TEXT, input_text TEXT NOT NULL, agent_id TEXT,
@@ -228,9 +228,9 @@ def _base_schema(con: sqlite3.Connection) -> None:
     )
     con.execute(
         "INSERT INTO tasks (id, workspace_id, creation_command_id, title, extra, task_type, "
-        "parent_task_id, parent_run_id, current_run_id, context_usage_used, "
+        "parent_task_id, parent_run_id, current_run_id, "
         "context_window_total, created_at, updated_at) "
-        "VALUES (1, 1, NULL, 't1', NULL, 'user', NULL, NULL, 1, 0, 100, 't', 't')"
+        "VALUES (1, 1, NULL, 't1', NULL, 'user', NULL, NULL, 1, 100, 't', 't')"
     )
     con.execute(
         "INSERT INTO conversation_runs (id, task_id, checkpoint_thread_id, input_text, "
