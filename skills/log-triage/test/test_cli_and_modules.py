@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """log-triage CLI 与其查询模块的独立单元测试（第三轮对抗性复测）。
 
-覆盖：参数校验、渲染、schema、agent_facts、side_effects、snapshots、
+覆盖：参数校验、渲染、schema、agent_facts（含委派子任务视图）、snapshots、
 query_logs 的查询构造与边界。全部走内存库/临时库，不触碰真实库。
 
 注：``# ruff: noqa: E501`` —— 建表与造数用的一行 SQL/JSON 字面量天然超长，
@@ -26,15 +26,14 @@ if str(SCRIPTS) not in sys.path:
 import query_app_db as qad  # noqa: E402
 import query_logs as ql  # noqa: E402
 from appdb_agent_facts import (  # noqa: E402
-    list_models,
-    list_providers,
+    list_child_tasks,
+    list_model_configs,
     recent_commands,
     recent_runs,
     recent_tasks,
     recent_workspaces,
 )
 from appdb_schema import database_overview, table_detail  # noqa: E402
-from appdb_side_effects import list_delegations, list_terminal_sessions  # noqa: E402
 from appdb_snapshots import run_snapshot, task_snapshot  # noqa: E402
 
 
@@ -43,42 +42,55 @@ def _schema(con: sqlite3.Connection) -> None:
         """
         CREATE TABLE workspaces (id INTEGER PRIMARY KEY, name TEXT, root_path TEXT,
             created_at TEXT, updated_at TEXT);
-        CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER, title TEXT,
-            task_type TEXT, parent_task_id INTEGER, parent_run_id INTEGER,
-            current_run_id INTEGER, delegation_id INTEGER, context_usage_used INTEGER,
-            context_window_total INTEGER, created_at TEXT, updated_at TEXT, extra TEXT);
-        CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, task_id INTEGER,
-            status TEXT, agent_id TEXT, provider_id INTEGER, model_name TEXT,
-            end_reason TEXT, input_text TEXT, final_output TEXT,
-            usage_json TEXT, error_json TEXT, created_at TEXT, updated_at TEXT,
-            checkpoint_thread_id TEXT);
+        CREATE TABLE model_configs (id INTEGER PRIMARY KEY, config_name TEXT NOT NULL,
+            base_url TEXT NOT NULL, api_key TEXT NOT NULL, model_name TEXT NOT NULL,
+            context_window_k INTEGER NOT NULL, supports_thinking BOOLEAN NOT NULL DEFAULT 0,
+            supports_reasoning_effort BOOLEAN NOT NULL DEFAULT 0,
+            supports_image BOOLEAN NOT NULL DEFAULT 0,
+            enabled BOOLEAN NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT, updated_at TEXT);
+        CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL,
+            creation_command_id TEXT, title TEXT NOT NULL, extra TEXT,
+            task_type TEXT NOT NULL, parent_task_id INTEGER, parent_run_id INTEGER,
+            current_run_id INTEGER, context_usage_used INTEGER, context_window_total INTEGER,
+            created_at TEXT, updated_at TEXT);
+        CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL,
+            checkpoint_thread_id TEXT, input_text TEXT NOT NULL, agent_id TEXT,
+            model_config_id INTEGER, image_paths TEXT, end_reason TEXT, final_output TEXT,
+            extra TEXT, usage_json TEXT, error_json TEXT, status TEXT NOT NULL,
+            created_at TEXT, updated_at TEXT);
         CREATE TABLE conversation_commands (id INTEGER PRIMARY KEY, task_id INTEGER,
             command_id TEXT, command_type TEXT, payload_hash TEXT, run_id INTEGER,
             error_code TEXT, created_at TEXT);
         CREATE TABLE conversation_task_contexts (id INTEGER PRIMARY KEY, task_id INTEGER,
             run_id INTEGER, tool_call_id TEXT, message_json TEXT NOT NULL,
             transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,
-            sequence INTEGER, created_at TEXT, updated_at TEXT, is_streaming BOOLEAN);
-        CREATE TABLE delegations (id INTEGER PRIMARY KEY, task_id INTEGER, parent_run_id INTEGER,
-            child_run_id INTEGER, child_task_id INTEGER, parent_agent_id TEXT,
-            child_agent_id TEXT, status TEXT, prompt TEXT, summary TEXT, error TEXT,
-            effective_tools TEXT, created_at TEXT, updated_at TEXT);
-        CREATE TABLE terminal_sessions (id INTEGER PRIMARY KEY, session_id TEXT, task_id INTEGER,
-            workspace_id INTEGER, created_by_run_id INTEGER, initial_cwd TEXT, shell_kind TEXT,
-            shell_executable TEXT, worker_instance_id TEXT, worker_pid INTEGER, status TEXT,
-            end_reason TEXT, exit_code INTEGER, cols INTEGER, rows INTEGER,
-            last_activity_at TEXT, ended_at TEXT, created_at TEXT);
-        CREATE TABLE providers (id INTEGER PRIMARY KEY, name TEXT, type TEXT, base_url TEXT,
-            api_key TEXT, enabled BOOLEAN, sort_order INTEGER);
-        CREATE TABLE models (id INTEGER PRIMARY KEY, provider_id INTEGER, model_name TEXT,
-            display_name TEXT, max_context_window INTEGER, supports_thinking BOOLEAN,
-            supports_image BOOLEAN, enabled BOOLEAN, sort_order INTEGER);
+            is_streaming BOOLEAN, sequence INTEGER, created_at TEXT, updated_at TEXT);
         """
     )
-    con.execute("INSERT INTO workspaces VALUES (1,'ws1','/tmp/ws1','t','t')")
-    con.execute("INSERT INTO tasks VALUES (1,1,'t1','chat',NULL,NULL,1,NULL,0,100,'t','t',NULL)")
     con.execute(
-        "INSERT INTO conversation_runs VALUES (1,1,'completed','a',1,'m','done','i','o','{}','{}','t','t',NULL)"
+        "INSERT INTO workspaces (id, name, root_path, created_at, updated_at) "
+        "VALUES (1, 'ws1', '/tmp/ws1', 't', 't')"
+    )
+    con.execute(
+        "INSERT INTO model_configs (id, config_name, base_url, api_key, model_name, "
+        "context_window_k, supports_thinking, supports_reasoning_effort, supports_image, "
+        "enabled, sort_order, created_at, updated_at) "
+        "VALUES (1, 'deepseek', 'https://api.deepseek.com', 'sk-secret', 'deepseek-flash', "
+        "1000, 1, 1, 1, 1, 0, 't', 't')"
+    )
+    con.execute(
+        "INSERT INTO tasks (id, workspace_id, creation_command_id, title, extra, task_type, "
+        "parent_task_id, parent_run_id, current_run_id, context_usage_used, "
+        "context_window_total, created_at, updated_at) "
+        "VALUES (1, 1, NULL, 't1', NULL, 'user', NULL, NULL, 1, 0, 100, 't', 't')"
+    )
+    con.execute(
+        "INSERT INTO conversation_runs (id, task_id, checkpoint_thread_id, input_text, "
+        "agent_id, model_config_id, image_paths, end_reason, final_output, extra, usage_json, "
+        "error_json, status, created_at, updated_at) "
+        "VALUES (1, 1, NULL, 'i', 'a', 1, NULL, 'done', 'o', NULL, '{}', '{}', 'completed', "
+        "'t', 't')"
     )
     con.commit()
 
@@ -186,7 +198,7 @@ class TestSchema:
     def test_overview(self, con: sqlite3.Connection) -> None:
         out = database_overview(con, include_columns=False)
         names = {t["table"] for t in out["tables"]}
-        assert {"tasks", "workspaces", "providers"} <= names
+        assert {"tasks", "workspaces", "model_configs"} <= names
         assert all("columns" not in t for t in out["tables"])
 
     def test_detail_unknown_table(self, con: sqlite3.Connection) -> None:
@@ -202,36 +214,64 @@ class TestSchema:
 
 
 class TestAgentFacts:
-    # 目的：providers 不得返回明文 api_key 列，只返回 has_api_key 布尔。潜在缺陷：secret 泄漏。
-    def test_providers_no_plaintext_key(self, con: sqlite3.Connection) -> None:
-        con.execute("INSERT INTO providers VALUES (1,'p','api','http://x','SECRET-123',1,0)")
+    # 目的：model_configs 不得返回明文 api_key 列，只返回 has_api_key 布尔。潜在缺陷：secret 泄漏。
+    def test_model_configs_no_plaintext_key(self, con: sqlite3.Connection) -> None:
+        con.execute(
+            "INSERT INTO model_configs (id, config_name, base_url, api_key, model_name, "
+            "context_window_k, enabled, sort_order) "
+            "VALUES (2, 'p', 'http://x', 'SECRET-123', 'm', 64, 1, 0)"
+        )
         con.commit()
-        rows = list_providers(con, limit=10)
-        assert "api_key" not in rows[0]
-        assert rows[0]["has_api_key"] == 1
+        rows = list_model_configs(con, limit=10)
+        row = next(item for item in rows if item["id"] == 2)
+        assert "api_key" not in row
+        assert row["has_api_key"] == 1
         assert "SECRET-123" not in json.dumps(rows)
 
-    # 目的：has_api_key 对 NULL/空串为 0，非空为 1。潜在缺陷：空串被当有效 key。
-    def test_has_api_key_null_and_empty(self, con: sqlite3.Connection) -> None:
-        con.execute("INSERT INTO providers VALUES (1,'a','api','u',NULL,1,0)")
-        con.execute("INSERT INTO providers VALUES (2,'b','api','u','',1,1)")
-        con.execute("INSERT INTO providers VALUES (3,'c','api','u','k',1,2)")
+    # 目的：has_api_key 对空串为 0、非空为 1（api_key 列 NOT NULL）。潜在缺陷：空串被当有效 key。
+    def test_has_api_key_empty_and_present(self, con: sqlite3.Connection) -> None:
+        con.execute(
+            "INSERT INTO model_configs (id, config_name, base_url, api_key, model_name, "
+            "context_window_k, enabled, sort_order) "
+            "VALUES (2, 'empty', 'u', '', 'm', 64, 1, 1)"
+        )
+        con.execute(
+            "INSERT INTO model_configs (id, config_name, base_url, api_key, model_name, "
+            "context_window_k, enabled, sort_order) "
+            "VALUES (3, 'filled', 'u', 'k', 'm', 64, 1, 2)"
+        )
         con.commit()
-        rows = {r["id"]: r["has_api_key"] for r in list_providers(con, limit=10)}
-        assert rows == {1: 0, 2: 0, 3: 1}
+        rows = {r["id"]: r["has_api_key"] for r in list_model_configs(con, limit=10)}
+        assert rows == {1: 1, 2: 0, 3: 1}
 
-    # 目的：recent_runs 非法 status 抛 ValueError。潜在缺陷：非法状态静默返回空。
-    def test_recent_runs_invalid_status(self, con: sqlite3.Connection) -> None:
+    # 目的：recent_runs 由 model_config_id 派生 model_name，且非法 status 抛 ValueError。
+    # 潜在缺陷：模型名丢失（排查「模型解析失败」时无路由线索），或非法状态静默返回空。
+    def test_recent_runs_derives_model_name(self, con: sqlite3.Connection) -> None:
+        rows = recent_runs(con, limit=10)
+        assert rows[0]["model_config_id"] == 1
+        assert rows[0]["model_name"] == "deepseek-flash"
         with pytest.raises(ValueError):
             recent_runs(con, limit=10, status="bogus")
+
+    # 目的：recent_tasks 附带当前 run 状态与派生模型名。潜在缺陷：JOIN 口径错导致状态/模型缺失。
+    def test_tasks_join_current_run_and_model(self, con: sqlite3.Connection) -> None:
+        rows = recent_tasks(con, limit=10)
+        row = next(item for item in rows if item["id"] == 1)
+        assert row["current_run_status"] == "completed"
+        assert row["current_model_config_id"] == 1
+        assert row["current_model_name"] == "deepseek-flash"
 
     # 目的：recent_tasks contains 对 LIKE 通配符转义，% 不扩大匹配面。潜在缺陷：未转义导致通配。
     def test_tasks_contains_escapes_wildcard(self, con: sqlite3.Connection) -> None:
         con.execute(
-            "INSERT INTO tasks VALUES (2,1,'abc','chat',NULL,NULL,NULL,NULL,0,1,'t','t',NULL)"
+            "INSERT INTO tasks (id, workspace_id, title, task_type, context_usage_used, "
+            "context_window_total, created_at, updated_at) "
+            "VALUES (2, 1, 'abc', 'user', 0, 1, 't', 't')"
         )
         con.execute(
-            "INSERT INTO tasks VALUES (3,1,'a%c','chat',NULL,NULL,NULL,NULL,0,1,'t','t',NULL)"
+            "INSERT INTO tasks (id, workspace_id, title, task_type, context_usage_used, "
+            "context_window_total, created_at, updated_at) "
+            "VALUES (3, 1, 'a%c', 'user', 0, 1, 't', 't')"
         )
         con.commit()
         rows = recent_tasks(con, limit=10, contains="%")
@@ -244,13 +284,16 @@ class TestAgentFacts:
         con.commit()
         assert [r["id"] for r in recent_workspaces(con, limit=10)] == [2, 1]
 
-    # 目的：models provider_id 过滤生效。潜在缺陷：过滤被忽略。
-    def test_models_provider_filter(self, con: sqlite3.Connection) -> None:
-        con.execute("INSERT INTO models VALUES (1,1,'m1','M1',100,0,0,1,0)")
-        con.execute("INSERT INTO models VALUES (2,2,'m2','M2',100,0,0,1,1)")
+    # 目的：model_configs 按 sort_order 升序、limit 生效。潜在缺陷：排序或 limit 失效。
+    def test_model_configs_order_and_limit(self, con: sqlite3.Connection) -> None:
+        con.execute(
+            "INSERT INTO model_configs (id, config_name, base_url, api_key, model_name, "
+            "context_window_k, enabled, sort_order) "
+            "VALUES (2, 'b', 'u', 'k', 'm2', 32, 1, 5)"
+        )
         con.commit()
-        assert [r["id"] for r in list_models(con, limit=10, provider_id=2)] == [2]
-        assert len(list_models(con, limit=10)) == 2
+        assert [r["id"] for r in list_model_configs(con, limit=10)] == [1, 2]
+        assert [r["id"] for r in list_model_configs(con, limit=1)] == [1]
 
     # 目的：commands 可选 task/run 过滤。潜在缺陷：过滤组合错。
     def test_commands_filters(self, con: sqlite3.Connection) -> None:
@@ -262,27 +305,37 @@ class TestAgentFacts:
 
 
 # --------------------------------------------------------------------------- #
-# appdb_side_effects
+# appdb_agent_facts：委派子任务视图
 # --------------------------------------------------------------------------- #
 
 
-class TestSideEffects:
-    # 目的：terminal_sessions 非法 status 抛 ValueError。潜在缺陷：非法状态静默返回空列表。
-    def test_terminal_invalid_status(self, con: sqlite3.Connection) -> None:
-        with pytest.raises(ValueError):
-            list_terminal_sessions(con, limit=10, status="zombie")
-
-    # 目的：delegations task_id 匹配发起端或子端。潜在缺陷：只匹配一侧。
-    def test_delegations_match_either_side(self, con: sqlite3.Connection) -> None:
+class TestChildTasks:
+    # 目的：child-tasks 只返回 parent_task_id 命中的子任务，不含父任务自身。潜在缺陷：把父任务当子任务返回。
+    def test_child_tasks_filter(self, con: sqlite3.Connection) -> None:
         con.execute(
-            "INSERT INTO delegations VALUES (1,1,NULL,NULL,5,'a','b','ok','p','s',NULL,NULL,'t','t')"
+            "INSERT INTO tasks (id, workspace_id, title, task_type, parent_task_id, "
+            "parent_run_id, created_at, updated_at) "
+            "VALUES (2, 1, 'child', 'child', 1, 1, 't', 't')"
         )
         con.execute(
-            "INSERT INTO delegations VALUES (2,9,NULL,NULL,5,'a','b','ok','p','s',NULL,NULL,'t','t')"
+            "INSERT INTO tasks (id, workspace_id, title, task_type, created_at, updated_at) "
+            "VALUES (3, 1, 'root', 'user', 't', 't')"
         )
         con.commit()
-        ids = sorted(r["id"] for r in list_delegations(con, limit=10, task_id=5))
-        assert ids == [1, 2]
+        assert [r["id"] for r in list_child_tasks(con, limit=10, parent_task_id=1)] == [2]
+
+    # 目的：省略 parent_task_id 时返回所有子任务（parent_task_id 非空）。潜在缺陷：漏掉非空判定，把根任务当子任务。
+    def test_child_tasks_all_when_parent_omitted(self, con: sqlite3.Connection) -> None:
+        con.execute(
+            "INSERT INTO tasks (id, workspace_id, title, task_type, parent_task_id, "
+            "created_at, updated_at) VALUES (2, 1, 'child', 'child', 1, 't', 't')"
+        )
+        con.execute(
+            "INSERT INTO tasks (id, workspace_id, title, task_type, created_at, updated_at) "
+            "VALUES (3, 1, 'root', 'user', 't', 't')"
+        )
+        con.commit()
+        assert [r["id"] for r in list_child_tasks(con, limit=10)] == [2]
 
 
 # --------------------------------------------------------------------------- #
@@ -296,7 +349,7 @@ class TestSnapshots:
         with pytest.raises(ValueError):
             task_snapshot(con, task_id=999, limit=10)
 
-    # 目的：task_snapshot 聚合结构含全部关键块。潜在缺陷：缺失 key 导致渲染崩溃。
+    # 目的：task_snapshot 聚合结构含全部关键块（委派事实已并入 child_tasks）。潜在缺陷：缺失 key 导致渲染崩溃。
     def test_task_snapshot_shape(self, con: sqlite3.Connection) -> None:
         snap = task_snapshot(con, task_id=1, limit=10)
         assert set(snap) == {
@@ -305,7 +358,6 @@ class TestSnapshots:
             "runs",
             "commands",
             "child_tasks",
-            "delegations",
             "context",
         }
 
@@ -314,14 +366,18 @@ class TestSnapshots:
         with pytest.raises(ValueError):
             run_snapshot(con, run_id=999, limit=10)
 
-    # 目的：run_snapshot 的 task_id 从 run 行取，task_id=0 不崩溃。潜在缺陷：孤儿 run 触发异常。
+    # 目的：run_snapshot 的 task_id 从 run 行取，指向缺失任务时不崩溃，且 run 行带派生模型名。
+    # 潜在缺陷：孤儿 run 触发异常，或模型路由线索丢失。
     def test_run_snapshot_orphan_run(self, con: sqlite3.Connection) -> None:
         con.execute(
-            "INSERT INTO conversation_runs VALUES (9,777,'completed','a',1,'m','d','i','o','{}','{}','t','t',NULL)"
+            "INSERT INTO conversation_runs (id, task_id, input_text, agent_id, "
+            "model_config_id, status, created_at, updated_at) "
+            "VALUES (9, 777, 'i', 'a', 1, 'completed', 't', 't')"
         )
         con.commit()
         snap = run_snapshot(con, run_id=9, limit=10)
         assert snap["run"]["id"] == 9
+        assert snap["run"]["resolved_model_name"] == "deepseek-flash"
         assert snap["task"] is None
 
 

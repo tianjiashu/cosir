@@ -9,8 +9,7 @@
 - 负责：按 task / run 读取消息行、解析 LangChain 序列化消息（``message_json``）与
   Transport metadata（``transport_metadata_json``）、按 ``tool_call_id`` 配对调用与结果、
   汇总上下文计数。
-- 不负责：run 生命周期状态（见 ``appdb_agent_facts``）、文件变更（见 ``appdb_side_effects``）、
-  渲染与截断（见 CLI 入口）。
+- 不负责：run 生命周期状态与委派子任务（见 ``appdb_agent_facts``）、渲染与截断（见 CLI 入口）。
 
 数据结构事实：``message_json`` 为 ``{"type": "ai"|"tool"|"human"|"system", "data": {...}}``；
 AI 的工具调用在 ``data.tool_calls[]``（``{id, name, args}``）；工具结果在

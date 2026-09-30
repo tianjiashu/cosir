@@ -8,8 +8,7 @@
 职责边界：
 - 负责：argparse 参数面、子命令分发、输出渲染（文本/JSON）、退出码。
 - 不负责：SQL 与业务语义（见 ``appdb_readonly`` / ``appdb_agent_facts`` /
-  ``appdb_context`` / ``appdb_side_effects`` / ``appdb_snapshots`` / ``appdb_health`` /
-  ``appdb_schema``）、任何写操作。
+  ``appdb_context`` / ``appdb_snapshots`` / ``appdb_health`` / ``appdb_schema``）、任何写操作。
 
 表结构事实以 ``apps/backend/app/storage/model`` 的 ORM 定义为准；本脚本子命令与字段随该
 目录演进，不硬编码表名清单（``schema`` 子命令从在线库读取真实结构）。
@@ -27,8 +26,8 @@ from typing import Any
 
 import triage_paths as paths
 from appdb_agent_facts import (
-    list_models,
-    list_providers,
+    list_child_tasks,
+    list_model_configs,
     recent_commands,
     recent_runs,
     recent_tasks,
@@ -38,7 +37,6 @@ from appdb_context import list_messages, summarize_tool_calls
 from appdb_health import find_unsettled
 from appdb_readonly import list_tables, open_readonly, resolve_db_path
 from appdb_schema import database_overview, table_detail
-from appdb_side_effects import list_delegations, list_terminal_sessions
 from appdb_snapshots import run_snapshot, task_snapshot
 
 _DEFAULT_LIMIT = 50
@@ -54,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
         无。
 
     返回:
-        配置好的 ``ArgumentParser``，子命令覆盖结构、事实、上下文、副作用与体检五类查询。
+        配置好的 ``ArgumentParser``，子命令覆盖结构、事实、上下文、委派与体检五类查询。
 
     异常:
         无。
@@ -123,25 +121,16 @@ def build_parser() -> argparse.ArgumentParser:
     tools.add_argument("--contains", default="", help="按工具名/参数/结果模糊搜索。")
     tools.add_argument("--failures-only", action="store_true", help="只显示失败调用。")
 
-    delegations = subparsers.add_parser("delegations", help="列出子 Agent 委派。")
-    _add_common_options(delegations)
-    _add_limit(delegations)
-    delegations.add_argument("--task-id", type=int, default=None)
+    child_tasks = subparsers.add_parser("child-tasks", help="列出委派产生的子任务。")
+    _add_common_options(child_tasks)
+    _add_limit(child_tasks)
+    child_tasks.add_argument("--parent-task-id", type=int, default=None)
 
-    sessions = subparsers.add_parser("sessions", help="列出终端会话。")
-    _add_common_options(sessions)
-    _add_limit(sessions)
-    sessions.add_argument("--task-id", type=int, default=None)
-    sessions.add_argument("--status", default="")
-
-    providers = subparsers.add_parser("providers", help="列出模型厂商（不含明文 Key）。")
-    _add_common_options(providers)
-    _add_limit(providers)
-
-    models = subparsers.add_parser("models", help="列出模型条目。")
-    _add_common_options(models)
-    _add_limit(models)
-    models.add_argument("--provider-id", type=int, default=None)
+    model_configs = subparsers.add_parser(
+        "model-configs", help="列出模型连接配置（不含明文 Key）。"
+    )
+    _add_common_options(model_configs)
+    _add_limit(model_configs)
 
     stuck = subparsers.add_parser("stuck", help="体检未收敛的 run / task / 流式草稿。")
     _add_common_options(stuck)
@@ -271,12 +260,10 @@ def dispatch(connection: sqlite3.Connection, args: argparse.Namespace) -> Any:
             failures_only=args.failures_only,
             limit=limit,
         ),
-        "delegations": lambda: list_delegations(connection, limit=limit, task_id=args.task_id),
-        "sessions": lambda: list_terminal_sessions(
-            connection, limit=limit, task_id=args.task_id, status=args.status.strip()
+        "child-tasks": lambda: list_child_tasks(
+            connection, limit=limit, parent_task_id=args.parent_task_id
         ),
-        "providers": lambda: list_providers(connection, limit=limit),
-        "models": lambda: list_models(connection, limit=limit, provider_id=args.provider_id),
+        "model-configs": lambda: list_model_configs(connection, limit=limit),
         "stuck": lambda: find_unsettled(connection, limit=limit),
     }
     handler = handlers.get(args.command)

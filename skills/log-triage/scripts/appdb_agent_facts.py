@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """业务库 Agent 执行事实查询（log-triage skill 内置）。
 
-单一职责：只读查询承载「任务 / 运行 / 命令 / 工作区 / 模型厂商」的持久化事实行：
-``workspaces``、``tasks``、``conversation_runs``、``conversation_commands``、
-``providers``、``models``。
+单一职责：只读查询承载「任务 / 运行 / 命令 / 工作区 / 模型连接配置」的持久化事实行：
+``workspaces``、``tasks``、``conversation_runs``、``conversation_commands``、``model_configs``。
 
 职责边界：
 - 负责：按标识与过滤条件下发只读 SELECT，并返回原始行字典（不做文本渲染、不做截断）。
 - 不负责：会话消息与工具调用（见 ``appdb_context``）、聚合排障快照（见 ``appdb_snapshots``）、
-  文件变更与终端会话（见 ``appdb_side_effects``）、终态体检（见 ``appdb_health``）。
-- 安全边界：``providers.api_key`` 是明文 secret，任何查询都不得返回其原文，只返回是否存在。
+  终态体检（见 ``appdb_health``）、结构概览（见 ``appdb_schema``）。
+- 安全边界：``model_configs.api_key`` 是明文 secret，任何查询都不得返回其原文，只返回是否存在。
+
+数据库演进备忘（脚本必须随 ``apps/backend/app/storage/model`` 同步）：
+
+- ``providers`` / ``models`` 两表已合并为单表 ``model_configs``；Run 只保存
+  ``model_config_id``，模型名称、上下文窗口与能力不再复制进 Run，需要时 JOIN 取回。
+- ``delegations`` / ``terminal_sessions`` 两表已移除：委派事实由 ``tasks.parent_task_id`` /
+  ``parent_run_id`` / ``task_type`` 承载（见 :func:`list_child_tasks`），终端会话元数据不再落库。
 """
 
 from __future__ import annotations
@@ -29,27 +35,26 @@ _TASK_COLUMNS = (
     "t.parent_task_id",
     "t.parent_run_id",
     "t.current_run_id",
-    "t.delegation_id",
     "t.context_usage_used",
     "t.context_window_total",
     "t.created_at",
     "t.updated_at",
 )
 
+# Run 只保存 model_config_id；模型名称由 model_configs JOIN 派生，不复制在 Run 行内。
 _RUN_COLUMNS = (
-    "id",
-    "task_id",
-    "status",
-    "agent_id",
-    "provider_id",
-    "model_name",
-    "end_reason",
-    "input_text",
-    "final_output",
-    "usage_json",
-    "error_json",
-    "created_at",
-    "updated_at",
+    "r.id",
+    "r.task_id",
+    "r.status",
+    "r.agent_id",
+    "r.model_config_id",
+    "r.end_reason",
+    "r.input_text",
+    "r.final_output",
+    "r.usage_json",
+    "r.error_json",
+    "r.created_at",
+    "r.updated_at",
 )
 
 
@@ -96,18 +101,18 @@ def recent_tasks(
         contains: 可选标题 / 标识模糊搜索。
 
     返回:
-        任务行列表，每行额外含 ``current_run_status`` 与 ``current_model_name``
-        （``current_run_id`` 为空或指向缺失行时为 None）。
+        任务行列表，每行额外含 ``current_run_status``、``current_model_config_id`` 与
+        ``current_model_name``（``current_run_id`` 为空、指向缺失行或 Run 未绑定配置时为 None）。
 
     异常:
-        ValueError: ``tasks`` 表缺失。
+        ValueError: ``tasks`` / ``conversation_runs`` / ``model_configs`` 表缺失。
         sqlite3.Error: 查询失败。
 
     副作用:
         无。
     """
 
-    require_tables(connection, "tasks", "conversation_runs")
+    require_tables(connection, "tasks", "conversation_runs", "model_configs")
     where: list[str] = []
     params: list[Any] = []
     if workspace_id is not None:
@@ -120,8 +125,11 @@ def recent_tasks(
     # 列名来自本模块常量，过滤值全部走占位符，无注入面。
     sql = (
         f"SELECT {', '.join(_TASK_COLUMNS)}, "  # noqa: S608 - 列名来自本模块常量，值走占位符
-        "r.status AS current_run_status, r.model_name AS current_model_name "
-        "FROM tasks t LEFT JOIN conversation_runs r ON r.id = t.current_run_id"
+        "r.status AS current_run_status, r.model_config_id AS current_model_config_id, "
+        "mc.model_name AS current_model_name "
+        "FROM tasks t "
+        "LEFT JOIN conversation_runs r ON r.id = t.current_run_id "
+        "LEFT JOIN model_configs mc ON mc.id = r.model_config_id"
     )
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -145,41 +153,45 @@ def recent_runs(
         limit: 最大返回行数。
         task_id: 可选任务过滤。
         status: 可选运行状态精确过滤（pending / running / completed / failed / cancelled）。
-        contains: 可选输入文本 / 终态原因 / 最终回复模糊搜索。
+        contains: 可选输入文本 / 终态原因 / 最终回复 / 错误模糊搜索。
 
     返回:
-        运行行列表（id 降序）。
+        运行行列表（id 降序）；每行含 ``model_config_id``，并额外派生 ``model_name``
+        （配置已删除或被置空时为 None）。
 
     异常:
-        ValueError: ``conversation_runs`` 表缺失，或 ``status`` 不在允许取值内。
+        ValueError: ``conversation_runs`` / ``model_configs`` 表缺失，或 ``status`` 不在允许取值内。
         sqlite3.Error: 查询失败。
 
     副作用:
         无。
     """
 
-    require_tables(connection, "conversation_runs")
+    require_tables(connection, "conversation_runs", "model_configs")
     if status and status not in _TASK_RUN_STATUSES:
         raise ValueError(f"status must be one of {', '.join(_TASK_RUN_STATUSES)}")
     where: list[str] = []
     params: list[Any] = []
     if task_id is not None:
-        where.append("task_id = ?")
+        where.append("r.task_id = ?")
         params.append(task_id)
     if status:
-        where.append("status = ?")
+        where.append("r.status = ?")
         params.append(status)
     if contains:
         pattern = contains_pattern(contains)
         where.append(
-            "(input_text LIKE ? ESCAPE '\\' OR end_reason LIKE ? ESCAPE '\\' "
-            "OR final_output LIKE ? ESCAPE '\\' OR error_json LIKE ? ESCAPE '\\')"
+            "(r.input_text LIKE ? ESCAPE '\\' OR r.end_reason LIKE ? ESCAPE '\\' "
+            "OR r.final_output LIKE ? ESCAPE '\\' OR r.error_json LIKE ? ESCAPE '\\')"
         )
         params.extend([pattern, pattern, pattern, pattern])
-    sql = f"SELECT {', '.join(_RUN_COLUMNS)} FROM conversation_runs"  # noqa: S608
+    sql = (
+        f"SELECT {', '.join(_RUN_COLUMNS)}, mc.model_name AS model_name "  # noqa: S608
+        "FROM conversation_runs r LEFT JOIN model_configs mc ON mc.id = r.model_config_id"
+    )
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY id DESC LIMIT ?"
+    sql += " ORDER BY r.id DESC LIMIT ?"
     params.append(limit)
     return query_rows(connection, sql, tuple(params))
 
@@ -230,68 +242,78 @@ def recent_commands(
     return query_rows(connection, sql, tuple(params))
 
 
-def list_providers(connection: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
-    """查询模型厂商配置（不返回明文 Key）。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        limit: 最大返回行数。
-
-    返回:
-        厂商行列表，含 ``has_api_key`` 布尔标记；**不含** ``api_key`` 原文。
-
-    异常:
-        ValueError: ``providers`` 表缺失。
-        sqlite3.Error: 查询失败。
-
-    副作用:
-        无。
-    """
-
-    require_tables(connection, "providers")
-    return query_rows(
-        connection,
-        "SELECT id, name, type, base_url, enabled, sort_order, "
-        "(api_key IS NOT NULL AND api_key != '') AS has_api_key "
-        "FROM providers ORDER BY sort_order ASC, id ASC LIMIT ?",
-        (limit,),
-    )
-
-
-def list_models(
+def list_child_tasks(
     connection: sqlite3.Connection,
     *,
     limit: int,
-    provider_id: int | None = None,
+    parent_task_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    """查询模型条目。
+    """查询委派出来的子任务（原 ``delegations`` 表的只读替代视图）。
+
+    委派事实现在只由 ``tasks`` 的 ``parent_task_id`` / ``parent_run_id`` / ``task_type``
+    承载，因此本函数是它的直接投影，不再有独立的委派行（提示词、摘要等不再落库）。
+
+    语义前提（后端事实，变更时需同步）：本函数以 ``parent_task_id IS NOT NULL`` 判定子任务。
+    当前只有委派子任务写这两列（``task_type='delegate_task'``）；``fork`` 任务虽然也是一种
+    「派生任务」，但创建时不写 ``parent_task_id``（来源记在 ``extra.fork``），因此不会出现在
+    本视图中。若后端将来新增「非委派但写父引用」的任务类型，这里需要改为显式判定
+    ``task_type``，否则会静默多出/漏掉行。
 
     参数:
         connection: 只读 SQLite 连接。
         limit: 最大返回行数。
-        provider_id: 可选厂商过滤。
+        parent_task_id: 可选父任务过滤；省略时返回所有子任务。
 
     返回:
-        模型行列表（含上下文窗口与能力标记）。
+        子任务行列表（id 降序），含父子 task/run 关系与任务类型。
 
     异常:
-        ValueError: ``models`` 表缺失。
+        ValueError: ``tasks`` 表缺失。
         sqlite3.Error: 查询失败。
 
     副作用:
         无。
     """
 
-    require_tables(connection, "models")
-    where = ""
+    require_tables(connection, "tasks")
+    where = ["parent_task_id IS NOT NULL"]
     params: list[Any] = []
-    if provider_id is not None:
-        where = " WHERE provider_id = ?"
-        params.append(provider_id)
+    if parent_task_id is not None:
+        where.append("parent_task_id = ?")
+        params.append(parent_task_id)
     params.append(limit)
     sql = (
-        "SELECT id, provider_id, model_name, display_name, max_context_window, "  # noqa: S608
-        "supports_thinking, supports_image, enabled, sort_order "
-        f"FROM models{where} ORDER BY sort_order ASC, id ASC LIMIT ?"
+        "SELECT id, title, task_type, parent_task_id, parent_run_id, current_run_id, "  # noqa: S608
+        "context_usage_used, context_window_total, created_at, updated_at "
+        f"FROM tasks WHERE {' AND '.join(where)} ORDER BY id DESC LIMIT ?"
     )
     return query_rows(connection, sql, tuple(params))
+
+
+def list_model_configs(connection: sqlite3.Connection, *, limit: int) -> list[dict[str, Any]]:
+    """查询模型连接配置（不返回明文 Key）。
+
+    参数:
+        connection: 只读 SQLite 连接。
+        limit: 最大返回行数。
+
+    返回:
+        配置行列表（sort_order 升序），含 ``has_api_key`` 布尔标记；**不含** ``api_key`` 原文。
+
+    异常:
+        ValueError: ``model_configs`` 表缺失。
+        sqlite3.Error: 查询失败。
+
+    副作用:
+        无。
+    """
+
+    require_tables(connection, "model_configs")
+    return query_rows(
+        connection,
+        "SELECT id, config_name, base_url, model_name, context_window_k, supports_thinking, "
+        "supports_reasoning_effort, supports_image, enabled, sort_order, "
+        "(api_key IS NOT NULL AND api_key != '') AS has_api_key "
+        "FROM model_configs ORDER BY sort_order ASC, id ASC LIMIT ?",
+        (limit,),
+    )

@@ -114,12 +114,15 @@ except Exception:
 - `trace_id` 由 `LogContextFilter` 自动回填，**不要手动传**；`task_id`/`run_id` 等业务 id 放 `extra["data"]`。
 - 子进程工具的日志经 `SubprocessQueueHandler` 回传父进程统一落盘，不另开日志文件。
 
-> **⚠️ 持久化日志里没有异常堆栈。** `MappedLogRecord` 会把 `error.message` 与 `error.stack`
-> 统一替换为「异常详情已省略」，只保留 `error.type`。也就是说 `log.exception(..., exc_info=True)`
-> 在固定 JSONL 文件里只贡献**异常类型**。
-> 因此排查异常时：① 在 `except` 里把关键上下文（入参、分支、业务 id）写进 `extra["data"]`；
-> ② 依赖 `event` + `caller` + `data` 定位到具体阶段；③ 需要堆栈就**本地复现**（见阶段 D），
-> 不要指望日志文件。
+> **异常信息会落盘，但被截断。** `MappedLogRecord._extract_error`
+> （`app/models/mapped_log_record.py`）会把 `exc_info` 渲染成
+> `error.type` / `error.message` / `error.stack` 三件套，各字段再按单字段 **2000 字符**
+> 上限截断并置 `truncated`；跨进程桥接写入的 `error_type` / `error_message` / `stack`
+> 属性走同一条渲染路径。
+> 因此 `log.exception(..., exc_info=True)` 的**堆栈在固定 JSONL 里可以直接读到**
+> （用 `query_logs.py --errors-only` 或 `trace <ID>`），这是排查异常的首选证据。
+> 仍要注意两点：① 截断可能丢掉最深帧，需要完整堆栈时本地复现（见阶段 D）；
+> ② 关键业务上下文（入参、分支、业务 id）仍应显式写进 `extra["data"]`，不要指望从堆栈反推。
 
 **前端怎么写（照抄）**：统一从 `@/lib/logging/frontend-log` 调，禁止 `console.log` 当系统日志。
 
@@ -142,23 +145,24 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 
 ## 3. 业务库表 → 承载事实 → 典型症状
 
-`<数据根>/.cosir/storage/app.sqlite3`（桌面态位置见 §1）的表结构以 `apps/backend/app/storage/model` 为事实源（`schema` 子命令会从在线库读真实结构）。
+`<数据根>/.cosir/storage/app.sqlite3`（桌面态位置见 §1）的表结构以 `apps/backend/app/storage/model` 为事实源（`schema` 子命令会从在线库读真实结构）。当前只有**六张表**：
 
 | 表 | 承载事实 | 典型症状 / 排查点 |
 |----|----------|-------------------|
 | `workspaces` | 工作区身份与根路径 | 路径越界、找不到文件、工作区切换异常 |
-| `tasks` | 任务身份、`current_run_id`、上下文窗口用量（`context_usage_used` / `context_window_total`）；父子/fork 关系由 `parent_task_id` / `parent_run_id` / `delegation_id` 显式承载，`extra` 为自由 JSON（fork 场景实测含 `{"fork": {"source_task_id", "source_run_id"}}`） | 任务列表状态不对、上下文占用异常、fork 关系 |
-| `conversation_runs` | **Run 生命周期唯一事实源**：`status` / `end_reason` / `error_json` / `final_output` / `usage_json` / `agent_id` / provider+model / `checkpoint_thread_id` | 一直转圈、失败原因、用量与成本、模型路由错 |
+| `tasks` | 任务身份、`task_type`（`user` / `fork` / `delegate_task`）、委派关系 `parent_task_id` / `parent_run_id`（`fork` 任务**不写**这两列，来源记在 `extra.fork.source_task_id` / `source_run_id`）、`current_run_id`、上下文窗口用量（`context_usage_used` / `context_window_total`）；`extra` 为自由 JSON | 任务列表状态不对、上下文占用异常、委派链路、fork 来源 |
+| `conversation_runs` | **Run 生命周期唯一事实源**：`status` / `end_reason` / `error_json` / `final_output` / `usage_json` / `agent_id` / `model_config_id`（模型名与能力不复制进 Run，由 `model_configs` 派生）/ `checkpoint_thread_id` | 一直转圈、失败原因、用量与成本、模型路由错 |
 | `conversation_commands` | Transport 命令幂等占用：`(task_id, command_id)` 唯一、`payload_hash`、`error_code` | 重复提交被拒、幂等冲突、命令失败码 |
 | `conversation_task_contexts` | **canonical 上下文消息**：`message_json` / `transport_metadata_json` / `sequence` / `tool_call_id` / `is_streaming` / `include_in_context` | Agent 回放、工具调用与结果、上下文缺口、工具状态不符 |
-| `delegations` | 子 Agent 委派：父子 run/task/agent、`status`、`summary`、`error` | 委派卡住、子任务结果丢失 |
-| `terminal_sessions` | 终端会话元数据（PTY 与输出缓存不落库） | 终端断连、worker 崩溃、会话未收口 |
-| `providers` / `models` | 模型厂商与模型条目（`api_key` 为**明文 secret，任何输出都不得包含**） | 模型解析失败、窗口/能力标志错 |
+| `model_configs` | 模型连接配置：`config_name` / `base_url` / `api_key`（**明文 secret，任何输出都不得包含**）/ `model_name` / `context_window_k` / `supports_thinking` / `supports_reasoning_effort` / `supports_image` / `enabled` / `sort_order` | 模型解析失败、窗口/能力标志错、Key 缺失 |
 
-**已从 schema 移除、不要再查**：`attachment_assets`（附件改为纯文件系统，落 workspace 的
+**已从 schema 移除、不要再查**：`providers` / `models`（已合并为单表 `model_configs`）、
+`delegations`（委派事实改由 `tasks.parent_task_id` / `parent_run_id` 承载，见 `child-tasks` 子命令）、
+`terminal_sessions`（终端会话元数据不再落库）、`attachment_assets`（附件改为纯文件系统，落 workspace 的
 `.cosir/Attachment/`，`storage` 层已无 attachment 模型）；更早的 `turn_id` / `turns` /
 `turn_messages` / `runtime_events`。查这些表会直接报 `table not found`（`require_tables` 会连带
-列出库内真实表名，是判断「schema 漂移」还是「查询写错」的快捷信号）。
+列出库内真实表名，是判断「schema 漂移」还是「查询写错」的快捷信号）；查已删列（`delegation_id` /
+`provider_id` / `model_name`）会报 `no such column`，同样按 schema 漂移处理。
 
 **状态词表（唯一事实源）**：
 
@@ -252,7 +256,7 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py m
 
 1. **补日志**（遵循项目《通用日志开发规范》与 AGENTS.md 日志章节）：
    - 必须带**上下文**：`extra["data"]` 中放 task_id / run_id / 路径 / 命令 / 重试状态等定位字段。
-   - 异常路径必须写 error 日志；**注意堆栈不会落盘（见 §2）**，因此要把「异常类型之外的因果」显式写进 `data`。
+   - 异常路径必须写 error 日志；**堆栈会随 `error.type` / `error.message` / `error.stack` 落盘并按单字段 2000 字符截断（见 §2）**，但截断可能丢掉最深帧，因此仍要把「异常类型之外的因果」显式写进 `data`。
    - 外部依赖调用记：目标、操作名、耗时、状态码、失败原因。
    - **绝不输出 secret / 敏感信息**（API Key、Token、Cookie、手机号、身份证、完整请求正文）。
    - 日志必须分级（DEBUG/INFO/WARNING/ERROR），调试日志不得污染生产默认输出。
@@ -283,7 +287,7 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py m
 - **三套标识必区分**（见 §0）：链路 trace_id 可跨前后端日志反查；Langfuse trace 只在 Langfuse；业务排查用 run_id/task_id。拿错标识查错通道 = 白查。
 - **日志不是事实源**：Run / 工具调用等权威状态在业务库（文件变更集能力已整体移除，勿再按该心智排查）；日志只做旁路印证。
 - **复现优先自己来**：pytest > 起后端调 API > 请用户前端复现。能自己复现就别打扰用户。
-- **补日志要合规**：上下文 + 分级 + 不泄密、禁止空 catch；记住**堆栈不落盘**，因果要写进 `data`。
+- **补日志要合规**：上下文 + 分级 + 不泄密、禁止空 catch；堆栈会落盘但被截断（见 §2），关键因果仍要写进 `data`。
 - **落盘可查**：自己复现时必须确认证据已落盘（`backend-*.log` / `app.sqlite3` / `frontend-*.log`），否则复现无效。
 - **不制造噪音**：查询脚本全部只读（`mode=ro`），不要为了排查改业务行为或写库。
 
@@ -309,10 +313,8 @@ task        <TASK_ID> [--limit N]                             # task 排障快�
 commands    [--task-id I] [--run-id I] [--limit N]
 messages    <TASK_ID> [--run-id I] [--order asc|desc] [--exclude-streaming] [--limit N]
 tools       <TASK_ID> [--run-id I] [--contains T] [--failures-only] [--limit N]
-delegations [--task-id I] [--limit N]
-sessions    [--task-id I] [--status S] [--limit N]
-providers   [--limit N]                                       # 不含明文 api_key
-models      [--provider-id I] [--limit N]
+child-tasks [--parent-task-id I] [--limit N]                  # 委派子任务（取代原 delegations）
+model-configs [--limit N]                                     # 模型连接配置，不含明文 api_key
 stuck       [--limit N]
 # 日志共享选项：--log-file PATH  --format text|json  --save FILE  --force
 
@@ -326,7 +328,7 @@ stuck       [--limit N]
 
 > **实现约定**：`query_app_db.py` 是 CLI 表现层（参数解析/分发/渲染），SQL 与业务语义拆在
 > `appdb_readonly.py`（只读访问原语）、`appdb_schema.py`、`appdb_agent_facts.py`、
-> `appdb_snapshots.py`、`appdb_context.py`、`appdb_side_effects.py`、`appdb_health.py` 七个模块中；
+> `appdb_snapshots.py`、`appdb_context.py`、`appdb_health.py` 六个模块中；
 > 脚本**不导入 `app.*`**，表结构事实以在线库与 `apps/backend/app/storage/model` 为准，因此可在服务
 > 未启动、启动失败或 UI 打不开时使用。
 > `--format json` 给出未经截断的完整字段（文本模式会压缩长文本），排查细节优先用 json。
@@ -337,10 +339,11 @@ stuck       [--limit N]
 > `test/` 只服务仓库内回归，运行时不需要，**不随安装副本同步**。
 > `appdb_*.py` 各查询模块必须随 `apps/backend/app/storage/model` 的表结构演进同步更新。
 >
-> **回归测试（改脚本后必跑）**：`skills/log-triage/test/` 下有 269 用例，覆盖布尔归一的
+> **回归测试（改脚本后必跑）**：`skills/log-triage/test/` 下有一组回归用例，覆盖布尔归一的
 > Python/SQL 双侧一致性、消息回放流式过滤口径、工具调用配对（含跨 run 复用 `tool_call_id`）、
 > 未收敛体检、缺表可诊断性、CLI 参数面、`--save`，以及数据根推导（`triage_paths` 三级回退
-> 与来源文案，见 `test_triage_paths_adversarial.py`）。从仓库根执行：
+> 与来源文案，见 `test_triage_paths_adversarial.py`；该文件还会在真实库存在时做一次只读连通性
+> 检查，缺库时自动跳过）。从仓库根执行：
 > `uv run --project apps/backend pytest -c apps/backend/pyproject.toml skills/log-triage/test -q`
 > 改动 `sqlite_values.py` 或任一过滤条件时，务必确认该套件全绿——口径分叉类缺陷不会报错，只会
 > 静默给出错误结论。

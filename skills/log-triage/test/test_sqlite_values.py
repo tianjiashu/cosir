@@ -189,45 +189,62 @@ def _base_schema(con: sqlite3.Connection) -> None:
         """
         CREATE TABLE workspaces (id INTEGER PRIMARY KEY, name TEXT, root_path TEXT,
             created_at TEXT, updated_at TEXT);
-        CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER, title TEXT,
-            task_type TEXT, parent_task_id INTEGER, parent_run_id INTEGER,
-            current_run_id INTEGER, delegation_id INTEGER, context_usage_used INTEGER,
-            context_window_total INTEGER, created_at TEXT, updated_at TEXT, extra TEXT);
-        CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, task_id INTEGER,
-            status TEXT, agent_id TEXT, provider_id INTEGER, model_name TEXT,
-            end_reason TEXT, input_text TEXT, final_output TEXT,
-            usage_json TEXT, error_json TEXT, created_at TEXT, updated_at TEXT,
-            checkpoint_thread_id TEXT);
+        CREATE TABLE model_configs (id INTEGER PRIMARY KEY, config_name TEXT NOT NULL,
+            base_url TEXT NOT NULL, api_key TEXT NOT NULL, model_name TEXT NOT NULL,
+            context_window_k INTEGER NOT NULL, supports_thinking BOOLEAN NOT NULL DEFAULT 0,
+            supports_reasoning_effort BOOLEAN NOT NULL DEFAULT 0,
+            supports_image BOOLEAN NOT NULL DEFAULT 0,
+            enabled BOOLEAN NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT, updated_at TEXT);
+        CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL,
+            creation_command_id TEXT, title TEXT NOT NULL, extra TEXT,
+            task_type TEXT NOT NULL, parent_task_id INTEGER, parent_run_id INTEGER,
+            current_run_id INTEGER, context_usage_used INTEGER, context_window_total INTEGER,
+            created_at TEXT, updated_at TEXT);
+        CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL,
+            checkpoint_thread_id TEXT, input_text TEXT NOT NULL, agent_id TEXT,
+            model_config_id INTEGER, image_paths TEXT, end_reason TEXT, final_output TEXT,
+            extra TEXT, usage_json TEXT, error_json TEXT, status TEXT NOT NULL,
+            created_at TEXT, updated_at TEXT);
         CREATE TABLE conversation_commands (id INTEGER PRIMARY KEY, task_id INTEGER,
             command_id TEXT, command_type TEXT, payload_hash TEXT, run_id INTEGER,
             error_code TEXT, created_at TEXT);
         CREATE TABLE conversation_task_contexts (id INTEGER PRIMARY KEY, task_id INTEGER,
             run_id INTEGER, tool_call_id TEXT, message_json TEXT NOT NULL,
             transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,
-            sequence INTEGER, created_at TEXT, updated_at TEXT, is_streaming BOOLEAN);
-        CREATE TABLE delegations (id INTEGER PRIMARY KEY, task_id INTEGER, parent_run_id INTEGER,
-            child_run_id INTEGER, child_task_id INTEGER, parent_agent_id TEXT,
-            child_agent_id TEXT, status TEXT, prompt TEXT, summary TEXT, error TEXT,
-            effective_tools TEXT, created_at TEXT, updated_at TEXT);
-        CREATE TABLE terminal_sessions (id INTEGER PRIMARY KEY, session_id TEXT, task_id INTEGER,
-            workspace_id INTEGER, created_by_run_id INTEGER, initial_cwd TEXT, shell_kind TEXT,
-            shell_executable TEXT, worker_instance_id TEXT, worker_pid INTEGER, status TEXT,
-            end_reason TEXT, exit_code INTEGER, cols INTEGER, rows INTEGER,
-            last_activity_at TEXT, ended_at TEXT, created_at TEXT);
-        CREATE TABLE providers (id INTEGER PRIMARY KEY, name TEXT, type TEXT, base_url TEXT,
-            api_key TEXT, enabled BOOLEAN, sort_order INTEGER);
-        CREATE TABLE models (id INTEGER PRIMARY KEY, provider_id INTEGER, model_name TEXT,
-            display_name TEXT, max_context_window INTEGER, supports_thinking BOOLEAN,
-            supports_image BOOLEAN, enabled BOOLEAN, sort_order INTEGER);
+            is_streaming BOOLEAN, sequence INTEGER, created_at TEXT, updated_at TEXT);
         """
     )
-    con.execute("INSERT INTO workspaces VALUES (1,'ws1','/tmp/ws1','t','t')")
-    con.execute("INSERT INTO tasks VALUES (1,1,'t1','chat',NULL,NULL,1,NULL,0,100,'t','t',NULL)")
     con.execute(
-        "INSERT INTO conversation_runs VALUES (1,1,'completed','a',1,'m','done','i','o','{}','{}','t','t',NULL)"
+        "INSERT INTO workspaces (id, name, root_path, created_at, updated_at) "
+        "VALUES (1, 'ws1', '/tmp/ws1', 't', 't')"
     )
     con.execute(
-        "INSERT INTO conversation_runs VALUES (2,1,'running','a',1,'m',NULL,'i',NULL,'{}','{}','t','t',NULL)"
+        "INSERT INTO model_configs (id, config_name, base_url, api_key, model_name, "
+        "context_window_k, supports_thinking, supports_reasoning_effort, supports_image, "
+        "enabled, sort_order, created_at, updated_at) "
+        "VALUES (1, 'deepseek', 'https://api.deepseek.com', 'sk-secret', 'deepseek-flash', "
+        "1000, 1, 1, 1, 1, 0, 't', 't')"
+    )
+    con.execute(
+        "INSERT INTO tasks (id, workspace_id, creation_command_id, title, extra, task_type, "
+        "parent_task_id, parent_run_id, current_run_id, context_usage_used, "
+        "context_window_total, created_at, updated_at) "
+        "VALUES (1, 1, NULL, 't1', NULL, 'user', NULL, NULL, 1, 0, 100, 't', 't')"
+    )
+    con.execute(
+        "INSERT INTO conversation_runs (id, task_id, checkpoint_thread_id, input_text, "
+        "agent_id, model_config_id, image_paths, end_reason, final_output, extra, usage_json, "
+        "error_json, status, created_at, updated_at) "
+        "VALUES (1, 1, NULL, 'i', 'a', 1, NULL, 'done', 'o', NULL, '{}', '{}', 'completed', "
+        "'t', 't')"
+    )
+    con.execute(
+        "INSERT INTO conversation_runs (id, task_id, checkpoint_thread_id, input_text, "
+        "agent_id, model_config_id, image_paths, end_reason, final_output, extra, usage_json, "
+        "error_json, status, created_at, updated_at) "
+        "VALUES (2, 1, NULL, 'i', 'a', 1, NULL, NULL, NULL, NULL, '{}', '{}', 'running', "
+        "'t', 't')"
     )
     con.commit()
 
@@ -504,9 +521,11 @@ class TestToolCallPairing:
                 _msg("tool", {"content": f"res-{run}", "tool_call_id": "dup", "status": "success"}),
                 tool_call_id="dup",
             )
-        # run 3 未在基础 schema 中，补一行
+        # run 3 未在基础 schema 中，补一行（显式列名，避免随 schema 列序漂移而失配）
         con.execute(
-            "INSERT INTO conversation_runs VALUES (3,1,'completed','a',1,'m','done','i','o','{}','{}','t','t',NULL)"
+            "INSERT INTO conversation_runs (id, task_id, input_text, agent_id, model_config_id, "
+            "status, created_at, updated_at) "
+            "VALUES (3, 1, 'i', 'a', 1, 'completed', 't', 't')"
         )
         con.commit()
         rows = summarize_tool_calls(con, task_id=1, limit=50)

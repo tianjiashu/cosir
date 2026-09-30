@@ -31,11 +31,13 @@ def find_unsettled(connection: sqlite3.Connection, *, limit: int) -> dict[str, A
 
     返回:
         ``{"active_runs", "tasks_with_active_run", "stale_streaming_drafts"}``：
-        非终态 run（含任务标题与工作区根）、``current_run_id`` 指向非终态 run 的任务、
+        非终态 run（含任务标题、工作区根与模型名——模型名由 ``model_configs`` 派生）、
+        ``current_run_id`` 指向非终态 run 的任务、
         ``is_streaming=1`` 且所属 run 已终态（或已不存在）的上下文草稿行。
 
     异常:
-        ValueError: ``conversation_runs`` 或 ``conversation_task_contexts`` 表缺失。
+        ValueError: ``conversation_runs`` / ``conversation_task_contexts`` / ``tasks`` /
+            ``workspaces`` / ``model_configs`` 表缺失。
         sqlite3.Error: 查询失败。
 
     副作用:
@@ -43,18 +45,25 @@ def find_unsettled(connection: sqlite3.Connection, *, limit: int) -> dict[str, A
     """
 
     require_tables(
-        connection, "conversation_runs", "conversation_task_contexts", "tasks", "workspaces"
+        connection,
+        "conversation_runs",
+        "conversation_task_contexts",
+        "tasks",
+        "workspaces",
+        "model_configs",
     )
     active_placeholders = ", ".join("?" for _ in ACTIVE_RUN_STATUSES)
     terminal_placeholders = ", ".join("?" for _ in TERMINAL_RUN_STATUSES)
 
     # 三处 SQL 的表名/列名均为内部常量，状态枚举走占位符，无注入面。
+    # Run 只保存 model_config_id，模型名从 model_configs 派生（配置已删除时为 NULL）。
     active_runs_sql = (
-        "SELECT r.id, r.task_id, r.status, r.agent_id, r.model_name, r.created_at, r.updated_at, "  # noqa: S608
-        "t.title, w.root_path "
+        "SELECT r.id, r.task_id, r.status, r.agent_id, r.model_config_id, "  # noqa: S608
+        "mc.model_name AS model_name, r.created_at, r.updated_at, t.title, w.root_path "
         "FROM conversation_runs r "
         "LEFT JOIN tasks t ON t.id = r.task_id "
         "LEFT JOIN workspaces w ON w.id = t.workspace_id "
+        "LEFT JOIN model_configs mc ON mc.id = r.model_config_id "
         f"WHERE r.status IN ({active_placeholders}) "
         "ORDER BY r.updated_at ASC, r.id ASC LIMIT ?"
     )

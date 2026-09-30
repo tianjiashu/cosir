@@ -100,7 +100,8 @@ class TestDataRootFallbackOrder:
     # 目的：显式变量带前后空格应被裁剪后使用（含实际路径）。潜在缺陷：保留空格导致路径带脏字符。
     def test_explicit_is_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CODING_AGENT_DATA_DIR", "  C:/data-root  ")
-        assert str(tp.data_root()) == "C:\\data-root"
+        # 用 Path 表达期望：Windows 会规范化为反斜杠，POSIX 保留斜杠（原断言写死了 Windows 形态）。
+        assert str(tp.data_root()) == str(Path("C:/data-root"))
 
     # 目的：桌面根与仓库根都有 .cosir 时必须选桌面根。潜在缺陷：顺序反了导致默认查到仓库那份（最危险的静默错）。
     def test_desktop_wins_when_both_have_cosir(
@@ -169,7 +170,10 @@ class TestPlatformDesktopRoot:
         monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setenv("APPDATA", r"C:\Users\u\AppData\Roaming")
         monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\u\AppData\Local")
-        assert str(tp.desktop_data_root()) == "C:\\Users\\u\\AppData\\Roaming\\com.cosir.desktop"
+        # 用 os.path.join 表达期望：拼接分隔符随平台（实现同样是 Path / 运算符）。
+        assert str(tp.desktop_data_root()) == os.path.join(
+            r"C:\Users\u\AppData\Roaming", "com.cosir.desktop"
+        )
 
     # 目的：Windows 上 APPDATA 存在但为纯空白时同样视为缺失。潜在缺陷：只判 truthy 不 strip。
     def test_windows_blank_appdata_treated_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -268,7 +272,10 @@ class TestDescribePathChoice:
     # 目的：显式变量时来源标注为 CODING_AGENT_DATA_DIR 且含实际路径。潜在缺陷：标注与实际不符。
     def test_explicit_label(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CODING_AGENT_DATA_DIR", "C:/explicit")
-        assert tp.describe_path_choice() == "data root: C:\\explicit (from CODING_AGENT_DATA_DIR)"
+        # 用 Path 渲染期望值：分隔符形态随平台（原断言写死了 Windows 形态）。
+        assert tp.describe_path_choice() == (
+            f"data root: {Path('C:/explicit')} (from CODING_AGENT_DATA_DIR)"
+        )
 
     # 目的：桌面根胜出时来源标注为 desktop app_data_dir。潜在缺陷：来源标签写反。
     def test_desktop_label(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -503,7 +510,20 @@ class TestAppDbSubcommands:
         parser = qad.build_parser()
         sub = next(a for a in parser._actions if isinstance(a, __import__("argparse")._SubParsersAction))
         assert "attachments" not in sub.choices
-        assert "sessions" in sub.choices  # 相邻子命令仍在，排除“整块误删”
+        assert "child-tasks" in sub.choices  # 相邻子命令仍在，排除“整块误删”
+
+    # 目的：随 schema 演进移除的子命令必须从参数面消失，替代子命令必须在位。
+    # 潜在缺陷：子命令面再次与 schema 漂移（旧命令误导排查者，或替代命令漏注册）。
+    def test_legacy_subcommands_gone(self) -> None:
+        parser = qad.build_parser()
+        sub = next(
+            a for a in parser._actions
+            if isinstance(a, __import__("argparse")._SubParsersAction)
+        )
+        for legacy in ("providers", "models", "sessions", "delegations"):
+            assert legacy not in sub.choices
+        for current in ("child-tasks", "model-configs", "tasks", "runs", "stuck"):
+            assert current in sub.choices
 
     # 目的：--db 显式时 stderr 文案为 explicit 且含实际路径。潜在缺陷：显式路径提示缺失或标注错误。
     def test_db_explicit_message(self, tmp_path: Path) -> None:
@@ -611,7 +631,9 @@ class TestAdversarialPathInputs:
             fake_module.write_text("", encoding="utf-8")
             monkeypatch.setattr(tp, "__file__", str(fake_module))
             monkeypatch.chdir(fake_repo)
-            assert tp.repository_root() == fake_repo
+            # cwd 分支走 Path.cwd()，在 macOS 上已被解析为 /private/var/...；
+            # 期望值同样归一，避免比较「符号链接路径 vs 真实路径」。
+            assert tp.repository_root() == fake_repo.resolve()
         finally:
             shutil.rmtree(base, ignore_errors=True)
 
@@ -637,11 +659,18 @@ class TestAdversarialPathInputs:
 
 
 def _real_db() -> Path | None:
-    appdata = os.environ.get("APPDATA", "")
-    if not appdata:
-        return None
-    candidate = Path(appdata) / "com.cosir.desktop" / ".cosir" / "storage" / "app.sqlite3"
-    return candidate if candidate.exists() else None
+    """返回真实业务库路径，无则返回 None。
+
+    原实现只认 Windows 的 ``%APPDATA%``，使 macOS/Linux 上「真实库只读连通性」用例永远跳过；
+    改为复用 :func:`triage_paths.app_db_path`（数据根推导：显式环境变量 → 已有 ``.cosir``
+    的桌面数据根 → 仓库根），与其余用例使用的路径事实同源。
+    """
+
+    with contextlib.suppress(ValueError):
+        candidate = tp.app_db_path()
+        if candidate.exists():
+            return candidate
+    return None
 
 
 REAL_DB = _real_db()
@@ -652,10 +681,8 @@ APPDB_SUBCOMMANDS: list[list[str]] = [
     ["tasks", "--limit", "5"],
     ["runs", "--limit", "5"],
     ["commands"],
-    ["providers"],
-    ["models"],
-    ["sessions"],
-    ["delegations"],
+    ["child-tasks"],
+    ["model-configs"],
     ["stuck"],
 ]
 

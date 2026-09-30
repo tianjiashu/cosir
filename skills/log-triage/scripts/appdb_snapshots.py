@@ -2,13 +2,14 @@
 """业务库排障快照聚合（log-triage skill 内置）。
 
 单一职责：把「一个任务」或「一次运行」在业务库中的全部相关事实聚合成单个快照对象，
-让排查者用一条命令拿到该实体的完整上下文（任务 / 运行 / 命令 / 消息 / 工具调用 /
-委派 / 子任务）。
+让排查者用一条命令拿到该实体的完整上下文（任务 / 运行 / 命令 / 消息 / 工具调用 / 子任务）。
 
 职责边界：
 - 负责：编排既有查询模块并组织聚合结构。
-- 不负责：单表查询实现（复用 ``appdb_agent_facts`` / ``appdb_context`` /
-  ``appdb_side_effects``）、输出渲染。
+- 不负责：单表查询实现（复用 ``appdb_agent_facts`` / ``appdb_context``）、输出渲染。
+
+数据库演进备忘：``delegations`` 表已移除，委派事实改由 ``tasks.parent_task_id`` /
+``parent_run_id`` 承载，因此快照里只有 ``child_tasks`` 块，不再有 ``delegations`` 块。
 """
 
 from __future__ import annotations
@@ -16,10 +17,9 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from appdb_agent_facts import recent_commands, recent_runs
+from appdb_agent_facts import list_child_tasks, recent_commands, recent_runs
 from appdb_context import context_statistics, list_messages, summarize_tool_calls
-from appdb_readonly import get_one, query_rows, require_tables
-from appdb_side_effects import list_delegations
+from appdb_readonly import get_one, require_tables
 
 
 def task_snapshot(connection: sqlite3.Connection, *, task_id: int, limit: int) -> dict[str, Any]:
@@ -31,7 +31,8 @@ def task_snapshot(connection: sqlite3.Connection, *, task_id: int, limit: int) -
         limit: 每类明细最大返回行数。
 
     返回:
-        ``{"task", "workspace", "runs", "commands", "child_tasks", "delegations", "context"}``。
+        ``{"task", "workspace", "runs", "commands", "child_tasks", "context"}``；
+        ``child_tasks`` 是该任务委派出去的子任务（委派事实的唯一落点）。
 
     异常:
         ValueError: 任务不存在，或必需表缺失。
@@ -55,13 +56,7 @@ def task_snapshot(connection: sqlite3.Connection, *, task_id: int, limit: int) -
         "workspace": workspace,
         "runs": recent_runs(connection, limit=limit, task_id=task_id),
         "commands": recent_commands(connection, limit=limit, task_id=task_id),
-        "child_tasks": query_rows(
-            connection,
-            "SELECT id, title, task_type, current_run_id, delegation_id, created_at "
-            "FROM tasks WHERE parent_task_id = ? ORDER BY id ASC LIMIT ?",
-            (task_id, limit),
-        ),
-        "delegations": list_delegations(connection, limit=limit, task_id=task_id),
+        "child_tasks": list_child_tasks(connection, limit=limit, parent_task_id=task_id),
         "context": context_statistics(connection, task_id=task_id),
     }
 
@@ -75,8 +70,10 @@ def run_snapshot(connection: sqlite3.Connection, *, run_id: int, limit: int) -> 
         limit: 每类明细最大返回行数。
 
     返回:
-        ``{"run", "task", "workspace", "commands", "messages", "tool_calls", "delegations"}``；
-        ``messages`` 按 sequence 升序回放该 run 的消息。
+        ``{"run", "task", "workspace", "commands", "messages", "tool_calls"}``；
+        ``messages`` 按 sequence 升序回放该 run 的消息。``run`` 行额外带
+        ``resolved_model_name`` / ``model_config_name``（由 ``model_config_id`` 派生，
+        用于判定「模型解析失败」类终态；配置已删除时为 None）。
 
     异常:
         ValueError: 运行不存在，或必需表缺失。
@@ -86,8 +83,14 @@ def run_snapshot(connection: sqlite3.Connection, *, run_id: int, limit: int) -> 
         无。
     """
 
-    require_tables(connection, "conversation_runs", "tasks", "workspaces")
-    run = get_one(connection, "SELECT * FROM conversation_runs WHERE id = ?", (run_id,))
+    require_tables(connection, "conversation_runs", "tasks", "workspaces", "model_configs")
+    run = get_one(
+        connection,
+        "SELECT r.*, mc.model_name AS resolved_model_name, mc.config_name AS model_config_name "
+        "FROM conversation_runs r LEFT JOIN model_configs mc ON mc.id = r.model_config_id "
+        "WHERE r.id = ?",
+        (run_id,),
+    )
     if run is None:
         raise ValueError(f"run not found: {run_id}")
     task_id = int(run.get("task_id") or 0)
@@ -104,5 +107,4 @@ def run_snapshot(connection: sqlite3.Connection, *, run_id: int, limit: int) -> 
         "commands": recent_commands(connection, limit=limit, run_id=run_id),
         "messages": list_messages(connection, task_id=task_id, run_id=run_id, limit=limit),
         "tool_calls": summarize_tool_calls(connection, task_id=task_id, run_id=run_id, limit=limit),
-        "delegations": list_delegations(connection, limit=limit, task_id=task_id),
     }
