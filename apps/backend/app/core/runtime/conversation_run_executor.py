@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from app.assistant_transport.event import ToolCallsSettledEvent
 from app.assistant_transport.service.conversation_event_projector import ConversationEventProjector
 from app.config.logging.logger import log
-from app.core.agents.model_settings import ModelSettings
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
@@ -71,7 +70,6 @@ class ConversationRunExecutor:
         run_id: int,
         start_mode: ExecutionMode,
         ban_tools: list[str] | None = None,
-        model_settings: ModelSettings | None = None,
     ) -> asyncio.Task[None]:
         """登记 run 并在当前事件循环创建独立后台 task。
 
@@ -87,7 +85,6 @@ class ConversationRunExecutor:
             start_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``），
                 原样透传给 ``_execute`` → ``AgentRuntime.execute_run``。
             ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
-            model_settings: 可选的模型参数覆盖；``None`` 表示沿用 agent profile 的配置。
 
         返回:
             已创建的后台 ``asyncio.Task``。
@@ -107,7 +104,7 @@ class ConversationRunExecutor:
         if run.status != ConversationRunStatus.RUNNING:
             raise ValueError(f"run {run_id} is not running")
         thread_task = asyncio.create_task(
-            self._execute(run_id, start_mode, ban_tools, model_settings)
+            self._execute(run_id, start_mode, ban_tools)
         )
         # 后台 task 无人 await：不挂回调时其异常会被 asyncio 静默吞掉，排障只能靠间接日志。
         thread_task.add_done_callback(lambda task: self._log_execution_result(run_id, task))
@@ -299,7 +296,6 @@ class ConversationRunExecutor:
         run_id: int,
         start_mode: ExecutionMode,
         ban_tools: list[str] | None = None,
-        model_settings: ModelSettings | None = None,
     ) -> None:
         """驱动 runner 执行一次 ConversationRun；执行器不拥有 run 终态。
 
@@ -314,7 +310,6 @@ class ConversationRunExecutor:
             start_mode: 本次执行是 ``fresh`` 还是 ``resume``，原样透传给
                 ``AgentRuntime.execute_run``。
             ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
-            model_settings: 可选的模型参数覆盖；``None`` 表示沿用 agent profile 的配置。
 
         返回:
             无。
@@ -343,7 +338,6 @@ class ConversationRunExecutor:
                     run=run,
                     execution_mode=start_mode,
                     ban_tools=ban_tools,
-                    model_settings=model_settings,
                 )
             except asyncio.CancelledError:
                 cancelled = runner_started
