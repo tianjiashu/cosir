@@ -34,11 +34,7 @@ export type ModelConfigUpdateInput = Partial<Omit<ModelConfigCreateInput, "api_k
   enabled?: boolean;
 };
 
-export type ModelConfigTestInput = {
-  base_url: string;
-  api_key: string;
-  model_name: string;
-};
+export type ModelConfigTestInput = Omit<ModelConfigCreateInput, "sort_order">;
 
 export type ModelConfigTestResult = {
   config_id: number | null;
@@ -61,9 +57,6 @@ export const deleteModelConfig = (configId: number) =>
   requestJson<{ config_id: number; deleted: boolean }>(`/model-configs/${configId}`, {
     method: "DELETE",
   });
-
-export const testModelConfig = (configId: number) =>
-  requestJson<ModelConfigTestResult>(`/model-configs/${configId}/test`, { method: "POST" });
 
 export const testDraftModelConfig = (input: ModelConfigTestInput) =>
   postJson<ModelConfigTestResult>("/model-configs/test", input);

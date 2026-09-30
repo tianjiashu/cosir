@@ -42,3 +42,22 @@ reason: <处理建议，不要包含must 等强制要求的信息>
 - `content` 和 `error` 均为 `None`；
 - 不携带错误重试提示；
 - 如果底层消息框架不支持 `cancelled` 状态，在边界层做兼容映射，但必须保留取消语义。
+
+## 工具参数宽容归一契约
+
+模型下发的参数在进入校验前先做一次「形态适配」，用于消除「把数字/布尔写成字符串」这类无意义往返；
+**strict 校验仍是唯一判定**——适配只改输入形态，不改变任何校验规则。
+
+- 适配入口：`validation/argument_coercion.py::coerce_tool_arguments`（纯函数，目标类型只来自
+  `args_model` 字段注解），由 `validation/arguments.py::validate_tool_arguments` 在 strict 校验前调用。
+- 白名单（仅无损、无歧义）：`"30"`→数字、`30.0`→整数、`"true"`/`"false"`→布尔（忽略大小写与空白）、
+  单值→单元素列表（元素按声明元素类型递归同规则）。
+- 明确不归一：数字→字符串、`"1"`/`"0"`→布尔、`""`→`None`、`Literal` 枚举字段、未知字段、
+  空串/纯空白→列表（避免构造长度合法但内容为空的列表而绕过 `min_length`）。
+- 容器语义：只处理 `list[T]`；`tuple` 在元素无需归一时原样保留；嵌套 `list[list[T]]` 按元素
+  注解递归归一。
+- 不放宽的安全与业务约束：范围（`gt/ge/le`）、长度、枚举、`extra="forbid"`、模型内业务校验
+  （如 `delegate_task.agent_name` 长度上限）、handler 内路径与命令安全策略。
+- 可观测：发生适配时由门禁记 `tool_argument_coerced`（warning），字段为
+  `tool` / `tool_call_id` / `coercions[].{field,from_type,to_type}`；**不记录参数值**。
+- 幂等：合法原生参数不产生适配事实。

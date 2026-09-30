@@ -1,10 +1,7 @@
 import {
-  InMemoryThreadListAdapter,
   useExternalStoreRuntime,
-  useRemoteThreadListRuntime,
   type AppendMessage,
   type ExternalStoreAdapter,
-  type RemoteThreadListAdapter,
 } from "@assistant-ui/react";
 import type { ReadonlyJSONValue } from "assistant-stream/utils";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
@@ -279,27 +276,19 @@ function useTaskAssistantTransportAdapter(
   return adapter;
 }
 
-/** 创建带有远程 thread-list 身份的可写持久化 task runtime。 */
+/**
+ * 创建 task 级可写 Transport runtime。
+ *
+ * task 导航和持久化身份由 Workbench 负责，本 runtime 只拥有当前 task 的
+ * TransportFrameStore；因此直接使用 external-store runtime，避免引入远程
+ * thread-list 的异步绑定阶段。该函数不创建额外线程列表，也不写入后端事实。
+ */
 export function useTaskAssistantTransportRuntime(
   taskId: number,
   options: TaskAssistantTransportOptions,
 ) {
   const adapter = useTaskAssistantTransportAdapter(taskId, options);
-  const threadId = `task-${taskId}`;
-  const threadListAdapter = useMemo<RemoteThreadListAdapter>(() => {
-    const inMemory = new InMemoryThreadListAdapter();
-    return Object.assign(inMemory, {
-      list: async () => ({ threads: [{ remoteId: threadId, status: "regular" as const }] }),
-      fetch: async () => ({ remoteId: threadId, status: "regular" as const }),
-    });
-  }, [threadId]);
-
-  return useRemoteThreadListRuntime({
-    adapter: threadListAdapter,
-    threadId,
-    allowNesting: true,
-    runtimeHook: () => useExternalStoreRuntime(adapter),
-  });
+  return useExternalStoreRuntime(adapter);
 }
 
 /** 创建不挂载嵌套远程 thread list 的只读 Workbench runtime。 */

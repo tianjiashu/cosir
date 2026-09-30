@@ -1,6 +1,6 @@
 "use client";
 
-import { AssistantRuntimeProvider, useAuiState } from "@assistant-ui/react";
+import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ReadonlyThread } from "@/components/assistant-ui/elements/readonly-thread.aui";
 import { AssistantAttachController } from "@/lib/assistant/assistant-attach-controller";
@@ -73,8 +73,7 @@ function AgentRunTransport({ taskId, initialState, onError }: { taskId: number; 
 }
 
 function AgentReadonlyMessages({ taskId }: { taskId: number }) {
-  const messages = useAuiState((state) => state.thread.messages);
-  return <ReadonlyThread messages={messages} taskId={taskId} />;
+  return <ReadonlyThread taskId={taskId} />;
 }
 
 /** Load a canonical child snapshot, then mount one active readonly transport. */

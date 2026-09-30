@@ -30,6 +30,15 @@ const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportT
 });
 
 describe("assistant transport converter", () => {
+  // 目的：Run 状态随消息一并投影，使消息渲染只依赖消息自身事实。潜在缺陷：消息组件回查
+  // thread external state 时，只读作用域（无 external state 的 runtime）会在渲染期抛错。
+  it("projects the run status onto assistant message metadata", () => {
+    const message: TransportMessage = { id: "assistant-1", role: "assistant", parts: [] };
+    const threadMessage = toThreadMessage(message, { ...completedRun(7), status: "running" });
+
+    expect(threadMessage.metadata.custom).toMatchObject({ runId: 7, runStatus: "running" });
+  });
+
   it("rebuilds ordinary attachments from inline token ids for failure restore", () => {
     const file = registerLocalAttachment(new File([], "设计 说明.md", { type: "text/markdown" }), {
       id: "local-file-restore",

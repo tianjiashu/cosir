@@ -17,6 +17,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.config.logging.logger import log
 from app.core.hook import HookContext, HookDecision, HookEvent, HookInterceptor, HookResult
 from app.core.tools.schemas import (
     ToolCall,
@@ -177,6 +178,27 @@ class ToolAccessGate:
                 )
             )
 
+        if validation.coercions:
+            # 输入适配只还原无损形态（如 "30"→30），是模型未按声明类型传值的信号；
+            # 只记字段与类型，不记参数值，避免命令/路径正文进入日志。
+            log.warning(
+                "tool_argument_coerced",
+                extra={
+                    "msg": "工具参数发生宽容归一（模型未按声明类型传值）",
+                    "data": {
+                        "tool": tool.name,
+                        "tool_call_id": call.call_id,
+                        "coercions": [
+                            {
+                                "field": item.field,
+                                "from_type": item.from_type,
+                                "to_type": item.to_type,
+                            }
+                            for item in validation.coercions
+                        ],
+                    },
+                },
+            )
         arguments = self._apply_pre_tool_use_hook(
             tool, validation, execution_context, call.call_id
         )

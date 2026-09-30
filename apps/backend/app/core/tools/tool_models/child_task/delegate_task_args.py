@@ -1,6 +1,6 @@
 """delegate_task 的结构参数与长度预算校验。"""
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config.logging.logger import log
 
@@ -14,6 +14,8 @@ class DelegateTaskArgs(BaseModel):
     子 Agent ID 的候选提示由每个 Run 的 workspace profile 目录投影到 JSON Schema；
     本模型只负责字段结构和文本预算，不读取进程级目录，也不承担委派授权裁决。
     """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     child_agent_id: str = Field(
         description="Target child Agent id. REQUIRED. Choose one of the listed available agents."

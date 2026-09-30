@@ -1,10 +1,12 @@
 """``child_agent_send`` 工具的参数模型。"""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChildAgentSendArgs(BaseModel):
     """给已有子任务追加输入并启动新 Run 的已校验参数。"""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     child_task_id: int = Field(
         gt=0,

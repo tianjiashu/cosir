@@ -15,6 +15,7 @@ from app.api.schemas.request.EnvironmentUpdateRequest import EnvironmentUpdateRe
 from app.api.schemas.request.ForkTaskRequest import ForkTaskRequest
 from app.api.schemas.request.GlobalInstructionUpdateRequest import GlobalInstructionUpdateRequest
 from app.api.schemas.request.ModelConfigCreateRequest import ModelConfigCreateRequest
+from app.api.schemas.request.ModelConfigFieldsRequest import ModelConfigFieldsRequest
 from app.api.schemas.request.ModelConfigTestRequest import ModelConfigTestRequest
 from app.api.schemas.request.ModelConfigUpdateRequest import ModelConfigUpdateRequest
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
@@ -53,6 +54,7 @@ __all__ = [
     "GlobalInstructionUpdateRequest",
     "HealthResponse",
     "ModelConfigCreateRequest",
+    "ModelConfigFieldsRequest",
     "ModelConfigResponse",
     "ModelConfigTestRequest",
     "ModelConfigUpdateRequest",

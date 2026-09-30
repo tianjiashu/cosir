@@ -482,6 +482,7 @@ function toThreadMessageWithContext(
       steps: [],
       custom: {
         runId: context.runId,
+        runStatus: context.runStatus,
         isLastRunMessage: context.isLastRunMessage,
       },
     },

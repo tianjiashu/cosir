@@ -123,7 +123,6 @@ def test_all_domain_routes_registered_on_same_app() -> None:
         "/model-configs",
         "/model-configs/{config_id}",
         "/model-configs/test",
-        "/model-configs/{config_id}/test",
         "/assistant",
         "/tasks/{task_id}/assistant/attach",
         "/tasks/{task_id}/assistant/state",

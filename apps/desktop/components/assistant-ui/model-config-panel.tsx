@@ -16,7 +16,6 @@ import {
   deleteModelConfig,
   getModelConfigs,
   testDraftModelConfig,
-  testModelConfig,
   updateModelConfig,
   type ModelConfig,
 } from "@/lib/api/model-configs";
@@ -57,9 +56,30 @@ export function ModelConfigPanel({
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [testingId, setTestingId] = useState<number | null>(null);
   const [testingDraft, setTestingDraft] = useState(false);
+  const [testedFormSignature, setTestedFormSignature] = useState<string | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const formInput = {
+    config_name: form.configName.trim(),
+    base_url: form.baseUrl.trim(),
+    api_key: form.apiKey.trim(),
+    model_name: form.modelName.trim(),
+    context_window_k: Number(form.contextWindowK),
+    supports_thinking: form.supportsThinking,
+    supports_reasoning_effort: form.supportsReasoningEffort,
+    supports_image: form.supportsImage,
+  };
+  const formSignature = JSON.stringify(formInput);
+  const formComplete = Boolean(
+    formInput.config_name &&
+      formInput.base_url &&
+      formInput.api_key &&
+      formInput.model_name &&
+      Number.isInteger(formInput.context_window_k) &&
+      formInput.context_window_k > 0,
+  );
+  const testPassed = formComplete && testedFormSignature === formSignature;
 
   const loadConfigs = useCallback(async () => {
     try {
@@ -79,27 +99,19 @@ export function ModelConfigPanel({
     setForm(emptyForm);
     setEditingId(null);
     setShowApiKey(false);
+    setTestedFormSignature(null);
   };
 
   const save = async () => {
+    if (!formComplete || !testPassed) return;
     setBusy(true);
     setMessage(null);
     try {
-      const input = {
-        config_name: form.configName.trim(),
-        base_url: form.baseUrl.trim(),
-        api_key: form.apiKey,
-        model_name: form.modelName.trim(),
-        context_window_k: Number(form.contextWindowK),
-        supports_thinking: form.supportsThinking,
-        supports_reasoning_effort: form.supportsReasoningEffort,
-        supports_image: form.supportsImage,
-      };
       let savedConfig: ModelConfig;
       if (editingId === null) {
-        savedConfig = await createModelConfig(input);
+        savedConfig = await createModelConfig(formInput);
       } else {
-        const { api_key, ...savedFields } = input;
+        const { api_key, ...savedFields } = formInput;
         savedConfig = await updateModelConfig(editingId, {
           ...savedFields,
           ...(api_key ? { api_key } : {}),
@@ -117,14 +129,15 @@ export function ModelConfigPanel({
   };
 
   const testDraft = async () => {
+    if (!formComplete) return;
+    const input = formInput;
+    const signature = JSON.stringify(input);
     setTestingDraft(true);
+    setTestedFormSignature(null);
     setMessage(null);
     try {
-      const result = await testDraftModelConfig({
-        base_url: form.baseUrl.trim(),
-        api_key: form.apiKey,
-        model_name: form.modelName.trim(),
-      });
+      const result = await testDraftModelConfig(input);
+      if (result.success) setTestedFormSignature(signature);
       setMessage({
         ok: result.success,
         text: result.success
@@ -135,24 +148,6 @@ export function ModelConfigPanel({
       setMessage({ ok: false, text: "连接测试失败，请重试" });
     } finally {
       setTestingDraft(false);
-    }
-  };
-
-  const testSaved = async (configId: number) => {
-    setTestingId(configId);
-    setMessage(null);
-    try {
-      const result = await testModelConfig(configId);
-      setMessage({
-        ok: result.success,
-        text: result.success
-          ? `连接成功${result.elapsed_ms ? ` · ${result.elapsed_ms}ms` : ""}`
-          : result.error_message ?? "连接失败，请检查模型配置",
-      });
-    } catch {
-      setMessage({ ok: false, text: "连接测试失败，请重试" });
-    } finally {
-      setTestingId(null);
     }
   };
 
@@ -213,11 +208,7 @@ export function ModelConfigPanel({
                   <p className="text-muted-foreground truncate text-xs">{config.model_name} · {config.context_window_k}K · {config.base_url}</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  <Button variant="ghost" size="sm" disabled={testingId !== null} onClick={() => void testSaved(config.config_id)}>
-                    {testingId === config.config_id && <Loader2Icon className="animate-spin" />}
-                    测试
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => { setEditingId(config.config_id); setForm({ configName: config.config_name, baseUrl: config.base_url, apiKey: config.api_key, modelName: config.model_name, contextWindowK: String(config.context_window_k), supportsThinking: config.supports_thinking, supportsReasoningEffort: config.supports_reasoning_effort, supportsImage: config.supports_image }); setShowApiKey(false); }}>
+                  <Button variant="ghost" size="sm" onClick={() => { setEditingId(config.config_id); setForm({ configName: config.config_name, baseUrl: config.base_url, apiKey: config.api_key, modelName: config.model_name, contextWindowK: String(config.context_window_k), supportsThinking: config.supports_thinking, supportsReasoningEffort: config.supports_reasoning_effort, supportsImage: config.supports_image }); setShowApiKey(false); setTestedFormSignature(null); }}>
                     编辑
                   </Button>
                   <Button variant="ghost" size="icon-sm" disabled={busy} onClick={() => void remove(config)} aria-label={`删除 ${config.config_name}`}>
@@ -246,8 +237,8 @@ export function ModelConfigPanel({
               <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.supportsImage} onChange={(event) => setForm({ ...form, supportsImage: event.target.checked })} />支持图片输入</label>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              <Button variant="outline" disabled={busy || testingDraft || !form.baseUrl.trim() || !form.apiKey || !form.modelName.trim()} onClick={() => void testDraft()}>{testingDraft && <Loader2Icon className="animate-spin" />}测试连接</Button>
-              <Button disabled={busy || !form.configName.trim() || !form.baseUrl.trim() || (editingId === null && !form.apiKey) || !form.modelName.trim() || !Number.isInteger(Number(form.contextWindowK)) || Number(form.contextWindowK) <= 0} onClick={() => void save()}>{busy && <Loader2Icon className="animate-spin" />}保存配置</Button>
+              <Button variant="outline" disabled={busy || testingDraft || !formComplete} onClick={() => void testDraft()}>{testingDraft && <Loader2Icon className="animate-spin" />}测试连接</Button>
+              <Button disabled={busy || testingDraft || !testPassed} onClick={() => void save()}>{busy && <Loader2Icon className="animate-spin" />}保存配置</Button>
             </div>
           </div>
 

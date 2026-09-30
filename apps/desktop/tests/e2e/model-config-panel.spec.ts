@@ -19,6 +19,10 @@ test("模型配置编辑回显密码态 API Key，保存后保持窗口打开", 
   };
   let saved = false;
   await page.route("http://127.0.0.1:8000/model-configs", (route) => route.fulfill({ json: [config] }));
+  await page.route("http://127.0.0.1:8000/model-configs/test", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    return route.fulfill({ json: { config_id: null, success: true, elapsed_ms: 8 } });
+  });
   await page.route("http://127.0.0.1:8000/model-configs/2", async (route) => {
     if (route.request().method() === "PUT") {
       saved = true;
@@ -31,14 +35,19 @@ test("模型配置编辑回显密码态 API Key，保存后保持窗口打开", 
   await page.getByRole("combobox", { name: "选择模型" }).click();
   await expect(page.getByText("128K 上下文", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "模型设置" }).click();
+  await expect(page.getByRole("button", { name: "测试", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "编辑" }).click();
 
   const apiKeyField = page.locator("label").filter({ hasText: "API Key" });
   const apiKey = apiKeyField.locator('input[type="password"]');
   await expect(apiKey).toHaveValue("test-api-key");
+  await expect(page.getByRole("button", { name: "保存配置" })).toBeDisabled();
   await apiKeyField.getByRole("button", { name: "显示 API Key" }).click();
   await expect(apiKeyField.locator('input[type="text"]')).toHaveValue("test-api-key");
   await apiKeyField.getByRole("button", { name: "隐藏 API Key" }).click();
+  await page.getByRole("button", { name: "测试连接" }).click();
+  await expect(page.getByText(/连接成功/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存配置" })).toBeEnabled();
   await page.getByRole("button", { name: "保存配置" }).click();
 
   await expect.poll(() => saved).toBe(true);

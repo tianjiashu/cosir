@@ -13,7 +13,12 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import type { TransportState, TransportRun } from "@/lib/assistant/contract";
+import type { TransportRun } from "@/lib/assistant/contract";
+import {
+  currentRunInputTokens,
+  findTransportRun,
+  transportContextWindowTotal,
+} from "@/lib/assistant/transport-state-operations";
 
 type UsageTone = "normal" | "warning" | "critical" | "unknown";
 
@@ -131,18 +136,6 @@ export function shouldDisplayRunUsage(
     && runExists;
 }
 
-function currentRunUsageInput(state: unknown): number | null {
-  if (typeof state !== "object" || state === null) return null;
-  const transportState = state as TransportState;
-  const run = transportState.current_run_id === null
-    ? null
-    : transportState.runs.find((candidate) => candidate.runId === transportState.current_run_id);
-  const inputTokens = run?.usage?.input_tokens;
-  return typeof inputTokens === "number" && Number.isFinite(inputTokens) && inputTokens >= 0
-    ? inputTokens
-    : null;
-}
-
 function toneClass(tone: UsageTone): string {
   if (tone === "critical") return "bg-destructive";
   if (tone === "warning") return "bg-amber-500";
@@ -159,11 +152,8 @@ function statusLabel(status: ContextUsagePresentation["status"]): string {
 }
 
 export function TaskContextUsage(): ReactElement {
-  const used = useAuiState((state) => currentRunUsageInput(state.thread.state));
-  const total = useAuiState((state) => {
-    const value = (state.thread.state as unknown as TransportState).context_window_total;
-    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-  });
+  const used = useAuiState((state) => currentRunInputTokens(state.thread.state));
+  const total = useAuiState((state) => transportContextWindowTotal(state.thread.state));
   const ratio = used !== null && total !== null && total > 0 ? used / total : Number.NaN;
   const presentation = getContextUsagePresentation(ratio ?? Number.NaN, used, total);
   const percent = presentation.percent === null ? 0 : Math.min(100, Math.max(0, presentation.percent));
@@ -232,10 +222,9 @@ export function TaskContextUsage(): ReactElement {
 }
 
 export function RunUsageDisplay({ runId, visible }: { runId: number | null; visible: boolean }): ReactElement | null {
-  const run = useAuiState((state): TransportRun | null => {
-    const transportState = state.thread.state as unknown as TransportState;
-    return runId === null ? null : transportState.runs.find((candidate) => candidate.runId === runId) ?? null;
-  });
+  const run = useAuiState((state): TransportRun | null =>
+    findTransportRun(state.thread.state, runId) ?? null,
+  );
   const usage = run?.usage ?? null;
   const input = usage?.input_tokens ?? null;
   const output = usage?.output_tokens ?? null;

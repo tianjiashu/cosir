@@ -96,7 +96,6 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
         backendAvailable={backendAvailable}
         backendGeneration={backendGeneration}
         resumeOnMount={resumeOnMount}
-        taskId={taskId}
         attachTransportRef={attachTransportRef}
       />
       <ComposerRestoreBridge register={registerComposerRestore} />

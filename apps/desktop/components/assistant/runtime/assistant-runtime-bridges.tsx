@@ -80,18 +80,15 @@ export function RuntimeControlBridge({
   backendAvailable,
   backendGeneration,
   resumeOnMount,
-  taskId,
   attachTransportRef,
 }: {
   register: (controls: RuntimeControls | null) => void;
   backendAvailable: boolean;
   backendGeneration: number;
   resumeOnMount: boolean;
-  taskId: number;
   attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;
 }) {
   const aui = useAui();
-  const remoteThreadId = useAuiState((state) => state.threadListItem.remoteId);
   const initialResumeIssuedRef = useRef(false);
   const backendAvailableRef = useRef(backendAvailable);
   const backendGenerationRef = useRef(backendGeneration);
@@ -109,7 +106,7 @@ export function RuntimeControlBridge({
   }, [attachTransportRef, aui, register]);
 
   useEffect(() => {
-    if (!backendAvailable || !resumeOnMount || initialResumeIssuedRef.current || remoteThreadId !== `task-${taskId}`) return;
+    if (!backendAvailable || !resumeOnMount || initialResumeIssuedRef.current) return;
     let cancelled = false;
     const scheduledBackendGeneration = backendGeneration;
     const timer = window.setTimeout(() => {
@@ -126,7 +123,7 @@ export function RuntimeControlBridge({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [attachTransportRef, backendAvailable, backendGeneration, remoteThreadId, resumeOnMount, taskId]);
+  }, [attachTransportRef, backendAvailable, backendGeneration, resumeOnMount]);
 
   return null;
 }
@@ -149,13 +146,11 @@ export function InitialMessageBridge({
   onError?: (message: string) => void;
 }) {
   const aui = useAui();
-  const remoteThreadId = useAuiState((state) => state.threadListItem.remoteId);
 
   useEffect(() => {
     if (
       !text?.trim() && attachments.length === 0
       || sentRef.current
-      || remoteThreadId !== `task-${taskId}`
       || transportMessageCount(initialState) > 0
       || (currentTransportRun(initialState)?.status ?? "idle") !== "idle"
     ) return;
@@ -207,7 +202,7 @@ export function InitialMessageBridge({
       }
     })();
     return () => { cancelled = true; };
-  }, [attachments, aui, initialState, onError, remoteThreadId, sentRef, taskId, text, traceId]);
+  }, [attachments, aui, initialState, onError, sentRef, taskId, text, traceId]);
 
   return null;
 }

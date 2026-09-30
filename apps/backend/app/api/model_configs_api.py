@@ -86,30 +86,9 @@ async def test_draft_model_config(
     payload: ModelConfigTestRequest,
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, object | None]:
-    """对尚未保存的配置执行一次真实 OpenAI 兼容请求。"""
+    """对完整但尚未保存的表单配置执行一次真实 OpenAI 兼容请求。"""
 
     result = await service.test_draft(**payload.model_dump())
-    return {
-        "config_id": result.config_id,
-        "success": result.success,
-        "elapsed_ms": result.elapsed_ms,
-        "error_code": result.error_code,
-        "error_message": result.error_message,
-    }
-
-
-@app.post("/model-configs/{config_id}/test")
-async def test_model_config(
-    config_id: int,
-    service: ModelConfigService = Depends(get_model_config_service),
-) -> dict[str, object | None]:
-    """对已保存的配置执行一次真实 OpenAI 兼容请求。"""
-
-    try:
-        record = service.get_config(config_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="模型配置不存在") from exc
-    result = await service.test_connection(record)
     return {
         "config_id": result.config_id,
         "success": result.success,

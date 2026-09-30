@@ -1,10 +1,12 @@
 """``child_agent_status`` 工具的参数模型。"""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChildAgentStatusArgs(BaseModel):
     """canonical Child Agent 状态读取的已校验参数。"""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     child_task_id: int = Field(
         gt=0,

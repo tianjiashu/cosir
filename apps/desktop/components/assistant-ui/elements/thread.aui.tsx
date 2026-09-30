@@ -46,6 +46,7 @@ import {
   isEditableLatestRunUserMessage,
   isResumableCancelledRun,
 } from "@/lib/assistant/conversation-actions";
+import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
 import { toEditableUserMessageDraft } from "@/lib/assistant/converter";
 import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
 import { editableDocumentAttachments } from "@/lib/assistant/editable-user-document";
@@ -61,7 +62,7 @@ import {
   takePendingEditComposerDraft,
   type EditDraftAttachment,
 } from "@/lib/assistant/edit-composer-draft";
-import type { TransportState, TransportToolStatus } from "@/lib/assistant/contract";
+import type { TransportRun, TransportToolStatus } from "@/lib/assistant/contract";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
@@ -305,7 +306,7 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   );
   const { cancellingRunId, onResumeBusiness, onCancelRequested, onCancelResult } = useContext(ThreadContext);
   const runId = useAuiState((state) => getTransportRunId(state.thread.state));
-  const canResume = useAuiState((state) => isResumableCancelledRun(state.thread.state as unknown as TransportState));
+  const canResume = useAuiState((state) => isResumableCancelledRun(readRuntimeTransportState(state.thread.state)));
   const isCancelling = cancellingRunId !== null && cancellingRunId === runId;
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
   const [resuming, setResuming] = useState(false);
@@ -402,7 +403,7 @@ const UserMessageView: FC = () => {
   const readonly = useContext(ThreadContext).readonly === true;
   const canEdit = useAuiState((state) => {
     if (readonly || isRunning || !isEditableLatestRunUserMessage(
-      state.thread.state as unknown as TransportState,
+      readRuntimeTransportState(state.thread.state),
       messageId,
     )) return false;
 
@@ -673,12 +674,11 @@ const AssistantMessageDefault: FC = () => {
   const custom = useAuiState((state) => state.message.metadata.custom);
   const isLastRunMessage = custom?.isLastRunMessage === true;
   const runId = typeof custom?.runId === "number" ? custom.runId : null;
-  const runStatus = useAuiState((state) => {
-    const transportState = state.thread.state as unknown as TransportState;
-    return runId === null
-      ? null
-      : transportState.runs.find((candidate) => candidate.runId === runId)?.status ?? null;
-  });
+  // Run 状态随消息一并投影（见 ``MessageContext``），因此消息渲染只依赖消息自身事实；
+  // 不再回查 ``thread.state``，只读作用域（无 external state 的 runtime）也能正常渲染。
+  const runStatus = typeof custom?.runStatus === "string"
+    ? custom.runStatus as TransportRun["status"]
+    : null;
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const { forkAvailable = false, forkingRunId = null, onForkRun, cancellingRunId = null, taskId, readonly = false } = useContext(ThreadContext);
   const canFork = !readonly && isLastRunMessage && runId !== null && forkAvailable && !isRunning;

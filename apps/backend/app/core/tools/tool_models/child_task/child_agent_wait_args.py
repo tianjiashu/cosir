@@ -1,10 +1,12 @@
 """``child_agent_wait`` 工具的参数模型。"""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChildAgentWaitArgs(BaseModel):
     """等待单个子任务最终输出的已校验参数。"""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     child_task_id: int = Field(
         gt=0,
