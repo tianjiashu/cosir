@@ -51,7 +51,7 @@ from app.core.tools.schemas.tool_names import (
 )
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_handler.search.file_walker import iter_files
-from app.core.tools.tool_handler.search.ignore_rules import load_ignore_rules
+from app.core.tools.tool_handler.search.ignore_rules import load_search_ignore_rules
 
 _REPEATED_TOOLS = frozenset({TOOL_READ_FILE, TOOL_SEARCH_CONTENT, TOOL_FIND_FILES})
 
@@ -492,7 +492,7 @@ class FileToolStateCoordinator:
                 # 最多取 max 个；目录忽略规则取自 workspace 的 .cosir/.fileignore。
                 sampled = list(
                     islice(
-                        iter_files(scope_root, rules=load_ignore_rules(workspace_root)),
+                        iter_files(scope_root, rules=load_search_ignore_rules(workspace_root)),
                         self._max_scope_paths,
                     )
                 )

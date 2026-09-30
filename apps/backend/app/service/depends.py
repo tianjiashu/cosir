@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     )
     from app.core.runtime.runner import AgentRuntime
     from app.service.model_config import ModelConfigService
+    from app.service.model_config.model_discovery_service import ModelDiscoveryService
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_state_service import ConversationRunStateService
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
@@ -307,6 +308,15 @@ def get_model_config_service() -> ModelConfigService:
 
 
 @lru_cache(maxsize=1)
+def get_model_discovery_service() -> ModelDiscoveryService:
+    """返回进程级远端模型目录发现服务单例。"""
+
+    from app.service.model_config.model_discovery_service import ModelDiscoveryService
+
+    return ModelDiscoveryService()
+
+
+@lru_cache(maxsize=1)
 def get_conversation_command_crud() -> ConversationCommandCrud:
     """返回进程级 ConversationCommandCrud 单例。"""
     from app.storage.crud.conversation_command_crud import ConversationCommandCrud
@@ -459,6 +469,7 @@ def reset_service_dependencies() -> None:
     get_conversation_task_state_service.cache_clear()
     get_conversation_task_context_service.cache_clear()
     get_model_config_service.cache_clear()
+    get_model_discovery_service.cache_clear()
 
 
 def _shutdown_cached_runtime_before_reset() -> None:

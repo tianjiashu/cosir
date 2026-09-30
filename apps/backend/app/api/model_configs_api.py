@@ -1,20 +1,23 @@
 """模型连接配置 HTTP API。
 
 本模块只负责请求校验、依赖装配和错误映射；配置持久化与真实网络测试由
-``ModelConfigService`` 负责。接口不暴露厂商目录；本机编辑响应会返回 API Key，
-但日志和领域摘要始终不包含密钥内容。
+``ModelConfigService`` 负责，远端模型目录发现由 ``ModelDiscoveryService`` 负责。
+目录接口只返回归一化的模型 ID；本机编辑响应会返回 API Key，但日志和领域摘要始终不包含密钥内容。
 """
 
 from fastapi import Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 
 from app.api.schemas.request.ModelConfigCreateRequest import ModelConfigCreateRequest
+from app.api.schemas.request.ModelConfigDiscoveryRequest import ModelConfigDiscoveryRequest
 from app.api.schemas.request.ModelConfigTestRequest import ModelConfigTestRequest
 from app.api.schemas.request.ModelConfigUpdateRequest import ModelConfigUpdateRequest
+from app.api.schemas.response.ModelConfigDiscoveryResponse import ModelConfigDiscoveryResponse
 from app.api.schemas.response.ModelConfigResponse import ModelConfigResponse
 from app.app import app
-from app.service.depends import get_model_config_service
+from app.service.depends import get_model_config_service, get_model_discovery_service
 from app.service.model_config import ModelConfigService
+from app.service.model_config.model_discovery_service import ModelDiscoveryService
 
 
 def _response(record) -> ModelConfigResponse:
@@ -46,6 +49,17 @@ async def create_model_config(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _response(record)
+
+
+@app.post("/model-configs/discover", response_model=ModelConfigDiscoveryResponse)
+async def discover_model_configs(
+    payload: ModelConfigDiscoveryRequest,
+    service: ModelDiscoveryService = Depends(get_model_discovery_service),
+) -> ModelConfigDiscoveryResponse:
+    """发现远端模型 ID；远端失败时返回空列表而不打断配置表单。"""
+
+    models = await service.discover(base_url=payload.base_url, api_key=payload.api_key)
+    return ModelConfigDiscoveryResponse(models=models)
 
 
 @app.put("/model-configs/{config_id}", response_model=ModelConfigResponse)

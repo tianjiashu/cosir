@@ -122,6 +122,8 @@ class Constant:
 
         # 单次模型 HTTP 请求超时（秒）；覆盖 SDK 默认的 600s，以便更快失败并重试。
         REQUEST_TIMEOUT_SECONDS: float = 120.0
+        # 模型目录发现的 HTTP 超时（秒）；目录请求只用于填充表单，不应阻塞配置弹窗过久。
+        MODEL_DISCOVERY_TIMEOUT_SECONDS: float = 8.0
         # SDK 层失败重试上限（不含超时本身的首次尝试）；0 表示不重试。
         MAX_RETRIES: int = 2
         # 生成种子：None 表示不固定种子（由 API 随机，正常生产语义）；设为非负整数可让输出

@@ -10,7 +10,7 @@ from typing import Literal
 
 from app.core.tools.tool_handler.search.errors import SearchPathNotFound, SearchPathUnreadable
 from app.core.tools.tool_handler.search.file_walker import iter_files
-from app.core.tools.tool_handler.search.ignore_rules import load_ignore_rules
+from app.core.tools.tool_handler.search.ignore_rules import load_search_ignore_rules
 
 ScopeKind = Literal["file", "directory"]
 
@@ -43,8 +43,9 @@ class SearchScope:
     def iter_files(self, file_glob: str | None = None) -> Iterator[Path]:
         """产生 scope 内候选文件，不做内容读取。
 
-        目录 scope 按当前 workspace 的 ``.cosir/.fileignore`` 规则跳过目录；规则在每次调用时
-        重新读取，因此用户改动规则无需重启即可生效。文件 scope 不遍历目录，规则不参与。
+        目录 scope 按当前 workspace 的 ``.cosir/.fileignore`` 与根 ``.gitignore`` 合并规则跳过
+        目录/文件（两者均为标准 gitignore 语义）；规则在每次调用时重新读取，因此用户改动规则无需重启
+        即可生效。文件 scope 不遍历目录，规则不参与。
 
         参数:
             file_glob: 可选文件名 glob；None 表示不过滤。
@@ -53,10 +54,10 @@ class SearchScope:
             候选文件路径生成器（不保证顺序）。
 
         异常:
-            无：规则文件读取失败由 ``load_ignore_rules`` 内部降级为默认规则。
+            无：规则文件读取失败由 ``load_search_ignore_rules`` 内部降级为默认规则。
 
         副作用:
-            规则文件缺失时可能创建 ``<workspace>/.cosir/.fileignore``（由 ``load_ignore_rules``
+            规则文件缺失时可能创建 ``<workspace>/.cosir/.fileignore``（由 ``load_search_ignore_rules``
             承担）；目录遍历本身只读。
         """
 
@@ -64,7 +65,9 @@ class SearchScope:
             if file_glob is None or fnmatch.fnmatchcase(self.path.name, file_glob):
                 yield self.path
             return
-        yield from iter_files(self.path, file_glob, rules=load_ignore_rules(self.workspace_root))
+        yield from iter_files(
+            self.path, file_glob, rules=load_search_ignore_rules(self.workspace_root)
+        )
 
     def display_path(self, file_path: Path) -> str:
         """生成稳定的模型可用路径；workspace 内统一使用 workspace-relative。"""

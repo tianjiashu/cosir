@@ -19,6 +19,9 @@ test("模型配置编辑回显密码态 API Key，保存后保持窗口打开", 
   };
   let saved = false;
   await page.route("http://127.0.0.1:8000/model-configs", (route) => route.fulfill({ json: [config] }));
+  await page.route("http://127.0.0.1:8000/model-configs/discover", (route) =>
+    route.fulfill({ json: { models: ["demo-model", "other-model"] } }),
+  );
   await page.route("http://127.0.0.1:8000/model-configs/test", async (route) => {
     expect(route.request().method()).toBe("POST");
     return route.fulfill({ json: { config_id: null, success: true, elapsed_ms: 8 } });

@@ -1,10 +1,52 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  shouldSubmitOnEnter,
   FILE_ATTACHMENT_TOKEN_PREFIX,
   FILE_ATTACHMENT_TOKEN_SUFFIX,
   renderInlineAttachmentHtml,
 } from "@/components/composer/inline-attachment-input";
+
+function enterEvent(overrides: Partial<{
+  key: string;
+  shiftKey: boolean;
+  defaultPrevented: boolean;
+  isComposing: boolean;
+  keyCode: number;
+}> = {}) {
+  return {
+    key: overrides.key ?? "Enter",
+    shiftKey: overrides.shiftKey ?? false,
+    defaultPrevented: overrides.defaultPrevented ?? false,
+    nativeEvent: {
+      isComposing: overrides.isComposing ?? false,
+      keyCode: overrides.keyCode ?? 13,
+    },
+  };
+}
+
+describe("composer Enter submission guard", () => {
+  it("submits a normal Enter key", () => {
+    expect(shouldSubmitOnEnter(enterEvent(), false)).toBe(true);
+  });
+
+  it("does not submit while the component composition lifecycle is active", () => {
+    expect(shouldSubmitOnEnter(enterEvent(), true)).toBe(false);
+  });
+
+  it("does not submit when the browser marks the key as composing", () => {
+    expect(shouldSubmitOnEnter(enterEvent({ isComposing: true }), false)).toBe(false);
+  });
+
+  it("does not submit the IME candidate confirmation key", () => {
+    expect(shouldSubmitOnEnter(enterEvent({ keyCode: 229 }), false)).toBe(false);
+  });
+
+  it("keeps Shift+Enter and already-handled events out of submission", () => {
+    expect(shouldSubmitOnEnter(enterEvent({ shiftKey: true }), false)).toBe(false);
+    expect(shouldSubmitOnEnter(enterEvent({ defaultPrevented: true }), false)).toBe(false);
+  });
+});
 
 describe("inline attachment HTML rendering", () => {
   it("renders plain text exactly once when there are no file tokens", () => {

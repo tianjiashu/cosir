@@ -1,8 +1,10 @@
-"""``<workspace>/.cosir/.fileignore`` 规则加载、解析与遍历接入测试。
+"""``<workspace>/.cosir/.fileignore`` 与根 ``.gitignore`` 合并忽略规则测试。
 
-覆盖：文件缺失时的默认初始化、既有文件解析（注释 / 空行 / 尾斜杠 / 相对路径）、空文件的
-「不忽略任何目录」语义、目录名与相对路径两类匹配、``iter_files`` 与 ``SearchScope`` 的接入、
-文件状态协调器 ``prepare`` 采样的一致性，以及读写失败与空 workspace 根时的降级与可排查日志。
+覆盖：文件缺失时的默认初始化、既有文件解析（注释 / 空行 / ``*.log`` / ``build/`` / ``!keep`` 否定 /
+相对路径）、显式空文件「不忽略任何目录」语义、``iter_files`` 与 ``SearchScope`` 的接入、文件状态协调器
+``prepare`` 采样的一致性，以及读写失败与空 workspace 根时的降级与可排查日志。
+
+``.fileignore`` 与 ``.gitignore`` 均采用标准 gitignore（gitwildmatch）语义，合并后任一命中即跳过。
 """
 
 from __future__ import annotations
@@ -14,35 +16,26 @@ from app.core.tools.guard.file_tool_state_coordinator import FileToolStateCoordi
 from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.tool_handler.find_files import FindFilesTool
 from app.core.tools.tool_handler.search.file_walker import iter_files
+from app.core.tools.tool_handler.search.gitignore_rules import (
+    GitignoreMatcher,
+    build_gitwildmatch_spec,
+    load_gitignore_rules,
+)
 from app.core.tools.tool_handler.search.ignore_rules import (
     DEFAULT_IGNORED_DIR_NAMES,
     IGNORE_FILE_NAME,
-    IgnoreRules,
+    CompositeIgnoreMatcher,
     default_ignore_rules,
     ignore_file_path,
-    load_ignore_rules,
-    parse_ignore_rules,
+    load_fileignore_rules,
+    load_search_ignore_rules,
     render_default_content,
 )
 from app.core.tools.tool_handler.search.scope import SearchScope
 
 
 def _write_ignore_file(workspace: Path, content: str) -> Path:
-    """在工作区 ``.cosir`` 下写入指定内容的 ``.fileignore`` 并返回其路径。
-
-    参数:
-        workspace: 工作区根目录。
-        content: 规则文件全文。
-
-    返回:
-        规则文件路径。
-
-    异常:
-        无（写入失败由 OS 异常向上暴露，属测试装配错误）。
-
-    副作用:
-        创建 ``<workspace>/.cosir`` 目录并写入文件。
-    """
+    """在工作区 ``.cosir`` 下写入指定内容的 ``.fileignore`` 并返回其路径。"""
 
     path = ignore_file_path(workspace)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -50,21 +43,16 @@ def _write_ignore_file(workspace: Path, content: str) -> Path:
     return path
 
 
+def _write_gitignore(workspace: Path, content: str) -> Path:
+    """在工作区根目录写入指定内容的 ``.gitignore`` 并返回其路径。"""
+
+    path = workspace / ".gitignore"
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
 def _touch(path: Path) -> Path:
-    """创建文件及其父目录并写入占位内容。
-
-    参数:
-        path: 目标文件路径。
-
-    返回:
-        同一路径，便于链式断言。
-
-    异常:
-        无（OS 异常向上暴露，属测试装配错误）。
-
-    副作用:
-        创建父目录与文件。
-    """
+    """创建文件及其父目录并写入占位内容。"""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("x\n", encoding="utf-8")
@@ -72,35 +60,22 @@ def _touch(path: Path) -> Path:
 
 
 def _log_events(caplog) -> list[str]:
-    """返回捕获到的日志事件名列表（``log.warning(event, ...)`` 的 event 即 message）。
-
-    参数:
-        caplog: pytest 日志捕获 fixture。
-
-    返回:
-        按记录顺序排列的事件名列表。
-
-    异常:
-        无。
-
-    副作用:
-        无（只读捕获结果）。
-    """
+    """返回捕获到的日志事件名列表（``log.warning(event, ...)`` 的 event 即 message）。"""
 
     return [record.getMessage() for record in caplog.records]
 
 
 def test_ignore_file_is_created_with_default_rules_on_first_use(tmp_path: Path) -> None:
-    """规则文件不存在时，首次加载要创建它并写入默认规则，返回默认集合。"""
+    """规则文件不存在时，首次加载要创建它并写入默认规则，返回默认匹配器。"""
 
-    rules = load_ignore_rules(tmp_path)
+    rules = load_fileignore_rules(tmp_path)
 
     created = ignore_file_path(tmp_path)
     assert created == tmp_path / ".cosir" / IGNORE_FILE_NAME
     assert created.read_text(encoding="utf-8") == render_default_content()
-    assert rules.names == frozenset(DEFAULT_IGNORED_DIR_NAMES)
-    assert rules.paths == frozenset()
-    assert rules.workspace_root == tmp_path
+    # 默认规则按 gitignore 语义跳过内置目录。
+    assert rules.match_dir(tmp_path / "node_modules") is True
+    assert rules.match_dir(tmp_path / "src") is False
 
 
 def test_default_rules_keep_the_expected_baseline_directories() -> None:
@@ -111,38 +86,40 @@ def test_default_rules_keep_the_expected_baseline_directories() -> None:
     )
 
 
-def test_existing_ignore_file_is_the_single_source_of_truth(tmp_path: Path) -> None:
-    """文件已存在时以文件内容为准（不再写入默认规则），并区分目录名与相对路径规则。"""
+def test_existing_ignore_file_is_parsed_as_gitignore(tmp_path: Path) -> None:
+    """已有 ``.fileignore`` 以标准 gitignore 语义解析（``build/``、``*.log``、``!keep`` 否定）。"""
 
     _write_ignore_file(
         tmp_path,
         "\n".join(
             [
                 "# 注释行",
-                "  node_modules  ",
-                "build/",
-                "/sub/dir",
+                "  build/  ",
+                "*.log",
+                "!keep.log",
                 "",
-                "sub\\dir2",
             ]
         ),
     )
 
-    rules = load_ignore_rules(tmp_path)
+    rules = load_fileignore_rules(tmp_path)
 
-    assert rules.names == frozenset({"node_modules", "build"})
-    assert rules.paths == frozenset({"sub/dir", "sub/dir2"})
+    assert rules.match_dir(tmp_path / "build") is True
+    assert rules.match_dir(tmp_path / "src") is False
+    assert rules.match_file(tmp_path / "a.log") is True
+    assert rules.match_file(tmp_path / "keep.log") is False  # 否定生效
+    assert rules.match_file(tmp_path / "keep.txt") is False
 
 
-def test_empty_ignore_file_means_no_directory_is_ignored(tmp_path: Path) -> None:
-    """文件存在但没有任何有效规则时，语义为「不忽略任何目录」。"""
+def test_empty_existing_ignore_file_means_no_ignore(tmp_path: Path) -> None:
+    """文件已存在但只有注释时，语义为「不忽略任何目录」（尊重用户显式配置）。"""
 
     _write_ignore_file(tmp_path, "# 只有注释\n\n")
 
-    rules = load_ignore_rules(tmp_path)
+    rules = load_fileignore_rules(tmp_path)
 
-    assert rules.names == frozenset()
-    assert rules.paths == frozenset()
+    assert rules.match_dir(tmp_path / "node_modules") is False
+    assert rules.match_file(tmp_path / "a.log") is False
 
 
 def test_loader_truncates_rules_beyond_limit_and_logs(tmp_path: Path, caplog) -> None:
@@ -151,9 +128,11 @@ def test_loader_truncates_rules_beyond_limit_and_logs(tmp_path: Path, caplog) ->
     caplog.set_level(logging.WARNING)
     _write_ignore_file(tmp_path, "\n".join(f"dir_{index}" for index in range(2050)))
 
-    rules = load_ignore_rules(tmp_path)
+    rules = load_fileignore_rules(tmp_path)
 
-    assert len(rules.names) == 2000
+    # 前 2000 条生效，超出部分被忽略。
+    assert rules.match_dir(tmp_path / "dir_5") is True
+    assert rules.match_dir(tmp_path / "dir_2045") is False
     assert "file_ignore_rules_truncated" in _log_events(caplog)
 
 
@@ -162,53 +141,21 @@ def test_blank_workspace_root_falls_back_to_default_rules(caplog) -> None:
 
     caplog.set_level(logging.WARNING)
 
-    rules = load_ignore_rules("   ")
+    rules = load_fileignore_rules("   ")
 
     assert rules == default_ignore_rules()
     assert "file_ignore_workspace_missing" in _log_events(caplog)
 
 
-def test_ignores_dir_matches_name_at_any_depth(tmp_path: Path) -> None:
-    """不含 "/" 的规则按目录名匹配任意层级。"""
-
-    rules = IgnoreRules(names=frozenset({"skipme"}))
-
-    assert rules.ignores_dir(tmp_path / "skipme") is True
-    assert rules.ignores_dir(tmp_path / "a" / "b" / "skipme") is True
-    assert rules.ignores_dir(tmp_path / "skipme2") is False
-
-
-def test_ignores_dir_matches_relative_path_only_below_workspace(tmp_path: Path) -> None:
-    """含 "/" 的规则只匹配 workspace 之下该相对路径，越界根退化为只按目录名判定。"""
-
-    rules = IgnoreRules(paths=frozenset({"a/b"}), workspace_root=tmp_path)
-
-    assert rules.ignores_dir(tmp_path / "a" / "b") is True
-    assert rules.ignores_dir(tmp_path / "x" / "a" / "b") is False
-    assert rules.ignores_dir(tmp_path / "a") is False
-    assert rules.ignores_dir(Path("C:/outside/a/b")) is False
-
-
-def test_default_rules_ignore_no_relative_paths() -> None:
-    """内置默认规则只有目录名，且不含 ``.cosir`` 与 ``.coding-agent``。"""
+def test_default_rules_ignore_builtin_directories() -> None:
+    """内置默认规则按 gitignore 语义跳过基线目录，且不含 ``.cosir`` 与 ``.coding-agent``。"""
 
     rules = default_ignore_rules()
 
-    assert rules.names == frozenset(DEFAULT_IGNORED_DIR_NAMES)
-    assert rules.paths == frozenset()
-    assert rules.workspace_root is None
-    assert ".cosir" not in rules.names
-    assert ".coding-agent" not in rules.names
-
-
-def test_parse_rules_is_pure_and_normalizes_separators() -> None:
-    """解析函数是纯函数：不访问文件系统、不截断，并按 "/" 归一规则。"""
-
-    rules = parse_ignore_rules("# 注释\nnode_modules\n\nsub\\dir\n", workspace_root=Path("C:/ws"))
-
-    assert rules.names == frozenset({"node_modules"})
-    assert rules.paths == frozenset({"sub/dir"})
-    assert rules.workspace_root == Path("C:/ws")
+    assert rules.match_dir(Path("/any/where/node_modules")) is True
+    assert rules.match_dir(Path("/any/where/src")) is False
+    assert ".cosir" not in DEFAULT_IGNORED_DIR_NAMES
+    assert ".coding-agent" not in DEFAULT_IGNORED_DIR_NAMES
 
 
 def test_walker_skips_configured_directory_subtree(tmp_path: Path) -> None:
@@ -216,17 +163,17 @@ def test_walker_skips_configured_directory_subtree(tmp_path: Path) -> None:
 
     kept = _touch(tmp_path / "src" / "main.py")
     _touch(tmp_path / "skipme" / "inner" / "nested.py")
-    rules = IgnoreRules(names=frozenset({"skipme"}))
+    rules = GitignoreMatcher(workspace_root=None, spec=build_gitwildmatch_spec(["skipme"]))
 
     assert list(iter_files(tmp_path, rules=rules)) == [kept]
 
 
 def test_walker_skips_relative_path_rules(tmp_path: Path) -> None:
-    """相对路径规则只跳过该路径下的目录，同名前缀目录不受影响。"""
+    """相对路径规则（以 workspace 根为基准）只跳过该路径下的目录，同名前缀目录不受影响。"""
 
     _touch(tmp_path / "a" / "b" / "ignored.py")
     kept = _touch(tmp_path / "a" / "c" / "kept.py")
-    rules = IgnoreRules(paths=frozenset({"a/b"}), workspace_root=tmp_path)
+    rules = GitignoreMatcher(workspace_root=tmp_path, spec=build_gitwildmatch_spec(["a/b/"]))
 
     assert list(iter_files(tmp_path, rules=rules)) == [kept]
 
@@ -298,9 +245,9 @@ def test_read_failure_degrades_to_default_rules_and_logs(
 
     monkeypatch.setattr(Path, "open", _open)
 
-    rules = load_ignore_rules(tmp_path)
+    rules = load_fileignore_rules(tmp_path)
 
-    assert rules.names == frozenset(DEFAULT_IGNORED_DIR_NAMES)
+    assert rules.match_dir(tmp_path / "node_modules") is True
     assert "file_ignore_read_failed" in _log_events(caplog)
 
 
@@ -320,8 +267,81 @@ def test_create_failure_degrades_to_default_rules_and_logs(
 
     monkeypatch.setattr(Path, "open", _open)
 
-    rules = load_ignore_rules(tmp_path)
+    rules = load_fileignore_rules(tmp_path)
 
-    assert rules.names == frozenset(DEFAULT_IGNORED_DIR_NAMES)
+    assert rules.match_dir(tmp_path / "node_modules") is True
     assert not ignore_file_path(tmp_path).exists()
     assert "file_ignore_create_failed" in _log_events(caplog)
+
+
+def test_gitignore_skips_files_and_directories(tmp_path: Path) -> None:
+    """根 ``.gitignore`` 同时覆盖文件级（``*.log``）与目录级（``build/``）忽略。"""
+
+    _write_gitignore(tmp_path, "*.log\nbuild/\n")
+    kept = _touch(tmp_path / "src" / "main.py")
+    _touch(tmp_path / "build" / "gen.py")  # 整棵子树跳过
+    _touch(tmp_path / "data" / "dump.log")  # 文件级跳过
+
+    produced = list(SearchScope.from_path(tmp_path, tmp_path).iter_files())
+
+    assert kept in produced
+    assert tmp_path / "build" / "gen.py" not in produced
+    assert tmp_path / "data" / "dump.log" not in produced
+
+
+def test_search_scope_combines_fileignore_and_gitignore(tmp_path: Path) -> None:
+    """``SearchScope`` 同时尊重 ``.fileignore``（gitignore 语法）与 ``.gitignore``（gitignore 语法）。"""
+
+    _write_ignore_file(tmp_path, "generated\n")
+    _write_gitignore(tmp_path, "*.log\n")
+    kept = _touch(tmp_path / "src" / "main.py")
+    _touch(tmp_path / "generated" / "gen.py")  # .fileignore
+    _touch(tmp_path / "data" / "dump.log")  # .gitignore
+
+    produced = list(SearchScope.from_path(tmp_path, tmp_path).iter_files())
+
+    assert kept in produced
+    assert tmp_path / "generated" / "gen.py" not in produced
+    assert tmp_path / "data" / "dump.log" not in produced
+
+
+def test_load_gitignore_rules_absent_returns_none(tmp_path: Path) -> None:
+    """根 ``.gitignore`` 缺失时 ``load_gitignore_rules`` 返回 None（不参与忽略）。"""
+
+    assert load_gitignore_rules(tmp_path) is None
+
+
+def test_load_gitignore_rules_parses_patterns(tmp_path: Path) -> None:
+    """``.gitignore`` 解析为匹配器，文件级/否定/目录级均按 git 语义生效。"""
+
+    _write_gitignore(tmp_path, "*.log\nbuild/\n!keep.log\n")
+    matcher = load_gitignore_rules(tmp_path)
+
+    assert isinstance(matcher, GitignoreMatcher)
+    assert matcher is not None
+    assert matcher.match_file(tmp_path / "a.log") is True
+    assert matcher.match_file(tmp_path / "keep.log") is False
+    assert matcher.match_dir(tmp_path / "build") is True
+
+
+def test_load_search_ignore_rules_returns_composite_when_gitignore_present(tmp_path: Path) -> None:
+    """同时存在 ``.gitignore`` 时组合加载器返回 ``CompositeIgnoreMatcher`` 并合并两类来源。"""
+
+    _write_gitignore(tmp_path, "*.log\n")
+    matcher = load_search_ignore_rules(tmp_path)
+
+    assert isinstance(matcher, CompositeIgnoreMatcher)
+    assert matcher.match_file(tmp_path / "a.log") is True
+    assert matcher.match_file(tmp_path / "a.py") is False
+
+
+def test_load_search_ignore_rules_falls_back_to_fileignore_alone(tmp_path: Path) -> None:
+    """仅 ``.fileignore`` 时直接返回其规则对象（不包装），且仍满足 IgnoreMatcher 协议。"""
+
+    _write_ignore_file(tmp_path, "generated\n")
+    matcher = load_search_ignore_rules(tmp_path)
+
+    assert not isinstance(matcher, CompositeIgnoreMatcher)
+    # ``generated``（无斜杠）按 gitignore 语义忽略任意层级名为 generated 的目录及其子树。
+    assert matcher.match_dir(tmp_path / "generated") is True
+    assert matcher.match_file(tmp_path / "generated" / "x.py") is True

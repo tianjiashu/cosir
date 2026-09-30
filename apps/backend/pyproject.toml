@@ -39,6 +39,7 @@ dependencies = [
     # import ChatOpenAI）。此前为 langchain 的传递依赖，现显式化以避免 uv 重解析时丢失。
     "langchain-openai==1.6.0",
     "unidiff==0.7.5",
+    "pathspec==0.12.1",
 ]
 
 [dependency-groups]

@@ -44,6 +44,15 @@ export type ModelConfigTestResult = {
   error_message?: string | null;
 };
 
+export type ModelConfigDiscoveryInput = {
+  base_url: string;
+  api_key: string;
+};
+
+export type ModelConfigDiscoveryResponse = {
+  models: string[];
+};
+
 export const getModelConfigs = (init?: RequestInit) =>
   requestJson<ModelConfig[]>("/model-configs", init);
 
@@ -60,3 +69,8 @@ export const deleteModelConfig = (configId: number) =>
 
 export const testDraftModelConfig = (input: ModelConfigTestInput) =>
   postJson<ModelConfigTestResult>("/model-configs/test", input);
+
+export const discoverModelConfigs = (
+  input: ModelConfigDiscoveryInput,
+  init?: RequestInit,
+) => postJson<ModelConfigDiscoveryResponse>("/model-configs/discover", input, init);

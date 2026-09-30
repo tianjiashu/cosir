@@ -115,6 +115,43 @@ type InlineAttachmentInputProps = {
   "aria-label"?: string;
 };
 
+/**
+ * 可用于判断回车提交的最小键盘事件契约。
+ *
+ * 该类型只描述输入边界需要的字段，不把具体编辑器、Assistant UI 或浏览器对象泄漏到
+ * 判定函数中，便于用纯单元测试覆盖输入法和普通回车的分支。
+ */
+export type ComposerEnterKeyEvent = {
+  key: string;
+  shiftKey: boolean;
+  defaultPrevented: boolean;
+  nativeEvent: {
+    isComposing: boolean;
+    keyCode: number;
+  };
+};
+
+/**
+ * 判断一次回车键事件是否可以提交消息。
+ *
+ * 组合输入由三层信号共同保护：组件维护的 composition 生命周期、浏览器标准
+ * ``isComposing`` 标志，以及当前 WebView 在 IME 确认候选词时使用的 229 keyCode。229
+ * 只在本输入边界做事件归一化，不参与业务发送逻辑；否则中文输入法确认候选词会被误当成发送。
+ */
+export function shouldSubmitOnEnter(
+  event: ComposerEnterKeyEvent,
+  isComposing: boolean,
+): boolean {
+  return (
+    event.key === "Enter" &&
+    !event.shiftKey &&
+    !event.defaultPrevented &&
+    !isComposing &&
+    !event.nativeEvent.isComposing &&
+    event.nativeEvent.keyCode !== 229
+  );
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -263,6 +300,7 @@ export function InlineAttachmentInput({
   "aria-label": ariaLabel,
 }: InlineAttachmentInputProps) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const isComposingRef = useRef(false);
   const lastMarkupSignature = useRef("");
   const caretOffset = useRef<number | null>(null);
   const currentValue = useRef(value);
@@ -450,12 +488,10 @@ export function InlineAttachmentInput({
   }, [attachmentSignature, attachments, suspendAttachmentReconciliation, value]);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.nativeEvent.isComposing) return;
     if (disabled) return;
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      onSubmit();
-    }
+    if (!shouldSubmitOnEnter(event, isComposingRef.current)) return;
+    event.preventDefault();
+    onSubmit();
   };
 
   return (
@@ -509,6 +545,12 @@ export function InlineAttachmentInput({
         if (event.defaultPrevented || event.dataTransfer.files.length === 0) return;
         event.preventDefault();
         void handleExternalFiles([...event.dataTransfer.files]);
+      }}
+      onCompositionStart={() => {
+        isComposingRef.current = true;
+      }}
+      onCompositionEnd={() => {
+        isComposingRef.current = false;
       }}
       onKeyDown={handleKeyDown}
       onKeyUp={rememberCaret}

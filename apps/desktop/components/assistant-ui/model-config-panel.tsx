@@ -14,6 +14,7 @@ import {
 import {
   createModelConfig,
   deleteModelConfig,
+  discoverModelConfigs,
   getModelConfigs,
   testDraftModelConfig,
   updateModelConfig,
@@ -57,6 +58,7 @@ export function ModelConfigPanel({
   const [showApiKey, setShowApiKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [testingDraft, setTestingDraft] = useState(false);
+  const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
   const [testedFormSignature, setTestedFormSignature] = useState<string | null>(null);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -95,11 +97,51 @@ export function ModelConfigPanel({
     return () => window.clearTimeout(timer);
   }, [loadConfigs, open]);
 
+  useEffect(() => {
+    if (!open) {
+      setDiscoveredModels(null);
+      return;
+    }
+
+    const baseUrl = form.baseUrl.trim();
+    const apiKey = form.apiKey.trim();
+    setDiscoveredModels(null);
+    if (!baseUrl || !apiKey) return;
+
+    const controller = new AbortController();
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void discoverModelConfigs(
+        { base_url: baseUrl, api_key: apiKey },
+        { signal: controller.signal },
+      )
+        .then((result) => {
+          if (!active || result.models.length === 0) return;
+          const currentModel = form.modelName.trim();
+          const models = currentModel && !result.models.includes(currentModel)
+            ? [currentModel, ...result.models]
+            : result.models;
+          setDiscoveredModels(models);
+        })
+        .catch((cause) => {
+          if (!active || (cause instanceof DOMException && cause.name === "AbortError")) return;
+          // 模型目录发现是表单增强能力；失败时保留手动输入，不打断配置流程。
+        });
+    }, 450);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [form.apiKey, form.baseUrl, open]);
+
   const resetForm = () => {
     setForm(emptyForm);
     setEditingId(null);
     setShowApiKey(false);
     setTestedFormSignature(null);
+    setDiscoveredModels(null);
   };
 
   const save = async () => {
@@ -227,7 +269,21 @@ export function ModelConfigPanel({
             <label className="grid gap-1 text-xs">API Base URL<input className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label>
             <label className="grid gap-1 text-xs">API Key<div className="relative"><input type={showApiKey ? "text" : "password"} className="border-input bg-background h-8 w-full rounded-md border px-2 pr-9 text-sm" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder="请输入 API Key" /><button type="button" className="text-muted-foreground hover:text-foreground absolute inset-y-0 right-0 inline-flex w-8 items-center justify-center" onClick={() => setShowApiKey((visible) => !visible)} aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}>{showApiKey ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}</button></div></label>
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="grid gap-1 text-xs">模型名称<input className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.modelName} onChange={(event) => setForm({ ...form, modelName: event.target.value })} placeholder="例如：deepseek-chat" /></label>
+              <label className="grid gap-1 text-xs">
+                模型名称
+                {discoveredModels ? (
+                  <select
+                    className="border-input bg-background h-8 rounded-md border px-2 text-sm"
+                    value={form.modelName}
+                    onChange={(event) => setForm({ ...form, modelName: event.target.value })}
+                  >
+                    <option value="">请选择模型</option>
+                    {discoveredModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                  </select>
+                ) : (
+                  <input className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.modelName} onChange={(event) => setForm({ ...form, modelName: event.target.value })} placeholder="例如：deepseek-chat" />
+                )}
+              </label>
               <label className="grid gap-1 text-xs">上下文窗口（K）<input type="number" min="1" step="1" className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.contextWindowK} onChange={(event) => setForm({ ...form, contextWindowK: event.target.value })} placeholder="例如：128" /></label>
             </div>
             <div className="grid gap-2 sm:grid-cols-3">

@@ -5,9 +5,9 @@
 
 设计边界：
 - 只做遍历与过滤，不做匹配、排序、分页与输出格式化。
-- 忽略规则由调用方注入（:class:`IgnoreRules`）：本模块不读配置文件、不知道 workspace 位置，
-  未注入时回退 :func:`ignore_rules.default_ignore_rules`；持有 workspace 的调用方应传
-  ``load_ignore_rules(workspace_root)``。
+- 忽略规则由调用方注入（:class:`GitignoreMatcher` 或组合器）：本模块不读配置文件、不知道
+  workspace 位置，未注入时回退 :func:`ignore_rules.default_ignore_rules`；持有 workspace 的调用方
+  应传 ``load_search_ignore_rules(workspace_root)``。
 - 不依赖外部命令，跨平台零重型依赖。
 """
 
@@ -17,7 +17,8 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
-from app.core.tools.tool_handler.search.ignore_rules import IgnoreRules, default_ignore_rules
+from app.core.tools.tool_handler.search.ignore_matcher import IgnoreMatcher
+from app.core.tools.tool_handler.search.ignore_rules import default_ignore_rules
 from app.core.tools.tool_handler.security.windows_reparse_point import (
     is_windows_directory_reparse_point,
 )
@@ -27,15 +28,16 @@ def iter_files(
     base: Path,
     file_glob: str | None = None,
     *,
-    rules: IgnoreRules | None = None,
+    rules: IgnoreMatcher | None = None,
 ) -> Iterator[Path]:
-    """递归遍历目录下的文件，按忽略规则跳过目录并按 glob 过滤文件名。
+    """递归遍历目录下的文件，按忽略匹配器跳过目录/文件并按 glob 过滤文件名。
 
     参数:
         base: 遍历根目录。
         file_glob: 可选的文件名 glob 模式（如 ``*.py``）；为 None 表示不过滤。
-        rules: 目录忽略规则；为 None 时使用内置默认规则（不含 workspace 的 ``.fileignore``
-            配置）。持有 workspace 上下文的调用方应传入 ``load_ignore_rules(workspace_root)``。
+        rules: 忽略匹配器；为 None 时使用内置默认规则（不含 workspace 的 ``.fileignore`` 与
+            ``.gitignore`` 配置）。持有 workspace 上下文的调用方应传入
+            ``load_search_ignore_rules(workspace_root)``。
 
     返回:
         文件路径生成器（不保证顺序）。
@@ -51,7 +53,7 @@ def iter_files(
     yield from _walk(base, file_glob, active_rules)
 
 
-def _walk(base: Path, file_glob: str | None, rules: IgnoreRules) -> Iterator[Path]:
+def _walk(base: Path, file_glob: str | None, rules: IgnoreMatcher) -> Iterator[Path]:
     """递归遍历一层目录；规则对象在整次遍历中复用，避免逐层重复读取规则文件。
 
     参数:
@@ -81,9 +83,9 @@ def _visit_entry(
     entry: Path,
     raw_entry: os.DirEntry[str],
     file_glob: str | None,
-    rules: IgnoreRules,
+    rules: IgnoreMatcher,
 ) -> Iterator[Path]:
-    """判定单个目录项：symlink / junction 跳过、目录按规则跳过、文件按 glob 过滤。
+    """判定单个目录项：symlink / junction 跳过、目录按规则跳过、文件按规则与 glob 过滤。
 
     参数:
         entry: 目录项路径。
@@ -106,10 +108,12 @@ def _visit_entry(
             # 与 rg 默认语义一致：不跟随 symlink 或 Windows junction。
             return
         if raw_entry.is_dir(follow_symlinks=False):
-            if rules.ignores_dir(entry):
+            if rules.match_dir(entry):
                 return
             yield from _walk(entry, file_glob, rules)
         elif raw_entry.is_file(follow_symlinks=False):
+            if rules.match_file(entry):
+                return
             if file_glob is None or entry.match(file_glob):
                 yield entry
     except OSError:
