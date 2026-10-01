@@ -164,8 +164,8 @@ proposal Run 额外加入 propose_agent_configuration
 `allows_tools` 中。用户点击按钮只改变本次 Run 的允许集合，不动态修改 `bind_tools`，也不把
 完整 schema 重复放入系统提示词或持久化上下文。提案约束只作为本次模型请求的临时消息注入。
 
-前端提交 `allows-tools` custom command，携带本次 Run 的完整允许工具名集合；后端按 Task 固化
-schema 校验其子集关系。普通对话不携带 proposal 工具，proposal 命令只负责额外开放已固化的
+前端提交 `ban-tools` custom command，携带本次 Run 禁用的工具名集合；后端按 Task 固化
+schema 校验其工具名，并计算最终 `allows_tools`。普通对话不携带 proposal 工具，proposal 命令只负责额外开放已固化的
 提案工具。
 
 ## 5. 提案命令与 Agent context 边界

@@ -14,7 +14,7 @@ type AssistantRuntimeTransportHostProps = {
   context: RuntimeSessionContext;
   recovery: RuntimeRecovery;
   commitTransportState: (state: TransportState) => void;
-  selectedAllowsTools: readonly string[];
+  selectedBanTools: readonly string[];
   registerRuntimeControls: (controls: RuntimeControls | null) => void;
   registerComposerRestore: (restore: ComposerRestore) => void;
   initialMessageSentRef: MutableRefObject<boolean>;
@@ -47,7 +47,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
   context,
   recovery,
   commitTransportState,
-  selectedAllowsTools,
+  selectedBanTools,
   registerRuntimeControls,
   registerComposerRestore,
   initialMessageSentRef,
@@ -75,7 +75,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
     context,
     recovery,
     commitTransportState,
-    selectedAllowsTools,
+    selectedBanTools,
     proposeAgentConfiguration,
     consumeProposalMode,
   );

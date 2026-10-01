@@ -32,7 +32,7 @@ def test_command_batch_replay_requires_every_command_id() -> None:
     with pytest.raises(RuntimeError, match="only part of the command batch"):
         service._resolve_existing_command(
             task_id=1,
-            command_ids=["message-id", "allows-tools-id"],
+            command_ids=["message-id", "ban-tools-id"],
             payload_hash="hash",
             mode="new",
         )
@@ -42,14 +42,14 @@ def test_command_batch_replay_requires_matching_payload_and_run() -> None:
     service = _service(
         {
             "message-id": _record("message-id"),
-            "allows-tools-id": _record("allows-tools-id", run_id=8),
+            "ban-tools-id": _record("ban-tools-id", run_id=8),
         }
     )
 
     with pytest.raises(RuntimeError, match="bound to different runs"):
         service._resolve_existing_command(
             task_id=1,
-            command_ids=["message-id", "allows-tools-id"],
+            command_ids=["message-id", "ban-tools-id"],
             payload_hash="hash",
             mode="new",
         )
@@ -59,13 +59,13 @@ def test_command_batch_replay_returns_existing_run_when_all_match() -> None:
     service = _service(
         {
             "message-id": _record("message-id"),
-            "allows-tools-id": _record("allows-tools-id"),
+            "ban-tools-id": _record("ban-tools-id"),
         }
     )
 
     result = service._resolve_existing_command(
         task_id=1,
-        command_ids=["message-id", "allows-tools-id"],
+        command_ids=["message-id", "ban-tools-id"],
         payload_hash="hash",
         mode="new",
     )
@@ -73,4 +73,3 @@ def test_command_batch_replay_returns_existing_run_when_all_match() -> None:
     assert result is not None
     assert result.created is False
     assert result.run.id == 7
-

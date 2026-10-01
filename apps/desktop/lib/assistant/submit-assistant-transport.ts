@@ -13,7 +13,7 @@ export type SubmitAssistantTransportInput = {
   commandId: string;
   text: string;
   imageAttachments: readonly NewConversationImageAttachment[];
-  allowsTools: readonly string[];
+  banTools: readonly string[];
   modelConfigId: number;
   reasoningEffort: string | null;
   proposeAgentConfiguration?: boolean;
@@ -70,9 +70,9 @@ export async function submitAssistantTransport(
         command,
         {
           type: "custom",
-          name: "allows-tools",
-          commandId: `${input.commandId}-allows-tools`,
-          payload: { allows_tools: [...input.allowsTools] },
+          name: "ban-tools",
+          commandId: `${input.commandId}-ban-tools`,
+          payload: { ban_tools: [...input.banTools] },
         },
         ...(input.proposeAgentConfiguration ? [{
           type: "custom",

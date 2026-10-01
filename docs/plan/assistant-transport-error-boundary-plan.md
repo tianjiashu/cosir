@@ -276,7 +276,7 @@ type TransportErrorParams = {
 2. 生成本次尝试唯一的 UUID，同时作为 `creationCommandId` 和首个 `add-message.commandId`；
 3. 调用现有 `createWorkspaceTask()`，携带 `creationCommandId`，得到 provisional `taskId`，但不导航；
 4. 复用已有 workspace-scoped attachment adapter，以该 `workspaceId` 上传图片；文件继续使用当前本机文件引用；
-5. 从发送快照构造完整 `add-message + allows-tools` 命令，使用 `threadId=task-{taskId}` 调用共享的非 React Assistant Transport submitter；
+5. 从发送快照构造完整 `add-message + ban-tools` 命令，使用 `threadId=task-{taskId}` 调用共享的非 React Assistant Transport submitter；
 6. submitter 收到 2xx 且确认 `X-Cosir-Task-Id` 与 provisional `taskId` 一致后，停止读取当前 SSE subscription 并返回 accepted 结果；不得调用 business cancel；
 7. 只有 accepted 结果返回后才导航到 `/tasks/{taskId}`；Task 页面随后通过现有 snapshot/attach 重新订阅同一 Run；
 8. 导航时不再通过 `initialMessage`/`initialAttachments` 发送第二次首条消息。
@@ -312,7 +312,7 @@ type TransportErrorParams = {
 - [ ] 运行该 E2E，确认现状会先进入 Task 页面；改造后只在 2xx 且 Task header 匹配时导航。
 - [ ] 删除 `test-server.mjs` 中旧的 task-less 创建分支，测试服务统一要求 `taskId`，避免 E2E 掩盖生产协议错误。
 - [ ] 补图片上传失败时的 best-effort provisional cleanup 测试；确认原始图片仍在 NewConversation composer。
-- [ ] 复用现有 Assistant command 序列化规则，确保图片、文件和 allows_tools 与 Task runtime 一致。
+- [ ] 复用现有 Assistant command 序列化规则，确保图片、文件和 ban_tools 与 Task runtime 一致。
 - [ ] 补 2xx 后 submitter 关闭 SSE、TaskPage attach 且后端 Run 不被取消的测试。
 - [ ] 将成功导航条件绑定到 accepted response，而不是 Task 创建成功。
 - [ ] 接入共享错误弹窗并保留当前表单 state。

@@ -49,12 +49,12 @@ type DeleteTarget =
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
 
-export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments, initialDisabledToolGroups, initialAllowsTools, settingsOpen = false, workspaceConfigurationId = null }: {
+export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments, initialDisabledToolGroups, initialBanTools, settingsOpen = false, workspaceConfigurationId = null }: {
   routeTaskId: number | null;
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
-  initialAllowsTools?: string[];
+  initialBanTools?: string[];
   settingsOpen?: boolean;
   workspaceConfigurationId?: number | null;
 }) {
@@ -422,7 +422,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
             initialMessage={initialMessage}
             initialAttachments={initialAttachments}
             initialDisabledToolGroups={initialDisabledToolGroups}
-            initialAllowsTools={initialAllowsTools}
+            initialBanTools={initialBanTools}
             workspaceRoot={activeWorkspace?.root_path}
             forkAvailable={activeTask?.fork_available}
             forkingRunId={forkingRunId}

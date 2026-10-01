@@ -14,7 +14,7 @@ export type AssistantRuntimeProps = {
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
-  initialAllowsTools?: string[];
+  initialBanTools?: string[];
   forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;

@@ -44,7 +44,7 @@ export function useRuntimeTransport(
   context: RuntimeSessionContext,
   recovery: RuntimeRecovery,
   onStateCommit: (state: TransportState) => void,
-  selectedAllowsTools: readonly string[],
+  selectedBanTools: readonly string[],
   proposeAgentConfiguration: boolean,
   onProposalModeConsumed: () => void,
 ): RuntimeTransport {
@@ -285,9 +285,9 @@ export function useRuntimeTransport(
       if (addMessage?.commandId) {
         commands.push({
           type: "custom",
-          name: "allows-tools",
-          commandId: `${addMessage.commandId}-allows-tools`,
-          payload: { allows_tools: [...selectedAllowsTools] },
+          name: "ban-tools",
+          commandId: `${addMessage.commandId}-ban-tools`,
+          payload: { ban_tools: [...selectedBanTools] },
         });
         if (proposeAgentConfiguration) {
           commands.push({

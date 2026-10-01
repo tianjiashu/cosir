@@ -36,7 +36,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   initialMessage,
   initialAttachments,
   initialDisabledToolGroups,
-  initialAllowsTools,
+  initialBanTools,
   forkAvailable,
   forkingRunId,
   onForkRun,
@@ -102,14 +102,10 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     return () => controller.abort();
   }, [backendRuntimeAvailable, backendRuntimeGeneration]);
 
-  const selectedAllowsTools = useMemo(() => {
-    if (toolGroupsLoading || toolGroupsError) return initialAllowsTools ?? [];
-    const disabledTools = new Set(toolNamesForGroups(selectedToolGroups, toolGroups));
-    return toolGroups
-      .flatMap(({ tools }) => tools)
-      .map(({ name }) => name)
-      .filter((name) => !disabledTools.has(name));
-  }, [initialAllowsTools, selectedToolGroups, toolGroups, toolGroupsError, toolGroupsLoading]);
+  const selectedBanTools = useMemo(() => {
+    if (toolGroupsLoading || toolGroupsError) return initialBanTools ?? [];
+    return toolNamesForGroups(selectedToolGroups, toolGroups);
+  }, [initialBanTools, selectedToolGroups, toolGroups, toolGroupsError, toolGroupsLoading]);
 
   const registerRuntimeControls = useCallback((controls: RuntimeControls | null) => {
     runtimeControlsRef.current = controls;
@@ -177,7 +173,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       context={context}
       recovery={recovery}
       commitTransportState={commitTransportState}
-      selectedAllowsTools={selectedAllowsTools}
+      selectedBanTools={selectedBanTools}
       registerRuntimeControls={registerRuntimeControls}
       registerComposerRestore={registerComposerRestore}
       initialMessageSentRef={initialMessageSentRef}
