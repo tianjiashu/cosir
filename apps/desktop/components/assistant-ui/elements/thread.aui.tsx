@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, BotIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon } from "lucide-react";
 import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FC, type ReactNode } from "react";
 import {
   AuiIf,
@@ -109,12 +109,14 @@ export type ThreadProps = {
   onCancelResult?: (runId: number, accepted: boolean) => void;
   cancellingRunId?: number | null;
   performanceProbe?: AssistantPerformanceProbe | null;
+  proposeAgentConfiguration?: boolean;
+  onProposeAgentConfigurationChange?: (enabled: boolean) => void;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "proposeAgentConfiguration" | "onProposeAgentConfigurationChange"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
@@ -163,12 +165,12 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null }) {
+export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null, proposeAgentConfiguration = false, onProposeAgentConfigurationChange }) {
   const isEmpty = useAuiState(isNewChatView);
   const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly }}>
+    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly, proposeAgentConfiguration, onProposeAgentConfigurationChange }}>
     <ThreadComponentsContext.Provider value={components}>
       <AttachmentWorkspaceContext.Provider value={workspaceId ?? undefined}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -275,10 +277,23 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
 
 const ComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = false }) => {
   const composer = unstable_useComposerInput();
+  const { proposeAgentConfiguration = false, onProposeAgentConfigurationChange } = useContext(ThreadContext);
   return (
     <div className="flex min-w-0 items-center gap-3">
       <FavoritePromptToolbar disabled={disabled || composer.isDisabled} />
       <ToolGroupSelector disabled={disabled || composer.isDisabled} />
+      <Button
+        type="button"
+        variant={proposeAgentConfiguration ? "secondary" : "ghost"}
+        size="sm"
+        className="h-7 rounded-full px-2.5 text-xs"
+        disabled={disabled || composer.isDisabled}
+        aria-pressed={proposeAgentConfiguration}
+        onClick={() => onProposeAgentConfigurationChange?.(!proposeAgentConfiguration)}
+      >
+        <BotIcon className="size-3.5" />
+        {proposeAgentConfiguration ? "配置提案已开启" : "生成子 Agent配置"}
+      </Button>
     </div>
   );
 };

@@ -46,7 +46,9 @@ class _LifecycleHarness:
             self.messages.append(message)
 
         self.runtime_context = SimpleNamespace(add_message=add_message)
-        self.manager = ToolCallLifecycleManager()
+        self.manager = ToolCallLifecycleManager(
+            allows_tools=tuple(tool.name for tool in self.operations.model_tools)
+        )
 
     def _patch_runtime(self):
         """返回 lifecycle 模块依赖的可恢复 patch_write 上下文。"""
@@ -246,7 +248,7 @@ def test_banned_tool_is_filtered_from_live_projection_and_execution() -> None:
     """禁用调用只进入隐藏闭合集合，不发事件也不进入可执行集合。"""
 
     harness = _LifecycleHarness()
-    harness.manager = ToolCallLifecycleManager(ban_tools=("read_file",))
+    harness.manager = ToolCallLifecycleManager(allows_tools=("write_file",))
     harness.create(ToolCall(tool_name="read_file", call_id="blocked-call"))
 
     with harness._patch_runtime():
@@ -276,7 +278,7 @@ def test_mixed_banned_tool_only_projects_and_executes_allowed_call() -> None:
             SimpleNamespace(name="write_file", display=None),
         ]
     )
-    harness.manager = ToolCallLifecycleManager(ban_tools=("read_file",))
+    harness.manager = ToolCallLifecycleManager(allows_tools=("write_file",))
     with harness._patch_runtime():
         harness.manager = harness.manager.create(
             task_id=1,
@@ -319,7 +321,7 @@ def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
         final_text="",
         last_tool_results={},
         tool_call_lifecycle=ToolCallLifecycleManager(
-            ban_tools=("read_file",),
+            allows_tools=("read_file",),
             calls={
                 "call-1": ToolCallLifecycleRecord(
                     tool_call_id="call-1",
@@ -334,4 +336,4 @@ def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
 
     assert isinstance(restored.tool_call_lifecycle, ToolCallLifecycleManager)
     assert restored.tool_call_lifecycle.calls["call-1"].status == "running"
-    assert restored.tool_call_lifecycle.ban_tools == ("read_file",)
+    assert restored.tool_call_lifecycle.allows_tools == ("read_file",)

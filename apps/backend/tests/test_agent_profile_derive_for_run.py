@@ -1,12 +1,10 @@
 """``AgentProfile.derive_for_run`` 的 per-run 派生契约单元测试。
 
-单一职责：只验证该函数自身的五条契约——``ban_tools`` 按工具名收窄、共享单例不被原地写、
+单一职责：只验证该函数自身的 per-run 派生契约、共享单例不被原地写、
 模型路由按 run 回填、``model_settings`` 分层合并（运行时字段只来自传参、偏好按「传参优先、
 profile 补缺」）、Run 推理强度最终覆盖。不覆盖 runner/workflow 链路（由各自的集成测试负责）。
 
-背景：``ban_tools`` 分支曾写成 ``changes["allowed_tools"] - ban_tools``，既读未初始化的
-key（必抛 ``KeyError``）又把列表当集合做差集，导致所有传 ``ban_tools`` 的 child run 在进入
-workflow 前就失败；本模块用于锁死该契约不再回退。
+工具允许集合不再通过 AgentProfile 派生，避免把一次 Run 的权限修改写回 profile。
 """
 
 from dataclasses import dataclass
@@ -65,36 +63,20 @@ def _child_profile() -> AgentProfile:
     )
 
 
-def test_derive_for_run_ban_tools_narrows_allowed_tools() -> None:
-    """``ban_tools`` 必须按工具名从 ``allowed_tools`` 中剔除，且不得抛异常。"""
+def test_derive_for_run_keeps_profile_tools_unchanged() -> None:
+    """per-run 派生不再收窄共享 profile 的工具配置。"""
 
     profile = _child_profile()
 
-    derived = profile.derive_for_run(
-        run=_RunRoute(),  # type: ignore[arg-type]
-        ban_tools=["delegate_task"],
-    )
+    derived = profile.derive_for_run(run=_RunRoute())  # type: ignore[arg-type]
 
-    assert derived.allowed_tools == ["read_file", "write_file"]
+    assert derived.allowed_tools == profile.allowed_tools
     # 共享单例必须保持原样：派生只产出副本，不原地写。
     assert profile.allowed_tools == ["read_file", "write_file", "delegate_task"]
 
 
-def test_derive_for_run_ignores_ban_names_not_in_allowed_tools() -> None:
-    """``ban_tools`` 含有本 profile 未持有的工具名时必须静默忽略，而不是报错。"""
-
-    profile = _child_profile()
-
-    derived = profile.derive_for_run(
-        run=_RunRoute(),  # type: ignore[arg-type]
-        ban_tools=["not_a_tool", "terminal_start"],
-    )
-
-    assert derived.allowed_tools == profile.allowed_tools
-
-
-def test_derive_for_run_without_ban_tools_keeps_allowed_tools() -> None:
-    """未传 ``ban_tools`` 时工具白名单原样沿用。"""
+def test_derive_for_run_without_runtime_allow_list_keeps_allowed_tools() -> None:
+    """没有运行期工具集合时仍保持 profile 的固定工具配置。"""
 
     profile = _child_profile()
 

@@ -5,7 +5,7 @@ from app.assistant_transport.request.assistant_transport_request import (
     AssistantTransportRequest,
     TransportRequestError,
 )
-from app.assistant_transport.request.command.ban_tools_command import BanToolsCommand
+from app.assistant_transport.request.command.allows_tools_command import AllowsToolsCommand
 
 
 def _request(**extra: object) -> AssistantTransportRequest:
@@ -124,12 +124,12 @@ def test_run_id_changes_payload_hash() -> None:
     assert first.payload_hash() != second.payload_hash()
 
 
-def test_accepts_typed_ban_tools_command_and_hashes_its_payload() -> None:
+def test_accepts_typed_allows_tools_command_and_hashes_its_payload() -> None:
     payload = {
         "type": "custom",
-        "commandId": "command-ban-tools",
-        "name": "ban-tools",
-        "payload": {"ban_tools": ["read_file"]},
+        "commandId": "command-allows-tools",
+        "name": "allows-tools",
+        "payload": {"allows_tools": ["read_file"]},
     }
     request = _request(commands=[
         {
@@ -145,14 +145,14 @@ def test_accepts_typed_ban_tools_command_and_hashes_its_payload() -> None:
             "commandId": "command-message",
             "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
         },
-        {**payload, "payload": {"ban_tools": ["write_file"]}},
+        {**payload, "payload": {"allows_tools": ["write_file"]}},
     ])
 
     assert request.payload_hash() != changed.payload_hash()
-    assert isinstance(request.commands[1], BanToolsCommand)
+    assert isinstance(request.commands[1], AllowsToolsCommand)
     command = request.commands[1]
-    assert isinstance(command, BanToolsCommand)
-    assert command.payload.ban_tools == ["read_file"]
+    assert isinstance(command, AllowsToolsCommand)
+    assert command.payload.allows_tools == ["read_file"]
 
 
 def test_payload_hash_is_independent_of_command_and_tool_selection_order() -> None:
@@ -161,16 +161,16 @@ def test_payload_hash_is_independent_of_command_and_tool_selection_order() -> No
         "commandId": "command-message",
         "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
     }
-    ban_tools = {
+    allows_tools = {
         "type": "custom",
-        "commandId": "command-ban-tools",
-        "name": "ban-tools",
-        "payload": {"ban_tools": ["read_file", "write_file"]},
+        "commandId": "command-allows-tools",
+        "name": "allows-tools",
+        "payload": {"allows_tools": ["read_file", "write_file"]},
     }
-    first = _request(commands=[add_message, ban_tools])
+    first = _request(commands=[add_message, allows_tools])
     reordered = _request(
         commands=[
-            {**ban_tools, "payload": {"ban_tools": ["write_file", "read_file"]}},
+            {**allows_tools, "payload": {"allows_tools": ["write_file", "read_file"]}},
             add_message,
         ]
     )
@@ -178,7 +178,7 @@ def test_payload_hash_is_independent_of_command_and_tool_selection_order() -> No
     assert first.payload_hash() == reordered.payload_hash()
 
 
-def test_accepts_empty_typed_ban_tools_selection() -> None:
+def test_accepts_empty_typed_allows_tools_selection() -> None:
     request = _request(commands=[
         {
             "type": "add-message",
@@ -187,15 +187,15 @@ def test_accepts_empty_typed_ban_tools_selection() -> None:
         },
         {
             "type": "custom",
-            "commandId": "command-ban-tools",
-            "name": "ban-tools",
-            "payload": {"ban_tools": []},
+            "commandId": "command-allows-tools",
+            "name": "allows-tools",
+            "payload": {"allows_tools": []},
         },
     ])
 
     command = request.commands[1]
-    assert isinstance(command, BanToolsCommand)
-    assert command.payload.ban_tools == []
+    assert isinstance(command, AllowsToolsCommand)
+    assert command.payload.allows_tools == []
 
 
 def test_rejects_unregistered_custom_command() -> None:
@@ -218,12 +218,12 @@ def test_rejects_unregistered_custom_command() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"ban_tools": ["read_file", "read_file"]},
-        {"ban_tools": [""]},
-        {"ban_tools": ["read_file"], "other": True},
+        {"allows_tools": ["read_file", "read_file"]},
+        {"allows_tools": [""]},
+        {"allows_tools": ["read_file"], "other": True},
     ],
 )
-def test_rejects_malformed_ban_tools_payload(payload: object) -> None:
+def test_rejects_malformed_allows_tools_payload(payload: object) -> None:
     with pytest.raises(ValidationError):
         _request(commands=[
             {
@@ -233,8 +233,8 @@ def test_rejects_malformed_ban_tools_payload(payload: object) -> None:
             },
             {
                 "type": "custom",
-                "commandId": "command-ban-tools",
-                "name": "ban-tools",
+                "commandId": "command-allows-tools",
+                "name": "allows-tools",
                 "payload": payload,
             },
         ])

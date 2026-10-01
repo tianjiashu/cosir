@@ -1,5 +1,5 @@
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { memo } from "react";
+import { memo, useCallback, useState } from "react";
 
 import { AssistantThreadSurface } from "@/components/assistant/runtime/assistant-thread-surface";
 import { useRuntimeTransport } from "@/components/assistant/runtime/use-runtime-transport";
@@ -14,7 +14,7 @@ type AssistantRuntimeTransportHostProps = {
   context: RuntimeSessionContext;
   recovery: RuntimeRecovery;
   commitTransportState: (state: TransportState) => void;
-  selectedBanTools: readonly string[];
+  selectedAllowsTools: readonly string[];
   registerRuntimeControls: (controls: RuntimeControls | null) => void;
   registerComposerRestore: (restore: ComposerRestore) => void;
   initialMessageSentRef: MutableRefObject<boolean>;
@@ -47,7 +47,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
   context,
   recovery,
   commitTransportState,
-  selectedBanTools,
+  selectedAllowsTools,
   registerRuntimeControls,
   registerComposerRestore,
   initialMessageSentRef,
@@ -69,7 +69,16 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
   cancellingRunId,
   performanceProbe,
 }: AssistantRuntimeTransportHostProps) {
-  const runtime = useRuntimeTransport(context, recovery, commitTransportState, selectedBanTools);
+  const [proposeAgentConfiguration, setProposeAgentConfiguration] = useState(false);
+  const consumeProposalMode = useCallback(() => setProposeAgentConfiguration(false), []);
+  const runtime = useRuntimeTransport(
+    context,
+    recovery,
+    commitTransportState,
+    selectedAllowsTools,
+    proposeAgentConfiguration,
+    consumeProposalMode,
+  );
   const resumeOnMount = context.initialState.runs.some((run) =>
     run.runId === context.initialState.current_run_id
       && (run.status === "pending" || run.status === "running"),
@@ -107,6 +116,8 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
         onCancelResult={onCancelResult}
         cancellingRunId={cancellingRunId}
         performanceProbe={performanceProbe}
+        proposeAgentConfiguration={proposeAgentConfiguration}
+        onProposeAgentConfigurationChange={setProposeAgentConfiguration}
       />
     </AssistantRuntimeProvider>
   );

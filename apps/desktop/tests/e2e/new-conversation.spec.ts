@@ -110,10 +110,10 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(assistantRequests[0]?.body.taskId).toBe(42);
   expect(assistantRequests[0]?.body.commands).toHaveLength(2);
   expect((assistantRequests[0]?.body.commands as Array<{ message?: { parts?: Array<{ text?: string }> } }>)[0]?.message?.parts?.[0]?.text).toBe("你好");
-  expect((assistantRequests[0]?.body.commands as Array<{ type?: string; name?: string; payload?: { ban_tools?: string[] } }>)[1]).toMatchObject({
+  expect((assistantRequests[0]?.body.commands as Array<{ type?: string; name?: string; payload?: { allows_tools?: string[] } }>)[1]).toMatchObject({
     type: "custom",
-    name: "ban-tools",
-    payload: { ban_tools: ["read_file"] },
+    name: "allows-tools",
+    payload: { allows_tools: ["write_file"] },
   });
   await expect(page.getByText("禁用工具组（1）")).toBeVisible();
   await expect(page.getByRole("main").getByText("你好", { exact: true })).toBeVisible();

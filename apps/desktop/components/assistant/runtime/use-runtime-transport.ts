@@ -44,7 +44,9 @@ export function useRuntimeTransport(
   context: RuntimeSessionContext,
   recovery: RuntimeRecovery,
   onStateCommit: (state: TransportState) => void,
-  selectedBanTools: readonly string[],
+  selectedAllowsTools: readonly string[],
+  proposeAgentConfiguration: boolean,
+  onProposalModeConsumed: () => void,
 ): RuntimeTransport {
   const attachmentAdapter = useMemo(
     () => context.workspaceId == null ? null : createAttachmentAdapter(context.workspaceId),
@@ -283,10 +285,17 @@ export function useRuntimeTransport(
       if (addMessage?.commandId) {
         commands.push({
           type: "custom",
-          name: "ban-tools",
-          commandId: `${addMessage.commandId}-ban-tools`,
-          payload: { ban_tools: [...selectedBanTools] },
+          name: "allows-tools",
+          commandId: `${addMessage.commandId}-allows-tools`,
+          payload: { allows_tools: [...selectedAllowsTools] },
         });
+        if (proposeAgentConfiguration) {
+          commands.push({
+            type: "custom",
+            name: "propose-agent-configuration",
+            commandId: `${addMessage.commandId}-agent-configuration-proposal`,
+          });
+        }
       }
       // 新用户命令开始新的 Transport recovery 预算；空 command batch 属于 attach/resume，
       // 不能重置有界 EOF 保护。
@@ -312,7 +321,7 @@ export function useRuntimeTransport(
           stateStripped: Object.prototype.hasOwnProperty.call(body, "state"),
           parentIdPresent: Object.prototype.hasOwnProperty.call(body, "parentId"),
         },
-      });
+    });
 
       return {
         ...backendRequest,
@@ -324,6 +333,7 @@ export function useRuntimeTransport(
       };
     },
     onResponse: (response) => {
+      if (proposeAgentConfiguration) onProposalModeConsumed();
       void frontendLog("INFO", "assistant_transport_response_received", "Assistant Transport 已收到响应头", {
         traceId: context.traceId,
         data: {

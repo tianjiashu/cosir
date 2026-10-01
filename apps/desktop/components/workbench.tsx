@@ -12,6 +12,7 @@ export function Workbench({ workspaceId }: { workspaceId: number | null }) {
   const activeTabId = useWorkbenchStore((state) => state.activeTabId);
   const panelOpen = useWorkbenchStore((state) => state.panelOpen);
   const panelWidth = useWorkbenchStore((state) => state.panelWidth);
+  const hasDirtyDraft = tabs.some((tab) => tab.kind === "agent-configuration-draft" && tab.dirty);
   const activateTab = useWorkbenchStore((state) => state.activateTab);
   const closeTab = useWorkbenchStore((state) => state.closeTab);
   const setPanelOpen = useWorkbenchStore((state) => state.setPanelOpen);
@@ -19,9 +20,16 @@ export function Workbench({ workspaceId }: { workspaceId: number | null }) {
   const draggingRef = useRef(false);
 
   const handleCloseTab = useCallback((tabId: string) => {
+    const tab = tabs.find((candidate) => candidate.id === tabId);
+    if (tab?.kind === "agent-configuration-draft" && tab.dirty && !window.confirm("配置草稿尚未保存，确定关闭吗？")) return;
     void frontendLog("INFO", "workbench_tab_closed", "Workbench 标签页关闭", { data: { tabId } });
     closeTab(tabId);
-  }, [closeTab]);
+  }, [closeTab, tabs]);
+
+  const closePanel = useCallback(() => {
+    if (hasDirtyDraft && !window.confirm("有未保存的配置草稿，确定收起 Workbench 吗？")) return;
+    setPanelOpen(false);
+  }, [hasDirtyDraft, setPanelOpen]);
 
   useEffect(() => {
     if (workspaceId === null && panelOpen) setPanelOpen(false);
@@ -84,7 +92,7 @@ export function Workbench({ workspaceId }: { workspaceId: number | null }) {
             </div>
           ))}
         </div>
-        <Button variant="ghost" size="icon-sm" aria-label="收起 Workbench" onClick={() => setPanelOpen(false)}><PanelRightCloseIcon /></Button>
+        <Button variant="ghost" size="icon-sm" aria-label="收起 Workbench" onClick={closePanel}><PanelRightCloseIcon /></Button>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden" role="tabpanel">
         <WorkbenchSurface tab={activeTab} onClose={() => handleCloseTab(activeTab.id)} />

@@ -7,6 +7,8 @@ import { DiffTool } from "./diff-tool";
 import { TerminalSessionTool } from "./terminal-session-tool";
 import { TerminalTool } from "./terminal-tool";
 import { ToolFallback } from "./tool-fallback";
+import { AgentConfigurationDraftTool } from "./agent-configuration-draft-tool";
+import { readAgentConfigurationDraftDisplay } from "./agent-configuration-draft-display";
 import { readChildAgentResultDisplay, readChildAgentWaitDisplay, readDelegationDisplay } from "./child-agent-display";
 import { asRecord, readToolArtifact, type ToolArtifact } from "./types";
 
@@ -15,6 +17,7 @@ export type ToolPartRoute =
   | "terminal"
   | "terminal-session"
   | "delegation"
+  | "agent-configuration-draft"
   | "details"
   | "fallback";
 
@@ -53,6 +56,7 @@ const KNOWN_DISPLAY_KINDS = new Set([
   "child-agent-wait-result",
   "child-agent-result",
   "repeated-call",
+  "agent-configuration-draft",
 ]);
 
 /**
@@ -69,6 +73,12 @@ const FALLBACK_RENDERER: ToolRendererDefinition = {
 };
 
 const TOOL_RENDERER_DEFINITIONS: readonly ToolRendererDefinition[] = [
+  {
+    route: "agent-configuration-draft",
+    renderer: AgentConfigurationDraftTool,
+    matches: ({ kind, artifact }) => kind === "agent-configuration-draft"
+      && readAgentConfigurationDraftDisplay(artifact.display_data) !== null,
+  },
   {
     route: "delegation",
     renderer: DelegationToolRow,

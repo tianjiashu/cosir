@@ -93,7 +93,7 @@ const tabItems: { id: ConfigurationTab; label: string; description: string; icon
  * 不可授予子 Agent 的工具组：交互终端会话与委派（子 Agent）能力属于主 Agent 的编排职责。
  * 这里保留渲染（让配置者知道存在这些分组），但复选框禁用、不可勾选。
  */
-const NON_ASSIGNABLE_TOOL_GROUPS = new Set(["交互终端工具", "子Agent工具"]);
+export const NON_ASSIGNABLE_TOOL_GROUPS = new Set(["交互终端工具", "子Agent工具", "配置生成工具"]);
 
 function ErrorNotice({ message }: { message: string | null }) {
   if (!message) return null;
@@ -118,7 +118,7 @@ function toAgentModelOption(model: ModelCatalogModel): ModelOption {
   };
 }
 
-function AgentModelSelector({
+export function AgentModelSelector({
   modelConfigId,
   onChange,
 }: {
@@ -175,7 +175,7 @@ function AgentModelSelector({
   );
 }
 
-function ModelSettingsEditor({
+export function ModelSettingsEditor({
   value,
   onChange,
 }: {

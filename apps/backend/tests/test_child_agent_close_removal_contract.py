@@ -8,7 +8,7 @@
 3. 装配面：``ToolSystem.build_tool_system()`` 的注册清单不含该名字，且「注册集合 =
    规范集合 - 条件跳过的 Web 工具」这一不变式仍然成立。
 4. 兄弟面（对抗）：仍存在的三个 child 工具（send/status/wait）的 ``args_model`` /
-   ``permission`` / ``to_definition()`` 契约，以及 ``CHILD_BANNED_TOOLS`` 不变式未被破坏。
+   ``permission`` / ``to_definition()`` 契约，以及 ``CHILD_DISALLOWED_TOOLS`` 不变式未被破坏。
 
 注明：本文件只做测试与事实固化，不修改任何生产代码。
 """
@@ -31,7 +31,7 @@ import app.core.tools as _tools_pkg
 from app.core.tools.schemas import ALL_TOOL_NAMES, ToolDefinition, ToolName
 from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
-from app.core.tools.tool_handler.child_task.child_agent_create import CHILD_BANNED_TOOLS
+from app.core.tools.tool_handler.child_task.child_agent_create import CHILD_DISALLOWED_TOOLS
 from app.core.tools.tool_handler.child_task.child_agent_send import (
     ChildAgentSendTool,
     build_child_agent_send_definition,
@@ -359,7 +359,7 @@ def test_registry_reads_are_thread_safe(storage: None) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 4. 兄弟面（对抗）：三个 child 工具的契约与 CHILD_BANNED_TOOLS
+# 4. 兄弟面（对抗）：三个 child 工具的契约与 CHILD_DISALLOWED_TOOLS
 # --------------------------------------------------------------------------- #
 
 
@@ -502,21 +502,21 @@ def test_child_wait_timeout_ceiling_vs_tool_level_timeout_documented_gap() -> No
 
 
 def test_child_banned_tools_invariants() -> None:
-    """目的：CHILD_BANNED_TOOLS 非空、无重复、全为 str、是规范名子集且不含已删工具名。
+    """目的：CHILD_DISALLOWED_TOOLS 非空、无重复、全为 str、是规范名子集且不含已删工具名。
 
     潜在缺陷类型：删除 close 后禁用清单残留旧名字（禁用已不存在的工具，或命名失效），
     或误删其它禁用项削弱子 Agent 隔离。
     """
 
-    assert isinstance(CHILD_BANNED_TOOLS, tuple)
-    assert CHILD_BANNED_TOOLS, "CHILD_BANNED_TOOLS 不得为空"
-    assert len(CHILD_BANNED_TOOLS) == len(set(CHILD_BANNED_TOOLS)), "存在重复项"
-    assert all(isinstance(name, str) and name for name in CHILD_BANNED_TOOLS)
-    assert _REMOVED_TOOL_NAME not in CHILD_BANNED_TOOLS
-    assert set(CHILD_BANNED_TOOLS) <= set(ALL_TOOL_NAMES), (
+    assert isinstance(CHILD_DISALLOWED_TOOLS, tuple)
+    assert CHILD_DISALLOWED_TOOLS, "CHILD_DISALLOWED_TOOLS 不得为空"
+    assert len(CHILD_DISALLOWED_TOOLS) == len(set(CHILD_DISALLOWED_TOOLS)), "存在重复项"
+    assert all(isinstance(name, str) and name for name in CHILD_DISALLOWED_TOOLS)
+    assert _REMOVED_TOOL_NAME not in CHILD_DISALLOWED_TOOLS
+    assert set(CHILD_DISALLOWED_TOOLS) <= set(ALL_TOOL_NAMES), (
         "禁用清单含非规范（幽灵/已删）工具名"
     )
-    assert set(CHILD_BANNED_TOOLS) == _EXPECTED_BANNED_TOOLS
+    assert set(CHILD_DISALLOWED_TOOLS) == _EXPECTED_BANNED_TOOLS
 
 
 def test_banned_tools_all_exist_in_live_registry(storage: None) -> None:
@@ -526,7 +526,7 @@ def test_banned_tools_all_exist_in_live_registry(storage: None) -> None:
     """
 
     registered = set(ToolSystem.build_tool_system().registry.get_all_tool_names())
-    unbacked = set(CHILD_BANNED_TOOLS) - registered
+    unbacked = set(CHILD_DISALLOWED_TOOLS) - registered
     assert unbacked <= _CONDITIONALLY_SKIPPED_TOOLS, f"禁用清单指向不存在的工具: {unbacked}"
 
 

@@ -27,4 +27,119 @@ describe("workbench store", () => {
     expect(useWorkbenchStore.getState().panelOpen).toBe(false);
     store.ensureWorkspace(null);
   });
+
+  it("keeps an edited configuration draft when switching workbench tabs", () => {
+    const store = useWorkbenchStore.getState();
+    const draft = {
+      agent_id: "reviewer",
+      role: "代码审查",
+      description: "审查代码质量",
+      system_prompt: "请检查代码并给出结论。",
+      allowed_tool_groups: [],
+      max_steps: 100,
+      model_config_id: null,
+      model_settings: {},
+    };
+    store.ensureWorkspace(9);
+    store.openAgentConfigurationDraftTab({
+      workspaceId: 9,
+      taskId: 601,
+      toolCallId: "tool-call-601",
+      title: "reviewer",
+      draft,
+      scope: "workspace",
+    });
+    store.updateAgentConfigurationDraft("agent-config-draft:tool-call-601", {
+      ...draft,
+      description: "审查 TypeScript 代码质量",
+    });
+    store.setDraftDirty("agent-config-draft:tool-call-601", false);
+    store.openAgentTab({ workspaceId: 9, taskId: 602, title: "另一个 Agent", role: "Tester" });
+    store.activateTab("agent-config-draft:tool-call-601");
+
+    const draftTab = useWorkbenchStore.getState().tabs.find(
+      (tab) => tab.id === "agent-config-draft:tool-call-601",
+    );
+    expect(draftTab?.kind).toBe("agent-configuration-draft");
+    expect(draftTab?.kind === "agent-configuration-draft" && draftTab.draft.description).toBe("审查 TypeScript 代码质量");
+    expect(draftTab?.kind === "agent-configuration-draft" && draftTab.dirty).toBe(false);
+    store.ensureWorkspace(null);
+  });
+
+  it("tracks saved and dismissed draft card state without persistence", () => {
+    const store = useWorkbenchStore.getState();
+    store.ensureWorkspace(10);
+    store.openAgentConfigurationDraftTab({
+      workspaceId: 10,
+      taskId: 701,
+      toolCallId: "tool-call-701",
+      title: "tester",
+      draft: {
+        agent_id: "tester",
+        role: "测试",
+        description: "运行测试",
+        system_prompt: "请运行测试。",
+        allowed_tool_groups: [],
+        max_steps: 100,
+        model_config_id: null,
+        model_settings: {},
+      },
+      scope: "workspace",
+    });
+    store.setDraftDirty("agent-config-draft:tool-call-701", false);
+    expect(useWorkbenchStore.getState().savedDraftToolCallIds).toContain("tool-call-701");
+    store.dismissAgentConfigurationDraft("tool-call-701");
+    expect(useWorkbenchStore.getState().dismissedDraftToolCallIds).toContain("tool-call-701");
+    expect(useWorkbenchStore.getState().tabs).toEqual([]);
+    store.ensureWorkspace(null);
+  });
+
+  it("does not overwrite an open draft and resets saved state when reopening it", () => {
+    const store = useWorkbenchStore.getState();
+    const draft = {
+      agent_id: "writer",
+      role: "文档",
+      description: "编写文档",
+      system_prompt: "请编写文档。",
+      allowed_tool_groups: [],
+      max_steps: 100,
+      model_config_id: null,
+      model_settings: {},
+    };
+    store.ensureWorkspace(11);
+    store.openAgentConfigurationDraftTab({
+      workspaceId: 11,
+      taskId: 801,
+      toolCallId: "tool-call-801",
+      title: "writer",
+      draft,
+      scope: "workspace",
+    });
+    store.updateAgentConfigurationDraft("agent-config-draft:tool-call-801", { ...draft, description: "编写技术文档" });
+    store.openAgentConfigurationDraftTab({
+      workspaceId: 11,
+      taskId: 801,
+      toolCallId: "tool-call-801",
+      title: "writer",
+      draft,
+      scope: "workspace",
+    });
+    let tab = useWorkbenchStore.getState().tabs.find((item) => item.id === "agent-config-draft:tool-call-801");
+    expect(tab?.kind === "agent-configuration-draft" && tab.draft.description).toBe("编写技术文档");
+
+    store.setDraftDirty("agent-config-draft:tool-call-801", false);
+    store.closeTab("agent-config-draft:tool-call-801");
+    store.openAgentConfigurationDraftTab({
+      workspaceId: 11,
+      taskId: 801,
+      toolCallId: "tool-call-801",
+      title: "writer",
+      draft,
+      scope: "workspace",
+    });
+    tab = useWorkbenchStore.getState().tabs.find((item) => item.id === "agent-config-draft:tool-call-801");
+    expect(tab?.kind === "agent-configuration-draft" && tab.dirty).toBe(true);
+    expect(useWorkbenchStore.getState().savedDraftToolCallIds).not.toContain("tool-call-801");
+    store.ensureWorkspace(null);
+  });
 });

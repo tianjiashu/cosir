@@ -15,7 +15,7 @@ type TaskSessionProps = {
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
-  initialBanTools?: string[];
+  initialAllowsTools?: string[];
   workspaceRoot?: string;
   forkAvailable?: boolean;
   forkingRunId?: number | null;
@@ -37,7 +37,7 @@ export function TaskPage({
   initialMessage,
   initialAttachments,
   initialDisabledToolGroups,
-  initialBanTools,
+  initialAllowsTools,
   workspaceRoot,
   forkAvailable,
   forkingRunId,
@@ -133,7 +133,7 @@ export function TaskPage({
           initialMessage={initialMessage}
           initialAttachments={initialAttachments}
           initialDisabledToolGroups={initialDisabledToolGroups}
-          initialBanTools={initialBanTools}
+          initialAllowsTools={initialAllowsTools}
           forkAvailable={forkAvailable ?? loadedTask.fork_available}
           forkingRunId={forkingRunId}
           onForkRun={onForkRun}

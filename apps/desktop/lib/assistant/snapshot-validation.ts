@@ -111,6 +111,16 @@ function validateChildAgentResultDisplayData(data: Record<string, unknown>, path
   if (data.end_reason !== null && typeof data.end_reason !== "string") throw new TransportSnapshotValidationError(`${path}.end_reason`, "字符串或 null");
 }
 
+function validateAgentConfigurationDraftDisplayData(data: Record<string, unknown>, path: string): void {
+  requireExactKeys(data, ["kind", "status", "agent_id", "role", "description", "system_prompt"], path);
+  if (data.status !== "draft") throw new TransportSnapshotValidationError(`${path}.status`, "draft");
+  for (const field of ["agent_id", "role", "description", "system_prompt"]) {
+    if (typeof data[field] !== "string" || data[field].trim() === "") {
+      throw new TransportSnapshotValidationError(`${path}.${field}`, "非空字符串");
+    }
+  }
+}
+
 function validateDisplayData(value: unknown, path: string): void {
   if (value === null || value === undefined) return;
   const data = requireRecord(value, path);
@@ -118,6 +128,7 @@ function validateDisplayData(value: unknown, path: string): void {
   if (data.kind === "delegation-result") validateDelegationDisplayData(data, path);
   if (data.kind === "child-agent-wait-result") validateChildWaitDisplayData(data, path);
   if (data.kind === "child-agent-result") validateChildAgentResultDisplayData(data, path);
+  if (data.kind === "agent-configuration-draft") validateAgentConfigurationDraftDisplayData(data, path);
 }
 
 const USAGE_KEYS = [

@@ -215,8 +215,8 @@ export function NewConversation({
         imageAttachments: sendAttachments
           .filter((attachment) => attachment.kind === "image")
           .map((attachment) => ({ file: attachment.file, name: attachment.name })),
-        banTools: toolGroups
-          .filter(({ group }) => selectedToolGroups.includes(group))
+        allowsTools: toolGroups
+          .filter(({ group }) => !selectedToolGroups.includes(group))
           .flatMap(({ tools }) => tools.map(({ name }) => name)),
         modelConfigId: selection.modelConfigId,
         reasoningEffort: selection.reasoningEffort ?? null,

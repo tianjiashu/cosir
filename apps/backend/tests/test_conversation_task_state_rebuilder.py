@@ -394,7 +394,7 @@ def test_blank_file_path_is_rejected() -> None:
                         "path": "   ",
                     }
                 ],
-                "ban_tools": [],
+                "allows_tools": [],
                 "reasoning_effort": None,
             }
         )

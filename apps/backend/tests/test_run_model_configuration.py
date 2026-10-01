@@ -56,7 +56,7 @@ def test_run_extra_serializes_explicit_reasoning_effort_without_capability_snaps
     assert extra.to_dict() == {
         "display_text": "hello",
         "attachments": [],
-        "ban_tools": [],
+        "allows_tools": None,
         "reasoning_effort": "low",
     }
     assert ConversationRunExtra.from_dict(extra.to_dict()) == extra

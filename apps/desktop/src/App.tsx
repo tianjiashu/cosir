@@ -16,7 +16,7 @@ type TaskRouteState = {
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
-  initialBanTools?: string[];
+  initialAllowsTools?: string[];
 };
 
 function TaskRoute() {
@@ -51,7 +51,7 @@ function TaskRoute() {
         initialMessage={routeState?.initialMessage}
         initialAttachments={routeState?.initialAttachments}
         initialDisabledToolGroups={routeState?.initialDisabledToolGroups}
-        initialBanTools={routeState?.initialBanTools}
+        initialAllowsTools={routeState?.initialAllowsTools}
       />
     : <div className="p-6 text-sm">任务标识无效。</div>;
 }

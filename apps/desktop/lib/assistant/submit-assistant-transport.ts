@@ -13,9 +13,10 @@ export type SubmitAssistantTransportInput = {
   commandId: string;
   text: string;
   imageAttachments: readonly NewConversationImageAttachment[];
-  banTools: readonly string[];
+  allowsTools: readonly string[];
   modelConfigId: number;
   reasoningEffort: string | null;
+  proposeAgentConfiguration?: boolean;
 };
 
 export class AssistantTransportProtocolError extends Error {
@@ -69,10 +70,15 @@ export async function submitAssistantTransport(
         command,
         {
           type: "custom",
-          name: "ban-tools",
-          commandId: `${input.commandId}-ban-tools`,
-          payload: { ban_tools: [...input.banTools] },
+          name: "allows-tools",
+          commandId: `${input.commandId}-allows-tools`,
+          payload: { allows_tools: [...input.allowsTools] },
         },
+        ...(input.proposeAgentConfiguration ? [{
+          type: "custom",
+          name: "propose-agent-configuration",
+          commandId: `${input.commandId}-agent-configuration-proposal`,
+        }] : []),
       ],
     }),
   });

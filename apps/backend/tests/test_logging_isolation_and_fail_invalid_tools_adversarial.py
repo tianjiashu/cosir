@@ -395,6 +395,7 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
 
     operations = SimpleNamespace(
         model_tools=[SimpleNamespace(name="read_file", display=None)],
+        allows_tools=frozenset({"read_file"}),
         # model 节点按 task 维度取延迟系统消息队列，故桩需暴露 get_current_task。
         get_current_task=lambda: SimpleNamespace(id=1),
         get_current_run=lambda: SimpleNamespace(task_id=1, id=2),
@@ -407,7 +408,7 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
         model=SimpleNamespace(astream=_astream),
         workspace_id=1,
         thinking_channel="",
-        # model 节点读 run.extra.ban_tools 构造禁用工具集；无禁用工具时 extra 为 None。
+        # model 节点读 WorkflowOperations.allows_tools 构造生命周期允许集合。
         run=SimpleNamespace(task_id=1, id=2, extra=None),
         usage_stats=SimpleNamespace(add_usage_metadata=lambda m: None, to_dict=lambda: {}),
     )
