@@ -1,23 +1,11 @@
-"""Assistant Transport command for selecting tools unavailable in one Run."""
-
+"""Assistant Transport 的 Run 工具禁用集合命令。"""
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
 
 class BanToolsPayload(BaseModel):
-    """Validated tool-name selection carried by ``BanToolsCommand``.
-
-    ``ban_tools`` may be empty to preserve the default where every tool remains available.
-    Names must be unique, nonblank strings; availability against the current main-agent catalog
-    is checked by the transport service after request parsing.
-
-    Raises:
-        ValidationError: When a name is blank, duplicated, or not a string.
-
-    Side effects:
-        None. This model only validates and stores the request payload.
-    """
+    """校验本次 Run 由用户禁用的工具名集合。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -25,44 +13,18 @@ class BanToolsPayload(BaseModel):
 
     @field_validator("ban_tools")
     @classmethod
-    def validate_tool_names(cls, names: list[str]) -> list[str]:
-        """Reject blank or duplicate names while allowing an empty selection.
+    def validate_unique_names(cls, value: list[str]) -> list[str]:
+        """拒绝空工具名和重复工具名，保持 payload 的确定性。"""
 
-        Args:
-            names: Strict string tool names parsed from the request.
-
-        Returns:
-            The unchanged validated list.
-
-        Raises:
-            ValueError: If a name is blank or appears more than once. Pydantic reports this as
-                a request validation error.
-
-        Side effects:
-            None.
-        """
-
-        if any(not name.strip() for name in names):
+        if any(not name.strip() for name in value):
             raise ValueError("ban_tools entries must not be blank")
-        if len(names) != len(set(names)):
+        if len(value) != len(set(value)):
             raise ValueError("ban_tools entries must be unique")
-        return names
+        return value
 
 
 class BanToolsCommand(BaseModel):
-    """Assistant UI custom command that configures disabled tools for one Run.
-
-    This schema preserves the wire shape ``type="custom"``, ``name="ban-tools"`` and a typed
-    ``payload``. It validates command identity and payload shape only; the transport service
-    validates tool names against the current main-agent catalog and persists them in Run Extra.
-
-    Raises:
-        ValidationError: When the wire discriminator, command name, command ID, or payload is
-            malformed.
-
-    Side effects:
-        None. Persistence and catalog lookup belong to the transport service.
-    """
+    """为单个新 Run 传递用户禁用的工具名集合。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -70,3 +32,6 @@ class BanToolsCommand(BaseModel):
     commandId: str = Field(min_length=1, max_length=128)
     name: Literal["ban-tools"]
     payload: BanToolsPayload
+
+
+__all__ = ["BanToolsCommand", "BanToolsPayload"]
