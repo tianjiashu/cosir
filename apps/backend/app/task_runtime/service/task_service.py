@@ -12,13 +12,17 @@
 """
 
 import asyncio
+import copy
 from contextlib import ExitStack
 from dataclasses import dataclass
 
 from sqlalchemy.orm.session import Session
 
+from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.constant import Constant
 from app.config.logging.logger import log
+from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.tools.schemas.tool_names import TOOL_PROPOSE_AGENT_CONFIGURATION
 from app.models import ConversationRunRecord, TaskRecord
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
@@ -84,6 +88,36 @@ class TaskService:
         extra: dict[str, object] | None = None,
         tool_definitions: list[dict[str, object]] | None = None,
     ) -> TaskRecord:
+        """创建新 Task 或读取已有 Task，并在新建时固化工具 schema。
+
+        新建用户 Task 且未显式提供 ``tool_definitions`` 时，从系统作用域的主 Agent
+        profile 与进程级 ToolSystem 生成固定 schema；委派子 Agent 等调用方可以显式传入
+        已筛选的 schema。已有 Task 只读取持久化记录，不重新根据当前 profile 改写工具集合。
+
+        参数:
+            workspace_id: 所属工作区标识。
+            title: Task 标题。
+            task_id: 已有 Task 标识；非空时只执行读取。
+            creation_command_id: provisional Task 的创建命令标识。
+            task_type: Task 类型。
+            parent_task_id: 委派子 Task 的父 Task 标识。
+            parent_run_id: 委派子 Task 的父 Run 标识。
+            session: 可选的外部数据库事务会话。
+            extra: Task 扩展 JSON。
+            tool_definitions: 已筛选的固定模型工具 schema；新建时为空则从主 Agent 生成。
+
+        返回:
+            新建或读取的 ``TaskRecord``。
+
+        异常:
+            RuntimeError: 主 Agent/ToolSystem 尚未完成装配，或已固化 schema 无法生成。
+            KeyError: 读取不存在的已有 Task。
+
+        副作用:
+            新建路径向 ``tasks.tool_definitions`` 写入 schema；已有 Task 路径只初始化运行时
+            space 并读取，不修改数据库。
+        """
+
         if workspace_id is None:
             raise ValueError("workspace_id is None")
 
@@ -93,7 +127,7 @@ class TaskService:
                 if tool_definitions is None
                 else tool_definitions
             )
-            return self._task.create(
+            task = self._task.create(
                 workspace_id=workspace_id,
                 title=title,
                 task_type=task_type,
@@ -104,6 +138,18 @@ class TaskService:
                 tool_definitions=frozen_tools,
                 session=session,
             )
+            log.info(
+                "task_tool_definitions_frozen",
+                extra={
+                    "msg": "Task 创建时已固化主 Agent 工具 schema",
+                    "data": {
+                        "task_id": task.id,
+                        "task_type": task_type,
+                        "tool_count": len(frozen_tools),
+                    },
+                },
+            )
+            return task
         task_runtime_spaces.get_or_create(task_id)
         return self._task.get(task_id)
 

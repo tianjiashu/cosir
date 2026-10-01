@@ -9,11 +9,14 @@
 - 不负责：直接 SQL 操作（委托给 ``WorkspaceCrud``/``TaskCrud``）；单任务粒度的级联删除细节
   （委托给 ``TaskService``）。
 """
-
+import copy
 from contextlib import ExitStack
 from pathlib import Path
 
+from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
+from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.tools.schemas import TOOL_PROPOSE_AGENT_CONFIGURATION
 from app.models import TaskRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
@@ -252,9 +255,42 @@ class WorkspaceService:
                     workspace_id,
                     title,
                     creation_command_id=creation_command_id,
+                    tool_definitions=self._main_agent_tool_definitions()
                 )
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc
+
+
+    def _main_agent_tool_definitions(self) -> list[dict[str, object]]:
+        """从主 Agent profile 固化新 Task 的模型工具 schema。
+
+        主 Agent Task 创建时读取系统作用域中的 ``main_agent`` profile，并从当前
+        ``ToolSystem`` 注册的定义中筛选 ``allowed_tools``。配置提案工具虽然不是主 Agent
+        的常驻 allowed_tools，但其 schema 必须随 Task 一并固化，供用户显式开启提案 Run；
+        普通 Run 是否实际允许它由运行时的 ``allows_tools`` 决定。
+
+        返回:
+            按 ToolSystem 注册顺序排列、与运行时模型 schema 同源的独立 JSON 字典列表。
+
+        异常:
+            RuntimeError: Agent registry、ToolSystem 或主 Agent profile 尚未完成应用装配。
+
+        副作用:
+            无；只读取进程级 Agent/Tool 装配结果并深拷贝 schema，不写数据库。调用方随后
+            将返回值作为 Task 创建事务的一部分写入 ``TaskModel.tool_definitions``。
+        """
+
+        profile = get_agent_registry().resolve(
+            AgentProfileRegistry.SYSTEM_WORKSPACE,
+            "main_agent",
+        )
+        if profile is None:
+            raise RuntimeError("main agent profile is unavailable")
+
+        registered_tools = get_tool_system().executor.list_tools()
+        selected_tools = profile.select_tools(registered_tools)
+
+        return [copy.deepcopy(tool.to_model_tool_definition()) for tool in selected_tools]
 
     def delete_workspace(self, workspace_id: int) -> None:
         """在单个事务内原子删除 workspace 及其全部 task 产物。
