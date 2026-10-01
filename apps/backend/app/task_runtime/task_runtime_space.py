@@ -39,7 +39,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from queue import Empty, SimpleQueue
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from langchain_core.messages import SystemMessage
 
@@ -99,13 +99,31 @@ class TaskRuntimeSpace:
     current_workspace: WorkspaceRecord = None
     current_task: TaskRecord = None
 
+    @property
+    def task_tool_definitions(self) -> tuple[dict[str, Any], ...]:
+        """返回 Task 创建时固化的模型工具 schema 快照。
+
+        返回:
+            不可替换且与 TaskRecord 脱离的 schema 元组；嵌套 JSON 值已经深拷贝，调用方可以
+            将其传给模型绑定逻辑而不修改 TaskRecord 工作副本。
+
+        异常:
+            ValueError: Task 记录中的 schema 缺少合法工具名时抛出，表示持久化事实损坏。
+
+        副作用:
+            无；该属性只读当前 Task 记录，不读取数据库，也不修改运行时状态。
+        """
+        return tuple(copy.deepcopy(self.current_task.tool_definitions or []))
+
     def __post_init__(self) -> None:
         """初始化统一执行闸门与 context manager 槽位锁。"""
 
         self.lock = threading.Lock()
         self._context_guard = threading.Lock()
         self.current_task = get_task_service().get_task(self.task_id)
-        self.current_workspace = get_workspace_service().get_workspace(self.current_task.workspace_id)
+        self.current_workspace = get_workspace_service().get_workspace(
+            self.current_task.workspace_id
+        )
 
     def _acquire_lock(self, timeout: float | None) -> bool:
         """在同步线程中取得 Task 操作闸门。"""
