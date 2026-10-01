@@ -67,13 +67,13 @@ export type WorkspaceFileIgnoreConfiguration = {
 
 export type EnvironmentField = {
   name: string;
-  type: "string" | "boolean";
+  type: "string" | "boolean" | "integer";
   component: "input" | "password" | "checkbox" | "select";
   label: string;
   secret: boolean;
-  default: string | boolean | null;
-  value: string | boolean | null;
-  disk_value: string | boolean | null;
+  default: string | number | boolean | null;
+  value: string | number | boolean | null;
+  disk_value: string | number | boolean | null;
   configured: boolean;
   masked: boolean;
   source: "process" | "file" | "default";
@@ -81,6 +81,8 @@ export type EnvironmentField = {
   options: Array<{ value: string; label: string }>;
   placeholder: string | null;
   clearable: boolean;
+  minimum: number | null;
+  maximum: number | null;
 };
 
 export type EnvironmentGroup = {

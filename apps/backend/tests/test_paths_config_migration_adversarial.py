@@ -40,9 +40,14 @@ def _reset_paths() -> None:
 
 
 def _expected_default_data_dir() -> Path:
-    """返回当前平台未注入环境变量时的数据根预期。"""
+    """返回当前平台未注入环境变量时的数据根预期（仅受支持平台有合法值）。"""
 
-    return Path.home() if sys.platform in {"darwin", "win32"} else paths.repository_root()
+    if sys.platform in {"darwin", "win32"}:
+        return Path.home()
+    raise AssertionError(
+        f"测试运行于不受支持的平台 {sys.platform}；"
+        "未注入 CODING_AGENT_DATA_DIR 时不应解析数据根"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -67,13 +72,6 @@ def test_default_constants_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
         assert data_root / ".cosir" / "runtime" == paths.RUNTIME_DIR
     finally:
         _reset_paths()
-
-
-def test_repository_root_points_to_repo(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 目的：repository_root() 上溯四级应命中仓库根（含 apps 与 .git 之类锚点）。
-    # 潜在缺陷：上溯层级错位。
-    root = paths.repository_root()
-    assert (root / "apps").is_dir() or (root / ".git").exists(), root
 
 
 # ---------------------------------------------------------------------------
@@ -512,11 +510,10 @@ def _restore_paths_after_each() -> None:
 
 
 def test_all_exports_cover_derivers_plus_helpers() -> None:
-    # 目的：__all__ 应恰好等于推导表键 + {override, repository_root, reset}。
+    # 目的：__all__ 应恰好等于推导表键 + {override, reset}。
     # 潜在缺陷：__all__ 手抄漂移致缺失/多余导出。
     assert set(paths.__all__) == set(paths._DERIVERS) | {
         "override",
-        "repository_root",
         "reset",
     }
 

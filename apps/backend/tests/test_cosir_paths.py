@@ -111,15 +111,14 @@ def test_paths_reset_without_data_dir_uses_user_home_on_desktop_platforms(
         paths.reset()
 
 
-def test_paths_reset_without_data_dir_uses_repository_root_on_other_platforms(
+def test_paths_reset_without_data_dir_raises_on_unsupported_platforms(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """非桌面平台未注入数据根时继续回落到仓库根目录。"""
+    """非桌面平台未注入数据根时，路径解析必须失败而非静默回落。"""
 
     monkeypatch.delenv("CODING_AGENT_DATA_DIR", raising=False)
     monkeypatch.setattr(paths.sys, "platform", "linux")
-    try:
+    with pytest.raises(RuntimeError):
         paths.reset()
-        assert paths.repository_root() == paths.DATA_DIR
-    finally:
-        paths.reset()
+    monkeypatch.undo()
+    paths.reset()

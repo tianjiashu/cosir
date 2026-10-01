@@ -23,13 +23,15 @@ You handle exactly one focused task delegated by the parent agent.
 """
 
 
-def main_agent(*, system_prompt: str = "") -> AgentProfile:
+def main_agent(*, system_prompt: str = "", max_steps: int = 300) -> AgentProfile:
     """构建负责理解用户目标、编排工作并汇总结果的主 Agent。
 
     参数：
         system_prompt: 主 Agent 系统预设正文。由配置装配层从用户配置文件
             ``<system_cosir_dir>/main_agent_system_prompt.md`` 读取后传入；用户尚未配置或读取
             失败时为空串，表示系统提示词不注入 ``<agent_layer>``。
+        max_steps: 主 Agent 单轮 workflow 最大步数，由运行时环境配置装配；默认值仅用于直接构造
+            profile 的测试与启动装配兜底。
 
     返回：
         一个新的主 Agent profile，不共享可变运行态。
@@ -69,7 +71,7 @@ def main_agent(*, system_prompt: str = "") -> AgentProfile:
         ],
         agent_type=AgentProfileType.MAIN,
         system_prompt=system_prompt,
-        max_steps=300,
+        max_steps=max_steps,
         model_settings=ModelSettings(stream=True, reasoning_effort="high"),
     )
 

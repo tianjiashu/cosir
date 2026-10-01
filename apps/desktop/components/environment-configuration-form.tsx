@@ -79,7 +79,9 @@ export function EnvironmentFieldControl({
             <Input
               id={inputId}
               className="h-9"
-              type={field.component === "password" ? "password" : "text"}
+              type={field.component === "password" ? "password" : field.type === "integer" ? "number" : "text"}
+              min={field.minimum ?? undefined}
+              max={field.maximum ?? undefined}
               value={String(value ?? "")}
               placeholder={field.secret && field.masked ? "已配置（留空保持不变）" : field.placeholder ?? "未配置"}
               onChange={(event) => onChange(event.target.value)}

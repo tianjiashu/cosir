@@ -9,11 +9,13 @@ from fastapi.testclient import TestClient
 from app.api.configuration import main_agent_prompt as main_agent_prompt_api
 from app.api.schemas.request.MainAgentPromptUpdateRequest import MainAgentPromptUpdateRequest
 from app.app import app
+from app.config import configuration
 from app.config.configuration import build_agent_registry
 from app.config.constant import Constant
 from app.core.agents import agent_profile_config
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.agents.define_agents import main_agent
 from app.service.configuration.main_agent_prompt_configuration_service import (
     MainAgentPromptConfigurationError,
     MainAgentPromptConfigurationService,
@@ -82,6 +84,32 @@ def test_build_agent_registry_uses_configured_main_prompt() -> None:
     assert profile.agent_type is AgentProfileType.MAIN
 
 
+def test_build_agent_registry_uses_configured_main_max_steps() -> None:
+    """Registry 装配应把环境层传入的主 Agent 步数写入 profile。"""
+
+    registry = build_agent_registry(main_agent_max_steps=17)
+    profile = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
+
+    assert profile is not None
+    assert profile.max_steps == 17
+
+
+def test_replace_main_agent_profile_preserves_prompt_when_budget_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """重载预算时应只替换 max_steps，并保留当前主 Agent prompt。"""
+
+    registry = build_agent_registry("当前协议", main_agent_max_steps=17)
+    monkeypatch.setattr(configuration, "_AGENT_REGISTRY", registry)
+
+    replacement = configuration.replace_main_agent_profile(max_steps=42)
+
+    assert replacement.system_prompt == "当前协议"
+    assert replacement.max_steps == 42
+    current = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
+    assert current is replacement
+
+
 def test_update_api_replaces_registry_profile_after_file_save(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -93,13 +121,23 @@ def test_update_api_replaces_registry_profile_after_file_save(
         path=target,
         root=target.parent,
     )
-    registry = build_agent_registry("旧协议")
+    registry = build_agent_registry("旧协议", main_agent_max_steps=17)
     monkeypatch.setattr(
         main_agent_prompt_api,
         "MainAgentPromptConfigurationService",
         lambda: service,
     )
-    monkeypatch.setattr(main_agent_prompt_api, "get_agent_registry", lambda: registry)
+    monkeypatch.setattr(
+        main_agent_prompt_api,
+        "replace_main_agent_profile",
+        lambda *, system_prompt=None, max_steps=None: registry.replace(
+            AgentProfileRegistry.SYSTEM_WORKSPACE,
+            main_agent(
+                system_prompt=system_prompt or "",
+                max_steps=profile_max_steps(registry, max_steps),
+            ),
+        ),
+    )
 
     response = asyncio.run(
         main_agent_prompt_api.update_main_agent_prompt_configuration(
@@ -112,6 +150,7 @@ def test_update_api_replaces_registry_profile_after_file_save(
     assert target.read_text(encoding="utf-8") == "新协议"
     assert profile is not None
     assert profile.system_prompt == "新协议"
+    assert profile.max_steps == 17
 
 
 def test_update_api_is_registered_as_http_endpoint(
@@ -125,13 +164,23 @@ def test_update_api_is_registered_as_http_endpoint(
         path=target,
         root=target.parent,
     )
-    registry = build_agent_registry("旧协议")
+    registry = build_agent_registry("旧协议", main_agent_max_steps=17)
     monkeypatch.setattr(
         main_agent_prompt_api,
         "MainAgentPromptConfigurationService",
         lambda: service,
     )
-    monkeypatch.setattr(main_agent_prompt_api, "get_agent_registry", lambda: registry)
+    monkeypatch.setattr(
+        main_agent_prompt_api,
+        "replace_main_agent_profile",
+        lambda *, system_prompt=None, max_steps=None: registry.replace(
+            AgentProfileRegistry.SYSTEM_WORKSPACE,
+            main_agent(
+                system_prompt=system_prompt or "",
+                max_steps=profile_max_steps(registry, max_steps),
+            ),
+        ),
+    )
 
     response = TestClient(app).put(
         "/configuration/main-agent-prompt",
@@ -140,3 +189,13 @@ def test_update_api_is_registered_as_http_endpoint(
 
     assert response.status_code == 200
     assert response.json()["content"] == "HTTP 新协议"
+
+
+def profile_max_steps(registry: AgentProfileRegistry, max_steps: int | None) -> int:
+    """返回测试替身应沿用的主 Agent 步数。"""
+
+    if max_steps is not None:
+        return max_steps
+    profile = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
+    assert profile is not None
+    return profile.max_steps

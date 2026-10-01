@@ -18,11 +18,18 @@
   统一管理。本模块均不持有，避免 ``config`` 层耦合 service / core 装配。
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from app.core.agents.agent_profile_registry import (
     AgentProfileRegistry,
 )
 from app.core.tools import ToolSystem
 from app.core.tools.tool_registry import ToolRegistry
+
+if TYPE_CHECKING:
+    from app.core.agents.agent_profile import AgentProfile
 
 _AGENT_REGISTRY: AgentProfileRegistry | None = None
 _TOOL_SYSTEM: ToolSystem | None = None
@@ -69,7 +76,11 @@ def get_agent_registry() -> AgentProfileRegistry:
     return _AGENT_REGISTRY
 
 
-def build_agent_registry(main_agent_system_prompt: str = "") -> AgentProfileRegistry:
+def build_agent_registry(
+    main_agent_system_prompt: str = "",
+    *,
+    main_agent_max_steps: int = 300,
+) -> AgentProfileRegistry:
     """构建只包含代码内置 profile 的进程级 Registry。
 
     内置 agent 构造器在本地延迟导入（``app.core.agents.define_agents`` 在模块级又会
@@ -79,6 +90,7 @@ def build_agent_registry(main_agent_system_prompt: str = "") -> AgentProfileRegi
 
     通用子 Agent 和主 Agent 由代码构造并注册到 `system` 作用域；主 Agent prompt 由系统配置
     service 从用户文件读取后注入，用户尚未配置时传空串（主 Agent 不生成 ``<agent_layer>``）。
+    主 Agent 的 ``max_steps`` 由装配层传入，默认值与 ``Settings`` 的默认配置一致。
     系统与 workspace JSON 由生命周期启动阶段一次性读取到同一个 Registry。
 
     返回:
@@ -101,9 +113,48 @@ def build_agent_registry(main_agent_system_prompt: str = "") -> AgentProfileRegi
     )
 
     registry = AgentProfileRegistry()
-    for profile in (general_child_agent(), main_agent(system_prompt=main_agent_system_prompt)):
+    for profile in (
+        general_child_agent(),
+        main_agent(system_prompt=main_agent_system_prompt, max_steps=main_agent_max_steps),
+    ):
         registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, profile)
     return registry
+
+
+def replace_main_agent_profile(
+    *,
+    system_prompt: str | None = None,
+    max_steps: int | None = None,
+) -> AgentProfile:
+    """按当前 Registry profile 重建并替换主 Agent。
+
+    参数:
+        system_prompt: 新的主 Agent prompt；为 ``None`` 时保留当前正文。
+        max_steps: 新的单轮最大步数；为 ``None`` 时保留当前预算。
+
+    返回:
+        已替换进 Registry 的新主 Agent profile。
+
+    异常:
+        RuntimeError: Registry 未初始化，或其中不存在主 Agent profile。
+
+    副作用:
+        原子替换进程级 Registry 中的主 Agent profile。已经从旧 profile 派生的 Run 不受影响，
+        后续从 Registry 解析 profile 的新 Run 使用新配置。
+    """
+
+    from app.core.agents.define_agents import main_agent
+
+    registry = get_agent_registry()
+    current = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
+    if current is None:
+        raise RuntimeError("main agent profile is unavailable")
+    replacement = main_agent(
+        system_prompt=current.system_prompt if system_prompt is None else system_prompt,
+        max_steps=current.max_steps if max_steps is None else max_steps,
+    )
+    registry.replace(AgentProfileRegistry.SYSTEM_WORKSPACE, replacement)
+    return replacement
 
 
 def set_tool_system(tool_system: ToolSystem) -> None:

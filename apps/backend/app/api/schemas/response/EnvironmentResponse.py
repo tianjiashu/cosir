@@ -24,13 +24,13 @@ class EnvironmentFieldResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    type: Literal["string", "boolean"]
+    type: Literal["string", "boolean", "integer"]
     component: Literal["input", "password", "checkbox", "select"]
     label: str
     secret: bool
-    default: str | bool | None
-    value: str | bool | None
-    disk_value: str | bool | None
+    default: str | int | bool | None
+    value: str | int | bool | None
+    disk_value: str | int | bool | None
     configured: bool
     masked: bool
     source: Literal["process", "file", "default"]
@@ -38,6 +38,8 @@ class EnvironmentFieldResponse(BaseModel):
     options: list[EnvironmentOptionResponse]
     placeholder: str | None
     clearable: bool
+    minimum: int | None
+    maximum: int | None
 
 
 class EnvironmentGroupResponse(BaseModel):

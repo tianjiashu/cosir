@@ -3,7 +3,7 @@
 本模块是后端进程固定路径的唯一事实源。桌面宿主把系统级数据根通过
 ``CODING_AGENT_DATA_DIR`` 注入；macOS/Windows 使用用户主目录，后端再把所有运行期数据统一
 放入该根目录下的 ``.cosir`` 子目录。直接运行后端时，macOS/Windows 同样使用用户主目录，
-其他平台回落到仓库根目录。
+其他平台必须由桌面宿主注入 ``CODING_AGENT_DATA_DIR``，否则启动期路径解析失败。
 
 路径布局：
 
@@ -38,12 +38,6 @@ _CHECKPOINT_FILE_NAME: Final[str] = "langgraph_checkpoints.sqlite"
 LOG_FILE_NAME: Final[str] = "backend.log"
 
 
-def repository_root() -> Path:
-    """返回仓库根目录绝对路径。"""
-
-    return Path(__file__).resolve().parents[4]
-
-
 def _env_path(name: str) -> Path | None:
     """读取并规范化路径环境变量。
 
@@ -61,8 +55,9 @@ def _resolve_data_dir() -> Path:
     """解析系统应用数据根。
 
     桌面模式使用 Tauri 注入的 ``CODING_AGENT_DATA_DIR``；直接运行后端时，macOS 与
-    Windows 使用当前用户主目录，其他平台使用仓库根目录。``.cosir`` 子目录由本模块
-    统一追加，不允许日志、数据库或 checkpoint 各自选择根目录。
+    Windows 使用当前用户主目录。其他平台不支持未注入数据根的运行方式：必须由桌面宿主注入
+    ``CODING_AGENT_DATA_DIR``，否则抛出异常。``.cosir`` 子目录由本模块统一追加，不允许
+    日志、数据库或 checkpoint 各自选择根目录。
     """
 
     configured = _env_path("CODING_AGENT_DATA_DIR")
@@ -70,7 +65,10 @@ def _resolve_data_dir() -> Path:
         return configured
     if sys.platform in {"darwin", "win32"}:
         return Path.home()
-    return repository_root()
+    raise RuntimeError(
+        "未设置 CODING_AGENT_DATA_DIR 且当前平台不是 macOS/Windows；"
+        "请由桌面宿主注入 CODING_AGENT_DATA_DIR，或在受支持的平台运行后端。"
+    )
 
 
 def _data_dir(data_dir: Path) -> Path:
@@ -165,4 +163,4 @@ def override(**kwargs: Any) -> None:
     globals().update(kwargs)
 
 
-__all__ = [*_DERIVERS, "override", "repository_root", "reset"]
+__all__ = [*_DERIVERS, "override", "reset"]

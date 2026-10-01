@@ -20,14 +20,14 @@ from typing import Any
 
 from dotenv import dotenv_values
 
-from app.config.logging.logger import log
-from app.config.settings import Settings
-from app.models.environment.environment_change import EnvironmentChange
-from app.models.environment.environment_field import EnvironmentField
 from app.config.environment_field_catalog import (
     ENVIRONMENT_FIELDS,
     ENVIRONMENT_GROUPS,
 )
+from app.config.logging.logger import log
+from app.config.settings import Settings
+from app.models.environment.environment_change import EnvironmentChange
+from app.models.environment.environment_field import EnvironmentField
 from app.service.configuration.file_store import ConfigurationFileStore
 from app.utils.cosir_paths import system_cosir_dir, system_env_file
 
@@ -114,6 +114,8 @@ class EnvironmentConfigurationService:
                     "options": [{"value": value, "label": label} for value, label in options],
                     "placeholder": field.placeholder,
                     "clearable": field.clearable,
+                    "minimum": field.minimum,
+                    "maximum": field.maximum,
                 }
             )
         return result
@@ -206,25 +208,29 @@ class EnvironmentConfigurationService:
     def reload_runtime_settings() -> None:
         """重新加载当前后端进程的系统环境配置，并重装配受其影响的进程级组件。
 
-        先经运行时配置的唯一加载入口 ``Settings.load`` 刷新 ``Settings`` 与进程环境，再重建工具
-        系统并刷新运行时持有的执行器：工具是否注册在工具系统装配期按当时的 ``Settings`` 判定
-        （Web 工具要求本地已配置 Provider 凭证），不重建则新配置对后续 Run 不生效。
+        先经运行时配置的唯一加载入口 ``Settings.load`` 刷新 ``Settings`` 与进程环境，再用新值
+        替换 Registry 中的主 Agent profile。主 Agent 的 ``max_steps`` 属于 profile 配置，不能
+        只更新 ``Settings``；否则 Registry 仍会继续向后续 Run 提供旧值。
 
-        不重建 Agent Registry：它只由 Agent profile 文件决定，与环境配置无关。
+        只替换共享 Registry 中的 profile，不改动已经派生出 per-run profile 或 workflow state 的
+        执行过程，因此新 ``max_steps`` 只对下一轮新建 Run 生效。
 
         返回:
             无。
 
         异常:
             OSError / ValueError: 配置文件读取失败或配置值无法解析，交由 API 层映射为配置错误。
-            RuntimeError: 工具系统或运行时尚未装配时抛出（配置早于装配完成时才会出现）。
+            RuntimeError: Agent Registry 尚未装配时抛出（配置早于应用启动完成时才会出现）。
 
         副作用:
-            重新读取系统 `.env`，更新 ``Settings`` 类级字段与派生路径，替换进程级工具系统单例，
-            并刷新运行时执行器引用；不改动运行中的 Run。
+            重新读取系统 `.env`，更新 ``Settings`` 类级字段与派生路径，并替换进程级主 Agent
+            profile；不改动运行中的 Run。
         """
 
         Settings.load()
+        from app.config.configuration import replace_main_agent_profile
+
+        replace_main_agent_profile(max_steps=Settings.MAIN_AGENT_MAX_STEPS)
 
     @staticmethod
     def _validate_value(field: EnvironmentField, value: Any) -> str:
@@ -243,6 +249,18 @@ class EnvironmentConfigurationService:
             }:
                 return value.strip().lower()
             raise EnvironmentConfigurationError(f"{field.name} 必须是布尔值")
+        if field.value_type == "integer":
+            if isinstance(value, bool) or not isinstance(value, str | int):
+                raise EnvironmentConfigurationError(f"{field.name} 必须是整数")
+            try:
+                parsed = int(str(value).strip())
+            except ValueError as exc:
+                raise EnvironmentConfigurationError(f"{field.name} 必须是整数") from exc
+            if field.minimum is not None and parsed < field.minimum:
+                raise EnvironmentConfigurationError(f"{field.name} 不能小于 {field.minimum}")
+            if field.maximum is not None and parsed > field.maximum:
+                raise EnvironmentConfigurationError(f"{field.name} 不能大于 {field.maximum}")
+            return str(parsed)
         if not isinstance(value, str):
             raise EnvironmentConfigurationError(f"{field.name} 必须是字符串")
         if field.component == "select" and value not in {option for option, _ in field.options}:

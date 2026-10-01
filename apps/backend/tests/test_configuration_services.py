@@ -365,6 +365,15 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
     langfuse = next(group for group in groups if group["id"] == "langfuse")
     response = EnvironmentResponse(groups=groups)
     assert response.groups[0].fields[0].name == "DEFAULT_LANGUAGE"
+    max_steps = next(
+        field
+        for group in response.groups
+        for field in group.fields
+        if field.name == "MAIN_AGENT_MAX_STEPS"
+    )
+    assert max_steps.type == "integer"
+    assert max_steps.value == 300
+    assert max_steps.minimum == 1
     assert [field["name"] for field in langfuse["fields"]] == [
         "LANGFUSE_ENABLED",
         "LANGFUSE_PUBLIC_KEY",
@@ -450,11 +459,32 @@ def test_web_provider_selection_is_not_env_overridable(
     assert Settings.WEB_EXTRACT_BACKEND == ""
 
 
+def test_settings_loads_main_agent_max_steps_from_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settings.load 应把主 Agent 步数解析为正整数，并拒绝非法值。"""
+
+    monkeypatch.setattr("app.config.settings.paths.env_file", lambda: tmp_path / "absent.env")
+    monkeypatch.setattr("app.config.settings.paths.reset", lambda: None)
+    monkeypatch.setattr(Settings, "_LOADED_ENV_VALUES", {})
+    monkeypatch.setattr(Settings, "MAIN_AGENT_MAX_STEPS", 300)
+    monkeypatch.setenv("MAIN_AGENT_MAX_STEPS", "42")
+
+    Settings.load()
+
+    assert Settings.MAIN_AGENT_MAX_STEPS == 42
+
+    monkeypatch.setenv("MAIN_AGENT_MAX_STEPS", "0")
+    with pytest.raises(ValueError, match="MAIN_AGENT_MAX_STEPS"):
+        Settings.load()
+
+
 def test_environment_update_can_reload_runtime_settings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """保存环境配置时按请求就地重载：刷新 Settings、重建工具系统并刷新运行时执行器。"""
+    """保存环境配置时按请求就地重载 Settings，并刷新主 Agent profile。"""
 
     root = tmp_path / "root"
     root.mkdir()
@@ -469,24 +499,47 @@ def test_environment_update_can_reload_runtime_settings(
 
     monkeypatch.setattr(Settings, "load", staticmethod(lambda: events.append("settings")))
     monkeypatch.setattr(
-        "app.config.configuration.rebuild_tool_system",
-        lambda: events.append("tool_system"),
+        "app.config.configuration.replace_main_agent_profile",
+        lambda **_: events.append("agent_registry"),
     )
-
-    class _Runtime:
-        def reload_tool_executor(self) -> None:
-            events.append("runtime")
-
-    monkeypatch.setattr("app.service.depends.get_runtime", lambda: _Runtime())
 
     service.update(
         {"DEFAULT_LANGUAGE": EnvironmentChange("replace", "en")},
         reload_after_write=True,
     )
 
-    # 顺序即语义：工具是否注册由工具系统装配期的 Settings 决定，必须先刷新配置再重建工具系统。
-    assert events == ["settings", "tool_system", "runtime"]
+    # 顺序即语义：必须先刷新 Settings，再把新预算注入主 Agent profile。
+    assert events == ["settings", "agent_registry"]
     assert 'DEFAULT_LANGUAGE="en"' in env_file.read_text(encoding="utf-8")
+
+
+def test_environment_service_validates_main_agent_max_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """主 Agent 步数只能保存为正整数，并按标准 env 字段返回。"""
+
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(
+        "app.service.configuration.environment_configuration_service.system_cosir_dir",
+        lambda: root,
+    )
+    env_file = root / ".env"
+    _bind_env_file(monkeypatch, env_file)
+    service = EnvironmentConfigurationService()
+
+    service.update({"MAIN_AGENT_MAX_STEPS": EnvironmentChange("replace", "42")})
+    assert 'MAIN_AGENT_MAX_STEPS="42"' in env_file.read_text(encoding="utf-8")
+    field = next(item for item in service.read() if item["name"] == "MAIN_AGENT_MAX_STEPS")
+    assert field["type"] == "integer"
+    assert field["minimum"] == 1
+    assert field["disk_value"] == "42"
+
+    with pytest.raises(EnvironmentConfigurationError):
+        service.update({"MAIN_AGENT_MAX_STEPS": EnvironmentChange("replace", "0")})
+    with pytest.raises(EnvironmentConfigurationError):
+        service.update({"MAIN_AGENT_MAX_STEPS": EnvironmentChange("replace", "not-a-number")})
 
 
 def test_agent_operations_require_canonical_file_name(

@@ -19,7 +19,9 @@ class EnvironmentField:
     group_id: str
     label: str
     secret: bool
-    default: str | bool | None
+    default: str | int | bool | None
     options: tuple[tuple[str, str], ...] = ()
     placeholder: str | None = None
     clearable: bool = True
+    minimum: int | None = None
+    maximum: int | None = None

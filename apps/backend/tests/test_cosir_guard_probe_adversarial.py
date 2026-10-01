@@ -682,19 +682,17 @@ def test_paths_reset_derives_data_dir_from_env(
 def test_paths_reset_without_data_dir_uses_platform_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """未设置 CODING_AGENT_DATA_DIR 时按平台选择用户主目录或仓库根。"""
+    """未设置 CODING_AGENT_DATA_DIR 时，受支持平台用用户主目录；其他平台必须失败。"""
 
     monkeypatch.delenv("CODING_AGENT_DATA_DIR", raising=False)
-    try:
+    if sys.platform in {"darwin", "win32"}:
         paths.reset()
-        if sys.platform in {"darwin", "win32"}:
-            assert paths.Path.home() == paths.DATA_DIR
-            assert cosir_paths.system_cosir_dir() == paths.Path.home() / cosir_paths.COSIR_DIR_NAME
-        else:
-            repo_root = paths.repository_root()
-            assert repo_root == paths.DATA_DIR
-            assert cosir_paths.system_cosir_dir() == repo_root / cosir_paths.COSIR_DIR_NAME
-    finally:
+        assert paths.Path.home() == paths.DATA_DIR
+        assert cosir_paths.system_cosir_dir() == paths.Path.home() / cosir_paths.COSIR_DIR_NAME
+    else:
+        with pytest.raises(RuntimeError):
+            paths.reset()
+        monkeypatch.undo()
         paths.reset()
 
 

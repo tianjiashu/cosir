@@ -237,7 +237,10 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     # 装入进程内 Registry。
     ensure_system_agent_config_dir()
     main_agent_prompt = MainAgentPromptConfigurationService().read().content
-    agent_registry = build_agent_registry(main_agent_prompt)
+    agent_registry = build_agent_registry(
+        main_agent_prompt,
+        main_agent_max_steps=Settings.MAIN_AGENT_MAX_STEPS,
+    )
     agent_registry.load_agent_profiles(
         AgentProfileRegistry.SYSTEM_WORKSPACE,
         system_agent_config_dir(),

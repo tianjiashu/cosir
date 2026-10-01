@@ -30,6 +30,17 @@ ENVIRONMENT_FIELDS: dict[str, EnvironmentField] = {
         (("", "使用系统默认值（中文）"), ("zh", "中文"), ("en", "English")),
         "请选择默认语言",
     ),
+    "MAIN_AGENT_MAX_STEPS": EnvironmentField(
+        "MAIN_AGENT_MAX_STEPS",
+        "integer",
+        "input",
+        "general",
+        "主 Agent 最大步数",
+        False,
+        300,
+        placeholder="请输入正整数",
+        minimum=1,
+    ),
     "FIRECRAWL_API_KEY": EnvironmentField(
         "FIRECRAWL_API_KEY",
         "string",

@@ -16,9 +16,8 @@
 - 进程固定路径（数据根 / 日志目录 / 主库与 checkpoint 文件）不在此定义，唯一事实源为
   ``app.utils.paths``；``Settings.load`` 会触发其 ``reset`` 与环境变量对齐。
 - 保留下来的配置全进程共享、启动后只读；测试需临时改值时经 ``monkeypatch.setattr``（自动还原）。
-  单轮最大步数
-  ``max_steps`` 不在此定义，唯一来源为 ``AgentProfile.max_steps``（编排层经
-  ``workflow.py`` 初始化 input_state 注入）。
+  主 Agent 的单轮最大步数由 ``MAIN_AGENT_MAX_STEPS`` 环境配置加载到这里，再注入主 Agent
+  profile；子 Agent 的 ``max_steps`` 仍由各自 Agent profile 配置提供。
 """
 
 import os
@@ -54,6 +53,9 @@ class Settings:
     # 面向用户的默认回复语言（如 zh / en）：作为全局配置，统一驱动系统提示词与运行时
     # 上下文；需要本地化覆盖时经同名环境变量 ``DEFAULT_LANGUAGE`` 注入。
     DEFAULT_LANGUAGE: ClassVar[str] = "zh"
+
+    # 主 Agent 的单轮执行预算：保存环境配置后会重载主 Agent profile，下一轮新 Run 使用新值。
+    MAIN_AGENT_MAX_STEPS: ClassVar[int] = 300
 
     # Web 工具 provider 选择：``WEB_BACKEND`` 是统一开关，两个 per-tool 变量用于按工具覆盖
     # （空串表示不覆盖）。三者是**固定值**：不经环境变量覆盖，也不进配置中心白名单。
@@ -146,6 +148,35 @@ class Settings:
             return False
         raise ValueError(f"{name} must be a boolean value")
 
+    @staticmethod
+    def _env_positive_int(name: str, default: int) -> int:
+        """读取必须为正整数的环境变量。
+
+        参数:
+            name: 环境变量名。
+            default: 未设置时使用的默认值。
+
+        返回:
+            解析后的正整数。
+
+        异常:
+            ValueError: 变量不是整数或小于等于零。
+
+        副作用:
+            读取进程环境变量。
+        """
+
+        value = os.environ.get(name)
+        if value is None:
+            return default
+        try:
+            parsed = int(value.strip())
+        except ValueError as exc:
+            raise ValueError(f"{name} must be a positive integer") from exc
+        if parsed <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+        return parsed
+
     @classmethod
     def load(cls) -> None:
         """加载默认配置与本地 env 覆盖，填充类级静态属性。
@@ -158,7 +189,8 @@ class Settings:
             无。
 
         异常:
-            ValueError: ``LANGFUSE_ENABLED`` 不是受支持的布尔文本时抛出。
+            ValueError: ``LANGFUSE_ENABLED`` 不是受支持的布尔文本，或
+                ``MAIN_AGENT_MAX_STEPS`` 不是正整数时抛出。
 
         副作用:
             加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性；经 ``paths.reset``
@@ -170,6 +202,7 @@ class Settings:
         paths.reset()
         # 环境变量名与类字段名同名（见模块 docstring）：读取的键即字段本身，无前缀映射。
         cls.DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "zh").strip().lower()
+        cls.MAIN_AGENT_MAX_STEPS = cls._env_positive_int("MAIN_AGENT_MAX_STEPS", 300)
 
         # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
         cls.LANGFUSE_ENABLED = cls._env_bool("LANGFUSE_ENABLED", False)
