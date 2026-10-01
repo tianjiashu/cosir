@@ -69,7 +69,6 @@ class ConversationRunExecutor:
         self,
         run_id: int,
         start_mode: ExecutionMode,
-        ban_tools: list[str] | None = None,
     ) -> asyncio.Task[None]:
         """登记 run 并在当前事件循环创建独立后台 task。
 
@@ -84,7 +83,6 @@ class ConversationRunExecutor:
             run_id: 运行对应的 ``ConversationRunRecord.id``。
             start_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``），
                 原样透传给 ``_execute`` → ``AgentRuntime.execute_run``。
-            ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
 
         返回:
             已创建的后台 ``asyncio.Task``。
@@ -103,9 +101,7 @@ class ConversationRunExecutor:
         run = await asyncio.to_thread(self._run_service.get_run, run_id)
         if run.status != ConversationRunStatus.RUNNING:
             raise ValueError(f"run {run_id} is not running")
-        thread_task = asyncio.create_task(
-            self._execute(run_id, start_mode, ban_tools)
-        )
+        thread_task = asyncio.create_task(self._execute(run_id, start_mode))
         # 后台 task 无人 await：不挂回调时其异常会被 asyncio 静默吞掉，排障只能靠间接日志。
         thread_task.add_done_callback(lambda task: self._log_execution_result(run_id, task))
         self._executions[run_id] = _Execution(thread_task=thread_task)
@@ -295,7 +291,6 @@ class ConversationRunExecutor:
         self,
         run_id: int,
         start_mode: ExecutionMode,
-        ban_tools: list[str] | None = None,
     ) -> None:
         """驱动 runner 执行一次 ConversationRun；执行器不拥有 run 终态。
 
@@ -309,7 +304,6 @@ class ConversationRunExecutor:
             run_id: 当前运行标识。
             start_mode: 本次执行是 ``fresh`` 还是 ``resume``，原样透传给
                 ``AgentRuntime.execute_run``。
-            ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
 
         返回:
             无。
@@ -337,7 +331,6 @@ class ConversationRunExecutor:
                 await get_runtime().execute_run(
                     run=run,
                     execution_mode=start_mode,
-                    ban_tools=ban_tools,
                 )
             except asyncio.CancelledError:
                 cancelled = runner_started
