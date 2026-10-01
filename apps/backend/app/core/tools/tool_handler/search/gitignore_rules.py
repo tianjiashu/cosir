@@ -84,7 +84,7 @@ class GitignoreMatcher:
         return rel is not None and self.spec.match_file(rel)
 
 
-def _valid_lines(text: str) -> list[str]:
+def valid_rule_lines(text: str) -> list[str]:
     """过滤出有效规则行（去除首尾空白、注释与空行）。"""
 
     lines: list[str] = []
@@ -130,7 +130,7 @@ def load_gitignore_style(
             },
         )
         return None
-    lines = _valid_lines(text)
+    lines = valid_rule_lines(text)
     if not lines:
         return None
     try:

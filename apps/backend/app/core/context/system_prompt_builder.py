@@ -16,9 +16,9 @@ T. ``<tool_layer>`` 工具能力目录层：只在 ``AgentProfile.allowed_tools`
    （由 ``app.utils.cosir_paths.system_instruction_file`` 计算），作为跨所有 workspace 生效的
    全局提示词；文件缺失时创建空白文件供用户编辑并降级为空，读取失败（权限/编码/IO）时同样降级为空，
    空白内容不生成该层标签；不参与目录层级择优。
-4. ``<workspace_layer>`` Workspace 项目层：只认 ``AGENTS.md``（唯一候选文件名，见
-   ``_WORKSPACE_INSTRUCTION_FILE_NAME``），按目录层级择优（顶层优先）选出**唯一**一个项目
-   指令文件，受预算闸门约束，避免上下文爆炸。
+4. ``<workspace_layer>`` Workspace 项目层：只认 ``AGENTS.md``，按目录层级择优（顶层优先）
+   选出**唯一**一个项目指令文件，受预算闸门约束，避免上下文爆炸。文件定位规则由
+   ``app.utils.workspace_instruction`` 统一提供。
 
 空层块（``""``）不参与拼接，避免相邻层之间出现多余空行。
 
@@ -31,8 +31,6 @@ T. ``<tool_layer>`` 工具能力目录层：只在 ``AgentProfile.allowed_tools`
 from __future__ import annotations
 
 import logging
-import os
-from collections import deque
 from collections.abc import Collection
 from pathlib import Path
 from platform import system
@@ -45,34 +43,9 @@ from app.service.configuration.file_store import ConfigurationFileStore
 from app.utils.cosir_paths import system_instruction_file
 from app.utils.file_utils import read_text_file
 from app.utils.token_estimator import TokenEstimator
+from app.utils.workspace_instruction import find_workspace_instruction_file
 
 logger = logging.getLogger(__name__)
-
-# 扫描 workspace 指令文件时跳过的目录（与 tools 层 ignore_rules.DEFAULT_IGNORED_DIR_NAMES
-# 语义一致；此处局部定义以避免 core/context 反向依赖 tools 层）。如后续下沉到公共位置可统一替换。
-_IGNORED_DIRS: frozenset[str] = frozenset(
-    {
-        ".git",
-        "node_modules",
-        ".venv",
-        "venv",
-        "__pycache__",
-        ".mypy_cache",
-        ".ruff_cache",
-        ".pytest_cache",
-        "dist",
-        "build",
-        ".idea",
-        ".vscode",
-        ".svn",
-        ".hg",
-    }
-)
-
-# Workspace 项目指令文件名（唯一候选）。只有一个候选名，故不存在"文件名优先级"维度，
-# 择优只剩目录层级一条；其它常见指令文件（如 CLAUDE.md）一律不参与择优、不会被加载。
-_WORKSPACE_INSTRUCTION_FILE_NAME = "AGENTS.md"
-
 
 class SystemPromptBuilder:
     """按五层结构构建本地 coding-agent 的系统提示词。
@@ -291,8 +264,8 @@ class SystemPromptBuilder:
     def _build_workspace_layer(workspace_root: str) -> str:
         """构建 Workspace 项目指令层：定位唯一的 ``AGENTS.md`` 并施加预算闸门。
 
-        候选文件名唯一（``_WORKSPACE_INSTRUCTION_FILE_NAME``，不再经配置注入），择优只剩
-        目录层级一条（越浅越优先），故最多加载一个文件；没有任何命中时返回空字符串。
+        候选文件名固定为 ``AGENTS.md``，择优只剩目录层级一条（越浅越优先），故最多加载
+        一个文件；没有任何命中时返回空字符串。
 
         参数:
             workspace_root: 当前工作区根目录。
@@ -331,16 +304,9 @@ class SystemPromptBuilder:
     def _find_instruction_file(root: Path) -> tuple[Path, Path] | None:
         """定位唯一的 Workspace 项目指令文件 ``AGENTS.md``（只定位，不读取内容）。
 
-        候选文件名唯一（``_WORKSPACE_INSTRUCTION_FILE_NAME``），因此不存在"文件名优先级"
-        维度，择优键只有一个：**目录所在层级越浅越优先**；同层级多命中时以相对路径字典序
-        兜底，保证结果确定。文件名比较不区分大小写。
-
-        采用 BFS 逐层扫描 + 在线维护最优项 + 逐层剪枝：
-            - 不收集全部命中、不排序、不读取文件内容；
-            - 每处理完一个完整目录层级再判定收工：本层只要命中，更深层不可能更优，立即结束
-              （根目录命中时只需扫描根目录一层）；
-            - 跳过 ``_IGNORED_DIRS`` 与超过固定最大深度（4 层）的目录，不跟随符号链接；
-            - 相对路径由绝对路径做纯字符串换算得到，避免逐候选 ``resolve()`` 的额外系统调用。
+        候选文件名固定为 ``AGENTS.md``，文件名比较不区分大小写；同层级多命中时以相对路径
+        字典序兜底，保证结果确定。具体遍历规则由共享定位器维护：逐层 BFS、跳过受保护目录、
+        最大深度为 4 层且不跟随符号链接。
 
         参数:
             root: 工作区根目录（内部解析为绝对路径）。
@@ -354,49 +320,7 @@ class SystemPromptBuilder:
         副作用:
             无（仅遍历目录，不读取文件内容）。
         """
-        target = _WORKSPACE_INSTRUCTION_FILE_NAME.lower()
-        try:
-            root = root.resolve()
-        except OSError:
-            return None
-        if not root.is_dir():
-            return None
-
-        best_key: tuple[int, str] | None = None
-        best_rel: Path | None = None
-        best_abs: Path | None = None
-        queue: deque[tuple[Path, int]] = deque([(root, 0)])
-
-        while queue:
-            for _ in range(len(queue)):  # 一次迭代覆盖一个完整目录层级
-                directory, depth = queue.popleft()
-                try:
-                    with os.scandir(directory) as entries:
-                        for e in entries:
-                            if e.name.lower() == target:
-                                try:
-                                    rel = Path(e.path).relative_to(root)
-                                except ValueError:
-                                    continue
-                                key = (len(rel.parts), rel.as_posix())
-                                if best_key is None or key < best_key:
-                                    best_key = key
-                                    best_rel = rel
-                                    best_abs = Path(e.path)
-                            elif (
-                                depth + 1 <= 4
-                                and e.name not in _IGNORED_DIRS
-                                and e.is_dir(follow_symlinks=False)
-                            ):
-                                queue.append((Path(e.path), depth + 1))
-                except (PermissionError, OSError):
-                    continue
-            if best_key is not None:
-                break  # 本层已命中，更深层不可能更优
-
-        if best_rel is None or best_abs is None:
-            return None
-        return best_rel, best_abs
+        return find_workspace_instruction_file(root)
 
     # --- 预算工具 ---
     @staticmethod

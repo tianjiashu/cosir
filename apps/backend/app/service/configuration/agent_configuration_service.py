@@ -1,6 +1,6 @@
-"""系统级子 Agent JSON 配置 service。
+"""system/workspace 作用域的子 Agent JSON 配置 service。
 
-本 service 以 ``AgentProfileRegistry`` 作为运行时事实源，以系统 `.cosir/agents/*.json` 作为
+本 service 以 ``AgentProfileRegistry`` 作为运行时事实源，以作用域对应的 `.cosir/agents/*.json` 作为
 持久化载体。所有配置写入都复用 ``parse_agent_profile_document`` 完成校验，并在文件操作成功
 后同步注册表；本 service 不实现第二套 profile 加载或状态缓存。对外收发的
 ``AgentConfigurationDocument`` 是 API 层传输结构（``app.api.schemas``），本模块只按它读写文件与
@@ -28,30 +28,31 @@ from app.service.configuration.file_store import (
     ConfigurationFileStore,
     ConfigurationPathError,
 )
-from app.utils.cosir_paths import system_agent_config_dir
+from app.utils.cosir_paths import system_agent_config_dir, workspace_agent_config_dir
 
 
 class AgentConfigurationError(ValueError):
-    """系统 Agent 文档输入或状态不满足配置中心契约。"""
+    """Agent 文档输入或状态不满足配置中心契约。"""
 
 
 _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 class AgentConfigurationService:
-    """管理系统子 Agent 的持久化文件与进程内注册表同步。"""
+    """管理指定作用域子 Agent 的持久化文件与进程内注册表同步。
 
-    def __init__(self) -> None:
-        """绑定系统 Agent 配置目录、进程级注册表与文件存储。
+    ``workspace_root`` 为空时管理 system 作用域；传入 workspace 根路径时只管理该 workspace
+    的本地文件。system 内置 Agent 只允许读取，workspace 配置不会覆盖 system 作用域。
+    """
 
-        目录在构造时解析一次（``system_agent_config_dir()``），不提供注入点：系统 Agent
-        只能落在系统 ``.cosir/agents`` 下，避免调用方指定任意目录绕过配置中心的路径边界。
-        注册表同样固定取进程级单例（``get_agent_registry()``），不提供注入点：系统 Agent 事实
-        只应有一份，允许注入会让配置写入落到另一个注册表而与运行时不一致。测试通过 monkeypatch
-        模块级 ``system_agent_config_dir`` 与 ``get_agent_registry`` 隔离这两项依赖。
+    def __init__(self, *, workspace_root: str | Path | None = None) -> None:
+        """绑定 system 或 workspace Agent 配置目录、注册表与文件存储。
+
+        配置目录由固定路径函数和已验证的 workspace 根路径计算，不接受任意客户端路径；Registry
+        固定取进程级单例，确保文件写入与运行时能力使用同一事实源。
 
         参数:
-            无。
+            workspace_root: workspace 根路径；为空时使用 system 作用域。
 
         返回:
             无。
@@ -63,17 +64,36 @@ class AgentConfigurationService:
             解析配置目录、取得注册表引用并构造 ``ConfigurationFileStore``，不读写文件系统。
         """
 
-        self.directory = system_agent_config_dir()
+        self.workspace_root = (
+            None
+            if workspace_root is None
+            else AgentProfileRegistry.normalize_workspace(workspace_root)
+        )
+        self.scope = (
+            AgentProfileRegistry.SYSTEM_WORKSPACE
+            if self.workspace_root is None
+            else self.workspace_root
+        )
+        self.directory = (
+            system_agent_config_dir()
+            if self.workspace_root is None
+            else workspace_agent_config_dir(self.workspace_root)
+        )
         self.registry = get_agent_registry()
         self.store = ConfigurationFileStore()
 
     def list_documents(self) -> list[AgentConfigurationDocument]:
-        """列出注册表中的系统子 Agent，不直接扫描磁盘文件。"""
+        """列出当前作用域的本地子 Agent，不直接扫描磁盘文件。"""
 
-        return [self._from_profile(profile) for profile in self.registry.list_system_sub_agents()]
+        profiles = (
+            self.registry.list_system_sub_agents()
+            if self.workspace_root is None
+            else self.registry.list_workspace_sub_agents(self.workspace_root)
+        )
+        return [self._from_profile(profile) for profile in profiles]
 
     def create_document(self, document: AgentConfigurationDocument) -> AgentConfigurationDocument:
-        """校验并创建系统 Agent JSON；Agent ID 与文件名由后端生成。"""
+        """校验并创建当前作用域的 Agent JSON；Agent ID 与文件名由后端生成。"""
 
         self._validate_agent_id(document.agent_id)
         self._ensure_not_builtin(document.agent_id)
@@ -82,10 +102,7 @@ class AgentConfigurationService:
             if target.exists() or target.is_symlink():
                 raise FileExistsError(document.agent_id)
             profile = self._profile_from_document(document, target)
-            if not self.registry.register(
-                AgentProfileRegistry.SYSTEM_WORKSPACE,
-                profile,
-            ):
+            if not self.registry.register(self.scope, profile):
                 raise AgentConfigurationError(f"Agent 已注册，不允许重复创建: {document.agent_id}")
             try:
                 self.store.write_text_atomic(
@@ -94,12 +111,15 @@ class AgentConfigurationService:
                     root=self.directory,
                 )
             except Exception:
-                self.registry.unregister(AgentProfileRegistry.SYSTEM_WORKSPACE, profile.agent_id)
+                self.registry.unregister(self.scope, profile.agent_id)
                 raise
         saved = self._from_profile(profile, path=target)
         log.info(
             "configuration_agent_written",
-            extra={"msg": "系统 Agent 配置已保存", "data": {"agent_id": document.agent_id}},
+            extra={
+                "msg": "Agent 配置已保存",
+                "data": {"agent_id": document.agent_id, "scope": str(self.scope)},
+            },
         )
         return saved
 
@@ -108,14 +128,14 @@ class AgentConfigurationService:
             agent_id: str,
             document: AgentConfigurationDocument,
     ) -> AgentConfigurationDocument:
-        """无损更新一个系统 JSON 文档；不支持原地修改 Agent ID。"""
+        """无损更新当前作用域的 JSON 文档；不支持原地修改 Agent ID。"""
 
         self._validate_agent_id(agent_id)
         if document.agent_id != agent_id:
             raise AgentConfigurationError("Agent ID 不可变，请使用新建后删除完成迁移")
         target = self._path_for(agent_id)
         profile = self._profile_from_document(document, target)
-        existing = self.registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, agent_id)
+        existing = self.registry.resolve_local(self.scope, agent_id)
         if existing is None or existing.agent_type is not AgentProfileType.CHILD:
             raise KeyError(agent_id)
         with self.store.locked(target):
@@ -124,26 +144,26 @@ class AgentConfigurationService:
                 self._encode(document.to_json_document()),
                 root=self.directory,
             )
-            self.registry.replace(
-                AgentProfileRegistry.SYSTEM_WORKSPACE,
-                profile,
-            )
+            self.registry.replace(self.scope, profile)
         saved = self._from_profile(profile, path=target)
         log.info(
             "configuration_agent_written",
-            extra={"msg": "系统 Agent 配置已保存", "data": {"agent_id": document.agent_id}},
+            extra={
+                "msg": "Agent 配置已保存",
+                "data": {"agent_id": document.agent_id, "scope": str(self.scope)},
+            },
         )
         return saved
 
     def delete_document(self, agent_id: str) -> None:
-        """删除系统 JSON Agent；内置 Agent 和符号链接均拒绝删除。"""
+        """删除当前作用域的 JSON Agent；内置 Agent 和符号链接均拒绝删除。"""
 
         self._validate_agent_id(agent_id)
         self._ensure_not_builtin(agent_id)
         target = self._path_for(agent_id)
         if not target.exists():
             raise KeyError(agent_id)
-        if self.registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, agent_id) is None:
+        if self.registry.resolve_local(self.scope, agent_id) is None:
             raise KeyError(agent_id)
         with self.store.locked(target):
             if target.is_symlink() or not target.is_file():
@@ -151,10 +171,13 @@ class AgentConfigurationService:
                     f"configuration target must be a regular file: {target}"
                 )
             self.store.delete_file(target, root=self.directory)
-            self.registry.unregister(AgentProfileRegistry.SYSTEM_WORKSPACE, agent_id)
+            self.registry.unregister(self.scope, agent_id)
         log.info(
             "configuration_agent_deleted",
-            extra={"msg": "系统 Agent 配置已删除", "data": {"agent_id": agent_id}},
+            extra={
+                "msg": "Agent 配置已删除",
+                "data": {"agent_id": agent_id, "scope": str(self.scope)},
+            },
         )
 
     def _from_profile(
@@ -169,7 +192,7 @@ class AgentConfigurationService:
         投影选择 ID，避免重新读取配置文件。
         """
 
-        is_builtin = self._is_builtin(profile.agent_id)
+        is_builtin = self.workspace_root is None and self._is_builtin(profile.agent_id)
         if path is None and not is_builtin:
             candidate = self._path_for(profile.agent_id)
             path = candidate if candidate.exists() else None
@@ -210,11 +233,10 @@ class AgentConfigurationService:
     def _path_for(self, agent_id: str) -> Path:
         return self.store.assert_safe_child(self.directory, self.directory / f"{agent_id}.json")
 
-    @staticmethod
-    def _ensure_not_builtin(agent_id: str) -> None:
+    def _ensure_not_builtin(self, agent_id: str) -> None:
         """拒绝用系统内置 Agent ID 创建或操作用户文件。"""
 
-        if AgentConfigurationService._is_builtin(agent_id):
+        if self.workspace_root is None and self._is_builtin(agent_id):
             raise AgentConfigurationError(f"Agent ID 属于内置 Agent，不允许写入: {agent_id}")
 
     @staticmethod

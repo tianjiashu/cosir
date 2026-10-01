@@ -1,7 +1,7 @@
 """workspace 级 ``.fileignore`` 的来源、默认初始化与合并忽略规则。
 
 单一职责：把 ``.fileignore``（标准 gitignore 语义，位于 ``<workspace>/.cosir/``）解析为匹配器，并在
-文件缺失时按默认规则初始化该文件；与 workspace 根 ``.gitignore`` 合并为单一忽略来源
+文件缺失时按空内容初始化该文件；与 workspace 根 ``.gitignore`` 合并为单一忽略来源
 （:func:`load_search_ignore_rules`）。不负责目录遍历（见 ``file_walker``）。
 
 ``.fileignore`` 采用与 ``.gitignore`` 一致的标准 gitignore（gitwildmatch）语法，二者合并后任一命中即
@@ -10,7 +10,7 @@
 文件存在但没有任何有效规则时，语义为「不忽略任何目录」——尊重用户的显式配置。
 
 副作用：:func:`load_fileignore_rules` 在规则文件缺失时会创建 ``<workspace>/.cosir`` 与
-``.fileignore`` 并写入默认规则；文件过大、行数超限或读写失败时按可用的最大信息降级并写
+``.fileignore`` 并写入空内容；文件过大、行数超限或读写失败时按可用的最大信息降级并写
 WARNING 日志，绝不阻断搜索链路。
 """
 
@@ -24,7 +24,7 @@ from app.core.tools.tool_handler.search.gitignore_rules import (
     GitignoreMatcher,
     build_gitwildmatch_spec,
     load_gitignore_rules,
-    load_gitignore_style,
+    valid_rule_lines,
 )
 from app.core.tools.tool_handler.search.ignore_matcher import IgnoreMatcher
 from app.utils.cosir_paths import workspace_cosir_dir
@@ -51,17 +51,19 @@ DEFAULT_IGNORED_DIR_NAMES: tuple[str, ...] = (
     ".eggs",
     "site-packages",
 )
-"""内置默认忽略目录名（17 项）；仅在规则文件缺失（新建时写入）或降级时使用。"""
+"""内置默认忽略目录名（17 项）；仅在无 workspace 或规则文件读写失败时使用。"""
 
-_MAX_FILE_BYTES: int = 256 * 1024
+FILEIGNORE_MAX_FILE_BYTES: int = 256 * 1024
 """规则文件读取上限（字符数）：超出部分不读入，避免异常大文件撑大内存。"""
 
-_MAX_RULES: int = 2000
+FILEIGNORE_MAX_RULES: int = 2000
 """规则行数上限：超出的行被忽略并记 WARNING，避免规则集合被异常文件撑大。"""
 
 _HEADER_LINES: tuple[str, ...] = (
-    "# 目录忽略规则（workspace 级，标准 gitignore 语法，UTF-8 每行一条）：命中的目录连同其整棵子树一并跳过。",
-    "# - 以 # 起始的行为注释，空行忽略；语法与 .gitignore 一致（支持 *.log、build/、**/x、!keep 否定等）。",
+    "# 目录忽略规则（workspace 级，标准 gitignore 语法，UTF-8 每行一条）："
+    "命中的目录连同其整棵子树一并跳过。",
+    "# - 以 # 起始的行为注释，空行忽略；语法与 .gitignore 一致（支持 "
+    "*.log、build/、**/x、!keep 否定等）。",
     "# - 本文件与 workspace 根的 .gitignore 合并生效：任一命中即跳过。",
 )
 
@@ -126,13 +128,13 @@ def default_ignore_rules() -> GitignoreMatcher:
 
 
 def render_default_content() -> str:
-    """渲染首次创建 ``.fileignore`` 时写入的默认文本（注释头 + 默认目录名）。
+    """渲染首次创建 ``.fileignore`` 时写入的默认文本。
 
     参数:
         无。
 
     返回:
-        以换行结尾的默认文件内容；规则来源为 ``DEFAULT_IGNORED_DIR_NAMES`` 单一事实源。
+        空字符串，表示 workspace 默认不额外忽略任何路径。
 
     异常:
         无。
@@ -141,8 +143,7 @@ def render_default_content() -> str:
         无。
     """
 
-    lines = [*_HEADER_LINES, "", *DEFAULT_IGNORED_DIR_NAMES]
-    return "\n".join(lines) + "\n"
+    return ""
 
 
 def _empty_matcher(workspace_root: Path) -> GitignoreMatcher:
@@ -152,7 +153,7 @@ def _empty_matcher(workspace_root: Path) -> GitignoreMatcher:
 
 
 def load_fileignore_rules(workspace_root: str | Path) -> GitignoreMatcher:
-    """读取 workspace 的 ``.fileignore``；文件缺失时先创建默认文件再解析。
+    """读取 workspace 的 ``.fileignore``；文件缺失时先创建空文件再解析。
 
     每次调用都重新读取文件，使规则改动无需重启即刻生效；一次遍历只需调用一次（遍历内部复用
     返回的规则对象）。采用标准 gitignore（gitwildmatch）语法，相对 workspace 根匹配。
@@ -162,7 +163,7 @@ def load_fileignore_rules(workspace_root: str | Path) -> GitignoreMatcher:
             不会退化成「在进程当前目录创建规则文件」。
 
     返回:
-        解析后的 gitwildmatch 匹配器。文件缺失且创建成功时，文件已写入默认规则，返回值即默认规则。
+        解析后的 gitwildmatch 匹配器。文件缺失且创建成功时，文件为空，返回空匹配器。
 
     异常:
         无：路径非法、读写失败或编码错误一律降级为默认规则并写 WARNING 日志。
@@ -181,17 +182,14 @@ def load_fileignore_rules(workspace_root: str | Path) -> GitignoreMatcher:
         return default_ignore_rules()
     root = Path(root_text)
     path = ignore_file_path(root)
-    # 先判定文件是否原本就存在：存在但无有效规则表示用户显式「不忽略任何目录」；不存在则本次会
-    # 创建默认文件，应回落为内置默认规则。两者语义不可混用。
-    file_existed = path.is_file()
     text = _read_ignore_text(path)
-    text = _limit_rules(text, path)
-    lines = _valid_lines(text)
-    if not lines:
-        if file_existed:
-            # 用户显式配置文件存在但无有效规则：尊重配置，忽略任何目录。
-            return _empty_matcher(root)
+    if text is None:
         return default_ignore_rules()
+    text = _limit_rules(text, path)
+    lines = valid_rule_lines(text)
+    if not lines:
+        # 缺失文件会被创建为空文件；空文件和显式空文件都表示 workspace 不额外忽略路径。
+        return _empty_matcher(root)
     try:
         spec = build_gitwildmatch_spec(lines)
     except Exception as exc:
@@ -210,7 +208,7 @@ def load_search_ignore_rules(workspace_root: str | Path) -> IgnoreMatcher:
     """读取 workspace 的搜索忽略规则组合：``.fileignore`` + workspace 根 ``.gitignore``。
 
     供搜索引擎在遍历时一次性注入；两个文件都采用标准 gitignore 语义，合并后任一命中即跳过。
-    ``.fileignore`` 缺失时创建默认文件，``.gitignore`` 缺失时仅 ``.fileignore`` 生效。文件级
+    ``.fileignore`` 缺失时创建空文件，``.gitignore`` 缺失时仅 ``.fileignore`` 生效。文件级
     规则（``*.log``）与目录级规则（``build/``）在二者之间始终按统一语义生效。
 
     参数:
@@ -223,7 +221,7 @@ def load_search_ignore_rules(workspace_root: str | Path) -> IgnoreMatcher:
         无：子匹配器读取失败一律降级，不阻断搜索。
 
     副作用:
-        同 :func:`load_fileignore_rules`（``.fileignore`` 缺失时创建默认文件）。
+        同 :func:`load_fileignore_rules`（``.fileignore`` 缺失时创建空文件）。
     """
 
     file_rules = load_fileignore_rules(workspace_root)
@@ -233,26 +231,15 @@ def load_search_ignore_rules(workspace_root: str | Path) -> IgnoreMatcher:
     return CompositeIgnoreMatcher((file_rules, git))
 
 
-def _valid_lines(text: str) -> list[str]:
-    """过滤出有效规则行（去除首尾空白、注释与空行），供空规则判定使用。"""
-
-    lines: list[str] = []
-    for raw in text.splitlines():
-        stripped = raw.strip()
-        if stripped and not stripped.startswith("#"):
-            lines.append(stripped)
-    return lines
-
-
 def _limit_rules(text: str, path: Path) -> str:
-    """把规则文本裁到 ``_MAX_RULES`` 行以内，超限时写 WARNING（带文件路径便于定位）。
+    """把规则文本裁到 ``FILEIGNORE_MAX_RULES`` 行以内，超限时写 WARNING（带文件路径便于定位）。
 
     参数:
-        text: 规则文件全文（可能已被 ``_MAX_FILE_BYTES`` 截断）。
+        text: 规则文件全文（可能已被 ``FILEIGNORE_MAX_FILE_BYTES`` 截断）。
         path: 规则文件路径，仅用于日志定位。
 
     返回:
-        最多 ``_MAX_RULES`` 行的文本；未超限时原样返回。
+        最多 ``FILEIGNORE_MAX_RULES`` 行的文本；未超限时原样返回。
 
     异常:
         无。
@@ -262,20 +249,20 @@ def _limit_rules(text: str, path: Path) -> str:
     """
 
     lines = text.splitlines()
-    if len(lines) <= _MAX_RULES:
+    if len(lines) <= FILEIGNORE_MAX_RULES:
         return text
     log.warning(
         "file_ignore_rules_truncated",
         extra={
             "msg": ".fileignore 行数超过上限，多余行已忽略",
-            "data": {"path": str(path), "limit": _MAX_RULES, "lines": len(lines)},
+            "data": {"path": str(path), "limit": FILEIGNORE_MAX_RULES, "lines": len(lines)},
         },
     )
-    return "\n".join(lines[:_MAX_RULES])
+    return "\n".join(lines[:FILEIGNORE_MAX_RULES])
 
 
-def _read_ignore_text(path: Path) -> str:
-    """读取规则文件文本；文件不存在时创建默认文件，失败时返回默认文本。
+def _read_ignore_text(path: Path) -> str | None:
+    """读取规则文件文本；文件不存在时创建空文件，失败时返回 ``None``。
 
     不用 ``app.utils.file_utils.read_text_file`` 收口：本函数需要按上限读取并在读取失败时降级，
     而该收口是「整文件 UTF-8 读取」的薄包装，无法表达这两点。
@@ -284,10 +271,10 @@ def _read_ignore_text(path: Path) -> str:
         path: 规则文件路径。
 
     返回:
-        文件全文；文件缺失且创建成功（或被并发方创建）时为该文件内容，创建失败时为默认文本。
+        文件全文；文件缺失且创建成功（或被并发方创建）时为该文件内容，创建或读取失败时为 ``None``。
 
     异常:
-        无：路径非法（如含 NUL 字节）、读写失败或解码失败一律降级为默认文本并写 WARNING 日志。
+        无：路径非法（如含 NUL 字节）、读写失败或解码失败一律降级为 ``None`` 并写 WARNING 日志。
 
     副作用:
         可能创建父目录与规则文件；并发创建命中的 ``FileExistsError`` 视为「他人已建」。
@@ -299,7 +286,7 @@ def _read_ignore_text(path: Path) -> str:
         pass
     except (OSError, ValueError) as exc:
         _log_read_failure(path, exc)
-        return render_default_content()
+        return None
 
     content = render_default_content()
     try:
@@ -312,6 +299,7 @@ def _read_ignore_text(path: Path) -> str:
             return _read_limited(path)
         except (OSError, ValueError) as exc:
             _log_read_failure(path, exc)
+            return None
     except (OSError, ValueError) as exc:
         log.warning(
             "file_ignore_create_failed",
@@ -324,17 +312,18 @@ def _read_ignore_text(path: Path) -> str:
                 },
             },
         )
+        return None
     return content
 
 
 def _read_limited(path: Path) -> str:
-    """按 ``_MAX_FILE_BYTES`` 上限读取规则文件。
+    """按 ``FILEIGNORE_MAX_FILE_BYTES`` 上限读取规则文件。
 
     参数:
         path: 规则文件路径。
 
     返回:
-        文件文本；超过上限时只返回前 ``_MAX_FILE_BYTES`` 个字符。
+        文件文本；超过上限时只返回前 ``FILEIGNORE_MAX_FILE_BYTES`` 个字符。
 
     异常:
         OSError: 文件不存在或无权限等 I/O 错误（由调用方降级）。
@@ -345,7 +334,7 @@ def _read_limited(path: Path) -> str:
     """
 
     with path.open("r", encoding="utf-8") as handle:
-        return handle.read(_MAX_FILE_BYTES)
+        return handle.read(FILEIGNORE_MAX_FILE_BYTES)
 
 
 def _log_read_failure(path: Path, exc: Exception) -> None:

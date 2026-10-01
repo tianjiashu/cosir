@@ -347,6 +347,30 @@ class AgentProfileRegistry:
                 (self.SYSTEM_WORKSPACE, agent_id)
             )
 
+    def resolve_local(self, workspace: str | Path, agent_id: str) -> AgentProfile | None:
+        """只解析指定作用域内的 Agent，不执行 system fallback。
+
+        配置写入、更新和删除必须使用本方法区分 workspace 本地文件与 system 继承项，
+        不得用带 fallback 的 :meth:`resolve` 代替。
+
+        参数:
+            workspace: 系统哨兵或 workspace 根路径。
+            agent_id: 要查找的 Agent 标识。
+
+        返回:
+            指定作用域内的 profile；不存在时返回 ``None``。
+
+        异常:
+            ValueError: workspace 路径为空时由 ``normalize_workspace`` 抛出。
+
+        副作用:
+            无；只读取受锁保护的进程内索引。
+        """
+
+        scope = self.normalize_workspace(workspace)
+        with self._lock:
+            return self._profiles.get((scope, agent_id))
+
     def list(self, workspace: str | Path) -> list[AgentProfile]:
         """列出指定 workspace 可见的 profile；系统作用域 profile 排在 workspace profile 前。
 

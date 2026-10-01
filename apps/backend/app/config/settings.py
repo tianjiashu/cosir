@@ -72,7 +72,7 @@ class Settings:
     LANGFUSE_PUBLIC_KEY: ClassVar[str | None] = None
     LANGFUSE_SECRET_KEY: ClassVar[str | None] = None
     # 云服务器经反向代理对外暴露的 HTTPS 域名（指向 langfuse/server）。
-    LANGFUSE_BASE_URL: ClassVar[str] = "http://124.220.55.187"
+    LANGFUSE_BASE_URL: ClassVar[str] = ""
     # 记录由系统配置文件注入的值，使配置中心能够与桌面宿主/启动器提供的进程环境区分。
     _LOADED_ENV_VALUES: ClassVar[dict[str, str]] = {}
 
@@ -177,5 +177,5 @@ class Settings:
         cls.LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY")
         cls.LANGFUSE_BASE_URL = os.environ.get(
             "LANGFUSE_BASE_URL",
-            "http://124.220.55.187",
+            "",
         )

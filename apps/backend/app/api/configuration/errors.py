@@ -28,6 +28,12 @@ from app.service.configuration.instruction_configuration_service import (
 from app.service.configuration.main_agent_prompt_configuration_service import (
     MainAgentPromptConfigurationError,
 )
+from app.service.configuration.workspace_fileignore_configuration_service import (
+    WorkspaceFileIgnoreConfigurationError,
+)
+from app.service.configuration.workspace_instruction_configuration_service import (
+    WorkspaceInstructionConfigurationError,
+)
 
 
 def raise_configuration_error(exc: Exception) -> NoReturn:
@@ -63,6 +69,8 @@ def raise_configuration_error(exc: Exception) -> NoReturn:
         | AgentConfigurationError
         | InstructionConfigurationError
         | MainAgentPromptConfigurationError
+        | WorkspaceInstructionConfigurationError
+        | WorkspaceFileIgnoreConfigurationError
         | EnvironmentConfigurationError
         | AgentProfileConfigError
         | ValueError,

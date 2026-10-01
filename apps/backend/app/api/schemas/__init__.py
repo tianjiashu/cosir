@@ -34,6 +34,8 @@ from app.api.schemas.response.HealthResponse import HealthResponse
 from app.api.schemas.response.ModelConfigDiscoveryResponse import ModelConfigDiscoveryResponse
 from app.api.schemas.response.ModelConfigResponse import ModelConfigResponse
 from app.api.schemas.response.TaskResponse import TaskResponse
+from app.api.schemas.response.WorkspaceFileIgnoreResponse import WorkspaceFileIgnoreResponse
+from app.api.schemas.response.WorkspaceInstructionResponse import WorkspaceInstructionResponse
 from app.api.schemas.response.WorkspaceResponse import WorkspaceResponse
 
 __all__ = [
@@ -63,5 +65,7 @@ __all__ = [
     "ModelConfigTestRequest",
     "ModelConfigUpdateRequest",
     "TaskResponse",
+    "WorkspaceFileIgnoreResponse",
+    "WorkspaceInstructionResponse",
     "WorkspaceResponse",
 ]
