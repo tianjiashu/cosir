@@ -145,7 +145,7 @@ test("系统配置中心从 settings 路由打开并展示三类配置", async (
   await expect(page.getByRole("status")).toHaveText("配置更改成功");
 
   await page.getByRole("button", { name: /全局指令/ }).click();
-  await expect(page.getByText("保存后实时生效，不影响前缀缓存；当前运行中的 Run 会在下一次模型请求时应用。", { exact: true })).toBeVisible();
+  await expect(page.getByText("保存后实时生效，不影响前缀缓存。", { exact: true })).toBeVisible();
   // 字节计数已移除，只保留 Token 估算。
   await expect(page.getByText("字节", { exact: true })).toHaveCount(0);
   await expect(page.getByText("估算 Token", { exact: true })).toBeVisible();
@@ -153,7 +153,7 @@ test("系统配置中心从 settings 路由打开并展示三类配置", async (
 
   await page.getByRole("button", { name: /主 Agent/ }).click();
   await expect(page.getByText("主 Agent 系统提示词", { exact: true })).toBeVisible();
-  await expect(page.getByText("保存后实时生效，不影响前缀缓存；当前运行中的 Run 会在下一次模型请求时应用。", { exact: true })).toBeVisible();
+  await expect(page.getByText("保存后实时生效，不影响前缀缓存。", { exact: true })).toBeVisible();
   await expect(page.locator("textarea").first()).toHaveValue("# 主 Agent 协议");
 
   await page.getByRole("button", { name: /环境变量/ }).click();

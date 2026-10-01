@@ -60,7 +60,11 @@ export function MarkdownConfigurationPanel<TDocument extends MarkdownDocumentCon
   return (
     <div className="space-y-4">
       <ErrorNotice message={state.error} />
-      {description && <p className="text-muted-foreground text-xs">{description}</p>}
+      {description && (
+        <p className="text-foreground text-xs font-semibold">
+          {description}
+        </p>
+      )}
       <MarkdownSourcePreviewEditor
         value={state.content}
         onChange={state.setContent}
