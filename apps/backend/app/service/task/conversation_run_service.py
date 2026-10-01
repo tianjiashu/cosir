@@ -103,7 +103,6 @@ class ConversationRunService:
         )
         if not input_text.strip() and not image_paths:
             raise ValueError("input_text must be a non-empty string")
-
         return _PreparedConversationRunInput(
             input_text=input_text,
             image_paths=image_paths,
@@ -112,6 +111,7 @@ class ConversationRunService:
                 attachments=file_attachments,
                 reasoning_effort=reasoning_effort,
                 ban_tools=command.ban_tools,
+                propose_agent_configuration=command.propose_agent_configuration,
             ),
         )
 
@@ -275,6 +275,9 @@ class ConversationRunService:
             attachments=extra.attachments if extra is not None else [],
             ban_tools=extra.ban_tools if extra is not None else [],
             reasoning_effort=reasoning_effort,
+            propose_agent_configuration=(
+                extra.propose_agent_configuration if extra is not None else False
+            ),
         )
         context_window_total = config.context_window_k * 1000
 
@@ -371,6 +374,9 @@ class ConversationRunService:
             attachments=extra.attachments if extra is not None else [],
             ban_tools=extra.ban_tools if extra is not None else [],
             reasoning_effort=reasoning_effort,
+            propose_agent_configuration=(
+                extra.propose_agent_configuration if extra is not None else False
+            ),
         )
         context_window_total = config.context_window_k * 1000
 

@@ -16,7 +16,8 @@ class ConversationRunExtra:
     """一次 Conversation Run 的扩展输入事实。
 
     字段承载 Assistant 用户可见文本、普通本机文件附件引用、本次 Run 禁用的工具名和
-    用户显式指定的推理强度。
+    用户显式指定的推理强度。最终 ``allows_tools`` 只在运行时根据 Task 固化工具目录
+    与 ``ban_tools`` 计算，不作为持久化字段保存。
     该类是内存中的领域值对象；写入 ``conversation_runs.extra`` 时由 ``to_dict`` 转成
     JSON 对象，从数据库读取时由 ``from_dict`` 恢复。它不保存附件二进制，也不负责检查
     路径是否仍然存在或是否属于当前工作区；模型能力由 ``model_config_id`` 指向的模型
@@ -27,20 +28,23 @@ class ConversationRunExtra:
     attachments: list[ConversationRunFileAttachment]
     reasoning_effort: ReasoningEffort | None = None
     ban_tools: list[str] = field(default_factory=list)
+    propose_agent_configuration: bool = False
 
     def __post_init__(self) -> None:
         """校验并规范化普通附件引用与展示文本中的 token 关系。"""
 
         if not isinstance(self.display_text, str):
             raise TypeError("display_text must be a string")
-        banned = self.ban_tools
-        if not isinstance(banned, list) or any(
-            not isinstance(name, str) or not name for name in banned
+        if (
+            not isinstance(self.ban_tools, list)
+            or any(not isinstance(name, str) or not name for name in self.ban_tools)
         ):
             raise TypeError("ban_tools must be a list of non-empty strings")
-        if len(banned) != len(set(banned)):
+        if len(self.ban_tools) != len(set(self.ban_tools)):
             raise ValueError("ban_tools must not contain duplicates")
-        object.__setattr__(self, "ban_tools", list(banned))
+        object.__setattr__(self, "ban_tools", list(self.ban_tools))
+        if not isinstance(self.propose_agent_configuration, bool):
+            raise TypeError("propose_agent_configuration must be a boolean")
         if len(self.attachments) > 32:
             raise ValueError("attachments must contain at most 32 items")
 
@@ -83,12 +87,15 @@ class ConversationRunExtra:
     def to_dict(self) -> dict[str, object]:
         """转换为 ``conversation_runs.extra`` 使用的 JSON 对象。"""
 
-        return {
+        value = {
             "display_text": self.display_text,
             "attachments": [dict(attachment) for attachment in self.attachments],
             "ban_tools": list(self.ban_tools),
             "reasoning_effort": self.reasoning_effort,
         }
+        if self.propose_agent_configuration:
+            value["propose_agent_configuration"] = True
+        return value
 
     @classmethod
     def from_dict(cls, value: object) -> ConversationRunExtra | None:
@@ -100,9 +107,15 @@ class ConversationRunExtra:
         if not isinstance(value, dict):
             raise TypeError("run extra must be an object")
 
-        expected = {"display_text", "attachments", "ban_tools", "reasoning_effort"}
+        expected = {
+            "display_text",
+            "attachments",
+            "ban_tools",
+            "reasoning_effort",
+            "propose_agent_configuration",
+        }
         unknown = set(value) - expected
-        missing = expected - set(value)
+        missing = (expected - {"propose_agent_configuration"}) - set(value)
         if unknown or missing:
             raise ValueError(
                 f"run extra fields invalid; unknown={sorted(unknown)}, missing={sorted(missing)}"
@@ -115,6 +128,7 @@ class ConversationRunExtra:
             attachments=attachments,
             ban_tools=ban_tools,
             reasoning_effort=value["reasoning_effort"],
+            propose_agent_configuration=value.get("propose_agent_configuration", False),
         )
 
 

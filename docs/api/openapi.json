@@ -1882,7 +1882,7 @@
           "payload"
         ],
         "title": "BanToolsCommand",
-        "description": "Assistant UI custom command that configures disabled tools for one Run.\n\nThis schema preserves the wire shape ``type=\"custom\"``, ``name=\"ban-tools\"`` and a typed\n``payload``. It validates command identity and payload shape only; the transport service\nvalidates tool names against the current Task catalog, derives the final ``allows_tools``\nsnapshot, and persists that snapshot in Run Extra.\n\nRaises:\n    ValidationError: When the wire discriminator, command name, command ID, or payload is\n        malformed.\n\nSide effects:\n    None. Persistence and catalog lookup belong to the transport service."
+        "description": "Assistant UI custom command that configures disabled tools for one Run.\n\nThis schema preserves the wire shape ``type=\"custom\"``, ``name=\"ban-tools\"`` and a typed\n``payload``. It validates command identity and payload shape only; the Run service validates\ntool names against the current Task catalog and persists the original ``ban_tools`` intent in\nRun Extra. The runtime derives the final ``allows_tools`` set when execution starts.\n\nRaises:\n    ValidationError: When the wire discriminator, command name, command ID, or payload is\n        malformed.\n\nSide effects:\n    None. Persistence and catalog lookup belong to the Run service."
       },
       "BanToolsPayload": {
         "properties": {

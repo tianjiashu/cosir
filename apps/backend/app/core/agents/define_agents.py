@@ -23,12 +23,6 @@ You handle exactly one focused task delegated by the parent agent.
 """
 
 
-def _all_tool_names() -> list[str]:
-    """返回工具规范清单中的全部名称。"""
-
-    return list(ALL_TOOL_NAMES)
-
-
 def main_agent(*, system_prompt: str = "") -> AgentProfile:
     """构建负责理解用户目标、编排工作并汇总结果的主 Agent。
 
@@ -50,7 +44,29 @@ def main_agent(*, system_prompt: str = "") -> AgentProfile:
     return AgentProfile(
         agent_id="main_agent",
         role="main_agent",
-        allowed_tools=_all_tool_names(),
+        allowed_tools=[
+            TOOL_READ_FILE,
+            TOOL_WRITE_FILE,
+            TOOL_REPLACE,
+            TOOL_APPLY_PATCH,
+            TOOL_DELETE_FILE,
+            TOOL_MOVE_FILE,
+            TOOL_SEARCH_CONTENT,
+            TOOL_FIND_FILES,
+            TOOL_LIST_DIRECTORY,
+            TOOL_EXECUTE_TERMINAL,
+            TOOL_TERMINAL_START,
+            TOOL_TERMINAL_READ,
+            TOOL_TERMINAL_WRITE,
+            TOOL_TERMINAL_SIGNAL,
+            TOOL_TERMINAL_CLOSE,
+            TOOL_WEB_SEARCH,
+            TOOL_WEB_EXTRACT,
+            TOOL_DELEGATE_TASK,
+            TOOL_CHILD_AGENT_SEND,
+            TOOL_CHILD_AGENT_STATUS,
+            TOOL_CHILD_AGENT_WAIT,
+        ],
         agent_type=AgentProfileType.MAIN,
         system_prompt=system_prompt,
         max_steps=300,
@@ -62,7 +78,7 @@ def general_child_agent() -> AgentProfile:
     """构建始终可用、由代码维护的通用委派子 Agent。
 
     该 profile 是唯一不从 JSON 加载的 CHILD Agent。它提供通用委派能力，具体工具仍受
-    `CHILD_BANNED_TOOLS` 和运行期 workspace 边界约束。
+    child Run 的 ``allows_tools`` 和运行期 workspace 边界约束。
 
     参数:
         无。
