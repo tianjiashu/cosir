@@ -284,9 +284,12 @@ const ComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = false })
       <ToolGroupSelector disabled={disabled || composer.isDisabled} />
       <Button
         type="button"
-        variant={proposeAgentConfiguration ? "secondary" : "ghost"}
+        variant="outline"
         size="sm"
-        className="h-7 rounded-full px-2.5 text-xs"
+        className={cn(
+          "h-7 gap-1.5 rounded-full px-2.5 text-xs",
+          proposeAgentConfiguration && "border-indigo-300 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 hover:text-indigo-800 dark:border-indigo-400/50 dark:bg-indigo-950/50 dark:text-indigo-200 dark:hover:bg-indigo-900/60 dark:hover:text-indigo-100",
+        )}
         disabled={disabled || composer.isDisabled}
         aria-pressed={proposeAgentConfiguration}
         onClick={() => onProposeAgentConfigurationChange?.(!proposeAgentConfiguration)}
