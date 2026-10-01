@@ -12,7 +12,7 @@ from pathlib import Path
 
 from app.models import WorkspaceRecord
 from app.service import depends as service_depends
-from app.utils.cosir_paths import workspace_agent_config_dir, workspace_cosir_dir
+from app.utils.path.workspace_cosir import workspace_agent_config_dir, workspace_cosir_dir
 
 
 @dataclass(frozen=True)

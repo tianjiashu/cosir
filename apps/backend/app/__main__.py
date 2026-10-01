@@ -23,7 +23,7 @@ from app.config.constant import Constant
 from app.config.logging.configuration import install_logging_for_current_process
 from app.config.settings import Settings
 from app.service.depends import initialize_service_dependencies
-from app.utils import paths
+from app.utils.path import system_cosir as paths
 
 
 def main() -> None:
@@ -48,7 +48,7 @@ def main() -> None:
         ``Constant.Logging.MAX_BYTES`` 大小轮转的固定 JSONL 文件日志处理器；同步系统代理
         环境变量到当前进程（在 ``.env`` 未显式设置代理时启用）；按需启动
         uvicorn 进程；按环境决定是否写入系统级 ``.cosir/runtime/backend.bootstate.json``
-        启动状态文件，系统级目录由 ``app.utils.paths`` 按平台解析。
+        启动状态文件，系统级目录由 ``app.utils.path.system_cosir`` 按平台解析。
     """
     boot_state_file = boot_state_file_from_env()
     try:

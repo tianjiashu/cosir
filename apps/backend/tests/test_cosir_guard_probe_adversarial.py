@@ -39,7 +39,9 @@ from app.core.tools.tool_handler.search_content import SearchContentTool
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.write_file import WriteFileTool
 from app.service.terminal.terminal_session_service import TerminalSessionService
-from app.utils import cosir_paths, paths
+from app.utils.path import system_cosir as paths
+from app.utils.path.system_cosir import COSIR_DIR_NAME, system_cosir_dir
+from app.utils.path.validation import is_within_cosir
 
 
 def _ctx(root: Path) -> ToolExecutionContext:
@@ -73,8 +75,8 @@ def test_cosir2_sibling_is_not_reserved(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     (root / ".cosir2" / "x").mkdir(parents=True)
-    assert cosir_paths.is_within_cosir(root / ".cosir2" / "x", root) is False
-    assert cosir_paths.is_within_cosir(root / ".cosir_v2", root) is False
+    assert is_within_cosir(root / ".cosir2" / "x", root) is False
+    assert is_within_cosir(root / ".cosir_v2", root) is False
 
 
 def test_is_within_cosir_case_insensitive_on_windows(tmp_path: Path) -> None:
@@ -82,7 +84,7 @@ def test_is_within_cosir_case_insensitive_on_windows(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
-    result = cosir_paths.is_within_cosir(root / ".COSIR" / "x.txt", root)
+    result = is_within_cosir(root / ".COSIR" / "x.txt", root)
     if os.path.normcase("A") == os.path.normcase("a"):
         assert result is True, "大小写不敏感文件系统上 .COSIR 必须被视为保留区"
     else:
@@ -95,7 +97,7 @@ def test_dot_slash_and_trailing_separator_variants(tmp_path: Path) -> None:
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
     for variant in ("./.cosir", ".cosir/", ".cosir//", ".cosir/x/../y", ".cosir/./sub/../y"):
-        assert cosir_paths.is_within_cosir(root / variant, root) is True, variant
+        assert is_within_cosir(root / variant, root) is True, variant
 
 
 def test_backslash_separator_variant_hits_reserved(tmp_path: Path) -> None:
@@ -103,7 +105,7 @@ def test_backslash_separator_variant_hits_reserved(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
-    result = cosir_paths.is_within_cosir(str(root) + "\\.cosir\\x.txt", root)
+    result = is_within_cosir(str(root) + "\\.cosir\\x.txt", root)
     if os.sep == "\\":
         assert result is True
     else:
@@ -118,8 +120,8 @@ def test_deep_dotdot_traversal_into_cosir(tmp_path: Path) -> None:
     (root / "a").mkdir(parents=True)
     (root / ".cosir").mkdir(parents=True)
     # `a/..` 回到 root，`root/.cosir/x` 命中。
-    assert cosir_paths.is_within_cosir(root / "a" / ".." / ".cosir" / "x", root) is True
-    assert cosir_paths.is_within_cosir(root / "a" / ".." / ".." / "x", root) is False
+    assert is_within_cosir(root / "a" / ".." / ".cosir" / "x", root) is True
+    assert is_within_cosir(root / "a" / ".." / ".." / "x", root) is False
 
 
 def test_nul_and_empty_inputs_do_not_crash(tmp_path: Path) -> None:
@@ -127,8 +129,8 @@ def test_nul_and_empty_inputs_do_not_crash(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
-    assert cosir_paths.is_within_cosir(str(root / ".cosir") + "\x00.txt", root) is False
-    assert cosir_paths.is_within_cosir("", root) is False
+    assert is_within_cosir(str(root / ".cosir") + "\x00.txt", root) is False
+    assert is_within_cosir("", root) is False
 
 
 def test_is_within_cosir_accepts_relative_path(tmp_path: Path) -> None:
@@ -136,15 +138,15 @@ def test_is_within_cosir_accepts_relative_path(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
-    result = cosir_paths.is_within_cosir(".cosir/x.txt", root)
+    result = is_within_cosir(".cosir/x.txt", root)
     assert result in (True, False)
 
 
 def test_cosir_root_none_and_empty(tmp_path: Path) -> None:
     """workspace_root 为 None / 空串时恒为 False（无 workspace 语义）。"""
 
-    assert cosir_paths.is_within_cosir(tmp_path / ".cosir" / "x", None) is False
-    assert cosir_paths.is_within_cosir(tmp_path / ".cosir" / "x", "") is False
+    assert is_within_cosir(tmp_path / ".cosir" / "x", None) is False
+    assert is_within_cosir(tmp_path / ".cosir" / "x", "") is False
 
 
 # --- B. 符号链接绕过（双向） ---------------------------------------------------
@@ -160,7 +162,7 @@ def test_symlink_pointing_into_cosir_is_reserved(tmp_path: Path) -> None:
     (root / ".cosir").mkdir()
     link = root / "innocent.txt"
     link.symlink_to(root / ".cosir" / "target.txt")
-    assert cosir_paths.is_within_cosir(link, root) is True
+    assert is_within_cosir(link, root) is True
 
 
 def test_symlink_from_outside_into_cosir_is_reserved(tmp_path: Path) -> None:
@@ -175,7 +177,7 @@ def test_symlink_from_outside_into_cosir_is_reserved(tmp_path: Path) -> None:
     outside.mkdir()
     link = outside / "escapelink.txt"
     link.symlink_to(root / ".cosir" / "target.txt")
-    assert cosir_paths.is_within_cosir(link, root) is True
+    assert is_within_cosir(link, root) is True
 
 
 def test_symlink_from_inside_cosir_to_outside_is_not_reserved(tmp_path: Path) -> None:
@@ -195,7 +197,7 @@ def test_symlink_from_inside_cosir_to_outside_is_not_reserved(tmp_path: Path) ->
     (outside / "target.txt").write_text("data", encoding="utf-8")
     link = root / ".cosir" / "escape.txt"
     link.symlink_to(outside / "target.txt")
-    assert cosir_paths.is_within_cosir(link, root) is False
+    assert is_within_cosir(link, root) is False
 
 
 def test_write_file_via_symlink_into_cosir_is_blocked(tmp_path: Path) -> None:
@@ -673,7 +675,7 @@ def test_paths_reset_derives_data_dir_from_env(
     try:
         paths.reset()
         assert data_dir == paths.DATA_DIR
-        assert cosir_paths.system_cosir_dir() == data_dir / cosir_paths.COSIR_DIR_NAME
+        assert system_cosir_dir() == data_dir / COSIR_DIR_NAME
     finally:
         monkeypatch.delenv("CODING_AGENT_DATA_DIR", raising=False)
         paths.reset()
@@ -688,7 +690,7 @@ def test_paths_reset_without_data_dir_uses_platform_default(
     if sys.platform in {"darwin", "win32"}:
         paths.reset()
         assert paths.Path.home() == paths.DATA_DIR
-        assert cosir_paths.system_cosir_dir() == paths.Path.home() / cosir_paths.COSIR_DIR_NAME
+        assert system_cosir_dir() == paths.Path.home() / COSIR_DIR_NAME
     else:
         with pytest.raises(RuntimeError):
             paths.reset()
@@ -701,7 +703,7 @@ def test_system_cosir_dir_reads_data_dir(tmp_path: Path) -> None:
 
     paths.override(DATA_DIR=tmp_path / "sys")
     try:
-        assert cosir_paths.system_cosir_dir() == tmp_path / "sys" / cosir_paths.COSIR_DIR_NAME
+        assert system_cosir_dir() == tmp_path / "sys" / COSIR_DIR_NAME
     finally:
         paths.reset()
 
@@ -715,7 +717,7 @@ def test_ensure_system_cosir_dir_is_idempotent(tmp_path: Path) -> None:
     try:
         _ensure_system_cosir_dir()
         _ensure_system_cosir_dir()
-        assert (tmp_path / "sys" / cosir_paths.COSIR_DIR_NAME).is_dir()
+        assert (tmp_path / "sys" / COSIR_DIR_NAME).is_dir()
     finally:
         paths.reset()
 
@@ -948,7 +950,7 @@ def test_junction_pointing_into_cosir_is_reserved(tmp_path: Path) -> None:
         pytest.skip("无法调用 mklink")
     if result.returncode != 0 or not junction.exists():
         pytest.skip(f"环境不支持创建 junction：{result.stderr or result.stdout}")
-    assert cosir_paths.is_within_cosir(junction / "x.txt", root) is True
+    assert is_within_cosir(junction / "x.txt", root) is True
     # 通过 junction 写文件的尝试必须被拒绝。
     obs = WriteFileTool().execute(path="junc/pwn.txt", content="x", execution_context=_ctx(root))
     assert obs.status == "error"
@@ -995,8 +997,8 @@ def test_cosir_root_relative_vs_absolute_consistency(tmp_path: Path) -> None:
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
     abs_path = str(root / ".cosir" / "x.txt")
-    assert cosir_paths.is_within_cosir(abs_path, root) is True
-    assert cosir_paths.is_within_cosir(abs_path, str(root)) is True
+    assert is_within_cosir(abs_path, root) is True
+    assert is_within_cosir(abs_path, str(root)) is True
 
 
 def test_artifact_containment_when_root_is_symlink(tmp_path: Path) -> None:
@@ -1026,8 +1028,8 @@ def test_is_within_cosir_with_relative_path_under_cwd(
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
     monkeypatch.chdir(root)
-    assert cosir_paths.is_within_cosir(".cosir/x.txt", root) is True
-    assert cosir_paths.is_within_cosir("src/x.txt", root) is False
+    assert is_within_cosir(".cosir/x.txt", root) is True
+    assert is_within_cosir("src/x.txt", root) is False
 
 
 def test_resolve_without_boundary_rejects_blank_and_nul(tmp_path: Path) -> None:

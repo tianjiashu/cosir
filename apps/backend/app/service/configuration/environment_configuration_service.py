@@ -29,7 +29,7 @@ from app.config.settings import Settings
 from app.models.environment.environment_change import EnvironmentChange
 from app.models.environment.environment_field import EnvironmentField
 from app.service.configuration.file_store import ConfigurationFileStore
-from app.utils.cosir_paths import system_cosir_dir, system_env_file
+from app.utils.path.system_cosir import system_cosir_dir, system_env_file
 
 
 class EnvironmentConfigurationError(ValueError):
@@ -47,7 +47,7 @@ class EnvironmentConfigurationService:
     def __init__(self) -> None:
         """初始化系统环境配置 service。
 
-        env 文件位置唯一由 ``app.utils.cosir_paths`` 决定（``<数据根>/.cosir/.env``），因此不接受
+        env 文件位置唯一由 ``app.utils.path`` 决定（``<数据根>/.cosir/.env``），因此不接受
         路径参数，避免出现第二套位置口径；测试若要隔离文件系统，应替换本模块引用的
         ``system_env_file``。
 

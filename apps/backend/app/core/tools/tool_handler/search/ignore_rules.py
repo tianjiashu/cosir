@@ -27,7 +27,7 @@ from app.core.tools.tool_handler.search.gitignore_rules import (
     valid_rule_lines,
 )
 from app.core.tools.tool_handler.search.ignore_matcher import IgnoreMatcher
-from app.utils.cosir_paths import workspace_cosir_dir
+from app.utils.path.workspace_cosir import workspace_cosir_dir
 
 IGNORE_FILE_NAME: str = ".fileignore"
 """workspace 级忽略规则文件名（位于 ``<workspace>/.cosir/`` 下）。"""
@@ -98,7 +98,7 @@ def ignore_file_path(workspace_root: str | Path) -> Path:
         无。
 
     副作用:
-        无（纯路径拼接；``.cosir`` 位置由 ``app.utils.cosir_paths`` 收口）。
+        无（纯路径拼接；``.cosir`` 位置由 ``app.utils.path.workspace_cosir`` 收口）。
     """
 
     return workspace_cosir_dir(workspace_root) / IGNORE_FILE_NAME

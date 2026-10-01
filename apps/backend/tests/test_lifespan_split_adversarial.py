@@ -34,7 +34,7 @@ from fastapi import FastAPI
 
 import app.app as app_module
 import app.lifespan as lifespan_module
-from app.utils import paths
+from app.utils.path import system_cosir as paths
 
 # ---------------------------------------------------------------------------
 # 通用夹具 / 辅助
@@ -43,7 +43,7 @@ from app.utils import paths
 
 @pytest.fixture(autouse=True)
 def _restore_paths() -> Any:
-    """每个用例结束后还原 ``app.utils.paths`` 的模块级路径常量，避免跨用例污染。"""
+    """每个用例结束后还原 ``app.utils.path.system_cosir`` 的模块级路径常量，避免跨用例污染。"""
 
     yield
     paths.reset()

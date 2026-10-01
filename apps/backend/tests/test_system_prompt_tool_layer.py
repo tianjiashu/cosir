@@ -17,7 +17,7 @@ from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.define_agents import main_agent
 from app.core.context import system_prompt_builder as spb
-from app.utils import paths
+from app.utils.path import system_cosir as paths
 
 _DELEGATION_TOOLS = ("read_file", "delegate_task")
 # 该层只把 workspace 当作 Registry 作用域键，故用例用任意稳定的路径字符串。

@@ -48,7 +48,7 @@ from app.core.tools.tool_handler.write_file import WriteFileTool
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.service.terminal.terminal_session_service import TerminalSessionService
-from app.utils import cosir_paths
+from app.utils.path.validation import is_within_cosir
 
 _ASSET = "a" * 64
 
@@ -377,7 +377,7 @@ def test_is_within_cosir_blank_path_returns_false(tmp_path: Path, blank: object)
 
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
-    assert cosir_paths.is_within_cosir(blank, root) is False
+    assert is_within_cosir(blank, root) is False
 
 
 def test_is_within_cosir_blank_does_not_depend_on_cwd(
@@ -390,8 +390,8 @@ def test_is_within_cosir_blank_does_not_depend_on_cwd(
     cosir.mkdir(parents=True)
     monkeypatch.chdir(cosir)
 
-    assert cosir_paths.is_within_cosir("", root) is False
-    assert cosir_paths.is_within_cosir("   ", root) is False
+    assert is_within_cosir("", root) is False
+    assert is_within_cosir("   ", root) is False
 
 
 def test_is_within_cosir_normal_paths_unaffected_by_blank_short_circuit(tmp_path: Path) -> None:
@@ -402,17 +402,17 @@ def test_is_within_cosir_normal_paths_unaffected_by_blank_short_circuit(tmp_path
     (root / ".cosir2").mkdir(parents=True)
 
     # 命中
-    assert cosir_paths.is_within_cosir(root / ".cosir", root) is True
-    assert cosir_paths.is_within_cosir(root / ".cosir" / "x.txt", root) is True
-    assert cosir_paths.is_within_cosir(root / "./.cosir" / "x", root) is True
-    assert cosir_paths.is_within_cosir(root / ".cosir" / "x" / ".." / "y", root) is True
+    assert is_within_cosir(root / ".cosir", root) is True
+    assert is_within_cosir(root / ".cosir" / "x.txt", root) is True
+    assert is_within_cosir(root / "./.cosir" / "x", root) is True
+    assert is_within_cosir(root / ".cosir" / "x" / ".." / "y", root) is True
     # 不命中
-    assert cosir_paths.is_within_cosir(root / ".cosir2" / "x", root) is False
-    assert cosir_paths.is_within_cosir(root / "src" / "x.txt", root) is False
+    assert is_within_cosir(root / ".cosir2" / "x", root) is False
+    assert is_within_cosir(root / "src" / "x.txt", root) is False
     # workspace_root 无效
-    assert cosir_paths.is_within_cosir(root / ".cosir" / "x", None) is False
-    assert cosir_paths.is_within_cosir(root / ".cosir" / "x", "") is False
-    assert cosir_paths.is_within_cosir(root / ".cosir" / "x", "   ") is False
+    assert is_within_cosir(root / ".cosir" / "x", None) is False
+    assert is_within_cosir(root / ".cosir" / "x", "") is False
+    assert is_within_cosir(root / ".cosir" / "x", "   ") is False
 
 
 def test_is_trusted_cosir_path_blank_is_false(tmp_path: Path) -> None:

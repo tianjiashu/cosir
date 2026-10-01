@@ -24,7 +24,7 @@ from app.service.attachment.image_normalizer import (
     normalize_image,
 )
 from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
-from app.utils.cosir_paths import (
+from app.utils.path.workspace_cosir import (
     workspace_attachment_dir,
     workspace_attachment_staging_dir,
     workspace_cosir_dir,
@@ -110,7 +110,7 @@ class AttachmentService:
         """返回 workspace 根目录与附件落盘目录。
 
         ``workspace_root`` 直接取自 workspace 记录，**不**由附件目录反推——避免把 ``.cosir``
-        的目录层级知识散落到本模块（层级规则由 ``app.utils.cosir_paths`` 独占）。
+        的目录层级知识散落到本模块（层级规则由 ``app.utils.path`` 独占）。
 
         参数:
             workspace_id: 工作区标识。

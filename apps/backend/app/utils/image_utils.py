@@ -20,7 +20,7 @@ import mimetypes
 from pathlib import Path
 
 from app.utils.constants import IMAGE_EXTENSIONS
-from app.utils.cosir_paths import is_within_cosir
+from app.utils.path.validation import is_within_cosir
 
 
 def is_image_path(ref: str) -> bool:
@@ -72,13 +72,13 @@ def is_trusted_cosir_path(image_path: str, workspace_root: str | None) -> bool:
         ``True`` 表示路径落在 ``.cosir`` 受信目录内（含子目录）；否则 ``False``。
 
     异常:
-        无：底层 :func:`app.utils.cosir_paths.is_within_cosir` 将 ``OSError`` 归一化为 ``False``。
+        无：底层 :func:`app.utils.path.validation.is_within_cosir` 将 ``OSError`` 归一化为 ``False``。
 
     副作用:
         无。
 
     说明:
-        判定委托 :func:`app.utils.cosir_paths.is_within_cosir`，使 ``.cosir`` 归属规则保持
+        判定委托 :func:`app.utils.path.validation.is_within_cosir`，使 ``.cosir`` 归属规则保持
         单一来源，避免本模块与其它调用点各自实现而漂移。
     """
 

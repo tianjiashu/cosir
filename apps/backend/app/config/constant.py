@@ -3,7 +3,7 @@
 单一职责：集中存放后端各域「不可变、跨模块共享」的命名常量——数值上限 / 超时 / 计数、
 协议与 worker 标识、状态与失败 code、编译后的正则、固定集合等。运行期可由环境变量覆盖的
 配置不在此处（见 ``app.config.settings.Settings``）；固定路径也不在此处（唯一事实源
-``app.utils.paths``）；路径外的其它「逻辑配置」由各自 service / 模块承载。
+``app.utils.path.system_cosir``）；路径外的其它「逻辑配置」由各自 service / 模块承载。
 
 设计约定：
 - 调用一律通过 ``Constant.<域>.<NAME>``（如 ``Constant.Terminal.MAX_ACTIVE_SESSIONS``），

@@ -14,7 +14,7 @@ import pytest
 from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.context import system_prompt_builder as spb
-from app.utils import paths
+from app.utils.path import system_cosir as paths
 from app.utils.token_estimator import TokenEstimator
 
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.core.agents.agent_profile import AgentProfileConfigError
-from app.utils.cosir_paths import system_agent_config_dir
+from app.utils.path.system_cosir import system_agent_config_dir
 
 
 def ensure_system_agent_config_dir() -> Path:

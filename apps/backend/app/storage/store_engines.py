@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.storage.engine_cache import _engine_cache, create_session_factory
 from app.storage.init_schema import initialize_app_schema
-from app.utils import paths
+from app.utils.path import system_cosir as paths
 
 _INIT_LOCK = RLock()
 

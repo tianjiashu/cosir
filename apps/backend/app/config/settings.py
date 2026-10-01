@@ -14,7 +14,7 @@
   Web 限额、日志轮转等固定值统一收敛到 ``app.config.constant.Constant`` 的对应域；判定标准
   是「是否存在真实的按环境覆盖需求」，不是数值大小。
 - 进程固定路径（数据根 / 日志目录 / 主库与 checkpoint 文件）不在此定义，唯一事实源为
-  ``app.utils.paths``；``Settings.load`` 会触发其 ``reset`` 与环境变量对齐。
+  ``app.utils.path.system_cosir``；``Settings.load`` 会触发其 ``reset`` 与环境变量对齐。
 - 保留下来的配置全进程共享、启动后只读；测试需临时改值时经 ``monkeypatch.setattr``（自动还原）。
   主 Agent 的单轮最大步数由 ``MAIN_AGENT_MAX_STEPS`` 环境配置加载到这里，再注入主 Agent
   profile；子 Agent 的 ``max_steps`` 仍由各自 Agent profile 配置提供。
@@ -27,7 +27,7 @@ from typing import ClassVar
 from dotenv import dotenv_values
 
 from app.service.configuration.file_store import ConfigurationFileStore
-from app.utils import paths
+from app.utils.path import system_cosir as paths
 
 
 class Settings:
@@ -40,7 +40,7 @@ class Settings:
         - 负责：进程级运行配置的定义、加载（含 ``.env`` 覆盖）与校验；测试临时改值由调用方
           经 ``monkeypatch.setattr`` 完成，本类不提供覆盖入口。
         - 不负责：不可变静态常量（见 ``app.config.constant.Constant``）、模型相关配置
-          （见 ``app.core.agents.model_settings``）、进程固定路径（见 ``app.utils.paths``）、
+          （见 ``app.core.agents.model_settings``）、进程固定路径（见 ``app.utils.path.system_cosir``）、
           任何业务读写。
     """
 
@@ -82,7 +82,7 @@ class Settings:
     def _load_env_file() -> None:
         """从系统级 ``.cosir/.env`` 加载未显式设置的环境变量。
 
-        配置文件位置完全由 ``app.utils.paths.env_file()`` 决定（``<数据根>/.cosir/.env``），本方法
+        配置文件位置完全由 ``app.utils.path.system_cosir.env_file()`` 决定（``<数据根>/.cosir/.env``），本方法
         不接受路径参数，避免出现第二套位置口径。
 
         返回:
@@ -183,7 +183,7 @@ class Settings:
 
         进程启动时调用一次（``__main__.py`` 与 ``app.py`` 的 lifespan 均会调用）；模块导入时
         亦会调用一次，使未显式启动的单元测试也能拿到按环境推导出的默认路径。不接受路径参数：
-        配置文件来源与全部固定路径都由 ``app.utils.paths`` 决定。
+        配置文件来源与全部固定路径都由 ``app.utils.path.system_cosir`` 决定。
 
         返回:
             无。
@@ -197,7 +197,7 @@ class Settings:
             按当前环境重新对齐固定路径（数据根 / 日志目录 / 主业务库与 checkpoint 文件）。
         """
         cls._load_env_file()
-        # 固定路径唯一事实源在 ``app.utils.paths``：加载 .env 后按环境重新对齐，使
+        # 固定路径唯一事实源在 ``app.utils.path.system_cosir``：加载 .env 后按环境重新对齐，使
         # 系统 ``.cosir/.env`` 中的运行配置在此阶段生效；路径根由桌面宿主注入。
         paths.reset()
         # 环境变量名与类字段名同名（见模块 docstring）：读取的键即字段本身，无前缀映射。

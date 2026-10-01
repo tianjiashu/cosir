@@ -12,7 +12,7 @@ from pathlib import Path
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.configuration.file_store import ConfigurationFileStore
-from app.utils.cosir_paths import system_cosir_dir, system_instruction_file
+from app.utils.path.system_cosir import system_cosir_dir, system_instruction_file
 from app.utils.token_estimator import TokenEstimator
 
 

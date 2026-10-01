@@ -19,7 +19,7 @@
 from pathlib import Path
 from typing import ClassVar
 
-from app.utils.cosir_paths import is_within_cosir
+from app.utils.path.validation import is_within_cosir
 
 
 class PathResolver:

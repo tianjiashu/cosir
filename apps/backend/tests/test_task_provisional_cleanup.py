@@ -14,7 +14,7 @@ from app.service.depends import (
 )
 from app.storage.store_engines import init_storage
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-from app.utils import paths
+from app.utils.path import system_cosir as paths
 
 
 @pytest.fixture

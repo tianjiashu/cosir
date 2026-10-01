@@ -1,9 +1,8 @@
-"""进程固定路径常量。
+"""系统级 ``.cosir`` 路径与进程固定路径常量（唯一事实源）。
 
-本模块是后端进程固定路径的唯一事实源。桌面宿主把系统级数据根通过
-``CODING_AGENT_DATA_DIR`` 注入；macOS/Windows 使用用户主目录，后端再把所有运行期数据统一
-放入该根目录下的 ``.cosir`` 子目录。直接运行后端时，macOS/Windows 同样使用用户主目录，
-其他平台必须由桌面宿主注入 ``CODING_AGENT_DATA_DIR``，否则启动期路径解析失败。
+桌面宿主把系统级数据根通过 ``CODING_AGENT_DATA_DIR`` 注入；macOS/Windows 使用用户主目录，
+后端再把所有运行期数据统一放入该根目录下的 ``.cosir`` 子目录。直接运行后端时，macOS/Windows
+同样使用用户主目录，其他平台必须由桌面宿主注入 ``CODING_AGENT_DATA_DIR``，否则启动期路径解析失败。
 
 路径布局：
 
@@ -15,6 +14,8 @@
 
 本模块只做路径推导，不创建目录、不读写文件。目录创建由 Tauri 宿主、日志配置和存储初始化
 各自负责；``Settings.load`` 在加载系统 ``.env`` 后调用 ``reset``，使环境变量与固定路径重新对齐。
+
+``.cosir`` 基名由 ``app.utils.path.workspace_cosir.COSIR_DIR_NAME`` 固定，不作为配置项。
 """
 
 from __future__ import annotations
@@ -25,9 +26,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Final
 
-from app.utils.cosir_paths import (
+from app.utils.path.workspace_cosir import (
+    COSIR_AGENT_CONFIG_DIR_NAME,
     COSIR_DIR_NAME,
-    system_env_file,
+    COSIR_ENV_FILE_NAME,
+    COSIR_INSTRUCTION_FILE_NAME,
+    COSIR_MAIN_AGENT_PROMPT_FILE_NAME,
 )
 
 _STORAGE_DIR_NAME: Final[str] = "storage"
@@ -132,6 +136,36 @@ CHECKPOINT_FILE: Path = _initial["CHECKPOINT_FILE"]
 RUNTIME_DIR: Path = _initial["RUNTIME_DIR"]
 
 
+def system_cosir_dir() -> Path:
+    """返回系统级 ``.cosir`` 目录路径（``<数据根>/.cosir``）。"""
+
+    return SYSTEM_COSIR_DIR
+
+
+def system_instruction_file() -> Path:
+    """返回系统级全局指令文件路径（``<system_cosir_dir>/AGENTS.md``）。"""
+
+    return system_cosir_dir() / COSIR_INSTRUCTION_FILE_NAME
+
+
+def system_main_agent_prompt_file() -> Path:
+    """返回系统级主 Agent 系统提示词配置文件路径。"""
+
+    return system_cosir_dir() / COSIR_MAIN_AGENT_PROMPT_FILE_NAME
+
+
+def system_agent_config_dir() -> Path:
+    """返回系统级子 Agent JSON 配置目录路径（``<system_cosir_dir>/agents``）。"""
+
+    return system_cosir_dir() / COSIR_AGENT_CONFIG_DIR_NAME
+
+
+def system_env_file() -> Path:
+    """返回系统级基础环境配置文件路径（``<system_cosir_dir>/.env``）。"""
+
+    return system_cosir_dir() / COSIR_ENV_FILE_NAME
+
+
 def env_file() -> Path:
     """返回系统级运行配置文件路径（``<数据根>/.cosir/.env``）。"""
 
@@ -163,4 +197,20 @@ def override(**kwargs: Any) -> None:
     globals().update(kwargs)
 
 
-__all__ = [*_DERIVERS, "override", "reset"]
+__all__ = [
+    *list(_DERIVERS),
+    "override",
+    "reset",
+    "env_file",
+    "LOG_FILE_NAME",
+    "system_cosir_dir",
+    "system_instruction_file",
+    "system_main_agent_prompt_file",
+    "system_agent_config_dir",
+    "system_env_file",
+    "COSIR_DIR_NAME",
+    "COSIR_AGENT_CONFIG_DIR_NAME",
+    "COSIR_INSTRUCTION_FILE_NAME",
+    "COSIR_MAIN_AGENT_PROMPT_FILE_NAME",
+    "COSIR_ENV_FILE_NAME",
+]

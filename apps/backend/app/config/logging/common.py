@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.utils.paths import LOG_FILE_NAME
+from app.utils.path.system_cosir import LOG_FILE_NAME
 
 
 def current_log_file(log_dir: Path) -> Path:

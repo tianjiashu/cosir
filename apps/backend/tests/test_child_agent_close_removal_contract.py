@@ -58,7 +58,7 @@ from app.core.tools.tool_registry import ToolRegistry
 from app.core.tools.tool_system import ToolSystem
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
-from app.utils import paths
+from app.utils.path import system_cosir as paths
 
 # 被删除的工具名（唯一事实源：本测试的待验证目标）。
 _REMOVED_TOOL_NAME = "child_agent_close"

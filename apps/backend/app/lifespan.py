@@ -60,12 +60,9 @@ from app.service.depends import (
     initialize_service_dependencies,
     set_runtime,
 )
-from app.utils import paths
-from app.utils.cosir_paths import (
-    system_agent_config_dir,
-    system_cosir_dir,
-    workspace_agent_config_dir,
-)
+from app.utils.path import system_cosir as paths
+from app.utils.path.system_cosir import system_agent_config_dir, system_cosir_dir
+from app.utils.path.workspace_cosir import workspace_agent_config_dir
 from app.utils.json_utils import JsonFileError, read_json_object
 
 
@@ -379,7 +376,7 @@ def _ensure_system_cosir_dir() -> None:
     """幂等创建系统级 ``.cosir`` 目录，失败降级不阻断启动。
 
     系统级 ``.cosir`` 用于承载跨 workspace 的系统级配置：**目录名固定为 ``.cosir``**，
-    位置由 ``cosir_paths.system_cosir_dir()`` 给出（macOS 为 ``~/.cosir``、Windows 为
+    位置由 ``system_cosir_dir()`` 给出（macOS 为 ``~/.cosir``、Windows 为
     ``%USERPROFILE%\\.cosir``；其他 Tauri 平台使用其应用数据目录下的 ``.cosir``；直接运行
     后端时 macOS/Windows 使用用户主目录，其他平台使用仓库根）。workspace 级 ``.cosir``
     由 ``WorkspaceService`` 在创建工作区时创建，与本函数无关。
@@ -394,7 +391,7 @@ def _ensure_system_cosir_dir() -> None:
         无：目录创建失败只记 error 日志，不向上抛出，避免元数据目录不可用阻断后端启动。
 
     副作用:
-        在 ``cosir_paths.system_cosir_dir()`` 创建目录（已存在则幂等跳过）；创建成功
+        在 ``system_cosir_dir()`` 创建目录（已存在则幂等跳过）；创建成功
         写 ``system_cosir_initialized`` info 日志，失败写 ``system_cosir_init_failed``
         error 日志。
     """

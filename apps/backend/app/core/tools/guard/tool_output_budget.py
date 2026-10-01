@@ -25,7 +25,7 @@ from app.config.logging.logger import log
 from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 from app.core.tools.tool_handler.patch_write.atomic_write import atomic_write_text
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
-from app.utils.cosir_paths import workspace_tool_artifact_dir
+from app.utils.path.workspace_cosir import workspace_tool_artifact_dir
 
 # 头尾预算分配：头部占比，其余给尾部。工具输出的结论/报错通常落在末尾，尾部必须保留；
 # 该常量是头尾配比的唯一调节点。

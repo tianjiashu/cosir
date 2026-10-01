@@ -35,7 +35,8 @@ from app.task_runtime.agent_catalog_change import (
 from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
     broadcast_agent_catalog_change,
 )
-from app.utils.cosir_paths import system_agent_config_dir, workspace_agent_config_dir
+from app.utils.path.system_cosir import system_agent_config_dir
+from app.utils.path.workspace_cosir import workspace_agent_config_dir
 
 
 class AgentConfigurationError(ValueError):

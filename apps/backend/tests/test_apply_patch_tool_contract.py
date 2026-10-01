@@ -17,7 +17,7 @@ from app.core.tools.tool_models.move_file_args import MoveFileArgs
 from app.core.tools.tool_system import ToolSystem
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
-from app.utils import paths
+from app.utils.path import system_cosir as paths
 
 # 工具描述的事实源已从模块级常量 ``APPLY_PATCH_DESCRIPTION`` 迁移为类属性
 # ``ApplyPatchTool.description``（模块不再导出该名字）。这里只做「测试内别名」，把下文的

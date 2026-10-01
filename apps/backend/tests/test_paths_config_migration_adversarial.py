@@ -9,7 +9,7 @@
   C. ``paths.override(**kwargs)``：部分覆盖、未知键、覆盖后 ``system_cosir_dir`` 联动。
   D. ``Settings`` 已无四个路径属性、也不再提供覆盖入口；``Settings.load()`` 触发
      ``paths.reset()`` 与环境对齐。
-  E. ``app.utils.cosir_paths`` 可独立导入且 ``system_cosir_dir`` 读 ``paths.DATA_DIR``。
+  E. ``app.utils.path.system_cosir`` 可独立导入且 ``system_cosir_dir`` 读 ``paths.DATA_DIR``。
   F. ``app.storage.store_engines`` 的 ``init_storage`` / ``checkpoint_path`` 使用 ``paths`` 常量、
      路径变化后切换引擎、并在结束时复位避免污染。
   G. 边界：``CODING_AGENT_DATA_DIR`` 为空串 / 纯空白（均按未设置回落平台默认根）/ 相对路径的处理。
@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 
 from app.config.settings import Settings
-from app.utils import paths
+from app.utils.path import system_cosir as paths
 
 
 def _reset_paths() -> None:
@@ -206,11 +206,11 @@ def test_override_unknown_key_after_valid_does_not_partially_apply(tmp_path: Pat
 def test_override_data_dir_updates_system_cosir_dir(tmp_path: Path) -> None:
     # 目的：override(DATA_DIR=...) 后 system_cosir_dir() == DATA_DIR/".cosir"。
     # 潜在缺陷：cosir_paths 读取静态快照或相对路径。
-    from app.utils import cosir_paths
+    from app.utils.path.system_cosir import system_cosir_dir
 
     paths.override(DATA_DIR=tmp_path / "sys")
     try:
-        assert cosir_paths.system_cosir_dir() == tmp_path / "sys" / ".cosir"
+        assert system_cosir_dir() == tmp_path / "sys" / ".cosir"
     finally:
         _reset_paths()
 
@@ -272,22 +272,22 @@ def test_settings_loads_environment_from_system_cosir(
 
 
 # ---------------------------------------------------------------------------
-# E. cosir_paths 导入与数据根
+# E. system_cosir 导入与数据根
 # ---------------------------------------------------------------------------
 def test_cosir_paths_importable_without_cycle() -> None:
     # 目的：cosir_paths 可独立导入（无循环导入）。潜在缺陷：模块级相互导入导致 ImportError。
-    module = importlib.import_module("app.utils.cosir_paths")
+    module = importlib.import_module("app.utils.path.system_cosir")
     assert module.COSIR_DIR_NAME == ".cosir"
 
 
 def test_system_cosir_dir_reads_paths_data_dir(tmp_path: Path) -> None:
     # 目的：system_cosir_dir() 动态读取 paths.DATA_DIR（非硬编码/相对）。潜在缺陷：读静态快照。
-    from app.utils import cosir_paths
+    from app.utils.path.system_cosir import system_cosir_dir
 
-    assert cosir_paths.system_cosir_dir() == paths.SYSTEM_COSIR_DIR
+    assert system_cosir_dir() == paths.SYSTEM_COSIR_DIR
     paths.override(DATA_DIR=tmp_path / "moved")
     try:
-        assert cosir_paths.system_cosir_dir() == tmp_path / "moved" / ".cosir"
+        assert system_cosir_dir() == tmp_path / "moved" / ".cosir"
     finally:
         _reset_paths()
 

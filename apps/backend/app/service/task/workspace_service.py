@@ -25,7 +25,7 @@ from app.storage.write_transaction import begin_immediate
 from app.task_runtime.service.task_service import TaskDeletionResult
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
-from app.utils.cosir_paths import workspace_attachment_dir, workspace_cosir_dir
+from app.utils.path.workspace_cosir import workspace_attachment_dir, workspace_cosir_dir
 
 
 class WorkspaceService:

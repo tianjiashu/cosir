@@ -13,7 +13,7 @@ T. ``<tool_layer>`` 工具能力目录层：只在 ``AgentProfile.allowed_tools`
    子 Agent 目录。委派工具不可用（子 Agent 已禁用委派、目录为空）时整层不出现，避免向模型下发
    不存在的契约；本层只消费调用方传入的工具名集合，不自行推导工具可用性。
 3. ``<global_layer>`` 系统级全局指令层：来源唯一、路径固定为 ``<system_cosir_dir>/AGENTS.md``
-   （由 ``app.utils.cosir_paths.system_instruction_file`` 计算），作为跨所有 workspace 生效的
+   （由 ``app.utils.path.system_cosir.system_instruction_file`` 计算），作为跨所有 workspace 生效的
    全局提示词；文件缺失时创建空白文件供用户编辑并降级为空，读取失败（权限/编码/IO）时同样降级为空，
    空白内容不生成该层标签；不参与目录层级择优。
 4. ``<workspace_layer>`` Workspace 项目层：只认 ``AGENTS.md``，按目录层级择优（顶层优先）
@@ -40,7 +40,7 @@ from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfile
 from app.core.tools.schemas.tool_names import TOOL_DELEGATE_TASK
 from app.service.configuration.file_store import ConfigurationFileStore
-from app.utils.cosir_paths import system_instruction_file
+from app.utils.path.system_cosir import system_instruction_file
 from app.utils.file_utils import read_text_file
 from app.utils.token_estimator import TokenEstimator
 from app.utils.workspace_instruction import find_workspace_instruction_file
@@ -216,7 +216,7 @@ class SystemPromptBuilder:
         """构建系统级全局指令层：加载 ``<system_cosir_dir>/AGENTS.md`` 作为全局提示词。
 
         与 Workspace 层（按目录层级择优、仅一个文件）不同，本层来源唯一、路径固定
-        （由 ``app.utils.cosir_paths.system_instruction_file`` 计算），作为跨所有 workspace
+        （由 ``app.utils.path.system_cosir.system_instruction_file`` 计算），作为跨所有 workspace
         生效的全局指令。文件缺失时先创建空白文件（便于用户就地编辑），再降级为空字符串；
         读取失败（权限/编码/IO）时同样降级为空字符串，不中断构建。空白内容（文件存在但无
         实质内容）不生成 ``<global_layer>`` 块，避免向模型注入空标签噪声。
