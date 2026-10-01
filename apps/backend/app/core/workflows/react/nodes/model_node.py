@@ -205,7 +205,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     # lifecycle 只覆盖本次 model request；model -> tools -> observe 之间会沿 state 传递，
     # 下一次进入 model 时从空快照开始，避免混入上一轮已结束的 tool call。
     state.tool_call_lifecycle = ToolCallLifecycleManager(
-        ban_tools=tuple(rc.run.extra.ban_tools if rc.run.extra is not None else ())
+        allows_tools=tuple(operations.allows_tools)
     )
     tool_call_lifecycle = state.tool_call_lifecycle
 

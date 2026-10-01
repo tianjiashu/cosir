@@ -412,7 +412,7 @@ runtime_context.begin_run(
     execution_mode,
     tool_schemas=binding.tool_schemas,
     context_window=binding.context_window,
-    effective_tools=binding.model_tools,
+    effective_tools=binding.all_vaild_tools,
 )
 ```
 

@@ -6,6 +6,8 @@ from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileConfigError,
 )
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from langchain_core.messages import SystemMessage
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.model_settings import ModelSettings
 from app.core.hook import HookContext, HookEvent, HookInterceptor
@@ -22,7 +24,8 @@ from app.core.runtime.execution_mode import ExecutionMode
 from app.core.runtime.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
-from app.core.tools.schemas import ToolExecutionContext
+from app.core.tools.schemas import ToolExecutionContext, ToolDefinition
+from app.core.tools.schemas.tool_names import TOOL_PROPOSE_AGENT_CONFIGURATION
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.workflow_operations import WorkflowOperations
@@ -33,6 +36,7 @@ from app.service.depends import (
     get_terminal_session_service,
     get_workspace_service,
 )
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 class AgentRuntime:
@@ -80,6 +84,7 @@ class AgentRuntime:
 
         self._task_service = get_task_service()
         self._tool_executor = get_tool_system().executor
+        self._tool_register = get_tool_system().registry
         self._agent_registry = get_agent_registry()
         self._workspace_service = get_workspace_service()
         self._process_tool_output_channel_factory = process_tool_output_channel_factory
@@ -89,7 +94,6 @@ class AgentRuntime:
         run: ConversationRunRecord,
         *,
         execution_mode: ExecutionMode = "fresh",
-        ban_tools: list[str] | None = None,
     ) -> None:
         """执行一个已被 ConversationRunExecutor 认领（pending→running）的 run。
 
@@ -107,7 +111,6 @@ class AgentRuntime:
             run: 已被执行器认领的 Conversation Run 记录（非 None，状态 running）。
             execution_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``）；
                 透传给 workflow，由其决定是否清空旧上下文与如何构造 graph 输入。
-            ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
 
         异常:
             RuntimeError: 轮次绑定的 agent profile 不可用时抛出，由执行器捕获收束为 failed。
@@ -139,7 +142,6 @@ class AgentRuntime:
         # 派生 per-run 副本承载本次 run：共享注册表单例不被原地写，并发 run 互不串扰。
         agent_profile = agent_profile.derive_for_run(
             run,
-            ban_tools=ban_tools,
             model_settings=runtime_model_settings,
         )
         await self.run_agent(
@@ -275,19 +277,18 @@ class AgentRuntime:
 
     def _build_operations(
         self,
-        workspace: WorkspaceRecord,
-        task: TaskRecord,
-        run: ConversationRunRecord,
-        agent_profile: AgentProfile,
-        tool_trace_recorder: ToolTraceRecorder | None = None,
+            workspace: WorkspaceRecord,
+            task: TaskRecord,
+            run: ConversationRunRecord,
+            agent_profile: AgentProfile,
+            tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> WorkflowOperations:
         """为单个 run 构建运行时操作门面，按 workspace 解析工具边界。
 
-        workspace 可见性（写、改、删是否开放）由 ``execution_context`` 决定；
-        最终「可运行工具集合」由 ``agent_profile.select_tools`` 在候选集上裁定，
-        运行底座不再自行做权限门禁。唯一例外是 fail closed 的委派前置条件：主 Agent 拿不到
-        ``agent_profile_registry`` 时从工具集中剔除 ``delegate_task``（无目录即无法解析目标），
-        子 Agent 则已由 ``ban_tools`` 收窄，不在此处处理。
+        Task 固化的模型 schema 决定 ``bind_tools`` 的稳定结构；当前 Run 的
+        Run Extra 持久化的 ``ban_tools`` 与 Task 固化 schema 在本方法内计算出的
+        ``allows_tools`` 决定工具调用和执行准入。workspace 可见性仍由
+        ``execution_context`` 负责，不能替代两者。
 
         参数:
             workspace: 当前 run 所属的 workspace 记录，用于解析工具执行边界。
@@ -304,7 +305,30 @@ class AgentRuntime:
             已注入正确 tool_executor / model_tools / execution_context / trace_recorder 的
             WorkflowOperations 实例。
         """
-        model_tools = agent_profile.select_tools(self._tool_executor.list_tools())
+        task_space = task_runtime_spaces.get_or_create(task.id)
+        model_tools = list(task_space.task_tool_definitions)
+        allows_tools = set(tool.get("name") for tool in model_tools)
+
+        ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
+        if run.extra is not None and len(run.extra.ban_tools) > 0:
+            allows_tools = allows_tools - ban_tools
+            task_space.defer_system_message(SystemMessage(
+                content=f"Tools banned for this round: {ban_tools}. These tools cannot be executed in this round; please do not use them."
+            ))
+        else:
+            task_space.defer_system_message(SystemMessage(
+                content="All tools are allowed for this round."
+            ))
+
+        if run.extra is not None and run.extra.propose_agent_configuration:
+            allows_tools.add(TOOL_PROPOSE_AGENT_CONFIGURATION)
+            definition:ToolDefinition = self._tool_register.get_tool_definition(TOOL_PROPOSE_AGENT_CONFIGURATION)
+            tool_schema = convert_to_openai_tool(definition.to_model_tool_definition(), strict=True)
+            task_space.defer_system_message(SystemMessage(
+                content=f"Please follow the user's instructions and use this tool to carry out their request: {tool_schema}"
+            ))
+
+
         execution_context = self._resolve_execution_context(task, run_id=run.id)
         runtime_dependencies = None
         if execution_context is not None:
@@ -322,7 +346,8 @@ class AgentRuntime:
             current_run=run,
             current_task=task,
             current_workspace=workspace,
-            model_tools=model_tools,
+            all_vaild_tools=model_tools,
+            allows_tools=allows_tools,
             execution_context=execution_context,
             runtime_dependencies=runtime_dependencies,
             tool_trace_recorder=tool_trace_recorder,

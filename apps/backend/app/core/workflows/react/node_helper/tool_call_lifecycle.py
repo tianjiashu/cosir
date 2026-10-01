@@ -258,7 +258,7 @@ class ToolCallLifecycleManager(BaseModel):
     """工具调用生命周期的 LangGraph state 与事件发射门面。
 
     state 中保存可执行/可见的 ``calls``、供协议闭合使用的隐藏 ``blocked_calls`` 和本 Run
-    的 ``ban_tools``。所有状态方法都返回深拷贝后的新 manager，避免节点继续持有旧快照；
+    的 ``allows_tools``。所有状态方法都返回深拷贝后的新 manager，避免节点继续持有旧快照；
     调用节点必须将返回值放入返回的
     state patch_write。事件发射和模型上下文写回是方法的运行期副作用，依赖从当前 LangGraph
     execution context 解析，不会被 Pydantic 或 LangGraph 序列化。
@@ -272,7 +272,7 @@ class ToolCallLifecycleManager(BaseModel):
 
     calls: dict[str, ToolCallLifecycleRecord] = Field(default_factory=dict)
     blocked_calls: dict[str, ToolCallLifecycleRecord] = Field(default_factory=dict)
-    ban_tools: tuple[str, ...] = ()
+    allows_tools: tuple[str, ...] = ()
 
     def _copy(self) -> ToolCallLifecycleManager:
         """复制 state，确保生命周期迁移以新快照返回。"""
@@ -316,14 +316,14 @@ class ToolCallLifecycleManager(BaseModel):
         if not isinstance(tool_name, str) or not tool_name:
             return False
         operations: WorkflowOperations = _runtime_config().operations
-        return tool_name in {tool.name for tool in operations.model_tools or []}
+        return tool_name in {tool.name for tool in operations.all_vaild_tools or []}
 
     @staticmethod
     def _presentation_for(tool_name: str) -> dict[str, object]:
         """读取工具的静态展示声明。"""
 
         operations: WorkflowOperations = _runtime_config().operations
-        for definition in getattr(operations, "model_tools", ()) or ():
+        for definition in operations.all_vaild_tools:
             if definition.name == tool_name and definition.display is not None:
                 return definition.display.to_dict()
         return {}
@@ -367,7 +367,7 @@ class ToolCallLifecycleManager(BaseModel):
             ):
                 continue
             assert isinstance(tool_name, str)
-            if tool_name in self.ban_tools:
+            if tool_name not in self.allows_tools:
                 updated.blocked_calls[call_id] = ToolCallLifecycleRecord(
                     tool_call_id=call_id,
                     tool_name=tool_name,
@@ -582,12 +582,17 @@ class ToolCallLifecycleManager(BaseModel):
 
         blocked_by_id: dict[str, str] = {
             tc.call_id: tc.tool_name for tc in tool_calls
-            if tc.call_id and tc.tool_name in self.ban_tools
+            if tc.call_id and tc.tool_name not in self.allows_tools
         }
         blocked_by_id.update({
             str(itc["id"]): str(itc.get("name") or "")
             for itc in invalid_tool_calls
-            if itc.get("id") and itc.get("name") in self.ban_tools
+            if (
+                itc.get("id")
+                and isinstance(itc.get("name"), str)
+                and self._valid_tool_name(itc["name"])
+                and itc.get("name") not in self.allows_tools
+            )
         })
         updated = self._copy()
         for call_id, tool_name in blocked_by_id.items():

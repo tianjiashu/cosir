@@ -14,9 +14,10 @@ from __future__ import annotations
 import asyncio
 import contextvars
 from collections import deque
+from collections.abc import Collection
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import ToolMessage
 
@@ -32,9 +33,8 @@ from app.core.runtime.conversation_run_cancellation_registry import (
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import (
     ToolCall,
-    ToolDefinition,
     ToolExecutionContext,
-    ToolObservation,
+    ToolObservation, ToolDefinition,
 )
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute.tool_error import (
@@ -62,16 +62,17 @@ class WorkflowOperations:
     """
 
     def __init__(
-        self,
-        tool_executor: ToolExecutor,
-        agent_profile: AgentProfile,
-        current_run: ConversationRunRecord,
-        current_task: TaskRecord,
-        current_workspace: WorkspaceRecord,
-        model_tools: list[ToolDefinition] | None = None,
-        execution_context: ToolExecutionContext | None = None,
-        runtime_dependencies: ToolRuntimeDependencies | None = None,
-        tool_trace_recorder: ToolTraceRecorder | None = None,
+            self,
+            tool_executor: ToolExecutor,
+            agent_profile: AgentProfile,
+            current_run: ConversationRunRecord,
+            current_task: TaskRecord,
+            current_workspace: WorkspaceRecord,
+            execution_context: ToolExecutionContext,
+            all_vaild_tools: list[dict[str, Any]] | None = None,
+            allows_tools: Collection[str] | None = None,
+            runtime_dependencies: ToolRuntimeDependencies | None = None,
+            tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -81,7 +82,9 @@ class WorkflowOperations:
             current_run: 当前绑定的 Conversation Run 记录（门面状态单一事实来源）。
             current_task: 当前执行的任务记录。
             current_workspace: 当前工作区记录。
-            model_tools: 暴露给模型的工具定义列表。
+            model_tools: 当前 Task 中可执行工具的进程内定义列表。
+            allows_tools: 当前 Run 允许执行的工具名快照；未传时默认允许 ``model_tools`` 中
+                的全部工具。
             execution_context: 当前执行的运行时边界；为 None 时 ``run_tool_calls``
                 日志不注入 ``workspace_id``。
             runtime_dependencies: 可选的本 run 工具运行期依赖；存在 execution_context 时
@@ -102,7 +105,7 @@ class WorkflowOperations:
         self._conversation_run_state_service = get_conversation_run_state_service()
         self._event_projector = get_conversation_event_projector()
         self._executor = tool_executor
-        self.model_tools: list[ToolDefinition] = list(model_tools or [])
+        self.all_vaild_tools: list[ToolDefinition] = self._to_tool_definition(list(all_vaild_tools or []))
         self.agent_profile = agent_profile
         self._current_workspace = current_workspace
         self._current_run = current_run
@@ -112,9 +115,9 @@ class WorkflowOperations:
             if execution_context is not None and runtime_dependencies is not None
             else execution_context
         )
-        self._allowed_tool_names = frozenset(tool.name for tool in self.model_tools)
+        self._allowed_tool_names = frozenset(allows_tools)
         self._parallel_mode_by_name = {
-            definition.name: definition.parallel_mode for definition in self.model_tools
+            definition.name: definition.parallel_mode for definition in self.all_vaild_tools
         }
         self._trace_recorder = tool_trace_recorder or _NullToolTraceRecorder()
 
@@ -124,12 +127,78 @@ class WorkflowOperations:
                 "msg": f"运行时操作门面已初始化，agent_id={agent_profile.agent_id}",
                 "data": {
                     "agent_id": agent_profile.agent_id,
-                    "model_tools_count": len(self.model_tools),
+                    "model_tools_count": len(self.all_vaild_tools),
+                    "allows_tools_count": len(self._allowed_tool_names),
                     "current_run_id": current_run.id if current_run else None,
                     "current_run_bound": bool(current_run),
                 },
             },
         )
+
+    @property
+    def task_tool_schemas(self) -> list[dict[str, Any]]:
+        tools: list[ToolDefinition] = self.all_vaild_tools
+        return [
+            tool_definition.to_model_tool_definition()
+            for tool_definition in tools
+            if tool_definition.name in self.allows_tools
+        ]
+
+    def _to_tool_definition(
+            self, tool_definition_dict: list[dict[str, Any]]
+    ) -> list[ToolDefinition]:
+        """把 Task 固化的模型工具 schema 还原为进程内 ToolDefinition 列表。
+
+        固化 schema 仅携带 ``name`` / ``description`` / ``parameters``，不含
+        ``handler``、``args_model``、``parallel_mode``、``display`` 等执行与展示契约，
+        因此按 ``name`` 回到工具注册表取回完整 ``ToolDefinition``（运行期调度并行模式、
+        展示提示都依赖这些被补齐的字段）。未在注册表落地的 name 直接跳过：固化数据与
+        进程内注册表不一致时不应构造残缺定义，运行期也不应调度一个当前进程没有的工具。
+
+        参数:
+            tool_definition_dict: Task 固化的模型工具 schema 列表；每项应含字符串 ``name``。
+
+        返回:
+            按输入顺序、去重保留首个出现的进程内 ``ToolDefinition`` 列表。
+
+        异常:
+            无；缺 ``name``、非字符串 ``name`` 或注册表未命中的项被跳过。
+
+        副作用:
+            无（只读注册表与入参，不修改二者）。
+        """
+        from app.config.configuration import get_tool_system
+
+        registry = get_tool_system().registry
+        definitions: list[ToolDefinition] = []
+        seen: set[str] = set()
+        for item in tool_definition_dict:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name or name in seen:
+                continue
+            definition = registry.get_tool_definition(name)
+            if definition is not None:
+                definitions.append(definition)
+                seen.add(name)
+        return definitions
+
+    @property
+    def allows_tools(self) -> frozenset[str]:
+        """返回本次 Run 的不可变工具允许集合。
+
+        返回:
+            运行期工具名白名单的不可变快照；它不改变 Task 固化的模型 schema。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return self._allowed_tool_names
 
     def get_current_run(self) -> ConversationRunRecord:
         """返回本门面绑定的 Conversation Run 记录。
@@ -233,9 +302,9 @@ class WorkflowOperations:
         return cancellation_registry.is_cancelled(current_run.id)
 
     def complete_run_if_running(
-        self,
-        usage_stats: ConversationRunUsageStats | None = None,
-        final_output: str | None = None,
+            self,
+            usage_stats: ConversationRunUsageStats | None = None,
+            final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """仅当 run 仍处于 running 时把它落定为 completed。
 
@@ -269,10 +338,10 @@ class WorkflowOperations:
         return record
 
     def fail_run_if_running(
-        self,
-        end_reason: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
-        final_output: str | None = None,
+            self,
+            end_reason: str | None = None,
+            usage_stats: ConversationRunUsageStats | None = None,
+            final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """仅当 run 仍处于 running 时把它落定为 failed。
 
@@ -310,10 +379,10 @@ class WorkflowOperations:
         return record
 
     def cancel_run_if_running(
-        self,
-        end_reason: str = "runtime_cancelled",
-        usage_stats: ConversationRunUsageStats | None = None,
-        final_output: str | None = None,
+            self,
+            end_reason: str = "runtime_cancelled",
+            usage_stats: ConversationRunUsageStats | None = None,
+            final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """经 canonical writer 把仍处于 active 的 run 落定为 cancelled。
 
@@ -351,11 +420,11 @@ class WorkflowOperations:
         return record
 
     async def run_tool_calls(
-        self,
-        task_id: int,
-        calls: list[ToolCall],
-        step_id: str | None = None,
-        running_loop: asyncio.AbstractEventLoop | None = None,
+            self,
+            task_id: int,
+            calls: list[ToolCall],
+            step_id: str | None = None,
+            running_loop: asyncio.AbstractEventLoop | None = None,
     ) -> ToolRunResult:
         """经工具系统执行模型请求的工具调用。
 
@@ -430,10 +499,10 @@ class WorkflowOperations:
         return ToolRunResult(observations=executed_observations)
 
     async def _run_calls_with_parallel_modes(
-        self,
-        task_id: int,
-        calls: list[tuple[int, ToolCall]],
-        step_id: str | None,
+            self,
+            task_id: int,
+            calls: list[tuple[int, ToolCall]],
+            step_id: str | None,
     ) -> list[tuple[int, ToolObservation]]:
         """并发执行一批已声明为可并行调度的工具调用。
 
@@ -524,10 +593,10 @@ class WorkflowOperations:
         return completed
 
     def _execute_tool_call(
-        self,
-        task_id: int,
-        call: ToolCall,
-        step_id: str | None,
+            self,
+            task_id: int,
+            call: ToolCall,
+            step_id: str | None,
     ) -> ToolObservation:
         """执行单个工具调用，并把执行链路异常收口为工具观察。
 
@@ -563,11 +632,11 @@ class WorkflowOperations:
             return self._internal_error_observation(task_id, call, exc, step_id)
 
     def _internal_error_observation(
-        self,
-        task_id: int,
-        call: ToolCall,
-        exc: Exception,
-        step_id: str | None = None,
+            self,
+            task_id: int,
+            call: ToolCall,
+            exc: Exception,
+            step_id: str | None = None,
     ) -> ToolObservation:
         """把工具执行链路内部异常转换为稳定的 error 观察。
 

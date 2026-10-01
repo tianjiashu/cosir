@@ -343,16 +343,15 @@ class ReactLikeWorkflow(AgentWorkflow):
             )
             raise
         # 构建工具
-        tool_schemas = [
-            tool.to_model_tool_definition()
-            for tool in operations.model_tools
-            if agent_profile.allowed_tools is None or tool.name in agent_profile.allowed_tools
-        ]
+        # Task schema 在首次创建时已经冻结；本次 Run 只能改变 allows_tools，不能改变
+        # bind_tools 的工具列表，否则同一 Task 的前缀缓存会因 proposal/禁用工具切换失效。
+        tool_schemas = operations.task_tool_schemas
         try:
             if len(tool_schemas) > 0:
-                bound_model = (
-                    base_model.bind_tools(tool_schemas, strict=True,
-                                          parallel_tool_calls=True) if tool_schemas else base_model
+                bound_model = base_model.bind_tools(
+                    tool_schemas,
+                    strict=True,
+                    parallel_tool_calls=True,
                 )
             else:
                 bound_model = base_model
