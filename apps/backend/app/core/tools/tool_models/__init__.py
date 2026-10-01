@@ -23,6 +23,7 @@ from app.core.tools.tool_models.terminal_session_args import (
     TerminalWriteArgs,
 )
 from app.core.tools.tool_models.write_file_args import WriteFileArgs
+from app.core.tools.tool_models.propose_agent_configuration_args import ProposeAgentConfigurationArgs
 
 __all__ = [
     "ApplyPatchArgs",
@@ -43,5 +44,6 @@ __all__ = [
     "TerminalWriteArgs",
     "WindowsExecuteTerminalArgs",
     "WriteFileArgs",
+    "ProposeAgentConfigurationArgs",
     "resolve_execute_terminal_args_model",
 ]
