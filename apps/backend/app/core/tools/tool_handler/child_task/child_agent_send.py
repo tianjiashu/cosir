@@ -18,7 +18,6 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_CHILD_AGENT
-from app.core.tools.tool_handler.child_task.child_agent_create import CHILD_BANNED_TOOLS
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.child_task import ChildAgentSendArgs
 from app.models import ConversationRunCommand
@@ -231,7 +230,6 @@ class ChildAgentSendTool(HandlerBase):
                 self._run_executor.start(
                     child_run.id,
                     "fresh",
-                    ban_tools=list(CHILD_BANNED_TOOLS),
                 ),
                 loop,
             )

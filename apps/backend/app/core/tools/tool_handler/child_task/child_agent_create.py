@@ -1,8 +1,7 @@
 """delegate_task 工具 handler：把一次委派请求落地为 child Task/Run 并启动 child workflow。
 
 职责：解析 child Agent profile、建立 child Task 与 Run、经父 Run 的事件循环调度 child 执行器，
-返回「已启动」观察（携带 child locator），并把子 Agent 的工具禁用清单（``CHILD_BANNED_TOOLS``）
-交给执行器。
+返回「已启动」观察（携带 child locator），并把子 Agent 的运行期工具允许集合交给执行器。
 
 不负责：child workflow 的实际运行与完成观测（父侧用 ``child_agent_wait`` / ``child_agent_status``
 查询）；参数校验与准入门禁（``ToolAccessGate``）；委派展示数据构造
@@ -10,6 +9,7 @@
 """
 
 import asyncio
+import copy
 import json
 from typing import ClassVar
 
@@ -52,10 +52,9 @@ from app.service.depends import (
 
 # 子 Agent 不得使用的工具：**委派与父子通信**（``tool_handler/child_task/`` 全部工具）与
 # **可交互终端**（``tool_handler/terminal_session/`` 全部工具）。清单与这两个目录一一对应，
-# 新增同目录工具时必须同步登记。``delegate_task`` 与 ``child_agent_send`` 在启动 child Run
-# 时都把它作为 ``ban_tools`` 传给执行器，保证子 Agent 既不能再向下委派，也不能操作父级
-# 的交互式终端会话。
-CHILD_BANNED_TOOLS: tuple[str, ...] = (
+# 新增同目录工具时必须同步登记。它们仍可被 Task schema 固化，但会进入 child Run 的
+# ``ban_tools``，从而保持 bind_tools 结构和实际执行权限分离。
+CHILD_DISALLOWED_TOOLS: tuple[str, ...] = (
     # child_task/：委派与父子通信
     TOOL_DELEGATE_TASK,
     TOOL_CHILD_AGENT_STATUS,
@@ -239,7 +238,14 @@ class DelegateTaskTool(HandlerBase):
             )
 
         try:
+            from app.config.configuration import get_tool_system
+
             parent_run = self.run_state_service.get_run(execution_context.run_id)
+            child_task_tools = child_agent_profile.select_tools(
+                get_tool_system().executor.list_tools()
+            )
+            child_final_task_tools = [tool for tool in child_task_tools if tool.name not in CHILD_DISALLOWED_TOOLS]
+
 
             child_task = self._task_service.get_or_create_task(
                 workspace_id=execution_context.workspace_id,
@@ -247,6 +253,7 @@ class DelegateTaskTool(HandlerBase):
                 task_type="delegate_task",
                 parent_task_id=execution_context.task_id,
                 parent_run_id=execution_context.run_id,
+                tool_definitions=[copy.deepcopy(definition.to_model_tool_definition()) for definition in child_final_task_tools]
             )
 
             reasoning_effort = (child_agent_profile.model_settings.reasoning_effort
@@ -281,7 +288,6 @@ class DelegateTaskTool(HandlerBase):
                 self.run_exector.start(
                     child_run.id,
                     start_mode="fresh",
-                    ban_tools=list(CHILD_BANNED_TOOLS),
                 ),
                 loop,
             )
