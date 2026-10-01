@@ -21,6 +21,9 @@ from app.core.tools.tool_handler.execute_terminal import build_execute_terminal_
 from app.core.tools.tool_handler.find_files import build_find_files_definition
 from app.core.tools.tool_handler.list_directory import build_list_directory_definition
 from app.core.tools.tool_handler.move_tool import build_move_file_definition
+from app.core.tools.tool_handler.propose_agent_configuration import (
+    build_propose_agent_configuration_definition,
+)
 from app.core.tools.tool_handler.read_file import build_read_file_definition
 from app.core.tools.tool_handler.replace_tool import build_replace_definition
 from app.core.tools.tool_handler.search_content import build_search_content_definition
@@ -112,6 +115,7 @@ class ToolSystem:
         registry.register(build_child_agent_send_definition())
         registry.register(build_child_agent_status_definition())
         registry.register(build_child_agent_wait_definition())
+        registry.register(build_propose_agent_configuration_definition())
         executor = ToolExecutor(
             registry=registry,
             output_budget=ToolOutputBudget(Constant.Tools.MAX_OUTPUT_CHARS),
