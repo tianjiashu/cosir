@@ -26,6 +26,7 @@ import { BackendStatusBanner } from "@/components/backend-status-banner";
 import { Workbench } from "@/components/workbench";
 import { WorkbenchProvider } from "@/lib/workbench/context";
 import { SystemConfigurationPage } from "@/components/system-configuration-page";
+import { WorkspaceConfigurationPage } from "@/components/workspace-configuration-page";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import {
   deleteTask,
@@ -48,13 +49,14 @@ type DeleteTarget =
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
 
-export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments, initialDisabledToolGroups, initialBanTools, settingsOpen = false }: {
+export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments, initialDisabledToolGroups, initialBanTools, settingsOpen = false, workspaceConfigurationId = null }: {
   routeTaskId: number | null;
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
   initialBanTools?: string[];
   settingsOpen?: boolean;
+  workspaceConfigurationId?: number | null;
 }) {
   const navigate = useNavigate();
   const closeWorkspaceTabs = useWorkbenchStore((state) => state.closeWorkspace);
@@ -148,6 +150,12 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
       for (const controller of taskRefreshControllerRef.current.values()) controller.abort();
     };
   }, [load]);
+
+  useEffect(() => {
+    if (workspaceConfigurationId === null) return;
+    setSelectedWorkspaceId(workspaceConfigurationId);
+    writeLastWorkspaceId(workspaceConfigurationId);
+  }, [workspaceConfigurationId]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(NARROW_VIEWPORT_QUERY);
@@ -267,7 +275,13 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
   const openSettings = () => {
     navigate("/settings", { state: { returnTaskId: activeTaskId } });
   };
+  const openWorkspaceSettings = (workspaceId: number) => {
+    navigate(`/workspaces/${workspaceId}/settings`, { state: { returnTaskId: activeTaskId } });
+  };
   const closeSettings = () => {
+    navigate(activeTaskId ? `/tasks/${activeTaskId}` : "/");
+  };
+  const closeWorkspaceSettings = () => {
     navigate(activeTaskId ? `/tasks/${activeTaskId}` : "/");
   };
   const requestDelete = (target: NonNullable<DeleteTarget>) => { setDeleteError(null); setDeleteTarget(target); };
@@ -367,6 +381,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
                           {expanded ? <ChevronDownIcon className="size-3.5 shrink-0" /> : <ChevronRightIcon className="size-3.5 shrink-0" />}
                           <FolderIcon className="text-muted-foreground size-4 shrink-0" /><span className="truncate">{workspace.name}</span>{workspace.taskLoadError ? <span className="text-destructive ml-auto text-xs" title={workspace.taskLoadError}>加载失败</span> : <span className="text-muted-foreground ml-auto text-xs">{workspace.tasks.length}</span>}
                         </button>
+                        <Button variant="ghost" size="icon-sm" className="text-muted-foreground shrink-0" onClick={() => openWorkspaceSettings(workspace.workspace_id)} aria-label={`工作区配置：${workspace.name}`} title={`配置 ${workspace.name}`}><Settings2Icon className="size-4" /></Button>
                         <ResourceActionMenu label={workspace.name} onDelete={() => requestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })} />
                       </div>
                       {expanded && <div className="ml-5 border-l pl-2">
@@ -421,6 +436,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
       <Workbench workspaceId={activeTaskWorkspaceId} />
       {deleteTarget && <DeleteConfirmDialog open title={deleteTarget.kind === "workspace" ? `删除工作区“${deleteTarget.label}”？` : `删除任务“${deleteTarget.label}”？`} description={deleteTarget.kind === "workspace" ? `此操作将永久删除该工作区及其下的 ${deleteTarget.taskCount} 个任务和全部对话数据。` : "此操作将永久删除该任务及其全部对话数据，不影响所属工作区和其他任务。"} warning="删除后无法撤销。" error={deleteError} busy={deleting} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteError(null); } }} onConfirm={() => void confirmDelete()} />}
       {settingsOpen && <SystemConfigurationPage onClose={closeSettings} />}
+      {workspaceConfigurationId !== null && <WorkspaceConfigurationPage workspaceId={workspaceConfigurationId} workspaceName={selectedWorkspace?.name ?? "当前工作区"} onClose={closeWorkspaceSettings} />}
     </div>
     </WorkbenchProvider>
   );

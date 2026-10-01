@@ -26,6 +26,17 @@ function TaskRoute() {
     const returnTaskId = routeState?.returnTaskId;
     return <WorkspaceShell routeTaskId={returnTaskId && returnTaskId > 0 ? returnTaskId : null} settingsOpen />;
   }
+  const workspaceSettingsPath = pathname.match(/^\/workspaces\/(\d+)\/settings$/);
+  if (workspaceSettingsPath) {
+    const workspaceId = Number(workspaceSettingsPath[1]);
+    const returnTaskId = routeState?.returnTaskId;
+    return Number.isInteger(workspaceId) && workspaceId > 0
+      ? <WorkspaceShell
+          routeTaskId={returnTaskId && returnTaskId > 0 ? returnTaskId : null}
+          workspaceConfigurationId={workspaceId}
+        />
+      : <div className="p-6 text-sm">工作区标识无效。</div>;
+  }
   const taskPath = pathname.match(/^\/tasks\/([^/]+)$/);
   if (!taskPath) {
     return pathname === "/"

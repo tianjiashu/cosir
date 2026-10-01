@@ -1,7 +1,9 @@
 """``<workspace>/.cosir/.fileignore`` 与根 ``.gitignore`` 合并忽略规则测试。
 
-覆盖：文件缺失时的默认初始化、既有文件解析（注释 / 空行 / ``*.log`` / ``build/`` / ``!keep`` 否定 /
-相对路径）、显式空文件「不忽略任何目录」语义、``iter_files`` 与 ``SearchScope`` 的接入、文件状态协调器
+覆盖：文件缺失时的空文件初始化、既有文件解析（注释 / 空行 / ``*.log`` / ``build/`` /
+``!keep`` 否定 /
+相对路径）、显式空文件「不忽略任何目录」语义、``iter_files`` 与 ``SearchScope`` 的接入、
+文件状态协调器
 ``prepare`` 采样的一致性，以及读写失败与空 workspace 根时的降级与可排查日志。
 
 ``.fileignore`` 与 ``.gitignore`` 均采用标准 gitignore（gitwildmatch）语义，合并后任一命中即跳过。
@@ -29,7 +31,6 @@ from app.core.tools.tool_handler.search.ignore_rules import (
     ignore_file_path,
     load_fileignore_rules,
     load_search_ignore_rules,
-    render_default_content,
 )
 from app.core.tools.tool_handler.search.scope import SearchScope
 
@@ -65,16 +66,15 @@ def _log_events(caplog) -> list[str]:
     return [record.getMessage() for record in caplog.records]
 
 
-def test_ignore_file_is_created_with_default_rules_on_first_use(tmp_path: Path) -> None:
-    """规则文件不存在时，首次加载要创建它并写入默认规则，返回默认匹配器。"""
+def test_ignore_file_is_created_empty_on_first_use(tmp_path: Path) -> None:
+    """规则文件不存在时，首次加载要创建空文件并返回空匹配器。"""
 
     rules = load_fileignore_rules(tmp_path)
 
     created = ignore_file_path(tmp_path)
     assert created == tmp_path / ".cosir" / IGNORE_FILE_NAME
-    assert created.read_text(encoding="utf-8") == render_default_content()
-    # 默认规则按 gitignore 语义跳过内置目录。
-    assert rules.match_dir(tmp_path / "node_modules") is True
+    assert created.read_text(encoding="utf-8") == ""
+    assert rules.match_dir(tmp_path / "node_modules") is False
     assert rules.match_dir(tmp_path / "src") is False
 
 
@@ -290,7 +290,7 @@ def test_gitignore_skips_files_and_directories(tmp_path: Path) -> None:
 
 
 def test_search_scope_combines_fileignore_and_gitignore(tmp_path: Path) -> None:
-    """``SearchScope`` 同时尊重 ``.fileignore``（gitignore 语法）与 ``.gitignore``（gitignore 语法）。"""
+    """``SearchScope`` 同时尊重两个 gitignore 语法的规则文件。"""
 
     _write_ignore_file(tmp_path, "generated\n")
     _write_gitignore(tmp_path, "*.log\n")

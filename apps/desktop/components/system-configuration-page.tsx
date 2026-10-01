@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 
 import { EnvironmentConfigurationForm, type EnvironmentFieldValue } from "@/components/environment-configuration-form";
+import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
+import { MarkdownSourcePreviewEditor } from "@/components/configuration/markdown-source-preview-editor";
 import {
   ModelSelectorContent,
   ModelSelectorList,
@@ -29,7 +31,6 @@ import {
 } from "@/components/model-selector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import { modelOptionId, useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
 import {
@@ -47,8 +48,6 @@ import {
   type AgentConfiguration,
   type AgentConfigurationInput,
   type EnvironmentGroup,
-  type GlobalInstructionConfiguration,
-  type MainAgentPromptConfiguration,
   updateAgentConfiguration,
   updateEnvironmentConfiguration,
   updateGlobalInstructionConfiguration,
@@ -56,6 +55,32 @@ import {
 } from "@/lib/api/configuration";
 
 type ConfigurationTab = "agents" | "main-agent" | "instructions" | "environment";
+
+export type AgentConfigurationApi = {
+  list: () => Promise<AgentConfiguration[]>;
+  create: (input: AgentConfigurationInput) => Promise<AgentConfiguration>;
+  update: (agentId: string, input: AgentConfigurationInput) => Promise<AgentConfiguration>;
+  remove: (agentId: string) => Promise<void>;
+};
+
+const systemAgentConfigurationApi: AgentConfigurationApi = {
+  list: getAgentConfigurations,
+  create: createAgentConfiguration,
+  update: updateAgentConfiguration,
+  remove: deleteAgentConfiguration,
+};
+
+const globalInstructionConfigurationAdapter = {
+  load: getGlobalInstructionConfiguration,
+  save: updateGlobalInstructionConfiguration,
+  allowEmpty: true,
+};
+
+const mainAgentPromptConfigurationAdapter = {
+  load: getMainAgentPromptConfiguration,
+  save: updateMainAgentPromptConfiguration,
+  allowEmpty: false,
+};
 
 const tabItems: { id: ConfigurationTab; label: string; description: string; icon: typeof Settings2Icon }[] = [
   { id: "agents", label: "子 Agent配置", description: "", icon: SlidersHorizontalIcon },
@@ -69,23 +94,6 @@ const tabItems: { id: ConfigurationTab; label: string; description: string; icon
  * 这里保留渲染（让配置者知道存在这些分组），但复选框禁用、不可勾选。
  */
 const NON_ASSIGNABLE_TOOL_GROUPS = new Set(["交互终端工具", "子Agent工具"]);
-
-/** 与后端 TokenEstimator 保持同一套字符分类估算，避免保存校验与页面提示分叉。 */
-function estimateTokens(text: string): number {
-  if (!text) return 0;
-  const characters = [...text];
-  let cjk = 0;
-  for (const character of characters) {
-    const code = character.codePointAt(0) ?? 0;
-    if (
-      (code >= 0x4e00 && code <= 0x9fff)
-      || (code >= 0x3400 && code <= 0x4dbf)
-      || (code >= 0x3000 && code <= 0x303f)
-      || (code >= 0xff00 && code <= 0xffef)
-    ) cjk += 1;
-  }
-  return Math.max(1, cjk + Math.floor((characters.length - cjk) / 4));
-}
 
 function ErrorNotice({ message }: { message: string | null }) {
   if (!message) return null;
@@ -214,11 +222,13 @@ function ModelSettingsEditor({
 function AgentEditor({
   initial,
   toolGroups,
+  api,
   onCancel,
   onSaved,
 }: {
   initial: AgentConfiguration | null;
   toolGroups: ToolGroupCatalog[];
+  api: AgentConfigurationApi;
   onCancel: () => void;
   onSaved: (agent: AgentConfiguration) => void;
 }) {
@@ -253,8 +263,8 @@ function AgentEditor({
       };
       if (input.model_config_id !== null && (!Number.isInteger(input.model_config_id) || input.model_config_id <= 0)) throw new Error("模型配置 ID 必须是正整数");
       const saved = initial
-        ? await updateAgentConfiguration(initial.agent_id, input)
-        : await createAgentConfiguration(input);
+        ? await api.update(initial.agent_id, input)
+        : await api.create(input);
       onSaved(saved);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存失败，请重试");
@@ -276,7 +286,17 @@ function AgentEditor({
           <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">角色</span><Input value={form.role} onChange={(event) => setField("role", event.target.value)} placeholder="给子Agent定义的身份" /></label>
         </div>
         <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">描述</span><Input value={form.description} onChange={(event) => setField("description", event.target.value)} placeholder="面向主Agent描述这个 Agent 负责什么？" /></label>
-        <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">系统提示词</span><Textarea className="min-h-36 resize-y" value={form.system_prompt} onChange={(event) => setField("system_prompt", event.target.value)} placeholder="定义该子 Agent 的边界、工作方式与输出要求…" /></label>
+        <div className="space-y-1.5 text-sm">
+          <span className="text-muted-foreground">系统提示词</span>
+          <MarkdownSourcePreviewEditor
+            value={form.system_prompt}
+            onChange={(value) => setField("system_prompt", value)}
+            initialMode="source"
+            minHeight="12rem"
+            placeholder="定义该子 Agent 的边界、工作方式与输出要求…"
+            ariaLabel="子 Agent 系统提示词编辑器"
+          />
+        </div>
         <div className="grid gap-4 sm:grid-cols-3">
           <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">最大步数</span><Input type="number" min={1} max={10000} value={form.max_steps} onChange={(event) => setField("max_steps", Number(event.target.value))} /></label>
           <div className="space-y-1.5 text-sm sm:col-span-2"><span className="text-muted-foreground">模型 <span className="text-muted-foreground/60">（可选）</span></span><AgentModelSelector modelConfigId={form.model_config_id} onChange={(modelConfigId) => setForm((current) => ({ ...current, model_config_id: modelConfigId }))} /></div>
@@ -318,7 +338,7 @@ function AgentEditor({
   );
 }
 
-function AgentsPanel() {
+export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: { api?: AgentConfigurationApi }) {
   const [agents, setAgents] = useState<AgentConfiguration[] | null>(null);
   const [toolGroups, setToolGroups] = useState<ToolGroupCatalog[] | null>(null);
   const [editing, setEditing] = useState<AgentConfiguration | null | undefined>(undefined);
@@ -328,15 +348,15 @@ function AgentsPanel() {
   const load = async () => {
     try {
       setError(null);
-      const [nextAgents, { groups }] = await Promise.all([getAgentConfigurations(), getToolGroups()]);
+      const [nextAgents, { groups }] = await Promise.all([api.list(), getToolGroups()]);
       setAgents(nextAgents);
       setToolGroups(groups);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "读取 Agent 配置失败");
     }
   };
-  useEffect(() => { void load(); }, []);
-  if (editing !== undefined && toolGroups) return <AgentEditor toolGroups={toolGroups} initial={editing} onCancel={() => setEditing(undefined)} onSaved={(agent) => { setConfigurationSaved(true); setEditing(undefined); setAgents((current) => current ? (current.some((item) => item.agent_id === agent.agent_id) ? current.map((item) => item.agent_id === agent.agent_id ? agent : item) : [...current, agent]) : [agent]); }} />;
+  useEffect(() => { void load(); }, [api]);
+  if (editing !== undefined && toolGroups) return <AgentEditor api={api} toolGroups={toolGroups} initial={editing} onCancel={() => setEditing(undefined)} onSaved={(agent) => { setConfigurationSaved(true); setEditing(undefined); setAgents((current) => current ? (current.some((item) => item.agent_id === agent.agent_id) ? current.map((item) => item.agent_id === agent.agent_id ? agent : item) : [...current, agent]) : [agent]); }} />;
   if (!agents || !toolGroups) return error ? <LoadErrorState message={error} onRetry={() => void load()} /> : <LoadingState />;
   return (
     <div className="space-y-4">
@@ -344,40 +364,10 @@ function AgentsPanel() {
       {configurationSaved && <div role="status" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">配置更改成功</div>}
       <div className="flex items-center justify-end"><Button onClick={() => setEditing(null)}><PlusIcon />新建 Agent</Button></div>
       <div className="grid gap-3 xl:grid-cols-2">
-        {agents.map((agent) => <article key={`${agent.source}:${agent.agent_id}`} className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm transition-shadow hover:shadow-md"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-xl"><Code2Icon className="size-4" /></div><div className="min-w-0"><div className="flex items-center gap-2"><h3 className="truncate font-medium">{agent.agent_id}</h3><span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-[10px]">{agent.source === "builtin" ? "内置" : "文件"}</span></div><p className="text-muted-foreground mt-1 truncate text-xs">{agent.description || "暂无描述"}</p></div></div>{agent.editable || agent.deletable ? <div className="flex gap-1">{agent.editable && <Button variant="ghost" size="icon-sm" onClick={() => setEditing(agent)} aria-label={`编辑 ${agent.agent_id}`}><Settings2Icon /></Button>}{agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => { if (window.confirm(`删除 Agent “${agent.agent_id}”？`)) void deleteAgentConfiguration(agent.agent_id).then(() => { setConfigurationSaved(true); setAgents((current) => current?.filter((item) => item.agent_id !== agent.agent_id) ?? null); }).catch((cause) => setError(cause instanceof Error ? cause.message : "删除失败")); }} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}</div> : <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置 Agent，不可编辑或删除" title="内置 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>}</div><div className="text-muted-foreground mt-4 flex flex-wrap gap-2 text-xs"><span className="bg-muted rounded-md px-2 py-1">{agent.role || "未指定角色"}</span><span className="bg-muted rounded-md px-2 py-1">{agent.allowed_tool_groups.length} 个工具组</span><span className="bg-muted rounded-md px-2 py-1">{agent.model_config_id ? `配置 ${agent.model_config_id}` : "跟随默认模型"}</span></div>{agent.validation_status !== "valid" && <p className="text-destructive mt-3 text-xs">{agent.validation_error ?? "配置无效"}</p>}</article>)}
+        {agents.map((agent) => <article key={`${agent.source}:${agent.agent_id}`} className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm transition-shadow hover:shadow-md"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-xl"><Code2Icon className="size-4" /></div><div className="min-w-0"><div className="flex items-center gap-2"><h3 className="truncate font-medium">{agent.agent_id}</h3><span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-[10px]">{agent.source === "builtin" ? "内置" : "文件"}</span></div><p className="text-muted-foreground mt-1 truncate text-xs">{agent.description || "暂无描述"}</p></div></div>{agent.editable || agent.deletable ? <div className="flex gap-1">{agent.editable && <Button variant="ghost" size="icon-sm" onClick={() => setEditing(agent)} aria-label={`编辑 ${agent.agent_id}`}><Settings2Icon /></Button>}{agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => { if (window.confirm(`删除 Agent “${agent.agent_id}”？`)) void api.remove(agent.agent_id).then(() => { setConfigurationSaved(true); setAgents((current) => current?.filter((item) => item.agent_id !== agent.agent_id) ?? null); }).catch((cause) => setError(cause instanceof Error ? cause.message : "删除失败")); }} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}</div> : <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置 Agent，不可编辑或删除" title="内置 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>}</div><div className="text-muted-foreground mt-4 flex flex-wrap gap-2 text-xs"><span className="bg-muted rounded-md px-2 py-1">{agent.role || "未指定角色"}</span><span className="bg-muted text-muted-foreground rounded-md px-2 py-1">{agent.allowed_tool_groups.length} 个工具组</span><span className="bg-muted rounded-md px-2 py-1">{agent.model_config_id ? `配置 ${agent.model_config_id}` : "跟随默认模型"}</span></div>{agent.validation_status !== "valid" && <p className="text-destructive mt-3 text-xs">{agent.validation_error ?? "配置无效"}</p>}</article>)}
       </div>
     </div>
   );
-}
-
-function InstructionPanel() {
-  const [document, setDocument] = useState<GlobalInstructionConfiguration | null>(null);
-  const [content, setContent] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const load = async () => { try { setError(null); const value = await getGlobalInstructionConfiguration(); setDocument(value); setContent(value.content); } catch (cause) { setError(cause instanceof Error ? cause.message : "读取全局指令失败"); } };
-  useEffect(() => { void load(); }, []);
-  const estimatedTokens = estimateTokens(content);
-  const tokenRatio = document ? Math.min(1, estimatedTokens / document.max_tokens) : 0;
-  const save = async () => { setSaving(true); setSaved(false); setError(null); try { const next = await updateGlobalInstructionConfiguration(content); setDocument(next); setContent(next.content); setSaved(true); } catch (cause) { setError(cause instanceof Error ? cause.message : "保存失败，请重试"); } finally { setSaving(false); } };
-  if (!document) return error ? <LoadErrorState message={error} onRetry={() => void load()} /> : <LoadingState />;
-  return <div className="space-y-4"><ErrorNotice message={error} /><section className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm"><Textarea className="min-h-[28rem] resize-y border-0 bg-transparent p-2 font-mono text-sm shadow-none focus-visible:ring-0" value={content} onChange={(event) => { setContent(event.target.value); setSaved(false); }} placeholder="在这里写入系统级工作约束…" /><div className="mt-4 grid gap-3 border-t pt-4 sm:grid-cols-2"><div><p className="text-muted-foreground text-xs">估算 Token</p><p className={`mt-1 font-mono text-sm ${tokenRatio >= 1 ? "text-destructive" : ""}`}>{estimatedTokens.toLocaleString()} / {document.max_tokens.toLocaleString()}</p></div><div className="flex items-end justify-end gap-2 sm:col-span-1">{saved && <span className="text-muted-foreground self-center text-xs">已保存</span>}<Button onClick={() => void save()} disabled={saving || estimatedTokens > document.max_tokens}>{saving ? <Loader2Icon className="animate-spin" /> : saved ? <CheckIcon /> : <SaveIcon />}保存指令</Button></div></div></section></div>;
-}
-
-function MainAgentPromptPanel() {
-  const [document, setDocument] = useState<MainAgentPromptConfiguration | null>(null);
-  const [content, setContent] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const load = async () => { try { setError(null); const value = await getMainAgentPromptConfiguration(); setDocument(value); setContent(value.content); } catch (cause) { setError(cause instanceof Error ? cause.message : "读取主 Agent prompt 失败"); } };
-  useEffect(() => { void load(); }, []);
-  const estimatedTokens = estimateTokens(content);
-  const tokenRatio = document ? Math.min(1, estimatedTokens / document.max_tokens) : 0;
-  const save = async () => { setSaving(true); setSaved(false); setError(null); try { const next = await updateMainAgentPromptConfiguration(content); setDocument(next); setContent(next.content); setSaved(true); } catch (cause) { setError(cause instanceof Error ? cause.message : "保存失败，请重试"); } finally { setSaving(false); } };
-  if (!document) return error ? <LoadErrorState message={error} onRetry={() => void load()} /> : <LoadingState />;
-  return <div className="space-y-4"><ErrorNotice message={error} /><section className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm"><Textarea className="min-h-[28rem] resize-y border-0 bg-transparent p-2 font-mono text-sm shadow-none focus-visible:ring-0" value={content} onChange={(event) => { setContent(event.target.value); setSaved(false); }} placeholder="定义主 Agent 的执行协议…" /><div className="mt-4 grid gap-3 border-t pt-4 sm:grid-cols-2"><div><p className="text-muted-foreground text-xs">估算 Token</p><p className={`mt-1 font-mono text-sm ${tokenRatio >= 1 ? "text-destructive" : ""}`}>{estimatedTokens.toLocaleString()} / {document.max_tokens.toLocaleString()}</p></div><div className="flex items-end justify-end gap-2 sm:col-span-1">{saved && <span className="text-muted-foreground self-center text-xs">已保存</span>}<Button onClick={() => void save()} disabled={saving || !content.trim() || estimatedTokens > document.max_tokens}>{saving ? <Loader2Icon className="animate-spin" /> : saved ? <CheckIcon /> : <SaveIcon />}保存主 Agent prompt</Button></div></div></section></div>;
 }
 
 function EnvironmentPanel() {
@@ -479,5 +469,5 @@ function EnvironmentPanel() {
 
 export function SystemConfigurationPage({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<ConfigurationTab>("agents");
-  return <div className="bg-background/95 absolute inset-0 z-30 overflow-y-auto backdrop-blur-sm"><div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-5 py-6 lg:px-10"><header className="mb-8 flex flex-wrap items-start justify-between gap-4"><div><div className="text-muted-foreground mb-3 flex items-center gap-2 text-xs"><Settings2Icon className="size-3.5" />系统配置中心</div><h1 className="text-2xl font-semibold tracking-tight">让本机 Agent 按你的方式工作</h1></div><Button variant="outline" onClick={onClose}><ChevronLeftIcon />返回工作区</Button></header><div className="grid min-h-0 flex-1 gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]"><nav className="flex gap-2 overflow-x-auto lg:block lg:space-y-2" aria-label="系统配置分类">{tabItems.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`flex min-w-44 items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors lg:w-full ${tab === item.id ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}><Icon className="size-4 shrink-0" /><span className="min-w-0"><span className="block text-sm font-medium">{item.label}</span><span className={`mt-0.5 block truncate text-[11px] ${tab === item.id ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{item.description}</span></span></button>; })}</nav><main className="min-w-0">{tab === "agents" && <AgentsPanel />}{tab === "main-agent" && <MainAgentPromptPanel />}{tab === "instructions" && <InstructionPanel />}{tab === "environment" && <EnvironmentPanel />}</main></div></div></div>;
+  return <div className="bg-background/95 absolute inset-0 z-30 overflow-y-auto backdrop-blur-sm"><div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-5 py-6 lg:px-10"><header className="mb-8 flex flex-wrap items-start justify-between gap-4"><div><div className="text-muted-foreground mb-3 flex items-center gap-2 text-xs"><Settings2Icon className="size-3.5" />系统配置中心</div><h1 className="text-2xl font-semibold tracking-tight">让本机 Agent 按你的方式工作</h1></div><Button variant="outline" onClick={onClose}><ChevronLeftIcon />返回工作区</Button></header><div className="grid min-h-0 flex-1 gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]"><nav className="flex gap-2 overflow-x-auto lg:block lg:space-y-2" aria-label="系统配置分类">{tabItems.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`flex min-w-44 items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors lg:w-full ${tab === item.id ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}><Icon className="size-4 shrink-0" /><span className="min-w-0"><span className="block text-sm font-medium">{item.label}</span><span className={`mt-0.5 block truncate text-[11px] ${tab === item.id ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{item.description}</span></span></button>; })}</nav><main className="min-w-0">{tab === "agents" && <AgentConfigurationPanel />}{tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} description="保存后实时生效，不影响前缀缓存；当前运行中的 Run 会在下一次模型请求时应用。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent prompt" initialMode="split" />}{tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存；当前运行中的 Run 会在下一次模型请求时应用。" placeholder="在这里写入系统级工作约束…" saveLabel="保存指令" initialMode="split" />}{tab === "environment" && <EnvironmentPanel />}</main></div></div></div>;
 }

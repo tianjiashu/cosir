@@ -47,6 +47,24 @@ export type MainAgentPromptConfiguration = {
   effective_on: "next_run";
 };
 
+export type WorkspaceInstructionConfiguration = {
+  content: string;
+  path: string;
+  relative_path: string;
+  token_length: number;
+  max_tokens: number;
+  exists: boolean;
+  effective_on: "next_run" | string;
+};
+
+export type WorkspaceFileIgnoreConfiguration = {
+  content: string;
+  path: string;
+  exists: boolean;
+  rule_count: number;
+  max_rules: number;
+};
+
 export type EnvironmentField = {
   name: string;
   type: "string" | "boolean";
@@ -110,4 +128,36 @@ export function getEnvironmentConfiguration(): Promise<{ groups: EnvironmentGrou
 
 export function updateEnvironmentConfiguration(changes: Record<string, { operation: "replace" | "clear" | "unchanged"; value?: unknown }>): Promise<{ groups: EnvironmentGroup[] }> {
   return requestJson("/configuration/environment", jsonRequestInit({ changes }, { method: "PUT" }));
+}
+
+export function getWorkspaceAgentConfigurations(workspaceId: number): Promise<AgentConfiguration[]> {
+  return requestJson<AgentConfiguration[]>(`/workspaces/${workspaceId}/configuration/agents`);
+}
+
+export function createWorkspaceAgentConfiguration(workspaceId: number, input: AgentConfigurationInput): Promise<AgentConfiguration> {
+  return requestJson<AgentConfiguration>(`/workspaces/${workspaceId}/configuration/agents`, jsonRequestInit(input, { method: "POST" }));
+}
+
+export function updateWorkspaceAgentConfiguration(workspaceId: number, agentId: string, input: AgentConfigurationInput): Promise<AgentConfiguration> {
+  return requestJson<AgentConfiguration>(`/workspaces/${workspaceId}/configuration/agents/${encodeURIComponent(agentId)}`, jsonRequestInit(input, { method: "PUT" }));
+}
+
+export function deleteWorkspaceAgentConfiguration(workspaceId: number, agentId: string): Promise<void> {
+  return requestJson(`/workspaces/${workspaceId}/configuration/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" }).then(() => undefined);
+}
+
+export function getWorkspaceInstructionConfiguration(workspaceId: number): Promise<WorkspaceInstructionConfiguration> {
+  return requestJson<WorkspaceInstructionConfiguration>(`/workspaces/${workspaceId}/configuration/instructions`);
+}
+
+export function updateWorkspaceInstructionConfiguration(workspaceId: number, content: string): Promise<WorkspaceInstructionConfiguration> {
+  return requestJson<WorkspaceInstructionConfiguration>(`/workspaces/${workspaceId}/configuration/instructions`, jsonRequestInit({ content }, { method: "PUT" }));
+}
+
+export function getWorkspaceFileIgnoreConfiguration(workspaceId: number): Promise<WorkspaceFileIgnoreConfiguration> {
+  return requestJson<WorkspaceFileIgnoreConfiguration>(`/workspaces/${workspaceId}/configuration/fileignore`);
+}
+
+export function updateWorkspaceFileIgnoreConfiguration(workspaceId: number, content: string): Promise<WorkspaceFileIgnoreConfiguration> {
+  return requestJson<WorkspaceFileIgnoreConfiguration>(`/workspaces/${workspaceId}/configuration/fileignore`, jsonRequestInit({ content }, { method: "PUT" }));
 }
