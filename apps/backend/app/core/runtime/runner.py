@@ -306,8 +306,7 @@ class AgentRuntime:
             WorkflowOperations 实例。
         """
         task_space = task_runtime_spaces.get_or_create(task.id)
-        model_tools = list(task_space.task_tool_definitions)
-        allows_tools = set(tool.get("name") for tool in model_tools)
+        allows_tools = set(tool.get("name") for tool in list(task_space.task_tool_definitions))
 
         ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
         if run.extra is not None and len(run.extra.ban_tools) > 0:
@@ -346,7 +345,6 @@ class AgentRuntime:
             current_run=run,
             current_task=task,
             current_workspace=workspace,
-            all_vaild_tools=model_tools,
             allows_tools=allows_tools,
             execution_context=execution_context,
             runtime_dependencies=runtime_dependencies,

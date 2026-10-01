@@ -69,7 +69,6 @@ class WorkflowOperations:
             current_task: TaskRecord,
             current_workspace: WorkspaceRecord,
             execution_context: ToolExecutionContext,
-            all_vaild_tools: list[dict[str, Any]] | None = None,
             allows_tools: Collection[str] | None = None,
             runtime_dependencies: ToolRuntimeDependencies | None = None,
             tool_trace_recorder: ToolTraceRecorder | None = None,
@@ -102,10 +101,12 @@ class WorkflowOperations:
             取消判定），存储执行上下文与 canonical writer，记初始化日志。
         """
 
+        from app.config.configuration import get_tool_registry
+
         self._conversation_run_state_service = get_conversation_run_state_service()
         self._event_projector = get_conversation_event_projector()
         self._executor = tool_executor
-        self.all_vaild_tools: list[ToolDefinition] = self._to_tool_definition(list(all_vaild_tools or []))
+        self.all_vaild_tools: list[ToolDefinition] = get_tool_registry().get_all_definitions()
         self.agent_profile = agent_profile
         self._current_workspace = current_workspace
         self._current_run = current_run
@@ -143,46 +144,6 @@ class WorkflowOperations:
             for tool_definition in tools
             if tool_definition.name in self.allows_tools
         ]
-
-    def _to_tool_definition(
-            self, tool_definition_dict: list[dict[str, Any]]
-    ) -> list[ToolDefinition]:
-        """把 Task 固化的模型工具 schema 还原为进程内 ToolDefinition 列表。
-
-        固化 schema 仅携带 ``name`` / ``description`` / ``parameters``，不含
-        ``handler``、``args_model``、``parallel_mode``、``display`` 等执行与展示契约，
-        因此按 ``name`` 回到工具注册表取回完整 ``ToolDefinition``（运行期调度并行模式、
-        展示提示都依赖这些被补齐的字段）。未在注册表落地的 name 直接跳过：固化数据与
-        进程内注册表不一致时不应构造残缺定义，运行期也不应调度一个当前进程没有的工具。
-
-        参数:
-            tool_definition_dict: Task 固化的模型工具 schema 列表；每项应含字符串 ``name``。
-
-        返回:
-            按输入顺序、去重保留首个出现的进程内 ``ToolDefinition`` 列表。
-
-        异常:
-            无；缺 ``name``、非字符串 ``name`` 或注册表未命中的项被跳过。
-
-        副作用:
-            无（只读注册表与入参，不修改二者）。
-        """
-        from app.config.configuration import get_tool_system
-
-        registry = get_tool_system().registry
-        definitions: list[ToolDefinition] = []
-        seen: set[str] = set()
-        for item in tool_definition_dict:
-            if not isinstance(item, dict):
-                continue
-            name = item.get("name")
-            if not isinstance(name, str) or not name or name in seen:
-                continue
-            definition = registry.get_tool_definition(name)
-            if definition is not None:
-                definitions.append(definition)
-                seen.add(name)
-        return definitions
 
     @property
     def allows_tools(self) -> frozenset[str]:
