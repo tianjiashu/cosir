@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
+import type { PendingAttachment } from "@assistant-ui/core";
 import { fileMatchesAccept } from "@assistant-ui/core/internal";
 
 import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
+
+function assertPendingAttachment(
+  attachment: PendingAttachment | AsyncGenerator<PendingAttachment, void>,
+): asserts attachment is PendingAttachment {
+  if (!("type" in attachment)) {
+    throw new Error("测试适配器返回了异步附件生成器，而不是待发送附件");
+  }
+}
 
 describe("assistant attachment adapter", () => {
   it("uses assistant-ui's all-file wildcard", () => {
@@ -28,6 +37,7 @@ describe("assistant attachment adapter", () => {
   it("rejects unsupported GIF image uploads before the HTTP request", async () => {
     const file = new File(["image"], "animation.gif", { type: "image/gif" });
     const attachment = await createAttachmentAdapter(7).add({ file });
+    assertPendingAttachment(attachment);
 
     expect(attachment.type).toBe("file");
     await expect(createAttachmentAdapter(7).send(attachment)).rejects.toThrow("JPEG 和 PNG");

@@ -35,13 +35,13 @@ jobs:
             runner: windows-latest
             target: x86_64-pc-windows-msvc
           - name: macos-x86_64
-            runner: macos-13
+            runner: macos-15-intel
             target: x86_64-apple-darwin
           - name: macos-aarch64
             runner: macos-14
             target: aarch64-apple-darwin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
@@ -50,7 +50,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: apps/backend/uv.lock
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
