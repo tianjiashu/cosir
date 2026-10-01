@@ -128,7 +128,7 @@ workspace 配置有误时，当前 Run 的主 Agent 仍可运行，但工具列�
 ## 8. 建议实施顺序
 
 1. 固定 JSON schema、默认值、未知字段策略及配置错误隔离规则。
-2. 在 `cosir_paths` 收口系统和 workspace agents 目录路径；实现无副作用路径函数、首次安装默认 JSON 初始化与独立 JSON loader/validator。
+2. 在 `app.utils.path.system_cosir` 与 `app.utils.path.workspace_cosir` 收口系统和 workspace agents 目录路径；实现无副作用路径函数、首次安装默认 JSON 初始化与独立 JSON loader/validator。
 3. 扩展 `AgentProfile` 的提示词来源表达，使内存配置文本可被 `SystemPromptBuilder` 使用，同时保持主 Agent 旧路径。
 4. 将除通用子 Agent 外的现有内置 CHILD 定义和提示词迁移到系统级 JSON；删除这些配置型 Agent 的 Python 构造入口，避免双重事实源。保留 `generic_child_agent()`、`main_agent` 与隐藏 Agent 的代码装配。
 5. 在启动阶段将系统和所有已登记 workspace 的 JSON profile 一次载入 Registry；所有运行期查询传入 workspace 作用域，并贯通 `delegate_task` 的 ToolDefinition 投影、执行期目标校验和 child Run profile 解析。
@@ -150,7 +150,7 @@ workspace 配置有误时，当前 Run 的主 Agent 仍可运行，但工具列�
 
 ## 10. 主要代码影响面
 
-- `apps/backend/app/utils/cosir_paths.py`：系统/workspace Agent 配置目录路径。
+- `apps/backend/app/utils/path/system_cosir.py` 与 `apps/backend/app/utils/path/workspace_cosir.py`：系统/workspace Agent 配置目录路径。
 - `apps/backend/app/core/agents/agent_profile.py`、`agent_profile_registry.py`：统一的 profile 提示词正文、文件校验和按 workspace 索引的进程内目录。
 - `apps/backend/app/config/configuration.py`、`apps/backend/app/lifespan.py`：系统配置启动加载与装配。
 - `apps/backend/app/core/context/system_prompt_builder.py`：统一消费 profile 提示词正文并构建 Agent 系统预设层；按 `AgentProfile.allowed_tools` 构建工具能力目录层（`<tool_layer>`）。

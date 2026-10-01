@@ -61,7 +61,7 @@ macOS `~/Library/Application Support/com.cosir.desktop`、Linux `~/.local/share/
 | LangGraph checkpoint | `<数据根>/.cosir/storage/langgraph_checkpoints.sqlite` | `checkpoints` / `writes`，按 `thread_id` 分片 | `sqlite3` 直连；`thread_id` = `conversation_runs.checkpoint_thread_id` |
 | 后端启动状态 | `<数据根>/.cosir/runtime/backend.bootstate.json` | JSON（`phase` / 失败原因） | `Read`；Tauri 据此判定启动失败 |
 
-**数据根怎么定（唯一事实源：`apps/backend/app/utils/paths.py`）**：
+**数据根怎么定（唯一事实源：`apps/backend/app/utils/path/system_cosir.py`）**：
 `DATA_DIR = CODING_AGENT_DATA_DIR or 仓库根`，其余路径**全部**由它派生到 `<DATA_DIR>/.cosir/` 下。
 
 - **经桌面宿主启动（含 `tauri dev`）**：Rust `spawn_backend` **无条件**注入
@@ -350,7 +350,7 @@ stuck       [--limit N]
 > 脚本与测试同时受项目 ruff 规则约束：
 > `uv run --project apps/backend ruff check --config apps/backend/pyproject.toml skills/log-triage/scripts skills/log-triage/test`。
 >
-> **路径解析约定**（实现见 `scripts/triage_paths.py`，规则与 `apps/backend/app/utils/paths.py`
+> **路径解析约定**（实现见 `scripts/triage_paths.py`，规则与 `apps/backend/app/utils/path/system_cosir.py`
 > 同源）：数据根按「`CODING_AGENT_DATA_DIR` → 已存在的桌面数据根（`%APPDATA%\com.cosir.desktop`）
 > → 仓库根（向上查找含 `apps/backend` 的目录）」顺序判定，因此桌面应用在跑时默认查的就是它那份
 > `.cosir`；业务库 = `<数据根>/.cosir/storage/app.sqlite3`，日志目录 = `<数据根>/.cosir/logs`。

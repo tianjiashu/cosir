@@ -35,39 +35,36 @@ Cosir 是一个**单用户、本机运行**的桌面应用。它使用 Tauri 承
 ```python
 class AgentProfile:
     """描述某个任务的 Agent 执行主体（能力事实源）。
-    description 应该是"选择指南"，prompt_file_path 应该是"执行协议"，而本次
+    description 应该是"选择指南"，system_prompt 应该是"执行协议"，而本次
     delegate_task.message 才是"具体工作单"
 
     字段：
         agent_id: 持久化在任务和事件上的稳定 Agent 标识。
         role: 人类可读的 Agent 角色。
+        system_prompt: 已装配到内存中的完整 Agent 系统提示词正文；来源读取和文件路径不进入 profile。
+        allowed_tools: 该 Agent 允许使用的工具名或权限名。
+        agent_type: Agent 分类（``AgentProfileType``），决定其在运行时的暴露与调度方式。
         description: 子 Agent 的职责/能力/适用场景与约束描述（delegate_task 中暴露给父 Agent）；
             主 Agent 不设置此字段。
-        allowed_tools: 该 Agent 允许使用的工具名或权限名。
         workflow: 执行策略（默认 ReAct-like，延迟导入打破循环依赖）。
-        provider_id: 模型厂商 id（None 时由 model_name 推导）。
-        model_name: 模型名称（可带 provider 前缀）。2026-08-18 决议：内置 profile 不内置
-            默认模型，默认 None；None 表示未配置，由前端优先校验、后端兜底报错。
-        model_settings: 模型覆盖配置（``ModelSettings``）。
-        agent_type: Agent 分类（``AgentProfileType``），决定其在运行时的暴露与调度方式。
+        model_config_id: 该 Agent 的模型选择元数据，不参与模型构建。
+        model_settings: 已物化的模型运行配置，供模型工厂唯一消费。
         max_steps: 单 run 最大步骤数。
         run: 当前所属 Conversation Run 记录（经 ``derive_for_run`` 注入 per-run 副本；
             单例上不原地写）。
-        prompt_file_path: 关联的 prompt 文件路径（可为 None）。
     """
 
     agent_id: str
     role: str
-    allowed_tools: list[str]
-    agent_type: AgentProfileType
+    system_prompt: str
+    allowed_tools: list[str] = field(default_factory=list)
+    agent_type: AgentProfileType = field(default=AgentProfileType.CHILD)
     description: str | None = field(default=None, kw_only=True)
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
-    provider_id: int | None = None
-    model_name: str | None = None
-    model_settings: ModelSettings = field(default_factory=ModelSettings)
-    max_steps: int = 1000
+    model_config_id: int | None = None
+    model_settings: ModelSettings = field(default_factory=ModelSettings.default_settings)
+    max_steps: int = 100
     run: ConversationRunRecord | None = None
-    prompt_file_path: Path | None = None
 ```
 
 - 未来基于当前架构探索 model - node - observe 的工作流作为Agent的核心工作流，探索observe节点来判断tool result 是进入上下文 or 丢弃不进上下文 or 部分进入上下文。
@@ -82,7 +79,7 @@ Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 
 **Agent 定义（`core/agents/`）**
 
-- `AgentProfile`（`agents/agent_profile.py`）：描述一个 Agent 执行主体，是能力事实源——角色、类型、允许使用的工具、模型与 workflow 都在这里声明。其中 `description` 是"选择指南"，`prompt_file_path` 是"执行协议"，`delegate_task.message` 才是"具体工作单"。
+- `AgentProfile`（`agents/agent_profile.py`）：描述一个 Agent 执行主体，是能力事实源——角色、类型、允许使用的工具、模型配置与 workflow 都在这里声明。其中 `description` 是"选择指南"，`system_prompt` 是"执行协议"，`delegate_task.message` 才是"具体工作单"。
 - `AgentProfileType`（同文件）：Agent 分类，决定运行时如何暴露与调度——`main`（全局唯一，不对用户开放）、`child`（可被委派）、`hidden`（内部 Agent，如上下文压缩，不可委派）。
 - `AgentProfileRegistry`（`agents/agent_profile_registry.py`）：按 `agent_id` 注册与解析 profile 的内存目录，只回答"有哪些 Agent、按 id 找得到"，不持久化、不持有运行态。
 
