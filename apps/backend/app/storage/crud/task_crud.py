@@ -61,6 +61,7 @@ class TaskCrud:
             creation_command_id: str | None = None,
             session: Session | None = None,
             extra: dict[str, Any] | None = None,
+            tool_definitions: list[dict[str, Any]] | None = None,
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 
@@ -104,6 +105,7 @@ class TaskCrud:
                     parent_run_id,
                     creation_command_id,
                     extra,
+                    tool_definitions,
                 )
         return self._build_and_flush(
             session,
@@ -114,6 +116,7 @@ class TaskCrud:
             parent_run_id,
             creation_command_id,
             extra,
+            tool_definitions,
         )
 
     def _build_and_flush(
@@ -126,6 +129,7 @@ class TaskCrud:
             parent_run_id: int | None,
             creation_command_id: str | None,
             extra: dict[str, Any] | None,
+            tool_definitions: list[dict[str, Any]] | None = None,
     ) -> TaskRecord:
         """在给定会话中构造并 flush 一条 task 记录。
 
@@ -156,6 +160,7 @@ class TaskCrud:
             parent_run_id=parent_run_id,
             creation_command_id=creation_command_id,
             extra=extra,
+            tool_definitions=tool_definitions or [],
             current_run_id=None,
             context_window_total=None,
         )

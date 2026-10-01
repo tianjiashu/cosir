@@ -28,6 +28,7 @@ TOOL_DELEGATE_TASK: Final[str] = "delegate_task"
 TOOL_CHILD_AGENT_SEND: Final[str] = "child_agent_send"
 TOOL_CHILD_AGENT_STATUS: Final[str] = "child_agent_status"
 TOOL_CHILD_AGENT_WAIT: Final[str] = "child_agent_wait"
+TOOL_PROPOSE_AGENT_CONFIGURATION: Final[str] = "propose_agent_configuration"
 
 ToolName: TypeAlias = Literal[
     "read_file",
@@ -51,6 +52,7 @@ ToolName: TypeAlias = Literal[
     "child_agent_send",
     "child_agent_status",
     "child_agent_wait",
+    "propose_agent_configuration",
 ]
 
 ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
@@ -75,4 +77,5 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_STATUS,
     TOOL_CHILD_AGENT_WAIT,
+    TOOL_PROPOSE_AGENT_CONFIGURATION,
 )

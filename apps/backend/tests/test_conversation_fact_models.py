@@ -153,7 +153,7 @@ def test_run_extra_serializes_direct_shape_without_version() -> None:
                 "path": "attachments/readme.md",
             }
         ],
-        "allows_tools": None,
+        "ban_tools": [],
         "reasoning_effort": "high",
     }
     assert "version" not in serialized
@@ -176,6 +176,15 @@ def test_run_extra_rejects_legacy_assistant_input_wrapper() -> None:
 def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
     attachment_path = Path(__file__)
     service = ConversationRunService.__new__(ConversationRunService)
+    service._task = SimpleNamespace(
+        get=lambda _task_id: SimpleNamespace(
+            tool_definitions=[
+                {"name": "read_file"},
+                {"name": "web_search"},
+                {"name": "propose_agent_configuration"},
+            ]
+        )
+    )
     command = ConversationRunCommand(
         display_text="请阅读 [[cosir-file:readme]]",
         attachments=[
@@ -200,14 +209,23 @@ def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
     assert prepared.extra is not None
     assert prepared.extra.display_text == command.display_text
     assert prepared.extra.attachments[0]["id"] == "readme"
-    assert prepared.extra.allows_tools is None
+    assert prepared.extra.ban_tools == []
 
 
-def test_run_service_persists_banned_tools_without_other_extra_fields() -> None:
+def test_run_service_delays_banned_tools_to_task_resolution() -> None:
     service = ConversationRunService.__new__(ConversationRunService)
+    service._task = SimpleNamespace(
+        get=lambda _task_id: SimpleNamespace(
+            tool_definitions=[
+                {"name": "execute_terminal"},
+                {"name": "web_search"},
+                {"name": "propose_agent_configuration"},
+            ]
+        )
+    )
     command = ConversationRunCommand(
         display_text="检查项目",
-        allows_tools=["execute_terminal", "web_search"],
+        ban_tools=["execute_terminal"],
     )
 
     prepared = service._prepare_command(  # type: ignore[attr-defined]
@@ -220,13 +238,16 @@ def test_run_service_persists_banned_tools_without_other_extra_fields() -> None:
 
     assert prepared.extra is not None
     assert prepared.extra.attachments == []
-    assert prepared.extra.allows_tools == ["execute_terminal", "web_search"]
-    assert prepared.extra.to_dict()["allows_tools"] == ["execute_terminal", "web_search"]
+    assert prepared.extra.ban_tools == ["execute_terminal"]
+    assert prepared.extra.to_dict()["ban_tools"] == ["execute_terminal"]
 
 
 def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
     attachment_path = Path(__file__).parent
     service = ConversationRunService.__new__(ConversationRunService)
+    service._task = SimpleNamespace(
+        get=lambda _task_id: SimpleNamespace(tool_definitions=[])
+    )
     command = ConversationRunCommand(
         display_text="请检查 [[cosir-file:references]]",
         attachments=[
@@ -274,6 +295,9 @@ def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
         reasoning_effort=None,
     )
     service = ConversationRunService.__new__(ConversationRunService)
+    service._task = SimpleNamespace(
+        get=lambda _task_id: SimpleNamespace(tool_definitions=[])
+    )
     service._run = SimpleNamespace(
         get=lambda _run_id: SimpleNamespace(extra=existing_extra)
     )

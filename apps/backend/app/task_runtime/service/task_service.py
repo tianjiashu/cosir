@@ -82,11 +82,17 @@ class TaskService:
         parent_run_id: int | None = None,
         session: Session | None = None,
         extra: dict[str, object] | None = None,
+        tool_definitions: list[dict[str, object]] | None = None,
     ) -> TaskRecord:
         if workspace_id is None:
             raise ValueError("workspace_id is None")
 
         if task_id is None:
+            frozen_tools = (
+                []
+                if tool_definitions is None
+                else tool_definitions
+            )
             return self._task.create(
                 workspace_id=workspace_id,
                 title=title,
@@ -95,6 +101,7 @@ class TaskService:
                 parent_run_id=parent_run_id,
                 creation_command_id=creation_command_id,
                 extra=extra,
+                tool_definitions=frozen_tools,
                 session=session,
             )
         task_runtime_spaces.get_or_create(task_id)
@@ -293,6 +300,7 @@ class TaskService:
                         "source_run_id": source_run_id,
                     }
                 },
+                tool_definitions=source.tool_definitions,
                 session=session,
             )
 
