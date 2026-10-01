@@ -58,7 +58,7 @@
 **接口：**
 
 - `AssistantRuntimeSession` 继续接收现有 `RuntimeSessionProps` 和 `setIssue`，输出任务级 Assistant UI。
-- `AssistantRuntimeTransportHost` 接收稳定的 `RuntimeSessionContext`、`RuntimeRecovery`、`selectedBanTools` 和现有 bridge 回调，内部调用 `useRuntimeTransport`。
+- `AssistantRuntimeTransportHost` 接收稳定的 `RuntimeSessionContext`、`RuntimeRecovery`、`selectedAllowsTools` 和现有 bridge 回调，内部调用 `useRuntimeTransport`。
 - `AssistantThreadSurface` 接收 Thread 展示和操作 props；不接收 `TransportFrameStore`、`view` 或任意 token 级数据。
 
 - [ ] 将 `useRuntimeTransport` 从 `AssistantRuntimeSession` 移入 `AssistantRuntimeTransportHost`，使 transport store 的 `useSyncExternalStore` 更新只发生在 host 子树。

@@ -1652,7 +1652,7 @@
                   "$ref": "#/components/schemas/AddMessageCommand"
                 },
                 {
-                  "$ref": "#/components/schemas/BanToolsCommand"
+                  "$ref": "#/components/schemas/AllowsToolsCommand"
                 }
               ]
             },
@@ -1851,7 +1851,7 @@
         "title": "AssistantUserMessage",
         "description": "校验 Assistant UI 的用户消息。"
       },
-      "BanToolsCommand": {
+      "AllowsToolsCommand": {
         "properties": {
           "type": {
             "type": "string",
@@ -1866,11 +1866,11 @@
           },
           "name": {
             "type": "string",
-            "const": "ban-tools",
+            "const": "allows-tools",
             "title": "Name"
           },
           "payload": {
-            "$ref": "#/components/schemas/BanToolsPayload"
+            "$ref": "#/components/schemas/AllowsToolsPayload"
           }
         },
         "additionalProperties": false,
@@ -1881,12 +1881,12 @@
           "name",
           "payload"
         ],
-        "title": "BanToolsCommand",
-        "description": "Assistant UI custom command that configures disabled tools for one Run.\n\nThis schema preserves the wire shape ``type=\"custom\"``, ``name=\"ban-tools\"`` and a typed\n``payload``. It validates command identity and payload shape only; the transport service\nvalidates tool names against the current main-agent catalog and persists them in Run Extra.\n\nRaises:\n    ValidationError: When the wire discriminator, command name, command ID, or payload is\n        malformed.\n\nSide effects:\n    None. Persistence and catalog lookup belong to the transport service."
+        "title": "AllowsToolsCommand",
+        "description": "Assistant UI custom command that configures disabled tools for one Run.\n\nThis schema preserves the wire shape ``type=\"custom\"``, ``name=\"allows-tools\"`` and a typed\n``payload``. It validates command identity and payload shape only; the transport service\nvalidates tool names against the current main-agent catalog and persists them in Run Extra.\n\nRaises:\n    ValidationError: When the wire discriminator, command name, command ID, or payload is\n        malformed.\n\nSide effects:\n    None. Persistence and catalog lookup belong to the transport service."
       },
-      "BanToolsPayload": {
+      "AllowsToolsPayload": {
         "properties": {
-          "ban_tools": {
+          "allows_tools": {
             "items": {
               "type": "string"
             },
@@ -1897,10 +1897,10 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "ban_tools"
+          "allows_tools"
         ],
-        "title": "BanToolsPayload",
-        "description": "Validated tool-name selection carried by ``BanToolsCommand``.\n\n``ban_tools`` may be empty to preserve the default where every tool remains available.\nNames must be unique, nonblank strings; availability against the current main-agent catalog\nis checked by the transport service after request parsing.\n\nRaises:\n    ValidationError: When a name is blank, duplicated, or not a string.\n\nSide effects:\n    None. This model only validates and stores the request payload."
+        "title": "AllowsToolsPayload",
+        "description": "Validated tool-name selection carried by ``AllowsToolsCommand``.\n\n``allows_tools`` may be empty to preserve the default where every tool remains available.\nNames must be unique, nonblank strings; availability against the current main-agent catalog\nis checked by the transport service after request parsing.\n\nRaises:\n    ValidationError: When a name is blank, duplicated, or not a string.\n\nSide effects:\n    None. This model only validates and stores the request payload."
       },
       "Body_upload_attachment_workspaces__workspace_id__attachments_post": {
         "properties": {

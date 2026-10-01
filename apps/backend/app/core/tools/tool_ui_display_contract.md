@@ -178,6 +178,7 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `child_agent_send` | `trace`、可展开、`details`、`send` | `child-agent-result` | `operation`、child task/run locator、状态、agent 标识、最终摘要、终态原因 |
 | `child_agent_status` | `trace`、可展开、`details`、`info` | `child-agent-result` | `operation`、child task/run locator、状态、agent 标识、最终摘要、终态原因 |
 | `child_agent_wait` | `trace`、可展开、`details`、`clock` | `child-agent-wait-result` | `timed_out`、终态 messages、pending locator、`interrupted_by` |
+| `propose_agent_configuration` | `standalone`、只读草稿卡、`bot` | `agent-configuration-draft` | `status=draft`、`agent_id`、`role`、`description`、`system_prompt` |
 
 交互式 terminal handler 已注册到 Agent tool schema，并继续复用现有 renderer 路由；静态
 布局为 `terminal`，动态 `kind` 为 `terminal-session`。静态 `ToolDisplayHints.variant`
