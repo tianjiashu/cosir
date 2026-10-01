@@ -17,10 +17,6 @@ from app.api.schemas.response.WorkspaceFileIgnoreResponse import WorkspaceFileIg
 from app.api.schemas.response.WorkspaceInstructionResponse import WorkspaceInstructionResponse
 from app.app import app
 from app.service.configuration.agent_configuration_service import AgentConfigurationService
-from app.service.configuration.system_prompt_update_broadcaster import (
-    broadcast_system_prompt_delta,
-    build_system_prompt_delta,
-)
 from app.service.configuration.workspace_configuration_context import (
     get_workspace_configuration_context,
 )
@@ -29,6 +25,10 @@ from app.service.configuration.workspace_fileignore_configuration_service import
 )
 from app.service.configuration.workspace_instruction_configuration_service import (
     WorkspaceInstructionConfigurationService,
+)
+from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
+    broadcast_system_prompt_delta,
+    build_system_prompt_delta,
 )
 from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 

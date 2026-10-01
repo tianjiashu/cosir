@@ -12,7 +12,7 @@ from app.core.agents.define_agents import main_agent
 from app.service.configuration.main_agent_prompt_configuration_service import (
     MainAgentPromptConfigurationService,
 )
-from app.service.configuration.system_prompt_update_broadcaster import (
+from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
     broadcast_system_prompt_delta,
     build_system_prompt_delta,
 )

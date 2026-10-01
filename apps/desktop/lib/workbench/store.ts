@@ -6,7 +6,6 @@ type WorkbenchState = {
   tabs: WorkbenchTab[];
   activeTabId: string | null;
   savedDraftToolCallIds: string[];
-  dismissedDraftToolCallIds: string[];
   panelOpen: boolean;
   panelWidth: number;
   ensureWorkspace: (workspaceId: number | null) => void;
@@ -15,7 +14,6 @@ type WorkbenchState = {
   updateAgentConfigurationDraft: (tabId: string, draft: WorkbenchAgentConfigurationDraftTab["draft"]) => void;
   setAgentConfigurationDraftScope: (tabId: string, scope: WorkbenchAgentConfigurationDraftTab["scope"]) => void;
   setDraftDirty: (tabId: string, dirty: boolean) => void;
-  dismissAgentConfigurationDraft: (toolCallId: string) => void;
   activateTab: (tabId: string) => void;
   closeTab: (tabId: string) => void;
   closeWorkspace: (workspaceId: number) => void;
@@ -31,11 +29,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   tabs: [],
   activeTabId: null,
   savedDraftToolCallIds: [],
-  dismissedDraftToolCallIds: [],
   panelOpen: false,
   panelWidth: 480,
   ensureWorkspace: (workspaceId) => set((state) => state.workspaceId === workspaceId ? state : {
-    ...state, workspaceId, tabs: [], activeTabId: null, savedDraftToolCallIds: [], dismissedDraftToolCallIds: [], panelOpen: false,
+    ...state, workspaceId, tabs: [], activeTabId: null, savedDraftToolCallIds: [], panelOpen: false,
   }),
   openAgentTab: (input) => set((state) => {
     const id = tabId(input.taskId);
@@ -63,7 +60,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
       savedDraftToolCallIds: existingDraft
         ? state.savedDraftToolCallIds
         : state.savedDraftToolCallIds.filter((toolCallId) => toolCallId !== input.toolCallId),
-      dismissedDraftToolCallIds: state.dismissedDraftToolCallIds.filter((toolCallId) => toolCallId !== input.toolCallId),
       workspaceId: input.workspaceId,
       tabs: existing
         ? existingDraft ? state.tabs : state.tabs.map((tab) => tab.id === id ? nextTab : tab)
@@ -82,22 +78,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
       ...state,
       savedDraftToolCallIds: [...savedDraftToolCallIds],
       tabs: state.tabs.map((candidate) => candidate.id === tabId ? { ...candidate, dirty } : candidate),
-    };
-  }),
-  dismissAgentConfigurationDraft: (toolCallId) => set((state) => {
-    const id = draftTabId(toolCallId);
-    const index = state.tabs.findIndex((tab) => tab.id === id);
-    const tabs = index < 0 ? state.tabs : state.tabs.filter((tab) => tab.id !== id);
-    const activeTabId = state.activeTabId === id ? tabs[Math.min(index, tabs.length - 1)]?.id ?? null : state.activeTabId;
-    return {
-      ...state,
-      tabs,
-      activeTabId,
-      panelOpen: tabs.length > 0 && state.panelOpen,
-      savedDraftToolCallIds: state.savedDraftToolCallIds.filter((item) => item !== toolCallId),
-      dismissedDraftToolCallIds: state.dismissedDraftToolCallIds.includes(toolCallId)
-        ? state.dismissedDraftToolCallIds
-        : [...state.dismissedDraftToolCallIds, toolCallId],
     };
   }),
   updateAgentConfigurationDraft: (tabId, draft) => set((state) => ({
@@ -121,7 +101,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     tabs: [],
     activeTabId: null,
     savedDraftToolCallIds: [],
-    dismissedDraftToolCallIds: [],
     panelOpen: false,
   } : state),
   setPanelOpen: (panelOpen) => set((state) => ({ ...state, panelOpen })),

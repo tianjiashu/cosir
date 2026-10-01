@@ -14,7 +14,7 @@ from app.app import app
 from app.service.configuration.instruction_configuration_service import (
     InstructionConfigurationService,
 )
-from app.service.configuration.system_prompt_update_broadcaster import (
+from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
     broadcast_system_prompt_delta,
     build_system_prompt_delta,
 )

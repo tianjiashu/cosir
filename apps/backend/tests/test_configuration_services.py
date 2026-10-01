@@ -163,6 +163,123 @@ def test_agent_configuration_round_trip_preserves_model_override(
     assert registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer") is None
 
 
+def test_agent_create_emits_deferred_catalog_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """创建子 Agent 后发布目录变更通知。"""
+
+    monkeypatch.setattr(
+        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        lambda: tmp_path / "agents",
+    )
+    registry = _configuration_registry()
+    service = _service(monkeypatch, registry)
+    changes: list[object] = []
+    monkeypatch.setattr(
+        "app.service.configuration.agent_configuration_service.broadcast_agent_catalog_change",
+        changes.append,
+        raising=False,
+    )
+
+    service.create_document(
+        AgentConfigurationDocument(
+            agent_id="reviewer",
+            role="child",
+            description="审查变更",
+            system_prompt="只审查，不修改文件。",
+            allowed_tools=["read_file"],
+        )
+    )
+
+    assert len(changes) == 1
+    assert changes[0].action == "created"
+    assert changes[0].agent_id == "reviewer"
+    assert changes[0].current_description == "审查变更"
+
+
+def test_agent_update_notifies_only_when_description_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """更新子 Agent 的非描述字段不通知，描述变化才通知。"""
+
+    monkeypatch.setattr(
+        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        lambda: tmp_path / "agents",
+    )
+    registry = _configuration_registry()
+    service = _service(monkeypatch, registry)
+    original = AgentConfigurationDocument(
+        agent_id="reviewer",
+        role="child",
+        description="审查变更",
+        system_prompt="只审查，不修改文件。",
+        allowed_tools=["read_file"],
+    )
+    service.create_document(original)
+    changes: list[object] = []
+    monkeypatch.setattr(
+        "app.service.configuration.agent_configuration_service.broadcast_agent_catalog_change",
+        changes.append,
+        raising=False,
+    )
+
+    service.update_document(
+        "reviewer",
+        AgentConfigurationDocument(
+            **{**original.__dict__, "model_settings": {"temperature": 0.2}}
+        ),
+    )
+    assert changes == []
+
+    service.update_document(
+        "reviewer",
+        AgentConfigurationDocument(
+            **{**original.__dict__, "description": "审查 TypeScript 变更"}
+        ),
+    )
+    assert len(changes) == 1
+    assert changes[0].action == "updated"
+    assert changes[0].previous_description == "审查变更"
+    assert changes[0].current_description == "审查 TypeScript 变更"
+
+
+def test_agent_delete_emits_deferred_catalog_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """删除子 Agent 后发布目录变更通知。"""
+
+    monkeypatch.setattr(
+        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        lambda: tmp_path / "agents",
+    )
+    registry = _configuration_registry()
+    service = _service(monkeypatch, registry)
+    document = AgentConfigurationDocument(
+        agent_id="reviewer",
+        role="child",
+        description="审查变更",
+        system_prompt="只审查，不修改文件。",
+        allowed_tools=["read_file"],
+    )
+    service.create_document(document)
+    changes: list[object] = []
+    monkeypatch.setattr(
+        "app.service.configuration.agent_configuration_service.broadcast_agent_catalog_change",
+        changes.append,
+    )
+
+    service.delete_document("reviewer")
+
+    assert len(changes) == 1
+    assert changes[0].action == "deleted"
+    assert changes[0].agent_id == "reviewer"
+    assert changes[0].previous_description == "审查变更"
+    assert changes[0].current_description is None
+
+
 def test_builtin_agent_is_editable_but_not_deletable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

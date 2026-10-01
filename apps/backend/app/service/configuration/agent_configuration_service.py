@@ -28,6 +28,13 @@ from app.service.configuration.file_store import (
     ConfigurationFileStore,
     ConfigurationPathError,
 )
+from app.task_runtime.agent_catalog_change import (
+    AgentCatalogChange,
+    AgentCatalogChangeAction,
+)
+from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
+    broadcast_agent_catalog_change,
+)
 from app.utils.cosir_paths import system_agent_config_dir, workspace_agent_config_dir
 
 
@@ -93,7 +100,11 @@ class AgentConfigurationService:
         return [self._from_profile(profile) for profile in profiles]
 
     def create_document(self, document: AgentConfigurationDocument) -> AgentConfigurationDocument:
-        """校验并创建当前作用域的 Agent JSON；Agent ID 与文件名由后端生成。"""
+        """校验并创建当前作用域的 Agent JSON，并延迟通知目录消费者。
+
+        Agent 文件与 Registry 均成功更新后才广播新增事件；通知失败只记录旁路日志，不回滚
+        已提交的配置事实。
+        """
 
         self._validate_agent_id(document.agent_id)
         self._ensure_not_builtin(document.agent_id)
@@ -121,6 +132,11 @@ class AgentConfigurationService:
                 "data": {"agent_id": document.agent_id, "scope": str(self.scope)},
             },
         )
+        self._notify_catalog_change(
+            action="created",
+            agent_id=document.agent_id,
+            current_description=profile.description,
+        )
         return saved
 
     def update_document(
@@ -128,7 +144,7 @@ class AgentConfigurationService:
             agent_id: str,
             document: AgentConfigurationDocument,
     ) -> AgentConfigurationDocument:
-        """无损更新当前作用域的 JSON 文档；不支持原地修改 Agent ID。"""
+        """无损更新当前作用域的 JSON 文档；仅描述变化时通知目录消费者。"""
 
         self._validate_agent_id(agent_id)
         if document.agent_id != agent_id:
@@ -153,17 +169,25 @@ class AgentConfigurationService:
                 "data": {"agent_id": document.agent_id, "scope": str(self.scope)},
             },
         )
+        if existing.description != profile.description:
+            self._notify_catalog_change(
+                action="updated",
+                agent_id=agent_id,
+                previous_description=existing.description,
+                current_description=profile.description,
+            )
         return saved
 
     def delete_document(self, agent_id: str) -> None:
-        """删除当前作用域的 JSON Agent；内置 Agent 和符号链接均拒绝删除。"""
+        """删除当前作用域的 JSON Agent，并延迟通知目录消费者。"""
 
         self._validate_agent_id(agent_id)
         self._ensure_not_builtin(agent_id)
         target = self._path_for(agent_id)
         if not target.exists():
             raise KeyError(agent_id)
-        if self.registry.resolve_local(self.scope, agent_id) is None:
+        existing = self.registry.resolve_local(self.scope, agent_id)
+        if existing is None:
             raise KeyError(agent_id)
         with self.store.locked(target):
             if target.is_symlink() or not target.is_file():
@@ -179,6 +203,47 @@ class AgentConfigurationService:
                 "data": {"agent_id": agent_id, "scope": str(self.scope)},
             },
         )
+        self._notify_catalog_change(
+            action="deleted",
+            agent_id=agent_id,
+            previous_description=existing.description,
+        )
+
+    def _notify_catalog_change(
+        self,
+        *,
+        action: AgentCatalogChangeAction,
+        agent_id: str,
+        previous_description: str | None = None,
+        current_description: str | None = None,
+    ) -> None:
+        """在配置事实提交后投递目录通知；通知旁路失败不影响配置请求成功。
+
+        该方法只接收目录可见的 Agent ID 与描述，不把完整 profile、系统提示词或模型配置
+        传给通知层。system 作用域用 ``None`` 表示全局，workspace 作用域使用规范化根路径。
+        """
+
+        change = AgentCatalogChange(
+            scope=None if self.workspace_root is None else str(self.scope),
+            action=action,
+            agent_id=agent_id,
+            previous_description=previous_description,
+            current_description=current_description,
+        )
+        try:
+            broadcast_agent_catalog_change(change)
+        except Exception:
+            log.exception(
+                "configuration_agent_catalog_notification_failed",
+                extra={
+                    "msg": "Agent 配置已提交，但目录延迟通知失败",
+                    "data": {
+                        "action": action,
+                        "agent_id": agent_id,
+                        "scope": change.scope,
+                    },
+                },
+            )
 
     def _from_profile(
             self,

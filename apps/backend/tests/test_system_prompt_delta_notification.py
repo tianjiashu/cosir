@@ -9,7 +9,7 @@ import pytest
 from langchain_core.messages import SystemMessage
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.service.configuration.system_prompt_update_broadcaster import (
+from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
     broadcast_system_prompt_delta,
     build_system_prompt_delta,
 )

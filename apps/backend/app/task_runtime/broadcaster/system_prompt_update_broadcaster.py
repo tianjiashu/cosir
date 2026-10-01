@@ -8,14 +8,15 @@ Agent Registry，也不负责把通知持久化到 Conversation context。
 from __future__ import annotations
 
 import difflib
-import os
 
-from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileType
+from app.task_runtime.broadcaster.deferred_system_message_broadcaster import (
+    broadcast_deferred_system_message,
+    normalize_scope_path,
+)
 from app.task_runtime.system_prompt_delta import SystemPromptDelta
 from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 def build_system_prompt_delta(
@@ -78,26 +79,17 @@ def broadcast_system_prompt_delta(delta: SystemPromptDelta) -> int:
         新 space，不写数据库，不修改 Registry，不阻塞正在进行的模型请求。
     """
 
-    spaces = task_runtime_spaces.existing_spaces()
-    delivered = 0
-    for space in spaces:
-        if _should_notify_space(space, delta):
-            space.defer_system_prompt_delta(delta)
-            delivered += 1
-    log.info(
-        "system_prompt_delta_broadcast",
-        extra={
-            "msg": "系统提示词变更已广播到进程内 Task runtime space",
-            "data": {
-                "source": delta.source.value,
-                "scope": delta.scope,
-                "diff_length": len(delta.diff),
-                "materialized_space_count": len(spaces),
-                "delivered_count": delivered,
-            },
+    return broadcast_deferred_system_message(
+        message=delta.to_message(),
+        should_notify=lambda space: _should_notify_space(space, delta),
+        event="system_prompt_delta_broadcast",
+        log_message="系统提示词变更已广播到进程内 Task runtime space",
+        data={
+            "source": delta.source.value,
+            "scope": delta.scope,
+            "diff_length": len(delta.diff),
         },
     )
-    return delivered
 
 
 def _should_notify_space(space: TaskRuntimeSpace, delta: SystemPromptDelta) -> bool:
@@ -114,11 +106,5 @@ def _should_notify_space(space: TaskRuntimeSpace, delta: SystemPromptDelta) -> b
     if delta.source is SystemPromptDeltaSource.WORKSPACE_INSTRUCTIONS:
         if delta.scope is None:
             return False
-        return _normalize_path(manager.workspace_root) == _normalize_path(delta.scope)
+        return normalize_scope_path(manager.workspace_root) == normalize_scope_path(delta.scope)
     return True
-
-
-def _normalize_path(path: str) -> str:
-    """把 workspace 路径规范化为仅用于作用域比较的稳定字符串。"""
-
-    return os.path.normcase(os.path.abspath(os.path.normpath(path)))

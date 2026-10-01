@@ -66,7 +66,7 @@ describe("workbench store", () => {
     store.ensureWorkspace(null);
   });
 
-  it("tracks saved and dismissed draft card state without persistence", () => {
+  it("tracks saved draft card state without persistence", () => {
     const store = useWorkbenchStore.getState();
     store.ensureWorkspace(10);
     store.openAgentConfigurationDraftTab({
@@ -88,9 +88,6 @@ describe("workbench store", () => {
     });
     store.setDraftDirty("agent-config-draft:tool-call-701", false);
     expect(useWorkbenchStore.getState().savedDraftToolCallIds).toContain("tool-call-701");
-    store.dismissAgentConfigurationDraft("tool-call-701");
-    expect(useWorkbenchStore.getState().dismissedDraftToolCallIds).toContain("tool-call-701");
-    expect(useWorkbenchStore.getState().tabs).toEqual([]);
     store.ensureWorkspace(null);
   });
 
