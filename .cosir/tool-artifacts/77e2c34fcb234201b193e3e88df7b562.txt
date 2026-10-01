@@ -1,0 +1,451 @@
+200| 
+201|         run_id = ReactLikeWorkflow._current_run_id(operations)
+202|         resolved_output = run_failure_message(end_reason) if final_output is None else final_output
+203|         try:
+204|             failed_run = operations.fail_run_if_running(
+205|                 end_reason=end_reason,
+206|                 usage_stats=usage_stats,
+207|                 final_output=resolved_output,
+208|             )
+209|         except Exception:
+210|             log.exception(
+211|                 "run_failure_settle_failed",
+212|                 extra={
+213|                     "msg": "异常收尾时落定 failed 终态失败，run 可能仍为 running",
+214|                     "data": {"run_id": run_id, "end_reason": end_reason},
+215|                 },
+216|             )
+217|             return
+218|         if failed_run is None:
+219|             log.info(
+220|                 "run_failure_settle_race_lost",
+221|                 extra={
+222|                     "msg": "异常收尾落定 failed 时 run 已非 running，跳过终态写入",
+223|                     "data": {"run_id": run_id, "end_reason": end_reason},
+224|                 },
+225|             )
+226|             return
+227|         log.info(
+228|             "run_failure_settled",
+229|             extra={
+230|                 "msg": "异常已将 run 落定为 failed 终态",
+231|                 "data": {"run_id": failed_run.id, "end_reason": end_reason},
+232|             },
+233|         )
+234| 
+235|     async def run(
+236|             self,
+237|             operations: WorkflowOperations,
+238|             callbacks: list | None = None,
+239|             langfuse_trace_id: str | None = None,
+240|             execution_mode: ExecutionMode = "fresh",
+241|     ) -> None:
+242|         """执行一个任务，并在异常逃逸时把 Run 落定为 failed 终态。
+243| 
+244|         本方法只做「调用图执行 + 异常兜底收口」两件事：正常终态由节点内的
+245|         ``WorkflowOperations`` 落定；任何逃逸出 ``_run_graph`` 的异常都在此处先落 failed 终态
+246|         再原样抛出——runner 与 executor 都刻意不写终态，异常若直接逃逸，Run 会永久停留在
+247|         ``running``，前端既收不到失败原因也无法开始新轮次。
+248| 
+249|         参数:
+250|             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新。
+251|             callbacks: 可选 LangChain callbacks（如 Langfuse ``CallbackHandler``）。
+252|             langfuse_trace_id: 可选 Langfuse trace 标识；未启用 Langfuse 时为 None。
+253|             execution_mode: 本次执行是 ``fresh`` 还是 ``resume``。
+254| 
+255|         返回:
+256|             无（协程）。
+257| 
+258|         异常:
+259|             Exception: 原样重新抛出 ``_run_graph`` 的异常；抛出前 Run 已落 failed 终态。
+260| 
+261|         副作用:
+262|             异常路径下把 Run 更新为 failed（含受控错误契约）并发布状态事件；其余副作用见
+263|             ``_run_graph``。
+264|         """
+265| 
+266|         try:
+267|             await self._run_graph(operations, callbacks, langfuse_trace_id, execution_mode)
+268|         except Exception as exc:
+269|             # 兜底收口：图构建、resume 状态检查等路径的异常不经过 graph.astream 的 except
+270|             # 分支，必须在这里补落终态。已在内部落定过的 run 只会命中 fail_run_if_running 的
+271|             # 「已非 running」分支，记 info 日志后放行。
+272|             self._settle_failed_run(operations, self._failure_code_for(exc))
+273|             raise
+274| 
+275|     async def _run_graph(
+276|             self,
+277|             operations: WorkflowOperations,
+278|             callbacks: list | None = None,
+279|             langfuse_trace_id: str | None = None,
+280|             execution_mode: ExecutionMode = "fresh",
+281|     ) -> None:
+282|         """驱动已编译 graph 执行一次任务，直到完成、失败、取消或达到最大步骤数。
+283| 
+284|         以 LangGraph 状态流驱动已编译 graph。工作流不再生产或透传 RuntimeEvent；模型、
+285|         工具和终态事实由 ``RuntimeOperations`` 直接提交到 canonical conversation state，
+286|         模型流式增量由 graph custom stream 统一转发到 snapshot。
+287|         模型经 ``resolve_chat_model`` 构建（缺 Key 在构建期抛错）；
+288|         工具由服务端工具策略直接执行，工作流不等待审批类外部决策；唯一的图内中断是协作取消
+289|         触发的 ``interrupt``（见 ``model_node``）。
+290| 
+291|         参数:
+292|             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新。
+293|             callbacks: 可选 LangChain callbacks（如 Langfuse ``CallbackHandler``），注入
+294|                 ``graph.astream`` 的 ``config["callbacks"]`` 使 LLM 调用被自动追踪。
+295|             langfuse_trace_id: 可选 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
+296|                 终态事件 payload 会携带该字段供前端展示。未启用 Langfuse 时为 None。
+297|             execution_mode: 本次执行是 ``fresh`` 还是 ``resume``；它决定注入 graph 的输入
+298|                 （``fresh`` 传初始 state、``resume`` 传 ``None`` 或 ``Command(resume=...)``）
+299|                 以及上下文是否清空该 run 的旧条目（见 ``RuntimeContextManager.begin_run``）。
+300| 
+301|         返回:
+302|             无（协程）。工作流只驱动领域事实写入；Transport 通过 canonical conversation
+303|             state 订阅事实变更。
+304| 
+305|         异常:
+306|             ValueError: Conversation Run 缺少 ``provider_id``——run 已先落 failed 终态。
+307|             Exception: 模型解析失败或 graph 执行失败时，记 ``workflow_graph_failed`` /
+308|                 ``model_resolve_failed``，经 ``_settle_failed_run`` 落定 failed 终态后原样向上
+309|                 抛出；未被这些分支覆盖的异常再由外层 ``run`` 兜底落定。
+310|         """
+311| 
+312|         run = operations.get_current_run()
+313|         # 一个 Conversation Run 对应一个 LangGraph checkpoint thread。这里必须使用
+314|         # run 创建时持久化的 UUID，而不是自增 run.id：主库可被清空/重建并重新分配同一个
+315|         # 整数 ID，而 checkpoint 库可能仍保留旧状态；UUID 才能保证两套生命周期真正隔离。
+316|         run_id = run.id
+317|         current_task = operations.get_current_task()
+318| 
+319|         # Agent 执行主体
+320|         agent_profile = operations.agent_profile
+321|         # 构建模型：按 run.model_name 运行期兜底解析（None 时回退 agent_profile.model_name），
+322|         # 失败记 ``model_resolve_failed`` 后抛出，由外层 graph.astream 异常分支收敛为 RUN_FAILED。
+323|         try:
+324|             base_model = resolve_chat_model(
+325|                 run=run,
+326|                 agent_profile=agent_profile,
+327|             )
+328|         except Exception as exc:
+329|             log.exception(
+330|                 "model_resolve_failed",
+331|                 extra={
+332|                     "msg": f"运行期模型解析失败，run 进入 RUN_FAILED：{exc}",
+333|                     "data": {
+334|                         "task_id": current_task.id,
+335|                         "run_id": run.id,
+336|                         "model": run.model_name or agent_profile.model_name,
+337|                     },
+338|                 },
+339|             )
+340|             self._settle_failed_run(
+341|                 operations,
+342|                 Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE,
+343|             )
+344|             raise
+345|         # 构建工具
+346|         tool_schemas = [
+347|             tool.to_model_tool_definition()
+348|             for tool in operations.model_tools
+349|             if agent_profile.allowed_tools is None or tool.name in agent_profile.allowed_tools
+350|         ]
+351|         try:
+352|             if len(tool_schemas) > 0:
+353|                 bound_model = (
+354|                     base_model.bind_tools(tool_schemas, strict=True,
+355|                                           parallel_tool_calls=True) if tool_schemas else base_model
+356|                 )
+357|             else:
+358|                 bound_model = base_model
+359|         except NotImplementedError:
+360|             # 降级防御：模型不支持 bind_tools 时禁用工具继续运行（与缺 Key 无关，缺 Key 在
+361|             # resolve_chat_model 构建期即抛错，不会走到这里）。
+362|             log.warning(
+363|                 "model %s does not support bind_tools; running without tools "
+364|                 "(degraded: model does not implement tool binding)",
+365|                 type(base_model).__name__,
+366|             )
+367|             bound_model = base_model
+368| 
+369|         if run.provider_id is None:
+370|             # 配置缺失也属于「本轮无法开始」的失败：先落 failed 终态再抛出，避免异常逃逸后
+371|             # run 永久停留在 running。
+372|             self._settle_failed_run(
+373|                 operations,
+374|                 Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE,
+375|             )
+376|             raise ValueError("Conversation Run provider_id is required")
+377|         thinking_channel = CapabilityService.get_thinking_channel(run.provider_id)
+378|         vision_input_format = CapabilityService.get_vision_input_format(run.provider_id)
+379| 
+380|         runtime_config = RuntimeConfig(
+381|             operations=operations,
+382|             run=run,
+383|             model=cast(BaseChatModel, bound_model),
+384|             start_time=perf_counter(),
+385|             usage_stats=ConversationRunUsageStats(),
+386|             langfuse_trace_id=langfuse_trace_id,
+387|             thinking_channel=thinking_channel,
+388|             thinking_roundtrip=True,
+389|             vision_input_format=vision_input_format,
+390|             execution_mode=execution_mode,
+391|         )
+392|         current_workspace = operations.get_current_workspace()
+393|         # 构造 task 级运行时上下文（唯一事实源），注入 store 端口使 manager 成为消息
+394|         # 读写唯一入口，并挂载上下文占用订阅者。
+395|         runtime_context_manager = RuntimeContextManager.ensure_get_runtime_context_manager(
+396|             agent_profile,
+397|             current_workspace,
+398|             current_task,
+399|         )
+400| 
+401|         # 每个新 ConversationRun 都从 canonical history 建立 fresh 上下文。
+402|         runtime_context_manager.begin_run(
+403|             run,
+404|             execution_mode,
+405|             tool_schemas=tool_schemas,
+406|         )
+407|         # 本 Run 的初始 user 消息属于该 Run 的 canonical 上下文事实：fresh 时
+408|         # ``begin_run`` 已清空该 Run 的旧条目，这里补写基线；resume 时同一 Run 的
+409|         # user 消息已存在。是否「已存在」由方法内部按 canonical context 事实判定，
+410|         # **不能**用 ``execution_mode`` 代替：续跑在「上次崩于写入之前」时仍需补写。
+411|         # 必须在 graph 启动前完成，使首个 model 步的 ``load_message`` 能把用户输入交给
+412|         # 模型；写入失败由异常向上收敛为 Run 失败。
+413|         runtime_context_manager.ensure_run_user_message(
+414|             run.input_text,
+415|             run.image_paths,
+416|             run.extra.display_text if run.extra is not None else run.input_text,
+417|             run.extra.attachments if run.extra is not None else None,
+418|         )
+419| 
+420|         config = {
+421|             "configurable": {
+422|                 "thread_id": run.checkpoint_thread_id,
+423|                 "run_id": run_id,
+424|                 "runtime_config": runtime_config,
+425|                 # 与 runtime_config 同口径经 config 注入，不进入 graph state
+426|                 # （非 list 对象不兼容 state reducer）。
+427|                 "runtime_context": runtime_context_manager,
+428|             },
+429|             # LangChain callbacks（如 Langfuse CallbackHandler）经此注入模型调用追踪。
+430|             "callbacks": callbacks or [],
+431|         }
+432| 
+433|         async with build_checkpointer() as checkpointer:
+434|             graph = self._build_graph(checkpointer)
+435|             # 初始 state 只填控制流字段：模型消息与 runtime context 都不进 state（前者归
+436|             # RuntimeContextManager，后者经 config 注入）。
+437|             initial_state = ReactGraphState(
+438|                 step_count=0,
+439|                 tool_error_count=0,
+440|                 requested_tool=False,
+441|                 continue_model=False,
+442|                 final_response=False,
+443|                 terminal=False,
+444|                 instruction="",
+445|                 max_steps=agent_profile.max_steps,
+446|                 final_text="",
+447|                 last_tool_results={},
+448|                 terminal_sessions={},
+449|             )
+450|             # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动
+451|             # 一个新的 graph input，即使 thread_id 相同也不等价于 resume。
+452|             # 因此 ``resume`` 分支要求 ``run.checkpoint_thread_id`` 指向的线程上已有
+453|             # checkpoint：续跑**不可**轮换该字段，否则会落到一个空线程上无从继续。
+454|             input_state: Any = initial_state
+455|             if execution_mode != "fresh":
+456|                 # 续跑准入：必须先判图状态。图已走到 END 时 ``astream`` 既不产出事件也不
+457|                 # 返回（协程永久挂起），因此必须先拒绝并收敛该 run，再决定恢复输入。
+458|                 snapshot = await graph.aget_state(config)
+459|                 if not snapshot.next:
+460|                     log.warning(
+461|                         "workflow_resume_rejected_graph_finished",
+462|                         extra={
+463|                             "msg": "续跑被拒绝：该 run 的图已结束（无可执行节点）",
+464|                             "data": {"task_id": current_task.id, "run_id": run_id},
+465|                         },
+466|                     )
+467|                     self._settle_failed_run(
+468|                         operations,
+469|                         Constant.Run.RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED,
+470|                     )
+471|                     await self._finalize_terminal_checkpoint(
+472|                         graph,
+473|                         config,
+474|                         run_id,
+475|                         reason="resume_rejected_graph_finished",
+476|                     )
+477|                     return
+478|                 # 图停在带 interrupt 的任务上（当前唯一来源是 ``model_node`` 的协作取消）
+479|                 # 时必须用 ``Command(resume=...)`` 恢复；其余情况传 ``None``，语义为
+480|                 # 「从既有 checkpoint 继续」。
+481|                 input_state = (
+482|                     Command(resume={"action": "resume"})
+483|                     if any(task.interrupts for task in snapshot.tasks)
+484|                     else None
+485|                 )
+486|             try:
+487|                 async for mode, value in graph.astream(
+488|                         input_state,
+489|                         config,
+490|                         stream_mode=["values", "custom"],
+491|                 ):
+492|                     # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
+493|                     # 统一写入 snapshot。两者都不是 Agent context 的来源。
+494|                     self._write_stream_item(operations, mode, value)
+495|             except Exception as exc:
+496|                 log.exception(
+497|                     "workflow_graph_failed",
+498|                     extra={
+499|                         "msg": "langgraph execution failed during workflow run",
+500|                         "data": {
+501|                             "task_id": current_task.id,
+502|                             # 经 _current_run_id 读取：日志语句本身不得在收尾路径上抛出。
+503|                             "run_id": ReactLikeWorkflow._current_run_id(operations),
+504|                         },
+505|                     },
+506|                 )
+507|                 # 图执行异常（模型调用报错、provider 不可用、节点内部硬错等）必须先落 failed
+508|                 # 终态再向上抛：本层是唯一知道异常形状的地方，而 runner / executor 都刻意不落
+509|                 # 终态，异常逃逸后 run 会永久停留在 running 且无法取消。
+510|                 self._settle_failed_run(
+511|                     operations,
+512|                     self._failure_code_for(exc),
+513|                     usage_stats=runtime_config.usage_stats,
+514|                 )
+515|                 raise
+516|             finally:
+517|                 await self._finalize_terminal_checkpoint(
+518|                     graph,
+519|                     config,
+520|                     run_id,
+521|                     reason="run_execution_finished",
+522|                 )
+523| 
+524|     async def _finalize_terminal_checkpoint(
+525|             self,
+526|             graph: Any,
+527|             config: dict[str, Any],
+528|             run_id: int,
+529|             *,
+530|             reason: str,
+531|     ) -> bool:
+532|         """关闭 Run 的 terminal 并把 checkpoint 中的活跃元数据收敛为终态。
+533| 
+534|         terminal worker 的真实生命周期由进程内 registry 管理；本方法只在 graph 仍持有
+535|         checkpointer 时，把 checkpoint 中 ``running`` / ``starting`` 的终端投影标记为关闭，
+536|         避免后续 resume 看到已经不存在的 PTY。checkpoint 写失败只记录日志，不覆盖 Run
+537|         已经由 workflow 落定的业务终态；executor 仍会在更外层再次强制关闭 worker。
+538|         """
+539| 
+540|         try:
+541|             get_terminal_session_service().close_run_terminals(run_id, reason=reason)
+542|             snapshot = await graph.aget_state(config)
+543|             terminal_sessions = snapshot.values.get("terminal_sessions")
+544|             if not isinstance(terminal_sessions, dict):
+545|                 return True
+546|             projected = {
+547|                 session_id: dict(metadata)
+548|                 for session_id, metadata in terminal_sessions.items()
+549|                 if isinstance(session_id, str) and isinstance(metadata, dict)
+550|             }
+551|             for metadata in projected.values():
+552|                 if metadata.get("status") in {"starting", "running"}:
+553|                     metadata["status"] = "closed"
+554|                     metadata["end_reason"] = reason
+555|             await graph.aupdate_state(config, {"terminal_sessions": projected})
+556|             return True
+557|         except Exception:
+558|             log.exception(
+559|                 "workflow_terminal_checkpoint_cleanup_failed",
+560|                 extra={
+561|                     "msg": "terminal worker 或 checkpoint 终态收敛失败",
+562|                     "data": {"run_id": run_id, "reason": reason},
+563|                 },
+564|             )
+565|             return False
+566| 
+567|     async def recover_orphaned_terminal_checkpoints(
+568|             self,
+569|             runs: Iterable[object],
+570|             *,
+571|             reason: str = "runtime_restarted",
+572|     ) -> int:
+573|         """扫描最近 Run 的 checkpoint 并关闭遗留的活跃 terminal 元数据。
+574| 
+575|         启动恢复发生在新的 backend 进程中，旧 PTY worker 不属于当前 registry；本方法仍
+576|         通过统一 terminal cleanup 设置 Run closing fence，并在 checkpointer 生命周期内把
+577|         最近 Run 的 ``starting`` / ``running`` terminal 投影收敛为 ``closed``。后续 resume
+578|         会清除 fence 并创建新的 terminal，不会复用旧 PTY。
+579| 
+580|         参数:
+581|             runs: 每个 task 最近一次 Run 的记录对象，需提供 ``id`` 与
+582|                 ``checkpoint_thread_id`` 属性。
+583|             reason: 写入 terminal 元数据的关闭原因。
+584| 
+585|         返回:
+586|             实际发现并收敛的 terminal session 数量。
+587| 
+588|         异常:
+589|             checkpoint 读取或写入失败只记录日志并继续扫描其他 Run；主库恢复状态不受影响。
+590| 
+591|         副作用:
+592|             读取并可能更新 LangGraph checkpoint；同步调用 terminal service 的 Run 级清理。
+593|         """
+594| 
+595|         run_list = list(runs)
+596|         if not run_list:
+597|             return 0
+598|         recovered_count = 0
+599|         async with build_checkpointer() as checkpointer:
+600|             graph = self._build_graph(checkpointer)
+601|             for run in run_list:
+602|                 run_id = getattr(run, "id", None)
+603|                 thread_id = getattr(run, "checkpoint_thread_id", None)
+604|                 if not isinstance(run_id, int) or not isinstance(thread_id, str) or not thread_id:
+605|                     continue
+606|                 try:
+607|                     snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+608|                     terminal_sessions = snapshot.values.get("terminal_sessions")
+609|                     active_count = sum(
+610|                         1
+611|                         for metadata in (
+612|                             terminal_sessions.values()
+613|                             if isinstance(terminal_sessions, dict)
+614|                             else ()
+615|                         )
+616|                         if isinstance(metadata, dict)
+617|                         and metadata.get("status") in {"starting", "running"}
+618|                     )
+619|                     if active_count == 0:
+620|                         continue
+621|                     finalized = await self._finalize_terminal_checkpoint(
+622|                         graph,
+623|                         {"configurable": {"thread_id": thread_id}},
+624|                         run_id,
+625|                         reason=reason,
+626|                     )
+627|                     if not finalized:
+628|                         continue
+629|                     recovered_count += active_count
+630|                     log.info(
+631|                         "orphaned_terminal_sessions_recovered",
+632|                         extra={
+633|                             "msg": "启动恢复已强制关闭最近 Run 的遗留 terminal",
+634|                             "data": {
+635|                                 "run_id": run_id,
+636|                                 "thread_id": thread_id,
+637|                                 "session_count": active_count,
+638|                                 "reason": reason,
+639|                             },
+640|                         },
+641|                     )
+642|                 except Exception:
+643|                     log.exception(
+644|                         "orphaned_terminal_sessions_recovery_failed",
+645|                         extra={
+646|                             "msg": "启动恢复扫描 Run terminal checkpoint 失败",
+647|                             "data": {"run_id": run_id, "thread_id": thread_id},
+648|                         },
+649|                     )
+650|         return recovered_count

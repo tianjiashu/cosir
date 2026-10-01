@@ -1,0 +1,488 @@
+1| """进程内 ConversationRun 后台执行器。"""
+2| 
+3| from __future__ import annotations
+4| 
+5| import asyncio
+6| from collections.abc import Awaitable, Callable
+7| from dataclasses import dataclass
+8| 
+9| from app.assistant_transport.event import ToolCallsSettledEvent
+10| from app.assistant_transport.service.conversation_event_projector import ConversationEventProjector
+11| from app.config.logging.logger import log
+12| from app.core.agents.model_settings import ModelSettings
+13| from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+14| from app.core.runtime.execution_mode import ExecutionMode
+15| from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
+16| from app.models import ConversationRunRecord, ConversationRunStatus
+17| from app.service.depends import (
+18|     get_conversation_run_state_service,
+19|     get_runtime,
+20|     get_terminal_session_service,
+21| )
+22| 
+23| ConversationRunRunner = Callable[[ConversationRunRecord], Awaitable[None]]
+24| 
+25| 
+26| @dataclass
+27| class _Execution:
+28|     """执行器内部维护的运行条目。
+29| 
+30|     ``run_id`` 不在此重复存放：它已经是 ``_executions`` 字典的键。
+31|     """
+32| 
+33|     thread_task: asyncio.Task[None]
+34| 
+35| 
+36| class ConversationRunExecutor:
+37|     """在进程内独立驱动一次 ConversationRun，并作为进程内取消信号的标记入口。
+38| 
+39|     本执行器只做「执行」：不拥有 run 的业务终态（``running`` → ``completed`` / ``failed`` /
+40|     ``cancelled`` 由 workflow 落定），也不决定业务准入（由 ``prepare_run_start`` 判定）。
+41|     唯一例外是兜底收敛：驱动结束后 run 仍 ``pending`` / ``running``（workflow 进入前抛错、
+42|     落终态写库失败、关闭期取消）时，``_execute`` 以条件更新把它收敛为终态，保证不遗留
+43|     无驱动者的 active run；条件更新使其对 workflow 已落定的 run 是 no-op，终态唯一写入
+44|     者仍是 workflow。
+45| 
+46|     取消入口同属本类：``cancel`` 标记 run 级取消并立即强制关闭该 Run 的 terminal（整个
+47|     run 停止），``cancel_tool_call`` 标记工具级取消（只中止一次工具调用，run 继续）。
+48|     Run 业务终态仍由 workflow 落定；信号本身不跨进程、不跨重启。
+49|     """
+50| 
+51|     def __init__(
+52|         self,
+53|     ) -> None:
+54|         """初始化执行器：装配 run_service、event_projector、进程内取消信号源与空运行注册表。
+55| 
+56|         返回:
+57|             无。
+58| 
+59|         副作用:
+60|             从依赖装配取得 ``run_service`` / ``event_projector`` / 进程内取消信号源；
+61|             初始化空的进程内运行注册表；不读取或写入任何 run 状态。
+62|         """
+63| 
+64|         self._run_service = get_conversation_run_state_service()
+65|         self._event_projector = ConversationEventProjector()
+66|         self._signal = cancellation_registry
+67|         self._executions: dict[int, _Execution] = {}
+68| 
+69|     async def start(
+70|         self,
+71|         run_id: int,
+72|         start_mode: ExecutionMode,
+73|         ban_tools: list[str] | None = None,
+74|         model_settings: ModelSettings | None = None,
+75|     ) -> asyncio.Task[None]:
+76|         """登记 run 并在当前事件循环创建独立后台 task。
+77| 
+78|         本方法只做「异步 canonical 前置条件断言 + 进程内登记 + 建 task」：在 worker
+79|         thread 中确认目标 run 已处于 ``running`` 状态（该状态由 ``prepare_run_start``
+80|         经 ``claim_pending_run`` 的条件更新落定），随后把后台 task 记入进程内
+81|         ``_executions``。它不做
+82|         业务准入决策——「这次请求是否允许启动」由 ``prepare_run_start`` 判定；本方法也
+83|         不落库、不认领 run、不等待执行结果，HTTP 订阅断开不会取消该 task。
+84| 
+85|         参数:
+86|             run_id: 运行对应的 ``ConversationRunRecord.id``。
+87|             start_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``），
+88|                 原样透传给 ``_execute`` → ``AgentRuntime.execute_run``。
+89|             ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
+90|             model_settings: 可选的模型参数覆盖；``None`` 表示沿用 agent profile 的配置。
+91| 
+92|         返回:
+93|             已创建的后台 ``asyncio.Task``。
+94| 
+95|         异常:
+96|             KeyError: ``run_id`` 对应的 run 不存在（来自 run service 读取）。
+97|             ValueError: 该 run 当前不是 ``running``（消息为 ``run {run_id} is not
+98|                 running``）。这表示调用方违约——未经 ``prepare_run_start`` 置位就调用，
+99|                 调用方应视为启动失败并收敛该 run，不得静默继续。
+100| 
+101|         副作用:
+102|             在线程池中读取一次 run 状态；随后在当前事件循环创建后台 task、为其挂异常记录
+103|             回调并写入进程内 ``_executions`` 注册；不写入 run 状态列。
+104|         """
+105| 
+106|         run = await asyncio.to_thread(self._run_service.get_run, run_id)
+107|         if run.status != ConversationRunStatus.RUNNING:
+108|             raise ValueError(f"run {run_id} is not running")
+109|         thread_task = asyncio.create_task(
+110|             self._execute(run_id, start_mode, ban_tools, model_settings)
+111|         )
+112|         # 后台 task 无人 await：不挂回调时其异常会被 asyncio 静默吞掉，排障只能靠间接日志。
+113|         thread_task.add_done_callback(lambda task: self._log_execution_result(run_id, task))
+114|         self._executions[run_id] = _Execution(thread_task=thread_task)
+115|         return thread_task
+116| 
+117|     @staticmethod
+118|     def _log_execution_result(run_id: int, task: asyncio.Task[None]) -> None:
+119|         """记录后台执行 task 的异常结束，避免异常在事件循环里无痕消失。
+120| 
+121|         本方法只做「取回并记录 task 结果」这件事：它不改变 run 状态、不重试、不重新抛出，
+122|         也不替换 workflow 已经落定的终态。
+123| 
+124|         异常分支属**防御性路径**：``_execute`` 已把驱动期异常（含取消）在内部收口，正常
+125|         情况下后台 task 不会以异常结束；保留该回调是为了让「task 异常结束」永不静默——
+126|         一旦出现，说明有异常绕过了 ``_execute`` 的收口。
+127| 
+128|         参数:
+129|             run_id: 本次后台执行对应的 Conversation Run 标识。
+130|             task: ``start`` 创建的后台 task。
+131| 
+132|         返回:
+133|             无。
+134| 
+135|         异常:
+136|             无。task 已被取消或正常结束时直接返回；异常 inspection 自身失败按静默返回处理。
+137| 
+138|         副作用:
+139|             极端情形下 task 以异常结束时写 ``conversation_run_execution_failed``（ERROR，
+140|             含异常类型与异常文本）日志；正常结束或取消不写日志。
+141|         """
+142| 
+143|         if task.cancelled():
+144|             return
+145|         try:
+146|             error = task.exception()
+147|         except asyncio.CancelledError:
+148|             return
+149|         except BaseException as exc:
+150|             log.error(
+151|                 "conversation_run_execution_done_callback_failed",
+152|                 extra={
+153|                     "msg": "Run done callback 读取异常失败",
+154|                     "data": {"run_id": run_id, "error_type": type(exc).__name__},
+155|                 },
+156|             )
+157|             return
+158|         if error is None:
+159|             return
+160|         log.error(
+161|             "conversation_run_execution_failed",
+162|             extra={
+163|                 "msg": "后台 Run 执行 task 以异常结束（终态由 workflow 落定）",
+164|                 "data": {
+165|                     "run_id": run_id,
+166|                     "error_type": type(error).__name__,
+167|                     "error": str(error)[:500],
+168|                 },
+169|             },
+170|         )
+171| 
+172|     async def close(self) -> None:
+173|         """优雅关闭执行器并取消活动执行。"""
+174| 
+175|         executions = list(self._executions.values())
+176|         for execution in executions:
+177|             if not execution.thread_task.done():
+178|                 execution.thread_task.cancel()
+179|         if executions:
+180|             await asyncio.gather(
+181|                 *(execution.thread_task for execution in executions), return_exceptions=True
+182|             )
+183| 
+184|     def close_sync(self) -> None:
+185|         """Synchronously fence runtime executions for dependency-cache reset.
+186| 
+187|         This is a deterministic cleanup contract for test/process reconfiguration paths that
+188|         cannot await ``close``.  It schedules cancellation on each task's owning loop and clears
+189|         this executor's process-local index.  The normal lifespan still uses :meth:`close` so it
+190|         can await task completion.
+191|         """
+192| 
+193|         executions = tuple(self._executions.items())
+194|         for run_id, execution in executions:
+195|             if execution.thread_task.done():
+196|                 continue
+197|             try:
+198|                 execution.thread_task.get_loop().call_soon_threadsafe(execution.thread_task.cancel)
+199|             except RuntimeError:
+200|                 log.warning(
+201|                     "conversation_run_executor_sync_close_cancel_failed",
+202|                     extra={
+203|                         "msg": "同步 reset 无法向 Run 所属事件循环投递取消",
+204|                         "data": {"run_id": run_id},
+205|                     },
+206|                 )
+207|         self._executions.clear()
+208| 
+209|     async def cancel(self, run_id: int, end_reason: str = "user_cancelled") -> bool:
+210|         """标记指定 run 的取消信号，并立即关闭本 Run 的 terminal。
+211| 
+212|         本方法在进程内取消信号源标记 ``run_id``，使工具/runner 在轮询信号时能协作停止，
+213|         并同步关闭该 Run 当前 registry 中的全部 terminal worker。run 的终态转移（active →
+214|         cancelled）由 workflow 经 run_service 负责，本方法不触碰 run 状态列；后台 asyncio
+215|         task 也不直接取消，而是由 runner 观察到信号后自行收束。
+216| 
+217|         存在性预检：mark 之后立刻确认 run 存在，不存在则回滚已标记的信号再抛
+218|         ``KeyError``，保持「信号已标记」与「run 真实存在」的一致性。进程内信号标记在第一次
+219|         await 前完成，canonical 存在性读取在线程池中执行。
+220| 
+221|         参数:
+222|             run_id: 待取消的运行标识。
+223|             end_reason: 写入 terminal 关闭事件的原因；Run 终态的 end_reason 仍由 workflow 落定。
+224| 
+225|         返回:
+226|             信号为新标记（取消请求已发出）返回 ``True``；run 已被标记取消返回 ``False``。
+227| 
+228|         异常:
+229|             KeyError: ``run_id`` 对应的 run 不存在——先撤销已标记的信号再向上传播，
+230|                 由 API 层映射为 404。
+231| 
+232|         副作用:
+233|             向进程内取消信号源写入 ``run_id``，并强制关闭本 Run 的 terminal；run 不存在时
+234|             回滚该信号；不发起 Run 状态落库、不取消 asyncio task。HTTP 订阅断开不会调用本方法。
+235|         """
+236| 
+237|         # 标记是同步集合操作且在第一个 await 之前完成：本调用返回后，该 run 的取消
+238|         # 信号即可被工具与 runner 通过轮询观测到。本方法不落库，因此数据库中的 run
+239|         # 状态不会因这次调用而改变。
+240|         if cancellation_registry.is_cancelled(run_id):
+241|             return False
+242|         self._signal.mark_cancelled(run_id)
+243|         try:
+244|             await asyncio.to_thread(self._run_service.get_run, run_id)
+245|         except KeyError:
+246|             self._signal.clear(run_id)
+247|             raise
+248|         # 取消请求必须立即关闭本 Run 的 PTY；workflow 之后仍会协作收束，
+249|         # ``_execute`` 的 finally 还会再次幂等兜底。
+250|         await asyncio.to_thread(self._close_run_terminals, run_id, end_reason)
+251|         return True
+252| 
+253|     async def cancel_tool_call(self, run_id: int, tool_call_id: str) -> bool:
+254|         """标记指定工具调用的进程内取消信号；不落库、不中断 run 或后台 task。
+255| 
+256|         本方法只负责「发送工具级取消信号」一件事：在 ``tool_call_cancellation_registry``
+257|         标记 ``(run_id, tool_call_id)``，使该次工具调用在轮询信号时协作停止。它不改变
+258|         run 生命周期、Agent 执行与工具观察：工具执行层检出信号后返回 ``cancelled`` 观察，
+259|         run 终态与模型侧 ``ToolMessage`` 仍由 workflow 落定；由于不落库，数据库中该 run
+260|         仍是 ``running``，前端需继续以 canonical snapshot 为准。
+261| 
+262|         标记前先确认 run 存在（存在性预检），不存在则回滚已标记的信号再抛 ``KeyError``，
+263|         保持「信号已标记」与「run 真实存在」的一致性。进程内信号标记在第一次 await 前完成，
+264|         canonical 存在性读取在线程池中执行。
+265| 
+266|         参数:
+267|             run_id: 目标工具调用所属的 Conversation Run 标识。
+268|             tool_call_id: 目标工具调用标识（模型工具调用 id）。
+269| 
+270|         返回:
+271|             信号为新标记（取消请求已发出）返回 ``True``；该工具调用此前已标记取消返回
+272|             ``False``。工具执行层在单次调用结束时释放该信号，run 收尾时按 run_id 兜底
+273|             清理，因此对已结束的调用再次调用本方法会重新返回 ``True``。
+274| 
+275|         异常:
+276|             KeyError: ``run_id`` 对应的 run 不存在——先撤销已标记的信号再向上传播，
+277|                 由 API 层映射为 404。
+278| 
+279|         副作用:
+280|             向进程内工具级取消信号源写入 ``(run_id, tool_call_id)``；run 不存在时回滚该
+281|             信号；不发起状态落库、不取消 asyncio task、不触碰 run 级取消信号。
+282|         """
+283| 
+284|         # 标记是同步集合操作且在第一个 await 之前完成：本调用返回后，该工具调用的取消
+285|         # 信号即可被工具执行层通过轮询观测到。本方法不落库，因此数据库中的 run 状态与
+286|         # 工具调用状态都不会因这次调用而改变。
+287|         if tool_call_cancellation_registry.is_cancelled(run_id, tool_call_id):
+288|             return False
+289|         tool_call_cancellation_registry.mark_cancelled(run_id, tool_call_id)
+290|         try:
+291|             await asyncio.to_thread(self._run_service.get_run, run_id)
+292|         except KeyError:
+293|             tool_call_cancellation_registry.clear(run_id, tool_call_id)
+294|             raise
+295|         return True
+296| 
+297|     async def _execute(
+298|         self,
+299|         run_id: int,
+300|         start_mode: ExecutionMode,
+301|         ban_tools: list[str] | None = None,
+302|         model_settings: ModelSettings | None = None,
+303|     ) -> None:
+304|         """驱动 runner 执行一次 ConversationRun；执行器不拥有 run 终态。
+305| 
+306|         本方法只负责「执行」：读取 run 后把控制权交给 ``AgentRuntime.execute_run`` 跑完
+307|         整个 workflow，退出时关闭本 Run 的 terminal 并从进程内 ``_executions`` 注销本次
+308|         执行。它不落库、不落定 run 终态
+309|         （running → completed/failed/cancelled 由 workflow 内部经 run_service 落定），
+310|         也不清理进程内取消信号（该清理由 ``AgentRuntime`` 的收尾负责）。
+311| 
+312|         参数:
+313|             run_id: 当前运行标识。
+314|             start_mode: 本次执行是 ``fresh`` 还是 ``resume``，原样透传给
+315|                 ``AgentRuntime.execute_run``。
+316|             ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。
+317|             model_settings: 可选的模型参数覆盖；``None`` 表示沿用 agent profile 的配置。
+318| 
+319|         返回:
+320|             无。
+321| 
+322|         异常:
+323|             KeyError: ``run_id`` 对应的 run 不存在（来自 run service 读取）。
+324|             驱动期异常**不外抛**：runner 抛 ``Exception`` 时经 ``_project_tools_settled``
+325|             投影工具失败收束后在本方法内收口，runner 抛 ``CancelledError`` 时只置内部
+326|             ``cancelled`` 标志；两条路径都在退出前经过兜底收敛，把仍未落终态的 run 收敛为
+327|             failed / cancelled。run 的常规终态仍必须在 workflow 抛出之前由 workflow 落定。
+328| 
+329|         副作用:
+330|             runner 抛 ``Exception`` 时先经 ``_project_tools_settled`` 投影工具失败收束
+331|             （该投影失败只记日志，不影响收口结果）；退出时强制关闭 terminal，并在本次执行
+332|             仍登记且当前 task 就是登记 task 时移除该登记，最后经
+333|             :meth:`_converge_unfinished_run` 兜底收敛仍未落终态的 run；不清理取消信号。
+334|         """
+335|         cancelled = False
+336|         runner_started = False
+337|         try:
+338|             try:
+339|                 run = self._run_service.get_run(run_id)
+340|                 get_terminal_session_service().begin_run(run_id)
+341|                 runner_started = True
+342|                 await get_runtime().execute_run(
+343|                     run=run,
+344|                     execution_mode=start_mode,
+345|                     ban_tools=ban_tools,
+346|                     model_settings=model_settings,
+347|                 )
+348|             except asyncio.CancelledError:
+349|                 cancelled = runner_started
+350|             except Exception:
+351|                 if runner_started:
+352|                     try:
+353|                         await asyncio.to_thread(
+354|                             self._project_tools_settled,
+355|                             run_id,
+356|                             "failed",
+357|                             "runtime_failed",
+358|                         )
+359|                     except BaseException:
+360|                         self._log_cleanup_failure(run_id, "tool_settlement")
+361|         finally:
+362|             try:
+363|                 await asyncio.to_thread(
+364|                     self._close_run_terminals,
+365|                     run_id,
+366|                     "run_execution_finished",
+367|                 )
+368|             except BaseException:
+369|                 self._log_cleanup_failure(run_id, "terminal_close")
+370|             try:
+371|                 current = self._executions.get(run_id)
+372|                 current_task = asyncio.current_task()
+373|                 if current is not None and current.thread_task is current_task:
+374|                     self._executions.pop(run_id, None)
+375|             except BaseException:
+376|                 self._log_cleanup_failure(run_id, "execution_registry_remove")
+377|             try:
+378|                 # 兜底收敛放在最后：即使它在事件循环拆除期被打断，前面的 terminal 清理与
+379|                 # 登记移除也已完成，残余窗口退回下次启动的 recover_orphaned_runs。
+380|                 await self._converge_unfinished_run(run_id, cancelled=cancelled)
+381|             except BaseException:
+382|                 self._log_cleanup_failure(run_id, "convergence")
+383| 
+384|     @staticmethod
+385|     def _log_cleanup_failure(run_id: int, stage: str) -> None:
+386|         """记录单个执行器收尾阶段失败，不向调用方抛出清理异常。"""
+387| 
+388|         log.exception(
+389|             "conversation_run_executor_cleanup_failed",
+390|             extra={
+391|                 "msg": "Run 执行器收尾阶段失败，继续执行后续收尾",
+392|                 "data": {"run_id": run_id, "stage": stage},
+393|             },
+394|         )
+395| 
+396|     @staticmethod
+397|     def _close_run_terminals(run_id: int, reason: str) -> None:
+398|         """Close terminal workers in a worker thread, never in the event loop."""
+399| 
+400|         get_terminal_session_service().close_run_terminals(run_id, reason=reason)
+401| 
+402|     async def _converge_unfinished_run(self, run_id: int, *, cancelled: bool) -> None:
+403|         """驱动结束后 run 仍未落终态时的条件收敛安全网。
+404| 
+405|         负责兜住「run 被 ``prepare_run_start`` 翻成 running 后驱动死亡」的路径：
+406|         workflow 进入前的 setup 抛错、workflow 落终态写库失败、优雅关闭取消。正常
+407|         终态由 workflow 落定，本方法对已落终态的 run 是 no-op（条件更新保证终态的
+408|         业务写入者仍是 workflow）。
+409| 
+410|         参数:
+411|             run_id: 本次驱动对应的 Conversation Run 标识。
+412|             cancelled: 驱动是否因 ``CancelledError`` 结束；True 时收敛为 ``cancelled``，
+413|                 False 时收敛为 ``failed``。
+414| 
+415|         返回:
+416|             无。
+417| 
+418|         异常:
+419|             无。任何写入或读取失败只记日志、不向外抛出，避免打断 ``_execute`` 收尾；
+420|             残余僵尸由下次启动 ``recover_orphaned_runs`` 兜底。
+421| 
+422|         副作用:
+423|             在线程池内条件更新 run 状态（active → failed/cancelled）并随之发布状态事件；
+424|             命中兜底时写 ``conversation_run_executor_converged_unfinished_run``（WARNING）
+425|             日志。
+426|         """
+427| 
+428|         try:
+429|             if cancelled:
+430|                 settled = await asyncio.to_thread(
+431|                     self._run_service.cancel_run_if_running,
+432|                     run_id,
+433|                     "run_execution_cancelled",
+434|                 )
+435|                 final_status = ConversationRunStatus.CANCELLED.value
+436|             else:
+437|                 settled = await asyncio.to_thread(
+438|                     self._run_service.fail_run_if_running,
+439|                     run_id,
+440|                     end_reason="run_execution_ended_without_terminal",
+441|                 )
+442|                 final_status = ConversationRunStatus.FAILED.value
+443|         except Exception:
+444|             log.exception(
+445|                 "conversation_run_executor_converge_unfinished_failed",
+446|                 extra={
+447|                     "msg": "兜底收敛未落终态的 run 失败，依赖下次启动 recover 兜底",
+448|                     "data": {"run_id": run_id},
+449|                 },
+450|             )
+451|             return
+452|         if settled is not None:
+453|             log.warning(
+454|                 "conversation_run_executor_converged_unfinished_run",
+455|                 extra={
+456|                     "msg": "后台执行结束但 run 未落终态，已兜底收敛",
+457|                     "data": {"run_id": run_id, "final_status": final_status},
+458|                 },
+459|             )
+460| 
+461|     def _project_tools_settled(self, run_id: int, status: str, reason: str) -> None:
+462|         """通过统一 event projector 收束执行器遗留的工具调用。
+463| 
+464|         这是 Run 终态提交后的 Transport 旁路；``status`` 非 ``cancelled`` 时统一按
+465|         ``failed`` 投影。projector 未装配时静默返回；任何读取或投影失败都只记录 error
+466|         日志，不得把已收束的 workflow 再次打回 active/failed 异常路径。
+467|         """
+468| 
+469|         try:
+470|             if self._event_projector is None:
+471|                 return
+472|             run = self._run_service.get_run(run_id)
+473|             self._event_projector.process(
+474|                 ToolCallsSettledEvent(
+475|                     task_id=run.task_id,
+476|                     run_id=run_id,
+477|                     status="cancelled" if status == "cancelled" else "failed",
+478|                     reason=reason,
+479|                 )
+480|             )
+481|         except Exception:
+482|             log.exception(
+483|                 "conversation_run_tool_settlement_projector_failed",
+484|                 extra={
+485|                     "msg": "Run 终态已提交，工具收束 projector 失败并被降级",
+486|                     "data": {"run_id": run_id, "status": status, "reason": reason},
+487|                 },
+488|             )
