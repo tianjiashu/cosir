@@ -11,8 +11,10 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.assistant_transport.request import AddMessageCommand, AssistantTransportRequest
-from app.assistant_transport.request.assistant_transport_request import TransportRequestError
 from app.assistant_transport.request.command.ban_tools_command import BanToolsCommand
+from app.assistant_transport.request.command.propose_agent_configuration_command import (
+    ProposeAgentConfigurationCommand,
+)
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandInput,
@@ -29,10 +31,8 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     find_run,
 )
-from app.config.configuration import get_agent_registry, get_tool_registry
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.models import (
     ConversationRunAttachmentInput,
     ConversationRunCommand,
@@ -66,31 +66,6 @@ def _build_ordered_display_text(
             segments.append(f"[[cosir-image:{asset_id}]]")
             emitted_image_ids.add(asset_id)
     return "\n".join(segments)
-
-
-def _parse_ban_tools(command: BanToolsCommand | None) -> list[str]:
-    """根据主 Agent 当前的工具目录校验禁用工具名。"""
-
-    if command is None:
-        return []
-    names = command.payload.ban_tools
-    profile = get_agent_registry().resolve(
-        AgentProfileRegistry.SYSTEM_WORKSPACE,
-        "main_agent",
-    )
-    if profile is None:
-        raise RuntimeError("main agent profile is unavailable")
-    registered = {definition.name for definition in get_tool_registry().get_all_definitions()}
-    allowed = set(profile.allowed_tools) & registered
-    unknown = sorted(set(names) - allowed)
-    if unknown:
-        raise TransportRequestError(
-            status_code=400,
-            code="BAN_TOOLS_UNAVAILABLE",
-            message="ban_tools 包含主 Agent 当前不可用的工具",
-            retryable=False,
-        )
-    return list(names)
 
 
 class TransportAssistantService:
@@ -407,7 +382,15 @@ class TransportAssistantService:
         ban_command = next(
             (item for item in request.commands if isinstance(item, BanToolsCommand)), None
         )
-        ban_tools = _parse_ban_tools(ban_command)
+        proposal_command = next(
+            (
+                item
+                for item in request.commands
+                if isinstance(item, ProposeAgentConfigurationCommand)
+            ),
+            None,
+        )
+        ban_tools = list(ban_command.payload.ban_tools) if ban_command is not None else []
         payload_hash = request.payload_hash()
         commands = [
             ConversationRunCommandInput(
@@ -428,6 +411,7 @@ class TransportAssistantService:
             display_text=display_text,
             image_asset_ids=image_asset_ids,
             ban_tools=ban_tools,
+            propose_agent_configuration=proposal_command is not None,
             attachments=[
                 ConversationRunAttachmentInput(
                     id=attachment.id,
