@@ -252,22 +252,18 @@ class AgentProfile:
         self,
         run: ConversationRunRecord,
         *,
-        ban_tools: list[str] | None = None,
         model_settings: ModelSettings | None = None,
     ) -> AgentProfile:
         """为一次独立的 Conversation Run 执行派生 per-run 副本。
 
         并发隔离收口：AgentProfile 是注册表共享单例，禁止调用方对其原地写运行时字段
         （并发 run 会互相覆盖）。每次 run 执行必须先经本方法派生独立副本，副本承载本次
-        执行的 ``run`` 与按 ``ban_tools`` 收窄后的 ``allowed_tools``，不同 run 的副本
-        互不串扰。
+        执行的 ``run``；工具 schema 与本次 Run 的 ``allows_tools`` 由运行时独立持有，
+        不写回共享 profile。
 
         参数:
             run: 本次执行的 Conversation Run 记录（必填，写入副本的 ``run`` 字段）；其
                 ``model_config_id`` 用于记录本次 Run 选择的模型配置。
-            ban_tools: 本次执行禁用的工具名列表；``None`` 表示不禁用。传入时按工具名
-                从 ``allowed_tools`` 中差集收窄（``select_tools`` 同样按工具名过滤，
-                两处口径必须一致）。
             model_settings: 本次 Run 已物化的完整运行配置（由 ``run.model_config_id``
                 解析而来），即本次执行的运行时参数，优先级高于本 profile：其连接与能力
                 字段独占结果（不回落 profile），其已设置的用户偏好也优先。profile 只在
@@ -289,9 +285,6 @@ class AgentProfile:
         changes["model_config_id"] = (
             run.model_config_id if run.model_config_id is not None else self.model_config_id
         )
-        if ban_tools is not None:
-            banned = set(ban_tools)
-            changes["allowed_tools"] = [t for t in self.allowed_tools if t not in banned]
         # 分层合并，优先级从高到低：run.extra.reasoning_effort（下方单独叠加）> 传参
         # （本 Run 由 run.model_config_id 物化的运行时参数）> profile 用户偏好默认值。
         # 只有「本 Run 的运行时参数」能提供 base_url/api_key/model_name 等字段，profile
@@ -312,8 +305,8 @@ class AgentProfile:
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
         """从候选工具中筛选本 Agent 可运行的工具集合。
 
-        工具「能否运行」由 Agent profile 全权决定，调用方（如运行底座）只按 workspace
-        可见性给出候选，不再自行做权限门禁，避免职责分散。
+        工具候选只按 Agent profile 的固化配置筛选；本次 Run 的临时允许集合由运行时另行
+        计算，避免把一次运行的权限写回共享 profile。
 
         参数:
             tools: 候选工具定义集合（通常按 workspace 可见性预筛后）。
