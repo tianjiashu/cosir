@@ -41,7 +41,7 @@ from app.config.logging.configuration import install_logging_for_current_process
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile import AgentProfileConfigError
-from app.core.agents.agent_profile_config import initialize_system_agent_defaults
+from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.observability import flush_langfuse
@@ -233,8 +233,9 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
 
     initialize_hook_registry()
 
-    # 一次性把系统和全部已登记 workspace 的 Agent JSON 装入进程内 Registry。
-    initialize_system_agent_defaults()
+    # 确保系统级子 Agent 配置目录存在，随后把系统和全部已登记 workspace 的 Agent JSON
+    # 装入进程内 Registry。
+    ensure_system_agent_config_dir()
     main_agent_prompt = MainAgentPromptConfigurationService().read().content
     agent_registry = build_agent_registry(main_agent_prompt)
     agent_registry.load_agent_profiles(

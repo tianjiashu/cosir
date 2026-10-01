@@ -38,7 +38,7 @@ def test_missing_main_prompt_creates_blank_user_file(tmp_path: Path) -> None:
     assert document.path == target
 
 
-def test_empty_packaged_agent_defaults_are_a_valid_empty_directory(
+def test_system_agent_config_dir_is_created_even_without_packaged_defaults(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -46,10 +46,9 @@ def test_empty_packaged_agent_defaults_are_a_valid_empty_directory(
 
     target = tmp_path / "system-agents"
     monkeypatch.setattr(agent_profile_config, "system_agent_config_dir", lambda: target)
-    monkeypatch.setattr(agent_profile_config, "_DEFAULTS_DIR", tmp_path / "missing-defaults")
 
-    assert agent_profile_config.initialize_system_agent_defaults() == target
-    assert (target / agent_profile_config._DEFAULTS_MARKER).is_file()
+    assert agent_profile_config.ensure_system_agent_config_dir() == target
+    assert target.is_dir()
 
 
 def test_main_prompt_update_validates_budget_and_writes_atomically(tmp_path: Path) -> None:

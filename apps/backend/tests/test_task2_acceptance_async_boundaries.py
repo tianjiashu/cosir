@@ -235,7 +235,7 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     monkeypatch.setattr(lifespan_module.Settings, "load", staticmethod(lambda: None))
     monkeypatch.setattr(lifespan_module, "initialize_service_dependencies", lambda: None)
     monkeypatch.setattr(lifespan_module, "_ensure_system_cosir_dir", lambda: None)
-    monkeypatch.setattr(lifespan_module, "initialize_system_agent_defaults", lambda: None)
+    monkeypatch.setattr(lifespan_module, "ensure_system_agent_config_dir", lambda: None)
     monkeypatch.setattr(
         lifespan_module,
         "get_workspace_service",

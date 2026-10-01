@@ -721,8 +721,8 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     monkeypatch.setattr(lifespan_module, "_ensure_system_cosir_dir", record("ensure_cosir"))
     monkeypatch.setattr(
         lifespan_module,
-        "initialize_system_agent_defaults",
-        record("initialize_system_agent_defaults"),
+        "ensure_system_agent_config_dir",
+        record("ensure_system_agent_config_dir"),
     )
     registry_stub = SimpleNamespace(load_agent_profiles=record("load_agent_profiles"))
     monkeypatch.setattr(
@@ -850,7 +850,7 @@ def test_lifespan_happy_path_marks_ready_then_stopped(
     calls = stubbed_lifespan.calls
     assert calls.index("install_logging") < calls.index("settings_load")
     assert calls.index("settings_load") < calls.index("init_deps")
-    assert calls.index("initialize_system_agent_defaults") < calls.index("build_agent_registry")
+    assert calls.index("ensure_system_agent_config_dir") < calls.index("build_agent_registry")
     assert calls.index("build_agent_registry") < calls.index("load_agent_profiles")
     assert calls.index("load_agent_profiles") < calls.index("set_agent_registry")
     assert "init_hook_registry" in calls

@@ -9,7 +9,7 @@ import pytest
 from app.config.constant import Constant
 from app.core.agents import agent_profile_config
 from app.core.agents.agent_profile import AgentProfile
-from app.core.agents.agent_profile_config import initialize_system_agent_defaults
+from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.core.context import system_prompt_builder
@@ -63,18 +63,24 @@ def test_loader_builds_child_profile_with_inline_prompt(tmp_path: Path) -> None:
     assert path.exists()
 
 
-def test_packaged_defaults_dir_is_optional_and_loads_nothing() -> None:
-    """没有随包分发的默认 JSON 是合法状态：内置目录缺失时加载得到空结果。
+def test_system_agent_config_dir_creates_empty_workspace_when_no_packaged_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没有随包分发的默认 JSON 时，系统 Agent 配置目录仍会被创建且加载为空。
 
-    专用 CHILD（code-developer 等）已从 ``defaults/*.json`` 迁出仓库，唯一代码内置 CHILD
-    由 ``define_agents.general_child_agent`` 直接注册；目录缺失不得让启动失败。
+    专用 CHILD（code-developer 等）已从内置 defaults 迁出仓库，唯一代码内置 CHILD 由
+    ``define_agents.general_child_agent`` 直接注册；目录存在但无 JSON 不得让加载失败。
     """
 
+    target = tmp_path / "system-agents"
+    monkeypatch.setattr(agent_profile_config, "system_agent_config_dir", lambda: target)
+
+    ensure_system_agent_config_dir()
+    assert target.is_dir()
+
     registry = AgentProfileRegistry()
-    registry.load_agent_profiles(
-        AgentProfileRegistry.SYSTEM_WORKSPACE,
-        agent_profile_config._DEFAULTS_DIR,
-    )
+    registry.load_agent_profiles(AgentProfileRegistry.SYSTEM_WORKSPACE, target)
 
     assert registry.list(AgentProfileRegistry.SYSTEM_WORKSPACE) == []
 
@@ -201,26 +207,25 @@ def test_workspace_catalog_isolated_and_rejects_baseline_collision(tmp_path: Pat
     assert collision.resolve(workspace, "workspace-reader") is not None
 
 
-def test_system_defaults_initialize_once_without_overwriting_user_files(
+def test_system_agent_config_dir_ensured_without_touching_user_files(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """默认导入只补缺失文件、不覆盖用户文件，且标记后不恢复用户删除项。
+    """启动期确保系统 .cosir/agents 目录存在，且不改动用户已有的自定义 Agent 文件。
 
-    当前仓库没有随包分发的默认 JSON，因此该入口在此只验证标记与「不覆盖」语义：用户自定义
-    文件保持原样，标记落盘后重复调用是幂等的。
+    当前仓库不随包分发默认 Agent JSON，因此该入口只验证目录创建与「不触碰已有文件」语义：
+    用户自定义文件保持原样，重复调用是幂等的。
     """
 
     target = tmp_path / "system-agents"
     monkeypatch.setattr(agent_profile_config, "system_agent_config_dir", lambda: target)
-    target.mkdir()
+
+    assert ensure_system_agent_config_dir() == target
+    assert target.is_dir()
+
     custom = _write_config(target, "code-explorer", _document("code-explorer") | {"role": "custom"})
-
-    assert initialize_system_agent_defaults() == target
     assert json.loads(custom.read_text(encoding="utf-8"))["role"] == "custom"
-    assert (target / agent_profile_config._DEFAULTS_MARKER).is_file()
 
-    initialize_system_agent_defaults()
+    ensure_system_agent_config_dir()
 
     assert json.loads(custom.read_text(encoding="utf-8"))["role"] == "custom"
-    assert (target / agent_profile_config._DEFAULTS_MARKER).is_file()
