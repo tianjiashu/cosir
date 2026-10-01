@@ -15,6 +15,9 @@ from app.assistant_transport.request.command.ban_tools_command import (
     BanToolsCommand,
     BanToolsPayload,
 )
+from app.assistant_transport.request.command.propose_agent_configuration_command import (
+    ProposeAgentConfigurationCommand,
+)
 from app.assistant_transport.request.part.assistant_file_attachment import AssistantFileAttachment
 from app.assistant_transport.request.part.assistant_image_part import AssistantImagePart
 
@@ -25,6 +28,7 @@ __all__ = [
     "AssistantFileAttachment",
     "AssistantImagePart",
     "AssistantTransportRequest",
+    "ProposeAgentConfigurationCommand",
     "BanToolsCommand",
     "BanToolsPayload",
     "TransportRequestError",

@@ -12,10 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.assistant_transport.request.command.add_message_command import AddMessageCommand
 from app.assistant_transport.request.command.ban_tools_command import BanToolsCommand
+from app.assistant_transport.request.command.propose_agent_configuration_command import (
+    ProposeAgentConfigurationCommand,
+)
 
 # custom 命令共用 wire ``type`` discriminator，因此每种受支持的项目命令都按明确 schema
 # 定义，并通过字面量 ``name`` 区分。
-AssistantCommand = AddMessageCommand | BanToolsCommand
+AssistantCommand = AddMessageCommand | BanToolsCommand | ProposeAgentConfigurationCommand
 
 
 class AssistantTransportRequest(BaseModel):
@@ -61,7 +64,8 @@ class AssistantTransportRequest(BaseModel):
         - ``commands`` 内 ``commandId`` 必须唯一；
         - ``threadId`` 必须与 ``task-{taskId}`` 一致，二者是同一领域身份的两种表达；
         - 一次请求最多包含一个 ``add-message`` 命令（首版运行模型不支持批量消息）；
-        - 唯一已定义的 custom 命令是与 add-message 同批的 ``BanToolsCommand``；
+        - custom 命令必须是与 add-message 同批的 ``BanToolsCommand`` 或
+          ``ProposeAgentConfigurationCommand``；
         - 空命令必须携带 ``runId`` 用于恢复已有 run；add-message 是否重放只由
           ``runId`` 是否存在决定，不能由 ``sourceId`` 推导；
         - 含 ``add-message`` 时 ``modelConfigId`` 必填；模型名由后端配置事实读取；
@@ -117,6 +121,11 @@ class AssistantTransportRequest(BaseModel):
         ban_tools_commands = [
             command for command in self.commands if isinstance(command, BanToolsCommand)
         ]
+        proposal_commands = [
+            command
+            for command in self.commands
+            if isinstance(command, ProposeAgentConfigurationCommand)
+        ]
         # 启动对话时只携带模型配置身份，具体模型名由后端配置事实解析。
         has_message = any(isinstance(command, AddMessageCommand) for command in self.commands)
         if ban_tools_commands and (not has_message or len(ban_tools_commands) != 1):
@@ -124,6 +133,13 @@ class AssistantTransportRequest(BaseModel):
                 status_code=400,
                 code="BAN_TOOLS_COMMAND_INVALID",
                 message="ban-tools 必须与唯一 add-message 命令同批提交",
+                retryable=False,
+            )
+        if proposal_commands and (not has_message or len(proposal_commands) != 1):
+            raise TransportRequestError(
+                status_code=400,
+                code="AGENT_CONFIGURATION_PROPOSAL_COMMAND_INVALID",
+                message="配置提案命令必须与唯一 add-message 命令同批提交",
                 retryable=False,
             )
         if not has_message and self.runId is None:
