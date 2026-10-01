@@ -8,7 +8,6 @@ from typing import cast
 from sqlalchemy import Engine, Table, inspect, text
 
 from app.storage.model.base import StorageBase
-from app.storage.model.conversation_command_model import ConversationCommandModel
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.model_config_model import ModelConfigModel
@@ -20,7 +19,6 @@ APP_MODELS = (
     WorkspaceModel,
     TaskModel,
     ConversationRunModel,
-    ConversationCommandModel,
     ConversationTaskContextModel,
 )
 def initialize_app_schema(engine: Engine) -> None:
@@ -45,6 +43,7 @@ def initialize_app_schema(engine: Engine) -> None:
     StorageBase.metadata.create_all(engine, tables=tables)
     _drop_legacy_file_snapshot_table(engine)
     _drop_legacy_models_table(engine)
+    _drop_legacy_conversation_commands_table(engine)
     _ensure_context_tool_call_id_schema(engine)
     _ensure_context_streaming_schema(engine)
     _ensure_conversation_run_model_config_schema(engine)
@@ -83,6 +82,32 @@ def _drop_legacy_models_table(engine: Engine) -> None:
         return
     with engine.begin() as connection:
         connection.execute(text("DROP TABLE IF EXISTS models"))
+
+
+def _drop_legacy_conversation_commands_table(engine: Engine) -> None:
+    """删除已废弃的 Transport 命令持久化表。
+
+    命令仍由 Assistant Transport 接收并参与本次 Run 编排，但不再作为本地数据库事实保存。
+    当前项目允许对本地主库进行破坏性 schema 收敛，因此已有命令记录直接删除，不保留兼容
+    迁移层。
+
+    参数:
+        engine: 已初始化的主库 SQLAlchemy 引擎。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: SQLite 删除遗留表失败。
+
+    副作用:
+        在 SQLite 上删除 ``conversation_commands`` 表及其历史命令记录；表不存在时无操作。
+    """
+
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS conversation_commands"))
 
 
 def _ensure_conversation_run_model_config_schema(engine: Engine) -> None:

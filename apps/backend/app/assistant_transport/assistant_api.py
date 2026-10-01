@@ -44,14 +44,14 @@ async def assistant_transport(
 
     参数:
         request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。
-        state_service: 负责读取 Task Transport state 的唯一 owner。
-        run_service: 在一个事务中占用 command 并创建、绑定 Conversation Run 的 service。
+        run_executor: 负责启动已完成装配的 Conversation Run。
+        transport_service: 负责校验请求、创建或恢复 Run 并建立 Transport 响应。
 
     返回:
-    使用项目自有 frame 协议编码的 ``text/event-stream`` 响应。
+        使用项目自有 frame 协议编码的 ``text/event-stream`` 响应。
 
     异常:
-        HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。
+        HTTPException: 请求任务不存在或运行切片创建失败时抛出。
 
     副作用:
         创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；
@@ -83,16 +83,6 @@ async def assistant_transport(
             )
             run = start_result.run
             initial_state = start_result.initial_state
-
-            if not start_result.created:
-                _raise_transport_error(
-                    409,
-                    "RUN_START_CONFLICT",
-                    "run already exists",
-                    retryable=True,
-                    command_id=command.commandId if command is not None else None,
-                    run_id=request.runId,
-                )
 
             try:
                 await run_executor.start(run.id, start_result.execution_mode)

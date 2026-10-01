@@ -4,25 +4,20 @@
 
 职责边界：
 - 负责：任务容器创建（不含首轮次）、从最新 turn 派生执行态、任务树原子级联删除
-  （编排 ``TaskCrud``/``ConversationRunCrud``/``ConversationCommandCrud``/
-  ``ConversationTaskContextCrud`` 在单事务内逐个清理，孤儿 checkpoint 线程交
-  ``checkpoint_gc`` 回收）。
+  （编排 ``TaskCrud``/``ConversationRunCrud``/``ConversationTaskContextCrud`` 在单事务内逐个清理，
+  孤儿 checkpoint 线程交 ``checkpoint_gc`` 回收）。
 - 不负责：直接 SQL 操作（委托给上述 CRUD）；不写执行态（执行态由 ``Turn`` 持有，本
   service 仅派生展示）；不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
 """
 
 import asyncio
-import copy
 from contextlib import ExitStack
 from dataclasses import dataclass
 
 from sqlalchemy.orm.session import Session
 
-from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.tools.schemas.tool_names import TOOL_PROPOSE_AGENT_CONFIGURATION
 from app.models import ConversationRunRecord, TaskRecord
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
@@ -71,7 +66,6 @@ class TaskService:
         self._workspace = service_depends.get_workspace_crud()
         self._context = service_depends.get_conversation_task_context_service()
         self._state = service_depends.get_conversation_task_state_service()
-        self._command = service_depends.get_conversation_command_crud()
         self._task_context_crud = service_depends.get_conversation_task_context_crud()
         self._session_factory = main_session_factory()
 
@@ -447,8 +441,8 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败（事务回滚）。
 
         副作用:
-            从 ``conversation_task_contexts`` / ``conversation_commands`` /
-            ``conversation_runs`` / ``tasks`` 表删除该任务树相关数据；并提交后清理已删任务遗留的
+            从 ``conversation_task_contexts`` / ``conversation_runs`` / ``tasks`` 表删除该任务树
+            相关数据；并提交后清理已删任务遗留的
             孤儿 LangGraph checkpoint 线程、卸载进程内 runtime space。
         """
 
@@ -562,8 +556,8 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果删除事务失败（回滚）。
 
         副作用:
-            从 ``conversation_task_contexts`` / ``conversation_commands`` /
-            ``conversation_runs`` 删除该 run 相关行，并把 ``tasks`` 中
+            从 ``conversation_task_contexts`` / ``conversation_runs`` 删除该 run 相关行，并把
+            ``tasks`` 中
             ``parent_run_id`` 指向本 run 的引用置空；提交后回收孤儿 checkpoint 线程。
         """
 
@@ -596,7 +590,6 @@ class TaskService:
                     )
                     with begin_immediate(self._session_factory) as session:
                         self._context.delete_by_run_id(task_id, run_id, session=session)
-                        self._command.delete_by_run_id(run_id, session=session)
                         self._task.clear_parent_run_id_by_run_id(run_id, session=session)
                         self._turn.delete_by_ids([run_id], session)
                         remaining_threads = (
@@ -792,7 +785,7 @@ class TaskService:
     def delete_single_task(self, task_id: int, session: Session | None = None) -> set[str]:
         """删除单个任务及其全部产物，不递归删除其子任务。
 
-        给定单个 task_id，在单一事务内清理该任务自身及其全部产物（run / command / context /
+        给定单个 task_id，在单一事务内清理该任务自身及其全部产物（run / context /
         snapshot / delegation），但不触碰子任务行。任务树的收集与级联删除由上层
         编排（见 ``delete_task``）：上层负责以「子任务先于父任务」的后序顺序逐个调用本方法，
         本方法只负责单任务粒度的删除，并在独立事务（无外部 session 时）提交后清理该任务
@@ -833,7 +826,7 @@ class TaskService:
         """在调用方事务内删除单个任务及其产物，返回孤儿 checkpoint 线程集合。
 
         顺序：先解除本任务行对 ``parent_run_id`` 的引用，再按外键依赖逆序删除
-        context / command / run，最后删除 task 行。
+        context / run，最后删除 task 行。
 
         参数:
             task_id: 待删除任务的标识。
@@ -858,8 +851,6 @@ class TaskService:
         run_ids = self._turn.collect_run_ids_by_task_ids(session, [task_id])
 
         self._task_context_crud.delete_by_task_ids([task_id], session)
-        # command.run_id 外键指向 run，必须先删 command 再删 run。
-        self._command.delete_by_task_ids([task_id], session)
         service_depends.get_terminal_session_service().delete_task_sessions([task_id])
         self._turn.delete_by_ids(run_ids, session)
         self._task.delete_by_ids([task_id], session)

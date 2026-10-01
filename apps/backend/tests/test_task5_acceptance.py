@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -36,7 +38,6 @@ from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.service.task.conversation_run_service import ConversationRunService
 from app.service.task.conversation_run_state_service import ConversationRunStateService
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
-from app.storage.crud.conversation_command_crud import ConversationCommandCrud
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -83,7 +84,6 @@ def canonical_store(tmp_path: Path, monkeypatch):
     tasks = _bind(TaskCrud, factory)
     runs = _bind(ConversationRunCrud, factory)
     contexts = _bind(ConversationTaskContextCrud, factory)
-    commands = _bind(ConversationCommandCrud, factory)
     context_service = ConversationTaskContextService.__new__(ConversationTaskContextService)
     context_service._crud = contexts
     workspace = workspaces.create("acceptance", str(tmp_path))
@@ -112,7 +112,6 @@ def canonical_store(tmp_path: Path, monkeypatch):
         tasks=tasks,
         runs=runs,
         contexts=contexts,
-        commands=commands,
         context=context_service,
         state=state,
         workspace=workspace,
@@ -221,6 +220,7 @@ def test_fresh_target_schema_has_no_persisted_conversation_snapshot_surface(tmp_
             {"conversation_task_snapshots"}
         )
         assert "conversation_task_contexts" in table_names
+        assert "conversation_commands" not in table_names
         assert "file_snapshots" not in table_names
         backend_app = Path(__file__).parents[1] / "app"
         assert not list(backend_app.rglob("conversation_task_snapshot*.py"))
@@ -249,6 +249,21 @@ def test_schema_removes_legacy_file_snapshot_table(tmp_path: Path) -> None:
             )
         initialize_app_schema(engine)
         assert "file_snapshots" not in inspect(engine).get_table_names()
+    finally:
+        engine.dispose()
+
+
+def test_schema_removes_legacy_conversation_command_table(tmp_path: Path) -> None:
+    """已有本地主库不再保留已移除的 Transport 命令表。"""
+
+    engine = create_sqlite_engine(tmp_path / "legacy-commands.sqlite3")
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "CREATE TABLE conversation_commands (id INTEGER PRIMARY KEY, command_id TEXT)"
+            )
+        initialize_app_schema(engine)
+        assert "conversation_commands" not in inspect(engine).get_table_names()
     finally:
         engine.dispose()
 
@@ -396,7 +411,7 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
 
 
 def _command_service(store) -> ConversationRunCommandService:
-    """Assemble the command service with real CRUD and no process-wide storage singleton."""
+    """使用隔离的 canonical CRUD 装配 Run command service。"""
 
     run_service = ConversationRunService.__new__(ConversationRunService)
     run_service._task = store.tasks
@@ -407,7 +422,6 @@ def _command_service(store) -> ConversationRunCommandService:
     run_state_service._run = store.runs
     run_state_service._session_factory = store.factory
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
-    service._command = store.commands
     service._conversation_run = run_service
     service._run_state = run_state_service
     service._state = store.state
@@ -419,10 +433,10 @@ def _command_service(store) -> ConversationRunCommandService:
     return service
 
 
-def _start_or_attach_under_operation(
+def _start_run_under_operation(
     task_space, service: ConversationRunCommandService, store
 ) -> ConversationRunStartResult:
-    """在 Task 操作闸门内以相同 command 启动一次 Run，复刻 API 层调用方持有的并发边界。
+    """在 Task 操作闸门内以同一批 command 启动一次 Run，复刻 API 调用边界。
 
     参数:
         task_space: 目标 task 的运行时空间，提供串行化同 task 并发操作的闸门。
@@ -430,18 +444,17 @@ def _start_or_attach_under_operation(
         store: acceptance fixture 装配的临时 canonical 存储。
 
     返回:
-        命令服务归一化后的启动结果（``created=True`` 表示新建，``False`` 表示幂等重连）。
+        命令服务完成初始装配后的启动结果。
 
     副作用:
-        进入 ``task_space.operation()`` 期间独占该 task；内部会创建或复用 Run 行。
+        进入 ``task_space.operation()`` 期间独占该 task；内部会创建 Run 行。
     """
 
     with task_space.operation():
-        return service.start_or_attach(
+        return service.start_run(
             commands=[
                 ConversationRunCommandInput(command_id="same-command", command_type="new")
             ],
-            payload_hash="same-payload",
             model_config_id=1,
             reasoning_effort=None,
             task_id=store.task.id,
@@ -449,11 +462,72 @@ def _start_or_attach_under_operation(
         )
 
 
+class _TestTaskOperationGate:
+    """提供测试所需的最小 Task 操作闸门，不依赖进程级 storage 装配。"""
+
+    def __init__(self) -> None:
+        """初始化一个可跨工作线程复用的互斥闸门。"""
+
+        self._lock = threading.Lock()
+
+    @contextmanager
+    def operation(self):
+        """在测试线程之间串行化同一 Task 的 Run 创建。"""
+
+        with self._lock:
+            yield
+
+
+class _TestSnapshotSpace:
+    """承载 acceptance 测试快照的最小 runtime space 替身。"""
+
+    def __init__(self) -> None:
+        """初始化一个尚未装载快照的工作副本。"""
+
+        self._snapshot = None
+
+    def get_snapshot(self, loader):
+        """首次读取时执行冷重建，后续返回同一份工作副本。"""
+
+        if self._snapshot is None:
+            self._snapshot = loader()
+        return self._snapshot
+
+    def get_working_snapshot(self, loader):
+        """提供与真实 runtime space 相同的工作副本读取接口。"""
+
+        return self.get_snapshot(loader)
+
+    def unload_snapshot(self) -> None:
+        """丢弃当前快照，使下一次读取重新走 canonical 冷重建。"""
+
+        self._snapshot = None
+
+    def replace_snapshot(self, snapshot) -> None:
+        """替换工作副本，模拟真实 runtime space 的快照安装边界。"""
+
+        self._snapshot = snapshot
+
+
+class _TestSnapshotRegistry:
+    """按 Task 隔离 acceptance 测试中的快照工作副本。"""
+
+    def __init__(self) -> None:
+        """初始化空的测试快照注册表。"""
+
+        self._spaces = {}
+
+    def get_or_create(self, task_id: int) -> _TestSnapshotSpace:
+        """返回指定 Task 的快照替身。"""
+
+        return self._spaces.setdefault(task_id, _TestSnapshotSpace())
+
+
 @pytest.mark.asyncio
-async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_idempotent(
+async def test_real_sqlite_same_task_is_mutually_exclusive_without_command_persistence(
     canonical_store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Real command writes serialize per Task while duplicate commands create one Run."""
+    """命令仍参与 Run 启动，但不再写入命令表或提供重复提交复用。"""
 
     store = canonical_store
     service = _command_service(store)
@@ -481,25 +555,36 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
                 context_window_k=128,
             )
         )
-    task_runtime_spaces.close()
     # Task 操作闸门在重构后收口到 API 层（见 assistant_api 的 ``task_run_operation``），
-    # ``start_or_attach`` 变成假定调用方已持闸的内部原语。因此这里按生产调用方的方式在
-    # ``task_space.operation()`` 内并发调用，验证的仍是「同 task 互斥 + 同 command 幂等」。
-    task_space = task_runtime_spaces.get_or_create(store.task.id)
+    # ``start_run`` 假定调用方已持闸。因此这里按生产调用方的方式在 ``task_space.operation()``
+    # 内并发调用，验证的是「同 task 互斥 + active run 守卫」，而不是命令幂等。
+    task_space = _TestTaskOperationGate()
+    snapshot_registry = _TestSnapshotRegistry()
+    monkeypatch.setattr(
+        task_runtime_spaces,
+        "get_or_create",
+        snapshot_registry.get_or_create,
+    )
+    monkeypatch.setattr(
+        "app.service.depends.get_conversation_event_projector",
+        lambda: ConversationEventProjector(state_service=store.state),
+    )
     results = await asyncio.gather(
         *(
             asyncio.to_thread(
-                _start_or_attach_under_operation,
+                _start_run_under_operation,
                 task_space,
                 service,
                 store,
             )
             for _ in range(2)
-        )
+        ),
+        return_exceptions=True,
     )
-    assert sorted(result.created for result in results) == [False, True]
+    assert sum(isinstance(result, ConversationRunStartResult) for result in results) == 1
+    assert sum(isinstance(result, ValueError) for result in results) == 1
     assert len(store.runs.list_by_task(store.task.id)) == 1
-    # 幂等只体现在 Run 行：user 消息由 workflow 在 graph 启动前写入，命令服务不写 context。
+    # user 消息由 workflow 在 graph 启动前写入，命令服务不写 context。
     assert store.contexts.get(store.task.id, include_in_context=False) == []
     first_run = store.runs.list_by_task(store.task.id)[0]
     # 第一个 Run 必须经状态 service 收口，而不是直接改 CRUD：Run 终态要靠事件投影同步到
@@ -514,34 +599,32 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_and_same_command_is_i
     assert completed.status == ConversationRunStatus.COMPLETED.value
 
     second_task = store.tasks.create(store.workspace.id, "second task")
-    # 不同 task 之间本无互斥/幂等关系，故这两次调用串行执行：本用例要验证的「同 task 互斥 +
-    # 同 command 幂等」已由上方并发段落覆盖，而进程级 TaskRuntimeSpace 注册表与文件级 SQLite
+    # 不同 task 之间本无互斥关系，故这两次调用串行执行：本用例要验证的「同 task 互斥」
+    # 已由上方并发段落覆盖，而进程级 TaskRuntimeSpace 注册表与文件级 SQLite
     # 在「多个 task 的首次 Run 创建」同时进入冷读装载时会互相争用，串行可让断言只反映语义。
     other_results = [
         await asyncio.to_thread(
-            service.start_or_attach,
+            service.start_run,
             commands=[
-                ConversationRunCommandInput(command_id="task-one-command", command_type="new")
+                ConversationRunCommandInput(command_id="same-command", command_type="new")
             ],
-            payload_hash="payload-one",
             model_config_id=1,
             reasoning_effort=None,
             task_id=store.task.id,
             run_command=ConversationRunCommand(display_text="one"),
         ),
         await asyncio.to_thread(
-            service.start_or_attach,
+            service.start_run,
             commands=[
                 ConversationRunCommandInput(command_id="task-two-command", command_type="new")
             ],
-            payload_hash="payload-two",
             model_config_id=1,
             reasoning_effort=None,
             task_id=second_task.id,
             run_command=ConversationRunCommand(display_text="two"),
         ),
     ]
-    assert all(result.created for result in other_results)
+    assert all(isinstance(result, ConversationRunStartResult) for result in other_results)
     assert len(store.runs.list_by_task(store.task.id)) == 2
     assert len(store.runs.list_by_task(second_task.id)) == 1
 

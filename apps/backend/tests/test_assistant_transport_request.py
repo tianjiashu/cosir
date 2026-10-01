@@ -109,22 +109,7 @@ def test_accepts_add_message_with_run_id_without_source_id() -> None:
     assert request.runId == 42
 
 
-def test_source_id_does_not_change_payload_hash() -> None:
-    first = _request()
-    second = _request()
-    second.commands[0].sourceId = "user-1"
-
-    assert first.payload_hash() == second.payload_hash()
-
-
-def test_run_id_changes_payload_hash() -> None:
-    first = _request()
-    second = _request(runId=42)
-
-    assert first.payload_hash() != second.payload_hash()
-
-
-def test_accepts_typed_ban_tools_command_and_hashes_its_payload() -> None:
+def test_accepts_typed_ban_tools_command() -> None:
     payload = {
         "type": "custom",
         "commandId": "command-ban-tools",
@@ -139,43 +124,10 @@ def test_accepts_typed_ban_tools_command_and_hashes_its_payload() -> None:
         },
         payload,
     ])
-    changed = _request(commands=[
-        {
-            "type": "add-message",
-            "commandId": "command-message",
-            "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
-        },
-        {**payload, "payload": {"ban_tools": ["write_file"]}},
-    ])
-
-    assert request.payload_hash() != changed.payload_hash()
     assert isinstance(request.commands[1], BanToolsCommand)
     command = request.commands[1]
     assert isinstance(command, BanToolsCommand)
     assert command.payload.ban_tools == ["read_file"]
-
-
-def test_payload_hash_is_independent_of_command_and_tool_selection_order() -> None:
-    add_message = {
-        "type": "add-message",
-        "commandId": "command-message",
-        "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
-    }
-    ban_tools = {
-        "type": "custom",
-        "commandId": "command-ban-tools",
-        "name": "ban-tools",
-        "payload": {"ban_tools": ["read_file", "write_file"]},
-    }
-    first = _request(commands=[add_message, ban_tools])
-    reordered = _request(
-        commands=[
-            {**ban_tools, "payload": {"ban_tools": ["write_file", "read_file"]}},
-            add_message,
-        ]
-    )
-
-    assert first.payload_hash() == reordered.payload_hash()
 
 
 def test_accepts_empty_typed_ban_tools_selection() -> None:

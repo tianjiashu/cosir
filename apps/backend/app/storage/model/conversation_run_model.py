@@ -18,8 +18,8 @@ class ConversationRunModel(StorageBase):
 
     职责边界：
     - 负责：单次运行的输入、模型连接路由、状态机与终态结果。
-    - 不负责：Transport 命令幂等占用（由 ``conversation_commands`` 表持有指向本表的
-      ``run_id`` 外键）、消息/工具调用等 canonical 会话事实（各自独立表）。
+    - 不负责：消息/工具调用等 canonical 会话事实（各自独立表）。Transport 命令只在请求
+      生命周期内参与 Run 编排，不作为独立数据库事实保存。
 
     模型路由事实分层：Run 只保存 ``model_config_id`` 和 ``extra`` 中的用户运行偏好；
     模型名称、上下文窗口和模型能力始终由模型配置解析得到，不在 Run 内复制。

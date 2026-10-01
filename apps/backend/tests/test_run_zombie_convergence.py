@@ -5,7 +5,7 @@
 
 - ``ConversationRunExecutor._execute``：驱动结束（runner 抛错 / 被取消）但 run 仍
   pending/running 时，经 ``_converge_unfinished_run`` 条件收敛为 failed/cancelled；
-- ``ConversationRunCommandService``：``start_or_attach`` / ``edit_or_restart`` 事务
+- ``ConversationRunCommandService``：``start_run`` / ``edit_or_restart`` 事务
   提交后的投影、认领、快照重读任一步失败时，以 ``run_setup_failed`` 当场收敛再抛出。
 """
 
@@ -256,11 +256,6 @@ def _build_command_service(
     monkeypatch.setattr(command_module, "main_session_factory", lambda: _FakeSessionFactory())
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: projector)
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
-    service._command = SimpleNamespace(
-        get=lambda *_args: None,
-        create=lambda **_kwargs: SimpleNamespace(id=6, command_id="cmd-1"),
-        get_by_run=lambda _run_id: SimpleNamespace(id=6, command_id="cmd-1"),
-    )
     service._conversation_run = SimpleNamespace(
         create_run=lambda **_kwargs: SimpleNamespace(id=11, task_id=_TASK_ID, status="pending"),
         reset_run_for_edit=lambda *_args, **_kwargs: SimpleNamespace(
@@ -335,7 +330,7 @@ def _state_service(
     )
 
 
-def test_start_or_attach_settles_run_when_projection_fails(
+def test_start_run_settles_run_when_projection_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """提交后的 ``RunInitializedEvent`` 投影失败：当场收敛 run 为 cancelled 并原样抛出。"""
@@ -349,9 +344,8 @@ def test_start_or_attach_settles_run_when_projection_fails(
     )
 
     with pytest.raises(RuntimeError, match="projection failed"):
-        service.start_or_attach(
+        service.start_run(
             commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
-            payload_hash="hash",
             model_config_id=None,
             task_id=_TASK_ID,
             run_command=SimpleNamespace(),  # type: ignore[arg-type]
@@ -361,7 +355,7 @@ def test_start_or_attach_settles_run_when_projection_fails(
     assert run_state.claimed == []
 
 
-def test_start_or_attach_settles_run_when_claim_fails(
+def test_start_run_settles_run_when_claim_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``claim_pending_run`` 自身抛错（状态已提交、事件发布失败）：同样必须当场收敛。"""
@@ -375,9 +369,8 @@ def test_start_or_attach_settles_run_when_claim_fails(
     )
 
     with pytest.raises(RuntimeError, match="claim dispatch failed"):
-        service.start_or_attach(
+        service.start_run(
             commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
-            payload_hash="hash",
             model_config_id=None,
             task_id=_TASK_ID,
             run_command=SimpleNamespace(),  # type: ignore[arg-type]
@@ -386,7 +379,7 @@ def test_start_or_attach_settles_run_when_claim_fails(
     assert run_state.settled == [(11, "run_setup_failed")]
 
 
-def test_start_or_attach_settles_run_when_snapshot_reread_fails(
+def test_start_run_settles_run_when_snapshot_reread_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """认领成功后快照重读失败：run 已是 running，仍必须收敛，不得留下无执行器的 active run。"""
@@ -401,9 +394,8 @@ def test_start_or_attach_settles_run_when_snapshot_reread_fails(
     )
 
     with pytest.raises(RuntimeError, match="snapshot read failed"):
-        service.start_or_attach(
+        service.start_run(
             commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
-            payload_hash="hash",
             model_config_id=None,
             task_id=_TASK_ID,
             run_command=SimpleNamespace(),  # type: ignore[arg-type]
@@ -430,7 +422,6 @@ def test_edit_or_restart_settles_run_when_post_commit_step_fails(
     with pytest.raises(RuntimeError, match="snapshot read failed"):
         service.edit_or_restart(
             commands=[ConversationRunCommandInput(command_id="cmd-2", command_type="edit")],
-            payload_hash="hash",
             task_id=_TASK_ID,
             run_id=11,
             model_config_id=None,
@@ -459,9 +450,8 @@ def test_settle_converge_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -
 
     # 原始异常仍是投影失败，而不是收敛过程中的数据库异常
     with pytest.raises(RuntimeError, match="projection failed"):
-        service.start_or_attach(
+        service.start_run(
             commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
-            payload_hash="hash",
             model_config_id=None,
             task_id=_TASK_ID,
             run_command=SimpleNamespace(),  # type: ignore[arg-type]

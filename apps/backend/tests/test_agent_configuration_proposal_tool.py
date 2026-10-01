@@ -4,10 +4,10 @@ from langchain_core.messages import HumanMessage
 
 from app.assistant_transport.request import AssistantTransportRequest
 from app.core.agents.define_agents import main_agent
-from app.core.workflows.react.nodes.model_node import _append_ephemeral_proposal_prompt
 from app.core.tools.tool_handler.propose_agent_configuration import (
     ProposeAgentConfigurationTool,
 )
+from app.core.workflows.react.nodes.model_node import _append_ephemeral_proposal_prompt
 from app.models import ConversationRunExtra
 
 
@@ -34,8 +34,8 @@ def test_proposal_tool_only_returns_unsaved_four_field_draft() -> None:
     assert "propose_agent_configuration" not in main_agent().allowed_tools
 
 
-def test_proposal_command_is_part_of_payload_identity() -> None:
-    """配置提案命令参与请求解析与 payload hash，不能与普通消息混淆。"""
+def test_proposal_command_is_received_as_a_typed_transport_command() -> None:
+    """配置提案命令参与请求解析，但不需要额外的持久化身份。"""
 
     request = AssistantTransportRequest.model_validate(
         {
@@ -60,7 +60,6 @@ def test_proposal_command_is_part_of_payload_identity() -> None:
         }
     )
 
-    assert request.payload_hash()
     assert request.commands[-1].name == "propose-agent-configuration"
 
 

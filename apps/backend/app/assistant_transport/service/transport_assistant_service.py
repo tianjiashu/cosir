@@ -344,11 +344,11 @@ class TransportAssistantService:
             mode: RunCommandMode,
             request: AssistantTransportRequest,
     ) -> ConversationRunStartResult:
-        """在 command service 层原子占用/创建/恢复 run，返回启动编排所需的 start result。
+        """在 command service 层原子创建、编辑或恢复 Run，返回启动编排所需的结果。
 
-        ``ensure_run_target`` 已完成全部前置校验；本方法只做 run 占用与基线状态装配
-        （幂等重连、新建、原地编辑或续跑），不触发 AgentRuntime 执行。真正的执行由
-        API 经 ``run_executor.start`` 触发，并由返回的 ``created`` 标志门控。
+        ``ensure_run_target`` 已完成全部前置校验；本方法只做 Run 创建/编辑/恢复与基线
+        状态装配，不触发 AgentRuntime 执行。真正的执行由 API 经
+        ``run_executor.start`` 触发。
 
         参数:
             task_id: 已校验通过的目标任务标识。
@@ -358,15 +358,15 @@ class TransportAssistantService:
 
         返回:
             ``ConversationRunStartResult``：含已占用或创建的 run、初始快照、
-            ``created`` 标志与 ``execution_mode``。
+            ``execution_mode`` 与业务模式。
 
         异常:
             ValueError: command service 领域校验失败（run 不可续跑 / 不可编辑 / 已有
                 active run 等），交由 API 的 ``except ValueError`` 翻译为对应 transport 错误。
 
         副作用:
-            仅在 storage 层原子写入 command / run / snapshot baseline，不启动执行器、不发布
-            run-status 事件。
+            仅在 storage 层原子写入 Run / context，并更新 snapshot baseline；不启动执行器、
+            不发布 run-status 事件。
         """
 
         if mode == "resume":
@@ -391,7 +391,6 @@ class TransportAssistantService:
             None,
         )
         ban_tools = list(ban_command.payload.ban_tools) if ban_command is not None else []
-        payload_hash = request.payload_hash()
         commands = [
             ConversationRunCommandInput(
                 command_id=item.commandId,
@@ -428,7 +427,6 @@ class TransportAssistantService:
             return await asyncio.to_thread(
                 self._commands.edit_or_restart,
                 commands=commands,
-                payload_hash=payload_hash,
                 task_id=task_id,
                 run_id=request.runId,
                 model_config_id=model_config_id,
@@ -436,14 +434,13 @@ class TransportAssistantService:
                 run_command=run_command,
             )
         return await asyncio.to_thread(
-            self._commands.start_or_attach,
-                commands=commands,
-                payload_hash=payload_hash,
-                model_config_id=model_config_id,
-                reasoning_effort=request.reasoningEffort,
-                run_command=run_command,
-                task_id=task_id,
-            )
+            self._commands.start_run,
+            commands=commands,
+            model_config_id=model_config_id,
+            reasoning_effort=request.reasoningEffort,
+            run_command=run_command,
+            task_id=task_id,
+        )
 
     async def attach_run(
             self,

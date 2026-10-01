@@ -1,4 +1,4 @@
-"""Assistant Transport command 幂等占用与 Conversation Run 创建。"""
+"""Assistant Transport 命令接收与 Conversation Run 创建。"""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ RunCommandMode = Literal["new", "edit", "resume"]
 
 @dataclass(frozen=True)
 class ConversationRunStartResult:
-    """表示一次 Run 命令分类、创建或幂等重连的结果。
+    """表示一次 Run 命令分类与执行准备结果。
 
     ``mode`` 表示业务语义，``execution_mode`` 表示 AgentRuntime 的执行方式。
     编辑重跑因此是 ``mode="edit"`` 与 ``execution_mode="fresh"`` 的组合，且保留
@@ -37,17 +37,16 @@ class ConversationRunStartResult:
 
     run: ConversationRunRecord
     initial_state: ConversationStateSnapshot
-    created: bool
     execution_mode: ExecutionMode = "fresh"
     mode: RunCommandMode = "new"
 
 
 @dataclass(frozen=True)
 class ConversationRunCommandInput:
-    """描述 Run 事务需要持久化的一条 Transport command 输入。
+    """描述一次 Run 请求接收的 Transport command。
 
-    ``command_id`` 是 task 内的幂等身份，``command_type`` 是持久化的 wire 类型。该值对象
-    只传递命令字段，不访问数据库、不创建 Run，也不计算共享的请求 ``payload_hash``。
+    ``command_id`` 与 ``command_type`` 只用于保留请求命令的结构化边界；命令不会写入本地
+    数据库，也不承担幂等身份或历史恢复职责。
     """
 
     command_id: str
@@ -55,91 +54,16 @@ class ConversationRunCommandInput:
 
 
 class ConversationRunCommandService:
-    """在任务边界内原子创建 run，或返回 command 已绑定的原 run。"""
+    """在任务边界内接收 Transport command 并原子创建、编辑或恢复 Run。"""
 
     def __init__(self) -> None:
-        """初始化 command、run 编排、run 状态与 snapshot 持久化依赖。"""
+        """初始化 Run 编排、Run 状态与 snapshot 持久化依赖。"""
 
-        self._command = service_depends.get_conversation_command_crud()
         self._conversation_run = service_depends.get_conversation_run_service()
         self._run_state = service_depends.get_conversation_run_state_service()
         self._state = ConversationTaskStateService()
         self._context = ConversationTaskContextService()
         self._task = service_depends.get_task_service()
-
-    def _resolve_existing_command(
-        self,
-        task_id: int,
-        command_ids: Sequence[str],
-        payload_hash: str,
-        mode: RunCommandMode,
-    ) -> ConversationRunStartResult | None:
-        """校验一批 command ID 的幂等占用，命中则返回它们共同绑定的 Run。
-
-        只有整批 ID 都不存在时才交由调用方新建；部分已存在视为不完整重放并拒绝。完整
-        命中时逐条比对共享的批次 ``payload_hash``，确认均已绑定同一个 ``run_id``，再读回
-        Run 并装配 ``created=False`` 的续订结果。
-
-        参数:
-            task_id: 任务标识。
-            command_ids: 当前请求内全部命令的幂等标识。
-            payload_hash: 本次请求的 payload 指纹。
-            mode: 本次请求归一化后的业务模式。
-
-        返回:
-            全部命令均已存在且一致时返回 ``created=False`` 的结果；全部不存在时返回
-            ``None``。
-
-        异常:
-            RuntimeError: 仅部分命令已存在、payload 不同、未绑定 Run，或不属于同一 Run。
-            KeyError: 命令所绑定的 run 不存在。
-
-        副作用:
-            无（仅读取）。
-        """
-
-        if not command_ids or len(set(command_ids)) != len(command_ids):
-            raise ValueError("command_ids must be a non-empty list of unique IDs")
-        existing_commands = [self._command.get(task_id, item) for item in command_ids]
-        found_commands = [item for item in existing_commands if item is not None]
-        if not found_commands:
-            return None
-        if len(found_commands) != len(command_ids):
-            raise RuntimeError("only part of the command batch already exists")
-        run_ids: set[int] = set()
-        for command_id, existing in zip(command_ids, found_commands, strict=True):
-            if existing.payload_hash != payload_hash:
-                raise RuntimeError(
-                    f"command {command_id!r} already exists with a different payload"
-                )
-            if existing.run_id is None:
-                raise RuntimeError(f"command {command_id!r} exists without a bound run")
-            run_ids.add(existing.run_id)
-        if len(run_ids) != 1:
-            raise RuntimeError("command batch is bound to different runs")
-        run_id = next(iter(run_ids))
-        run = self._run_state.get_run(run_id)
-        return ConversationRunStartResult(
-            run=run,
-            initial_state=self._state.get_state(task_id),
-            created=False,
-            execution_mode="fresh",
-            mode=mode,
-        )
-
-    def resolve_existing_command(
-        self,
-        task_id: int,
-        command_ids: Sequence[str],
-        payload_hash: str,
-        mode: RunCommandMode,
-    ) -> ConversationRunStartResult | None:
-        """在解析附件路径前检查幂等命令，避免重复请求依赖源文件仍存在。
-
-        该只读查询用于 Assistant Transport 的早期幂等短路；真正创建/编辑 Run 时仍会在
-        task 操作闸门内再次检查，防止查询与写入之间出现竞态。
-        """
-        return self._resolve_existing_command(task_id, command_ids, payload_hash, mode)
 
     def _assert_no_active_run(self, task_id: int, session: Session | None = None) -> None:
         """任务已有 active run 时拒绝新的 run 占用请求。
@@ -161,7 +85,7 @@ class ConversationRunCommandService:
         并发:
             **本校验不是 Task 操作闸门的重复，禁止以"task 锁已保证互斥"为由删除。**
             Task 操作闸门只把「创建 run」串行化，并不表达「一个 task 同时只允许一个 active
-            run」这条不变量：两条 ``command_id`` 不同的并发新建请求会被闸门依次放行，
+            run」这条不变量：两条并发新建请求会被闸门依次放行，
             若省略本校验，同一 task 会同时存在两个 pending run 并被分别驱动。要下沉该
             不变量只能改成库级约束（``conversation_runs(task_id) WHERE status IN
             ('pending','running')`` 的部分唯一索引），而不是删掉校验。
@@ -170,38 +94,34 @@ class ConversationRunCommandService:
         if self._run_state.has_active_run(task_id, session=session):
             raise ValueError(f"task {task_id} already has an active run")
 
-    def start_or_attach(
+    def start_run(
         self,
         commands: Sequence[ConversationRunCommandInput],
-        payload_hash: str,
         model_config_id: int | None,
         reasoning_effort: str | None = None,
         task_id: int | None = None,
         run_command: ConversationRunCommand | None = None,
     ) -> ConversationRunStartResult:
-        """为整批 command ID 原子创建新 Run，或在完整重放时返回原 Run。
+        """接收一批 Transport command 并原子创建一个新 Run。
 
         参数:
-            commands: 本次请求全部命令的幂等标识和类型，按请求顺序持久化。
-            payload_hash: 命令业务载荷指纹。
+            commands: 本次请求接收的全部命令；命令只参与本次请求，不落库。
             model_config_id: 模型厂商标识。
             reasoning_effort: 可选推理深度。
             task_id: 所属任务标识。
             run_command: 已由 Assistant Transport 转换的领域输入命令。
 
         返回:
-            ``created=True`` 表示本次创建了 run；``created=False`` 表示应重新订阅已有 run。
+            ``ConversationRunStartResult``：包含新建并完成初始装配的 Run。
 
         异常:
-            RuntimeError: command 批次已存在但 payload 冲突、仅部分记录存在、记录未绑定 run，
-                或快照重建后仍缺该 run（不变量被破坏）。
+            RuntimeError: 快照重建后仍缺该 run（不变量被破坏）。
             ValueError: 任务已有其他 active run。
             KeyError: 任务或 run 不存在。
 
         副作用:
-            首次调用在一个数据库事务内写入 command、run 和 context baseline；重复调用只读
-            已有 command/run，不创建第二个 run。事务提交后若快照缺少该 run（与 canonical
-            分叉），先按 canonical 重建快照并发布 full 帧；此后任一步（投影、认领、快照重读）
+            在一个数据库事务内写入 Run；事务提交后若快照缺少该 run（与 canonical 分叉），
+            先按 canonical 重建快照并发布 full 帧；此后任一步（投影、认领、快照重读）
             失败时，先把该 run 当场收敛为 ``cancelled``（end_reason=``run_setup_failed``）
             再原样抛出，不留下无执行器的 active run。
         """
@@ -213,11 +133,6 @@ class ConversationRunCommandService:
         if not commands:
             raise ValueError("commands must not be empty")
 
-        command_ids = [item.command_id for item in commands]
-        existing_result = self._resolve_existing_command(task_id, command_ids, payload_hash, "new")
-        if existing_result is not None:
-            return existing_result
-
         with main_session_factory().begin() as session:
             self._assert_no_active_run(task_id, session)
             run = self._conversation_run.create_run(
@@ -228,15 +143,6 @@ class ConversationRunCommandService:
                 session=session,
                 run_command=run_command,
             )
-            for item in commands:
-                self._command.create(
-                    task_id=task_id,
-                    command_id=item.command_id,
-                    command_type=item.command_type,
-                    payload_hash=payload_hash,
-                    run_id=run.id,
-                    session=session,
-                )
         log.info(
             "context_message_persisted",
             extra={
@@ -276,7 +182,6 @@ class ConversationRunCommandService:
         return ConversationRunStartResult(
             run=running_run,
             initial_state=snapshot,
-            created=True,
             execution_mode="fresh",
             mode="new",
         )
@@ -285,7 +190,6 @@ class ConversationRunCommandService:
     def edit_or_restart(
         self,
         commands: Sequence[ConversationRunCommandInput],
-        payload_hash: str,
         task_id: int,
         run_id: int,
         model_config_id: int | None,
@@ -299,8 +203,7 @@ class ConversationRunCommandService:
         但会换用新的 checkpoint thread；Assistant UI ``sourceId`` 不参与本用例。
 
         参数:
-            commands: 本次请求全部命令的幂等标识和类型，按请求顺序持久化。
-            payload_hash: 命令业务载荷指纹。
+            commands: 本次请求接收的全部命令；命令只参与本次请求，不落库。
             task_id: 所属任务标识。
             run_id: 被编辑的 Conversation Run 标识（必须是该 task 的最近 run）。
             model_config_id: 模型厂商标识。
@@ -308,19 +211,18 @@ class ConversationRunCommandService:
             run_command: 已由 Assistant Transport 转换的领域输入命令。
 
         返回:
-            ``created=True``、``execution_mode="fresh"``、``mode="edit"`` 的启动结果；
-            ``run`` 为本次编辑的 run 记录，认领为 ``running`` 发生在返回之前。
+            ``execution_mode="fresh"``、``mode="edit"`` 的启动结果；``run`` 为本次编辑
+            的 Run 记录，认领为 ``running`` 发生在返回之前。
 
         异常:
             ValueError: ``run_command`` 缺失、``run_id`` 不是该 task 最近 run、run 当前
                 状态不允许编辑，或 pending → running 认领未命中。
-            RuntimeError: 同 ``command_id`` 的命令已存在但 payload 冲突、命令未绑定 run，
-                或快照重建后仍缺该 run（不变量被破坏）。
+            RuntimeError: 快照重建后仍缺该 run（不变量被破坏）。
             KeyError: task 或 run 不存在。
 
         副作用:
             在同一事务内重置 run（写回输入、换 checkpoint thread、清空终态字段）、删除该
-            run 的旧 context entries、写入新命令；随后投影 ``RunInitializedEvent``
+            run 的旧 context entries；随后投影 ``RunInitializedEvent``
             （``replace_existing=True``）重建 Transport 骨架并刷新快照（骨架若因快照分叉
             未能建立，则先按 canonical 重建快照），最后把该 run 认领为 ``running``
             （发布一次 RUNNING 状态事件）。不会创建新的 run。事务提交后任一步失败时，先把
@@ -336,11 +238,6 @@ class ConversationRunCommandService:
         if latest_run is None or latest_run.id != run_id:
             raise ValueError(f"run {run_id} does not belong to task {task_id}")
 
-        command_ids = [item.command_id for item in commands]
-        existing_result = self._resolve_existing_command(task_id, command_ids, payload_hash, "edit")
-        if existing_result is not None:
-            return existing_result
-
         with main_session_factory().begin() as session:
             self._assert_no_active_run(task_id, session)
             reset = self._conversation_run.reset_run_for_edit(
@@ -353,15 +250,6 @@ class ConversationRunCommandService:
             if reset is None:
                 raise ValueError(f"run {latest_run.id} is not editable in its current state")
             self._context.delete_by_run_id(task_id, latest_run.id, session=session)
-            for item in commands:
-                self._command.create(
-                    task_id=task_id,
-                    command_id=item.command_id,
-                    command_type=item.command_type,
-                    payload_hash=payload_hash,
-                    run_id=latest_run.id,
-                    session=session,
-                )
         log.info(
             "context_message_persisted",
             extra={
@@ -389,7 +277,7 @@ class ConversationRunCommandService:
             snapshot: ConversationStateSnapshot = self._state.get_state(task_id)
             self._state.publish_state(task_id, snapshot)
         except Exception:
-            # 与 start_or_attach 同一补偿语义：提交后的投影/认领/快照失败必须当场收敛。
+            # 与新建路径同一补偿语义：提交后的投影/认领/快照失败必须当场收敛。
             log.exception(
                 "assistant_transport_run_setup_failed",
                 extra={
@@ -402,7 +290,6 @@ class ConversationRunCommandService:
         return ConversationRunStartResult(
             run=reset,
             initial_state=snapshot,
-            created=True,
             execution_mode="fresh",
             mode="edit",
         )
@@ -424,7 +311,7 @@ class ConversationRunCommandService:
             run_id: 待续跑的 Conversation Run 标识。
 
         返回:
-            ``created=True``、``execution_mode="resume"`` 的启动结果。
+            ``execution_mode="resume"`` 的启动结果。
 
         异常:
             ValueError: run 不是 task 最近 run、不是 ``cancelled``、snapshot 归属失效、
@@ -476,7 +363,6 @@ class ConversationRunCommandService:
         return ConversationRunStartResult(
             run=resumed,
             initial_state=state,
-            created=True,
             execution_mode="resume",
             mode="resume",
         )

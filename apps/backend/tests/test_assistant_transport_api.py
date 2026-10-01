@@ -172,15 +172,10 @@ async def test_resume_task_accepts_any_cancelled_end_reason(
         def resume_cancelled_run(self, _run_id: int) -> object:
             return SimpleNamespace(id=7, task_id=1, status="running")
 
-    class _CommandCrud:
-        def get_by_run(self, _run_id: int) -> None:
-            return None
-
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._task = _TaskService()
     service._state = _StateService()
     service._run_state = _RunService()
-    service._command = _CommandCrud()
 
     result = service.resume_latest_run(task_id=1, run_id=7)
 
@@ -410,15 +405,10 @@ async def test_resume_setup_failure_settles_run() -> None:
             settled.append((run_id, end_reason))
             return SimpleNamespace(id=run_id, task_id=1, status="cancelled")
 
-    class _CommandCrud:
-        def get_by_run(self, _run_id: int) -> object:
-            return SimpleNamespace(id=6, command_id="transport-second")
-
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._task = _TaskService()
     service._state = _StateService()
     service._run_state = _RunService()
-    service._command = _CommandCrud()
 
     with pytest.raises(RuntimeError, match="snapshot read failed"):
         service.resume_latest_run(task_id=1, run_id=7)
@@ -428,8 +418,8 @@ async def test_resume_setup_failure_settles_run() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_does_not_depend_on_a_representative_command() -> None:
-    """恢复 Run 不依赖从批次中挑选一条代表 command。"""
+async def test_resume_does_not_depend_on_persisted_commands() -> None:
+    """恢复 Run 不依赖任何命令持久化记录。"""
 
     state = _snapshot(7, "cancelled")
     resumed = False
@@ -452,7 +442,6 @@ async def test_resume_does_not_depend_on_a_representative_command() -> None:
     service._task = _TaskService()
     service._state = _StateService()
     service._run_state = _RunService()
-    service._command = object()
 
     result = service.resume_latest_run(task_id=1, run_id=7)
 

@@ -50,8 +50,8 @@ _ALLOWED_RUN_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
 class RunInitializedEvent(ConversationEventEnvelope):
     """一个 Conversation Run 已被创建并绑定到 Task。
 
-    事实语义：命令已被幂等占用、run 已落库，Transport 侧应为其建立 user / assistant
-    两条消息骨架与 ``run.runId`` 基线。本事件**不携带用户输入文本**——文本由紧随其后的
+    事实语义：本次请求已接收、run 已落库，Transport 侧应为其建立 user / assistant 两条
+    消息骨架与 ``run.runId`` 基线。本事件**不携带用户输入文本**——文本由紧随其后的
     ``UserInputAppendedEvent`` 追加，使「run 已存在但输入尚未写完」这个中间态也是合法且
     可渲染的。编辑重跑也可用 ``replace_existing`` 重建骨架。
 

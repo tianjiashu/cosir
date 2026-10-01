@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
     from app.service.task.workspace_service import WorkspaceService
     from app.service.terminal.terminal_session_service import TerminalSessionService
-    from app.storage.crud.conversation_command_crud import ConversationCommandCrud
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
     from app.storage.crud.model_config_crud import ModelConfigCrud
@@ -317,14 +316,6 @@ def get_model_discovery_service() -> ModelDiscoveryService:
 
 
 @lru_cache(maxsize=1)
-def get_conversation_command_crud() -> ConversationCommandCrud:
-    """返回进程级 ConversationCommandCrud 单例。"""
-    from app.storage.crud.conversation_command_crud import ConversationCommandCrud
-
-    return ConversationCommandCrud()
-
-
-@lru_cache(maxsize=1)
 def get_conversation_task_context_crud() -> ConversationTaskContextCrud:
     """返回进程级 ConversationTaskContextCrud 单例。"""
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
@@ -344,7 +335,7 @@ def get_transport_assistant_service() -> TransportAssistantService:
 
 @lru_cache(maxsize=1)
 def get_conversation_run_command_service() -> ConversationRunCommandService:
-    """返回进程级 command 幂等与 Conversation Run 创建 service 单例。"""
+    """返回进程级 Transport command 接收与 Conversation Run 编排 service 单例。"""
 
     from app.assistant_transport.service.conversation_run_command_service import (
         ConversationRunCommandService,
@@ -459,7 +450,6 @@ def reset_service_dependencies() -> None:
     get_conversation_run_crud.cache_clear()
     get_task_crud.cache_clear()
     get_model_config_crud.cache_clear()
-    get_conversation_command_crud.cache_clear()
     get_conversation_task_context_crud.cache_clear()
     get_conversation_run_command_service.cache_clear()
     get_conversation_run_state_service.cache_clear()

@@ -5,9 +5,6 @@ LangGraph 或 storage。wire 字段遵循 assistant-ui 的 camelCase 约定；�
 后由 API 边界映射为后端 snake_case 领域参数。
 """
 
-import json
-from hashlib import sha256
-
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.assistant_transport.request.command.add_message_command import AddMessageCommand
@@ -57,8 +54,8 @@ class AssistantTransportRequest(BaseModel):
         """在模型构造后自动校验全部纯 wire 契约约束，不涉及领域持久化状态。
 
         本校验器由 Pydantic 在请求解析阶段自动触发，覆盖所有可在解析期判定的结构
-        性约束，与领域 service 的运行期校验（task 是否存在、command 幂等冲突、run
-        占用状态）严格分离：
+        性约束，与领域 service 的运行期校验（task 是否存在、run 冲突、run 占用状态）
+        严格分离：
 
         - ``reasoningEffort`` 必须在允许集合 ``{low, high, max}`` 内；
         - ``commands`` 内 ``commandId`` 必须唯一；
@@ -157,59 +154,6 @@ class AssistantTransportRequest(BaseModel):
                 retryable=False,
             )
         return self
-
-    def payload_hash(self) -> str:
-        """计算当前 Run 命令批次的稳定业务载荷指纹。
-
-        参数:
-            无；载荷字段直接取自当前请求模型。
-
-        返回:
-            SHA-256 十六进制字符串。
-
-        异常:
-            无；请求字段已由 Pydantic 完成校验。
-
-        副作用:
-            无。
-
-        说明:
-            ``commandId`` 是幂等身份，``taskId`` / ``workspaceId`` 是路由身份，``threadId`` 是
-            Transport 元数据，不参与载荷 hash。所有本批 command ID 共享此整体指纹；消息、
-            禁用工具集合、run 操作身份和模型选择会改变实际执行语义，必须参与 hash。当前
-            add-message 与 ban-tools 的批次顺序及禁用工具顺序不影响语义，因此先规范化顺序。
-            Assistant UI 的 ``parentId``/``sourceId`` 只属于编辑元数据，不参与领域幂等指纹。
-        """
-        commands = [
-            command.model_dump(mode="json", exclude={"commandId", "parentId", "sourceId"})
-            for command in self.commands
-        ]
-        for command in commands:
-            if command.get("name") == "ban-tools":
-                payload = command.get("payload")
-                if isinstance(payload, dict) and isinstance(payload.get("ban_tools"), list):
-                    payload["ban_tools"] = sorted(payload["ban_tools"])
-        # 当前命令批次的顺序不影响语义：add-message 提供 Run 输入，ban-tools 提供 Run 配置，
-        # 因此将批次按集合语义计算 hash。
-        commands.sort(
-            key=lambda command: json.dumps(
-                command, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            )
-        )
-        payload = {
-            "commands": commands,
-            "modelConfigId": self.modelConfigId,
-            "reasoningEffort": self.reasoningEffort,
-            "runId": self.runId,
-        }
-        serialized = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        return sha256(serialized.encode("utf-8")).hexdigest()
-
 
 class TransportRequestError(Exception):
     """纯 wire 契约校验失败的结构化异常。

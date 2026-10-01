@@ -143,11 +143,6 @@ def _build_command_service(
         "app.service.depends.get_conversation_event_projector", lambda: _Projector()
     )
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
-    service._command = SimpleNamespace(
-        get=lambda *_args: None,
-        create=lambda **_kwargs: SimpleNamespace(id=6, command_id="cmd-1"),
-        get_by_run=lambda _run_id: SimpleNamespace(id=6, command_id="cmd-1"),
-    )
     service._conversation_run = SimpleNamespace(
         create_run=lambda **_kwargs: SimpleNamespace(
             id=_RUN_ID, task_id=_TASK_ID, status="pending"
@@ -166,10 +161,9 @@ def _build_command_service(
     return service
 
 
-def _start_or_attach(service: ConversationRunCommandService) -> object:
-    return service.start_or_attach(
+def _start_run(service: ConversationRunCommandService) -> object:
+    return service.start_run(
         commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
-        payload_hash="hash",
         model_config_id=None,
         task_id=_TASK_ID,
         run_command=SimpleNamespace(),  # type: ignore[arg-type]
@@ -179,7 +173,6 @@ def _start_or_attach(service: ConversationRunCommandService) -> object:
 def _edit_or_restart(service: ConversationRunCommandService) -> object:
     return service.edit_or_restart(
         commands=[ConversationRunCommandInput(command_id="cmd-2", command_type="edit")],
-        payload_hash="hash",
         task_id=_TASK_ID,
         run_id=_RUN_ID,
         model_config_id=None,
@@ -187,7 +180,7 @@ def _edit_or_restart(service: ConversationRunCommandService) -> object:
     )
 
 
-def test_start_or_attach_rebuilds_diverged_snapshot_before_claim(
+def test_start_run_rebuilds_diverged_snapshot_before_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """快照缺新 run（分叉）时：先按 canonical 重建并发布 full 帧，再认领，不再 500。"""
@@ -201,13 +194,12 @@ def test_start_or_attach_rebuilds_diverged_snapshot_before_claim(
         monkeypatch, run_state=run_state, state_service=state_service
     )
 
-    result = _start_or_attach(service)
+    _start_run(service)
 
     assert state_service.rebuild_calls == [_TASK_ID]
     assert state_service.published == [_TASK_ID]
     assert run_state.claimed == [_RUN_ID]
     assert run_state.settled == []
-    assert result.created is True  # type: ignore[attr-defined]
 
 
 def test_edit_or_restart_rebuilds_diverged_snapshot_before_claim(
@@ -272,13 +264,13 @@ def test_ensure_run_visible_fails_fast_when_run_absent_after_rebuild(
     )
 
     with pytest.raises(RuntimeError, match="absent from both snapshot and canonical rebuild"):
-        _start_or_attach(service)
+        _start_run(service)
 
     assert run_state.claimed == []
     assert run_state.settled == [(_RUN_ID, "run_setup_failed")]
 
 
-def test_start_or_attach_skips_rebuild_when_skeleton_exists(
+def test_start_run_skips_rebuild_when_skeleton_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """正常路径只做只读复核：不重建、不额外发布 full 帧。"""
@@ -296,7 +288,7 @@ def test_start_or_attach_skips_rebuild_when_skeleton_exists(
         monkeypatch, run_state=run_state, state_service=state_service
     )
 
-    _start_or_attach(service)
+    _start_run(service)
 
     assert state_service.rebuild_calls == []
     assert state_service.published == []

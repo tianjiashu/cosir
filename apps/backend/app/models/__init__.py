@@ -4,7 +4,6 @@
 model，文件名与 model 相关。不承载服务、适配或 node_helper 逻辑。
 """
 
-from app.models.conversation_command_record import ConversationCommandRecord
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_extra import ConversationRunExtra
@@ -17,7 +16,6 @@ from app.models.terminal_session_record import TerminalSessionRecord
 from app.models.workspace_record import WorkspaceRecord
 
 __all__ = [
-    "ConversationCommandRecord",
     "ConversationRunAttachmentInput",
     "ConversationRunCommand",
     "ConversationRunError",

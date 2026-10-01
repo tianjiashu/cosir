@@ -5,7 +5,7 @@
 职责边界：
     - 负责：run 状态读写与条件更新、
   ``ConversationRunModel``↔``ConversationRunRecord`` 转换。
-- 不负责：Transport 命令幂等占用（见 ``ConversationCommandCrud``）、跨表操作与任务
+- 不负责：Transport 命令接收与 Run 编排、跨表操作与任务
   编排（由 ``service/task/`` 负责）、业务规则。
 
 依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，必须在

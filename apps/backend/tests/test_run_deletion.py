@@ -12,7 +12,6 @@ from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.deletion_errors import DeletionBusyError, RunDeletionConflictError
 from app.service.depends import (
     close_service_dependencies,
-    get_conversation_command_crud,
     get_conversation_run_crud,
     get_conversation_task_context_crud,
     get_task_crud,
@@ -72,14 +71,6 @@ def test_delete_middle_run_removes_only_its_data(storage) -> None:
             )
         )
 
-    # 只给中间 run_b 挂命令产物。
-    get_conversation_command_crud().create(
-        task_id=task.id,
-        command_id="cmd-b",
-        command_type="new",
-        payload_hash="hash-b",
-        run_id=run_b.id,
-    )
     get_task_service().delete_run(task.id, run_b.id)
 
     # 目标 run 及其上下文被删除，兄弟 run 与上下文保留。
