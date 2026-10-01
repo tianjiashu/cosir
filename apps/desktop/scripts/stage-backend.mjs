@@ -17,26 +17,6 @@ const stagingRoot = path.join(buildArtifactsRoot, "resources", "backend");
 const executableName = process.platform === "win32" ? `${appName}.exe` : appName;
 const pyinstallerExecutable = process.platform === "win32" ? "pyinstaller.exe" : "pyinstaller";
 const uvExecutable = process.platform === "win32" ? "uv.exe" : "uv";
-const defaultAgentConfigRoot = path.join(backendRoot, "app", "core", "agents", "defaults");
-const systemPromptRoot = path.join(backendRoot, "app", "core", "context", "system_prompt");
-const backendDataFiles = [
-  ...fs
-    .readdirSync(defaultAgentConfigRoot)
-    .filter((fileName) => fileName.endsWith(".json"))
-    .map((fileName) => ({
-      source: path.join(defaultAgentConfigRoot, fileName),
-      destination: "app/core/agents/defaults",
-    })),
-  ...fs
-    .readdirSync(systemPromptRoot)
-    .filter((fileName) => fileName.endsWith(".md"))
-    .map((fileName) => ({
-      source: path.join(systemPromptRoot, fileName),
-      destination: "app/core/context/system_prompt",
-    })),
-];
-const pyinstallerDataSeparator = process.platform === "win32" ? ";" : ":";
-
 function assertWithin(parent, candidate, label) {
   const relative = path.relative(parent, candidate);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -133,10 +113,6 @@ const pyinstallerArgs = [
   buildRoot,
   "--collect-submodules",
   "app",
-  ...backendDataFiles.flatMap(({ source, destination }) => [
-    "--add-data",
-    `${source}${pyinstallerDataSeparator}${destination}`,
-  ]),
   entrypoint,
 ];
 run(actualPyinstallerPath, pyinstallerArgs, {
