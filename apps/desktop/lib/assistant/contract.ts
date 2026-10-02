@@ -153,6 +153,8 @@ export type TransportRun = {
   runId: number;
   status: string;
   endReason: string | null;
+  /** Langfuse 根 Trace 标识；未启用观测或初始化失败时为 null。 */
+  langfuseTraceId: string | null;
   messages: TransportMessage[];
   usage: ConversationStateUsage | null;
   /**

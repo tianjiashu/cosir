@@ -553,6 +553,7 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     runId: -1,
     status: "completed",
     endReason: null,
+    langfuseTraceId: null,
     messages: [],
     usage: null,
     error: null,
