@@ -33,9 +33,6 @@ allowed-tools: Read,Write,Bash
 `LogContextFilter` 自动回填每条 `LogRecord` → 落 `backend-*.log`。因此
 **前端日志里的 trace_id 可以直接拿去 `query_logs.py trace` 反查后端全链路**。
 
-**已废弃、不要再用**：`turn_id`、`turns`、`turn_messages`、`runtime_events` 表均已从 schema 删除；
-`turn_trace()` 已不存在（改为 `conversation_run_trace()`）。历史文档若提到这些名字，视为过时。
-
 **实战要点**：
 - 拿到 32 位 hex **先问来源**：在前端/后端日志里看到的 → 链路 trace_id，用 `query_logs.py trace`；在 Langfuse UI 或 SSE payload 里看到的 → Langfuse trace，**用日志脚本查不到**（数值不同源，纯属巧合才会命中）。
 - 排查 Agent 行为/状态一律用整数 `task_id` / `run_id` 走 `query_app_db.py`；不要拿它当 trace_id，反之亦然。

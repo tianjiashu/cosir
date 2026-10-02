@@ -542,7 +542,7 @@ apps/backend/app/storage/crud/conversation_task_snapshot_crud.py
 并在：
 
 ```text
-apps/backend/app/storage/init_schema.py
+apps/backend/app/storage/store_engines.py
 ```
 
 注册模型和 schema 演进规则。Task 删除时必须删除对应 snapshot，不得留下孤儿行。

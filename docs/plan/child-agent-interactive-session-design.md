@@ -599,7 +599,7 @@ Child Run 自身的状态通过既有 Run status event 和 Child Task snapshot �
 - `apps/backend/app/service/task/conversation_run_service.py`：保留 `recover_orphaned_runs()` 的启动期批量收敛边界，并在提交后交给 `ChildAgentRecoveryHook` 做 Child locator 投影，不调用 live observer。
 - `apps/backend/app/lifespan.py`：增加 Child Agent startup recovery 和 shutdown cleanup。
 - `apps/backend/app/storage/model/task_model.py`、Task CRUD/Service：删除 `delegation_id` 及其外键/唯一索引，保留 `parent_task_id/parent_run_id`。
-- `apps/backend/app/storage/init_schema.py`：删除 `DelegationModel` 注册，绿地项目允许直接移除旧 `delegations` 表。
+- `apps/backend/app/storage/store_engines.py`：删除 `DelegationModel` 注册，绿地项目允许直接移除旧 `delegations` 表。
 - `apps/backend/app/assistant_transport/service/conversation_task_state_service.py` 和 rebuilder：从 Child Task/Run + parent checkpoint/transport locator 冷读恢复 Child locator。
 - `apps/backend/app/core/tools/tool_registry.py`：注册期拒绝 async handler 的非法 Protocol、并行声明或缺失参数契约。
 - `apps/desktop/components/workbench-agent-run-surface.tsx` 及相关 Workbench/assistant tool renderer：复用 terminal 的 surface 生命周期、状态栏和显式停止动作。

@@ -425,7 +425,7 @@ projector 继续负责实时 Transport mutation，但删除对 snapshot 表的 u
 - `ConversationTaskContextService`、`RuntimeContextManager`、`TaskService`；
 - Run command/service、workflow operations、所有 completed/failed/cancelled/restart 路径；
 - fork、edit、reset、orphan recovery 和 delegation summary；
-- `init_schema.py` 的 model 注册、表约束和 schema test；
+- `store_engines.py` 的 model 注册、表约束和 schema test；
 - `ConversationTaskStateService`、`TaskRuntimeSpace` 的 snapshot 懒加载/复用，以及
   projector/transport 的依赖注入。
 
