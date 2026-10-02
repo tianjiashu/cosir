@@ -228,6 +228,9 @@ class EnvironmentConfigurationService:
         """
 
         Settings.load()
+        from app.core.observability.langfuse_runtime import reload_langfuse_from_settings
+
+        reload_langfuse_from_settings()
         from app.config.configuration import replace_main_agent_profile
 
         replace_main_agent_profile(max_steps=Settings.MAIN_AGENT_MAX_STEPS)

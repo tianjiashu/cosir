@@ -1,19 +1,19 @@
 """Coordinate task lifecycle and workflow execution."""
 
+from langchain_core.messages import SystemMessage
+from langchain_core.utils.function_calling import convert_to_openai_tool
+
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileConfigError,
 )
-from langchain_core.utils.function_calling import convert_to_openai_tool
-from langchain_core.messages import SystemMessage
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.model_settings import ModelSettings
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.observability import (
     TraceMetadata,
-    build_tool_trace_recorder,
     conversation_run_trace,
 )
 from app.core.observability.tool_trace_recorder import ToolTraceRecorder
@@ -24,13 +24,14 @@ from app.core.runtime.execution_mode import ExecutionMode
 from app.core.runtime.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
-from app.core.tools.schemas import ToolExecutionContext, ToolDefinition
+from app.core.tools.schemas import ToolDefinition, ToolExecutionContext
 from app.core.tools.schemas.tool_names import TOOL_PROPOSE_AGENT_CONFIGURATION
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
+    get_conversation_run_observability_service,
     get_model_config_service,
     get_task_service,
     get_terminal_session_service,
@@ -150,10 +151,7 @@ class AgentRuntime:
         )
 
     async def run_agent(
-        self,
-        agent: AgentProfile,
-        *,
-        execution_mode: ExecutionMode = "fresh"
+        self, agent: AgentProfile, *, execution_mode: ExecutionMode = "fresh"
     ) -> None:
         """驱动一次 agent run 执行并提交 canonical conversation facts。
 
@@ -200,14 +198,30 @@ class AgentRuntime:
                 run_id=run_id,
                 agent_id=agent.agent_id,
             )
-            recorder = build_tool_trace_recorder()
-            operations = self._build_operations(
-                workspace, task, run, agent, tool_trace_recorder=recorder
-            )
-            # 本轮消息轨迹（清空残留、落 user 基线、逐条增量落库）统一由 workflow.run 内
-            # 的 RuntimeContextManager 负责（注入 message_store 端口），runner 不再直接落库。
-
-            with conversation_run_trace(metadata) as trace_result:
+            async with conversation_run_trace(metadata) as trace_result:
+                if trace_result.trace_id is not None:
+                    try:
+                        get_conversation_run_observability_service().set_langfuse_trace_id(
+                            run_id,
+                            trace_result.trace_id,
+                        )
+                    except Exception:
+                        log.exception(
+                            "langfuse_trace_id_persist_failed",
+                            extra={
+                                "msg": "Langfuse trace_id 持久化失败，继续执行 Agent",
+                                "data": {"run_id": run_id, "task_id": task_id},
+                            },
+                        )
+                operations = self._build_operations(
+                    workspace,
+                    task,
+                    run,
+                    agent,
+                    tool_trace_recorder=trace_result.tool_trace_recorder,
+                )
+                # 本轮消息轨迹（清空残留、落 user 基线、逐条增量落库）统一由 workflow.run 内
+                # 的 RuntimeContextManager 负责（注入 message_store 端口），runner 不再直接落库。
                 await agent.workflow.run(
                     operations,
                     callbacks=trace_result.callbacks,
@@ -277,11 +291,11 @@ class AgentRuntime:
 
     def _build_operations(
         self,
-            workspace: WorkspaceRecord,
-            task: TaskRecord,
-            run: ConversationRunRecord,
-            agent_profile: AgentProfile,
-            tool_trace_recorder: ToolTraceRecorder | None = None,
+        workspace: WorkspaceRecord,
+        task: TaskRecord,
+        run: ConversationRunRecord,
+        agent_profile: AgentProfile,
+        tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> WorkflowOperations:
         """为单个 run 构建运行时操作门面，按 workspace 解析工具边界。
 
@@ -311,22 +325,27 @@ class AgentRuntime:
         ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
         if run.extra is not None and len(run.extra.ban_tools) > 0:
             allows_tools = allows_tools - ban_tools
-            task_space.defer_system_message(SystemMessage(
-                content=f"Tools banned for this round: {ban_tools}. These tools cannot be executed in this round; please do not use them."
-            ))
+            task_space.defer_system_message(
+                SystemMessage(
+                    content=f"Tools banned for this round: {ban_tools}. These tools cannot be executed in this round; please do not use them."
+                )
+            )
         else:
-            task_space.defer_system_message(SystemMessage(
-                content="All tools are allowed for this round."
-            ))
+            task_space.defer_system_message(
+                SystemMessage(content="All tools are allowed for this round.")
+            )
 
         if run.extra is not None and run.extra.propose_agent_configuration:
             allows_tools.add(TOOL_PROPOSE_AGENT_CONFIGURATION)
-            definition:ToolDefinition = self._tool_register.get_tool_definition(TOOL_PROPOSE_AGENT_CONFIGURATION)
+            definition: ToolDefinition = self._tool_register.get_tool_definition(
+                TOOL_PROPOSE_AGENT_CONFIGURATION
+            )
             tool_schema = convert_to_openai_tool(definition.to_model_tool_definition(), strict=True)
-            task_space.defer_system_message(SystemMessage(
-                content=f"Please follow the user's instructions and use this tool to carry out their request: {tool_schema}"
-            ))
-
+            task_space.defer_system_message(
+                SystemMessage(
+                    content=f"Please follow the user's instructions and use this tool to carry out their request: {tool_schema}"
+                )
+            )
 
         execution_context = self._resolve_execution_context(task, run_id=run.id)
         runtime_dependencies = None

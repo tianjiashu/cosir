@@ -7,6 +7,8 @@ override 由 ``EnvironmentConfigurationService`` 承担，本模块不直接读�
 
 from __future__ import annotations
 
+import asyncio
+
 from app.api.configuration.errors import raise_configuration_error
 from app.api.schemas.request.EnvironmentUpdateRequest import EnvironmentUpdateRequest
 from app.api.schemas.response.EnvironmentResponse import EnvironmentResponse
@@ -36,7 +38,7 @@ async def update_environment_configuration(
             for name, item in payload.changes.items()
         }
         service = EnvironmentConfigurationService()
-        service.update(changes, reload_after_write=True)
+        await asyncio.to_thread(service.update, changes, reload_after_write=True)
         return EnvironmentResponse(groups=service.read_grouped())
     except Exception as exc:
         raise_configuration_error(exc)

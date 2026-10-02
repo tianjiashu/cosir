@@ -9,6 +9,7 @@ run 执行状态的迁移（含终态）。run 内消息与工具的细节事实
 不负责：assistant 消息内容与工具调用生命周期（分别见 ``message_event``、
 ``tool_call_event``）；本模块只定义用户输入事实事件的 Transport parts。
 """
+
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal, cast
@@ -144,15 +145,14 @@ class RunInitializedEvent(ConversationEventEnvelope):
                     "runId": self.run_id,
                     "status": "pending",
                     "endReason": None,
+                    "langfuseTraceId": None,
                     "messages": self._messages(),
                     "usage": None,
                     "error": None,
                 },
             ),
             ConversationStateMutation("set", ("current_run_id",), self.run_id),
-            ConversationStateMutation(
-                "set", ("context_window_total",), self.context_window_total
-            ),
+            ConversationStateMutation("set", ("context_window_total",), self.context_window_total),
             ConversationStateMutation("set", ("error",), None),
         ]
 
@@ -171,10 +171,37 @@ class RunInitializedEvent(ConversationEventEnvelope):
             "runId": self.run_id,
             "status": "pending",
             "endReason": None,
+            "langfuseTraceId": None,
             "messages": self._messages(),
             "usage": None,
             "error": None,
         }
+
+
+class RunTraceUpdatedEvent(ConversationEventEnvelope):
+    """一次 Run 的 Langfuse 根 Trace 标识已经持久化。
+
+    事实语义：Run observability service 已经把 trace ID 写入 canonical Run 事实，Transport
+    侧只需把它投影到对应 Run。事件不创建、不验证 Langfuse Trace，也不改变 Run 生命周期。
+    """
+
+    type: Literal["run_trace_updated"] = "run_trace_updated"
+    trace_id: str = Field(min_length=1)
+
+    def plan(
+        self,
+        state: ConversationStateSnapshot,
+    ) -> Sequence[ConversationStateMutation]:
+        """规划 Langfuse trace ID 的单字段快照更新。"""
+
+        run_index = self._find_run(state, self.run_id)
+        return [
+            ConversationStateMutation(
+                "set",
+                ("runs", run_index, "langfuseTraceId"),
+                self.trace_id,
+            )
+        ]
 
 
 class RunStatusChangedEvent(ConversationEventEnvelope):
@@ -337,7 +364,7 @@ def build_user_input_parts(
     referenced_image_ids: set[str] = set()
     referenced_file_ids: set[str] = set()
     for match in Constant.Transport.INPUT_TOKEN.finditer(display_text):
-        text_part = display_text[cursor:match.start()]
+        text_part = display_text[cursor : match.start()]
         if text_part:
             parts.append({"type": "text", "text": text_part, "status": "completed"})
         marker_kind, token_id = match.groups()
@@ -411,10 +438,10 @@ class UserInputAppendedEvent(ConversationEventEnvelope):
                     raise ValueError("user text part status is invalid")
             elif part_type == "image":
                 image_part = cast(ConversationStateImagePart, part)
-                if (
-                    set(image_part) != {"type", "image"}
-                    or not Constant.Transport.IMAGE_LOCATOR.fullmatch(image_part["image"])
-                ):
+                if set(image_part) != {
+                    "type",
+                    "image",
+                } or not Constant.Transport.IMAGE_LOCATOR.fullmatch(image_part["image"]):
                     raise ValueError("user image part locator is invalid")
             elif part_type == "file":
                 file_part = cast(ConversationStateFilePart, part)

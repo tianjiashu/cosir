@@ -31,6 +31,9 @@ if TYPE_CHECKING:
     from app.core.runtime.runner import AgentRuntime
     from app.service.model_config import ModelConfigService
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
+    from app.service.task.conversation_run_observability_service import (
+        ConversationRunObservabilityService,
+    )
     from app.service.task.conversation_run_service import ConversationRunService
     from app.service.task.conversation_run_state_service import ConversationRunStateService
     from app.service.task.conversation_task_context_service import ConversationTaskContextService
@@ -390,6 +393,17 @@ def get_conversation_run_state_service() -> ConversationRunStateService:
     return ConversationRunStateService()
 
 
+@lru_cache(maxsize=1)
+def get_conversation_run_observability_service() -> ConversationRunObservabilityService:
+    """返回进程级 Conversation Run 可观测性事实 service。"""
+
+    from app.service.task.conversation_run_observability_service import (
+        ConversationRunObservabilityService,
+    )
+
+    return ConversationRunObservabilityService()
+
+
 
 @lru_cache(maxsize=1)
 def get_conversation_event_projector() -> ConversationEventProjector:
@@ -445,6 +459,7 @@ def reset_service_dependencies() -> None:
     get_workspace_service.cache_clear()
     get_conversation_run_service.cache_clear()
     get_conversation_run_state_service.cache_clear()
+    get_conversation_run_observability_service.cache_clear()
     get_task_service.cache_clear()
     get_workspace_crud.cache_clear()
     get_conversation_run_crud.cache_clear()

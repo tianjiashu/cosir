@@ -45,6 +45,7 @@ from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.observability import flush_langfuse
+from app.core.observability.langfuse_runtime import reload_langfuse_from_settings
 from app.core.runtime.runner import AgentRuntime
 from app.core.tools import ToolSystem
 from app.core.workflows.react.workflow import ReactLikeWorkflow
@@ -60,10 +61,10 @@ from app.service.depends import (
     initialize_service_dependencies,
     set_runtime,
 )
+from app.utils.json_utils import JsonFileError, read_json_object
 from app.utils.path import system_cosir as paths
 from app.utils.path.system_cosir import system_agent_config_dir, system_cosir_dir
 from app.utils.path.workspace_cosir import workspace_agent_config_dir
-from app.utils.json_utils import JsonFileError, read_json_object
 
 
 @asynccontextmanager
@@ -184,6 +185,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     # 文件管线，确保 Settings.load 或依赖初始化失败也有固定 JSONL 现场。
     install_logging_for_current_process(log_dir=paths.LOG_DIR)
     Settings.load()
+    reload_langfuse_from_settings()
     initialize_service_dependencies()
     # 重建一次管线：Settings.load() 已把 .env 载入进程环境并调用 paths.reset()，此刻
     # paths.LOG_DIR 才是最终数据根（CODING_AGENT_DATA_DIR）下的日志目录。轮转参数与函数默认值
@@ -280,10 +282,16 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         try:
             # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
             HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
-            await get_conversation_run_executor().close()
-            await asyncio.to_thread(get_terminal_session_service().shutdown)
-            await asyncio.to_thread(flush_langfuse)
-            await asyncio.to_thread(close_service_dependencies)
+            try:
+                await get_conversation_run_executor().close()
+            finally:
+                try:
+                    await asyncio.to_thread(get_terminal_session_service().shutdown)
+                finally:
+                    try:
+                        await asyncio.to_thread(flush_langfuse)
+                    finally:
+                        await asyncio.to_thread(close_service_dependencies)
             # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
             _mark_boot_stopped()
         finally:

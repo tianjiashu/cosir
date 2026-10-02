@@ -5,7 +5,6 @@ import 均为惰性加载，未启用 / 缺密钥 / 未安装时运行时行为�
 """
 
 from app.core.observability.langfuse_payload_limits import limit_langfuse_payload
-from app.core.observability.langfuse_tool_trace_recorder import build_tool_trace_recorder
 from app.core.observability.langfuse_tracing import (
     ConversationRunTraceResult,
     TraceMetadata,
@@ -16,7 +15,6 @@ from app.core.observability.langfuse_tracing import (
 __all__ = [
     "ConversationRunTraceResult",
     "TraceMetadata",
-    "build_tool_trace_recorder",
     "conversation_run_trace",
     "flush_langfuse",
     "limit_langfuse_payload",

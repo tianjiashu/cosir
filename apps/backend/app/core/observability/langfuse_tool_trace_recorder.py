@@ -21,11 +21,8 @@ from typing import Any
 
 from app.config.logging.logger import log
 from app.core.observability.langfuse_payload_limits import limit_langfuse_payload
-from app.core.observability.langfuse_tracing import _build_langfuse_client, tracing_enabled
 from app.core.observability.tool_trace_recorder import (
-    ToolTraceRecorder,
     _NullToolSpan,
-    _NullToolTraceRecorder,
 )
 from app.core.tools.schemas import ToolCall, ToolObservation
 
@@ -97,15 +94,16 @@ class LangfuseToolTraceRecorder:
     """把每次工具调用记录为 Langfuse tool observation（实现 ``ToolTraceRecorder`` 协议）。
 
     职责边界：
-    - 负责：observation 开闭、输入输出映射、错误级别标注、payload 长度限制、进程级客户端复用与 flush。
-    - 不负责：工具执行本身、事件发出、trace 根上下文（由 ``conversation_run_trace`` 建立）。
+    - 负责：observation 开闭、输入输出映射、错误级别标注和 payload 长度限制。
+    - 不负责：工具执行本身、事件发出、client 生命周期和 trace 根上下文；这些由
+      ``LangfuseRuntimeManager`` 统一装配。
     """
 
-    def __init__(self) -> None:
-        """创建进程级 Langfuse 客户端（仅当 ``tracing_enabled()`` 为 True 时由调用方构造）。
+    def __init__(self, client: Any) -> None:
+        """绑定统一生命周期管理器提供的 Langfuse client。
 
         参数:
-            无。
+            client: 当前 Run lease 持有的 Langfuse client。
 
         返回:
             无。
@@ -114,9 +112,14 @@ class LangfuseToolTraceRecorder:
             不向上抛出：客户端创建失败由 ``span`` 的兜底捕获并降级为空 observation。
 
         副作用:
-            创建 Langfuse 客户端实例（构造不连网，懒连接；以 public_key 为进程单例键）。
+            无；本类不创建、不关闭、不 flush client。
         """
-        self._client = _build_langfuse_client()
+        self._client = client
+
+    def flush(self) -> None:
+        """保持 ``ToolTraceRecorder`` 契约；实际 flush 由运行时 manager 统一负责。"""
+
+        return None
 
     @contextmanager
     def span(self, call: ToolCall, step_id: str) -> Iterator[Any]:
@@ -144,9 +147,7 @@ class LangfuseToolTraceRecorder:
                 as_type="tool",
                 name=call.tool_name,
                 input=limit_langfuse_payload({"arguments": arguments, "call_id": call.call_id}),
-                metadata=limit_langfuse_payload(
-                    {"step_id": step_id, "tool_call_id": call.call_id}
-                ),
+                metadata=limit_langfuse_payload({"step_id": step_id, "tool_call_id": call.call_id}),
             )
             span = span_cm.__enter__()
         except Exception:
@@ -178,29 +179,6 @@ class LangfuseToolTraceRecorder:
                         "data": {"tool_name": call.tool_name, "step_id": step_id},
                     },
                 )
-
-    def flush(self) -> None:
-        """flush 本 recorder 持有的 Langfuse 客户端缓冲。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            不向上抛出：flush 失败仅记日志。
-
-        副作用:
-            触发后台批量上报。
-        """
-        try:
-            self._client.flush()
-        except Exception:
-            log.exception(
-                "langfuse_recorder_flush_failed",
-                extra={"msg": "Langfuse recorder flush 失败（忽略）"},
-            )
 
 
 def _safe_finalize_tool_span(
@@ -235,31 +213,3 @@ def _safe_finalize_tool_span(
                 "data": {"tool_name": call.tool_name, "step_id": step_id},
             },
         )
-
-
-def build_tool_trace_recorder() -> ToolTraceRecorder:
-    """Build a tool trace recorder with safe Langfuse degradation.
-
-    参数:
-        无。
-
-    返回:
-        可直接注入 service 层的 ``ToolTraceRecorder``。未启用或初始化失败时返回空实现。
-
-    异常:
-        无。Langfuse 初始化异常被记录后降级为空实现。
-
-    副作用:
-        启用 Langfuse 时可能初始化进程级 Langfuse client；失败时写 error 日志。
-    """
-
-    if not tracing_enabled():
-        return _NullToolTraceRecorder()
-    try:
-        return LangfuseToolTraceRecorder()
-    except Exception:
-        log.exception(
-            "langfuse_tool_recorder_init_failed",
-            extra={"msg": "Langfuse 工具 trace recorder 初始化失败，降级为空实现"},
-        )
-        return _NullToolTraceRecorder()

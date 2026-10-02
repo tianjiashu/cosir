@@ -31,6 +31,7 @@ from app.assistant_transport.event.message_event import (
 from app.assistant_transport.event.run_event import (
     RunInitializedEvent,
     RunStatusChangedEvent,
+    RunTraceUpdatedEvent,
     UserInputAppendedEvent,
     build_user_input_parts,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "ConversationEventEnvelope",
     "RunInitializedEvent",
     "RunStatusChangedEvent",
+    "RunTraceUpdatedEvent",
     "TerminalOutputDeltaData",
     "ToolCallCreatedEvent",
     "ToolCallEventStatus",
