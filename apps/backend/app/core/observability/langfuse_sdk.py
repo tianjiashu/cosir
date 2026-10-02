@@ -7,9 +7,12 @@ payload 大小限制回调。所有 Langfuse import 均为惰性加载。
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from app.config.logging.logger import log
+
+if TYPE_CHECKING:
+    from langfuse.types import MaskOtelSpansParams, MaskOtelSpansResult
 from app.core.observability.langfuse_config import LangfuseConfig
 from app.core.observability.langfuse_payload_limits import limit_langfuse_payload
 
@@ -86,7 +89,7 @@ class _LangfuseSdkAdapter:
             LangfuseResourceManager._instances.pop(_public_key, None)
 
 
-def _limit_langfuse_data(*, data: Any, **_kwargs: Any) -> Any:
+def _limit_langfuse_data(*, data: Any, **_kwargs: dict[str, Any]) -> Any:
     """限制 Langfuse SDK input/output payload 大小。"""
 
     try:
@@ -96,7 +99,7 @@ def _limit_langfuse_data(*, data: Any, **_kwargs: Any) -> Any:
         return data
 
 
-def _limit_langfuse_otel_spans(*, params: Any) -> Any:
+def _limit_langfuse_otel_spans(*, params: MaskOtelSpansParams) -> MaskOtelSpansResult | None:
     """限制 Langfuse OTel span 属性中的长文本。"""
 
     try:
