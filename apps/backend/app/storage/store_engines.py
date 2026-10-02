@@ -1,7 +1,8 @@
 """业务 SQLite 引擎统一工厂。
 
-本模块只负责主业务库的 SQLAlchemy 引擎生命周期。日志是固定格式的本地文件，
-不再创建独立日志数据库或日志 session factory。
+本模块负责主业务库的 SQLAlchemy 引擎生命周期与业务 schema 初始化：引擎由
+``engine_cache`` 提供，业务表由 ``initialize_app_schema`` 基于当前 ORM metadata
+一次性建好。日志是固定格式的本地文件，不再创建独立日志数据库或日志 session factory。
 """
 
 from __future__ import annotations
@@ -9,13 +10,48 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
+from typing import cast
 
-from sqlalchemy import Engine
+from sqlalchemy import Engine, Table
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.storage.engine_cache import _engine_cache, create_session_factory
-from app.storage.init_schema import initialize_app_schema
+from app.storage.model.base import StorageBase
+from app.storage.model.conversation_run_model import ConversationRunModel
+from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
+from app.storage.model.model_config_model import ModelConfigModel
+from app.storage.model.task_model import TaskModel
+from app.storage.model.workspace_model import WorkspaceModel
 from app.utils.path import system_cosir as paths
+
+APP_MODELS = (
+    ModelConfigModel,
+    WorkspaceModel,
+    TaskModel,
+    ConversationRunModel,
+    ConversationTaskContextModel,
+)
+
+
+def initialize_app_schema(engine: Engine) -> None:
+    """创建当前应用 metadata 声明的全部业务表。
+
+    参数:
+        engine: 已初始化的主库 SQLAlchemy 引擎。
+
+    返回:
+        无。
+
+    异常:
+        sqlalchemy.exc.SQLAlchemyError: 建表失败。
+
+    副作用:
+        在当前数据库创建缺失的应用表。本函数不修改已存在的表，也不执行任何旧
+        schema 迁移；遗留旧结构应通过删除本地库重建。
+    """
+
+    tables = [cast(Table, model.__table__) for model in APP_MODELS]
+    StorageBase.metadata.create_all(engine, tables=tables)
 
 _INIT_LOCK = RLock()
 

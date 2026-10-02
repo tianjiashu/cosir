@@ -13,7 +13,7 @@
 
 职责边界：
     - 负责：引擎创建、连接池配置、按路径缓存与释放。
-    - 不负责：schema 建表 / 迁移（见 ``init_schema``）、三大引擎的编排与生命周期
+    - 不负责：schema 建表 / 迁移（见 ``store_engines``）、三大引擎的编排与生命周期
       （见 ``store_engines``）、任何业务读写（见 ``crud/``）。
 
 对外入口：模块级单例 ``_engine_cache``；上层（``store_engines``）通过它取得引擎，不直接
