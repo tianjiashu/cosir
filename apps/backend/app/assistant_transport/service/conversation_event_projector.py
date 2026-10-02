@@ -20,6 +20,7 @@ from app.service.depends import get_conversation_task_state_service
 _EVENT_ADAPTER: TypeAdapter[ConversationEvent] = TypeAdapter(ConversationEvent)
 _KNOWN_EVENT_TYPES = {
     "run_initialized",
+    "run_trace_updated",
     "user_input_appended",
     "run_status_changed",
     "assistant_text_delta",

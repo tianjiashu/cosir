@@ -14,6 +14,7 @@
 
 import copy
 import json
+from dataclasses import replace
 from uuid import uuid4
 
 from sqlalchemy import asc, delete, desc, select, update
@@ -271,7 +272,11 @@ class ConversationRunCrud:
             image_paths=copy.deepcopy(source.image_paths),
             end_reason=source.end_reason,
             final_output=source.final_output,
-            extra=(source.extra.to_dict() if source.extra is not None else None),
+            extra=(
+                replace(source.extra, langfuse_trace_id=None).to_dict()
+                if source.extra is not None
+                else None
+            ),
             usage_json=_serialize_typed_json(source.usage),
             error_json=_serialize_typed_json(source.error),
             status=source.status,
@@ -612,6 +617,59 @@ class ConversationRunCrud:
                 update(ConversationRunModel)
                 .where(ConversationRunModel.id == run_id)
                 .values(extra=extra.to_dict())
+            )
+            if not result.rowcount:
+                raise KeyError(run_id)
+            current_session.flush()
+            return self.get_in_session(current_session, run_id)
+
+        if session is not None:
+            return update_in_session(session)
+        with self._session_factory.begin() as managed_session:
+            return update_in_session(managed_session)
+
+    def update_langfuse_trace_id(
+        self,
+        run_id: int,
+        trace_id: str,
+        session: Session | None = None,
+    ) -> ConversationRunRecord:
+        """把 Run 的 Langfuse 根 Trace ID 写入 ``extra`` JSON。
+
+        参数:
+            run_id: 目标 Conversation Run 标识。
+            trace_id: 已由 Langfuse SDK 生成的非空 Trace ID。
+            session: 可选外部事务；传入时复用且不自行提交。
+
+        返回:
+            更新后的 ``ConversationRunRecord``。
+
+        异常:
+            ValueError: ``trace_id`` 为空白。
+            KeyError: Run 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 数据库更新失败。
+
+        副作用:
+            更新 ``conversation_runs.extra``；不发布 Transport 事件，事件由 Run
+            observability service 在事务提交后发布。
+        """
+
+        if not trace_id.strip():
+            raise ValueError("trace_id must be non-empty")
+
+        def update_in_session(current_session: Session) -> ConversationRunRecord:
+            current = self.get_in_session(current_session, run_id)
+            extra = current.extra
+            if extra is None:
+                extra = ConversationRunExtra(
+                    display_text=current.input_text,
+                    attachments=[],
+                )
+            updated_extra = replace(extra, langfuse_trace_id=trace_id)
+            result = current_session.execute(
+                update(ConversationRunModel)
+                .where(ConversationRunModel.id == run_id)
+                .values(extra=updated_extra.to_dict())
             )
             if not result.rowcount:
                 raise KeyError(run_id)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from itertools import groupby
 from operator import attrgetter
-from typing import Any, cast
+from typing import cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.messages.tool import ToolCall
@@ -326,6 +326,9 @@ class ConversationTaskStateRebuilder:
                     runId=run.id,
                     status=run.status,
                     endReason=run.end_reason,
+                    langfuseTraceId=(
+                        run_extra.langfuse_trace_id if run_extra is not None else None
+                    ),
                     messages=snapshot_messages,
                     usage=run.usage,
                     error=ConversationTaskStateRebuilder.build_run_error(run),

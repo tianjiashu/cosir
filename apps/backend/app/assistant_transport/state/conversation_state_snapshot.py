@@ -12,7 +12,15 @@ _SNAPSHOT_KEYS = {
     "context_window_total",
     "error",
 }
-_RUN_KEYS = {"runId", "status", "endReason", "messages", "usage", "error"}
+_RUN_KEYS = {
+    "runId",
+    "status",
+    "endReason",
+    "langfuseTraceId",
+    "messages",
+    "usage",
+    "error",
+}
 _MESSAGE_KEYS = {"id", "role", "parts"}
 _TEXT_PART_KEYS = {"type", "text", "status"}
 _IMAGE_PART_KEYS = {"type", "image"}
@@ -142,6 +150,8 @@ def _validate_run(run: object, seen_run_ids: set[int]) -> None:
         raise ValueError("snapshot run status must be a non-empty string")
     if run["endReason"] is not None and not isinstance(run["endReason"], str):
         raise ValueError("snapshot run endReason must be a string or null")
+    if run["langfuseTraceId"] is not None and not isinstance(run["langfuseTraceId"], str):
+        raise ValueError("snapshot run langfuseTraceId must be a string or null")
     if not isinstance(run["messages"], list):
         raise ValueError("snapshot run messages must be an array")
     if run["usage"] is not None:
