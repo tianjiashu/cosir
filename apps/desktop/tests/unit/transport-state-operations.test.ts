@@ -17,6 +17,7 @@ function state(): TransportState {
         runId: 1,
         status: "running",
         endReason: null,
+        langfuseTraceId: null,
         messages: [{
           id: "assistant-1",
           role: "assistant",
@@ -32,6 +33,7 @@ function state(): TransportState {
         runId: 2,
         status: "completed",
         endReason: null,
+        langfuseTraceId: null,
         messages: [{ id: "assistant-2", role: "assistant", parts: [] }],
         usage: null,
         error: null,

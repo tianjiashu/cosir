@@ -47,6 +47,7 @@ def _snapshot(
                 "runId": run_id,
                 "status": status,
                 "endReason": None,
+                "langfuseTraceId": None,
                 "messages": [{"id": f"user-{run_id}", "role": "user", "parts": []}],
                 "usage": None,
                 "error": None,

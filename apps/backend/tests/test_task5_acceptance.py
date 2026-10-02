@@ -43,7 +43,7 @@ from app.storage.crud.conversation_task_context_crud import ConversationTaskCont
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
-from app.storage.init_schema import APP_MODELS, initialize_app_schema
+from app.storage.store_engines import APP_MODELS, initialize_app_schema
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.model_config_model import ModelConfigModel
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces

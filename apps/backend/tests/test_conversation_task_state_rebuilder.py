@@ -87,6 +87,7 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
                 "runId": 1,
                 "status": "completed",
                 "endReason": None,
+                "langfuseTraceId": None,
                 "usage": None,
                 "error": None,
                 "messages": [

@@ -31,7 +31,7 @@ from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
-from app.storage.init_schema import initialize_app_schema
+from app.storage.store_engines import initialize_app_schema
 from app.task_runtime.service.task_service import TaskService
 
 

@@ -307,6 +307,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                 "runId": 2,
                 "status": "running",
                 "endReason": None,
+                "langfuseTraceId": None,
                 "messages": [
                     {
                         "id": "stale-user",

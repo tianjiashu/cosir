@@ -94,6 +94,7 @@ def _running_state() -> ConversationStateSnapshot:
             runId=1,
             status="running",
             endReason=None,
+            langfuseTraceId=None,
             messages=[],
             usage=None,
             error=None,

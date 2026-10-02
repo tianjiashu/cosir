@@ -1135,6 +1135,7 @@ def test_real_storage_backed_projection_updates_snapshot(
             "runId": 5,
             "status": "running",
             "endReason": None,
+            "langfuseTraceId": None,
             "messages": [
                 {"id": "m0", "role": "user", "parts": []},
                 {

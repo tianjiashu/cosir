@@ -21,11 +21,11 @@ from app.service.task.conversation_task_context_service import ConversationTaskC
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
-from app.storage.init_schema import initialize_app_schema
 from app.storage.model.base import StorageBase
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.task_model import TaskModel
+from app.storage.store_engines import initialize_app_schema
 
 
 def _timestamp() -> datetime:
@@ -79,8 +79,6 @@ def test_context_storage_exposes_only_canonical_message_fields() -> None:
     }
 
 
-
-
 def test_context_record_rejects_malformed_metadata_json() -> None:
     model = ConversationTaskContextModel(
         task_id=7,
@@ -93,8 +91,6 @@ def test_context_record_rejects_malformed_metadata_json() -> None:
 
     with pytest.raises((TypeError, ValueError)):
         ConversationTaskContextRecord._from_model(model)
-
-
 
 
 def test_run_record_round_trips_usage_and_error() -> None:
@@ -140,6 +136,7 @@ def test_run_extra_serializes_direct_shape_without_version() -> None:
             }
         ],
         reasoning_effort="high",
+        langfuse_trace_id="trace-11",
     )
 
     serialized = extra.to_dict()
@@ -155,6 +152,7 @@ def test_run_extra_serializes_direct_shape_without_version() -> None:
         ],
         "ban_tools": [],
         "reasoning_effort": "high",
+        "langfuse_trace_id": "trace-11",
     }
     assert "version" not in serialized
     assert ConversationRunExtra.from_dict(serialized) == extra
@@ -245,9 +243,7 @@ def test_run_service_delays_banned_tools_to_task_resolution() -> None:
 def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
     attachment_path = Path(__file__).parent
     service = ConversationRunService.__new__(ConversationRunService)
-    service._task = SimpleNamespace(
-        get=lambda _task_id: SimpleNamespace(tool_definitions=[])
-    )
+    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(tool_definitions=[]))
     command = ConversationRunCommand(
         display_text="请检查 [[cosir-file:references]]",
         attachments=[
@@ -295,12 +291,8 @@ def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
         reasoning_effort=None,
     )
     service = ConversationRunService.__new__(ConversationRunService)
-    service._task = SimpleNamespace(
-        get=lambda _task_id: SimpleNamespace(tool_definitions=[])
-    )
-    service._run = SimpleNamespace(
-        get=lambda _run_id: SimpleNamespace(extra=existing_extra)
-    )
+    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(tool_definitions=[]))
+    service._run = SimpleNamespace(get=lambda _run_id: SimpleNamespace(extra=existing_extra))
     command = ConversationRunCommand(
         display_text="请再次阅读 [[cosir-file:readme]]",
         attachments=[
@@ -342,6 +334,11 @@ def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -
         created_at=_timestamp(),
         updated_at=_timestamp(),
         checkpoint_thread_id="thread-11",
+        extra=ConversationRunExtra(
+            display_text="run input",
+            attachments=[],
+            langfuse_trace_id="trace-source",
+        ),
         usage=usage,
         error={"code": "provider_error", "message": "provider unavailable"},
     )
@@ -358,10 +355,10 @@ def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -
             "message": "provider unavailable",
         }
         assert cloned.checkpoint_thread_id != source.checkpoint_thread_id
+        assert cloned.extra is not None
+        assert cloned.extra.langfuse_trace_id is None
     finally:
         engine.dispose()
-
-
 
 
 def test_context_clone_copies_transport_fields_to_real_row() -> None:
@@ -396,9 +393,7 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
                     id=41,
                     task_id=7,
                     run_id=11,
-                    message_json=json.dumps(
-                        {"type": "human", "data": {"content": "source"}}
-                    ),
+                    message_json=json.dumps({"type": "human", "data": {"content": "source"}}),
                     include_in_context=True,
                     sequence=3,
                     transport_metadata_json=json.dumps(metadata),
@@ -419,8 +414,6 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
             assert json.loads(cloned_row.transport_metadata_json) == metadata
     finally:
         engine.dispose()
-
-
 
 
 def test_context_crud_does_not_swallow_non_tool_uniqueness_integrity_error() -> None:
@@ -458,9 +451,7 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
     factory = sessionmaker(bind=engine)
     try:
         with Session(engine) as session:
-            session.add(
-                TaskModel(id=7, workspace_id=3, title="task", creation_command_id=None)
-            )
+            session.add(TaskModel(id=7, workspace_id=3, title="task", creation_command_id=None))
             session.add(
                 ConversationRunModel(
                     id=11,
@@ -475,9 +466,7 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
                 run_id=11,
                 message=AIMessage(
                     content="I will inspect it",
-                    tool_calls=[
-                        {"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}
-                    ],
+                    tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
                 ),
                 include_in_context=True,
                 sequence=1,

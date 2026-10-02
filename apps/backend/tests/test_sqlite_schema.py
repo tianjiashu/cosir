@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine, inspect
 
-from app.storage.init_schema import initialize_app_schema
+from app.storage.store_engines import initialize_app_schema
 
 
 def test_tasks_table_uses_sqlite_autoincrement() -> None:

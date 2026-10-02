@@ -92,6 +92,7 @@ def _record_state() -> ConversationStateSnapshot:
             runId=1,
             status="running",
             endReason=None,
+            langfuseTraceId=None,
             messages=[],
             usage=None,
             error=None,
@@ -794,7 +795,15 @@ def test_validate_snapshot_rejects_boolean_run_id_with_error_contract() -> None:
 # --------------------------------------------------------------------------------------
 
 
-_RUN_REQUIRED_KEYS = {"runId", "status", "endReason", "messages", "usage", "error"}
+_RUN_REQUIRED_KEYS = {
+    "runId",
+    "status",
+    "endReason",
+    "langfuseTraceId",
+    "messages",
+    "usage",
+    "error",
+}
 
 
 def _python_run_literal_keys(text: str, source_name: str) -> list[tuple[int, set[str]]]:

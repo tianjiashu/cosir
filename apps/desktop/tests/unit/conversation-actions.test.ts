@@ -23,6 +23,7 @@ const run = (runId: number, status: string = "completed", messages: TransportMes
   runId,
   status,
   endReason: null,
+  langfuseTraceId: null,
   messages,
   usage: null,
   error: null,
