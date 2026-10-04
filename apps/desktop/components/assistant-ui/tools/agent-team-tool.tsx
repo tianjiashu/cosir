@@ -3,9 +3,9 @@ import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { CheckCircle2, UsersIcon } from "lucide-react";
 
 import {
-  confirmAgentTeamPreview,
+  confirmAgentTeamRun,
   getAgentTeamRun,
-  getLatestAgentTeamRunByParent,
+  getLatestAgentTeamRun,
   type AgentTeamRun,
 } from "@/lib/api/agent-teams";
 import { Button } from "@/components/ui/button";
@@ -17,23 +17,46 @@ type AgentTeamToolProps = ToolCallMessagePartProps;
 
 type NodeResult = {
   node_id: string;
+  task_id: number;
+  run_id: number;
+  completed: true;
   status: string;
   output: string;
 };
 
+const END_REASON_LABELS: Record<string, string> = {
+  superseded_by_new_preview: "执行方案已被新的方案替代",
+  team_start_failed: "Team 入口节点启动失败",
+  transition_not_found: "节点状态没有匹配的转移规则",
+  runtime_unavailable: "本地运行时不可用",
+  next_node_start_failed: "下一节点启动失败",
+  node_run_failed: "Team 节点执行失败",
+  node_run_cancelled: "Team 节点执行被取消",
+  implicit_completion_missing: "节点未提交 Team 状态",
+  cancelled: "Team 已取消",
+  runtime_restarted: "后端重启后未自动恢复 Team",
+};
+
+function endReasonLabel(endReason: string): string {
+  return END_REASON_LABELS[endReason] ?? "Agent Team 执行未完成";
+}
+
 function readNodeResults(state: Record<string, unknown>): NodeResult[] {
-  const raw = state.previous_outputs;
+  const raw = state.node_executions;
   if (!Array.isArray(raw)) return [];
   return raw.filter((item): item is NodeResult => {
     if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
     const value = item as Record<string, unknown>;
     return typeof value.node_id === "string"
+      && typeof value.task_id === "number"
+      && typeof value.run_id === "number"
+      && value.completed === true
       && typeof value.status === "string"
       && typeof value.output === "string";
   });
 }
 
-/** Agent Team 方案预览卡；确认动作只提交后端保存的精确预览，不接受前端改写的图。 */
+/** Agent Team 方案预览卡；确认时提交用户最终编辑后的配置，由后端重新校验。 */
 export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
   const artifact = readToolArtifact(rawArtifact);
   const preview = readAgentTeamPreviewDisplay(artifact.display_data);
@@ -44,24 +67,33 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
   useEffect(() => {
     if (!preview) return undefined;
     let disposed = false;
-    void getLatestAgentTeamRunByParent(
-      preview.parentTaskId,
-      preview.parentRunId,
-      preview.previewFingerprint,
-    )
+    void getLatestAgentTeamRun(preview.parentTaskId, preview.parentRunId, preview.teamId)
       .then((current) => {
-        if (disposed || current === null) return;
+        if (disposed) return;
+        if (current.status === "awaiting_confirmation") return;
         setTeamRun(current);
-        setState("confirmed");
-        setMessage(`已恢复，当前状态：${current.status}`);
+        if (current.status === "pending" || current.status === "running") {
+          setState("confirmed");
+          setMessage(`已恢复，当前状态：${current.status}`);
+          return;
+        }
+        if (current.status === "completed") {
+          setState("confirmed");
+          setMessage("已恢复，Team 已完成");
+          return;
+        }
+        if (current.status === "failed" || current.status === "cancelled") {
+          setState("failed");
+          setMessage(current.status === "cancelled" ? "该 Agent Team 执行方案已取消" : "该 Agent Team 执行失败");
+        }
       })
       .catch(() => {
-        // 未确认的预览没有 TeamRun；这里保持确认按钮，不把正常的 404/空结果当成错误展示。
+        // TeamRun 不存在时保持原始方案展示，由确认动作暴露后端错误。
       });
     return () => {
       disposed = true;
     };
-  }, [preview?.parentTaskId, preview?.parentRunId, preview?.previewFingerprint]);
+  }, [preview?.parentTaskId, preview?.parentRunId, preview?.teamId]);
 
   useEffect(() => {
     if (!teamRun || !["pending", "running"].includes(teamRun.status)) return undefined;
@@ -69,7 +101,7 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
     let timer: number | undefined;
     const poll = async () => {
       try {
-        const current = await getAgentTeamRun(teamRun.team_run_id);
+        const current = await getAgentTeamRun(teamRun.id);
         if (disposed) return;
         setTeamRun(current);
         if (["pending", "running"].includes(current.status)) {
@@ -92,14 +124,15 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
     setState("confirming");
     setMessage("");
     try {
-      const result = await confirmAgentTeamPreview(
+      const result = await confirmAgentTeamRun(
         preview.parentTaskId,
         preview.parentRunId,
-        preview.previewFingerprint,
+        preview.teamId,
+        preview.configuration,
       );
       setTeamRun(result);
       setState("confirmed");
-      setMessage(`已启动，当前节点：${result.current_node_id ?? "入口"}`);
+      setMessage(`已启动，当前节点：${result.active_node?.node_id ?? "入口"}`);
     } catch (error) {
       setState("failed");
       setMessage(error instanceof Error ? error.message : "确认失败，请让主 Agent 重新生成方案");
@@ -138,8 +171,7 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
         <div className="space-y-1 text-xs">
           <div className="flex items-center gap-1.5 text-emerald-600"><CheckCircle2 className="size-3.5" />{message}</div>
           {teamRun && <div className="text-muted-foreground">
-            Team 状态：{teamRun.status} · 当前节点：{teamRun.current_node_id ?? "无"}
-            {teamRun.current_node_status ? ` · ${teamRun.current_node_status}` : ""}
+            Team 状态：{teamRun.status} · 当前节点：{teamRun.active_node?.node_id ?? "无"}
           </div>}
           {teamRun && readNodeResults(teamRun.state).length > 0 && (
             <div className="space-y-1.5 border-t border-border/50 pt-2">
@@ -152,8 +184,9 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
               ))}
             </div>
           )}
-          {teamRun?.current_node_output && <div className="text-muted-foreground line-clamp-3">{teamRun.current_node_output}</div>}
-          {teamRun?.failure_message && <div className="text-destructive">{teamRun.failure_message}</div>}
+          {teamRun?.end_reason && (
+            <div className="text-destructive">{endReasonLabel(teamRun.end_reason)}</div>
+          )}
           {teamRun?.status === "completed" && <div className="font-medium text-emerald-600">Team 已完成。</div>}
           {teamRun?.status === "cancelled" && <div className="font-medium text-muted-foreground">Team 已取消。</div>}
         </div>

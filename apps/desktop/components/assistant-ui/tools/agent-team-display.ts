@@ -21,11 +21,11 @@ export type AgentTeamPreviewDisplay = {
   startNode: string;
   parentTaskId: number;
   parentRunId: number;
-  previewFingerprint: string;
   workspaceId: number;
   requiresConfirmation: boolean;
   nodes: AgentTeamNodePreview[];
   edges: Record<string, unknown>[];
+  configuration: Record<string, unknown>;
 };
 
 export type AgentTeamConfigurationDraftDisplay = {
@@ -74,9 +74,9 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
   const startNode = text(data.start_node);
   const parentTaskId = positiveId(data.parent_task_id);
   const parentRunId = positiveId(data.parent_run_id);
-  const previewFingerprint = text(data.preview_fingerprint);
   const workspaceId = positiveId(data.workspace_id);
-  if (!teamId || !name || !goal || !startNode || !previewFingerprint || parentTaskId === undefined || parentRunId === undefined || workspaceId === undefined) return null;
+  const configuration = asRecord(data.configuration);
+  if (!teamId || !name || !goal || !startNode || parentTaskId === undefined || parentRunId === undefined || workspaceId === undefined || Object.keys(configuration).length === 0) return null;
   const edges = recordList(data.edges);
   if (data.requires_confirmation !== true || !Array.isArray(data.nodes) || !edges) return null;
   const nodes: AgentTeamNodePreview[] = [];
@@ -116,11 +116,11 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
     startNode,
     parentTaskId,
     parentRunId,
-    previewFingerprint,
     workspaceId,
     requiresConfirmation: true,
     nodes,
     edges,
+    configuration,
   };
 }
 
