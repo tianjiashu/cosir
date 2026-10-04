@@ -1,13 +1,10 @@
 """子 Agent 配置提案工具与按需 Transport 命令的契约测试。"""
 
-from langchain_core.messages import HumanMessage
-
 from app.assistant_transport.request import AssistantTransportRequest
 from app.core.agents.define_agents import main_agent
-from app.core.tools.tool_handler.propose_agent_configuration import (
+from app.core.tools.tool_handler.child_task.propose_agent_configuration import (
     ProposeAgentConfigurationTool,
 )
-from app.core.workflows.react.nodes.model_node import _append_ephemeral_proposal_prompt
 from app.models import ConversationRunExtra
 
 
@@ -75,14 +72,3 @@ def test_proposal_run_extra_round_trips_without_version_field() -> None:
     serialized = extra.to_dict()
     assert "version" not in serialized
     assert ConversationRunExtra.from_dict(serialized) == extra
-
-
-def test_proposal_prompt_is_added_to_request_only() -> None:
-    """提案约束只追加到当前请求消息，不通过 context manager 写入长期上下文。"""
-
-    messages = [HumanMessage(content="生成配置")]
-    _append_ephemeral_proposal_prompt(messages, enabled=True)
-
-    assert len(messages) == 2
-    assert messages[-1].type == "system"
-    assert "propose_agent_configuration" in messages[-1].content

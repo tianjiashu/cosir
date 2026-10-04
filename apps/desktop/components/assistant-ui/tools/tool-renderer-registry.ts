@@ -8,6 +8,9 @@ import { TerminalSessionTool } from "./terminal-session-tool";
 import { TerminalTool } from "./terminal-tool";
 import { ToolFallback } from "./tool-fallback";
 import { AgentConfigurationDraftTool } from "./agent-configuration-draft-tool";
+import { AgentTeamTool } from "./agent-team-tool";
+import { AgentTeamConfigurationTool } from "./agent-team-configuration-tool";
+import { readAgentTeamConfigurationDraftDisplay, readAgentTeamPreviewDisplay } from "./agent-team-display";
 import { readAgentConfigurationDraftDisplay } from "./agent-configuration-draft-display";
 import { readChildAgentResultDisplay, readChildAgentWaitDisplay, readDelegationDisplay } from "./child-agent-display";
 import { asRecord, readToolArtifact, type ToolArtifact } from "./types";
@@ -18,6 +21,8 @@ export type ToolPartRoute =
   | "terminal-session"
   | "delegation"
   | "agent-configuration-draft"
+  | "agent-team-preview"
+  | "agent-team-configuration-draft"
   | "details"
   | "fallback";
 
@@ -57,6 +62,8 @@ const KNOWN_DISPLAY_KINDS = new Set([
   "child-agent-result",
   "repeated-call",
   "agent-configuration-draft",
+  "agent-team-preview",
+  "agent-team-configuration-draft",
 ]);
 
 /**
@@ -73,6 +80,18 @@ const FALLBACK_RENDERER: ToolRendererDefinition = {
 };
 
 const TOOL_RENDERER_DEFINITIONS: readonly ToolRendererDefinition[] = [
+  {
+    route: "agent-team-configuration-draft",
+    renderer: AgentTeamConfigurationTool,
+    matches: ({ kind, artifact }) => kind === "agent-team-configuration-draft"
+      && readAgentTeamConfigurationDraftDisplay(artifact.display_data) !== null,
+  },
+  {
+    route: "agent-team-preview",
+    renderer: AgentTeamTool,
+    matches: ({ kind, artifact }) => kind === "agent-team-preview"
+      && readAgentTeamPreviewDisplay(artifact.display_data) !== null,
+  },
   {
     route: "agent-configuration-draft",
     renderer: AgentConfigurationDraftTool,

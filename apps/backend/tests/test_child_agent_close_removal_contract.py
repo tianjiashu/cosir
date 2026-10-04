@@ -95,10 +95,13 @@ _CHILD_TOOL_SPECS = [
     ),
 ]
 
-# 期望被禁用的工具全集（子 Agent 不得使用）：child_task/ 全族 + terminal_session/ 全族。
+# 期望被禁用的工具全集（子 Agent 不得使用）：委派/Team 工具 + terminal_session/ 全族。
 _EXPECTED_BANNED_TOOLS = frozenset(
     {
         "delegate_task",
+        "agent_team",
+        "propose_agent_team_configuration",
+        "agent_team_node_status",
         "child_agent_status",
         "child_agent_send",
         "child_agent_wait",
