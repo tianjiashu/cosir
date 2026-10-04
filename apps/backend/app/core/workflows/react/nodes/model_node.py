@@ -21,7 +21,6 @@ import asyncio
 
 from langchain_core.messages import (
     AIMessage,
-    AIMessageChunk,
     BaseMessage,
     SystemMessage,
     ToolMessage,
@@ -148,11 +147,6 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     task_id = operations.get_current_task().id
     run_id = operations.get_current_run().id
-    workspace_id = operations.get_current_workspace().id
-
-    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-
-    task_space = task_runtime_spaces.get_or_create(task_id)
 
     step_count = state.step_count + 1
     # 提前拦截：本次推理若已超配额（step_count > max_steps）
@@ -169,6 +163,10 @@ async def _model_node(state: ReactGraphState) -> dict:
         )
         operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
         interrupt({"reason": "user_cancelled"})
+    workspace_id = operations.get_current_workspace().id
+    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+    task_space = task_runtime_spaces.get_or_create(task_id)
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
     messages: list[BaseMessage] = _runtime_context().load_message()
 

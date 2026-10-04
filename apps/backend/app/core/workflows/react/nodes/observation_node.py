@@ -30,8 +30,21 @@ from typing import Any
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
+from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM
 from app.core.workflows.react.node_helper.common import _runtime_config, _runtime_context
 from app.core.workflows.react.worflow_state.state import ReactGraphState
+
+
+def _contains_agent_team_preview(observations: list[dict[str, Any]]) -> bool:
+    """判断本批工具结果是否包含成功的 Agent Team 运行预览。"""
+
+    return any(
+        observation.get("tool_name") == TOOL_AGENT_TEAM
+        and observation.get("status") == "success"
+        and isinstance(observation.get("display_data"), dict)
+        and observation["display_data"].get("kind") == "agent-team-preview"
+        for observation in observations
+    )
 
 
 async def _observe_node(state: ReactGraphState) -> dict:
@@ -129,6 +142,14 @@ async def _observe_node(state: ReactGraphState) -> dict:
     )
     lifecycle = dispatch.lifecycle
     tool_error_count = dispatch.tool_error_count
+    waiting_for_team_confirmation = _contains_agent_team_preview(observations)
+    if waiting_for_team_confirmation:
+        # 先把主 Run 收敛为可恢复的 cancelled，再进入 LangGraph interrupt。用户确认后，
+        # coordinator 通过既有 resume 入口恢复同一个 Run；未确认时不会留下 running Run。
+        operations.cancel_run_if_running(
+            end_reason="agent_team_waiting_confirmation",
+            final_output="Agent Team 执行方案已生成，等待用户确认。",
+        )
 
     observed_call_ids = {
         str(summary["tool_call_id"]) for summary in observations if summary.get("tool_call_id")
@@ -155,7 +176,11 @@ async def _observe_node(state: ReactGraphState) -> dict:
 
     if not observations:
         # 仅修复提示（全非法调用）：不计数，交给 graph 回到 model 重试。
-        return {"tool_error_count": tool_error_count, "tool_call_lifecycle": lifecycle}
+        return {
+            "tool_error_count": tool_error_count,
+            "tool_call_lifecycle": lifecycle,
+            "agent_team_confirmation_waiting": waiting_for_team_confirmation,
+        }
 
     log.info(
         "observe_node_completed",
@@ -211,4 +236,8 @@ async def _observe_node(state: ReactGraphState) -> dict:
         }
 
     # 正常返回：把更新后的计数与 lifecycle 写回 state。
-    return {"tool_error_count": tool_error_count, "tool_call_lifecycle": lifecycle}
+    return {
+        "tool_error_count": tool_error_count,
+        "tool_call_lifecycle": lifecycle,
+        "agent_team_confirmation_waiting": waiting_for_team_confirmation,
+    }

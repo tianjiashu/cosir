@@ -53,6 +53,9 @@ class ReactGraphState(BaseModel):
         tool_call_lifecycle: 当前 workflow 已创建工具调用的可序列化生命周期记录。model
             节点写入创建 / 运行状态与非法调用标记，tools 节点回写同一快照，observe 节点写入
             终态；不含 operations、stream writer 或 runtime context。
+        agent_team_confirmation_waiting: Agent Team 预览已经生成，主 Agent 等待用户确认。
+            观察节点写入该标记，专用等待节点在恢复后清除；该标记只服务 graph 路由，不是
+            ConversationRun 或 TeamRun 的第二套持久化状态。
     """
 
     step_count: int
@@ -67,3 +70,4 @@ class ReactGraphState(BaseModel):
     terminal_sessions: dict[str, TerminalSessionCheckpoint] = Field(default_factory=dict)
     continue_model: bool = False
     tool_call_lifecycle: ToolCallLifecycleManager | None = None
+    agent_team_confirmation_waiting: bool = False

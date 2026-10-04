@@ -32,7 +32,6 @@ from app.models.conversation_run_failure import (
 )
 from app.service.depends import get_terminal_session_service
 
-from ...context.runtime_context_manager import RuntimeContextManager
 from ..agent_workflow import AgentWorkflow, build_checkpointer
 from .edges import _after_observe, _after_tools, _should_continue
 from .runtime_config import RuntimeConfig
@@ -58,9 +57,9 @@ class ReactLikeWorkflow(AgentWorkflow):
     def _build_graph(self, checkpointer) -> Any:
         """构建并编译 ReAct StateGraph。
 
-        ``model`` / ``tools`` / ``observe`` 三节点经条件边形成 ReAct 循环；graph 编译时挂入
-        ``checkpointer`` 以启用 graph 控制流持久化。图内不设独立的暂停节点：协作取消由
-        ``model`` 节点的 ``interrupt`` 中断（见 ``nodes.model_node``）。
+        ``model`` / ``tools`` / ``observe`` 三节点经条件边形成 ReAct 循环；Agent Team 预览
+        通过专用等待节点挂起主 Agent；graph 编译时挂入 ``checkpointer`` 以启用 graph 控制流
+        持久化。普通协作取消仍由 ``model`` 节点的 ``interrupt`` 中断。
 
         参数:
             checkpointer: 已配置好的 LangGraph checkpointer。
@@ -72,23 +71,37 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 延迟导入节点，打破 nodes 子包与 react 包之间的循环导入：
         # nodes.model_node -> react.state/runtime_config -> react.__init__
         # -> react.workflow -> nodes
+        from app.core.workflows.react.nodes.agent_team_confirmation_wait_node import (
+            agent_team_confirmation_wait_node,
+        )
         from app.core.workflows.react.nodes import _model_node, _observe_node, _tools_node
 
         builder = StateGraph(ReactGraphState)
         builder.add_node("model", _model_node)
         builder.add_node("tools", _tools_node)
         builder.add_node("observe", _observe_node)
+        builder.add_node("agent_team_wait", agent_team_confirmation_wait_node)
         builder.add_edge(START, "model")
         # 超配额拦截收口在 model 节点（发起推理前 step_count > max_steps 直接终态）。
         builder.add_conditional_edges(
             "model",
             _should_continue,
-            {"tools": "tools", "model": "model", END: END},
+            {
+                "tools": "tools",
+                "model": "model",
+                END: END,
+            },
         )
         # tools 执行后进入 observe；取消/终态分支直接 END，不进 observe 避免多余推理。
         builder.add_conditional_edges("tools", _after_tools, {"observe": "observe", END: END})
-        # observe 判定后回 model 继续推理，或达错误上限终态 END。
-        builder.add_conditional_edges("observe", _after_observe, {"model": "model", END: END})
+        # observe 判定后回 model 继续推理、挂起等待 Team 确认，或达错误上限终态 END。
+        builder.add_conditional_edges(
+            "observe",
+            _after_observe,
+            {"model": "model", "agent_team_wait": "agent_team_wait", END: END},
+        )
+        # 等待节点初次执行时通过 interrupt 保存断点；恢复后继续回到模型节点读取 TeamResult。
+        builder.add_edge("agent_team_wait", "model")
         return builder.compile(checkpointer=checkpointer)
 
     @staticmethod
@@ -367,7 +380,6 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         thinking_channel = "reasoning_content" if resolved_model.supports_thinking else ""
 
-        current_workspace = operations.get_current_workspace()
         runtime_config = RuntimeConfig(
             operations=operations,
             run=run,
@@ -382,9 +394,9 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 读写唯一入口，并挂载上下文占用订阅者。
         from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-        runtime_context_manager = task_runtime_spaces.get_or_create(current_task.id).get_context_manager(
-            agent_profile=agent_profile
-        )
+        runtime_context_manager = task_runtime_spaces.get_or_create(
+            current_task.id
+        ).get_context_manager(agent_profile=agent_profile)
 
 
         # 每个新 ConversationRun 都从 canonical history 建立 fresh 上下文。
@@ -434,6 +446,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                 final_text="",
                 last_tool_results={},
                 terminal_sessions={},
+                agent_team_confirmation_waiting=False,
             )
             # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动
             # 一个新的 graph input，即使 thread_id 相同也不等价于 resume。

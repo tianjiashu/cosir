@@ -51,17 +51,19 @@ def _after_tools(state: ReactGraphState) -> str:
 
 
 def _after_observe(state: ReactGraphState) -> str:
-    """观察节点出口：回流模型继续推理，或结束工作流。
+    """观察节点出口：回流模型、挂起等待 Team 确认，或结束工作流。
 
     参数:
         state: 当前 graph state（``observe`` 节点写回 ``terminal`` 与更新后的
             ``tool_error_count``）。
 
     返回:
-        ``"model"`` 表示回到模型节点继续推理；``END`` 表示工作流结束（终态或已产出
-        最终回答）。
+        ``"model"`` 表示回到模型节点继续推理；``"agent_team_wait"`` 表示主 Agent
+        等待用户确认 Agent Team；``END`` 表示工作流结束（终态或已产出最终回答）。
     """
 
     if state.terminal or state.final_response:
         return END
+    if state.agent_team_confirmation_waiting:
+        return "agent_team_wait"
     return "model"
