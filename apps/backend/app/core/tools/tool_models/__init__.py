@@ -1,5 +1,12 @@
 """Pydantic schemas for tool arguments."""
 
+from app.core.tools.tool_models.agent_team.agent_team_args import AgentTeamArgs
+from app.core.tools.tool_models.agent_team.agent_team_node_status_args import (
+    AgentTeamNodeStatusArgs,
+)
+from app.core.tools.tool_models.agent_team.propose_agent_team_configuration_args import (
+    ProposeAgentTeamConfigurationArgs,
+)
 from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
 from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 from app.core.tools.tool_models.delete_file_args import DeleteFileArgs
@@ -12,6 +19,9 @@ from app.core.tools.tool_models.execute_terminal_args import (
 from app.core.tools.tool_models.find_files_args import FindFilesArgs
 from app.core.tools.tool_models.list_directory_args import ListDirectoryArgs
 from app.core.tools.tool_models.move_file_args import MoveFileArgs
+from app.core.tools.tool_models.propose_agent_configuration_args import (
+    ProposeAgentConfigurationArgs,
+)
 from app.core.tools.tool_models.read_file_args import ReadFileArgs
 from app.core.tools.tool_models.replace_args import ReplaceArgs
 from app.core.tools.tool_models.search_content_args import SearchContentArgs
@@ -23,9 +33,10 @@ from app.core.tools.tool_models.terminal_session_args import (
     TerminalWriteArgs,
 )
 from app.core.tools.tool_models.write_file_args import WriteFileArgs
-from app.core.tools.tool_models.propose_agent_configuration_args import ProposeAgentConfigurationArgs
 
 __all__ = [
+    "AgentTeamArgs",
+    "AgentTeamNodeStatusArgs",
     "ApplyPatchArgs",
     "DelegateTaskArgs",
     "DeleteFileArgs",
@@ -34,6 +45,8 @@ __all__ = [
     "ListDirectoryArgs",
     "MacExecuteTerminalArgs",
     "MoveFileArgs",
+    "ProposeAgentConfigurationArgs",
+    "ProposeAgentTeamConfigurationArgs",
     "ReadFileArgs",
     "ReplaceArgs",
     "SearchContentArgs",
@@ -44,6 +57,5 @@ __all__ = [
     "TerminalWriteArgs",
     "WindowsExecuteTerminalArgs",
     "WriteFileArgs",
-    "ProposeAgentConfigurationArgs",
     "resolve_execute_terminal_args_model",
 ]

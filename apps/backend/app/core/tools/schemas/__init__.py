@@ -6,6 +6,8 @@ from app.core.tools.schemas.tool_display import ToolDisplayHints
 from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
 from app.core.tools.schemas.tool_names import (
     ALL_TOOL_NAMES,
+    TOOL_AGENT_TEAM,
+    TOOL_AGENT_TEAM_NODE_STATUS,
     TOOL_APPLY_PATCH,
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_STATUS,
@@ -17,6 +19,7 @@ from app.core.tools.schemas.tool_names import (
     TOOL_LIST_DIRECTORY,
     TOOL_MOVE_FILE,
     TOOL_PROPOSE_AGENT_CONFIGURATION,
+    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
     TOOL_READ_FILE,
     TOOL_REPLACE,
     TOOL_SEARCH_CONTENT,
@@ -39,6 +42,8 @@ from app.core.tools.schemas.tool_output import (
 
 __all__ = [
     "ALL_TOOL_NAMES",
+    "TOOL_AGENT_TEAM",
+    "TOOL_AGENT_TEAM_NODE_STATUS",
     "TOOL_APPLY_PATCH",
     "TOOL_CHILD_AGENT_SEND",
     "TOOL_CHILD_AGENT_STATUS",
@@ -50,6 +55,7 @@ __all__ = [
     "TOOL_LIST_DIRECTORY",
     "TOOL_MOVE_FILE",
     "TOOL_PROPOSE_AGENT_CONFIGURATION",
+    "TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION",
     "TOOL_READ_FILE",
     "TOOL_REPLACE",
     "TOOL_SEARCH_CONTENT",
