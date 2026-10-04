@@ -28,6 +28,7 @@ from typing import Any, Final
 
 from app.utils.path.workspace_cosir import (
     COSIR_AGENT_CONFIG_DIR_NAME,
+    COSIR_AGENT_TEAM_CONFIG_DIR_NAME,
     COSIR_DIR_NAME,
     COSIR_ENV_FILE_NAME,
     COSIR_INSTRUCTION_FILE_NAME,
@@ -160,6 +161,12 @@ def system_agent_config_dir() -> Path:
     return system_cosir_dir() / COSIR_AGENT_CONFIG_DIR_NAME
 
 
+def system_agent_team_config_dir() -> Path:
+    """返回系统级 Team JSON 配置目录路径。"""
+
+    return system_cosir_dir() / COSIR_AGENT_TEAM_CONFIG_DIR_NAME
+
+
 def system_env_file() -> Path:
     """返回系统级基础环境配置文件路径（``<system_cosir_dir>/.env``）。"""
 
@@ -207,9 +214,11 @@ __all__ = [
     "system_instruction_file",
     "system_main_agent_prompt_file",
     "system_agent_config_dir",
+    "system_agent_team_config_dir",
     "system_env_file",
     "COSIR_DIR_NAME",
     "COSIR_AGENT_CONFIG_DIR_NAME",
+    "COSIR_AGENT_TEAM_CONFIG_DIR_NAME",
     "COSIR_INSTRUCTION_FILE_NAME",
     "COSIR_MAIN_AGENT_PROMPT_FILE_NAME",
     "COSIR_ENV_FILE_NAME",

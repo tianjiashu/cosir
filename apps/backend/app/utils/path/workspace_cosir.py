@@ -19,6 +19,7 @@ COSIR_ATTACHMENT_DIR_NAME: str = "Attachment"
 COSIR_ATTACHMENT_STAGING_DIR_NAME: str = ".uploading"
 COSIR_TOOL_ARTIFACT_DIR_NAME: str = "tool-artifacts"
 COSIR_AGENT_CONFIG_DIR_NAME: str = "agents"
+COSIR_AGENT_TEAM_CONFIG_DIR_NAME: str = "agent-teams"
 COSIR_INSTRUCTION_FILE_NAME: str = "AGENTS.md"
 COSIR_MAIN_AGENT_PROMPT_FILE_NAME: str = "main_agent_system_prompt.md"
 COSIR_ENV_FILE_NAME: str = ".env"
@@ -67,18 +68,26 @@ def workspace_agent_config_dir(workspace_root: str | Path) -> Path:
     return workspace_cosir_dir(workspace_root) / COSIR_AGENT_CONFIG_DIR_NAME
 
 
+def workspace_agent_team_config_dir(workspace_root: str | Path) -> Path:
+    """返回 workspace Team JSON 配置目录路径。"""
+
+    return workspace_cosir_dir(workspace_root) / COSIR_AGENT_TEAM_CONFIG_DIR_NAME
+
+
 __all__ = [
-    "COSIR_DIR_NAME",
+    "COSIR_AGENT_CONFIG_DIR_NAME",
+    "COSIR_AGENT_TEAM_CONFIG_DIR_NAME",
     "COSIR_ATTACHMENT_DIR_NAME",
     "COSIR_ATTACHMENT_STAGING_DIR_NAME",
-    "COSIR_TOOL_ARTIFACT_DIR_NAME",
-    "COSIR_AGENT_CONFIG_DIR_NAME",
+    "COSIR_DIR_NAME",
+    "COSIR_ENV_FILE_NAME",
     "COSIR_INSTRUCTION_FILE_NAME",
     "COSIR_MAIN_AGENT_PROMPT_FILE_NAME",
-    "COSIR_ENV_FILE_NAME",
-    "workspace_cosir_dir",
+    "COSIR_TOOL_ARTIFACT_DIR_NAME",
+    "workspace_agent_config_dir",
+    "workspace_agent_team_config_dir",
     "workspace_attachment_dir",
     "workspace_attachment_staging_dir",
+    "workspace_cosir_dir",
     "workspace_tool_artifact_dir",
-    "workspace_agent_config_dir",
 ]

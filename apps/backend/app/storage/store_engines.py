@@ -16,6 +16,7 @@ from sqlalchemy import Engine, Table
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.storage.engine_cache import _engine_cache, create_session_factory
+from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.model.base import StorageBase
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
@@ -30,6 +31,7 @@ APP_MODELS = (
     TaskModel,
     ConversationRunModel,
     ConversationTaskContextModel,
+    AgentTeamRunModel,
 )
 
 

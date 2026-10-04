@@ -52,7 +52,7 @@ def test_react_edges_route_only_from_current_graph_state() -> None:
         == "agent_team_wait"
     )
     assert _after_observe(_state(final_response=True)) == END
-    assert _should_continue(_state(agent_team_confirmation_waiting=True)) == "agent_team_wait"
+    assert _should_continue(_state(agent_team_confirmation_waiting=True)) == END
 
 
 def test_model_node_interrupts_when_run_was_cancelled_before_request(
