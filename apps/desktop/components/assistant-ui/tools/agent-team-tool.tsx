@@ -70,9 +70,14 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
     void getLatestAgentTeamRun(preview.parentTaskId, preview.parentRunId, preview.teamId)
       .then((current) => {
         if (disposed) return;
-        if (current.status === "awaiting_confirmation") return;
+        if (current.status === "pending") {
+          setTeamRun(null);
+          setState("idle");
+          setMessage("");
+          return;
+        }
         setTeamRun(current);
-        if (current.status === "pending" || current.status === "running") {
+        if (current.status === "running") {
           setState("confirmed");
           setMessage(`已恢复，当前状态：${current.status}`);
           return;
@@ -96,7 +101,7 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
   }, [preview?.parentTaskId, preview?.parentRunId, preview?.teamId]);
 
   useEffect(() => {
-    if (!teamRun || !["pending", "running"].includes(teamRun.status)) return undefined;
+    if (!teamRun || teamRun.status !== "running") return undefined;
     let disposed = false;
     let timer: number | undefined;
     const poll = async () => {
@@ -104,7 +109,7 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
         const current = await getAgentTeamRun(teamRun.id);
         if (disposed) return;
         setTeamRun(current);
-        if (["pending", "running"].includes(current.status)) {
+        if (current.status === "running") {
           timer = window.setTimeout(() => void poll(), 1000);
         }
       } catch (error) {

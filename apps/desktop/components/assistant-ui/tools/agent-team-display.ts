@@ -22,7 +22,6 @@ export type AgentTeamPreviewDisplay = {
   parentTaskId: number;
   parentRunId: number;
   workspaceId: number;
-  requiresConfirmation: boolean;
   nodes: AgentTeamNodePreview[];
   edges: Record<string, unknown>[];
   configuration: Record<string, unknown>;
@@ -78,7 +77,7 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
   const configuration = asRecord(data.configuration);
   if (!teamId || !name || !goal || !startNode || parentTaskId === undefined || parentRunId === undefined || workspaceId === undefined || Object.keys(configuration).length === 0) return null;
   const edges = recordList(data.edges);
-  if (data.requires_confirmation !== true || !Array.isArray(data.nodes) || !edges) return null;
+  if (!Array.isArray(data.nodes) || !edges) return null;
   const nodes: AgentTeamNodePreview[] = [];
   for (const raw of data.nodes) {
     const node = asRecord(raw);
@@ -117,7 +116,6 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
     parentTaskId,
     parentRunId,
     workspaceId,
-    requiresConfirmation: true,
     nodes,
     edges,
     configuration,

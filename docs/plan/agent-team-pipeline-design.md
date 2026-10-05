@@ -247,8 +247,8 @@ agent_team 只有创建语义。主 Agent 每次调用它提交 team_id、共同
    parent_task_id + parent_run_id 关联到主 Agent Run；
 6. 返回只用于 UI 展示的结构化 display_data，其中包含可供用户编辑后回传的配置。
 
-创建工具会创建一条 ``awaiting_confirmation`` 状态的 AgentTeamRunModel，但不创建节点
-Task/ConversationRun，也不执行节点。预览只经统一 ToolMessage 流程写入
+创建工具会创建一条 ``pending`` 状态的 AgentTeamRunModel，但不创建节点 Task/ConversationRun，
+也不执行节点。预览只经统一 ToolMessage 流程写入
 ConversationTaskContextModel 的 ``display_data``，不复制到 AgentTeamRunModel；同一主 Agent
 Run 再次创建预览时，旧的待确认 TeamRun 被替换。
 
@@ -264,12 +264,12 @@ Run 再次创建预览时，旧的待确认 TeamRun 被替换。
 ~~~text
 主 Agent Run
   └─ agent_team(team_id, goal, instructions)
-       └─ 返回预览 display_data，并创建 awaiting_confirmation TeamRun
+       └─ 返回预览 display_data，并创建 pending TeamRun
 
 用户确认
   └─ 后端确认入口按 parent_task_id + parent_run_id + team_id 读取待确认 TeamRun
-       └─ 重新校验最终配置并覆盖执行快照，迁移为 pending
-            └─ 创建入口 ConversationRun，交给 Coordinator 异步启动 Team
+       └─ 重新校验最终配置并覆盖执行快照，原子迁移为 running
+            └─ 事务提交后创建入口 ConversationRun，交给 Coordinator 异步启动 Team
 ~~~
 
 确认入口允许用户提交修改后的节点图，但不能绕过后端配置和运行时资源校验。确认后的
@@ -298,7 +298,6 @@ nodes:
   max_steps
 edges
 configuration
-requires_confirmation: true
 ~~~
 
 预览必须明确显示：
@@ -345,22 +344,18 @@ ProposeAgentTeamConfigurationTool 负责根据用户目标生成配置预览。�
 建议字段语义如下：
 
 ~~~text
-team_run_id
+id                          AgentTeamRunModel 继承的 StorageBase 主键，仅用于后端查询和执行关联
 team_id
 workspace_id
 parent_task_id
 parent_run_id
 goal_input
 node_instructions_json       本次运行的节点预设指令
-configuration_snapshot_json   确认执行时使用的 Team 配置快照
-status                       pending / running / completed / failed / cancelled
-current_node_id
-current_node_status
-current_node_output
-state_json                   当前节点、previous_outputs 和转移历史
-generation                   并发与迟到回调隔离栅栏
-failure_kind
-failure_message              受控短消息
+configuration_snapshot_json   待确认候选或确认后实际使用的 Team 配置快照
+preview_fingerprint           实际执行计划的稳定摘要指纹
+status                        pending / running / completed / failed / cancelled
+state_json                    节点执行记录、活动节点游标、转移历史和运行快照
+end_reason                    失败或取消时的稳定原因码
 started_at / ended_at
 ~~~
 
@@ -505,7 +500,7 @@ review.needs_changes → develop
 ~~~text
 1. 主 Agent 调用 agent_team
 2. TeamService 校验图、解析 profile、物化有效模型/工具并创建 Team 快照
-3. 工具返回 team_id、preview 和 requires_confirmation=true
+3. 工具返回 team_id 和 preview
 4. 主 Agent 将主 Run 挂起在 Agent Team 等待节点；用户界面展示预览，主 Run 不继续生成普通回复
 ~~~
 

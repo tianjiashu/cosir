@@ -12,7 +12,7 @@ export type AgentTeamRun = {
   workspace_id: number;
   parent_task_id: number;
   parent_run_id: number;
-  status: "awaiting_confirmation" | "pending" | "running" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   active_node: {
     node_id: string;
     task_id: number;
