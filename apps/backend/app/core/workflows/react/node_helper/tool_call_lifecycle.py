@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+from collections.abc import Mapping
 from typing import Any, Literal
 
+from langchain_core.messages import InvalidToolCall
+from langchain_core.messages.tool import ToolCall
 from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,7 +27,6 @@ from app.assistant_transport.event import ToolCallCreatedEvent, ToolCallStatusCh
 from app.config.logging.logger import log
 from app.core.context.runtime_context_manager import RuntimeContextManager
 from app.core.tools.schemas import ToolObservation
-from langchain_core.messages.tool import ToolCall, InvalidToolCall
 from app.core.tools.tool_execute.tool_terminal_projection import (
     normalize_display_data,
     terminal_error_hint,
@@ -43,9 +45,6 @@ class ToolCallLifecycleRecord(BaseModel):
     展示声明 ``presentation``（``create`` / ``classify`` 的 ``allowed`` 桶写入，``settle`` 对缺失
     记录的补建按工具名写入）。
 
-    字段 ``invalid_detail`` 为「模型输出中参数非法但工具名合法的调用」预留（原始 name/args/error），
-    当前无写入方，恒为 ``None``。
-
     异常:
         pydantic.ValidationError: 字段不满足契约（``tool_call_id`` / ``tool_name`` 为空，或出现
             ``extra="forbid"`` 未声明的字段）时抛出。
@@ -58,8 +57,6 @@ class ToolCallLifecycleRecord(BaseModel):
     status: ToolCallEventStatus = "pending"
     args: dict[str, object] = Field(default_factory=dict)
     presentation: dict[str, object] = Field(default_factory=dict)
-    # 预留字段：参数非法调用的原始 invalid_tool_call（name/args/error）。当前全类无写入方。
-    invalid_detail: dict[str, object] | None = None
 
 
 @dataclasses.dataclass
@@ -102,12 +99,37 @@ def _event_status(status: str) -> Literal["completed", "failed", "cancelled"]:
     return terminal_status(status)
 
 
+def _record_args(raw_args: object) -> dict[str, object]:
+    """把原始调用参数归一为记录字段可接受的结构化参数。
+
+    ``create`` 收到的流式分片参数与 ``classify`` 收到的未解析调用参数都可能是原始 JSON 片段
+    （``str``）而不是字典，而 :class:`ToolCallLifecycleRecord.args` 只承载已解析参数。非映射
+    一律归一为空 ``dict``：调用照常进入执行链，由 ``ToolAccessGate`` 按参数校验给出可读拒绝
+    （如缺少必需参数），原因随错误观察回给模型。
+
+    参数:
+        raw_args: 原始 ``args``（字典、JSON 片段 ``str``、``None`` 或其他对象）。
+
+    返回:
+        映射时为其普通 ``dict`` 拷贝，否则为空 ``dict``。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    return dict(raw_args) if isinstance(raw_args, Mapping) else {"Invaild_args":raw_args}
+
+
 def _ui_data(summary: dict[str, Any]) -> dict[str, object] | None:
     """取出终态事件需要更新的 ``display_data``（深拷贝，避免共享摘要结构）。
 
-    形状判定、深拷贝与「载荷被丢弃」留痕都收口在 ``tool_terminal_projection.normalize_display_data``：
-    提前投影与结算兜底必须对畸形展示数据给出同一种降级与同一种可观测性，故本函数只做摘要适配与
-    委托。摘要自带的 ``tool_call_id`` 作为丢弃日志的定位标识传入。
+    形状判定、深拷贝与「载荷被丢弃」留痕都收口在
+    ``tool_terminal_projection.normalize_display_data``：提前投影与结算兜底必须对畸形展示数据给出
+    同一种降级与同一种可观测性，故本函数只做摘要适配与委托。摘要自带的 ``tool_call_id`` 作为丢弃
+    日志的定位标识传入。
 
     参数:
         summary: 单条观察摘要。
@@ -194,7 +216,8 @@ class ToolCallLifecycleManager(BaseModel):
 
     可序列化 state 字段（类体声明）为三条：``valid_calls``（身份可用且未被本轮 ``allows_tools``
     拦截的调用，含工具名未注册者——那类调用仍交给执行层判定）、``blocked_calls``（已注册但本轮未
-    放行，仅供隐藏协议闭合，不执行）、``allows_tools``（本 Run 允许执行的工具名快照）。
+    放行：不发创建事件、前端无对应 part，但同样送入执行层由 ``ToolAccessGate`` 拒绝，其观察用于
+    闭合模型协议）、``allows_tools``（本 Run 允许执行的工具名快照）。
 
     归属由 :meth:`_resolve_call_bucket` 在 ``create`` / ``classify`` 阶段一次性裁定；``classify``
     整体重建 ``valid_calls`` / ``blocked_calls``，``settle`` 对缺失记录即时补建 ``pending``，其余
@@ -377,7 +400,8 @@ class ToolCallLifecycleManager(BaseModel):
         :meth:`_resolve_call_bucket` 统一裁决：``ignore_*``（``id`` / ``name`` 尚未到达的流式
         中间态）跳过；``blocked`` 记入 ``blocked_calls``；``invaild_tool_name`` 记入
         ``valid_calls``；``allowed`` 记入 ``valid_calls`` 并发创建事件。已在快照中登记过的 ``id``
-        幂等跳过（不重复建记录）。
+        幂等跳过（不重复建记录）。流式分片的 ``args`` 多为未闭合 JSON 片段，经 :func:`_record_args`
+        归一为 ``dict``，完整参数由后续 ``classify`` 用聚合后的调用重写。
 
         参数:
             task_id, run_id, step_id: 事件定位三元组。
@@ -414,14 +438,14 @@ class ToolCallLifecycleManager(BaseModel):
                 updated.blocked_calls[call_id] = ToolCallLifecycleRecord(
                     tool_call_id=call_id,
                     tool_name=tool_name,
-                    args=raw_call.get("args")
+                    args=_record_args(raw_call.get("args"))
                 )
                 continue
             if bucket == "invaild_tool_name":
                 updated.valid_calls[call_id] = ToolCallLifecycleRecord(
                     tool_call_id=call_id,
                     tool_name=tool_name,
-                    args=raw_call.get("args")
+                    args=_record_args(raw_call.get("args"))
                 )
                 continue
             presentation = self._presentation_for(tool_name)
@@ -438,7 +462,7 @@ class ToolCallLifecycleManager(BaseModel):
             updated.valid_calls[call_id] = ToolCallLifecycleRecord(
                 tool_call_id=call_id,
                 tool_name=tool_name,
-                args=raw_call.get("args"),
+                args=_record_args(raw_call.get("args")),
                 presentation=presentation,
             )
         return updated
@@ -471,6 +495,8 @@ class ToolCallLifecycleManager(BaseModel):
 
         异常:
             pydantic.ValidationError: 事件字段不满足契约时抛出。
+            RuntimeError / KeyError / TypeError: 不在 graph 运行上下文内调用
+                （``get_stream_writer`` 取不到 stream writer 时抛出）。
 
         副作用:
             经 stream writer 发出 ``ToolCallStatusChangedEvent``；迁移合法性由 snapshot projector
@@ -490,69 +516,6 @@ class ToolCallLifecycleManager(BaseModel):
                 display_data=display_data,
             )
         )
-
-    def _emit_status_safe(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            step_id: str,
-            call_id: str,
-            to_status: ToolCallEventStatus,
-            args: dict[str, object] | None = None,
-            error: str | None = None,
-            display_data: dict[str, object] | None = None,
-    ) -> None:
-        """发射状态迁移事件；失败只降级记日志，绝不阻断调用方的状态迁移。
-
-        状态事件是「通知前端」的旁路：它失败不能让已经确定的状态迁移半途而废，否则快照会出现
-        「事件已发、状态未落」的不一致。本方法把该降级收口在一处，供 ``begin`` / ``cancel`` /
-        ``settle`` 共用。
-
-        参数:
-            task_id, run_id, step_id: 事件定位三元组。
-            call_id: 目标工具调用 id。
-            to_status: 目标状态（``running`` / ``completed`` / ``failed`` / ``cancelled``）。
-            args: 可选，完整参数（仅调用迁移到 ``running`` 时携带）。
-            error: 可选，面向前端的短错误提示。
-            display_data: 可选，终态展示数据。
-
-        返回:
-            无。
-
-        异常:
-            无。``BaseException``（如 ``KeyboardInterrupt``）仍照常上抛，不被本方法吞掉。
-
-        副作用:
-            成功时经 :meth:`_emit_status` 发出一次 ``ToolCallStatusChangedEvent``；失败时写
-            ``tool_terminal_event_failed`` ERROR 日志（含 ``task_id`` / ``run_id`` /
-            ``tool_call_id`` / ``status`` 等定位字段）后返回，调用方的状态迁移照常完成。
-        """
-
-        try:
-            self._emit_status(
-                task_id=task_id,
-                run_id=run_id,
-                step_id=step_id,
-                call_id=call_id,
-                to_status=to_status,
-                args=args,
-                error=error,
-                display_data=display_data,
-            )
-        except Exception:
-            log.exception(
-                "tool_terminal_event_failed",
-                extra={
-                    "msg": "工具调用状态事件发送失败并被降级",
-                    "data": {
-                        "task_id": task_id,
-                        "run_id": run_id,
-                        "tool_call_id": call_id,
-                        "status": to_status,
-                    },
-                },
-            )
 
     def begin(
             self,
@@ -574,11 +537,13 @@ class ToolCallLifecycleManager(BaseModel):
 
         异常:
             RuntimeError / KeyError / TypeError: 仅可在 graph 运行上下文内调用
-                （:meth:`_valid_tool_name` 经 :func:`_runtime_config` 取不到配置时抛出）。
+                （:meth:`_valid_tool_name` 经 :func:`_runtime_config`、:meth:`_emit_status` 经
+                ``get_stream_writer`` 取不到上下文时抛出）。
+            pydantic.ValidationError: :meth:`_emit_status` 的事件字段不满足契约时抛出。
 
         副作用:
-            每条迁移经 stream writer 发出一次 ``running`` 状态事件；事件发送失败只记
-            ``tool_terminal_event_failed`` 并降级继续，状态迁移照常完成。
+            每条迁移经 :meth:`_emit_status` 发出一次 ``running`` 状态事件；事件构造或入队失败直接
+            向上抛出，不在本方法内降级。
         """
 
         # 与 ``cancel`` 同口径：恒以新快照起手，返回值身份可预期；起手即复制后，迁移过程直接在
@@ -589,7 +554,7 @@ class ToolCallLifecycleManager(BaseModel):
                 continue
             if not self._valid_tool_name(record.tool_name):
                 continue
-            updated._emit_status_safe(
+            updated._emit_status(
                 task_id=task_id,
                 run_id=run_id,
                 step_id=step_id,
@@ -610,9 +575,10 @@ class ToolCallLifecycleManager(BaseModel):
 
         遍历 ``tool_calls + invalid_tool_calls``（后者覆盖先出现的同名 ``id``），逐条经
         :meth:`_resolve_call_bucket` 裁决：``blocked`` 进 ``blocked_calls``；``allowed`` 与
-        ``invaild_tool_name`` 进 ``valid_calls``（展示声明仅在 ``allowed`` 桶写入，``invaild_tool_name``
-        桶为 ``None``）；``ignore_*`` 静默丢弃。记录状态保持默认 ``pending``——置 ``running`` 由后续
-        ``tools`` 节点的 :meth:`begin` 完成。
+        ``invaild_tool_name`` 进 ``valid_calls``（展示声明仅在 ``allowed`` 桶写入，该桶为空
+        ``dict``）；``ignore_*`` 静默丢弃。记录状态保持默认 ``pending``——置 ``running`` 由后续
+        ``tools`` 节点的 :meth:`begin` 完成。参数经 :func:`_record_args` 归一：未解析调用的 ``args``
+        是 JSON 片段字符串，非映射一律落为空 ``dict``（调用仍送执行层按参数校验被拒）。
 
         参数:
             tool_calls: 模型解析成功的工具调用（``ai_message.tool_calls``）。
@@ -632,22 +598,22 @@ class ToolCallLifecycleManager(BaseModel):
 
         all_calls = tool_calls + invalid_tool_calls
 
-        valid_calls: dict[str, ToolCallLifecycleRecord] = Field(default_factory=dict)
-        blocked_calls: dict[str, ToolCallLifecycleRecord] = Field(default_factory=dict)
+        valid_calls: dict[str, ToolCallLifecycleRecord] = {}
+        blocked_calls: dict[str, ToolCallLifecycleRecord] = {}
 
         for call in all_calls:
             call_id = call.get("id")
             call_name = call.get("name")
-            call_args = call.get("args")
+            call_args = _record_args(call.get("args"))
             bucket = self._resolve_call_bucket(call_id, call_name)
             if bucket == "blocked":
                 blocked_calls[call_id] = ToolCallLifecycleRecord(
                     tool_call_id=call_id,
                     tool_name=call_name,
-                    args=call_args
+                    args=call_args,
                 )
             elif bucket == "allowed" or bucket == "invaild_tool_name":
-                presentation = self._presentation_for(call_name) if bucket == "allowed" else None
+                presentation = self._presentation_for(call_name) if bucket == "allowed" else {}
                 valid_calls[call_id] = ToolCallLifecycleRecord(
                     tool_call_id=call_id,
                     tool_name=call_name,
@@ -671,8 +637,8 @@ class ToolCallLifecycleManager(BaseModel):
 
         收口判据是状态本身：只处理仍处于 ``pending`` / ``running`` 的可执行调用记录，已终态的跳过，
         因此可重复调用；适用于「流式期 :meth:`create` 已把调用投影给前端、但该调用不会真正执行」的
-        场景，避免前端留下悬空的「执行中」part。含从未发创建事件的未注册工具名调用——那类调用的事件
-        会因前端缺 part 被 projector 跳过并记 warning；``blocked_calls`` 从未发创建事件，不参与收口。
+        场景，避免前端留下悬空的「执行中」part。含从未发创建事件的未注册工具名调用（那类事件会被
+        projector 跳过并记 warning）；``blocked_calls`` 从未发创建事件，不参与收口。
 
         调用点：``model_node`` 在流式循环内检测到协作取消时调用本方法，随后才 ``interrupt`` 挂起
         节点；顺序不可颠倒（``interrupt`` 之后的语句不会执行）。返回值（copy-on-write 快照）必须
@@ -688,29 +654,32 @@ class ToolCallLifecycleManager(BaseModel):
             更新后的 manager；已终态的调用不受影响。
 
         异常:
-            无。``BaseException``（如 ``KeyboardInterrupt``）仍照常上抛。
+            pydantic.ValidationError: :meth:`_emit_status` 的事件字段不满足契约时抛出。
+            RuntimeError / KeyError / TypeError: 不在 graph 运行上下文内调用
+                （:meth:`_emit_status` 经 ``get_stream_writer`` 取不到 stream writer 时抛出）。
 
         副作用:
-            经 stream writer 为每条被收口的调用发出一次 ``cancelled`` 终态事件；事件发送失败
-            只记 ``tool_terminal_event_failed`` 并降级继续，状态迁移照常完成。
+            经 :meth:`_emit_status` 为每条被收口的调用发出一次 ``cancelled`` 终态事件；事件构造或
+            入队失败直接向上抛出，不在本方法内降级。
         """
 
         updated = self._copy()
 
-        # 被投影过的调用可能停在 pending/running（流式期 create 后模型取消），逐条收口，
-        # 避免前端留下悬空 part。
-        for calls in (updated.valid_calls, updated.blocked_calls):
-            for record in list(calls.values()):
-                if record is None or record.status not in {"pending", "running"}:
-                    continue
-                updated._emit_status_safe(
-                    task_id=task_id,
-                    run_id=run_id,
-                    step_id=step_id,
-                    call_id=record.tool_call_id,
-                    to_status="cancelled",
-                )
-                calls[record.tool_call_id].status = "cancelled"
+        # 只有 ``create`` 发过创建事件、前端存在 part 的可执行调用需要收口；``blocked_calls`` 从未
+        # 投影为 part，收口没有对象（发事件只会让 projector 记一条「part 缺失」告警）。
+        for record in list(updated.valid_calls.values()):
+            if record is None or record.status not in {"pending", "running"}:
+                continue
+            if not self._valid_tool_name(record.tool_name) or record.tool_name not in self.allows_tools:
+                continue
+            updated._emit_status(
+                task_id=task_id,
+                run_id=run_id,
+                step_id=step_id,
+                call_id=record.tool_call_id,
+                to_status="cancelled",
+            )
+            updated.valid_calls[record.tool_call_id].status = "cancelled"
         return updated
 
     def settle(
@@ -746,38 +715,45 @@ class ToolCallLifecycleManager(BaseModel):
 
         异常:
             KeyError: 摘要缺少必需字段（见 :func:`_summary_to_observation`）；本方法不兜底。
-            RuntimeError / KeyError / TypeError: 仅可在 graph 运行上下文内调用（:func:`_runtime_context`
-                与 :func:`_runtime_config` 取不到配置时抛出）。
-            pydantic.ValidationError: 补建记录时摘要的 ``tool_name`` 为空串（记录字段 ``min_length=1``）。
+            RuntimeError / KeyError / TypeError: 仅可在 graph 运行上下文内调用
+                （:func:`_runtime_context` / :func:`_runtime_config` / ``get_stream_writer`` 取不到
+                上下文时抛出）。
+            pydantic.ValidationError: 补建记录时摘要的 ``tool_name`` 为空串（记录字段
+                ``min_length=1``），或 :meth:`_emit_status` 的事件字段不满足契约。
 
         副作用:
             经 ``RuntimeContextManager.add_message`` 写一条 ``ToolMessage``（成功后记 info
-            ``tool_observation_persisted``），并经 stream writer 发终态事件；``add_message``
-            返回 ``False``（该消息已存在）时直接返回、不再发事件，事件发送失败只记
-            ``tool_terminal_event_failed`` 并降级继续。记录不存在时即时补建一条 ``pending`` 记录
-            再落终态。
+            ``tool_observation_persisted``），并经 :meth:`_emit_status` 发终态事件；``add_message``
+            返回 ``False``（该消息已存在）时直接返回、不再发事件。事件构造或入队失败直接向上抛出，
+            不在本方法内降级。记录不存在时即时补建一条 ``pending`` 记录再落终态。命中
+            ``blocked_calls`` 的记录只写 ``ToolMessage``、不发终态事件（前端无 part，属隐藏闭合）。
         """
 
         observation = _summary_to_observation(summary)
         event_status = _event_status(observation.status)
         call_id = summary["tool_call_id"]
         existing = self.valid_calls.get(call_id)
+        if existing is None:
+            existing = self.blocked_calls.get(call_id)
         if existing is not None and existing.status in {"completed", "failed", "cancelled"}:
             return self._copy(), event_status
         updated = self._copy()
-        record = updated.valid_calls.get(call_id)
+        # ``blocked_calls`` 的调用同样会送达执行层（由 ``ToolAccessGate`` 拒绝），因此也要在此结算；
+        # 记录保持在原集合内演化，不跨集合搬移。
+        blocked = call_id in updated.blocked_calls
+        record = updated.blocked_calls.get(call_id) if blocked else updated.valid_calls.get(call_id)
         if record is None:
             # 正常路径一定先 create；保留记录可让恢复后的 state 反映实际终态。
             presentation = self._presentation_for(summary["tool_name"])
-            updated.valid_calls[call_id] = ToolCallLifecycleRecord(
+            record = ToolCallLifecycleRecord(
                 tool_call_id=call_id,
                 tool_name=summary["tool_name"],
                 status="pending",
                 presentation=presentation,
             )
+            updated.valid_calls[call_id] = record
         runtime_context: RuntimeContextManager = _runtime_context()
         operations: WorkflowOperations = _runtime_config().operations
-        record = updated.valid_calls[call_id]
         record.status = event_status
         result_display_data = _ui_data(summary)
         status_hint = _ui_error(summary, event_status)
@@ -806,7 +782,11 @@ class ToolCallLifecycleManager(BaseModel):
         )
         # 刻意先落库上下文、再发终态事件：否则 projector 可能发布一个无法从 context
         # 重建的终态工具状态。
-        updated._emit_status_safe(
+        if blocked:
+            # 隐藏闭合：blocked 调用从未发创建事件、前端无 part，发终态事件只会让 projector 记一条
+            # 「part 缺失」告警；模型侧协议已由上面的 ToolMessage 闭合。
+            return updated, event_status
+        updated._emit_status(
             task_id=task_id,
             run_id=run_id,
             step_id=step_id,
@@ -828,10 +808,9 @@ class ToolCallLifecycleManager(BaseModel):
     ) -> SettlementResult:
         """结算一批观察摘要，返回错误计数和更新后的 lifecycle。
 
-        ``blocked_calls`` 中的调用不执行、无观察，摘要命中者整条跳过。连续失败计数规则：
-        ``completed`` 清零；``failed`` 且 ``retryable is False`` 时累加（同时累加本批
-        ``error_count``）；``cancelled`` 与可重试失败既不计也不清零。``inherited_error_count``
-        是上一批留下的计数。
+        连续失败计数规则：``completed`` 清零；``failed`` 且 ``retryable is False`` 时累加（同时
+        累加本批 ``error_count``）；``cancelled`` 与可重试失败既不计也不清零。
+        ``inherited_error_count`` 是上一批留下的计数。
 
         参数:
             task_id, run_id, step_id: 事件定位三元组。
@@ -847,16 +826,15 @@ class ToolCallLifecycleManager(BaseModel):
                 （本方法不兜底，异常向上冒泡）。
 
         副作用:
-            逐条经 :meth:`settle` 写模型上下文并发终态事件；结束时记一条
-            ``observe_node_dispatch_completed`` 汇总日志。
+            逐条经 :meth:`settle` 写模型上下文并发终态事件（``blocked_calls`` 的观察同样在此结算，
+            但只写 ``ToolMessage``、不发终态事件）；结束时记一条 ``observe_node_dispatch_completed``
+            汇总日志。
         """
 
         lifecycle = self
         tool_error_count = inherited_error_count
         error_count = 0
         for summary in summaries:
-            if summary.get("tool_call_id") in lifecycle.blocked_calls.keys():
-                continue
             lifecycle, event_status = lifecycle.settle(
                 task_id=task_id,
                 run_id=run_id,

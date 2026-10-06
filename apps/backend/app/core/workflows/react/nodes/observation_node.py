@@ -5,13 +5,8 @@
 
 1. **结果分发**：经 ``ToolCallLifecycleManager.settle_batch`` 把已治理观察分发到前端事件流
    （``ToolCallStatusChangedEvent`` 终态）与模型上下文（``ToolMessage`` 配对闭合），
-   同时重算连续失败计数；
-2. **非法 / 孤儿调用结算**：对参数非法（``invalid_detail``）与流式期创建但模型最终丢弃的
-   孤儿 ``pending`` 调用只发终态事件闭合前端 part，不写 ``ToolMessage``；
-3. **修复提示注入**：把非法调用明细经 ``SystemMessage`` 注入模型上下文，必须排在全部
-   ``ToolMessage`` 之后，维持 ``AIMessage(tool_calls) -> ToolMessage × N -> SystemMessage``
-   顺序；
-4. **错误计数与上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时经
+   同时重算连续失败计数；命中 ``blocked_calls`` 的观察只写 ``ToolMessage``（隐藏闭合）；
+2. **错误计数与上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时经
    ``RuntimeOperations`` 标记失败终态；否则写回计数，让 graph 经条件边回到 ``model``
    节点继续推理。
 
@@ -56,14 +51,12 @@ async def _observe_node(state: ReactGraphState) -> dict:
     1. **结果分发**：对本批 ``last_tool_results`` 的观察逐条发出
        ``ToolCallStatusChangedEvent`` 终态事件（``completed`` / ``failed`` /
        ``cancelled``）并写回模型上下文（``ToolMessage``，闭合
-       ``AIMessage.tool_calls`` 配对），同时重算连续失败计数（``success`` 清零、
-       ``error`` 累加、``cancelled`` 不计）。
-    2. **非法 / 孤儿调用结算**：对参数非法（``invalid_detail``）与从未执行的孤儿
-       ``pending`` 调用只发终态事件闭合前端 part，不发 ``ToolMessage``。
-    3. **修复提示注入**：非法调用的修复 ``SystemMessage`` 排在全部 ``ToolMessage`` 之后。
-    4. **空结果批次**：无本批工具结果且无修复提示时不计数也不判定，保留继承的
-       ``tool_error_count``（无信息即不改写），避免对无新结果时误发 RUN_FAILED。
-    5. **错误上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时经
+       ``AIMessage.tool_calls`` 配对），同时重算连续失败计数（``completed`` 清零、
+       ``failed`` 且 ``retryable is False`` 时累加、``cancelled`` 不计）。命中
+       ``blocked_calls`` 的观察只写 ``ToolMessage``（前端无 part，不发终态事件）。
+    2. **空结果批次**：本批无观察时循环不执行，不计数也不判定，保留继承的
+       ``tool_error_count``（无信息即不改写），避免无新结果时误发 RUN_FAILED。
+    3. **错误上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时经
        ``RuntimeOperations.fail_run_if_running`` 标记失败终态；否则写回计数，
        让 graph 经条件边回到 ``model`` 节点。
 
@@ -80,8 +73,8 @@ async def _observe_node(state: ReactGraphState) -> dict:
 
     副作用:
         - 分发阶段经 stream writer 发出 ``ToolCallStatusChangedEvent``，并把
-          ``ToolMessage`` 写回 ``RuntimeContextManager``；
-        - 对非法 / 孤儿调用发出 failed 终态事件关闭前端 part；
+          ``ToolMessage`` 写回 ``RuntimeContextManager``（命中 ``blocked_calls`` 的观察只写
+          ``ToolMessage``，不发终态事件）；
         - 错误上限分支经 ``fail_run_if_running`` 标记 run 失败终态；
         - 阶段二将在此接入 LLM 观察推理并写入明确的观察事实，不在此写消息通道。
     """

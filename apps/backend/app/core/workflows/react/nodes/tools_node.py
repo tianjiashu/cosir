@@ -11,11 +11,11 @@
 ``dataclasses.asdict`` 投影，键名与执行层字段一致，含 ``tool_call_id`` /
 ``display_data``）供 ``observe`` 消费。
 
-注意：本节点**不会重放**旧 checkpoint 里的工具批次，该性质与 ``checkpoint_thread_id``
-无关（续跑复用原线程、从既有 checkpoint 继续）。真正生效的是「只执行活调用」：
-本节点只从 ``ToolCallLifecycleManager`` 取 ``status == "running"`` 的调用，因此从既有
-checkpoint 恢复时待执行集合为空、直接短路返回空摘要。模型协议的配对闭合由
-``model_node.load_message`` 兜底。与模型节点共享的运行时原语见 ``common``。
+注意：执行集合当前取 ``valid_calls`` + ``blocked_calls`` 的全部记录，**不做状态过滤**，因此从既有
+checkpoint 恢复（本节点重入）时会重放本批调用。历史实现靠「只执行 ``status == "running"`` 的
+调用」获得防重放性质，该过滤已在重构中移除，属**已知缺口**（见 ``begin`` 的返回值刻意不写回
+state）。模型协议的配对闭合由 ``model_node.load_message`` 兜底。与模型节点共享的运行时原语见
+``common``。
 """
 
 import asyncio
@@ -23,7 +23,6 @@ import dataclasses
 from typing import Any
 
 from app.config.logging.logger import log
-from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.workflows.react.node_helper.common import _runtime_config
 from app.core.workflows.react.worflow_state.state import ReactGraphState
@@ -110,14 +109,11 @@ async def _tools_node(state: ReactGraphState) -> dict:
         state: 当前 graph state，经 ``tool_call_lifecycle`` 携带待执行工具调用与 instruction。
 
     返回:
-        需要合并回 graph state 的增量：
-        - 无 ``running`` 调用（例如仅参数非法的 ``pending`` 调用）时短路返回：回写
-          ``tool_call_lifecycle``，并把 ``last_tool_results`` 重置为结构完整的空摘要
-          （``{"instruction": ..., "observations": []}``），使
-          ``observe`` 不重复结算上一批结果、也不因缺键崩溃；
-        - 正常分支只回写 ``last_tool_results``（本批次工具观察的 ``dataclasses.asdict``
-          投影，键名即执行层字段名 ``tool_call_id`` / ``display_data``，可落 checkpoint），
-          ``tool_call_lifecycle`` 沿用 ``model`` 节点已写入的快照。
+        需要合并回 graph state 的增量：``last_tool_results``（本批次工具观察的
+        ``dataclasses.asdict`` 投影，键名即执行层字段名 ``tool_call_id`` / ``display_data``，
+        可落 checkpoint）与 ``terminal_sessions``（终端会话展示元数据投影）。
+        ``tool_call_lifecycle`` 沿用 ``model`` 节点已写入的快照，本节点不回写（``begin`` 的
+        返回值刻意丢弃，避免把 ``running`` 状态持久化进 checkpoint）。
 
     异常:
         无。工具链路异常由执行层收口为 ``ToolObservation``（含 ``error`` 观察）。
@@ -140,10 +136,15 @@ async def _tools_node(state: ReactGraphState) -> dict:
 
     instruction = state.instruction
 
-    lifecycle.begin(task_id=task_id, run_id=state.run_id, step_id=step_id)
+    # run 身份取自 ``RuntimeConfig.run``（``ReactGraphState`` 不含 run_id，状态事实源是 run 记录）。
+    lifecycle.begin(task_id=task_id, run_id=rc.run.id, step_id=step_id)
 
-    # 仅执行状态为 running 的合法调用；pending（参数非法）调用不执行，由 observe 节点统一结算。
-    approved_calls = [_to_tool_call(record) for record in lifecycle.valid_tools | lifecycle.blocked_tool_calls]
+    # 可执行集合 = 合法调用 + 隐藏闭合集合：后者由 ToolAccessGate 在执行层拒绝，其错误观察用于
+    # 闭合模型协议（前端无对应 part，由 settle 只写 ToolMessage、不发终态事件）。
+    approved_calls = [
+        _to_tool_call(record)
+        for record in lifecycle.valid_tools + lifecycle.blocked_tool_calls
+    ]
 
     log.info(
         "tools_node_resumed",

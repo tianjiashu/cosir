@@ -24,6 +24,7 @@ from langchain_core.messages import (
     BaseMessage,
     SystemMessage,
 )
+from langchain_core.messages.tool import ToolCall
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
@@ -39,10 +40,9 @@ from app.core.workflows.react.node_helper.model_chunk import ModelChunkProcessor
 from app.core.workflows.react.node_helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
-from langchain_core.messages.tool import ToolCall
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
-from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.react.worflow_state.route import ReactRoute
+from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.vision_input import resolve_messages_for_model
 from app.utils.message_content import content_to_text
 
@@ -116,11 +116,12 @@ async def _model_node(state: ReactGraphState) -> dict:
           送入 ``tools`` 节点执行。循环结束后的收口不检查取消，故取消信号若落在「最后一个
           chunk 处理完 → 循环退出」之间，本轮已完整流出的输出会照常收口并按正常路径路由
           （该批工具仍会执行），下一次进入本节点时才由请求前检查挂起；
-        - ``invalid_tool_calls`` 的判定已下沉到 ``ToolCallLifecycleManager.classify``：按 ``id``
-          对齐模型未解析成功的调用，命中者挂 ``invalid_detail`` 并维持 ``pending``，由 observe
-          节点统一结算并注入修复 ``SystemMessage``（排在全部 ToolMessage 之后，避免产生
-          ``AIMessage(tool_calls) -> SystemMessage -> ToolMessage`` 的非法顺序）；缺失 ``id``
-          的非法调用无法对齐，仅记 warning。
+        - 本轮工具调用的归桶已下沉到 ``ToolCallLifecycleManager.classify``：把已解析
+          ``tool_calls`` 与未解析 ``invalid_tool_calls`` 合并后按 ``id`` 逐个裁决——已注册但不在
+          本轮 ``allows_tools`` 的进 ``blocked_calls``，其余进 ``valid_calls``（``id`` 不可用的
+          解析噪声直接丢弃）。随后本节点清空 ``ai_message.invalid_tool_calls``，并按
+          ``blocked_calls + valid_calls`` 重写 ``ai_message.tool_calls``，使模型协议里每条调用都有
+          配对身份；它们的执行与 ``ToolMessage`` 回写由 ``tools`` / ``observe`` 节点完成。
         - 模型没有工具调用时，只有 Provider 明确报告正常完成原因才标记最终回答；长度截断直接经
           ``model`` 路由回到模型节点由模型自行延续，缺失或未知完成原因还会额外追加一次继续
           提示（见 ``_build_continuation_prompt``）。
@@ -144,7 +145,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     run_id = operations.get_current_run().id
 
     step_count = state.step_count + 1
-    # =======================提前拦截：本次推理若已超配额（step_count > max_steps）=======================
+    # ================== 提前拦截：本次推理若已超配额（step_count > max_steps） ==================
     if step_count > state.max_steps:
         return await _finalize_max_steps(state, step_count=step_count)
     step_id = f"step-{step_count}"
@@ -269,8 +270,12 @@ async def _model_node(state: ReactGraphState) -> dict:
         invalid_tool_calls=ai_message.invalid_tool_calls,
     )
 
+    #invalid_tool_calls 表示 LangChain 无法把参数解析成字典，不是“工具不存在”“工具不在白名单”，也不是完整的工具参数 schema 校验结果
     ai_message.invalid_tool_calls = []
-    ai_message.tool_calls = [ToolCall(name=call.tool_name, args=call.args, id=call.id) for call in tool_call_lifecycle.blocked_tool_calls + tool_call_lifecycle.valid_tools]
+    ai_message.tool_calls = [
+        ToolCall(name=call.tool_name, args=call.args, id=call.tool_call_id)
+        for call in tool_call_lifecycle.blocked_tool_calls + tool_call_lifecycle.valid_tools
+    ]
     _runtime_context().add_message(ai_message)
 
     log.info(
@@ -280,7 +285,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "data": {
                 "step_id": step_id,
                 "tool_count": len(tool_call_lifecycle.valid_calls),
-                "invalid_count": tool_call_lifecycle.invalid_count,
+                "blocked_count": len(tool_call_lifecycle.blocked_calls),
                 "output_text_length": len(ai_message.content),
                 "finish_reason": finish_reason,
             },
