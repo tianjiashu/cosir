@@ -29,9 +29,8 @@ class RuntimeConfig:
     Attributes:
         operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新能力。
         run: 当前执行的 Conversation Run 记录，节点经它写入 run 状态（单一事实来源）。
-        model: 根据 Task 冻结工具 schema 绑定的 Runnable；无工具时为基础模型，仅供普通推理使用。
-        final_model: 未绑定工具的基础模型；最终回答阶段使用以禁止工具调用，结构化输出节点
-            基于该模型临时绑定 JSON response_format。
+        model: 根据 Task 冻结工具 schema 绑定的 Runnable；无工具时为基础模型。结构化输出节点
+            在同一模型上临时绑定 JSON response_format，保留请求中的工具 schema。
         structured_output: 本次 Agent Run 冻结的可选最终 JSON Schema 契约。
         start_time: graph 开始执行的 ``time.perf_counter()`` 时间戳（由 ``ReactLikeWorkflow.run``
             写入）。**当前无读取方**：耗时统计不在 workflow 内计算，字段保留待用。
@@ -52,7 +51,6 @@ class RuntimeConfig:
     operations: WorkflowOperations
     run: ConversationRunRecord
     model: Runnable
-    final_model: Runnable
     structured_output: StructuredOutputSpec | None = None
     start_time: float = 0.0
     usage_stats: ConversationRunUsageStats = field(default_factory=ConversationRunUsageStats)
