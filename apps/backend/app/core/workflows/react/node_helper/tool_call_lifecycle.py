@@ -16,6 +16,7 @@ import copy
 import dataclasses
 from typing import Any, Literal
 
+from langchain_core.messages import ToolMessage
 from langgraph.config import get_stream_writer
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -218,8 +219,7 @@ def build_invalid_tool_call_repair_message(
         args_preview = str(invalid_tc.get("args", ""))
         if len(args_preview) > Constant.Workflow.INVALID_TOOL_ARGS_PREVIEW_CHARS:
             args_preview = (
-                args_preview[:Constant.Workflow.INVALID_TOOL_ARGS_PREVIEW_CHARS]
-                + "...[truncated]"
+                args_preview[: Constant.Workflow.INVALID_TOOL_ARGS_PREVIEW_CHARS] + "...[truncated]"
             )
 
         error = invalid_tc.get("error")
@@ -302,12 +302,6 @@ class ToolCallLifecycleManager(BaseModel):
         """返回全部合法工具调用记录。"""
 
         return [record for record in self.calls.values() if record.invalid_detail is None]
-
-    @property
-    def blocked_tool_calls(self) -> list[ToolCallLifecycleRecord]:
-        """Return disabled calls for hidden protocol closure by the model node."""
-
-        return list(self.blocked_calls.values())
 
     @staticmethod
     def _valid_tool_name(tool_name: object) -> bool:
@@ -567,7 +561,7 @@ class ToolCallLifecycleManager(BaseModel):
           ``running`` 并写入完整参数；
         - id 命中非法集合的调用（无论是否同时出现在合法 ``tool_calls`` 中）不进入 running，
           而是挂载 ``invalid_detail``（原始 invalid_tool_call 的 name/args/error）并维持
-          ``pending``，供 observe 节点统一收口并构造修复提示；命中但尚无 lifecycle 记录的
+          ``pending``，供 tools 节点收口并构造修复提示；命中但尚无 lifecycle 记录的
           非法调用合成一条 ``pending`` 记录，维持可修复语义。
 
         参数:
@@ -581,19 +575,26 @@ class ToolCallLifecycleManager(BaseModel):
         """
 
         blocked_by_id: dict[str, str] = {
-            tc.call_id: tc.tool_name for tc in tool_calls
-            if tc.call_id and tc.tool_name not in self.allows_tools
-        }
-        blocked_by_id.update({
-            str(itc["id"]): str(itc.get("name") or "")
-            for itc in invalid_tool_calls
+            tc.call_id: tc.tool_name
+            for tc in tool_calls
             if (
-                itc.get("id")
-                and isinstance(itc.get("name"), str)
-                and self._valid_tool_name(itc["name"])
-                and itc.get("name") not in self.allows_tools
+                tc.call_id
+                and self._valid_tool_name(tc.tool_name)
+                and tc.tool_name not in self.allows_tools
             )
-        })
+        }
+        blocked_by_id.update(
+            {
+                str(itc["id"]): str(itc.get("name") or "")
+                for itc in invalid_tool_calls
+                if (
+                    itc.get("id")
+                    and isinstance(itc.get("name"), str)
+                    and self._valid_tool_name(itc["name"])
+                    and itc.get("name") not in self.allows_tools
+                )
+            }
+        )
         updated = self._copy()
         for call_id, tool_name in blocked_by_id.items():
             updated.calls.pop(call_id, None)
@@ -607,7 +608,8 @@ class ToolCallLifecycleManager(BaseModel):
             if itc.get("id") and str(itc["id"]) not in blocked_by_id
         }
         valid_tool_calls = [
-            tc for tc in tool_calls
+            tc
+            for tc in tool_calls
             if tc.call_id not in invalid_by_id and tc.call_id not in blocked_by_id
         ]
         if not invalid_by_id:
@@ -643,22 +645,27 @@ class ToolCallLifecycleManager(BaseModel):
             tool_name = invalid_tc.get("name")
             presentation = (
                 updated._presentation_for(tool_name)
-                if isinstance(tool_name, str) and tool_name
+                if isinstance(tool_name, str) and updated._valid_tool_name(tool_name)
                 else {}
             )
-            updated.calls[itc_id] = ToolCallLifecycleRecord(
-                tool_call_id=itc_id,
-                tool_name=tool_name or "",
-                presentation=presentation,
-                invalid_detail=detail,
-            )
-        # 缺失 id 的非法调用无法与生命周期对齐，视为解析噪声忽略。
-        unmatched = [itc for itc in invalid_tool_calls if not itc.get("id")]
+            if isinstance(tool_name, str) and updated._valid_tool_name(tool_name):
+                updated.calls[itc_id] = ToolCallLifecycleRecord(
+                    tool_call_id=itc_id,
+                    tool_name=tool_name,
+                    presentation=presentation,
+                    invalid_detail=detail,
+                )
+        # 无法关联合法工具 part 的畸形调用由批次修复提示处理，不创建伪生命周期记录。
+        unmatched = [
+            itc
+            for itc in invalid_tool_calls
+            if not itc.get("id") or not isinstance(itc.get("name"), str) or not itc.get("name")
+        ]
         if unmatched:
             log.warning(
                 "lifecycle_invalid_tool_call_no_id",
                 extra={
-                    "msg": "非法工具调用缺少 id，无法与生命周期对齐，视为解析噪声忽略",
+                    "msg": "非法工具调用缺少可用身份，无法建立生命周期记录",
                     "data": {"step_id": step_id, "count": len(unmatched)},
                 },
             )
@@ -716,6 +723,7 @@ class ToolCallLifecycleManager(BaseModel):
         task_id: int,
         run_id: int,
         step_id: str,
+        invalid_tool_calls: list[dict[str, Any]] | None = None,
     ) -> tuple[ToolCallLifecycleManager, str | None]:
         """收口全部参数非法的调用，并产出面向模型的修复提示文本。
 
@@ -762,10 +770,82 @@ class ToolCallLifecycleManager(BaseModel):
                 {"tool_name": record.tool_name, "invalid_tool_call": record.invalid_detail}
             )
 
+        if invalid_tool_calls is not None:
+            repair_datas = [
+                {
+                    "tool_name": str(invalid_call.get("name") or "unknown_tool"),
+                    "invalid_tool_call": invalid_call,
+                }
+                for invalid_call in invalid_tool_calls
+            ]
+
         # 修复提示必须排在全部 ToolMessage 之后注入，故由调用方经延迟队列下发。
         if not repair_datas:
             return updated, None
         return updated, build_invalid_tool_call_repair_message(repair_datas)
+
+    def close_blocked_calls(
+        self,
+        task_id: int,
+        run_id: int,
+        step_id: str,
+        tool_call_ids: set[str] | None = None,
+    ) -> int:
+        """隐藏本轮被禁用工具的调用，闭合模型协议。
+
+        被 ``allows_tools`` 排除的调用只进入隐藏集合（不投影、不执行），但模型仍按工具协议
+        期待与每个 ``tool_call_id`` 配对的 ``ToolMessage``。本方法为其逐条补发 ``cancelled``
+        态 ``ToolMessage``，避免模型侧悬空引用，并记一条汇总日志。
+
+        与 ``fail_invalid_tools`` 不同：本方法只发 ``ToolMessage`` 副作用并记日志，不迁移任何
+        生命周期状态（隐藏集合 ``blocked_calls`` 本身即为终态收口，无需再置 ``failed``），
+        因此**不返回新快照、也不写回 graph state**；调用方无需接住返回值。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+
+        返回:
+            已闭合（已补发 ``cancelled`` 态 ``ToolMessage``）的禁用调用数量；无禁用调用时返回 0。
+
+        异常:
+            无。
+
+        副作用:
+            经 runtime context 为每个禁用调用写一条 ``cancelled`` 态 ``ToolMessage``；至少一条
+            时记一条 ``model_node_disabled_tools_blocked`` 汇总日志（含 ``tool_names`` 与
+            ``count``）。
+        """
+
+        runtime_context = _runtime_context()
+        records = [
+            record
+            for call_id, record in self.blocked_calls.items()
+            if tool_call_ids is None or call_id in tool_call_ids
+        ]
+        for record in records:
+            runtime_context.add_message(
+                ToolMessage(
+                    content="This tool is disabled for the current run.Do not call again",
+                    tool_call_id=record.tool_call_id,
+                    name=record.tool_name,
+                ),
+                transport_metadata=TransportMetadata(status="cancelled"),
+            )
+        if records:
+            log.info(
+                "tools_node_blocked_calls_closed",
+                extra={
+                    "msg": "本轮禁用工具调用已隐藏并闭合模型协议",
+                    "data": {
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "step_id": step_id,
+                        "tool_names": sorted({record.tool_name for record in records}),
+                        "count": len(records),
+                    },
+                },
+            )
+        return len(records)
 
     def _fail_invalid(
         self,
@@ -780,7 +860,7 @@ class ToolCallLifecycleManager(BaseModel):
 
         参数非法的调用从未真正执行，不应产生 ``ToolMessage`` 与合法调用配对；本方法只补发
         终态 ``tool_call_status_changed`` 事件以关闭前端 pending part（``pending`` ->
-        ``failed``）。修复提示由 observe 节点经 ``SystemMessage`` 注入，不在此写模型消息。
+        ``failed``）。修复提示由 tools 节点组织，混合批次再经 observe 延迟注入。
 
         参数:
             task_id, run_id, step_id: 事件定位三元组。

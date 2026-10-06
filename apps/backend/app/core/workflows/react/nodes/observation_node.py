@@ -11,9 +11,8 @@
 3. **修复提示注入**：把非法调用明细经 ``SystemMessage`` 注入模型上下文，必须排在全部
    ``ToolMessage`` 之后，维持 ``AIMessage(tool_calls) -> ToolMessage × N -> SystemMessage``
    顺序；
-4. **错误计数与上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时经
-   ``RuntimeOperations`` 标记失败终态；否则写回计数，让 graph 经条件边回到 ``model``
-   节点继续推理。
+4. **错误计数与上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时停止
+   后续工具执行并路由到无工具最终回答；Run 的终态由该最终回答决定。
 
 设计动机（与阶段二演进对齐）：
 - 「观察工具结果」是独立于「执行工具」的推理步骤。阶段一做确定性的分发、错误计数与
@@ -28,10 +27,13 @@
 
 from typing import Any
 
+from langchain_core.messages import SystemMessage
+
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM
 from app.core.workflows.react.node_helper.common import _runtime_config, _runtime_context
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
@@ -62,30 +64,26 @@ async def _observe_node(state: ReactGraphState) -> dict:
     3. **修复提示注入**：非法调用的修复 ``SystemMessage`` 排在全部 ``ToolMessage`` 之后。
     4. **空结果批次**：无本批工具结果且无修复提示时不计数也不判定，保留继承的
        ``tool_error_count``（无信息即不改写），避免对无新结果时误发 RUN_FAILED。
-    5. **错误上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时经
-       ``RuntimeOperations.fail_run_if_running`` 标记失败终态；否则写回计数，
-       让 graph 经条件边回到 ``model`` 节点。
+    5. **错误上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时设置
+       ``final_answer_only`` 并路由到无工具模型回答；Run 终态由模型回答决定。
 
     参数:
         state: 当前 graph state，含本批 ``last_tool_results``、继承的 ``tool_error_count``。
 
     返回:
-        需要合并回 graph state 的增量（各分支均回写 ``tool_call_lifecycle``）：
-        空结果且无修复提示时返回 ``{"tool_call_lifecycle"}``（保留继承计数）；仅修复提示时
-        返回 ``{"tool_error_count", "tool_call_lifecycle"}``；错误上限分支（含失败落定竞态
-        落空）返回 ``{"tool_error_count", "terminal": True, "tool_call_lifecycle"}``；
-        正常分支返回 ``{"tool_error_count", "tool_call_lifecycle"}``，供 ``_after_observe``
-        路由回 ``model``。
+        回写本批工具错误计数与生命周期快照，并明确设置 ``next_node``：正常分支设为
+        ``model``；错误上限分支也设为 ``model`` 并启用无工具最终回答；Agent Team 预览分支
+        设为 ``agent_team_wait``。空结果分支保留继承计数。
 
     异常:
-        RuntimeError: ``state.tool_call_lifecycle`` 缺失（应由 ``model`` 节点写入）。
+        RuntimeError: ``state.tool_call_lifecycle`` 缺失（应由 ``tools`` 节点写入）。
         KeyError: 观察摘要缺少模型上下文所需字段（上游契约错误）。
 
     副作用:
         - 分发阶段经 stream writer 发出 ``ToolCallStatusChangedEvent``，并把
           ``ToolMessage`` 写回 ``RuntimeContextManager``；
         - 对非法 / 孤儿调用发出 failed 终态事件关闭前端 part；
-        - 错误上限分支经 ``fail_run_if_running`` 标记 run 失败终态；
+        - 错误上限分支停止工具调用并请求最终回答，不直接改变 Run 终态；
         - 阶段二将在此接入 LLM 观察推理并写入明确的观察事实，不在此写消息通道。
     """
     rc = _runtime_config()  # 取运行时配置（本节点只用其中的 operations 与 usage_stats）
@@ -142,6 +140,14 @@ async def _observe_node(state: ReactGraphState) -> dict:
     )
     lifecycle = dispatch.lifecycle
     tool_error_count = dispatch.tool_error_count
+    tool_feedback = state.tool_feedback
+    if tool_feedback:
+        _runtime_context().add_message(
+            SystemMessage(
+                content=tool_feedback,
+                additional_kwargs={"run_id": run_id},
+            )
+        )
     waiting_for_team_confirmation = _contains_agent_team_preview(observations)
     if waiting_for_team_confirmation:
         # 先把主 Run 收敛为可恢复的 cancelled，再进入 LangGraph interrupt。用户确认后，
@@ -172,14 +178,15 @@ async def _observe_node(state: ReactGraphState) -> dict:
         )
         _runtime_context().load_message()
 
-
-
     if not observations:
-        # 仅修复提示（全非法调用）：不计数，交给 graph 回到 model 重试。
+        # 无执行结果时不计数；tools 节点已完成拒绝收口并决定是否强制最终回答。
         return {
             "tool_error_count": tool_error_count,
             "tool_call_lifecycle": lifecycle,
-            "agent_team_confirmation_waiting": waiting_for_team_confirmation,
+            "tool_feedback": "",
+            "next_node": (
+                ReactRoute.AGENT_TEAM_WAIT if waiting_for_team_confirmation else ReactRoute.MODEL
+            ),
         }
 
     log.info(
@@ -196,30 +203,10 @@ async def _observe_node(state: ReactGraphState) -> dict:
     )
 
     if tool_error_count >= Constant.Workflow.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
-        failed_run = operations.fail_run_if_running(
-            end_reason=Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT,
-            usage_stats=rc.usage_stats,
-        )
-        if failed_run is None:
-            log.info(
-                "observe_node_error_limit_terminal_race_lost",
-                extra={
-                    "msg": (
-                        f"工具错误上限失败落定时 run 已非 running，"
-                        f"跳过失败事件，step_id={step_id}"
-                    ),
-                    "data": {"step_id": step_id, "run_id": run_id},
-                },
-            )
-            return {
-                "tool_error_count": tool_error_count,
-                "terminal": True,
-                "tool_call_lifecycle": lifecycle,
-            }
         log.warning(
-            "observe_node_error_limit",
+            "observe_node_error_limit_final_answer",
             extra={
-                "msg": f"连续工具错误达到上限，停止执行，step_id={step_id}",
+                "msg": f"连续工具错误达到上限，停止工具执行并请求最终回答，step_id={step_id}",
                 "data": {
                     "step_id": step_id,
                     "tool_error_count": tool_error_count,
@@ -228,16 +215,21 @@ async def _observe_node(state: ReactGraphState) -> dict:
                 },
             },
         )
-        # 失败终态：错误上限时经 canonical writer 落定失败。
+        # 工具错误上限只停止工具执行；Run 仍由无工具最终回答决定终态。
         return {
             "tool_error_count": tool_error_count,
-            "terminal": True,
+            "next_node": ReactRoute.MODEL,
             "tool_call_lifecycle": lifecycle,
+            "tool_feedback": "",
+            "final_answer_only": True,
         }
 
     # 正常返回：把更新后的计数与 lifecycle 写回 state。
     return {
         "tool_error_count": tool_error_count,
         "tool_call_lifecycle": lifecycle,
-        "agent_team_confirmation_waiting": waiting_for_team_confirmation,
+        "tool_feedback": "",
+        "next_node": (
+            ReactRoute.AGENT_TEAM_WAIT if waiting_for_team_confirmation else ReactRoute.MODEL
+        ),
     }

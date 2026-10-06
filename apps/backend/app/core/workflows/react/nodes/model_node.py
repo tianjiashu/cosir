@@ -1,10 +1,10 @@
 """ReAct-like 工作流的模型节点（``_model_node``）。
 
 本模块只承载「模型节点」单一职责：流式消费模型输出并决定下一步动作。节点从运行上下文
-    取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量写入 workflow custom
+取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量写入 workflow custom
 stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContextManager`` 累积并收口成完整
-``AIMessage``），根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大
-步数终止。run 状态变更经 ``WorkflowOperations`` 落到 ``ConversationRun``（唯一事实源）。
+``AIMessage``），再把原始工具请求交给 ``tools`` 节点分类处理。普通推理预算耗尽或工具拒绝次数
+超限时切换到无工具最终回答；Run 状态经 ``WorkflowOperations`` 落到 ``ConversationRun``。
 
 关于「文本 + 工具调用并存」：ReAct 中模型「边说明边调工具」是合法输出（例如先说
 "我先用 grep 查一下文件结构" 再给出一个 ``search_content`` 调用）。此时文本**不计入最终
@@ -17,34 +17,32 @@ stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContext
 模型侧数据处理辅助（流式 chunk 解析 ``ModelChunkProcessor``、流式 part 生命周期）
 已拆为独立模块，本模块仅 import 使用；节点共享运行时原语见 ``common``。
 """
+
 import asyncio
 
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     SystemMessage,
-    ToolMessage,
 )
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tools.schemas import ToolCall
 from app.core.workflows.react.node_helper.common import (
     _runtime_config,
     _runtime_context,
-    terminal_state,
+    end_state,
 )
 from app.core.workflows.react.node_helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.react.node_helper.model_chunk import ModelChunkProcessor
 from app.core.workflows.react.node_helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
-from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.vision_input import resolve_messages_for_model
-from app.models.conversation_task_context import TransportMetadata
 from app.utils.message_content import content_to_text
 
 # ``finish_reason`` 是 Provider 语义，不直接等同于工作流终态。不同兼容层可能使用
@@ -67,7 +65,7 @@ def _build_continuation_prompt(finish_reason: str | None) -> str | None:
 
     返回:
         追加到 canonical context 的 ``SystemMessage`` 文本；``length`` 类截断返回 ``None``，
-        表示本轮无需注入提示、直接由调用方经 ``continue_model`` 回到模型节点。
+        表示本轮无需注入提示、直接由调用方路由回模型节点。
 
     异常:
         无。
@@ -87,60 +85,29 @@ def _build_continuation_prompt(finish_reason: str | None) -> str | None:
 
 
 async def _model_node(state: ReactGraphState) -> dict:
-    """ReAct 模型节点：流式消费模型输出并决定下一步动作。
+    """流式调用模型，并把模型输出转换为工作流路由结果。
 
-    节点从运行上下文取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量
-    写入 workflow stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContextManager``
-    累积并收口成完整 ``AIMessage``）。根据模型最终输出决定进入工具分支、最终回答分支，还是因
-    无效输出 / 超过最大步数而终止。run 状态变更经 ``WorkflowOperations`` 落到
-    ``ConversationRun``（唯一事实源）。
+    普通阶段使用绑定工具的模型；最终回答阶段使用不绑定工具的模型。工具调用原样交给
+    ``tools`` 节点分类和执行，本节点不创建工具生命周期事实。超过普通模型步数时转入一次
+    最终回答阶段；只有模型返回正常结束原因且有文本时才完成 Run。
 
     参数:
-        state: 当前 graph state。
+        state: 当前 graph state，包含步数、工具请求和最终回答阶段标志。
 
     返回:
-        需要合并回 graph state 的增量（步数、标志位、待执行工具调用等）；当本次推理
-        已超配额（``step_count > max_steps``）时不发起推理，直接返回
-        ``_finalize_max_steps`` 的终态 patch_write。
-
-    副作用:
-        - 发起推理前若本次已超配额，调用 ``_finalize_max_steps`` 收口终态，由 canonical
-          writer 把 run 标记为 ``max_steps_reached`` 失败，不再触发推理；
-        - 经 ``RuntimeContextManager.add_message_chunk`` 增量持久化本轮 assistant 草稿，
-          正常结束后由 ``flush_message_chunk(complete=True)`` 收口为完整 ``AIMessage``，
-          使下一模型步能累积看到本轮输出；
-        - 模型文本与 reasoning 增量经 LangGraph custom stream 写给 workflow；由 workflow
-          统一调用 ``RuntimeOperations`` 更新 snapshot；状态写入 ``run``；
-        - 非法输出经 ``RuntimeOperations`` 落定失败。协作取消只在两处检测：进入模型请求前
-          与流式循环内（每个 chunk 处理前）；命中时经 ``RuntimeOperations.cancel_run_if_running``
-          落定取消终态并 ``interrupt`` 挂起本节点（不写路由标志、不结束图，该 run 仍可由
-          续跑恢复）；
-        - 流式循环内命中取消时额外收口本轮遗留：草稿经 ``flush_message_chunk(mode="cancel")``
-          落库但不加入模型上下文（半截消息不进入下一次模型请求），已投影的工具调用经
-          ``ToolCallLifecycleManager.cancel`` 收为 ``cancelled``；因此本轮半截工具调用不会被
-          送入 ``tools`` 节点执行。循环结束后的收口不检查取消，故取消信号若落在「最后一个
-          chunk 处理完 → 循环退出」之间，本轮已完整流出的输出会照常收口并按正常路径路由
-          （该批工具仍会执行），下一次进入本节点时才由请求前检查挂起；
-        - ``invalid_tool_calls`` 的判定已下沉到 ``ToolCallLifecycleManager.classify``：按 ``id``
-          对齐模型未解析成功的调用，命中者挂 ``invalid_detail`` 并维持 ``pending``，由 observe
-          节点统一结算并注入修复 ``SystemMessage``（排在全部 ToolMessage 之后，避免产生
-          ``AIMessage(tool_calls) -> SystemMessage -> ToolMessage`` 的非法顺序）；缺失 ``id``
-          的非法调用无法对齐，仅记 warning。
-        - 模型没有工具调用时，只有 Provider 明确报告正常完成原因才标记最终回答；长度截断直接经
-          ``continue_model`` 回到模型节点由模型自行延续，缺失或未知完成原因还会额外追加一次继续
-          提示（见 ``_build_continuation_prompt``）。
+        合并到 graph state 的步数、路由、模型指令或工具请求增量。
 
     异常:
-        RuntimeError: 超步数收口时 ``RuntimeConfig`` 未携带 run id（见 ``_finalize_max_steps``）。
-        AttributeError: 本步模型未产出任何 chunk（无草稿可收口）时 ``flush_message_chunk``
-            返回 ``None``，随后读取 ``ai_message.tool_calls`` 失败；异常由 workflow 的兜底分支
-            把 run 落 failed 终态。
-        Exception: 模型调用或流式消费失败时向上传播，由 runner 收敛 run 终态。
+        Exception: 模型调用、上下文读写或流式收口失败时向上传播，由 workflow 收敛 Run。
+
+    副作用:
+        增量持久化 assistant 草稿，将文本与 reasoning 写入 workflow stream；完成时把模型消息
+        收口到运行时上下文。检测到取消时落定取消状态并中断当前图节点。
     """
 
     rc = _runtime_config()
     operations = rc.operations
-    model = rc.model
+    model = rc.final_model if state.final_answer_only else rc.model
     thinking_channel = rc.thinking_channel
     chunk_processor = ModelChunkProcessor(thinking_channel)
     stream_writer = get_stream_writer()
@@ -149,8 +116,8 @@ async def _model_node(state: ReactGraphState) -> dict:
     run_id = operations.get_current_run().id
 
     step_count = state.step_count + 1
-    # 提前拦截：本次推理若已超配额（step_count > max_steps）
-    if step_count > state.max_steps:
+    # 普通推理耗尽后仍保留一次无工具最终回答请求。
+    if step_count > state.max_steps and not state.final_answer_only:
         return await _finalize_max_steps(state, step_count=step_count)
     step_id = f"step-{step_count}"
     if operations.is_current_run_cancelled():
@@ -178,6 +145,17 @@ async def _model_node(state: ReactGraphState) -> dict:
         _runtime_context().add_message(system_message)
         messages.append(system_message)
 
+    if state.final_answer_only:
+        final_instruction = SystemMessage(
+            content=(
+                "工具调用阶段已经结束。现在只根据当前对话和已有工具结果，直接给出用户可见的最终回答。"
+                "不要调用工具，不要描述内部路由或重试过程；信息不足时明确说明已知事实与限制。"
+            ),
+            additional_kwargs={"run_id": run_id},
+        )
+        _runtime_context().add_message(final_instruction)
+        messages.append(final_instruction)
+
     messages = await asyncio.to_thread(
         resolve_messages_for_model,
         messages,
@@ -200,12 +178,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         stream_writer, task_id=task_id, run_id=run_id, step_id=step_id
     )
 
-    # lifecycle 只覆盖本次 model request；model -> tools -> observe 之间会沿 state 传递，
-    # 下一次进入 model 时从空快照开始，避免混入上一轮已结束的 tool call。
-    state.tool_call_lifecycle = ToolCallLifecycleManager(
-        allows_tools=tuple(operations.allows_tools)
-    )
-    tool_call_lifecycle = state.tool_call_lifecycle
+    requested_tool_calls: list[dict[str, object]] = []
 
     async for chunk in model.astream(messages):
         message_chunk = _runtime_context().add_message_chunk(
@@ -220,13 +193,8 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "usage": rc.usage_stats.to_dict()},
                 },
             )
-            _runtime_context().flush_message_chunk(
-                stream_id=step_id, run_id=run_id, mode="cancel"
-            )
+            _runtime_context().flush_message_chunk(stream_id=step_id, run_id=run_id, mode="cancel")
             parts.finish()
-            tool_call_lifecycle = tool_call_lifecycle.cancel(
-                task_id=task_id, run_id=run_id, step_id=step_id
-            )
             operations.cancel_run_if_running(
                 usage_stats=rc.usage_stats, final_output="user_cancelled"
             )
@@ -246,14 +214,8 @@ async def _model_node(state: ReactGraphState) -> dict:
         # 两种形态都适用（聚合后调用通常已落在 ``tool_calls``）。
         raw_tool_calls = chunk_processor.extract_tool_calls(message_chunk)
         if raw_tool_calls:
-            # 一个 chunk 可能并行携带多个 tool call，逐条处理已有的 name/id 身份。
+            # 这里只收口文本 part；工具调用的分类和生命周期统一由 tools 节点负责。
             parts.tool_call()
-            tool_call_lifecycle = tool_call_lifecycle.create(
-                task_id=task_id,
-                run_id=run_id,
-                step_id=step_id,
-                raw_tool_calls=raw_tool_calls,
-            )
 
     parts.finish()
     ai_message: AIMessage = _runtime_context().flush_message_chunk(
@@ -265,55 +227,13 @@ async def _model_node(state: ReactGraphState) -> dict:
     # 累加 usage_metadata 到 run 级共享累加器。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
 
-    # 把模型输出拆解为工具调用生命周期：合法调用置 running，可修复非法调用挂 invalid_detail
-    # （由 observe 节点统一结算并构造修复提示），未命中工具名的噪声仅记 warning。invalid
-    # 判定从 model_node 下沉到 ToolCallLifecycleManager，本节点不再分支处理，职责收敛为
-    # 「消费模型输出、决定工具/最终回答/非法输出」三类走向。
     invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
-    tool_calls = [ToolCall.from_from_langchain(call) for call in ai_message.tool_calls]
-    tool_call_lifecycle = tool_call_lifecycle.classify(
-        task_id=task_id,
-        run_id=run_id,
-        step_id=step_id,
-        tool_calls=tool_calls,
-        invalid_tool_calls=invalid_tool_calls,
-    )
-
-    blocked_calls = tool_call_lifecycle.blocked_tool_calls
-    if blocked_calls:
-        for blocked_call in blocked_calls:
-            _runtime_context().add_message(
-                ToolMessage(
-                    content="This tool is disabled for the current run.Do not call again",
-                    tool_call_id=blocked_call.tool_call_id,
-                    name=blocked_call.tool_name,
-                ),
-                transport_metadata=TransportMetadata(status="cancelled"),
-            )
-        log.info(
-            "model_node_disabled_tools_blocked",
-            extra={
-                "msg": "本轮禁用工具调用已隐藏并闭合模型协议",
-                "data": {
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "step_id": step_id,
-                    "tool_names": sorted({record.tool_name for record in blocked_calls}),
-                    "count": len(blocked_calls),
-                },
-            },
-        )
-
-    # 非法调用就地收口为 failed：返回的是新的生命周期快照（copy-on-write），必须写回局部
-    # ``lifecycle`` 才能随返回值进入 graph state；丢弃它会让记录停在 pending。
-    tool_call_lifecycle, repair_message = tool_call_lifecycle.fail_invalid_tools(
-        task_id=task_id, run_id=run_id, step_id=step_id
-    )
-    # 3. 注入修复提示（若有可修复非法调用）：必须排在全部 ToolMessage 之后,通过system_queue延后注入.
-    if repair_message:
-        task_space.defer_system_message(
-            SystemMessage(content=repair_message, additional_kwargs={"run_id": run_id})
-        )
+    requested_tool_calls = [dict(call) for call in ai_message.tool_calls if isinstance(call, dict)]
+    invalid_requests = [dict(call) for call in invalid_tool_calls if isinstance(call, dict)]
+    tool_request = {
+        "tool_calls": requested_tool_calls,
+        "invalid_tool_calls": invalid_requests,
+    }
 
     log.info(
         "model_node_completed",
@@ -321,43 +241,51 @@ async def _model_node(state: ReactGraphState) -> dict:
             "msg": f"模型产出完成，step_id={step_id}",
             "data": {
                 "step_id": step_id,
-                "tool_count": len(tool_calls),
-                "invalid_count": tool_call_lifecycle.invalid_count,
+                "tool_count": len(requested_tool_calls),
+                "invalid_count": len(invalid_requests),
                 "output_text_length": len(ai_message.content),
                 "finish_reason": finish_reason,
             },
         },
     )
 
-    if tool_call_lifecycle.has_call:
-        # 有任意工具调用（合法或非法）都进 tools 节点：合法调用执行，非法调用由 observe 结算。
-        # 不再区分 requested_tool / repair_requested —— observe 非终态即经 _after_observe
-        # 回流 model。
+    has_tool_request = bool(requested_tool_calls or invalid_requests)
+    if has_tool_request and not state.final_answer_only:
         return {
             "step_count": step_count,
-            "requested_tool": True,
-            "continue_model": False,
-            "final_response": False,
-            "terminal": False,
+            "next_node": ReactRoute.TOOLS,
             "instruction": ai_message.content if isinstance(ai_message.content, str) else "",
-            "tool_call_lifecycle": tool_call_lifecycle,
+            "tool_request": tool_request,
         }
 
-    if finish_reason in Constant.Workflow.NORMAL_FINISH_REASONS and ai_message.content:
+    if state.final_answer_only and has_tool_request:
+        final_output = "最终回答阶段仍请求调用工具，未能生成有效最终回答。"
+        failed_run = operations.fail_run_if_running(
+            end_reason="invalid_model_output",
+            usage_stats=rc.usage_stats,
+            final_output=final_output,
+        )
+        if failed_run is None:
+            log.info(
+                "model_node_final_answer_tool_request_terminal_race_lost",
+                extra={
+                    "msg": "最终回答阶段仍请求工具时 Run 已非运行态",
+                    "data": {"step_id": step_id, "run_id": run_id},
+                },
+            )
+        return {**end_state(step_count), "final_text": final_output}
+
+    final_content = content_to_text(ai_message.content).strip()
+    if finish_reason in Constant.Workflow.NORMAL_FINISH_REASONS and final_content:
         # 没有工具调用且 Provider 明确报告正常结束 → 普通最终文本，必要时继续走结构化收口。
-        final_answer = ai_message.content if isinstance(ai_message.content, str) else None
-        if rc.structured_output is not None and ai_message.content:
+        final_answer = final_content
+        if rc.structured_output is not None and final_content:
             # 普通最终答复作为结构化节点的上下文候选；这里只交接控制流，不提前完成 Run。
             return {
                 "step_count": step_count,
-                "requested_tool": False,
-                "continue_model": False,
-                "structured_output_requested": True,
-                "final_response": False,
-                "terminal": False,
+                "next_node": ReactRoute.STRUCTURED_OUTPUT,
                 "instruction": "",
-                "final_text": content_to_text(ai_message.content),
-                "tool_call_lifecycle": tool_call_lifecycle,
+                "final_text": final_content,
             }
         completed_run = operations.complete_run_if_running(
             rc.usage_stats, final_output=final_answer
@@ -370,7 +298,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "run_id": rc.run.id},
                 },
             )
-            return terminal_state(step_count, requested_tool=False)
+            return end_state(step_count)
         log.info(
             "model_node_final_response",
             extra={
@@ -379,9 +307,26 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         return {
-            **terminal_state(step_count, final_response=True, requested_tool=False),
-            "final_text": ai_message.content,
+            **end_state(step_count),
+            "final_text": final_content,
         }
+
+    if state.final_answer_only:
+        final_output = "模型未能在最终回答阶段返回有效文本。"
+        failed_run = operations.fail_run_if_running(
+            end_reason="invalid_model_output",
+            usage_stats=rc.usage_stats,
+            final_output=final_output,
+        )
+        if failed_run is None:
+            log.info(
+                "model_node_final_answer_invalid_terminal_race_lost",
+                extra={
+                    "msg": "最终回答阶段无有效文本时 Run 已非运行态",
+                    "data": {"step_id": step_id, "run_id": run_id},
+                },
+            )
+        return {**end_state(step_count), "final_text": final_output}
 
     if finish_reason not in Constant.Workflow.NORMAL_FINISH_REASONS:
         # 已有文本不代表模型完成：例如 finish_reason=length 只说明本轮达到输出上限。
@@ -406,21 +351,15 @@ async def _model_node(state: ReactGraphState) -> dict:
         )
         return {
             "step_count": step_count,
-            "requested_tool": False,
-            "continue_model": True,
-            "final_response": False,
-            "terminal": False,
+            "next_node": ReactRoute.MODEL,
             "instruction": "",
         }
 
-    #如果存在系统修复提示，重新进入model
+    # 如果存在系统修复提示，重新进入model
     if task_space.has_deferred_system_messages():
         return {
             "step_count": step_count,
-            "requested_tool": False,
-            "continue_model": True,
-            "final_response": False,
-            "terminal": False,
+            "next_node": ReactRoute.MODEL,
             "instruction": "",
         }
 
@@ -444,4 +383,4 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "run_id": rc.run.id},
             },
         )
-    return terminal_state(step_count, requested_tool=False)
+    return end_state(step_count)

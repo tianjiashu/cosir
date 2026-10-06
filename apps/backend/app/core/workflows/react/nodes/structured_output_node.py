@@ -14,7 +14,7 @@ from app.config.logging.logger import log
 from app.core.workflows.react.node_helper.common import (
     _runtime_config,
     _runtime_context,
-    terminal_state,
+    end_state,
 )
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.vision_input import resolve_messages_for_model
@@ -154,9 +154,8 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
         workspace_id=task.workspace_id,
     )
     tool_schemas = operations.task_tool_schemas
-    # 复用 ReAct 的工具绑定模型，不设置 tool_choice=none；提示词约束工具调用，若模型仍
-    # 返回工具调用则由 _validate_response 拒绝并重试，同时保持请求中的工具 schema 不变。
-    model = runtime.model.bind(response_format=spec.response_format())
+    # 使用未绑定工具的基础模型并绑定 response_format；校验仍拒绝任何意外工具调用。
+    model = runtime.final_model.bind(response_format=spec.response_format())
     retry_feedback: str | None = None
 
     for attempt in range(1, _MAX_ATTEMPTS + 1):
@@ -165,7 +164,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                 usage_stats=runtime.usage_stats,
                 final_output="user_cancelled",
             )
-            return terminal_state(state.step_count)
+            return end_state(state.step_count)
 
         instruction = _request_instruction(
             spec.name,
@@ -184,7 +183,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                 usage_stats=runtime.usage_stats,
                 final_output="user_cancelled",
             )
-            return terminal_state(state.step_count)
+            return end_state(state.step_count)
 
         final_output, retry_feedback = _validate_response(response, spec.json_schema)
         if final_output is not None:
@@ -200,7 +199,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                         "data": {"run_id": runtime.run.id, "attempt": attempt},
                     },
                 )
-                return terminal_state(state.step_count)
+                return end_state(state.step_count)
             log.info(
                 "structured_output_completed",
                 extra={
@@ -213,7 +212,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                     },
                 },
             )
-            return terminal_state(state.step_count, final_response=True)
+            return end_state(state.step_count)
 
         log.warning(
             "structured_output_validation_failed",
@@ -254,4 +253,4 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                 },
             },
         )
-    return terminal_state(state.step_count)
+    return end_state(state.step_count)

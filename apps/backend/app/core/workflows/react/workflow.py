@@ -25,6 +25,7 @@ from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.llm_provider.model_failure import classify_model_failure
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_run_failure import (
@@ -33,7 +34,7 @@ from app.models.conversation_run_failure import (
 from app.service.depends import get_terminal_session_service
 
 from ..agent_workflow import AgentWorkflow, build_checkpointer
-from .edges import _after_observe, _after_tools, _should_continue
+from .edges import _route_target
 from .runtime_config import RuntimeConfig
 
 
@@ -57,7 +58,7 @@ class ReactLikeWorkflow(AgentWorkflow):
     def _build_graph(self, checkpointer) -> Any:
         """构建并编译 ReAct StateGraph。
 
-        ``model`` / ``tools`` / ``observe`` 三节点经条件边形成 ReAct 循环；Agent Team 预览
+        ``model`` / ``tools`` / ``observe`` 形成 ReAct 循环；Agent Team 预览
         通过专用等待节点挂起主 Agent；graph 编译时挂入 ``checkpointer`` 以启用 graph 控制流
         持久化。普通协作取消仍由 ``model`` 节点的 ``interrupt`` 中断。
 
@@ -88,24 +89,29 @@ class ReactLikeWorkflow(AgentWorkflow):
         builder.add_node("structured_output", _structured_output_node)
         builder.add_node("agent_team_wait", agent_team_confirmation_wait_node)
         builder.add_edge(START, "model")
-        # 超配额拦截收口在 model 节点（发起推理前 step_count > max_steps 直接终态）。
+        # 超出普通推理预算后，model 节点切换为一次无工具最终回答请求。
         builder.add_conditional_edges(
             "model",
-            _should_continue,
+            _route_target,
             {
                 "tools": "tools",
+                "observe": "observe",
                 "model": "model",
                 "structured_output": "structured_output",
                 END: END,
             },
         )
         builder.add_edge("structured_output", END)
-        # tools 执行后进入 observe；取消/终态分支直接 END，不进 observe 避免多余推理。
-        builder.add_conditional_edges("tools", _after_tools, {"observe": "observe", END: END})
-        # observe 判定后回 model 继续推理、挂起等待 Team 确认，或达错误上限终态 END。
+        # tools 对被拒绝/无效批次可直接回 model；有实际执行结果时才进入 observe。
+        builder.add_conditional_edges(
+            "tools",
+            _route_target,
+            {"model": "model", "observe": "observe"},
+        )
+        # observe 写入明确的下一目标：回到模型、等待 Team 确认或结束。
         builder.add_conditional_edges(
             "observe",
-            _after_observe,
+            _route_target,
             {"model": "model", "agent_team_wait": "agent_team_wait", END: END},
         )
         # 等待节点初次执行时通过 interrupt 保存断点；恢复后继续回到模型节点读取 TeamResult。
@@ -185,11 +191,11 @@ class ReactLikeWorkflow(AgentWorkflow):
 
     @staticmethod
     def _settle_failed_run(
-            operations: WorkflowOperations,
-            end_reason: str,
-            *,
-            usage_stats: ConversationRunUsageStats | None = None,
-            final_output: str | None = None,
+        operations: WorkflowOperations,
+        end_reason: str,
+        *,
+        usage_stats: ConversationRunUsageStats | None = None,
+        final_output: str | None = None,
     ) -> None:
         """把本轮的 running Run 落定为 failed 终态。
 
@@ -253,11 +259,11 @@ class ReactLikeWorkflow(AgentWorkflow):
         )
 
     async def run(
-            self,
-            operations: WorkflowOperations,
-            callbacks: list | None = None,
-            langfuse_trace_id: str | None = None,
-            execution_mode: ExecutionMode = "fresh",
+        self,
+        operations: WorkflowOperations,
+        callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
+        execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """执行一个任务，并在异常逃逸时把 Run 落定为 failed 终态。
 
@@ -293,11 +299,11 @@ class ReactLikeWorkflow(AgentWorkflow):
             raise
 
     async def _run_graph(
-            self,
-            operations: WorkflowOperations,
-            callbacks: list | None = None,
-            langfuse_trace_id: str | None = None,
-            execution_mode: ExecutionMode = "fresh",
+        self,
+        operations: WorkflowOperations,
+        callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
+        execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """驱动已编译 graph 执行一次任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -392,6 +398,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             operations=operations,
             run=run,
             model=cast(Runnable, bound_model),
+            final_model=cast(Runnable, base_model),
             structured_output=agent_profile.structured_output,
             start_time=perf_counter(),
             usage_stats=ConversationRunUsageStats(),
@@ -406,7 +413,6 @@ class ReactLikeWorkflow(AgentWorkflow):
         runtime_context_manager = task_runtime_spaces.get_or_create(
             current_task.id
         ).get_context_manager(agent_profile=agent_profile)
-
 
         # 每个新 ConversationRun 都从 canonical history 建立 fresh 上下文。
         runtime_context_manager.begin_run(
@@ -441,21 +447,18 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         async with build_checkpointer() as checkpointer:
             graph = self._build_graph(checkpointer)
-            # 初始 state 只填控制流字段：模型消息与 runtime context 都不进 state（前者归
+            # 初始 state 填入图控制与执行数据：模型消息与 runtime context 都不进 state（前者归
             # RuntimeContextManager，后者经 config 注入）。
             initial_state = ReactGraphState(
                 step_count=0,
                 tool_error_count=0,
-                requested_tool=False,
-                continue_model=False,
-                final_response=False,
-                terminal=False,
+                next_node=ReactRoute.MODEL,
                 instruction="",
                 max_steps=agent_profile.max_steps,
                 final_text="",
                 last_tool_results={},
+                tool_request={},
                 terminal_sessions={},
-                agent_team_confirmation_waiting=False,
             )
             # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动
             # 一个新的 graph input，即使 thread_id 相同也不等价于 resume。
@@ -495,9 +498,9 @@ class ReactLikeWorkflow(AgentWorkflow):
                 )
             try:
                 async for mode, value in graph.astream(
-                        input_state,
-                        config,
-                        stream_mode=["values", "custom"],
+                    input_state,
+                    config,
+                    stream_mode=["values", "custom"],
                 ):
                     # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
                     # 统一写入 snapshot。两者都不是 Agent context 的来源。
@@ -532,12 +535,12 @@ class ReactLikeWorkflow(AgentWorkflow):
                 )
 
     async def _finalize_terminal_checkpoint(
-            self,
-            graph: Any,
-            config: dict[str, Any],
-            run_id: int,
-            *,
-            reason: str,
+        self,
+        graph: Any,
+        config: dict[str, Any],
+        run_id: int,
+        *,
+        reason: str,
     ) -> bool:
         """关闭 Run 的 terminal 并把 checkpoint 中的活跃元数据收敛为终态。
 
@@ -575,10 +578,10 @@ class ReactLikeWorkflow(AgentWorkflow):
             return False
 
     async def recover_orphaned_terminal_checkpoints(
-            self,
-            runs: Iterable[object],
-            *,
-            reason: str = "runtime_restarted",
+        self,
+        runs: Iterable[object],
+        *,
+        reason: str = "runtime_restarted",
     ) -> int:
         """扫描最近 Run 的 checkpoint 并关闭遗留的活跃 terminal 元数据。
 

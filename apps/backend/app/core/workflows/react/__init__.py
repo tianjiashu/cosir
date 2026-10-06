@@ -5,24 +5,20 @@
   独占管理，不进 state）。
 - ``nodes``（``app.core.workflows.nodes``）：``model`` / ``tools`` / ``observe`` 节点行为
   （LangGraph 原生 callable）。
-- ``edges``：``_should_continue`` / ``_after_tools`` / ``_after_observe`` 条件边路由。
+- ``edges``：把 state 的 ``next_node`` 转换成 LangGraph 条件边目标。
 - ``workflow``：``ReactLikeWorkflow`` 编排入口（构建 graph、驱动执行、转发 custom stream）。
 - ``runtime_config``：注入 ``config["configurable"]`` 的节点共享运行期依赖。
 - ``streaming``：节点写入 custom stream 的中性模型增量契约。
 """
 
-from app.core.workflows.react.edges import (
-    _after_observe,
-    _after_tools,
-    _should_continue,
-)
+from app.core.workflows.react.edges import _route_target
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.react.workflow import ReactLikeWorkflow
 
 __all__ = [
     "ReactGraphState",
     "ReactLikeWorkflow",
-    "_after_observe",
-    "_after_tools",
-    "_should_continue",
+    "ReactRoute",
+    "_route_target",
 ]
