@@ -1,0 +1,1198 @@
+[exit_code=0]
+pip install -r requirements.txt
+python main.py
+pip install -r requirements.txt
+where git
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-2) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+pip install requests
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -m pip install requests
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python --version && where python && python -m pip --version && where pip
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python --version
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -m pip list
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -m pip install requests
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python parse_result.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -c "import json; with open('nowcoder_search_result.json', 'r', encoding='utf-8') as f: data = json.load(f); print(json.dumps(data['data'], indent=2, ensure_ascii=False)[:5000])"
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python view_json_structure.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python view_json_structure.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python view_json_structure.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python parse_result.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+pip install user-agents
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+dir nowcoder_results
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+& G:/Python/python.exe c:/Users/Administrator/Desktop/niuke/nowcoder_spider.py
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-5) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-6) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+& G:/Python/python.exe c:/Users/Administrator/Desktop/niuke/nowcoder_spider.py
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-9) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-10) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+& G:/Python/python.exe c:/Users/Administrator/Desktop/niuke/nowcoder_spider.py
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-12) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python merge_results.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python get_file_size.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python count_json_elements.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+dir nowcoder_results\parsed_moment_data_*.json | sort
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python test_data_format.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python merge_results.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_content_spider.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_content_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+dir nowcoder_content
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_content_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_content_spider.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_content_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+pip install openpyxl
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_content_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python nowcoder_content_spider.py
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+dir
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-4) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mkdir -p "d:\JavaBaguwen\JavaBaguwen-service\src\main\java\com\java\baguwen\show\JavaBaguwen\spider"
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mkdir -p "d:\JavaBaguwen\JavaBaguwen-service\src\main\resources\mapper"
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd d:\JavaBaguwen\JavaBaguwen-web && mvn spring-boot:run -Dspring-boot.run.arguments="--spring.profiles.active=spider --log.home=test-logs" -q
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd d:\JavaBaguwen\JavaBaguwen-web
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mvn spring-boot:run -Dspring-boot.run.arguments="--spring.profiles.active=spider --log.home=test-logs" -q
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+java -version
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+d:\JavaBaguwen\JavaBaguwen-web\test-logging.bat
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-3) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd d:\JavaBaguwen\JavaBaguwen &amp;&amp; mvn clean package -DskipTests
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd d:\JavaBaguwen\JavaBaguwen; mvn clean package -DskipTests
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+where mvn
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd d:\JavaBaguwen\JavaBaguwen\JavaBaguwen-start\target; jar -tf JavaBaguwen-start.jar | findstr log4j2
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd d:\JavaBaguwen\JavaBaguwen\JavaBaguwen-start\target; jar -tf JavaBaguwen-start.jar | Select-String "log4j2"
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd d:\JavaBaguwen\JavaBaguwen\JavaBaguwen-start; mvn dependency:tree -Dincludes=*log4j*
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-4) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -m http.server 8000
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -m http.server 8000
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-3) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -m http.server 8000
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+dir /b d:\前端
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+ls -la
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+dir
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-3) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mkdir -p src/main/java/com/alibaba/springboot/dynamicconfig/{auto,storage,monitor,annotation,serializer,api,model,properties} src/main/resources/META-INF src/test/java/com/alibaba/springboot/dynamicconfig
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mkdir src\main\java\com\alibaba\springboot\dynamicconfig\auto
+mkdir src\main\java\com\alibaba\springboot\dynamicconfig\storage
+mkdir src\main\java\com\alibaba\springboot\dynamicconfig\monitor
+mkdir src\main\java\com\alibaba\springboot\dynamicconfig\annotation
+mkdir src\main\java\com\alibaba\springboot\dynamicconfig\serializer
+mkdir src\main\java\com\alibaba\springboot\dynamicconfig\api
+mkdir src\main\java\com\alibaba\springboot\dynamicconfig\model
+mkdir src\main\java\com\alibaba\springboot\dynamicconfig\properties
+mkdir src\main\resources\META-INF
+mkdir src\test\java\com\alibaba\springboot\dynamicconfig
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mvn clean package -DskipTests
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+where mvn
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+where gradle
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-3) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -c "import PyPDF2; pdf_file = open('Python 后端减脂助手小程序技术方案.pdf', 'rb'); pdf_reader = PyPDF2.PdfReader(pdf_file); print(len(pdf_reader.pages)); for page_num in range(len(pdf_reader.pages)): page = pdf_reader.pages[page_num]; print(page.extract_text())"; pdf_file.close()
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -c "import PyPDF2; with open('Python 后端减脂助手小程序技术方案.pdf', 'rb') as pdf_file: pdf_reader = PyPDF2.PdfReader(pdf_file); print(len(pdf_reader.pages)); for page_num in range(len(pdf_reader.pages)): page = pdf_reader.pages[page_num]; print(page.extract_text())"
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+echo 'import PyPDF2`
+with open("Python 后端减脂助手小程序技术方案.pdf", "rb") as pdf_file:`
+    pdf_reader = PyPDF2.PdfReader(pdf_file)`
+    print("Number of pages:", len(pdf_reader.pages))`
+    for page_num in range(len(pdf_reader.pages)):`
+        page = pdf_reader.pages[page_num]`
+        text = page.extract_text()`
+        print(f"\n--- Page {page_num + 1} ---")`
+        print(text)' > read_pdf.py && python read_pdf.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mkdir -p fat_loss_assistant/app/api fat_loss_assistant/app/core fat_loss_assistant/app/crud fat_loss_assistant/app/models fat_loss_assistant/app/schemas fat_loss_assistant/app/services fat_loss_assistant/app/utils
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+New-Item -ItemType Directory -Path "fat_loss_assistant\app\api" -Force; New-Item -ItemType Directory -Path "fat_loss_assistant\app\core" -Force; New-Item -ItemType Directory -Path "fat_loss_assistant\app\crud" -Force; New-Item -ItemType Directory -Path "fat_loss_assistant\app\models" -Force; New-Item -ItemType Directory -Path "fat_loss_assistant\app\schemas" -Force; New-Item -ItemType Directory -Path "fat_loss_assistant\app\services" -Force; New-Item -ItemType Directory -Path "fat_loss_assistant\app\utils" -Force
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -m py_compile fat_loss_assistant\main.py fat_loss_assistant\api\*.py fat_loss_assistant\services\*.py fat_loss_assistant\crud\*.py fat_loss_assistant\models\*.py fat_loss_assistant\schemas\*.py fat_loss_assistant\utils\*.py fat_loss_assistant\core\*.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd fat_loss_assistant && python -c "from main import app; print('应用启动成功')"
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd fat_loss_assistant; python -c "from main import app; print('应用启动成功')"
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -c "from main import app; print('应用启动成功')"
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -c "import sys; sys.path.append('c:\\Users\\Administrator\\Desktop\\您瘦了吗？'); from fat_loss_assistant.schemas.user import UserBase, UserSubmit, UserInfo; print('Schemas imported successfully'); print('UserBase fields:', [field for field in UserBase.__fields__]); print('UserSubmit fields:', [field for field in UserSubmit.__fields__]); print('UserInfo fields:', [field for field in UserInfo.__fields__])"
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python main.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+pip install -r requirements.txt
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+pip install -r requirements.txt
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python main.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+pip install passlib[bcrypt]
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python main.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python main.py
+wsl --install
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-5) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -m py_compile services/user.py api/user.py schemas/user.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd c:\Users\Administrator\Desktop\您瘦了吗？\fat_loss_assistant ; python -m py_compile services/user.py api/user.py schemas/user.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+python -m py_compile services/user.py api/user.py schemas/user.py
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+curl -X GET http://localhost:8000/health
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+Invoke-WebRequest -Uri http://localhost:8000/health -Method GET
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-4) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+try { function Global:trae-sandbox { param([string]$CommandLine); if (-not $CommandLine -and $args.Count -gt 0) { $CommandLine = ($args -join ' ') }; $shellPath = (Get-Process -Id $PID).Path; & "$env:TRAE_SANDBOX_CLI_PATH" exec --storage-path "$env:TRAE_SANDBOX_STORAGE_PATH" --config-name "$env:TRAE_SANDBOX_CONFIG_NAME" --shell-path "$shellPath" --command-line "$CommandLine" }; if ($env:TRAE_SANDBOX_SOURCE_FLAG_PATH) { try { if (-not (Test-Path $env:TRAE_SANDBOX_SOURCE_FLAG_PATH)) { [System.IO.File]::Create($env:TRAE_SANDBOX_SOURCE_FLAG_PATH).Close() } } catch { } } } catch{} ; Write-Output "[Trae CN] want run in sandbox environment, try to fix it now."
+trae-sandbox 'netstat -ano | findstr :8000'
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-5) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+try { function Global:trae-sandbox { param([string]$CommandLine); if (-not $CommandLine -and $args.Count -gt 0) { $CommandLine = ($args -join ' ') }; $shellPath = (Get-Process -Id $PID).Path; & "$env:TRAE_SANDBOX_CLI_PATH" exec --storage-path "$env:TRAE_SANDBOX_STORAGE_PATH" --config-name "$env:TRAE_SANDBOX_CONFIG_NAME" --shell-path "$shellPath" --command-line "$CommandLine" }; if ($env:TRAE_SANDBOX_SOURCE_FLAG_PATH) { try { if (-not (Test-Path $env:TRAE_SANDBOX_SOURCE_FLAG_PATH)) { [System.IO.File]::Create($env:TRAE_SANDBOX_SOURCE_FLAG_PATH).Close() } } catch { } } } catch{} ; Write-Output "[Trae CN] want run in sandbox environment, try to fix it now."
+trae-sandbox 'python main.py'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'netstat -ano | findstr :8000'
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-6) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+try { function Global:trae-sandbox { param([string]$CommandLine); if (-not $CommandLine -and $args.Count -gt 0) { $CommandLine = ($args -join ' ') }; $shellPath = (Get-Process -Id $PID).Path; & "$env:TRAE_SANDBOX_CLI_PATH" exec --storage-path "$env:TRAE_SANDBOX_STORAGE_PATH" --config-name "$env:TRAE_SANDBOX_CONFIG_NAME" --shell-path "$shellPath" --command-line "$CommandLine" }; if ($env:TRAE_SANDBOX_SOURCE_FLAG_PATH) { try { if (-not (Test-Path $env:TRAE_SANDBOX_SOURCE_FLAG_PATH)) { [System.IO.File]::Create($env:TRAE_SANDBOX_SOURCE_FLAG_PATH).Close() } } catch { } } } catch{} ; Write-Output "[Trae CN] want run in sandbox environment, try to fix it now."
+trae-sandbox 'uvicorn main:app --host 0.0.0.0 --port 8000 --reload'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python -m uvicorn main:app --reload'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'curl -X POST "http://127.0.0.1:8000/api/auth/register/web" -H "Content-Type: application/json" -d "{\"username\": \"newuser\", \"password\": \"123456\", \"nickname\": \"新用户\"}"'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/auth/register/web" -Method POST -Headers @{"Content-Type"="application/json"} -Body ''{"username": "newuser", "password": "123456", "nickname": "新用户"}'''
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox '$body = ''{"username": "newuser", "password": "123456", "nickname": "新用户"}''; Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/auth/register/web" -Method POST -Headers @{"Content-Type"="application/json"} -Body $body'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python -c "import requests; data = {''username'': ''newuser'', ''password'': ''123456'', ''nickname'': ''新用户''}; response = requests.post(''http://127.0.0.1:8000/api/auth/register/web'', json=data); print(response.status_code); print(response.json())"'
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-7) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+try { function Global:trae-sandbox { param([string]$CommandLine); if (-not $CommandLine -and $args.Count -gt 0) { $CommandLine = ($args -join ' ') }; $shellPath = (Get-Process -Id $PID).Path; & "$env:TRAE_SANDBOX_CLI_PATH" exec --storage-path "$env:TRAE_SANDBOX_STORAGE_PATH" --config-name "$env:TRAE_SANDBOX_CONFIG_NAME" --shell-path "$shellPath" --command-line "$CommandLine" }; if ($env:TRAE_SANDBOX_SOURCE_FLAG_PATH) { try { if (-not (Test-Path $env:TRAE_SANDBOX_SOURCE_FLAG_PATH)) { [System.IO.File]::Create($env:TRAE_SANDBOX_SOURCE_FLAG_PATH).Close() } } catch { } } } catch{} ; Write-Output "[Trae CN] want run in sandbox environment, try to fix it now."
+trae-sandbox 'pip install -r requirements.txt'
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-8) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+try { function Global:trae-sandbox { param([string]$CommandLine); if (-not $CommandLine -and $args.Count -gt 0) { $CommandLine = ($args -join ' ') }; $shellPath = (Get-Process -Id $PID).Path; & "$env:TRAE_SANDBOX_CLI_PATH" exec --storage-path "$env:TRAE_SANDBOX_STORAGE_PATH" --config-name "$env:TRAE_SANDBOX_CONFIG_NAME" --shell-path "$shellPath" --command-line "$CommandLine" }; if ($env:TRAE_SANDBOX_SOURCE_FLAG_PATH) { try { if (-not (Test-Path $env:TRAE_SANDBOX_SOURCE_FLAG_PATH)) { [System.IO.File]::Create($env:TRAE_SANDBOX_SOURCE_FLAG_PATH).Close() } } catch { } } } catch{} ; Write-Output "[Trae CN] want run in sandbox environment, try to fix it now."
+trae-sandbox 'python test_password_hash.py'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd c:\Users\Administrator\Desktop\您瘦了吗？\fat_loss_assistant ; trae-sandbox 'python test_password_hash.py'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'copy "..\test_password_hash.py" . && python test_password_hash.py'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+copy "..\test_password_hash.py" .
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python test_password_hash.py'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd c:\Users\Administrator\Desktop\您瘦了吗？ ; trae-sandbox 'pip show bcrypt passlib'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd c:\Users\Administrator\Desktop\您瘦了吗？\fat_loss_assistant ; trae-sandbox 'python test_password_hash.py'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python test_password_hash.py'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'pip install argon2-cffi redis'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'mkdir -p tests && python -m unittest tests/test_auth.py'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python -m unittest tests/test_auth.py'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python -m unittest tests/test_auth.py'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python -m unittest tests/test_auth.py'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python -m unittest tests/test_auth.py'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd c:\Users\Administrator\Desktop\您瘦了吗？ ; trae-sandbox 'python -m pytest fat_loss_assistant/tests/test_user_split.py -v'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python fat_loss_assistant/tests/test_user_split.py'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python fat_loss_assistant/tests/test_user_split.py'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python fat_loss_assistant/tests/test_user_split.py'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python fat_loss_assistant/tests/test_user_split.py'
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python main.py'
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd C:\Users\Administrator\Desktop\您瘦了吗？\fat_loss_assistant ; trae-sandbox 'python main.py'
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+Remove-Variable -Name '__VSCodeOriginalPrompt' -ErrorAction SilentlyContinue; $Global:__TraeInjectAgain=1; function prompt { $lastSuccess = $?; "(TraeAI-4) $($ExecutionContext.SessionState.Path.CurrentLocation) [$( if ($lastSuccess -eq $true) { 0 } else { 1 } ):$LASTEXITCODE] $ " }; $env:GIT_PAGER=""; $env:PAGER=""
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mysql -u root -p -e "ALTER TABLE user_account MODIFY COLUMN openid VARCHAR(64) UNIQUE NULL;"
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+try { function Global:trae-sandbox { param([string]$CommandLine); if (-not $CommandLine -and $args.Count -gt 0) { $CommandLine = ($args -join ' ') }; $shellPath = (Get-Process -Id $PID).Path; & "$env:TRAE_SANDBOX_CLI_PATH" exec --storage-path "$env:TRAE_SANDBOX_STORAGE_PATH" --config-name "$env:TRAE_SANDBOX_CONFIG_NAME" --shell-path "$shellPath" --command-line "$CommandLine" }; if ($env:TRAE_SANDBOX_SOURCE_FLAG_PATH) { try { if (-not (Test-Path $env:TRAE_SANDBOX_SOURCE_FLAG_PATH)) { [System.IO.File]::Create($env:TRAE_SANDBOX_SOURCE_FLAG_PATH).Close() } } catch { } } } catch{} ; Write-Output "[Trae CN] want run in sandbox environment, try to fix it now."
+trae-sandbox 'python test_register.py'
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'cd fat_loss_assistant && python ..\test_register.py'
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+cd c:\Users\Administrator\Desktop\您瘦了吗？\fat_loss_assistant ; trae-sandbox 'python test_register.py'
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox 'python test_register.py'
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+trae-sandbox '$env:PYTHONPATH = "fat_loss_assistant"; python test_register.py'
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mysql -u root -p -e "DESCRIBE user_account;"
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mysql -u root -p -e "SHOW CREATE TABLE user_account;"
+clear
+if ($env:TERM_PROGRAM -eq "vscode") { $Global:__TraeInjectAgain=1; try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch{} }; Write-Output "[Trae CN] Shell integration is not enabled, try to fix it now."
+clear
+try { . "g:\Trae CN\resources\app\out\vs\workbench\contrib\terminal\common\scripts\safe_rm_aliases.ps1" } catch{} ; Write-Output "[Trae CN] Safe Rm alias is not enabled, try to fix it now."
+mysql -u root -p -e "SELECT COLUMN_NAME, IS_NULLABLE, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'fat_loss' AND TABLE_NAME = 'user_account' AND COLUMN_NAME = 'openid';"
+curl -fsSL https://moltbotai.ai/install.sh | bash
+<#`
+MoltBot Windows 一键安装脚本`
+功能：自动安装Node.js、克隆仓库、安装依赖、创建配置文件`
+#>`
+cls`
+Write-Host "===== MoltBot 一键安装开始 =====" -ForegroundColor Green`
+`
+# 1. 检查并安装Node.js（v22，适配MoltBot）`
+Write-Host "`n【1/5】检查Node.js环境..." -ForegroundColor Cyan`
+$nodeVersion = (node -v 2>&1) -replace "v", ""`
+if (-not $nodeVersion -or [version]$nodeVersion -lt [version]"22.0.0") {`
+    Write-Host "未安装Node.js或版本过低，正在下载Node.js v22..." -ForegroundColor Yellow`
+    $nodeInstaller = "$env:TEMP\node-v22.9.0-x64.msi"`
+    # 用国内镜像下载，速度更快`
+    Invoke-WebRequest -Uri "https://npmmirror.com/mirrors/node/v22.9.0/node-v22.9.0-x64.msi" -OutFile $nodeInstaller`
+    Write-Host "开始安装Node.js..." -ForegroundColor Yellow`
+    Start-Process msiexec.exe -ArgumentList "/i `"$nodeInstaller`" /qn ADDLOCAL=ALL" -Wait`
+    Remove-Item $nodeInstaller -Force`
+    # 刷新环境变量`
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")`
+    Write-Host "Node.js安装完成！" -ForegroundColor Green`
+} else {`
+    Write-Host "Node.js版本符合要求（v$nodeVersion）" -ForegroundColor Green`
+}`
+`
+# 2. 安装pnpm包管理器`
+Write-Host "`n【2/5】安装pnpm..." -ForegroundColor Cyan`
+if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {`
+    npm install -g pnpm --registry=https://registry.npmmirror.com`
+    Write-Host "pnpm安装完成！" -ForegroundColor Green`
+} else {`
+    Write-Host "pnpm已安装" -ForegroundColor Green`
+}`
+`
+# 3. 克隆MoltBot仓库（默认到桌面，方便查找）`
+Write-Host "`n【3/5】克隆MoltBot仓库..." -ForegroundColor Cyan`
+$installPath = "$env:USERPROFILE\Desktop\MoltBot"`
+if (-not (Test-Path $installPath)) {`
+    # 优先用git克隆，失败则下载压缩包`
+    if (Get-Command git -ErrorAction SilentlyContinue) {`
+        git clone https://github.com/moltinai/moltbot.git $installPath`
+    } else {`
+        Write-Host "未安装Git，直接下载压缩包..." -ForegroundColor Yellow`
+        $zipFile = "$env:TEMP\moltbot.zip"`
+        Invoke-WebRequest -Uri "https://github.com/moltinai/moltbot/archive/refs/heads/main.zip" -OutFile $zipFile`
+        Expand-Archive -Path $zipFile -DestinationPath $installPath -Force`
+        # 调整目录结构（压缩包解压后多一层文件夹）`
+        Move-Item -Path "$installPath\moltbot-main\*" -Destination $installPath -Force`
+        Remove-Item -Path "$installPath\moltbot-main" -Force`
+        Remove-Item $zipFile -Force`
+    }`
+    Write-Host "仓库下载完成（路径：$installPath）" -ForegroundColor Green`
+} else {`
+    Write-Host "MoltBot已存在，跳过克隆" -ForegroundColor Green`
+}`
+`
+# 4. 安装项目依赖`
+Write-Host "`n【4/5】安装项目依赖..." -ForegroundColor Cyan`
+cd $installPath`
+pnpm install --registry=https://registry.npmmirror.com`
+Write-Host "依赖安装完成！" -ForegroundColor Green`
+`
+# 5. 创建配置文件模板`
+Write-Host "`n【5/5】创建配置文件..." -ForegroundColor Cyan`
+$envFile = "$installPath\.env"`
+if (-not (Test-Path $envFile)) {`
+    @"`
+# 模型配置（二选一即可）`
+ANTHROPIC_API_KEY=你的Claude API Key`
+# OPENAI_API_KEY=你的OpenAI API Key`
+`
+# 基础配置`
+MODEL_PROVIDER=anthropic  # 可选：anthropic / openai`
+ALLOW_SHELL=true          # 允许执行系统命令（谨慎开启）`
+ALLOW_DESKTOP=true        # 允许桌面控制`
+LANGUAGE=zh-CN            # 响应语言`
+PORT=3000                 # 网页版端口`
+"@ | Out-File -Path $envFile -Encoding utf8`
+    Write-Host "配置文件已创建（路径：$envFile）" -ForegroundColor Green`
+} else {`
+    Write-Host "配置文件已存在，跳过创建" -ForegroundColor Green`
+}`
+`
+Write-Host "`n===== MoltBot 一键安装完成！=====" -ForegroundColor Green`
+Write-Host "下一步操作：" -ForegroundColor Cyan`
+Write-Host "1. 编辑 $installPath\.env 文件，填入你的API Key"`
+Write-Host "2. 在PowerShell中执行：cd $installPath && pnpm run start:wechat"`
+Write-Host "3. 扫码登录微信，即可开始使用"
+<#`
+MoltBot Windows 一键安装脚本（指定G:\MoltBot路径）`
+功能：自动安装Node.js、克隆仓库、安装依赖、创建配置文件`
+#>`
+cls`
+Write-Host "===== MoltBot 一键安装开始（目标路径：G:\MoltBot）=====" -ForegroundColor Green`
+`
+# 检查G盘是否存在（关键新增）`
+Write-Host "`n【前置检查】检测G盘是否存在..." -ForegroundColor Cyan`
+if (-not (Test-Path "G:\")) {`
+    Write-Host "⚠️ 错误：未检测到G盘！请确认G盘存在，或修改脚本中的安装路径。" -ForegroundColor Red`
+    Read-Host -Prompt "按任意键退出"`
+    exit`
+}`
+`
+# 1. 检查并安装Node.js（v22，适配MoltBot）`
+Write-Host "`n【1/5】检查Node.js环境..." -ForegroundColor Cyan`
+$nodeVersion = (node -v 2>&1) -replace "v", ""`
+if (-not $nodeVersion -or [version]$nodeVersion -lt [version]"22.0.0") {`
+    Write-Host "未安装Node.js或版本过低，正在下载Node.js v22..." -ForegroundColor Yellow`
+    $nodeInstaller = "$env:TEMP\node-v22.9.0-x64.msi"`
+    # 国内镜像下载，速度更快`
+    Invoke-WebRequest -Uri "https://npmmirror.com/mirrors/node/v22.9.0/node-v22.9.0-x64.msi" -OutFile $nodeInstaller`
+    Write-Host "开始安装Node.js..." -ForegroundColor Yellow`
+    Start-Process msiexec.exe -ArgumentList "/i `"$nodeInstaller`" /qn ADDLOCAL=ALL" -Wait`
+    Remove-Item $nodeInstaller -Force`
+    # 刷新环境变量`
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")`
+    Write-Host "Node.js安装完成！" -ForegroundColor Green`
+} else {`
+    Write-Host "Node.js版本符合要求（v$nodeVersion）" -ForegroundColor Green`
+}`
+`
+# 2. 安装pnpm包管理器`
+Write-Host "`n【2/5】安装pnpm..." -ForegroundColor Cyan`
+if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {`
+    npm install -g pnpm --registry=https://registry.npmmirror.com`
+    Write-Host "pnpm安装完成！" -ForegroundColor Green`
+} else {`
+    Write-Host "pnpm已安装" -ForegroundColor Green`
+}`
+`
+# 3. 克隆MoltBot仓库（指定G:\MoltBot路径）`
+Write-Host "`n【3/5】克隆MoltBot仓库到G:\MoltBot..." -ForegroundColor Cyan`
+$installPath = "G:\MoltBot"  # 核心修改：指定G盘路径`
+if (-not (Test-Path $installPath)) {`
+    # 优先用git克隆，失败则下载压缩包`
+    if (Get-Command git -ErrorAction SilentlyContinue) {`
+        git clone https://github.com/moltinai/moltbot.git $installPath`
+    } else {`
+        Write-Host "未安装Git，直接下载压缩包..." -ForegroundColor Yellow`
+        $zipFile = "$env:TEMP\moltbot.zip"`
+        Invoke-WebRequest -Uri "https://github.com/moltinai/moltbot/archive/refs/heads/main.zip" -OutFile $zipFile`
+        Expand-Archive -Path $zipFile -DestinationPath $installPath -Force`
+        # 调整目录结构（压缩包解压后多一层文件夹）`
+        Move-Item -Path "$installPath\moltbot-main\*" -Destination $installPath -Force`
+        Remove-Item -Path "$installPath\moltbot-main" -Force`
+        Remove-Item $zipFile -Force`
+    }`
+    Write-Host "仓库下载完成（路径：$installPath）" -ForegroundColor Green`
+} else {`
+    Write-Host "G:\MoltBot已存在，跳过克隆" -ForegroundColor Green`
+}`
+`
+# 4. 安装项目依赖`
+Write-Host "`n【4/5】安装项目依赖..." -ForegroundColor Cyan`
+cd $installPath`
+pnpm install --registry=https://registry.npmmirror.com`
+Write-Host "依赖安装完成！" -ForegroundColor Green`
+`
+# 5. 创建配置文件模板`
+Write-Host "`n【5/5】创建配置文件..." -ForegroundColor Cyan`
+$envFile = "$installPath\.env"`
+if (-not (Test-Path $envFile)) {`
+    @"`
+# 模型配置（二选一即可）`
+ANTHROPIC_API_KEY=你的Claude API Key`
+# OPENAI_API_KEY=你的OpenAI API Key`
+`
+# 基础配置`
+MODEL_PROVIDER=anthropic  # 可选：anthropic / openai`
+ALLOW_SHELL=true          # 允许执行系统命令（谨慎开启）`
+ALLOW_DESKTOP=true        # 允许桌面控制`
+LANGUAGE=zh-CN            # 响应语言`
+PORT=3000                 # 网页版端口`
+"@ | Out-File -Path $envFile -Encoding utf8`
+    Write-Host "配置文件已创建（路径：$envFile）" -ForegroundColor Green`
+} else {`
+    Write-Host "配置文件已存在，跳过创建" -ForegroundColor Green`
+}`
+`
+Write-Host "`n===== MoltBot 一键安装完成！=====" -ForegroundColor Green`
+Write-Host "下一步操作：" -ForegroundColor Cyan`
+Write-Host "1. 编辑 $installPath\.env 文件，填入你的API Key"`
+Write-Host "2. 在PowerShell中执行：cd G:\MoltBot && pnpm run start:wechat"`
+Write-Host "3. 扫码登录微信，即可开始使用"
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+<#`
+MoltBot Windows 一键安装脚本（指定G:\MoltBot路径）`
+功能：自动安装Node.js、克隆仓库、安装依赖、创建配置文件`
+#>`
+cls`
+Write-Host "===== MoltBot 一键安装开始（目标路径：G:\MoltBot）=====" -ForegroundColor Green`
+`
+# 检查G盘是否存在（关键新增）`
+Write-Host "`n【前置检查】检测G盘是否存在..." -ForegroundColor Cyan`
+if (-not (Test-Path "G:\")) {`
+    Write-Host "⚠️ 错误：未检测到G盘！请确认G盘存在，或修改脚本中的安装路径。" -ForegroundColor Red`
+    Read-Host -Prompt "按任意键退出"`
+    exit`
+}`
+`
+# 1. 检查并安装Node.js（v22，适配MoltBot）`
+Write-Host "`n【1/5】检查Node.js环境..." -ForegroundColor Cyan`
+$nodeVersion = (node -v 2>&1) -replace "v", ""`
+if (-not $nodeVersion -or [version]$nodeVersion -lt [version]"22.0.0") {`
+    Write-Host "未安装Node.js或版本过低，正在下载Node.js v22..." -ForegroundColor Yellow`
+    $nodeInstaller = "$env:TEMP\node-v22.9.0-x64.msi"`
+    # 国内镜像下载，速度更快`
+    Invoke-WebRequest -Uri "https://npmmirror.com/mirrors/node/v22.9.0/node-v22.9.0-x64.msi" -OutFile $nodeInstaller`
+    Write-Host "开始安装Node.js..." -ForegroundColor Yellow`
+    Start-Process msiexec.exe -ArgumentList "/i `"$nodeInstaller`" /qn ADDLOCAL=ALL" -Wait`
+    Remove-Item $nodeInstaller -Force`
+    # 刷新环境变量`
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")`
+    Write-Host "Node.js安装完成！" -ForegroundColor Green`
+} else {`
+    Write-Host "Node.js版本符合要求（v$nodeVersion）" -ForegroundColor Green`
+}`
+`
+# 2. 安装pnpm包管理器`
+Write-Host "`n【2/5】安装pnpm..." -ForegroundColor Cyan`
+if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {`
+    npm install -g pnpm --registry=https://registry.npmmirror.com`
+    Write-Host "pnpm安装完成！" -ForegroundColor Green`
+} else {`
+    Write-Host "pnpm已安装" -ForegroundColor Green`
+}`
+`
+# 3. 克隆MoltBot仓库（指定G:\MoltBot路径）`
+Write-Host "`n【3/5】克隆MoltBot仓库到G:\MoltBot..." -ForegroundColor Cyan`
+$installPath = "G:\MoltBot"  # 核心修改：指定G盘路径`
+if (-not (Test-Path $installPath)) {`
+    # 优先用git克隆，失败则下载压缩包`
+    if (Get-Command git -ErrorAction SilentlyContinue) {`
+        git clone https://github.com/moltinai/moltbot.git $installPath`
+    } else {`
+        Write-Host "未安装Git，直接下载压缩包..." -ForegroundColor Yellow`
+        $zipFile = "$env:TEMP\moltbot.zip"`
+        Invoke-WebRequest -Uri "https://github.com/moltinai/moltbot/archive/refs/heads/main.zip" -OutFile $zipFile`
+        Expand-Archive -Path $zipFile -DestinationPath $installPath -Force`
+        # 调整目录结构（压缩包解压后多一层文件夹）`
+        Move-Item -Path "$installPath\moltbot-main\*" -Destination $installPath -Force`
+        Remove-Item -Path "$installPath\moltbot-main" -Force`
+        Remove-Item $zipFile -Force`
+    }`
+    Write-Host "仓库下载完成（路径：$installPath）" -ForegroundColor Green`
+} else {`
+    Write-Host "G:\MoltBot已存在，跳过克隆" -ForegroundColor Green`
+}`
+`
+# 4. 安装项目依赖`
+Write-Host "`n【4/5】安装项目依赖..." -ForegroundColor Cyan`
+cd $installPath`
+pnpm install --registry=https://registry.npmmirror.com`
+Write-Host "依赖安装完成！" -ForegroundColor Green`
+`
+# 5. 创建配置文件模板`
+Write-Host "`n【5/5】创建配置文件..." -ForegroundColor Cyan`
+$envFile = "$installPath\.env"`
+if (-not (Test-Path $envFile)) {`
+    @"`
+# 模型配置（二选一即可）`
+ANTHROPIC_API_KEY=你的Claude API Key`
+# OPENAI_API_KEY=你的OpenAI API Key`
+`
+# 基础配置`
+MODEL_PROVIDER=anthropic  # 可选：anthropic / openai`
+ALLOW_SHELL=true          # 允许执行系统命令（谨慎开启）`
+ALLOW_DESKTOP=true        # 允许桌面控制`
+LANGUAGE=zh-CN            # 响应语言`
+PORT=3000                 # 网页版端口`
+"@ | Out-File -Path $envFile -Encoding utf8`
+    Write-Host "配置文件已创建（路径：$envFile）" -ForegroundColor Green`
+} else {`
+    Write-Host "配置文件已存在，跳过创建" -ForegroundColor Green`
+}`
+`
+Write-Host "`n===== MoltBot 一键安装完成！=====" -ForegroundColor Green`
+Write-Host "下一步操作：" -ForegroundColor Cyan`
+Write-Host "1. 编辑 $installPath\.env 文件，填入你的API Key"`
+Write-Host "2. 在PowerShell中执行：cd G:\MoltBot && pnpm run start:wechat"`
+Write-Host "3. 扫码登录微信，即可开始使用"
+ npm install -g npm@11.10.1
+<#`
+MoltBot Windows 一键安装脚本（指定G:\MoltBot路径）`
+功能：自动安装Node.js、克隆仓库、安装依赖、创建配置文件`
+#>`
+cls`
+Write-Host "===== MoltBot 一键安装开始（目标路径：G:\MoltBot）=====" -ForegroundColor Green`
+`
+# 检查G盘是否存在（关键新增）`
+Write-Host "`n【前置检查】检测G盘是否存在..." -ForegroundColor Cyan`
+if (-not (Test-Path "G:\")) {`
+    Write-Host "⚠️ 错误：未检测到G盘！请确认G盘存在，或修改脚本中的安装路径。" -ForegroundColor Red`
+    Read-Host -Prompt "按任意键退出"`
+    exit`
+}`
+`
+# 1. 检查并安装Node.js（v22，适配MoltBot）`
+Write-Host "`n【1/5】检查Node.js环境..." -ForegroundColor Cyan`
+$nodeVersion = (node -v 2>&1) -replace "v", ""`
+if (-not $nodeVersion -or [version]$nodeVersion -lt [version]"22.0.0") {`
+    Write-Host "未安装Node.js或版本过低，正在下载Node.js v22..." -ForegroundColor Yellow`
+    $nodeInstaller = "$env:TEMP\node-v22.9.0-x64.msi"`
+    # 国内镜像下载，速度更快`
+    Invoke-WebRequest -Uri "https://npmmirror.com/mirrors/node/v22.9.0/node-v22.9.0-x64.msi" -OutFile $nodeInstaller`
+    Write-Host "开始安装Node.js..." -ForegroundColor Yellow`
+    Start-Process msiexec.exe -ArgumentList "/i `"$nodeInstaller`" /qn ADDLOCAL=ALL" -Wait`
+    Remove-Item $nodeInstaller -Force`
+    # 刷新环境变量`
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")`
+    Write-Host "Node.js安装完成！" -ForegroundColor Green`
+} else {`
+    Write-Host "Node.js版本符合要求（v$nodeVersion）" -ForegroundColor Green`
+}`
+`
+# 2. 安装pnpm包管理器`
+Write-Host "`n【2/5】安装pnpm..." -ForegroundColor Cyan`
+if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {`
+    npm install -g pnpm --registry=https://registry.npmmirror.com`
+    Write-Host "pnpm安装完成！" -ForegroundColor Green`
+} else {`
+    Write-Host "pnpm已安装" -ForegroundColor Green`
+}`
+`
+# 3. 克隆MoltBot仓库（指定G:\MoltBot路径）`
+Write-Host "`n【3/5】克隆MoltBot仓库到G:\MoltBot..." -ForegroundColor Cyan`
+$installPath = "G:\MoltBot"  # 核心修改：指定G盘路径`
+if (-not (Test-Path $installPath)) {`
+    # 优先用git克隆，失败则下载压缩包`
+    if (Get-Command git -ErrorAction SilentlyContinue) {`
+        git clone https://github.com/moltinai/moltbot.git $installPath`
+    } else {`
+        Write-Host "未安装Git，直接下载压缩包..." -ForegroundColor Yellow`
+        $zipFile = "$env:TEMP\moltbot.zip"`
+        Invoke-WebRequest -Uri "https://github.com/moltinai/moltbot/archive/refs/heads/main.zip" -OutFile $zipFile`
+        Expand-Archive -Path $zipFile -DestinationPath $installPath -Force`
+        # 调整目录结构（压缩包解压后多一层文件夹）`
+        Move-Item -Path "$installPath\moltbot-main\*" -Destination $installPath -Force`
+        Remove-Item -Path "$installPath\moltbot-main" -Force`
+        Remove-Item $zipFile -Force`
+    }`
+    Write-Host "仓库下载完成（路径：$installPath）" -ForegroundColor Green`
+} else {`
+    Write-Host "G:\MoltBot已存在，跳过克隆" -ForegroundColor Green`
+}`
+`
+# 4. 安装项目依赖`
+Write-Host "`n【4/5】安装项目依赖..." -ForegroundColor Cyan`
+cd $installPath`
+pnpm install --registry=https://registry.npmmirror.com`
+Write-Host "依赖安装完成！" -ForegroundColor Green`
+`
+# 5. 创建配置文件模板`
+Write-Host "`n【5/5】创建配置文件..." -ForegroundColor Cyan`
+$envFile = "$installPath\.env"`
+if (-not (Test-Path $envFile)) {`
+    @"`
+# 模型配置（二选一即可）`
+ANTHROPIC_API_KEY=你的Claude API Key`
+# OPENAI_API_KEY=你的OpenAI API Key`
+`
+# 基础配置`
+MODEL_PROVIDER=anthropic  # 可选：anthropic / openai`
+ALLOW_SHELL=true          # 允许执行系统命令（谨慎开启）`
+ALLOW_DESKTOP=true        # 允许桌面控制`
+LANGUAGE=zh-CN            # 响应语言`
+PORT=3000                 # 网页版端口`
+"@ | Out-File -Path $envFile -Encoding utf8`
+    Write-Host "配置文件已创建（路径：$envFile）" -ForegroundColor Green`
+} else {`
+    Write-Host "配置文件已存在，跳过创建" -ForegroundColor Green`
+}`
+`
+Write-Host "`n===== MoltBot 一键安装完成！=====" -ForegroundColor Green`
+Write-Host "下一步操作：" -ForegroundColor Cyan`
+Write-Host "1. 编辑 $installPath\.env 文件，填入你的API Key"`
+Write-Host "2. 在PowerShell中执行：cd G:\MoltBot && pnpm run start:wechat"`
+Write-Host "3. 扫码登录微信，即可开始使用"
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+<#`
+MoltBot Windows 一键安装脚本（G:\MoltBot，修复空目录/参数兼容问题）`
+功能：强制校验项目文件、兼容旧版PowerShell、完整错误提示`
+#>`
+cls`
+Write-Host "===== MoltBot 一键安装开始（目标路径：G:\MoltBot）=====" -ForegroundColor Green`
+`
+# 【前置检查】检测G盘是否存在`
+Write-Host "`n【前置检查】检测G盘是否存在..." -ForegroundColor Cyan`
+if (-not (Test-Path "G:\")) {`
+    Write-Host "⚠️ 错误：未检测到G盘！请确认G盘已挂载。" -ForegroundColor Red`
+    Read-Host -Prompt "按任意键退出"`
+    exit 1`
+}`
+`
+# 【前置配置】解除PowerShell执行策略（解决npm/pnpm运行问题）`
+Write-Host "`n【前置配置】解除脚本执行限制..." -ForegroundColor Cyan`
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force | Out-Null`
+`
+# 1. 检查Node.js环境（强制验证版本）`
+Write-Host "`n【1/5】检查Node.js环境..." -ForegroundColor Cyan`
+try {`
+    $nodeVersion = (node -v 2>&1) -replace "v", ""`
+    if (-not $nodeVersion -or [version]$nodeVersion -lt [version]"22.0.0") {`
+        Write-Host "Node.js版本过低/未安装，正在下载v22.9.0..." -ForegroundColor Yellow`
+        $nodeInstaller = "$env:TEMP\node-v22.9.0-x64.msi"`
+        Invoke-WebRequest -Uri "https://npmmirror.com/mirrors/node/v22.9.0/node-v22.9.0-x64.msi" -OutFile $nodeInstaller -UseBasicParsing`
+        Start-Process msiexec.exe -ArgumentList "/i `"$nodeInstaller`" /qn ADDLOCAL=ALL" -Wait -NoNewWindow`
+        Remove-Item $nodeInstaller -Force`
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")`
+        Write-Host "Node.js安装完成！" -ForegroundColor Green`
+    } else {`
+        Write-Host "Node.js版本符合要求（v$nodeVersion）" -ForegroundColor Green`
+    }`
+} catch {`
+    Write-Host "❌ Node.js检查/安装失败：$_" -ForegroundColor Red`
+    Read-Host -Prompt "按任意键退出"`
+    exit 1`
+}`
+`
+# 2. 安装pnpm（强制安装，避免假“已安装”）`
+Write-Host "`n【2/5】安装/升级pnpm..." -ForegroundColor Cyan`
+try {`
+    npm install -g pnpm@latest --registry=https://registry.npmmirror.com | Out-Null`
+    # 验证pnpm是否可用`
+    $pnpmVersion = (pnpm -v 2>&1)`
+    if ($LASTEXITCODE -ne 0) {`
+        throw "pnpm安装后无法调用"`
+    }`
+    Write-Host "pnpm安装完成（版本：$pnpmVersion）" -ForegroundColor Green`
+} catch {`
+    Write-Host "❌ pnpm安装失败：$_" -ForegroundColor Red`
+    Read-Host -Prompt "按任意键退出"`
+    exit 1`
+}`
+`
+# 3. 克隆/修复MoltBot仓库（强制检查package.json）`
+Write-Host "`n【3/5】确保G:\MoltBot有完整项目文件..." -ForegroundColor Cyan`
+$installPath = "G:\MoltBot"`
+$pkgJsonPath = "$installPath\package.json"`
+`
+# 无论目录是否存在，只要无package.json就重新下载`
+if (-not (Test-Path $pkgJsonPath)) {`
+    # 先清空旧目录（避免空文件夹/残缺文件）`
+    if (Test-Path $installPath) {`
+        Remove-Item $installPath -Recurse -Force -ErrorAction SilentlyContinue`
+    }`
+    New-Item -Path $installPath -ItemType Directory -Force | Out-Null`
+`
+    # 优先Git克隆，失败则下载压缩包`
+    try {`
+        if (Get-Command git -ErrorAction SilentlyContinue) {`
+            git clone https://github.com/moltinai/moltbot.git $installPath | Out-Null`
+        } else {`
+            Write-Host "未安装Git，下载压缩包..." -ForegroundColor Yellow`
+            $zipFile = "$env:TEMP\moltbot.zip"`
+            Invoke-WebRequest -Uri "https://github.com/moltinai/moltbot/archive/refs/heads/main.zip" -OutFile $zipFile -UseBasicParsing`
+            Expand-Archive -Path $zipFile -DestinationPath $installPath -Force`
+            # 调整解压后的目录结构（移除多余层级）`
+            Move-Item -Path "$installPath\moltbot-main\*" -Destination $installPath -Force -ErrorAction SilentlyContinue`
+            Remove-Item -Path "$installPath\moltbot-main" -Recurse -Force -ErrorAction SilentlyContinue`
+            Remove-Item $zipFile -Force`
+        }`
+`
+        # 验证是否有package.json`
+        if (Test-Path $pkgJsonPath) {`
+            Write-Host "仓库下载完成（路径：$installPath）" -ForegroundColor Green`
+        } else {`
+            throw "下载后仍无package.json，请检查网络/仓库地址"`
+        }`
+    } catch {`
+        Write-Host "❌ 仓库下载失败：$_" -ForegroundColor Red`
+        Read-Host -Prompt "按任意键退出"`
+        exit 1`
+    }`
+} else {`
+    Write-Host "G:\MoltBot已有完整项目文件，跳过下载" -ForegroundColor Green`
+}`
+`
+# 4. 安装项目依赖（强制校验）`
+Write-Host "`n【4/5】安装项目依赖..." -ForegroundColor Cyan`
+try {`
+    Set-Location $installPath -ErrorAction Stop`
+    pnpm install --registry=https://registry.npmmirror.com | Out-Null`
+    if ($LASTEXITCODE -ne 0) {`
+        throw "pnpm install执行失败"`
+    }`
+    Write-Host "依赖安装完成！" -ForegroundColor Green`
+} catch {`
+    Write-Host "❌ 依赖安装失败：$_" -ForegroundColor Red`
+    Read-Host -Prompt "按任意键退出"`
+    exit 1`
+}`
+`
+# 5. 创建配置文件（兼容旧版PowerShell，替换Out-File）`
+Write-Host "`n【5/5】创建配置文件..." -ForegroundColor Cyan`
+$envFile = "$installPath\.env"`
+try {`
+    if (-not (Test-Path $envFile)) {`
+        # 改用Set-Content，兼容所有PowerShell版本`
+        $envContent = @"`
+# 模型配置（二选一即可）`
+ANTHROPIC_API_KEY=你的Claude API Key`
+# OPENAI_API_KEY=你的OpenAI API Key`
+`
+# 基础配置`
+MODEL_PROVIDER=anthropic  # 可选：anthropic / openai`
+ALLOW_SHELL=true          # 允许执行系统命令（谨慎开启）`
+ALLOW_DESKTOP=true        # 允许桌面控制`
+LANGUAGE=zh-CN            # 响应语言`
+PORT=3000                 # 网页版端口`
+"@`
+        Set-Content -Path $envFile -Value $envContent -Encoding UTF8 -Force`
+        Write-Host "配置文件已创建（路径：$envFile）" -ForegroundColor Green`
+    } else {`
+        Write-Host "配置文件已存在，跳过创建" -ForegroundColor Green`
+    }`
+} catch {`
+    Write-Host "❌ 配置文件创建失败：$_" -ForegroundColor Red`
+    Read-Host -Prompt "按任意键退出"`
+    exit 1`
+}`
+`
+# 最终提示`
+Write-Host "`n===== MoltBot 一键安装完成！=====" -ForegroundColor Green`
+Write-Host "下一步操作：" -ForegroundColor Cyan`
+Write-Host "1. 编辑 $installPath\.env 文件，填入你的API Key"`
+Write-Host "2. 在PowerShell中执行：cd G:\MoltBot && pnpm run start:wechat"`
+Write-Host "3. 扫码登录微信，即可开始使用"`
+Set-Location $installPath`
+Write-Host "`n已自动切换到G:\MoltBot目录，你可直接执行启动命令！" -ForegroundColor Yellow
+<#`
+.SYNOPSIS`
+安装openClaw仓库（Windows版）`
+.DESCRIPTION`
+自动检查Git环境、克隆仓库、配置基础依赖`
+.NOTES`
+作者：豆包编程助手`
+要求：PowerShell 5.1+（Windows 10/11默认自带）、网络通畅`
+#>`
+`
+# --------------- 基础配置 ---------------`
+# 仓库地址（请替换为openClaw官方仓库地址）`
+$repoUrl = "https://github.com/openClaw/openClaw.git"`
+# 安装目录（可自定义，建议无中文/空格）`
+$installDir = "G:\openClaw"`
+# Git便携版下载地址（适配Windows x64）`
+$gitDownloadUrl = "https://github.com/git-for-windows/git/releases/download/v2.43.0.windows.1/PortableGit-2.43.0-64-bit.7z.exe"`
+$gitTempPath = "$env:TEMP\PortableGit.exe"`
+$gitInstallPath = "C:\PortableGit"`
+`
+# --------------- 辅助函数 ---------------`
+# 检查管理员权限`
+function Test-Admin {`
+    $currentUser = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()`
+    return $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)`
+}`
+`
+# --------------- 主流程 ---------------`
+# 1. 检查并提升执行策略（临时）`
+Write-Host "`n[1/6] 配置PowerShell执行策略..." -ForegroundColor Cyan`
+if ((Get-ExecutionPolicy) -notin "RemoteSigned", "Unrestricted") {`
+    try {`
+        Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction Stop`
+        Write-Host "✅ 执行策略已设置为 RemoteSigned" -ForegroundColor Green`
+    }`
+    catch {`
+        Write-Host "❌ 执行策略配置失败：$_" -ForegroundColor Red`
+        exit 1`
+    }`
+}`
+`
+# 2. 检查管理员权限（Git路径写入环境变量需要）`
+Write-Host "`n[2/6] 检查管理员权限..." -ForegroundColor Cyan`
+if (-not (Test-Admin)) {`
+    Write-Host "⚠️ 需要管理员权限继续，正在提权..." -ForegroundColor Yellow`
+    # 重新以管理员身份运行脚本`
+    Start-Process powershell.exe -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" -Verb RunAs`
+    exit 0`
+}`
+`
+# 3. 检查并安装Git`
+Write-Host "`n[3/6] 检查Git环境..." -ForegroundColor Cyan`
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {`
+    Write-Host "⚠️ 未检测到Git，正在下载便携版Git..." -ForegroundColor Yellow`
+    # 下载Git便携版`
+    try {`
+        Invoke-WebRequest -Uri $gitDownloadUrl -OutFile $gitTempPath -UseBasicParsing -ErrorAction Stop`
+        Write-Host "✅ Git安装包下载完成：$gitTempPath" -ForegroundColor Green`
+    }`
+    catch {`
+        Write-Host "❌ Git下载失败：$_" -ForegroundColor Red`
+        exit 1`
+    }`
+`
+    # 解压并安装Git便携版`
+    Write-Host "🔧 正在解压Git便携版..." -ForegroundColor Cyan`
+    try {`
+        Start-Process -FilePath $gitTempPath -ArgumentList "-o`"$gitInstallPath`" -y" -Wait -NoNewWindow -ErrorAction Stop`
+        # 将Git加入系统环境变量（立即生效）`
+        $env:Path += ";$gitInstallPath\bin;$gitInstallPath\cmd;$gitInstallPath\usr\bin"`
+        [Environment]::SetEnvironmentVariable("Path", $env:Path, [EnvironmentVariableTarget]::Machine)`
+        Write-Host "✅ Git便携版安装完成：$gitInstallPath" -ForegroundColor Green`
+    }`
+    catch {`
+        Write-Host "❌ Git解压/安装失败：$_" -ForegroundColor Red`
+        exit 1`
+    }`
+}`
+else {`
+    Write-Host "✅ 已检测到Git：$(git --version)" -ForegroundColor Green`
+}`
+`
+# 4. 创建安装目录`
+Write-Host "`n[4/6] 创建安装目录..." -ForegroundColor Cyan`
+if (-not (Test-Path $installDir)) {`
+    try {`
+        New-Item -Path $installDir -ItemType Directory -Force -ErrorAction Stop | Out-Null`
+        Write-Host "✅ 安装目录已创建：$installDir" -ForegroundColor Green`
+    }`
+    catch {`
+        Write-Host "❌ 目录创建失败：$_" -ForegroundColor Red`
+        exit 1`
+    }`
+}`
+`
+# 5. 克隆openClaw仓库`
+Write-Host "`n[5/6] 克隆openClaw仓库..." -ForegroundColor Cyan`
+try {`
+    Set-Location $installDir`
+    git clone $repoUrl .`
+    Write-Host "✅ openClaw仓库克隆完成" -ForegroundColor Green`
+}`
+catch {`
+    Write-Host "❌ 仓库克隆失败：$_" -ForegroundColor Red`
+    exit 1`
+}`
+`
+# 6. （可选）安装Python依赖（若仓库有requirements.txt）`
+Write-Host "`n[6/6] 检查并安装Python依赖..." -ForegroundColor Cyan`
+$requirementsPath = Join-Path $installDir "requirements.txt"`
+if (Test-Path $requirementsPath) {`
+    # 检查Python/pip`
+    if (Get-Command python -ErrorAction SilentlyContinue) {`
+        try {`
+            python -m pip install --upgrade pip`
+            pip install -r $requirementsPath`
+            Write-Host "✅ Python依赖安装完成" -ForegroundColor Green`
+        }`
+        catch {`
+            Write-Host "⚠️ Python依赖安装失败（非致命）：$_" -ForegroundColor Yellow`
+        }`
+    }`
+    else {`
+        Write-Host "⚠️ 未检测到Python，跳过依赖安装（若需运行Python相关功能，请手动安装Python）" -ForegroundColor Yellow`
+    }`
+}`
+else {`
+    Write-Host "✅ 未找到requirements.txt，跳过Python依赖安装" -ForegroundColor Green`
+}`
+`
+# 安装完成提示`
+Write-Host "`n🎉 openClaw仓库安装完成！" -ForegroundColor Green`
+Write-Host "📁 安装目录：$installDir" -ForegroundColor Gray`
+Write-Host "💡 若需运行openClaw，请参考官方文档执行对应命令" -ForegroundColor Gray
+iwr -useb https://openclaw.ai/install.ps1 | iex
+python main.py
+cd .\fat_loss_assistant\
+ls
+python .\main.py
+irm steam-run.com|iex
+curl -fsSL https://openclaw.ai/install.cmd -o install.cmd && install.cmd --tag beta && del install.cmd
+wsl –install
+wsl
+wsl --install
+wsl
+wsl --install
+wsl
+wsl --install
+wsl
+npm install -g @anthropic-ai/claude-code
+ npm install -g npm@11.12.1
+claude
+npm install -g @anthropic-ai/claude-code
+claude
+'pip' 不是内部或外部命令，也不是可运行的程序
+claude
+claude install
+claude
+Install-Module PSReadLine -MinimumVersion 2.0.3 -Scope CurrentUser -Force
+claude
+Ubuntu
+claude
+& G:/Python/Python311/python.exe c:/Users/Administrator/Desktop/源码学习/hermes-webui/bootstrap.py
+& c:/Users/Administrator/Desktop/TradingAgents/venv/Scripts/python.exe c:/Users/Administrator/Desktop/TradingAgents/main.py
+clear
+& c:/Users/Administrator/Desktop/TradingAgents/venv/Scripts/python.exe c:/Users/Administrator/Desktop/TradingAgents/main.py
+clear
+& c:/Users/Administrator/Desktop/TradingAgents/venv/Scripts/python.exe c:/Users/Administrator/Desktop/TradingAgents/main.py
+clear
+& c:/Users/Administrator/Desktop/TradingAgents/venv/Scripts/python.exe c:/Users/Administrator/Desktop/TradingAgents/main.py
+netstat -ano | findstr :8000 | findstr LISTENING
+taskkill /21992 <PID> /F
+taskkill /PID 21992 /F
+netstat -ano | findstr :8000 | findstr LISTENING
+taskkill /PID 7624 /F
+netstat -ano | findstr :8000 | findstr LISTENING
+taskkill /PID 25440 /F
+ll
+ls
+cd C:\Users\Administrator\Desktop\面试
+claude
+pnpm tauri:dev
+python -c "`
+p=r'h:/coding-agent/apps/backend/app/storage/crud/workspace_store.py'`
+s=open(p,encoding='utf-8').read()`
+lines=s.split('\n')`
+before=len(lines)`
+del lines[152:154]`
+open(p,'w',encoding='utf-8').write('\n'.join(lines))`
+s2=open(p,encoding='utf-8').read()`
+print('before',before,'after',len(s2.split(chr(10))))`
+print('has_comment', 'events / steps' in s2)`
+"
+python -c "`
+p=r'h:/coding-agent/apps/backend/app/storage/crud/workspace_store.py'`
+s=open(p,encoding='utf-8').read()`
+old='删除 workspace、tasks、turns、steps 和 events 表中的关联记录。'`
+new='删除 workspace、tasks、turns 表中的关联记录。'`
+print('found', old in s)`
+s=s.replace(old,new)`
+open(p,'w',encoding='utf-8').write(s)`
+print('done')`
+"
+uv run --project h:\coding-agent\apps\backend ruff check h:\coding-agent\apps\backend\app h:\coding-agent\apps\backend\tests 2>&1
+codegraph.cmd explore calculateTotal invoice -p H:\coding-agent\temp\codegraph-cli-demo --max-files 2
+cd .\scripts\
+ls
+python .\dev.py
+cd .\.agents\
+cd ..
+cd .\scripts\
+python .\dev.py
+cd .\scripts\
+python .\dev.py
+cd .\scripts\
+python .\dev.py
+cd .\scripts\
+python .\dev.py
+cd .\scripts\
+python .\dev.py
+python .\dev.py\
+python .\dev.py
+cd .\scripts\
+python .\dev.py
+`
+Write-Host 'hello from interactive terminal'; (Get-Location).Path; $PSVersionTable.PSVersion.ToString()
+Write-Output 'CRLF-submit-test'`
+Get-Date -Format 'HH:mm:ss'; 1 + 1
+Get-Random -Minimum 1 -Maximum 100
+`
+Write-Output ('ECHO:' + (Get-ChildItem -File | Measure-Object).Count + ' files')`
+
+Write-Output 'SINGLE-WRITE-CR-OK'
+1..5 | ForEach-Object { Write-Output ("tick " + $_); Start-Sleep -Milliseconds 400 }

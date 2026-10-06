@@ -1,0 +1,742 @@
+[exit_code=0]
+ 驱动器 H 中的卷是 新加卷
+ 卷的序列号是 BAB4-F017
+
+ H:\coding-agent\target\Cosir-portable 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          backend
+2026/09/20  20:15        10,289,152 Cosir.exe
+2026/09/20  20:15               232 README.txt
+2026/09/20  20:15    <DIR>          terminal-worker
+               2 个文件     10,289,384 字节
+
+ H:\coding-agent\target\Cosir-portable\backend 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14        19,324,354 cosir-backend.exe
+2026/09/20  20:15    <DIR>          _internal
+               1 个文件     19,324,354 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           221,696 ada92cb5d92a588d1b93__mypyc.cp311-win_amd64.pyd
+2026/09/20  20:15    <DIR>          attrs-26.1.0.dist-info
+2026/09/20  20:14         1,443,233 base_library.zip
+2026/09/20  20:15    <DIR>          certifi
+2026/09/20  20:15    <DIR>          charset_normalizer
+2026/09/20  20:15    <DIR>          click-8.4.2.dist-info
+2026/09/20  20:15    <DIR>          google
+2026/09/20  20:15    <DIR>          greenlet
+2026/09/20  20:15    <DIR>          httptools
+2026/09/20  20:15    <DIR>          jiter
+2026/09/20  20:15    <DIR>          jsonschema
+2026/09/20  20:15    <DIR>          jsonschema-4.23.0.dist-info
+2026/09/20  20:15    <DIR>          jsonschema_specifications
+2026/09/20  20:15    <DIR>          langchain
+2026/09/20  20:15    <DIR>          langchain-1.3.1.dist-info
+2026/09/20  20:15    <DIR>          langfuse-4.14.1.dist-info
+2026/09/20  20:14         7,983,104 libcrypto-3-x64.dll
+2026/09/20  20:14            28,160 libffi-8.dll
+2026/09/20  20:14         1,579,520 libssl-3-x64.dll
+2026/09/20  20:14           557,728 MSVCP140.dll
+2026/09/20  20:15    <DIR>          opentelemetry_api-1.44.0.dist-info
+2026/09/20  20:15    <DIR>          opentelemetry_exporter_otlp_proto_http-1.44.0.dist-info
+2026/09/20  20:15    <DIR>          opentelemetry_sdk-1.44.0.dist-info
+2026/09/20  20:15    <DIR>          orjson
+2026/09/20  20:15    <DIR>          ormsgpack
+2026/09/20  20:15    <DIR>          PIL
+2026/09/20  20:15    <DIR>          pydantic_core
+2026/09/20  20:14           203,264 pyexpat.pyd
+2026/09/20  20:14            55,296 python3.dll
+2026/09/20  20:14         5,846,016 python311.dll
+2026/09/20  20:15    <DIR>          regex
+2026/09/20  20:15    <DIR>          rpds
+2026/09/20  20:14            18,944 select.pyd
+2026/09/20  20:15    <DIR>          setuptools
+2026/09/20  20:15    <DIR>          sqlalchemy
+2026/09/20  20:14         1,598,976 sqlite3.dll
+2026/09/20  20:15    <DIR>          tiktoken
+2026/09/20  20:15    <DIR>          tqdm-4.69.0.dist-info
+2026/09/20  20:15    <DIR>          tree_sitter
+2026/09/20  20:15    <DIR>          tree_sitter_c
+2026/09/20  20:15    <DIR>          tree_sitter_css
+2026/09/20  20:15    <DIR>          tree_sitter_c_sharp
+2026/09/20  20:15    <DIR>          tree_sitter_go
+2026/09/20  20:15    <DIR>          tree_sitter_html
+2026/09/20  20:15    <DIR>          tree_sitter_java
+2026/09/20  20:15    <DIR>          tree_sitter_javascript
+2026/09/20  20:15    <DIR>          tree_sitter_python
+2026/09/20  20:15    <DIR>          tree_sitter_rust
+2026/09/20  20:15    <DIR>          tree_sitter_typescript
+2026/09/20  20:14         1,128,960 unicodedata.pyd
+2026/09/20  20:15    <DIR>          urllib3-2.7.0.dist-info
+2026/09/20  20:15    <DIR>          uuid_utils
+2026/09/20  20:14           124,544 VCRUNTIME140.dll
+2026/09/20  20:14            49,792 VCRUNTIME140_1.dll
+2026/09/20  20:15    <DIR>          watchfiles
+2026/09/20  20:15    <DIR>          websockets
+2026/09/20  20:15    <DIR>          websockets-15.0.1.dist-info
+2026/09/20  20:15    <DIR>          xxhash
+2026/09/20  20:15    <DIR>          yaml
+2026/09/20  20:15    <DIR>          zstandard
+2026/09/20  20:14            53,248 _asyncio.pyd
+2026/09/20  20:14            72,704 _bz2.pyd
+2026/09/20  20:14           119,296 _ctypes.pyd
+2026/09/20  20:14           243,712 _decimal.pyd
+2026/09/20  20:14           116,736 _elementtree.pyd
+2026/09/20  20:14            53,760 _hashlib.pyd
+2026/09/20  20:14           152,576 _lzma.pyd
+2026/09/20  20:14            22,528 _multiprocessing.pyd
+2026/09/20  20:14            39,424 _overlapped.pyd
+2026/09/20  20:14            20,480 _queue.pyd
+2026/09/20  20:14            67,584 _socket.pyd
+2026/09/20  20:14           109,568 _sqlite3.pyd
+2026/09/20  20:14           166,912 _ssl.pyd
+2026/09/20  20:14            13,824 _uuid.pyd
+2026/09/20  20:14            33,792 _zoneinfo.pyd
+              29 个文件     22,125,377 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\attrs-26.1.0.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14             8,754 METADATA
+2026/09/20  20:14             2,742 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                87 WHEEL
+               5 个文件         11,585 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\attrs-26.1.0.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,109 LICENSE
+               1 个文件          1,109 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\certifi 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           234,354 cacert.pem
+2026/09/20  20:14                 0 py.typed
+               2 个文件        234,354 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\charset_normalizer 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14            10,752 cd.cp311-win_amd64.pyd
+2026/09/20  20:14            10,752 md.cp311-win_amd64.pyd
+               2 个文件         21,504 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\click-8.4.2.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14             2,621 METADATA
+2026/09/20  20:14             1,810 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                82 WHEEL
+               5 个文件          4,515 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\click-8.4.2.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,475 LICENSE.txt
+               1 个文件          1,475 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\google 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          _upb
+               0 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\google\_upb 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           728,649 _message.pyd
+               1 个文件        728,649 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\greenlet 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14            70,656 _greenlet.cp311-win_amd64.pyd
+               1 个文件         70,656 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\httptools 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          parser
+               0 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\httptools\parser 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           122,880 parser.cp311-win_amd64.pyd
+2026/09/20  20:14            51,200 url_parser.cp311-win_amd64.pyd
+               2 个文件        174,080 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jiter 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           452,608 jiter.cp311-win_amd64.pyd
+               1 个文件        452,608 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          benchmarks
+               0 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema\benchmarks 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          issue232
+               0 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema\benchmarks\issue232 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           117,105 issue.json
+               1 个文件        117,105 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema-4.23.0.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14                51 entry_points.txt
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14             7,906 METADATA
+2026/09/20  20:14             3,782 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                87 WHEEL
+               6 个文件         11,828 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema-4.23.0.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,057 COPYING
+               1 个文件          1,057 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema_specifications 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          schemas
+               0 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema_specifications\schemas 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          draft201909
+2026/09/20  20:15    <DIR>          draft202012
+2026/09/20  20:15    <DIR>          draft3
+2026/09/20  20:15    <DIR>          draft4
+2026/09/20  20:15    <DIR>          draft6
+2026/09/20  20:15    <DIR>          draft7
+               0 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema_specifications\schemas\draft201909 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,785 metaschema.json
+2026/09/20  20:15    <DIR>          vocabularies
+               1 个文件          1,785 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema_specifications\schemas\draft201909\vocabularies 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,860 applicator
+2026/09/20  20:14               517 content
+2026/09/20  20:14             1,531 core
+2026/09/20  20:14               403 format
+2026/09/20  20:14               892 meta-data
+2026/09/20  20:14             2,834 validation
+               6 个文件          8,037 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema_specifications\schemas\draft202012 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             2,452 metaschema.json
+2026/09/20  20:15    <DIR>          vocabularies
+               1 个文件          2,452 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema_specifications\schemas\draft202012\vocabularies 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,659 applicator
+2026/09/20  20:14               519 content
+2026/09/20  20:14             1,564 core
+2026/09/20  20:14               448 format-annotation
+2026/09/20  20:14               445 format-assertion
+2026/09/20  20:14               892 meta-data
+2026/09/20  20:14               506 unevaluated
+2026/09/20  20:14             2,834 validation
+               8 个文件          8,867 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema_specifications\schemas\draft3 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             2,600 metaschema.json
+               1 个文件          2,600 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema_specifications\schemas\draft4 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             4,357 metaschema.json
+               1 个文件          4,357 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema_specifications\schemas\draft6 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             4,437 metaschema.json
+               1 个文件          4,437 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\jsonschema_specifications\schemas\draft7 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             4,819 metaschema.json
+               1 个文件          4,819 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\langchain 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14                 0 py.typed
+               1 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\langchain-1.3.1.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14             5,770 METADATA
+2026/09/20  20:14             3,486 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                87 WHEEL
+               5 个文件          9,345 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\langchain-1.3.1.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,067 LICENSE
+               1 个文件          1,067 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\langfuse-4.14.1.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14             3,562 METADATA
+2026/09/20  20:14            58,394 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                80 WHEEL
+               5 个文件         62,038 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\langfuse-4.14.1.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,074 LICENSE
+               1 个文件          1,074 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\opentelemetry_api-1.44.0.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14               573 entry_points.txt
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14             1,411 METADATA
+2026/09/20  20:14             4,472 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                87 WHEEL
+               6 个文件          6,545 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\opentelemetry_api-1.44.0.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14            11,357 LICENSE
+               1 个文件         11,357 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\opentelemetry_exporter_otlp_proto_http-1.44.0.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14               365 entry_points.txt
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14             2,414 METADATA
+2026/09/20  20:14             1,734 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                87 WHEEL
+               6 个文件          4,602 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\opentelemetry_exporter_otlp_proto_http-1.44.0.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14            11,357 LICENSE
+               1 个文件         11,357 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\opentelemetry_sdk-1.44.0.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,544 entry_points.txt
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14             1,627 METADATA
+2026/09/20  20:14             7,788 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                87 WHEEL
+               6 个文件         11,048 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\opentelemetry_sdk-1.44.0.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14            11,357 LICENSE
+               1 个文件         11,357 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\orjson 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           223,232 orjson.cp311-win_amd64.pyd
+               1 个文件        223,232 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\ormsgpack 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           209,408 ormsgpack.cp311-win_amd64.pyd
+               1 个文件        209,408 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\PIL 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14         7,832,064 _avif.cp311-win_amd64.pyd
+2026/09/20  20:14         2,489,856 _imaging.cp311-win_amd64.pyd
+2026/09/20  20:14           267,264 _imagingcms.cp311-win_amd64.pyd
+2026/09/20  20:14            25,088 _imagingmath.cp311-win_amd64.pyd
+2026/09/20  20:14            14,848 _imagingtk.cp311-win_amd64.pyd
+2026/09/20  20:14           409,600 _webp.cp311-win_amd64.pyd
+               6 个文件     11,038,720 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\pydantic_core 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14         5,236,736 _pydantic_core.cp311-win_amd64.pyd
+               1 个文件      5,236,736 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\regex 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           726,016 _regex.cp311-win_amd64.pyd
+               1 个文件        726,016 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\rpds 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           560,128 rpds.cp311-win_amd64.pyd
+               1 个文件        560,128 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\setuptools 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          _vendor
+               0 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\setuptools\_vendor 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          importlib_metadata-8.7.1.dist-info
+2026/09/20  20:15    <DIR>          jaraco
+               0 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\setuptools\_vendor\importlib_metadata-8.7.1.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14             4,670 METADATA
+2026/09/20  20:14             1,868 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                19 top_level.txt
+2026/09/20  20:14                91 WHEEL
+               6 个文件          6,650 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\setuptools\_vendor\importlib_metadata-8.7.1.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14            10,278 LICENSE
+               1 个文件         10,278 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\setuptools\_vendor\jaraco 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          text
+               0 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\setuptools\_vendor\jaraco\text 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,335 Lorem ipsum.txt
+               1 个文件          1,335 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\sqlalchemy 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:15    <DIR>          cyextension
+               0 个文件              0 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\sqlalchemy\cyextension 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           175,616 collections.cp311-win_amd64.pyd
+2026/09/20  20:14            73,216 immutabledict.cp311-win_amd64.pyd
+2026/09/20  20:14            58,880 processors.cp311-win_amd64.pyd
+2026/09/20  20:14            60,928 resultproxy.cp311-win_amd64.pyd
+2026/09/20  20:14            73,216 util.cp311-win_amd64.pyd
+               5 个文件        441,856 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tiktoken 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14         2,291,712 _tiktoken.cp311-win_amd64.pyd
+               1 个文件      2,291,712 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tqdm-4.69.0.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14                39 entry_points.txt
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14            57,356 METADATA
+2026/09/20  20:14             3,501 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14             2,946 scm_file_list.json
+2026/09/20  20:14               161 scm_version.json
+2026/09/20  20:14                12 top_level.txt
+2026/09/20  20:14                91 WHEEL
+               9 个文件         64,108 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tqdm-4.69.0.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,985 LICENCE
+               1 个文件          1,985 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           239,616 _binding.cp311-win_amd64.pyd
+               1 个文件        239,616 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter_c 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           625,664 _binding.pyd
+               1 个文件        625,664 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter_css 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           124,416 _binding.pyd
+               1 个文件        124,416 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter_c_sharp 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14         5,328,384 _binding.pyd
+               1 个文件      5,328,384 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter_go 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           226,304 _binding.pyd
+               1 个文件        226,304 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter_html 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14            30,208 _binding.pyd
+               1 个文件         30,208 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter_java 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           422,400 _binding.pyd
+               1 个文件        422,400 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter_javascript 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           420,352 _binding.pyd
+               1 个文件        420,352 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter_python 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           467,456 _binding.pyd
+               1 个文件        467,456 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter_rust 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14         1,122,816 _binding.pyd
+               1 个文件      1,122,816 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\tree_sitter_typescript 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14         2,853,888 _binding.pyd
+               1 个文件      2,853,888 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\urllib3-2.7.0.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:15    <DIR>          licenses
+2026/09/20  20:14             6,852 METADATA
+2026/09/20  20:14             3,624 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                87 WHEEL
+               5 个文件         10,565 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\urllib3-2.7.0.dist-info\licenses 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14             1,093 LICENSE.txt
+               1 个文件          1,093 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\uuid_utils 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           358,400 _uuid_utils.cp311-win_amd64.pyd
+               1 个文件        358,400 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\watchfiles 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           639,488 _rust_notify.cp311-win_amd64.pyd
+               1 个文件        639,488 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\websockets 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14            11,776 speedups.cp311-win_amd64.pyd
+               1 个文件         11,776 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\websockets-15.0.1.dist-info 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14                51 entry_points.txt
+2026/09/20  20:14                 2 INSTALLER
+2026/09/20  20:14             1,538 LICENSE
+2026/09/20  20:14             6,996 METADATA
+2026/09/20  20:14             4,983 RECORD
+2026/09/20  20:14                 0 REQUESTED
+2026/09/20  20:14                11 top_level.txt
+2026/09/20  20:14               101 WHEEL
+               8 个文件         13,682 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\xxhash 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14            60,416 _xxhash.cp311-win_amd64.pyd
+               1 个文件         60,416 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\yaml 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           258,560 _yaml.cp311-win_amd64.pyd
+               1 个文件        258,560 字节
+
+ H:\coding-agent\target\Cosir-portable\backend\_internal\zstandard 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  20:14           524,800 backend_c.cp311-win_amd64.pyd
+2026/09/20  20:14           667,136 _cffi.cp311-win_amd64.pyd
+               2 个文件      1,191,936 字节
+
+ H:\coding-agent\target\Cosir-portable\terminal-worker 的目录
+
+2026/09/20  20:15    <DIR>          .
+2026/09/20  20:15    <DIR>          ..
+2026/09/20  16:39           580,608 terminal-worker.exe
+               1 个文件        580,608 字节
+
+     所列文件总数:
+             183 个文件     89,536,976 字节
+             236 个目录  5,750,640,640 可用字节

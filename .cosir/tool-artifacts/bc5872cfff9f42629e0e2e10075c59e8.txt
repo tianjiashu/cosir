@@ -1,0 +1,156 @@
+[exit_code=0]
+
+   Id ProcessName   StartTime          Path                                                                                                  
+   -- -----------   ---------          ----                                                                                                  
+ 1720 cmd           2026/9/21 14:38:52 C:\Windows\system32\cmd.exe                                                                           
+ 3292 cmd           2026/9/21 16:18:32 C:\Windows\system32\cmd.exe                                                                           
+ 6812 cmd           2026/9/21 15:36:13 C:\Windows\system32\cmd.exe                                                                           
+ 8224 cmd           2026/9/21 16:43:53 C:\Windows\system32\cmd.exe                                                                           
+14584 cmd           2026/9/21 16:18:35 C:\Windows\system32\cmd.exe                                                                           
+15148 cmd           2026/9/21 15:42:20 C:\Windows\system32\cmd.exe                                                                           
+16728 cmd           2026/9/11 0:23:53  C:\Windows\system32\cmd.exe                                                                           
+23200 cmd           2026/9/21 15:36:19 C:\Windows\system32\cmd.exe                                                                           
+24832 cmd           2026/9/18 15:32:14 C:\Windows\system32\cmd.exe                                                                           
+27172 cmd           2026/9/21 15:47:40 C:\Windows\system32\cmd.exe                                                                           
+27244 cmd           2026/9/21 16:19:49 C:\Windows\system32\cmd.exe                                                                           
+29940 cmd           2026/9/21 14:38:58 C:\Windows\system32\cmd.exe                                                                           
+30028 cmd           2026/9/21 16:12:16 C:\Windows\system32\cmd.exe                                                                           
+32060 cmd           2026/9/21 15:42:22 C:\Windows\system32\cmd.exe                                                                           
+33904 cmd           2026/9/21 16:28:47 C:\Windows\system32\cmd.exe                                                                           
+33924 cmd           2026/9/21 16:43:54 C:\Windows\system32\cmd.exe                                                                           
+35104 cmd           2026/9/21 16:19:49 C:\Windows\system32\cmd.exe                                                                           
+35612 cmd           2026/9/21 15:36:13 C:\Windows\system32\cmd.exe                                                                           
+38824 cmd           2026/9/21 16:06:44 C:\Windows\system32\cmd.exe                                                                           
+38944 cmd           2026/9/21 16:06:42 C:\Windows\system32\cmd.exe                                                                           
+40468 cmd           2026/9/21 15:36:17 C:\Windows\system32\cmd.exe                                                                           
+42108 cmd           2026/9/21 14:39:00 C:\Windows\system32\cmd.exe                                                                           
+43028 cmd           2026/9/21 14:38:49 C:\Windows\system32\cmd.exe                                                                           
+43328 cmd           2026/9/21 15:36:16 C:\Windows\system32\cmd.exe                                                                           
+44760 cmd           2026/9/21 16:43:53 C:\Windows\system32\cmd.exe                                                                           
+45148 cmd           2026/9/21 14:38:58 C:\Windows\system32\cmd.exe                                                                           
+48308 cmd           2026/9/21 16:06:42 C:\Windows\system32\cmd.exe                                                                           
+49968 cmd           2026/9/21 16:17:52 C:\Windows\system32\cmd.exe                                                                           
+50800 cmd           2026/9/21 16:17:52 C:\Windows\system32\cmd.exe                                                                           
+52256 cmd           2026/9/21 16:28:47 C:\Windows\system32\cmd.exe                                                                           
+52776 cmd           2026/9/21 15:47:40 C:\Windows\system32\cmd.exe                                                                           
+53740 cmd           2026/9/21 16:43:22 C:\Windows\system32\cmd.exe                                                                           
+53852 cmd           2026/9/21 14:38:49 C:\Windows\system32\cmd.exe                                                                           
+55324 cmd           2026/9/21 15:36:17 C:\Windows\system32\cmd.exe                                                                           
+55336 cmd           2026/9/21 16:43:24 C:\Windows\system32\cmd.exe                                                                           
+55440 cmd           2026/9/21 16:18:32 C:\Windows\system32\cmd.exe                                                                           
+57388 cmd           2026/9/21 16:43:22 C:\Windows\system32\cmd.exe                                                                           
+58084 cmd           2026/9/21 16:17:54 C:\Windows\system32\cmd.exe                                                                           
+58180 cmd           2026/9/21 15:47:42 C:\Windows\system32\cmd.exe                                                                           
+58740 cmd           2026/9/21 16:12:18 C:\Windows\system32\cmd.exe                                                                           
+59276 cmd           2026/9/21 16:19:52 C:\Windows\system32\cmd.exe                                                                           
+59408 cmd           2026/9/21 15:42:20 C:\Windows\system32\cmd.exe                                                                           
+60752 cmd           2026/9/21 16:12:16 C:\Windows\system32\cmd.exe                                                                           
+61732 cmd           2026/9/21 16:28:49 C:\Windows\system32\cmd.exe                                                                           
+62356 cmd           2026/9/21 16:43:53 C:\Windows\system32\cmd.exe                                                                           
+   32 conhost       2026/9/11 8:44:11  C:\Windows\system32\conhost.exe                                                                       
+ 4644 conhost       2026/9/11 0:23:20  C:\Windows\system32\conhost.exe                                                                       
+ 5832 conhost       2026/9/11 0:23:21  C:\Windows\system32\conhost.exe                                                                       
+11384 conhost       2026/9/18 15:32:14 C:\Windows\system32\conhost.exe                                                                       
+11764 conhost       2026/9/11 15:02:39 C:\Windows\system32\conhost.exe                                                                       
+16736 conhost       2026/9/11 0:23:53  C:\Windows\system32\conhost.exe                                                                       
+27276 conhost       2026/9/21 16:43:58 C:\Windows\system32\conhost.exe                                                                       
+32172 conhost       2026/9/21 16:10:54 C:\Windows\system32\conhost.exe                                                                       
+39192 conhost       2026/9/21 16:43:53 C:\Windows\system32\conhost.exe                                                                       
+45296 conhost       2026/9/21 14:40:16 C:\Windows\system32\conhost.exe                                                                       
+47824 conhost       2026/9/21 16:10:55 C:\Windows\system32\conhost.exe                                                                       
+50412 conhost       2026/9/21 16:10:59 C:\Windows\system32\conhost.exe                                                                       
+55460 conhost       2026/9/21 16:10:51 C:\Windows\system32\conhost.exe                                                                       
+56696 conhost       2026/9/21 14:40:16 C:\Windows\system32\conhost.exe                                                                       
+59744 conhost       2026/9/21 16:10:59 C:\Windows\system32\conhost.exe                                                                       
+60160 conhost       2026/9/21 14:36:44 C:\Windows\system32\conhost.exe                                                                       
+61248 conhost       2026/9/21 14:37:02 C:\Windows\system32\conhost.exe                                                                       
+47380 cosir-desktop 2026/9/21 16:43:57 H:\coding-agent\target\debug\cosir-desktop.exe                                                        
+ 3776 node          2026/9/21 16:28:47 G:\NodeJs\node.exe                                                                                    
+ 4392 node          2026/9/21 16:28:50 G:\NodeJs\node.exe                                                                                    
+ 8488 node          2026/9/21 16:17:52 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+12420 node          2026/9/21 15:36:16 G:\NodeJs\node.exe                                                                                    
+14440 node          2026/9/21 16:18:32 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+15364 node          2026/9/21 15:36:20 G:\NodeJs\node.exe                                                                                    
+16200 node          2026/9/21 16:18:35 G:\NodeJs\node.exe                                                                                    
+16596 node          2026/9/21 16:19:49 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+18428 node          2026/9/21 16:43:22 G:\NodeJs\node.exe                                                                                    
+21952 node          2026/9/21 16:19:50 G:\NodeJs\node.exe                                                                                    
+24480 node          2026/9/21 16:06:42 G:\NodeJs\node.exe                                                                                    
+24536 node          2026/9/21 14:38:52 G:\NodeJs\node.exe                                                                                    
+24680 node          2026/9/21 14:38:58 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+26844 node          2026/9/21 16:17:54 G:\NodeJs\node.exe                                                                                    
+27180 node          2026/9/21 16:18:36 G:\NodeJs\node.exe                                                                                    
+27440 node          2026/9/21 15:36:13 G:\NodeJs\node.exe                                                                                    
+28376 node          2026/9/21 16:12:16 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+28560 node          2026/9/21 16:28:49 G:\NodeJs\node.exe                                                                                    
+28952 node          2026/9/21 15:36:13 G:\NodeJs\node.exe                                                                                    
+29092 node          2026/9/21 16:19:49 G:\NodeJs\node.exe                                                                                    
+29572 node          2026/9/21 15:47:40 G:\NodeJs\node.exe                                                                                    
+31048 node          2026/9/21 15:42:20 G:\NodeJs\node.exe                                                                                    
+31064 node          2026/9/21 15:36:16 G:\NodeJs\node.exe                                                                                    
+32940 node          2026/9/21 15:36:17 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+35680 node          2026/9/21 15:42:23 G:\NodeJs\node.exe                                                                                    
+37952 node          2026/9/21 16:18:32 G:\NodeJs\node.exe                                                                                    
+38124 node          2026/9/21 14:39:00 G:\NodeJs\node.exe                                                                                    
+38212 node          2026/9/21 14:40:16 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+38820 node          2026/9/21 15:36:17 G:\NodeJs\node.exe                                                                                    
+39008 node          2026/9/21 16:43:25 G:\NodeJs\node.exe                                                                                    
+39272 node          2026/9/21 15:47:43 G:\NodeJs\node.exe                                                                                    
+39556 node          2026/9/21 14:38:49 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+39596 node          2026/9/21 15:47:42 G:\NodeJs\node.exe                                                                                    
+39776 node          2026/9/21 15:36:19 G:\NodeJs\node.exe                                                                                    
+40152 node          2026/9/21 16:43:54 G:\NodeJs\node.exe                                                                                    
+41348 node          2026/9/21 16:17:52 G:\NodeJs\node.exe                                                                                    
+42348 node          2026/9/21 16:17:52 G:\NodeJs\node.exe                                                                                    
+42660 node          2026/9/21 15:42:22 G:\NodeJs\node.exe                                                                                    
+45460 node          2026/9/21 16:18:32 G:\NodeJs\node.exe                                                                                    
+45672 node          2026/9/21 16:06:42 G:\NodeJs\node.exe                                                                                    
+46328 node          2026/9/21 16:06:45 G:\NodeJs\node.exe                                                                                    
+46628 node          2026/9/21 14:38:58 G:\NodeJs\node.exe                                                                                    
+48368 node          2026/9/21 14:38:49 G:\NodeJs\node.exe                                                                                    
+49436 node          2026/9/21 16:19:52 G:\NodeJs\node.exe                                                                                    
+51124 node          2026/9/21 15:36:13 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+51364 node          2026/9/21 16:12:18 G:\NodeJs\node.exe                                                                                    
+51496 node          2026/9/21 14:38:49 G:\NodeJs\node.exe                                                                                    
+51552 node          2026/9/21 15:42:20 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+52320 node          2026/9/21 16:43:22 G:\NodeJs\node.exe                                                                                    
+52496 node          2026/9/21 16:19:52 G:\NodeJs\node.exe                                                                                    
+52912 node          2026/9/21 14:38:58 G:\NodeJs\node.exe                                                                                    
+54428 node          2026/9/21 14:39:00 G:\NodeJs\node.exe                                                                                    
+54920 node          2026/9/21 16:43:53 G:\NodeJs\node.exe                                                                                    
+55568 node          2026/9/21 14:38:52 G:\NodeJs\node.exe                                                                                    
+56360 node          2026/9/21 16:28:47 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+56596 node          2026/9/21 15:47:40 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+56624 node          2026/9/21 15:47:40 G:\NodeJs\node.exe                                                                                    
+57732 node          2026/9/21 15:36:17 G:\NodeJs\node.exe                                                                                    
+57760 node          2026/9/21 16:28:47 G:\NodeJs\node.exe                                                                                    
+57960 node          2026/9/21 16:43:24 G:\NodeJs\node.exe                                                                                    
+58228 node          2026/9/21 14:40:16 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+58496 node          2026/9/21 15:42:20 G:\NodeJs\node.exe                                                                                    
+58508 node          2026/9/21 16:12:16 G:\NodeJs\node.exe                                                                                    
+58980 node          2026/9/21 16:06:42 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+59424 node          2026/9/21 16:43:53 G:\NodeJs\node.exe                                                                                    
+59536 node          2026/9/21 16:06:44 G:\NodeJs\node.exe                                                                                    
+59556 node          2026/9/21 16:12:16 G:\NodeJs\node.exe                                                                                    
+61320 node          2026/9/21 16:17:55 G:\NodeJs\node.exe                                                                                    
+61764 node          2026/9/21 16:12:19 G:\NodeJs\node.exe                                                                                    
+61848 node          2026/9/21 16:43:22 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node.exe     
+21756 node_repl     2026/9/21 16:17:52 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+32384 node_repl     2026/9/21 16:19:49 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+34644 node_repl     2026/9/21 16:06:42 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+44208 node_repl     2026/9/21 14:38:57 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+47364 node_repl     2026/9/21 15:36:17 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+51544 node_repl     2026/9/21 15:42:20 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+52676 node_repl     2026/9/21 16:12:16 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+56412 node_repl     2026/9/21 14:38:49 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+57528 node_repl     2026/9/21 15:47:40 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+58028 node_repl     2026/9/21 16:18:32 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+59524 node_repl     2026/9/21 16:43:22 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+61948 node_repl     2026/9/21 15:36:13 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+62136 node_repl     2026/9/21 16:28:47 C:\Users\Administrator\AppData\Local\OpenAI\Codex\runtimes\cua_node\df473e5367fa2b42\bin\node_repl.exe
+45780 python        2026/9/21 16:43:59 C:\Users\Administrator\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\python.exe          
+53668 python        2026/9/21 16:46:50 C:\Users\Administrator\AppData\Roaming\uv\python\cpython-3.11-windows-x86_64-none\python.exe          
+59340 python        2026/9/21 16:43:59 H:\coding-agent\apps\backend\.venv\Scripts\python.exe                                                 
+
+
+

@@ -1,0 +1,647 @@
+1| """Terminal Worker sidecar protocol client。
+2| 
+3| 本模块只负责 backend 与独立 Terminal Worker 之间的本机进程边界。PTY/ConPTY
+4| 实现位于 Rust sidecar；backend 不直接调用平台 PTY API。Windows Worker 以无可见
+5| 控制台窗口的方式启动，shell 的交互语义仍由 Worker 内的 ConPTY 提供。
+6| """
+7| 
+8| from __future__ import annotations
+9| 
+10| import base64
+11| import json
+12| import os
+13| import platform
+14| import queue
+15| import struct
+16| import subprocess
+17| import threading
+18| import uuid
+19| from collections.abc import Callable, Mapping
+20| from contextlib import suppress
+21| from dataclasses import dataclass
+22| from pathlib import Path
+23| from typing import Protocol
+24| 
+25| from app.config.constant import Constant
+26| from app.config.logging.logger import log
+27| from app.service.terminal.errors import (
+28|     TerminalWorkerBackpressureError,
+29|     TerminalWorkerProtocolError,
+30|     TerminalWorkerSignalFailedError,
+31|     TerminalWorkerSignalUnsupportedError,
+32|     TerminalWorkerUnavailableError,
+33| )
+34| from app.service.terminal.shell_resolver import ShellSpec
+35| 
+36| WorkerEventCallback = Callable[[Mapping[str, object]], None]
+37| SIGNAL_ACK_TIMEOUT_SECONDS = 5.0
+38| HANDSHAKE_TIMEOUT_SECONDS = 5.0
+39| 
+40| 
+41| @dataclass
+42| class _PendingSignal:
+43|     """等待 worker signal_result 的单次请求状态。"""
+44| 
+45|     event: threading.Event
+46|     result: Mapping[str, object] | None = None
+47| 
+48| 
+49| class TerminalWorker(Protocol):
+50|     """Terminal Worker 生命周期和控制操作契约。"""
+51| 
+52|     @property
+53|     def pid(self) -> int | None: ...
+54| 
+55|     @property
+56|     def capabilities(self) -> frozenset[str]: ...
+57| 
+58|     def start(
+59|         self,
+60|         spec: ShellSpec,
+61|         cwd: str,
+62|         on_event: WorkerEventCallback,
+63|     ) -> None: ...
+64| 
+65|     def write(self, data: bytes) -> None: ...
+66| 
+67|     def signal(self, signal_name: str) -> None: ...
+68| 
+69|     def close(self) -> None: ...
+70| 
+71| 
+72| class TerminalWorkerFactory(Protocol):
+73|     """创建一个尚未启动的 worker client。"""
+74| 
+75|     def create(self, instance_id: str) -> TerminalWorker: ...
+76| 
+77| 
+78| class ProcessTerminalWorkerFactory:
+79|     """通过 ``CODING_AGENT_TERMINAL_WORKER`` 创建 sidecar worker。"""
+80| 
+81|     def __init__(self, executable: str | None = None) -> None:
+82|         """保存显式路径；未提供时延迟读取环境变量，方便测试和桌面装配。"""
+83| 
+84|         self._executable = executable
+85| 
+86|     def create(self, instance_id: str) -> TerminalWorker:
+87|         """构造 process worker；不在此处启动子进程。
+88| 
+89|         参数:
+90|             instance_id: 本次 worker 会话实例标识，参与握手校验并进入进程名与日志。
+91| 
+92|         返回:
+93|             尚未启动的 :class:`ProcessTerminalWorker`。
+94| 
+95|         异常:
+96|             TerminalWorkerUnavailableError: 未配置 worker 可执行文件时抛出（桌面宿主经
+97|                 ``CODING_AGENT_TERMINAL_WORKER`` 注入，缺失说明装配不完整）。
+98| 
+99|         副作用:
+100|             未配置时写一条 WARNING 日志 ``terminal_worker_not_configured``；否则只读环境变量。
+101|         """
+102| 
+103|         executable = self._executable or os.environ.get(Constant.Terminal.WORKER_ENV, "").strip()
+104|         if not executable:
+105|             log.warning(
+106|                 "terminal_worker_not_configured",
+107|                 extra={
+108|                     "msg": "未配置 Terminal Worker 可执行文件，终端 session 无法创建",
+109|                     "data": {
+110|                         "env_var": Constant.Terminal.WORKER_ENV,
+111|                         "instance_id": instance_id,
+112|                     },
+113|                 },
+114|             )
+115|             raise TerminalWorkerUnavailableError(
+116|                 f"{Constant.Terminal.WORKER_ENV} is not configured; "
+117|                 "terminal worker sidecar is unavailable"
+118|             )
+119|         return ProcessTerminalWorker(executable, instance_id)
+120| 
+121| 
+122| class ProcessTerminalWorker:
+123|     """基于长度前缀 JSON 控制帧的 Terminal Worker client。
+124| 
+125|     Worker 进程必须先返回 ``handshake``，之后发送 ``output``、``status``、``exit``
+126|     事件。二进制 PTY 数据使用 base64 字段；shell/PTY 资源由 worker 管理。
+127|     """
+128| 
+129|     def __init__(self, executable: str, instance_id: str) -> None:
+130|         """初始化未启动的 worker client。"""
+131| 
+132|         self._executable = executable
+133|         self.instance_id = instance_id
+134|         self._process: subprocess.Popen[bytes] | None = None
+135|         self._on_event: WorkerEventCallback | None = None
+136|         self._write_lock = threading.Lock()
+137|         self._stop_event = threading.Event()
+138|         self._handshake_event = threading.Event()
+139|         self._reader_thread: threading.Thread | None = None
+140|         self._heartbeat_thread: threading.Thread | None = None
+141|         self._writer_thread: threading.Thread | None = None
+142|         self._input_queue: queue.Queue[bytes] = queue.Queue(
+143|             maxsize=Constant.Terminal.MAX_INPUT_QUEUE_FRAMES
+144|         )
+145|         self._input_queue_lock = threading.Lock()
+146|         self._input_queue_bytes = 0
+147|         self._writer_stop = threading.Event()
+148|         self._exit_lock = threading.Lock()
+149|         self._exit_emitted = False
+150|         self._handshake_valid = False
+151|         self._handshake_payload: dict[str, object] | None = None
+152|         self._capabilities = frozenset[str]()
+153|         self._signal_lock = threading.Lock()
+154|         self._pending_signals: dict[str, _PendingSignal] = {}
+155| 
+156|     @property
+157|     def pid(self) -> int | None:
+158|         """返回当前 sidecar PID。"""
+159| 
+160|         return self._process.pid if self._process is not None else None
+161| 
+162|     @property
+163|     def capabilities(self) -> frozenset[str]:
+164|         """返回最近一次 handshake 声明的静态 worker 能力。"""
+165| 
+166|         return self._capabilities
+167| 
+168|     def start(
+169|         self,
+170|         spec: ShellSpec,
+171|         cwd: str,
+172|         on_event: WorkerEventCallback,
+173|     ) -> None:
+174|         """无可见控制台窗口地启动 worker，发送 shell spec 并等待 handshake。
+175| 
+176|         参数:
+177|             spec: shell 启动规格（argv 与 shell 类型），PTY 由 worker 侧创建。
+178|             cwd: 初始工作目录；调用方保证已通过路径安全解析。
+179|             on_event: worker 事件回调（``output`` / ``status`` / ``exit`` 等）。
+180| 
+181|         返回:
+182|             无；握手通过后 writer 与 heartbeat 线程均已启动。
+183| 
+184|         异常:
+185|             TerminalWorkerUnavailableError: worker 已启动过、可执行文件无法拉起，或握手超时
+186|                 （可能是 worker 启动慢等瞬时条件，可重试）。
+187|             TerminalWorkerProtocolError: 收到握手但字段不合法（协议版本 / 实例 / PID / PTY
+188|                 类型不符），属确定性失败，重试同一 worker 二进制不会有不同结果。
+189| 
+190|         副作用:
+191|             启动 worker 子进程与 reader / stderr / writer / heartbeat 线程；失败路径写 WARNING
+192|             日志 ``terminal_worker_spawn_failed`` 或 ``terminal_worker_handshake_failed`` 并关闭
+193|             已启动的进程。
+194|         """
+195| 
+196|         if self._process is not None:
+197|             raise TerminalWorkerUnavailableError("terminal worker has already started")
+198|         try:
+199|             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+200|             process = subprocess.Popen(  # noqa: S603 - executable is desktop-provided sidecar
+201|                 [self._executable, "--stdio", "--instance-id", self.instance_id],
+202|                 stdin=subprocess.PIPE,
+203|                 stdout=subprocess.PIPE,
+204|                 stderr=subprocess.PIPE,
+205|                 cwd=str(Path(cwd).anchor or cwd),
+206|                 bufsize=0,
+207|                 creationflags=creationflags,
+208|             )
+209|         except OSError as exc:
+210|             log.warning(
+211|                 "terminal_worker_spawn_failed",
+212|                 extra={
+213|                     "msg": "Terminal Worker 启动失败，终端 session 无法创建",
+214|                     "data": {
+215|                         "executable": self._executable,
+216|                         "instance_id": self.instance_id,
+217|                         "error": str(exc),
+218|                         "error_type": type(exc).__name__,
+219|                     },
+220|                 },
+221|                 exc_info=True,
+222|             )
+223|             raise TerminalWorkerUnavailableError(f"failed to start terminal worker: {exc}") from exc
+224| 
+225|         self._process = process
+226|         self._on_event = on_event
+227|         self._exit_emitted = False
+228|         self._handshake_valid = False
+229|         self._handshake_payload = None
+230|         self._capabilities = frozenset()
+231|         self._stop_event.clear()
+232|         self._writer_stop.clear()
+233|         self._reader_thread = threading.Thread(
+234|             target=self._read_events,
+235|             name=f"terminal-worker-reader-{self.instance_id[:8]}",
+236|             daemon=True,
+237|         )
+238|         self._reader_thread.start()
+239|         threading.Thread(
+240|             target=self._drain_stderr,
+241|             name="terminal-worker-stderr",
+242|             daemon=True,
+243|         ).start()
+244|         self._send(
+245|             {
+246|                 "type": "start",
+247|                 "shell": list(spec.argv),
+248|                 "shell_kind": spec.kind,
+249|                 "cwd": cwd,
+250|             }
+251|         )
+252|         # 超时与「收到但不合法」是两类故障：前者可能是 worker 启动慢（可重试），后者是确定性
+253|         # 协议不兼容（重试同一二进制必然失败），必须分开抛出并各自留下可定位的日志。
+254|         handshake_expired = not self._handshake_event.wait(timeout=HANDSHAKE_TIMEOUT_SECONDS)
+255|         if handshake_expired or not self._handshake_valid:
+256|             self._log_handshake_failure("timeout" if handshake_expired else "rejected")
+257|             self.close()
+258|             if handshake_expired:
+259|                 raise TerminalWorkerUnavailableError(
+260|                     f"terminal worker handshake timed out after {HANDSHAKE_TIMEOUT_SECONDS:g}s"
+261|                 )
+262|             raise TerminalWorkerProtocolError(self._describe_handshake_mismatch())
+263|         self._writer_thread = threading.Thread(
+264|             target=self._write_events,
+265|             name=f"terminal-worker-writer-{self.instance_id[:8]}",
+266|             daemon=True,
+267|         )
+268|         self._writer_thread.start()
+269|         self._heartbeat_thread = threading.Thread(
+270|             target=self._heartbeat_loop,
+271|             name=f"terminal-worker-heartbeat-{self.instance_id[:8]}",
+272|             daemon=True,
+273|         )
+274|         self._heartbeat_thread.start()
+275| 
+276|     def write(self, data: bytes) -> None:
+277|         """向 worker 写入一段 PTY input bytes。"""
+278| 
+279|         process = self._process
+280|         if process is None or process.poll() is not None or not self._handshake_valid:
+281|             raise TerminalWorkerUnavailableError("terminal worker is not ready")
+282|         payload = self._encode_frame(
+283|             {"type": "write", "data_base64": base64.b64encode(data).decode("ascii")}
+284|         )
+285|         with self._input_queue_lock:
+286|             if (
+287|                 self._input_queue.full()
+288|                 or self._input_queue_bytes + len(data) > Constant.Terminal.MAX_INPUT_QUEUE_BYTES
+289|             ):
+290|                 raise TerminalWorkerBackpressureError("terminal worker input queue is full")
+291|             self._input_queue.put_nowait(payload)
+292|             self._input_queue_bytes += len(data)
+293| 
+294|     def signal(self, signal_name: str) -> None:
+295|         """发送 signal 并等待 worker 确认实际投递结果。"""
+296| 
+297|         request_id = uuid.uuid4().hex
+298|         pending = _PendingSignal(threading.Event())
+299|         with self._signal_lock:
+300|             self._pending_signals[request_id] = pending
+301|         try:
+302|             self._send({"type": "signal", "request_id": request_id, "signal": signal_name})
+303|         except Exception:
+304|             with self._signal_lock:
+305|                 self._pending_signals.pop(request_id, None)
+306|             raise
+307|         if not pending.event.wait(timeout=SIGNAL_ACK_TIMEOUT_SECONDS):
+308|             with self._signal_lock:
+309|                 self._pending_signals.pop(request_id, None)
+310|             raise TerminalWorkerUnavailableError("terminal worker signal acknowledgement timed out")
+311|         with self._signal_lock:
+312|             result = self._pending_signals.pop(request_id, None)
+313|         status = result.result.get("status") if result and result.result else None
+314|         if status == "applied":
+315|             return
+316|         if status == "unsupported":
+317|             raise TerminalWorkerSignalUnsupportedError("terminal signal is unsupported")
+318|         if status == "failed":
+319|             raise TerminalWorkerSignalFailedError("terminal worker failed to deliver signal")
+320|         raise TerminalWorkerUnavailableError("terminal worker signal result is missing")
+321| 
+322|     def close(self) -> None:
+323|         """请求 worker 关闭 shell，超时后终止 worker 进程。"""
+324| 
+325|         process = self._process
+326|         if process is None:
+327|             return
+328|         self._stop_event.set()
+329|         self._writer_stop.set()
+330|         with self._signal_lock:
+331|             for pending in self._pending_signals.values():
+332|                 pending.result = {"status": "unavailable"}
+333|                 pending.event.set()
+334|         with self._input_queue_lock:
+335|             while True:
+336|                 try:
+337|                     self._input_queue.get_nowait()
+338|                     self._input_queue.task_done()
+339|                 except queue.Empty:
+340|                     break
+341|             self._input_queue_bytes = 0
+342|         if process.poll() is None:
+343|             with suppress(TerminalWorkerUnavailableError):
+344|                 self._send({"type": "shutdown"})
+345|             try:
+346|                 process.wait(timeout=3)
+347|             except subprocess.TimeoutExpired:
+348|                 process.terminate()
+349|                 try:
+350|                     process.wait(timeout=2)
+351|                 except subprocess.TimeoutExpired:
+352|                     process.kill()
+353|                     process.wait(timeout=2)
+354|         self._process = None
+355| 
+356|     def _write_events(self) -> None:
+357|         """从有界 input queue 向 worker 写入控制帧。"""
+358| 
+359|         while not self._writer_stop.is_set():
+360|             try:
+361|                 payload = self._input_queue.get(timeout=0.1)
+362|             except queue.Empty:
+363|                 continue
+364|             try:
+365|                 self._send_payload(payload)
+366|             except TerminalWorkerUnavailableError:
+367|                 return
+368|             finally:
+369|                 with self._input_queue_lock:
+370|                     self._input_queue_bytes = max(
+371|                         0, self._input_queue_bytes - _payload_data_bytes(payload)
+372|                     )
+373|                 self._input_queue.task_done()
+374| 
+375|     @staticmethod
+376|     def _encode_frame(message: Mapping[str, object]) -> bytes:
+377|         """编码长度前缀控制帧。"""
+378| 
+379|         payload = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+380|         if len(payload) > Constant.Terminal.MAX_FRAME_BYTES:
+381|             raise TerminalWorkerUnavailableError("terminal worker frame exceeds size limit")
+382|         return struct.pack(">I", len(payload)) + payload
+383| 
+384|     def _send_payload(self, frame: bytes) -> None:
+385|         """向 worker stdin 写入已经编码的 frame。"""
+386| 
+387|         process = self._process
+388|         if process is None or process.stdin is None or process.poll() is not None:
+389|             raise TerminalWorkerUnavailableError("terminal worker is not running")
+390|         try:
+391|             with self._write_lock:
+392|                 process.stdin.write(frame)
+393|                 process.stdin.flush()
+394|         except (BrokenPipeError, OSError) as exc:
+395|             raise TerminalWorkerUnavailableError("terminal worker control pipe is closed") from exc
+396| 
+397|     def _send(self, message: Mapping[str, object]) -> None:
+398|         """发送一个长度前缀控制帧。"""
+399| 
+400|         process = self._process
+401|         if process is None or process.stdin is None or process.poll() is not None:
+402|             raise TerminalWorkerUnavailableError("terminal worker is not running")
+403|         self._send_payload(self._encode_frame(message))
+404| 
+405|     def _read_events(self) -> None:
+406|         """后台读取 worker 事件并转发给 session service。"""
+407| 
+408|         process = self._process
+409|         if process is None or process.stdout is None:
+410|             return
+411|         try:
+412|             while not self._stop_event.is_set():
+413|                 header = _read_exact(process.stdout, 4)
+414|                 if not header:
+415|                     break
+416|                 size = struct.unpack(">I", header)[0]
+417|                 if size <= 0 or size > Constant.Terminal.MAX_FRAME_BYTES:
+418|                     raise TerminalWorkerProtocolError(f"invalid terminal worker frame size: {size}")
+419|                 payload = _read_exact(process.stdout, size)
+420|                 if len(payload) != size:
+421|                     break
+422|                 event = json.loads(payload.decode("utf-8"))
+423|                 if not isinstance(event, dict):
+424|                     raise TerminalWorkerProtocolError("terminal worker event is not an object")
+425|                 if event.get("type") == "handshake":
+426|                     # 保留原始握手内容：校验不通过时由 start() 输出期望/实际字段对照与日志。
+427|                     self._handshake_payload = dict(event)
+428|                     self._handshake_valid = self._validate_handshake(event, process.pid)
+429|                     raw_capabilities = event.get("capabilities")
+430|                     if isinstance(raw_capabilities, list):
+431|                         self._capabilities = frozenset(
+432|                             value for value in raw_capabilities if isinstance(value, str)
+433|                         )
+434|                     self._handshake_event.set()
+435|                 if event.get("type") == "signal_result":
+436|                     request_id = event.get("request_id")
+437|                     if isinstance(request_id, str):
+438|                         with self._signal_lock:
+439|                             pending = self._pending_signals.get(request_id)
+440|                             if pending is not None:
+441|                                 pending.result = event
+442|                                 pending.event.set()
+443|                     continue
+444|                 callback = self._on_event
+445|                 if callback is not None:
+446|                     callback(event)
+447|         except (
+448|             OSError,
+449|             json.JSONDecodeError,
+450|             UnicodeDecodeError,
+451|             TerminalWorkerUnavailableError,
+452|         ) as exc:
+453|             if not self._stop_event.is_set():
+454|                 log.warning(
+455|                     "terminal_worker_reader_failed",
+456|                     extra={
+457|                         "msg": "Terminal Worker 事件读取失败",
+458|                         "data": {
+459|                             "instance_id": self.instance_id,
+460|                             "worker_pid": process.pid,
+461|                             "error": str(exc),
+462|                             "error_type": type(exc).__name__,
+463|                         },
+464|                     },
+465|                 )
+466|         finally:
+467|             self._handshake_event.set()
+468|             if not self._stop_event.is_set():
+469|                 self._emit_exit(process.poll())
+470| 
+471|     def _emit_exit(self, exit_code: int | None) -> None:
+472|         """在 worker 自然退出或控制管道异常时通知 session service 一次。"""
+473| 
+474|         with self._exit_lock:
+475|             if self._exit_emitted:
+476|                 return
+477|             self._exit_emitted = True
+478|         callback = self._on_event
+479|         if callback is not None:
+480|             callback({"type": "exit", "exit_code": exit_code})
+481| 
+482|     def _validate_handshake(self, event: Mapping[str, object], process_pid: int) -> bool:
+483|         """校验 worker 协议版本、实例、PID 与 PTY 类型。"""
+484| 
+485|         return (
+486|             event.get("protocol") == Constant.Terminal.WORKER_PROTOCOL
+487|             and event.get("instance_id") == self.instance_id
+488|             and event.get("pid") == process_pid
+489|             and event.get("pty_kind") in {"conpty", "unix_pty"}
+490|         )
+491| 
+492|     def _handshake_mismatch_details(self) -> dict[str, object]:
+493|         """返回握手「期望值 vs 实际收到值」的对照表（仅协议元数据，不含 PTY 内容）。
+494| 
+495|         参数:
+496|             无。
+497| 
+498|         返回:
+499|             可直接放进日志 ``data`` 或错误消息的键值表；尚未收到握手帧时实际值均为 ``None``。
+500| 
+501|         异常:
+502|             无（只读实例状态与进程 PID）。
+503| 
+504|         副作用:
+505|             无。
+506|         """
+507| 
+508|         received = self._handshake_payload or {}
+509|         process = self._process
+510|         return {
+511|             "expected_protocol": Constant.Terminal.WORKER_PROTOCOL,
+512|             "received_protocol": received.get("protocol"),
+513|             "expected_instance_id": self.instance_id,
+514|             "received_instance_id": received.get("instance_id"),
+515|             "expected_pid": process.pid if process is not None else None,
+516|             "received_pid": received.get("pid"),
+517|             "received_pty_kind": received.get("pty_kind"),
+518|         }
+519| 
+520|     def _describe_handshake_mismatch(self) -> str:
+521|         """构造握手被拒时的错误消息（列出期望与实际字段，便于直接定位版本错配）。
+522| 
+523|         参数:
+524|             无。
+525| 
+526|         返回:
+527|             含期望/实际字段对照的错误消息文本。
+528| 
+529|         异常:
+530|             无。
+531| 
+532|         副作用:
+533|             无。
+534|         """
+535| 
+536|         details = self._handshake_mismatch_details()
+537|         rendered = ", ".join(f"{key}={value!r}" for key, value in details.items())
+538|         return (
+539|             f"terminal worker handshake rejected by {self._executable}: {rendered}; "
+540|             "the worker binary likely predates the current protocol contract"
+541|         )
+542| 
+543|     def _log_handshake_failure(self, reason: str) -> None:
+544|         """记录握手失败的可排查日志（含失败类别与协议字段对照）。
+545| 
+546|         参数:
+547|             reason: 失败类别，``"timeout"``（等待握手超时）或 ``"rejected"``（收到但校验不通过）。
+548| 
+549|         返回:
+550|             无。
+551| 
+552|         异常:
+553|             无。
+554| 
+555|         副作用:
+556|             写 WARNING 日志 ``terminal_worker_handshake_failed``；只记录协议元数据与进程号，
+557|             不记录任何 PTY 输入输出内容。
+558|         """
+559| 
+560|         process = self._process
+561|         log.warning(
+562|             "terminal_worker_handshake_failed",
+563|             extra={
+564|                 "msg": "Terminal Worker 握手失败，终端 session 无法启动",
+565|                 "data": {
+566|                     "reason": reason,
+567|                     "executable": self._executable,
+568|                     "instance_id": self.instance_id,
+569|                     "worker_pid": process.pid if process is not None else None,
+570|                     "timeout_seconds": HANDSHAKE_TIMEOUT_SECONDS,
+571|                     **self._handshake_mismatch_details(),
+572|                 },
+573|             },
+574|         )
+575| 
+576|     def _drain_stderr(self) -> None:
+577|         """消费并限长记录 worker stderr，防止诊断管道阻塞。"""
+578| 
+579|         process = self._process
+580|         if process is None or process.stderr is None:
+581|             return
+582|         for raw_line in process.stderr:
+583|             line = _sanitize_worker_stderr(raw_line)
+584|             if line:
+585|                 log.warning(
+586|                     "terminal_worker_stderr",
+587|                     extra={
+588|                         "msg": "Terminal Worker stderr",
+589|                         "data": {
+590|                             "worker_instance_id": self.instance_id,
+591|                             "worker_pid": process.pid,
+592|                             "platform": platform.system().lower(),
+593|                             "error_category": "worker_stderr",
+594|                             "line": line,
+595|                         },
+596|                     },
+597|                 )
+598| 
+599|     def _heartbeat_loop(self) -> None:
+600|         """按协议向 worker 发送 heartbeat。"""
+601| 
+602|         while not self._stop_event.wait(timeout=5):
+603|             try:
+604|                 self._send({"type": "heartbeat"})
+605|             except TerminalWorkerUnavailableError:
+606|                 return
+607| 
+608| 
+609| def _read_exact(stream: object, size: int) -> bytes:
+610|     """从 binary stream 读取最多指定字节数，EOF 时返回已读取内容。"""
+611| 
+612|     read = stream.read  # type: ignore[attr-defined]
+613|     chunks: list[bytes] = []
+614|     remaining = size
+615|     while remaining:
+616|         chunk = read(remaining)
+617|         if not chunk:
+618|             break
+619|         chunks.append(chunk)
+620|         remaining -= len(chunk)
+621|     return b"".join(chunks)
+622| 
+623| 
+624| def _payload_data_bytes(payload: bytes) -> int:
+625|     """从 write frame 估算其原始 input bytes 大小。"""
+626| 
+627|     try:
+628|         size = struct.unpack(">I", payload[:4])[0]
+629|         message = json.loads(payload[4 : 4 + size].decode("utf-8"))
+630|         encoded = message.get("data_base64") if isinstance(message, dict) else None
+631|         return len(base64.b64decode(encoded, validate=True)) if isinstance(encoded, str) else 0
+632|     except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+633|         return 0
+634| 
+635| 
+636| def _sanitize_worker_stderr(raw_line: bytes, *, max_length: int = 4096) -> str:
+637|     """将 worker 诊断行转换为受限、可落盘的日志文本。"""
+638| 
+639|     text = raw_line.decode("utf-8", errors="replace").strip()
+640|     sanitized = "".join(character for character in text if character >= " " or character == "\t")
+641|     return sanitized[:max_length]
+642| 
+643| 
+644| def new_worker_instance_id() -> str:
+645|     """生成不可复用的 worker instance id。"""
+646| 
+647|     return uuid.uuid4().hex

@@ -1,0 +1,502 @@
+401|                 after_seq=after_seq,
+402|                 wait_ms=wait_ms,
+403|                 is_cancelled=is_cancelled,
+404|             )
+405|         except Exception:
+406|             if operation_key is not None:
+407|                 self._forget_write_operation(operation_key)
+408|             raise
+409|         if operation_key is not None:
+410|             with self._write_operations_condition:
+411|                 self._write_operations[operation_key] = (data, result)
+412|                 while len(self._write_operations) > 4096:
+413|                     self._write_operations.pop(next(iter(self._write_operations)))
+414|                 self._write_operations_condition.notify_all()
+415|         return result
+416| 
+417|     def read(
+418|         self,
+419|         session_id: str,
+420|         *,
+421|         task_id: int,
+422|         workspace_id: int | None = None,
+423|         after_seq: int | None = None,
+424|         wait_ms: int = 1000,
+425|         is_cancelled: RunCancellationCheck | None = None,
+426|     ) -> TerminalReadResult:
+427|         """按 output cursor 非破坏性读取 session 输出。"""
+428| 
+429|         runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
+430|         wait_seconds = max(0, min(wait_ms, 30_000)) / 1000
+431|         deadline = time.monotonic() + wait_seconds
+432|         with runtime.condition:
+433|             while True:
+434|                 self._validate_cursor(runtime, after_seq)
+435|                 result = self._read_locked(runtime, after_seq)
+436|                 if result.output or runtime.status in {"exited", "interrupted", "failed", "closed"}:
+437|                     return result
+438|                 if is_cancelled is not None and is_cancelled():
+439|                     return result
+440|                 remaining = deadline - time.monotonic()
+441|                 if remaining <= 0:
+442|                     return result
+443|                 runtime.condition.wait(timeout=min(remaining, 0.05))
+444| 
+445|     def signal(
+446|         self,
+447|         session_id: str,
+448|         *,
+449|         task_id: int,
+450|         workspace_id: int | None = None,
+451|         signal_name: str,
+452|     ) -> dict[str, object]:
+453|         """由 Agent 向 PTY 发送平台无关的 signal。"""
+454| 
+455|         if signal_name not in {"interrupt", "eof", "suspend"}:
+456|             raise TerminalSessionError(f"unsupported terminal signal: {signal_name}")
+457|         runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
+458|         with runtime.lock:
+459|             self._ensure_mutable(runtime)
+460|             if runtime.worker is None:
+461|                 raise TerminalSessionStateError("terminal session has no active worker")
+462|             required_capability = {
+463|                 "interrupt": "signal_interrupt",
+464|                 "eof": "signal_eof_canonical",
+465|                 "suspend": "signal_suspend",
+466|             }[signal_name]
+467|             if required_capability not in runtime.worker.capabilities:
+468|                 raise TerminalSessionStateError(
+469|                     f"terminal signal is unsupported by worker: {signal_name}"
+470|                 )
+471|             try:
+472|                 runtime.worker.signal(signal_name)
+473|             except TerminalWorkerUnavailableError:
+474|                 self._fail_runtime(runtime, "worker_unavailable")
+475|                 raise
+476|             self._touch(runtime)
+477|         return self.snapshot(session_id, task_id=task_id, workspace_id=workspace_id)
+478| 
+479|     def close(
+480|         self,
+481|         session_id: str,
+482|         *,
+483|         task_id: int,
+484|         workspace_id: int | None = None,
+485|         reason: str = "agent_closed",
+486|     ) -> dict[str, object]:
+487|         """显式关闭 session；重复关闭只返回当前终态。"""
+488| 
+489|         runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
+490|         with runtime.lock:
+491|             if runtime.status in {"closed", "exited", "interrupted", "failed"}:
+492|                 return self.snapshot(session_id, task_id=task_id, workspace_id=workspace_id)
+493|             worker = runtime.worker
+494|             self._update_runtime(
+495|                 runtime,
+496|                 status="closed",
+497|                 end_reason=reason,
+498|                 ended_at=utc_now(),
+499|             )
+500|             runtime.condition.notify_all()
+501|         if worker is not None:
+502|             worker.close()
+503|         self._publish_status(runtime)
+504|         return self.snapshot(session_id, task_id=task_id, workspace_id=workspace_id)
+505| 
+506|     def snapshot(
+507|         self,
+508|         session_id: str,
+509|         *,
+510|         task_id: int,
+511|         workspace_id: int | None = None,
+512|     ) -> dict[str, object]:
+513|         """读取 session 当前元数据和 cursor watermark。"""
+514| 
+515|         runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
+516|         with runtime.lock:
+517|             first_available = _first_available_seq(runtime)
+518|             return {
+519|                 **runtime.record.to_dict(),
+520|                 "generation": runtime.generation,
+521|                 "first_available_seq": first_available,
+522|                 "next_seq": runtime.next_seq,
+523|             }
+524| 
+525|     def subscribe(
+526|         self,
+527|         session_id: str,
+528|         *,
+529|         task_id: int,
+530|         after_seq: int | None,
+531|     ) -> TerminalPreviewAttachment:
+532|         """注册只读预览 subscriber，并返回有序 replay 边界。"""
+533| 
+534|         runtime = self._require_runtime(session_id, task_id)
+535|         subscription = TerminalPreviewSubscription()
+536|         with runtime.lock:
+537|             self._validate_cursor(runtime, after_seq)
+538|             first_available = _first_available_seq(runtime)
+539|             replay = tuple(
+540|                 frame
+541|                 for frame in runtime.frames
+542|                 if after_seq is None or _frame_seq(frame) > after_seq
+543|             )
+544|             attached = {
+545|                 "protocol": "terminal-preview-v1",
+546|                 "type": "attached",
+547|                 "session_id": session_id,
+548|                 "task_id": task_id,
+549|                 "generation": runtime.generation,
+550|                 "first_available_seq": first_available,
+551|                 "next_seq": runtime.next_seq,
+552|                 "status": runtime.status,
+553|             }
+554|             terminal_event = (
+555|                 _terminal_event(runtime)
+556|                 if runtime.status in {"exited", "interrupted", "failed", "closed"}
+557|                 else None
+558|             )
+559|             runtime.subscribers.add(subscription)
+560|         return TerminalPreviewAttachment(attached, replay, terminal_event, subscription)
+561| 
+562|     def unsubscribe(self, session_id: str, subscription: TerminalPreviewSubscription) -> None:
+563|         """移除一个预览 subscriber。"""
+564| 
+565|         with self._registry_lock:
+566|             runtime = self._registry.get(session_id)
+567|         if runtime is not None:
+568|             with runtime.lock:
+569|                 runtime.subscribers.discard(subscription)
+570|         subscription.close()
+571| 
+572|     def shutdown(self) -> None:
+573|         """停止接收新操作并关闭当前进程持有的全部 worker。"""
+574| 
+575|         with self._registry_lock:
+576|             self._accepting = False
+577|             runtimes = list(self._registry.values())
+578|         for runtime in runtimes:
+579|             if runtime.status in {"starting", "running"}:
+580|                 try:
+581|                     self.close(
+582|                         runtime.record.session_id,
+583|                         task_id=runtime.record.task_id,
+584|                         reason="backend_shutdown",
+585|                     )
+586|                 except Exception:
+587|                     log.exception(
+588|                         "terminal_session_shutdown_failed",
+589|                         extra={
+590|                             "msg": "Terminal session 关闭失败",
+591|                             "data": {"session_id": runtime.record.session_id},
+592|                         },
+593|                     )
+594|         for runtime in runtimes:
+595|             with runtime.lock:
+596|                 for subscriber in tuple(runtime.subscribers):
+597|                     subscriber.close()
+598|                 runtime.subscribers.clear()
+599|         with self._registry_lock:
+600|             self._registry.clear()
+601|         self._sweeper_stop.set()
+602|         if (
+603|             self._sweeper_thread is not None
+604|             and self._sweeper_thread is not threading.current_thread()
+605|         ):
+606|             self._sweeper_thread.join(timeout=2)
+607|         self._sweeper_thread = None
+608| 
+609|     def delete_task_sessions(self, task_ids: Iterable[int]) -> int:
+610|         """在 Task 删除前关闭其仍存活的 terminal worker。
+611| 
+612|         终端元数据属于 checkpoint，不存在主库行需要删除；此方法仅释放当前进程资源。
+613|         """
+614| 
+615|         ids = set(task_ids)
+616|         if not ids:
+617|             return 0
+618|         closed = self._close_matching(
+619|             lambda runtime: runtime.record.task_id in ids,
+620|             reason="task_deleted",
+621|             log_event="terminal_session_task_delete_worker_close_failed",
+622|         )
+623|         with self._registry_lock:
+624|             self._backpressure_notified_runs = {
+625|                 key for key in self._backpressure_notified_runs if key[0] not in ids
+626|             }
+627|         return closed
+628| 
+629|     def begin_run(self, run_id: int) -> None:
+630|         """允许一个新的执行轮次创建 terminal。
+631| 
+632|         同一 ``ConversationRun`` 业务 resume 时，旧轮次的 terminal 已经被关闭；
+633|         resume 会在新的工具调用中创建新的 session，而不会复用旧 PTY。
+634|         """
+635| 
+636|         with self._registry_lock:
+637|             self._closing_runs.discard(run_id)
+638| 
+639|     def close_run_terminals(self, run_id: int, *, reason: str = "run_finished") -> int:
+640|         """幂等强制关闭一个 Run 持有的全部 terminal worker。
+641| 
+642|         先设置 closing fence 并从 registry 脱离 session，阻止迟到的工具调用重新写入；
+643|         然后发布终态、关闭 subscriber，并调用 worker 的 shutdown/terminate/kill 兜底。
+644|         不修改 checkpoint；Run 状态由 ConversationRunModel 负责，checkpoint 只保存工具
+645|         操作期间已投影的终端元数据。
+646|         """
+647| 
+648|         with self._registry_lock:
+649|             self._closing_runs.add(run_id)
+650|         closed = self._close_matching(
+651|             lambda runtime: runtime.record.run_id == run_id,
+652|             reason=reason,
+653|             log_event="terminal_session_run_close_worker_failed",
+654|         )
+655|         with self._registry_lock:
+656|             self._backpressure_notified_runs = {
+657|                 key for key in self._backpressure_notified_runs if key[1] != run_id
+658|             }
+659|         return closed
+660| 
+661|     def _close_matching(
+662|         self,
+663|         predicate: Callable[[_SessionRuntime], bool],
+664|         *,
+665|         reason: str,
+666|         log_event: str,
+667|     ) -> int:
+668|         """脱离并关闭满足条件的 session；不触碰 checkpoint 或主库。"""
+669| 
+670|         with self._registry_lock:
+671|             runtimes = [runtime for runtime in self._registry.values() if predicate(runtime)]
+672|             for runtime in runtimes:
+673|                 self._registry.pop(runtime.record.session_id, None)
+674|         for runtime in runtimes:
+675|             worker: TerminalWorker | None
+676|             with runtime.lock:
+677|                 if runtime.status in {"starting", "running"}:
+678|                     self._update_runtime(
+679|                         runtime,
+680|                         status="closed",
+681|                         end_reason=reason,
+682|                         ended_at=utc_now(),
+683|                 )
+684|                 worker = runtime.worker
+685|                 runtime.worker = None
+686|                 self._publish_status(runtime)
+687|                 runtime.subscribers.clear()
+688|                 runtime.condition.notify_all()
+689|             if worker is not None:
+690|                 try:
+691|                     worker.close()
+692|                 except Exception:
+693|                     log.exception(
+694|                         log_event,
+695|                         extra={
+696|                             "msg": "Terminal Worker 强制关闭失败",
+697|                             "data": {
+698|                                 "session_id": runtime.record.session_id,
+699|                                 "run_id": runtime.record.run_id,
+700|                                 "reason": reason,
+701|                             },
+702|                         },
+703|                     )
+704|         return len(runtimes)
+705| 
+706|     def _on_worker_event(self, session_id: str, generation: str, event: object) -> None:
+707|         """将 worker 事件投影到 session runtime。"""
+708| 
+709|         if not isinstance(event, dict):
+710|             return
+711|         with self._registry_lock:
+712|             runtime = self._registry.get(session_id)
+713|         if runtime is None:
+714|             return
+715|         if runtime.generation != generation:
+716|             log.warning(
+717|                 "terminal_session_stale_worker_event",
+718|                 extra={
+719|                     "msg": "丢弃旧 Terminal Worker callback",
+720|                     "data": {"session_id": session_id},
+721|                 },
+722|             )
+723|             return
+724|         event_type = event.get("type")
+725|         if event_type == "handshake":
+726|             return
+727|         if event_type == "output":
+728|             self._on_output(runtime, event)
+729|         elif event_type == "error":
+730|             self._on_worker_error(runtime, event)
+731|         elif event_type == "exit":
+732|             self._on_exit(runtime, event)
+733| 
+734|     def _forget_write_operation(self, operation_key: tuple[str, str]) -> None:
+735|         """Remove a failed in-flight operation and wake a retrying caller."""
+736| 
+737|         with self._write_operations_condition:
+738|             self._write_operations.pop(operation_key, None)
+739|             self._write_operations_condition.notify_all()
+740| 
+741|     def _defer_backpressure_message(self, runtime: _SessionRuntime) -> None:
+742|         """在输入队列背压时向该 Task 延迟注入一次可重试提示。"""
+743| 
+744|         run_key = (runtime.record.task_id, runtime.record.run_id)
+745|         with self._registry_lock:
+746|             if run_key in self._backpressure_notified_runs:
+747|                 return
+748|             self._backpressure_notified_runs.add(run_key)
+749|         try:
+750|             task_runtime_spaces.get_or_create(runtime.record.task_id).defer_system_message(
+751|                 SystemMessage(
+752|                     content=(
+753|                         "The terminal input queue is temporarily full. Wait briefly for "
+754|                         "the terminal worker to drain, then retry terminal_write."
+755|                     ),
+756|                     additional_kwargs={
+757|                         "source": "terminal_input_backpressure",
+758|                         "run_id": runtime.record.run_id,
+759|                     },
+760|                 )
+761|             )
+762|         except Exception:
+763|             with self._registry_lock:
+764|                 self._backpressure_notified_runs.discard(run_key)
+765|             log.warning(
+766|                 "terminal_session_backpressure_message_defer_failed",
+767|                 extra={
+768|                     "msg": "Terminal 输入队列背压提示注入失败",
+769|                     "data": {
+770|                         "session_id": runtime.record.session_id,
+771|                         "task_id": runtime.record.task_id,
+772|                         "run_id": runtime.record.run_id,
+773|                     },
+774|                 },
+775|             )
+776| 
+777|     def _on_output(self, runtime: _SessionRuntime, event: dict[str, object]) -> None:
+778|         """接收 worker output 并广播到 ring buffer/subscribers。"""
+779| 
+780|         encoded = event.get("data_base64")
+781|         if not isinstance(encoded, str):
+782|             return
+783|         try:
+784|             data = base64.b64decode(encoded, validate=True)
+785|         except (ValueError, TypeError):
+786|             self._fail_runtime(runtime, "invalid_worker_output")
+787|             return
+788|         if not data or len(data) > Constant.Terminal.MAX_WORKER_OUTPUT_CHUNK_BYTES:
+789|             self._fail_runtime(runtime, "worker_output_chunk_too_large")
+790|             return
+791|         with runtime.condition:
+792|             if runtime.status not in {"starting", "running"}:
+793|                 return
+794|             frame = {
+795|                 "protocol": "terminal-preview-v1",
+796|                 "type": "output",
+797|                 "session_id": runtime.record.session_id,
+798|                 "generation": runtime.generation,
+799|                 "seq": runtime.next_seq,
+800|                 "data_base64": base64.b64encode(data).decode("ascii"),
+801|             }
+802|             runtime.next_seq += 1
+803|             runtime.frames.append(frame)
+804|             runtime.buffer_bytes += len(data)
+805|             while runtime.buffer_bytes > self._ring_buffer_bytes and runtime.frames:
+806|                 removed = runtime.frames.popleft()
+807|                 runtime.buffer_bytes -= _frame_bytes(removed)
+808|             for subscriber in tuple(runtime.subscribers):
+809|                 subscriber.publish(frame)
+810|             runtime.condition.notify_all()
+811|         self._touch(runtime)
+812| 
+813|     def _on_exit(self, runtime: _SessionRuntime, event: dict[str, object]) -> None:
+814|         """把 worker 退出映射为唯一 session 终态。"""
+815| 
+816|         exit_code = event.get("exit_code")
+817|         worker = runtime.worker
+818|         with runtime.condition:
+819|             if runtime.status in {"closed", "failed", "interrupted", "exited"}:
+820|                 return
+821|             self._update_runtime(
+822|                 runtime,
+823|                 status="exited",
+824|                 end_reason="shell_exited",
+825|                 exit_code=exit_code if isinstance(exit_code, int) else None,
+826|                 ended_at=utc_now(),
+827|             )
+828|             self._publish_status(runtime)
+829|             runtime.condition.notify_all()
+830|         if worker is not None:
+831|             with suppress(Exception):
+832|                 worker.close()
+833| 
+834|     def _on_worker_error(self, runtime: _SessionRuntime, event: dict[str, object]) -> None:
+835|         """将 Worker 错误事件映射为失败或可记录的非致命运行态。"""
+836| 
+837|         code = event.get("code")
+838|         if code in {
+839|             "START_ALREADY_COMPLETE",
+840|             "PTY_SIGNAL_FAILED",
+841|             "PTY_SIGNAL_UNSUPPORTED",
+842|             "PTY_QUERY_RESPONSE_FAILED",
+843|         }:
+844|             log.warning(
+845|                 "terminal_session_worker_nonfatal_error",
+846|                 extra={
+847|                     "msg": "Terminal Worker 报告非致命错误",
+848|                     "data": {"session_id": runtime.record.session_id, "code": code},
+849|                 },
+850|             )
+851|             return
+852|         self._fail_runtime(runtime, _worker_error_reason(code))
+853| 
+854|     def _publish_status(self, runtime: _SessionRuntime) -> None:
+855|         """向所有 subscriber 发布当前状态。"""
+856| 
+857|         event = {
+858|             "protocol": "terminal-preview-v1",
+859|             "type": "status",
+860|             "session_id": runtime.record.session_id,
+861|             "generation": runtime.generation,
+862|             "status": runtime.status,
+863|         }
+864|         if runtime.status in {"exited", "interrupted", "failed", "closed"}:
+865|             event = _terminal_event(runtime)
+866|         for subscriber in tuple(runtime.subscribers):
+867|             subscriber.publish(event)
+868| 
+869|     def _fail_runtime(self, runtime: _SessionRuntime, reason: str) -> None:
+870|         """安全收敛 worker 失败，不向模型暴露原始异常。"""
+871| 
+872|         worker = runtime.worker
+873|         with runtime.condition:
+874|             if runtime.status in {"closed", "exited", "interrupted", "failed"}:
+875|                 return
+876|             self._update_runtime(
+877|                 runtime,
+878|                 status="failed",
+879|                 end_reason=reason,
+880|                 ended_at=utc_now(),
+881|             )
+882|             runtime.condition.notify_all()
+883|             self._publish_status(runtime)
+884|         if worker is not None:
+885|             with suppress(Exception):
+886|                 worker.close()
+887| 
+888|     def _require_runtime(
+889|         self,
+890|         session_id: str,
+891|         task_id: int,
+892|         *,
+893|         workspace_id: int | None = None,
+894|     ) -> _SessionRuntime:
+895|         """取得当前 backend 进程中的 active runtime。"""
+896| 
+897|         with self._registry_lock:
+898|             runtime = self._registry.get(session_id)
+899|             if runtime is not None:
+900|                 if runtime.record.task_id != task_id or (
+
+Use offset=901 to continue reading.
