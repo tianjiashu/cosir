@@ -129,32 +129,6 @@ async def _tools_node(state: ReactGraphState) -> dict:
           自动补 ``ToolMessage`` 占位，本节点不构造/落库占位消息、亦不越界访问 service
           受保护成员。
     """
-
-    # blocked_calls = tool_call_lifecycle.blocked_tool_calls
-    # if blocked_calls:
-    #     for blocked_call in blocked_calls:
-    #         _runtime_context().add_message(
-    #             ToolMessage(
-    #                 content="This tool is disabled for the current run.Do not call again",
-    #                 tool_call_id=blocked_call.tool_call_id,
-    #                 name=blocked_call.tool_name,
-    #             ),
-    #             transport_metadata=TransportMetadata(status="cancelled"),
-    #         )
-    #     log.info(
-    #         "model_node_disabled_tools_blocked",
-    #         extra={
-    #             "msg": "本轮禁用工具调用已隐藏并闭合模型协议",
-    #             "data": {
-    #                 "task_id": task_id,
-    #                 "run_id": run_id,
-    #                 "step_id": step_id,
-    #                 "tool_names": sorted({record.tool_name for record in blocked_calls}),
-    #                 "count": len(blocked_calls),
-    #             },
-    #         },
-    #     )
-
     rc = _runtime_config()  # 取运行时配置
     operations = rc.operations  # 领域操作
     lifecycle = state.tool_call_lifecycle
@@ -164,50 +138,38 @@ async def _tools_node(state: ReactGraphState) -> dict:
     if lifecycle is None:
         raise RuntimeError("tool_call_lifecycle is required before tools_node execution")
 
-    tool_run: ToolRunResult | None = None
     instruction = state.instruction
-    blocked_observations = []
 
-    if lifecycle.blocked_calls:
-        blocked_observations = [ToolObservation(tool_name=call.tool_name, status="cancelled",
-                                   content="This tool is disabled for the current run.Do not call again",
-                                   retryable=False, tool_call_id=call.call_id, ) for call in
-                   lifecycle.blocked_calls.values()]
+    lifecycle.begin(task_id=task_id, run_id=state.run_id, step_id=step_id)
 
-    if lifecycle.valid_tools:
+    # 仅执行状态为 running 的合法调用；pending（参数非法）调用不执行，由 observe 节点统一结算。
+    approved_calls = [_to_tool_call(record) for record in lifecycle.valid_tools | lifecycle.blocked_tool_calls]
 
-        # 仅执行状态为 running 的合法调用；pending（参数非法）调用不执行，由 observe 节点统一结算。
-        approved_calls = [_to_tool_call(record) for record in lifecycle.valid_tools]
-
-        log.info(
-            "tools_node_resumed",
-            extra={
-                "msg": f"准备执行 {len(approved_calls)} 个工具调用，step_id={step_id}",
-                "data": {
-                    "step_id": step_id,
-                    "approved_count": len(approved_calls),
-                    "instruction": instruction,
-                },
+    log.info(
+        "tools_node_resumed",
+        extra={
+            "msg": f"准备执行 {len(approved_calls)} 个工具调用，step_id={step_id}",
+            "data": {
+                "step_id": step_id,
+                "approved_count": len(approved_calls),
+                "instruction": instruction,
             },
-        )
+        },
+    )
 
-        tool_run = await operations.run_tool_calls(
-            task_id, approved_calls, step_id, asyncio.get_running_loop()
-        )
-
-    final_tool_run = ToolRunResult(
-        observations=blocked_observations + tool_run.observations if tool_run else blocked_observations
+    tool_run = await operations.run_tool_calls(
+        task_id, approved_calls, step_id, asyncio.get_running_loop()
     )
 
     log.info(
         "tools_node_tool_run",
         extra={
             "msg": f"工具批次执行结果，step_id={step_id}",
-            "data": {"tool_run": dataclasses.asdict(final_tool_run)},
+            "data": {"tool_run": dataclasses.asdict(tool_run)},
         },
     )
 
-    observations:list[ToolObservation] = final_tool_run.observations  # 每个工具调用的观察结果
+    observations:list[ToolObservation] = tool_run.observations  # 每个工具调用的观察结果
     # 终态事件（completed/failed/cancelled）、模型上下文写回与错误计数统一收敛到
     # observe 节点（经 ToolCallLifecycleManager.settle_batch 分发），本节点只产出治理摘要。
     log.info(

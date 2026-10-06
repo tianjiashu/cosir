@@ -23,14 +23,12 @@ from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     SystemMessage,
-    ToolMessage,
 )
 from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tools.schemas import ToolCall
 from app.core.workflows.react.node_helper.common import (
     _runtime_config,
     _runtime_context,
@@ -41,16 +39,12 @@ from app.core.workflows.react.node_helper.model_chunk import ModelChunkProcessor
 from app.core.workflows.react.node_helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
+from langchain_core.messages.tool import ToolCall
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.vision_input import resolve_messages_for_model
-from app.models.conversation_task_context import TransportMetadata
 from app.utils.message_content import content_to_text
-
-# ``finish_reason`` 是 Provider 语义，不直接等同于工作流终态。不同兼容层可能使用
-# ``stop``、``end`` 或 ``end_turn`` 表示正常文本结束；在 model 节点内做最小归一化，避免
-# 把 provider-specific 字符串扩散到 graph edge 与终态写入逻辑。
 
 
 def _build_continuation_prompt(finish_reason: str | None) -> str | None:
@@ -266,33 +260,18 @@ async def _model_node(state: ReactGraphState) -> dict:
     )
 
     finish_reason = chunk_processor.extract_finish_reason(ai_message)
-
-    # 累加 usage_metadata 到 run 级共享累加器。
-    rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
+    rc.usage_stats.add_usage_metadata(ai_message.usage_metadata)
 
 
     #======================= 区分合法与非法工具调用=======================
-    invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
-    tool_calls = [ToolCall.from_from_langchain(call) for call in ai_message.tool_calls]
     tool_call_lifecycle = tool_call_lifecycle.classify(
-        task_id=task_id,
-        run_id=run_id,
-        step_id=step_id,
-        tool_calls=tool_calls,
-        invalid_tool_calls=invalid_tool_calls,
+        tool_calls=ai_message.tool_calls,
+        invalid_tool_calls=ai_message.invalid_tool_calls,
     )
 
-
-    # 非法调用就地收口为 failed：返回的是新的生命周期快照（copy-on-write），必须写回局部
-    # ``lifecycle`` 才能随返回值进入 graph state；丢弃它会让记录停在 pending。
-    tool_call_lifecycle, repair_message = tool_call_lifecycle.fail_invalid_tools(
-        task_id=task_id, run_id=run_id, step_id=step_id
-    )
-    # 3. 注入修复提示（若有可修复非法调用）：必须排在全部 ToolMessage 之后,通过system_queue延后注入.
-    if repair_message:
-        task_space.defer_system_message(
-            SystemMessage(content=repair_message, additional_kwargs={"run_id": run_id})
-        )
+    ai_message.invalid_tool_calls = []
+    ai_message.tool_calls = [ToolCall(name=call.tool_name, args=call.args, id=call.id) for call in tool_call_lifecycle.blocked_tool_calls + tool_call_lifecycle.valid_tools]
+    _runtime_context().add_message(ai_message)
 
     log.info(
         "model_node_completed",
@@ -300,7 +279,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             "msg": f"模型产出完成，step_id={step_id}",
             "data": {
                 "step_id": step_id,
-                "tool_count": len(tool_calls),
+                "tool_count": len(tool_call_lifecycle.valid_calls),
                 "invalid_count": tool_call_lifecycle.invalid_count,
                 "output_text_length": len(ai_message.content),
                 "finish_reason": finish_reason,
