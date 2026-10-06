@@ -28,7 +28,6 @@ class ToolRuntimeDependencies:
     parent_agent_profile: AgentProfile | None = None
     # 全局 Agent profile Registry；作用域由 ToolExecutionContext.workspace_root 决定。
     agent_profile_registry: AgentProfileRegistry | None = None
-    parent_task_is_child: bool = False
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
     process_tool_output_channel_factory: ProcessToolOutputChannelFactory | None = None
     # 仅供同进程 terminal_session handler 使用；process execution 必须清空。

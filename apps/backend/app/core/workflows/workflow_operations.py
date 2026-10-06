@@ -37,7 +37,6 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM_NODE_STATUS
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute.tool_error import (
     internal_execution_error_reason,
@@ -118,6 +117,8 @@ class WorkflowOperations:
             if execution_context is not None and runtime_dependencies is not None
             else execution_context
         )
+
+        #运行时动态变化的工具白名单
         self._allowed_tool_names = frozenset(allows_tools)
         self._parallel_mode_by_name = {
             definition.name: definition.parallel_mode for definition in self.all_vaild_tools
@@ -459,15 +460,6 @@ class WorkflowOperations:
             )
 
         executed_observations = [observation for _, observation in indexed_observations]
-        if any(
-            observation.tool_name == TOOL_AGENT_TEAM_NODE_STATUS
-            and observation.status == "success"
-            for observation in executed_observations
-        ):
-            # 节点状态提交已经由 Team coordinator 将当前 ConversationRun 落定为
-            # completed；设置本地取消信号让当前 ReAct 图在本轮 observe 后停止继续推理，
-            # 不改变已完成的 Run 状态。下一节点由 coordinator 独立启动。
-            cancellation_registry.mark_cancelled(self._current_run.id)
         return ToolRunResult(observations=executed_observations)
 
     async def _run_calls_with_parallel_modes(
@@ -666,6 +658,8 @@ class WorkflowOperations:
         副作用:
             无。
         """
+        if call.tool_name not in self._parallel_mode_by_name.keys():
+            return False
         return self._parallel_mode_by_name.get(call.tool_name) == "parallel"
 
     def to_tool_model_message(self, observation: ToolObservation) -> ToolMessage:

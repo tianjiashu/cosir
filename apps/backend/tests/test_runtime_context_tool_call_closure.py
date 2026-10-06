@@ -3,8 +3,7 @@
 调用点（``load_message`` 是唯一入口）：
 
 - ``model_node``：每个推理步取上下文前调用（``_model_node`` -> ``load_message``）；
-- ``observation_node``：工具观察结果缺失（``missing_call_ids``）与延迟修复提示两条
-  恢复路径上调用（见 ``observation_node._observe_node``）；
+- ``observation_node``：延迟修复提示的恢复路径上调用（见 ``observation_node._observe_node``）；
 - ``tools_node`` 执行前取消分支**不写占位**，注释显式声明「由下一次 load_message 兜底」，
   因此取消/崩溃遗留的占位实际落在**下一个 run**（或同 run resume 时的取数时刻）。
 

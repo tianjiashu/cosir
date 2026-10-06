@@ -21,10 +21,7 @@ from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolObservation
 from app.core.workflows.react.nodes import observation_node as observe_module
 from app.core.workflows.react.nodes import tools_node as tools_module
-from app.core.workflows.react.node_helper.tool_call_lifecycle import (
-    ToolCallLifecycleManager,
-    ToolCallLifecycleRecord,
-)
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
@@ -34,14 +31,12 @@ def _state(**overrides: Any) -> ReactGraphState:
     values: dict[str, Any] = {
         "step_count": 1,
         "tool_error_count": 0,
-        "requested_tool": False,
-        "final_response": False,
-        "terminal": False,
+        "next_node": ReactRoute.MODEL,
         "instruction": "",
         "max_steps": 10,
         "final_text": "",
         "last_tool_results": {"instruction": "", "observations": []},
-        "tool_call_lifecycle": ToolCallLifecycleManager(),
+        "tool_request": {},
     }
     values.update(overrides)
     return ReactGraphState(**values)
@@ -60,6 +55,8 @@ class _WorkflowHarness:
 
         self.operations = SimpleNamespace(
             model_tools=[SimpleNamespace(name="list_directory", display=None)],
+            all_vaild_tools=[SimpleNamespace(name="list_directory", display=None)],
+            allows_tools=frozenset({"list_directory"}),
             get_current_task=lambda: SimpleNamespace(id=1),
             get_current_run=lambda: SimpleNamespace(id=2),
             is_current_run_cancelled=lambda: False,
@@ -69,6 +66,7 @@ class _WorkflowHarness:
             ),
         )
         self.runtime_config = SimpleNamespace(operations=self.operations, usage_stats=None)
+
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
 
@@ -79,18 +77,9 @@ class _WorkflowHarness:
 
         monkeypatch.setattr(tools_module, "_runtime_config", lambda: self.runtime_config)
         monkeypatch.setattr(observe_module, "_runtime_config", lambda: self.runtime_config)
-        monkeypatch.setattr(observe_module, "_runtime_context", lambda: self.runtime_context)
         monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: self.runtime_config)
         monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: self.runtime_context)
         monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: self.events.append)
-
-
-def _running_call(call_id: str, status: str = "running") -> ToolCallLifecycleRecord:
-    """构造 lifecycle 中处于给定状态的合法调用记录（供 tools/observe 节点读取 running 调用）。"""
-
-    return ToolCallLifecycleRecord(
-        tool_call_id=call_id, tool_name="list_directory", status=status
-    )
 
 
 def test_tools_summary_uses_tool_call_id_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -112,9 +101,9 @@ def test_tools_summary_uses_tool_call_id_key(monkeypatch: pytest.MonkeyPatch) ->
     tools_result = asyncio.run(
         tools_module._tools_node(
             _state(
-                tool_call_lifecycle=ToolCallLifecycleManager(
-                    calls={"call-1": _running_call("call-1")}
-                ),
+                tool_request={
+                    "tool_calls": [{"name": "list_directory", "args": {}, "id": "call-1"}]
+                },
                 instruction="看看目录",
             )
         )
@@ -122,7 +111,6 @@ def test_tools_summary_uses_tool_call_id_key(monkeypatch: pytest.MonkeyPatch) ->
 
     summaries = tools_result["last_tool_results"]
     assert summaries["instruction"] == "看看目录"
-    assert summaries["expected_call_ids"] == ["call-1"]
     assert summaries["observations"][0]["tool_call_id"] == "call-1"
     assert "call_id" not in summaries["observations"][0]
 
@@ -145,7 +133,7 @@ def test_tools_summary_feeds_observe_without_key_error(
     )
     harness.patch(monkeypatch)
     state = _state(
-        tool_call_lifecycle=ToolCallLifecycleManager(calls={"call-1": _running_call("call-1")}),
+        tool_request={"tool_calls": [{"name": "list_directory", "args": {}, "id": "call-1"}]},
         instruction="看看目录",
     )
 
@@ -155,16 +143,17 @@ def test_tools_summary_feeds_observe_without_key_error(
     observe_result = asyncio.run(
         observe_module._observe_node(
             _state(
-                requested_tool=True,
+                next_node=ReactRoute.TOOLS,
                 last_tool_results=summaries,
-                tool_call_lifecycle=state.tool_call_lifecycle,
+                tool_call_lifecycle=tools_result["tool_call_lifecycle"],
             )
         )
     )
 
     assert observe_result["tool_error_count"] == 0
-    assert [event.status for event in harness.events] == ["completed"]
-    assert [event.tool_call_id for event in harness.events] == ["call-1"]
+    status_events = [event for event in harness.events if event.type == "tool_call_status_changed"]
+    assert [event.status for event in status_events] == ["running", "completed"]
+    assert [event.tool_call_id for event in status_events] == ["call-1", "call-1"]
     assert isinstance(harness.messages[-1], ToolMessage)
     assert harness.messages[-1].tool_call_id == "call-1"
 
@@ -193,9 +182,9 @@ def test_observe_settles_failed_observation_from_tools_summary(
     tools_result = asyncio.run(
         tools_module._tools_node(
             _state(
-                tool_call_lifecycle=ToolCallLifecycleManager(
-                    calls={"call-9": _running_call("call-9")}
-                ),
+                tool_request={
+                    "tool_calls": [{"name": "list_directory", "args": {}, "id": "call-9"}]
+                },
                 instruction="",
             )
         )
@@ -206,15 +195,16 @@ def test_observe_settles_failed_observation_from_tools_summary(
     observe_result = asyncio.run(
         observe_module._observe_node(
             _state(
-                requested_tool=True,
+                next_node=ReactRoute.TOOLS,
                 last_tool_results=summaries,
-                tool_call_lifecycle=ToolCallLifecycleManager(),
+                tool_call_lifecycle=tools_result["tool_call_lifecycle"],
             )
         )
     )
 
     assert observe_result["tool_error_count"] == 1
-    assert [event.status for event in harness.events] == ["failed"]
-    assert harness.events[0].error == "目录不存在"
+    status_events = [event for event in harness.events if event.type == "tool_call_status_changed"]
+    assert [event.status for event in status_events] == ["running", "failed"]
+    assert status_events[-1].error == "目录不存在"
     assert isinstance(harness.messages[-1], ToolMessage)
     assert harness.messages[-1].tool_call_id == "call-9"

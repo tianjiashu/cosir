@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from typing import Any
 
+from langchain_core.messages import ToolMessage
+
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.tools.schemas import ToolCall
 from app.core.workflows.react.node_helper.tool_call_lifecycle import (
@@ -10,6 +12,7 @@ from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
@@ -36,9 +39,14 @@ class _LifecycleHarness:
     def __init__(self, model_tools: list[Any] | None = None) -> None:
         self.events: list[Any] = []
         self.messages: list[Any] = []
+        # 补全 WorkflowOperations 契约：``_valid_tool_name`` / ``_presentation_for``
+        # 经 ``operations.all_vaild_tools`` 取工具名与展示声明，harness 必须提供该属性，
+        # 否则走 ``create`` / ``classify`` 的用例会因 mock 不完整而 AttributeError。
+        model_tools = model_tools or [SimpleNamespace(name="read_file", display=None)]
         self.operations = SimpleNamespace(
             to_tool_model_message=lambda observation: ("tool-message", observation.tool_call_id),
-            model_tools=model_tools or [SimpleNamespace(name="read_file", display=None)],
+            model_tools=model_tools,
+            all_vaild_tools=model_tools,
         )
         self.runtime_config = SimpleNamespace(operations=self.operations)
 
@@ -69,7 +77,7 @@ class _LifecycleHarness:
 
         for summary in summaries:
             call_id = summary["tool_call_id"]
-            self.manager.calls.setdefault(
+            self.manager.valid_calls.setdefault(
                 call_id,
                 ToolCallLifecycleRecord(
                     tool_call_id=call_id,
@@ -148,7 +156,7 @@ def test_status_mapping_success_error_cancelled() -> None:
     assert harness.events[1].error == "命令失败"
     assert harness.events[2].error == "已取消"
     assert result.tool_error_count == 1 and result.error_count == 1
-    assert harness.manager.calls["a"].status == "completed"
+    assert harness.manager.valid_calls["a"].status == "completed"
 
 
 def test_data_is_forwarded_to_event_only() -> None:
@@ -201,20 +209,20 @@ def test_create_begin_and_cancel_update_serializable_state() -> None:
     original = harness.manager
     harness.create(ToolCall(tool_name="read_file", call_id="call-1"))
     assert harness.manager is not original
-    assert harness.manager.calls["call-1"].status == "pending"
+    assert harness.manager.valid_calls["call-1"].status == "pending"
     assert harness.events[0].type == "tool_call_created"
 
     harness.begin("call-1", {"path": "a.py"})
-    assert harness.manager.calls["call-1"].status == "running"
-    assert harness.manager.calls["call-1"].args == {"path": "a.py"}
+    assert harness.manager.valid_calls["call-1"].status == "running"
+    assert harness.manager.valid_calls["call-1"].args == {"path": "a.py"}
     assert harness.events[1].args == {"path": "a.py"}
 
     harness.cancel()
-    assert harness.manager.calls["call-1"].status == "cancelled"
+    assert harness.manager.valid_calls["call-1"].status == "cancelled"
     assert harness.events[2].status == "cancelled"
 
     dumped = harness.manager.model_dump(mode="json")
-    assert dumped["calls"]["call-1"]["status"] == "cancelled"
+    assert dumped["valid_calls"]["call-1"]["status"] == "cancelled"
     assert "operations" not in dumped
     assert "stream_writer" not in dumped
 
@@ -241,7 +249,7 @@ def test_create_is_idempotent_and_handles_multiple_calls() -> None:
         )
 
     assert [event.tool_call_id for event in harness.events] == ["a", "b"]
-    assert set(harness.manager.calls) == {"a", "b"}
+    assert set(harness.manager.valid_calls) == {"a", "b"}
 
 
 def test_banned_tool_is_filtered_from_live_projection_and_execution() -> None:
@@ -261,10 +269,10 @@ def test_banned_tool_is_filtered_from_live_projection_and_execution() -> None:
         )
 
     assert harness.events == []
-    assert harness.manager.calls == {}
+    assert harness.manager.valid_calls == {}
     assert harness.manager.valid_tools == []
     assert not harness.manager.has_call
-    assert [record.tool_call_id for record in harness.manager.blocked_tool_calls] == [
+    assert [record.tool_call_id for record in harness.manager.blocked_calls.values()] == [
         "blocked-call"
     ]
 
@@ -302,7 +310,36 @@ def test_mixed_banned_tool_only_projects_and_executes_allowed_call() -> None:
 
     assert [event.tool_call_id for event in harness.events] == ["allowed", "allowed"]
     assert [record.tool_call_id for record in harness.manager.valid_tools] == ["allowed"]
-    assert [record.tool_call_id for record in harness.manager.blocked_tool_calls] == ["blocked"]
+    assert [record.tool_call_id for record in harness.manager.blocked_calls.values()] == ["blocked"]
+
+
+def test_close_blocked_calls_injects_cancelled_tool_message() -> None:
+    """close_blocked_calls 为每个禁用调用补发 cancelled ToolMessage 并返回数量。"""
+
+    # 注册工具集含 read_file（真实禁用场景：已注册但不在本轮白名单），
+    # 仅 write_file 在本轮 allows_tools 中。
+    harness = _LifecycleHarness(
+        [
+            SimpleNamespace(name="read_file", display=None),
+            SimpleNamespace(name="write_file", display=None),
+        ]
+    )
+    harness.manager = ToolCallLifecycleManager(allows_tools=("write_file",))
+    with harness._patch_runtime():
+        harness.manager = harness.manager.create(
+            task_id=1,
+            run_id=2,
+            step_id="step-3",
+            raw_tool_calls=[{"id": "blocked", "name": "read_file"}],
+        )
+        count = harness.manager.close_blocked_calls(task_id=1, run_id=2, step_id="step-3")
+    assert count == 1
+    assert len(harness.messages) == 1
+    msg = harness.messages[0]
+    assert isinstance(msg, ToolMessage)
+    assert msg.tool_call_id == "blocked"
+    assert msg.name == "read_file"
+    assert msg.content == "This tool is disabled for the current run.Do not call again"
 
 
 def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
@@ -313,16 +350,14 @@ def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
     state = ReactGraphState(
         step_count=0,
         tool_error_count=0,
-        requested_tool=False,
-        final_response=False,
-        terminal=False,
+        next_node=ReactRoute.MODEL,
         instruction="",
         max_steps=1,
         final_text="",
         last_tool_results={},
         tool_call_lifecycle=ToolCallLifecycleManager(
             allows_tools=("read_file",),
-            calls={
+            valid_calls={
                 "call-1": ToolCallLifecycleRecord(
                     tool_call_id="call-1",
                     tool_name="read_file",
@@ -335,5 +370,5 @@ def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
     restored = serializer.loads_typed(serializer.dumps_typed(state))
 
     assert isinstance(restored.tool_call_lifecycle, ToolCallLifecycleManager)
-    assert restored.tool_call_lifecycle.calls["call-1"].status == "running"
+    assert restored.tool_call_lifecycle.valid_calls["call-1"].status == "running"
     assert restored.tool_call_lifecycle.allows_tools == ("read_file",)

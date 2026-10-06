@@ -7,7 +7,6 @@ from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
 from app.core.tools.schemas.tool_names import (
     ALL_TOOL_NAMES,
     TOOL_AGENT_TEAM,
-    TOOL_AGENT_TEAM_NODE_STATUS,
     TOOL_APPLY_PATCH,
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_STATUS,
@@ -43,7 +42,6 @@ from app.core.tools.schemas.tool_output import (
 __all__ = [
     "ALL_TOOL_NAMES",
     "TOOL_AGENT_TEAM",
-    "TOOL_AGENT_TEAM_NODE_STATUS",
     "TOOL_APPLY_PATCH",
     "TOOL_CHILD_AGENT_SEND",
     "TOOL_CHILD_AGENT_STATUS",

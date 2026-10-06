@@ -6,7 +6,7 @@
 - A 组：证明 conftest 的 autouse 夹具确实复原 ``coding_agent.backend`` / ``uvicorn.error``
   的 ``level`` / ``propagate``，并攻击其可能的绕过面。
 - B 组：攻击 ``ToolCallLifecycleManager.fail_invalid_tools`` 的 copy-on-write / 幂等 /
-  事件失败 / 全终态 / 空集合等边界，以及 model 节点写回链路。
+  事件失败 / 全终态 / 空集合等边界，以及 tools 节点收口链路。
 """
 
 from __future__ import annotations
@@ -222,7 +222,7 @@ def test_mixed_pending_and_failed_only_migrates_pending():
 
     harness = _Harness()
     mgr = ToolCallLifecycleManager(
-        calls={
+        invalid_calls={
             "p1": _invalid_record("p1", status="pending"),
             "p2": _invalid_record("p2", status="pending"),
             "f1": _invalid_record("f1", status="failed"),
@@ -233,7 +233,7 @@ def test_mixed_pending_and_failed_only_migrates_pending():
 
     failed_events = [e for e in harness.events if getattr(e, "status", None) == "failed"]
     assert sorted(e.tool_call_id for e in failed_events) == ["p1", "p2"]
-    assert {cid: r.status for cid, r in updated.calls.items()} == {
+    assert {cid: r.status for cid, r in updated.invalid_calls.items()} == {
         "p1": "failed",
         "p2": "failed",
         "f1": "failed",
@@ -248,7 +248,7 @@ def test_all_terminal_returns_equivalent_snapshot_and_none():
 
     harness = _Harness()
     mgr = ToolCallLifecycleManager(
-        calls={
+        invalid_calls={
             "f1": _invalid_record("f1", status="failed"),
             "c1": _invalid_record("c1", status="cancelled"),
         }
@@ -260,8 +260,8 @@ def test_all_terminal_returns_equivalent_snapshot_and_none():
     assert harness.events == []
     # copy-on-write 契约恒定：即使本批无待收口调用，返回的也是新快照（对象身份可预期）。
     assert updated is not mgr, "全终态时应返回新快照，而不是原对象引用"
-    assert updated.calls == mgr.calls
-    assert {cid: r.status for cid, r in updated.calls.items()} == {
+    assert updated.invalid_calls == mgr.invalid_calls
+    assert {cid: r.status for cid, r in updated.invalid_calls.items()} == {
         "f1": "failed",
         "c1": "cancelled",
     }
@@ -276,7 +276,7 @@ def test_no_calls_returns_equivalent_manager_and_none():
         updated, repair = mgr.fail_invalid_tools(1, 2, "step-1")
 
     assert isinstance(updated, ToolCallLifecycleManager)
-    assert updated.calls == {}
+    assert updated.invalid_calls == {}
     assert repair is None
     assert harness.events == []
 
@@ -285,22 +285,22 @@ def test_copy_on_write_origin_untouched_and_new_object():
     """B4：原 manager 不被就地改写（保持 pending），返回快照为新对象。"""
 
     harness = _Harness()
-    mgr = ToolCallLifecycleManager(calls={"p1": _invalid_record("p1")})
+    mgr = ToolCallLifecycleManager(invalid_calls={"p1": _invalid_record("p1")})
     original_id = id(mgr)
     with harness.ctx():
         updated, _ = mgr.fail_invalid_tools(1, 2, "step-1")
 
     assert updated is not mgr
     assert id(mgr) == original_id  # 未替换
-    assert mgr.calls["p1"].status == "pending", "原快照被就地改写，违反 copy-on-write"
-    assert updated.calls["p1"].status == "failed"
+    assert mgr.invalid_calls["p1"].status == "pending", "原快照被就地改写，违反 copy-on-write"
+    assert updated.invalid_calls["p1"].status == "failed"
 
 
 def test_idempotent_second_call_no_event_and_none_repair():
     """B5：连续两次调用，第二次无事件、repair=None、状态一致。"""
 
     harness = _Harness()
-    mgr = ToolCallLifecycleManager(calls={"p1": _invalid_record("p1")})
+    mgr = ToolCallLifecycleManager(invalid_calls={"p1": _invalid_record("p1")})
     with harness.ctx():
         first, repair1 = mgr.fail_invalid_tools(1, 2, "step-1")
         events_after_first = len(harness.events)
@@ -310,7 +310,7 @@ def test_idempotent_second_call_no_event_and_none_repair():
     assert repair1 is not None
     assert repair2 is None
     assert len(harness.events) == events_after_first, "第二次调用又发了事件"
-    assert second.calls["p1"].status == "failed"
+    assert second.invalid_calls["p1"].status == "failed"
 
 
 def test_emit_status_failure_does_not_escape_and_state_consistency():
@@ -327,7 +327,7 @@ def test_emit_status_failure_does_not_escape_and_state_consistency():
 
     from unittest.mock import patch
 
-    mgr = ToolCallLifecycleManager(calls={"p1": _invalid_record("p1")})
+    mgr = ToolCallLifecycleManager(invalid_calls={"p1": _invalid_record("p1")})
     escaped: Exception | None = None
     with patch.multiple(
         lifecycle_module,
@@ -367,8 +367,8 @@ def test_logger_state_restored_regardless_of_order(caplog: pytest.LogCaptureFixt
 # ---------------------------------------------------------------------------
 
 
-def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) -> None:
-    """D1（真实链路）：model 节点返回的 lifecycle 中非法调用应为 failed（非 pending）。"""
+def test_tools_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) -> None:
+    """D1（真实链路）：tools 节点把非法调用收口为 failed 并要求模型修复。"""
 
     import asyncio
     from collections.abc import AsyncIterator
@@ -377,9 +377,21 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
 
     from app.core.context.runtime_context_manager import _as_ai_message
     from app.core.workflows.react.nodes import model_node as model_module
+    from app.core.workflows.react.nodes import tools_node as tools_module
+    from app.core.workflows.react.worflow_state.route import ReactRoute
     from app.core.workflows.react.worflow_state.state import ReactGraphState
 
-    task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
+    class _TaskSpace:
+        def take_deferred_system_messages(self, **_kwargs: Any) -> list[Any]:
+            return []
+
+        def defer_system_message(self, _message: Any) -> None:
+            return None
+
+        def has_deferred_system_messages(self) -> bool:
+            return False
+
+    monkeypatch.setattr(task_runtime_spaces, "get_or_create", lambda _task_id: _TaskSpace())
 
     message = AIMessage(
         content="",
@@ -395,10 +407,11 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
 
     operations = SimpleNamespace(
         model_tools=[SimpleNamespace(name="read_file", display=None)],
+        all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
         allows_tools=frozenset({"read_file"}),
-        # model 节点按 task 维度取延迟系统消息队列，故桩需暴露 get_current_task。
         get_current_task=lambda: SimpleNamespace(id=1),
         get_current_run=lambda: SimpleNamespace(task_id=1, id=2),
+        get_current_workspace=lambda: SimpleNamespace(id=1),
         is_current_run_cancelled=lambda: False,
         complete_run_if_running=lambda *a, **k: object(),
         fail_run_if_running=lambda *a, **k: object(),
@@ -406,9 +419,10 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
     runtime_config = SimpleNamespace(
         operations=operations,
         model=SimpleNamespace(astream=_astream),
+        final_model=SimpleNamespace(astream=_astream),
+        structured_output=None,
         workspace_id=1,
         thinking_channel="",
-        # model 节点读 WorkflowOperations.allows_tools 构造生命周期允许集合。
         run=SimpleNamespace(task_id=1, id=2, extra=None),
         usage_stats=SimpleNamespace(add_usage_metadata=lambda m: None, to_dict=lambda: {}),
     )
@@ -441,26 +455,36 @@ def test_model_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
     monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: runtime_config)
     monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: runtime_context)
     monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(tools_module, "_runtime_config", lambda: runtime_config)
+    monkeypatch.setattr(tools_module, "_runtime_context", lambda: runtime_context)
 
     state = ReactGraphState(
         step_count=1,
         tool_error_count=0,
-        requested_tool=False,
-        continue_model=False,
-        final_response=False,
-        terminal=False,
+        next_node=ReactRoute.MODEL,
         instruction="",
         max_steps=10,
         final_text="",
         last_tool_results={"instruction": "", "observations": []},
     )
     result = asyncio.run(model_module._model_node(state))
-    task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
+    tools_result = asyncio.run(
+        tools_module._tools_node(
+            state.model_copy(
+                update={
+                    "step_count": result["step_count"],
+                    "tool_request": result["tool_request"],
+                }
+            )
+        )
+    )
 
-    lifecycle = result["tool_call_lifecycle"]
+    assert result["next_node"] is ReactRoute.TOOLS
+    assert tools_result["next_node"] is ReactRoute.MODEL
+    lifecycle = tools_result["tool_call_lifecycle"]
     assert (
-        lifecycle.calls["call-1"].status == "failed"
-    ), f"model 节点写回的非法调用状态为 {lifecycle.calls['call-1'].status}（应为 failed）"
+        lifecycle.invalid_calls["call-1"].status == "failed"
+    ), f"model 节点写回的非法调用状态为 {lifecycle.invalid_calls['call-1'].status}（应为 failed）"
     assert any(
         getattr(e, "status", None) == "failed" and getattr(e, "tool_call_id", None) == "call-1"
         for e in events

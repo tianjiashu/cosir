@@ -101,7 +101,6 @@ _EXPECTED_BANNED_TOOLS = frozenset(
         "delegate_task",
         "agent_team",
         "propose_agent_team_configuration",
-        "agent_team_node_status",
         "child_agent_status",
         "child_agent_send",
         "child_agent_wait",

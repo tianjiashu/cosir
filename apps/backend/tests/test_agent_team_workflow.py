@@ -14,6 +14,7 @@ from app.core.agents.model_settings import ModelSettings
 from app.core.workflows.react.nodes.agent_team_confirmation_wait_node import (
     agent_team_confirmation_wait_node,
 )
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.service.agent_team.agent_team_preparation_service import (
     resolve_effective_model_settings,
@@ -26,9 +27,7 @@ def _state() -> ReactGraphState:
     return ReactGraphState(
         step_count=0,
         tool_error_count=0,
-        requested_tool=False,
-        final_response=False,
-        terminal=False,
+        next_node=ReactRoute.MODEL,
         max_steps=10,
         final_text="",
         last_tool_results={},
@@ -40,7 +39,7 @@ def test_agent_team_wait_node_resumes_to_model_path() -> None:
 
     builder = StateGraph(ReactGraphState)
     builder.add_node("wait", agent_team_confirmation_wait_node)
-    builder.add_node("finish", lambda _state: {"terminal": True})
+    builder.add_node("finish", lambda _state: {"next_node": ReactRoute.END})
     builder.add_edge(START, "wait")
     builder.add_edge("wait", "finish")
     builder.add_edge("finish", END)

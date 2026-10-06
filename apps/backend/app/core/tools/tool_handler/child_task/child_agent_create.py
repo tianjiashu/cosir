@@ -23,7 +23,6 @@ from app.core.runtime.conversation_run_cancellation_registry import cancellation
 from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.core.tools.schemas import (
     TOOL_AGENT_TEAM,
-    TOOL_AGENT_TEAM_NODE_STATUS,
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_STATUS,
     TOOL_CHILD_AGENT_WAIT,
@@ -63,7 +62,6 @@ CHILD_DISALLOWED_TOOLS: tuple[str, ...] = (
     TOOL_CHILD_AGENT_STATUS,
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_WAIT,
-    TOOL_AGENT_TEAM_NODE_STATUS,
     TOOL_AGENT_TEAM,
     TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
     # terminal_session/：可交互终端

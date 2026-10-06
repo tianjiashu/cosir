@@ -198,7 +198,7 @@ def test_tool_call_lifecycle_freezes_presentation_in_serializable_state(monkeypa
         raw_tool_calls=[{"id": "call-1", "name": "read_file"}],
     )
 
-    assert manager.calls["call-1"].presentation == {"verb": "Read"}
+    assert manager.valid_calls["call-1"].presentation == {"verb": "Read"}
 
 
 def _tool_summary() -> dict[str, Any]:
@@ -241,7 +241,7 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
     )
     runtime_context = _RuntimeContext()
     manager = ToolCallLifecycleManager(
-        calls={
+        valid_calls={
             "call-1": ToolCallLifecycleRecord(
                 tool_call_id="call-1", tool_name="read_file", status="running"
             )
@@ -270,7 +270,7 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
     )
 
     assert order == ["database", "event"]
-    assert second.lifecycle.calls["call-1"].status == "completed"
+    assert second.lifecycle.valid_calls["call-1"].status == "completed"
 
 
 def test_failed_tool_event_uses_sanitized_display_data_and_writer_failure_is_non_fatal(
@@ -297,7 +297,7 @@ def test_failed_tool_event_uses_sanitized_display_data_and_writer_failure_is_non
         )
     )
     manager = ToolCallLifecycleManager(
-        calls={
+        valid_calls={
             "call-1": ToolCallLifecycleRecord(
                 tool_call_id="call-1", tool_name="read_file", status="running"
             )
@@ -320,7 +320,7 @@ def test_failed_tool_event_uses_sanitized_display_data_and_writer_failure_is_non
     )
 
     assert status == "failed"
-    assert updated.calls["call-1"].status == "failed"
+    assert updated.valid_calls["call-1"].status == "failed"
     assert events[0].display_data == {"kind": "read-file-meta", "path": "a.py"}
 
 
@@ -344,7 +344,7 @@ def test_tool_settle_does_not_emit_terminal_event_when_canonical_append_is_dupli
         )
     )
     manager = ToolCallLifecycleManager(
-        calls={
+        valid_calls={
             "call-1": ToolCallLifecycleRecord(
                 tool_call_id="call-1", tool_name="read_file", status="running"
             )

@@ -12,7 +12,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-from app.core.workflows.react.edges import _after_observe, _after_tools, _should_continue
+from app.core.workflows.react.edges import _route_target
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 model_node_module = importlib.import_module("app.core.workflows.react.nodes.model_node")
@@ -24,9 +25,7 @@ def _state(**overrides: Any) -> ReactGraphState:
     values: dict[str, Any] = {
         "step_count": 1,
         "tool_error_count": 0,
-        "requested_tool": False,
-        "final_response": False,
-        "terminal": False,
+        "next_node": ReactRoute.MODEL,
         "max_steps": 10,
         "final_text": "",
         "last_tool_results": {},
@@ -38,21 +37,11 @@ def _state(**overrides: Any) -> ReactGraphState:
 def test_react_edges_route_only_from_current_graph_state() -> None:
     """The current graph has model/tools/observe edges; cancellation interrupts in model."""
 
-    assert _should_continue(_state(requested_tool=True)) == "tools"
-    assert _should_continue(_state(continue_model=True)) == "model"
-    assert _should_continue(_state(final_response=True)) == END
-    assert _should_continue(_state(terminal=True)) == END
-    assert _should_continue(_state()) == END
-
-    assert _after_tools(_state()) == "observe"
-    assert _after_tools(_state(terminal=True)) == END
-    assert _after_observe(_state()) == "model"
-    assert (
-        _after_observe(_state(agent_team_confirmation_waiting=True))
-        == "agent_team_wait"
-    )
-    assert _after_observe(_state(final_response=True)) == END
-    assert _should_continue(_state(agent_team_confirmation_waiting=True)) == END
+    assert _route_target(_state(next_node=ReactRoute.TOOLS)) == "tools"
+    assert _route_target(_state(next_node=ReactRoute.MODEL)) == "model"
+    assert _route_target(_state(next_node=ReactRoute.STRUCTURED_OUTPUT)) == "structured_output"
+    assert _route_target(_state(next_node=ReactRoute.AGENT_TEAM_WAIT)) == "agent_team_wait"
+    assert _route_target(_state(next_node=ReactRoute.END)) == END
 
 
 def test_model_node_interrupts_when_run_was_cancelled_before_request(
@@ -102,11 +91,11 @@ def test_langgraph_interrupt_checkpoint_can_resume_the_interrupted_node() -> Non
     cancellation = [True]
     calls: list[str] = []
 
-    async def _model_node(_state: ReactGraphState) -> dict[str, bool]:
+    async def _model_node(_state: ReactGraphState) -> dict[str, object]:
         calls.append("model")
         if cancellation[0]:
             interrupt({"reason": "user_cancelled"})
-        return {"terminal": True}
+        return {"next_node": ReactRoute.END}
 
     builder = StateGraph(ReactGraphState)
     builder.add_node("model", _model_node)
@@ -134,8 +123,8 @@ def test_langgraph_interrupt_checkpoint_can_resume_the_interrupted_node() -> Non
 def test_finished_graph_has_no_resumable_next_node() -> None:
     """A completed graph has an empty next tuple and cannot be resumed."""
 
-    async def _finish(_state: ReactGraphState) -> dict[str, bool]:
-        return {"terminal": True}
+    async def _finish(_state: ReactGraphState) -> dict[str, object]:
+        return {"next_node": ReactRoute.END}
 
     builder = StateGraph(ReactGraphState)
     builder.add_node("finish", _finish)

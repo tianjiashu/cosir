@@ -5,9 +5,6 @@ from dataclasses import dataclass
 from app.config.constant import Constant
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
-from app.core.tools.tool_handler.agent_team.agent_team_node_status import (
-    build_agent_team_node_status_definition,
-)
 from app.core.tools.tool_handler.agent_team.agent_team_run import (
     build_agent_team_run_definition,
 )
@@ -127,7 +124,6 @@ class ToolSystem:
         registry.register(build_propose_agent_configuration_definition())
         registry.register(build_propose_agent_team_configuration_definition())
         registry.register(build_agent_team_run_definition())
-        registry.register(build_agent_team_node_status_definition())
         executor = ToolExecutor(
             registry=registry,
             output_budget=ToolOutputBudget(Constant.Tools.MAX_OUTPUT_CHARS),

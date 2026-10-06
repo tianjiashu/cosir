@@ -1,9 +1,6 @@
 """Pydantic schemas for tool arguments."""
 
 from app.core.tools.tool_models.agent_team.agent_team_args import AgentTeamArgs
-from app.core.tools.tool_models.agent_team.agent_team_node_status_args import (
-    AgentTeamNodeStatusArgs,
-)
 from app.core.tools.tool_models.agent_team.propose_agent_team_configuration_args import (
     ProposeAgentTeamConfigurationArgs,
 )
@@ -36,7 +33,6 @@ from app.core.tools.tool_models.write_file_args import WriteFileArgs
 
 __all__ = [
     "AgentTeamArgs",
-    "AgentTeamNodeStatusArgs",
     "ApplyPatchArgs",
     "DelegateTaskArgs",
     "DeleteFileArgs",

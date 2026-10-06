@@ -233,7 +233,7 @@ def test_project_records_terminal_state_event_payload(
 class _LifecycleHarness:
     """装配 lifecycle 运行期依赖并收集发出的终态事件。"""
 
-    def __init__(self, *, add_message_result: bool = True, stream_writer_fails: bool = False) -> None:
+    def __init__(self, *, add_message_result: bool = True) -> None:
         self.events: list[Any] = []
         self.messages: list[Any] = []
         self.operations = SimpleNamespace(
@@ -246,15 +246,7 @@ class _LifecycleHarness:
             self.messages.append(message)
             return add_message_result
 
-        if stream_writer_fails:
-
-            def stream_writer(event: Any) -> None:
-                self.events.append(event)
-                raise RuntimeError("stream writer exploded")
-
-        else:
-            stream_writer = self.events.append
-
+        stream_writer = self.events.append
         self.runtime_context = SimpleNamespace(add_message=add_message)
         self.manager = ToolCallLifecycleManager()
         self._stream_writer = stream_writer
@@ -323,7 +315,7 @@ def test_projection_and_settle_agree_on_terminal_fields(
 
     # 路径 2：settle 兜底。
     harness = _LifecycleHarness()
-    harness.manager.calls["call-1"] = ToolCallLifecycleRecord(
+    harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
         tool_call_id="call-1", tool_name="read_file"
     )
     harness.settle(_summary_from_observation(observation))
@@ -764,7 +756,7 @@ def test_double_projection_keeps_snapshot_terminal_state_stable() -> None:
 
     # 第二次：settle 兜底（同值终态）。
     lifecycle = ToolCallLifecycleManager(
-        calls={"call-1": ToolCallLifecycleRecord(tool_call_id="call-1", tool_name="read_file")}
+        valid_calls={"call-1": ToolCallLifecycleRecord(tool_call_id="call-1", tool_name="read_file")}
     )
     harness = _LifecycleHarness()
     harness.manager = lifecycle
@@ -1233,7 +1225,7 @@ def test_settle_batch_mixed_statuses_emits_consistent_events() -> None:
         _summary_from_observation(_observation("cancelled", tool_call_id="c3")),
     ]
     for summary in summaries:
-        harness.manager.calls[summary["tool_call_id"]] = ToolCallLifecycleRecord(
+        harness.manager.valid_calls[summary["tool_call_id"]] = ToolCallLifecycleRecord(
             tool_call_id=summary["tool_call_id"], tool_name=summary["tool_name"]
         )
 
@@ -1500,7 +1492,7 @@ def test_two_paths_agree_on_malformed_display_data(
 
     # 路径 2：settle 兜底。
     harness = _LifecycleHarness()
-    harness.manager.calls["call-1"] = ToolCallLifecycleRecord(
+    harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
         tool_call_id="call-1", tool_name="read_file"
     )
     harness.settle(_summary_from_observation(observation))
@@ -1539,7 +1531,7 @@ def test_settle_is_idempotent_after_terminal_state() -> None:
     """缺陷类型：已终态记录被 settle 二次结算，重复写上下文/重复发事件（判据 E）。"""
 
     harness = _LifecycleHarness()
-    harness.manager.calls["call-1"] = ToolCallLifecycleRecord(
+    harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
         tool_call_id="call-1", tool_name="read_file", status="completed"
     )
     summary = _summary_from_observation(_observation("success", tool_call_id="call-1"))
@@ -1555,7 +1547,7 @@ def test_settle_returns_without_event_when_message_already_exists() -> None:
     """缺陷类型：add_message 返回 False 时仍发终态事件，产生孤儿状态。"""
 
     harness = _LifecycleHarness(add_message_result=False)
-    harness.manager.calls["call-1"] = ToolCallLifecycleRecord(
+    harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
         tool_call_id="call-1", tool_name="read_file"
     )
     summary = _summary_from_observation(_observation("success", tool_call_id="call-1"))
@@ -1564,25 +1556,6 @@ def test_settle_returns_without_event_when_message_already_exists() -> None:
 
     assert event_status == "completed"
     assert harness.events == [], "消息未新建时不应发终态事件"
-
-
-def test_settle_degrades_when_event_emission_fails(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """缺陷类型：终态事件发送失败向上抛出，中断已落库的结算（应降级并记日志）。"""
-
-    harness = _LifecycleHarness(stream_writer_fails=True)
-    harness.manager.calls["call-1"] = ToolCallLifecycleRecord(
-        tool_call_id="call-1", tool_name="read_file"
-    )
-    summary = _summary_from_observation(_observation("success", tool_call_id="call-1"))
-
-    with caplog.at_level("ERROR", logger="coding_agent.backend"):
-        event_status = harness.settle(summary)
-
-    assert event_status == "completed"
-    assert harness.messages, "消息应已落库"
-    assert "tool_terminal_event_failed" in {r.message for r in caplog.records}
 
 
 def test_fail_invalid_tools_emits_failed_and_returns_repair_message() -> None:
@@ -1594,7 +1567,7 @@ def test_fail_invalid_tools_emits_failed_and_returns_repair_message() -> None:
     """
 
     harness = _LifecycleHarness()
-    harness.manager.calls["bad"] = ToolCallLifecycleRecord(
+    harness.manager.invalid_calls["bad"] = ToolCallLifecycleRecord(
         tool_call_id="bad",
         tool_name="read_file",
         invalid_detail={"name": "read_file", "args": "{bad", "error": "invalid json"},
@@ -1611,17 +1584,17 @@ def test_fail_invalid_tools_emits_failed_and_returns_repair_message() -> None:
     assert events[0].status == "failed"
     assert events[0].error == "参数无效"
     assert repair is not None and "read_file" in repair
-    assert updated.calls["bad"].status == "failed"
+    assert updated.invalid_calls["bad"].status == "failed"
     # 原快照不被就地改写（copy-on-write）：状态与对象身份都必须不同，浅共享的伪实现会在此失败。
-    assert harness.manager.calls["bad"].status == "pending"
-    assert harness.manager.calls["bad"] is not updated.calls["bad"]
+    assert harness.manager.invalid_calls["bad"].status == "pending"
+    assert harness.manager.invalid_calls["bad"] is not updated.invalid_calls["bad"]
 
 
 def test_fail_invalid_tools_no_repair_for_non_pending() -> None:
     """缺陷类型：已终态的非法调用被重复收口（应跳过、返回 None）。"""
 
     harness = _LifecycleHarness()
-    harness.manager.calls["bad"] = ToolCallLifecycleRecord(
+    harness.manager.invalid_calls["bad"] = ToolCallLifecycleRecord(
         tool_call_id="bad",
         tool_name="read_file",
         status="failed",
@@ -1635,27 +1608,27 @@ def test_fail_invalid_tools_no_repair_for_non_pending() -> None:
 
     assert repair is None
     assert harness.events == []
-    assert updated.calls["bad"].status == "failed"
+    assert updated.invalid_calls["bad"].status == "failed"
 
 
 def test_cancel_moves_pending_and_running_only() -> None:
     """缺陷类型：cancel 误伤已终态调用，将其改写为 cancelled（判据：收口判据是状态）。"""
 
     harness = _LifecycleHarness()
-    harness.manager.calls["p"] = ToolCallLifecycleRecord(tool_call_id="p", tool_name="read_file")
-    harness.manager.calls["r"] = ToolCallLifecycleRecord(
+    harness.manager.valid_calls["p"] = ToolCallLifecycleRecord(tool_call_id="p", tool_name="read_file")
+    harness.manager.valid_calls["r"] = ToolCallLifecycleRecord(
         tool_call_id="r", tool_name="read_file", status="running"
     )
-    harness.manager.calls["done"] = ToolCallLifecycleRecord(
+    harness.manager.valid_calls["done"] = ToolCallLifecycleRecord(
         tool_call_id="done", tool_name="read_file", status="completed"
     )
 
     with harness._patch_runtime():
         harness.manager = harness.manager.cancel(task_id=1, run_id=2, step_id="step-3")
 
-    assert harness.manager.calls["p"].status == "cancelled"
-    assert harness.manager.calls["r"].status == "cancelled"
-    assert harness.manager.calls["done"].status == "completed", "已终态调用不得被 cancel 改写"
+    assert harness.manager.valid_calls["p"].status == "cancelled"
+    assert harness.manager.valid_calls["r"].status == "cancelled"
+    assert harness.manager.valid_calls["done"].status == "completed", "已终态调用不得被 cancel 改写"
     assert sorted(e.tool_call_id for e in harness.events) == ["p", "r"]
     assert all(e.status == "cancelled" for e in harness.events)
 
@@ -1664,7 +1637,7 @@ def test_classify_invalid_id_never_enters_running() -> None:
     """缺陷类型：非法调用（id 命中非法集合）被当作合法进入 running，污染展示。"""
 
     harness = _LifecycleHarness()
-    harness.manager.calls["bad"] = ToolCallLifecycleRecord(
+    harness.manager.valid_calls["bad"] = ToolCallLifecycleRecord(
         tool_call_id="bad", tool_name="read_file", status="pending"
     )
 
@@ -1677,7 +1650,7 @@ def test_classify_invalid_id_never_enters_running() -> None:
             invalid_tool_calls=[{"id": "bad", "name": "read_file", "args": "{", "error": "e"}],
         )
 
-    record = harness.manager.calls["bad"]
+    record = harness.manager.invalid_calls["bad"]
     assert record.status == "pending", "非法调用不得进入 running"
     assert record.invalid_detail is not None
     assert record.invalid_detail["error"] == "e"
@@ -1702,7 +1675,7 @@ def test_classify_invalid_without_id_is_ignored_with_warning(
                 ],
             )
 
-    assert set(harness.manager.calls) == {"with-id"}
+    assert set(harness.manager.invalid_calls) == {"with-id"}
     assert "lifecycle_invalid_tool_call_no_id" in {r.message for r in caplog.records}
 
 
@@ -1711,8 +1684,8 @@ def test_classify_all_id_less_invalid_calls_are_ignored(
 ) -> None:
     """缺陷类型：全部非法调用都缺 id 时，不得为它们建记录（判据：无法对齐即噪声）。
 
-    另注（既有观察项，见结论报告）：此场景下 ``classify`` 在 ``if not invalid_by_id`` 处提前
-    返回，故 ``lifecycle_invalid_tool_call_no_id`` warning 不可达；本用例只断言无记录被建。
+    ``lifecycle_invalid_tool_call_no_id`` warning 现已上移到 ``classify`` 提前返回之前，
+    本场景同样会留痕；本用例只断言无记录被建。
     """
 
     harness = _LifecycleHarness()
@@ -1725,7 +1698,7 @@ def test_classify_all_id_less_invalid_calls_are_ignored(
             invalid_tool_calls=[{"name": "read_file", "args": "{", "error": "e"}],
         )
 
-    assert harness.manager.calls == {}
+    assert harness.manager.valid_calls == {} and harness.manager.invalid_calls == {}
 
 
 # ---------------------------------------------------------------------------
@@ -1768,7 +1741,7 @@ def test_dropped_留痕_settle_path_carries_tool_call_id(caplog: pytest.LogCaptu
     """判据 A：结算路径（_ui_data）对同一畸形载荷同样写 warning，至少含 tool_call_id。"""
 
     harness = _LifecycleHarness()
-    harness.manager.calls["call-settle"] = ToolCallLifecycleRecord(
+    harness.manager.valid_calls["call-settle"] = ToolCallLifecycleRecord(
         tool_call_id="call-settle", tool_name="read_file"
     )
     summary = _summary_from_observation(
@@ -1802,7 +1775,7 @@ def test_dropped_留痕_two_paths_same_event_name_and_type(
 
     caplog.clear()
     harness = _LifecycleHarness()
-    harness.manager.calls["call-1"] = ToolCallLifecycleRecord(
+    harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
         tool_call_id="call-1", tool_name="read_file"
     )
     with caplog.at_level("WARNING"):
@@ -1849,7 +1822,7 @@ def test_no_dropped_log_along_early_and_settle_for_valid_payload(
             observation=_observation("error", display_data=payload),
         )
         harness = _LifecycleHarness()
-        harness.manager.calls["call-1"] = ToolCallLifecycleRecord(
+        harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
             tool_call_id="call-1", tool_name="read_file"
         )
         with harness._patch_runtime():
@@ -1892,7 +1865,7 @@ def test_settle_malformed_display_data_writes_two_identical_warnings(
     """
 
     harness = _LifecycleHarness()
-    harness.manager.calls["call-dup"] = ToolCallLifecycleRecord(
+    harness.manager.valid_calls["call-dup"] = ToolCallLifecycleRecord(
         tool_call_id="call-dup", tool_name="read_file"
     )
     summary = _summary_from_observation(

@@ -112,18 +112,7 @@ class ChildAgentSendTool(HandlerBase):
                 reason="Call this tool from inside a running turn instead of directly.",
                 permission=self.permission,
             )
-        loop = execution_context.runtime_dependencies.runtime_event_loop
-        if loop is None or loop.is_closed():
-            return tool_error(
-                self.name,
-                "child_agent_send_runtime_unavailable",
-                reason=(
-                    "the parent runtime event loop is unavailable, so the child run cannot "
-                    "be started; retry from a normal turn."
-                ),
-                permission=self.permission,
-                retryable=False,
-            )
+
 
         try:
             # 存在性校验：子任务不存在时直接返回确定性错误，不再继续创建 Run。

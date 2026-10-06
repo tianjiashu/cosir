@@ -423,7 +423,6 @@ class AgentRuntime:
             runtime_dependencies = ToolRuntimeDependencies(
                 parent_agent_profile=agent_profile,
                 agent_profile_registry=get_agent_registry(),
-                parent_task_is_child=task.is_child,
                 terminal_session_service=get_terminal_session_service(),
                 is_run_cancelled=cancellation_registry.is_cancelled,
                 process_tool_output_channel_factory=self._process_tool_output_channel_factory,

@@ -12,33 +12,40 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, ToolMessage
 
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.context.runtime_context_manager import _as_ai_message
 from app.core.runtime.run_result import ToolRunResult
-from app.core.workflows.react.node_helper.tool_call_lifecycle import (
-    ToolCallLifecycleManager,
-    ToolCallLifecycleRecord,
-)
 from app.core.workflows.react.nodes import model_node as model_module
 from app.core.workflows.react.nodes import observation_node as observe_module
 from app.core.workflows.react.nodes import tools_node as tools_module
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 @pytest.fixture(autouse=True)
-def _clear_deferred_system_messages():
-    """隔离 model 节点的延迟系统消息队列，避免测试顺序污染消息协议断言。
+def _patch_task_space(monkeypatch: Any):
+    """为 model 节点提供不依赖数据库的延迟消息队列。"""
 
-    队列已随 TaskRuntimeSpace 下沉到 task 维度；此处按 harness 使用的 task_id=1 取出
-    同一 space 并排空，保持用例间隔离。
-    """
+    class TaskSpace:
+        def __init__(self) -> None:
+            self.messages: list[Any] = []
 
-    task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
-    yield
-    task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
+        def take_deferred_system_messages(self, **_kwargs: Any) -> list[Any]:
+            messages, self.messages = self.messages, []
+            return messages
+
+        def defer_system_message(self, message: Any) -> None:
+            self.messages.append(message)
+
+        def has_deferred_system_messages(self) -> bool:
+            return bool(self.messages)
+
+    task_space = TaskSpace()
+    monkeypatch.setattr(task_runtime_spaces, "get_or_create", lambda _task_id: task_space)
+    return task_space
 
 
 def _state(**overrides: Any) -> ReactGraphState:
@@ -47,14 +54,12 @@ def _state(**overrides: Any) -> ReactGraphState:
     values: dict[str, Any] = {
         "step_count": 1,
         "tool_error_count": 0,
-        "requested_tool": False,
-        "continue_model": False,
-        "final_response": False,
-        "terminal": False,
+        "next_node": ReactRoute.MODEL,
         "instruction": "",
         "max_steps": 10,
         "final_text": "",
         "last_tool_results": {"instruction": "", "observations": []},
+        "tool_request": {},
     }
     values.update(overrides)
     return ReactGraphState(**values)
@@ -95,10 +100,12 @@ class _ModelHarness:
 
         self.operations = SimpleNamespace(
             model_tools=[SimpleNamespace(name="read_file", display=None)],
+            all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
             allows_tools=frozenset({"read_file"}),
             # model / tools 节点按「当前 task 维度」取上下文，故桩必须暴露 get_current_task。
             get_current_task=lambda: SimpleNamespace(id=1),
             get_current_run=lambda: SimpleNamespace(task_id=1, id=2),
+            get_current_workspace=lambda: SimpleNamespace(id=1),
             is_current_run_cancelled=lambda: False,
             complete_run_if_running=complete_run_if_running,
             fail_run_if_running=fail_run_if_running,
@@ -107,6 +114,8 @@ class _ModelHarness:
         self.runtime_config = SimpleNamespace(
             operations=self.operations,
             model=SimpleNamespace(astream=self._astream),
+            final_model=SimpleNamespace(astream=self._astream),
+            structured_output=None,
             workspace_id=1,
             thinking_channel="",
             # model 节点读 WorkflowOperations.allows_tools 构造生命周期允许集合。
@@ -124,9 +133,7 @@ class _ModelHarness:
             chunk: AIMessageChunk, *, stream_id: str, run_id: Any = None
         ) -> AIMessage:
             del stream_id, run_id
-            self._merged_chunk = (
-                chunk if self._merged_chunk is None else self._merged_chunk + chunk
-            )
+            self._merged_chunk = chunk if self._merged_chunk is None else self._merged_chunk + chunk
             return _as_ai_message(self._merged_chunk)
 
         def flush_message_chunk(
@@ -161,6 +168,7 @@ def _patch_lifecycle_runtime(monkeypatch: Any, harness: Any) -> None:
     monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: harness.runtime_config)
     monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(tools_module, "_runtime_context", lambda: harness.runtime_context)
 
 
 def _observe_harness(
@@ -170,9 +178,13 @@ def _observe_harness(
 
     operations = SimpleNamespace(
         model_tools=model_tools,
+        all_vaild_tools=model_tools,
         get_current_task=lambda: SimpleNamespace(id=1),
         get_current_run=lambda: SimpleNamespace(id=2),
         is_current_run_cancelled=lambda: False,
+        to_tool_model_message=lambda observation: ToolMessage(
+            content=observation.content, tool_call_id=observation.tool_call_id
+        ),
     )
     runtime_config = SimpleNamespace(
         operations=operations,
@@ -216,15 +228,13 @@ def test_reasoning_closes_before_tool_call_created(monkeypatch: Any) -> None:
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["requested_tool"] is True
+    assert result["next_node"] is ReactRoute.TOOLS
     closed_index = next(
         index for index, event in enumerate(harness.events) if event.type == "assistant_part_closed"
     )
-    created_index = next(
-        index for index, event in enumerate(harness.events) if event.type == "tool_call_created"
-    )
-    assert closed_index < created_index
     assert harness.events[closed_index].part == "reasoning"
+    assert not [event for event in harness.events if event.type == "tool_call_created"]
+    assert result["tool_request"]["tool_calls"][0]["id"] == "call-1"
 
 
 def test_normal_finish_reason_is_required_for_final_response(monkeypatch: Any) -> None:
@@ -242,9 +252,7 @@ def test_normal_finish_reason_is_required_for_final_response(monkeypatch: Any) -
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["terminal"] is True
-    assert result["final_response"] is True
-    assert result.get("continue_model", False) is False
+    assert result["next_node"] is ReactRoute.END
     assert harness.completed is True
     assert harness.failed is False
     assert [type(item) for item in harness.messages] == [AIMessage]
@@ -265,9 +273,7 @@ def test_truncated_model_output_continues_without_injected_prompt(monkeypatch: A
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["terminal"] is False
-    assert result["final_response"] is False
-    assert result["continue_model"] is True
+    assert result["next_node"] is ReactRoute.MODEL
     assert harness.completed is False
     assert harness.failed is False
     # length 类截断只表示本轮达到输出上限，由模型自行从已有输出继续；既不就地写入
@@ -288,8 +294,7 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["terminal"] is False
-    assert result["continue_model"] is True
+    assert result["next_node"] is ReactRoute.MODEL
     assert harness.completed is False
     # 续写提示不再就地写入 canonical context，而是经 task 级延迟队列在下一个 model 步注入；
     # 故本轮 harness.messages 只含 AIMessage，提示位于延迟队列。
@@ -314,8 +319,7 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["terminal"] is True
-    assert result["final_response"] is True
+    assert result["next_node"] is ReactRoute.END
     assert harness.completed is True
 
 
@@ -353,7 +357,14 @@ def test_multiple_tool_calls_are_created_and_started_independently(monkeypatch: 
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["requested_tool"] is True
+    assert result["next_node"] is ReactRoute.TOOLS
+    assert not [
+        event
+        for event in harness.events
+        if event.type in {"tool_call_created", "tool_call_status_changed"}
+    ]
+    monkeypatch.setattr(tools_module, "_runtime_config", lambda: harness.runtime_config)
+    tool_result = asyncio.run(tools_module._tools_node(_state(tool_request=result["tool_request"])))
     lifecycle_events = [
         event
         for event in harness.events
@@ -369,10 +380,11 @@ def test_multiple_tool_calls_are_created_and_started_independently(monkeypatch: 
         event.args for event in lifecycle_events if event.type == "tool_call_status_changed"
     ]
     assert status_args == [{"path": "a.py"}, {"path": "b.py"}]
+    assert tool_result["next_node"] is ReactRoute.OBSERVE
 
 
 def test_all_repairable_invalid_calls_route_back_to_model(monkeypatch: Any) -> None:
-    """全无效但可识别的调用应在 observe 节点统一结算并追加修复提示（不再经 model 即时回流）。"""
+    """全无效批次由 tools 收口、追加修复提示并直接回到 model。"""
 
     message = AIMessage(
         content="",
@@ -387,62 +399,99 @@ def test_all_repairable_invalid_calls_route_back_to_model(monkeypatch: Any) -> N
     _patch_lifecycle_runtime(monkeypatch, harness)
 
     model_result = asyncio.run(model_module._model_node(_state()))
-
-    # model 节点不再即时注入 SystemMessage，而是把非法调用挂进 lifecycle 交 observe 结算。
-    assert model_result["requested_tool"] is True
-    invalid_records = [
-        record
-        for record in model_result["tool_call_lifecycle"].calls.values()
-        if record.invalid_detail is not None
-    ]
-    assert len(invalid_records) == 1
-    assert invalid_records[0].tool_name == "read_file"
-    assert model_result["tool_call_lifecycle"].invalid_count == 1
+    assert model_result["next_node"] is ReactRoute.TOOLS
     assert [type(item) for item in harness.messages] == [AIMessage]
 
-    # tools 节点：无 running 调用，执行空批次并返回空摘要；不再回写 tool_call_lifecycle，
-    # 该快照由 model 节点写入 state 后沿 state 传递。
     monkeypatch.setattr(tools_module, "_runtime_config", lambda: harness.runtime_config)
     tools_result = asyncio.run(
-        tools_module._tools_node(_state(tool_call_lifecycle=model_result["tool_call_lifecycle"]))
-    )
-    assert tools_result["last_tool_results"]["observations"] == []
-
-    # observe 节点：统一结算非法调用（不写 ToolMessage），并追加修复 SystemMessage，
-    # 非终态回流 model。
-    observe_harness = _observe_harness(
-        harness.messages,
-        harness.events,
-        model_tools=[SimpleNamespace(name="read_file", display=None)],
-    )
-    monkeypatch.setattr(observe_module, "_runtime_config", lambda: observe_harness.runtime_config)
-    monkeypatch.setattr(observe_module, "_runtime_context", lambda: observe_harness.runtime_context)
-    _patch_lifecycle_runtime(monkeypatch, observe_harness)
-
-    observe_result = asyncio.run(
-        observe_module._observe_node(
+        tools_module._tools_node(
             _state(
                 step_count=model_result["step_count"],
-                requested_tool=True,
-                tool_call_lifecycle=model_result["tool_call_lifecycle"],
-                last_tool_results=tools_result["last_tool_results"],
+                tool_request=model_result["tool_request"],
             )
         )
     )
-    # 修复提示由 model 节点放入延迟队列；observe 只收口非法调用，不直接写消息。
-    assert [type(item) for item in observe_harness.messages] == [AIMessage]
-    deferred_system_messages = task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
-    assert len(deferred_system_messages) == 1
-    assert "Retry this step" in deferred_system_messages[0].content
-    # 非法调用已被收口为 failed（前端 pending part 闭合），且不计入 tool_error_count。
-    assert observe_result["tool_error_count"] == 0
-    repairable_records = [
+
+    assert tools_result["next_node"] is ReactRoute.MODEL
+    assert tools_result["tool_rejection_count"] == 1
+    assert tools_result["final_answer_only"] is False
+    assert tools_result["last_tool_results"]["observations"] == []
+    assert [type(item) for item in harness.messages] == [AIMessage, SystemMessage]
+    assert "Retry this step" in harness.messages[-1].content
+    invalid_records = [
         record
-        for record in observe_result["tool_call_lifecycle"].calls.values()
+        for record in tools_result["tool_call_lifecycle"].invalid_calls.values()
         if record.invalid_detail is not None
     ]
-    assert repairable_records
-    assert all(record.status == "failed" for record in repairable_records)
+    assert len(invalid_records) == 1
+    assert invalid_records[0].status == "failed"
+
+    second_rejection = asyncio.run(
+        tools_module._tools_node(
+            _state(
+                step_count=model_result["step_count"],
+                tool_request=model_result["tool_request"],
+                tool_rejection_count=tools_result["tool_rejection_count"],
+            )
+        )
+    )
+    assert second_rejection["next_node"] is ReactRoute.MODEL
+    assert second_rejection["final_answer_only"] is True
+
+    harness._message = AIMessage(
+        content="已尝试工具，但该工具不可用。以下是基于现有信息的答复。",
+        response_metadata={"finish_reason": "stop"},
+    )
+    final_result = asyncio.run(
+        model_module._model_node(
+            _state(
+                step_count=second_rejection.get("step_count", model_result["step_count"]),
+                tool_rejection_count=second_rejection["tool_rejection_count"],
+                final_answer_only=second_rejection["final_answer_only"],
+            )
+        )
+    )
+    assert final_result["next_node"] is ReactRoute.END
+    assert final_result["final_text"] == harness._message.content
+    assert harness.completed is True
+
+
+def test_blocked_only_calls_are_closed_and_return_to_model(monkeypatch: Any) -> None:
+    """全阻塞调用不执行工具，先闭合协议并带限制提示回到模型。"""
+
+    harness = _ModelHarness(
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "read_file", "args": {}, "id": "blocked-1"}],
+        )
+    )
+    harness.operations.allows_tools = frozenset()
+    _patch_lifecycle_runtime(monkeypatch, harness)
+    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(tools_module, "_runtime_config", lambda: harness.runtime_config)
+
+    model_result = asyncio.run(model_module._model_node(_state()))
+    tools_result = asyncio.run(
+        tools_module._tools_node(
+            _state(
+                step_count=model_result["step_count"],
+                tool_request=model_result["tool_request"],
+            )
+        )
+    )
+
+    assert tools_result["next_node"] is ReactRoute.MODEL
+    assert tools_result["last_tool_results"]["observations"] == []
+    assert [type(message) for message in harness.messages] == [
+        AIMessage,
+        ToolMessage,
+        SystemMessage,
+    ]
+    assert harness.messages[1].tool_call_id == "blocked-1"
+    assert "disabled" in harness.messages[-1].content
+    assert harness.events == []
 
 
 def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch: Any) -> None:
@@ -462,8 +511,12 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
     _patch_lifecycle_runtime(monkeypatch, model_harness)
 
     model_result = asyncio.run(model_module._model_node(_state()))
-    assert model_result["requested_tool"] is True
+    assert model_result["next_node"] is ReactRoute.TOOLS
     assert [type(item) for item in model_harness.messages] == [AIMessage]
+    monkeypatch.setattr(tools_module, "_runtime_config", lambda: model_harness.runtime_config)
+    tools_result = asyncio.run(
+        tools_module._tools_node(_state(tool_request=model_result["tool_request"]))
+    )
 
     observe_harness = SimpleNamespace(
         messages=model_harness.messages,
@@ -498,11 +551,11 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
         observe_module._observe_node(
             _state(
                 step_count=model_result["step_count"],
-                requested_tool=True,
-                tool_call_lifecycle=model_result["tool_call_lifecycle"],
+                next_node=ReactRoute.TOOLS,
+                tool_call_lifecycle=tools_result["tool_call_lifecycle"],
+                tool_feedback=tools_result["tool_feedback"],
                 last_tool_results={
                     "instruction": "先读取文件。",
-                    "expected_call_ids": ["valid-1"],
                     "observations": [
                         {
                             "tool_call_id": "valid-1",
@@ -514,34 +567,25 @@ def test_partial_valid_calls_defer_repair_until_after_tool_messages(monkeypatch:
                             "retryable": False,
                             "display_data": {},
                         },
-                        {
-                            "tool_call_id": "unexpected-1",
-                            "tool_name": "read_file",
-                            "status": "success",
-                            "error": "",
-                            "reason": "",
-                            "content": "must be dropped",
-                            "retryable": False,
-                            "display_data": {},
-                        },
                     ],
                 },
             )
         )
     )
 
-    # 修复提示要等下一次 model 节点读取延迟队列时写入；持久化顺序因此为
-    # AIMessage -> ToolMessage -> SystemMessage，而不是在两者之间插入。
-    assert [type(item) for item in observe_harness.messages] == [AIMessage, ToolMessage]
-    deferred_system_messages = task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
-    assert len(deferred_system_messages) == 1
-    assert "Retry this step" in deferred_system_messages[0].content
+    # observe 先写 ToolMessage，再把批次修复提示写入上下文。
+    assert [type(item) for item in observe_harness.messages] == [
+        AIMessage,
+        ToolMessage,
+        SystemMessage,
+    ]
+    assert "Retry this step" in observe_harness.messages[-1].content
     assert observe_harness.messages[1].tool_call_id == "valid-1"
     # 合法调用成功结算；非法调用被收口为 failed 且不计入错误计数。
     assert observe_result["tool_error_count"] == 0
     repairable_records = [
         record
-        for record in observe_result["tool_call_lifecycle"].calls.values()
+        for record in observe_result["tool_call_lifecycle"].invalid_calls.values()
         if record.invalid_detail is not None
     ]
     assert repairable_records
@@ -561,21 +605,12 @@ def test_all_valid_calls_have_no_deferred_repair(monkeypatch: Any) -> None:
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
 
-    result = asyncio.run(
-        model_module._model_node(
-            _state(
-                tool_call_lifecycle=ToolCallLifecycleManager(
-                    calls={
-                        "previous-call": ToolCallLifecycleRecord(
-                            tool_call_id="previous-call",
-                            tool_name="read_file",
-                            status="completed",
-                        )
-                    }
-                )
-            )
-        )
+    result = asyncio.run(model_module._model_node(_state()))
+    assert result["next_node"] is ReactRoute.TOOLS
+    assert [event for event in harness.events if event.type == "tool_call_created"] == []
+    monkeypatch.setattr(tools_module, "_runtime_config", lambda: harness.runtime_config)
+    tools_result = asyncio.run(
+        tools_module._tools_node(_state(tool_request=result["tool_request"]))
     )
-
-    assert result["requested_tool"] is True
-    assert set(result["tool_call_lifecycle"].calls) == {"valid-1"}
+    assert tools_result["next_node"] is ReactRoute.OBSERVE
+    assert set(tools_result["tool_call_lifecycle"].valid_calls) == {"valid-1"}
