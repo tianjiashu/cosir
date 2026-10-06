@@ -16,7 +16,6 @@ from pathlib import Path
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.tools.schemas import TOOL_PROPOSE_AGENT_CONFIGURATION
 from app.models import TaskRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
@@ -320,6 +319,10 @@ class WorkspaceService:
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
                 task_ids = set(self._task_crud.list_ids_by_workspace(workspace_id))
+                # 先发送取消信号，再取得 task 闸门，避免运行中的 Team 收尾与删除互相等待。
+                from app.agent_team.coordinator import get_agent_team_coordinator
+
+                get_agent_team_coordinator().cancel_for_task_ids(task_ids)
                 with ExitStack() as stack:
                     self._acquire_task_operations(workspace_id, task_ids, stack)
                     log.info(

@@ -1,15 +1,17 @@
-"""Agent Team 静态契约和进程内待确认预览测试。"""
+"""Agent Team 静态契约和持久化运行意图测试。"""
 
 from pathlib import Path
-from time import monotonic
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import inspect
+from sqlalchemy.orm import sessionmaker
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
-from app.agent_team.preview import PendingTeamPreview, TeamPreviewStore
 from app.agent_team.registry import AgentTeamConfigurationRegistry
+from app.agent_team.state.agent_team_run_state import AgentTeamRunState
+from app.api.schemas.request.confirm_agent_team_request import ConfirmAgentTeamRequest
 from app.core.tools.tool_handler.agent_team.propose_agent_team_configuration import (
     ProposeAgentTeamConfigurationTool,
 )
@@ -19,6 +21,12 @@ from app.core.tools.tool_models.agent_team.propose_agent_team_configuration_args
 from app.service.configuration.agent_team_configuration_service import (
     AgentTeamConfigurationService,
 )
+from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
+from app.storage.engine_cache import create_sqlite_engine
+from app.storage.model.conversation_run_model import ConversationRunModel
+from app.storage.model.task_model import TaskModel
+from app.storage.model.workspace_model import WorkspaceModel
+from app.storage.store_engines import initialize_app_schema
 
 
 def _configuration(**overrides: object) -> dict[str, object]:
@@ -118,6 +126,31 @@ def test_proposal_tool_separates_argument_and_configuration_validation() -> None
 
     rejected = ProposeAgentTeamConfigurationTool().execute(**{**proposal, "scope": "system"})
     assert rejected.status == "error"
+
+
+def test_confirm_request_carries_final_configuration_instead_of_preview_fingerprint() -> None:
+    """确认请求提交最终配置，旧的预览指纹协议不再属于接口契约。"""
+
+    configuration = _configuration()
+    payload = ConfirmAgentTeamRequest.model_validate(
+        {
+            "parent_task_id": 1,
+            "parent_run_id": 2,
+            "team_id": "code-quality",
+            "configuration": configuration,
+        }
+    )
+
+    assert payload.configuration == configuration
+    with pytest.raises(ValidationError):
+        ConfirmAgentTeamRequest.model_validate(
+            {
+                "parent_task_id": 1,
+                "parent_run_id": 2,
+                "team_id": "code-quality",
+                "preview_fingerprint": "f" * 64,
+            }
+        )
 
 
 def test_proposal_tool_does_not_construct_persisted_configuration(
@@ -367,23 +400,124 @@ def test_registry_saves_and_reloads_workspace_configuration(tmp_path: Path) -> N
     assert restored.resolve(tmp_path, "code-quality").team_id == "code-quality"
 
 
-def test_preview_store_replaces_and_consumes_one_preview(tmp_path: Path) -> None:
-    store = TeamPreviewStore()
-    first = PendingTeamPreview(
-        parent_task_id=1,
-        parent_run_id=2,
-        workspace_id=3,
-        workspace_root=str(tmp_path),
-        team_id="first",
-        goal="goal",
+def test_agent_team_run_table_persists_confirmation_state(tmp_path: Path) -> None:
+    engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
+    initialize_app_schema(engine)
+
+    assert "agent_team_execution_requests" not in inspect(engine).get_table_names()
+    table = inspect(engine).get_columns("agent_team_runs")
+    columns = {item["name"] for item in table}
+
+    assert {"id", "status", "configuration_snapshot_json", "state_json"} <= columns
+    assert "preview_document_json" not in columns
+    assert not {
+        "team_run_id",
+        "expires_at",
+        "resolved_at",
+        "generation",
+        "current_node_id",
+        "current_node_status",
+        "current_node_output",
+        "failure_kind",
+        "failure_message",
+    }.intersection(columns)
+    assert "end_reason" in columns
+
+
+def test_team_run_crud_round_trips_persisted_confirmation_state(
+    tmp_path: Path,
+) -> None:
+    engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
+    initialize_app_schema(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    with factory.begin() as session:
+        workspace = WorkspaceModel(name="workspace", root_path=str(tmp_path))
+        session.add(workspace)
+        session.flush()
+        task = TaskModel(workspace_id=workspace.id, title="parent", tool_definitions=[])
+        session.add(task)
+        session.flush()
+        run = ConversationRunModel(
+            task_id=task.id,
+            status="cancelled",
+            end_reason="agent_team_waiting_confirmation",
+        )
+        session.add(run)
+        session.flush()
+
+    crud = AgentTeamRunCrud.__new__(AgentTeamRunCrud)
+    crud._session_factory = factory
+    configuration = AgentTeamConfiguration.model_validate(_configuration())
+    created = crud.create(
+        configuration=configuration,
+        workspace_id=workspace.id,
+        parent_task_id=task.id,
+        parent_run_id=run.id,
+        preview_fingerprint="f" * 64,
+        goal="检查代码",
         instructions={},
-        configuration_snapshot={},
-        node_runtime_snapshots={},
-        preview={},
-        created_at=monotonic(),
+        node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
     )
-    second = PendingTeamPreview(**{**first.__dict__, "team_id": "second"})
-    store.put(first)
-    store.put(second)
-    assert store.consume(1, 2).team_id == "second"
-    assert store.consume(1, 2) is None
+
+    restored = crud.get_by_id(created.id)
+    assert restored is not None
+    assert restored.status == "pending"
+    assert "requires_confirmation" not in restored.state_json
+    assert restored.configuration_snapshot_json["team_id"] == "code-quality"
+    assert crud.list_active() == []
+
+
+def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -> None:
+    """TeamRun 条件状态更新不能覆盖已经迁移后的状态。"""
+
+    engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
+    initialize_app_schema(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    with factory.begin() as session:
+        workspace = WorkspaceModel(name="workspace", root_path=str(tmp_path))
+        session.add(workspace)
+        session.flush()
+        task = TaskModel(workspace_id=workspace.id, title="parent", tool_definitions=[])
+        session.add(task)
+        session.flush()
+        run = ConversationRunModel(
+            task_id=task.id,
+            status="cancelled",
+            end_reason="agent_team_waiting_confirmation",
+        )
+        session.add(run)
+        session.flush()
+
+    crud = AgentTeamRunCrud.__new__(AgentTeamRunCrud)
+    crud._session_factory = factory
+    created = crud.create(
+        configuration=AgentTeamConfiguration.model_validate(_configuration()),
+        workspace_id=workspace.id,
+        parent_task_id=task.id,
+        parent_run_id=run.id,
+        preview_fingerprint="f" * 64,
+        goal="检查代码",
+        instructions={},
+        node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
+    )
+
+    updated = crud.update_status_if_in(
+        created.id,
+        "running",
+        ("pending",),
+        state=AgentTeamRunState.initial({"develop": {"agent_id": "general-assistant"}}),
+        started=True,
+    )
+    assert updated is not None
+    assert updated.status == "running"
+    assert "requires_confirmation" not in updated.state_json
+    assert updated.end_reason is None
+    assert [row.id for row in crud.list_active()] == [created.id]
+    assert (
+        crud.update_status_if_in(
+            created.id,
+            "cancelled",
+            ("pending",),
+        )
+        is None
+    )

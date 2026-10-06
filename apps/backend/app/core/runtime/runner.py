@@ -1,5 +1,7 @@
 """Coordinate task lifecycle and workflow execution."""
 
+from dataclasses import replace
+
 from langchain_core.messages import SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
@@ -8,9 +10,11 @@ from app.config.logging.logger import log
 from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileConfigError,
+    AgentProfileType,
 )
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.model_settings import ModelSettings
+from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.observability import (
     TraceMetadata,
@@ -124,18 +128,74 @@ class AgentRuntime:
         workspace_scope = (
             AgentProfileRegistry.SYSTEM_WORKSPACE if is_main_agent else workspace.root_path
         )
+        profile_snapshot = (
+            task.extra.get("agent_team_profile_snapshot")
+            if isinstance(task.extra, dict)
+            else None
+        )
         try:
             agent_profile = self._agent_registry.resolve(workspace_scope, agent_id)
         except AgentProfileConfigError as exc:
-            raise RuntimeError(
-                f"workspace child agent configuration unavailable for run {run_id}: {exc}"
-            ) from exc
-        if agent_profile is None:
+            if not isinstance(profile_snapshot, dict):
+                raise RuntimeError(
+                    f"workspace child agent configuration unavailable for run {run_id}: {exc}"
+                ) from exc
+            agent_profile = None
+        if agent_profile is None and not isinstance(profile_snapshot, dict):
             raise RuntimeError(f"agent profile unavailable for run {run_id}")
+        if isinstance(profile_snapshot, dict):
+            snapshot_settings = profile_snapshot.get("model_settings", {})
+            if not isinstance(snapshot_settings, dict):
+                raise RuntimeError(f"agent team profile snapshot is invalid for run {run_id}")
+            snapshot_agent_id = str(
+                profile_snapshot.get("agent_id", agent_id)
+            )
+            snapshot_role = str(profile_snapshot.get("role", snapshot_agent_id))
+            snapshot_prompt = str(profile_snapshot.get("system_prompt", ""))
+            snapshot_tools = list(profile_snapshot.get("allowed_tools", []))
+            snapshot_max_steps = int(profile_snapshot.get("max_steps", 100))
+            snapshot_structured_output = profile_snapshot.get("structured_output")
+            structured_output = (
+                StructuredOutputSpec.model_validate(snapshot_structured_output)
+                if snapshot_structured_output is not None
+                else None
+            )
+            if agent_profile is None:
+                agent_profile = AgentProfile(
+                    agent_id=snapshot_agent_id,
+                    role=snapshot_role,
+                    system_prompt=snapshot_prompt,
+                    allowed_tools=snapshot_tools,
+                    agent_type=AgentProfileType.CHILD,
+                    max_steps=snapshot_max_steps,
+                    structured_output=structured_output,
+                )
+            agent_profile = replace(
+                agent_profile,
+                agent_id=snapshot_agent_id,
+                role=snapshot_role,
+                system_prompt=str(
+                    profile_snapshot.get("system_prompt", agent_profile.system_prompt)
+                ),
+                allowed_tools=snapshot_tools or agent_profile.allowed_tools,
+                max_steps=snapshot_max_steps,
+                structured_output=structured_output,
+                model_config_id=profile_snapshot.get(
+                    "model_config_id", agent_profile.model_config_id
+                ),
+                model_settings=ModelSettings(**snapshot_settings),
+            )
         # Run 选择的模型配置在 per-run 派生边界物化；进入 workflow 后只允许消费
         # AgentProfile.model_settings，不再让模型工厂回查 model_config_id。
         runtime_model_settings = None
-        if run.model_config_id is not None:
+        if isinstance(profile_snapshot, dict):
+            # Agent Team 节点使用确认时冻结的完整模型设置；不能因用户随后编辑或删除
+            # model_config 而改变已经确认的 Team。
+            snapshot_settings = profile_snapshot.get("model_settings")
+            if not isinstance(snapshot_settings, dict):
+                raise RuntimeError(f"agent team model snapshot is invalid for run {run_id}")
+            runtime_model_settings = ModelSettings(**snapshot_settings)
+        elif run.model_config_id is not None:
             runtime_model_settings = ModelSettings.from_model_config_record(
                 get_model_config_service().get_config(run.model_config_id)
             )
@@ -247,6 +307,10 @@ class AgentRuntime:
             )
             raise
         finally:
+            if isinstance(task.extra, dict) and task.extra.get("agent_team_run_id"):
+                from app.agent_team.coordinator import get_agent_team_coordinator
+
+                get_agent_team_coordinator().handle_node_natural_completion(run_id)
             cancellation_registry.clear(run_id)
             # 工具级信号由工具执行层在单次调用结束时释放；这里兜底回收「点名了已结束的
             # 工具调用」这类不会再被消费的信号，避免进程内信号随会话累积。
@@ -320,14 +384,17 @@ class AgentRuntime:
             WorkflowOperations 实例。
         """
         task_space = task_runtime_spaces.get_or_create(task.id)
-        allows_tools = set(tool.get("name") for tool in list(task_space.task_tool_definitions))
+        allows_tools = {tool.get("name") for tool in task_space.task_tool_definitions}
 
         ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
         if run.extra is not None and len(run.extra.ban_tools) > 0:
             allows_tools = allows_tools - ban_tools
             task_space.defer_system_message(
                 SystemMessage(
-                    content=f"Tools banned for this round: {ban_tools}. These tools cannot be executed in this round; please do not use them."
+                    content=(
+                        f"Tools banned for this round: {ban_tools}. These tools cannot be "
+                        "executed in this round; please do not use them."
+                    )
                 )
             )
         else:
@@ -343,7 +410,10 @@ class AgentRuntime:
             tool_schema = convert_to_openai_tool(definition.to_model_tool_definition(), strict=True)
             task_space.defer_system_message(
                 SystemMessage(
-                    content=f"Please follow the user's instructions and use this tool to carry out their request: {tool_schema}"
+                    content=(
+                        "Please follow the user's instructions and use this tool to carry out "
+                        f"their request: {tool_schema}"
+                    )
                 )
             )
 

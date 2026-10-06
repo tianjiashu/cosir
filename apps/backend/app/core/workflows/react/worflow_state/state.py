@@ -35,6 +35,8 @@ class ReactGraphState(BaseModel):
             model。model 节点写；``_should_continue`` 消费。它不表示工具调用，避免用
             ``requested_tool`` 伪造一条空工具路径。
         final_response: 当前步骤是否已产出最终回答。model 节点写；``_should_continue`` 消费。
+        structured_output_requested: model 已完成普通推理且需要结构化收口。model 节点写；
+            条件边消费后进入 ``structured_output``，结构化结果本身不进入 graph state。
         terminal: 是否进入完成 / 失败 / 超步数等终止态。``model`` / ``observe`` 节点写
             （``tools`` 节点不写终态）；编排层结合 ``aget_state().next`` 判定图是否结束。
             协作取消不走本字段。
@@ -69,5 +71,6 @@ class ReactGraphState(BaseModel):
     last_tool_results: dict[str, Any]
     terminal_sessions: dict[str, TerminalSessionCheckpoint] = Field(default_factory=dict)
     continue_model: bool = False
+    structured_output_requested: bool = False
     tool_call_lifecycle: ToolCallLifecycleManager | None = None
     agent_team_confirmation_waiting: bool = False

@@ -22,10 +22,13 @@ from app.core.agents.agent_profile import (
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.core.tools.schemas import (
+    TOOL_AGENT_TEAM,
+    TOOL_AGENT_TEAM_NODE_STATUS,
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_STATUS,
     TOOL_CHILD_AGENT_WAIT,
     TOOL_DELEGATE_TASK,
+    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
     TOOL_TERMINAL_CLOSE,
     TOOL_TERMINAL_READ,
     TOOL_TERMINAL_SIGNAL,
@@ -60,6 +63,9 @@ CHILD_DISALLOWED_TOOLS: tuple[str, ...] = (
     TOOL_CHILD_AGENT_STATUS,
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_WAIT,
+    TOOL_AGENT_TEAM_NODE_STATUS,
+    TOOL_AGENT_TEAM,
+    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
     # terminal_session/：可交互终端
     TOOL_TERMINAL_START,
     TOOL_TERMINAL_WRITE,
@@ -244,7 +250,9 @@ class DelegateTaskTool(HandlerBase):
             child_task_tools = child_agent_profile.select_tools(
                 get_tool_system().executor.list_tools()
             )
-            child_final_task_tools = [tool for tool in child_task_tools if tool.name not in CHILD_DISALLOWED_TOOLS]
+            child_final_task_tools = [
+                tool for tool in child_task_tools if tool.name not in CHILD_DISALLOWED_TOOLS
+            ]
 
 
             child_task = self._task_service.get_or_create_task(
@@ -253,7 +261,10 @@ class DelegateTaskTool(HandlerBase):
                 task_type="delegate_task",
                 parent_task_id=execution_context.task_id,
                 parent_run_id=execution_context.run_id,
-                tool_definitions=[copy.deepcopy(definition.to_model_tool_definition()) for definition in child_final_task_tools]
+                tool_definitions=[
+                    copy.deepcopy(definition.to_model_tool_definition())
+                    for definition in child_final_task_tools
+                ]
             )
 
             reasoning_effort = (child_agent_profile.model_settings.reasoning_effort

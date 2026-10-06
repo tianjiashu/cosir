@@ -238,6 +238,24 @@ class ConversationRunExecutor:
         except KeyError:
             self._signal.clear(run_id)
             raise
+        # 主 Agent 被用户或其它业务入口显式取消时，不能留下仍在运行的 Team。等待用户
+        # 确认是 Agent Team 自己使用的内部暂停语义，此时 Team 尚未创建，不能反向取消。
+        if end_reason != "agent_team_waiting_confirmation":
+            try:
+                from app.agent_team.coordinator import get_agent_team_coordinator
+
+                await asyncio.to_thread(
+                    get_agent_team_coordinator().cancel_for_parent_run_id,
+                    run_id,
+                )
+            except Exception:
+                log.exception(
+                    "agent_team_parent_cancel_propagation_failed",
+                    extra={
+                        "msg": "主 Agent 取消后传播到 Agent Team 失败",
+                        "data": {"parent_run_id": run_id, "end_reason": end_reason},
+                    },
+                )
         # 取消请求必须立即关闭本 Run 的 PTY；workflow 之后仍会协作收束，
         # ``_execute`` 的 finally 还会再次幂等兜底。
         await asyncio.to_thread(self._close_run_terminals, run_id, end_reason)

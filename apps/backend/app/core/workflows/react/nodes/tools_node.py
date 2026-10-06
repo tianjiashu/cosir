@@ -24,7 +24,7 @@ from typing import Any
 
 from app.config.logging.logger import log
 from app.core.runtime.run_result import ToolRunResult
-from app.core.tools.schemas import ToolCall
+from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.workflows.react.node_helper.common import _runtime_config
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
@@ -166,7 +166,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
         },
     )
 
-    observations = tool_run.observations  # 每个工具调用的观察结果
+    observations:list[ToolObservation] = tool_run.observations  # 每个工具调用的观察结果
     # 终态事件（completed/failed/cancelled）、模型上下文写回与错误计数统一收敛到
     # observe 节点（经 ToolCallLifecycleManager.settle_batch 分发），本节点只产出治理摘要。
     log.info(

@@ -8,8 +8,8 @@ from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_handler.agent_team.agent_team_node_status import (
     build_agent_team_node_status_definition,
 )
-from app.core.tools.tool_handler.agent_team.agent_team_preview import (
-    build_agent_team_definition,
+from app.core.tools.tool_handler.agent_team.agent_team_run import (
+    build_agent_team_run_definition,
 )
 from app.core.tools.tool_handler.agent_team.propose_agent_team_configuration import (
     build_propose_agent_team_configuration_definition,
@@ -25,14 +25,14 @@ from app.core.tools.tool_handler.child_task.child_agent_status import (
 from app.core.tools.tool_handler.child_task.child_agent_wait import (
     build_child_agent_wait_definition,
 )
+from app.core.tools.tool_handler.child_task.propose_agent_configuration import (
+    build_propose_agent_configuration_definition,
+)
 from app.core.tools.tool_handler.delete_tool import build_delete_file_definition
 from app.core.tools.tool_handler.execute_terminal import build_execute_terminal_definition
 from app.core.tools.tool_handler.find_files import build_find_files_definition
 from app.core.tools.tool_handler.list_directory import build_list_directory_definition
 from app.core.tools.tool_handler.move_tool import build_move_file_definition
-from app.core.tools.tool_handler.child_task.propose_agent_configuration import (
-    build_propose_agent_configuration_definition,
-)
 from app.core.tools.tool_handler.read_file import build_read_file_definition
 from app.core.tools.tool_handler.replace_tool import build_replace_definition
 from app.core.tools.tool_handler.search_content import build_search_content_definition
@@ -126,7 +126,7 @@ class ToolSystem:
         registry.register(build_child_agent_wait_definition())
         registry.register(build_propose_agent_configuration_definition())
         registry.register(build_propose_agent_team_configuration_definition())
-        registry.register(build_agent_team_definition())
+        registry.register(build_agent_team_run_definition())
         registry.register(build_agent_team_node_status_definition())
         executor = ToolExecutor(
             registry=registry,

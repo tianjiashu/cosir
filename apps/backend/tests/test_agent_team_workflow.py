@@ -8,13 +8,16 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from app.agent_team.coordinator import AgentTeamCoordinator
-from app.agent_team.preview_builder import resolve_effective_model_settings
+from app.agent_team.state.agent_team_run_state import AgentTeamRunState
+from app.api.agent_teams_api import _run_payload
+from app.core.agents.model_settings import ModelSettings
 from app.core.workflows.react.nodes.agent_team_confirmation_wait_node import (
     agent_team_confirmation_wait_node,
 )
-from app.api.agent_teams_api import _run_payload
-from app.core.agents.model_settings import ModelSettings
 from app.core.workflows.react.worflow_state.state import ReactGraphState
+from app.service.agent_team.agent_team_preparation_service import (
+    resolve_effective_model_settings,
+)
 
 
 def _state() -> ReactGraphState:
@@ -54,24 +57,45 @@ def test_agent_team_wait_node_resumes_to_model_path() -> None:
     asyncio.run(run())
 
 
+def test_agent_team_run_state_tracks_repeated_node_executions() -> None:
+    """状态快照按每次节点 Run 保存历史，并从最新完成记录提供前置输出。"""
+
+    state = AgentTeamRunState.initial({"develop": {"agent_id": "general-assistant"}})
+    state.start_node("develop", task_id=10, run_id=20)
+    state.complete_node(20, "done", "第一次完成")
+    state.add_transition("develop", "done", "develop")
+    state.start_node("develop", task_id=11, run_id=21)
+    state.complete_node(21, "done", "第二次完成")
+
+    assert state.active_execution() is None
+    assert state.completed_run_ids() == {20, 21}
+    assert state.previous_outputs_for(["develop"]) == [
+        {"node_id": "develop", "status": "done", "output": "第二次完成"}
+    ]
+    assert len(state.transition_history) == 1
+
+
 def test_team_result_message_contains_node_results() -> None:
     """主 Agent 收到的 TeamResult 包含节点 status/output，而不是只收到终态。"""
 
     row = SimpleNamespace(
-        team_run_id="run-1",
+        id=1,
         team_id="quality",
         status="completed",
         goal_input="完成质量检查",
-        current_node_id=None,
-        current_node_status="passed",
-        current_node_output="检查通过",
-        state_json={
-            "previous_outputs": [
-                {"node_id": "review", "status": "passed", "output": "检查通过"}
+        state_json=AgentTeamRunState(
+            node_executions=[
+                {
+                    "node_id": "review",
+                    "task_id": 2,
+                    "run_id": 3,
+                    "completed": True,
+                    "status": "passed",
+                    "output": "检查通过",
+                }
             ]
-        },
-        failure_kind=None,
-        failure_message=None,
+        ).to_json(),
+        end_reason=None,
     )
 
     result = AgentTeamCoordinator._build_team_result_message(row)
@@ -84,24 +108,25 @@ def test_team_run_payload_hides_runtime_profile_snapshots() -> None:
     """Team 状态查询不能把节点 system_prompt 暴露给前端。"""
 
     row = SimpleNamespace(
-        team_run_id="run-1",
+        id=1,
         team_id="quality",
         workspace_id=1,
         parent_task_id=2,
         parent_run_id=3,
         goal_input="goal",
         status="running",
-        current_node_id="review",
-        current_node_status="",
-        current_node_output="",
-        state_json={"node_runtime_snapshots": {"review": {"system_prompt": "secret"}}},
-        failure_kind=None,
-        failure_message=None,
+        state_json=AgentTeamRunState(
+            runtime={"node_snapshots": {"review": {"system_prompt": "secret"}}}
+        ).to_json(),
+        end_reason=None,
         started_at=None,
         ended_at=None,
     )
 
-    assert "node_runtime_snapshots" not in _run_payload(row)["state"]
+    payload = _run_payload(row)
+    assert "runtime" not in payload["state"]
+    assert payload["active_node"] is None
+    assert payload["node_results"] == []
 
 
 def test_team_model_snapshot_falls_back_to_parent_materialized_settings() -> None:

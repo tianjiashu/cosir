@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.config.logging.logger import log
 from app.core.agents.model_settings import ModelSettings
+from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.models import ConversationRunRecord
 from app.service.depends import get_model_config_service
 from app.utils.json_utils import read_json_object
@@ -114,6 +115,7 @@ _DOCUMENT_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "max_steps": (int,),
     "model_config_id": (int, type(None)),
     "model_settings": (dict,),
+    "structured_output": (dict, type(None)),
 }
 _BLANK_REJECTED_TEXT_FIELDS = ("agent_id", "role", "description", "system_prompt")
 _REQUIRED_DOCUMENT_FIELDS = ("agent_id", "role", "description", "system_prompt", "allowed_tools")
@@ -229,6 +231,7 @@ class AgentProfile:
         workflow: 执行策略（默认 ReAct-like，延迟导入打破循环依赖）。
         model_config_id: 该 Agent 的模型选择元数据，不参与模型构建。
         model_settings: 已物化的模型运行配置，供模型工厂唯一消费。
+        structured_output: 可选的最终 JSON Schema 契约；为空时沿用普通文本最终输出。
         agent_type: Agent 分类（``AgentProfileType``），决定其在运行时的暴露与调度方式。
         max_steps: 单 run 最大步骤数。
         run: 当前所属 Conversation Run 记录（经 ``derive_for_run`` 注入 per-run 副本；
@@ -245,6 +248,7 @@ class AgentProfile:
     workflow: AgentWorkflow = field(default_factory=_default_workflow)
     model_config_id: int | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings.default_settings)
+    structured_output: StructuredOutputSpec | None = None
     max_steps: int = 100
     run: ConversationRunRecord | None = None
 
@@ -464,6 +468,12 @@ def parse_agent_profile_document(
         # 非严格加载允许无效选择降级为未物化 profile；真正运行时会由 Run 选择配置。
         model_settings = ModelSettings.from_json(document.get("model_settings", {}))
         model_config_id = None
+    raw_structured_output = document.get("structured_output")
+    structured_output = (
+        StructuredOutputSpec.model_validate(raw_structured_output)
+        if raw_structured_output is not None
+        else None
+    )
     return AgentProfile(
         agent_id=document["agent_id"],
         role=document["role"],
@@ -472,6 +482,7 @@ def parse_agent_profile_document(
         agent_type=AgentProfileType.CHILD,
         system_prompt=document["system_prompt"],
         model_settings=model_settings,
+        structured_output=structured_output,
         model_config_id=model_config_id,
         max_steps=AgentProfile.max_steps if max_steps is None else max_steps,
     )

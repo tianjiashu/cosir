@@ -24,6 +24,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.agent_team.registry import (
+    AgentTeamConfigurationRegistry,
+    set_agent_team_registry,
+)
 from app.assistant_transport.event.tool_runtime_output_adapter import (
     ToolRuntimeOutputChannelFactory,
 )
@@ -49,6 +53,10 @@ from app.core.observability.langfuse_runtime import reload_langfuse_from_setting
 from app.core.runtime.runner import AgentRuntime
 from app.core.tools import ToolSystem
 from app.core.workflows.react.workflow import ReactLikeWorkflow
+from app.service.configuration.agent_team_configuration_service import (
+    AgentTeamConfigurationService,
+    set_agent_team_configuration_service,
+)
 from app.service.configuration.main_agent_prompt_configuration_service import (
     MainAgentPromptConfigurationService,
 )
@@ -63,8 +71,15 @@ from app.service.depends import (
 )
 from app.utils.json_utils import JsonFileError, read_json_object
 from app.utils.path import system_cosir as paths
-from app.utils.path.system_cosir import system_agent_config_dir, system_cosir_dir
-from app.utils.path.workspace_cosir import workspace_agent_config_dir
+from app.utils.path.system_cosir import (
+    system_agent_config_dir,
+    system_agent_team_config_dir,
+    system_cosir_dir,
+)
+from app.utils.path.workspace_cosir import (
+    workspace_agent_config_dir,
+    workspace_agent_team_config_dir,
+)
 
 
 @asynccontextmanager
@@ -205,6 +220,17 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
                 "data": {"run_ids": [run.id for run in recovered_runs]},
             },
         )
+    from app.agent_team.coordinator import get_agent_team_coordinator
+
+    recovered_team_runs = get_agent_team_coordinator().recover_after_restart()
+    if recovered_team_runs:
+        log.info(
+            "agent_team_runs_recovered_after_restart",
+            extra={
+                "msg": "后端启动时已将遗留 Agent Team 收敛为 cancelled",
+                "data": {"count": recovered_team_runs},
+            },
+        )
     latest_runs = get_conversation_run_service().list_latest_runs()
     get_terminal_session_service().initialize()
     try:
@@ -263,6 +289,16 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
                 },
             )
     set_agent_registry(agent_registry)
+    team_registry = AgentTeamConfigurationRegistry()
+    team_configuration_service = AgentTeamConfigurationService(registry=team_registry)
+    team_configuration_service.load_directory("system", system_agent_team_config_dir())
+    for workspace in get_workspace_service().list_workspaces():
+        team_configuration_service.load_directory(
+            workspace.root_path,
+            workspace_agent_team_config_dir(workspace.root_path),
+        )
+    set_agent_team_configuration_service(team_configuration_service)
+    set_agent_team_registry(team_registry)
     tool_system = ToolSystem.build_tool_system()
     set_tool_system(tool_system)
     set_runtime(
@@ -283,6 +319,9 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
             HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
             try:
+                from app.agent_team.coordinator import get_agent_team_coordinator
+
+                get_agent_team_coordinator().shutdown()
                 await get_conversation_run_executor().close()
             finally:
                 try:

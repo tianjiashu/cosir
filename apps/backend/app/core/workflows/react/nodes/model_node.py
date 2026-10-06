@@ -1,7 +1,7 @@
 """ReAct-like 工作流的模型节点（``_model_node``）。
 
 本模块只承载「模型节点」单一职责：流式消费模型输出并决定下一步动作。节点从运行上下文
-取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量写入 workflow custom
+    取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量写入 workflow custom
 stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContextManager`` 累积并收口成完整
 ``AIMessage``），根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大
 步数终止。run 状态变更经 ``WorkflowOperations`` 落到 ``ConversationRun``（唯一事实源）。
@@ -344,8 +344,21 @@ async def _model_node(state: ReactGraphState) -> dict:
         }
 
     if finish_reason in Constant.Workflow.NORMAL_FINISH_REASONS and ai_message.content:
-        # 没有工具调用且 Provider 明确报告正常结束 → 最终回答。
+        # 没有工具调用且 Provider 明确报告正常结束 → 普通最终文本，必要时继续走结构化收口。
         final_answer = ai_message.content if isinstance(ai_message.content, str) else None
+        if rc.structured_output is not None and ai_message.content:
+            # 普通最终答复作为结构化节点的上下文候选；这里只交接控制流，不提前完成 Run。
+            return {
+                "step_count": step_count,
+                "requested_tool": False,
+                "continue_model": False,
+                "structured_output_requested": True,
+                "final_response": False,
+                "terminal": False,
+                "instruction": "",
+                "final_text": content_to_text(ai_message.content),
+                "tool_call_lifecycle": tool_call_lifecycle,
+            }
         completed_run = operations.complete_run_if_running(
             rc.usage_stats, final_output=final_answer
         )

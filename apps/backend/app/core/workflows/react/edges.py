@@ -25,6 +25,8 @@ def _should_continue(state: ReactGraphState) -> str:
 
     if state.terminal or state.final_response:
         return END
+    if state.structured_output_requested:
+        return "structured_output"
     if state.continue_model:
         return "model"
     if state.requested_tool:

@@ -1,7 +1,7 @@
 """默认 ReAct-like 工作流编排，由 LangGraph StateGraph 驱动。
 
-本模块是工作流的唯一编排入口：构建并编译 graph（``model`` / ``tools`` / ``observe`` 三个节点
-+ 条件边），以 LangGraph 状态流驱动图执行；节点产生的模型、工具和终态事实由
+本模块是工作流的唯一编排入口：构建并编译包含 ``model`` / ``tools`` / ``observe`` /
+``structured_output`` 的 graph，以 LangGraph 状态流驱动图执行；节点产生的模型、工具和终态事实由
 ``RuntimeOperations`` 写入 canonical conversation state，Transport 只订阅该事实。
 graph 编译时挂既有 checkpointer，由 LangGraph 负责控制流状态持久化。
 
@@ -15,7 +15,7 @@ from collections.abc import Iterable
 from time import perf_counter
 from typing import Any, cast
 
-from langchain_core.language_models import BaseChatModel
+from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
@@ -71,15 +71,21 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 延迟导入节点，打破 nodes 子包与 react 包之间的循环导入：
         # nodes.model_node -> react.state/runtime_config -> react.__init__
         # -> react.workflow -> nodes
+        from app.core.workflows.react.nodes import (
+            _model_node,
+            _observe_node,
+            _structured_output_node,
+            _tools_node,
+        )
         from app.core.workflows.react.nodes.agent_team_confirmation_wait_node import (
             agent_team_confirmation_wait_node,
         )
-        from app.core.workflows.react.nodes import _model_node, _observe_node, _tools_node
 
         builder = StateGraph(ReactGraphState)
         builder.add_node("model", _model_node)
         builder.add_node("tools", _tools_node)
         builder.add_node("observe", _observe_node)
+        builder.add_node("structured_output", _structured_output_node)
         builder.add_node("agent_team_wait", agent_team_confirmation_wait_node)
         builder.add_edge(START, "model")
         # 超配额拦截收口在 model 节点（发起推理前 step_count > max_steps 直接终态）。
@@ -89,9 +95,11 @@ class ReactLikeWorkflow(AgentWorkflow):
             {
                 "tools": "tools",
                 "model": "model",
+                "structured_output": "structured_output",
                 END: END,
             },
         )
+        builder.add_edge("structured_output", END)
         # tools 执行后进入 observe；取消/终态分支直接 END，不进 observe 避免多余推理。
         builder.add_conditional_edges("tools", _after_tools, {"observe": "observe", END: END})
         # observe 判定后回 model 继续推理、挂起等待 Team 确认，或达错误上限终态 END。
@@ -383,7 +391,8 @@ class ReactLikeWorkflow(AgentWorkflow):
         runtime_config = RuntimeConfig(
             operations=operations,
             run=run,
-            model=cast(BaseChatModel, bound_model),
+            model=cast(Runnable, bound_model),
+            structured_output=agent_profile.structured_output,
             start_time=perf_counter(),
             usage_stats=ConversationRunUsageStats(),
             langfuse_trace_id=langfuse_trace_id,

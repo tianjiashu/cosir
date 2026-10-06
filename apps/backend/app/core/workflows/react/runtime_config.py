@@ -8,8 +8,9 @@ state 随执行累积并写入 checkpoint；``RuntimeConfig`` 含不可序列化
 
 from dataclasses import dataclass, field
 
-from langchain_core.language_models import BaseChatModel
+from langchain_core.runnables import Runnable
 
+from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.workflow_operations import WorkflowOperations
@@ -28,7 +29,9 @@ class RuntimeConfig:
     Attributes:
         operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新能力。
         run: 当前执行的 Conversation Run 记录，节点经它写入 run 状态（单一事实来源）。
-        model: 已绑定工具的 LangChain chat model 实例，供 model 节点推理。
+        model: 根据 Task 冻结工具 schema 绑定的 Runnable；无工具时为基础模型。结构化输出节点
+            在同一模型上临时绑定 JSON response_format，保留请求中的工具 schema。
+        structured_output: 本次 Agent Run 冻结的可选最终 JSON Schema 契约。
         start_time: graph 开始执行的 ``time.perf_counter()`` 时间戳（由 ``ReactLikeWorkflow.run``
             写入）。**当前无读取方**：耗时统计不在 workflow 内计算，字段保留待用。
         usage_stats: run 级 token 累加器；model 节点在每次模型调用后把 ``usage_metadata``
@@ -47,7 +50,8 @@ class RuntimeConfig:
 
     operations: WorkflowOperations
     run: ConversationRunRecord
-    model: BaseChatModel
+    model: Runnable
+    structured_output: StructuredOutputSpec | None = None
     start_time: float = 0.0
     usage_stats: ConversationRunUsageStats = field(default_factory=ConversationRunUsageStats)
     langfuse_trace_id: str | None = None

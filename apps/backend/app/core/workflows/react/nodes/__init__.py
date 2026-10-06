@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from app.core.workflows.react.node_helper import _finalize_max_steps
     from app.core.workflows.react.nodes.model_node import _model_node
     from app.core.workflows.react.nodes.observation_node import _observe_node
+    from app.core.workflows.react.nodes.structured_output_node import _structured_output_node
     from app.core.workflows.react.nodes.tools_node import _tools_node
 
 
@@ -47,15 +48,23 @@ def __getattr__(name: str) -> Any:
         from app.core.workflows.react.nodes.observation_node import _observe_node
 
         return _observe_node
+    if name == "_structured_output_node":
+        from app.core.workflows.react.nodes.structured_output_node import (
+            _structured_output_node,
+        )
+
+        return _structured_output_node
     if name == "_tools_node":
         from app.core.workflows.react.nodes.tools_node import _tools_node
 
         return _tools_node
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+
 __all__ = [
     "_finalize_max_steps",
     "_model_node",
     "_observe_node",
+    "_structured_output_node",
     "_tools_node",
 ]

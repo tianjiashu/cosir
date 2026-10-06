@@ -505,11 +505,16 @@ class TaskService:
     def _delete_task_locked(self, task_id: int) -> TaskDeletionResult:
         """在已持有 workspace 闸门时删除任务树，不触发附件清理。"""
 
+        task_ids = self._collect_task_tree_ids(task_id)
+        # 先发送取消信号，再取得 task 闸门；节点 executor 需要拿同一闸门完成收尾，
+        # 不能在持有闸门后等待它，否则删除路径会自锁。
+        from app.agent_team.coordinator import get_agent_team_coordinator
+
+        get_agent_team_coordinator().cancel_for_task_ids(task_ids)
         locked_ids = self._collect_task_ancestor_ids(task_id) | {task_id}
         with ExitStack() as stack:
             for current_id in sorted(locked_ids):
                 stack.enter_context(self._task_register.get_or_create(current_id).operation(timeout=10))
-            task_ids = self._collect_task_tree_ids(task_id)
             for current_id in sorted(task_ids - locked_ids):
                 stack.enter_context(self._task_register.get_or_create(current_id).operation(timeout=10))
                 locked_ids.add(current_id)
