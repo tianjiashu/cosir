@@ -257,8 +257,12 @@ def build_invalid_tool_call_repair_message(
 class ToolCallLifecycleManager(BaseModel):
     """工具调用生命周期的 LangGraph state 与事件发射门面。
 
-    state 中保存可执行/可见的 ``calls``、供协议闭合使用的隐藏 ``blocked_calls`` 和本 Run
-    的 ``allows_tools``。所有状态方法都返回深拷贝后的新 manager，避免节点继续持有旧快照；
+    state 中保存可执行/可见的两条调用集合——``valid_calls``（参数合法、可执行的调用）与
+    ``invalid_calls``（参数非法、已挂载 ``invalid_detail`` 的调用），供协议闭合使用的隐藏
+    ``blocked_calls``，以及本 Run 的 ``allows_tools``。调用的合法性只在 ``create`` / ``classify``
+    阶段一次性裁定，因此 ``valid_calls`` 与 ``invalid_calls`` 各自只在内部演化状态、不跨字典搬移
+    （``classify`` 命中非法集合的调用会直接落到 ``invalid_calls``）。所有状态方法都返回深拷贝后的
+    新 manager，避免节点继续持有旧快照；
     调用节点必须将返回值放入返回的
     state patch_write。事件发射和模型上下文写回是方法的运行期副作用，依赖从当前 LangGraph
     execution context 解析，不会被 Pydantic 或 LangGraph 序列化。
@@ -270,7 +274,8 @@ class ToolCallLifecycleManager(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    calls: dict[str, ToolCallLifecycleRecord] = Field(default_factory=dict)
+    valid_calls: dict[str, ToolCallLifecycleRecord] = Field(default_factory=dict)
+    invalid_calls: dict[str, ToolCallLifecycleRecord] = Field(default_factory=dict)
     blocked_calls: dict[str, ToolCallLifecycleRecord] = Field(default_factory=dict)
     allows_tools: tuple[str, ...] = ()
 
@@ -281,27 +286,27 @@ class ToolCallLifecycleManager(BaseModel):
 
     @property
     def invalid_count(self) -> int:
-        """返回已挂 ``invalid_detail`` 的非法调用数量。"""
+        """返回非法调用数量（即 ``invalid_calls`` 的条目数）。"""
 
-        return sum(1 for record in self.calls.values() if record.invalid_detail is not None)
+        return len(self.invalid_calls)
 
     @property
     def has_call(self) -> bool:
         """返回本快照是否登记了任意工具调用（合法或非法）。"""
 
-        return len(self.calls) > 0
+        return bool(self.valid_calls) or bool(self.blocked_calls)
 
     @property
     def invalid_tools(self) -> list[ToolCallLifecycleRecord]:
-        """返回全部挂 ``invalid_detail`` 的非法调用记录。"""
+        """返回全部非法调用记录（``invalid_calls`` 全集）。"""
 
-        return [record for record in self.calls.values() if record.invalid_detail is not None]
+        return list(self.invalid_calls.values())
 
     @property
     def valid_tools(self) -> list[ToolCallLifecycleRecord]:
-        """返回全部合法工具调用记录。"""
+        """返回全部合法工具调用记录（``valid_calls`` 全集）。"""
 
-        return [record for record in self.calls.values() if record.invalid_detail is None]
+        return list(self.valid_calls.values())
 
     @property
     def blocked_tool_calls(self) -> list[ToolCallLifecycleRecord]:
@@ -362,7 +367,8 @@ class ToolCallLifecycleManager(BaseModel):
                 not isinstance(call_id, str)
                 or not call_id
                 or not self._valid_tool_name(tool_name)
-                or call_id in updated.calls
+                or call_id in updated.valid_calls
+                or call_id in updated.invalid_calls
                 or call_id in updated.blocked_calls
             ):
                 continue
@@ -384,7 +390,7 @@ class ToolCallLifecycleManager(BaseModel):
                     presentation=copy.deepcopy(presentation),
                 )
             )
-            updated.calls[call_id] = ToolCallLifecycleRecord(
+            updated.valid_calls[call_id] = ToolCallLifecycleRecord(
                 tool_call_id=call_id,
                 tool_name=tool_name,
                 presentation=presentation,
@@ -526,14 +532,14 @@ class ToolCallLifecycleManager(BaseModel):
         # 起手即复制后，迁移过程直接在该快照上推进即可，无需逐步复制。
         updated = self._copy()
         for tool_call in tool_calls:
-            if tool_call.call_id not in updated.calls:
+            if tool_call.call_id not in updated.valid_calls:
                 updated = updated.create(
                     task_id=task_id,
                     run_id=run_id,
                     step_id=step_id,
                     raw_tool_calls=[{"id": tool_call.call_id, "name": tool_call.tool_name}],
                 )
-            record = updated.calls.get(tool_call.call_id)
+            record = updated.valid_calls.get(tool_call.call_id)
             if record is None or record.status != "pending":
                 continue
             updated._emit_status_safe(
@@ -544,8 +550,8 @@ class ToolCallLifecycleManager(BaseModel):
                 to_status="running",
                 args=tool_call.arguments,
             )
-            updated.calls[tool_call.call_id].status = "running"
-            updated.calls[tool_call.call_id].args = copy.deepcopy(tool_call.arguments)
+            updated.valid_calls[tool_call.call_id].status = "running"
+            updated.valid_calls[tool_call.call_id].args = copy.deepcopy(tool_call.arguments)
         return updated
 
     def classify(
@@ -596,7 +602,8 @@ class ToolCallLifecycleManager(BaseModel):
         })
         updated = self._copy()
         for call_id, tool_name in blocked_by_id.items():
-            updated.calls.pop(call_id, None)
+            updated.valid_calls.pop(call_id, None)
+            updated.invalid_calls.pop(call_id, None)
             updated.blocked_calls[call_id] = ToolCallLifecycleRecord(
                 tool_call_id=call_id,
                 tool_name=tool_name,
@@ -630,13 +637,16 @@ class ToolCallLifecycleManager(BaseModel):
                 "args": invalid_tc.get("args"),
                 "error": invalid_tc.get("error"),
             }
-            existing = updated.calls.get(itc_id)
+            existing = updated.valid_calls.get(itc_id)
             if existing is not None:
                 existing.invalid_detail = detail
                 # 非法调用从未真正执行：若 begin 已置 running 则回退 pending，
                 # 使其进入 observe 的非法结算分支而非被当作合法结果分发。
                 if existing.status == "running":
                     existing.status = "pending"
+                # 命中非法集合的调用整体归属 invalid_calls，与合法调用物理隔离。
+                updated.invalid_calls[itc_id] = existing
+                updated.valid_calls.pop(itc_id, None)
                 continue
             # 流式期未建对应条目、但 id 已知的非法调用：合成 pending 记录，
             # 使其经 observe 统一结算为 failed 并注入修复提示。
@@ -646,7 +656,7 @@ class ToolCallLifecycleManager(BaseModel):
                 if isinstance(tool_name, str) and tool_name
                 else {}
             )
-            updated.calls[itc_id] = ToolCallLifecycleRecord(
+            updated.invalid_calls[itc_id] = ToolCallLifecycleRecord(
                 tool_call_id=itc_id,
                 tool_name=tool_name or "",
                 presentation=presentation,
@@ -698,17 +708,20 @@ class ToolCallLifecycleManager(BaseModel):
 
         updated = self._copy()
 
-        for record in updated.calls.values():
-            if record is None or record.status not in {"pending", "running"}:
-                continue
-            updated._emit_status_safe(
-                task_id=task_id,
-                run_id=run_id,
-                step_id=step_id,
-                call_id=record.tool_call_id,
-                to_status="cancelled",
-            )
-            updated.calls[record.tool_call_id].status = "cancelled"
+        # 合法与非法调用都可能处于 pending/running（如流式期 create 后模型取消），
+        # 两条集合都要收口，避免前端留下悬空 part。
+        for calls in (updated.valid_calls, updated.invalid_calls):
+            for record in list(calls.values()):
+                if record is None or record.status not in {"pending", "running"}:
+                    continue
+                updated._emit_status_safe(
+                    task_id=task_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    call_id=record.tool_call_id,
+                    to_status="cancelled",
+                )
+                calls[record.tool_call_id].status = "cancelled"
         return updated
 
     def fail_invalid_tools(
@@ -796,7 +809,7 @@ class ToolCallLifecycleManager(BaseModel):
         """
 
         updated = self._copy()
-        record = updated.calls.get(call_id)
+        record = updated.invalid_calls.get(call_id)
         if record is None or record.status != "pending":
             return updated
         updated._emit_status_safe(
@@ -807,7 +820,7 @@ class ToolCallLifecycleManager(BaseModel):
             to_status="failed",
             error=status_hint,
         )
-        updated.calls[call_id].status = "failed"
+        updated.invalid_calls[call_id].status = "failed"
         return updated
 
     def settle(
@@ -854,15 +867,15 @@ class ToolCallLifecycleManager(BaseModel):
         observation = _summary_to_observation(summary)
         event_status = _event_status(observation.status)
         call_id = summary["tool_call_id"]
-        existing = self.calls.get(call_id)
+        existing = self.valid_calls.get(call_id)
         if existing is not None and existing.status in {"completed", "failed", "cancelled"}:
             return self._copy(), event_status
         updated = self._copy()
-        record = updated.calls.get(call_id)
+        record = updated.valid_calls.get(call_id)
         if record is None:
             # 正常路径一定先 create；保留记录可让恢复后的 state 反映实际终态。
             presentation = self._presentation_for(summary["tool_name"])
-            updated.calls[call_id] = ToolCallLifecycleRecord(
+            updated.valid_calls[call_id] = ToolCallLifecycleRecord(
                 tool_call_id=call_id,
                 tool_name=summary["tool_name"],
                 status="pending",
@@ -870,7 +883,7 @@ class ToolCallLifecycleManager(BaseModel):
             )
         runtime_context: RuntimeContextManager = _runtime_context()
         operations: WorkflowOperations = _runtime_config().operations
-        record = updated.calls[call_id]
+        record = updated.valid_calls[call_id]
         record.status = event_status
         result_display_data = _ui_data(summary)
         status_hint = _ui_error(summary, event_status)
@@ -944,6 +957,8 @@ class ToolCallLifecycleManager(BaseModel):
         tool_error_count = inherited_error_count
         error_count = 0
         for summary in summaries:
+            if summary.get("tool_call_id") in lifecycle.blocked_calls.keys():
+                continue
             lifecycle, event_status = lifecycle.settle(
                 task_id=task_id,
                 run_id=run_id,

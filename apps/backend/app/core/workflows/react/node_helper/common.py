@@ -2,12 +2,11 @@
 
 本模块只承载「各节点按需复用」的公共原语，不包含任何单节点专属逻辑（``_runtime_config``
 为 model / tools / observe 与工具调用生命周期共用；``_runtime_context`` 为 model / observe
-与工具调用生命周期共用；``terminal_state`` 为 model 与超步数收口共用）：
+与工具调用生命周期共用；``route_state`` 为 model、结构化输出与超步数收口共用）：
 
 - ``_runtime_config`` / ``_runtime_context``：从 LangGraph 运行上下文取运行时配置与
   task 级上下文。
-- ``terminal_state``：统一构造终态 state patch_write，消除各节点
-  重复的 ``{"terminal": True, ...}`` 字典字面量。
+- ``route_state``：构造带模型步骤号和动态下一节点的 state patch。
 
 节点各自的数据处理辅助不放这里；``content → text`` 归一统一收口于
 ``app.utils.message_content.content_to_text``（原 AIMessageChunk 抽取与 runtime_context_manager
@@ -19,6 +18,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from langgraph.config import get_config
+
+from app.core.workflows.react.worflow_state.route import ReactRoute
 
 if TYPE_CHECKING:
     from app.core.context.runtime_context_manager import RuntimeContextManager
@@ -52,26 +53,20 @@ def _runtime_context() -> RuntimeContextManager:
     return get_config()["configurable"]["runtime_context"]
 
 
-def terminal_state(
+def route_state(
     step_count: int,
-    *,
-    requested_tool: bool = False,
-    final_response: bool = False,
+    next_node: ReactRoute,
 ) -> dict[str, Any]:
-    """构造统一的终态 state patch_write（graph 走到 END 用）。
+    """构造带动态路由的 state 增量。
 
-    ``model`` 节点的各终态分支与 ``_finalize_max_steps`` 都要写同一组硬字段
-    （``step_count`` / ``requested_tool`` / ``final_response`` / ``terminal``），手写易错且
-    各处分歧；本函数把它收口为单一来源。
+    仅动态转移需要写入 ``next_node``；固定转移由 StateGraph 的普通边表达。
 
     参数:
         step_count: 当前步编号，直接落入 patch_write。
-        requested_tool: 本步是否请求了工具，默认 ``False``。
-        final_response: 是否产出终态文本，默认 ``False``。
+        next_node: 动态下一节点或 ``ReactRoute.END``。
 
     返回:
-        可直接 ``return`` 给 LangGraph 合并的 state patch_write 字典（``terminal`` 恒为
-        ``True``）；需要附加终态字段（如 ``final_text``）的调用方在其结果上叠加。
+        可直接返回给 LangGraph 合并的 state 增量。
 
     异常:
         无。
@@ -81,7 +76,5 @@ def terminal_state(
     """
     return {
         "step_count": step_count,
-        "requested_tool": requested_tool,
-        "final_response": final_response,
-        "terminal": True,
+        "next_node": next_node,
     }

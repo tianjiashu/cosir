@@ -5,7 +5,7 @@ from __future__ import annotations
 from langgraph.types import interrupt
 
 
-def agent_team_confirmation_wait_node(_state: object) -> dict[str, bool]:
+def agent_team_confirmation_wait_node(_state: object) -> dict[str, object]:
     """在用户确认 Team 前挂起主 Agent，并在恢复后回到模型节点。
 
     Agent Team 预览已经作为工具结果写入主 Agent context 后，观察节点会先把主 Run
@@ -17,7 +17,7 @@ def agent_team_confirmation_wait_node(_state: object) -> dict[str, bool]:
         _state: 当前 ReAct graph state。该节点不读取业务字段，断点由 LangGraph 保存。
 
     返回:
-        主 Agent 被恢复后清除等待标记，使条件边继续进入 ``model``。
+        空 state 增量；恢复后由固定图边继续进入 ``model``。
 
     异常:
         LangGraph 初次执行时会通过 ``interrupt`` 挂起当前节点；调用方不应吞掉该控制流。
@@ -27,4 +27,4 @@ def agent_team_confirmation_wait_node(_state: object) -> dict[str, bool]:
     """
 
     interrupt({"reason": "agent_team_waiting_confirmation"})
-    return {"agent_team_confirmation_waiting": False}
+    return {}

@@ -33,8 +33,9 @@ from app.models.conversation_run_failure import (
 from app.service.depends import get_terminal_session_service
 
 from ..agent_workflow import AgentWorkflow, build_checkpointer
-from .edges import _after_observe, _after_tools, _should_continue
+from .edges import _route_target
 from .runtime_config import RuntimeConfig
+from .worflow_state.route import ReactRoute
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -91,22 +92,26 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 超配额拦截收口在 model 节点（发起推理前 step_count > max_steps 直接终态）。
         builder.add_conditional_edges(
             "model",
-            _should_continue,
+            _route_target,
             {
-                "tools": "tools",
-                "model": "model",
-                "structured_output": "structured_output",
+                ReactRoute.TOOLS.value: "tools",
+                ReactRoute.MODEL.value: "model",
+                ReactRoute.STRUCTURED_OUTPUT.value: "structured_output",
                 END: END,
             },
         )
         builder.add_edge("structured_output", END)
-        # tools 执行后进入 observe；取消/终态分支直接 END，不进 observe 避免多余推理。
-        builder.add_conditional_edges("tools", _after_tools, {"observe": "observe", END: END})
-        # observe 判定后回 model 继续推理、挂起等待 Team 确认，或达错误上限终态 END。
+        # 工具结果统一交给 observe 收口；错误上限与 Team 等待由 observe 写入动态路由。
+        builder.add_edge("tools", "observe")
+        # observe 判定后回 model、挂起等待 Team 确认，或结束工作流。
         builder.add_conditional_edges(
             "observe",
-            _after_observe,
-            {"model": "model", "agent_team_wait": "agent_team_wait", END: END},
+            _route_target,
+            {
+                ReactRoute.MODEL.value: "model",
+                ReactRoute.AGENT_TEAM_WAIT.value: "agent_team_wait",
+                END: END,
+            },
         )
         # 等待节点初次执行时通过 interrupt 保存断点；恢复后继续回到模型节点读取 TeamResult。
         builder.add_edge("agent_team_wait", "model")
@@ -446,16 +451,12 @@ class ReactLikeWorkflow(AgentWorkflow):
             initial_state = ReactGraphState(
                 step_count=0,
                 tool_error_count=0,
-                requested_tool=False,
-                continue_model=False,
-                final_response=False,
-                terminal=False,
+                next_node=ReactRoute.MODEL,
                 instruction="",
                 max_steps=agent_profile.max_steps,
                 final_text="",
                 last_tool_results={},
                 terminal_sessions={},
-                agent_team_confirmation_waiting=False,
             )
             # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动
             # 一个新的 graph input，即使 thread_id 相同也不等价于 resume。

@@ -11,8 +11,9 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.workflows.react.node_helper.common import (
     _runtime_config,
-    terminal_state,
+    route_state,
 )
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 # 步数耗尽时写给父 Agent / 用户的默认可见文本（英文，与面向模型的文本约定一致）。
@@ -66,7 +67,7 @@ async def _finalize_max_steps(
                 "data": {"step_id": step_id, "run_id": run_id},
             },
         )
-        return _terminal_state(effective_step_count)
+        return _end_state(effective_step_count)
 
     event_data = {"final_text": Constant.Workflow.MAX_STEPS_FINAL_TEXT}
     log.warning(
@@ -83,14 +84,14 @@ async def _finalize_max_steps(
     )
     # 失败原因与终态由 RuntimeOperations 的 canonical writer 原子落定；附加诊断
     # 数据只进入结构化日志，不重新引入通用 runtime event payload。
-    return _terminal_state(effective_step_count)
+    return _end_state(effective_step_count)
 
 
-def _terminal_state(step_count: int) -> dict[str, Any]:
-    """构造最大步数收口函数返回的终态 state patch_write。
+def _end_state(step_count: int) -> dict[str, Any]:
+    """构造最大步数收口函数返回的结束路由 state 增量。
 
-    复用 ``common.terminal_state`` 的终态硬字段（与 ``model_node`` 各终态分支同口径），并补上
-    ``final_text``（步数耗尽没有最终回答，写给父 Agent / 用户的可见失败说明，见
+    复用 ``common.route_state`` 的结束路由，并补上 ``final_text``（步数耗尽没有最终回答，
+    写给父 Agent / 用户的可见失败说明，见
     ``_MAX_STEPS_FINAL_TEXT``）。
 
     参数:
@@ -107,6 +108,6 @@ def _terminal_state(step_count: int) -> dict[str, Any]:
     """
 
     return {
-        **terminal_state(step_count),
+        **route_state(step_count, ReactRoute.END),
         "final_text": Constant.Workflow.MAX_STEPS_FINAL_TEXT,
     }

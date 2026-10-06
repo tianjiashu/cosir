@@ -14,8 +14,9 @@ from app.config.logging.logger import log
 from app.core.workflows.react.node_helper.common import (
     _runtime_config,
     _runtime_context,
-    terminal_state,
+    route_state,
 )
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.vision_input import resolve_messages_for_model
 from app.models.conversation_run_failure import run_failure_message
@@ -127,8 +128,9 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
         state: 当前 graph state；只读取模型步骤号，不把结构化结果写入 state。
 
     返回:
-        LangGraph state 增量。成功时标记最终响应；失败或取消时标记终止。JSON 内容不进入
-        graph state、RuntimeContextManager 或对话消息。
+        指向 ``END`` 的 LangGraph state 增量。Run 的完成、失败或取消状态由
+        ``RuntimeOperations`` 写入；JSON 内容不进入 graph state、RuntimeContextManager
+        或对话消息。
 
     异常:
         模型调用、图片解析或持久化异常向上抛出，由工作流统一落定失败 Run。
@@ -165,7 +167,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                 usage_stats=runtime.usage_stats,
                 final_output="user_cancelled",
             )
-            return terminal_state(state.step_count)
+            return route_state(state.step_count, ReactRoute.END)
 
         instruction = _request_instruction(
             spec.name,
@@ -184,7 +186,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                 usage_stats=runtime.usage_stats,
                 final_output="user_cancelled",
             )
-            return terminal_state(state.step_count)
+            return route_state(state.step_count, ReactRoute.END)
 
         final_output, retry_feedback = _validate_response(response, spec.json_schema)
         if final_output is not None:
@@ -200,7 +202,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                         "data": {"run_id": runtime.run.id, "attempt": attempt},
                     },
                 )
-                return terminal_state(state.step_count)
+                return route_state(state.step_count, ReactRoute.END)
             log.info(
                 "structured_output_completed",
                 extra={
@@ -213,7 +215,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                     },
                 },
             )
-            return terminal_state(state.step_count, final_response=True)
+            return route_state(state.step_count, ReactRoute.END)
 
         log.warning(
             "structured_output_validation_failed",
@@ -254,4 +256,4 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                 },
             },
         )
-    return terminal_state(state.step_count)
+    return route_state(state.step_count, ReactRoute.END)

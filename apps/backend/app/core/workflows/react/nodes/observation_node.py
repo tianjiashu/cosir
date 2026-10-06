@@ -31,7 +31,8 @@ from typing import Any
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM
-from app.core.workflows.react.node_helper.common import _runtime_config, _runtime_context
+from app.core.workflows.react.node_helper.common import _runtime_config
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
@@ -70,12 +71,8 @@ async def _observe_node(state: ReactGraphState) -> dict:
         state: 当前 graph state，含本批 ``last_tool_results``、继承的 ``tool_error_count``。
 
     返回:
-        需要合并回 graph state 的增量（各分支均回写 ``tool_call_lifecycle``）：
-        空结果且无修复提示时返回 ``{"tool_call_lifecycle"}``（保留继承计数）；仅修复提示时
-        返回 ``{"tool_error_count", "tool_call_lifecycle"}``；错误上限分支（含失败落定竞态
-        落空）返回 ``{"tool_error_count", "terminal": True, "tool_call_lifecycle"}``；
-        正常分支返回 ``{"tool_error_count", "tool_call_lifecycle"}``，供 ``_after_observe``
-        路由回 ``model``。
+        需要合并回 graph state 的增量。所有分支均回写动态 ``next_node`` 与工具调用生命周期；
+        路由值为 ``model``、``agent_team_wait`` 或 ``end``。
 
     异常:
         RuntimeError: ``state.tool_call_lifecycle`` 缺失（应由 ``model`` 节点写入）。
@@ -100,38 +97,6 @@ async def _observe_node(state: ReactGraphState) -> dict:
     lifecycle = state.tool_call_lifecycle
     if lifecycle is None:
         raise RuntimeError("tool_call_lifecycle is required before observing tool results")
-    expected_call_ids = {
-        str(call_id) for call_id in state.last_tool_results.get("expected_call_ids", []) if call_id
-    }
-    if expected_call_ids:
-        accepted_summaries: list[dict[str, Any]] = []
-        observed_call_ids: set[str] = set()
-        unexpected_call_ids: set[str] = set()
-        duplicate_call_ids: set[str] = set()
-        for observation in observations:
-            call_id = str(observation.get("tool_call_id") or "")
-            if call_id not in expected_call_ids:
-                unexpected_call_ids.add(call_id or "<empty>")
-                continue
-            if call_id in observed_call_ids:
-                duplicate_call_ids.add(call_id)
-                continue
-            observed_call_ids.add(call_id)
-            accepted_summaries.append(observation)
-        if unexpected_call_ids or duplicate_call_ids:
-            log.error(
-                "observe_node_invalid_tool_result_ids",
-                extra={
-                    "msg": "工具观察结果包含多余或重复的 tool_call_id，已丢弃异常结果",
-                    "data": {
-                        "step_id": step_id,
-                        "unexpected_count": len(unexpected_call_ids),
-                        "duplicate_count": len(duplicate_call_ids),
-                    },
-                },
-            )
-        observations = accepted_summaries
-
     # 1. 结果分发：终态事件 + 模型上下文 + 连续失败计数重算。
     dispatch = lifecycle.settle_batch(
         task_id=task_id,
@@ -143,43 +108,13 @@ async def _observe_node(state: ReactGraphState) -> dict:
     lifecycle = dispatch.lifecycle
     tool_error_count = dispatch.tool_error_count
     waiting_for_team_confirmation = _contains_agent_team_preview(observations)
+
+
     if waiting_for_team_confirmation:
-        # 先把主 Run 收敛为可恢复的 cancelled，再进入 LangGraph interrupt。用户确认后，
-        # coordinator 通过既有 resume 入口恢复同一个 Run；未确认时不会留下 running Run。
-        operations.cancel_run_if_running(
-            end_reason="agent_team_waiting_confirmation",
-            final_output="Agent Team 执行方案已生成，等待用户确认。",
-        )
-
-    observed_call_ids = {
-        str(summary["tool_call_id"]) for summary in observations if summary.get("tool_call_id")
-    }
-    missing_call_ids = expected_call_ids - observed_call_ids
-    if missing_call_ids:
-        # 工具执行层理论上为每个 approved call 返回 observation；若异常丢失结果，先补齐
-        # ToolMessage 协议占位，再允许延迟 SystemMessage 入上下文，避免仍有悬空调用。
-        log.error(
-            "observe_node_missing_tool_results",
-            extra={
-                "msg": "工具观察结果缺少已批准的工具调用，先补齐协议占位",
-                "data": {
-                    "step_id": step_id,
-                    "expected_count": len(expected_call_ids),
-                    "observed_count": len(observed_call_ids),
-                    "missing_count": len(missing_call_ids),
-                },
-            },
-        )
-        _runtime_context().load_message()
-
-
-
-    if not observations:
-        # 仅修复提示（全非法调用）：不计数，交给 graph 回到 model 重试。
         return {
             "tool_error_count": tool_error_count,
             "tool_call_lifecycle": lifecycle,
-            "agent_team_confirmation_waiting": waiting_for_team_confirmation,
+            "next_node": ReactRoute.AGENT_TEAM_WAIT,
         }
 
     log.info(
@@ -213,8 +148,8 @@ async def _observe_node(state: ReactGraphState) -> dict:
             )
             return {
                 "tool_error_count": tool_error_count,
-                "terminal": True,
                 "tool_call_lifecycle": lifecycle,
+                "next_node": ReactRoute.END,
             }
         log.warning(
             "observe_node_error_limit",
@@ -231,13 +166,15 @@ async def _observe_node(state: ReactGraphState) -> dict:
         # 失败终态：错误上限时经 canonical writer 落定失败。
         return {
             "tool_error_count": tool_error_count,
-            "terminal": True,
             "tool_call_lifecycle": lifecycle,
+            "next_node": ReactRoute.END,
         }
 
     # 正常返回：把更新后的计数与 lifecycle 写回 state。
     return {
         "tool_error_count": tool_error_count,
         "tool_call_lifecycle": lifecycle,
-        "agent_team_confirmation_waiting": waiting_for_team_confirmation,
+        "next_node": (
+            ReactRoute.AGENT_TEAM_WAIT if waiting_for_team_confirmation else ReactRoute.MODEL
+        ),
     }

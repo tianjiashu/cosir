@@ -34,7 +34,7 @@ from app.core.tools.schemas import ToolCall
 from app.core.workflows.react.node_helper.common import (
     _runtime_config,
     _runtime_context,
-    terminal_state,
+    route_state,
 )
 from app.core.workflows.react.node_helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.react.node_helper.model_chunk import ModelChunkProcessor
@@ -43,6 +43,7 @@ from app.core.workflows.react.node_helper.streaming_part_state_machine import (
 )
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
 from app.core.workflows.react.worflow_state.state import ReactGraphState
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.vision_input import resolve_messages_for_model
 from app.models.conversation_task_context import TransportMetadata
 from app.utils.message_content import content_to_text
@@ -67,7 +68,7 @@ def _build_continuation_prompt(finish_reason: str | None) -> str | None:
 
     返回:
         追加到 canonical context 的 ``SystemMessage`` 文本；``length`` 类截断返回 ``None``，
-        表示本轮无需注入提示、直接由调用方经 ``continue_model`` 回到模型节点。
+        表示本轮无需注入提示、直接由调用方路由回模型节点。
 
     异常:
         无。
@@ -127,7 +128,7 @@ async def _model_node(state: ReactGraphState) -> dict:
           ``AIMessage(tool_calls) -> SystemMessage -> ToolMessage`` 的非法顺序）；缺失 ``id``
           的非法调用无法对齐，仅记 warning。
         - 模型没有工具调用时，只有 Provider 明确报告正常完成原因才标记最终回答；长度截断直接经
-          ``continue_model`` 回到模型节点由模型自行延续，缺失或未知完成原因还会额外追加一次继续
+          ``model`` 路由回到模型节点由模型自行延续，缺失或未知完成原因还会额外追加一次继续
           提示（见 ``_build_continuation_prompt``）。
 
     异常:
@@ -149,7 +150,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     run_id = operations.get_current_run().id
 
     step_count = state.step_count + 1
-    # 提前拦截：本次推理若已超配额（step_count > max_steps）
+    # =======================提前拦截：本次推理若已超配额（step_count > max_steps）=======================
     if step_count > state.max_steps:
         return await _finalize_max_steps(state, step_count=step_count)
     step_id = f"step-{step_count}"
@@ -163,6 +164,8 @@ async def _model_node(state: ReactGraphState) -> dict:
         )
         operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
         interrupt({"reason": "user_cancelled"})
+
+    #======================= 加载延迟系统消息=======================
     workspace_id = operations.get_current_workspace().id
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -207,6 +210,7 @@ async def _model_node(state: ReactGraphState) -> dict:
     )
     tool_call_lifecycle = state.tool_call_lifecycle
 
+    #======================= 模型调用=======================
     async for chunk in model.astream(messages):
         message_chunk = _runtime_context().add_message_chunk(
             chunk, stream_id=step_id, run_id=run_id
@@ -255,6 +259,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                 raw_tool_calls=raw_tool_calls,
             )
 
+    # =======================收口：本轮模型输出收口=======================
     parts.finish()
     ai_message: AIMessage = _runtime_context().flush_message_chunk(
         stream_id=step_id, run_id=run_id, mode="complete"
@@ -265,10 +270,8 @@ async def _model_node(state: ReactGraphState) -> dict:
     # 累加 usage_metadata 到 run 级共享累加器。
     rc.usage_stats.add_usage_metadata(getattr(ai_message, "usage_metadata", None))
 
-    # 把模型输出拆解为工具调用生命周期：合法调用置 running，可修复非法调用挂 invalid_detail
-    # （由 observe 节点统一结算并构造修复提示），未命中工具名的噪声仅记 warning。invalid
-    # 判定从 model_node 下沉到 ToolCallLifecycleManager，本节点不再分支处理，职责收敛为
-    # 「消费模型输出、决定工具/最终回答/非法输出」三类走向。
+
+    #======================= 区分合法与非法工具调用=======================
     invalid_tool_calls = getattr(ai_message, "invalid_tool_calls", None) or []
     tool_calls = [ToolCall.from_from_langchain(call) for call in ai_message.tool_calls]
     tool_call_lifecycle = tool_call_lifecycle.classify(
@@ -279,30 +282,6 @@ async def _model_node(state: ReactGraphState) -> dict:
         invalid_tool_calls=invalid_tool_calls,
     )
 
-    blocked_calls = tool_call_lifecycle.blocked_tool_calls
-    if blocked_calls:
-        for blocked_call in blocked_calls:
-            _runtime_context().add_message(
-                ToolMessage(
-                    content="This tool is disabled for the current run.Do not call again",
-                    tool_call_id=blocked_call.tool_call_id,
-                    name=blocked_call.tool_name,
-                ),
-                transport_metadata=TransportMetadata(status="cancelled"),
-            )
-        log.info(
-            "model_node_disabled_tools_blocked",
-            extra={
-                "msg": "本轮禁用工具调用已隐藏并闭合模型协议",
-                "data": {
-                    "task_id": task_id,
-                    "run_id": run_id,
-                    "step_id": step_id,
-                    "tool_names": sorted({record.tool_name for record in blocked_calls}),
-                    "count": len(blocked_calls),
-                },
-            },
-        )
 
     # 非法调用就地收口为 failed：返回的是新的生命周期快照（copy-on-write），必须写回局部
     # ``lifecycle`` 才能随返回值进入 graph state；丢弃它会让记录停在 pending。
@@ -331,14 +310,9 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     if tool_call_lifecycle.has_call:
         # 有任意工具调用（合法或非法）都进 tools 节点：合法调用执行，非法调用由 observe 结算。
-        # 不再区分 requested_tool / repair_requested —— observe 非终态即经 _after_observe
-        # 回流 model。
+        # 有工具调用时统一进入 tools；工具结果由 observe 决定是否回流 model。
         return {
-            "step_count": step_count,
-            "requested_tool": True,
-            "continue_model": False,
-            "final_response": False,
-            "terminal": False,
+            **route_state(step_count, ReactRoute.TOOLS),
             "instruction": ai_message.content if isinstance(ai_message.content, str) else "",
             "tool_call_lifecycle": tool_call_lifecycle,
         }
@@ -349,12 +323,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         if rc.structured_output is not None and ai_message.content:
             # 普通最终答复作为结构化节点的上下文候选；这里只交接控制流，不提前完成 Run。
             return {
-                "step_count": step_count,
-                "requested_tool": False,
-                "continue_model": False,
-                "structured_output_requested": True,
-                "final_response": False,
-                "terminal": False,
+                **route_state(step_count, ReactRoute.STRUCTURED_OUTPUT),
                 "instruction": "",
                 "final_text": content_to_text(ai_message.content),
                 "tool_call_lifecycle": tool_call_lifecycle,
@@ -370,7 +339,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                     "data": {"step_id": step_id, "run_id": rc.run.id},
                 },
             )
-            return terminal_state(step_count, requested_tool=False)
+            return route_state(step_count, ReactRoute.END)
         log.info(
             "model_node_final_response",
             extra={
@@ -379,7 +348,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         return {
-            **terminal_state(step_count, final_response=True, requested_tool=False),
+            **route_state(step_count, ReactRoute.END),
             "final_text": ai_message.content,
         }
 
@@ -405,22 +374,14 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         return {
-            "step_count": step_count,
-            "requested_tool": False,
-            "continue_model": True,
-            "final_response": False,
-            "terminal": False,
+            **route_state(step_count, ReactRoute.MODEL),
             "instruction": "",
         }
 
     #如果存在系统修复提示，重新进入model
     if task_space.has_deferred_system_messages():
         return {
-            "step_count": step_count,
-            "requested_tool": False,
-            "continue_model": True,
-            "final_response": False,
-            "terminal": False,
+            **route_state(step_count, ReactRoute.MODEL),
             "instruction": "",
         }
 
@@ -444,4 +405,4 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "data": {"step_id": step_id, "run_id": rc.run.id},
             },
         )
-    return terminal_state(step_count, requested_tool=False)
+    return route_state(step_count, ReactRoute.END)

@@ -113,7 +113,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
         需要合并回 graph state 的增量：
         - 无 ``running`` 调用（例如仅参数非法的 ``pending`` 调用）时短路返回：回写
           ``tool_call_lifecycle``，并把 ``last_tool_results`` 重置为结构完整的空摘要
-          （``{"instruction": ..., "observations": [], "expected_call_ids": []}``），使
+          （``{"instruction": ..., "observations": []}``），使
           ``observe`` 不重复结算上一批结果、也不因缺键崩溃；
         - 正常分支只回写 ``last_tool_results``（本批次工具观察的 ``dataclasses.asdict``
           投影，键名即执行层字段名 ``tool_call_id`` / ``display_data``，可落 checkpoint），
@@ -130,43 +130,84 @@ async def _tools_node(state: ReactGraphState) -> dict:
           受保护成员。
     """
 
+    # blocked_calls = tool_call_lifecycle.blocked_tool_calls
+    # if blocked_calls:
+    #     for blocked_call in blocked_calls:
+    #         _runtime_context().add_message(
+    #             ToolMessage(
+    #                 content="This tool is disabled for the current run.Do not call again",
+    #                 tool_call_id=blocked_call.tool_call_id,
+    #                 name=blocked_call.tool_name,
+    #             ),
+    #             transport_metadata=TransportMetadata(status="cancelled"),
+    #         )
+    #     log.info(
+    #         "model_node_disabled_tools_blocked",
+    #         extra={
+    #             "msg": "本轮禁用工具调用已隐藏并闭合模型协议",
+    #             "data": {
+    #                 "task_id": task_id,
+    #                 "run_id": run_id,
+    #                 "step_id": step_id,
+    #                 "tool_names": sorted({record.tool_name for record in blocked_calls}),
+    #                 "count": len(blocked_calls),
+    #             },
+    #         },
+    #     )
+
     rc = _runtime_config()  # 取运行时配置
     operations = rc.operations  # 领域操作
     lifecycle = state.tool_call_lifecycle
     task = operations.get_current_task()  # 任务（工具执行需要 task_id）
     task_id = task.id
+    step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
     if lifecycle is None:
         raise RuntimeError("tool_call_lifecycle is required before tools_node execution")
-    # 仅执行状态为 running 的合法调用；pending（参数非法）调用不执行，由 observe 节点统一结算。
-    approved_calls = [_to_tool_call(record) for record in lifecycle.valid_tools]
+
+    tool_run: ToolRunResult | None = None
     instruction = state.instruction
-    step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
+    blocked_observations = []
 
-    log.info(
-        "tools_node_resumed",
-        extra={
-            "msg": f"准备执行 {len(approved_calls)} 个工具调用，step_id={step_id}",
-            "data": {
-                "step_id": step_id,
-                "approved_count": len(approved_calls),
-                "instruction": instruction,
+    if lifecycle.blocked_calls:
+        blocked_observations = [ToolObservation(tool_name=call.tool_name, status="cancelled",
+                                   content="This tool is disabled for the current run.Do not call again",
+                                   retryable=False, tool_call_id=call.call_id, ) for call in
+                   lifecycle.blocked_calls.values()]
+
+    if lifecycle.valid_tools:
+
+        # 仅执行状态为 running 的合法调用；pending（参数非法）调用不执行，由 observe 节点统一结算。
+        approved_calls = [_to_tool_call(record) for record in lifecycle.valid_tools]
+
+        log.info(
+            "tools_node_resumed",
+            extra={
+                "msg": f"准备执行 {len(approved_calls)} 个工具调用，step_id={step_id}",
+                "data": {
+                    "step_id": step_id,
+                    "approved_count": len(approved_calls),
+                    "instruction": instruction,
+                },
             },
-        },
-    )
+        )
 
-    tool_run: ToolRunResult = await operations.run_tool_calls(
-        task_id, approved_calls, step_id, asyncio.get_running_loop()
+        tool_run = await operations.run_tool_calls(
+            task_id, approved_calls, step_id, asyncio.get_running_loop()
+        )
+
+    final_tool_run = ToolRunResult(
+        observations=blocked_observations + tool_run.observations if tool_run else blocked_observations
     )
 
     log.info(
         "tools_node_tool_run",
         extra={
             "msg": f"工具批次执行结果，step_id={step_id}",
-            "data": {"tool_run": dataclasses.asdict(tool_run)},
+            "data": {"tool_run": dataclasses.asdict(final_tool_run)},
         },
     )
 
-    observations:list[ToolObservation] = tool_run.observations  # 每个工具调用的观察结果
+    observations:list[ToolObservation] = final_tool_run.observations  # 每个工具调用的观察结果
     # 终态事件（completed/failed/cancelled）、模型上下文写回与错误计数统一收敛到
     # observe 节点（经 ToolCallLifecycleManager.settle_batch 分发），本节点只产出治理摘要。
     log.info(
@@ -186,7 +227,6 @@ async def _tools_node(state: ReactGraphState) -> dict:
         "last_tool_results": {
             "instruction": instruction or "",
             "observations": observation_dicts,
-            "expected_call_ids": [call.call_id for call in approved_calls],
         },
         "terminal_sessions": _project_terminal_sessions(
             state.terminal_sessions,

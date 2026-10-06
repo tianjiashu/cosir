@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.terminal_session_checkpoint import (
     TerminalSessionCheckpoint,
 )
@@ -29,17 +30,8 @@ class ReactGraphState(BaseModel):
             ``step_count > max_steps`` 拦截，超配额调用 ``_finalize_max_steps`` 收口终态。
         tool_error_count: 连续工具失败次数，成功即清零。observe 节点从本批
             ``last_tool_results`` 重算并消费（超 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 判定）。
-        requested_tool: 当前步骤是否请求工具调用。model 节点写；``_should_continue``
-            消费（决定走 tools 还是 END）。
-        continue_model: 当前模型输出未以可接受的完成原因结束，需要追加恢复提示并重新调用
-            model。model 节点写；``_should_continue`` 消费。它不表示工具调用，避免用
-            ``requested_tool`` 伪造一条空工具路径。
-        final_response: 当前步骤是否已产出最终回答。model 节点写；``_should_continue`` 消费。
-        structured_output_requested: model 已完成普通推理且需要结构化收口。model 节点写；
-            条件边消费后进入 ``structured_output``，结构化结果本身不进入 graph state。
-        terminal: 是否进入完成 / 失败 / 超步数等终止态。``model`` / ``observe`` 节点写
-            （``tools`` 节点不写终态）；编排层结合 ``aget_state().next`` 判定图是否结束。
-            协作取消不走本字段。
+        next_node: 下一个图节点或 ``end``。model 节点选择工具、续写、结构化输出或结束；
+            observe 节点选择继续模型、等待 Agent Team 确认或结束。固定转移由图边表达。
         max_steps: 本轮允许的最大模型步骤数，执行期常量。编排层初始化；model 节点
             ``step_count > max_steps`` 判定用。
         final_text: 终态可见文本：正常完成为模型最终回答，步数耗尽由 ``_finalize_max_steps``
@@ -55,22 +47,14 @@ class ReactGraphState(BaseModel):
         tool_call_lifecycle: 当前 workflow 已创建工具调用的可序列化生命周期记录。model
             节点写入创建 / 运行状态与非法调用标记，tools 节点回写同一快照，observe 节点写入
             终态；不含 operations、stream writer 或 runtime context。
-        agent_team_confirmation_waiting: Agent Team 预览已经生成，主 Agent 等待用户确认。
-            观察节点写入该标记，专用等待节点在恢复后清除；该标记只服务 graph 路由，不是
-            ConversationRun 或 TeamRun 的第二套持久化状态。
     """
 
     step_count: int
     tool_error_count: int
-    requested_tool: bool
-    final_response: bool
-    terminal: bool
+    next_node: ReactRoute
     instruction: str = ""
     max_steps: int
     final_text: str
     last_tool_results: dict[str, Any]
     terminal_sessions: dict[str, TerminalSessionCheckpoint] = Field(default_factory=dict)
-    continue_model: bool = False
-    structured_output_requested: bool = False
     tool_call_lifecycle: ToolCallLifecycleManager | None = None
-    agent_team_confirmation_waiting: bool = False
