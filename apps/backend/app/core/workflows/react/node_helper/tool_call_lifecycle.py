@@ -374,9 +374,9 @@ class ToolCallLifecycleManager(BaseModel):
             只读运行时 ``operations.all_vaild_tools``（经 :meth:`_valid_tool_name`）；无写入。
         """
 
-        if not isinstance(call_id, str) or not call_id:
+        if not isinstance(call_id, str) or not call_id.strip():
             return "ignore_no_id"
-        if not isinstance(tool_name, str):
+        if not isinstance(tool_name, str) or not tool_name.strip():
             return "ignore_bad_name"
         if self._valid_tool_name(tool_name) and tool_name not in self.allows_tools:
             return "blocked"

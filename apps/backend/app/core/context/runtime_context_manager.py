@@ -365,8 +365,6 @@ class RuntimeContextManager:
                     is_streaming=False,
                 )
             )
-            self._entries.append(ContextEntry(finalized, target_run_id, state.sequence))
-            self.mark_context_changed(ContextEventType.ADD_MESSAGE, self._effective_entries())
             return _as_ai_message(state.chunk)
         # 中途 flush：保持 partial 状态，不触发 listener。
         self._require_context_service().replace_streaming_message(
