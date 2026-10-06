@@ -60,7 +60,7 @@ class ProposeAgentTeamNodeArgs(BaseModel):
         min_length=1,
         max_length=32,
         description=(
-            "Business statuses this node may submit through agent_team_node_status. "
+            "Business statuses this node may submit when reporting its result. "
             "Use lowercase snake_case names, such as pass, fail, or needs_changes. "
             "Do not use runtime lifecycle states unless they are intentional business statuses."
         ),

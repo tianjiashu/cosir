@@ -62,7 +62,6 @@ def _runtime_manager(service: _RecordingContextService) -> RuntimeContextManager
     manager._system_entry = None
     manager._entries = []
     manager._message_sequence = 1
-    manager._listeners = []
     manager._streaming_messages = {}
     manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
     return manager
@@ -177,14 +176,18 @@ def test_merged_chunk_preserves_complete_langchain_message_semantics() -> None:
 
 
 def test_tool_call_lifecycle_freezes_presentation_in_serializable_state(monkeypatch) -> None:
-    manager = ToolCallLifecycleManager()
+    # 展示声明只在 ``allowed`` 桶写入，故本用例必须把工具放进本轮允许集合。
+    manager = ToolCallLifecycleManager(allows_tools=("read_file",))
+    tool_definitions = [
+        SimpleNamespace(
+            name="read_file", display=SimpleNamespace(to_dict=lambda: {"verb": "Read"})
+        )
+    ]
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
-            model_tools=[
-                SimpleNamespace(
-                    name="read_file", display=SimpleNamespace(to_dict=lambda: {"verb": "Read"})
-                )
-            ]
+            model_tools=tool_definitions,
+            # 与真实契约同形：``_valid_tool_name`` / ``_presentation_for`` 读 ``all_vaild_tools``。
+            all_vaild_tools=tool_definitions,
         )
     )
     events: list[Any] = []
@@ -273,9 +276,9 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
     assert second.lifecycle.valid_calls["call-1"].status == "completed"
 
 
-def test_failed_tool_event_uses_sanitized_display_data_and_writer_failure_is_non_fatal(
-    monkeypatch,
-) -> None:
+def test_failed_tool_event_uses_sanitized_display_data(monkeypatch) -> None:
+    """失败终态的展示数据与短提示取自 ``display_data`` 分类，不携带原始 provider 文本。"""
+
     events: list[Any] = []
 
     class _RuntimeContext:
@@ -305,12 +308,7 @@ def test_failed_tool_event_uses_sanitized_display_data_and_writer_failure_is_non
     )
     monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: runtime_config)
     monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: _RuntimeContext())
-
-    def failing_writer(_event: Any) -> None:
-        events.append(_event)
-        raise RuntimeError("stream disconnected")
-
-    monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: failing_writer)
+    monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: events.append)
 
     updated, status = manager.settle(
         task_id=7,
@@ -322,6 +320,7 @@ def test_failed_tool_event_uses_sanitized_display_data_and_writer_failure_is_non
     assert status == "failed"
     assert updated.valid_calls["call-1"].status == "failed"
     assert events[0].display_data == {"kind": "read-file-meta", "path": "a.py"}
+    assert events[0].error == "执行失败"
 
 
 def test_tool_settle_does_not_emit_terminal_event_when_canonical_append_is_duplicate(
@@ -362,25 +361,6 @@ def test_tool_settle_does_not_emit_terminal_event_when_canonical_append_is_dupli
     )
 
     assert events == []
-
-
-def test_runtime_context_post_commit_listener_failure_does_not_hide_durable_write() -> None:
-    service = _RecordingContextService()
-    manager = _runtime_manager(service)
-
-    class _FailingListener:
-        main_agent_only = False
-        order = 0
-
-        def listen(self, *_args: Any) -> None:
-            raise RuntimeError("projector unavailable")
-
-    manager.add_change_listener(_FailingListener())
-
-    manager.add_message(AIMessage(content="durable"))
-
-    assert len(service.appended) == 1
-    assert manager._entries[-1].message.content == "durable"
 
 
 def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:

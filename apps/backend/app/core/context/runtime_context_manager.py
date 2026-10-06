@@ -24,12 +24,10 @@ from langchain_core.messages import (
 
 from app.assistant_transport.event import UserInputAppendedEvent, build_user_input_parts
 from app.config.logging.logger import log
-from app.core.agents.agent_profile import AgentProfile, AgentProfileType
+from app.core.agents.agent_profile import AgentProfile
 from app.core.context import SystemPromptBuilder
 from app.core.context.context_compressor.context_compressor import ContextCompressor
 from app.core.context.context_entry import ContextEntry
-from app.core.context.context_listener.context_listener import ContextListener
-from app.core.context.context_listener.listener_event import ContextEventType, ListenerEvent
 from app.core.context.streaming_message_state import StreamingMessageState
 from app.core.context.tool_call_closure import (
     build_placeholder_tool_message,
@@ -39,8 +37,6 @@ from app.core.runtime.execution_mode import ExecutionMode
 from app.models import (
     ConversationRunFileAttachment,
     ConversationRunRecord,
-    TaskRecord,
-    WorkspaceRecord,
 )
 from app.models.conversation_task_context import (
     ConversationTaskContextRecord,
@@ -62,7 +58,7 @@ STREAMING_PERSIST_MAX_INTERVAL_SECONDS = 0.25
 
 @dataclass
 class RuntimeContextManager:
-    """提供一个 task 的 LangChain context 读写和 listener 边界。"""
+    """提供一个 task 的 LangChain context 读写边界。"""
 
     current_task_id: int
     agent_profile: AgentProfile
@@ -77,8 +73,6 @@ class RuntimeContextManager:
     # begin_run 从持久化 context 恢复下一个可用序号，add_message 落库后自增。
     # 序号游标由 RuntimeContextManager 独自管理；context service 只负责持久化。
     _message_sequence: int = field(default=0, init=False)
-    # 上下文变化订阅者列表：按 order 排序，按需插入。
-    _listeners: list[ContextListener] = field(default_factory=list, init=False)
     # key=(run_id, stream_id) → 一条流式草稿的进程内聚合状态。复合 key 区分不同 run / step
     # 的草稿；partial 不进 _entries，避免被下一次模型调用误读。
     _streaming_messages: dict[tuple[int | None, str], StreamingMessageState] = field(
@@ -182,25 +176,6 @@ class RuntimeContextManager:
         # 使用 0/1 后，第二轮会再次尝试写入 1，触发 (task_id, sequence) 唯一约束。
         self.current_run_id = run.id
 
-    def add_change_listener(self, listener: ContextListener) -> RuntimeContextManager:
-        """注册一个按 order 执行的 context listener。
-
-        同一个 manager 会跨 Conversation Run 复用，因此同一 listener 类型的后续注册
-        会替换旧实例，避免 context 变更被重复处理，也避免旧 run 的 event emitter
-        在新 run 的 graph stream 外继续收到回调。
-        """
-
-        if listener.main_agent_only and self.agent_profile.agent_type is not AgentProfileType.MAIN:
-            return self
-        for index, current in enumerate(self._listeners):
-            if type(current) is type(listener):
-                self._listeners[index] = listener
-                self._listeners.sort(key=lambda item: item.order)
-                return self
-        self._listeners.append(listener)
-        self._listeners.sort(key=lambda item: item.order)
-        return self
-
     def add_message(
             self,
             message: BaseMessage,
@@ -243,7 +218,6 @@ class RuntimeContextManager:
         if not include_in_context:
             return True
         self._entries.append(ContextEntry(message, target_run_id, sequence))
-        self.mark_context_changed(ContextEventType.ADD_MESSAGE, self._effective_entries())
         return True
 
     def add_message_chunk(
@@ -272,8 +246,8 @@ class RuntimeContextManager:
             ValueError: chunk 类型不正确或 stream_id 为空；持久化错误向上传播。
 
         副作用:
-            首个 chunk 新增一条 partial context 行，后续 chunk 更新该行；不会触发 context
-            usage listener 或 ADD_MESSAGE 事件，实时 Transport 增量仍由 workflow stream 负责。
+            首个 chunk 新增一条 partial context 行，后续 chunk 更新该行，草稿不进入模型上下文；
+            实时 Transport 增量仍由 workflow stream 负责。
         """
 
         if not isinstance(chunk, AIMessageChunk):
@@ -322,10 +296,10 @@ class RuntimeContextManager:
 
         - ``running``（默认）：以 partial 状态（``is_streaming=True``）落库，**保留**内存
           state 供后续 chunk 继续累积。add_message_chunk 的节流刷写即走此态。
-        - ``cancel``：同样 partial 落盘，但 run 已终止不再累积，故**丢弃**内存 state；不加入
-          模型上下文、不触发 listener。
+        - ``cancel``：同样 partial 落盘，但 run 已终止不再累积，故**丢弃**内存 state，且不加入
+          模型上下文。
         - ``complete``：收口为普通 canonical assistant 消息，复用原 ``sequence`` 更新同一行，
-          并仅在收口时加入模型上下文与触发 ``ADD_MESSAGE`` listener。
+          并仅在收口时加入模型上下文。
 
         参数:
             stream_id: 本次流式会话的唯一标识，通常为 ``step-N``。
@@ -339,8 +313,8 @@ class RuntimeContextManager:
             持久化错误向上传播。
 
         副作用:
-            running / cancel 更新 partial 行但不触发 listener；complete 触发 ``ADD_MESSAGE``
-            并把消息加入内存 entries；实时 Transport 增量由 workflow stream 负责。
+            running / cancel 只更新 partial 行；complete 才把消息加入内存 entries；实时
+            Transport 增量由 workflow stream 负责。
         """
 
         target_run_id = self.current_run_id if run_id is None else run_id
@@ -366,7 +340,7 @@ class RuntimeContextManager:
                 )
             )
             return _as_ai_message(state.chunk)
-        # 中途 flush：保持 partial 状态，不触发 listener。
+        # 中途 flush：只更新 partial 行、保留内存 state 以便后续 chunk 继续累积。
         self._require_context_service().replace_streaming_message(
             ConversationTaskContextRecord(
                 task_id=self.current_task_id,
@@ -638,33 +612,6 @@ class RuntimeContextManager:
         if self._system_entry is None:
             raise RuntimeError("system entry is not initialized")
         return [self._system_entry, *self._entries]
-
-    def mark_context_changed(
-            self,
-            event_type: ContextEventType,
-            entries: list[ContextEntry],
-    ) -> None:
-        """向 listener 发布 context 完整快照。"""
-
-        snapshot = copy.deepcopy(entries)
-        for listener in self._listeners:
-            try:
-                listener.listen(
-                    ListenerEvent(event_type, snapshot),
-                )
-            except Exception:
-                log.exception(
-                    "context_listener_failed",
-                    extra={
-                        "msg": "context 已落库，旁路 listener 失败并被降级",
-                        "data": {
-                            "task_id": self.current_task_id,
-                            "run_id": self.current_run_id,
-                            "listener": type(listener).__name__,
-                            "event_type": event_type.value,
-                        },
-                    },
-                )
 
 
 def _as_ai_message(chunk: AIMessageChunk) -> AIMessage:

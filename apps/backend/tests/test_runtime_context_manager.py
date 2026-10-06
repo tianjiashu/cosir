@@ -60,20 +60,8 @@ def _manager(context_service: _ContextService, *, next_sequence: int = 0) -> Run
     manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
     manager._entries = []
     manager._message_sequence = next_sequence
-    manager._listeners = []
     manager._streaming_messages = {}
     return manager
-
-
-class _RecordingListener:
-    main_agent_only = False
-    order = 0
-
-    def __init__(self) -> None:
-        self.events = []
-
-    def listen(self, event) -> None:
-        self.events.append(event)
 
 
 def test_runtime_context_manager_owns_next_sequence_after_run_restart() -> None:

@@ -43,7 +43,6 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from langchain_core.messages import SystemMessage
 
-from app.core.context.context_listener.context_compress_listener import ContextCompressListener
 from app.service.depends import get_task_service, get_workspace_service
 from app.task_runtime.system_prompt_delta import SystemPromptDelta
 
@@ -297,8 +296,8 @@ class TaskRuntimeSpace:
             固定系统提示词；当前 profile 只用于首次创建 Task 提示词。
 
         异常:
-            ``RuntimeContextManager`` 构造或其 listener 装配失败时原样向上抛出，本方法不兜底；
-            此时 space 不会缓存半成品引用，调用方（run 执行、task fork）需自行处理。
+            ``RuntimeContextManager`` 构造失败时原样向上抛出，本方法不兜底；此时 space 不会缓存
+            半成品引用，调用方（run 执行、task fork）需自行处理。
 
         副作用:
             首次调用时在持有 ``_context_guard`` 的前提下惰性构造并以**弱引用**缓存 context
@@ -328,14 +327,11 @@ class TaskRuntimeSpace:
                     self.agent_profile = agent_profile
 
 
-                manager = (
-                    RuntimeContextManager(
-                        current_task_id=self.current_task.id,
-                        agent_profile=self.agent_profile,
-                        workspace_root=self.current_workspace.root_path,
-                        is_fork=self.current_task.task_type == "fork",
-                    )
-                    .add_change_listener(ContextCompressListener())
+                manager = RuntimeContextManager(
+                    current_task_id=self.current_task.id,
+                    agent_profile=self.agent_profile,
+                    workspace_root=self.current_workspace.root_path,
+                    is_fork=self.current_task.task_type == "fork",
                 )
                 self._context_manager = _weak_ref(manager)
             return manager
@@ -353,10 +349,7 @@ class TaskRuntimeSpace:
         with self._context_guard:
             if self._context_manager is not None and self._context_manager() is not None:
                 return
-            installed = (
-                manager.add_change_listener(ContextCompressListener())
-            )
-            self._context_manager = _weak_ref(installed)
+            self._context_manager = _weak_ref(manager)
 
     def defer_system_message(self, message: SystemMessage) -> None:
         """将一条修复类系统消息延后到本 task 下一次 model 节点入口注入。

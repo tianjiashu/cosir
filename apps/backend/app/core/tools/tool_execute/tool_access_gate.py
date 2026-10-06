@@ -137,23 +137,7 @@ class ToolAccessGate:
                         f"name will always be rejected."
                     ),
                     tool_call_id=call.call_id,
-                )
-            )
-
-        if allowed_tool_names is not None and tool.name not in allowed_tool_names:
-            return ToolGateOutcome(
-                denial=tool_error(
-                    tool.name,
-                    f"agent profile denied tool: {tool.name},allow tool names:{allowed_tool_names}",
-                    reason=(
-                        f"the current agent profile does not allow calling "
-                        f"'{tool.name}'; the allowed tools are "
-                        f"{sorted(allowed_tool_names)}. This is deterministic under "
-                        f"the current profile, so choose an allowed tool or update "
-                        f"the profile's allowed_permissions before retrying."
-                    ),
-                    permission=tool.permission,
-                    tool_call_id=call.call_id,
+                    retryable=False,
                 )
             )
 
@@ -168,13 +152,13 @@ class ToolAccessGate:
                     tool.name,
                     f"invalid tool arguments: {validation.error}",
                     reason=(
-                        f"the tool arguments failed validation: {validation.error}; "
                         f"this is deterministic, so fix the argument values/types per "
                         f"the tool's parameter schema and call again. The same "
                         f"arguments will always be rejected."
                     ),
                     permission=tool.permission,
                     tool_call_id=call.call_id,
+                    retryable=True,
                 )
             )
 
@@ -199,6 +183,19 @@ class ToolAccessGate:
                     },
                 },
             )
+
+        if allowed_tool_names is not None and tool.name not in allowed_tool_names:
+            return ToolGateOutcome(
+                denial=tool_error(
+                    tool.name,
+                    f"This tool is disabled for the current run.Do not call again",
+                    reason="",
+                    permission=tool.permission,
+                    tool_call_id=call.call_id,
+                    retryable=False,
+                )
+            )
+
         arguments = self._apply_pre_tool_use_hook(
             tool, validation, execution_context, call.call_id
         )

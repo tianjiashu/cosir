@@ -159,7 +159,6 @@ def _manager(
     manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
     manager._entries = list(entries)
     manager._message_sequence = next_sequence
-    manager._listeners = []
     manager._tool_schemas = ()
     # 与真实 dataclass 字段同形：Run 重置路径会访问流式草稿表。
     manager._streaming_messages = {}

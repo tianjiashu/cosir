@@ -278,8 +278,8 @@ class TaskCrud:
     ) -> TaskRecord:
         """在同一事务中记录当前 Run 及其上下文窗口总量。
 
-        上下文窗口总量必须与当前 Run 使用的模型保持一致，不能依赖上下文消息变化时的
-        token 估算 listener 旁路回写。
+        上下文窗口总量必须与当前 Run 使用的模型保持一致，随 Run 绑定显式写入，而不是等上下文
+        消息变化时旁路回填。
         """
 
         values: dict[str, object] = {

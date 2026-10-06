@@ -20,7 +20,6 @@ from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.tools.schemas import ToolDefinition
 from app.core.tools.schemas.tool_names import (
     TOOL_AGENT_TEAM,
-    TOOL_AGENT_TEAM_NODE_STATUS,
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_STATUS,
     TOOL_CHILD_AGENT_WAIT,
@@ -85,29 +84,25 @@ def resolve_node_profile(
 
 
 def materialize_node_tools(agent_id: str, workspace_root: str) -> list[ToolDefinition]:
-    """根据节点 Agent Profile 固化工具定义，并注入节点状态工具。
+    """根据节点 Agent Profile 固化工具定义。
 
-    Team 节点不能递归创建 Team、子 Agent 或配置提案，但始终可以报告自身节点状态。
-    返回的工具定义属于本次准备结果，确认后不会再次从可变注册表解析。
+    Team 节点不能递归创建 Team、子 Agent 或配置提案；可固化工具来自节点 Profile 允许的工具
+    集，再剔除 Team 节点禁用的工具。返回的工具定义属于本次准备结果，确认后不会再次从可变
+    注册表解析。
 
     异常:
         ValueError: Agent Profile 不存在。
     """
 
     tool_system = get_tool_system()
-    definition = tool_system.registry.get_tool_definition(TOOL_AGENT_TEAM_NODE_STATUS)
     profile = get_agent_registry().resolve(workspace_root, agent_id)
     if profile is None:
         raise ValueError(f"Team 节点 Agent 不可用: {agent_id}")
-    if definition is None:
-        raise ValueError("Agent Team 节点状态工具未注册")
     selected = [
         tool
         for tool in profile.select_tools(tool_system.executor.list_tools())
         if tool.name not in TEAM_NODE_DISALLOWED_TOOLS
     ]
-    if all(tool.name != definition.name for tool in selected):
-        selected.append(definition)
     return selected
 
 
