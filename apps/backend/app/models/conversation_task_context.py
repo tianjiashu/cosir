@@ -17,11 +17,19 @@ from app.storage.model.conversation_task_context_model import ConversationTaskCo
 
 
 class TransportMetadata(TypedDict):
+    """工具结果行随行携带的 Transport 展示元数据。
+
+    ``hidden`` 标记「该调用在前端没有 tool-call part」（本轮未放行 / 工具名未注册 / 恢复补建的
+    孤儿调用）。它由 ``ToolCallLifecycleManager.settle`` 按 ``part_projected`` 写入，冷重建
+    （``ConversationTaskStateRebuilder.build_pair_tool_part``）据此跳过建 part，使刷新页面后的
+    快照与实时快照一致——实时链路从未为这些调用发过 ``ToolCallCreatedEvent``。
+    """
 
     status: ToolCallStatus
     error: NotRequired[str | None]
     display_data: NotRequired[dict[str, object] | None]
     approvalRequestId: NotRequired[None]
+    hidden: NotRequired[bool]
 
 
 @dataclass(frozen=True)

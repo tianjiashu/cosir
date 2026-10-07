@@ -83,6 +83,10 @@ class ConversationTaskStateRebuilder:
         动态展示数据只从 ToolMessage 的 ``transport_metadata.display_data`` 读取；冷重建不
         通过工具名、委派记录或子任务记录推断展示数据。
 
+        **隐藏调用不建 part**：ToolMessage 行带 ``transport_metadata.hidden`` 的调用（本轮未
+        放行 / 工具名未注册 — 实时链路从未为它们发过 ``ToolCallCreatedEvent``）被整条跳过，
+        否则刷新页面会凭空多出实时快照里不存在的工具气泡。
+
         参数:
             rows: 单个 Run 的 context 行，调用方保证已按 ``sequence`` 排序。
             child_agent_roles: 由调用方按 child task 的 workspace 解析出的旧记录 role，键为
@@ -98,6 +102,14 @@ class ConversationTaskStateRebuilder:
         副作用:
             无（纯函数，不访问数据库、注册表之外的状态或前端运行时）。
         """
+        # 先扫一遍结果行收集隐藏调用：AI 消息的 tool_calls 里可能包含它们，但实时链路从未为
+        # 这些调用建过 part，冷重建必须与实时口径一致地跳过。
+        hidden_call_ids = {
+            cast(ToolMessage, row.message).tool_call_id
+            for row in rows
+            if isinstance(row.message, ToolMessage)
+            and (row.transport_metadata or {}).get("hidden") is True
+        }
         tool_parts: dict[str, ConversationStateToolCallPart] = {}
         for row in rows:
             message: BaseMessage = row.message
@@ -105,6 +117,8 @@ class ConversationTaskStateRebuilder:
                 ai_message = cast(AIMessage, message)
                 calls: list[ToolCall] = ai_message.tool_calls
                 for call in calls:
+                    if call.get("id") in hidden_call_ids:
+                        continue
                     tool_part = ConversationStateToolCallPart(
                         type="tool-call",
                         toolCallId=call.get("id"),
@@ -118,6 +132,8 @@ class ConversationTaskStateRebuilder:
                     tool_parts[call.get("id")] = tool_part
             if isinstance(message, ToolMessage):
                 tool_message = cast(ToolMessage, message)
+                if tool_message.tool_call_id in hidden_call_ids:
+                    continue
                 tool_part: ConversationStateToolCallPart = tool_parts.get(tool_message.tool_call_id)
                 if tool_part is None:
                     raise RuntimeError("未闭合tool")
@@ -312,7 +328,13 @@ class ConversationTaskStateRebuilder:
                     if ai_message.tool_calls is not None and len(ai_message.tool_calls) > 0:
                         calls: list[ToolCall] = ai_message.tool_calls
                         for call in calls:
-                            assistant_message["parts"].append(tool_parts_dict[call.get("id")])
+                            tool_part = tool_parts_dict.get(call.get("id"))
+                            if tool_part is None:
+                                # 隐藏调用（本轮未放行 / 工具名未注册）：``build_pair_tool_part``
+                                # 不为它们建 part，实时链路同样没有 part，此处必须跳过而不是
+                                # 抛 KeyError——展示层缺口不得让冷重建整张快照失败。
+                                continue
+                            assistant_message["parts"].append(tool_part)
             run_extra: ConversationRunExtra | None = getattr(run, "extra", None)
             if not has_user_message and (
                 getattr(run, "input_text", "").strip()

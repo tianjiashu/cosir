@@ -41,9 +41,18 @@ from app.models.enums.tool_call_status import ToolCallEventStatus
 class ToolCallLifecycleRecord(BaseModel):
     """单次工具调用的可序列化生命周期记录。
 
-    承载调用身份（``tool_call_id`` / ``tool_name``）、状态（默认 ``pending``）、已解析参数与静态
+    承载调用身份（``tool_call_id`` / ``tool_name``）、状态（默认 ``pending``）、已解析参数、静态
     展示声明 ``presentation``（``create`` / ``classify`` 的 ``allowed`` 桶写入，``settle`` 对缺失
-    记录的补建按工具名写入）。
+    记录的补建按工具名写入）与 ``part_projected``。
+
+    ``part_projected`` 表示前端是否已建立对应的 tool-call part（等价于「本调用是否已发过
+    ``ToolCallCreatedEvent``」）。它是「终态能否投影给前端」的**唯一裁决依据**，由 ``settle`` 与
+    ``cancel`` 共用，避免两处各自按工具名 / 白名单推断而漂移。
+
+    取值由 ``create`` / ``classify`` 按归属桶显式写入：``allowed`` 桶为 ``True``，``blocked`` 与
+    工具名未注册者为 ``False``，``settle`` 补建的孤儿记录同样为 ``False``。默认值 ``True`` 只是
+    兜底——从非 ``create`` / ``classify`` 路径产生的记录（如直接构造或旧 checkpoint 反序列化）
+    按「前端有 part」处理，宁可多投影一次（多一条告警），也不让真实存在的 part 永远收不到终态。
 
     异常:
         pydantic.ValidationError: 字段不满足契约（``tool_call_id`` / ``tool_name`` 为空，或出现
@@ -57,6 +66,7 @@ class ToolCallLifecycleRecord(BaseModel):
     status: ToolCallEventStatus = "pending"
     args: dict[str, object] = Field(default_factory=dict)
     presentation: dict[str, object] = Field(default_factory=dict)
+    part_projected: bool = True
 
 
 @dataclasses.dataclass
@@ -420,8 +430,9 @@ class ToolCallLifecycleManager(BaseModel):
 
         副作用:
             ``allowed`` 桶经 stream writer 发 ``ToolCallCreatedEvent``（该事件把前端 part 初始化
-            为 ``pending``，故不再单发 pending 状态事件），并把静态展示声明写入记录；
-            ``blocked`` / ``invaild_tool_name`` 桶只落 state，不发事件、不写日志。
+            为 ``pending``，故不再单发 pending 状态事件），把静态展示声明写入记录并置
+            ``part_projected=True``；``blocked`` / ``invaild_tool_name`` 桶只落 state，不发事件、
+            不写日志，``part_projected`` 保持 ``False``。
         """
 
         updated = self._copy()
@@ -441,14 +452,16 @@ class ToolCallLifecycleManager(BaseModel):
                 updated.blocked_calls[call_id] = ToolCallLifecycleRecord(
                     tool_call_id=call_id,
                     tool_name=tool_name,
-                    args=_record_args(raw_call.get("args"))
+                    args=_record_args(raw_call.get("args")),
+                    part_projected=False,
                 )
                 continue
             if bucket == "invaild_tool_name":
                 updated.valid_calls[call_id] = ToolCallLifecycleRecord(
                     tool_call_id=call_id,
                     tool_name=tool_name,
-                    args=_record_args(raw_call.get("args"))
+                    args=_record_args(raw_call.get("args")),
+                    part_projected=False,
                 )
                 continue
             presentation = self._presentation_for(tool_name)
@@ -467,6 +480,7 @@ class ToolCallLifecycleManager(BaseModel):
                 tool_name=tool_name,
                 args=_record_args(raw_call.get("args")),
                 presentation=presentation,
+                part_projected=True,
             )
         return updated
 
@@ -578,8 +592,8 @@ class ToolCallLifecycleManager(BaseModel):
 
         遍历 ``tool_calls + invalid_tool_calls``（后者覆盖先出现的同名 ``id``），逐条经
         :meth:`_resolve_call_bucket` 裁决：``blocked`` 进 ``blocked_calls``；``allowed`` 与
-        ``invaild_tool_name`` 进 ``valid_calls``（展示声明仅在 ``allowed`` 桶写入，该桶为空
-        ``dict``）；``ignore_*`` 静默丢弃。记录状态保持默认 ``pending``——置 ``running`` 由后续
+        ``invaild_tool_name`` 进 ``valid_calls``（展示声明与 ``part_projected`` 只有 ``allowed``
+        桶写入）；``ignore_*`` 静默丢弃。记录状态保持默认 ``pending``——置 ``running`` 由后续
         ``tools`` 节点的 :meth:`begin` 完成。参数经 :func:`_record_args` 归一：未解析调用的 ``args``
         是 JSON 片段字符串，非映射时原始值放入保留键 ``Invaild_args``（该调用仍送执行层，由参数
         校验产出可读拒绝）。
@@ -615,14 +629,17 @@ class ToolCallLifecycleManager(BaseModel):
                     tool_call_id=call_id,
                     tool_name=call_name,
                     args=call_args,
+                    part_projected=False,
                 )
             elif bucket == "allowed" or bucket == "invaild_tool_name":
-                presentation = self._presentation_for(call_name) if bucket == "allowed" else {}
+                projected = bucket == "allowed"
+                presentation = self._presentation_for(call_name) if projected else {}
                 valid_calls[call_id] = ToolCallLifecycleRecord(
                     tool_call_id=call_id,
                     tool_name=call_name,
                     args=call_args,
                     presentation=presentation,
+                    part_projected=projected,
                 )
 
         updated = self._copy()
@@ -639,10 +656,11 @@ class ToolCallLifecycleManager(BaseModel):
     ) -> ToolCallLifecycleManager:
         """把尚未结束的调用迁移到 cancelled，并为每条发出终态事件。
 
-        收口判据是状态本身：只处理仍处于 ``pending`` / ``running`` 的可执行调用记录，已终态的跳过，
-        因此可重复调用；适用于「流式期 :meth:`create` 已把调用投影给前端、但该调用不会真正执行」的
-        场景，避免前端留下悬空的「执行中」part。含从未发创建事件的未注册工具名调用（那类事件会被
-        projector 跳过并记 warning）；``blocked_calls`` 从未发创建事件，不参与收口。
+        收口判据是「状态 + 是否已投影」：只处理仍处于 ``pending`` / ``running`` 且
+        ``part_projected`` 为 ``True`` 的可执行调用记录，已终态的、以及没有前端 part 的（工具名
+        未注册者）都跳过，因此可重复调用；适用于「流式期 :meth:`create` 已把调用投影给前端、但该
+        调用不会真正执行」的场景，避免前端留下悬空的「执行中」part。``blocked_calls`` 从未发创建
+        事件，不参与收口。跳过判据与 :meth:`settle` 共用 ``part_projected`` 字段。
 
         调用点：``model_node`` 在流式循环内检测到协作取消时调用本方法，随后才 ``interrupt`` 挂起
         节点；顺序不可颠倒（``interrupt`` 之后的语句不会执行）。返回值（copy-on-write 快照）必须
@@ -669,12 +687,13 @@ class ToolCallLifecycleManager(BaseModel):
 
         updated = self._copy()
 
-        # 只有 ``create`` 发过创建事件、前端存在 part 的可执行调用需要收口；``blocked_calls`` 从未
-        # 投影为 part，收口没有对象（发事件只会让 projector 记一条「part 缺失」告警）。
+        # 只有前端存在 part（``part_projected``）的调用需要收口：没有 part 的调用发终态事件只会
+        # 让 projector 记一条「part 缺失」告警。判据与 :meth:`settle` 共用同一字段，避免两处
+        # 各自按工具名 / 白名单推断而漂移。
         for record in list(updated.valid_calls.values()):
             if record is None or record.status not in {"pending", "running"}:
                 continue
-            if not self._valid_tool_name(record.tool_name) or record.tool_name not in self.allows_tools:
+            if not record.part_projected:
                 continue
             updated._emit_status(
                 task_id=task_id,
@@ -732,8 +751,10 @@ class ToolCallLifecycleManager(BaseModel):
             ``tool_observation_persisted``（带 ``canonical_write`` 区分）。覆盖同样会发终态事件，
             前端据此从占位状态翻到真实终态。
             事件构造或入队失败直接向上抛出，不在本方法内降级。记录不存在时即时补建一条 ``pending``
-            记录再落终态。命中 ``blocked_calls`` 的记录只写 ``ToolMessage``、不发终态事件（前端无
-            part，属隐藏闭合）。
+            记录再落终态（其 ``part_projected`` 为 ``False``）。``part_projected`` 为 ``False`` 的
+            记录（本轮未放行、工具名未注册、补建的孤儿记录）只写 ``ToolMessage``、不发终态事件
+            （前端无 part，属隐藏闭合），并在 ``transport_metadata`` 写入 ``hidden=True``，使冷重建
+            跳过该调用的 part。
         """
 
         observation = _summary_to_observation(summary)
@@ -757,6 +778,8 @@ class ToolCallLifecycleManager(BaseModel):
                 tool_name=summary["tool_name"],
                 status="pending",
                 presentation=presentation,
+                # 补建的孤儿记录从未发过创建事件，前端没有 part。
+                part_projected=False,
             )
             updated.valid_calls[call_id] = record
         runtime_context: RuntimeContextManager = _runtime_context()
@@ -769,6 +792,10 @@ class ToolCallLifecycleManager(BaseModel):
             display_data=result_display_data,
             error=status_hint,
         )
+        if not record.part_projected:
+            # 隐藏闭合标记：本调用前端没有 part，冷重建必须据此跳过建 part，否则刷新页面会
+            # 凭空多出一个工具气泡（冷/热两份快照不一致）。
+            transport_metadata["hidden"] = True
         # ``add_message`` 命中同一条调用的既有结果行（取消/崩溃遗留的 cancelled 占位）时会原地
         # 覆盖它，因此真实结果既不会被拒，也不会与占位并排留下第二行。
         canonical_write = runtime_context.add_message(
@@ -790,9 +817,11 @@ class ToolCallLifecycleManager(BaseModel):
         )
         # 刻意先落库上下文、再发终态事件：否则 projector 可能发布一个无法从 context
         # 重建的终态工具状态。
-        if blocked:
-            # 隐藏闭合：blocked 调用从未发创建事件、前端无 part，发终态事件只会让 projector 记一条
-            # 「part 缺失」告警；模型侧协议已由上面的 ToolMessage 闭合。
+        if not record.part_projected:
+            # 隐藏闭合：本调用前端没有 part（本轮未放行 / 工具名未注册 / 恢复补建的孤儿记录），
+            # 发终态事件只会让 projector 记一条「part 缺失」告警；模型侧协议已由上面的
+            # ToolMessage 闭合，冷重建侧由 ``hidden`` 标记跳过建 part。判据与 :meth:`cancel` 共用
+            # ``part_projected`` 字段。
             return updated, event_status
         updated._emit_status(
             task_id=task_id,

@@ -87,6 +87,8 @@ class _LifecycleHarness:
         )
         self.writer = _FakeStreamWriter()
         self.messages: list[Any] = []
+        # 与 messages 一一对应的 Transport metadata（用于断言隐藏闭合的 ``hidden`` 标记）。
+        self.metadata: list[dict[str, Any]] = []
         self.model_tools = [
             SimpleNamespace(name=name, display=None) for name in self.registered_tool_names
         ]
@@ -106,8 +108,9 @@ class _LifecycleHarness:
             usage_stats=SimpleNamespace(),
         )
 
-        def _add_message(message: Any, **_kwargs: Any) -> str:
+        def _add_message(message: Any, **kwargs: Any) -> str:
             self.messages.append(message)
+            self.metadata.append(kwargs.get("transport_metadata") or {})
             return "appended"
 
         self.runtime_context = SimpleNamespace(add_message=_add_message)
@@ -588,17 +591,14 @@ def test_t2_pre_tool_use_hook_deny_and_argument_rewrite(
 # ============================================================================
 
 
-def test_t3_settle_emits_terminal_event_for_unregistered_tool_name_record() -> None:
-    """T3-a：``settle`` 对「工具名未注册」的记录**仍发出终态事件**（对照 ``cancel`` 跳过）。
+def test_t3_settle_closes_unregistered_tool_name_record_silently() -> None:
+    """T3-a：``settle`` 对「工具名未注册」的记录**静默闭合**（不发终态事件），与 ``cancel`` 同口径。
 
-    被测行为：先用 ``classify`` 把未注册工具名（``ghost_tool``）造进 ``valid_calls``，
-    再对同一 call_id 结算一条 success 观察，用假 stream writer 收集事件。
-    实际观测：发出一条 ``ToolCallStatusChangedEvent(status="completed", tool_call_id="ghost-1")``，
-    同时写入一条 ``ToolMessage``；而该调用**从未**发过 ``ToolCallCreatedEvent``
-    （create/classify 对未注册名都不发创建事件），前端本不存在对应 part。
-    是否符合预期：**不符合**——``cancel`` 明确按「工具名是否已注册 + 是否在 allows_tools」
-    跳过这类记录（避免 projector 记「part 缺失」告警），``settle`` 却没有同样的守卫，
-    于是实时链路会给一个不存在的 part 发终态事件。
+    被测行为：先用 ``classify`` 把未注册工具名（``ghost_tool``）造进 ``valid_calls``
+    （其 ``part_projected`` 为 ``False``），再对同一 call_id 结算一条 success 观察。
+    修复后实际观测：**不发** ``ToolCallStatusChangedEvent``，只写一条 ``ToolMessage``，
+    且该 ToolMessage 的 ``transport_metadata`` 带 ``hidden=True``（供冷重建跳过建 part）。
+    修复前：会向一个前端不存在的 part 发终态事件（projector 记「part 缺失」告警）。
     """
 
     harness = _LifecycleHarness(registered_tool_names=("read_file",))
@@ -608,9 +608,10 @@ def test_t3_settle_emits_terminal_event_for_unregistered_tool_name_record() -> N
             invalid_tool_calls=[],
         )
 
-    # 前置事实：未注册名进 valid_calls，且未发任何创建事件。
+    # 前置事实：未注册名进 valid_calls，且未发任何创建事件、未投影为 part。
     assert "ghost-1" in classified.valid_calls
     assert classified.valid_calls["ghost-1"].tool_name == "ghost_tool"
+    assert classified.valid_calls["ghost-1"].part_projected is False
     assert harness.writer.created_events == []
 
     with harness.runtime():
@@ -622,20 +623,18 @@ def test_t3_settle_emits_terminal_event_for_unregistered_tool_name_record() -> N
         )
 
     assert event_status == "completed"
-    assert [(event.tool_call_id, event.status) for event in harness.writer.status_events] == [
-        ("ghost-1", "completed")
-    ]
+    assert harness.writer.status_events == [], f"实发事件={harness.writer.status_events}"
     assert updated.valid_calls["ghost-1"].status == "completed"
-    # 模型侧协议照常闭合（写一条 ToolMessage）。
+    # 模型侧协议照常闭合（写一条 ToolMessage），并带隐藏标记。
     assert [message.tool_call_id for message in harness.messages] == ["ghost-1"]
+    assert harness.metadata[-1].get("hidden") is True
 
 
 def test_t3_cancel_skips_the_same_unregistered_record() -> None:
     """T3-b：对照用例——``cancel`` 对同一条「未注册工具名」记录**跳过**、不发任何事件。
 
     实际观测：``cancel()`` 后事件列表为空，记录状态仍为 ``pending``（未被收口）。
-    是否符合预期：符合 cancel 的 docstring（「含从未发创建事件的未注册工具名调用…不参与收口」）；
-    与 T3-a 形成不对称：同一条记录，取消路径不发事件，结算路径发事件。
+    修复后 ``settle``（T3-a）与 ``cancel`` 共用 ``part_projected`` 判据，两条路径同口径。
     """
 
     harness = _LifecycleHarness(registered_tool_names=("read_file",))
@@ -650,13 +649,11 @@ def test_t3_cancel_skips_the_same_unregistered_record() -> None:
     assert cancelled.valid_calls["ghost-1"].status == "pending"
 
 
-def test_t3_settle_emits_event_for_record_that_was_never_registered_at_all() -> None:
-    """T3-c：``settle`` 对**完全没有记录**的 call_id 会即时补建 pending 记录并发终态事件。
+def test_t3_settle_closes_orphan_record_silently() -> None:
+    """T3-c：``settle`` 对**完全没有记录**的 call_id 即时补建 pending 记录并**静默闭合**。
 
-    实际观测：补建的记录落在 ``valid_calls``，状态一步到 ``completed``，并发出终态事件；
-    即使该工具名从未在注册表出现（``ghost_tool``），事件照样发出。
-    是否符合预期：不符合（同 T3-a，缺「工具名已注册」守卫）；补建路径是恢复场景的兜底，
-    但对未注册名同样应静默闭合。
+    修复后实际观测：补建记录的 ``part_projected`` 恒为 ``False``，因此不发终态事件，只写
+    ToolMessage 并标记 ``hidden``。修复前：补建路径无条件发终态事件（孤儿调用同样没有 part）。
     """
 
     harness = _LifecycleHarness(registered_tool_names=("read_file",))
@@ -670,9 +667,9 @@ def test_t3_settle_emits_event_for_record_that_was_never_registered_at_all() -> 
 
     assert event_status == "completed"
     assert updated.valid_calls["orphan-1"].status == "completed"
-    assert [(event.tool_call_id, event.status) for event in harness.writer.status_events] == [
-        ("orphan-1", "completed")
-    ]
+    assert updated.valid_calls["orphan-1"].part_projected is False
+    assert harness.writer.status_events == [], f"实发事件={harness.writer.status_events}"
+    assert harness.metadata[-1].get("hidden") is True
 
 
 def test_t3_blocked_call_is_closed_silently_by_settle() -> None:
@@ -883,19 +880,14 @@ def _tool_row(
     )
 
 
-def test_t4_cold_rebuild_builds_part_for_the_hidden_disabled_call(
+def test_t4_cold_rebuild_skips_the_hidden_disabled_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4-a：冷重建为「本轮被禁用 / 隐藏闭合」的调用**也建了 part**（实时链路没有该 part）。
+    """T4-a：冷重建跳过「本轮被禁用 / 隐藏闭合」的调用（与实时链路一致，无 part）。
 
-    被测行为：一条 AIMessage（1 个正常调用 + 1 个本轮被禁用、走隐藏闭合的调用）+ 两条 ToolMessage，
-    经 ``build_pair_tool_part`` 重建。
-    实际观测：返回 **2** 个 part，``hidden-1`` 与 ``normal-1`` 都在；隐藏调用的 part 状态取自
-    ToolMessage 的 ``transport_metadata.status``（此处为 ``failed``，``isError=True``）。
-    是否符合预期：**不符合**——实时链路里隐藏闭合调用从未发 ``ToolCallCreatedEvent``、
-    前端没有 part，``settle`` 也刻意只写 ToolMessage 不发终态事件；冷重建却按
-    「AI 消息里有 tool_call 就建 part」把它投影出来，导致刷新页面后凭空多出一个工具气泡
-    （冷/热两份快照不一致）。
+    被测行为：一条 AIMessage（1 个正常调用 + 1 个隐藏闭合调用）+ 两条 ToolMessage，其中隐藏
+    调用的结果行带 ``transport_metadata.hidden=True``（由 ``settle`` 写入）。
+    修复后实际观测：只返回 ``normal-1`` 一个 part；隐藏调用被整条跳过。
     """
 
     monkeypatch.setattr(
@@ -919,32 +911,31 @@ def test_t4_cold_rebuild_builds_part_for_the_hidden_disabled_call(
         _tool_row(
             3,
             "hidden-1",
-            "This tool is disabled for the current run.Do not call again",
-            {"status": "failed", "display_data": {"status_hint": "禁用"}, "error": "本轮禁用"},
+            "This tool is disabled for the current run. Do not call again",
+            {
+                "status": "failed",
+                "display_data": {"status_hint": "禁用"},
+                "error": "本轮禁用",
+                "hidden": True,
+            },
             sequence=3,
         ),
     ]
 
     parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
 
-    assert len(parts) == 2, f"实际 part 数={len(parts)}, keys={sorted(parts)}"
-    assert set(parts) == {"normal-1", "hidden-1"}
-    assert parts["hidden-1"]["toolName"] == "write_file"
-    assert parts["hidden-1"]["status"] == "failed"
-    assert parts["hidden-1"]["isError"] is True
-    assert parts["hidden-1"]["error"] == "本轮禁用"
+    assert set(parts) == {"normal-1"}, f"实际 part={sorted(parts)}"
     assert parts["normal-1"]["status"] == "completed"
 
 
 def test_t4_cold_rebuild_hidden_call_without_result_stays_cancelled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4-b：隐藏闭合调用若没有配套 ToolMessage，冷重建按默认规则投影为 ``cancelled``。
+    """T4-b：**已知边界**——隐藏调用没有配套 ToolMessage 时，冷重建仍会建 part（cancelled）。
 
-    实际观测：``hidden-1`` 仍有 part，status == ``"cancelled"``；且因为没有 ToolMessage 行驱动结算，
-    part 上**根本没有** ``isError`` / ``error`` / ``display_data`` 键（三者只在 ToolMessage 分支写入）。
-    是否符合预期：部分是（无结果行 → cancelled 是既定兜底）；但「该 part 存在」本身仍与
-    实时链路不一致（见 T4-a），且缺 ``isError`` 键会让消费方按 ``part["isError"]`` 直取时 KeyError。
+    ``hidden`` 标记只由 ``settle`` 随 ToolMessage 行写入；进程在 ``settle`` 之前终止（例如工具
+    执行期崩溃、或被取消）时该行不存在，冷重建无从得知调用是隐藏的，只能按默认规则建一个
+    ``cancelled`` part。此时 part 上**没有** ``isError`` / ``error`` 键（只在 ToolMessage 分支写入）。
     """
 
     monkeypatch.setattr(
@@ -975,16 +966,14 @@ def test_t4_cold_rebuild_hidden_call_without_result_stays_cancelled(
     assert "error" not in parts["hidden-1"]
 
 
-def test_t4_live_projection_has_one_part_while_cold_rebuild_has_two(
+def test_t4_live_and_cold_projection_agree_on_one_part(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4-c：同一批调用，实时投影只有 1 个 part、冷重建有 2 个——冷/热快照数量不一致。
+    """T4-c：同一批调用，实时投影与冷重建**都是 1 个 part**（冷/热一致）。
 
-    实际观测：
     - 实时：``create`` 只为 ``allowed`` 桶（``read_file``）发 ``ToolCallCreatedEvent``，
       ``write_file``（已注册但不在 allows_tools）进 ``blocked_calls``、无创建事件、无 part；
-    - 冷：``build_pair_tool_part`` 对 AI 消息里的两条调用各建一个 part。
-    是否符合预期：**不符合**——这正是刷新页面后「凭空多出工具气泡」的直接证据。
+    - 冷：``build_pair_tool_part`` 按结果行的 ``hidden`` 标记跳过隐藏调用。
     """
 
     monkeypatch.setattr(
@@ -1027,25 +1016,28 @@ def test_t4_live_projection_has_one_part_while_cold_rebuild_has_two(
         _tool_row(
             3,
             "hidden-1",
-            "This tool is disabled for the current run.Do not call again",
-            {"status": "failed", "display_data": {"status_hint": "禁用"}, "error": "本轮禁用"},
+            "This tool is disabled for the current run. Do not call again",
+            {
+                "status": "failed",
+                "display_data": {"status_hint": "禁用"},
+                "error": "本轮禁用",
+                "hidden": True,
+            },
             sequence=3,
         ),
     ]
     cold_part_ids = sorted(ConversationTaskStateRebuilder.build_pair_tool_part(rows))
 
-    assert len(live_part_ids) == 1
-    assert len(cold_part_ids) == 2, f"冷重建 part={cold_part_ids}"
+    assert live_part_ids == cold_part_ids == ["normal-1"], f"冷重建 part={cold_part_ids}"
 
 
-def test_t4_rebuild_snapshot_materializes_both_tool_parts(
+def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4-d：整张快照 ``rebuild`` 后，隐藏闭合调用的 part 真的出现在 assistant 消息里。
+    """T4-d：整张快照 ``rebuild`` 后只出现可见调用（``normal-1``）的 part。
 
-    实际观测：``runs[0].messages[-1].parts`` 里有一条 ``tool-call`` part 的 ``toolCallId``
-    为 ``hidden-1``（本轮被禁用的 write_file），并且整张快照能通过 ``validate_snapshot``。
-    是否符合预期：**不符合**——刷新前端后用户会看到一个实时链路里从未出现过的工具气泡。
+    实际观测：``runs[0].messages[-1].parts`` 里的 ``tool-call`` part 只有 ``normal-1``，
+    隐藏的 ``hidden-1`` 不出现，整张快照通过 ``validate_snapshot``。
     """
 
     monkeypatch.setattr(
@@ -1082,8 +1074,13 @@ def test_t4_rebuild_snapshot_materializes_both_tool_parts(
         _tool_row(
             3,
             "hidden-1",
-            "This tool is disabled for the current run.Do not call again",
-            {"status": "failed", "display_data": {"status_hint": "禁用"}, "error": "本轮禁用"},
+            "This tool is disabled for the current run. Do not call again",
+            {
+                "status": "failed",
+                "display_data": {"status_hint": "禁用"},
+                "error": "本轮禁用",
+                "hidden": True,
+            },
             sequence=3,
         ),
     ]
@@ -1092,7 +1089,7 @@ def test_t4_rebuild_snapshot_materializes_both_tool_parts(
     parts = snapshot["runs"][0]["messages"][-1]["parts"]
 
     tool_part_ids = [part["toolCallId"] for part in parts if part["type"] == "tool-call"]
-    assert tool_part_ids == ["normal-1", "hidden-1"], f"快照 part={tool_part_ids}"
+    assert tool_part_ids == ["normal-1"], f"快照 part={tool_part_ids}"
     validate_snapshot(snapshot)
 
 
@@ -1226,3 +1223,68 @@ def test_t4_delegation_display_data_backfills_child_locators(
     assert part["child_run_id"] == 220
     assert part["agent_role"] == "workspace-reviewer"
     assert part["display_data"]["role"] == "workspace-reviewer"
+
+
+def test_t4_hidden_marksurvives_from_settle_to_cold_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T4-g（端到端）：``settle`` 写下的 ``hidden`` 标记能让冷重建跳过隐藏调用。
+
+    把 D3 与 D4 接起来验证：``classify`` 把本轮未放行的 ``write_file`` 判进 ``blocked_calls``
+    → ``settle`` 静默闭合、不发终态事件、结果行 metadata 带 ``hidden=True`` → 用该 metadata
+    构造的 context 行经 ``build_pair_tool_part`` 重建时**不产出**该调用的 part。
+    """
+
+    monkeypatch.setattr(
+        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
+        lambda: _FakeRebuildRegistry(("read_file", "write_file")),
+    )
+    harness = _LifecycleHarness(
+        registered_tool_names=("read_file", "write_file"),
+        allows_tools=("read_file",),
+    )
+    with harness.runtime():
+        classified = harness.manager.classify(
+            tool_calls=[
+                {"id": "normal-1", "name": "read_file", "args": {"path": "a.txt"}},
+                {"id": "hidden-1", "name": "write_file", "args": {"path": "b.txt"}},
+            ],
+            invalid_tool_calls=[],
+        )
+    assert list(classified.valid_calls) == ["normal-1"]
+    assert list(classified.blocked_calls) == ["hidden-1"]
+
+    with harness.runtime():
+        classified.settle(
+            task_id=11,
+            run_id=200,
+            step_id="step-3",
+            summary=_summary(
+                tool_call_id="hidden-1",
+                tool_name="write_file",
+                status="error",
+                error="tool is not allowed: write_file",
+            ),
+        )
+
+    # 事实 1：隐藏调用不发终态事件（前端无 part）。
+    assert harness.writer.status_events == [], f"实发事件={harness.writer.status_events}"
+    # 事实 2：结果行带 hidden 标记。
+    assert harness.metadata[-1].get("hidden") is True
+    # 事实 3：冷重建据此跳过该调用。
+    rows = [
+        _ai_row(
+            [
+                {"id": "normal-1", "name": "read_file", "args": {"path": "a.txt"}},
+                {"id": "hidden-1", "name": "write_file", "args": {"path": "b.txt"}},
+            ]
+        ),
+        _tool_row(
+            2,
+            "hidden-1",
+            "tool is not allowed: write_file",
+            harness.metadata[-1],
+            sequence=2,
+        ),
+    ]
+    assert set(ConversationTaskStateRebuilder.build_pair_tool_part(rows)) == {"normal-1"}

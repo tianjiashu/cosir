@@ -236,6 +236,8 @@ class RuntimeContextManager:
         tool_call_id = message.tool_call_id if isinstance(message, ToolMessage) else ""
         existing: ContextEntry | None = None
         if tool_call_id:
+            # 若 tool_call_id 非空，就用 plan_tool_call_closure(self._entries) 查找与该调用 ID
+            # 配对的工具结果。
             plan = plan_tool_call_closure(self._entries)
             paired = (
                 next((slot for slot in plan.slots if slot.call_id == tool_call_id), None)
@@ -247,6 +249,10 @@ class RuntimeContextManager:
                 if candidate.run_id == target_run_id:
                     existing = candidate
         if existing is not None:
+            # 工具结果幂等：常见于系统此前为未完成调用补过一条 cancelled 占位，续跑得到真实结果
+            # 后就把它原地更新为真实 ToolMessage——用 replace_message(...) 保留原来的 sequence
+            # 和 run_id、更新消息内容与 Transport 元数据，库里始终只有一条结果，不会同一调用
+            # 留两行。
             self._require_context_service().replace_message(
                 ConversationTaskContextRecord(
                     task_id=self.current_task_id,
