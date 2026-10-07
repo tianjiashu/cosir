@@ -5,8 +5,8 @@
 ``RuntimeOperations`` 写入 canonical conversation state，Transport 只订阅该事实。
 graph 编译时挂既有 checkpointer，由 LangGraph 负责控制流状态持久化。
 
-协作取消是图内的唯一中断点：``model`` 节点落定取消终态后调用 ``interrupt`` 中断执行，图停在
-带 interrupt 的任务上（``next`` 非空），因此该 run 仍可由本模块的续跑分支恢复。
+协作取消与用户输入等待通过 LangGraph ``interrupt`` 保留图断点；用户输入等待由工作流返回
+明确结果，执行器完成本地资源清理后再迁移 Run 状态，避免状态事件早于执行器收尾。
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
@@ -18,6 +18,7 @@ from typing import Any, cast
 from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
+from langchain_core.messages import SystemMessage
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -32,14 +33,14 @@ from app.models.conversation_run_failure import (
 )
 from app.service.depends import get_terminal_session_service
 
-from ..agent_workflow import AgentWorkflow, build_checkpointer
+from ..agent_workflow import AgentWorkflow, WorkflowOutcome, build_checkpointer
 from .edges import _route_target
 from .runtime_config import RuntimeConfig
 from .worflow_state.route import ReactRoute
 
 
 class ReactLikeWorkflow(AgentWorkflow):
-    """基于“模型推理 -> 工具调用 -> 继续推理/最终回答”的默认工作流，由 LangGraph 编排。
+    """基于"模型推理 -> 工具调用 -> 继续推理/最终回答"的默认工作流，由 LangGraph 编排。
 
     该类只承担执行策略职责，不直接创建模型、工具或数据库连接，所有外部能力都通过
     ``RuntimeOperations`` 注入。graph 编译时挂 ``AsyncSqliteSaver`` checkpointer，由 LangGraph
@@ -58,8 +59,8 @@ class ReactLikeWorkflow(AgentWorkflow):
     def _build_graph(self, checkpointer) -> Any:
         """构建并编译 ReAct StateGraph。
 
-        ``model`` / ``tools`` / ``observe`` 三节点经条件边形成 ReAct 循环；Agent Team 预览
-        通过专用等待节点挂起主 Agent；graph 编译时挂入 ``checkpointer`` 以启用 graph 控制流
+        ``model`` / ``tools`` / ``observe`` 三节点经条件边形成 ReAct 循环；需要用户输入的
+        工具结果通过通用等待节点挂起图；graph 编译时挂入 ``checkpointer`` 以启用 graph 控制流
         持久化。普通协作取消仍由 ``model`` 节点的 ``interrupt`` 中断。
 
         参数:
@@ -78,16 +79,14 @@ class ReactLikeWorkflow(AgentWorkflow):
             _structured_output_node,
             _tools_node,
         )
-        from app.core.workflows.react.nodes.agent_team_confirmation_wait_node import (
-            agent_team_confirmation_wait_node,
-        )
+        from app.core.workflows.react.nodes.user_input_wait_node import user_input_wait_node
 
         builder = StateGraph(ReactGraphState)
         builder.add_node("model", _model_node)
         builder.add_node("tools", _tools_node)
         builder.add_node("observe", _observe_node)
         builder.add_node("structured_output", _structured_output_node)
-        builder.add_node("agent_team_wait", agent_team_confirmation_wait_node)
+        builder.add_node("user_input_wait", user_input_wait_node)
         builder.add_edge(START, "model")
         # 超配额拦截收口在 model 节点（发起推理前 step_count > max_steps 直接终态）。
         builder.add_conditional_edges(
@@ -103,18 +102,18 @@ class ReactLikeWorkflow(AgentWorkflow):
         builder.add_edge("structured_output", END)
         # 工具结果统一交给 observe 收口；错误上限与 Team 等待由 observe 写入动态路由。
         builder.add_edge("tools", "observe")
-        # observe 判定后回 model、挂起等待 Team 确认，或结束工作流。
+        # observe 判定后回 model、挂起等待用户输入，或结束工作流。
         builder.add_conditional_edges(
             "observe",
             _route_target,
             {
                 ReactRoute.MODEL.value: "model",
-                ReactRoute.AGENT_TEAM_WAIT.value: "agent_team_wait",
+                ReactRoute.USER_INPUT_WAIT.value: "user_input_wait",
                 END: END,
             },
         )
-        # 等待节点初次执行时通过 interrupt 保存断点；恢复后继续回到模型节点读取 TeamResult。
-        builder.add_edge("agent_team_wait", "model")
+        # 等待节点初次执行时通过 interrupt 保存断点；业务边界恢复后继续回到模型节点。
+        builder.add_edge("user_input_wait", "model")
         return builder.compile(checkpointer=checkpointer)
 
     @staticmethod
@@ -263,7 +262,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             callbacks: list | None = None,
             langfuse_trace_id: str | None = None,
             execution_mode: ExecutionMode = "fresh",
-    ) -> None:
+    ) -> WorkflowOutcome:
         """执行一个任务，并在异常逃逸时把 Run 落定为 failed 终态。
 
         本方法只做「调用图执行 + 异常兜底收口」两件事：正常终态由节点内的
@@ -278,7 +277,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             execution_mode: 本次执行是 ``fresh`` 还是 ``resume``。
 
         返回:
-            无（协程）。
+            ``finished`` 表示图已收束；``waiting_for_input`` 表示通用等待节点已保存 interrupt，
+            由执行器在清理本地资源后迁移 Run 状态。
 
         异常:
             Exception: 原样重新抛出 ``_run_graph`` 的异常；抛出前 Run 已落 failed 终态。
@@ -289,7 +289,9 @@ class ReactLikeWorkflow(AgentWorkflow):
         """
 
         try:
-            await self._run_graph(operations, callbacks, langfuse_trace_id, execution_mode)
+            return await self._run_graph(
+                operations, callbacks, langfuse_trace_id, execution_mode
+            )
         except Exception as exc:
             # 兜底收口：图构建、resume 状态检查等路径的异常不经过 graph.astream 的 except
             # 分支，必须在这里补落终态。已在内部落定过的 run 只会命中 fail_run_if_running 的
@@ -303,15 +305,14 @@ class ReactLikeWorkflow(AgentWorkflow):
             callbacks: list | None = None,
             langfuse_trace_id: str | None = None,
             execution_mode: ExecutionMode = "fresh",
-    ) -> None:
+    ) -> WorkflowOutcome:
         """驱动已编译 graph 执行一次任务，直到完成、失败、取消或达到最大步骤数。
 
         以 LangGraph 状态流驱动已编译 graph。工作流不再生产或透传 RuntimeEvent；模型、
         工具和终态事实由 ``RuntimeOperations`` 直接提交到 canonical conversation state，
         模型流式增量由 graph custom stream 统一转发到 snapshot。
-        模型经 ``resolve_chat_model`` 构建（缺 Key 在构建期抛错）；
-        工具由服务端工具策略直接执行，工作流不等待审批类外部决策；唯一的图内中断是协作取消
-        触发的 ``interrupt``（见 ``model_node``）。
+        模型经 ``resolve_chat_model`` 构建（缺 Key 在构建期抛错）；工具由服务端工具策略执行；
+        协作取消与通用用户输入等待都通过 LangGraph ``interrupt`` 保存 checkpoint。
 
         参数:
             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新。
@@ -320,12 +321,12 @@ class ReactLikeWorkflow(AgentWorkflow):
             langfuse_trace_id: 可选 Langfuse trace 标识；由 runner 在启用 tracing 时注入，
                 终态事件 payload 会携带该字段供前端展示。未启用 Langfuse 时为 None。
             execution_mode: 本次执行是 ``fresh`` 还是 ``resume``；它决定注入 graph 的输入
-                （``fresh`` 传初始 state、``resume`` 传 ``None`` 或 ``Command(resume=...)``）
+                （``fresh`` 传初始 state；``resume`` 默认传 ``Command(goto="model")`` 回退
+                到 model 节点重跑，用户输入等待和协作取消沿用 ``Command(resume=...)``）
                 以及上下文是否清空该 run 的旧条目（见 ``RuntimeContextManager.begin_run``）。
 
         返回:
-            无（协程）。工作流只驱动领域事实写入；Transport 通过 canonical conversation
-            state 订阅事实变更。
+            ``finished`` 表示图已收束；``waiting_for_input`` 表示通用等待节点已持久化 interrupt。
 
         异常:
             ValueError: Agent profile 的 ModelSettings 未物化或不满足模型能力约束——run 已先落
@@ -485,15 +486,45 @@ class ReactLikeWorkflow(AgentWorkflow):
                         run_id,
                         reason="resume_rejected_graph_finished",
                     )
-                    return
-                # 图停在带 interrupt 的任务上（当前唯一来源是 ``model_node`` 的协作取消）
-                # 时必须用 ``Command(resume=...)`` 恢复；其余情况传 ``None``，语义为
-                # 「从既有 checkpoint 继续」。
-                input_state = (
-                    Command(resume={"action": "resume"})
-                    if any(task.interrupts for task in snapshot.tasks)
-                    else None
-                )
+                    return "finished"
+                # 续跑一律回退到 model 节点重跑：用户取消 / 工具执行期崩溃 / 后端重启收敛后的
+                # run 都重新经过 ``_model_node``，避免在 ``tools_node`` / ``observe_node`` 重入
+                # 导致工具调用被静默重放（旧 Agent 执行不得隐式重放，见 AGENTS.md 约束）。
+                # ``_model_node`` 入场会重建 lifecycle，并经 ``_close_unclosed_tool_calls`` 给
+                # 未配对的调用补 cancelled 占位闭合协议，因此重跑前无需保留任何工具中间态。
+                # 用户输入等待节点已在工具结果观察后完成工具调用配对，恢复时必须沿用
+                # ``Command(resume=...)`` 穿过原 interrupt，再按固定边进入 model。
+                next_nodes = set(snapshot.next)
+                if "user_input_wait" in next_nodes:
+                    input_state = (
+                        Command(resume={"action": "resume"})
+                        if any(task.interrupts for task in snapshot.tasks)
+                        else None
+                    )
+                else:
+                    task_runtime_spaces.get_or_create(current_task.id).defer_system_message(
+                        SystemMessage(
+                            content=(
+                                "This run was resumed after an interruption. Any tool calls "
+                                "that did not record a result are closed as cancelled; "
+                                "re-issue them only if appropriate, and account for side "
+                                "effects that may already have happened."
+                            )
+                        )
+                    )
+                    log.info(
+                        "workflow_resume_rewound_to_model",
+                        extra={
+                            "msg": "续跑回退到 model 节点重跑，避免工具调用重放",
+                            "data": {
+                                "task_id": current_task.id,
+                                "run_id": run_id,
+                                "stuck_nodes": sorted(next_nodes),
+                            },
+                        },
+                    )
+                    input_state = Command(goto=ReactRoute.MODEL.value)
+
             try:
                 async for mode, value in graph.astream(
                         input_state,
@@ -503,6 +534,14 @@ class ReactLikeWorkflow(AgentWorkflow):
                     # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
                     # 统一写入 snapshot。两者都不是 Agent context 的来源。
                     self._write_stream_item(operations, mode, value)
+                graph_state = await graph.aget_state(config)
+                user_input_waiting = any(
+                    task.name == "user_input_wait" and task.interrupts
+                    for task in graph_state.tasks
+                )
+                outcome: WorkflowOutcome = (
+                    "waiting_for_input" if user_input_waiting else "finished"
+                )
             except Exception as exc:
                 log.exception(
                     "workflow_graph_failed",
@@ -531,6 +570,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                     run_id,
                     reason="run_execution_finished",
                 )
+            return outcome
 
     async def _finalize_terminal_checkpoint(
             self,

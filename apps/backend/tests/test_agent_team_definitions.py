@@ -437,8 +437,7 @@ def test_team_run_crud_round_trips_persisted_confirmation_state(
         session.flush()
         run = ConversationRunModel(
             task_id=task.id,
-            status="cancelled",
-            end_reason="agent_team_waiting_confirmation",
+            status="waiting_for_input",
         )
         session.add(run)
         session.flush()
@@ -480,8 +479,7 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
         session.flush()
         run = ConversationRunModel(
             task_id=task.id,
-            status="cancelled",
-            end_reason="agent_team_waiting_confirmation",
+            status="waiting_for_input",
         )
         session.add(run)
         session.flush()

@@ -24,7 +24,7 @@ from app.service.depends import (
     get_task_service,
     get_workspace_service,
 )
-from app.service.task.workspace_service import WorkspaceService
+from app.service.conversation_run.workspace_service import WorkspaceService
 from app.task_runtime.service.task_service import TaskService
 from app.utils.datetime_utils import TASK_TITLE_LIMIT, preview
 

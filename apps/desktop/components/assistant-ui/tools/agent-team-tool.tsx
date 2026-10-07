@@ -5,9 +5,11 @@ import { CheckCircle2, UsersIcon } from "lucide-react";
 import {
   confirmAgentTeamRun,
   getAgentTeamRun,
+  rejectAgentTeamRun,
   type AgentTeamRun,
 } from "@/lib/api/agent-teams";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { readToolArtifact } from "./types";
 import { readAgentTeamPreviewDisplay } from "./agent-team-display";
 import { ToolStatus } from "./tool-status";
@@ -24,6 +26,7 @@ type NodeResult = {
 };
 
 const END_REASON_LABELS: Record<string, string> = {
+  rejected_by_user: "方案已被用户驳回",
   superseded_by_new_preview: "执行方案已被新的方案替代",
   team_start_failed: "Team 入口节点启动失败",
   transition_not_found: "节点状态没有匹配的转移规则",
@@ -60,9 +63,18 @@ function readNodeResults(state: Record<string, unknown>): NodeResult[] {
 export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
   const artifact = readToolArtifact(rawArtifact);
   const preview = readAgentTeamPreviewDisplay(artifact.display_data);
-  const [state, setState] = useState<"idle" | "confirming" | "confirmed" | "failed">("idle");
+  const [state, setState] = useState<"idle" | "confirming" | "rejecting" | "confirmed" | "rejected" | "failed">("idle");
   const [message, setMessage] = useState("");
   const [teamRun, setTeamRun] = useState<AgentTeamRun | null>(null);
+  const [goal, setGoal] = useState(preview?.goal ?? "");
+  const [instructions, setInstructions] = useState<Record<string, string>>(preview?.instructions ?? {});
+  const [feedback, setFeedback] = useState("");
+
+  useEffect(() => {
+    if (!preview) return;
+    setGoal(preview.goal);
+    setInstructions(preview.instructions);
+  }, [preview?.teamRunId]);
 
   useEffect(() => {
     if (!preview) return undefined;
@@ -88,8 +100,9 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
           return;
         }
         if (current.status === "failed" || current.status === "cancelled") {
-          setState("failed");
-          setMessage(current.status === "cancelled" ? "该 Agent Team 执行方案已取消" : "该 Agent Team 执行失败");
+          const rejected = current.end_reason === "rejected_by_user";
+          setState(rejected ? "rejected" : "failed");
+          setMessage(rejected ? "方案已驳回，主 Agent 将根据反馈重新生成" : current.status === "cancelled" ? "该 Agent Team 执行方案已取消" : "该 Agent Team 执行失败");
         }
       })
       .catch(() => {
@@ -132,6 +145,8 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
       const result = await confirmAgentTeamRun(
         preview.teamRunId,
         preview.configuration,
+        goal,
+        instructions,
       );
       setTeamRun(result);
       setState("confirmed");
@@ -139,6 +154,25 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
     } catch (error) {
       setState("failed");
       setMessage(error instanceof Error ? error.message : "确认失败，请让主 Agent 重新生成方案");
+    }
+  };
+  const reject = async () => {
+    const trimmedFeedback = feedback.trim();
+    if (!trimmedFeedback) {
+      setState("failed");
+      setMessage("请填写驳回意见，主 Agent 才能据此重新生成方案");
+      return;
+    }
+    setState("rejecting");
+    setMessage("");
+    try {
+      const result = await rejectAgentTeamRun(preview.teamRunId, trimmedFeedback);
+      setTeamRun(result);
+      setState("rejected");
+      setMessage("方案已驳回，主 Agent 正在根据意见重新生成");
+    } catch (error) {
+      setState("failed");
+      setMessage(error instanceof Error ? error.message : "驳回失败");
     }
   };
   return (
@@ -150,7 +184,14 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
             <span className="font-medium text-sm">{preview.name}</span>
             <ToolStatus status={artifact.backendStatus} className="text-muted-foreground" />
           </div>
-          <p className="text-muted-foreground mt-1 text-xs">目标：{preview.goal}</p>
+          <p className="text-muted-foreground mt-1 text-xs">目标</p>
+          <Textarea
+            aria-label="Agent Team 目标"
+            className="mt-1 min-h-16 resize-y text-xs"
+            value={goal}
+            disabled={state === "confirming" || state === "rejecting" || state === "confirmed" || state === "rejected"}
+            onChange={(event) => setGoal(event.target.value)}
+          />
         </div>
       </div>
       <div className="space-y-1.5 text-xs">
@@ -164,6 +205,19 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
             <div className="text-muted-foreground mt-0.5">
               状态：{node.statuses.join("、")}
             </div>
+            <label className="text-muted-foreground mt-2 block">
+              节点指令
+              <Textarea
+                aria-label={`${node.name} 的节点指令`}
+                className="mt-1 min-h-14 resize-y bg-background text-xs"
+                value={instructions[node.nodeId] ?? ""}
+                disabled={state === "confirming" || state === "rejecting" || state === "confirmed" || state === "rejected"}
+                onChange={(event) => setInstructions((current) => ({
+                  ...current,
+                  [node.nodeId]: event.target.value,
+                }))}
+              />
+            </label>
           </div>
         ))}
       </div>
@@ -193,12 +247,29 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
           {teamRun?.status === "completed" && <div className="font-medium text-emerald-600">Team 已完成。</div>}
           {teamRun?.status === "cancelled" && <div className="font-medium text-muted-foreground">Team 已取消。</div>}
         </div>
+      ) : state === "rejected" ? (
+        <p className="text-muted-foreground text-xs">{message}</p>
       ) : (
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-muted-foreground text-xs">不满意时让主 Agent 重新调用 agent_team。</span>
-          <Button type="button" size="sm" disabled={state === "confirming"} onClick={confirm}>
-            {state === "confirming" ? "确认中…" : "确认执行"}
-          </Button>
+        <div className="space-y-2">
+          <label className="text-muted-foreground block text-xs">
+            驳回意见
+            <Textarea
+              aria-label="驳回意见"
+              className="mt-1 min-h-16 resize-y bg-background"
+              placeholder="说明需要调整的目标、分工或执行方式…"
+              value={feedback}
+              disabled={state === "confirming" || state === "rejecting"}
+              onChange={(event) => setFeedback(event.target.value)}
+            />
+          </label>
+          <div className="flex justify-end gap-2">
+            <Button type="button" size="sm" variant="outline" disabled={state === "confirming" || state === "rejecting"} onClick={() => void reject()}>
+              {state === "rejecting" ? "正在驳回…" : "驳回并重新生成"}
+            </Button>
+            <Button type="button" size="sm" disabled={state === "confirming" || state === "rejecting"} onClick={() => void confirm()}>
+              {state === "confirming" ? "确认中…" : "确认执行"}
+            </Button>
+          </div>
         </div>
       )}
       {state === "failed" && <p className="text-destructive text-xs">{message}</p>}

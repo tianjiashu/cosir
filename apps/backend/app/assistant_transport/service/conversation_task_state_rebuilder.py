@@ -304,7 +304,9 @@ class ConversationTaskStateRebuilder:
                     ai_message: AIMessage = cast(AIMessage, message)
                     text_status = (
                         "running"
-                        if row.is_streaming and run.status in {"pending", "running"}
+                        if row.is_streaming and run.status in {
+                            "pending", "running", "waiting_for_input"
+                        }
                         else "completed"
                     )
                     if ai_message.additional_kwargs.get("reasoning_content") is not None:

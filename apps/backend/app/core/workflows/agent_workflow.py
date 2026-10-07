@@ -9,13 +9,15 @@ Workflow 编排层强依赖 LangGraph（见 ``AGENTS.md`` 不可变决议）：`
 from abc import ABC
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.storage.store_engines import checkpoint_path as _engine_checkpoint_path
+
+WorkflowOutcome = Literal["finished", "waiting_for_input"]
 
 
 class AgentWorkflow(ABC):
@@ -29,7 +31,7 @@ class AgentWorkflow(ABC):
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,
         execution_mode: ExecutionMode = "fresh",
-    ) -> None:
+    ) -> WorkflowOutcome:
         """通过一个工作流策略运行一个任务。
 
         参数:
@@ -42,14 +44,14 @@ class AgentWorkflow(ABC):
                 由工作流实现决定是否清空该 run 的旧上下文与如何构造 graph 输入。
 
         返回:
-            无（协程）。工作流只驱动领域事实写入；Transport 通过 canonical conversation
-            state 订阅事实变更。
+            ``finished`` 表示本次图执行已收束；``waiting_for_input`` 表示 checkpoint 已保存，
+            执行器应先完成本地资源清理，再将 Run 迁移为等待输入状态。
 
         异常:
             Exception: 工作流失败可能传播到运行时包装器。
 
         副作用:
-            使用 ``operations`` 更新状态、调用模型、执行工具，并记录对话事实。
+            调用模型、执行工具并记录对话事实；等待输入状态由外层执行器在资源清理后写入。
         """
 
         ...

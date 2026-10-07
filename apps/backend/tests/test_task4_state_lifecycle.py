@@ -20,8 +20,7 @@ from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
-from app.service.task import conversation_run_state_service as conversation_run_state_service_module
-from app.service.task.conversation_run_state_service import ConversationRunStateService
+from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
@@ -424,11 +423,11 @@ async def test_cold_sse_first_frame_uses_canonical_rebuild() -> None:
 # retryable 只属于工具观察（告诉模型能否重试某次工具调用）；Run 级错误契约的键集精确锁定为
 # code + message，任何把 retryable 加回来的改动都必须让本用例变红。
 def test_terminal_error_contract_carries_only_code_and_message() -> None:
-    failed = conversation_run_state_service_module.terminal_error(
+    failed = ConversationRunStateService.terminal_error(
         ConversationRunStatus.FAILED,
         "tool_error_limit_reached",
     )
-    cancelled = conversation_run_state_service_module.terminal_error(
+    cancelled = ConversationRunStateService.terminal_error(
         ConversationRunStatus.CANCELLED,
         "user cancelled mid-run",  # 非合法标识符 -> 回退固定 code
     )
@@ -445,7 +444,7 @@ def test_terminal_error_contract_carries_only_code_and_message() -> None:
         "message": run_failure_message("run_cancelled"),
     }
     assert (
-        conversation_run_state_service_module.terminal_error(
+        ConversationRunStateService.terminal_error(
             ConversationRunStatus.COMPLETED,
             None,
         )

@@ -19,8 +19,9 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.config.logging.logger import log
 from app.core.runtime.execution_mode import ExecutionMode
 from app.models import ConversationRunCommand, ConversationRunRecord
+from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service import depends as service_depends
-from app.service.task.conversation_task_context_service import ConversationTaskContextService
+from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
 from app.storage.store_engines import main_session_factory
 
 RunCommandMode = Literal["new", "edit", "resume"]
@@ -296,59 +297,88 @@ class ConversationRunCommandService:
 
 
     def resume_latest_run(self, task_id: int, run_id: int) -> ConversationRunStartResult:
-        """校验 task 最近 run 并返回业务续跑的执行结果。
-
-        该用例只负责领域身份和持久状态资格判断；真正的 executor 启动由 API 编排层
-        完成，Transport 层只负责随后建立 snapshot response。
-
-        执行顺序刻意把所有可能失败的只读步骤放在唯一写操作之前：先校验 run 身份与状态、
-        snapshot 归属与用户消息、驱动命令可读，再原子恢复 run 状态。否则一旦写操作之后才
-        暴露错误，run 会停在 ``running`` 却没有执行器，后续 resume 会被状态校验永久拒绝。
-        写操作之后的 snapshot 重读若失败，会补偿收敛该 run。
+        """恢复用户显式取消后仍可续跑的最近 Run。
 
         参数:
-            task_id: 目标任务标识。
-            run_id: 待续跑的 Conversation Run 标识。
+            task_id: Run 所属 Task 标识。
+            run_id: 需要恢复的最近 Run 标识。
 
         返回:
-            ``execution_mode="resume"`` 的启动结果。
+            使用既有 checkpoint 的 ``resume`` 执行准备结果。
 
         异常:
-            ValueError: run 不是 task 最近 run、不是 ``cancelled``、snapshot 归属失效、
-                缺少用户消息，或恢复时已被其它路径落定终态。
-            RuntimeError: 快照与 canonical 均不含该 run（不变量被破坏）。
+            ValueError: Run 身份、状态或 snapshot 归属不满足恢复条件。
+            RuntimeError: canonical 与 Transport snapshot 同时缺少该 Run。
 
         副作用:
-            事务性把 ``cancelled`` run 恢复为 ``running``（清空旧终态字段）并发布 RUNNING
-            状态事件；若快照缺少该 run（与 canonical 分叉）则先按 canonical 重建快照并发布
-            full 帧，再做归属与用户消息校验；补偿路径会把该 run 收敛回终态，避免留下无执行器
-            的 active run。
+            通过 ``ConversationRunStateService`` 原子迁移状态并发布状态事件。
         """
 
+        return self._resume_run(
+            task_id,
+            run_id,
+            expected_status=ConversationRunStatus.CANCELLED,
+        )
+
+    def resume_waiting_run(self, task_id: int, run_id: int) -> ConversationRunStartResult:
+        """恢复等待用户输入的最近 Run。
+
+        参数:
+            task_id: Run 所属 Task 标识。
+            run_id: 需要恢复的最近 Run 标识。
+
+        返回:
+            使用既有 checkpoint 的 ``resume`` 执行准备结果。
+
+        异常:
+            ValueError: Run 当前不处于等待状态，或身份/snapshot 校验失败。
+            RuntimeError: canonical 与 Transport snapshot 同时缺少该 Run。
+
+        副作用:
+            将 Run 原子迁移回 ``running`` 并发布状态事件；不直接启动执行器。
+        """
+
+        return self._resume_run(
+            task_id,
+            run_id,
+            expected_status=ConversationRunStatus.WAITING_FOR_INPUT,
+        )
+
+    def _resume_run(
+        self,
+        task_id: int,
+        run_id: int,
+        *,
+        expected_status: ConversationRunStatus,
+    ) -> ConversationRunStartResult:
+        """校验最近 Run 的身份和状态，迁移为 running 并返回 checkpoint 续跑结果。"""
+
         latest_run = self._task.get_latest_run(task_id)
-        if latest_run is None or latest_run.id != run_id or latest_run.status != "cancelled":
-            raise ValueError(f"run {run_id} is not resumable")
-        # 快照缺失该 run 说明已与 canonical 分叉：先自愈，否则下面的归属/用户消息校验必然
-        # 失败，用户会看到「无法 resume」，而进程内没有其它恢复入口（只有重启或删 task）。
+        if (
+            latest_run is None
+            or latest_run.id != run_id
+            or latest_run.status != expected_status.value
+        ):
+            raise ValueError(f"run {run_id} is not resumable from {expected_status.value}")
         state = self._ensure_run_visible(task_id, run_id)
         if state["current_run_id"] != run_id:
-            raise ValueError(f"run {run_id} is not the current task run")
+            raise ValueError(f"run {run_id} is not the current conversation_run run")
         if not any(
-                message["role"] == "user"
-                for run in state["runs"]
-                if run["runId"] == run_id
-                for message in run["messages"]
+            message["role"] == "user"
+            for run in state["runs"]
+            if run["runId"] == run_id
+            for message in run["messages"]
         ):
             raise ValueError(f"run {run_id} has no user message")
         try:
-            resumed = self._run_state.resume_cancelled_run(run_id)
+            if expected_status is ConversationRunStatus.CANCELLED:
+                resumed = self._run_state.resume_cancelled_run(run_id)
+            else:
+                resumed = self._run_state.resume_waiting_run(run_id)
             if resumed is None:
                 raise ValueError(f"run {run_id} is no longer resumable")
             state = self._state.get_state(task_id)
         except Exception:
-            # run 可能已被本调用置为 running（认领提交成功但后续步骤/事件发布抛错）；
-            # 本次续跑不会启动执行器，无条件尝试收敛（未认领命中时条件是 no-op），让用户
-            # 可重试，而不是留下永远无法 resume 的 active run。
             log.exception(
                 "assistant_transport_resume_setup_failed",
                 extra={
@@ -356,9 +386,7 @@ class ConversationRunCommandService:
                     "data": {"task_id": task_id, "run_id": run_id},
                 },
             )
-            self._converge_failed_setup(
-                run_id, end_reason="resume_setup_failed"
-            )
+            self._converge_failed_setup(run_id, end_reason="resume_setup_failed")
             raise
         return ConversationRunStartResult(
             run=resumed,

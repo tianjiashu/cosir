@@ -379,6 +379,7 @@ function toMessageStatusForRun(
   switch (status) {
     case "pending":
     case "running":
+    case "waiting_for_input":
       return { type: "running" };
     case "completed":
       return { type: "complete", reason: "stop" };

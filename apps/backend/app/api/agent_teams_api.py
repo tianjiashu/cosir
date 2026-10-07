@@ -11,6 +11,7 @@ from app.agent_team.coordinator import get_agent_team_coordinator
 from app.agent_team.registry import get_agent_team_registry
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.api.schemas.request.confirm_agent_team_request import ConfirmAgentTeamRequest
+from app.api.schemas.request.reject_agent_team_request import RejectAgentTeamRequest
 from app.api.schemas.request.save_agent_team_configuration_request import (
     SaveAgentTeamConfigurationRequest,
 )
@@ -103,10 +104,13 @@ async def confirm_agent_team_run(
 
     runtime_loop = asyncio.get_running_loop()
     try:
+        await get_agent_team_coordinator().wait_for_parent_input(payload.team_run_id)
         row = await asyncio.to_thread(
             AgentTeamRunService().confirm_and_start,
             payload.team_run_id,
             payload.configuration,
+            goal=payload.goal,
+            instructions=payload.instructions,
             runtime_loop=runtime_loop,
         )
         return _run_payload(row)
@@ -125,6 +129,30 @@ async def get_agent_team_run(run_id: int) -> dict[str, Any]:
         if row is None:
             raise KeyError(run_id)
         return _run_payload(row)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Team run not found") from exc
+
+
+@app.post("/agent-team/runs/{run_id}/reject")
+async def reject_agent_team_run(
+    run_id: int,
+    payload: RejectAgentTeamRequest,
+) -> dict[str, Any]:
+    """驳回待确认方案，把反馈交给主 Agent 并恢复等待中的 Run。"""
+
+    try:
+        feedback = payload.feedback.strip()
+        if not feedback:
+            raise ValueError("驳回意见不能为空")
+        await get_agent_team_coordinator().wait_for_parent_input(run_id)
+        team_run = await asyncio.to_thread(AgentTeamRunService().reject_pending, run_id)
+        await get_agent_team_coordinator().resume_parent_after_rejection(
+            team_run,
+            feedback,
+        )
+        return _run_payload(team_run)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Team run not found") from exc
 

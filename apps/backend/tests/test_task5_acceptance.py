@@ -35,9 +35,9 @@ from app.core.workflows.conversation_run_usage_stats import ConversationRunUsage
 from app.models import ConversationRunCommand, ConversationRunError, ConversationRunStatus
 from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.service.task.conversation_run_service import ConversationRunService
-from app.service.task.conversation_run_state_service import ConversationRunStateService
-from app.service.task.conversation_task_context_service import ConversationTaskContextService
+from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
+from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -87,7 +87,7 @@ def canonical_store(tmp_path: Path, monkeypatch):
     context_service = ConversationTaskContextService.__new__(ConversationTaskContextService)
     context_service._crud = contexts
     workspace = workspaces.create("acceptance", str(tmp_path))
-    task = tasks.create(workspace.id, "canonical task")
+    task = tasks.create(workspace.id, "canonical conversation_run")
     # 快照重建按工具名查 display 定义；本文件只验证状态契约，给出最小合法 presentation
     # （``validate_snapshot`` 要求它是对象），不依赖工具系统装配。
     monkeypatch.setattr(

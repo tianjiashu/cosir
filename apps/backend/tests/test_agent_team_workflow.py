@@ -11,9 +11,7 @@ from app.agent_team.coordinator import AgentTeamCoordinator
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.api.agent_teams_api import _run_payload
 from app.core.agents.model_settings import ModelSettings
-from app.core.workflows.react.nodes.agent_team_confirmation_wait_node import (
-    agent_team_confirmation_wait_node,
-)
+from app.core.workflows.react.nodes.user_input_wait_node import user_input_wait_node
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.service.agent_team.agent_team_preparation_service import (
@@ -22,7 +20,7 @@ from app.service.agent_team.agent_team_preparation_service import (
 
 
 def _state() -> ReactGraphState:
-    """构造等待节点所需的最小 graph state。"""
+    """构造通用用户输入等待节点所需的最小 graph state。"""
 
     return ReactGraphState(
         step_count=0,
@@ -30,15 +28,28 @@ def _state() -> ReactGraphState:
         next_node=ReactRoute.MODEL,
         max_steps=10,
         final_text="",
-        last_tool_results={},
+        last_tool_results={
+            "observations": [
+                {
+                    "status": "success",
+                    "display_data": {
+                        "requires_user_input": True,
+                        "user_input_request": {
+                            "kind": "agent_team_review",
+                            "request_id": "1",
+                        },
+                    },
+                }
+            ]
+        },
     )
 
 
-def test_agent_team_wait_node_resumes_to_model_path() -> None:
-    """等待节点初次执行保存断点，恢复后才离开节点。"""
+def test_user_input_wait_node_resumes_to_model_path() -> None:
+    """通用等待节点初次执行保存断点，恢复后才离开节点。"""
 
     builder = StateGraph(ReactGraphState)
-    builder.add_node("wait", agent_team_confirmation_wait_node)
+    builder.add_node("wait", user_input_wait_node)
     builder.add_node("finish", lambda _state: {"next_node": ReactRoute.END})
     builder.add_edge(START, "wait")
     builder.add_edge("wait", "finish")

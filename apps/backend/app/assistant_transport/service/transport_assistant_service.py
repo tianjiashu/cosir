@@ -82,9 +82,13 @@ class TransportAssistantService:
         from app.service.depends import get_conversation_run_executor
 
         self.run_executor = get_conversation_run_executor()
-        from app.service.depends import get_conversation_run_state_service
+        from app.service.depends import (
+            get_conversation_run_service,
+            get_conversation_run_state_service,
+        )
 
         self._runs = get_conversation_run_state_service()
+        self._run_service = get_conversation_run_service()
         from app.service.depends import get_task_service
 
         self._tasks = get_task_service()
@@ -470,7 +474,7 @@ class TransportAssistantService:
         """
 
         try:
-            run = self._runs.get_run(run_id)
+            run = self._run_service.get_run(run_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="run not found") from exc
         if run.task_id != task_id:
@@ -494,6 +498,7 @@ class TransportAssistantService:
         if run.status not in {
             ConversationRunStatus.PENDING.value,
             ConversationRunStatus.RUNNING.value,
+            ConversationRunStatus.WAITING_FOR_INPUT.value,
         }:
             _raise_transport_error(
                 409,

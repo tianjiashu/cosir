@@ -11,6 +11,7 @@ class AgentTeamRunEndReason(str, Enum):
     """
 
     SUPERSEDED_BY_NEW_PREVIEW = "superseded_by_new_preview"
+    REJECTED_BY_USER = "rejected_by_user"
     TEAM_START_FAILED = "team_start_failed"
     TRANSITION_NOT_FOUND = "transition_not_found"
     RUNTIME_UNAVAILABLE = "runtime_unavailable"

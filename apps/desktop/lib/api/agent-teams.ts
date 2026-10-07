@@ -45,6 +45,8 @@ export function saveAgentTeamConfiguration(input: AgentTeamConfigurationInput): 
 export function confirmAgentTeamRun(
   teamRunId: number,
   configuration: Record<string, unknown>,
+  goal: string,
+  instructions: Record<string, string>,
 ): Promise<AgentTeamRun> {
   return requestJson<AgentTeamRun>(
     "/agent-team/runs/confirm",
@@ -52,9 +54,18 @@ export function confirmAgentTeamRun(
       {
         team_run_id: teamRunId,
         configuration,
+        goal,
+        instructions,
       },
       { method: "POST" },
     ),
+  );
+}
+
+export function rejectAgentTeamRun(teamRunId: number, feedback: string): Promise<AgentTeamRun> {
+  return requestJson<AgentTeamRun>(
+    `/agent-team/runs/${encodeURIComponent(teamRunId)}/reject`,
+    jsonRequestInit({ feedback }, { method: "POST" }),
   );
 }
 

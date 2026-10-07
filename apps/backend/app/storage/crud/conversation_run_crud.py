@@ -423,13 +423,13 @@ class ConversationRunCrud:
         return list(latest_by_task.values())
 
     def list_recoverable(self) -> list[ConversationRunRecord]:
-        """返回进程重启后仍需恢复的 pending/running 运行。
+        """返回进程重启后仍需收敛的 pending/running/waiting 运行。
 
         参数:
             无。
 
         返回:
-            状态为 ``pending`` 或 ``running`` 的 run 列表，按 ``created_at`` 再 ``id``
+            状态为 ``pending``、``running`` 或 ``waiting_for_input`` 的 run 列表，按 ``created_at`` 再 ``id``
             升序；无匹配时为空列表。
 
         异常:
@@ -447,6 +447,7 @@ class ConversationRunCrud:
                             (
                                 ConversationRunStatus.PENDING.value,
                                 ConversationRunStatus.RUNNING.value,
+                                ConversationRunStatus.WAITING_FOR_INPUT.value,
                             )
                         )
                     )
@@ -461,7 +462,7 @@ class ConversationRunCrud:
         return [ConversationRunRecord.from_model(row) for row in rows]
 
     def has_active_for_task(self, task_id: int) -> bool:
-        """Return whether the task has a canonical pending or running Run."""
+        """判断 conversation_run 是否存在 pending、running 或 waiting_for_input Run。"""
 
         with self._session_factory() as session:
             row_id = session.execute(
@@ -472,6 +473,7 @@ class ConversationRunCrud:
                         (
                             ConversationRunStatus.PENDING.value,
                             ConversationRunStatus.RUNNING.value,
+                            ConversationRunStatus.WAITING_FOR_INPUT.value,
                         )
                     )
                 )

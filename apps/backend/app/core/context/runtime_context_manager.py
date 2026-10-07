@@ -53,7 +53,7 @@ from app.service.depends import (
     get_conversation_event_projector,
     get_conversation_task_context_service,
 )
-from app.service.task.conversation_task_context_service import (
+from app.service.conversation_run.conversation_task_context_service import (
     TASK_SYSTEM_PROMPT_SEQUENCE,
     ConversationTaskContextService,
 )

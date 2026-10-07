@@ -142,6 +142,28 @@ class AgentTeamRunCrud:
                 ).all()
             )
 
+    def list_pending_confirmations(self) -> list[AgentTeamRunModel]:
+        """读取尚未确认的 TeamRun。
+
+        返回:
+            按数据库查询顺序返回所有 ``pending`` TeamRun；无记录时返回空列表。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 查询主库失败。
+
+        副作用:
+            打开一次主库只读 session。
+        """
+
+        with self._session_factory() as session:
+            return list(
+                session.scalars(
+                    select(AgentTeamRunModel).where(
+                        AgentTeamRunModel.status == AgentTeamRunStatus.PENDING.value,
+                    )
+                ).all()
+            )
+
     def update_status_if_in(
         self,
         team_run_db_id: int,

@@ -19,7 +19,7 @@ from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_AGENT_TEAM
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import AgentTeamArgs
-from app.service.depends import get_conversation_run_state_service
+from app.service.depends import get_conversation_run_service
 
 
 class AgentTeamRunTool(HandlerBase):
@@ -70,7 +70,7 @@ class AgentTeamRunTool(HandlerBase):
             )
             if configuration is None:
                 raise ValueError(f"Team 配置不存在: {team_id}")
-            parent_run = get_conversation_run_state_service().get_run(execution_context.run_id)
+            parent_run = get_conversation_run_service().get_run(execution_context.run_id)
             # Runner 为主 Run 派生的 profile 已经物化了模型连接配置。节点缺少独立配置时，
             # 只能沿用这份本次 Run 快照，不能在确认时重新读取可变配置。
             fallback_model_settings = (
@@ -111,6 +111,11 @@ class AgentTeamRunTool(HandlerBase):
                 display_data={
                     **preparation.preview_document,
                     "team_run_id": pending_run.id,
+                    "requires_user_input": True,
+                    "user_input_request": {
+                        "kind": "agent_team_review",
+                        "request_id": str(pending_run.id),
+                    },
                 },
             )
         except Exception as exc:

@@ -19,6 +19,7 @@ export type AgentTeamPreviewDisplay = {
   teamId: string;
   name: string;
   goal: string;
+  instructions: Record<string, string>;
   startNode: string;
   parentTaskId: number;
   parentRunId: number;
@@ -79,6 +80,11 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
   const configuration = asRecord(data.configuration);
   if (teamRunId === undefined || !teamId || !name || !goal || !startNode || parentTaskId === undefined || parentRunId === undefined || workspaceId === undefined || Object.keys(configuration).length === 0) return null;
   const edges = recordList(data.edges);
+  const instructions = data.instructions === undefined
+    ? {}
+    : Object.fromEntries(
+      Object.entries(asRecord(data.instructions)).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+    );
   if (!Array.isArray(data.nodes) || !edges) return null;
   const nodes: AgentTeamNodePreview[] = [];
   for (const raw of data.nodes) {
@@ -115,6 +121,7 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
     teamId,
     name,
     goal,
+    instructions,
     startNode,
     parentTaskId,
     parentRunId,

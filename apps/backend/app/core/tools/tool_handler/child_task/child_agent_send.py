@@ -141,7 +141,7 @@ class ChildAgentSendTool(HandlerBase):
             )
 
         current_run_id = child_task.current_run_id
-        current_run = self._run_state_service.get_run(current_run_id)
+        current_run = self._run_service.get_run(current_run_id)
         if current_run.status not in Constant.Run.TERMINAL_STATUSES:
             return tool_error(
                 tool_name=self.name,

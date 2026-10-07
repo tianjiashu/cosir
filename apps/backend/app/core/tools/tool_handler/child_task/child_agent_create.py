@@ -243,7 +243,7 @@ class DelegateTaskTool(HandlerBase):
         try:
             from app.config.configuration import get_tool_system
 
-            parent_run = self.run_state_service.get_run(execution_context.run_id)
+            parent_run = self.run_setvice.get_run(execution_context.run_id)
             child_task_tools = child_agent_profile.select_tools(
                 get_tool_system().executor.list_tools()
             )

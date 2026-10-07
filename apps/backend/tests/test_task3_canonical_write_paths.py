@@ -27,8 +27,8 @@ from app.core.workflows.react.node_helper.tool_call_lifecycle import (
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.conversation_run_status import ConversationRunStatus
-from app.service.task.conversation_run_service import ConversationRunService
-from app.service.task.conversation_run_state_service import ConversationRunStateService
+from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 
 
 class _RecordingContextService:

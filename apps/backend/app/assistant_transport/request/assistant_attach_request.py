@@ -24,5 +24,5 @@ class AssistantAttachRequest(BaseModel):
 
     commands: list[object] = Field(default_factory=list)
     taskId: int | None = Field(default=None, ge=1)
-    threadId: str = Field(pattern=r"^task-[1-9][0-9]*$")
+    threadId: str = Field(pattern=r"^conversation_run-[1-9][0-9]*$")
     runId: int = Field(ge=1)

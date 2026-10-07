@@ -16,3 +16,5 @@ class ConfirmAgentTeamRequest(BaseModel):
 
     team_run_id: int = Field(gt=0)
     configuration: dict[str, Any]
+    goal: str | None = None
+    instructions: dict[str, str] | None = None

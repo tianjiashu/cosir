@@ -19,7 +19,7 @@ from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.child_task import ChildAgentWaitArgs
-from app.service.depends import get_conversation_run_state_service, get_task_service
+from app.service.depends import get_conversation_run_service, get_task_service
 
 # 轮询间隔：子 Agent 完成一轮通常以秒到分钟计，1 秒足以兼顾及时性与查询开销。
 _POLL_INTERVAL_SECONDS = 1.0
@@ -60,11 +60,11 @@ class ChildAgentWaitTool(HandlerBase):
             无。
 
         副作用:
-            从依赖装配取得 ``TaskService`` 与 ``ConversationRunStateService`` 单例引用。
+            从依赖装配取得 ``TaskService`` 与 ``ConversationRunService`` 单例引用。
         """
 
         self._task_service = get_task_service()
-        self._run_state_service = get_conversation_run_state_service()
+        self._run_service = get_conversation_run_service()
 
     def execute(
         self,
@@ -138,7 +138,7 @@ class ChildAgentWaitTool(HandlerBase):
                     permission=self.permission,
                 )
 
-            run = self._run_state_service.get_run(child_task.current_run_id)
+            run = self._run_service.get_run(child_task.current_run_id)
 
             if run.final_output:
                 return tool_success(

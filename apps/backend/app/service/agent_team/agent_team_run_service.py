@@ -21,7 +21,7 @@ from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationService,
 )
 from app.service.depends import get_model_config_service, get_workspace_service
-from app.service.task.conversation_run_service import ConversationRunService
+from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory

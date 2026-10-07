@@ -31,8 +31,8 @@ from app.models import (
 )
 from app.service import depends as service_depends
 from app.service.depends import get_model_config_service
-from app.service.task.conversation_run_state_service import ConversationRunStateService
-from app.service.task.conversation_task_context_service import ConversationTaskContextService
+from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
+from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
 from app.storage.store_engines import main_session_factory
 
 

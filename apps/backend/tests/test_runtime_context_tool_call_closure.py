@@ -45,8 +45,8 @@ from app.core.agents.agent_profile import AgentProfile
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_context_manager import RuntimeContextManager
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.service.task.conversation_run_service import ConversationRunService
-from app.service.task.conversation_task_context_service import ConversationTaskContextService
+from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud

@@ -25,20 +25,18 @@ from typing import Any
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM
 from app.core.workflows.react.node_helper.common import _runtime_config
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
-def _contains_agent_team_preview(observations: list[dict[str, Any]]) -> bool:
-    """判断本批工具结果是否包含成功的 Agent Team 运行预览。"""
+def _contains_user_input_request(observations: list[dict[str, Any]]) -> bool:
+    """判断本批工具结果是否声明需要用户输入后才能继续工作流。"""
 
     return any(
-        observation.get("tool_name") == TOOL_AGENT_TEAM
-        and observation.get("status") == "success"
+        observation.get("status") == "success"
         and isinstance(observation.get("display_data"), dict)
-        and observation["display_data"].get("kind") == "agent-team-preview"
+        and observation["display_data"].get("requires_user_input") is True
         for observation in observations
     )
 
@@ -65,7 +63,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
 
     返回:
         需要合并回 graph state 的增量。所有分支均回写动态 ``next_node`` 与工具调用生命周期；
-        路由值为 ``model``、``agent_team_wait`` 或 ``end``。
+        路由值为 ``model``、``user_input_wait`` 或 ``end``。
 
     异常:
         RuntimeError: ``state.tool_call_lifecycle`` 缺失（应由 ``model`` 节点写入）。
@@ -100,14 +98,13 @@ async def _observe_node(state: ReactGraphState) -> dict:
     )
     lifecycle = dispatch.lifecycle
     tool_error_count = dispatch.tool_error_count
-    waiting_for_team_confirmation = _contains_agent_team_preview(observations)
+    waiting_for_user_input = _contains_user_input_request(observations)
 
-
-    if waiting_for_team_confirmation:
+    if waiting_for_user_input:
         return {
             "tool_error_count": tool_error_count,
             "tool_call_lifecycle": lifecycle,
-            "next_node": ReactRoute.AGENT_TEAM_WAIT,
+            "next_node": ReactRoute.USER_INPUT_WAIT,
         }
 
     log.info(
@@ -168,6 +165,6 @@ async def _observe_node(state: ReactGraphState) -> dict:
         "tool_error_count": tool_error_count,
         "tool_call_lifecycle": lifecycle,
         "next_node": (
-            ReactRoute.AGENT_TEAM_WAIT if waiting_for_team_confirmation else ReactRoute.MODEL
+            ReactRoute.USER_INPUT_WAIT if waiting_for_user_input else ReactRoute.MODEL
         ),
     }

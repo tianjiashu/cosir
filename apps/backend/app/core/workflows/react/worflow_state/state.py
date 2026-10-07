@@ -2,7 +2,7 @@
 
 本模块只承载交给 LangGraph 管理的 graph state 数据契约。state 是 graph 各节点之间传递的
 唯一数据通道，由 LangGraph 在节点返回增量后自动合并并
-经 ``AsyncSqliteSaver`` checkpointer 持久化（断点续跑与审批中断重放的依据）。
+经 ``AsyncSqliteSaver`` checkpointer 持久化，作为断点续跑与用户输入等待恢复的依据。
 """
 
 from typing import Any
@@ -31,7 +31,7 @@ class ReactGraphState(BaseModel):
         tool_error_count: 连续工具失败次数，成功即清零。observe 节点从本批
             ``last_tool_results`` 重算并消费（超 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 判定）。
         next_node: 下一个图节点或 ``end``。model 节点选择工具、续写、结构化输出或结束；
-            observe 节点选择继续模型、等待 Agent Team 确认或结束。固定转移由图边表达。
+        observe 节点选择继续模型、等待用户输入或结束。固定转移由图边表达。
         max_steps: 本轮允许的最大模型步骤数，执行期常量。编排层初始化；model 节点
             ``step_count > max_steps`` 判定用。
         final_text: 终态可见文本：正常完成为模型最终回答，步数耗尽由 ``_finalize_max_steps``

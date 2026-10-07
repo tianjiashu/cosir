@@ -14,6 +14,7 @@ from app.core.runtime.execution_mode import ExecutionMode
 from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.models import ConversationRunRecord, ConversationRunStatus
 from app.service.depends import (
+    get_conversation_run_service,
     get_conversation_run_state_service,
     get_runtime,
     get_terminal_session_service,
@@ -60,7 +61,8 @@ class ConversationRunExecutor:
             初始化空的进程内运行注册表；不读取或写入任何 run 状态。
         """
 
-        self._run_service = get_conversation_run_state_service()
+        self._run_service = get_conversation_run_service()
+        self._run_state_service = get_conversation_run_state_service()
         self._event_projector = ConversationEventProjector()
         self._signal = cancellation_registry
         self._executions: dict[int, _Execution] = {}
@@ -240,22 +242,21 @@ class ConversationRunExecutor:
             raise
         # 主 Agent 被用户或其它业务入口显式取消时，不能留下仍在运行的 Team。等待用户
         # 确认是 Agent Team 自己使用的内部暂停语义，此时 Team 尚未创建，不能反向取消。
-        if end_reason != "agent_team_waiting_confirmation":
-            try:
-                from app.agent_team.coordinator import get_agent_team_coordinator
+        try:
+            from app.agent_team.coordinator import get_agent_team_coordinator
 
-                await asyncio.to_thread(
-                    get_agent_team_coordinator().cancel_for_parent_run_id,
-                    run_id,
-                )
-            except Exception:
-                log.exception(
-                    "agent_team_parent_cancel_propagation_failed",
-                    extra={
-                        "msg": "主 Agent 取消后传播到 Agent Team 失败",
-                        "data": {"parent_run_id": run_id, "end_reason": end_reason},
-                    },
-                )
+            await asyncio.to_thread(
+                get_agent_team_coordinator().cancel_for_parent_run_id,
+                run_id,
+            )
+        except Exception:
+            log.exception(
+                "agent_team_parent_cancel_propagation_failed",
+                extra={
+                    "msg": "主 Agent 取消后传播到 Agent Team 失败",
+                    "data": {"parent_run_id": run_id, "end_reason": end_reason},
+                },
+            )
         # 取消请求必须立即关闭本 Run 的 PTY；workflow 之后仍会协作收束，
         # ``_execute`` 的 finally 还会再次幂等兜底。
         await asyncio.to_thread(self._close_run_terminals, run_id, end_reason)
@@ -312,11 +313,11 @@ class ConversationRunExecutor:
     ) -> None:
         """驱动 runner 执行一次 ConversationRun；执行器不拥有 run 终态。
 
-        本方法只负责「执行」：读取 run 后把控制权交给 ``AgentRuntime.execute_run`` 跑完
-        整个 workflow，退出时关闭本 Run 的 terminal 并从进程内 ``_executions`` 注销本次
-        执行。它不落库、不落定 run 终态
-        （running → completed/failed/cancelled 由 workflow 内部经 run_service 落定），
-        也不清理进程内取消信号（该清理由 ``AgentRuntime`` 的收尾负责）。
+        本方法只负责「执行」：读取 run 后把控制权交给 ``AgentRuntime.execute_run`` 驱动
+        workflow，退出时关闭本 Run 的 terminal 并从进程内 ``_executions`` 注销本次执行。
+        workflow 正常终态由节点落定；若 workflow 返回用户输入等待结果，则本方法在资源清理
+        完成后迁移到 ``waiting_for_input``。本方法也不清理进程内取消信号（该清理由
+        ``AgentRuntime`` 的收尾负责）。
 
         参数:
             run_id: 当前运行标识。
@@ -331,7 +332,7 @@ class ConversationRunExecutor:
             驱动期异常**不外抛**：runner 抛 ``Exception`` 时经 ``_project_tools_settled``
             投影工具失败收束后在本方法内收口，runner 抛 ``CancelledError`` 时只置内部
             ``cancelled`` 标志；两条路径都在退出前经过兜底收敛，把仍未落终态的 run 收敛为
-            failed / cancelled。run 的常规终态仍必须在 workflow 抛出之前由 workflow 落定。
+            failed / cancelled。正常终态仍由 workflow 落定；等待状态在执行器完成收尾后落定。
 
         副作用:
             runner 抛 ``Exception`` 时先经 ``_project_tools_settled`` 投影工具失败收束
@@ -341,15 +342,17 @@ class ConversationRunExecutor:
         """
         cancelled = False
         runner_started = False
+        waiting_for_input = False
         try:
             try:
                 run = self._run_service.get_run(run_id)
                 get_terminal_session_service().begin_run(run_id)
                 runner_started = True
-                await get_runtime().execute_run(
+                outcome = await get_runtime().execute_run(
                     run=run,
                     execution_mode=start_mode,
                 )
+                waiting_for_input = outcome == "waiting_for_input"
             except asyncio.CancelledError:
                 cancelled = runner_started
             except Exception:
@@ -379,10 +382,38 @@ class ConversationRunExecutor:
                     self._executions.pop(run_id, None)
             except BaseException:
                 self._log_cleanup_failure(run_id, "execution_registry_remove")
+            preserved_waiting_run = False
+            if waiting_for_input:
+                try:
+                    waiting_record = await asyncio.to_thread(
+                        self._run_state_service.mark_waiting_for_input_if_running,
+                        run_id,
+                    )
+                    preserved_waiting_run = waiting_record is not None
+                    if not preserved_waiting_run:
+                        log.info(
+                            "conversation_run_wait_status_not_changed",
+                            extra={
+                                "msg": "工作流断点已保存，但 Run 已由并发路径迁移",
+                                "data": {"run_id": run_id},
+                            },
+                        )
+                except Exception:
+                    log.exception(
+                        "conversation_run_wait_status_persist_failed",
+                        extra={
+                            "msg": "用户输入断点已保存，但 Run 状态迁移失败",
+                            "data": {"run_id": run_id},
+                        },
+                    )
             try:
                 # 兜底收敛放在最后：即使它在事件循环拆除期被打断，前面的 terminal 清理与
                 # 登记移除也已完成，残余窗口退回下次启动的 recover_orphaned_runs。
-                await self._converge_unfinished_run(run_id, cancelled=cancelled)
+                await self._converge_unfinished_run(
+                    run_id,
+                    cancelled=cancelled,
+                    preserved_waiting_run=preserved_waiting_run,
+                )
             except BaseException:
                 self._log_cleanup_failure(run_id, "convergence")
 
@@ -404,7 +435,13 @@ class ConversationRunExecutor:
 
         get_terminal_session_service().close_run_terminals(run_id, reason=reason)
 
-    async def _converge_unfinished_run(self, run_id: int, *, cancelled: bool) -> None:
+    async def _converge_unfinished_run(
+        self,
+        run_id: int,
+        *,
+        cancelled: bool,
+        preserved_waiting_run: bool = False,
+    ) -> None:
         """驱动结束后 run 仍未落终态时的条件收敛安全网。
 
         负责兜住「run 被 ``prepare_run_start`` 翻成 running 后驱动死亡」的路径：
@@ -431,16 +468,25 @@ class ConversationRunExecutor:
         """
 
         try:
+            if preserved_waiting_run:
+                log.info(
+                    "conversation_run_executor_preserved_waiting_run",
+                    extra={
+                        "msg": "工作流已进入等待用户输入状态，执行器正常结束而不收敛 Run",
+                        "data": {"run_id": run_id},
+                    },
+                )
+                return
             if cancelled:
                 settled = await asyncio.to_thread(
-                    self._run_service.cancel_run_if_running,
+                    self._run_state_service.cancel_run_if_running,
                     run_id,
                     "run_execution_cancelled",
                 )
                 final_status = ConversationRunStatus.CANCELLED.value
             else:
                 settled = await asyncio.to_thread(
-                    self._run_service.fail_run_if_running,
+                    self._run_state_service.fail_run_if_running,
                     run_id,
                     end_reason="run_execution_ended_without_terminal",
                 )

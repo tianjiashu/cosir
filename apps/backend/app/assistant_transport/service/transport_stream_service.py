@@ -35,9 +35,9 @@ class AssistantTransportStreamService:
         """绑定进程本地快照持有者与 run 状态数据源。"""
 
         self._snapshots = ConversationTaskStateService()
-        from app.service.depends import get_conversation_run_state_service
+        from app.service.depends import get_conversation_run_service
 
-        self._runs = get_conversation_run_state_service()
+        self._run_service = get_conversation_run_service()
 
     @staticmethod
     def _run(state: ConversationStateSnapshot, run_id: int) -> dict[str, Any]:
@@ -173,7 +173,7 @@ class AssistantTransportStreamService:
             """仅在连接安静轮询节拍上检查目标 Run。"""
 
             try:
-                status = self._runs.get_run(run_id).status
+                status = self._run_service.get_run(run_id).status
             except KeyError:
                 return True
             return status in self.terminal_statuses

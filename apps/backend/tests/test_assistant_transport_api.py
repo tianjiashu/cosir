@@ -22,7 +22,7 @@ from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
     _build_ordered_display_text,
 )
-from app.service.task.conversation_run_service import ConversationRunService
+from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
@@ -122,7 +122,7 @@ async def test_task_endpoint_returns_task_response_with_fork_status() -> None:
     record = SimpleNamespace(
         id=7,
         workspace_id=3,
-        title="task",
+        title="conversation_run",
         extra=None,
         execution_status=None,
         task_type="user",
@@ -229,11 +229,11 @@ async def test_attach_run_only_subscribes_existing_executor(
 
     service._stream = SimpleNamespace(stream_envelopes=_stream_envelopes)
 
-    result = await service.attach_run(task_id=1, thread_id="task-1", run_id=7)
+    result = await service.attach_run(task_id=1, thread_id="conversation_run-1", run_id=7)
 
     assert result.media_type == "text/event-stream"
     assert result.headers["X-Cosir-Task-Id"] == "1"
-    assert result.headers["X-Cosir-Thread-Id"] == "task-1"
+    assert result.headers["X-Cosir-Thread-Id"] == "conversation_run-1"
 
 
 @pytest.mark.asyncio

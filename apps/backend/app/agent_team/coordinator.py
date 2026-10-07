@@ -20,10 +20,11 @@ from app.assistant_transport.event.dispatch import dispatch_conversation_event
 from app.config.logging.logger import log
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
+from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service import depends as service_depends
-from app.service.task.conversation_run_service import ConversationRunService
-from app.service.task.conversation_run_state_service import ConversationRunStateService
+from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
@@ -129,91 +130,136 @@ class AgentTeamCoordinator:
             raise RuntimeError("TeamRun creation did not return a row")
         return self._team_run_crud.get_by_id(row.id)
 
+    async def resume_parent_after_rejection(
+        self,
+        team: AgentTeamRunModel,
+        feedback: str,
+    ) -> None:
+        """把用户驳回意见加入主 Agent context，并恢复其等待输入的 checkpoint。
+
+        参数:
+            team: 已通过条件迁移驳回的 TeamRun。
+            feedback: 用户审查意见，写入本次 Run 的延迟系统消息队列。
+
+        返回:
+            无；执行器启动后由后台继续运行。
+
+        异常:
+            ValueError: 主 Run 已不处于等待用户输入状态。
+            sqlalchemy.exc.SQLAlchemyError: Run 状态恢复准备失败。
+            RuntimeError: 执行器无法启动恢复后的 Run。
+
+        副作用:
+            向 Task 级 context 队列写入带 Run 归属的反馈消息，将 Run 迁移为 ``running``，
+            并以 resume 模式启动现有 checkpoint。
+        """
+
+        parent_run = await asyncio.to_thread(
+            self._run_service.get_run, team.parent_run_id
+        )
+        if parent_run.status != "waiting_for_input":
+            raise ValueError("主 Agent Run 当前没有等待用户输入")
+        from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+        from app.service.depends import (
+            get_conversation_run_command_service,
+            get_conversation_run_executor,
+        )
+
+        task_runtime_spaces.get_or_create(team.parent_task_id).defer_system_message(
+            SystemMessage(
+                content=(
+                    "用户驳回了刚才提出的 Agent Team 执行方案。请依据以下反馈重新审视目标，"
+                    "必要时重新调用 agent_team 生成方案；不要启动被驳回的方案。\n\n用户反馈：\n"
+                    + feedback.strip()
+                ),
+                additional_kwargs={"run_id": team.parent_run_id},
+            )
+        )
+        resumed = await asyncio.to_thread(
+            get_conversation_run_command_service().resume_waiting_run,
+            team.parent_task_id,
+            team.parent_run_id,
+        )
+        await get_conversation_run_executor().start(
+            resumed.run.id, start_mode=resumed.execution_mode
+        )
+
+    async def wait_for_parent_input(self, team_run_id: int) -> None:
+        """等待 Team 预览所属主 Run 完成 interrupt 并进入用户输入等待状态。
+
+        工具结果可能先于 LangGraph interrupt 和执行器收尾抵达前端。确认或驳回请求因此
+        可以早于 ``waiting_for_input`` 状态事件到达；本方法在本机协调层短暂等待该状态，
+        避免用户操作因正常时序竞态被拒绝。
+
+        参数:
+            team_run_id: 预览对应的 TeamRun 标识。
+
+        返回:
+            主 Run 进入等待状态时无返回值。
+
+        异常:
+            KeyError: TeamRun 或其主 Run 不存在。
+            ValueError: 主 Run 已结束，或在等待期限内未进入用户输入等待状态。
+
+        副作用:
+            只读查询 Run 状态；最多等待 30 秒，不创建任务或持久化状态。
+        """
+
+        team = await asyncio.to_thread(self._team_run_crud.get_by_id, team_run_id)
+        if team is None:
+            raise KeyError(team_run_id)
+        for _ in range(600):
+            parent_run = await asyncio.to_thread(
+                self._run_service.get_run,
+                team.parent_run_id,
+            )
+            if parent_run.status == ConversationRunStatus.WAITING_FOR_INPUT.value:
+                return
+            if parent_run.status in {
+                ConversationRunStatus.COMPLETED.value,
+                ConversationRunStatus.FAILED.value,
+                ConversationRunStatus.CANCELLED.value,
+            }:
+                raise ValueError("主 Agent Run 已结束，不能处理 Team 预览")
+            await asyncio.sleep(0.05)
+        raise ValueError("主 Agent Run 尚未进入等待输入状态，请稍后重试")
+
     async def _resume_parent_after_team(self, team_run_id: int) -> None:
-        """Team 进入终态后，把受挂起的主 Agent Run 恢复并注入 TeamResult。"""
+        """Team 进入终态后，将聚合结果交给等待中的主 Agent 并恢复其 checkpoint。"""
 
         try:
             team = await self.wait_until_terminal(team_run_id)
-            from app.service.depends import (
-                get_conversation_run_command_service,
-                get_conversation_run_executor,
-            )
-
             parent_run = await asyncio.to_thread(
-                self._run_state_service.get_run, team.parent_run_id
+                self._run_service.get_run, team.parent_run_id
             )
-            forced_pause = False
-            while parent_run.status not in {"cancelled", "completed", "failed"}:
-                if parent_run.status == "cancelled":
+            for _ in range(600):
+                if parent_run.status == "waiting_for_input":
                     break
-                if parent_run.status in {"completed", "failed"}:
-                    log.warning(
-                        "agent_team_parent_run_not_resumable",
-                        extra={
-                            "msg": "Agent Team 已结束，但主 Agent Run 已进入不可恢复终态",
-                            "data": {
-                                "run_id": team_run_id,
-                                "parent_run_id": team.parent_run_id,
-                                "parent_status": parent_run.status,
-                            },
-                        },
-                    )
-                    return
-                if not forced_pause:
-                    # 正常路径已经由 observe 节点取消主 Run；如果 Team 先于该节点
-                    # 收敛，主动发送同一取消语义，避免 TeamResult 因竞态永久丢失。
-                    try:
-                        await get_conversation_run_executor().cancel(
-                            team.parent_run_id,
-                            end_reason="agent_team_waiting_confirmation",
-                        )
-                    except Exception:
-                        log.warning(
-                            "agent_team_parent_executor_cancel_failed",
-                            extra={
-                                "msg": "主 Agent 执行器取消信号发送失败，继续用数据库状态收敛",
-                                "data": {"run_id": team_run_id},
-                            },
-                        )
-                    await asyncio.to_thread(
-                        self._run_state_service.cancel_run_if_running,
-                        team.parent_run_id,
-                        "agent_team_waiting_confirmation",
-                        "Agent Team 执行方案已生成，等待用户确认。",
-                    )
-                    forced_pause = True
+                if parent_run.status in {"completed", "failed", "cancelled"}:
+                    break
                 await asyncio.sleep(0.05)
                 parent_run = await asyncio.to_thread(
-                    self._run_state_service.get_run, team.parent_run_id
+                    self._run_service.get_run, team.parent_run_id
                 )
-            if parent_run.status in {"completed", "failed"}:
+            if parent_run.status != "waiting_for_input":
                 log.warning(
-                    "agent_team_parent_run_not_resumable",
+                    "agent_team_parent_run_not_waiting",
                     extra={
-                        "msg": "Agent Team 已结束，但主 Agent Run 已进入不可恢复终态",
+                        "msg": "Agent Team 已结束，但主 Agent Run 不在等待输入状态",
                         "data": {
-                            "run_id": team_run_id,
+                            "team_run_id": team_run_id,
                             "parent_run_id": team.parent_run_id,
                             "parent_status": parent_run.status,
                         },
                     },
                 )
                 return
-            if parent_run.end_reason != "agent_team_waiting_confirmation":
-                log.warning(
-                    "agent_team_parent_run_cancel_reason_mismatch",
-                    extra={
-                        "msg": "主 Agent Run 的取消原因不是 Agent Team 等待确认，跳过自动续跑",
-                        "data": {
-                            "run_id": team_run_id,
-                            "parent_run_id": team.parent_run_id,
-                            "end_reason": parent_run.end_reason,
-                        },
-                    },
-                )
-                return
 
             from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+            from app.service.depends import (
+                get_conversation_run_command_service,
+                get_conversation_run_executor,
+            )
 
             task_runtime_spaces.get_or_create(team.parent_task_id).defer_system_message(
                 SystemMessage(
@@ -221,112 +267,32 @@ class AgentTeamCoordinator:
                     additional_kwargs={"run_id": team.parent_run_id},
                 )
             )
-            attempt = 0
-            while True:
-                parent_run = await asyncio.to_thread(
-                    self._run_state_service.get_run, team.parent_run_id
-                )
-                if parent_run.status in {"completed", "failed"}:
-                    log.warning(
-                        "agent_team_parent_run_not_resumable",
-                        extra={
-                            "msg": "主 Agent Run 在 TeamResult 续跑前已进入终态",
-                            "data": {
-                                "run_id": team_run_id,
-                                "parent_run_id": team.parent_run_id,
-                                "parent_status": parent_run.status,
-                                "attempt": attempt,
-                            },
-                        },
-                    )
-                    return
-                if parent_run.status != "cancelled":
-                    if parent_run.status == "running":
-                        try:
-                            await get_conversation_run_executor().cancel(
-                                team.parent_run_id,
-                                end_reason="agent_team_waiting_confirmation",
-                            )
-                        except Exception:
-                            log.exception(
-                                "agent_team_parent_run_repause_failed",
-                                extra={
-                                    "msg": "主 Agent 续跑失败后重新暂停失败",
-                                    "data": {"run_id": team_run_id},
-                                },
-                            )
-                    await asyncio.sleep(0.2)
-                    continue
-                if parent_run.end_reason != "agent_team_waiting_confirmation":
-                    log.warning(
-                        "agent_team_parent_run_cancel_reason_mismatch",
-                        extra={
-                            "msg": "主 Agent Run 取消原因已变化，跳过自动续跑",
-                            "data": {
-                                "run_id": team_run_id,
-                                "parent_run_id": team.parent_run_id,
-                                "end_reason": parent_run.end_reason,
-                            },
-                        },
-                    )
-                    return
-                try:
-                    resumed = await asyncio.to_thread(
-                        get_conversation_run_command_service().resume_latest_run,
-                        team.parent_task_id,
-                        team.parent_run_id,
-                    )
-                    await get_conversation_run_executor().start(
-                        resumed.run.id, start_mode=resumed.execution_mode
-                    )
-                    log.info(
-                        "agent_team_parent_run_resumed",
-                        extra={
-                            "msg": "Agent Team 已向主 Agent 注入 TeamResult 并恢复主 Run",
-                            "data": {
-                                "run_id": team_run_id,
-                                "parent_task_id": team.parent_task_id,
-                                "parent_run_id": team.parent_run_id,
-                                "team_status": team.status,
-                                "attempt": attempt,
-                            },
-                        },
-                    )
-                    return
-                except Exception as exc:
-                    attempt += 1
-                    log.warning(
-                        "agent_team_parent_run_resume_retry",
-                        extra={
-                            "msg": "主 Agent Run 续跑失败，将继续等待本地状态收敛后重试",
-                            "data": {
-                                "run_id": team_run_id,
-                                "parent_run_id": team.parent_run_id,
-                                "attempt": attempt,
-                                "error_type": type(exc).__name__,
-                            },
-                        },
-                    )
-                    try:
-                        await get_conversation_run_executor().cancel(
-                            team.parent_run_id,
-                            end_reason="agent_team_waiting_confirmation",
-                        )
-                    except Exception:
-                        log.exception(
-                            "agent_team_parent_resume_retry_cancel_failed",
-                            extra={
-                                "msg": "主 Agent 续跑失败后重新收敛取消状态失败",
-                                "data": {"run_id": team_run_id},
-                            },
-                        )
-                    await asyncio.sleep(min(5.0, 0.2 * attempt))
+            resumed = await asyncio.to_thread(
+                get_conversation_run_command_service().resume_waiting_run,
+                team.parent_task_id,
+                team.parent_run_id,
+            )
+            await get_conversation_run_executor().start(
+                resumed.run.id, start_mode=resumed.execution_mode
+            )
+            log.info(
+                "agent_team_parent_run_resumed",
+                extra={
+                    "msg": "Agent Team 结果已交给主 Agent，并恢复其等待中的 Run",
+                    "data": {
+                        "team_run_id": team_run_id,
+                        "parent_task_id": team.parent_task_id,
+                        "parent_run_id": team.parent_run_id,
+                        "team_status": team.status,
+                    },
+                },
+            )
         except Exception:
             log.exception(
                 "agent_team_parent_run_resume_failed",
                 extra={
                     "msg": "Agent Team 结束后恢复主 Agent Run 失败",
-                    "data": {"run_id": team_run_id},
+                    "data": {"team_run_id": team_run_id},
                 },
             )
 
@@ -400,7 +366,7 @@ class AgentTeamCoordinator:
             row.node_instructions_json.get(node_id, ""),
             previous_outputs,
         )
-        parent_run = self._run_state_service.get_run(row.parent_run_id)
+        parent_run = self._run_service.get_run(row.parent_run_id)
         model_settings = runtime_snapshot.get("model_settings", {})
         reasoning_effort = model_settings.get("reasoning_effort")
 
@@ -562,7 +528,7 @@ class AgentTeamCoordinator:
                 return {"status": "node_already_completed", "run_id": row.id}
             if state.active_node_run_id != node_run_id:
                 raise ValueError("节点状态提交者不是当前活动节点")
-            node_run = self._run_state_service.get_run(node_run_id)
+            node_run = self._run_service.get_run(node_run_id)
             if node_run.status != ConversationRunStatus.COMPLETED.value:
                 raise ValueError("Team 节点必须先完成结构化输出 Run 才能提交结果")
             node_id = execution.node_id
@@ -756,7 +722,10 @@ class AgentTeamCoordinator:
         if not task_ids:
             return 0
         cancelled = 0
-        for row in self._team_run_crud.list_active():
+        for row in (
+            *self._team_run_crud.list_pending_confirmations(),
+            *self._team_run_crud.list_active(),
+        ):
             state = AgentTeamRunState.model_validate(row.state_json)
             node_task_ids = {task_id for task_id, _ in state.node_references()}
             if row.parent_task_id not in task_ids and not node_task_ids.intersection(task_ids):
@@ -771,7 +740,7 @@ class AgentTeamCoordinator:
         """取消指定主 Agent Run 创建的所有活动 Team。
 
         该方法由 ConversationRunExecutor 的显式取消入口调用，负责把主 Run 的取消信号
-        传播到 Team 及其当前节点 Run。等待确认的内部暂停不会调用本方法。
+        传播到待确认或运行中的 Team 及其当前节点 Run。
 
         参数:
             parent_run_id: 主 Agent ConversationRun 标识。
@@ -785,7 +754,10 @@ class AgentTeamCoordinator:
         """
 
         cancelled = 0
-        for row in self._team_run_crud.list_active():
+        for row in (
+            *self._team_run_crud.list_pending_confirmations(),
+            *self._team_run_crud.list_active(),
+        ):
             if row.parent_run_id != parent_run_id:
                 continue
             previous = row.status
@@ -810,7 +782,7 @@ class AgentTeamCoordinator:
                 return
             if execution.completed:
                 return
-            node_run = self._run_state_service.get_run(node_run_id)
+            node_run = self._run_service.get_run(node_run_id)
             if node_run.status == "failed":
                 self._fail_team(
                     current.id,
@@ -858,21 +830,26 @@ class AgentTeamCoordinator:
             )
 
     def recover_after_restart(self) -> int:
-        """把后端重启遗留的活动 Team 收敛为 cancelled，不自动重放。"""
+        """把后端重启遗留的 Team 运行和未确认方案收敛为 cancelled，不自动重放。"""
 
+        pending = self._team_run_crud.list_pending_confirmations()
         active = self._team_run_crud.list_active()
-        for row in active:
+        recovered = 0
+        for row in (*pending, *active):
+            previous_status = row.status
             updated = self._team_run_crud.update_status_if_in(
                 row.id,
-                "cancelled",
-                ("running",),
+                AgentTeamRunStatus.CANCELLED.value,
+                (previous_status,),
                 end_reason=AgentTeamRunEndReason.RUNTIME_RESTARTED.value,
                 ended=True,
             )
             if updated is None:
                 continue
-            self._notify_terminal(updated.id)
-        return len(active)
+            recovered += 1
+            if previous_status == AgentTeamRunStatus.RUNNING.value:
+                self._notify_terminal(updated.id)
+        return recovered
 
     def shutdown(self) -> int:
         """关闭后端前收敛活动 Team 并唤醒所有本地等待者。"""

@@ -207,24 +207,6 @@ class TaskService:
         """
         return self._task.get(task_id)
 
-    def list_child_tasks(self, parent_task_id: int, parent_run_id: int) -> list[TaskRecord]:
-        """Return direct delegation children owned by one parent Run.
-
-        This is a relationship read only; it does not infer lifecycle state.  Callers
-        must read each child's ConversationRun records for canonical status.
-        """
-
-        return [
-            child
-            for child in self._task.list_by_parent_task(parent_task_id)
-            if child.task_type == "delegate_task" and child.parent_run_id == parent_run_id
-        ]
-
-    def list_runs_for_task(self, task_id: int) -> list[ConversationRunRecord]:
-        """Return canonical Run history for a child-session recovery/read boundary."""
-
-        return self._turn.list_by_task(task_id)
-
     def is_fork_available(self, task_id: int) -> bool:
         """返回任务的所有 Run 是否均处于已知终态。"""
 
@@ -786,46 +768,6 @@ class TaskService:
                         "data": {"task_id": current_id},
                     },
                 )
-
-    def delete_single_task(self, task_id: int, session: Session | None = None) -> set[str]:
-        """删除单个任务及其全部产物，不递归删除其子任务。
-
-        给定单个 task_id，在单一事务内清理该任务自身及其全部产物（run / context /
-        snapshot / delegation），但不触碰子任务行。任务树的收集与级联删除由上层
-        编排（见 ``delete_task``）：上层负责以「子任务先于父任务」的后序顺序逐个调用本方法，
-        本方法只负责单任务粒度的删除，并在独立事务（无外部 session 时）提交后清理该任务
-        遗留的孤儿 LangGraph checkpoint 线程。
-
-        外键前置条件（由上层保证）：因 ``tasks.parent_run_id → runs`` 且
-        ``tasks.parent_task_id`` 自引用指向父任务，本方法在删除 run / task 行前会先解除
-        本任务行对 run 的引用；而子任务必须在父任务之前删除（后序），以避免自引用外键冲突。
-
-        参数:
-            task_id: 待删除任务的标识（整数 id）。
-            session: 可选外部事务 session。传入时复用该事务（调用方负责提交、子任务后序
-                编排、space 卸载与 checkpoint GC）；为 None 时由本方法自开事务并自动提交，
-                随后清理孤儿 checkpoint 线程。
-
-        返回:
-            本次删除不再被主库剩余 run 引用的 checkpoint thread id 集合；传入外部 session 时
-            同样返回该集合，由调用方在提交后统一做 checkpoint GC。
-
-        异常:
-            KeyError: 如果 task_id 对应的任务不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果删除失败（事务回滚）。
-
-        副作用:
-            在事务内删除该任务的产物与任务行；无外部 session 时额外清理孤儿 checkpoint 线程；
-            不触碰子任务、不卸载 runtime space（均由上层负责）。
-        """
-
-        if session is None:
-            with begin_immediate(self._session_factory) as session:
-                orphan_threads = self._delete_single_task_in_session(task_id, session)
-            if orphan_threads:
-                cleanup_orphan_checkpoint_threads(orphan_threads)
-            return orphan_threads
-        return self._delete_single_task_in_session(task_id, session)
 
     def _delete_single_task_in_session(self, task_id: int, session: Session) -> set[str]:
         """在调用方事务内删除单个任务及其产物，返回孤儿 checkpoint 线程集合。

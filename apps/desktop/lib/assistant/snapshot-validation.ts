@@ -257,8 +257,8 @@ export function parseTransportState(value: unknown): TransportState {
     if (runId === null || runIds.has(runId)) throw new TransportSnapshotValidationError(`runs[${index}].runId`, "唯一的非负整数");
     runIds.add(runId);
     const status = requireString(run.status, `runs[${index}].status`);
-    if (!["idle", "pending", "running", "completed", "failed", "cancelled", "interrupted"].includes(status)) throw new TransportSnapshotValidationError(`runs[${index}].status`, "受支持的运行状态");
-    if (status === "pending" || status === "running") activeRunIds.push(runId);
+    if (!["idle", "pending", "running", "waiting_for_input", "completed", "failed", "cancelled", "interrupted"].includes(status)) throw new TransportSnapshotValidationError(`runs[${index}].status`, "受支持的运行状态");
+    if (status === "pending" || status === "running" || status === "waiting_for_input") activeRunIds.push(runId);
     if (run.endReason !== null && typeof run.endReason !== "string") throw new TransportSnapshotValidationError(`runs[${index}].endReason`, "字符串或 null");
     if (run.langfuseTraceId !== null && typeof run.langfuseTraceId !== "string") throw new TransportSnapshotValidationError(`runs[${index}].langfuseTraceId`, "字符串或 null");
     if (!Array.isArray(run.messages)) throw new TransportSnapshotValidationError(`runs[${index}].messages`, "数组");

@@ -42,7 +42,8 @@ from app.models.conversation_run_failure import (
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.enums.error_kind import ErrorKind
-from app.service.task.conversation_run_state_service import terminal_error
+from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
+
 
 # --------------------------------------------------------------------------------------
 # 测试替身
@@ -404,7 +405,7 @@ def test_run_failure_message_tolerates_non_string_input() -> None:
 def test_terminal_error_completed_has_no_error_contract() -> None:
     """``completed`` 终态不写错误契约。"""
 
-    assert terminal_error(ConversationRunStatus.COMPLETED, "run_failed") is None
+    assert ConversationRunStateService.terminal_error(ConversationRunStatus.COMPLETED, "run_failed") is None
 
 
 @pytest.mark.parametrize(
@@ -425,7 +426,7 @@ def test_terminal_error_rejects_non_identifier_end_reason(end_reason: str | None
     潜在缺陷：若实现直接 ``end_reason or fallback``，自由文本会进入受控 ``code`` 字段。
     """
 
-    error = terminal_error(ConversationRunStatus.FAILED, end_reason)
+    error = ConversationRunStateService.terminal_error(ConversationRunStatus.FAILED, end_reason)
     assert error is not None
     assert error["code"].isidentifier()
     if end_reason is None or not end_reason.isidentifier():
@@ -437,11 +438,11 @@ def test_terminal_error_rejects_non_identifier_end_reason(end_reason: str | None
 def test_terminal_error_cancelled_fallback_code() -> None:
     """``cancelled`` 终态在无可用原因时回退取消类兜底 code。"""
 
-    error = terminal_error(ConversationRunStatus.CANCELLED, None)
+    error = ConversationRunStateService.terminal_error(ConversationRunStatus.CANCELLED, None)
     assert error is not None
     assert error["code"] == Constant.Run.RUN_FAILURE_CODE_CANCELLED
 
-    error = terminal_error(ConversationRunStatus.CANCELLED, "not an identifier")
+    error = ConversationRunStateService.terminal_error(ConversationRunStatus.CANCELLED, "not an identifier")
     assert error is not None
     assert error["code"] == Constant.Run.RUN_FAILURE_CODE_CANCELLED
 
@@ -454,7 +455,7 @@ def test_terminal_error_message_is_non_empty_and_controlled() -> None:
         ConversationRunStatus.CANCELLED,
     ):
         for reason in (None, "unknown_free_text", "model_insufficient_quota"):
-            error = terminal_error(status, reason)
+            error = ConversationRunStateService.terminal_error(status, reason)
             assert error is not None
             assert error["message"].strip()
             assert not re.search(r"\d", error["message"])

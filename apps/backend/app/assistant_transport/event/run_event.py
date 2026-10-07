@@ -34,14 +34,14 @@ from app.models import ConversationRunError
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
 # Run 状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）一律丢弃。
-# ``cancelled -> running`` 是「续跑恢复」的合法迁移，由
-# ``ConversationRunStateService.resume_cancelled_run`` 在数据库条件更新
-# （``WHERE status='cancelled'``）成功之后才发出；若在此丢弃，snapshot 会永久
+# ``cancelled -> running`` 与 ``waiting_for_input -> running`` 是合法恢复迁移，由
+# ``ConversationRunStateService`` 在数据库条件更新成功之后才发出；若在此丢弃，snapshot 会永久
 # 停在终态，后续 tool-call 创建事件随之被终态短路丢弃，最终在工具状态迁移事件上抛 KeyError 中断
 # 整个 Run。``completed`` / ``failed`` 仍不可逆，避免迟到事件把已结束的 Run 拉回 active。
 _ALLOWED_RUN_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
-    "pending": frozenset({"pending", "running", "completed", "failed", "cancelled"}),
-    "running": frozenset({"running", "completed", "failed", "cancelled"}),
+    "pending": frozenset({"pending", "running", "failed", "cancelled"}),
+    "running": frozenset({"running", "waiting_for_input", "completed", "failed", "cancelled"}),
+    "waiting_for_input": frozenset({"waiting_for_input", "running", "failed", "cancelled"}),
     "cancelled": frozenset({"cancelled", "running"}),
     "failed": frozenset({"failed"}),
     "completed": frozenset({"completed"}),
@@ -211,7 +211,7 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
     发出方不负责再迁一次，applier 只把它投影为快照的 ``run.status`` 与对应 assistant
     消息的 ``status`` / ``endReason``。
 
-    所有迁移（pending → running → completed / failed / cancelled，以及启动恢复、
+    所有迁移（pending → running → waiting_for_input → running / 终态，以及启动恢复、
     API 取消、执行器收口）统一由本类型表达，不为每个目标状态单开事件类型：
     类型数与 applier 分支数减半，且「哪些迁移合法」的判定集中在领域侧一处。
 

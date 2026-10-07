@@ -242,7 +242,7 @@ function useTaskAssistantTransportAdapter(
   }, [closeActiveStream, store]);
   const onRefetchThread = useCallback(async () => {
     const currentSnapshot = store.getSnapshot();
-    if (currentSnapshot.targetRunStatus === "pending" || currentSnapshot.targetRunStatus === "running") {
+    if (currentSnapshot.targetRunStatus === "pending" || currentSnapshot.targetRunStatus === "running" || currentSnapshot.targetRunStatus === "waiting_for_input") {
       await attach();
       return;
     }

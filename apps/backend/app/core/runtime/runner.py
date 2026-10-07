@@ -34,6 +34,7 @@ from app.core.tools.schemas.tool_names import TOOL_PROPOSE_AGENT_CONFIGURATION
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.workflow_operations import WorkflowOperations
+from app.core.workflows.agent_workflow import WorkflowOutcome
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import (
     get_conversation_run_observability_service,
@@ -100,7 +101,7 @@ class AgentRuntime:
         run: ConversationRunRecord,
         *,
         execution_mode: ExecutionMode = "fresh",
-    ) -> None:
+    ) -> WorkflowOutcome:
         """执行一个已被 ConversationRunExecutor 认领（pending→running）的 run。
 
         前置条件由执行器保证，本方法不再重复认领或做状态复查：
@@ -117,6 +118,10 @@ class AgentRuntime:
             run: 已被执行器认领的 Conversation Run 记录（非 None，状态 running）。
             execution_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``）；
                 透传给 workflow，由其决定是否清空旧上下文与如何构造 graph 输入。
+
+        返回:
+            ``finished`` 表示 workflow 已收束；``waiting_for_input`` 表示需保留 checkpoint，
+            由执行器完成本地收尾后迁移 Run 状态。
 
         异常:
             RuntimeError: 轮次绑定的 agent profile 不可用时抛出，由执行器捕获收束为 failed。
@@ -206,14 +211,14 @@ class AgentRuntime:
             run,
             model_settings=runtime_model_settings,
         )
-        await self.run_agent(
+        return await self.run_agent(
             agent_profile,
             execution_mode=execution_mode,
         )
 
     async def run_agent(
         self, agent: AgentProfile, *, execution_mode: ExecutionMode = "fresh"
-    ) -> None:
+    ) -> WorkflowOutcome:
         """驱动一次 agent run 执行并提交 canonical conversation facts。
 
         参数:
@@ -283,7 +288,7 @@ class AgentRuntime:
                 )
                 # 本轮消息轨迹（清空残留、落 user 基线、逐条增量落库）统一由 workflow.run 内
                 # 的 RuntimeContextManager 负责（注入 message_store 端口），runner 不再直接落库。
-                await agent.workflow.run(
+                outcome = await agent.workflow.run(
                     operations,
                     callbacks=trace_result.callbacks,
                     langfuse_trace_id=trace_result.trace_id,
@@ -297,7 +302,7 @@ class AgentRuntime:
             await HookInterceptor.async_safe_fire(
                 HookContext.from_locatable(event=HookEvent.STOP, locatable=task, turn=run)
             )
-            return
+            return outcome
         except Exception as exc:
             log.exception(
                 "task_failed",
