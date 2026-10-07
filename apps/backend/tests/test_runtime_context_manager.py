@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from langchain_core.messages import (
@@ -156,15 +157,18 @@ def test_streaming_draft_is_finalized_in_place_into_one_context_row() -> None:
     manager.flush_message_chunk(stream_id="step-1")
     assert len(context_service.appended) == 2
     assert context_service.appended[0][3] == context_service.appended[1][3] == 5
-    # flush 只落 partial：草稿既不进模型上下文、也不被当成 canonical 消息。
+    # flush 的默认 running 态只落 partial：草稿既不进模型上下文、也不被当成 canonical 消息。
     assert context_service.appended[1][2].is_streaming is True
     assert context_service.appended[1][2].include_in_context is False
     assert manager._entries == []
+    # running 保留草稿供后续 chunk 继续累积，并推进刷写进度。
+    assert list(manager._streaming_messages) == [(2, "step-1")]
+    assert manager._streaming_messages[(2, "step-1")].persisted_text_length == len("你好，世界")
 
-    # 收口一次完成：丢弃内存草稿状态 + 原地固化调用方交付的修订版。
+    # 收口（flush 的 finalize 态）一次完成：丢弃内存草稿状态 + 原地写入调用方交付的修订版。
     revised = AIMessage(content="你好，世界", tool_calls=[])
-    returned = manager.finalize_message_chunk(
-        stream_id="step-1", run_id=2, message=revised
+    returned = manager.flush_message_chunk(
+        stream_id="step-1", run_id=2, mode="finalize", message=revised
     )
 
     assert returned is revised
@@ -181,7 +185,7 @@ def test_streaming_draft_is_finalized_in_place_into_one_context_row() -> None:
     assert manager._message_sequence == 6
 
 
-def test_finalize_message_chunk_raises_without_draft() -> None:
+def test_flush_finalize_raises_without_draft() -> None:
     """无草稿时收口立即失败（``KeyError``）：不得伪造消息，也不得复用上一次的草稿。"""
 
     context_service = _ContextService(max_sequence=4)
@@ -189,11 +193,47 @@ def test_finalize_message_chunk_raises_without_draft() -> None:
     manager.current_run_id = 2
 
     with pytest.raises(KeyError):
-        manager.finalize_message_chunk(stream_id="step-1")
+        manager.flush_message_chunk(stream_id="step-1", mode="finalize")
 
     assert context_service.appended == []
     assert manager._entries == []
     assert manager._message_sequence == 5
+
+
+def test_flush_rejects_unknown_mode() -> None:
+    """未知 ``mode`` 必须报错，不得悄悄落成某一种既有语义。"""
+
+    context_service = _ContextService(max_sequence=4)
+    manager = _manager(context_service, next_sequence=5)
+    manager.current_run_id = 2
+    manager.add_message_chunk(AIMessageChunk(content="半截"), stream_id="step-1")
+
+    with pytest.raises(ValueError):
+        manager.flush_message_chunk(stream_id="step-1", mode=cast(Any, "complete"))
+
+    # 报错发生在写入之前：只有首 chunk 建的那一行为 written，草稿仍在。
+    assert len(context_service.appended) == 1
+    assert list(manager._streaming_messages) == [(2, "step-1")]
+
+
+def test_flush_rejects_message_outside_finalize_mode() -> None:
+    """``message`` 只在 finalize 态有意义：其余模式传入必须报错，不得静默忽略。"""
+
+    context_service = _ContextService(max_sequence=4)
+    manager = _manager(context_service, next_sequence=5)
+    manager.current_run_id = 2
+    manager.add_message_chunk(AIMessageChunk(content="半截"), stream_id="step-1")
+
+    with pytest.raises(ValueError):
+        manager.flush_message_chunk(stream_id="step-1", message=AIMessage(content="修订版"))
+
+    # 报错发生在写入之前：内存草稿仍在，且没有发生任何原地写入。
+    assert list(manager._streaming_messages) == [(2, "step-1")]
+    assert [
+        item[2]
+        for item in context_service.appended
+        if isinstance(item[2], ConversationTaskContextRecord)
+    ] == []
 
 
 def test_add_message_replaces_paired_tool_result_row_in_place() -> None:

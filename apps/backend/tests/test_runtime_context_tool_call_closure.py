@@ -71,6 +71,16 @@ def _ai_message(*call_ids: str) -> AIMessage:
     )
 
 
+def _image_path() -> str:
+    """构造合法的 workspace 相对图片路径（文件名 stem 为 64 位十六进制 asset id）。
+
+    ``build_user_input_parts`` 会把它转成 ``cosir-attachment://<asset_id>`` 并按
+    ``Constant.Transport.IMAGE_LOCATOR`` 校验，形状不对会直接抛错。
+    """
+
+    return f"attachments/{'a' * 64}.png"
+
+
 def _bind(crud_type: type[_CrudT], factory: sessionmaker[Session]) -> _CrudT:
     """把真实 CRUD 绑定到本用例自己的 SQLite 工厂（与 acceptance 夹具同构）。"""
 
@@ -637,6 +647,31 @@ def test_ensure_run_user_message_writes_once_per_run(
     assert [type(message) for message in manager.load_message()] == [SystemMessage, HumanMessage]
     # 只有真正写入的那一次投影事件（幂等调用不重复投影）。
     assert [type(event).__name__ for event in projected] == ["UserInputAppendedEvent"]
+
+
+def test_ensure_run_user_message_omits_empty_text_block_for_image_only_input(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """只发图片时不得写入空 text 块：部分厂商拒绝空文本块，langchain 翻译层也不替空块兜底。"""
+
+    monkeypatch.setattr(
+        "app.core.context.runtime_context_manager.get_conversation_event_projector",
+        lambda: SimpleNamespace(process=lambda _event: None),
+    )
+    run = env.seed_run("running")
+    manager = _manager(
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=run.id,
+        entries=[],
+        next_sequence=1,
+    )
+
+    assert manager.ensure_run_user_message("", (_image_path(),)) is True
+
+    users = [row for row in _rows(env) if isinstance(row.message, HumanMessage)]
+    assert len(users) == 1
+    assert users[0].message.content == [{"type": "image", "file_id": _image_path()}]
 
 
 def test_ensure_run_user_message_keeps_existing_message_on_resume(env: SimpleNamespace) -> None:

@@ -178,6 +178,20 @@ class Constant:
         # Layer 3（Workspace 项目指令）token 上限。
         WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: int = 5_000
 
+    class Context:
+        """Task 级 context 运行时（``RuntimeContextManager``）的共享常量。
+
+        仅承载 context 读写边界自身的数值闸门（流式草稿落库的刷新阈值、序号规则等），不含
+        业务规则；业务规则由 ``RuntimeContextManager`` 与其协作的 service 负责。
+        """
+
+        # 流式 assistant 草稿落库的最小新增字符数：累积未落库字符达到该值才触发一次持久化写，
+        # 减少碎片写入（与最大间隔阈值取「或」关系一同生效）。
+        STREAMING_PERSIST_MIN_CHARS: int = 64
+        # 流式 assistant 草稿落库的最大间隔时间（秒）：距上次落库超过该值即触发一次持久化写，
+        # 避免低频流式场景下草稿长时间不落库、崩溃后恢复滞后过多。
+        STREAMING_PERSIST_MAX_INTERVAL_SECONDS: float = 0.25
+
     class Attachment:
         """附件上传与图片归一化的共享常量。"""
 

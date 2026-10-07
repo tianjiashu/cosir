@@ -4,10 +4,11 @@
 ``ConversationTaskContextService`` 负责，``ContextEntry.run_id`` 始终随消息保存。
 
 ``add_message`` 是**工具结果**（取消/崩溃补的占位与真实结果）的唯一写入入口：命中同一条调用的
-既有结果行时按 ``plan_tool_call_closure`` 的配对规则原地覆盖，追加则是默认行为。assistant 草稿另
-有两条路径：流式 ``AIMessageChunk`` 由 ``add_message_chunk`` 演进为不纳入上下文的持久化草稿，
-收口由 ``finalize_message_chunk`` 一次完成（可在固化时交付修订版消息）——canonical 侧一条
-assistant 消息只占一行（``is_streaming`` 草稿行另计，取消或崩溃遗留的草稿不进入模型上下文）。
+既有结果行时按 ``plan_tool_call_closure`` 的配对规则原地覆盖，追加则是默认行为。assistant 草稿走
+另一条链路：``add_message_chunk`` 把流式 ``AIMessageChunk`` 演进为不纳入上下文的持久化草稿，
+``flush_message_chunk`` 按 ``running`` / ``cancel`` / ``finalize`` 三态写同一行，其中 ``finalize``
+一次完成收口（可在收口时交付修订版消息）——canonical 侧一条 assistant 消息只占一行
+（``is_streaming`` 草稿行另计，取消或崩溃遗留的草稿不进入模型上下文）。
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from langchain_core.messages import (
 )
 
 from app.assistant_transport.event import UserInputAppendedEvent, build_user_input_parts
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.core.context import SystemPromptBuilder
@@ -57,8 +59,6 @@ from app.service.task.conversation_task_context_service import (
 )
 from app.utils.message_content import content_to_text
 
-STREAMING_PERSIST_MIN_CHARS = 64
-STREAMING_PERSIST_MAX_INTERVAL_SECONDS = 0.25
 
 
 @dataclass
@@ -80,7 +80,7 @@ class RuntimeContextManager:
     _entries: list[ContextEntry] = field(default_factory=list, init=False)
     # 序号由 RuntimeContextManager 独自分配，context service 只负责持久化：构造时
     # （__post_init__）从持久化 context 恢复下一个可用序号；此后每条新消息（含流式草稿首 chunk）
-    # 落库时占用一个序号并自增；finalize_message_chunk 原地复用草稿已占用的序号，不推进游标。
+    # 落库时占用一个序号并自增；flush 的 finalize 态原地复用草稿已占用的序号，不推进游标。
     _message_sequence: int = field(default=0, init=False)
     # key=(run_id, stream_id) → 一条流式草稿的进程内聚合状态。复合 key 区分不同 run / step
     # 的草稿；partial 不进 _entries，避免被下一次模型调用误读。
@@ -181,7 +181,7 @@ class RuntimeContextManager:
         # ``max_sequence`` 返回的是最后一个已使用的序号，而不是下一个可用序号。
         # RuntimeContextManager 是 Task context 序号的唯一运行时 owner：恢复时从
         # SQLite 读取最后序号并推进一次，后续序号只由本类分配——add_message 与流式草稿首 chunk
-        # 各占用一个序号，finalize_message_chunk 复用草稿序号而不推进。否则首轮
+        # 各占用一个序号，flush 的 finalize 态复用草稿序号而不推进。否则首轮
         # 使用 0/1 后，第二轮会再次尝试写入 1，触发 (task_id, sequence) 唯一约束。
         self.current_run_id = run.id
 
@@ -357,125 +357,96 @@ class RuntimeContextManager:
             *,
             stream_id: str,
             run_id: int | None = None,
-            mode: Literal["running", "cancel"] = "running",
+            mode: Literal["running", "cancel", "finalize"] = "running",
+            message: AIMessage | None = None,
     ) -> AIMessage | None:
-        """把当前流式草稿以 partial 状态刷入数据库；按 ``mode`` 分两种语义态。
+        """把一条流式草稿按 ``mode`` 写入它已占用的那一行（同一行、同一序号，不新增行）。
 
-        - ``running``（默认）：保留内存 state 供后续 chunk 继续累积；``add_message_chunk`` 的
-          节流刷写即走此态。
-        - ``cancel``：run 已终止不再累积，故丢弃内存 state；同样只落 partial，且不加入模型上下文。
+        三种语义共用同一个前提——**同一条 assistant 消息全流程只占一个 ``sequence``**：草稿行在
+        ``add_message_chunk`` 首个 chunk 时创建，本方法总是**原地替换**该行，既不新增行，也不推进
+        消息序号游标。区别在写入形态与内存草稿的处置：
 
-        两种语义都**不**把草稿收口为 canonical 消息：收口由 :meth:`finalize_message_chunk` 一次
-        完成——调用方须在收口时交付用 ``ToolCallLifecycleManager.classify`` 修订过的
-        ``tool_calls`` / ``invalid_tool_calls``，修订版才是 canonical 内容。
+        - ``running``（默认）：写 partial（``is_streaming=True`` / ``include_in_context=False``）并
+          **保留**内存草稿供后续 chunk 继续累积；``add_message_chunk`` 的节流刷写即走此态。
+        - ``cancel``：run 已终止不再累积，写 partial 后**丢弃**内存草稿。
+        - ``finalize``：收口——把草稿升格为 canonical（``is_streaming=False`` /
+          ``include_in_context=True``）、丢弃内存草稿，并把该消息追加进内存模型上下文。
+          ``message`` 用于交付**修订版**：``model_node`` 借此把 ``tool_calls`` 按工具生命周期记录
+          重写、清空 ``invalid_tool_calls``（LangChain 解析失败的非法调用不得进入 provider 请求）；
+          不传则固化内存聚合结果。草稿行在收口前既非 canonical 也不进模型上下文，因此修订时机不
+          影响正确性。
 
         参数:
             stream_id: 本次流式会话的唯一标识，通常为 ``step-N``。
-            run_id: 消息归属 Run；缺省使用当前 Run。
-            mode: ``running`` / ``cancel``。
+            run_id: 该草稿归属 Run；缺省使用当前 Run。写入不重新推导归属——草稿 key 里的 Run 才是
+                事实，否则两次取数之间 ``current_run_id`` 变化会把该行改到别的 Run。
+            mode: ``running`` / ``cancel`` / ``finalize``。
+            message: 仅 ``finalize`` 可用：修订后的完整 ``AIMessage``；为 ``None`` 时使用内存聚合
+                结果。其余模式传入即报错，避免入参被静默忽略。
 
         返回:
-            本次刷写得到的 ``AIMessage``；无对应草稿时返回 ``None``。
+            写入该行的 ``AIMessage``；``running`` / ``cancel`` 且无对应草稿时返回 ``None``。
 
         异常:
-            持久化错误向上传播。
+            ValueError: ``mode`` 不是三态之一，或非 ``finalize`` 模式传入了 ``message``。
+            KeyError: ``finalize`` 时该 ``(run_id, stream_id)`` 没有草稿（同一 ``stream_id`` 被重复
+                收口，或草稿已被 ``cancel`` 态消费）。
+            sqlalchemy.exc.SQLAlchemyError: 持久化失败——``finalize`` 时内存草稿已被消费且该消息
+                未进入 canonical，同一 ``stream_id`` 无法重试（run 会走失败收敛）。
 
         副作用:
-            只更新 partial 行（``is_streaming=True``、``include_in_context=False``）；
-            ``cancel`` 额外丢弃内存草稿 state，``running`` 保留它以继续累积。实时 Transport
-            增量由 workflow stream 负责。
+            ``running`` / ``cancel`` 只更新 partial 行（前者额外更新刷写进度并保留内存草稿）；
+            ``finalize`` 原地更新该行为 canonical、丢弃内存草稿并在 ``_entries`` 末尾追加该消息。
+            三种语义都不推进消息序号游标。不触发 Transport 增量——实时投影由 workflow custom
+            stream 负责。
         """
 
+        if mode not in ("running", "cancel", "finalize"):
+            raise ValueError(f"unknown flush mode {mode}")
+        finalizing = mode == "finalize"
+        if message is not None and not finalizing:
+            raise ValueError("message is only accepted in finalize mode")
         target_run_id = self.current_run_id if run_id is None else run_id
         key = (target_run_id, stream_id)
-        # cancel flush 消费草稿并移除内存 state；中途 flush 保留 state 以便继续累积。
+        # cancel / finalize 都消费草稿并移除内存 state；中途 flush 保留 state 以便继续累积。
         state = (
             self._streaming_messages.pop(key, None)
-            if mode == "cancel"
+            if finalizing or mode == "cancel"
             else self._streaming_messages.get(key)
         )
         if state is None:
+            if finalizing:
+                raise KeyError(f"no streaming draft for run {target_run_id} / {stream_id}")
             return None
+        written = _as_ai_message(state.chunk) if message is None else message
         self._require_context_service().replace_message(
             ConversationTaskContextRecord(
                 task_id=self.current_task_id,
                 # 按草稿自身归属回写：草稿行创建时用的是 target_run_id，缺省传 None 不得把归属清空。
                 run_id=target_run_id,
-                message=_as_ai_message(state.chunk),
-                include_in_context=False,
+                message=written,
+                include_in_context=finalizing,
                 sequence=state.sequence,
-                is_streaming=True,
+                is_streaming=not finalizing,
             )
         )
-        state.persisted_text_length = len(content_to_text(state.chunk.content))
-        state.last_persisted_at = time.monotonic()
-        return _as_ai_message(state.chunk)
-
-    def finalize_message_chunk(
-            self,
-            *,
-            stream_id: str,
-            run_id: int | None = None,
-            message: AIMessage | None = None,
-    ) -> AIMessage:
-        """把一条流式草稿原地固化为 canonical assistant 消息（收口的唯一入口）。
-
-        用草稿行已占用的 ``sequence`` **原地替换**该行（``is_streaming=False``、
-        ``include_in_context=True``），并把该消息追加进内存模型上下文；**不新增行**——同一条
-        assistant 消息全流程只占一个序号，既不产生重复行，也不与随后的 ``ToolMessage`` 争抢序号。
-
-        ``message`` 让调用方在固化时交付**修订版**：``model_node`` 用它把 ``tool_calls`` 按工具
-        生命周期记录重写、清空 ``invalid_tool_calls``（LangChain 解析失败的非法调用不得进入
-        provider 请求）；不传则固化内存里的原始聚合结果。修订时机不影响安全性——草稿行在固化前
-        既非 canonical 也不进模型上下文（``is_streaming=True`` / ``include_in_context=False``）。
-
-        参数:
-            stream_id: 本次流式会话的唯一标识，通常为 ``step-N``。
-            run_id: 该草稿归属 Run；缺省使用当前 Run。固化不重新推导归属——草稿 key 里的 Run 才是
-                事实，否则两次取数之间 ``current_run_id`` 变化会把该行改到别的 Run。
-            message: 修订后的完整 ``AIMessage``；为 ``None`` 时使用内存聚合结果。
-
-        返回:
-            实际固化进 canonical 的那条 ``AIMessage``。
-
-        异常:
-            KeyError: 该 ``(run_id, stream_id)`` 没有草稿（同一 ``stream_id`` 被重复收口，或草稿
-                已被 :meth:`flush_message_chunk` 的 ``cancel`` 态消费）。
-            sqlalchemy.exc.SQLAlchemyError: 持久化失败——此时内存草稿已被消费且该消息未进入
-                canonical，同一 ``stream_id`` 无法重试（run 会走失败收敛）。
-
-        副作用:
-            原地更新一条 canonical context 行、丢弃该草稿的内存聚合状态，并在 ``_entries`` 末尾追加
-            同一条消息；消息序号游标不推进（草稿创建时已占用该序号）。不触发 Transport 增量——实时
-            投影由 workflow custom stream 负责。
-        """
-
-        target_run_id = self.current_run_id if run_id is None else run_id
-        state = self._streaming_messages.pop((target_run_id, stream_id), None)
-        if state is None:
-            raise KeyError(f"no streaming draft for run {target_run_id} / {stream_id}")
-        finalized = _as_ai_message(state.chunk) if message is None else message
-        self._require_context_service().replace_message(
-            ConversationTaskContextRecord(
-                task_id=self.current_task_id,
-                run_id=target_run_id,
-                message=finalized,
-                include_in_context=True,
-                sequence=state.sequence,
-                is_streaming=False,
-            )
-        )
-        self._entries.append(ContextEntry(finalized, target_run_id, state.sequence))
-        return finalized
+        if finalizing:
+            self._entries.append(ContextEntry(written, target_run_id, state.sequence))
+            return written
+        if mode == "running":
+            # 只有 running 会继续累积，才需要推进刷写进度；cancel 已丢弃该草稿，写它是无效写。
+            state.persisted_text_length = len(content_to_text(state.chunk.content))
+            state.last_persisted_at = time.monotonic()
+        return written
 
     def _streaming_needs_flush(self, state: StreamingMessageState) -> bool:
         """根据字符和时间阈值决定是否刷写流式草稿。"""
 
         text_length = len(content_to_text(state.chunk.content))
         return (
-                text_length - state.persisted_text_length >= STREAMING_PERSIST_MIN_CHARS
+                text_length - state.persisted_text_length >= Constant.Context.STREAMING_PERSIST_MIN_CHARS
                 or time.monotonic() - state.last_persisted_at
-                >= STREAMING_PERSIST_MAX_INTERVAL_SECONDS
+                >= Constant.Context.STREAMING_PERSIST_MAX_INTERVAL_SECONDS
         )
 
     def ensure_run_user_message(
@@ -518,9 +489,10 @@ class RuntimeContextManager:
             无；持久化失败由 ``add_message`` 向上传播。
 
         副作用:
-            经 ``add_message`` 落库一条 ``HumanMessage`` 并触发上下文变更监听；已存在时只记
-            一条 info 日志后返回；文本和图片均为空时写一条 warning 日志（历史空输入 Run 不应
-            因此中断执行）。图片 ref 不包含二进制。
+            经 ``add_message`` 落库一条 ``HumanMessage``，并向 Transport 投影一条
+            ``UserInputAppendedEvent``；已存在时只记一条 info 日志后返回；文本和图片均为空时写一条
+            warning 日志（历史空输入 Run 不应因此中断执行）。图片 ref 只记 workspace 相对路径，
+            不包含二进制。
         """
 
         paths = tuple(path.strip() for path in (image_paths or ()) if path and path.strip())
@@ -542,13 +514,17 @@ class RuntimeContextManager:
                 },
             )
             return False
+        content: str | list[dict[str, str]]
         if paths:
             content_blocks: list[dict[str, str]] = []
             if text and text.strip():
+                # 只发图片时不得产出空 text 块：部分厂商（Anthropic）拒绝空文本块，而 langchain
+                # 的翻译层只对字符串 content 丢弃空串，不会替列表里的空块兜底。
                 content_blocks.append({"type": "text", "text": text})
-            content_blocks.extend({"type": "cosir_image_ref", "path": path} for path in paths)
-            content: str | list[dict[str, str]] = content_blocks
+            content_blocks.extend({"type": "image", "file_id": path} for path in paths)
+            content = content_blocks
         else:
+            # 纯文本输入保持字符串 content：provider 兼容性最好，也是历史形状。
             content = text
         self.add_message(HumanMessage(content=cast(Any, content)))
         get_conversation_event_projector().process(

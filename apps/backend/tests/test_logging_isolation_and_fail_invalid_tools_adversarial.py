@@ -398,6 +398,8 @@ def test_tools_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
             {"name": "read_file", "args": "{", "id": "call-1", "error": "invalid json"}
         ],
     )
+    # 假流以 ``canned`` 代表「本轮完整输出」；收口时由节点交付修订版（见假 flush 的 finalize 态）。
+    canned = message
     events: list[Any] = []
     messages: list[Any] = []
 
@@ -438,24 +440,28 @@ def test_tools_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
         # 同形），故直接返回它；真实聚合与固化行为由 manager 单测钉住。
         return message
 
-    def flush_message_chunk(*, stream_id: str, run_id: Any = None, mode: str = "running"):
-        return message
-
-    def finalize_message_chunk(
-        *, stream_id: str, run_id: Any = None, message: AIMessage | None = None
-    ) -> AIMessage:
-        # 不模拟「省略 message 时固化内存聚合结果」：节点必须交付修订版，省略即契约被破坏。
-        if message is None:
-            raise AssertionError("model_node must pass the finalized message")
-        messages.append(message)
-        return message
+    def flush_message_chunk(
+        *,
+        stream_id: str,
+        run_id: Any = None,
+        mode: str = "running",
+        message: AIMessage | None = None,
+    ):
+        if mode == "finalize":
+            # 不模拟「省略 message 时固化内存聚合结果」：节点必须交付修订版，省略即契约被破坏。
+            if message is None:
+                raise AssertionError("model_node must pass the finalized message")
+            messages.append(message)
+            return message
+        if message is not None:
+            raise ValueError("message is only accepted in finalize mode")
+        return canned
 
     runtime_context = SimpleNamespace(
         load_message=lambda: [],
         add_message=add_message,
         add_message_chunk=add_message_chunk,
         flush_message_chunk=flush_message_chunk,
-        finalize_message_chunk=finalize_message_chunk,
     )
     monkeypatch.setattr(model_module, "_runtime_config", lambda: runtime_config)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: runtime_context)

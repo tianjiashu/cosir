@@ -9,8 +9,8 @@ stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContext
 关于「文本 + 工具调用并存」：ReAct 中模型「边说明边调工具」是合法输出（例如先说
 "我先用 grep 查一下文件结构" 再给出一个 ``search_content`` 调用）。此时文本**不计入最终
 回复**（最终回复只来自纯文本分支），但模型这段说明并非丢弃——它会经 canonical conversation
-facts 写入（``RuntimeContextManager.add_message_chunk`` 累积草稿，收口后由
-``finalize_message_chunk`` 原地固化为 canonical 消息）落库进历史上下文，并随 state
+facts 写入（``RuntimeContextManager.add_message_chunk`` 累积草稿，收口时经
+``flush_message_chunk(mode="finalize")`` 原地固化为 canonical 消息）落库进历史上下文，并随 state
 ``instruction`` 字段下传给 ``tools`` / ``observe`` 节点，使下游执行与错误排查能看到模型
 当时的意图。
 
@@ -102,9 +102,9 @@ async def _model_node(state: ReactGraphState) -> dict:
         - 发起推理前若本次已超配额，调用 ``_finalize_max_steps`` 收口终态，由 canonical
           writer 把 run 标记为 ``max_steps_reached`` 失败，不再触发推理；
         - 经 ``RuntimeContextManager.add_message_chunk`` 增量持久化本轮 assistant 草稿；正常结束
-          后用最后一条聚合消息经 ``classify`` 修订工具调用，再经 ``finalize_message_chunk`` 一次
-          原地固化为 canonical 消息（同一行、同一序号，不新增行），使下一模型步能累积看到本轮
-          输出；
+          后用最后一条聚合消息经 ``classify`` 修订工具调用，再经
+          ``flush_message_chunk(mode="finalize")`` 一次收口为 canonical 消息（同一行、同一序号，
+          不新增行），使下一模型步能累积看到本轮输出；
         - 模型文本与 reasoning 增量经 LangGraph custom stream 写给 workflow；由 workflow
           统一调用 ``RuntimeOperations`` 更新 snapshot；状态写入 ``run``；
         - 非法输出经 ``RuntimeOperations`` 落定失败。协作取消只在两处检测：进入模型请求前
@@ -210,10 +210,9 @@ async def _model_node(state: ReactGraphState) -> dict:
     # 收口时直接用它做工具调用修订，无需再从草稿状态里取回。
     aggregated_message: AIMessage | None = None
     async for chunk in model.astream(messages):
-        message_chunk = _runtime_context().add_message_chunk(
+        aggregated_message = _runtime_context().add_message_chunk(
             chunk, stream_id=step_id, run_id=run_id
         )
-        aggregated_message = message_chunk
 
         if operations.is_current_run_cancelled():
             log.warning(
@@ -247,7 +246,7 @@ async def _model_node(state: ReactGraphState) -> dict:
         # 传入的是本步累积后的 AIMessage（``add_message_chunk`` 的返回），而非原始
         # chunk：``extract_tool_calls`` 按属性读取 ``tool_call_chunks`` / ``tool_calls``，
         # 两种形态都适用（聚合后调用通常已落在 ``tool_calls``）。
-        raw_tool_calls = chunk_processor.extract_tool_calls(message_chunk)
+        raw_tool_calls = chunk_processor.extract_tool_calls(aggregated_message)
         if raw_tool_calls:
             # 一个 chunk 可能并行携带多个 tool call，逐条处理已有的 name/id 身份。
             parts.tool_call()
@@ -284,9 +283,9 @@ async def _model_node(state: ReactGraphState) -> dict:
         ToolCall(name=call.tool_name, args=call.args, id=call.tool_call_id)
         for call in tool_call_lifecycle.blocked_tool_calls + tool_call_lifecycle.valid_tools
     ]
-    # 一次固化修订版到草稿行占用的同一 sequence：canonical 上下文只此一份，下一模型步即可读到。
-    _runtime_context().finalize_message_chunk(
-        stream_id=step_id, run_id=run_id, message=ai_message
+    # 一次收口修订版到草稿行占用的同一 sequence：canonical 上下文只此一份，下一模型步即可读到。
+    _runtime_context().flush_message_chunk(
+        stream_id=step_id, run_id=run_id, mode="finalize", message=ai_message
     )
 
     log.info(

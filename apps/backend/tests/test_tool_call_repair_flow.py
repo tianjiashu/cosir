@@ -71,8 +71,9 @@ class _ModelHarness:
     ``model``（``astream`` 产出的 chunk 流）与 ``runtime_context``。``runtime_context``
     按 ``RuntimeContextManager`` 的当前契约实现：``add_message_chunk`` / ``flush_message_chunk``
     返回本 harness 构造时传入的 ``message``（真实 provider 的 chunk 聚合结果与它同形），
-    ``finalize_message_chunk`` 一次收口并**如实使用传入的修订版 ``message``**。因此 model 节点的
-    后续判定等于构造时传入的 ``message``（即本轮模型最终输出）。
+    ``flush_message_chunk`` 按 ``running`` / ``cancel`` / ``finalize`` 三态写同一行，其中
+    ``finalize`` 一次收口并**如实使用传入的修订版 ``message``**。因此 model 节点的后续判定等于
+    构造时传入的 ``message``（即本轮模型最终输出）。
     """
 
     def __init__(self, message: AIMessage, chunks: list[AIMessageChunk] | None = None) -> None:
@@ -81,7 +82,8 @@ class _ModelHarness:
         self.completed = False
         self.failed = False
         self._message = message
-        self._chunks = chunks or [AIMessageChunk(content="")]
+        # 显式传空列表表示「零 chunk 流」，故不能写成 ``chunks or [...]``（空列表会被默认值吞掉）。
+        self._chunks = chunks if chunks is not None else [AIMessageChunk(content="")]
         self._merged_chunk: AIMessageChunk | None = None
 
         def complete_run_if_running(*_args: Any, **_kwargs: Any) -> object:
@@ -142,32 +144,27 @@ class _ModelHarness:
             stream_id: str,
             run_id: Any = None,
             mode: str = "running",
+            message: AIMessage | None = None,
         ) -> AIMessage | None:
             del stream_id, run_id
+            if mode == "finalize":
+                # 不模拟「省略 message 时固化内存聚合结果」：节点必须交付修订版，省略即契约被破坏。
+                if message is None:
+                    raise AssertionError("model_node must pass the finalized message")
+                self._merged_chunk = None
+                self.messages.append(message)
+                return message
+            if message is not None:
+                raise ValueError("message is only accepted in finalize mode")
             if mode == "cancel":
                 self._merged_chunk = None
             return self._message
-
-        def finalize_message_chunk(
-            *,
-            stream_id: str,
-            run_id: Any = None,
-            message: AIMessage | None = None,
-        ) -> AIMessage:
-            del stream_id, run_id
-            # 不模拟「省略 message 时固化内存聚合结果」：节点必须交付修订版，省略即契约被破坏。
-            if message is None:
-                raise AssertionError("model_node must pass the finalized message")
-            self._merged_chunk = None
-            self.messages.append(message)
-            return message
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
             add_message=add_message,
             add_message_chunk=add_message_chunk,
             flush_message_chunk=flush_message_chunk,
-            finalize_message_chunk=finalize_message_chunk,
         )
 
     async def _astream(self, _messages: list[Any]) -> AsyncIterator[AIMessageChunk]:
@@ -248,6 +245,23 @@ def test_reasoning_closes_before_tool_call_created(monkeypatch: Any) -> None:
     assert harness.events[closed_index].part == "reasoning"
     assert not [event for event in harness.events if event.type == "tool_call_created"]
     assert result["tool_request"]["tool_calls"][0]["id"] == "call-1"
+
+
+def test_empty_model_stream_fails_loudly_without_finalizing(monkeypatch: Any) -> None:
+    """模型一个 chunk 都没产出时必须响亮失败，不得固化出一条空 assistant 消息。
+
+    该分支在收口处、早于任何 lifecycle / tools 交互，因此只打 ``model_module`` 的桩即可覆盖。
+    """
+
+    harness = _ModelHarness(AIMessage(content=""), chunks=[])
+    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(model_module._model_node(_state()))
+
+    assert harness.messages == [], "空流不得固化任何消息"
 
 
 def test_normal_finish_reason_is_required_for_final_response(monkeypatch: Any) -> None:
