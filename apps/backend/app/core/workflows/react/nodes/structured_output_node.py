@@ -22,8 +22,6 @@ from app.core.workflows.vision_input import resolve_messages_for_model
 from app.models.conversation_run_failure import run_failure_message
 from app.utils.message_content import content_to_text
 
-_MAX_ATTEMPTS = 4
-
 
 def _request_instruction(
     schema_name: str,
@@ -157,7 +155,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
     # 返回工具调用则由 _validate_response 拒绝并重试，同时保持请求中的工具 schema 不变。
     model = runtime.model.bind(response_format=spec.response_format())
     retry_feedback: str | None = None
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
+    for attempt in range(1, Constant.Workflow.STRUCTURED_OUTPUT_MAX_ATTEMPTS + 1):
         if operations.is_current_run_cancelled():
             operations.cancel_run_if_running(
                 usage_stats=runtime.usage_stats,
@@ -247,7 +245,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
                 "data": {
                     "run_id": runtime.run.id,
                     "schema_name": spec.name,
-                    "attempts": _MAX_ATTEMPTS,
+                    "attempts": Constant.Workflow.STRUCTURED_OUTPUT_MAX_ATTEMPTS,
                 },
             },
         )

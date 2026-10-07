@@ -144,6 +144,8 @@ class Constant:
         INVALID_TOOL_ARGS_PREVIEW_CHARS: int = 500
         # 单次工具调用错误累计展示的字符预算上限。
         INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS: int = 2000
+        # 结构化输出阶段的模型请求总次数上限，包含首次请求与后续重试。
+        STRUCTURED_OUTPUT_MAX_ATTEMPTS: int = 4
         # 连续工具调用失败次数上限：达到即终止本轮 Run（end_reason 取
         # ``Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT``）。由 ``observation_node`` 判定。
         # 取值沿用迁移前 ``CODING_AGENT_TOOL_ERROR_LIMIT`` 的实际生效值（100，容许长会话中的
