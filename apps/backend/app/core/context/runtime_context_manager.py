@@ -2,8 +2,12 @@
 
 本模块只维护模型调用所需的内存工作副本；持久化事实由
 ``ConversationTaskContextService`` 负责，``ContextEntry.run_id`` 始终随消息保存。
-流式 ``AIMessageChunk`` 通过 ``add_message_chunk`` 写入不纳入模型上下文的持久化草稿；
-只有收口后的完整消息才会进入模型 context。
+
+``add_message`` 是**工具结果**（取消/崩溃补的占位与真实结果）的唯一写入入口：命中同一条调用的
+既有结果行时按 ``plan_tool_call_closure`` 的配对规则原地覆盖，追加则是默认行为。assistant 草稿另
+有两条路径：流式 ``AIMessageChunk`` 由 ``add_message_chunk`` 演进为不纳入上下文的持久化草稿，
+收口由 ``finalize_message_chunk`` 一次完成（可在固化时交付修订版消息）——canonical 侧一条
+assistant 消息只占一行（``is_streaming`` 草稿行另计，取消或崩溃遗留的草稿不进入模型上下文）。
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     SystemMessage,
+    ToolMessage,
 )
 
 from app.assistant_transport.event import UserInputAppendedEvent, build_user_input_parts
@@ -67,11 +72,15 @@ class RuntimeContextManager:
     current_run_id: int | None = None
     # fork Task 的运行时标记；它只描述 Task 身份，不改变 context 持久化规则。
     is_fork: bool = False
+    # 纯内存用例注入的 context service 实现；生产路径恒为 None，回落到全局装配的实例。
+    # 显式声明而非运行期探测属性：它是契约端口，缺失/未装配必须走明确分支而不是 getattr 静默降级。
+    context_service: ConversationTaskContextService | None = field(default=None, init=False)
     # 固定持久化的 Task system prompt，不参与压缩；每次模型调用均位于消息前缀。
     _system_entry: ContextEntry | None = field(default=None, init=False)
     _entries: list[ContextEntry] = field(default_factory=list, init=False)
-    # begin_run 从持久化 context 恢复下一个可用序号，add_message 落库后自增。
-    # 序号游标由 RuntimeContextManager 独自管理；context service 只负责持久化。
+    # 序号由 RuntimeContextManager 独自分配，context service 只负责持久化：构造时
+    # （__post_init__）从持久化 context 恢复下一个可用序号；此后每条新消息（含流式草稿首 chunk）
+    # 落库时占用一个序号并自增；finalize_message_chunk 原地复用草稿已占用的序号，不推进游标。
     _message_sequence: int = field(default=0, init=False)
     # key=(run_id, stream_id) → 一条流式草稿的进程内聚合状态。复合 key 区分不同 run / step
     # 的草稿；partial 不进 _entries，避免被下一次模型调用误读。
@@ -125,14 +134,13 @@ class RuntimeContextManager:
         )
 
     def _require_context_service(self) -> ConversationTaskContextService:
-        """返回已装配的 context service；未装配时立即失败。
+        """返回 context service 端口：注入实现优先，否则回落到全局装配的实例。
 
-        若实例持有注入的 ``context_service``（纯内存测试场景）则优先返回，否则回落到
-        全局 ``get_conversation_task_context_service()``。生产路径不设置该属性，故始终走全局。
+        注入走类体显式声明的 ``context_service`` 字段（默认 ``None``）；生产路径不设置它，
+        因此始终回落到全局 provider——provider 未装配时立即失败，不做静默降级。
         """
-        injected = getattr(self, "context_service", None)
-        if injected is not None:
-            return injected
+        if self.context_service is not None:
+            return self.context_service
         return get_conversation_task_context_service()
 
     def begin_run(
@@ -172,7 +180,8 @@ class RuntimeContextManager:
             }
         # ``max_sequence`` 返回的是最后一个已使用的序号，而不是下一个可用序号。
         # RuntimeContextManager 是 Task context 序号的唯一运行时 owner：恢复时从
-        # SQLite 读取最后序号并推进一次，后续消息只由 ``add_message`` 自增。否则首轮
+        # SQLite 读取最后序号并推进一次，后续序号只由本类分配——add_message 与流式草稿首 chunk
+        # 各占用一个序号，finalize_message_chunk 复用草稿序号而不推进。否则首轮
         # 使用 0/1 后，第二轮会再次尝试写入 1，触发 (task_id, sequence) 唯一约束。
         self.current_run_id = run.id
 
@@ -183,28 +192,88 @@ class RuntimeContextManager:
             include_in_context: bool = True,
             transport_metadata: TransportMetadata | None = None,
             run_id: int | None = None,
-    ) -> bool:
-        """追加一条完整 LangChain 消息到 Task context。
+    ) -> Literal["appended", "replaced"]:
+        """把一条完整 LangChain 消息写入 canonical context（工具结果可覆盖既有行）。
+
+        追加是默认行为；唯一例外是 ``ToolMessage`` 命中了**同一条工具调用的既有结果行**——判据与
+        补占位共用 ``plan_tool_call_closure``：只有落在最后一条携带 ``tool_calls`` 的 ``AIMessage``
+        **之后**、且 ``tool_call_id`` 与归属 Run 都相同的那一行才算命中。命中即**原地覆盖**（沿用
+        该行的 ``sequence`` 与 ``run_id``），让取消/崩溃遗留的 ``cancelled`` 占位被真实结果顶掉，
+        且不并排留下第二行（模型协议上一条调用只有一个结果）。
+
+        为什么必须按配对规则定位：``tool_call_id`` 由模型给出，可跨 Run、甚至跨同一 Run 的不同
+        model 步复用；按 id 全表匹配会覆盖掉别的调用已有的结果行，并使当前调用永久不闭合。
+
+        判据为何取内存副本：``_entries`` 装载自 ``include_in_context=True`` 的全部行，重启后由
+        context service 重建；运行期的行删除也都经本类（``begin_run`` 移除该 Run 的条目，编辑重跑
+        由命令层在无活跃 Run 时先删行再由本类重建），因此等价于持久化事实，无需数据库侧的唯一列。
 
         参数:
             message: 完整 LangChain 消息；不接受流式 chunk。
-            include_in_context: 是否加入当前模型输入；默认 True。
-            transport_metadata: 该消息对应的 Transport 元数据；无则为 None。
-            run_id: 该消息归属的 Conversation Run；为 None 时归属当前 Run。协议占位需要
-                写回**产生该工具调用的 Run**，避免把历史调用的闭合结果记到新 Run 上。
+            include_in_context: 是否加入当前模型输入；默认 True。覆盖分支恒视为纳入上下文。
+            transport_metadata: 该消息对应的 Transport 元数据；无则为 None。覆盖时 ``None`` 表示
+                **保留既有行的 metadata**（见 ``ConversationTaskContextCrud.replace_message``），
+                因此覆盖真实结果必须给出终态，否则会保留占位携带的 ``cancelled``。
+            run_id: 该消息归属的 Conversation Run；为 None 时归属当前 Run。协议占位需要写回
+                **产生该工具调用的 Run**，避免把历史调用的闭合结果记到新 Run 上；匹配既有行时也要求
+                归属相同。
 
         返回:
-            ``True`` 表示 canonical context 新增；``False`` 表示同一工具结果已存在。
+            ``appended``：新增一行；``replaced``：覆盖了既有工具结果行。
 
         异常:
-            ValueError: 传入 ``AIMessageChunk``。
+            KeyError: 覆盖时命中的行在替换前被删除（调用顺序错误）。
+            持久化失败（含序号冲突）向上传播。
 
         副作用:
-            通过 context owner 持久化完整消息，并更新当前内存副本。
+            追加时新增一行 canonical context 并占用一个序号，``include_in_context=True`` 时追加进
+            内存模型上下文；覆盖时原地更新该行（不推进序号游标）、同步内存条目的消息，并记 info
+            ``tool_result_row_replaced``。
         """
+
         target_run_id = self.current_run_id if run_id is None else run_id
+        # 类型窄化不进入推导式作用域，故先固化标识；后续日志与覆盖分支都复用它。
+        tool_call_id = message.tool_call_id if isinstance(message, ToolMessage) else ""
+        existing: ContextEntry | None = None
+        if tool_call_id:
+            plan = plan_tool_call_closure(self._entries)
+            paired = (
+                next((slot for slot in plan.slots if slot.call_id == tool_call_id), None)
+                if plan is not None
+                else None
+            )
+            if paired is not None and paired.tool_index is not None:
+                candidate = self._entries[paired.tool_index]
+                if candidate.run_id == target_run_id:
+                    existing = candidate
+        if existing is not None:
+            self._require_context_service().replace_message(
+                ConversationTaskContextRecord(
+                    task_id=self.current_task_id,
+                    run_id=existing.run_id,
+                    message=message,
+                    include_in_context=True,
+                    sequence=existing.sequence,
+                    transport_metadata=transport_metadata,
+                    is_streaming=False,
+                )
+            )
+            existing.message = message
+            log.info(
+                "tool_result_row_replaced",
+                extra={
+                    "msg": "同一工具调用的既有结果行已被真实结果覆盖",
+                    "data": {
+                        "task_id": self.current_task_id,
+                        "run_id": existing.run_id,
+                        "tool_call_id": tool_call_id,
+                        "sequence": existing.sequence,
+                    },
+                },
+            )
+            return "replaced"
         sequence = self._message_sequence
-        created = self._require_context_service().append(
+        self._require_context_service().append(
             self.current_task_id,
             target_run_id,
             message,
@@ -212,13 +281,11 @@ class RuntimeContextManager:
             include_in_context,
             transport_metadata,
         )
-        if created is False:
-            return False
         self._message_sequence += 1
         if not include_in_context:
-            return True
+            return "appended"
         self._entries.append(ContextEntry(message, target_run_id, sequence))
-        return True
+        return "appended"
 
     def add_message_chunk(
             self,
@@ -290,21 +357,22 @@ class RuntimeContextManager:
             *,
             stream_id: str,
             run_id: int | None = None,
-            mode: Literal["complete", "cancel", "running"] = "running",
+            mode: Literal["running", "cancel"] = "running",
     ) -> AIMessage | None:
-        """把当前流式草稿刷入数据库；按 ``mode`` 分三种语义态。
+        """把当前流式草稿以 partial 状态刷入数据库；按 ``mode`` 分两种语义态。
 
-        - ``running``（默认）：以 partial 状态（``is_streaming=True``）落库，**保留**内存
-          state 供后续 chunk 继续累积。add_message_chunk 的节流刷写即走此态。
-        - ``cancel``：同样 partial 落盘，但 run 已终止不再累积，故**丢弃**内存 state，且不加入
-          模型上下文。
-        - ``complete``：收口为普通 canonical assistant 消息，复用原 ``sequence`` 更新同一行，
-          并仅在收口时加入模型上下文。
+        - ``running``（默认）：保留内存 state 供后续 chunk 继续累积；``add_message_chunk`` 的
+          节流刷写即走此态。
+        - ``cancel``：run 已终止不再累积，故丢弃内存 state；同样只落 partial，且不加入模型上下文。
+
+        两种语义都**不**把草稿收口为 canonical 消息：收口由 :meth:`finalize_message_chunk` 一次
+        完成——调用方须在收口时交付用 ``ToolCallLifecycleManager.classify`` 修订过的
+        ``tool_calls`` / ``invalid_tool_calls``，修订版才是 canonical 内容。
 
         参数:
             stream_id: 本次流式会话的唯一标识，通常为 ``step-N``。
             run_id: 消息归属 Run；缺省使用当前 Run。
-            mode: ``running`` / ``cancel`` / ``complete``。
+            mode: ``running`` / ``cancel``。
 
         返回:
             本次刷写得到的 ``AIMessage``；无对应草稿时返回 ``None``。
@@ -313,38 +381,26 @@ class RuntimeContextManager:
             持久化错误向上传播。
 
         副作用:
-            running / cancel 只更新 partial 行；complete 才把消息加入内存 entries；实时
-            Transport 增量由 workflow stream 负责。
+            只更新 partial 行（``is_streaming=True``、``include_in_context=False``）；
+            ``cancel`` 额外丢弃内存草稿 state，``running`` 保留它以继续累积。实时 Transport
+            增量由 workflow stream 负责。
         """
 
         target_run_id = self.current_run_id if run_id is None else run_id
         key = (target_run_id, stream_id)
-        # 收口 flush 与取消 flush 都消费草稿并移除内存 state；中途 flush 保留 state 以便继续累积。
+        # cancel flush 消费草稿并移除内存 state；中途 flush 保留 state 以便继续累积。
         state = (
             self._streaming_messages.pop(key, None)
-            if mode in {"complete", "cancel"}
+            if mode == "cancel"
             else self._streaming_messages.get(key)
         )
         if state is None:
             return None
-        if mode == "complete":
-            finalized = _as_ai_message(state.chunk)
-            self._require_context_service().replace_streaming_message(
-                ConversationTaskContextRecord(
-                    task_id=self.current_task_id,
-                    run_id=target_run_id,
-                    message=finalized,
-                    include_in_context=True,
-                    sequence=state.sequence,
-                    is_streaming=False,
-                )
-            )
-            return _as_ai_message(state.chunk)
-        # 中途 flush：只更新 partial 行、保留内存 state 以便后续 chunk 继续累积。
-        self._require_context_service().replace_streaming_message(
+        self._require_context_service().replace_message(
             ConversationTaskContextRecord(
                 task_id=self.current_task_id,
-                run_id=run_id,
+                # 按草稿自身归属回写：草稿行创建时用的是 target_run_id，缺省传 None 不得把归属清空。
+                run_id=target_run_id,
                 message=_as_ai_message(state.chunk),
                 include_in_context=False,
                 sequence=state.sequence,
@@ -354,6 +410,63 @@ class RuntimeContextManager:
         state.persisted_text_length = len(content_to_text(state.chunk.content))
         state.last_persisted_at = time.monotonic()
         return _as_ai_message(state.chunk)
+
+    def finalize_message_chunk(
+            self,
+            *,
+            stream_id: str,
+            run_id: int | None = None,
+            message: AIMessage | None = None,
+    ) -> AIMessage:
+        """把一条流式草稿原地固化为 canonical assistant 消息（收口的唯一入口）。
+
+        用草稿行已占用的 ``sequence`` **原地替换**该行（``is_streaming=False``、
+        ``include_in_context=True``），并把该消息追加进内存模型上下文；**不新增行**——同一条
+        assistant 消息全流程只占一个序号，既不产生重复行，也不与随后的 ``ToolMessage`` 争抢序号。
+
+        ``message`` 让调用方在固化时交付**修订版**：``model_node`` 用它把 ``tool_calls`` 按工具
+        生命周期记录重写、清空 ``invalid_tool_calls``（LangChain 解析失败的非法调用不得进入
+        provider 请求）；不传则固化内存里的原始聚合结果。修订时机不影响安全性——草稿行在固化前
+        既非 canonical 也不进模型上下文（``is_streaming=True`` / ``include_in_context=False``）。
+
+        参数:
+            stream_id: 本次流式会话的唯一标识，通常为 ``step-N``。
+            run_id: 该草稿归属 Run；缺省使用当前 Run。固化不重新推导归属——草稿 key 里的 Run 才是
+                事实，否则两次取数之间 ``current_run_id`` 变化会把该行改到别的 Run。
+            message: 修订后的完整 ``AIMessage``；为 ``None`` 时使用内存聚合结果。
+
+        返回:
+            实际固化进 canonical 的那条 ``AIMessage``。
+
+        异常:
+            KeyError: 该 ``(run_id, stream_id)`` 没有草稿（同一 ``stream_id`` 被重复收口，或草稿
+                已被 :meth:`flush_message_chunk` 的 ``cancel`` 态消费）。
+            sqlalchemy.exc.SQLAlchemyError: 持久化失败——此时内存草稿已被消费且该消息未进入
+                canonical，同一 ``stream_id`` 无法重试（run 会走失败收敛）。
+
+        副作用:
+            原地更新一条 canonical context 行、丢弃该草稿的内存聚合状态，并在 ``_entries`` 末尾追加
+            同一条消息；消息序号游标不推进（草稿创建时已占用该序号）。不触发 Transport 增量——实时
+            投影由 workflow custom stream 负责。
+        """
+
+        target_run_id = self.current_run_id if run_id is None else run_id
+        state = self._streaming_messages.pop((target_run_id, stream_id), None)
+        if state is None:
+            raise KeyError(f"no streaming draft for run {target_run_id} / {stream_id}")
+        finalized = _as_ai_message(state.chunk) if message is None else message
+        self._require_context_service().replace_message(
+            ConversationTaskContextRecord(
+                task_id=self.current_task_id,
+                run_id=target_run_id,
+                message=finalized,
+                include_in_context=True,
+                sequence=state.sequence,
+                is_streaming=False,
+            )
+        )
+        self._entries.append(ContextEntry(finalized, target_run_id, state.sequence))
+        return finalized
 
     def _streaming_needs_flush(self, state: StreamingMessageState) -> bool:
         """根据字符和时间阈值决定是否刷写流式草稿。"""
@@ -437,7 +550,7 @@ class RuntimeContextManager:
             content: str | list[dict[str, str]] = content_blocks
         else:
             content = text
-        message = self.add_message(HumanMessage(content=cast(Any, content)))
+        self.add_message(HumanMessage(content=cast(Any, content)))
         get_conversation_event_projector().process(
             UserInputAppendedEvent(
                 task_id=self.current_task_id,
@@ -449,7 +562,7 @@ class RuntimeContextManager:
                 ),
             )
         )
-        return message
+        return True
 
     def _current_run_has_user_message(self) -> bool:
         """返回当前 Run 是否已在 canonical context 中拥有初始 user 消息。
@@ -499,14 +612,16 @@ class RuntimeContextManager:
             无。
 
         异常:
-            无；持久化异常由 ``add_message`` 向上传播。
+            RuntimeError: 缺失槽位在追加占位时命中了既有结果行（同一条 ``AIMessage`` 出现重复
+                ``call_id`` 一类畸形数据）——显式失败，避免复用旧行后索引失配。
+            sqlalchemy.exc.SQLAlchemyError: 持久化失败，由 ``add_message`` 向上传播。
 
         副作用:
             为每个未配对调用调用 ``add_message``：写回 ``_entries``、经
             ``context_service.append`` 落库（``include_in_context=True``、随行写入调用所属
-            ``run_id`` 与 ``TransportMetadata(status="cancelled")``）并触发上下文变更监听；
-            已有但错位的 ToolMessage 只在当前 working copy 中重排，不改写上下文事实。占位
-            落库后下次加载即命中配对，天然幂等。
+            ``run_id`` 与 ``TransportMetadata(status="cancelled")``）；已有但错位的 ToolMessage
+            只在当前 working copy 中重排，不改写上下文事实。占位落库后下次加载即命中配对，天然
+            幂等（占位追加在目标消息之后，下次取数即被配对规则认到）。
         """
         entries = self._entries
         plan = plan_tool_call_closure(entries)
@@ -529,7 +644,10 @@ class RuntimeContextManager:
                 continue
 
             previous_length = len(self._entries)
-            created = self.add_message(
+            # missing 槽（``tool_index is None``）按配对规则不可能命中既有行——命中就有 tool_index。
+            # 因此这里必须是「追加」；真的命中说明出现了同 id 重复槽一类畸形数据，显式失败比静默
+            # 复用旧行、并让下面的索引失配更好。
+            if self.add_message(
                 build_placeholder_tool_message(slot.call_id, slot.tool_name),
                 include_in_context=True,
                 # 占位必须随行写入 Transport 终态：快照重建按 Run 分组配对时直接读
@@ -539,22 +657,11 @@ class RuntimeContextManager:
                 transport_metadata=TransportMetadata(status="cancelled"),
                 # 归属产生该调用的 Run，而不是恰好正在执行的新 Run。
                 run_id=plan.target_run_id,
-            )
-            if created is False:
-                # 同 (task, run, tool_call_id) 已落库但不在当前 working copy（例如未纳入
-                # 上下文的历史行）：不能重复写入，也不凭空构造条目，记 warning 后跳过。
-                log.warning(
-                    "runtime_context_tool_call_placeholder_skipped",
-                    extra={
-                        "msg": "该工具调用已有同名结果行，跳过占位写入",
-                        "data": {
-                            "task_id": self.current_task_id,
-                            "run_id": plan.target_run_id,
-                            "tool_call_id": slot.call_id,
-                        },
-                    },
+            ) != "appended":
+                raise RuntimeError(
+                    f"tool call placeholder must be appended, but the result row of "
+                    f"{slot.call_id} already exists"
                 )
-                continue
             normalized.append(self._entries[previous_length])
             created_placeholder_count += 1
             appended_count += 1
@@ -584,15 +691,28 @@ class RuntimeContextManager:
     def load_message(self) -> list[BaseMessage]:
         """返回 system prompt 加 Task context 的模型输入副本。
 
-        取数前先闭合最后一条工具调用消息上未配对的结果（崩溃/取消遗留），保证返回给模型的
-        上下文协议闭合。
+        取数前先闭合最后一条工具调用消息上未配对的结果（崩溃/取消遗留）：为缺失结果补
+        ``cancelled`` 占位，并把已落库但错位的结果搬回该消息之后。判据与覆盖策略共用
+        ``plan_tool_call_closure``，因此**只在配对规则可达范围内闭合**——``AIMessage`` 之前残留的
+        「反向孤儿」结果行不在其中（属 ``tool_call_closure`` 已登记的缺陷），此时模型输入仍不闭合。
+
+        返回:
+            模型输入副本：固定 system 提示词 + 当前 Task 全部纳入上下文的条目。返回深拷贝，调用方
+            改写不影响 working copy。
+
+        异常:
+            RuntimeError: 收口占位时命中畸形数据（见 :meth:`_close_unclosed_tool_calls`），或
+                system entry 未初始化。
+            sqlalchemy.exc.SQLAlchemyError: 补占位落库失败。
 
         副作用:
-            若检测到未配对调用，经 ``_close_unclosed_tool_calls`` -> ``add_message`` 补占位会
-            写回上下文并触发变更通知；无未配对调用时不修改上下文。
+            检测到未配对调用时经 ``_close_unclosed_tool_calls`` 补占位（写库并更新 working copy）；
+            无论是否有未配对调用，都把 working copy 中的 assistant 消息重建为只保留
+            ``id`` / ``content`` / ``tool_calls`` / ``additional_kwargs`` 的形态——
+            ``invalid_tool_calls`` 等字段不得进入 provider 请求。
         """
+
         self._close_unclosed_tool_calls()
-        message_list = []
         for entry in self._effective_entries():
             if entry.message.type == "ai":
                 source_ai_message = cast(AIMessage, entry.message)
@@ -601,9 +721,7 @@ class RuntimeContextManager:
                     content=source_ai_message.content,
                     tool_calls=source_ai_message.tool_calls,
                     additional_kwargs=source_ai_message.additional_kwargs,
-
                 )
-            message_list.append(entry)
         return [entry.message for entry in copy.deepcopy(self._effective_entries())]
 
     def _effective_entries(self) -> list[ContextEntry]:

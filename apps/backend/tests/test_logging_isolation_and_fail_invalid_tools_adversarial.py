@@ -375,7 +375,6 @@ def test_tools_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
 
     from langchain_core.messages import AIMessage, AIMessageChunk
 
-    from app.core.context.runtime_context_manager import _as_ai_message
     from app.core.workflows.react.nodes import model_node as model_module
     from app.core.workflows.react.nodes import tools_node as tools_module
     from app.core.workflows.react.worflow_state.route import ReactRoute
@@ -435,19 +434,28 @@ def test_tools_node_writes_failed_invalid_call_into_lifecycle(monkeypatch: Any) 
         chunk: AIMessageChunk, *, stream_id: str, run_id: Any = None
     ) -> AIMessage:
         merged["c"] = chunk if "c" not in merged else merged["c"] + chunk
-        return _as_ai_message(merged["c"])
+        # 假流：本用例把「本轮完整输出」预置为 ``message``（真实 provider 的 chunk 聚合结果与它
+        # 同形），故直接返回它；真实聚合与固化行为由 manager 单测钉住。
+        return message
 
     def flush_message_chunk(*, stream_id: str, run_id: Any = None, mode: str = "running"):
-        if mode == "complete":
-            messages.append(message)
-            return message
-        return None
+        return message
+
+    def finalize_message_chunk(
+        *, stream_id: str, run_id: Any = None, message: AIMessage | None = None
+    ) -> AIMessage:
+        # 不模拟「省略 message 时固化内存聚合结果」：节点必须交付修订版，省略即契约被破坏。
+        if message is None:
+            raise AssertionError("model_node must pass the finalized message")
+        messages.append(message)
+        return message
 
     runtime_context = SimpleNamespace(
         load_message=lambda: [],
         add_message=add_message,
         add_message_chunk=add_message_chunk,
         flush_message_chunk=flush_message_chunk,
+        finalize_message_chunk=finalize_message_chunk,
     )
     monkeypatch.setattr(model_module, "_runtime_config", lambda: runtime_config)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: runtime_context)

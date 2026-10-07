@@ -19,7 +19,7 @@
 
 from typing import Any
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 
 class ModelChunkProcessor:
@@ -82,7 +82,7 @@ class ModelChunkProcessor:
                 return text
         return ""
 
-    def extract_tool_calls(self, chunk: AIMessageChunk) -> list[dict[str, Any]]:
+    def extract_tool_calls(self, chunk: AIMessage | AIMessageChunk) -> list[dict[str, Any]]:
         """从单个 chunk 提前抽取全部完整 tool_call（保留原生字段）。
 
         优先读 ``tool_call_chunks``（流式分片主要载体，可能并行多工具调用，每项自带

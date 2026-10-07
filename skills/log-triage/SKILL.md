@@ -150,7 +150,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 | `tasks` | 任务身份、`task_type`（`user` / `fork` / `delegate_task`）、委派关系 `parent_task_id` / `parent_run_id`（`fork` 任务**不写**这两列，来源记在 `extra.fork.source_task_id` / `source_run_id`）、`current_run_id`、最后一个 Run 的上下文窗口上限 `context_window_total`；最后一个 Run 的 provider usage 从 `conversation_runs.usage_json` 读取；`extra` 为自由 JSON | 任务列表状态不对、上下文占用异常、委派链路、fork 来源 |
 | `conversation_runs` | **Run 生命周期唯一事实源**：`status` / `end_reason` / `error_json` / `final_output` / `usage_json` / `agent_id` / `model_config_id`（模型名与能力不复制进 Run，由 `model_configs` 派生）/ `checkpoint_thread_id` | 一直转圈、失败原因、用量与成本、模型路由错 |
 | `conversation_commands` | Transport 命令幂等占用：`(task_id, command_id)` 唯一、`payload_hash`、`error_code` | 重复提交被拒、幂等冲突、命令失败码 |
-| `conversation_task_contexts` | **canonical 上下文消息**：`message_json` / `transport_metadata_json` / `sequence` / `tool_call_id` / `is_streaming` / `include_in_context` | Agent 回放、工具调用与结果、上下文缺口、工具状态不符 |
+| `conversation_task_contexts` | **canonical 上下文消息**：`message_json` / `transport_metadata_json` / `sequence` / `is_streaming` / `include_in_context`（工具调用 id 在 `message_json.data.tool_call_id`，表上不再单列） | Agent 回放、工具调用与结果、上下文缺口、工具状态不符 |
 | `model_configs` | 模型连接配置：`config_name` / `base_url` / `api_key`（**明文 secret，任何输出都不得包含**）/ `model_name` / `context_window_k` / `supports_thinking` / `supports_reasoning_effort` / `supports_image` / `enabled` / `sort_order` | 模型解析失败、窗口/能力标志错、Key 缺失 |
 
 **已从 schema 移除、不要再查**：`providers` / `models`（已合并为单表 `model_configs`）、
@@ -159,7 +159,9 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 `.cosir/Attachment/`，`storage` 层已无 attachment 模型）；更早的 `turn_id` / `turns` /
 `turn_messages` / `runtime_events`。查这些表会直接报 `table not found`（`require_tables` 会连带
 列出库内真实表名，是判断「schema 漂移」还是「查询写错」的快捷信号）；查已删列（`delegation_id` /
-`provider_id` / `model_name`）会报 `no such column`，同样按 schema 漂移处理。
+`provider_id` / `model_name` / `conversation_task_contexts.tool_call_id`）会报 `no such column`，同样
+按 schema 漂移处理。**注意**：`tool_call_id` 列是较新删除的，未删旧库仍会残留该列且旧行带值——按
+第 153 行的「表上不再单列」去查历史数据时要意识到这点，别把残留值当成当前 schema 的事实。
 
 **状态词表（唯一事实源）**：
 
@@ -168,7 +170,8 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
   **判读口径**：run 被取消或后端重启恢复时，`ConversationTaskContextService.close_unclosed_tool_calls_for_run`
   （配合 `ConversationRunService.recover_orphaned_runs`）会为未闭合调用**补一行占位 ToolMessage** 并记
   `cancelled`，所以「取消导致未闭合」通常表现为 `cancelled`；只有占位补行未执行（进程被强杀且之后未再启动）
-  才表现为缺结果的 `pending`。`tools` 子命令按 `tool_call_id` 配对即可还原两者。
+  才表现为缺结果的 `pending`。`tools` 子命令按 `(run_id, tool_call_id)` 配对即可还原两者——同一
+  task 内 `tool_call_id` 可跨 run 复用，只按 id 会把结果错挂到别的 run 上。
 - 消息类型：`ai` / `human` / `tool` / `system`。AI 的工具调用在 `message_json.data.tool_calls[]`（`{id, name, args}`）；工具结果在 `tool` 消息的 `data.content` + `data.tool_call_id` + `data.status`（`success` / `error`）。
 
 **边界提醒**：`app.sqlite3`（业务事实）、固定 JSONL 日志文件（诊断旁路）、`langgraph_checkpoints.sqlite`

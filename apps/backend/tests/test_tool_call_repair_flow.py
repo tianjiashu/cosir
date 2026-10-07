@@ -15,7 +15,6 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, SystemMessage, ToolMessage
 
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
-from app.core.context.runtime_context_manager import _as_ai_message
 from app.core.runtime.run_result import ToolRunResult
 from app.core.workflows.react.nodes import model_node as model_module
 from app.core.workflows.react.nodes import observation_node as observe_module
@@ -70,11 +69,10 @@ class _ModelHarness:
 
     只模拟 model 节点实际协作的三方：``operations``（run 终态落定与取消判定）、
     ``model``（``astream`` 产出的 chunk 流）与 ``runtime_context``。``runtime_context``
-    按 ``RuntimeContextManager`` 的当前契约实现：``add_message_chunk`` 累积 chunk 并返回
-    聚合后的 ``AIMessage``（model 节点用它做流式工具调用登记），
-    ``flush_message_chunk(mode="complete")`` 返回收口后的完整 ``AIMessage`` 并计入
-    canonical 消息序列——model 节点的后续判定完全基于该返回值，故其等于本 harness 构造时
-    传入的 ``message``（即本轮模型最终输出）。
+    按 ``RuntimeContextManager`` 的当前契约实现：``add_message_chunk`` / ``flush_message_chunk``
+    返回本 harness 构造时传入的 ``message``（真实 provider 的 chunk 聚合结果与它同形），
+    ``finalize_message_chunk`` 一次收口并**如实使用传入的修订版 ``message``**。因此 model 节点的
+    后续判定等于构造时传入的 ``message``（即本轮模型最终输出）。
     """
 
     def __init__(self, message: AIMessage, chunks: list[AIMessageChunk] | None = None) -> None:
@@ -134,7 +132,10 @@ class _ModelHarness:
         ) -> AIMessage:
             del stream_id, run_id
             self._merged_chunk = chunk if self._merged_chunk is None else self._merged_chunk + chunk
-            return _as_ai_message(self._merged_chunk)
+            # 假流：本用例把「本轮完整输出」预置为 ``message``（真实 provider 的 chunk 聚合结果与它
+            # 同形：finish_reason / tool_calls / usage 都在其中），故累积结果直接返回它；真实的
+            # 聚合、节流与固化行为由 manager 单测钉住。
+            return self._message
 
         def flush_message_chunk(
             *,
@@ -143,18 +144,30 @@ class _ModelHarness:
             mode: str = "running",
         ) -> AIMessage | None:
             del stream_id, run_id
-            if mode != "running":
+            if mode == "cancel":
                 self._merged_chunk = None
-            if mode != "complete":
-                return None
-            self.messages.append(self._message)
             return self._message
+
+        def finalize_message_chunk(
+            *,
+            stream_id: str,
+            run_id: Any = None,
+            message: AIMessage | None = None,
+        ) -> AIMessage:
+            del stream_id, run_id
+            # 不模拟「省略 message 时固化内存聚合结果」：节点必须交付修订版，省略即契约被破坏。
+            if message is None:
+                raise AssertionError("model_node must pass the finalized message")
+            self._merged_chunk = None
+            self.messages.append(message)
+            return message
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
             add_message=add_message,
             add_message_chunk=add_message_chunk,
             flush_message_chunk=flush_message_chunk,
+            finalize_message_chunk=finalize_message_chunk,
         )
 
     async def _astream(self, _messages: list[Any]) -> AsyncIterator[AIMessageChunk]:

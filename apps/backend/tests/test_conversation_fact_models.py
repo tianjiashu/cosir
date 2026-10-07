@@ -68,7 +68,6 @@ def test_context_storage_exposes_only_canonical_message_fields() -> None:
         "id",
         "task_id",
         "run_id",
-        "tool_call_id",
         "message_json",
         "transport_metadata_json",
         "include_in_context",
@@ -416,8 +415,12 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
         engine.dispose()
 
 
-def test_context_crud_does_not_swallow_non_tool_uniqueness_integrity_error() -> None:
-    """A sequence collision for another tool id is a real DB failure, not a duplicate settle."""
+def test_context_crud_raises_on_sequence_collision() -> None:
+    """序号冲突（调用方分配序号出错）必须原样抛出，不得在持久化层被吞掉。
+
+    工具调用身份不再是数据库事实（``tool_call_id`` 列已删除），因此 ``create`` 的唯一冲突来源
+    只有 ``(task_id, sequence)``；它代表序号 owner 出错，只能暴露。
+    """
 
     engine = create_engine("sqlite://")
     StorageBase.metadata.create_all(engine)
@@ -438,9 +441,61 @@ def test_context_crud_does_not_swallow_non_tool_uniqueness_integrity_error() -> 
             sequence=1,
         )
         with Session(engine) as session:
-            assert crud.create(first, session=session) is True
+            crud.create(first, session=session)
             with pytest.raises(IntegrityError):
                 crud.create(conflicting_sequence, session=session)
+    finally:
+        engine.dispose()
+
+
+def test_streaming_draft_finalize_replaces_row_in_place_without_new_row() -> None:
+    """收口是原地替换草稿行：行数与 sequence 不变，只翻转 include_in_context / is_streaming。
+
+    这是「同一条 assistant 消息只占一行」的持久化层不变量：流式草稿行被收口后不允许再新增
+    第二行（历史缺陷：``flush`` 原地固化 + ``add_message`` 追加修订版，两行都进模型上下文）。
+    """
+
+    engine = create_engine("sqlite://")
+    StorageBase.metadata.create_all(engine)
+    try:
+        crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
+        draft = ConversationTaskContextRecord(
+            task_id=7,
+            run_id=11,
+            message=AIMessage(content="半截草稿"),
+            include_in_context=False,
+            sequence=1,
+            is_streaming=True,
+        )
+        finalized = ConversationTaskContextRecord(
+            task_id=7,
+            run_id=11,
+            message=AIMessage(
+                content="修订后的完整回复",
+                tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
+            ),
+            include_in_context=True,
+            sequence=1,
+            is_streaming=False,
+        )
+        with Session(engine) as session:
+            crud.create(draft, session=session)
+
+            crud.replace_message(7, 1, finalized, session=session)
+
+            rows = crud.get(7, include_in_context=False, session=session)
+            assert len(rows) == 1
+            assert rows[0].sequence == 1
+            assert rows[0].run_id == 11
+            assert rows[0].include_in_context is True
+            assert rows[0].is_streaming is False
+            assert rows[0].message.content == "修订后的完整回复"
+            # LangChain 反序列化会给 tool_call 补 type 键，故按字段断言而不是整体相等。
+            tool_calls = rows[0].message.tool_calls
+            assert len(tool_calls) == 1
+            assert tool_calls[0]["name"] == "read_file"
+            assert tool_calls[0]["args"] == {"path": "a.py"}
+            assert tool_calls[0]["id"] == "call-1"
     finally:
         engine.dispose()
 

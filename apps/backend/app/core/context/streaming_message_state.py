@@ -1,9 +1,10 @@
-"""流式 assistant 草稿的进程内聚合状态。
+"""流式 assistant 消息在进程内的状态值对象。
 
-``StreamingMessageState`` 只承载「一条尚未收口的流式草稿」在进程内的可变聚合数据：
-聚合后的 ``AIMessageChunk``、该草稿在 canonical context 中的消息序号，以及刷写判定所需
-的进度。草稿的合并、刷写阈值与落库由 ``RuntimeContextManager`` 负责，本模块不持有任何
-行为或外部依赖，仅作为跨模块可引用的类型边界。
+``StreamingMessageState`` 承载「一条尚未收口的流式草稿」的**可变**聚合数据：聚合后的
+``AIMessageChunk``、该草稿在 canonical context 中的消息序号，以及刷写判定所需的进度。
+
+草稿的合并、刷写阈值、收口与落库均由 ``RuntimeContextManager`` 负责，本模块不持有任何行为或
+外部依赖，仅作为跨模块可引用的类型边界。
 """
 
 from __future__ import annotations

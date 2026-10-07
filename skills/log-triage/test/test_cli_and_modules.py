@@ -63,7 +63,7 @@ def _schema(con: sqlite3.Connection) -> None:
             command_id TEXT, command_type TEXT, payload_hash TEXT, run_id INTEGER,
             error_code TEXT, created_at TEXT);
         CREATE TABLE conversation_task_contexts (id INTEGER PRIMARY KEY, task_id INTEGER,
-            run_id INTEGER, tool_call_id TEXT, message_json TEXT NOT NULL,
+            run_id INTEGER, message_json TEXT NOT NULL,
             transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,
             is_streaming BOOLEAN, sequence INTEGER, created_at TEXT, updated_at TEXT);
         """

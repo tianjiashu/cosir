@@ -233,7 +233,7 @@ def test_project_records_terminal_state_event_payload(
 class _LifecycleHarness:
     """装配 lifecycle 运行期依赖并收集发出的终态事件。"""
 
-    def __init__(self, *, add_message_result: bool = True) -> None:
+    def __init__(self) -> None:
         self.events: list[Any] = []
         self.messages: list[Any] = []
         self.operations = SimpleNamespace(
@@ -242,9 +242,16 @@ class _LifecycleHarness:
         )
         self.runtime_config = SimpleNamespace(operations=self.operations)
 
-        def add_message(message: Any, **_kwargs: Any) -> bool:
+        def add_message(message: Any, **_kwargs: Any) -> str:
+            """假写入：记录消息并回「replaced」（命中既有行）这一分支。
+
+            本假对象只用于验证 ``settle`` 不因写入命中既有行而跳过落库与终态事件；真实「覆盖既有
+            行」语义（行数、序号、metadata）由真实 SQLite 用例钉住
+            （tests/test_runtime_context_tool_call_closure.py 的占位覆盖用例）。
+            """
+
             self.messages.append(message)
-            return add_message_result
+            return "replaced"
 
         stream_writer = self.events.append
         self.runtime_context = SimpleNamespace(add_message=add_message)
@@ -1543,10 +1550,14 @@ def test_settle_is_idempotent_after_terminal_state() -> None:
     assert harness.events == [], "已终态记录不得重复发终态事件"
 
 
-def test_settle_returns_without_event_when_message_already_exists() -> None:
-    """缺陷类型：add_message 返回 False 时仍发终态事件，产生孤儿状态。"""
+def test_settle_overwrites_existing_result_row_and_still_emits_terminal_event() -> None:
+    """结算命中既有结果行（占位）时原地覆盖，并照常发终态事件。
 
-    harness = _LifecycleHarness(add_message_result=False)
+    覆盖语义的由来：取消/崩溃留下的 ``cancelled`` 占位不得阻塞同一调用的真实结果，也不得
+    与它并排留下第二行；前端必须能从占位状态翻到真实终态。
+    """
+
+    harness = _LifecycleHarness()
     harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
         tool_call_id="call-1", tool_name="read_file"
     )
@@ -1555,7 +1566,8 @@ def test_settle_returns_without_event_when_message_already_exists() -> None:
     event_status = harness.settle(summary)
 
     assert event_status == "completed"
-    assert harness.events == [], "消息未新建时不应发终态事件"
+    assert harness.messages == [("tool-message", "call-1")]
+    assert [event.status for event in harness.events] == ["completed"]
 
 
 def test_fail_invalid_tools_emits_failed_and_returns_repair_message() -> None:

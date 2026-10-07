@@ -53,7 +53,7 @@ def _build_app_db(path: Path) -> None:
             command_id TEXT, command_type TEXT, payload_hash TEXT, run_id INTEGER,
             error_code TEXT, created_at TEXT);
         CREATE TABLE conversation_task_contexts (id INTEGER PRIMARY KEY, task_id INTEGER,
-            run_id INTEGER, tool_call_id TEXT, message_json TEXT NOT NULL,
+            run_id INTEGER, message_json TEXT NOT NULL,
             transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,
             is_streaming BOOLEAN, sequence INTEGER, created_at TEXT, updated_at TEXT);
         """
@@ -85,9 +85,9 @@ def _build_app_db(path: Path) -> None:
     import json as _json
 
     con.execute(
-        "INSERT INTO conversation_task_contexts (id, task_id, run_id, tool_call_id, "
+        "INSERT INTO conversation_task_contexts (id, task_id, run_id, "
         "message_json, transport_metadata_json, include_in_context, is_streaming, sequence, "
-        "created_at, updated_at) VALUES (1, 1, 1, NULL, ?, '{}', 1, 0, 1, 't', 't')",
+        "created_at, updated_at) VALUES (1, 1, 1, ?, '{}', 1, 0, 1, 't', 't')",
         (_json.dumps({"type": "human", "data": {"content": "hello 世界"}}),),
     )
     con.commit()

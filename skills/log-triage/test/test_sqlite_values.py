@@ -210,7 +210,7 @@ def _base_schema(con: sqlite3.Connection) -> None:
             command_id TEXT, command_type TEXT, payload_hash TEXT, run_id INTEGER,
             error_code TEXT, created_at TEXT);
         CREATE TABLE conversation_task_contexts (id INTEGER PRIMARY KEY, task_id INTEGER,
-            run_id INTEGER, tool_call_id TEXT, message_json TEXT NOT NULL,
+            run_id INTEGER, message_json TEXT NOT NULL,
             transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,
             is_streaming BOOLEAN, sequence INTEGER, created_at TEXT, updated_at TEXT);
         """
@@ -271,14 +271,13 @@ def _add(
     seq: int,
     is_streaming: object,
     mj: str,
-    tool_call_id: str | None = None,
     tmeta: str = "{}",
 ) -> None:
     con.execute(
-        "INSERT INTO conversation_task_contexts (task_id,run_id,tool_call_id,message_json,"
+        "INSERT INTO conversation_task_contexts (task_id,run_id,message_json,"
         "transport_metadata_json,include_in_context,sequence,created_at,updated_at,is_streaming)"
-        " VALUES (?,?,?,?,?,1,?,?,?,?)",
-        (task, run, tool_call_id, mj, tmeta, seq, "t", "t", is_streaming),
+        " VALUES (?,?,?,?,1,?,?,?,?)",
+        (task, run, mj, tmeta, seq, "t", "t", is_streaming),
     )
     con.commit()
 
@@ -477,7 +476,6 @@ class TestToolCallPairing:
             2,
             0,
             _msg("tool", {"content": "r", "tool_call_id": "c1", "status": "success"}),
-            tool_call_id="c1",
         )
         rows = summarize_tool_calls(con, task_id=1, limit=50)
         assert [r["tool_call_id"] for r in rows] == ["c1"]
@@ -519,7 +517,6 @@ class TestToolCallPairing:
                 base + 1,
                 0,
                 _msg("tool", {"content": f"res-{run}", "tool_call_id": "dup", "status": "success"}),
-                tool_call_id="dup",
             )
         # run 3 未在基础 schema 中，补一行（显式列名，避免随 schema 列序漂移而失配）
         con.execute(
@@ -555,7 +552,6 @@ class TestToolCallPairing:
             1,
             0,
             _msg("tool", {"content": "orphan", "tool_call_id": "ghost", "status": "success"}),
-            tool_call_id="ghost",
         )
         assert summarize_tool_calls(con, task_id=1, limit=50) == []
 
@@ -568,7 +564,6 @@ class TestToolCallPairing:
             5,
             0,
             _msg("tool", {"content": "early", "tool_call_id": "lc", "status": "success"}),
-            tool_call_id="lc",
         )
         _add(
             con,
@@ -617,7 +612,6 @@ class TestToolCallPairing:
             3,
             0,
             _msg("tool", {"content": "res-run2", "tool_call_id": "dup", "status": "success"}),
-            tool_call_id="dup",
         )
         rows = summarize_tool_calls(con, task_id=1, limit=50)
         by_name = {r["tool_name"]: r for r in rows}
@@ -652,7 +646,6 @@ class TestToolCallPairing:
             3,
             0,
             _msg("tool", {"content": "res-for-call1", "tool_call_id": "dup", "status": "success"}),
-            tool_call_id="dup",
         )
         _add(
             con,
@@ -661,7 +654,6 @@ class TestToolCallPairing:
             4,
             0,
             _msg("tool", {"content": "res-for-call2", "tool_call_id": "dup", "status": "success"}),
-            tool_call_id="dup",
         )
         rows = summarize_tool_calls(con, task_id=1, limit=50)
         assert [(r["tool_name"], r["result_summary"]) for r in rows] == [
@@ -690,7 +682,6 @@ class TestToolCallPairing:
             4,
             0,
             _msg("tool", {"content": "r1", "tool_call_id": "dup", "status": "success"}),
-            tool_call_id="dup",
         )
         _add(
             con,
@@ -699,7 +690,6 @@ class TestToolCallPairing:
             5,
             0,
             _msg("tool", {"content": "r2", "tool_call_id": "dup", "status": "success"}),
-            tool_call_id="dup",
         )
         rows = summarize_tool_calls(con, task_id=1, limit=50)
         assert [(r["tool_name"], r["status"], r["result_summary"]) for r in rows] == [
@@ -735,7 +725,6 @@ class TestToolCallPairing:
             3,
             0,
             _msg("tool", {"content": "error: boom", "tool_call_id": "dup", "status": "error"}),
-            tool_call_id="dup",
         )
         _add(
             con,
@@ -744,7 +733,6 @@ class TestToolCallPairing:
             4,
             0,
             _msg("tool", {"content": "fine", "tool_call_id": "dup", "status": "success"}),
-            tool_call_id="dup",
         )
         rows = summarize_tool_calls(con, task_id=1, limit=50)
         assert [(r["tool_name"], r["is_error"], r["result_summary"]) for r in rows] == [
@@ -779,7 +767,6 @@ class TestToolCallPairing:
             2,
             0,
             _msg("tool", {"content": content, "tool_call_id": "e1", "status": status}),
-            tool_call_id="e1",
         )
         rows = summarize_tool_calls(con, task_id=1, limit=50)
         assert rows[0]["is_error"] is expected
@@ -801,7 +788,6 @@ class TestToolCallPairing:
             2,
             0,
             _msg("tool", {"content": "done", "tool_call_id": "ok", "status": "success"}),
-            tool_call_id="ok",
         )
         _add(
             con,
@@ -818,7 +804,6 @@ class TestToolCallPairing:
             4,
             0,
             _msg("tool", {"content": "error: x", "tool_call_id": "bad", "status": "error"}),
-            tool_call_id="bad",
         )
         _add(
             con,
@@ -870,7 +855,6 @@ class TestToolCallPairing:
             2,
             0,
             _msg("tool", {"content": "found", "tool_call_id": "s1", "status": "success"}),
-            tool_call_id="s1",
         )
         assert len(summarize_tool_calls(con, task_id=1, limit=50, contains="search")) == 1
         assert len(summarize_tool_calls(con, task_id=1, limit=50, contains="hello")) == 1
@@ -893,7 +877,6 @@ class TestToolCallPairing:
             2,
             0,
             _msg("tool", {"content": "", "tool_call_id": "cv"}),
-            tool_call_id="cv",
             tmeta='{"status": "cancelled"}',
         )
         rows = summarize_tool_calls(con, task_id=1, limit=50)

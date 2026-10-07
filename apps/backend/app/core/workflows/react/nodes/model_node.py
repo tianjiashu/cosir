@@ -1,18 +1,18 @@
 """ReAct-like 工作流的模型节点（``_model_node``）。
 
 本模块只承载「模型节点」单一职责：流式消费模型输出并决定下一步动作。节点从运行上下文
-    取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量写入 workflow custom
+取出 ``operations`` / ``run`` / ``model``，将模型文本与 reasoning 增量写入 workflow custom
 stream；用 ``model.astream()`` 消费流式输出（草稿由 ``RuntimeContextManager`` 累积并收口成完整
 ``AIMessage``），根据模型最终输出决定进入工具分支、最终回答分支，还是因无效输出 / 超过最大
 步数终止。run 状态变更经 ``WorkflowOperations`` 落到 ``ConversationRun``（唯一事实源）。
 
 关于「文本 + 工具调用并存」：ReAct 中模型「边说明边调工具」是合法输出（例如先说
 "我先用 grep 查一下文件结构" 再给出一个 ``search_content`` 调用）。此时文本**不计入最终
-回复**（最终回复只来自纯文本分支），但模型这段说明并非丢弃——
-它会经 canonical conversation facts 写入、经 ``RuntimeContextManager.add_message`` /
-``add_message_chunk``
-落库进历史上下文，并随 state ``instruction`` 字段下传给 ``tools`` / ``observe`` 节点，
-使下游执行与错误排查能看到模型当时的意图。
+回复**（最终回复只来自纯文本分支），但模型这段说明并非丢弃——它会经 canonical conversation
+facts 写入（``RuntimeContextManager.add_message_chunk`` 累积草稿，收口后由
+``finalize_message_chunk`` 原地固化为 canonical 消息）落库进历史上下文，并随 state
+``instruction`` 字段下传给 ``tools`` / ``observe`` 节点，使下游执行与错误排查能看到模型
+当时的意图。
 
 模型侧数据处理辅助（流式 chunk 解析 ``ModelChunkProcessor``、流式 part 生命周期）
 已拆为独立模块，本模块仅 import 使用；节点共享运行时原语见 ``common``。
@@ -101,9 +101,10 @@ async def _model_node(state: ReactGraphState) -> dict:
     副作用:
         - 发起推理前若本次已超配额，调用 ``_finalize_max_steps`` 收口终态，由 canonical
           writer 把 run 标记为 ``max_steps_reached`` 失败，不再触发推理；
-        - 经 ``RuntimeContextManager.add_message_chunk`` 增量持久化本轮 assistant 草稿，
-          正常结束后由 ``flush_message_chunk(complete=True)`` 收口为完整 ``AIMessage``，
-          使下一模型步能累积看到本轮输出；
+        - 经 ``RuntimeContextManager.add_message_chunk`` 增量持久化本轮 assistant 草稿；正常结束
+          后用最后一条聚合消息经 ``classify`` 修订工具调用，再经 ``finalize_message_chunk`` 一次
+          原地固化为 canonical 消息（同一行、同一序号，不新增行），使下一模型步能累积看到本轮
+          输出；
         - 模型文本与 reasoning 增量经 LangGraph custom stream 写给 workflow；由 workflow
           统一调用 ``RuntimeOperations`` 更新 snapshot；状态写入 ``run``；
         - 非法输出经 ``RuntimeOperations`` 落定失败。协作取消只在两处检测：进入模型请求前
@@ -127,10 +128,9 @@ async def _model_node(state: ReactGraphState) -> dict:
           提示（见 ``_build_continuation_prompt``）。
 
     异常:
-        RuntimeError: 超步数收口时 ``RuntimeConfig`` 未携带 run id（见 ``_finalize_max_steps``）。
-        AttributeError: 本步模型未产出任何 chunk（无草稿可收口）时 ``flush_message_chunk``
-            返回 ``None``，随后读取 ``ai_message.tool_calls`` 失败；异常由 workflow 的兜底分支
-            把 run 落 failed 终态。
+        RuntimeError: 超步数收口时 ``RuntimeConfig`` 未携带 run id（见 ``_finalize_max_steps``）；
+            或本步模型未产出任何 chunk（无聚合消息，也就无草稿可收口）。两者都由 workflow 的兜底
+            分支把 run 落 failed 终态。
         Exception: 模型调用或流式消费失败时向上传播，由 runner 收敛 run 终态。
     """
 
@@ -206,10 +206,14 @@ async def _model_node(state: ReactGraphState) -> dict:
     tool_call_lifecycle = state.tool_call_lifecycle
 
     #======================= 模型调用=======================
+    # ``add_message_chunk`` 每次返回「累积至今」的聚合消息，循环结束后最后一次赋值即本轮完整输出；
+    # 收口时直接用它做工具调用修订，无需再从草稿状态里取回。
+    aggregated_message: AIMessage | None = None
     async for chunk in model.astream(messages):
         message_chunk = _runtime_context().add_message_chunk(
             chunk, stream_id=step_id, run_id=run_id
         )
+        aggregated_message = message_chunk
 
         if operations.is_current_run_cancelled():
             log.warning(
@@ -256,9 +260,12 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     # =======================收口：本轮模型输出收口=======================
     parts.finish()
-    ai_message: AIMessage = _runtime_context().flush_message_chunk(
-        stream_id=step_id, run_id=run_id, mode="complete"
-    )
+    # 收口一次完成：用本轮最后一条聚合消息在 classify 修订 tool_calls / invalid_tool_calls 之后
+    # 直接固化同一行——同一条 assistant 消息全流程只占一个 sequence，不会出现「未修订行 + 修订行」
+    # 两行并存。空流（一个 chunk 都没有）没有草稿可收口，属不应发生的协议异常。
+    if aggregated_message is None:
+        raise RuntimeError("本步模型未产出任何 chunk，无草稿可收口")
+    ai_message: AIMessage = aggregated_message
 
     finish_reason = chunk_processor.extract_finish_reason(ai_message)
     rc.usage_stats.add_usage_metadata(ai_message.usage_metadata)
@@ -270,13 +277,17 @@ async def _model_node(state: ReactGraphState) -> dict:
         invalid_tool_calls=ai_message.invalid_tool_calls,
     )
 
-    #invalid_tool_calls 表示 LangChain 无法把参数解析成字典，不是“工具不存在”“工具不在白名单”，也不是完整的工具参数 schema 校验结果
+    # invalid_tool_calls 表示 LangChain 无法把参数解析成字典：不是“工具不存在”“工具不在白名单”，
+    # 也不是完整的工具参数 schema 校验结果
     ai_message.invalid_tool_calls = []
     ai_message.tool_calls = [
         ToolCall(name=call.tool_name, args=call.args, id=call.tool_call_id)
         for call in tool_call_lifecycle.blocked_tool_calls + tool_call_lifecycle.valid_tools
     ]
-    _runtime_context().add_message(ai_message)
+    # 一次固化修订版到草稿行占用的同一 sequence：canonical 上下文只此一份，下一模型步即可读到。
+    _runtime_context().finalize_message_chunk(
+        stream_id=step_id, run_id=run_id, message=ai_message
+    )
 
     log.info(
         "model_node_completed",

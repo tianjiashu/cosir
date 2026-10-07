@@ -24,6 +24,24 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.models.enums.tool_call_status import ToolCallEventStatus
 
+# 工具状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）丢弃并留痕。
+# ``cancelled -> completed/failed`` 是「占位被真实结果覆盖」的合法迁移：取消或崩溃时
+# ``RuntimeContextManager.load_message``（以及启动恢复的
+# ``ConversationTaskContextService.close_unclosed_tool_calls_for_run``）会为未配对的调用补一条
+# ``cancelled`` 占位行，该 run 续跑重放后真实结果经 ``RuntimeContextManager.add_message`` 按
+# ``plan_tool_call_closure`` 配对规则命中该行并原地覆盖；若在此丢弃该迁移，数据库已是真实终态而
+# snapshot 会永久停在 ``cancelled``
+# （与 ``RunStatusChangedEvent`` 的 ``cancelled -> running`` 例外同源）。``completed`` / ``failed``
+# 仍不可逆，避免迟到事件把已结束的调用拉回 active。
+_ALLOWED_TOOL_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
+    "pending": frozenset({"pending", "running", "completed", "failed", "cancelled"}),
+    "running": frozenset({"running", "completed", "failed", "cancelled"}),
+    "cancelled": frozenset({"cancelled", "completed", "failed"}),
+    "failed": frozenset({"failed"}),
+    "completed": frozenset({"completed"}),
+}
+_TERMINAL_TOOL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
 
 class ToolCallCreatedEvent(ConversationEventEnvelope):
     """模型已请求一次工具调用。
@@ -163,13 +181,14 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
 
         返回:
             更新 ``status`` / ``args`` / ``error`` / ``isError``（及可选 ``display_data``）的
-            mutation 列表；对应 tool-call part 不存在时返回空列表并记 warning。
+            mutation 列表；对应 tool-call part 不存在、或已终态的 part 收到不在白名单内的迁移时，
+            返回空列表并记 warning。
 
         异常:
-            ValueError: 目标状态不是当前状态允许迁移到的状态。
+            ValueError: 非终态 part 收到白名单外的目标状态（表明事件生产者与状态机不一致，需暴露）。
 
         副作用:
-            无；part 缺失时额外写一条 warning 日志。
+            无；part 缺失、终态迁移被丢弃时额外写一条 warning 日志。
         """
 
         located = self._find_tool(state, self.tool_call_id, required=False)
@@ -194,16 +213,27 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
             state["runs"][run_index]["messages"][message_index]["parts"][part_index],
         )
         current = str(part["status"])
-        allowed = {
-            "pending": {"pending", "running", "completed", "failed", "cancelled"},
-            "running": {"running", "completed", "failed", "cancelled"},
-            "completed": {"completed"},
-            "failed": {"failed"},
-            "cancelled": {"cancelled"},
-        }
-        if current in {"completed", "failed", "cancelled"} and self.status != current:
-            return []
-        if self.status not in allowed[current]:
+        # 安全查表：part 的 status 若不在白名单键内，交给下面显式抛 ValueError 暴露，
+        # 而不是 KeyError。
+        allowed_targets = _ALLOWED_TOOL_STATUS_TRANSITIONS.get(current, frozenset())
+        if self.status not in allowed_targets:
+            if current in _TERMINAL_TOOL_STATUSES:
+                # 已终态的 part 只接受自迁移与「占位覆盖」白名单；其余是陈旧或重复投递的事件。
+                # 必须留痕：静默丢弃会让「DB 已是真实终态、snapshot 停在旧终态」无从排查。
+                log.warning(
+                    "tool_call_status_transition_dropped",
+                    extra={
+                        "msg": "工具状态迁移不在白名单内，已丢弃",
+                        "data": {
+                            "task_id": self.task_id,
+                            "run_id": self.run_id,
+                            "tool_call_id": self.tool_call_id,
+                            "from_status": current,
+                            "to_status": self.status,
+                        },
+                    },
+                )
+                return []
             raise ValueError(f"invalid tool transition {current} -> {self.status}")
         base = ("runs", run_index, "messages", message_index, "parts", part_index)
         mutations: list[ConversationStateMutation] = [

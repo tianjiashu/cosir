@@ -8,7 +8,6 @@ from typing import NotRequired, TypedDict
 
 from langchain_core.messages import (
     BaseMessage,
-    ToolMessage,
     _message_from_dict,
     message_to_dict,
 )
@@ -32,7 +31,9 @@ class ConversationTaskContextRecord:
     message: BaseMessage
     include_in_context: bool
     sequence: int
-    transport_metadata: TransportMetadata = None
+    # None 是合法取值：无 Transport 语义的消息（如 assistant 正文）不携带 metadata；写入侧
+    # 「None 表示不改写」只作用于原地替换路径，追加路径照实落 ``null``。
+    transport_metadata: TransportMetadata | None = None
     is_streaming: bool = False
     id: int | None = None
 
@@ -44,8 +45,7 @@ class ConversationTaskContextRecord:
             model: ``conversation_task_contexts`` 行实例，列已含单条消息的全部字段。
 
         返回:
-            含 row id、task_id、run_id、反序列化消息、Transport metadata、schema version、
-            纳入标记与排序的记录。
+            含 row id、task_id、run_id、反序列化消息、Transport metadata、纳入标记与排序的记录。
 
         异常:
             json.JSONDecodeError: ``message_json`` 不是合法 JSON。
@@ -72,8 +72,8 @@ class ConversationTaskContextRecord:
     def _to_model(self) -> ConversationTaskContextModel:
         """将记录映射为持久化模型实例。
 
-        本方法只负责字段映射，不生成 ``task_id`` 之外的主键或唯一约束相关派生值；
-        ``sequence`` 由调用方在落盘前按任务维度统一分配以保证唯一性。
+        本方法只负责字段映射，不生成主键或唯一约束相关派生值；``sequence`` 由调用方在落盘前按
+        任务维度统一分配以保证唯一性。
 
         返回:
             含 task_id、run_id、消息 JSON、纳入标记与排序的模型实例。
@@ -90,9 +90,6 @@ class ConversationTaskContextRecord:
             id=self.id,
             task_id=self.task_id,
             run_id=self.run_id,
-            tool_call_id=(
-                self.message.tool_call_id if isinstance(self.message, ToolMessage) else None
-            ),
             message_json=json.dumps(message_to_dict(self.message), ensure_ascii=False),
             transport_metadata_json=json.dumps(
                 self.transport_metadata,

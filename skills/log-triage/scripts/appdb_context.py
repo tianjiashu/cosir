@@ -7,8 +7,8 @@
 
 职责边界：
 - 负责：按 task / run 读取消息行、解析 LangChain 序列化消息（``message_json``）与
-  Transport metadata（``transport_metadata_json``）、按 ``tool_call_id`` 配对调用与结果、
-  汇总上下文计数。
+  Transport metadata（``transport_metadata_json``）、按 ``(run_id, tool_call_id)`` 配对调用与
+  结果、汇总上下文计数。
 - 不负责：run 生命周期状态与委派子任务（见 ``appdb_agent_facts``）、渲染与截断（见 CLI 入口）。
 
 数据结构事实：``message_json`` 为 ``{"type": "ai"|"tool"|"human"|"system", "data": {...}}``；
@@ -75,7 +75,7 @@ def list_messages(
         where.append(f"NOT ({bool_true_sql('is_streaming')})")
     direction = "ASC" if order == "asc" else "DESC"
     sql = (
-        "SELECT id, task_id, run_id, tool_call_id, sequence, is_streaming, "
+        "SELECT id, task_id, run_id, sequence, is_streaming, "
         "include_in_context, transport_metadata_json, message_json "
         "FROM conversation_task_contexts WHERE "
         + " AND ".join(where)
@@ -98,9 +98,11 @@ def summarize_tool_calls(
     """按 ``tool_call_id`` 配对工具调用与结果，汇总每次工具调用的结局。
 
     配对在**单遍、按 ``sequence`` 顺序**上进行，未配对调用按 ``(run_id, tool_call_id)`` 维护 FIFO
-    队列、结果行只认领同一 run 内最早的未配对调用，因此并发调用、跨 run 复用同一 id、取消占位都能
-    正确还原（若只按 ``tool_call_id`` 配对，「run1 的调用无结果 + run2 复用同一 id 且有结果」会把
-    run2 的结果错挂到 run1）。
+    队列，结果行**优先**认领同一 run 内最早的未配对调用，因此并发调用、跨 run 复用同一 id、取消占位
+    都能正确还原（若只按 ``tool_call_id`` 配对，「run1 的调用无结果 + run2 复用同一 id 且有结果」会
+    把 run2 的结果错挂到 run1）。精确键 ``(run_id, tool_call_id)`` 队列为空时，才宽松回退到任意 run
+    下同 id 的队首，用于容忍结果行 run_id 与调用行不一致的异常数据（见
+    :func:`_claim_unmatched_call`）。
 
     待定状态的判读口径（重要）：
     - ``cancelled``：run 被取消或后端重启恢复时，``ConversationTaskContextService
@@ -140,14 +142,14 @@ def summarize_tool_calls(
         where.append("run_id = ?")
         params.append(run_id)
     sql = (
-        "SELECT id, run_id, tool_call_id, sequence, transport_metadata_json, message_json "
+        "SELECT id, run_id, sequence, transport_metadata_json, message_json "
         "FROM conversation_task_contexts WHERE " + " AND ".join(where) + " ORDER BY sequence ASC"
     )
     rows = query_rows(connection, sql, tuple(params))
 
     # 单遍、按 sequence 顺序配对：未配对调用按 (run_id, tool_call_id) 建 FIFO 队列，结果行只
     # 认领**同一 run 内**最早的未配对调用。为何必须带 run_id 而不是只用 tool_call_id——同一 task
-    # 内 tool_call_id 可跨 run 复用（唯一约束是 (task_id, run_id, tool_call_id)），若只按 id 配对，
+    # 内 tool_call_id 由模型给出、可跨 run 复用（数据库对它没有唯一约束），若只按 id 配对，
     # 「run1 的调用没有结果、run2 复用同一 id 且有结果」时会把 run2 的结果错挂到 run1。
     calls: list[dict[str, Any]] = []
     unmatched: dict[tuple[Any, str], deque[dict[str, Any]]] = {}
@@ -184,7 +186,7 @@ def summarize_tool_calls(
             continue
         if kind != "tool":
             continue
-        call_id = str(row.get("tool_call_id") or data.get("tool_call_id") or "")
+        call_id = str(data.get("tool_call_id") or "")
         entry = _claim_unmatched_call(unmatched, row.get("run_id"), call_id)
         if entry is None:
             # 缺调用行的孤立结果（如上下文被压缩掉 AI 消息）不产出条目，避免伪造调用。
@@ -318,7 +320,7 @@ def _describe_message(row: dict[str, Any]) -> dict[str, Any]:
         "sequence": row.get("sequence"),
         "run_id": row.get("run_id"),
         "kind": message.get("type") if isinstance(message, dict) else None,
-        "tool_call_id": row.get("tool_call_id") or data.get("tool_call_id"),
+        "tool_call_id": data.get("tool_call_id"),
         "is_streaming": as_bool(row.get("is_streaming")),
         "include_in_context": as_bool(row.get("include_in_context")),
         "transport_status": _transport_status(row.get("transport_metadata_json")),

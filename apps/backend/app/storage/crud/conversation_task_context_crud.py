@@ -113,7 +113,7 @@ class ConversationTaskContextCrud:
         self,
         record: ConversationTaskContextRecord,
         session: Session | None = None,
-    ) -> bool:
+    ) -> None:
         """写入一条上下文消息行。
 
         参数:
@@ -121,7 +121,11 @@ class ConversationTaskContextCrud:
             session: 外部事务 Session；为 ``None`` 时自建事务并提交。
 
         返回:
-            ``True`` 表示新增；违反工具调用唯一性时返回 ``False``。其他数据库错误继续抛出。
+            无。
+
+        异常:
+            sqlalchemy.exc.IntegrityError: 调用方分配的序号撞上 ``(task_id, sequence)`` 唯一约束，
+                或其它数据库错误——一律向上抛出，不在此吞掉。
 
         副作用:
             传入 ``session`` 时仅 ``add`` 不提交（由调用方事务收口）；
@@ -131,11 +135,11 @@ class ConversationTaskContextCrud:
         model = record._to_model()
         if session is None:
             with self._session_factory.begin() as owned_session:
-                return self.create(record, session=owned_session)
+                self.create(record, session=owned_session)
+            return
         with session.begin_nested():
             session.add(model)
             session.flush()
-        return True
 
     def replace_message(
         self,
@@ -144,10 +148,30 @@ class ConversationTaskContextCrud:
         record: ConversationTaskContextRecord,
         session: Session | None = None,
     ) -> None:
-        """原子替换同一条 context 行的消息正文及流式标记。
+        """原子替换同一条 context 行的内容：消息正文、归属、两个标记位与可选 Transport metadata。
 
-        该方法只服务于稳定 sequence 的流式 assistant 草稿更新，不改变行身份、顺序或
-        归属。调用方必须保证 ``record`` 与目标 task/sequence 匹配。
+        本方法是「原地替换一行」的唯一入口（流式草稿更新、草稿收口、占位被真实工具结果覆盖都
+        经它），因此**不改变行身份与顺序**：``id`` / ``task_id`` / ``sequence`` 保持原值，调用方
+        必须保证 ``record`` 与目标 task/sequence 匹配。
+
+        Transport metadata 采用与事件契约一致的「**None 表示不改写**」语义：``record`` 未提供
+        metadata 时保留行内既有值——正文替换不得清掉由旁路（child display、terminal 展示状态）
+        维护的 metadata；需要写入新终态时必须显式给出完整 metadata（覆盖占位走这条）。
+
+        参数:
+            task_id: 目标行所属 Task。
+            sequence: 目标行的序号（行身份）。
+            record: 覆盖用的新内容；其 ``task_id`` / ``sequence`` 必须与入参一致。
+            session: 外部事务 Session；为 ``None`` 时自建事务并提交。
+
+        异常:
+            ValueError: ``record`` 的 task/sequence 与目标不匹配。
+            KeyError: 目标行不存在（草稿或行已被删除，属调用顺序错误）。
+
+        副作用:
+            就地更新该行的 ``run_id`` / ``message_json`` / ``include_in_context`` /
+            ``is_streaming``（``record.transport_metadata`` 非 ``None`` 时一并更新
+            ``transport_metadata_json``）并 flush；不新增、不删除行。
         """
 
         if record.task_id != task_id or record.sequence != sequence:
@@ -165,10 +189,11 @@ class ConversationTaskContextCrud:
             raise KeyError(f"context row {task_id}/{sequence} not found")
         replacement = record._to_model()
         model.run_id = replacement.run_id
-        model.tool_call_id = replacement.tool_call_id
         model.message_json = replacement.message_json
         model.include_in_context = replacement.include_in_context
         model.is_streaming = replacement.is_streaming
+        if record.transport_metadata is not None:
+            model.transport_metadata_json = replacement.transport_metadata_json
         session.flush()
 
     def update_child_display_status(

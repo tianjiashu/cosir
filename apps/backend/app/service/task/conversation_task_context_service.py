@@ -42,12 +42,12 @@ class ConversationTaskContextService:
         task_id: int,
         run_id: int | None,
         message: BaseMessage,
-        seq: int | None = None,
+        seq: int,
         include_in_context: bool = True,
         transport_metadata: TransportMetadata | None = None,
         is_streaming: bool = False,
         session: Session | None = None,
-    ) -> bool:
+    ) -> None:
         """以独立事务追加一条完整 LangChain 消息。
 
         参数顺序保持 ``task_id, run_id, message, seq, include_in_context``，以兼容调用点的
@@ -57,26 +57,25 @@ class ConversationTaskContextService:
             task_id: 目标任务标识。
             run_id: 产生消息的 Conversation Run 标识；system 消息可为 ``None``。
             message: 完整 LangChain 消息对象；不会被重建或裁剪字段。
-            seq: 显式序号；为 ``None`` 时自动取 ``max_sequence(task_id) + 1``，
-                避免与现有行 ``(task_id, sequence)`` 唯一约束冲突。
+            seq: 该行在 Task 内的序号（必填，非负）；由调用方按 ``(task_id, sequence)`` 唯一约束
+                自行分配，本方法不做自增也不做去重。
             include_in_context: 该消息是否纳入上下文视图，默认 ``True``。
             is_streaming: 是否为仅供 Transport 冷重建的 assistant 流式草稿。草稿必须同时
                 使用 ``include_in_context=False``，避免半截消息进入下一次模型请求。
-            transport_parts: 完整消息对应的 Assistant Transport parts；由本 service
-                组装并交给严格 metadata serializer，不允许调用方手写 metadata JSON。
-            tool_result: ToolMessage 的结构化 Transport 结果；普通消息必须为 ``None``。
+            transport_metadata: 该消息对应的 Transport 元数据；无则为 ``None``。
             session: 可选外部事务；传入时复用该事务，不自行提交。
 
         返回:
-            ``True`` 表示新增；同一 run 的同一 tool_call_id 已存在时返回 ``False``。
+            无。同一工具调用的结果是否已存在由业务层判定（``RuntimeContextManager``），
+            不在持久化层做去重——需要覆盖既有行时走 :meth:`replace_message`。
 
         异常:
+            ValueError: 流式草稿被要求纳入模型上下文。
             持久化失败时由 CRUD 回滚并向上传播。
 
         副作用:
-            新增一行上下文消息；``seq`` 为 ``None`` 时会产生一次 ``max_sequence`` 查询。
+            新增一行上下文消息；序号由调用方给定，本方法既不自增也不去重。
         """
-
 
         record = ConversationTaskContextRecord(
             task_id=task_id,
@@ -89,8 +88,8 @@ class ConversationTaskContextService:
         )
         if is_streaming and include_in_context:
             raise ValueError("streaming context messages must not enter model context")
-        created = self._crud.create(record, session=session) is not False
-        if created and session is None:
+        self._crud.create(record, session=session)
+        if session is None:
             log.info(
                 "context_message_persisted",
                 extra={
@@ -103,7 +102,6 @@ class ConversationTaskContextService:
                     },
                 },
             )
-        return created
 
     def streaming_messages_for_run(
         self, task_id: int, run_id: int
@@ -116,16 +114,18 @@ class ConversationTaskContextService:
             if record.run_id == run_id and record.is_streaming
         ]
 
-    def replace_streaming_message(
+    def replace_message(
         self,
         record: ConversationTaskContextRecord,
         *,
         session: Session | None = None,
     ) -> None:
-        """更新一条已存在的流式草稿或将其收口为完整消息。
+        """原地替换一条已存在的上下文行的内容（消息正文、标记位与可选 Transport metadata）。
 
-        ``record.sequence`` 是流式消息的稳定身份；方法不新增行，避免每个 chunk 形成一
-        条上下文消息。持久化层异常向调用方传播，由模型节点的运行终态处理。
+        ``record.sequence`` 是行的稳定身份；方法不新增行，因此既用于「流式草稿更新 / 收口」，
+        也用于「占位被真实工具结果覆盖」。``record.transport_metadata`` 为 ``None`` 时保留行内既有
+        metadata（正文替换不清展示状态），需要改写时必须给出完整 metadata。持久化层异常向调用方
+        传播，由调用方的运行终态处理。
         """
 
         self._crud.replace_message(
@@ -275,7 +275,7 @@ class ConversationTaskContextService:
                 continue
             if source_entry.run_id not in run_id_map:
                 continue
-            created = self._crud.create(
+            self._crud.create(
                 ConversationTaskContextRecord(
                     task_id=target_task_id,
                     run_id=run_id_map[source_entry.run_id],
@@ -287,8 +287,7 @@ class ConversationTaskContextService:
                 ),
                 session=session,
             )
-            if created:
-                cloned_count += 1
+            cloned_count += 1
             next_sequence += 1
         if not system_prompt_found:
             raise RuntimeError(f"task {source_task_id} has no persisted system prompt")
@@ -365,7 +364,7 @@ class ConversationTaskContextService:
         next_sequence = self.max_sequence(task_id, session=session) + 1
         repaired: list[str] = []
         for slot in plan.missing_slots:
-            created = self.append(
+            self.append(
                 task_id,
                 run_id,
                 build_placeholder_tool_message(slot.call_id, slot.tool_name),
@@ -374,8 +373,6 @@ class ConversationTaskContextService:
                 TransportMetadata(status="cancelled"),
                 session=session,
             )
-            if created is False:
-                continue
             repaired.append(slot.call_id)
             next_sequence += 1
         return repaired

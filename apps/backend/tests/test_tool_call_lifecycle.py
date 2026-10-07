@@ -50,8 +50,9 @@ class _LifecycleHarness:
         )
         self.runtime_config = SimpleNamespace(operations=self.operations)
 
-        def add_message(message: Any, **_kwargs: Any) -> None:
+        def add_message(message: Any, **_kwargs: Any) -> str:
             self.messages.append(message)
+            return "appended"
 
         self.runtime_context = SimpleNamespace(add_message=add_message)
         self.manager = ToolCallLifecycleManager(

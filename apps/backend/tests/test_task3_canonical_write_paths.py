@@ -222,7 +222,7 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
     order: list[str] = []
 
     class _RuntimeContext:
-        def add_message(self, message: ToolMessage, **kwargs: Any) -> None:
+        def add_message(self, message: ToolMessage, **kwargs: Any) -> str:
             order.append("database")
             assert message.status == "success"
             assert kwargs["transport_metadata"]["display_data"] == {
@@ -230,6 +230,7 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
                 "path": "a.py",
             }
             assert "artifact_data" not in kwargs["transport_metadata"]
+            return "appended"
 
     writer = order.append
     runtime_config = SimpleNamespace(
@@ -282,12 +283,13 @@ def test_failed_tool_event_uses_sanitized_display_data(monkeypatch) -> None:
     events: list[Any] = []
 
     class _RuntimeContext:
-        def add_message(self, message: ToolMessage, **kwargs: Any) -> None:
+        def add_message(self, message: ToolMessage, **kwargs: Any) -> str:
             assert kwargs["transport_metadata"]["display_data"] == {
                 "kind": "read-file-meta",
                 "path": "a.py",
             }
             assert kwargs["transport_metadata"]["error"] == "执行失败"
+            return "appended"
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
@@ -323,14 +325,18 @@ def test_failed_tool_event_uses_sanitized_display_data(monkeypatch) -> None:
     assert events[0].error == "执行失败"
 
 
-def test_tool_settle_does_not_emit_terminal_event_when_canonical_append_is_duplicate(
+def test_tool_settle_overwrites_existing_result_row_and_still_emits_terminal_event(
     monkeypatch,
 ) -> None:
+    """命中既有结果行（占位）时结算覆盖该行，并照常发终态事件。"""
+
     events: list[Any] = []
+    writes: list[str] = []
 
     class _RuntimeContext:
-        def add_message(self, _message: ToolMessage, **_kwargs: Any) -> bool:
-            return False
+        def add_message(self, _message: ToolMessage, **_kwargs: Any) -> str:
+            writes.append("replaced")
+            return "replaced"
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
@@ -360,7 +366,8 @@ def test_tool_settle_does_not_emit_terminal_event_when_canonical_append_is_dupli
         summary=_tool_summary(),
     )
 
-    assert events == []
+    assert writes == ["replaced"]
+    assert [event.status for event in events] == ["completed"]
 
 
 def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:

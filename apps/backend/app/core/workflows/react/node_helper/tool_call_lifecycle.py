@@ -103,15 +103,18 @@ def _record_args(raw_args: object) -> dict[str, object]:
     """把原始调用参数归一为记录字段可接受的结构化参数。
 
     ``create`` 收到的流式分片参数与 ``classify`` 收到的未解析调用参数都可能是原始 JSON 片段
-    （``str``）而不是字典，而 :class:`ToolCallLifecycleRecord.args` 只承载已解析参数。非映射
-    一律归一为空 ``dict``：调用照常进入执行链，由 ``ToolAccessGate`` 按参数校验给出可读拒绝
-    （如缺少必需参数），原因随错误观察回给模型。
+    （``str``）而不是字典，而 :class:`ToolCallLifecycleRecord.args` 只承载已解析参数。映射直接
+    取其普通 ``dict`` 拷贝；**非映射保留原始值并放入保留键 ``Invaild_args``**，使调用进入执行链
+    后，修订版 ``ai_message.tool_calls`` 里仍带着模型自己发错的原始内容——这是刻意的：
+    参数写错时必须让模型看见错在哪，而不是把参数抹成空。参数合法性仍由执行层
+    ``ToolAccessGate`` 校验并产出可读拒绝（如缺少必需参数），该拒绝随错误观察一并回给模型。
 
     参数:
         raw_args: 原始 ``args``（字典、JSON 片段 ``str``、``None`` 或其他对象）。
 
     返回:
-        映射时为其普通 ``dict`` 拷贝，否则为空 ``dict``。
+        映射时为其普通 ``dict`` 拷贝；否则为 ``{"Invaild_args": <原始值>}``（键名拼写照旧保留，
+        它已是下发模型与落库的对外形态）。
 
     异常:
         无。
@@ -578,7 +581,8 @@ class ToolCallLifecycleManager(BaseModel):
         ``invaild_tool_name`` 进 ``valid_calls``（展示声明仅在 ``allowed`` 桶写入，该桶为空
         ``dict``）；``ignore_*`` 静默丢弃。记录状态保持默认 ``pending``——置 ``running`` 由后续
         ``tools`` 节点的 :meth:`begin` 完成。参数经 :func:`_record_args` 归一：未解析调用的 ``args``
-        是 JSON 片段字符串，非映射一律落为空 ``dict``（调用仍送执行层按参数校验被拒）。
+        是 JSON 片段字符串，非映射时原始值放入保留键 ``Invaild_args``（该调用仍送执行层，由参数
+        校验产出可读拒绝）。
 
         参数:
             tool_calls: 模型解析成功的工具调用（``ai_message.tool_calls``）。
@@ -722,11 +726,14 @@ class ToolCallLifecycleManager(BaseModel):
                 ``min_length=1``），或 :meth:`_emit_status` 的事件字段不满足契约。
 
         副作用:
-            经 ``RuntimeContextManager.add_message`` 写一条 ``ToolMessage``（成功后记 info
-            ``tool_observation_persisted``），并经 :meth:`_emit_status` 发终态事件；``add_message``
-            返回 ``False``（该消息已存在）时直接返回、不再发事件。事件构造或入队失败直接向上抛出，
-            不在本方法内降级。记录不存在时即时补建一条 ``pending`` 记录再落终态。命中
-            ``blocked_calls`` 的记录只写 ``ToolMessage``、不发终态事件（前端无 part，属隐藏闭合）。
+            经 ``RuntimeContextManager.add_message`` 写一条 ``ToolMessage``：该调用尚无结果行时
+            追加，已有结果行（取消/崩溃遗留的 ``cancelled`` 占位）时按配对规则**原地覆盖**，使真实
+            结果不被占位阻塞也不并排留下第二行；两种写入都记 info
+            ``tool_observation_persisted``（带 ``canonical_write`` 区分）。覆盖同样会发终态事件，
+            前端据此从占位状态翻到真实终态。
+            事件构造或入队失败直接向上抛出，不在本方法内降级。记录不存在时即时补建一条 ``pending``
+            记录再落终态。命中 ``blocked_calls`` 的记录只写 ``ToolMessage``、不发终态事件（前端无
+            part，属隐藏闭合）。
         """
 
         observation = _summary_to_observation(summary)
@@ -762,12 +769,12 @@ class ToolCallLifecycleManager(BaseModel):
             display_data=result_display_data,
             error=status_hint,
         )
-        created = runtime_context.add_message(
+        # ``add_message`` 命中同一条调用的既有结果行（取消/崩溃遗留的 cancelled 占位）时会原地
+        # 覆盖它，因此真实结果既不会被拒，也不会与占位并排留下第二行。
+        canonical_write = runtime_context.add_message(
             operations.to_tool_model_message(observation),
             transport_metadata=transport_metadata,
         )
-        if created is False:
-            return updated, event_status
         log.info(
             "tool_observation_persisted",
             extra={
@@ -777,6 +784,7 @@ class ToolCallLifecycleManager(BaseModel):
                     "run_id": run_id,
                     "tool_call_id": call_id,
                     "status": event_status,
+                    "canonical_write": canonical_write,
                 },
             },
         )

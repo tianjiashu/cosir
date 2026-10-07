@@ -2,18 +2,19 @@
 
 调用点（``load_message`` 是唯一入口）：
 
-- ``model_node``：每个推理步取上下文前调用（``_model_node`` -> ``load_message``）；
-- ``observation_node``：延迟修复提示的恢复路径上调用（见 ``observation_node._observe_node``）；
-- ``tools_node`` 执行前取消分支**不写占位**，注释显式声明「由下一次 load_message 兜底」，
-  因此取消/崩溃遗留的占位实际落在**下一个 run**（或同 run resume 时的取数时刻）。
+- ``model_node``：每个推理步取上下文前调用；
+- ``structured_output_node``：结构化收口前取上下文时调用；
+- ``tools_node`` 执行前取消分支**不写占位**，声明「由下一次 load_message 兜底」，因此取消/崩溃
+  遗留的占位实际落在**下一个 run**（或同 run resume 时的取数时刻）。
 
 本文件同时使用两条证据链：
 
 1. 真实 SQLite + 真实 ``ConversationTaskContextService``：钉住占位的**持久化身份**
-   （run_id、sequence、transport_metadata）及其与下游快照重建
-   （``ConversationTaskStateRebuilder`` / ``validate_snapshot``）的契约冲突；
-2. 按 ``append`` 文档契约实现的假服务：钉住 ``created is False`` 与反向孤儿消息两条
-   未覆盖分支。
+   （run_id、sequence、transport_metadata）、真实结果对占位的覆盖语义及其与下游快照重建
+   （``ConversationTaskStateRebuilder`` / ``validate_snapshot``）的契约；
+2. 按当前 service 契约实现的假服务：钉住「占位跳过」与反向孤儿消息两条分支——持久化层已不再
+   知道工具调用身份，「该调用是否已有结果行」由 ``RuntimeContextManager`` 依据内存
+   working copy 判定。
 
 标注 ``xfail(strict=True)`` 的用例断言的是**期望行为**（当前失败即为缺陷证据）；
 一旦修复，用例会 XPASS 失败，提醒删除标记。
@@ -149,8 +150,6 @@ def _manager(
     manager.current_task_id = task_id
     manager.agent_profile = cast(AgentProfile, SimpleNamespace())
     manager.workspace_root = ""
-    manager.total_tokens = 0
-    manager.used_tokens = 0
     manager.compressor = None
     # 假服务按协议实现 append，不继承真实 service 类型。
     manager.context_service = cast(ConversationTaskContextService, context_service)
@@ -159,7 +158,6 @@ def _manager(
     manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
     manager._entries = list(entries)
     manager._message_sequence = next_sequence
-    manager._tool_schemas = ()
     # 与真实 dataclass 字段同形：Run 重置路径会访问流式草稿表。
     manager._streaming_messages = {}
     return manager
@@ -188,14 +186,14 @@ def _assert_model_protocol_closed(messages: list[BaseMessage]) -> None:
 
 
 class _ContractContextService:
-    """按 ``ConversationTaskContextService.append`` 文档契约实现的假服务。
+    """按 ``ConversationTaskContextService`` 当前契约实现的假服务。
 
-    契约（见 service / CRUD docstring）：同一 ``(task_id, run_id, tool_call_id)``
-    再次追加时返回 ``False``，调用方不得假定 ``_entries`` 一定新增。
+    契约（见 service / CRUD docstring）：``append`` 只追加、恒不返回去重结果——持久化层不再
+    知道「工具调用身份」；「该调用是否已有结果行」由 ``RuntimeContextManager`` 依据内存
+    working copy（``_entries``）判定，命中时走 ``replace_message`` 原地覆盖。
     """
 
-    def __init__(self, existing: set[tuple[int | None, str]] | None = None) -> None:
-        self.existing = set(existing or ())
+    def __init__(self) -> None:
         self.appended: list[tuple[int | None, BaseMessage, int]] = []
 
     def append(
@@ -206,16 +204,10 @@ class _ContractContextService:
         seq: int,
         include_in_context: bool,
         transport_metadata: object = None,
-    ) -> bool:
-        """重复的 tool 结果返回 ``False``；其余情况记录并返回 ``True``。"""
+    ) -> None:
+        """记录一次追加；不做任何去重。"""
 
-        if isinstance(message, ToolMessage) and message.tool_call_id:
-            key = (run_id, message.tool_call_id)
-            if key in self.existing:
-                return False
-            self.existing.add(key)
         self.appended.append((run_id, message, seq))
-        return True
 
     def entries_in_context(self, task_id: int) -> list[ContextEntry]:
         """纯内存用例不通过 service 读取历史。"""
@@ -229,6 +221,41 @@ class _ContractContextService:
 
     def delete_by_run_id(self, task_id: int, run_id: int) -> None:
         """纯内存用例不删除行。"""
+
+
+def test_duplicate_call_id_slots_fail_loudly_instead_of_reusing_a_row(
+    env: SimpleNamespace,
+) -> None:
+    """同一条 AI 消息出现重复 ``call_id``（畸形数据）时缺失槽必须响亮失败。
+
+    第一个槽会认领既有结果行，第二个同 id 槽按配对规则是「缺失」；此时若静默复用旧行，后续按索引
+    取新条目会失配，因此显式抛 ``RuntimeError`` 而不是悄悄改写别人的结果。
+    """
+
+    run = env.seed_run("running")
+    duplicate_calls = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "read_file", "args": {}, "id": "call-1"},
+            {"name": "read_file", "args": {}, "id": "call-1"},
+        ],
+    )
+    existing_result = ToolMessage(content="result", tool_call_id="call-1")
+    env.context.append(env.task.id, run.id, duplicate_calls, 1, True)
+    env.context.append(env.task.id, run.id, existing_result, 2, True)
+    manager = _manager(
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=run.id,
+        entries=[
+            ContextEntry(duplicate_calls, run.id, 1),
+            ContextEntry(existing_result, run.id, 2),
+        ],
+        next_sequence=3,
+    )
+
+    with pytest.raises(RuntimeError):
+        manager.load_message()
 
 
 def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNamespace) -> None:
@@ -328,27 +355,44 @@ def test_same_run_placeholder_metadata_backs_snapshot_rebuild(env: SimpleNamespa
     validate_snapshot(rebuilt)
 
 
-def test_close_unclosed_tool_calls_survives_duplicate_append_result() -> None:
-    """``append`` 返回 ``False``（同 run 同 tool_call_id 已有行）时不得崩溃、不得重复写。
+def test_close_unclosed_tool_calls_appends_placeholder_beside_earlier_orphan_result() -> None:
+    """目标 ``AIMessage`` 之前残留的结果行不影响补占位：该调用仍被补上占位并闭合。
 
-    该分支只在「同名结果行已落库但不在当前 working copy」时命中（例如
-    ``include_in_context=False`` 的历史行）。此时无法在不伪造事实的前提下闭合模型输入，
-    因此降级为「记 warning + 跳过」：不崩溃、不重复落库，也不凭空构造条目。
+    配对规则只认目标消息**之后**的结果行，因此排在它之前的结果会被当成本次缺失，于是补一行占位
+    （追加在目标之后）。这是刻意的取舍：宁可多补一行占位让**当前**调用闭合，也不复用/覆盖那条错位
+    的结果行——复用会让本 Run 的调用指向别的调用的输出。错位行本身原样保留，它是本文件下方
+    ``xfail`` 登记的孤儿缺陷（模型输入在那种形态下仍不闭合）。
     """
 
-    service = _ContractContextService(existing={(1, "call-1")})
+    service = _ContractContextService()
     manager = _manager(
         context_service=service,
         task_id=7,
         current_run_id=1,
-        entries=[ContextEntry(_ai_message("call-1"), 1, 1)],
-        next_sequence=2,
+        entries=[
+            ContextEntry(ToolMessage(content="orphan", tool_call_id="call-1"), 1, 1),
+            ContextEntry(_ai_message("call-1"), 1, 2),
+        ],
+        next_sequence=3,
     )
 
-    messages = manager.load_message()
+    manager.load_message()
 
-    assert service.appended == []
-    assert [type(message) for message in messages] == [SystemMessage, AIMessage]
+    assert len(service.appended) == 1, "缺失结果必须补一行占位"
+    appended_ids = [item[1].tool_call_id for item in service.appended]
+    assert appended_ids == ["call-1"]
+    messages = [entry.message for entry in manager._entries]
+    assert [type(message).__name__ for message in messages] == [
+        "ToolMessage",
+        "AIMessage",
+        "ToolMessage",
+    ]
+    assert messages[0].content == "orphan", "错位的结果行必须原样保留，不得被复用或覆盖"
+    assert messages[2].tool_call_id == "call-1"
+
+    # 占位落在目标消息之后 ⇒ 下一次取数即被配对规则认到，不会反复补行。
+    manager.load_message()
+    assert len(service.appended) == 1
 
 
 @pytest.mark.xfail(
@@ -373,17 +417,13 @@ def test_orphan_tool_message_is_closed_or_dropped() -> None:
     _assert_model_protocol_closed(messages)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="缺陷: 占位先占用 (task_id, run_id, tool_call_id)，真实结果随后写入抛 IntegrityError",
-)
 def test_placeholder_does_not_block_later_real_tool_result(env: SimpleNamespace) -> None:
-    """期望行为：占位不得阻塞同一调用真实结果的写入（resume 重放 / 结果迟到）。
+    """占位不得阻塞同一调用真实结果的写入：真实结果原地覆盖占位，只留一行。
 
     可达路径：run 在工具执行前被取消 -> ``tools_node`` 跳过执行且不写占位 ->
-    下一次 ``load_message``（同 run resume 或下一 run）补占位 ->
+    下一次 ``load_message``（同 run resume 或下一 run）补 ``cancelled`` 占位 ->
     该 run 的 pending 调用被重放执行 -> ``ToolCallLifecycleManager.settle`` 经
-    ``add_message`` 写真实结果 -> 撞上占位占用的唯一键。
+    ``add_message`` 写真实结果 -> 按配对规则命中占位行并原地覆盖（不新增行、不推进序号）。
     """
 
     run = env.seed_run("running")
@@ -398,12 +438,21 @@ def test_placeholder_does_not_block_later_real_tool_result(env: SimpleNamespace)
     )
     manager.load_message()
 
-    manager.add_message(
-        ToolMessage(content="real tool output", tool_call_id="call-1"),
+    outcome = manager.add_message(
+        ToolMessage(content="real tool output", tool_call_id="call-1", status="success"),
         transport_metadata={"status": "completed"},
     )
 
+    assert outcome == "replaced"
+    rows = _rows(env)
+    result_rows = [row for row in rows if isinstance(row.message, ToolMessage)]
+    assert len(result_rows) == 1, "真实结果必须覆盖占位，不得并排留下第二行"
+    assert result_rows[0].sequence == 2, "覆盖复用占位已占用的序号"
+    assert result_rows[0].message.content == "real tool output"
+    assert result_rows[0].transport_metadata == {"status": "completed"}
+
     messages = manager.load_message()
+    _assert_model_protocol_closed(messages)
     modeled = [message for message in messages if isinstance(message, ToolMessage)]
     assert [message.content for message in modeled] == ["real tool output"]
 
