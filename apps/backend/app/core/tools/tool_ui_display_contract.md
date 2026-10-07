@@ -54,7 +54,7 @@ Tauri Rust 主进程
 
 位置：`apps/backend/app/core/tools/schemas/tool_observation.py`
 
-`display_data` 是一次工具执行产生的、面向客户端的结构化 JSON 数据。每个 payload 必须有稳定的 `kind` 字段：
+成功态非空 `display_data` 是面向客户端的结构化 JSON 数据，必须有稳定的 `kind` 字段：
 
 ```json
 {
@@ -72,6 +72,7 @@ Tauri Rust 主进程
 - 字段投影和敏感字段过滤必须先于 Transport；安全 allowlist 不能由大小预算替代。
 - `display_data` 仅服务前端展示，不按模型 `content` 预算截断；工具自身业务语义需要截断时，必须通过明确的 `truncated` 标记表达。
 - 外层工具状态使用 Transport 的 `pending`、`running`、`completed`、`failed`、`cancelled`，不在 payload 中重复建立第二套 Run 状态机。
+- 错误态 `display_data` 按第 2.3 节的短提示规则处理，不要求 `kind`。
 - 失败时 UI 默认只展示由 `ToolObservation.status` 投影出的失败状态"失败"，以及 `tool_error` `display_data` 中由后端受控生成的短提示；不得把模型侧的完整错误原因直接展示给用户。
 
 错误态不在 `display_data` 中携带目标、结果或其它业务字段。无法生成安全短提示时，错误 `display_data` 仍只返回通用短提示，不把未经筛选的原始参数传给 UI。

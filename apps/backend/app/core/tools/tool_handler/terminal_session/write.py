@@ -8,6 +8,7 @@
 from typing import ClassVar
 
 from app.config.logging.logger import log
+from app.core.tools.display.terminal_display import build_terminal_session_display_data
 from app.core.tools.schemas import (
     TOOL_TERMINAL_WRITE,
     ToolDefinition,
@@ -17,7 +18,6 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.core.tools.tool_handler.terminal_session.common import (
-    build_session_display_payload,
     cancelled,
     cancelled_observation,
     require_service,
@@ -157,7 +157,7 @@ class TerminalWriteTool(HandlerBase):
                 self.permission,
                 {"session_id": session_id, **result.to_dict()},
                 summary="Terminal input accepted.",
-                display_payload=build_session_display_payload(
+                display_payload=build_terminal_session_display_data(
                     {"session_id": session_id, **result.to_dict()},
                     extra={"submitted": submit},
                 ),

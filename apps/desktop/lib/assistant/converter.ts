@@ -398,9 +398,8 @@ function toMessageStatusForRun(
       return {
         type: "incomplete",
         reason: "error",
-        // 后端受控文案优先：它按失败类别给出 provider 无关的说明（鉴权/配额/限流/超时/
-        // 连接等）。没有 error 契约或文案为空白时回退到本地通用文案——否则会渲染出空白的
-        // 错误气泡，用户看不到任何原因。
+        // 后端错误契约优先：模型 HTTP 失败时 message 可以直接来自响应体。
+        // 没有 error 契约或文案为空白时回退到本地通用文案，避免渲染空白错误气泡。
         error: error?.message?.trim() ? error.message : "对话运行失败，请检查模型配置或后端状态。",
       };
     default:

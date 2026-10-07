@@ -1,8 +1,8 @@
 """交互终端工具族的共享辅助函数。
 
 这里集中 terminal handler 共用的四类小能力：取进程内 session service、统一的取消检查、
-把领域错误与成功结果归一化为 ``ToolObservation``、把 session 快照投影为模型可见
-``display_data``。本模块不持有会话状态，也不实现任何 PTY 能力。
+把领域错误与成功结果归一化为 ``ToolObservation``。展示字段投影由
+``core/tools/display/terminal_display.py`` 负责；本模块不持有会话状态，也不实现 PTY 能力。
 """
 
 from __future__ import annotations
@@ -149,7 +149,7 @@ def success_observation(
 
     返回:
         ``status="success"`` 的 ``ToolObservation``：``content`` 为摘要加紧凑 JSON，
-        ``display_data`` 为 ``kind="terminal-session"`` 与投影后的字段。
+        ``display_data`` 使用调用方从 display 模块得到的投影结果。
 
     异常:
         无。
@@ -162,56 +162,8 @@ def success_observation(
         tool_name=tool_name,
         permission=permission,
         content=f"{summary}\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}",
-        display_data={
-            "kind": "terminal-session",
-            **display_payload,
-        },
+        display_data=display_payload,
     )
-
-
-def build_session_display_payload(
-    payload: dict[str, object],
-    *,
-    include_terminal_info: bool = False,
-    extra: dict[str, object] | None = None,
-) -> dict[str, object]:
-    """把 session 快照投影为 allowlist 内的 UI 元数据。
-
-    service 快照还包含 worker、workspace、可执行文件与时间戳等诊断信息；那些是后端事实，
-    不允许进入 Assistant Transport。``extra`` 只承载少量已校验的操作元数据（如 ``signal``、
-    ``submitted``），**绝不**承载终端输入或输出。
-
-    参数:
-        payload: service 返回的 session 快照字典。
-        include_terminal_info: 为 True 时额外带上 ``initial_cwd`` 与 ``shell_kind``（仅创建
-            会话时使用）。
-        extra: 可选操作元数据，其键会覆盖同名的白名单字段。
-
-    返回:
-        只包含白名单字段的展示字典；``payload`` 中不存在的字段直接省略。
-
-    异常:
-        无。
-
-    副作用:
-        无；纯投影，不修改入参。
-    """
-
-    fields = (
-        "session_id",
-        "status",
-        "generation",
-        "first_available_seq",
-        "next_seq",
-        "exit_code",
-        "end_reason",
-    )
-    if include_terminal_info:
-        fields += ("initial_cwd", "shell_kind")
-    result = {key: payload[key] for key in fields if key in payload}
-    if extra:
-        result.update(extra)
-    return result
 
 
 def with_terminal_errors(

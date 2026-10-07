@@ -5,7 +5,7 @@ from app.core.tools.tool_handler.terminal_session import (
     TerminalStartTool,
     TerminalWriteTool,
 )
-from app.core.tools.tool_handler.terminal_session.common import build_session_display_payload
+from app.core.tools.display.terminal_display import build_session_display_payload
 from app.core.tools.tool_handler.terminal_session.write import encode_terminal_input
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import (

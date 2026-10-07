@@ -158,9 +158,9 @@ export type TransportRun = {
   messages: TransportMessage[];
   usage: ConversationStateUsage | null;
   /**
-   * Run 进入失败/取消终态时后端给出的受控错误；运行中与正常结束为 null。
+   * Run 进入失败/取消终态时后端给出的错误；运行中与正常结束为 null。
    *
-   * `message` 是后端受控的 provider 无关文案，前端直接展示，不得自行拼接 provider 报文。
+   * `message` 由后端直接提供并展示；模型 HTTP 失败时可能是响应体里的 message 字段。
    */
   error: TransportError | null;
 };
@@ -168,8 +168,8 @@ export type TransportRun = {
 /**
  * 运行错误：与后端 `ConversationStateError` 对齐的稳定结构。
  *
- * 只有稳定 `code` 与面向用户的安全 `message`；`retryable` 属于工具观察（仅面向模型），
- * 不在 Transport 错误契约内。
+ * 只有稳定 `code` 与 UI 展示 `message`；`retryable` 属于工具观察（仅面向模型），不在
+ * Transport 错误契约内。
  */
 export type TransportError = {
   code: string;

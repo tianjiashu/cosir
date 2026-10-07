@@ -1,14 +1,46 @@
 """Agent Team 工具的前端展示数据投影。"""
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from app.core.tools.tool_models import ProposeAgentTeamConfigurationArgs
 
 
-def build_agent_team_preview_display_data(preview: dict[str, Any]) -> dict[str, Any]:
-    """返回已完成脱敏的 Team 预览展示数据。"""
+def build_agent_team_preview_display_data(
+    preview_fields: Mapping[str, Any],
+    *,
+    team_run_id: int,
+) -> dict[str, Any]:
+    """从准备结果中投影供用户确认的 Team 预览数据。
 
-    return {"kind": "agent-team-preview", **preview}
+    ``preview_fields`` 是 preparation service 生成的预览输入，不直接作为 Transport
+    payload；本函数集中决定可进入 UI 的字段，并补充待确认运行所需的交互标识。
+    """
+
+    fields = (
+        "team_id",
+        "name",
+        "goal",
+        "instructions",
+        "start_node",
+        "nodes",
+        "edges",
+        "parent_task_id",
+        "parent_run_id",
+        "workspace_id",
+        "configuration",
+    )
+    return {
+        "kind": "agent-team-preview",
+        "status": "pending",
+        **{key: preview_fields[key] for key in fields},
+        "team_run_id": team_run_id,
+        "requires_user_input": True,
+        "user_input_request": {
+            "kind": "agent_team_review",
+            "request_id": str(team_run_id),
+        },
+    }
 
 
 def build_agent_team_configuration_display_data(

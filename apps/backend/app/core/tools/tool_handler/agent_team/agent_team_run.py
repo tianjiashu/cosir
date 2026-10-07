@@ -7,6 +7,7 @@ from typing import ClassVar
 
 from app.agent_team.registry import get_agent_team_registry
 from app.config.logging.logger import log
+from app.core.tools.display.agent_team_display import build_agent_team_preview_display_data
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -108,15 +109,10 @@ class AgentTeamRunTool(HandlerBase):
                     },
                     ensure_ascii=False,
                 ),
-                display_data={
-                    **preparation.preview_document,
-                    "team_run_id": pending_run.id,
-                    "requires_user_input": True,
-                    "user_input_request": {
-                        "kind": "agent_team_review",
-                        "request_id": str(pending_run.id),
-                    },
-                },
+                display_data=build_agent_team_preview_display_data(
+                    preparation.preview_fields,
+                    team_run_id=pending_run.id,
+                ),
             )
         except Exception as exc:
             log.warning(

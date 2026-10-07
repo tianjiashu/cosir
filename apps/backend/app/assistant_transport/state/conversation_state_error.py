@@ -4,10 +4,10 @@ from typing_extensions import TypedDict
 
 
 class ConversationStateError(TypedDict):
-    """面向 UI 的稳定错误结构。
+    """面向 UI 的 Run 错误结构。
 
-    只包含稳定的机器可读 ``code`` 与面向用户的安全 ``message``。``retryable`` 是工具观察的
-    字段（仅面向模型），不属于 Transport 错误契约。
+    ``code`` 是内部稳定类别；``message`` 可以是模型 HTTP 响应体直接提供的消息。Transport
+    只承载这两个字段，不透传完整响应体。``retryable`` 是工具观察的字段，不属于此契约。
     """
 
     code: str

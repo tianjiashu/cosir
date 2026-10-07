@@ -122,18 +122,22 @@ class ConversationRunStateService:
 
     @staticmethod
     def terminal_error(
-        status: ConversationRunStatus, end_reason: str | None
+        status: ConversationRunStatus,
+        end_reason: str | None,
+        message: str | None = None,
     ) -> ConversationRunError | None:
-        """把终态状态映射为受控的持久化错误契约。
+        """把终态状态映射为持久化错误契约。
 
         参数:
             status: 目标终态；``completed`` 表示成功终止，不写错误契约。
             end_reason: 领域侧终态原因；仅当它是合法标识符（``isidentifier()``）时才作为
                 ``code`` 落库，避免把自由文本写进受控字段。
+            message: 可选的错误消息覆盖值；模型失败时用于透传 HTTP 响应体的 ``message`` 字段，
+                为空或全空白时仍使用受控文案目录。
 
         返回:
             非 ``completed`` 终态返回受控的 ``ConversationRunError``；``completed`` 返回 ``None``。
-            ``message`` 由失败 code 目录统一产出（provider 无关的通用文案），未登记的 code
+            ``message`` 优先使用非空覆盖值，否则由失败 code 目录生成受控文案；未登记的 code
             回退通用失败文案，保证 UI 始终拿得到可展示文本。
 
         异常:
@@ -152,7 +156,11 @@ class ConversationRunStateService:
                 if status is ConversationRunStatus.CANCELLED
                 else Constant.Run.RUN_FAILURE_CODE_UNKNOWN
             )
-        return ConversationRunError(code=code, message=run_failure_message(code))
+        resolved_message = message.strip() if isinstance(message, str) else ""
+        return ConversationRunError(
+            code=code,
+            message=resolved_message or run_failure_message(code),
+        )
 
     def has_active_run(self, task_id: int, session: Session | None = None) -> bool:
         """检查该 task 是否已存在 ``pending``、``running`` 或等待输入的 Run。
@@ -401,14 +409,17 @@ class ConversationRunStateService:
         end_reason: str | None = None,
         final_output: str | None = None,
         usage_stats: ConversationRunUsageStats | None = None,
+        error_message: str | None = None,
     ) -> ConversationRunRecord | None:
-        """原子失败结束仍处于可失败状态的 Run，并发布受控错误事件。
+        """原子失败结束仍处于可失败状态的 Run，并发布错误事件。
 
         参数:
             run_id: 待失败落定的 Conversation Run 标识。
             end_reason: 可选失败原因。
             final_output: 可选，随终态一并写入的失败说明文本，供委派场景主 Agent 感知。
             usage_stats: 可选，运行用量统计，终态时按六键契约落库并发布事件。
+            error_message: 可选的 UI 错误消息覆盖值；workflow 可传入模型 HTTP 响应体的
+                ``message`` 字段。为空时沿用受控错误文案。
 
         返回:
             成功失败落定时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
@@ -419,11 +430,15 @@ class ConversationRunStateService:
 
         副作用:
             条件满足时更新 run 状态为 failed（并可选写入 end_reason 与 final_output），
-            随后发布 FAILED 状态事件；事件同时携带同一份受控错误契约，使前端无需额外
-            查询即可展示失败原因。
+            随后发布 FAILED 状态事件；事件携带同一份错误契约，使前端无需额外查询即可展示失败
+            原因。提供 ``error_message`` 时它会随 Run 持久化并透传到 Transport。
         """
 
-        error = self.terminal_error(ConversationRunStatus.FAILED, end_reason)
+        error = self.terminal_error(
+            ConversationRunStatus.FAILED,
+            end_reason,
+            message=error_message,
+        )
         record = self._run.update_status_if_in(
             run_id,
             ConversationRunStatus.FAILED.value,

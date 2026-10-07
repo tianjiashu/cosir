@@ -63,16 +63,16 @@ class WorkflowOperations:
     """
 
     def __init__(
-            self,
-            tool_executor: ToolExecutor,
-            agent_profile: AgentProfile,
-            current_run: ConversationRunRecord,
-            current_task: TaskRecord,
-            current_workspace: WorkspaceRecord,
-            execution_context: ToolExecutionContext,
-            allows_tools: Collection[str] | None = None,
-            runtime_dependencies: ToolRuntimeDependencies | None = None,
-            tool_trace_recorder: ToolTraceRecorder | None = None,
+        self,
+        tool_executor: ToolExecutor,
+        agent_profile: AgentProfile,
+        current_run: ConversationRunRecord,
+        current_task: TaskRecord,
+        current_workspace: WorkspaceRecord,
+        execution_context: ToolExecutionContext,
+        allows_tools: Collection[str] | None = None,
+        runtime_dependencies: ToolRuntimeDependencies | None = None,
+        tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -118,7 +118,7 @@ class WorkflowOperations:
             else execution_context
         )
 
-        #运行时动态变化的工具白名单
+        # 运行时动态变化的工具白名单
         self._allowed_tool_names = frozenset(allows_tools)
         self._parallel_mode_by_name = {
             definition.name: definition.parallel_mode for definition in self.all_vaild_tools
@@ -266,9 +266,9 @@ class WorkflowOperations:
         return cancellation_registry.is_cancelled(current_run.id)
 
     def complete_run_if_running(
-            self,
-            usage_stats: ConversationRunUsageStats | None = None,
-            final_output: str | None = None,
+        self,
+        usage_stats: ConversationRunUsageStats | None = None,
+        final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """仅当 run 仍处于 running 时把它落定为 completed。
 
@@ -332,10 +332,11 @@ class WorkflowOperations:
         )
 
     def fail_run_if_running(
-            self,
-            end_reason: str | None = None,
-            usage_stats: ConversationRunUsageStats | None = None,
-            final_output: str | None = None,
+        self,
+        end_reason: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
+        final_output: str | None = None,
+        error_message: str | None = None,
     ) -> ConversationRunRecord | None:
         """仅当 run 仍处于 running 时把它落定为 failed。
 
@@ -346,6 +347,8 @@ class WorkflowOperations:
             end_reason: 可选失败原因。
             usage_stats: 可选 token 使用统计，随状态事件透出。
             final_output: 可选，随终态一并写入的失败说明文本，供委派场景主 Agent 感知。
+            error_message: 可选的面向 UI 错误消息；模型失败时可传入 HTTP 响应体的原始
+                ``message`` 字段，为 None 时由状态服务按稳定失败 code 生成文案。
 
         返回:
             成功失败落定时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
@@ -356,7 +359,7 @@ class WorkflowOperations:
 
         副作用:
             条件满足时把 run 更新为 ``failed``（写入 ``end_reason`` / ``final_output`` / 用量与
-            受控错误契约）；状态变更事件由 ``ConversationRunStateService`` 在条件更新命中后发布，
+            错误契约）；状态变更事件由 ``ConversationRunStateService`` 在条件更新命中后发布，
             本方法不直接发事件。
         """
         run_id = self._current_run.id
@@ -368,15 +371,19 @@ class WorkflowOperations:
             },
         )
         record = self._conversation_run_state_service.fail_run_if_running(
-            run_id, end_reason, final_output=final_output, usage_stats=usage_stats
+            run_id,
+            end_reason,
+            final_output=final_output,
+            usage_stats=usage_stats,
+            error_message=error_message,
         )
         return record
 
     def cancel_run_if_running(
-            self,
-            end_reason: str = "runtime_cancelled",
-            usage_stats: ConversationRunUsageStats | None = None,
-            final_output: str | None = None,
+        self,
+        end_reason: str = "runtime_cancelled",
+        usage_stats: ConversationRunUsageStats | None = None,
+        final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """经 canonical writer 把仍处于 active 的 run 落定为 cancelled。
 
@@ -414,11 +421,11 @@ class WorkflowOperations:
         return record
 
     async def run_tool_calls(
-            self,
-            task_id: int,
-            calls: list[ToolCall],
-            step_id: str | None = None,
-            running_loop: asyncio.AbstractEventLoop | None = None,
+        self,
+        task_id: int,
+        calls: list[ToolCall],
+        step_id: str | None = None,
+        running_loop: asyncio.AbstractEventLoop | None = None,
     ) -> ToolRunResult:
         """经工具系统执行模型请求的工具调用。
 
@@ -493,10 +500,10 @@ class WorkflowOperations:
         return ToolRunResult(observations=executed_observations)
 
     async def _run_calls_with_parallel_modes(
-            self,
-            task_id: int,
-            calls: list[tuple[int, ToolCall]],
-            step_id: str | None,
+        self,
+        task_id: int,
+        calls: list[tuple[int, ToolCall]],
+        step_id: str | None,
     ) -> list[tuple[int, ToolObservation]]:
         """并发执行一批已声明为可并行调度的工具调用。
 
@@ -587,10 +594,10 @@ class WorkflowOperations:
         return completed
 
     def _execute_tool_call(
-            self,
-            task_id: int,
-            call: ToolCall,
-            step_id: str | None,
+        self,
+        task_id: int,
+        call: ToolCall,
+        step_id: str | None,
     ) -> ToolObservation:
         """执行单个工具调用，并把执行链路异常收口为工具观察。
 
@@ -626,11 +633,11 @@ class WorkflowOperations:
             return self._internal_error_observation(task_id, call, exc, step_id)
 
     def _internal_error_observation(
-            self,
-            task_id: int,
-            call: ToolCall,
-            exc: Exception,
-            step_id: str | None = None,
+        self,
+        task_id: int,
+        call: ToolCall,
+        exc: Exception,
+        step_id: str | None = None,
     ) -> ToolObservation:
         """把工具执行链路内部异常转换为稳定的 error 观察。
 

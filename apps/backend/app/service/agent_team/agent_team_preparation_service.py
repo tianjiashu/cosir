@@ -1,8 +1,8 @@
 """Agent Team 执行准备服务。
 
 本模块把已解析的 Team 配置转换成一次运行准备结果：节点 Profile、工具定义、模型设置、
-前端展示预览和预览指纹均在同一次解析中生成。它不保存配置文件，不创建 TeamRun，也不
-推进节点执行；这些职责分别由配置服务和 Team coordinator 负责。
+供展示层投影的预览输入和预览指纹均在同一次解析中生成。它不保存配置文件，不创建 TeamRun，
+也不推进节点执行；这些职责分别由配置服务和 Team coordinator 负责。
 """
 
 from __future__ import annotations
@@ -39,13 +39,13 @@ TEAM_NODE_DISALLOWED_TOOLS = frozenset(
 class AgentTeamPreparationResult:
     """一次 Agent Team 执行准备的不可变输出。
 
-    ``preview_document`` 面向工具展示，包含供用户编辑后回传的静态配置；
+    ``preview_fields`` 是交给展示投影函数的预览输入，包含供用户编辑后回传的静态配置；
     ``node_runtime_snapshots`` 面向确认后的节点执行，``preview_fingerprint`` 是本次解析
     结果的稳定指纹。三者来自同一次解析，但最终确认时必须基于用户提交的配置重新生成，
     不能把展示数据直接当作执行事实。
     """
 
-    preview_document: dict[str, Any]
+    preview_fields: dict[str, Any]
     node_runtime_snapshots: dict[str, dict[str, Any]]
     preview_fingerprint: str
 
@@ -341,9 +341,7 @@ class AgentTeamPreparationService:
                 }
             )
 
-        preview_document = {
-            "kind": "agent-team-preview",
-            "status": "pending",
+        preview_fields = {
             "team_id": configuration.team_id,
             "name": configuration.name,
             "goal": goal,
@@ -375,7 +373,7 @@ class AgentTeamPreparationService:
             ).encode("utf-8")
         ).hexdigest()
         return AgentTeamPreparationResult(
-            preview_document=preview_document,
+            preview_fields=preview_fields,
             node_runtime_snapshots=node_runtime_snapshots,
             preview_fingerprint=preview_fingerprint,
         )

@@ -6,6 +6,7 @@
 
 from typing import ClassVar
 
+from app.core.tools.display.terminal_display import build_terminal_session_display_data
 from app.core.tools.schemas import (
     TOOL_TERMINAL_CLOSE,
     ToolDefinition,
@@ -15,7 +16,6 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.core.tools.tool_handler.terminal_session.common import (
-    build_session_display_payload,
     cancelled,
     cancelled_observation,
     require_service,
@@ -89,7 +89,7 @@ class TerminalCloseTool(HandlerBase):
                 self.permission,
                 payload,
                 summary="Terminal session closed.",
-                display_payload=build_session_display_payload(payload),
+                display_payload=build_terminal_session_display_data(payload),
             )
 
         return with_terminal_errors(self.name, self.permission, action)

@@ -23,7 +23,10 @@ from langgraph.types import Command
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.model_factory import resolve_chat_model
-from app.core.llm_provider.model_failure import classify_model_failure
+from app.core.llm_provider.model_failure import (
+    classify_model_failure,
+    extract_model_response_message,
+)
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.react.worflow_state.state import ReactGraphState
@@ -148,11 +151,12 @@ class ReactLikeWorkflow(AgentWorkflow):
 
     @staticmethod
     def _settle_failed_run(
-            operations: WorkflowOperations,
-            end_reason: str,
-            *,
-            usage_stats: ConversationRunUsageStats | None = None,
-            final_output: str | None = None,
+        operations: WorkflowOperations,
+        end_reason: str,
+        *,
+        usage_stats: ConversationRunUsageStats | None = None,
+        final_output: str | None = None,
+        error_message: str | None = None,
     ) -> None:
         """把本轮的 running Run 落定为 failed 终态。
 
@@ -166,6 +170,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             usage_stats: 可选累计用量；异常发生前已消耗的 token 随终态一并落库。
             final_output: 可选失败说明文本；为 ``None`` 时使用该 code 对应的受控用户文案，
                 使委派场景的主 Agent 也能感知子 run 的失败原因。
+            error_message: 可选的模型 HTTP 响应 message 原文，直接写入 Run 错误契约供 UI 展示；
+                没有响应 message 时沿用稳定 code 对应的受控文案。
 
         返回:
             无。
@@ -175,7 +181,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             时记 info 日志并返回。
 
         副作用:
-            更新 ``conversation_runs`` 行（failed 终态、end_reason、受控错误、用量与 final_output）
+            更新 ``conversation_runs`` 行（failed 终态、end_reason、错误消息、用量与 final_output）
             并发布 Run 状态事件；写 ``run_failure_settled`` / ``run_failure_settle_failed`` /
             ``run_failure_settle_race_lost`` 日志。
         """
@@ -187,6 +193,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                 end_reason=end_reason,
                 usage_stats=usage_stats,
                 final_output=resolved_output,
+                error_message=error_message,
             )
         except Exception:
             log.exception(
@@ -215,11 +222,11 @@ class ReactLikeWorkflow(AgentWorkflow):
         )
 
     async def run(
-            self,
-            operations: WorkflowOperations,
-            callbacks: list | None = None,
-            langfuse_trace_id: str | None = None,
-            execution_mode: ExecutionMode = "fresh",
+        self,
+        operations: WorkflowOperations,
+        callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
+        execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """执行一个任务，并在唯一异常边界把 Run 落定为 failed 终态。
 
@@ -240,7 +247,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             asyncio.CancelledError: 保留取消语义并向执行器传播。
 
         副作用:
-            失败路径记录带异常堆栈的结构化日志，将 Run 更新为 failed（含受控错误契约）并发布
+            失败路径记录带异常堆栈的结构化日志，将 Run 更新为 failed（含错误契约）并发布
             状态事件；其余副作用见 ``_run_graph``。
         """
 
@@ -271,16 +278,17 @@ class ReactLikeWorkflow(AgentWorkflow):
                 operations,
                 failure_code,
                 usage_stats=usage_stats,
+                error_message=extract_model_response_message(exc),
             )
 
     async def _run_graph(
-            self,
-            operations: WorkflowOperations,
-            callbacks: list | None = None,
-            langfuse_trace_id: str | None = None,
-            execution_mode: ExecutionMode = "fresh",
-            *,
-            usage_stats: ConversationRunUsageStats | None = None,
+        self,
+        operations: WorkflowOperations,
+        callbacks: list | None = None,
+        langfuse_trace_id: str | None = None,
+        execution_mode: ExecutionMode = "fresh",
+        *,
+        usage_stats: ConversationRunUsageStats | None = None,
     ) -> None:
         """驱动已编译 graph 执行一次任务，直到完成、失败、取消或达到最大步骤数。
 
@@ -454,9 +462,9 @@ class ReactLikeWorkflow(AgentWorkflow):
                         input_state = Command(goto=ReactRoute.MODEL.value)
 
                 async for mode, value in graph.astream(
-                        input_state,
-                        config,
-                        stream_mode=["values", "custom"],
+                    input_state,
+                    config,
+                    stream_mode=["values", "custom"],
                 ):
                     # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
                     # 统一写入 snapshot。两者都不是 Agent context 的来源。
@@ -474,12 +482,12 @@ class ReactLikeWorkflow(AgentWorkflow):
                 )
 
     async def _finalize_terminal_checkpoint(
-            self,
-            graph: Any,
-            config: dict[str, Any],
-            run_id: int,
-            *,
-            reason: str,
+        self,
+        graph: Any,
+        config: dict[str, Any],
+        run_id: int,
+        *,
+        reason: str,
     ) -> bool:
         """关闭 Run 的 terminal 并把 checkpoint 中的活跃元数据收敛为终态。
 
@@ -521,10 +529,10 @@ class ReactLikeWorkflow(AgentWorkflow):
             return False
 
     async def recover_orphaned_terminal_checkpoints(
-            self,
-            runs: Iterable[object],
-            *,
-            reason: str = "runtime_restarted",
+        self,
+        runs: Iterable[object],
+        *,
+        reason: str = "runtime_restarted",
     ) -> int:
         """扫描最近 Run 的 checkpoint 并关闭遗留的活跃 terminal 元数据。
 

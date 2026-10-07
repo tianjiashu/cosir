@@ -42,8 +42,8 @@ class ConversationTaskStateRebuilder:
                 ``ConversationRunStateService.terminal_error`` 写入。
 
         返回:
-            ``{"code", "message"}`` 形状的 Transport 错误；Run 未失败或没有错误契约时返回
-            ``None``。
+            ``{"code", "message"}`` 形状的 Transport 错误；``message`` 保留持久化错误契约
+            原值（模型 HTTP 失败时可能是响应 message）；Run 未失败或没有错误契约时返回 ``None``。
 
         异常:
             ValueError: 持久化错误契约不是映射，或不是恰好 ``{code, message}`` 两个**非空白**

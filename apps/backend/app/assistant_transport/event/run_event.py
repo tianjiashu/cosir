@@ -221,8 +221,9 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
             ``"backend_restarted"``）；非终态迁移为 ``None``。
         usage_stats: Run 终态时随事件附带的完整累计 token 用量；未获得 provider usage 时为
             ``None``。
-        error: Run 终态的受控错误契约（稳定 ``code`` + provider 无关的用户文案）；非终态
-            迁移与 ``completed`` 为 ``None``，此时投影会把已存在的错误清空。
+        error: Run 终态的错误契约（稳定 ``code`` + UI 展示 ``message``）；模型 HTTP 失败时
+            ``message`` 可直接来自响应体；非终态迁移与 ``completed`` 为 ``None``，此时投影会
+            把已存在的错误清空。
 
     异常:
         pydantic.ValidationError: ``status`` 不在枚举内，或出现未声明字段时抛出。
@@ -247,7 +248,7 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
             state: 当前 Task snapshot。
 
         返回:
-            更新 ``run`` 状态、终态原因与受控错误（及可选 ``usage``）的 mutation；若 assistant
+            更新 ``run`` 状态、终态原因与错误契约（及可选 ``usage``）的 mutation；若 assistant
             message 存在，额外更新其 ``status`` / ``endReason``，并把仍 running 的
             text / reasoning part 收口为 completed。目标状态不在白名单矩阵内时（陈旧或重复
             投递的迁移）返回空列表。

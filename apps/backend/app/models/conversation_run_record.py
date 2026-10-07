@@ -23,11 +23,11 @@ if TYPE_CHECKING:
 
 
 class ConversationRunError(TypedDict):
-    """Controlled, user-safe error contract persisted for a failed run.
+    """Run 失败后持久化并投影给 UI 的错误契约。
 
-    只承载 Run 级的受控错误事实（稳定 ``code`` + 面向用户的安全 ``message``）。
-    ``retryable`` 只属于工具观察（``ToolObservation.retryable``），用于告诉模型某次工具调用
-    能否重试；Run 级错误契约不包含该字段。
+    ``code`` 是内部稳定失败类别；``message`` 默认来自受控文案目录，模型 HTTP 错误时可以
+    直接承载响应体中的 ``message`` 字段供 UI 展示。完整响应体和请求内容不进入此契约。
+    ``retryable`` 只属于工具观察（``ToolObservation.retryable``），Run 级错误不包含该字段。
     """
 
     code: str

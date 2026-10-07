@@ -6,6 +6,7 @@ PTY 创建、shell 解析、cwd 边界校验与终端元数据登记都在 ``Ter
 
 from typing import ClassVar
 
+from app.core.tools.display.terminal_display import build_terminal_session_display_data
 from app.core.tools.schemas import (
     TOOL_TERMINAL_START,
     ToolDefinition,
@@ -15,7 +16,6 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.core.tools.tool_handler.terminal_session.common import (
-    build_session_display_payload,
     cancelled,
     cancelled_observation,
     require_service,
@@ -101,7 +101,10 @@ class TerminalStartTool(HandlerBase):
                 self.permission,
                 payload,
                 summary="Terminal session started.",
-                display_payload=build_session_display_payload(payload, include_terminal_info=True),
+                display_payload=build_terminal_session_display_data(
+                    payload,
+                    include_terminal_info=True,
+                ),
             )
 
         return with_terminal_errors(self.name, self.permission, action)
