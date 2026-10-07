@@ -28,5 +28,11 @@ tauri-plugin-wdio-webdriver = { version = "1.4.0", optional = true }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [target.'cfg(windows)'.dependencies]
-webview2-com = "0.38.2"
-windows = { version = "0.61", features = ["Win32_Foundation"] }
+# 必须与 tauri/wry 实际使用的 webview2-com-sys 版本一致（均为 0.39.x）。
+# 若版本错配，webview2-com 导出的 handler 类型会编译在另一套 windows-core 上，
+# 与 with_webview 传入的 ICoreWebView2 的 add_* 方法 Param 约束不匹配而编译失败。
+webview2-com = "0.39.1"
+# 必须直接依赖 webview2-com-sys 所用的独立 windows-core crate（0.62），
+# 而非 `windows` crate 内部打包的 windows_core 副本——二者即使版本号相同也是不同类型，
+# Rust 也不允许 use 传递依赖的 crate。本文件从它导入 Interface 与 Error。
+windows-core = { version = "0.62", features = ["std"] }

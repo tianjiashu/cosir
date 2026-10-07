@@ -43,18 +43,14 @@ export function saveAgentTeamConfiguration(input: AgentTeamConfigurationInput): 
 }
 
 export function confirmAgentTeamRun(
-  parentTaskId: number,
-  parentRunId: number,
-  teamId: string,
+  teamRunId: number,
   configuration: Record<string, unknown>,
 ): Promise<AgentTeamRun> {
   return requestJson<AgentTeamRun>(
     "/agent-team/runs/confirm",
     jsonRequestInit(
       {
-        parent_task_id: parentTaskId,
-        parent_run_id: parentRunId,
-        team_id: teamId,
+        team_run_id: teamRunId,
         configuration,
       },
       { method: "POST" },
@@ -62,28 +58,8 @@ export function confirmAgentTeamRun(
   );
 }
 
-export function getLatestAgentTeamRun(
-  parentTaskId: number,
-  parentRunId: number,
-  teamId: string,
-): Promise<AgentTeamRun> {
-  const query = new URLSearchParams({
-    parent_task_id: String(parentTaskId),
-    parent_run_id: String(parentRunId),
-    team_id: teamId,
-  });
-  return requestJson<AgentTeamRun>(`/agent-team/runs/latest?${query.toString()}`);
-}
-
 export function getAgentTeamRun(runId: number): Promise<AgentTeamRun> {
   return requestJson<AgentTeamRun>(`/agent-team/runs/${encodeURIComponent(runId)}`);
-}
-
-export function waitAgentTeamRun(runId: number, timeoutSeconds?: number): Promise<AgentTeamRun> {
-  const query = timeoutSeconds === undefined ? "" : `?timeout_seconds=${encodeURIComponent(timeoutSeconds)}`;
-  return requestJson<AgentTeamRun>(
-    `/agent-team/runs/${encodeURIComponent(runId)}/wait${query}`,
-  );
 }
 
 export function cancelAgentTeamRun(runId: number): Promise<AgentTeamRun> {

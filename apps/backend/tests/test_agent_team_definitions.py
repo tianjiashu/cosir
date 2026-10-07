@@ -134,20 +134,18 @@ def test_confirm_request_carries_final_configuration_instead_of_preview_fingerpr
     configuration = _configuration()
     payload = ConfirmAgentTeamRequest.model_validate(
         {
-            "parent_task_id": 1,
-            "parent_run_id": 2,
-            "team_id": "code-quality",
+            "team_run_id": 123,
             "configuration": configuration,
         }
     )
 
+    assert payload.team_run_id == 123
     assert payload.configuration == configuration
     with pytest.raises(ValidationError):
         ConfirmAgentTeamRequest.model_validate(
             {
-                "parent_task_id": 1,
-                "parent_run_id": 2,
-                "team_id": "code-quality",
+                "team_run_id": 123,
+                "configuration": configuration,
                 "preview_fingerprint": "f" * 64,
             }
         )

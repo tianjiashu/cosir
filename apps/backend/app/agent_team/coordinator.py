@@ -368,7 +368,12 @@ class AgentTeamCoordinator:
         *,
         session: Session | None = None,
     ) -> tuple[Any | None, Any | None]:
-        """创建一个节点 Task/Run，固化工具 schema 并调度现有执行器。"""
+        """复用或创建节点 Task，为本次节点访问创建 Run。
+
+        同一 TeamRun 中的节点按 ``node_id`` 绑定独立 Task；再次访问该节点时读取原 Task，
+        由 Task 级 context 保留它自己的历史。Task 映射、Run 创建和节点执行记录在调用方
+        事务中一起提交。
+        """
 
         row = (
             session.get(AgentTeamRunModel, team_run_db_id)
@@ -400,20 +405,30 @@ class AgentTeamCoordinator:
         reasoning_effort = model_settings.get("reasoning_effort")
 
         def persist(persist_session: Session) -> tuple[Any, Any]:
-            task = self._task_service.get_or_create_task(
-                workspace_id=row.workspace_id,
-                title=node.name,
-                task_type="agent_team_node",
-                parent_task_id=row.parent_task_id,
-                parent_run_id=row.parent_run_id,
-                extra={
-                    "agent_team_run_id": row.id,
-                    "agent_team_node_id": node_id,
-                    "agent_team_profile_snapshot": runtime_snapshot,
-                },
-                tool_definitions=copy.deepcopy(tool_definitions),
-                session=persist_session,
-            )
+            task_id = state.task_id_for_node(node_id)
+            if task_id is None:
+                task = self._task_service.get_or_create_task(
+                    workspace_id=row.workspace_id,
+                    title=node.name,
+                    task_type="agent_team_node",
+                    parent_task_id=row.parent_task_id,
+                    parent_run_id=row.parent_run_id,
+                    extra={
+                        "agent_team_run_id": row.id,
+                        "agent_team_node_id": node_id,
+                        "agent_team_profile_snapshot": runtime_snapshot,
+                    },
+                    tool_definitions=copy.deepcopy(tool_definitions),
+                    session=persist_session,
+                )
+            else:
+                task = self._task_service.get_or_create_task(
+                    workspace_id=row.workspace_id,
+                    title=node.name,
+                    task_id=task_id,
+                    session=persist_session,
+                )
+            state.bind_node_task(node_id, task.id)
             node_run = self._run_service.create_run(
                 task_id=task.id,
                 agent_id=agent_id,
@@ -527,7 +542,7 @@ class AgentTeamCoordinator:
         *,
         runtime_loop: asyncio.AbstractEventLoop | None,
     ) -> dict[str, Any]:
-        """校验并提交节点结果，随后按唯一目标节点继续执行。"""
+        """校验已完成节点的结构化结果，随后按唯一目标节点继续执行。"""
 
         if not isinstance(output, str) or len(output) > 100_000:
             raise ValueError("node output must be a string no longer than 100000 characters")
@@ -547,11 +562,13 @@ class AgentTeamCoordinator:
                 return {"status": "node_already_completed", "run_id": row.id}
             if state.active_node_run_id != node_run_id:
                 raise ValueError("节点状态提交者不是当前活动节点")
+            node_run = self._run_state_service.get_run(node_run_id)
+            if node_run.status != ConversationRunStatus.COMPLETED.value:
+                raise ValueError("Team 节点必须先完成结构化输出 Run 才能提交结果")
             node_id = execution.node_id
             node = configuration.node(node_id)
             if status not in node.statuses:
                 raise ValueError(f"status '{status}' is not allowed by node '{node_id}'")
-            self._run_state_service.complete_run_if_running(node_run_id, final_output=output)
 
             state.complete_node(node_run_id, status, output)
             transitions = configuration.transitions_for(node_id, status)
@@ -778,7 +795,7 @@ class AgentTeamCoordinator:
         return cancelled
 
     def handle_node_natural_completion(self, node_run_id: int) -> None:
-        """节点自然结束但没有提交状态时，将 Team 明确收敛为失败。"""
+        """消费节点 Run 终态，并提交其结构化结果或收敛 Team 失败。"""
 
         row = self._team_run_crud.find_by_node_run_id(node_run_id)
         if row is None:
@@ -799,6 +816,35 @@ class AgentTeamCoordinator:
                     current.id,
                     AgentTeamRunEndReason.NODE_RUN_FAILED,
                 )
+                return
+            if node_run.status == ConversationRunStatus.COMPLETED.value:
+                try:
+                    result = json.loads(node_run.final_output or "")
+                    if not isinstance(result, dict) or set(result) != {"status", "output"}:
+                        raise ValueError("结构化结果必须且只能包含 status 和 output")
+                    status = result["status"]
+                    output = result["output"]
+                    if not isinstance(status, str) or not isinstance(output, str):
+                        raise ValueError("结构化结果的 status 和 output 必须是字符串")
+                    runtime_loop = self._runtime_loop_for(current.id)
+                    self.submit_node_result(
+                        node_run_id,
+                        status,
+                        output,
+                        runtime_loop=runtime_loop,
+                    )
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    log.exception(
+                        "agent_team_node_output_invalid",
+                        extra={
+                            "msg": "Agent Team 节点完成结果不符合结构化输出契约",
+                            "data": {"run_id": current.id, "node_run_id": node_run_id},
+                        },
+                    )
+                    self._fail_team(
+                        current.id,
+                        AgentTeamRunEndReason.NODE_OUTPUT_INVALID,
+                    )
                 return
             if node_run.status == "cancelled":
                 self._fail_team(

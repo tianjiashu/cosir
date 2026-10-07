@@ -1,6 +1,5 @@
 """子 Agent 创建入口的 profile 类型授权测试。"""
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,7 +8,6 @@ import pytest
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
-from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_handler.child_task import child_agent_send
 
 
@@ -71,9 +69,6 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
         workspace_id=3,
         workspace_root=tmp_path,
         run_id=12,
-        runtime_dependencies=ToolRuntimeDependencies(
-            runtime_event_loop=asyncio.get_running_loop(),
-        ),
     )
 
     result = tool.execute(11, "Continue this task.", execution_context=context)

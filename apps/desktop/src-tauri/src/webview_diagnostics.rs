@@ -8,7 +8,7 @@ use webview2_com::{
     ContentLoadingEventHandler, DOMContentLoadedEventHandler, NavigationCompletedEventHandler,
     ProcessFailedEventHandler,
 };
-use windows::core::{Interface, BOOL};
+use windows_core::{Interface, BOOL};
 
 use crate::desktop_log::append_json_line;
 use crate::log_paths::app_log_dir;
@@ -140,7 +140,7 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
         .map_err(|error| format!("无法注册 WebView2 诊断事件：{error}"))
 }
 
-fn write_registration_failure(path: &Path, handler: &str, error: windows::core::Error) {
+fn write_registration_failure(path: &Path, handler: &str, error: windows_core::Error) {
     write_event(
         path,
         "WARNING",

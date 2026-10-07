@@ -89,7 +89,7 @@ class AgentTeamRunTool(HandlerBase):
                 fallback_model_settings=fallback_model_settings,
                 fallback_model_config_id=parent_run.model_config_id,
             )
-            AgentTeamRunService().create_pending_confirmation(
+            pending_run = AgentTeamRunService().create_pending_confirmation(
                 configuration=configuration,
                 preparation=preparation,
                 workspace_id=execution_context.workspace_id,
@@ -108,7 +108,10 @@ class AgentTeamRunTool(HandlerBase):
                     },
                     ensure_ascii=False,
                 ),
-                display_data=preparation.preview_document,
+                display_data={
+                    **preparation.preview_document,
+                    "team_run_id": pending_run.id,
+                },
             )
         except Exception as exc:
             log.warning(

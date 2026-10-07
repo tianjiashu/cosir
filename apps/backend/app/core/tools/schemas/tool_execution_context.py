@@ -13,8 +13,8 @@ class ToolExecutionContext:
 
     ``ToolExecutionContext`` 表达一次工具调用所处的任务、工作区、根路径与
     turn 边界。``runtime_dependencies`` 承载父进程执行层和同进程工具使用的运行期
-    能力，例如委派执行器、输出事件通道工厂和事件 loop。这些依赖可能间接持有
-    数据库引擎、事件循环、服务对象或其他不可 pickle 状态。
+    能力，例如 Agent profile、终端会话服务和输出事件通道工厂。这些依赖可能间接持有
+    数据库引擎、服务对象或其他不可 pickle 状态。
 
     process 隔离工具（例如 ``execute_terminal``）启动子进程前必须调用
     :meth:`for_process_execution` 取得跨进程安全副本，避免把

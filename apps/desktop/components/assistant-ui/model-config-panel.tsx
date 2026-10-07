@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2Icon, EyeIcon, EyeOffIcon, Loader2Icon, Settings2Icon, Trash2Icon, XCircleIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -265,15 +266,15 @@ export function ModelConfigPanel({
               <h3 className="text-sm font-medium">{editingId === null ? "添加模型配置" : "编辑模型配置"}</h3>
               {editingId !== null && <Button variant="ghost" size="sm" onClick={resetForm}>取消编辑</Button>}
             </div>
-            <label className="grid gap-1 text-xs">配置名称<input className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.configName} onChange={(event) => setForm({ ...form, configName: event.target.value })} placeholder="例如：DeepSeek 官方" /></label>
-            <label className="grid gap-1 text-xs">API Base URL<input className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label>
-            <label className="grid gap-1 text-xs">API Key<div className="relative"><input type={showApiKey ? "text" : "password"} className="border-input bg-background h-8 w-full rounded-md border px-2 pr-9 text-sm" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder="请输入 API Key" /><button type="button" className="text-muted-foreground hover:text-foreground absolute inset-y-0 right-0 inline-flex w-8 items-center justify-center" onClick={() => setShowApiKey((visible) => !visible)} aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}>{showApiKey ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}</button></div></label>
+            <label className="grid min-w-0 gap-1 text-xs">配置名称<Input value={form.configName} onChange={(event) => setForm({ ...form, configName: event.target.value })} placeholder="例如：DeepSeek 官方" /></label>
+            <label className="grid min-w-0 gap-1 text-xs">API Base URL<Input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label>
+            <label className="grid min-w-0 gap-1 text-xs">API Key<div className="relative min-w-0"><Input type={showApiKey ? "text" : "password"} className="pr-9" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder="请输入 API Key" /><button type="button" className="text-muted-foreground hover:text-foreground absolute inset-y-0 right-0 inline-flex w-8 items-center justify-center" onClick={() => setShowApiKey((visible) => !visible)} aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}>{showApiKey ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}</button></div></label>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="grid gap-1 text-xs">
                 模型名称
                 {discoveredModels ? (
                   <select
-                    className="border-input bg-background h-8 rounded-md border px-2 text-sm"
+                    className="h-8 w-full min-w-0 rounded-md border px-2 text-sm"
                     value={form.modelName}
                     onChange={(event) => setForm({ ...form, modelName: event.target.value })}
                   >
@@ -281,10 +282,10 @@ export function ModelConfigPanel({
                     {discoveredModels.map((model) => <option key={model} value={model}>{model}</option>)}
                   </select>
                 ) : (
-                  <input className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.modelName} onChange={(event) => setForm({ ...form, modelName: event.target.value })} placeholder="例如：deepseek-chat" />
+                  <Input value={form.modelName} onChange={(event) => setForm({ ...form, modelName: event.target.value })} placeholder="例如：deepseek-chat" />
                 )}
               </label>
-              <label className="grid gap-1 text-xs">上下文窗口（K）<input type="number" min="1" step="1" className="border-input bg-background h-8 rounded-md border px-2 text-sm" value={form.contextWindowK} onChange={(event) => setForm({ ...form, contextWindowK: event.target.value })} placeholder="例如：128" /></label>
+              <label className="grid min-w-0 gap-1 text-xs">上下文窗口（K）<Input type="number" min="1" step="1" value={form.contextWindowK} onChange={(event) => setForm({ ...form, contextWindowK: event.target.value })} placeholder="例如：128" /></label>
             </div>
             <div className="grid gap-2 sm:grid-cols-3">
               <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.supportsThinking} onChange={(event) => setForm({ ...form, supportsThinking: event.target.checked })} />支持思考</label>

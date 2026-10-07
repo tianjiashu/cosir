@@ -1,5 +1,4 @@
 """child_agent_send 工具：给已有子任务追加输入并启动新的 Run。"""
-
 import asyncio
 import json
 from typing import ClassVar
@@ -215,6 +214,20 @@ class ChildAgentSendTool(HandlerBase):
                     permission=self.permission,
                     retryable=False,
                 )
+
+            # 执行器入口是协程：在父 Run 的事件循环上调度，并只等待登记完成。
+            loop = execution_context.runtime_dependencies.runtime_event_loop
+            if loop is None or loop.is_closed():
+                return tool_error(
+                    self.name,
+                    "delegate_task_runtime_unavailable",
+                    reason=(
+                        "the parent runtime event loop is unavailable, so the child run "
+                        "cannot be started; retry from a normal turn."
+                    ),
+                    permission=self.permission,
+                    retryable=False,
+                )
             # 执行器入口是协程：在父 Run 的事件循环上调度，并只等待登记完成。
             future = asyncio.run_coroutine_threadsafe(
                 self._run_executor.start(
@@ -239,12 +252,9 @@ class ChildAgentSendTool(HandlerBase):
             return tool_error(
                 self.name,
                 "child_agent_send_failed",
-                reason=(
-                    "the follow-up run could not be started; inspect the backend log and "
-                    "retry later."
-                ),
+                reason="the follow-up run could not be started; ",
                 permission=self.permission,
-                retryable=True,
+                retryable=False,
             )
 
         return tool_success(

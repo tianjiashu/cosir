@@ -17,24 +17,20 @@ from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
+from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.tools.schemas import ToolDefinition
-from app.core.tools.schemas.tool_names import (
-    TOOL_AGENT_TEAM,
-    TOOL_CHILD_AGENT_SEND,
-    TOOL_CHILD_AGENT_STATUS,
-    TOOL_CHILD_AGENT_WAIT,
-    TOOL_DELEGATE_TASK,
-    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
-)
+from app.core.tools.schemas.tool_names import *
 
 TEAM_NODE_DISALLOWED_TOOLS = frozenset(
     {
-        TOOL_DELEGATE_TASK,
-        TOOL_CHILD_AGENT_SEND,
-        TOOL_CHILD_AGENT_STATUS,
-        TOOL_CHILD_AGENT_WAIT,
         TOOL_AGENT_TEAM,
         TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
+        TOOL_PROPOSE_AGENT_CONFIGURATION,
+        TOOL_TERMINAL_START,
+        TOOL_TERMINAL_READ,
+        TOOL_TERMINAL_WRITE,
+        TOOL_TERMINAL_CLOSE,
+        TOOL_TERMINAL_SIGNAL,
     }
 )
 
@@ -131,6 +127,124 @@ def resolve_effective_model_settings(
             raise ValueError(f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置") from exc
 
 
+def build_node_structured_output(
+    configuration: AgentTeamConfiguration,
+    node: TeamNodeDefinition,
+) -> StructuredOutputSpec:
+    """按 Team 节点允许的状态和转移目标生成严格输出契约。
+
+    参数:
+        configuration: 本次运行冻结的 Team 工作流配置。
+        node: 当前节点定义。
+
+    返回:
+        包含状态和下游结果的 JSON Schema 契约；状态枚举只包含当前节点允许的值。
+
+    异常:
+        ValueError: 节点状态没有对应转移，且节点不是终点时抛出。
+
+    副作用:
+        无；只读取配置并构造不可变输出契约。
+    """
+
+    node_names = {item.node_id: item.name for item in configuration.nodes}
+    routes = {
+        transition.status: transition.target_node_id
+        for transition in configuration.transitions
+        if transition.from_node_id == node.node_id
+    }
+    route_descriptions = []
+    for status in node.statuses:
+        target_node_id = routes.get(status)
+        if target_node_id is None:
+            if node.node_type != "end":
+                raise ValueError(
+                    f"Team 节点状态缺少转移目标: {node.node_id}/{status}"
+                )
+            destination = "结束 Team"
+        else:
+            destination = f"{node_names[target_node_id]}（{target_node_id}）"
+        route_descriptions.append(f"{status} → {destination}")
+
+    schema = {
+        "type": "object",
+        "description": "提交当前 Team 节点的处理状态和供后续工作使用的结果。",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": node.statuses,
+                "description": (
+                    "选择当前节点的处理状态；该值决定 Team 工作流流向，不是 Run 生命周期状态。"
+                    "可选状态及去向：" + "；".join(route_descriptions)
+                ),
+            },
+            "output": {
+                "type": "string",
+                "description": "简洁说明本节点结论及可供后续节点使用的必要信息。",
+                "maxLength": 100_000,
+            },
+        },
+        "required": ["status", "output"],
+        "additionalProperties": False,
+    }
+    return StructuredOutputSpec(name="agent_team_node_result", json_schema=schema)
+
+
+def build_node_system_prompt(
+    profile: AgentProfile,
+    configuration: AgentTeamConfiguration,
+    node: TeamNodeDefinition,
+) -> str:
+    """在节点 Profile 提示词后追加本次 Team 身份和流转协议。
+
+    参数:
+        profile: 已解析的节点 Agent Profile；本函数不修改该对象。
+        configuration: 本次运行冻结的 Team 工作流配置。
+        node: 当前节点定义。
+
+    返回:
+        原 Profile 提示词和 Team 专属说明组成的新提示词。
+
+    异常:
+        无。
+
+    副作用:
+        无；不会修改注册表中的 Agent Profile。
+    """
+
+    route_lines = []
+    for transition in configuration.transitions:
+        if transition.from_node_id != node.node_id:
+            continue
+        target = configuration.node(transition.target_node_id)
+        route_lines.append(f"- {transition.status}：交给 {target.name}（{target.node_id}）")
+    if node.node_type == "end":
+        route_lines.append("- 本节点完成后结束 Team")
+
+    workflow_nodes = [
+        f"- {item.name}（{item.node_id}，{item.node_type}）"
+        for item in configuration.nodes
+    ]
+    workflow_transitions = [
+        f"- {configuration.node(item.from_node_id).name} --{item.status}--> "
+        f"{configuration.node(item.target_node_id).name}"
+        for item in configuration.transitions
+    ]
+    team_context = "\n".join(
+        (
+            "## Agent Team 执行协议",
+            f"你正在 Team「{configuration.name}」（{configuration.team_id}）中执行。",
+            f"当前节点：{node.name}（{node.node_id}，{node.node_type}）。",
+            "Team 节点：\n" + "\n".join(workflow_nodes),
+            "Team 状态流转：\n"
+            + ("\n".join(workflow_transitions) or "- 无显式转移"),
+            "当前节点状态与流向：\n" + ("\n".join(route_lines) or "- 完成后结束 Team"),
+        )
+    )
+    base_prompt = profile.system_prompt.strip()
+    return f"{base_prompt}\n\n{team_context}" if base_prompt else team_context
+
+
 class AgentTeamPreparationService:
     """把 Team 配置和当前运行时依赖准备成一次不可变执行计划。
 
@@ -172,13 +286,13 @@ class AgentTeamPreparationService:
             ValueError: 目标、节点指令或节点运行时依赖无效。
     """
 
-        normalized_goal = goal.strip()
-        if not normalized_goal:
+        goal = goal.strip()
+        if not goal:
             raise ValueError("Team goal must not be blank")
-        normalized_instructions = {
+        instructions = {
             key: value.strip() for key, value in instructions.items() if value.strip()
         }
-        unknown_instructions = set(normalized_instructions) - {
+        unknown_instructions = set(instructions) - {
             node.node_id for node in configuration.nodes
         }
         if unknown_instructions:
@@ -194,18 +308,15 @@ class AgentTeamPreparationService:
             _, profile = resolve_node_profile(configuration, workspace_root, node.node_id)
             tools = materialize_node_tools(profile.agent_id, workspace_root)
             model_settings = resolve_effective_model_settings(profile, fallback_model_settings)
+            structured_output = build_node_structured_output(configuration, node)
             node_runtime_snapshots[node.node_id] = {
                 "agent_id": profile.agent_id,
                 "role": profile.role,
-                "system_prompt": profile.system_prompt,
+                "system_prompt": build_node_system_prompt(profile, configuration, node),
+                "instruction": instructions.get(node.node_id, ""),
                 "allowed_tools": [tool.name for tool in tools],
-                "tool_definitions": [tool.to_model_tool_definition() for tool in tools],
                 "max_steps": profile.max_steps,
-                "structured_output": (
-                    profile.structured_output.to_document()
-                    if profile.structured_output is not None
-                    else None
-                ),
+                "structured_output": structured_output.to_document(),
                 "model_config_id": profile.model_config_id or fallback_model_config_id,
                 "model_settings": {
                     name: getattr(model_settings, name)
@@ -220,11 +331,11 @@ class AgentTeamPreparationService:
                     "agent_id": node.agent_id,
                     "node_type": node.node_type,
                     "role": profile.role,
-                    "instruction_summary": normalized_instructions.get(node.node_id, "")[:500],
-                    "effective_model_config_id": profile.model_config_id
+                    "instruction": instructions.get(node.node_id, ""),
+                    "model_config_id": profile.model_config_id
                     or fallback_model_config_id,
-                    "effective_model_name": model_settings.model_name,
-                    "effective_tools": [tool.name for tool in tools],
+                    "model_name": model_settings.model_name,
+                    "tools": [tool.name for tool in tools],
                     "max_steps": profile.max_steps,
                     "statuses": node.statuses,
                 }
@@ -235,7 +346,7 @@ class AgentTeamPreparationService:
             "status": "pending",
             "team_id": configuration.team_id,
             "name": configuration.name,
-            "goal": normalized_goal,
+            "goal": goal,
             "start_node": configuration.start_node_id,
             "nodes": resolved_nodes,
             "edges": [
@@ -252,8 +363,8 @@ class AgentTeamPreparationService:
             json.dumps(
                 {
                     "team_id": configuration.team_id,
-                    "goal": normalized_goal,
-                    "instructions": normalized_instructions,
+                    "goal": goal,
+                    "instructions": instructions,
                     "configuration": configuration.model_dump(mode="json"),
                     "node_runtime_snapshots": node_runtime_snapshots,
                 },

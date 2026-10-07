@@ -105,9 +105,7 @@ async def confirm_agent_team_run(
     try:
         row = await asyncio.to_thread(
             AgentTeamRunService().confirm_and_start,
-            payload.parent_task_id,
-            payload.parent_run_id,
-            payload.team_id,
+            payload.team_run_id,
             payload.configuration,
             runtime_loop=runtime_loop,
         )
@@ -116,25 +114,6 @@ async def confirm_agent_team_run(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@app.get("/agent-team/runs/latest")
-async def get_latest_agent_team_run(
-    parent_task_id: int,
-    parent_run_id: int,
-    team_id: str,
-) -> dict[str, Any]:
-    """读取主 Run 下指定 Team 的最新状态，用于前端刷新后的恢复。"""
-
-    row = await asyncio.to_thread(
-        AgentTeamRunService().get_latest_for_parent,
-        parent_task_id,
-        parent_run_id,
-        team_id,
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="Team run not found")
-    return _run_payload(row)
 
 
 @app.get("/agent-team/runs/{run_id}")
@@ -146,23 +125,6 @@ async def get_agent_team_run(run_id: int) -> dict[str, Any]:
         if row is None:
             raise KeyError(run_id)
         return _run_payload(row)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Team run not found") from exc
-
-
-@app.get("/agent-team/runs/{run_id}/wait")
-async def wait_agent_team_run(
-    run_id: int, timeout_seconds: float | None = None
-) -> dict[str, Any]:
-    """以异步 awaitable 等待 Team 终态，SSE 断开不会触发取消。"""
-
-    try:
-        row = await get_agent_team_coordinator().wait_until_terminal(
-            run_id, timeout_seconds=timeout_seconds
-        )
-        return _run_payload(row)
-    except TimeoutError:
-        return _run_payload(get_agent_team_coordinator().get(run_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Team run not found") from exc
 

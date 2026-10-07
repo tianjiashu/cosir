@@ -1,5 +1,4 @@
 """工具 handler 可用的运行期依赖。"""
-
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,8 +17,9 @@ class ToolRuntimeDependencies:
     """承载由 runtime 注入到工具执行上下文的可选能力。
 
     ``terminal_session_service`` 只服务同进程工具，类型上仅由 ``TYPE_CHECKING`` 引用以
-    避免 tools → service 的运行期导入。输出通道工厂由父进程
-    runner 调用，将子进程队列中的输出增量接入运行期事件。所有 runtime dependency 都会
+    避免 tools → service 的运行期导入。输出通道工厂由 WorkflowOperations 在事件循环线程
+    调用并创建逐调用通道，ToolHandlerRunner 使用该通道将子进程队列中的输出增量接入运行期事件。
+    所有 runtime dependency 都会
     在 ``ToolExecutionContext.for_process_execution`` 中剔除，不进入工具子进程。
     """
 

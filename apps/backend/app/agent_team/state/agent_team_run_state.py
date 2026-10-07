@@ -47,9 +47,10 @@ class AgentTeamRunState(BaseModel):
     """Agent Team 的持久化执行快照。
 
     本模型保存 Team 的执行聚合状态，但不承载 Team 生命周期状态；生命周期状态由
-    ``AgentTeamRunModel.status`` 及其条件状态迁移负责。``node_executions`` 按创建顺序
-    保存每次节点 Run，``active_node_run_id`` 指向唯一尚未提交结果的节点 Run，节点结果
-    和历史转移均从该快照读取。运行时快照只供后端恢复节点执行，API 投影时必须过滤。
+    ``AgentTeamRunModel.status`` 及其条件状态迁移负责。``node_task_ids`` 按 ``node_id``
+    固定节点 Task 身份；``node_executions`` 按创建顺序保存每次节点 Run，
+    ``active_node_run_id`` 指向唯一尚未提交结果的节点 Run，节点结果和历史转移均从该快照
+    读取。运行时快照只供后端恢复节点执行，API 投影时必须过滤。
 
     该模型使用严格字段和禁止额外字段的契约。状态结构发生变化时直接要求新数据库状态，
     不对旧 JSON 做兼容转换，避免同一进程同时维护多套状态格式。
@@ -58,6 +59,7 @@ class AgentTeamRunState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_executions: list[AgentTeamNodeExecution] = Field(default_factory=list)
+    node_task_ids: dict[str, StrictInt] = Field(default_factory=dict)
     active_node_run_id: StrictInt | None = None
     transition_history: list[AgentTeamTransitionRecord] = Field(default_factory=list)
     runtime: AgentTeamRunRuntime = Field(default_factory=AgentTeamRunRuntime)
@@ -79,7 +81,12 @@ class AgentTeamRunState(BaseModel):
                 raise ValueError("活动节点游标与未完成节点执行记录不一致")
         elif self.active_node_run_id is not None:
             raise ValueError("没有活动节点执行记录时不能保留活动节点游标")
+        unknown_node_ids = set(self.node_task_ids) - set(self.runtime.node_snapshots)
+        if unknown_node_ids:
+            raise ValueError("节点 Task 映射引用了不存在的 Team 节点")
         for execution in self.node_executions:
+            if self.node_task_ids.get(execution.node_id) != execution.task_id:
+                raise ValueError("节点执行记录与稳定 Task 映射不一致")
             if execution.completed and (execution.status is None or execution.output is None):
                 raise ValueError("已完成节点必须同时保存 status 和 output")
             if not execution.completed and (
@@ -98,6 +105,25 @@ class AgentTeamRunState(BaseModel):
 
         return cls(runtime=AgentTeamRunRuntime(node_snapshots=node_runtime_snapshots))
 
+    def task_id_for_node(self, node_id: str) -> int | None:
+        """返回节点已绑定的稳定 Task 标识；首次执行的节点返回 ``None``。"""
+
+        return self.node_task_ids.get(node_id)
+
+    def bind_node_task(self, node_id: str, task_id: int) -> None:
+        """绑定节点的稳定 Task，拒绝把同一节点迁移到另一 Task。
+
+        异常:
+            ValueError: 节点未配置，或该节点已绑定不同的 Task。
+        """
+
+        if node_id not in self.runtime.node_snapshots:
+            raise ValueError(f"Agent Team 状态没有节点运行快照: {node_id}")
+        existing_task_id = self.node_task_ids.get(node_id)
+        if existing_task_id is not None and existing_task_id != task_id:
+            raise ValueError(f"Agent Team 节点不能更换 Task: {node_id}")
+        self.node_task_ids[node_id] = task_id
+
     def start_node(self, node_id: str, task_id: int, run_id: int) -> None:
         """登记一次新节点执行，并将其设置为当前活动节点。
 
@@ -107,6 +133,8 @@ class AgentTeamRunState(BaseModel):
 
         if self.active_node_run_id is not None:
             raise ValueError("Agent Team 已存在尚未完成的活动节点")
+        if self.node_task_ids.get(node_id) != task_id:
+            raise ValueError("节点 Task 必须先绑定到 Agent Team 状态")
         execution = AgentTeamNodeExecution(node_id=node_id, task_id=task_id, run_id=run_id)
         self.node_executions.append(execution)
         self.active_node_run_id = run_id

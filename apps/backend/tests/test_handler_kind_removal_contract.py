@@ -791,13 +791,10 @@ def test_serial_batch_cancellation_propagates_without_waiting_for_handler() -> N
     assert asyncio.run(scenario()) < 0.5
 
 
-def test_run_tool_calls_binds_running_event_loop_into_execution_context(
+def test_run_tool_calls_does_not_store_event_loop_in_execution_context(
     tmp_path: Path,
 ) -> None:
-    """状态副作用：调用后 ``execution_context`` 的运行期依赖必须绑定到当前事件循环。
-
-    串行统一走 to_thread 后，进程工具输出通道仍依赖这一绑定，不能因删除 async 分支而丢失。
-    """
+    """工具上下文不保存事件循环；逐调用输出通道由 workflow 显式创建并传递。"""
 
     executor = _SleepingExecutor()
     context = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
@@ -807,7 +804,7 @@ def test_run_tool_calls_binds_running_event_loop_into_execution_context(
         allowed=frozenset({"serial_tool"}),
         execution_context=context,
     )
-    assert context.runtime_dependencies.runtime_event_loop is None
+    assert not hasattr(context.runtime_dependencies, "runtime_event_loop")
 
     async def scenario() -> object:
         await operations.run_tool_calls(
@@ -815,14 +812,11 @@ def test_run_tool_calls_binds_running_event_loop_into_execution_context(
             calls=[_call("serial_tool", "call-0")],
             step_id="step-1",
         )
-        bound_context = operations._execution_context
-        assert bound_context is not None
-        return bound_context.runtime_dependencies.runtime_event_loop
+        return operations._execution_context
 
-    bound_loop = asyncio.run(scenario())
+    resulting_context = asyncio.run(scenario())
 
-    assert bound_loop is not None
-    assert isinstance(bound_loop, asyncio.AbstractEventLoop)
+    assert resulting_context is context
 
 
 # --------------------------------------------------------------------------- #

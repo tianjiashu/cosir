@@ -297,7 +297,6 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence(
         run_id=9,
         tool_call_id="call-1",
         tool_name="execute_terminal",
-        loop=loop,
     )
     assert isinstance(channel, BufferedProcessToolOutputChannel)
     expected = "x" * (Constant.Tools.MAX_OUTPUT_CHARS + 1)
@@ -324,16 +323,19 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence(
 
 
 @pytest.mark.asyncio
-async def test_workflow_places_event_loop_in_run_scoped_tool_dependencies(
+async def test_workflow_creates_process_output_channel_on_event_loop(
     tmp_path: Path,
 ) -> None:
-    loop = asyncio.get_running_loop()
+    loop_thread = threading.get_ident()
+    channel_factory = ToolRuntimeOutputChannelFactory()
     context = ToolExecutionContext(
         task_id=7,
         workspace_id=2,
         workspace_root=tmp_path,
         run_id=9,
-        runtime_dependencies=ToolRuntimeDependencies(),
+        runtime_dependencies=ToolRuntimeDependencies(
+            process_tool_output_channel_factory=channel_factory,
+        ),
     )
     operations = WorkflowOperations.__new__(WorkflowOperations)
     operations._current_run = SimpleNamespace(id=9)
@@ -347,8 +349,10 @@ async def test_workflow_places_event_loop_in_run_scoped_tool_dependencies(
             call: Any,
             execution_context: Any = None,
             allowed_tool_names: Any = None,
+            process_output_channel: Any = None,
         ) -> ToolObservation:
-            assert execution_context.runtime_dependencies.runtime_event_loop is loop
+            assert isinstance(process_output_channel, BufferedProcessToolOutputChannel)
+            assert threading.get_ident() != loop_thread
             assert allowed_tool_names == {"execute_terminal"}
             return ToolObservation(
                 tool_name=call.tool_name,
@@ -366,7 +370,6 @@ async def test_workflow_places_event_loop_in_run_scoped_tool_dependencies(
     )
 
     assert len(result.observations) == 1
-    assert operations._execution_context.runtime_dependencies.runtime_event_loop is loop
 
 
 def test_output_queue_completion_waits_for_tail_without_dropping_chunks() -> None:

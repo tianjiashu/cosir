@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import contextlib
+import asyncio
 import threading
 import time
 from pathlib import Path
@@ -234,7 +235,6 @@ class _LoopBackedChannelFactory(ProcessToolOutputChannelFactory):
         run_id: int,
         tool_call_id: str,
         tool_name: str,
-        loop: Any,
     ) -> BufferedProcessToolOutputChannel | None:
         self.task_id, self.run_id, self.tool_call_id = task_id, run_id, tool_call_id
 
@@ -248,7 +248,7 @@ class _LoopBackedChannelFactory(ProcessToolOutputChannelFactory):
             task_id=task_id,
             run_id=run_id,
             tool_call_id=tool_call_id,
-            loop=loop,
+            loop=asyncio.get_running_loop(),
             publish=publish,
             max_chunk_chars=4096,
         )
@@ -297,7 +297,7 @@ async def test_projection_ordering_kill_then_drain_then_project(
 
     import asyncio
 
-    loop = asyncio.get_running_loop()
+    asyncio.get_running_loop()
     timeline = _Timeline()
     marker = tmp_path / "probe_marker.txt"
 
@@ -353,14 +353,11 @@ async def test_projection_ordering_kill_then_drain_then_project(
         workspace_root=tmp_path,
         run_id=_RUN_ID,
     )
-    import dataclasses
-
-    context = dataclasses.replace(
-        context,
-        runtime_dependencies=context.runtime_dependencies.__class__(
-            process_tool_output_channel_factory=channel_factory,
-            runtime_event_loop=loop,
-        ),
+    output_channel = channel_factory.create(
+        task_id=_TASK_ID,
+        run_id=_RUN_ID,
+        tool_call_id="call-cancel",
+        tool_name=_STREAMING_TOOL_NAME,
     )
 
     # 定时器在子进程运行途中标记工具级取消（真实跨线程信号）。
@@ -382,6 +379,7 @@ async def test_projection_ordering_kill_then_drain_then_project(
                 call_id="call-cancel",
             ),
             execution_context=context,
+            process_output_channel=output_channel,
         )
     finally:
         timer.cancel()
@@ -467,7 +465,6 @@ async def test_cancel_path_never_touches_shared_projection(
 
     import asyncio
 
-    loop = asyncio.get_running_loop()
     hits: list[str] = []
     getter_calls: list[int] = []
 
@@ -492,21 +489,11 @@ async def test_cancel_path_never_touches_shared_projection(
     )
 
     tool = _make_process_tool("probe_no_projection")
-    channel_factory = _LoopBackedChannelFactory(_Timeline())
     context = ToolExecutionContext(
         task_id=_TASK_ID,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=_RUN_ID,
-    )
-    import dataclasses
-
-    context = dataclasses.replace(
-        context,
-        runtime_dependencies=context.runtime_dependencies.__class__(
-            process_tool_output_channel_factory=channel_factory,
-            runtime_event_loop=loop,
-        ),
     )
 
     # 直接调 runner（执行层）而非 executor，从而隔离出「取消路径本身是否投影」。
@@ -523,6 +510,7 @@ async def test_cancel_path_never_touches_shared_projection(
             {"marker_path": str(tmp_path / "m.txt")},
             context,
             "call-cancel",
+            process_output_channel=None,
         )
     finally:
         timer.cancel()

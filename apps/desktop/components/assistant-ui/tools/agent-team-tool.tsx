@@ -5,7 +5,6 @@ import { CheckCircle2, UsersIcon } from "lucide-react";
 import {
   confirmAgentTeamRun,
   getAgentTeamRun,
-  getLatestAgentTeamRun,
   type AgentTeamRun,
 } from "@/lib/api/agent-teams";
 import { Button } from "@/components/ui/button";
@@ -32,6 +31,7 @@ const END_REASON_LABELS: Record<string, string> = {
   next_node_start_failed: "下一节点启动失败",
   node_run_failed: "Team 节点执行失败",
   node_run_cancelled: "Team 节点执行被取消",
+  node_output_invalid: "Team 节点结构化结果无效",
   implicit_completion_missing: "节点未提交 Team 状态",
   cancelled: "Team 已取消",
   runtime_restarted: "后端重启后未自动恢复 Team",
@@ -67,7 +67,7 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
   useEffect(() => {
     if (!preview) return undefined;
     let disposed = false;
-    void getLatestAgentTeamRun(preview.parentTaskId, preview.parentRunId, preview.teamId)
+    void getAgentTeamRun(preview.teamRunId)
       .then((current) => {
         if (disposed) return;
         if (current.status === "pending") {
@@ -98,7 +98,7 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
     return () => {
       disposed = true;
     };
-  }, [preview?.parentTaskId, preview?.parentRunId, preview?.teamId]);
+  }, [preview?.teamRunId]);
 
   useEffect(() => {
     if (!teamRun || teamRun.status !== "running") return undefined;
@@ -130,9 +130,7 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
     setMessage("");
     try {
       const result = await confirmAgentTeamRun(
-        preview.parentTaskId,
-        preview.parentRunId,
-        preview.teamId,
+        preview.teamRunId,
         preview.configuration,
       );
       setTeamRun(result);

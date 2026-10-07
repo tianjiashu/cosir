@@ -71,7 +71,7 @@ class AgentTeamRunService:
             sqlalchemy.exc.SQLAlchemyError: 主库写入失败时向上抛出。
         """
 
-        normalized_instructions = {
+        instructions = {
             key: value.strip() for key, value in instructions.items() if value.strip()
         }
         with begin_immediate(self._session_factory) as session:
@@ -87,7 +87,7 @@ class AgentTeamRunService:
                 parent_run_id=parent_run_id,
                 preview_fingerprint=preparation.preview_fingerprint,
                 goal=goal.strip(),
-                instructions=normalized_instructions,
+                instructions=instructions,
                 node_runtime_snapshots=preparation.node_runtime_snapshots,
                 session=session,
             )
@@ -102,38 +102,16 @@ class AgentTeamRunService:
             except KeyError:
                 return None
 
-    def get_latest_for_parent(
-        self,
-        parent_task_id: int,
-        parent_run_id: int,
-        team_id: str,
-    ) -> AgentTeamRunModel | None:
-        """读取主 Run 下指定 Team 的最新运行记录。
-
-        该查询服务于前端刷新后的运行状态恢复，不读取工具预览，也不依赖预览中的
-        TeamRun 标识。无记录时返回 ``None``。
-        """
-
-        with self._session_factory() as session:
-            return self._team_run_crud.get_latest_for_parent(
-                parent_task_id,
-                parent_run_id,
-                team_id,
-                session=session,
-            )
-
     def confirm_and_start(
         self,
-        parent_task_id: int,
-        parent_run_id: int,
-        team_id: str,
+        team_run_id: int,
         configuration_document: dict[str, Any],
         *,
         runtime_loop: asyncio.AbstractEventLoop,
     ) -> AgentTeamRunModel:
         """使用用户最终配置确认 TeamRun，并在提交后交给 Coordinator 启动。
 
-        前端只提交主 Run 定位信息、Team 标识和用户最终配置。后端不信任预览展示数据或
+        前端提交工具预览关联的 TeamRun ID 和用户最终配置。后端不信任预览展示数据或
         前端指纹，而是在确认边界重新校验配置、解析节点运行快照并计算指纹，再将最终
         执行计划写入 TeamRun。确认事务会把 TeamRun 从 ``pending`` 原子迁移为 ``running``，
         并同时写入最终配置和运行快照；事务提交后才启动 Coordinator，因此数据库中的
@@ -144,7 +122,7 @@ class AgentTeamRunService:
             KeyError: 关联的主 Agent Run 不存在。
         """
 
-        existing = self.get_latest_for_parent(parent_task_id, parent_run_id, team_id)
+        existing = self.get(team_run_id)
         if existing is None:
             raise ValueError("Agent Team 待确认执行方案不存在")
         if existing.status != AgentTeamRunStatus.PENDING.value:
@@ -152,15 +130,13 @@ class AgentTeamRunService:
         self._validate_parent_run(existing.parent_task_id, existing.parent_run_id)
         configuration = AgentTeamConfiguration.model_validate(configuration_document)
         if configuration.team_id != existing.team_id:
-            raise ValueError("确认配置的 team_id 与待确认 Team 不一致")
+            raise ValueError("确认配置的 team_id 与指定 TeamRun 不一致")
         preparation = self._prepare_final_plan(existing, configuration)
 
         with begin_immediate(self._session_factory) as session:
             row = self._team_run_crud.get_by_id(existing.id, session=session)
             if row.status != AgentTeamRunStatus.PENDING.value:
                 raise ValueError("Agent Team 已确认或已处理")
-            if row.parent_task_id != parent_task_id or row.parent_run_id != parent_run_id:
-                raise ValueError("Agent Team 不属于指定主 Agent Run")
             if row.team_id != configuration.team_id:
                 raise ValueError("确认配置的 team_id 与待确认 Team 不一致")
             state = AgentTeamRunState.initial(preparation.node_runtime_snapshots)

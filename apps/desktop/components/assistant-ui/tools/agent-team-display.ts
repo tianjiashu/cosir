@@ -15,6 +15,7 @@ export type AgentTeamNodePreview = {
 
 export type AgentTeamPreviewDisplay = {
   kind: "agent-team-preview";
+  teamRunId: number;
   teamId: string;
   name: string;
   goal: string;
@@ -67,6 +68,7 @@ function recordList(value: unknown): Record<string, unknown>[] | undefined {
 export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDisplay | null {
   const data = asRecord(value);
   if (data.kind !== "agent-team-preview") return null;
+  const teamRunId = positiveId(data.team_run_id);
   const teamId = text(data.team_id);
   const name = text(data.name);
   const goal = text(data.goal);
@@ -75,7 +77,7 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
   const parentRunId = positiveId(data.parent_run_id);
   const workspaceId = positiveId(data.workspace_id);
   const configuration = asRecord(data.configuration);
-  if (!teamId || !name || !goal || !startNode || parentTaskId === undefined || parentRunId === undefined || workspaceId === undefined || Object.keys(configuration).length === 0) return null;
+  if (teamRunId === undefined || !teamId || !name || !goal || !startNode || parentTaskId === undefined || parentRunId === undefined || workspaceId === undefined || Object.keys(configuration).length === 0) return null;
   const edges = recordList(data.edges);
   if (!Array.isArray(data.nodes) || !edges) return null;
   const nodes: AgentTeamNodePreview[] = [];
@@ -109,6 +111,7 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
   }
   return {
     kind: "agent-team-preview",
+    teamRunId,
     teamId,
     name,
     goal,

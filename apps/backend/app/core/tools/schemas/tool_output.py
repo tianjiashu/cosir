@@ -1,6 +1,5 @@
 """进程隔离工具与运行期输出消费者之间的接口契约。"""
 
-import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
@@ -35,9 +34,8 @@ class ProcessToolOutputChannelFactory(ABC):
         run_id: int,
         tool_call_id: str,
         tool_name: str,
-        loop: asyncio.AbstractEventLoop,
     ) -> ProcessToolOutputChannel | None:
-        """返回输出通道；工具没有运行期输出视图时返回 ``None``。"""
+        """在调用方事件循环线程创建输出通道；工具无运行期输出视图时返回 ``None``。"""
 
 
 __all__ = ["OutputSink", "ProcessToolOutputChannel", "ProcessToolOutputChannelFactory"]

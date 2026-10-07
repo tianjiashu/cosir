@@ -69,34 +69,6 @@ class AgentTeamRunCrud:
             session.flush()
         return row
 
-    def get_latest_for_parent(
-        self,
-        parent_task_id: int,
-        parent_run_id: int,
-        team_id: str,
-        *,
-        session: Session | None = None,
-    ) -> AgentTeamRunModel | None:
-        """读取主 Run 下指定 Team 的最新运行记录。
-
-        该查询只定位 TeamRun 生命周期记录，不读取也不解析工具预览数据。
-        """
-
-        statement = (
-            select(AgentTeamRunModel)
-            .where(
-                AgentTeamRunModel.parent_task_id == parent_task_id,
-                AgentTeamRunModel.parent_run_id == parent_run_id,
-                AgentTeamRunModel.team_id == team_id,
-            )
-            .order_by(AgentTeamRunModel.id.desc())
-            .limit(1)
-        )
-        if session is not None:
-            return session.scalar(statement)
-        with self._session_factory() as owned_session:
-            return owned_session.scalar(statement)
-
     def cancel_pending_confirmation_for_parent(
         self,
         parent_task_id: int,

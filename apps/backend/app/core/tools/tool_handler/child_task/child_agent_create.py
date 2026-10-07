@@ -1,13 +1,12 @@
 """delegate_task 工具 handler：把一次委派请求落地为 child Task/Run 并启动 child workflow。
 
-职责：解析 child Agent profile、建立 child Task 与 Run、经父 Run 的事件循环调度 child 执行器，
+职责：解析 child Agent profile、建立 child Task 与 Run、经 ConversationRunExecutor 调度 child 执行器，
 返回「已启动」观察（携带 child locator），并把子 Agent 的运行期工具允许集合交给执行器。
 
 不负责：child workflow 的实际运行与完成观测（父侧用 ``child_agent_wait`` / ``child_agent_status``
 查询）；参数校验与准入门禁（``ToolAccessGate``）；委派展示数据构造
 （``build_delegation_display_data``）。
 """
-
 import asyncio
 import copy
 import json
@@ -144,7 +143,7 @@ class DelegateTaskTool(HandlerBase):
 
         返回:
             child 启动成功时返回携带稳定 locator 的 success 观察；缺少执行上下文、缺少父
-            profile、run 已取消、child 无法解析、父事件循环不可用或启动失败时返回确定性的
+            profile、run 已取消、child 无法解析、父执行器不可用或启动失败时返回确定性的
             error/cancelled 观察。
 
         异常:
@@ -153,8 +152,8 @@ class DelegateTaskTool(HandlerBase):
             ``delegate_task_exception`` 日志，不向上抛异常。
 
         副作用:
-            创建 child Task 与 pending Run、认领该 Run，并经父 Run 的事件循环调度 child 执行器
-            （只等待启动登记，不等待 child 执行结束）；写委派相关日志。
+            创建 child Task 与 pending Run、认领该 Run，并请求 ConversationRunExecutor 在父
+            Run 的事件循环上调度 child 执行（只等待启动登记，不等待 child 执行结束）；写日志。
         """
 
         if execution_context is None:

@@ -17,6 +17,7 @@ class AgentTeamRunEndReason(str, Enum):
     NEXT_NODE_START_FAILED = "next_node_start_failed"
     NODE_RUN_FAILED = "node_run_failed"
     NODE_RUN_CANCELLED = "node_run_cancelled"
+    NODE_OUTPUT_INVALID = "node_output_invalid"
     IMPLICIT_COMPLETION_MISSING = "implicit_completion_missing"
     CANCELLED = "cancelled"
     RUNTIME_RESTARTED = "runtime_restarted"
