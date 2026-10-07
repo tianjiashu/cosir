@@ -80,10 +80,11 @@ class TokenEstimator:
     def estimate_image(cls, image: dict) -> int:
         """估算单张多模态图片进入模型上下文后的 token 占用（按厂商上限启发式，零依赖）。
 
-        与编码层同源：读取 ``build_user_content_blocks`` 产出的 ``image_url`` block 中的 base64
-        数据（即运行期实际发给模型的内容），按字节估算 token；并以 DeepSeek 官方每张图 token
-        硬上限 384 封顶。当前轮与历史轮回放均经同一 ``build_user_content_blocks`` 重建 block，
-        故 token 估算必然一致（避免圆环失真）。
+        与编码层同源：读取运行期实际发给模型的 ``image_url`` block 中的 base64 数据——该 block 由
+        ``resolve_messages_for_model`` 先把 canonical 图片引用解析成 base64 图片块、再由 provider
+        适配器转成 data URL，故 estimator 读到的一定是真实请求内容；按字节估算 token，并以
+        DeepSeek 官方每张图 token 硬上限 384 封顶。当前轮与历史轮回放走同一条解析链路，因此
+        token 估算必然一致（避免圆环失真）。
 
         参数:
             image: 多模态 block（``image_url`` 类型，含 ``data:...;base64,...`` 的 url）。

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 # 标准库 mimetypes 覆盖不到、但本项目视觉通道需强制路由的图片扩展名（小写、含点）。
 # 注意：DeepSeek 官方视觉文档不支持 bmp，但此处保留 .bmp 是为了把该类文件**路由到**
-# 运行期视觉通道（build_user_content_blocks 会做格式/体积校验并拒绝），而非静默当成
-# 普通文件拼进文本——属于"早fail"而非"错误归类"。
+# 运行期视觉通道（格式与体积校验在附件上传/Run 创建边界完成，如
+# ``AttachmentService.resolve_image_paths``），而非静默当成普通文件拼进文本——属于
+# "早 fail"而非"错误归类"。
 IMAGE_EXTENSIONS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"})
