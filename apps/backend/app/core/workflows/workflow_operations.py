@@ -301,6 +301,36 @@ class WorkflowOperations:
         )
         return record
 
+    def mark_waiting_for_input_if_running(self) -> ConversationRunRecord | None:
+        """将当前 Run 迁移到等待用户输入状态并发布状态事件。
+
+        用户输入等待节点在调用 LangGraph ``interrupt`` 前调用本方法。状态事实由
+        ``ConversationRunStateService`` 条件更新并发布；图断点随后由 LangGraph checkpointer
+        保存，执行器会在本次图驱动结束后完成资源收尾。
+
+        返回:
+            成功迁移时返回最新 Run 记录；Run 已由并发路径迁移时返回 None。
+
+        异常:
+            KeyError: 当前 Run 不存在。
+            sqlalchemy.exc.SQLAlchemyError: 状态条件更新失败。
+
+        副作用:
+            更新本 Run 状态并在成功后发布 ``waiting_for_input`` 事实事件。
+        """
+
+        run_id = self._current_run.id
+        log.info(
+            "run_waiting_for_input_attempted",
+            extra={
+                "msg": f"尝试将 Run 迁移为等待用户输入，run_id={run_id}",
+                "data": {"run_id": run_id},
+            },
+        )
+        return self._conversation_run_state_service.mark_waiting_for_input_if_running(
+            run_id
+        )
+
     def fail_run_if_running(
             self,
             end_reason: str | None = None,

@@ -109,6 +109,40 @@ class ConversationRunExecutor:
         self._executions[run_id] = _Execution(thread_task=thread_task)
         return thread_task
 
+    async def wait_until_stopped(
+        self,
+        run_id: int,
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        """等待旧执行器完成收尾后再允许恢复同一 Run。
+
+        参数:
+            run_id: Conversation Run 标识。
+            timeout_seconds: 最长等待秒数。
+
+        返回:
+            已登记执行器结束，或当前没有执行器时无返回值。
+
+        异常:
+            ValueError: 旧执行器在期限内未结束。
+            Exception: 旧执行任务异常退出时原样传播。
+
+        副作用:
+            只等待进程内任务，不修改持久化状态或取消信号。
+        """
+
+        execution = self._executions.get(run_id)
+        if execution is None or execution.thread_task is asyncio.current_task():
+            return
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(execution.thread_task),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise ValueError(f"run {run_id} executor did not stop in time") from exc
+
     @staticmethod
     def _log_execution_result(run_id: int, task: asyncio.Task[None]) -> None:
         """记录后台执行 task 的异常结束，避免异常在事件循环里无痕消失。
@@ -315,8 +349,8 @@ class ConversationRunExecutor:
 
         本方法只负责「执行」：读取 run 后把控制权交给 ``AgentRuntime.execute_run`` 驱动
         workflow，退出时关闭本 Run 的 terminal 并从进程内 ``_executions`` 注销本次执行。
-        workflow 正常终态由节点落定；若 workflow 返回用户输入等待结果，则本方法在资源清理
-        完成后迁移到 ``waiting_for_input``。本方法也不清理进程内取消信号（该清理由
+        workflow 正常终态由节点落定；用户输入等待节点直接迁移 Run 状态，本方法在资源清理
+        完成前保留该等待状态。本方法也不清理进程内取消信号（该清理由
         ``AgentRuntime`` 的收尾负责）。
 
         参数:
@@ -329,43 +363,37 @@ class ConversationRunExecutor:
 
         异常:
             KeyError: ``run_id`` 对应的 run 不存在（来自 run service 读取）。
-            驱动期异常**不外抛**：runner 抛 ``Exception`` 时经 ``_project_tools_settled``
-            投影工具失败收束后在本方法内收口，runner 抛 ``CancelledError`` 时只置内部
-            ``cancelled`` 标志；两条路径都在退出前经过兜底收敛，把仍未落终态的 run 收敛为
-            failed / cancelled。正常终态仍由 workflow 落定；等待状态在执行器完成收尾后落定。
+            驱动期异常**不外抛**：runner 抛 ``Exception`` 时由 workflow.run 先收敛失败，或由
+            本执行器的安全网兜底；runner 抛 ``CancelledError`` 时只置内部 ``cancelled`` 标志。
+            两条路径都在退出前经过兜底收敛。正常终态和等待状态由 workflow 节点落定；等待状态
+            在执行器完成收尾前不可由 coordinator 恢复。
 
         副作用:
-            runner 抛 ``Exception`` 时先经 ``_project_tools_settled`` 投影工具失败收束
-            （该投影失败只记日志，不影响收口结果）；退出时强制关闭 terminal，并在本次执行
-            仍登记且当前 task 就是登记 task 时移除该登记，最后经
-            :meth:`_converge_unfinished_run` 兜底收敛仍未落终态的 run；不清理取消信号。
+            退出时强制关闭 terminal，并在本次执行仍登记且当前 task 就是登记 task 时移除该登记，
+            保留节点已落定的等待状态，或经 :meth:`_converge_unfinished_run` 兜底收敛仍未落终态
+            的 Run；依据最终 Run 状态投影未闭合的工具调用，不清理取消信号。
         """
         cancelled = False
         runner_started = False
-        waiting_for_input = False
         try:
             try:
                 run = self._run_service.get_run(run_id)
                 get_terminal_session_service().begin_run(run_id)
                 runner_started = True
-                outcome = await get_runtime().execute_run(
+                await get_runtime().execute_run(
                     run=run,
                     execution_mode=start_mode,
                 )
-                waiting_for_input = outcome == "waiting_for_input"
             except asyncio.CancelledError:
                 cancelled = runner_started
             except Exception:
-                if runner_started:
-                    try:
-                        await asyncio.to_thread(
-                            self._project_tools_settled,
-                            run_id,
-                            "failed",
-                            "runtime_failed",
-                        )
-                    except BaseException:
-                        self._log_cleanup_failure(run_id, "tool_settlement")
+                log.exception(
+                    "conversation_run_execution_failed",
+                    extra={
+                        "msg": "Run 驱动过程发生未收敛异常，继续执行统一收尾",
+                        "data": {"run_id": run_id, "runner_started": runner_started},
+                    },
+                )
         finally:
             try:
                 await asyncio.to_thread(
@@ -375,40 +403,18 @@ class ConversationRunExecutor:
                 )
             except BaseException:
                 self._log_cleanup_failure(run_id, "terminal_close")
-            try:
-                current = self._executions.get(run_id)
-                current_task = asyncio.current_task()
-                if current is not None and current.thread_task is current_task:
-                    self._executions.pop(run_id, None)
-            except BaseException:
-                self._log_cleanup_failure(run_id, "execution_registry_remove")
             preserved_waiting_run = False
-            if waiting_for_input:
-                try:
-                    waiting_record = await asyncio.to_thread(
-                        self._run_state_service.mark_waiting_for_input_if_running,
-                        run_id,
-                    )
-                    preserved_waiting_run = waiting_record is not None
-                    if not preserved_waiting_run:
-                        log.info(
-                            "conversation_run_wait_status_not_changed",
-                            extra={
-                                "msg": "工作流断点已保存，但 Run 已由并发路径迁移",
-                                "data": {"run_id": run_id},
-                            },
-                        )
-                except Exception:
-                    log.exception(
-                        "conversation_run_wait_status_persist_failed",
-                        extra={
-                            "msg": "用户输入断点已保存，但 Run 状态迁移失败",
-                            "data": {"run_id": run_id},
-                        },
-                    )
             try:
-                # 兜底收敛放在最后：即使它在事件循环拆除期被打断，前面的 terminal 清理与
-                # 登记移除也已完成，残余窗口退回下次启动的 recover_orphaned_runs。
+                current_run = await asyncio.to_thread(self._run_service.get_run, run_id)
+                preserved_waiting_run = (
+                    not cancelled
+                    and current_run.status == ConversationRunStatus.WAITING_FOR_INPUT.value
+                )
+            except BaseException:
+                self._log_cleanup_failure(run_id, "waiting_status_read")
+            try:
+                # 兜底收敛和 registry 注销按序完成；等待调用方只有在本 task 结束后才可恢复
+                # 同一 checkpoint，避免旧执行器和续跑执行器重叠。
                 await self._converge_unfinished_run(
                     run_id,
                     cancelled=cancelled,
@@ -416,6 +422,32 @@ class ConversationRunExecutor:
                 )
             except BaseException:
                 self._log_cleanup_failure(run_id, "convergence")
+            try:
+                final_run = await asyncio.to_thread(self._run_service.get_run, run_id)
+                if final_run.status == ConversationRunStatus.FAILED.value:
+                    await asyncio.to_thread(
+                        self._project_tools_settled,
+                        run_id,
+                        "failed",
+                        final_run.end_reason or "runtime_failed",
+                    )
+                elif final_run.status == ConversationRunStatus.CANCELLED.value:
+                    await asyncio.to_thread(
+                        self._project_tools_settled,
+                        run_id,
+                        "cancelled",
+                        final_run.end_reason or "runtime_cancelled",
+                    )
+            except BaseException:
+                self._log_cleanup_failure(run_id, "tool_settlement")
+            finally:
+                try:
+                    current = self._executions.get(run_id)
+                    current_task = asyncio.current_task()
+                    if current is not None and current.thread_task is current_task:
+                        self._executions.pop(run_id, None)
+                except BaseException:
+                    self._log_cleanup_failure(run_id, "execution_registry_remove")
 
     @staticmethod
     def _log_cleanup_failure(run_id: int, stage: str) -> None:

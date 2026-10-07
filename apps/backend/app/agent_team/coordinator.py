@@ -188,21 +188,21 @@ class AgentTeamCoordinator:
         """等待 Team 预览所属主 Run 完成 interrupt 并进入用户输入等待状态。
 
         工具结果可能先于 LangGraph interrupt 和执行器收尾抵达前端。确认或驳回请求因此
-        可以早于 ``waiting_for_input`` 状态事件到达；本方法在本机协调层短暂等待该状态，
-        避免用户操作因正常时序竞态被拒绝。
+        可以早于 ``waiting_for_input`` 状态事件到达；本方法等待该状态并确认旧执行器已完成
+        interrupt checkpoint 和本地资源收尾，避免恢复请求与旧执行器重叠。
 
         参数:
             team_run_id: 预览对应的 TeamRun 标识。
 
         返回:
-            主 Run 进入等待状态时无返回值。
+            主 Run 进入等待状态且旧执行器完成时无返回值。
 
         异常:
             KeyError: TeamRun 或其主 Run 不存在。
-            ValueError: 主 Run 已结束，或在等待期限内未进入用户输入等待状态。
+            ValueError: 主 Run 已结束、未及时进入等待状态，或旧执行器未及时结束。
 
         副作用:
-            只读查询 Run 状态；最多等待 30 秒，不创建任务或持久化状态。
+            只读查询 Run 状态并等待旧执行器；最多等待 60 秒，不创建任务或持久化状态。
         """
 
         team = await asyncio.to_thread(self._team_run_crud.get_by_id, team_run_id)
@@ -214,6 +214,11 @@ class AgentTeamCoordinator:
                 team.parent_run_id,
             )
             if parent_run.status == ConversationRunStatus.WAITING_FOR_INPUT.value:
+                from app.service.depends import get_conversation_run_executor
+
+                await get_conversation_run_executor().wait_until_stopped(
+                    team.parent_run_id
+                )
                 return
             if parent_run.status in {
                 ConversationRunStatus.COMPLETED.value,
@@ -254,6 +259,12 @@ class AgentTeamCoordinator:
                     },
                 )
                 return
+
+            from app.service.depends import get_conversation_run_executor
+
+            await get_conversation_run_executor().wait_until_stopped(
+                team.parent_run_id
+            )
 
             from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
             from app.service.depends import (

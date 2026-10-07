@@ -5,12 +5,13 @@
 ``RuntimeOperations`` 写入 canonical conversation state，Transport 只订阅该事实。
 graph 编译时挂既有 checkpointer，由 LangGraph 负责控制流状态持久化。
 
-协作取消与用户输入等待通过 LangGraph ``interrupt`` 保留图断点；用户输入等待由工作流返回
-明确结果，执行器完成本地资源清理后再迁移 Run 状态，避免状态事件早于执行器收尾。
+协作取消与用户输入等待通过 LangGraph ``interrupt`` 保留图断点；用户输入等待由工作流内的
+通用等待节点经操作门面迁移 Run 状态；terminal checkpoint 在 ``_run_graph`` 的 ``finally`` 中收敛。
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
 
+import asyncio
 from collections.abc import Iterable
 from time import perf_counter
 from typing import Any, cast
@@ -18,7 +19,6 @@ from typing import Any, cast
 from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
-from langchain_core.messages import SystemMessage
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -28,15 +28,24 @@ from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.workflow_operations import WorkflowOperations
+from app.models import ConversationRunRecord
 from app.models.conversation_run_failure import (
     run_failure_message,
 )
 from app.service.depends import get_terminal_session_service
 
-from ..agent_workflow import AgentWorkflow, WorkflowOutcome, build_checkpointer
+from ..agent_workflow import AgentWorkflow, build_checkpointer
 from .edges import _route_target
 from .runtime_config import RuntimeConfig
 from .worflow_state.route import ReactRoute
+
+
+class _WorkflowRunFailure(Exception):
+    """携带稳定 Run 失败码向工作流统一收口边界传递的异常。"""
+
+    def __init__(self, failure_code: str, message: str) -> None:
+        super().__init__(message)
+        self.failure_code = failure_code
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -147,7 +156,7 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         参数:
             exc: 待归类的异常。既可能是从 graph 逃逸的异常，也可能是本工作流构建期
-                （模型解析、运行期配置构造）抛出并就地收口的异常。
+                （模型解析、运行期配置构造）抛出并由 ``run`` 统一收口的异常。
 
         返回:
             ``ErrorKind`` 的模型错误分类值，或 ``RUN_FAILURE_CODE_GRAPH_FAILED``（无法判定时）。
@@ -159,6 +168,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             无。
         """
 
+        if isinstance(exc, _WorkflowRunFailure):
+            return exc.failure_code
         return classify_model_failure(exc) or Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
 
     @staticmethod
@@ -188,6 +199,15 @@ class ReactLikeWorkflow(AgentWorkflow):
             return None
 
     @staticmethod
+    def _current_task_id(operations: WorkflowOperations) -> int | None:
+        """安全读取当前 Task 标识，避免失败日志字段读取掩盖原始异常。"""
+
+        try:
+            return operations.get_current_task().id
+        except Exception:
+            return None
+
+    @staticmethod
     def _settle_failed_run(
             operations: WorkflowOperations,
             end_reason: str,
@@ -197,9 +217,8 @@ class ReactLikeWorkflow(AgentWorkflow):
     ) -> None:
         """把本轮的 running Run 落定为 failed 终态。
 
-        本方法是「graph 构建期与执行期异常逃逸」的唯一终态收口点：调用方负责在调用它之后
-        继续向上抛出原异常，而 Run 终态必须先在此落定——否则异常逃逸到 runner / executor 后
-        无人落终态，Run 会永久停留在 ``running``，前端既收不到失败原因也无法开始新轮次。
+        本方法是「graph 构建期与执行期异常逃逸」的唯一终态收口点。异常由 ``run`` 捕获后
+        调用本方法；终态写入失败只记日志，执行器的未收敛安全网仍可继续兜底。
 
         参数:
             operations: 当前 Conversation Run 的运行时操作门面，提供 run 状态迁移入口。
@@ -213,8 +232,8 @@ class ReactLikeWorkflow(AgentWorkflow):
             无。
 
         异常:
-            无。落终态失败（如数据库写入异常）只记 error 日志并返回——收尾失败不得替换调用方
-            正在向上抛出的原始异常；Run 已由其它路径落终态时记 info 日志并返回。
+            无。落终态失败（如数据库写入异常）只记 error 日志并返回；Run 已由其它路径落终态
+            时记 info 日志并返回。
 
         副作用:
             更新 ``conversation_runs`` 行（failed 终态、end_reason、受控错误、用量与 final_output）
@@ -262,13 +281,12 @@ class ReactLikeWorkflow(AgentWorkflow):
             callbacks: list | None = None,
             langfuse_trace_id: str | None = None,
             execution_mode: ExecutionMode = "fresh",
-    ) -> WorkflowOutcome:
-        """执行一个任务，并在异常逃逸时把 Run 落定为 failed 终态。
+    ) -> None:
+        """执行一个任务，并在唯一异常边界把 Run 落定为 failed 终态。
 
-        本方法只做「调用图执行 + 异常兜底收口」两件事：正常终态由节点内的
-        ``WorkflowOperations`` 落定；任何逃逸出 ``_run_graph`` 的异常都在此处先落 failed 终态
-        再原样抛出——runner 与 executor 都刻意不写终态，异常若直接逃逸，Run 会永久停留在
-        ``running``，前端既收不到失败原因也无法开始新轮次。
+        正常终态与等待状态由节点经 ``WorkflowOperations`` 落定。``_run_graph`` 的普通异常
+        全部传播到本方法，由本方法分类、记录异常并落 failed 终态后吞掉；取消信号不属于普通
+        异常，继续传播给执行器按 cancelled 路径处理。
 
         参数:
             operations: 运行时操作门面，提供模型调用、工具执行、事件记录与状态更新。
@@ -277,27 +295,44 @@ class ReactLikeWorkflow(AgentWorkflow):
             execution_mode: 本次执行是 ``fresh`` 还是 ``resume``。
 
         返回:
-            ``finished`` 表示图已收束；``waiting_for_input`` 表示通用等待节点已保存 interrupt，
-            由执行器在清理本地资源后迁移 Run 状态。
+            无。图正常收束、挂起或失败收口后均正常返回。
 
         异常:
-            Exception: 原样重新抛出 ``_run_graph`` 的异常；抛出前 Run 已落 failed 终态。
+            asyncio.CancelledError: 保留取消语义并向执行器传播。
 
         副作用:
-            异常路径下把 Run 更新为 failed（含受控错误契约）并发布状态事件；其余副作用见
-            ``_run_graph``。
+            失败路径记录带异常堆栈的结构化日志，将 Run 更新为 failed（含受控错误契约）并发布
+            状态事件；其余副作用见 ``_run_graph``。
         """
 
+        usage_stats = ConversationRunUsageStats()
         try:
-            return await self._run_graph(
-                operations, callbacks, langfuse_trace_id, execution_mode
+            await self._run_graph(
+                operations,
+                callbacks,
+                langfuse_trace_id,
+                execution_mode,
+                usage_stats=usage_stats,
             )
         except Exception as exc:
-            # 兜底收口：图构建、resume 状态检查等路径的异常不经过 graph.astream 的 except
-            # 分支，必须在这里补落终态。已在内部落定过的 run 只会命中 fail_run_if_running 的
-            # 「已非 running」分支，记 info 日志后放行。
-            self._settle_failed_run(operations, self._failure_code_for(exc))
-            raise
+            failure_code = self._failure_code_for(exc)
+            log.exception(
+                "workflow_run_failed",
+                extra={
+                    "msg": "工作流执行失败，统一收敛 Conversation Run",
+                    "data": {
+                        "task_id": self._current_task_id(operations),
+                        "run_id": self._current_run_id(operations),
+                        "failure_code": failure_code,
+                        "error_type": type(exc).__name__,
+                    },
+                },
+            )
+            self._settle_failed_run(
+                operations,
+                failure_code,
+                usage_stats=usage_stats,
+            )
 
     async def _run_graph(
             self,
@@ -305,7 +340,9 @@ class ReactLikeWorkflow(AgentWorkflow):
             callbacks: list | None = None,
             langfuse_trace_id: str | None = None,
             execution_mode: ExecutionMode = "fresh",
-    ) -> WorkflowOutcome:
+            *,
+            usage_stats: ConversationRunUsageStats | None = None,
+    ) -> None:
         """驱动已编译 graph 执行一次任务，直到完成、失败、取消或达到最大步骤数。
 
         以 LangGraph 状态流驱动已编译 graph。工作流不再生产或透传 RuntimeEvent；模型、
@@ -326,14 +363,11 @@ class ReactLikeWorkflow(AgentWorkflow):
                 以及上下文是否清空该 run 的旧条目（见 ``RuntimeContextManager.begin_run``）。
 
         返回:
-            ``finished`` 表示图已收束；``waiting_for_input`` 表示通用等待节点已持久化 interrupt。
+            无。若图在等待节点处中断，LangGraph 将 interrupt 与 checkpoint 持久化。
 
         异常:
-            ValueError: Agent profile 的 ModelSettings 未物化或不满足模型能力约束——run 已先落
-                failed 终态。
-            Exception: 模型解析失败或 graph 执行失败时，记 ``workflow_graph_failed`` /
-                ``model_resolve_failed``，经 ``_settle_failed_run`` 落定 failed 终态后原样向上
-                抛出；未被这些分支覆盖的异常再由外层 ``run`` 兜底落定。
+            Exception: 模型解析、graph 构建、恢复校验或图执行失败时原样传播给 ``run``，由
+                ``run`` 统一分类、记录并收敛 Run 状态。
         """
 
         run = operations.get_current_run()
@@ -348,27 +382,13 @@ class ReactLikeWorkflow(AgentWorkflow):
         # 构建模型：所有连接字段和能力字段都已在 runner 的 per-run 派生边界写入
         # AgentProfile.model_settings；工厂只消费该值对象，不回查 Run 或配置服务。
         try:
-            resolved_model = resolve_chat_model(
-                agent_profile=agent_profile,
-            )
+            resolved_model = resolve_chat_model(agent_profile=agent_profile)
             base_model = resolved_model.model
         except Exception as exc:
-            log.exception(
-                "model_resolve_failed",
-                extra={
-                    "msg": f"运行期模型解析失败，run 进入 RUN_FAILED：{exc}",
-                    "data": {
-                        "task_id": current_task.id,
-                        "run_id": run.id,
-                        "model": agent_profile.model_settings.model_name,
-                    },
-                },
-            )
-            self._settle_failed_run(
-                operations,
+            raise _WorkflowRunFailure(
                 Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE,
-            )
-            raise
+                "运行期模型解析失败",
+            ) from exc
         # 构建工具
         # Task schema 在首次创建时已经冻结；本次 Run 只能改变 allows_tools，不能改变
         # bind_tools 的工具列表，否则同一 Task 的前缀缓存会因 proposal/禁用工具切换失效。
@@ -400,7 +420,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             model=cast(Runnable, bound_model),
             structured_output=agent_profile.structured_output,
             start_time=perf_counter(),
-            usage_stats=ConversationRunUsageStats(),
+            usage_stats=usage_stats or ConversationRunUsageStats(),
             langfuse_trace_id=langfuse_trace_id,
             thinking_channel=thinking_channel,
             execution_mode=execution_mode,
@@ -445,87 +465,55 @@ class ReactLikeWorkflow(AgentWorkflow):
             "callbacks": callbacks or [],
         }
 
-        async with build_checkpointer() as checkpointer:
+        async with (build_checkpointer() as checkpointer):
             graph = self._build_graph(checkpointer)
-            # 初始 state 只填控制流字段：模型消息与 runtime context 都不进 state（前者归
-            # RuntimeContextManager，后者经 config 注入）。
-            initial_state = ReactGraphState(
-                step_count=0,
-                tool_error_count=0,
-                next_node=ReactRoute.MODEL,
-                instruction="",
-                max_steps=agent_profile.max_steps,
-                final_text="",
-                last_tool_results={},
-                terminal_sessions={},
-            )
-            # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动
-            # 一个新的 graph input，即使 thread_id 相同也不等价于 resume。
-            # 因此 ``resume`` 分支要求 ``run.checkpoint_thread_id`` 指向的线程上已有
-            # checkpoint：续跑**不可**轮换该字段，否则会落到一个空线程上无从继续。
-            input_state: Any = initial_state
-            if execution_mode != "fresh":
-                # 续跑准入：必须先判图状态。图已走到 END 时 ``astream`` 既不产出事件也不
-                # 返回（协程永久挂起），因此必须先拒绝并收敛该 run，再决定恢复输入。
-                snapshot = await graph.aget_state(config)
-                if not snapshot.next:
-                    log.warning(
-                        "workflow_resume_rejected_graph_finished",
-                        extra={
-                            "msg": "续跑被拒绝：该 run 的图已结束（无可执行节点）",
-                            "data": {"task_id": current_task.id, "run_id": run_id},
-                        },
-                    )
-                    self._settle_failed_run(
-                        operations,
-                        Constant.Run.RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED,
-                    )
-                    await self._finalize_terminal_checkpoint(
-                        graph,
-                        config,
-                        run_id,
-                        reason="resume_rejected_graph_finished",
-                    )
-                    return "finished"
-                # 续跑一律回退到 model 节点重跑：用户取消 / 工具执行期崩溃 / 后端重启收敛后的
-                # run 都重新经过 ``_model_node``，避免在 ``tools_node`` / ``observe_node`` 重入
-                # 导致工具调用被静默重放（旧 Agent 执行不得隐式重放，见 AGENTS.md 约束）。
-                # ``_model_node`` 入场会重建 lifecycle，并经 ``_close_unclosed_tool_calls`` 给
-                # 未配对的调用补 cancelled 占位闭合协议，因此重跑前无需保留任何工具中间态。
-                # 用户输入等待节点已在工具结果观察后完成工具调用配对，恢复时必须沿用
-                # ``Command(resume=...)`` 穿过原 interrupt，再按固定边进入 model。
-                next_nodes = set(snapshot.next)
-                if "user_input_wait" in next_nodes:
-                    input_state = (
-                        Command(resume={"action": "resume"})
-                        if any(task.interrupts for task in snapshot.tasks)
-                        else None
-                    )
-                else:
-                    task_runtime_spaces.get_or_create(current_task.id).defer_system_message(
-                        SystemMessage(
-                            content=(
-                                "This run was resumed after an interruption. Any tool calls "
-                                "that did not record a result are closed as cancelled; "
-                                "re-issue them only if appropriate, and account for side "
-                                "effects that may already have happened."
-                            )
-                        )
-                    )
-                    log.info(
-                        "workflow_resume_rewound_to_model",
-                        extra={
-                            "msg": "续跑回退到 model 节点重跑，避免工具调用重放",
-                            "data": {
-                                "task_id": current_task.id,
-                                "run_id": run_id,
-                                "stuck_nodes": sorted(next_nodes),
-                            },
-                        },
-                    )
-                    input_state = Command(goto=ReactRoute.MODEL.value)
-
             try:
+                # 初始 state 只填控制流字段：模型消息与 runtime context 都不进 state（前者归
+                # RuntimeContextManager，后者经 config 注入）。
+                initial_state = ReactGraphState(
+                    step_count=0,
+                    tool_error_count=0,
+                    next_node=ReactRoute.MODEL,
+                    instruction="",
+                    max_steps=agent_profile.max_steps,
+                    final_text="",
+                    last_tool_results={},
+                    terminal_sessions={},
+                )
+                # None 是 LangGraph 从既有 checkpoint 继续的明确语义；新的 dict 会启动
+                # 一个新的 graph input，即使 thread_id 相同也不等价于 resume。
+                # 因此 ``resume`` 分支要求 ``run.checkpoint_thread_id`` 指向的线程上已有
+                # checkpoint：续跑**不可**轮换该字段，否则会落到一个空线程上无从继续。
+                input_state: Any = initial_state
+                if execution_mode == "resume":
+                    # 续跑准入：必须先判图状态。图已走到 END 时 ``astream`` 既不产出事件也不
+                    # 返回（协程永久挂起），因此必须先拒绝续跑；异常交给 ``run`` 统一收敛。
+                    snapshot = await graph.aget_state(config)
+                    if not snapshot.next:
+                        raise _WorkflowRunFailure(
+                            Constant.Run.RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED,
+                            "该 Run 的 checkpoint 已结束，无法续跑",
+                        )
+                    # 续跑一律回退到 model 节点重跑：用户取消 / 工具执行期崩溃 / 后端重启收敛后的
+                    # run 都重新经过 ``_model_node``，避免在 ``tools_node`` / ``observe_node`` 重入
+                    # 导致工具调用被静默重放（旧 Agent 执行不得隐式重放，见 AGENTS.md 约束）。
+                    # ``_model_node`` 入场会重建 lifecycle，并经 ``_close_unclosed_tool_calls`` 给
+                    # 未配对的调用补 cancelled 占位闭合协议，因此重跑前无需保留任何工具中间态。
+                    # 用户输入等待节点已在工具结果观察后完成工具调用配对，恢复时必须沿用
+                    # ``Command(resume=...)`` 穿过原 interrupt，再按固定边进入 model。
+                    next_nodes = set(snapshot.next)
+                    if ReactRoute.USER_INPUT_WAIT.value in next_nodes:
+                        runtime_config.resuming_user_input_wait = any(
+                            task.interrupts for task in snapshot.tasks
+                        )
+                        input_state = (
+                            Command(resume={"action": "resume"})
+                            if runtime_config.resuming_user_input_wait
+                            else None
+                        )
+                    else:
+                        input_state = Command(goto=ReactRoute.MODEL.value)
+
                 async for mode, value in graph.astream(
                         input_state,
                         config,
@@ -534,35 +522,6 @@ class ReactLikeWorkflow(AgentWorkflow):
                     # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
                     # 统一写入 snapshot。两者都不是 Agent context 的来源。
                     self._write_stream_item(operations, mode, value)
-                graph_state = await graph.aget_state(config)
-                user_input_waiting = any(
-                    task.name == "user_input_wait" and task.interrupts
-                    for task in graph_state.tasks
-                )
-                outcome: WorkflowOutcome = (
-                    "waiting_for_input" if user_input_waiting else "finished"
-                )
-            except Exception as exc:
-                log.exception(
-                    "workflow_graph_failed",
-                    extra={
-                        "msg": "langgraph execution failed during workflow run",
-                        "data": {
-                            "task_id": current_task.id,
-                            # 经 _current_run_id 读取：日志语句本身不得在收尾路径上抛出。
-                            "run_id": ReactLikeWorkflow._current_run_id(operations),
-                        },
-                    },
-                )
-                # 图执行异常（模型调用报错、provider 不可用、节点内部硬错等）必须先落 failed
-                # 终态再向上抛：本层是唯一知道异常形状的地方，而 runner / executor 都刻意不落
-                # 终态，异常逃逸后 run 会永久停留在 running 且无法取消。
-                self._settle_failed_run(
-                    operations,
-                    self._failure_code_for(exc),
-                    usage_stats=runtime_config.usage_stats,
-                )
-                raise
             finally:
                 await self._finalize_terminal_checkpoint(
                     graph,
@@ -570,7 +529,6 @@ class ReactLikeWorkflow(AgentWorkflow):
                     run_id,
                     reason="run_execution_finished",
                 )
-            return outcome
 
     async def _finalize_terminal_checkpoint(
             self,
@@ -582,14 +540,18 @@ class ReactLikeWorkflow(AgentWorkflow):
     ) -> bool:
         """关闭 Run 的 terminal 并把 checkpoint 中的活跃元数据收敛为终态。
 
-        terminal worker 的真实生命周期由进程内 registry 管理；本方法只在 graph 仍持有
-        checkpointer 时，把 checkpoint 中 ``running`` / ``starting`` 的终端投影标记为关闭，
+        terminal worker 的真实生命周期由进程内 registry 管理；本方法在 graph 执行的 ``finally``
+        中通过仍打开的 checkpointer，把 checkpoint 中 ``running`` / ``starting`` 的终端投影标记为关闭，
         避免后续 resume 看到已经不存在的 PTY。checkpoint 写失败只记录日志，不覆盖 Run
         已经由 workflow 落定的业务终态；executor 仍会在更外层再次强制关闭 worker。
         """
 
         try:
-            get_terminal_session_service().close_run_terminals(run_id, reason=reason)
+            await asyncio.to_thread(
+                get_terminal_session_service().close_run_terminals,
+                run_id,
+                reason=reason,
+            )
             snapshot = await graph.aget_state(config)
             terminal_sessions = snapshot.values.get("terminal_sessions")
             if not isinstance(terminal_sessions, dict):

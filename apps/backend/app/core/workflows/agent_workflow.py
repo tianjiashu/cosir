@@ -9,16 +9,13 @@ Workflow 编排层强依赖 LangGraph（见 ``AGENTS.md`` 不可变决议）：`
 from abc import ABC
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import ClassVar, Literal
+from typing import ClassVar
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.storage.store_engines import checkpoint_path as _engine_checkpoint_path
-
-WorkflowOutcome = Literal["finished", "waiting_for_input"]
-
 
 class AgentWorkflow(ABC):
     """定义面向运行时的、单个 Agent 工作流接口。"""
@@ -31,7 +28,7 @@ class AgentWorkflow(ABC):
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,
         execution_mode: ExecutionMode = "fresh",
-    ) -> WorkflowOutcome:
+    ) -> None:
         """通过一个工作流策略运行一个任务。
 
         参数:
@@ -44,18 +41,16 @@ class AgentWorkflow(ABC):
                 由工作流实现决定是否清空该 run 的旧上下文与如何构造 graph 输入。
 
         返回:
-            ``finished`` 表示本次图执行已收束；``waiting_for_input`` 表示 checkpoint 已保存，
-            执行器应先完成本地资源清理，再将 Run 迁移为等待输入状态。
+            无。工作流完成或在 interrupt 处挂起均通过图执行生命周期表达。
 
         异常:
             Exception: 工作流失败可能传播到运行时包装器。
 
         副作用:
-            调用模型、执行工具并记录对话事实；等待输入状态由外层执行器在资源清理后写入。
+            调用模型、执行工具并记录对话事实；用户输入等待节点直接经操作门面迁移 Run 状态。
         """
 
         ...
-
 
 @asynccontextmanager
 async def build_checkpointer() -> AsyncIterator[AsyncSqliteSaver]:

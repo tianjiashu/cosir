@@ -46,6 +46,8 @@ class RuntimeConfig:
             ``checkpoint_thread_id`` 指向线程的既有 checkpoint 继续（因此续跑**不可**
             换线程）。工具节点不依赖本字段判断重放，重放由工具调用自身的生命周期状态
             决定（见 ``tools_node``）。
+        resuming_user_input_wait: 当前输入是否正在恢复用户输入等待节点的 interrupt。
+            只有该节点的 interrupt 恢复重放时为 True；续跑后首次到达等待节点仍为 False。
     """
 
     operations: WorkflowOperations
@@ -57,3 +59,4 @@ class RuntimeConfig:
     langfuse_trace_id: str | None = None
     thinking_channel: str = ""
     execution_mode: ExecutionMode = "fresh"
+    resuming_user_input_wait: bool = False

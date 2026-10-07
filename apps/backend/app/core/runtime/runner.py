@@ -34,10 +34,15 @@ from app.core.tools.schemas.tool_names import TOOL_PROPOSE_AGENT_CONFIGURATION
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.workflow_operations import WorkflowOperations
-from app.core.workflows.agent_workflow import WorkflowOutcome
-from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
+from app.models import (
+    ConversationRunRecord,
+    ConversationRunStatus,
+    TaskRecord,
+    WorkspaceRecord,
+)
 from app.service.depends import (
     get_conversation_run_observability_service,
+    get_conversation_run_state_service,
     get_model_config_service,
     get_task_service,
     get_terminal_session_service,
@@ -101,7 +106,7 @@ class AgentRuntime:
         run: ConversationRunRecord,
         *,
         execution_mode: ExecutionMode = "fresh",
-    ) -> WorkflowOutcome:
+    ) -> None:
         """执行一个已被 ConversationRunExecutor 认领（pending→running）的 run。
 
         前置条件由执行器保证，本方法不再重复认领或做状态复查：
@@ -120,8 +125,7 @@ class AgentRuntime:
                 透传给 workflow，由其决定是否清空旧上下文与如何构造 graph 输入。
 
         返回:
-            ``finished`` 表示 workflow 已收束；``waiting_for_input`` 表示需保留 checkpoint，
-            由执行器完成本地收尾后迁移 Run 状态。
+            无。workflow 完成或挂起后，本方法正常返回。
 
         异常:
             RuntimeError: 轮次绑定的 agent profile 不可用时抛出，由执行器捕获收束为 failed。
@@ -211,14 +215,14 @@ class AgentRuntime:
             run,
             model_settings=runtime_model_settings,
         )
-        return await self.run_agent(
+        await self.run_agent(
             agent_profile,
             execution_mode=execution_mode,
         )
 
     async def run_agent(
         self, agent: AgentProfile, *, execution_mode: ExecutionMode = "fresh"
-    ) -> WorkflowOutcome:
+    ) -> None:
         """驱动一次 agent run 执行并提交 canonical conversation facts。
 
         参数:
@@ -233,11 +237,10 @@ class AgentRuntime:
             RuntimeError: 当 ``agent.run`` 为 None 时抛出。
 
         副作用:
-            触发 USER_PROMPT_SUBMIT/STOP hook；run 的终态（completed / cancelled / failed）
-            **由 workflow 落定**——正常路径经节点内的 ``WorkflowOperations``，异常路径经
-            ``ReactLikeWorkflow._settle_failed_run``；本方法不写任何终态，异常按原文传播并
-            记 ``task_failed``，仅清理进程内取消信号。本轮消息落库、canonical conversation
-            facts 与快照收口由 ``workflow.run`` 内部的 ``RuntimeContextManager`` 负责。
+            触发 USER_PROMPT_SUBMIT/STOP hook；Run 终态由 workflow 节点或 workflow.run 的统一
+            异常边界落定；terminal checkpoint 由 ``_run_graph`` 的 finally 收敛。本方法在
+            finally 中处理 Team 子 Run 自然结束回调并清理进程内取消信号。本轮消息落库、canonical conversation facts 与快照收口由
+            ``workflow.run`` 内部的 ``RuntimeContextManager`` 负责。
         """
 
         if agent.run is None:
@@ -288,7 +291,7 @@ class AgentRuntime:
                 )
                 # 本轮消息轨迹（清空残留、落 user 基线、逐条增量落库）统一由 workflow.run 内
                 # 的 RuntimeContextManager 负责（注入 message_store 端口），runner 不再直接落库。
-                outcome = await agent.workflow.run(
+                await agent.workflow.run(
                     operations,
                     callbacks=trace_result.callbacks,
                     langfuse_trace_id=trace_result.trace_id,
@@ -297,12 +300,24 @@ class AgentRuntime:
             # Langfuse recorder 使用 SDK 自带的后台批量上报。不能在对话收尾路径
             # 主动调用同步 flush：网络不可用时 SDK 会等待重试，导致 run 无法及时
             # 进入 completed/failed 终态，前端会一直显示运行中。
-            # Stop 挂接：本轮正常完成后触发。无内置实现，空订阅下 fire 零开销放行。
-            # 统一经 HookInterceptor 收口（异步调度不卡事件循环）。
-            await HookInterceptor.async_safe_fire(
-                HookContext.from_locatable(event=HookEvent.STOP, locatable=task, turn=run)
+            current_run = await asyncio.to_thread(
+                get_conversation_run_state_service().get_run,
+                run_id,
             )
-            return outcome
+            if current_run.status in {
+                ConversationRunStatus.COMPLETED.value,
+                ConversationRunStatus.CANCELLED.value,
+                ConversationRunStatus.WAITING_FOR_INPUT.value,
+            }:
+                # Stop 挂接：工作流正常收束、取消或挂起时触发；失败由 workflow.run 自行吞掉，
+                # 因而根据 canonical 状态跳过 Stop，避免把失败伪装为正常结束。
+                await HookInterceptor.async_safe_fire(
+                    HookContext.from_locatable(
+                        event=HookEvent.STOP,
+                        locatable=task,
+                        turn=run,
+                    )
+                )
         except Exception as exc:
             log.exception(
                 "task_failed",
@@ -313,17 +328,19 @@ class AgentRuntime:
             )
             raise
         finally:
-            if isinstance(task.extra, dict) and task.extra.get("agent_team_run_id"):
-                from app.agent_team.coordinator import get_agent_team_coordinator
+            try:
+                if isinstance(task.extra, dict) and task.extra.get("agent_team_run_id"):
+                    from app.agent_team.coordinator import get_agent_team_coordinator
 
-                await asyncio.to_thread(
-                    get_agent_team_coordinator().handle_node_natural_completion,
-                    run_id,
-                )
-            cancellation_registry.clear(run_id)
-            # 工具级信号由工具执行层在单次调用结束时释放；这里兜底回收「点名了已结束的
-            # 工具调用」这类不会再被消费的信号，避免进程内信号随会话累积。
-            tool_call_cancellation_registry.clear_run(run_id)
+                    await asyncio.to_thread(
+                        get_agent_team_coordinator().handle_node_natural_completion,
+                        run_id,
+                    )
+            finally:
+                cancellation_registry.clear(run_id)
+                # 工具级信号由工具执行层在单次调用结束时释放；这里兜底回收「点名了已结束的
+                # 工具调用」这类不会再被消费的信号，避免进程内信号随会话累积。
+                tool_call_cancellation_registry.clear_run(run_id)
 
     def _resolve_execution_context(
         self,
