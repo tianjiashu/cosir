@@ -28,7 +28,6 @@ _MAX_ATTEMPTS = 4
 def _request_instruction(
     schema_name: str,
     schema: dict[str, Any],
-    tool_schemas: list[dict[str, Any]],
     *,
     retry_feedback: str | None,
 ) -> str:
@@ -37,7 +36,6 @@ def _request_instruction(
     参数:
         schema_name: 输出契约名称。
         schema: 已通过 Draft 2020-12 校验的 JSON Schema。
-        tool_schemas: 当前 Task 冻结的工具 schema，仅作为上下文说明。
         retry_feedback: 上一轮的受控校验失败原因；首轮为 ``None``。
 
     返回:
@@ -51,19 +49,18 @@ def _request_instruction(
     """
 
     sections = [
-        "现在只执行最终结构化输出，不再继续分析或调用工具。",
-        "请根据上方完整对话上下文生成一个符合指定 JSON Schema 的 JSON 值。",
-        "只能返回 JSON，不得返回 Markdown 代码围栏、解释文字或工具调用。",
-        f"Schema 名称：{schema_name}",
-        "JSON Schema：",
+        "Produce the final structured output now. Do not continue the analysis or call tools.",
+        "Based on the full conversation above, generate a JSON value that conforms to the specified JSON Schema.",
+        "Return only JSON. Do not include Markdown fences, explanations, or tool calls.",
+        f"Schema name: {schema_name}",
+        "JSON Schema:",
         json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
-        "本任务可用工具 schema（仅供理解此前工具调用，不得调用工具）：",
-        json.dumps(tool_schemas, ensure_ascii=False, separators=(",", ":")),
+        "Do not call tools. Use prior tool interactions in the conversation as context only.",
     ]
     if retry_feedback is not None:
         sections.extend(
             [
-                "上一次结果未通过格式或 schema 校验。请重新生成完整 JSON，修正以下问题：",
+                "The previous response did not pass JSON or schema validation. Generate a complete JSON value again and fix the following issue:",
                 retry_feedback,
             ]
         )
@@ -95,21 +92,21 @@ def _validate_response(message: BaseMessage, schema: dict[str, Any]) -> tuple[st
     """
 
     if not isinstance(message, AIMessage):
-        return None, "模型响应不是 assistant 消息。"
+        return None, "The model response is not an assistant message."
     if (
         message.tool_calls
         or message.invalid_tool_calls
         or message.additional_kwargs.get("tool_calls")
         or message.additional_kwargs.get("function_call")
     ):
-        return None, "响应包含工具调用；本阶段禁止调用工具。"
+        return None, "The response contains a tool call, which is not allowed at this stage."
     text = content_to_text(message.content).strip()
     if not text:
-        return None, "响应内容为空。"
+        return None, "The response is empty."
     try:
         value = json.loads(text, parse_constant=_reject_json_constant)
     except (json.JSONDecodeError, TypeError, ValueError):
-        return None, "响应不是有效 JSON。"
+        return None, "The response is not valid JSON."
 
     error = next(Draft202012Validator(schema).iter_errors(value), None)
     if error is not None:
@@ -117,7 +114,7 @@ def _validate_response(message: BaseMessage, schema: dict[str, Any]) -> tuple[st
             str(part).replace("~", "~0").replace("/", "~1") for part in error.absolute_path
         )
         path = "/" + "/".join(escaped_path)
-        return None, f"JSON 不符合 schema（路径：{path}；规则：{error.validator}）。"
+        return None, f"The JSON does not conform to the schema (path: {path}; keyword: {error.validator})."
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")), ""
 
 
@@ -137,8 +134,9 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
 
     副作用:
         最多发起四次非流式模型请求（初次调用加三次重试）；用量写入 Run 级统计；成功时条件
-        更新 Run 为 completed，四次输出均无效时条件更新为 failed。每次请求都在 context 副本
-        末尾追加临时指令，不修改 canonical context，保持原有缓存前缀不变。
+        更新 Run 为 completed，四次输出均无效时条件更新为 failed。请求使用 context 副本；每轮
+        将临时指令和模型响应追加到副本，使后续重试可以参考此前失败的尝试，不修改 canonical
+        context。
     """
 
     runtime = _runtime_config()
@@ -149,18 +147,16 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
 
     task = operations.get_current_task()
     context_messages = _runtime_context().load_message()
-    # 先解析历史消息中的图片引用，再在尾部追加请求，确保追加指令前的 context 完全不变。
+    # 先解析历史消息中的图片引用；后续重试只改动此副本，不写回 canonical context。
     context_messages = await asyncio.to_thread(
         resolve_messages_for_model,
         context_messages,
         workspace_id=task.workspace_id,
     )
-    tool_schemas = operations.task_tool_schemas
     # 复用 ReAct 的工具绑定模型，不设置 tool_choice=none；提示词约束工具调用，若模型仍
     # 返回工具调用则由 _validate_response 拒绝并重试，同时保持请求中的工具 schema 不变。
     model = runtime.model.bind(response_format=spec.response_format())
     retry_feedback: str | None = None
-
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         if operations.is_current_run_cancelled():
             operations.cancel_run_if_running(
@@ -172,14 +168,13 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
         instruction = _request_instruction(
             spec.name,
             spec.json_schema,
-            tool_schemas,
             retry_feedback=retry_feedback,
         )
-        # 每次调用共享同一份只读前缀；结构化指令仅作为本次请求的最后一条临时消息。
-        request_messages = [*context_messages, HumanMessage(content=instruction)]
-        response = await model.ainvoke(request_messages)
-        if isinstance(response, AIMessage):
-            runtime.usage_stats.add_usage_metadata(response.usage_metadata)
+        # 在上下文副本末尾追加本轮指令；前序失败响应保留在副本中供模型修正。
+        context_messages.append(HumanMessage(content=instruction))
+        response = await model.ainvoke(context_messages)
+        context_messages.append(response)
+        runtime.usage_stats.add_usage_metadata(response.usage_metadata)
 
         if operations.is_current_run_cancelled():
             operations.cancel_run_if_running(
