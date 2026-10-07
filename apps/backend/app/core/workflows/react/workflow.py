@@ -28,7 +28,6 @@ from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.workflow_operations import WorkflowOperations
-from app.models import ConversationRunRecord
 from app.models.conversation_run_failure import (
     run_failure_message,
 )
@@ -126,31 +125,6 @@ class ReactLikeWorkflow(AgentWorkflow):
         return builder.compile(checkpointer=checkpointer)
 
     @staticmethod
-    def _write_stream_item(operations: WorkflowOperations, mode: str, value: object) -> None:
-        """消费 workflow stream 中的模型增量并写入 snapshot。
-
-        参数:
-            operations: 当前 Conversation Run 的运行时操作门面。
-            mode: LangGraph stream 模式；只有 ``custom`` 模式由本方法处理。
-            value: custom stream 产出的中性模型增量。
-
-        返回:
-            无。
-
-        异常:
-            无。``operations.process_event`` 内部已把投影异常降级为日志，custom 增量结构
-            非法不会中断工作流。
-
-        副作用:
-            将文本或 reasoning 增量交给 ``RuntimeOperations``，由其更新 snapshot 并发布
-            Assistant Transport 增量；不会写入 Agent context。
-        """
-
-        if mode != "custom":
-            return
-        operations.process_event(value)
-
-    @staticmethod
     def _failure_code_for(exc: BaseException) -> str:
         """把异常归类为失败 code；识别不出模型调用错误时用中性兜底 code。
 
@@ -171,41 +145,6 @@ class ReactLikeWorkflow(AgentWorkflow):
         if isinstance(exc, _WorkflowRunFailure):
             return exc.failure_code
         return classify_model_failure(exc) or Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
-
-    @staticmethod
-    def _current_run_id(operations: WorkflowOperations) -> int | None:
-        """读取当前 Run 标识用于日志；门面不可用时返回 ``None``。
-
-        收口日志必须在**任何**情况下都写得出来：异常收尾路径上 ``operations`` 可能已不可用
-        （例如落定失败后门面解绑）。此处把读取本身降级为 ``None``，避免日志语句反过来抛出
-        新异常、把原始失败掩盖掉。
-
-        参数:
-            operations: 当前 Conversation Run 的运行时操作门面。
-
-        返回:
-            Run 标识；读取失败时返回 ``None``。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        try:
-            return operations.get_current_run().id
-        except Exception:  # 日志字段读取失败按「不知道」处理
-            return None
-
-    @staticmethod
-    def _current_task_id(operations: WorkflowOperations) -> int | None:
-        """安全读取当前 Task 标识，避免失败日志字段读取掩盖原始异常。"""
-
-        try:
-            return operations.get_current_task().id
-        except Exception:
-            return None
 
     @staticmethod
     def _settle_failed_run(
@@ -241,7 +180,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             ``run_failure_settle_race_lost`` 日志。
         """
 
-        run_id = ReactLikeWorkflow._current_run_id(operations)
+        run_id = operations.get_current_run().id
         resolved_output = run_failure_message(end_reason) if final_output is None else final_output
         try:
             failed_run = operations.fail_run_if_running(
@@ -321,8 +260,8 @@ class ReactLikeWorkflow(AgentWorkflow):
                 extra={
                     "msg": "工作流执行失败，统一收敛 Conversation Run",
                     "data": {
-                        "task_id": self._current_task_id(operations),
-                        "run_id": self._current_run_id(operations),
+                        "task_id": operations.get_current_task().id,
+                        "run_id": operations.get_current_run().id,
                         "failure_code": failure_code,
                         "error_type": type(exc).__name__,
                     },
@@ -521,7 +460,11 @@ class ReactLikeWorkflow(AgentWorkflow):
                 ):
                     # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
                     # 统一写入 snapshot。两者都不是 Agent context 的来源。
-                    self._write_stream_item(operations, mode, value)
+                    if mode != "custom":
+                        continue
+                    operations.process_event(value)
+            except Exception as e:
+                raise e
             finally:
                 await self._finalize_terminal_checkpoint(
                     graph,

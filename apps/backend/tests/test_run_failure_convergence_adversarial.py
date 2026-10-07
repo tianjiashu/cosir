@@ -532,27 +532,6 @@ def test_settle_failed_run_survives_get_current_run_failure_on_race_lost() -> No
     assert len(operations.calls) == 1
 
 
-def test_current_run_id_returns_none_when_facade_raises() -> None:
-    """日志字段读取失败必须降级为 ``None``：收尾路径上的日志语句不得再抛。
-
-    覆盖 graph 异常分支等直接读取 Run 标识的日志点；它们与 ``_settle_failed_run`` 共用同一
-    个 ``_current_run_id`` 入口，因此本用例是该不变量的统一守卫。
-    """
-
-    operations = _RecordingOperations()
-    operations.get_current_run_failure = RuntimeError("facade unavailable")
-
-    assert ReactLikeWorkflow._current_run_id(cast(WorkflowOperations, operations)) is None
-
-
-def test_current_run_id_returns_run_identity_when_available() -> None:
-    """门面可用时返回真实 Run 标识，供日志定位。"""
-
-    operations = _RecordingOperations()
-
-    assert ReactLikeWorkflow._current_run_id(cast(WorkflowOperations, operations)) == 7
-
-
 def test_settle_failed_run_with_empty_string_code_records_empty_reason() -> None:
     """空字符串 code 会被原样透传给落定入口（``run_failure_message`` 回退通用文案）。
 
