@@ -347,6 +347,7 @@ class AgentTeamPreparationService:
             "team_id": configuration.team_id,
             "name": configuration.name,
             "goal": goal,
+            "instructions": instructions,
             "start_node": configuration.start_node_id,
             "nodes": resolved_nodes,
             "edges": [

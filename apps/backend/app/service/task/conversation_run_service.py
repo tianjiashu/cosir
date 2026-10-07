@@ -31,7 +31,7 @@ from app.models import (
 )
 from app.service import depends as service_depends
 from app.service.depends import get_model_config_service
-from app.service.task.conversation_run_state_service import terminal_error
+from app.service.task.conversation_run_state_service import ConversationRunStateService
 from app.service.task.conversation_task_context_service import ConversationTaskContextService
 from app.storage.store_engines import main_session_factory
 
@@ -130,12 +130,12 @@ class ConversationRunService:
                 existing_run = self._run.get(run_id)
                 if existing_run.extra is not None:
                     existing_by_id = {
-                        attachment["id"]: {
-                            "id": attachment["id"],
-                            "name": attachment["name"],
-                            "content_type": attachment["content_type"],
-                            "path": attachment["path"],
-                        }
+                        attachment["id"]: ConversationRunFileAttachment(
+                            id=attachment["id"],
+                            name=attachment["name"],
+                            content_type=attachment["content_type"],
+                            path=attachment["path"],
+                        )
                         for attachment in existing_run.extra.attachments
                     }
             except KeyError:
@@ -148,12 +148,12 @@ class ConversationRunService:
             candidate = Path(attachment.path)
             if not (candidate.is_file() or candidate.is_dir()):
                 raise ValueError("ordinary file attachment is unavailable")
-            merged[attachment.id] = {
-                "id": attachment.id,
-                "name": attachment.name,
-                "content_type": attachment.content_type,
-                "path": attachment.path,
-            }
+            merged[attachment.id] = ConversationRunFileAttachment(
+                id=attachment.id,
+                name=attachment.name,
+                content_type=attachment.content_type,
+                path=attachment.path,
+            )
 
         result: list[ConversationRunFileAttachment] = []
         for attachment_id in dict.fromkeys(Constant.Cosir.LOCAL_FILE_TOKEN.findall(display_text)):
@@ -451,10 +451,13 @@ class ConversationRunService:
                     allowed_statuses=(
                         ConversationRunStatus.PENDING.value,
                         ConversationRunStatus.RUNNING.value,
+                        ConversationRunStatus.WAITING_FOR_INPUT.value,
                     ),
                     end_reason=end_reason,
                     usage=None,
-                    error=terminal_error(ConversationRunStatus.CANCELLED, end_reason),
+                    error=ConversationRunStateService.terminal_error(
+                        ConversationRunStatus.CANCELLED, end_reason
+                    ),
                     session=session,
                 )
                 if record is not None:
@@ -500,3 +503,21 @@ class ConversationRunService:
         """
 
         return self._run.list_latest_by_tasks()
+
+    def get_run(self, run_id: int) -> ConversationRunRecord:
+        """按标识读取单个 Run 记录。
+
+        参数:
+            run_id: Conversation Run 标识。
+
+        返回:
+            对应的 ``ConversationRunRecord``。
+
+        异常:
+            KeyError: run 不存在。
+
+        副作用:
+            无。
+        """
+
+        return self._run.get(run_id)

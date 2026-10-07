@@ -15,12 +15,13 @@ from app.config.configuration import get_agent_registry
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.model_settings import ModelSettings
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
+from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationResult,
     AgentTeamPreparationService,
 )
 from app.service.depends import get_model_config_service, get_workspace_service
-from app.service.task.conversation_run_state_service import ConversationRunStateService
+from app.service.task.conversation_run_service import ConversationRunService
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
@@ -34,17 +35,17 @@ class AgentTeamRunService:
         self,
         *,
         team_run_crud: AgentTeamRunCrud | None = None,
-        run_state_service: ConversationRunStateService | None = None,
+        run_service: ConversationRunService | None = None,
     ) -> None:
         """创建无进程状态的 TeamRun 生命周期服务。
 
         参数:
             team_run_crud: 可选的 TeamRun CRUD，供测试或特殊装配注入。
-            run_state_service: 可选的主 Agent Run 读取服务。
+            run_service: 可选的主 Agent Run 读取服务。
         """
 
         self._team_run_crud = team_run_crud or AgentTeamRunCrud()
-        self._run_state_service = run_state_service or ConversationRunStateService()
+        self._run_service = run_service or ConversationRunService()
         self._session_factory = main_session_factory()
 
     def create_pending_confirmation(
@@ -102,11 +103,48 @@ class AgentTeamRunService:
             except KeyError:
                 return None
 
+    def reject_pending(self, team_run_id: int) -> AgentTeamRunModel:
+        """原子驳回待确认 TeamRun。
+
+        参数:
+            team_run_id: 前端预览卡关联的 TeamRun 标识。
+
+        返回:
+            已迁移为 ``cancelled`` 且原因是用户驳回的 TeamRun 记录。
+
+        异常:
+            KeyError: TeamRun 不存在。
+            ValueError: TeamRun 已被处理，或其主 Run 当前不在等待用户输入状态。
+            sqlalchemy.exc.SQLAlchemyError: 条件状态更新失败。
+
+        副作用:
+            以条件更新结束 TeamRun；主 Agent 反馈注入和 checkpoint 恢复由 Coordinator 执行。
+        """
+
+        existing = self.get(team_run_id)
+        if existing is None:
+            raise KeyError(team_run_id)
+        if existing.status != AgentTeamRunStatus.PENDING.value:
+            raise ValueError("Agent Team 已确认或已处理")
+        self._validate_parent_run(existing.parent_task_id, existing.parent_run_id)
+        updated = self._team_run_crud.update_status_if_in(
+            existing.id,
+            AgentTeamRunStatus.CANCELLED.value,
+            (AgentTeamRunStatus.PENDING.value,),
+            end_reason=AgentTeamRunEndReason.REJECTED_BY_USER.value,
+            ended=True,
+        )
+        if updated is None:
+            raise ValueError("Agent Team 已确认或已处理")
+        return updated
+
     def confirm_and_start(
         self,
         team_run_id: int,
         configuration_document: dict[str, Any],
         *,
+        goal: str | None = None,
+        instructions: dict[str, str] | None = None,
         runtime_loop: asyncio.AbstractEventLoop,
     ) -> AgentTeamRunModel:
         """使用用户最终配置确认 TeamRun，并在提交后交给 Coordinator 启动。
@@ -128,10 +166,26 @@ class AgentTeamRunService:
         if existing.status != AgentTeamRunStatus.PENDING.value:
             raise ValueError("Agent Team 已确认或已处理")
         self._validate_parent_run(existing.parent_task_id, existing.parent_run_id)
+        final_goal = (goal if goal is not None else existing.goal_input).strip()
+        final_instructions = instructions if instructions is not None else existing.node_instructions_json
         configuration = AgentTeamConfiguration.model_validate(configuration_document)
+        final_instructions = {
+            key: value.strip()
+            for key, value in final_instructions.items()
+            if isinstance(key, str) and isinstance(value, str) and value.strip()
+        }
+        if not final_goal:
+            raise ValueError("Team goal must not be blank")
+        unknown_instructions = set(final_instructions) - {
+            node.node_id for node in configuration.nodes
+        }
+        if unknown_instructions:
+            raise ValueError("instructions reference unknown Team nodes")
         if configuration.team_id != existing.team_id:
             raise ValueError("确认配置的 team_id 与指定 TeamRun 不一致")
-        preparation = self._prepare_final_plan(existing, configuration)
+        preparation = self._prepare_final_plan(
+            existing, configuration, goal=final_goal, instructions=final_instructions
+        )
 
         with begin_immediate(self._session_factory) as session:
             row = self._team_run_crud.get_by_id(existing.id, session=session)
@@ -142,6 +196,8 @@ class AgentTeamRunService:
             state = AgentTeamRunState.initial(preparation.node_runtime_snapshots)
             row.configuration_snapshot_json = configuration.model_dump(mode="json")
             row.preview_fingerprint = preparation.preview_fingerprint
+            row.goal_input = final_goal
+            row.node_instructions_json = final_instructions
             updated = self._team_run_crud.update_status_if_in(
                 row.id,
                 AgentTeamRunStatus.RUNNING.value,
@@ -164,6 +220,9 @@ class AgentTeamRunService:
         self,
         row: AgentTeamRunModel,
         configuration: AgentTeamConfiguration,
+        *,
+        goal: str,
+        instructions: dict[str, str],
     ) -> AgentTeamPreparationResult:
         """基于确认时的最终配置重新生成执行快照。
 
@@ -172,15 +231,15 @@ class AgentTeamRunService:
         """
 
         workspace_root = get_workspace_service().get_workspace(row.workspace_id).root_path
-        parent_run = self._run_state_service.get_run(row.parent_run_id)
+        parent_run = self._run_service.get_run(row.parent_run_id)
         fallback_model_settings = self._resolve_parent_model_settings(
             parent_run,
             workspace_root,
         )
         return AgentTeamPreparationService().prepare(
             configuration,
-            goal=row.goal_input,
-            instructions=row.node_instructions_json,
+            goal=goal,
+            instructions=instructions,
             workspace_root=workspace_root,
             parent_task_id=row.parent_task_id,
             parent_run_id=row.parent_run_id,
@@ -221,13 +280,8 @@ class AgentTeamRunService:
     def _validate_parent_run(self, parent_task_id: int, parent_run_id: int) -> None:
         """校验 TeamRun 关联的主 Agent Run 仍属于该 Task 且可继续。"""
 
-        parent_run = self._run_state_service.get_run(parent_run_id)
+        parent_run = self._run_service.get_run(parent_run_id)
         if parent_run.task_id != parent_task_id:
             raise ValueError("TeamRun 不属于指定主 Agent Task")
-        if parent_run.status in {"completed", "failed"}:
-            raise ValueError("主 Agent Run 已结束，不能确认 TeamRun")
-        if (
-            parent_run.status == "cancelled"
-            and parent_run.end_reason != "agent_team_waiting_confirmation"
-        ):
-            raise ValueError("主 Agent Run 已被其他原因取消，不能确认 TeamRun")
+        if parent_run.status != "waiting_for_input":
+            raise ValueError("主 Agent Run 当前没有等待用户确认 TeamRun")
