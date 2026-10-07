@@ -141,6 +141,21 @@ class ToolAccessGate:
                 )
             )
 
+        if allowed_tool_names is not None and tool.name not in allowed_tool_names:
+            return ToolGateOutcome(
+                denial=tool_error(
+                    tool.name,
+                    f"tool is not allowed: {tool.name}",
+                    # 禁用是 Run 级策略性拒绝：只回传「本轮禁用、停止调用」这一个信号，不复述
+                    # 策略来源（哪条 profile / 谁关掉的），也不把可用工具集回灌给模型——模型本就
+                    # 持有工具声明，回灌只会放大提示面。retryable=False 与该信号配套。
+                    reason="This tool is disabled for the current run. Do not call again",
+                    permission=tool.permission,
+                    tool_call_id=call.call_id,
+                    retryable=False,
+                )
+            )
+
         validation = validate_tool_arguments(
             call.arguments,
             tool.parameters_schema,
@@ -182,18 +197,6 @@ class ToolAccessGate:
                         ],
                     },
                 },
-            )
-
-        if allowed_tool_names is not None and tool.name not in allowed_tool_names:
-            return ToolGateOutcome(
-                denial=tool_error(
-                    tool.name,
-                    f"This tool is disabled for the current run.Do not call again",
-                    reason="",
-                    permission=tool.permission,
-                    tool_call_id=call.call_id,
-                    retryable=False,
-                )
             )
 
         arguments = self._apply_pre_tool_use_hook(

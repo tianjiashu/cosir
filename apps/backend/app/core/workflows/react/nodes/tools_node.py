@@ -11,11 +11,15 @@
 ``dataclasses.asdict`` 投影，键名与执行层字段一致，含 ``tool_call_id`` /
 ``display_data``）供 ``observe`` 消费。
 
-注意：执行集合当前取 ``valid_calls`` + ``blocked_calls`` 的全部记录，**不做状态过滤**，因此从既有
-checkpoint 恢复（本节点重入）时会重放本批调用。历史实现靠「只执行 ``status == "running"`` 的
-调用」获得防重放性质，该过滤已在重构中移除，属**已知缺口**（见 ``begin`` 的返回值刻意不写回
-state）。模型协议的配对闭合由 ``model_node.load_message`` 兜底。与模型节点共享的运行时原语见
-``common``。
+执行集合取 ``valid_calls`` + ``blocked_calls`` 中**尚未起跑**的记录（``status == "pending"``）；
+``begin`` 迁移出的 ``running`` 快照随 patch 写回 state，使 checkpoint 反映本批实际起跑状态。
+
+**剩余缺口（未决）**：LangGraph 的 checkpoint 以节点为单位——本节点执行期间（工具正在跑）进程
+退出时，checkpoint 仍停留在进入本节点之前（记录仍是 ``pending``），因此续跑重入本节点仍会重放
+本批调用，对 ``write_file`` / ``apply_patch`` / ``delete_file`` / ``execute_terminal`` 这类有副作用
+工具会造成二次执行。彻底消除必须在「工具起跑前」落盘一份「已起跑」事实（按 run_id + step_id +
+tool_call_id 的幂等键）作为过滤依据，该事实源尚未建立。模型协议的配对闭合由
+``model_node.load_message`` 兜底。与模型节点共享的运行时原语见 ``common``。
 """
 
 import asyncio
@@ -111,16 +115,21 @@ async def _tools_node(state: ReactGraphState) -> dict:
     返回:
         需要合并回 graph state 的增量：``last_tool_results``（本批次工具观察的
         ``dataclasses.asdict`` 投影，键名即执行层字段名 ``tool_call_id`` / ``display_data``，
-        可落 checkpoint）与 ``terminal_sessions``（终端会话展示元数据投影）。
-        ``tool_call_lifecycle`` 沿用 ``model`` 节点已写入的快照，本节点不回写（``begin`` 的
-        返回值刻意丢弃，避免把 ``running`` 状态持久化进 checkpoint）。
+        可落 checkpoint）、``terminal_sessions``（终端会话展示元数据投影）与
+        ``tool_call_lifecycle``（``begin`` 迁移后的快照：已起跑的合法调用为 ``running``，
+        隐藏闭合调用仍为 ``pending``）。写回该快照让 checkpoint 反映本批实际起跑状态，
+        重入时无需对同一批调用重复发 ``running`` 事件。
+
+        执行集合在 ``begin`` 之前按 ``pending`` 判定：``running`` / 终态记录已起跑或已有观察，
+        再次发起会对有副作用的工具造成二次写入。
 
     异常:
         无。工具链路异常由执行层收口为 ``ToolObservation``（含 ``error`` 观察）。
 
     副作用:
         - 执行工具（文件、终端、搜索、委派等）并产出工具生命周期事实；状态写入 **run**；
-        - ``running`` 与终态事件不在本节点发出，也不在此收口取消；
+        - ``running`` 状态事件由 ``begin`` 在本节点发出；终态事件不在本节点发出，也不在此
+          收口取消（两者分别由执行层出口投影与 ``observe`` 节点的 ``settle`` 负责）；
         - 模型协议层面的配对闭合统一由 ``RuntimeContextManager.load_message`` 在下次取数时
           自动补 ``ToolMessage`` 占位，本节点不构造/落库占位消息、亦不越界访问 service
           受保护成员。
@@ -137,14 +146,19 @@ async def _tools_node(state: ReactGraphState) -> dict:
     instruction = state.instruction
 
     # run 身份取自 ``RuntimeConfig.run``（``ReactGraphState`` 不含 run_id，状态事实源是 run 记录）。
-    lifecycle.begin(task_id=task_id, run_id=rc.run.id, step_id=step_id)
-
-    # 可执行集合 = 合法调用 + 隐藏闭合集合：后者由 ToolAccessGate 在执行层拒绝，其错误观察用于
-    # 闭合模型协议（前端无对应 part，由 settle 只写 ToolMessage、不发终态事件）。
-    approved_calls = [
-        _to_tool_call(record)
+    # 可执行集合必须在 ``begin`` **之前**判定：``begin`` 会把待执行的合法调用迁移为 ``running``，
+    # 若在其后过滤就只剩隐藏闭合记录。取合法调用 + 隐藏闭合集合中尚未起跑的记录（``pending``）：
+    # 后者由 ToolAccessGate 在执行层拒绝，其错误观察用于闭合模型协议（前端无对应 part，由
+    # settle 只写 ToolMessage、不发终态事件）。已 running / 终态的记录不再发起：它们已经起跑或
+    # 已有观察，重复发起会对 write_file / apply_patch / delete_file / execute_terminal 这类有
+    # 副作用的工具造成二次写入。
+    pending_records = [
+        record
         for record in lifecycle.valid_tools + lifecycle.blocked_tool_calls
+        if record.status == "pending"
     ]
+    lifecycle = lifecycle.begin(task_id=task_id, run_id=rc.run.id, step_id=step_id)
+    approved_calls = [_to_tool_call(record) for record in pending_records]
 
     log.info(
         "tools_node_resumed",
@@ -195,4 +209,5 @@ async def _tools_node(state: ReactGraphState) -> dict:
             state.terminal_sessions,
             observation_dicts,
         ),
+        "tool_call_lifecycle": lifecycle,
     }
