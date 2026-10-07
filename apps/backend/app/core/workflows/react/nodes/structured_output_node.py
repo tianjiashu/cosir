@@ -153,7 +153,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
     )
     # 复用 ReAct 的工具绑定模型，不设置 tool_choice=none；提示词约束工具调用，若模型仍
     # 返回工具调用则由 _validate_response 拒绝并重试，同时保持请求中的工具 schema 不变。
-    model = runtime.model.bind(response_format=spec.response_format())
+    model = runtime.model.bind(response_format={"type": "json_object"})
     retry_feedback: str | None = None
     for attempt in range(1, Constant.Workflow.STRUCTURED_OUTPUT_MAX_ATTEMPTS + 1):
         if operations.is_current_run_cancelled():

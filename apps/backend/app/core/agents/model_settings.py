@@ -81,7 +81,6 @@ class ModelSettings:
     drop_params: bool | None = None
     stream: bool | None = None
     reasoning_effort: str | None = None
-    response_format: str | None = None
 
     base_url: str | None = None
     api_key: str | None = field(default=None, repr=False)

@@ -51,28 +51,6 @@ class StructuredOutputSpec(BaseModel):
         Draft202012Validator.check_schema(value)
         return value
 
-    def response_format(self) -> dict[str, Any]:
-        """构造供 LangChain chat model 临时绑定的 strict JSON Schema 参数。
-
-        返回:
-            OpenAI-compatible ``response_format`` 参数字典；不改变本对象或模型实例。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": self.name,
-                "strict": True,
-                "schema": self.json_schema,
-            },
-        }
-
     def to_document(self) -> dict[str, Any]:
         """返回可持久化、可传递的 schema 契约字典。
 
