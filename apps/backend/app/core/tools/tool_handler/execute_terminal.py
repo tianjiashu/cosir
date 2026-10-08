@@ -85,7 +85,6 @@ class ExecuteTerminalTool(HandlerBase):
     description = _DESCRIPTION
     permission = "execute_terminal"
     timeout_seconds = 120.0  # 外层 ToolHandlerRunner 硬保险
-    risk_level = "high"
     default_command_timeout = 60.0  # 内层命令级缺省
     max_command_timeout = 110.0  # 内层钳制上限（< 外层 120 留 10s 收尾）
     group = TOOL_GROUP_TERMINAL
@@ -381,11 +380,9 @@ class ExecuteTerminalTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=self.description,
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             resource_keys=("shell",),
             execution_mode="process",  # 跑任意 shell，需子进程隔离 + 树杀兜底
             display=ToolDisplayHints(

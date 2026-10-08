@@ -14,7 +14,7 @@ class ToolDefinition:
     """工具系统的元数据与 handler 契约单一事实来源（frozen）。
 
     模型可见结构（name / description / parameters）由 ``to_model_tool_definition``
-    投影；内部契约字段（permission / resource_keys / execution_mode 等）不进模型
+    投影；内部契约字段（resource_keys / execution_mode 等）不进模型
     可见结构，仅由对应消费模块读取。本类纯数据契约，不持有任何执行或调度逻辑。
 
     关键字段：
@@ -31,12 +31,10 @@ class ToolDefinition:
     name: str
     group: str
     description: str
-    permission: str
     handler: Callable[..., Any]
     args_model: type[BaseModel]
     parameters_schema: Mapping[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 10.0
-    risk_level: str = "low"
     resource_keys: Sequence[str] = field(default_factory=tuple)
     display: ToolDisplayHints | None = None
     # 隔离执行模式（仅 executor 读取，不进模型可见结构）："thread"=当前线程直跑
@@ -61,12 +59,10 @@ class ToolDefinition:
             name=self.name,
             group=self.group,
             description=self.description,
-            permission=self.permission,
             handler=self.handler,
             parameters_schema=model_def["parameters"],
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             resource_keys=self.resource_keys,
             display=self.display,
             execution_mode=self.execution_mode,

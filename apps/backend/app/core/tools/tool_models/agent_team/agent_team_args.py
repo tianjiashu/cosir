@@ -13,7 +13,8 @@ class AgentTeamArgs(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    team_id: StrictStr = Field(min_length=1, max_length=128)
+    team_id: StrictStr = Field(min_length=1, max_length=128,
+                               description="ID of an existing Team configuration; must reference a valid Team config, otherwise an error is raised.")
     goal: StrictStr = Field(
         min_length=1,
         max_length=50_000,

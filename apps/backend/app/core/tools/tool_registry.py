@@ -228,48 +228,6 @@ class ToolRegistry:
                 if definition.group in tool_groups
             ]
 
-    def get_tools_by_permission(self, permission: str) -> list[ToolDefinition]:
-        """按权限标签筛选工具定义。
-
-        参数:
-            permission: 权限标签。
-
-        返回:
-            所有 ``permission`` 字段等于给定标签的工具定义列表（不保证顺序）。
-
-        异常:
-            无。
-
-        副作用:
-            无（只读，持锁查询）。
-        """
-
-        with self._lock:
-            return [
-                definition
-                for definition in self._tool_definitions.values()
-                if definition.permission == permission
-            ]
-
-    def get_permissions(self) -> set[str]:
-        """返回全部工具用到的权限标签集合。
-
-        参数:
-            无。
-
-        返回:
-            去重后的权限标签集合。
-
-        异常:
-            无。
-
-        副作用:
-            无（只读，持锁查询）。
-        """
-
-        with self._lock:
-            return {definition.permission for definition in self._tool_definitions.values()}
-
     @property
     def generation(self) -> int:
         """返回注册表代计数器。

@@ -6,10 +6,10 @@
 
 - ``name``: 工具名称，与 ``ToolDefinition.name`` 对应。
 - ``description``: 面向模型的工具描述。
-- ``permission``: 权限标签（如 ``safe_read`` / ``file_write``）。
+- ``permission``: 权限标签（如 ``safe_read`` / ``file_write``），仅用于工具结果
+  （``tool_error`` / ``tool_success`` 等）的 ``permission`` 标记，不进入 ``ToolDefinition``。
 - ``args_model``: Pydantic 参数校验模型（``type[BaseModel]``）。
 - ``timeout_seconds``: 执行超时（秒）。
-- ``risk_level``: 风险等级（``"low"`` / ``"medium"`` / ``"high"``）。
 
 **必须实现（实例方法）**：
 
@@ -61,13 +61,12 @@ class HandlerBase(ABC):
     # name / description / args_model 声明为实例可写属性而非 ClassVar：多数单用途工具
     # 以类属性形式固化；按实例承载多个定义的 handler 需要为前三项按实例赋值。
     # mypy 禁止用实例变量覆盖父类 ClassVar，故此处放开前三个。
-    # permission / timeout_seconds / risk_level 在工具族内始终为类级，保持 ClassVar。
+    # timeout_seconds 在工具族内始终为类级，保持 ClassVar。
     name: str
     description: str
     permission: ClassVar[str]
     args_model: type[BaseModel]
     timeout_seconds: ClassVar[float]
-    risk_level: ClassVar[str]
     group: ClassVar[str]
 
     @abstractmethod

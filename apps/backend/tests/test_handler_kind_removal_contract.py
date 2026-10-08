@@ -76,7 +76,6 @@ def _make_definition(name: str = "probe_tool", **overrides: Any) -> ToolDefiniti
         "name": name,
         "group": "probe",
         "description": "probe",
-        "permission": "safe_read",
         "handler": _sync_probe_handler,
         "args_model": _ProbeArgs,
     }
@@ -189,7 +188,6 @@ def test_tool_definition_default_contract_values_after_field_removal() -> None:
 
     assert definition.parameters_schema == {}
     assert definition.timeout_seconds == 10.0
-    assert definition.risk_level == "low"
     assert definition.resource_keys == ()
     assert definition.display is None
     assert definition.execution_mode == "thread"
@@ -208,7 +206,6 @@ def test_tool_definition_requires_handler_and_args_model() -> None:
             name="missing_handler",
             group="probe",
             description="d",
-            permission="safe_read",
             args_model=_ProbeArgs,
         )
     with pytest.raises(TypeError):
@@ -216,7 +213,6 @@ def test_tool_definition_requires_handler_and_args_model() -> None:
             name="missing_args_model",
             group="probe",
             description="d",
-            permission="safe_read",
             handler=_sync_probe_handler,
         )
 
@@ -260,7 +256,6 @@ def test_normalized_preserves_every_carried_contract_field() -> None:
 
     definition = _make_definition(
         timeout_seconds=3.5,
-        risk_level="high",
         resource_keys=("filesystem", "shell"),
         execution_mode="process",
         parallel_mode="parallel",
@@ -269,12 +264,10 @@ def test_normalized_preserves_every_carried_contract_field() -> None:
     normalized = definition.normalized()
 
     assert normalized.timeout_seconds == 3.5
-    assert normalized.risk_level == "high"
     assert normalized.resource_keys == ("filesystem", "shell")
     assert normalized.execution_mode == "process"
     assert normalized.parallel_mode == "parallel"
     assert normalized.args_model is _ProbeArgs
-    assert normalized.permission == "safe_read"
     assert normalized.handler is definition.handler
     assert normalized.display is definition.display
     # 参数 schema 被派生，故二者不相等；派生后应幂等。
@@ -439,31 +432,6 @@ def test_get_schema_returns_static_schema_and_none_for_unknown() -> None:
 
     assert registry.get_schema("static_tool") == schema
     assert registry.get_schema("ghost_tool") is None
-
-
-def test_deregister_and_permission_views_unchanged() -> None:
-    """deregister 与权限投影的既有语义（只在命中时改动 generation；权限集合去重）。"""
-
-    registry = ToolRegistry(
-        [
-            _make_definition(name="a", permission="safe_read"),
-            _make_definition(name="b", permission="file_write"),
-            _make_definition(name="c", permission="safe_read"),
-        ]
-    )
-    assert registry.get_permissions() == {"safe_read", "file_write"}
-    assert {definition.name for definition in registry.get_tools_by_permission("safe_read")} == {
-        "a",
-        "c",
-    }
-    assert registry.get_tools_by_permission("nope") == []
-
-    registry.deregister("ghost_tool")
-    assert registry.generation == 3, "移除不存在工具不得改变 generation"
-
-    registry.deregister("b")
-    assert registry.generation == 4
-    assert registry.get_all_tool_names() == ["a", "c"]
 
 
 # --------------------------------------------------------------------------- #

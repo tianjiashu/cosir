@@ -46,7 +46,6 @@ class TerminalSignalTool(HandlerBase):
     permission: ClassVar[str] = "shell"
     args_model = TerminalSignalArgs
     timeout_seconds: ClassVar[float] = 10.0
-    risk_level: ClassVar[str] = "high"
     group = TOOL_GROUP_TERMINAL_SESSION
 
 
@@ -108,7 +107,7 @@ class TerminalSignalTool(HandlerBase):
         返回:
             ``ToolDefinition``：模型可见描述与 ``parameters_schema`` 由 ``descriptions.py``
             按宿主平台补全（含该平台的信号能力说明），权限 ``shell``、
-            ``execution_mode="thread"``、``risk_level="high"``。
+            ``execution_mode="thread"``。
 
         异常:
             无。
@@ -121,14 +120,12 @@ class TerminalSignalTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=describe_terminal_tool(self.name, self.description),
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             parameters_schema=build_terminal_session_parameters_schema(
                 self.name, self.args_model
             ),
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             resource_keys=("shell",),
             execution_mode="thread",
             display=ToolDisplayHints(

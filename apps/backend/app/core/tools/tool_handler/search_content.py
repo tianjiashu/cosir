@@ -47,7 +47,6 @@ class SearchContentTool(HandlerBase):
     permission = "file_search"
     args_model = SearchContentArgs
     timeout_seconds = 30.0
-    risk_level = "low"
     group = TOOL_GROUP_SEARCH
 
 
@@ -157,11 +156,9 @@ class SearchContentTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=self.description,
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             resource_keys=("filesystem",),
             execution_mode="thread",
             display=ToolDisplayHints(

@@ -44,7 +44,6 @@ class ChildAgentWaitTool(HandlerBase):
     permission: ClassVar[str] = "child_agent_wait"
     args_model: type[ChildAgentWaitArgs] = ChildAgentWaitArgs
     timeout_seconds: ClassVar[float] = 300.0
-    risk_level: ClassVar[str] = "low"
     group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
@@ -226,11 +225,9 @@ class ChildAgentWaitTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=self.description,
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             execution_mode="thread",
             parallel_mode="serial",
             display=ToolDisplayHints(

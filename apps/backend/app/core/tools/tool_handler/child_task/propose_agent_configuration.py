@@ -35,7 +35,6 @@ class ProposeAgentConfigurationTool(HandlerBase):
     permission: ClassVar[str] = "agent_configuration_proposal"
     args_model = ProposeAgentConfigurationArgs
     timeout_seconds: ClassVar[float] = 10.0
-    risk_level: ClassVar[str] = "low"
     group = TOOL_GROUP_CONFIGURATION
 
     def execute(
@@ -93,11 +92,9 @@ class ProposeAgentConfigurationTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=self.description,
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             execution_mode="thread",
             display=ToolDisplayHints(
                 verb="生成子 Agent 配置草稿",

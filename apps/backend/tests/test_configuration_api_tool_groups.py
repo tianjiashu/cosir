@@ -31,7 +31,6 @@ def _definition(name: str, group: str) -> ToolDefinition:
         name=name,
         group=group,
         description=f"{name} 描述",
-        permission="safe_read",
         handler=lambda: None,
         args_model=_PlaceholderArgs,
         parameters_schema={"type": "object", "properties": {}},

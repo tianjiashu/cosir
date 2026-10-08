@@ -35,7 +35,6 @@ class ChildAgentStatusTool(HandlerBase):
     permission: ClassVar[str] = "child_agent_status"
     args_model: type[ChildAgentStatusArgs] = ChildAgentStatusArgs
     timeout_seconds: ClassVar[float] = 10.0
-    risk_level: ClassVar[str] = "low"
     group = TOOL_GROUP_CHILD_AGENT
 
 
@@ -179,11 +178,9 @@ class ChildAgentStatusTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=self.description,
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             execution_mode="thread",
             display=ToolDisplayHints(
                 verb="读取子 Agent 状态",

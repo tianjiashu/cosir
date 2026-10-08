@@ -76,7 +76,6 @@ class ReplaceTool(HandlerBase):
     permission = "file_write"
     args_model = ReplaceArgs
     timeout_seconds = 30.0
-    risk_level = "medium"
     group = TOOL_GROUP_FILE_EDIT
 
 
@@ -263,11 +262,9 @@ class ReplaceTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=self.description,
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             resource_keys=("filesystem",),
             display=ToolDisplayHints(
                 verb="替换文本",

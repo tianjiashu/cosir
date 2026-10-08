@@ -264,7 +264,6 @@ def _make_process_tool(name: str, *, timeout_seconds: float = 60.0) -> ToolDefin
         name=name,
         group="probe",
         description="cancellation ordering probe",
-        permission="probe",
         handler=_probe_sleeps_then_writes_and_streams,
         args_model=_ProbeArgs,
         execution_mode="process",

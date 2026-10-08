@@ -50,7 +50,6 @@ class ChildAgentSendTool(HandlerBase):
     permission: ClassVar[str] = "child_agent_send"
     args_model: type[ChildAgentSendArgs] = ChildAgentSendArgs
     timeout_seconds: ClassVar[float] = 30.0
-    risk_level: ClassVar[str] = "medium"
     group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
@@ -304,11 +303,9 @@ class ChildAgentSendTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=self.description,
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             execution_mode="thread",
             display=ToolDisplayHints(
                 verb="发送给子 Agent",

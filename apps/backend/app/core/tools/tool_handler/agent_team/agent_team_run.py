@@ -15,12 +15,14 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM
+from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM, TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_AGENT_TEAM
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import AgentTeamArgs
+from app.service.agent_team.agent_team_preparation_service import AgentTeamPreparationService
+from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 from app.service.depends import get_conversation_run_service
 
 
@@ -29,14 +31,19 @@ class AgentTeamRunTool(HandlerBase):
 
     name = TOOL_AGENT_TEAM
     description = (
-        "Prepare a configured Agent Team execution plan. "
-        "It requires user confirmation before execution."
+        "Prepare a configured Agent Team execution plan for the user to review. "
+        "The referenced team must already exist; if it does not, ask the user to create it first. "
+        "The plan requires explicit user confirmation before execution; once the user confirms, "
+        "the Agent Team starts the TeamRun."
     )
     permission: ClassVar[str] = "agent_team"
     args_model = AgentTeamArgs
     timeout_seconds: ClassVar[float] = 30.0
-    risk_level: ClassVar[str] = "medium"
     group = TOOL_GROUP_AGENT_TEAM
+
+    def __init__(self):
+        self.agent_team_run_service = AgentTeamRunService()
+        self.agent_team_preparation_service = AgentTeamPreparationService()
 
     def execute(
         self,
@@ -60,19 +67,12 @@ class AgentTeamRunTool(HandlerBase):
                 permission=self.permission,
             )
         try:
-            # 准备服务会读取 ToolSystem；延迟导入以避免 ToolSystem 装配 Team 工具时形成循环导入。
-            from app.service.agent_team.agent_team_preparation_service import (
-                AgentTeamPreparationService,
-            )
-            from app.service.agent_team.agent_team_run_service import (
-                AgentTeamRunService,
-            )
 
             configuration = get_agent_team_registry().resolve(
                 str(execution_context.workspace_root), team_id.strip()
             )
             if configuration is None:
-                raise TeamToolError(f"Team 配置不存在: {team_id}")
+                raise TeamToolError(f"Team 配置不存在: {team_id}, 请确认一下是否创建了该 Team")
             parent_run = get_conversation_run_service().get_run(execution_context.run_id)
             # Runner 为主 Run 派生的 profile 已经物化了模型连接配置。节点缺少独立配置时，
             # 只能沿用这份本次 Run 快照，不能在确认时重新读取可变配置。
@@ -81,7 +81,7 @@ class AgentTeamRunTool(HandlerBase):
                 if execution_context.runtime_dependencies.parent_agent_profile is not None
                 else None
             )
-            preparation = AgentTeamPreparationService().prepare(
+            preparation = self.agent_team_preparation_service.prepare(
                 configuration,
                 goal=goal,
                 node_goals=node_goals,
@@ -92,29 +92,14 @@ class AgentTeamRunTool(HandlerBase):
                 fallback_model_settings=fallback_model_settings,
                 fallback_model_config_id=parent_run.model_config_id,
             )
-            # 若同主 Run 已存在 pending TeamRun（部分唯一索引约束一个主 Run 至多一条），
-            # 则原地更新其执行输入与运行快照，但保持原始 team_id 与 pending 状态；否则新建。
-            # 「team_id 存在」即视为已查到 pending 记录，与「保留旧 team_id」语义一致。
-            existing_pending = AgentTeamRunService().find_pending_confirmation(
+            pending_run = self.agent_team_run_service.create_pending_confirmation(
+                configuration=configuration,
+                preparation=preparation,
+                workspace_id=execution_context.workspace_id,
                 parent_task_id=execution_context.task_id,
                 parent_run_id=execution_context.run_id,
+                goal=goal,
             )
-            if existing_pending is not None:
-                pending_run = AgentTeamRunService().update_pending_confirmation(
-                    existing_id=existing_pending.id,
-                    configuration=configuration,
-                    preparation=preparation,
-                    goal=goal,
-                )
-            else:
-                pending_run = AgentTeamRunService().create_pending_confirmation(
-                    configuration=configuration,
-                    preparation=preparation,
-                    workspace_id=execution_context.workspace_id,
-                    parent_task_id=execution_context.task_id,
-                    parent_run_id=execution_context.run_id,
-                    goal=goal,
-                )
             return tool_success(
                 tool_name=self.name,
                 permission=self.permission,
@@ -172,11 +157,9 @@ class AgentTeamRunTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=self.description,
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             execution_mode="thread",
             display=ToolDisplayHints(
                 verb="准备 Agent Team 执行方案",

@@ -99,7 +99,6 @@ def _make_tool(
         name=name,
         group="probe",
         description="probe tool",
-        permission="test",
         handler=handler,
         args_model=_NoArgs,
         timeout_seconds=timeout_seconds,

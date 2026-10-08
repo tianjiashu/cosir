@@ -288,7 +288,6 @@ def test_tool_system_registry_excludes_removed_tool(storage: None) -> None:
     assert _REMOVED_TOOL_NAME not in names
     assert registry.get_tool_definition(_REMOVED_TOOL_NAME) is None
     assert registry.get_schema(_REMOVED_TOOL_NAME) is None
-    assert registry.get_tools_by_permission(_REMOVED_TOOL_NAME) == []
 
 
 def test_registry_is_subset_of_canonical_names_and_only_web_tools_may_be_missing(
@@ -405,14 +404,13 @@ def test_child_tool_to_definition_is_consistent(
 ) -> None:
     """目的：to_definition() 返回的定义字段自洽，且工厂函数等价于实例方法。
 
-    潜在缺陷类型：定义构造遗漏 permission/args_model，或工厂与实例方法分叉。
+    潜在缺陷类型：定义构造遗漏 args_model，或工厂与实例方法分叉。
     """
 
     tool = tool_cls()
     definition = tool.to_definition()
 
     assert definition.name == tool_name
-    assert definition.permission == tool_name
     assert definition.args_model is args_model
     assert definition.execution_mode == "thread"
     assert definition.timeout_seconds > 0
@@ -421,7 +419,6 @@ def test_child_tool_to_definition_is_consistent(
 
     built = factory()
     assert built.name == definition.name
-    assert built.permission == definition.permission
     assert built.args_model is definition.args_model
     assert built.execution_mode == definition.execution_mode
 
@@ -436,9 +433,7 @@ def test_child_tool_definitions_match_registry_definitions(storage: None) -> Non
     for tool_name, _tool_cls, args_model, _factory, _timeout in _CHILD_TOOL_SPECS:
         definition = registry.get_tool_definition(tool_name)
         assert definition is not None, f"{tool_name} 未注册"
-        assert definition.permission == tool_name
         assert definition.args_model is args_model
-        assert len(registry.get_tools_by_permission(tool_name)) == 1
 
 
 def test_child_send_args_model_boundaries() -> None:

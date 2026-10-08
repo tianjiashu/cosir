@@ -76,7 +76,6 @@ class TerminalWriteTool(HandlerBase):
     permission: ClassVar[str] = "shell"
     args_model = TerminalWriteArgs
     timeout_seconds: ClassVar[float] = 30.0
-    risk_level: ClassVar[str] = "high"
     group = TOOL_GROUP_TERMINAL_SESSION
 
     def execute(
@@ -171,7 +170,7 @@ class TerminalWriteTool(HandlerBase):
         返回:
             ``ToolDefinition``：模型可见描述由 ``descriptions.py`` 按宿主平台补全，
             ``parameters_schema`` 用宿主专属 shell 说明覆盖，权限 ``shell``、
-            ``execution_mode="thread"``、``risk_level="high"``。
+            ``execution_mode="thread"``。
 
         异常:
             无。
@@ -184,14 +183,12 @@ class TerminalWriteTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=describe_terminal_tool(self.name, self.description),
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             parameters_schema=build_terminal_session_parameters_schema(
                 self.name, self.args_model
             ),
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             resource_keys=("shell",),
             execution_mode="thread",
             display=ToolDisplayHints(

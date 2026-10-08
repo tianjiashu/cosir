@@ -62,7 +62,6 @@ class WebExtractTool(HandlerBase):
     permission: ClassVar[str] = "network"
     args_model: type[WebExtractArgs] = WebExtractArgs
     timeout_seconds: ClassVar[float] = Constant.Web.REQUEST_TIMEOUT_SECONDS + 10
-    risk_level: ClassVar[str] = "medium"
     group = TOOL_GROUP_WEB
 
 
@@ -485,11 +484,9 @@ class WebExtractTool(HandlerBase):
             name=self.name,
             group=self.group,
             description=self.description,
-            permission=self.permission,
             handler=self.execute,
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
-            risk_level=self.risk_level,
             resource_keys=("network",),
             execution_mode="thread",
             display=ToolDisplayHints(
