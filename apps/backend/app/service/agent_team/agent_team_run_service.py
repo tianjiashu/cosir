@@ -11,11 +11,11 @@ from typing import Any
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
+from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_agent_registry
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.model_settings import ModelSettings
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
-from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationResult,
     AgentTeamPreparationService,
@@ -26,6 +26,7 @@ from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
+from sqlalchemy.exc import SQLAlchemyError
 
 
 class AgentTeamRunService:
@@ -60,34 +61,129 @@ class AgentTeamRunService:
     ) -> AgentTeamRunModel:
         """创建并持久化一条处于确认门槛的 ``pending`` TeamRun。
 
+        本方法只负责新建：覆盖/更新的判断在 ``AgentTeamRunTool`` 中完成（先调
+        :meth:`find_pending_confirmation`，命中则走 :meth:`update_pending_confirmation`）。
         初始配置快照和节点运行快照作为待确认候选保存；用户确认时会使用请求体中的最终
         配置重新准备并覆盖这些执行快照。预览文档只返回给工具层，不写入 TeamRun。创建
         后的 ``pending`` 记录不会进入 Coordinator 的活动运行集合。
-        相同主 Task/Run 的旧待确认 TeamRun 会在同一事务中标记为 ``cancelled``，避免一个
-        主 Run 同时存在多个确认入口。
+
+        参数:
+            configuration: 已通过领域校验的 Team 配置。
+            preparation: ``prepare`` 生成的不可变执行计划。
+            workspace_id: TeamRun 所属 workspace 主键。
+            parent_task_id: 发起 TeamRun 的主 Agent Task 主键。
+            parent_run_id: 发起 TeamRun 的主 ConversationRun 主键。
+            goal: 本次 Team 总目标（会被 ``strip``）。
+
+        返回:
+            持久化后的 ``pending`` TeamRun 模型。
 
         异常:
-            ValueError: 输入或准备结果无效时向上抛出。
-            sqlalchemy.exc.SQLAlchemyError: 主库写入失败时向上抛出。
+            TeamToolError: 数据库写入失败（不可重试）时抛出。
         """
 
-        with begin_immediate(self._session_factory) as session:
-            self._team_run_crud.cancel_pending_confirmation_for_parent(
+        goal_input = goal.strip()
+        try:
+            with begin_immediate(self._session_factory) as session:
+                return self._team_run_crud.create(
+                    configuration=configuration,
+                    workspace_id=workspace_id,
+                    parent_task_id=parent_task_id,
+                    parent_run_id=parent_run_id,
+                    preview_fingerprint=preparation.preview_fingerprint,
+                    goal=goal_input,
+                    node_runtime_snapshots=preparation.node_runtime_snapshots,
+                    session=session,
+                )
+        except SQLAlchemyError as exc:
+            raise TeamToolError(
+                f"Agent Team 待确认记录持久化失败: {exc}",
+                retryable=False,
+            ) from exc
+
+    def find_pending_confirmation(
+        self,
+        *,
+        parent_task_id: int,
+        parent_run_id: int,
+    ) -> AgentTeamRunModel | None:
+        """查找同 ``(parent_task_id, parent_run_id)`` 的待确认 ``pending`` TeamRun。
+
+        部分唯一索引保证一个主 Run 至多一条 pending TeamRun，因此本查询返回至多一行。
+        工具层据此决定是原地更新还是新建，不消费也不修改状态。
+
+        参数:
+            parent_task_id: 发起 TeamRun 的主 Agent Task 主键。
+            parent_run_id: 发起 TeamRun 的主 ConversationRun 主键。
+
+        返回:
+            命中则返回 pending TeamRun 模型，否则返回 ``None``。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 查询主库失败时向上抛出。
+        """
+
+        with self._session_factory() as session:
+            return self._team_run_crud.find_pending_for_parent(
                 parent_task_id,
                 parent_run_id,
                 session=session,
             )
-            row = self._team_run_crud.create(
-                configuration=configuration,
-                workspace_id=workspace_id,
-                parent_task_id=parent_task_id,
-                parent_run_id=parent_run_id,
-                preview_fingerprint=preparation.preview_fingerprint,
-                goal=goal.strip(),
-                node_runtime_snapshots=preparation.node_runtime_snapshots,
-                session=session,
-            )
-            return row
+
+    def update_pending_confirmation(
+        self,
+        *,
+        existing_id: int,
+        configuration: AgentTeamConfiguration,
+        preparation: AgentTeamPreparationResult,
+        goal: str,
+    ) -> AgentTeamRunModel:
+        """原地覆盖一条 pending TeamRun 的执行输入与运行快照。
+
+        覆盖 goal / 配置快照 / 节点运行快照 / 预览指纹，但**保留原始 ``team_id`` 与
+        ``pending`` 状态**：不迁移生命周期、不取消、不新建行。「保留旧 team_id」的语义
+        由调用方（工具层）在查到 pending 记录后主动选择本方法实现，与部分唯一索引约束
+        一致（一个主 Run 至多一条 pending）。
+
+        参数:
+            existing_id: 待更新的 pending TeamRun 主键。
+            configuration: 已通过领域校验的 Team 配置。
+            preparation: ``prepare`` 生成的不可变执行计划。
+            goal: 本次 Team 总目标（会被 ``strip``）。
+
+        返回:
+            更新后的 ``pending`` TeamRun 模型。
+
+        异常:
+            TeamToolError: 并发条件更新失败（记录已被迁移出 pending）或数据库写入失败
+                （均不可重试）时抛出。
+        """
+
+        goal_input = goal.strip()
+        try:
+            with begin_immediate(self._session_factory) as session:
+                updated = self._team_run_crud.update_status_if_in(
+                    existing_id,
+                    AgentTeamRunStatus.PENDING.value,
+                    (AgentTeamRunStatus.PENDING.value,),
+                    state=AgentTeamRunState.initial(preparation.node_runtime_snapshots),
+                    configuration_snapshot_json=configuration.model_dump(mode="json"),
+                    preview_fingerprint=preparation.preview_fingerprint,
+                    goal_input=goal_input,
+                    session=session,
+                )
+                if updated is None:
+                    # 竞态：记录在我们读取后被其他路径迁移出 pending。
+                    raise TeamToolError(
+                        "Agent Team 待确认记录已被其他流程处理，无法原地更新",
+                        retryable=False,
+                    )
+                return updated
+        except SQLAlchemyError as exc:
+            raise TeamToolError(
+                f"Agent Team 待确认记录持久化失败: {exc}",
+                retryable=False,
+            ) from exc
 
     def get(self, run_id: int) -> AgentTeamRunModel:
         """读取 TeamRun。

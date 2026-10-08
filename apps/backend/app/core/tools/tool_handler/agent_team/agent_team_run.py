@@ -6,6 +6,7 @@ import json
 from typing import ClassVar
 
 from app.agent_team.registry import get_agent_team_registry
+from app.agent_team.team_tool_error import TeamToolError
 from app.config.logging.logger import log
 from app.core.tools.display.agent_team_display import build_agent_team_preview_display_data
 from app.core.tools.schemas import (
@@ -47,7 +48,8 @@ class AgentTeamRunTool(HandlerBase):
         """准备并保存当前主 Agent Run 的待确认 TeamRun。
 
         预览和运行时快照在同一次准备中生成，并在返回工具结果前写入主 SQLite。此方法不
-        启动 TeamRun；启动发生在用户确认执行方案之后。
+        启动 TeamRun；启动发生在用户确认执行方案之后。准备或持久化失败会抛出
+        ``TeamToolError``，由下方 ``except`` 统一映射为不可重试的失败观察。
         """
 
         if execution_context is None:
@@ -70,7 +72,7 @@ class AgentTeamRunTool(HandlerBase):
                 str(execution_context.workspace_root), team_id.strip()
             )
             if configuration is None:
-                raise ValueError(f"Team 配置不存在: {team_id}")
+                raise TeamToolError(f"Team 配置不存在: {team_id}")
             parent_run = get_conversation_run_service().get_run(execution_context.run_id)
             # Runner 为主 Run 派生的 profile 已经物化了模型连接配置。节点缺少独立配置时，
             # 只能沿用这份本次 Run 快照，不能在确认时重新读取可变配置。
@@ -90,14 +92,29 @@ class AgentTeamRunTool(HandlerBase):
                 fallback_model_settings=fallback_model_settings,
                 fallback_model_config_id=parent_run.model_config_id,
             )
-            pending_run = AgentTeamRunService().create_pending_confirmation(
-                configuration=configuration,
-                preparation=preparation,
-                workspace_id=execution_context.workspace_id,
+            # 若同主 Run 已存在 pending TeamRun（部分唯一索引约束一个主 Run 至多一条），
+            # 则原地更新其执行输入与运行快照，但保持原始 team_id 与 pending 状态；否则新建。
+            # 「team_id 存在」即视为已查到 pending 记录，与「保留旧 team_id」语义一致。
+            existing_pending = AgentTeamRunService().find_pending_confirmation(
                 parent_task_id=execution_context.task_id,
                 parent_run_id=execution_context.run_id,
-                goal=goal,
             )
+            if existing_pending is not None:
+                pending_run = AgentTeamRunService().update_pending_confirmation(
+                    existing_id=existing_pending.id,
+                    configuration=configuration,
+                    preparation=preparation,
+                    goal=goal,
+                )
+            else:
+                pending_run = AgentTeamRunService().create_pending_confirmation(
+                    configuration=configuration,
+                    preparation=preparation,
+                    workspace_id=execution_context.workspace_id,
+                    parent_task_id=execution_context.task_id,
+                    parent_run_id=execution_context.run_id,
+                    goal=goal,
+                )
             return tool_success(
                 tool_name=self.name,
                 permission=self.permission,
@@ -113,11 +130,30 @@ class AgentTeamRunTool(HandlerBase):
                     team_run_id=pending_run.id,
                 ),
             )
-        except Exception as exc:
+        except TeamToolError as exc:
             log.warning(
                 "agent_team_run_creation_failed",
                 extra={
                     "msg": "Agent Team 待确认运行创建失败",
+                    "data": {
+                        "team_id": team_id,
+                        "error_type": type(exc).__name__,
+                        "retryable": exc.retryable,
+                    },
+                },
+            )
+            return tool_error(
+                self.name,
+                "agent_team_run_creation_invalid",
+                reason=f"无法创建 Team 执行方案，请检查 Team 配置或稍后重试,error:{str(exc)}",
+                permission=self.permission,
+                retryable=exc.retryable,
+            )
+        except Exception as exc:
+            log.warning(
+                "agent_team_run_creation_failed",
+                extra={
+                    "msg": "Agent Team 待确认运行创建失败（未知异常）",
                     "data": {"team_id": team_id, "error_type": type(exc).__name__},
                 },
             )
@@ -126,7 +162,7 @@ class AgentTeamRunTool(HandlerBase):
                 "agent_team_run_creation_invalid",
                 reason=f"无法创建 Team 执行方案，请检查 Team 配置或稍后重试,error:{str(exc)}",
                 permission=self.permission,
-                retryable=True,
+                retryable=False,
             )
 
     def to_definition(self) -> ToolDefinition:

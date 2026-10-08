@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
-from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
@@ -67,28 +66,37 @@ class AgentTeamRunCrud:
             session.flush()
         return row
 
-    def cancel_pending_confirmation_for_parent(
+    def find_pending_for_parent(
         self,
         parent_task_id: int,
         parent_run_id: int,
         *,
         session: Session,
-    ) -> int:
-        """在创建新方案前取消同一主 Run 的旧待确认 ``pending`` TeamRun。"""
+    ) -> AgentTeamRunModel | None:
+        """读取同 ``(parent_task_id, parent_run_id)`` 的唯一 ``pending`` TeamRun。
 
-        result = session.execute(
-            update(AgentTeamRunModel)
-            .where(
+        部分唯一索引保证一个主 Run 至多一条 pending TeamRun，因此本查询返回至多一行；
+        用于创建前的就地更新判断，不消费也不修改状态。
+
+        参数:
+            parent_task_id: 主 Agent Task 主键。
+            parent_run_id: 主 ConversationRun 主键。
+            session: 调用方事务；本方法不自行提交。
+
+        返回:
+            命中则返回 pending TeamRun 模型，否则返回 ``None``。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 查询主库失败时向上抛出。
+        """
+
+        return session.scalars(
+            select(AgentTeamRunModel).where(
                 AgentTeamRunModel.parent_task_id == parent_task_id,
                 AgentTeamRunModel.parent_run_id == parent_run_id,
                 AgentTeamRunModel.status == AgentTeamRunStatus.PENDING.value,
             )
-            .values(
-                status=AgentTeamRunStatus.CANCELLED.value,
-                end_reason=AgentTeamRunEndReason.SUPERSEDED_BY_NEW_PREVIEW.value,
-            )
-        )
-        return result.rowcount
+        ).first()
 
     def get_by_id(
         self,

@@ -15,6 +15,7 @@ from typing import Any
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
+from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
@@ -68,7 +69,7 @@ def resolve_node_profile(
 
     异常:
         KeyError: 节点不存在。
-        ValueError: 节点引用的 Agent 不存在或不是 CHILD 类型。
+        TeamToolError: 节点引用的 Agent 不存在或不是 CHILD 类型。
     """
 
     node = next((item for item in configuration.nodes if item.node_id == node_id), None)
@@ -76,7 +77,7 @@ def resolve_node_profile(
         raise KeyError(node_id)
     profile = get_agent_registry().resolve(workspace_root, node.agent_id)
     if profile is None or profile.agent_type is not AgentProfileType.CHILD:
-        raise ValueError(f"Team 节点引用的 child Agent 不可用: {node.agent_id}")
+        raise TeamToolError(f"Team 节点引用的 child Agent 不可用: {node.agent_id}")
     return node, profile
 
 
@@ -88,13 +89,13 @@ def materialize_node_tools(agent_id: str, workspace_root: str) -> list[ToolDefin
     注册表解析。
 
     异常:
-        ValueError: Agent Profile 不存在。
+        TeamToolError: Agent Profile 不存在。
     """
 
     tool_system = get_tool_system()
     profile = get_agent_registry().resolve(workspace_root, agent_id)
     if profile is None:
-        raise ValueError(f"Team 节点 Agent 不可用: {agent_id}")
+        raise TeamToolError(f"Team 节点 Agent 不可用: {agent_id}")
     selected = [
         tool
         for tool in profile.select_tools(tool_system.executor.list_tools())
@@ -113,19 +114,19 @@ def resolve_effective_model_settings(
     物化的模型连接配置，并应用节点偏好覆盖。返回值会进入本次 Team 的冻结运行快照。
 
     异常:
-        ValueError: Profile 和 fallback 都不能提供完整模型运行配置。
+        TeamToolError: Profile 和 fallback 都不能提供完整模型运行配置。
     """
 
     try:
         return profile.model_settings.require_runtime_config()
     except ModelSettingsError:
         if fallback is None:
-            raise ValueError(f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置") from None
+            raise TeamToolError(f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置") from None
         try:
             effective = fallback.with_preference_defaults(profile.model_settings)
             return effective.require_runtime_config()
         except ModelSettingsError as exc:
-            raise ValueError(f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置") from exc
+            raise TeamToolError(f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置") from exc
 
 
 def build_node_structured_output(
@@ -142,7 +143,7 @@ def build_node_structured_output(
         包含状态和下游结果的 JSON Schema 契约；状态枚举只包含当前节点允许的值。
 
     异常:
-        ValueError: 节点状态没有对应转移，且节点不是终点时抛出。
+        TeamToolError: 节点状态没有对应转移，且节点不是终点时抛出。
 
     副作用:
         无；只读取配置并构造不可变输出契约。
@@ -159,7 +160,7 @@ def build_node_structured_output(
         target_node_id = routes.get(status)
         if target_node_id is None:
             if node.node_type != "end":
-                raise ValueError(
+                raise TeamToolError(
                     f"Team 节点状态缺少转移目标: {node.node_id}/{status}"
                 )
             destination = "End the Team"
@@ -301,25 +302,25 @@ class AgentTeamPreparationService:
         不由本服务持久化。
 
         异常:
-            ValueError: 总目标、节点子目标或节点运行时依赖无效。
+            TeamToolError: 总目标、节点子目标或节点运行时依赖无效。
     """
 
         goal = goal.strip()
         if not goal:
-            raise ValueError("Team goal must not be blank")
+            raise TeamToolError("Team goal must not be blank")
         node_ids = {node.node_id for node in configuration.nodes}
         node_goals = {
             key: value.strip() for key, value in node_goals.items()
         }
         unknown_node_goals = set(node_goals) - node_ids
         if unknown_node_goals:
-            raise ValueError(
+            raise TeamToolError(
                 "node_goals references unknown nodes: "
                 + ", ".join(sorted(unknown_node_goals))
             )
         missing_node_goals = node_ids - set(node_goals)
         if missing_node_goals:
-            raise ValueError(
+            raise TeamToolError(
                 "node_goals must define every node: "
                 + ", ".join(sorted(missing_node_goals))
             )
@@ -327,7 +328,7 @@ class AgentTeamPreparationService:
             node_id for node_id, value in node_goals.items() if not value
         )
         if blank_node_goals:
-            raise ValueError(
+            raise TeamToolError(
                 "node_goals must not be blank: " + ", ".join(blank_node_goals)
             )
 
