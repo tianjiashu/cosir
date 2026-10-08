@@ -105,7 +105,6 @@ async def confirm_agent_team_run(
 ) -> dict[str, Any]:
     """提交最终配置，确认主 Run 下的待确认 TeamRun 并异步启动对应节点。"""
 
-    runtime_loop = asyncio.get_running_loop()
     try:
         await AgentTeamParentRunService().wait_for_parent_input(payload.team_run_id)
         row = await asyncio.to_thread(
@@ -114,7 +113,6 @@ async def confirm_agent_team_run(
             payload.configuration,
             goal=payload.goal,
             node_goals=payload.node_goals,
-            runtime_loop=runtime_loop,
         )
         return _run_payload(row)
     except ValueError as exc:

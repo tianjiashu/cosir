@@ -115,7 +115,6 @@ class AgentTeamRunService:
         *,
         goal: str,
         node_goals: dict[str, str],
-        runtime_loop: asyncio.AbstractEventLoop,
     ) -> AgentTeamRunModel:
         """使用用户最终配置确认 TeamRun，并在提交后交给 Coordinator 启动。
 
@@ -164,7 +163,6 @@ class AgentTeamRunService:
 
         return get_agent_team_coordinator().start(
             existing.id,
-            runtime_loop=runtime_loop,
         )
 
     def _prepare_final_plan(

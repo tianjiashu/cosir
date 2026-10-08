@@ -69,8 +69,6 @@ class AgentTeamCoordinator:
     def start(
             self,
             team_run_id: int,
-            *,
-            runtime_loop: asyncio.AbstractEventLoop,
     ) -> AgentTeamRunModel:
         """启动已确认的 TeamRun，并登记由 Coordinator 拥有的节点驱动任务。
 
