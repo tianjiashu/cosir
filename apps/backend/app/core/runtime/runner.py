@@ -138,87 +138,22 @@ class AgentRuntime:
         workspace_scope = (
             AgentProfileRegistry.SYSTEM_WORKSPACE if is_main_agent else workspace.root_path
         )
-        profile_snapshot = (
-            task.extra.get("agent_team_profile_snapshot")
-            if isinstance(task.extra, dict)
-            else None
-        )
         try:
             agent_profile = self._agent_registry.resolve(workspace_scope, agent_id)
         except AgentProfileConfigError as exc:
-            if not isinstance(profile_snapshot, dict):
-                raise RuntimeError(
-                    f"workspace child agent configuration unavailable for run {run_id}: {exc}"
-                ) from exc
-            agent_profile = None
-        if agent_profile is None and not isinstance(profile_snapshot, dict):
+            raise RuntimeError(
+                f"workspace child agent configuration unavailable for run {run_id}: {exc}"
+            ) from exc
+        if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for run {run_id}")
-        if isinstance(profile_snapshot, dict):
-            snapshot_settings = profile_snapshot.get("model_settings", {})
-            if not isinstance(snapshot_settings, dict):
-                raise RuntimeError(f"agent team profile snapshot is invalid for run {run_id}")
-            snapshot_agent_id = str(
-                profile_snapshot.get("agent_id", agent_id)
-            )
-            snapshot_role = str(profile_snapshot.get("role", snapshot_agent_id))
-            snapshot_prompt = str(profile_snapshot.get("system_prompt", ""))
-            snapshot_tools = list(profile_snapshot.get("allowed_tools", []))
-            snapshot_max_steps = int(profile_snapshot.get("max_steps", 100))
-            snapshot_structured_output = profile_snapshot.get("structured_output")
-            structured_output = (
-                StructuredOutputSpec.model_validate(snapshot_structured_output)
-                if snapshot_structured_output is not None
-                else None
-            )
-            if agent_profile is None:
-                agent_profile = AgentProfile(
-                    agent_id=snapshot_agent_id,
-                    role=snapshot_role,
-                    system_prompt=snapshot_prompt,
-                    allowed_tools=snapshot_tools,
-                    agent_type=AgentProfileType.CHILD,
-                    max_steps=snapshot_max_steps,
-                    structured_output=structured_output,
-                )
-            agent_profile = replace(
-                agent_profile,
-                agent_id=snapshot_agent_id,
-                role=snapshot_role,
-                system_prompt=str(
-                    profile_snapshot.get("system_prompt", agent_profile.system_prompt)
-                ),
-                allowed_tools=snapshot_tools or agent_profile.allowed_tools,
-                max_steps=snapshot_max_steps,
-                structured_output=structured_output,
-                model_config_id=profile_snapshot.get(
-                    "model_config_id", agent_profile.model_config_id
-                ),
-                model_settings=ModelSettings(**snapshot_settings),
-            )
-        # Run 选择的模型配置在 per-run 派生边界物化；进入 workflow 后只允许消费
-        # AgentProfile.model_settings，不再让模型工厂回查 model_config_id。
         runtime_model_settings = None
-        if isinstance(profile_snapshot, dict):
-            # Agent Team 节点使用确认时冻结的完整模型设置；不能因用户随后编辑或删除
-            # model_config 而改变已经确认的 Team。
-            snapshot_settings = profile_snapshot.get("model_settings")
-            if not isinstance(snapshot_settings, dict):
-                raise RuntimeError(f"agent team model snapshot is invalid for run {run_id}")
-            runtime_model_settings = ModelSettings(**snapshot_settings)
-        elif run.model_config_id is not None:
+        if run.model_config_id is not None:
             runtime_model_settings = ModelSettings.from_model_config_record(
                 get_model_config_service().get_config(run.model_config_id)
             )
-
         # 派生 per-run 副本承载本次 run：共享注册表单例不被原地写，并发 run 互不串扰。
-        agent_profile = agent_profile.derive_for_run(
-            run,
-            model_settings=runtime_model_settings,
-        )
-        await self.run_agent(
-            agent_profile,
-            execution_mode=execution_mode,
-        )
+        agent_profile = agent_profile.derive_for_run(run, model_settings=runtime_model_settings)
+        await self.run_agent(agent_profile, execution_mode=execution_mode)
 
     async def run_agent(
         self, agent: AgentProfile, *, execution_mode: ExecutionMode = "fresh"
@@ -237,10 +172,11 @@ class AgentRuntime:
             RuntimeError: 当 ``agent.run`` 为 None 时抛出。
 
         副作用:
-            触发 USER_PROMPT_SUBMIT/STOP hook；Run 终态由 workflow 节点或 workflow.run 的统一
-            异常边界落定；terminal checkpoint 由 ``_run_graph`` 的 finally 收敛。本方法在
-            finally 中处理 Team 子 Run 自然结束回调并清理进程内取消信号。本轮消息落库、canonical conversation facts 与快照收口由
-            ``workflow.run`` 内部的 ``RuntimeContextManager`` 负责。
+            触发 USER_PROMPT_SUBMIT/STOP hook；run 的终态（completed / cancelled / failed）
+            **由 workflow 落定**——正常路径经节点内的 ``WorkflowOperations``，异常路径经
+            ``ReactLikeWorkflow._settle_failed_run``；本方法不写任何终态，异常按原文传播并
+            记 ``task_failed``，仅清理进程内取消信号。本轮消息落库、canonical conversation
+            facts 与快照收口由 ``workflow.run`` 内部的 ``RuntimeContextManager`` 负责。
         """
 
         if agent.run is None:
