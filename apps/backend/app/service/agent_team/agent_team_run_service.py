@@ -20,7 +20,7 @@ from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationResult,
     AgentTeamPreparationService,
 )
-from app.service.depends import get_model_config_service, get_workspace_service
+from app.service.depends import get_model_config_service, get_workspace_service, get_conversation_run_service
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
@@ -32,12 +32,7 @@ from sqlalchemy.exc import SQLAlchemyError
 class AgentTeamRunService:
     """管理 TeamRun 从待确认到运行的持久化生命周期。"""
 
-    def __init__(
-        self,
-        *,
-        team_run_crud: AgentTeamRunCrud | None = None,
-        run_service: ConversationRunService | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         """创建无进程状态的 TeamRun 生命周期服务。
 
         参数:
@@ -45,8 +40,8 @@ class AgentTeamRunService:
             run_service: 可选的主 Agent Run 读取服务。
         """
 
-        self._team_run_crud = team_run_crud or AgentTeamRunCrud()
-        self._run_service = run_service or ConversationRunService()
+        self._team_run_crud = AgentTeamRunCrud()
+        self._run_service = get_conversation_run_service()
         self._session_factory = main_session_factory()
 
     def create_pending_confirmation(
@@ -132,20 +127,20 @@ class AgentTeamRunService:
         existing = self.get(team_run_id)
         self._validate_parent_run(existing.parent_task_id, existing.parent_run_id)
         final_goal = goal.strip()
-        configuration = AgentTeamConfiguration.model_validate(configuration_document)
+        configuration:AgentTeamConfiguration = AgentTeamConfiguration.model_validate(configuration_document)
         final_node_goals = {
             key: value.strip()
             for key, value in node_goals.items()
             if isinstance(key, str) and isinstance(value, str) and value.strip()
         }
-        agent_team_preparation = self._prepare_final_plan(
+        agent_team_preparation:AgentTeamPreparationResult = self._prepare_final_plan(
             existing, configuration, goal=final_goal, node_goals=final_node_goals
         )
 
         with begin_immediate(self._session_factory) as session:
             if existing.team_id != configuration.team_id:
                 raise ValueError("确认配置的 team_id 与待确认 Team 不一致")
-            state = AgentTeamRunState.initial(agent_team_preparation.node_runtime_snapshots)
+            state = AgentTeamRunState.initial(agent_team_preparation.node_runtime_snapshots,configuration)
             updated = self._team_run_crud.update_status_if_in(
                 existing.id,
                 AgentTeamRunStatus.RUNNING.value,
@@ -162,7 +157,7 @@ class AgentTeamRunService:
         from app.agent_team.coordinator import get_agent_team_coordinator
 
         return get_agent_team_coordinator().start(
-            existing.id,
+            existing,
         )
 
     def _prepare_final_plan(
@@ -191,35 +186,6 @@ class AgentTeamRunService:
             workspace_id=row.workspace_id,
             parent_agent_profile=get_agent_registry().resolve(workspace_root, parent_run.agent_id),
         )
-
-    @staticmethod
-    def _resolve_parent_model_settings(
-        parent_run: Any,
-        workspace_root: str,
-    ) -> ModelSettings | None:
-        """物化主 Run 的模型设置，供确认时解析缺少独立模型配置的节点。
-
-        主 Run 的模型连接配置来自其 ``model_config_id``，Agent profile 仅补充用户偏好。
-        如果主 profile 当前不可解析，则仍返回已物化的连接设置；节点自身拥有独立模型配置
-        时，准备服务可以不依赖该 fallback。
-        """
-
-        runtime_settings = None
-        if parent_run.model_config_id is not None:
-            runtime_settings = ModelSettings.from_model_config_record(
-                get_model_config_service().get_config(parent_run.model_config_id)
-            )
-        agent_id = parent_run.agent_id or "main_agent"
-        scope = (
-            AgentProfileRegistry.SYSTEM_WORKSPACE if agent_id == "main_agent" else workspace_root
-        )
-        profile = get_agent_registry().resolve(scope, agent_id)
-        if profile is None:
-            return runtime_settings
-        return profile.derive_for_run(
-            parent_run,
-            model_settings=runtime_settings,
-        ).model_settings
 
     def _validate_parent_run(self, parent_task_id: int, parent_run_id: int) -> None:
         """校验 TeamRun 关联的主 Agent Run 仍属于该 Task 且可继续。"""

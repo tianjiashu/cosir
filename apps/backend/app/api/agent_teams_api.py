@@ -34,7 +34,6 @@ def _run_payload(row: Any) -> dict[str, Any]:
     # 节点运行快照包含 system_prompt 和内部模型 schema，只供 coordinator 恢复执行，
     # 不属于前端 Team 进度契约，避免通过状态查询泄露内部提示词。
     public_state.pop("node_runtime", None)
-    active_execution = state.active_execution()
     node_results = [
         execution.model_dump(mode="json")
         for execution in state.node_executions
@@ -48,9 +47,6 @@ def _run_payload(row: Any) -> dict[str, Any]:
         "parent_run_id": row.parent_run_id,
         "goal": row.goal_input,
         "status": row.status,
-        "active_node": (
-            active_execution.model_dump(mode="json") if active_execution is not None else None
-        ),
         "node_results": node_results,
         "state": public_state,
         "end_reason": row.end_reason,

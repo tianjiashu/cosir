@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, StringConstraints, model_validator
 
@@ -36,8 +36,6 @@ class TeamNodeDefinition(BaseModel):
         name: 面向用户展示的节点名称。
         agent_id: 节点执行时使用的 child Agent profile 标识；profile 是否存在由运行时
             注册表和预览构建层校验。
-        node_type: 节点在流水线中的位置类型。``start`` 是唯一入口，``middle`` 是普通
-            流转节点，``end`` 是提交结果后结束 Team 的终点。
         statuses: 节点允许提交的业务状态名称集合；它们不是 ConversationRun 的技术
             生命周期状态。
 
@@ -57,9 +55,6 @@ class TeamNodeDefinition(BaseModel):
     )
     agent_id: TeamNodeIdentifier = Field(
         description="节点使用的 child Agent profile 标识。",
-    )
-    node_type: Literal["start", "middle", "end"] = Field(
-        description="节点类型：start 为唯一入口，middle 为中间节点，end 为终点。",
     )
     statuses: list[TeamStatusName] = Field(
         min_length=1,

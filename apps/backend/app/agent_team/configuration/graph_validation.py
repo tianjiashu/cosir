@@ -3,19 +3,23 @@
 本模块只依赖节点和转移对象的最小属性协议，因此既可以被面向 Agent 的提案参数模型
 调用，也可以被最终持久化配置模型调用。字段格式由各自模型负责；本模块只负责节点
 之间的结构关系、可达性和状态转移完整性，不负责读取文件、解析 Agent profile 或写库。
+
+图以 ``start_node_id`` 作为唯一入口，以转移目标字面量 ``END`` 表示 Team 结束；节点不再
+携带 ``node_type``。
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal, Protocol
+from typing import Protocol
+
+from app.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
 
 
 class TeamGraphNode(Protocol):
     """图校验所需的节点最小属性协议。"""
 
     node_id: str
-    node_type: Literal["start", "middle", "end"]
     statuses: Sequence[str]
 
 
@@ -34,17 +38,19 @@ class TeamGraphValidationError(ValueError):
 def validate_team_graph(
     nodes: Sequence[TeamGraphNode],
     transitions: Sequence[TeamGraphTransition],
+    start_node_id: str,
 ) -> None:
-    """校验 Team 图的节点类型、转移关系和可达性。
+    """校验 Team 图的入口、转移关系和可达性。
 
     参数:
         nodes: 待校验的节点对象序列；对象只需实现 :class:`TeamGraphNode` 协议。
         transitions: 待校验的转移对象序列；对象只需实现 :class:`TeamGraphTransition`
             协议。
+        start_node_id: 图的唯一入口节点标识，必须声明在 ``nodes`` 中。
 
     异常:
-        TeamGraphValidationError: 节点重复、start/end 数量不正确、转移引用无效、存在
-            孤立节点、死路节点、重复转移或非终点状态缺少转移时抛出。
+        TeamGraphValidationError: 节点重复、入口无效、``END`` 被用作节点、转移引用无效、
+            存在孤立节点、死路节点、重复转移或状态缺少转移时抛出。
 
     副作用:
         不修改输入对象，不读取外部资源，也不产生持久化写入。
@@ -58,22 +64,29 @@ def validate_team_graph(
         raise TeamGraphValidationError("node_id must be unique")
     node_map = {node.node_id: node for node in nodes}
 
-    start_nodes = [node for node in nodes if node.node_type == "start"]
-    end_nodes = [node for node in nodes if node.node_type == "end"]
-    if len(start_nodes) != 1:
-        raise TeamGraphValidationError("Team must contain exactly one start node")
-    if len(end_nodes) != 1:
-        raise TeamGraphValidationError("Team must contain exactly one end node")
+    if start_node_id not in node_map:
+        raise TeamGraphValidationError(
+            f"start_node_id '{start_node_id}' is not a declared node"
+        )
+    if END_TARGET_NODE_ID in node_map:
+        raise TeamGraphValidationError(
+            f"node_id '{END_TARGET_NODE_ID}' is reserved as the terminal target"
+        )
 
     edge_keys: set[tuple[str, str]] = set()
     adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    adjacency[END_TARGET_NODE_ID] = set()
     reverse_adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    reverse_adjacency[END_TARGET_NODE_ID] = set()
     for transition in transitions:
+        if transition.from_node_id == END_TARGET_NODE_ID:
+            raise TeamGraphValidationError(
+                f"'{END_TARGET_NODE_ID}' is only allowed as a transition target, "
+                "not as from_node_id"
+            )
         source = node_map.get(transition.from_node_id)
         if source is None:
             raise TeamGraphValidationError("transition references an unknown source node")
-        if source.node_type == "end":
-            raise TeamGraphValidationError("end nodes cannot have outgoing transitions")
         if transition.status not in source.statuses:
             raise TeamGraphValidationError(
                 "status "
@@ -88,14 +101,13 @@ def validate_team_graph(
             )
         edge_keys.add(edge_key)
 
-        if transition.target_node_id not in node_map:
+        target = transition.target_node_id
+        if target != END_TARGET_NODE_ID and target not in node_map:
             raise TeamGraphValidationError("transition references an unknown target node")
-        adjacency[transition.from_node_id].add(transition.target_node_id)
-        reverse_adjacency[transition.target_node_id].add(transition.from_node_id)
+        adjacency[transition.from_node_id].add(target)
+        reverse_adjacency[target].add(transition.from_node_id)
 
     for node in nodes:
-        if node.node_type == "end":
-            continue
         missing_statuses = [
             status for status in node.statuses if (node.node_id, status) not in edge_keys
         ]
@@ -105,18 +117,16 @@ def validate_team_graph(
                 f"'{node.node_id}' has statuses without transitions: {', '.join(missing_statuses)}"
             )
 
-    start_node_id = start_nodes[0].node_id
     reachable = _walk_graph(start_node_id, adjacency)
     unreachable = sorted(set(node_ids) - reachable)
     if unreachable:
         raise TeamGraphValidationError(f"unreachable nodes: {', '.join(unreachable)}")
 
-    end_node_id = end_nodes[0].node_id
-    can_reach_end = _walk_graph(end_node_id, reverse_adjacency)
+    can_reach_end = _walk_graph(END_TARGET_NODE_ID, reverse_adjacency)
     dead_end_nodes = sorted(set(node_ids) - can_reach_end)
     if dead_end_nodes:
         raise TeamGraphValidationError(
-            "nodes cannot reach the end node: " + ", ".join(dead_end_nodes)
+            "nodes cannot reach the terminal END target: " + ", ".join(dead_end_nodes)
         )
 
 

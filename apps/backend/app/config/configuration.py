@@ -25,11 +25,11 @@ from typing import TYPE_CHECKING
 from app.core.agents.agent_profile_registry import (
     AgentProfileRegistry,
 )
-from app.core.tools import ToolSystem
 from app.core.tools.tool_registry import ToolRegistry
 
 if TYPE_CHECKING:
     from app.core.agents.agent_profile import AgentProfile
+    from app.core.tools import ToolSystem
 
 _AGENT_REGISTRY: AgentProfileRegistry | None = None
 _TOOL_SYSTEM: ToolSystem | None = None

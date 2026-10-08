@@ -13,6 +13,7 @@ from typing import Any
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
+from app.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
@@ -79,7 +80,7 @@ def resolve_node_profile(
     return node, profile
 
 
-def materialize_node_tools(agent_id: str, workspace_root: str) -> list[ToolDefinition]:
+def materialize_node_tools(agent_id: str, workspace_root: str) -> list[str]:
     """根据节点 Agent Profile 固化工具定义。
 
     Team 节点不能递归创建 Team、子 Agent 或配置提案；可固化工具来自节点 Profile 允许的工具
@@ -94,12 +95,9 @@ def materialize_node_tools(agent_id: str, workspace_root: str) -> list[ToolDefin
     profile = get_agent_registry().resolve(workspace_root, agent_id)
     if profile is None:
         raise TeamToolError(f"Team 节点 Agent 不可用: {agent_id}")
-    selected = [
-        tool
-        for tool in profile.select_tools(tool_system.executor.list_tools())
-        if tool.name not in TEAM_NODE_DISALLOWED_TOOLS
-    ]
-    return selected
+    allowed_tools = profile.allowed_tools
+    allowed_tools.extend([TOOL_DELEGATE_TASK, TOOL_CHILD_AGENT_SEND, TOOL_CHILD_AGENT_STATUS, TOOL_CHILD_AGENT_WAIT])
+    return allowed_tools
 
 def require_model_settings(model_settings: ModelSettings) -> ModelSettings | None:
     """断言模型设置已具备模型构建所需的物化字段。"""
@@ -158,7 +156,7 @@ def build_node_structured_output(
         包含状态和下游结果的 JSON Schema 契约；状态枚举只包含当前节点允许的值。
 
     异常:
-        TeamToolError: 节点状态没有对应转移，且节点不是终点时抛出。
+        TeamToolError: 节点状态没有对应转移时抛出。
 
     副作用:
         无；只读取配置并构造不可变输出契约。
@@ -174,10 +172,10 @@ def build_node_structured_output(
     for status in node.statuses:
         target_node_id = routes.get(status)
         if target_node_id is None:
-            if node.node_type != "end":
-                raise TeamToolError(
-                    f"Team 节点状态缺少转移目标: {node.node_id}/{status}"
-                )
+            raise TeamToolError(
+                f"Team 节点状态缺少转移目标: {node.node_id}/{status}"
+            )
+        if target_node_id == END_TARGET_NODE_ID:
             destination = "End the Team"
         else:
             destination = f"{node_names[target_node_id]} ({target_node_id})"
@@ -244,30 +242,37 @@ def build_node_system_prompt(
     for transition in configuration.transitions:
         if transition.from_node_id != node.node_id:
             continue
+        if transition.target_node_id == END_TARGET_NODE_ID:
+            route_lines.append(
+                f"- On status '{transition.status}', end the Agent Team."
+            )
+            continue
         target = configuration.node(transition.target_node_id)
         route_lines.append(
             f"- On status '{transition.status}', hand off to {target.name} ({target.node_id})."
         )
-    if node.node_type == "end":
-        route_lines.append("- End the Agent Team after this node completes.")
 
     workflow_nodes = [
-        f"- {item.name} ({item.node_id}, {item.node_type}); "
-        f"Agent role: {node_roles[item.node_id]}"
+        f"- {item.name} ({item.node_id}); Agent role: {node_roles[item.node_id]}"
         for item in configuration.nodes
     ]
-    workflow_transitions = [
-        f"- {configuration.node(item.from_node_id).name} ({item.from_node_id}) "
-        f"--{item.status}--> "
-        f"{configuration.node(item.target_node_id).name} ({item.target_node_id})"
-        for item in configuration.transitions
-    ]
+    workflow_transitions = []
+    for item in configuration.transitions:
+        source_name = configuration.node(item.from_node_id).name
+        if item.target_node_id == END_TARGET_NODE_ID:
+            target_label = "End the Agent Team"
+        else:
+            target = configuration.node(item.target_node_id)
+            target_label = f"{target.name} ({target.node_id})"
+        workflow_transitions.append(
+            f"- {source_name} ({item.from_node_id}) --{item.status}--> {target_label}"
+        )
     team_context = "\n".join(
         (
             "## Agent Team Execution Protocol",
             "## Overall Team Goal\n" + goal,
             f'You are working in Agent Team "{configuration.name}" ({configuration.team_id}).',
-            f"Current node: {node.name} ({node.node_id}, {node.node_type}).",
+            f"Current node: {node.name} ({node.node_id}).",
             "Team members and roles:\n" + "\n".join(workflow_nodes),
             "Team workflow transitions:\n"
             + ("\n".join(workflow_transitions) or "- No explicit transitions."),
@@ -364,7 +369,7 @@ class AgentTeamPreparationService:
         node_runtime_snapshots: dict[str, dict[str, Any]] = {}
         for node in configuration.nodes:
             profile = node_profiles[node.node_id]
-            tools = materialize_node_tools(profile.agent_id, workspace_root)
+            allowed_tools = materialize_node_tools(profile.agent_id, workspace_root)
             model_settings: ModelSettings = resolve_effective_model_settings(profile, parent_agent_profile)
             structured_output = build_node_structured_output(configuration, node)
             node_runtime_snapshots[node.node_id] = {
@@ -378,8 +383,7 @@ class AgentTeamPreparationService:
                     goal,
                     node_roles,
                 ),
-                "allowed_tools": [tool.name for tool in tools],
-                "max_steps": profile.max_steps,
+                "allowed_tools": allowed_tools,
                 "structured_output": structured_output.to_document(),
                 "model_config_id": profile.model_config_id or parent_agent_profile.model_config_id,
                 "model_settings": dataclasses.asdict(model_settings),
@@ -389,7 +393,9 @@ class AgentTeamPreparationService:
                     "node_id": node.node_id,
                     "name": node.name,
                     "agent_id": node.agent_id,
-                    "node_type": node.node_type,
+                    "node_type": (
+                        "start" if node.node_id == configuration.start_node_id else "middle"
+                    ),
                     "role": profile.role,
                     "model_config_id": profile.model_config_id
                                        or parent_agent_profile.model_config_id,

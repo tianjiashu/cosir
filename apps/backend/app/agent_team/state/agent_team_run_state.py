@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
+from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+
 
 class AgentTeamNodeExecution(BaseModel):
     """记录一次节点 ConversationRun 执行及其提交结果。
@@ -48,7 +50,6 @@ class AgentTeamRunRuntime(BaseModel):
     node_goal: StrictStr = ""
     system_prompt: StrictStr = ""
     allowed_tools: list[str] = Field(default_factory=list)
-    max_steps: StrictInt | None = None
     structured_output: dict[str, Any] = Field(default_factory=dict)
     model_config_id: StrictInt | None = None
     model_settings: dict[str, Any] = Field(default_factory=dict)
@@ -71,56 +72,41 @@ class AgentTeamRunState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_executions: dict[str, AgentTeamNodeExecution] = Field(default_factory=dict)
-    active_node_run_id: StrictInt | None = None
+    current_node_id: StrictStr | None = None
     transition_history: list[AgentTeamTransitionRecord] = Field(default_factory=list)
     node_runtime: dict[str, AgentTeamRunRuntime] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_execution_cursor(self) -> AgentTeamRunState:
-        """校验节点执行历史与活动节点游标的一致性。"""
-
-        run_ids = [execution.run_id for execution in self.node_executions]
-        if len(run_ids) != len(set(run_ids)):
-            raise ValueError("Agent Team 节点执行记录不能复用同一个 run_id")
-        active_executions = [
-            execution for execution in self.node_executions if not execution.completed
-        ]
-        if len(active_executions) > 1:
-            raise ValueError("Agent Team 状态最多只能存在一个活动节点")
-        if active_executions:
-            if self.active_node_run_id != active_executions[0].run_id:
-                raise ValueError("活动节点游标与未完成节点执行记录不一致")
-        elif self.active_node_run_id is not None:
-            raise ValueError("没有活动节点执行记录时不能保留活动节点游标")
-        unknown_node_ids = set(self.node_task_ids) - set(self.node_runtime)
-        if unknown_node_ids:
-            raise ValueError("节点 Task 映射引用了不存在的 Team 节点")
-        for execution in self.node_executions:
-            if self.node_task_ids.get(execution.node_id) != execution.task_id:
-                raise ValueError("节点执行记录与稳定 Task 映射不一致")
-            if execution.completed and (execution.status is None or execution.output is None):
-                raise ValueError("已完成节点必须同时保存 status 和 output")
-            if not execution.completed and (
-                    execution.status is not None or execution.output is not None
-            ):
-                raise ValueError("未完成节点不能提前保存 status 或 output")
-        return self
+    node_transitions: dict[str, dict[str, str]] = Field(default_factory=dict)
 
     @classmethod
-    def initial(cls, node_runtime_snapshots: dict[str, dict[str, Any]]) -> AgentTeamRunState:
+    def initial(cls, node_runtime_snapshots: dict[str, dict[str, Any]],
+                configuration: AgentTeamConfiguration) -> AgentTeamRunState:
         """创建尚未启动节点的初始状态。
 
         参数:
             node_runtime_snapshots: 已解析并冻结的节点运行资源快照，按 ``node_id`` 索引；
                 每个快照都会被校验并固化为 ``AgentTeamRunRuntime``。
+            configuration: 已冻结的 Team 配置；其转移规则被压平为
+                ``node_transitions[node_id][status] = target_node_id`` 快照。
         """
+
+        node_transitions: dict[str, dict[str, str]] = {}
+        for transition in configuration.transitions:
+            node_transitions.setdefault(transition.from_node_id, {})[
+                transition.status
+            ] = transition.target_node_id
 
         return cls(
             node_runtime={
                 node_id: AgentTeamRunRuntime.model_validate(snapshot)
                 for node_id, snapshot in node_runtime_snapshots.items()
-            }
+            },
+            node_transitions=node_transitions,
         )
+
+    def has_next_node(self,status: str) -> str:
+        """返回是否有下一个节点需要执行。"""
+
+        return self.node_transitions[self.current_node_id].get(status)
 
     def node_execution_for_node(self, node_id: str) -> AgentTeamNodeExecution | None:
         """返回节点已绑定的稳定 Task 标识；首次执行的节点返回 ``None``。"""
@@ -131,37 +117,6 @@ class AgentTeamRunState(BaseModel):
         """创建节点执行记录。"""
 
         self.node_executions[node_id] = execution
-        return execution
-
-    def start_node(self, node_id: str, task_id: int, run_id: int) -> None:
-        """登记一次新节点执行，并将其设置为当前活动节点。
-
-        异常:
-            ValueError: 已存在未提交结果的活动节点，或输入标识不符合持久化契约。
-        """
-
-        if self.active_node_run_id is not None:
-            raise ValueError("Agent Team 已存在尚未完成的活动节点")
-        if self.node_task_ids.get(node_id) != task_id:
-            raise ValueError("节点 Task 必须先绑定到 Agent Team 状态")
-        execution = AgentTeamNodeExecution(node_id=node_id, task_id=task_id, run_id=run_id)
-        self.node_executions.append(execution)
-        self.active_node_run_id = run_id
-
-    def complete_node(self, run_id: int, status: str, output: str) -> AgentTeamNodeExecution:
-        """写入活动节点结果并清除活动节点游标。"""
-
-        execution = self.execution_for_run(run_id)
-        if execution is None:
-            raise ValueError(f"找不到节点 Run: {run_id}")
-        if execution.completed:
-            raise ValueError(f"节点 Run 已提交结果: {run_id}")
-        if self.active_node_run_id != run_id:
-            raise ValueError(f"节点 Run 不是当前活动节点: {run_id}")
-        execution.completed = True
-        execution.status = status
-        execution.output = output
-        self.active_node_run_id = None
         return execution
 
     def add_transition(
@@ -180,52 +135,10 @@ class AgentTeamRunState(BaseModel):
             )
         )
 
-    def execution_for_run(self, run_id: int) -> AgentTeamNodeExecution | None:
-        """按 ConversationRun 标识查找节点执行记录。"""
-
-        return next(
-            (execution for execution in self.node_executions if execution.run_id == run_id),
-            None,
-        )
-
-    def active_execution(self) -> AgentTeamNodeExecution | None:
-        """返回当前活动节点执行记录；没有活动节点时返回 ``None``。"""
-
-        if self.active_node_run_id is None:
-            return None
-        execution = self.execution_for_run(self.active_node_run_id)
-        if execution is None:
-            raise ValueError("Agent Team 状态的活动节点游标没有对应执行记录")
-        return execution
-
-    def completed_run_ids(self) -> set[int]:
-        """返回已经提交节点结果的 ConversationRun 标识集合。"""
-
-        return {
-            execution.run_id for execution in self.node_executions if execution.completed
-        }
-
     def node_references(self) -> list[tuple[int, int]]:
         """返回所有节点 Task/Run 引用，供取消和诊断使用。"""
 
         return [(execution.task_id, execution.run_id) for execution in self.node_executions]
-
-    def previous_outputs_for(self, node_ids: list[str]) -> list[dict[str, Any]]:
-        """返回指定节点最近一次已完成执行的结果，供下游节点构造输入。"""
-
-        latest: dict[str, AgentTeamNodeExecution] = {}
-        for execution in self.node_executions:
-            if execution.completed and execution.node_id in node_ids:
-                latest[execution.node_id] = execution
-        return [
-            {
-                "node_id": node_id,
-                "status": latest[node_id].status,
-                "output": latest[node_id].output,
-            }
-            for node_id in node_ids
-            if node_id in latest
-        ]
 
     def to_json(self) -> dict[str, Any]:
         """转换为可直接写入 SQLAlchemy JSON 列的字典。"""

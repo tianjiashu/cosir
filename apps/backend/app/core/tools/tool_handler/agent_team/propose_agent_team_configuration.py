@@ -25,7 +25,11 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
 
     name = TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION
     description = (
-        "Create an Agent Team configuration draft for user review. Do not save or execute it."
+        "Create an Agent Team configuration draft for user review. Declare exactly one entry "
+        "node via start_node_id, and finish the Team by routing transitions to the literal "
+        "target END (at least one transition must reach END). Node transitions must be "
+        "directed and strictly one-way; cycles are invalid, e.g. "
+        "develop --done--> review --done--> develop."
     )
     args_model = ProposeAgentTeamConfigurationArgs
     timeout_seconds: ClassVar[float] = 20.0
@@ -49,13 +53,12 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
             # 提案只生成待审阅的工具输入预览，不提前构造持久化配置对象。用户确认
             # 保存时，保存 API 会用用户实际选择的 scope 重新校验领域配置。
             proposal: ProposeAgentTeamConfigurationArgs = self.args_model.model_validate(kwargs)
-            if execution_context is not None:
-                for node in proposal.nodes:
-                    resolve_node_profile(
-                        proposal,
-                        str(execution_context.workspace_root),
-                        node.node_id,
-                    )
+            for node in proposal.nodes:
+                resolve_node_profile(
+                    proposal,
+                    str(execution_context.workspace_root),
+                    node.node_id,
+                )
             return tool_success(
                 tool_name=self.name,
                 content="Agent Team configuration draft is ready for user review.",
@@ -63,6 +66,17 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
                     proposal,
                     scope="workspace",
                 ),
+            )
+        except ValueError as exc:
+            log.warning(
+                "agent_team_configuration_proposal_failed",
+                extra={"msg": "Agent Team 配置提案校验失败", "error_type": type(exc).__name__},
+            )
+            return tool_error(
+                tool_name=self.name,
+                error="agent_team_configuration_invalid",
+                reason=str(exc),
+                retryable=True,
             )
         except Exception as exc:
             log.warning(
@@ -72,8 +86,8 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
             return tool_error(
                 tool_name=self.name,
                 error="agent_team_configuration_invalid",
-                reason="The Team configuration is invalid. Please review and try again.",
-                retryable=True,
+                reason="The Team configuration is invalid",
+                retryable=False,
             )
 
     def to_definition(self) -> ToolDefinition:

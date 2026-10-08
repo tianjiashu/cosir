@@ -35,33 +35,25 @@ def _configuration(**overrides: object) -> dict[str, object]:
         "name": "代码质量 Team",
         "description": "开发、审查和测试",
         "scope": "workspace",
+        "start_node_id": "develop",
         "nodes": [
             {
                 "node_id": "develop",
                 "name": "开发",
                 "agent_id": "general-assistant",
-                "node_type": "start",
                 "statuses": ["done", "blocked"],
             },
             {
                 "node_id": "review",
                 "name": "审查",
                 "agent_id": "general-assistant",
-                "node_type": "middle",
                 "statuses": ["passed", "needs_changes"],
-            },
-            {
-                "node_id": "finish",
-                "name": "完成",
-                "agent_id": "general-assistant",
-                "node_type": "end",
-                "statuses": ["passed"],
             },
         ],
         "transitions": [
             {"from_node_id": "develop", "status": "done", "target_node_id": "review"},
-            {"from_node_id": "develop", "status": "blocked", "target_node_id": "finish"},
-            {"from_node_id": "review", "status": "passed", "target_node_id": "finish"},
+            {"from_node_id": "develop", "status": "blocked", "target_node_id": "END"},
+            {"from_node_id": "review", "status": "passed", "target_node_id": "END"},
             {
                 "from_node_id": "review",
                 "status": "needs_changes",
@@ -80,20 +72,17 @@ def test_configuration_validates_status_transitions_and_loops() -> None:
     assert configuration.transitions_for("review", "needs_changes")[0].target_node_id == "develop"
 
 
-def test_proposal_uses_node_types_without_entry_or_transition_kind() -> None:
+def test_proposal_uses_start_node_id_without_scope_or_extra_fields() -> None:
     proposal_input = _configuration()
     proposal_input.pop("scope")
     proposal = ProposeAgentTeamConfigurationArgs.model_validate(proposal_input)
 
     document = proposal.model_dump()
+    assert document["start_node_id"] == "develop"
     assert "scope" not in document
     assert "entry_node_id" not in document
+    assert all("node_type" not in node for node in document["nodes"])
     assert all("transition_kind" not in transition for transition in document["transitions"])
-    assert {node["node_type"] for node in document["nodes"]} == {
-        "start",
-        "middle",
-        "end",
-    }
 
     with pytest.raises(ValidationError):
         ProposeAgentTeamConfigurationArgs.model_validate({**document, "entry_node_id": "develop"})
@@ -232,19 +221,18 @@ def test_configuration_rejects_unknown_transition_target() -> None:
         )
 
 
-def test_configuration_rejects_duplicate_end_nodes() -> None:
+def test_configuration_rejects_reserved_end_node_id() -> None:
     nodes = list(_configuration()["nodes"])
     nodes.append(
         {
-            "node_id": "finish-again",
-            "name": "重复完成",
+            "node_id": "END",
+            "name": "保留标识",
             "agent_id": "general-assistant",
-            "node_type": "end",
             "statuses": ["passed"],
         }
     )
 
-    with pytest.raises(ValidationError, match="exactly one end"):
+    with pytest.raises(ValidationError, match="reserved"):
         AgentTeamConfiguration.model_validate(_configuration(nodes=nodes))
 
 
@@ -255,7 +243,6 @@ def test_configuration_rejects_unreachable_node() -> None:
             "node_id": "orphan",
             "name": "孤立节点",
             "agent_id": "general-assistant",
-            "node_type": "middle",
             "statuses": ["loop"],
         }
     )
@@ -273,7 +260,6 @@ def test_configuration_rejects_branch_that_cannot_reach_end() -> None:
             "node_id": "dead-end",
             "name": "无法结束",
             "agent_id": "general-assistant",
-            "node_type": "middle",
             "statuses": ["loop"],
         }
     )
@@ -293,7 +279,7 @@ def test_configuration_rejects_branch_that_cannot_reach_end() -> None:
         ]
     )
 
-    with pytest.raises(ValidationError, match="cannot reach the end"):
+    with pytest.raises(ValidationError, match="cannot reach the terminal END target"):
         AgentTeamConfiguration.model_validate(_configuration(nodes=nodes, transitions=transitions))
 
 
@@ -362,7 +348,6 @@ def test_configuration_rejects_removed_join_fields() -> None:
                         "node_id": "develop",
                         "name": "开发",
                         "agent_id": "general-assistant",
-                        "node_type": "start",
                         "statuses": ["done", "join"],
                         "join_policy": "all",
                     },
@@ -370,15 +355,7 @@ def test_configuration_rejects_removed_join_fields() -> None:
                         "node_id": "review",
                         "name": "审查",
                         "agent_id": "general-assistant",
-                        "node_type": "middle",
                         "statuses": ["passed", "needs_changes"],
-                    },
-                    {
-                        "node_id": "finish",
-                        "name": "完成",
-                        "agent_id": "general-assistant",
-                        "node_type": "end",
-                        "statuses": ["passed"],
                     },
                 ]
             )
@@ -499,7 +476,10 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
         created.id,
         "running",
         ("pending",),
-        state=AgentTeamRunState.initial({"develop": {"agent_id": "general-assistant"}}),
+        state=AgentTeamRunState.initial(
+            {"develop": {"agent_id": "general-assistant"}},
+            AgentTeamConfiguration.model_validate(_configuration()),
+        ),
         started=True,
     )
     assert updated is not None

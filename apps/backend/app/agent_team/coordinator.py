@@ -17,8 +17,10 @@ from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState, AgentTeamNodeExecution, AgentTeamRunRuntime
 from app.assistant_transport.event import RunInitializedEvent, RunStatusChangedEvent
 from app.assistant_transport.event.dispatch import dispatch_conversation_event
-from app.config.configuration import get_tool_system
+from app.config.configuration import get_tool_system, get_agent_registry
 from app.config.logging.logger import log
+from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.models import ConversationRunRecord
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
@@ -31,7 +33,7 @@ from app.service.agent_team.agent_team_parent_run_service import (
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.service.depends import get_runtime, get_task_service, get_conversation_run_service, \
-    get_conversation_run_state_service
+    get_conversation_run_state_service, get_workspace_service
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
@@ -51,7 +53,6 @@ class AgentTeamCoordinator:
         self._team_run_crud = AgentTeamRunCrud()
         self._task_service = get_task_service()
         self._tool_system = get_tool_system()
-        self._configurations: dict[int, AgentTeamConfiguration] = {}
         self._run_service = get_conversation_run_service()
         self._run_state_service = get_conversation_run_state_service()
         self._parent_run_service = AgentTeamParentRunService()
@@ -60,7 +61,9 @@ class AgentTeamCoordinator:
         self._locks: dict[int, RLock] = defaultdict(RLock)
         self._runtime_loops_guard = RLock()
         self._runtime_loops: dict[int, asyncio.AbstractEventLoop] = {}
-        self.runner = get_runtime()
+        self._runner = get_runtime()
+        self._workspace_service = get_workspace_service()
+        self._agent_registry = get_agent_registry()
 
     def _lock_for(self, team_run_db_id: int) -> RLock:
         with self._locks_guard:
@@ -68,7 +71,7 @@ class AgentTeamCoordinator:
 
     def start(
             self,
-            team_run_id: int,
+            team_run: AgentTeamRunModel,
     ) -> AgentTeamRunModel:
         """启动已确认的 TeamRun，并登记由 Coordinator 拥有的节点驱动任务。
 
@@ -84,55 +87,116 @@ class AgentTeamCoordinator:
             ValueError: Team 已处于非运行态或已有活动节点（重复启动），或已冻结的节点配置或
                 运行快照无效。
         """
-
-        row: AgentTeamRunModel | None = None
+        state: AgentTeamRunState | None = None
         try:
-            with begin_immediate(self._session_factory) as session:
-                row = session.get(AgentTeamRunModel, team_run_id)
-                if row is None:
-                    raise KeyError(team_run_id)
-                if row.status != AgentTeamRunStatus.RUNNING.value:
-                    raise ValueError(f"Team 已进入非运行态({row.status})，无法启动")
-                state = AgentTeamRunState.model_validate(row.state_json)
-                configuration = AgentTeamConfiguration.model_validate(
-                    row.configuration_snapshot_json
-                )
-                self._configurations[row.id] = configuration
+            if team_run.status != AgentTeamRunStatus.RUNNING.value:
+                raise ValueError(f"Team 已进入非运行态({team_run.status})，无法启动")
+            state = AgentTeamRunState.model_validate(team_run.state_json)
+            configuration = AgentTeamConfiguration.model_validate(
+                team_run.configuration_snapshot_json
+            )
 
-                node_id = configuration.start_node_id
+            state.current_node_id = configuration.start_node_id
+            next_node_input = None
+            rounds = 0
 
+            while True:
+                if rounds >= configuration.max_runs:
+                    self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.FAILED.value,
+                                                            (AgentTeamRunStatus.RUNNING.value,), state=state,
+                                                            end_reason=AgentTeamRunEndReason.MAX_RUNS_EXCEEDED.value,
+                                                            ended=True)
+                    log.error(
+                        "agent_team_max_runs_exceeded",
+                        extra={
+                            "msg": "Agent Team 超过最大轮数，已收敛为失败",
+                            "data": {"run_id": team_run.id, "max_runs": configuration.max_runs},
+                        },
+                    )
+                    break
+                rounds += 1
+                self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.RUNNING.value,
+                                                        (AgentTeamRunStatus.RUNNING.value,), state=state)
                 node_execution, node_run = self._start_node(
-                    row,
+                    team_run,
                     state,
                     configuration,
-                    node_id,
-                    session=session,
+                    next_node_input,
                 )
+                if node_run.status != ConversationRunStatus.COMPLETED.value:
+                    break
 
+                final_output = node_run.final_output
+                status, next_node_input = self.struct_out_put(final_output)
+                next_node_id = state.has_next_node(status)
+                if next_node_id is None:
+                    log.error(
+                        "agent_team_start_failed",
+                        extra={
+                            "msg": "next_node_id 为空",
+                            "data": {
+                                "run_id": team_run.id,
+                                "node_id": state.current_node_id,
+                                "output": final_output,
+                            },
+                        },
+                    )
+                    self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.FAILED.value,
+                                                            (AgentTeamRunStatus.RUNNING.value,), state=state,
+                                                            end_reason="next_node_id 为空", ended=True)
+                    break
+                if next_node_id == "END":
+                    log.info(
+                        "agent_team_start_completed",
+                        extra={
+                            "msg": "Agent Team 已完成",
+                            "data": {
+                                "run_id": team_run.id,
+                                "node_id": state.current_node_id,
+                                "output": final_output,
+                            },
+                        },
+                    )
+                    final_node_output = next_node_input
+                    self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.COMPLETED.value,
+                                                            (AgentTeamRunStatus.RUNNING.value,), state=state,
+                                                            end_reason=final_node_output, ended=True)
+                    break
+                state.add_transition(state.current_node_id, status, next_node_id)
+                state.current_node_id = next_node_id
         except Exception as exc:
-            if row is not None:
-                self._fail_team(row.id, AgentTeamRunEndReason.TEAM_START_FAILED)
             log.exception(
                 "agent_team_start_failed",
                 extra={
                     "msg": "Agent Team 入口节点启动失败",
                     "data": {
-                        "run_id": team_run_id,
+                        "run_id": team_run.id,
                         "error_type": type(exc).__name__,
                     },
                 },
             )
+            self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.FAILED.value,
+                                                    (AgentTeamRunStatus.RUNNING.value,), state=state,
+                                                    end_reason="next_node_id 为空", ended=True)
             raise
-        return self._team_run_crud.get_by_id(row.id)
+        return self._team_run_crud.get_by_id(team_run.id)
+
+    def struct_out_put(self, output: str) -> tuple[str, str] | None:
+        try:
+            json_output: dict[str, Any] = json.loads(output)
+            status = json_output.get("status")
+            output = json_output.get("output")
+            if status is not None and output is not None:
+                return status, output
+            raise ValueError("Invalid output")
+        except Exception:
+            return None
 
     def _start_node(
             self,
             row: AgentTeamRunModel,
             state: AgentTeamRunState,
             configuration: AgentTeamConfiguration,
-            node_id: str,
-            *,
-            session: Session,
             node_input: str | None = None,
     ) -> tuple[AgentTeamNodeExecution, ConversationRunRecord]:
         """在调用方事务中复用或创建节点 Task，并创建本次节点 Run（只写执行事实）。
@@ -147,7 +211,7 @@ class AgentTeamCoordinator:
         由 Task 级 context 保留它自己的历史。节点事件发布和 Run 启动由 Coordinator 驱动循环
         在事务提交后执行。
         """
-
+        node_id = state.current_node_id
         node: TeamNodeDefinition = configuration.node(node_id)
         node_runtime: AgentTeamRunRuntime = state.node_runtime.get(node_id)
         agent_id = node.agent_id
@@ -174,7 +238,6 @@ class AgentTeamCoordinator:
                     "agent_team_profile_snapshot": node_runtime.model_dump(mode="json"),
                 },
                 tool_definitions=tool_definitions,
-                session=session,
             )
             node_execution: AgentTeamNodeExecution = state.create_execution_node(node_id,
                                                                                  AgentTeamNodeExecution(node_id=node_id,
@@ -186,11 +249,27 @@ class AgentTeamCoordinator:
             status=ConversationRunStatus.RUNNING.value,
             model_config_id=node_runtime.model_config_id,
             reasoning_effort=reasoning_effort,
-            run_command=ConversationRunCommand(display_text=input_text),
-            session=session,
+            run_command=ConversationRunCommand(display_text=input_text)
         )
         node_execution.conversation_run_ids.append(node_run.id)
-        self.runner.execute_run(node_run)
+        workspace_root = self._workspace_root(row.workspace_id)
+        agent_profile: AgentProfile = self._agent_registry.resolve(workspace_root, agent_id)
+
+        self._team_run_crud.update_status_if_in(row.id, AgentTeamRunStatus.RUNNING.value,
+                                                (AgentTeamRunStatus.RUNNING.value,), state=state)
+
+        asyncio.run(self._runner.run_agent(AgentProfile(
+            agent_id=agent_id,
+            role=agent_profile.role,
+            system_prompt=node_runtime.system_prompt,
+            allowed_tools=node_runtime.allowed_tools,
+            agent_type=agent_profile.agent_type,
+            model_config_id=agent_profile.model_config_id,
+            model_settings=agent_profile.model_settings,
+            structured_output=agent_profile.structured_output,
+            max_steps=agent_profile.max_steps,
+            run=node_run
+        )))
         node_run = self._run_service.get_run(node_run.id)
 
         return node_execution, node_run
@@ -226,7 +305,6 @@ class AgentTeamCoordinator:
             definitions.append(copy.deepcopy(tool.to_model_tool_definition()))
         return definitions
 
-
     @staticmethod
     def _build_node_input(node_goal: str, node_input: str | None = None) -> str:
         """只把当前节点子目标和直接前置输出放入 user input；全局目标在 system prompt。"""
@@ -238,68 +316,13 @@ class AgentTeamCoordinator:
             sections.append("前置节点输出:\n" + node_input)
         return "\n\n".join(sections) or "请依据当前节点职责推进 Team 总目标。"
 
-    @staticmethod
-    def _workspace_root(workspace_id: int) -> str:
+    def _workspace_root(self, workspace_id: int) -> str:
         """读取 workspace 根路径。"""
 
-        return service_depends.get_workspace_service().get_workspace(workspace_id).root_path
-
-    def _fail_team(
-            self,
-            team_run_db_id: int,
-            end_reason: AgentTeamRunEndReason,
-            *,
-            state: AgentTeamRunState | None = None,
-    ) -> None:
-        """把 Team 收敛为失败；节点已结算时同时保留其状态快照。"""
-
-        self._configurations.pop(team_run_db_id, None)
-        current = self._team_run_crud.get_by_id(team_run_db_id)
-        if state is None:
-            state = AgentTeamRunState.model_validate(current.state_json)
-        completed_runs = state.completed_run_ids()
-        row = self._team_run_crud.update_status_if_in(
-            team_run_db_id,
-            AgentTeamRunStatus.FAILED.value,
-            (AgentTeamRunStatus.RUNNING.value,),
-            state=state,
-            end_reason=end_reason.value,
-            ended=True,
-        )
-        if row is None:
-            log.info(
-                "agent_team_stale_failure_ignored",
-                extra={
-                    "msg": "忽略已不处于运行态的 Team 失败收敛",
-                    "data": {"team_run_db_id": team_run_db_id, "end_reason": end_reason.value},
-                },
-            )
-            return
-        for _, run_id in state.node_references():
-            if run_id not in completed_runs:
-                self._cancel_node_execution(run_id, current.id, end_reason="agent_team_failed")
+        return self._workspace_service.get_workspace(workspace_id).root_path
 
     def cancel(self, team_run_id: int) -> AgentTeamRunModel:
-        """取消 Team 和当前活动节点 Run。"""
-
-        row = self._team_run_crud.get_by_id(team_run_id)
-        with self._lock_for(team_run_id):
-            row = self._team_run_crud.get_by_id(row.id)
-            if row.status not in {"pending", "running"}:
-                return row
-            result = self._team_run_crud.update_status_if_in(
-                row.id,
-                "cancelled",
-                ("pending", "running"),
-                end_reason=AgentTeamRunEndReason.CANCELLED.value,
-                ended=True,
-            )
-            if result is None:
-                return self._team_run_crud.get_by_id(row.id)
-            state = AgentTeamRunState.model_validate(row.state_json)
-            for _, node_run_id in state.node_references():
-                self._cancel_node_execution(node_run_id, row.id, end_reason="agent_team_cancelled")
-            return result
+        pass
 
     def cancel_for_task_ids(self, task_ids: set[int]) -> int:
         """在删除任务树前取消与其关联的活动 Team。
@@ -385,42 +408,6 @@ class AgentTeamCoordinator:
                 continue
             recovered += 1
         return recovered
-
-
-    def _runtime_loop_for(self, team_run_id: int) -> asyncio.AbstractEventLoop | None:
-        """读取 Team 绑定的本地运行时事件循环。"""
-
-        with self._runtime_loops_guard:
-            return self._runtime_loops.get(team_run_id)
-
-    def _cancel_node_execution(
-            self, node_run_id: int, team_run_id: int, *, end_reason: str
-    ) -> None:
-        """通过现有执行器发出取消信号，并同步落定尚未结束的节点 Run。"""
-
-        runtime_loop = self._runtime_loop_for(team_run_id)
-        if runtime_loop is not None and not runtime_loop.is_closed():
-            try:
-                from app.service.depends import get_conversation_run_executor
-
-                future = asyncio.run_coroutine_threadsafe(
-                    get_conversation_run_executor().cancel(node_run_id, end_reason=end_reason),
-                    runtime_loop,
-                )
-                future.result(timeout=10)
-            except Exception as exc:
-                log.warning(
-                    "agent_team_node_executor_cancel_failed",
-                    extra={
-                        "msg": "Agent Team 节点执行器取消信号发送失败，继续执行数据库收敛",
-                        "data": {
-                            "run_id": team_run_id,
-                            "node_run_id": node_run_id,
-                            "error_type": type(exc).__name__,
-                        },
-                    },
-                )
-        self._run_state_service.cancel_run_if_running(node_run_id, end_reason=end_reason)
 
     def get(self, team_run_id: int) -> AgentTeamRunModel:
         """读取 TeamRun 当前持久化快照。"""

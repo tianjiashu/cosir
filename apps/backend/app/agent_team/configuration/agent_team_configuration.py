@@ -19,7 +19,10 @@ from app.agent_team.configuration.graph_validation import (
     TeamGraphValidationError,
     validate_team_graph,
 )
-from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
+from app.agent_team.configuration.team_node_definition import (
+    TeamNodeDefinition,
+    TeamNodeIdentifier,
+)
 from app.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
 
 TeamScope = Literal["system", "workspace"]
@@ -44,9 +47,11 @@ class AgentTeamConfiguration(BaseModel):
             下划线或连字符。
         name: 面向用户展示的 Team 名称。
         description: Team 的用途说明，帮助主 Agent 和用户理解配置适用场景。
-        nodes: 按节点定义组成的有序节点列表；必须包含且只能包含一个 ``start`` 节点和
-            一个 ``end`` 节点，节点通过 ``node_id`` 被转移规则引用。
-        transitions: 节点业务状态到下一个节点的转移规则列表；到达 ``end`` 节点后结束。
+        max_runs: 整个 Team 允许的最大执行轮数（节点执行次数），超过则收敛为失败。
+        start_node_id: 唯一入口节点标识，必须声明在 ``nodes`` 中。
+        nodes: 按节点定义组成的有序节点列表，通过 ``node_id`` 被转移规则引用。
+        transitions: 节点业务状态到下一个节点的转移规则列表；目标为字面量 ``END``
+            时结束 Team。
         scope: 配置作用域；``system`` 表示系统配置，``workspace`` 表示当前工作区配置。
 
     该模型只负责配置解析和不依赖运行时资源的图校验，不读取文件、不解析 Agent
@@ -71,6 +76,14 @@ class AgentTeamConfiguration(BaseModel):
         min_length=1,
         max_length=2_000,
         description="Team 的用途和适用场景说明。",
+    )
+    max_runs: int = Field(
+        default=10,
+        ge=1,
+        description="整个 Team 允许的最大执行轮数（节点执行次数）；超过该轮数时 Team 收敛为失败。",
+    )
+    start_node_id: TeamNodeIdentifier = Field(
+        description="唯一入口节点标识，必须声明在 nodes 中，且不能为 END。",
     )
     nodes: list[TeamNodeDefinition] = Field(
         min_length=1,
@@ -98,20 +111,10 @@ class AgentTeamConfiguration(BaseModel):
         """
 
         try:
-            validate_team_graph(self.nodes, self.transitions)
+            validate_team_graph(self.nodes, self.transitions, self.start_node_id)
         except TeamGraphValidationError as exc:
             raise TeamConfigurationError(str(exc)) from exc
         return self
-
-    @property
-    def start_node_id(self) -> str:
-        """返回配置中唯一的起始节点标识。
-
-        节点类型校验已在模型创建时完成，因此该属性不会返回空值。它是从节点定义
-        推导出的运行入口，不会作为独立字段序列化到配置文件。
-        """
-
-        return next(node.node_id for node in self.nodes if node.node_type == "start")
 
     def node(self, node_id: str) -> TeamNodeDefinition:
         """按节点标识返回节点定义。

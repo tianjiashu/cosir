@@ -67,25 +67,6 @@ def test_user_input_wait_node_resumes_to_model_path() -> None:
     asyncio.run(run())
 
 
-def test_agent_team_run_state_tracks_repeated_node_executions() -> None:
-    """状态快照按每次节点 Run 保存历史，并从最新完成记录提供前置输出。"""
-
-    state = AgentTeamRunState.initial({"develop": {"agent_id": "general-assistant"}})
-    state.start_node("develop", task_id=10, run_id=20)
-    state.complete_node(20, "done", "第一次完成")
-    state.add_transition("develop", "done", "develop")
-    state.start_node("develop", task_id=11, run_id=21)
-    state.complete_node(21, "done", "第二次完成")
-
-    assert state.active_execution() is None
-    assert state.completed_run_ids() == {20, 21}
-    assert state.previous_outputs_for(["develop"]) == [
-        {"node_id": "develop", "status": "done", "output": "第二次完成"}
-    ]
-    assert len(state.transition_history) == 1
-
-
-
 def test_team_run_payload_hides_runtime_profile_snapshots() -> None:
     """Team 状态查询不能把节点 system_prompt 暴露给前端。"""
 

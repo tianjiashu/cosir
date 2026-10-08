@@ -21,6 +21,7 @@ class AgentTeamRunEndReason(str, Enum):
     IMPLICIT_COMPLETION_MISSING = "implicit_completion_missing"
     CANCELLED = "cancelled"
     RUNTIME_RESTARTED = "runtime_restarted"
+    MAX_RUNS_EXCEEDED = "max_runs_exceeded"
 
     def __str__(self) -> str:
         """返回可持久化的稳定原因码。"""

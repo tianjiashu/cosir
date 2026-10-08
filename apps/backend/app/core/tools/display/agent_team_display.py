@@ -77,7 +77,9 @@ def build_agent_team_configuration_display_data(
                 "node_id": node.node_id,
                 "name": node.name,
                 "agent_id": node.agent_id,
-                "node_type": node.node_type,
+                "node_type": (
+                    "start" if node.node_id == configuration.start_node_id else "middle"
+                ),
                 "statuses": node.statuses,
             }
             for node in configuration.nodes

@@ -54,7 +54,7 @@ class AgentTeamRunCrud:
             goal_input=goal,
             configuration_snapshot_json=configuration.model_dump(mode="json"),
             status=AgentTeamRunStatus.PENDING.value,
-            state_json=AgentTeamRunState.initial(node_runtime_snapshots).to_json(),
+            state_json=AgentTeamRunState.initial(node_runtime_snapshots, configuration).to_json(),
         )
         if session is None:
             with begin_immediate(self._session_factory) as owned_session:
@@ -83,21 +83,6 @@ class AgentTeamRunCrud:
             return query(session)
         with self._session_factory() as owned_session:
             return query(owned_session)
-
-    def find_by_node_run_id(self, node_run_id: int) -> AgentTeamRunModel | None:
-        """从持久化的节点引用中找到拥有该 ConversationRun 的活动 Team。"""
-
-        with self._session_factory() as session:
-            rows = session.scalars(
-                select(AgentTeamRunModel).where(
-                    AgentTeamRunModel.status == AgentTeamRunStatus.RUNNING.value,
-                )
-            ).all()
-            for row in rows:
-                state = AgentTeamRunState.model_validate(row.state_json)
-                if state.execution_for_run(node_run_id) is not None:
-                    return row
-        return None
 
     def list_active(self) -> list[AgentTeamRunModel]:
         """读取所有已进入运行阶段且尚未进入 Team 终态的运行。
