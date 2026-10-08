@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
 
 from sqlalchemy.orm import Session
 
 from app.assistant_transport.event import RunInitializedEvent
+from app.assistant_transport.request import AddMessageCommand, AssistantTransportRequest
+from app.assistant_transport.request.command.ban_tools_command import BanToolsCommand
+from app.assistant_transport.request.command.propose_agent_configuration_command import (
+    ProposeAgentConfigurationCommand,
+)
+from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
@@ -16,30 +21,58 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     has_run,
 )
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.runtime.execution_mode import ExecutionMode
-from app.models import ConversationRunCommand, ConversationRunRecord
+from app.models import (
+    ConversationRunAttachmentInput,
+    ConversationRunCommand,
+    ConversationRunRecord,
+)
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service import depends as service_depends
-from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
 from app.storage.store_engines import main_session_factory
 
-RunCommandMode = Literal["new", "edit", "resume"]
+
+def _build_ordered_display_text(
+    parts: Sequence[AssistantTextPart | AssistantImagePart],
+) -> str:
+    """将 composer 的文本/图片顺序编码进既有 Run 展示文本值。"""
+
+    image_token = Constant.Cosir.LOCAL_IMAGE_TOKEN
+    emitted_image_ids = {
+        image_id
+        for part in parts
+        if isinstance(part, AssistantTextPart)
+        for image_id in image_token.findall(
+            Constant.Transport.HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text)
+        )
+    }
+    segments: list[str] = []
+    for part in parts:
+        if isinstance(part, AssistantTextPart):
+            segments.append(Constant.Transport.HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text))
+        else:
+            asset_id = part.image.removeprefix("cosir-attachment://")
+            if asset_id in emitted_image_ids:
+                continue
+            segments.append(f"[[cosir-image:{asset_id}]]")
+            emitted_image_ids.add(asset_id)
+    return "\n".join(segments)
 
 
 @dataclass(frozen=True)
 class ConversationRunStartResult:
     """表示一次 Run 命令分类与执行准备结果。
 
-    ``mode`` 表示业务语义，``execution_mode`` 表示 AgentRuntime 的执行方式。
-    编辑重跑因此是 ``mode="edit"`` 与 ``execution_mode="fresh"`` 的组合，且保留
-    原 Conversation Run id。
+    ``execution_mode`` 表示 AgentRuntime 的执行方式；编辑重跑由调用方先删除被编辑的
+    Run、再走新建路径实现，因此其结果就是普通新建结果（``execution_mode="fresh"``，
+    ``run`` 与被编辑的 Run 不同）。
     """
 
     run: ConversationRunRecord
     initial_state: ConversationStateSnapshot
     execution_mode: ExecutionMode = "fresh"
-    mode: RunCommandMode = "new"
 
 
 @dataclass(frozen=True)
@@ -55,7 +88,7 @@ class ConversationRunCommandInput:
 
 
 class ConversationRunCommandService:
-    """在任务边界内接收 Transport command 并原子创建、编辑或恢复 Run。"""
+    """在任务边界内接收 Transport command 并原子创建、删除（编辑重跑）或恢复 Run。"""
 
     def __init__(self) -> None:
         """初始化 Run 编排、Run 状态与 snapshot 持久化依赖。"""
@@ -63,8 +96,68 @@ class ConversationRunCommandService:
         self._conversation_run = service_depends.get_conversation_run_service()
         self._run_state = service_depends.get_conversation_run_state_service()
         self._state = ConversationTaskStateService()
-        self._context = ConversationTaskContextService()
         self._task = service_depends.get_task_service()
+
+    def build_command_inputs(
+        self, request: AssistantTransportRequest,
+    ) -> list[ConversationRunCommandInput]:
+        """把 Transport 请求中的命令归一化为命令服务的输入信封列表。"""
+
+        return [
+            ConversationRunCommandInput(
+                command_id=item.commandId,
+                command_type=item.type,
+            )
+            for item in request.commands
+        ]
+
+    def build_run_command(
+        self,
+        request: AssistantTransportRequest,
+        command: AddMessageCommand,
+    ) -> ConversationRunCommand:
+        """把 Transport 请求归一化为领域 Run 输入命令。
+
+        ``display_text`` 复用既有 extra 文本编码，保持文字与图片的原始顺序，不新增数据库
+        字段；``ban_tools`` 与 ``propose_agent_configuration`` 取自同一请求中的兄弟命令
+        （``BanToolsCommand`` / ``ProposeAgentConfigurationCommand``）。
+        """
+
+        ban_command = next(
+            (item for item in request.commands if isinstance(item, BanToolsCommand)),
+            None,
+        )
+        proposal_command = next(
+            (
+                item
+                for item in request.commands
+                if isinstance(item, ProposeAgentConfigurationCommand)
+            ),
+            None,
+        )
+        display_text = _build_ordered_display_text(command.message.parts)
+        image_asset_ids = list(
+            dict.fromkeys(
+                part.image.removeprefix("cosir-attachment://")
+                for part in command.message.parts
+                if isinstance(part, AssistantImagePart)
+            )
+        )
+        return ConversationRunCommand(
+            display_text=display_text,
+            image_asset_ids=image_asset_ids,
+            ban_tools=list(ban_command.payload.ban_tools) if ban_command is not None else [],
+            propose_agent_configuration=proposal_command is not None,
+            attachments=[
+                ConversationRunAttachmentInput(
+                    id=attachment.id,
+                    name=attachment.name,
+                    content_type=attachment.contentType,
+                    path=attachment.path,
+                )
+                for attachment in command.message.attachments
+            ],
+        )
 
     def _assert_no_active_run(self, task_id: int, session: Session | None = None) -> None:
         """任务已有 active run 时拒绝新的 run 占用请求。
@@ -184,167 +277,49 @@ class ConversationRunCommandService:
             run=running_run,
             initial_state=snapshot,
             execution_mode="fresh",
-            mode="new",
         )
 
 
-    def edit_or_restart(
-        self,
-        commands: Sequence[ConversationRunCommandInput],
-        task_id: int,
-        run_id: int,
-        model_config_id: int | None,
-        reasoning_effort: str | None = None,
-        run_command: ConversationRunCommand | None = None,
-    ) -> ConversationRunStartResult:
-        """原地编辑当前 run 的最后一条用户消息并重置执行基线。
+    def delete_edited_run(self, task_id: int, run_id: int) -> None:
+        """删除被编辑的最近 Run，为「编辑重跑」腾出 task 的 active 槽位。
 
-        ``run_id`` 必须是 task 最近 run，且 canonical context 中必须存在该 run 的 user 消息。
-        旧 run 的 context entries 按 ``ContextEntry.run_id`` 删除，run 保留原 id，
-        但会换用新的 checkpoint thread；Assistant UI ``sourceId`` 不参与本用例。
+        编辑重跑复用新建路径：本方法只删除被编辑的 Run 及其全部会话事实（context、
+        checkpoint、终端元数据，并置空引用它的 ``tasks.parent_run_id``），随后由调用方
+        （Assistant Transport）继续走 ``start_run`` 创建一条全新 Run。``run_id`` 必须是
+        该 task 的最近 Run。
 
         参数:
-            commands: 本次请求接收的全部命令；命令只参与本次请求，不落库。
             task_id: 所属任务标识。
             run_id: 被编辑的 Conversation Run 标识（必须是该 task 的最近 run）。
-            model_config_id: 模型厂商标识。
-            reasoning_effort: 可选推理深度。
-            run_command: 已由 Assistant Transport 转换的领域输入命令。
 
         返回:
-            ``execution_mode="fresh"``、``mode="edit"`` 的启动结果；``run`` 为本次编辑
-            的 Run 记录，认领为 ``running`` 发生在返回之前。
+            无。
 
         异常:
-            ValueError: ``run_command`` 缺失、``run_id`` 不是该 task 最近 run、run 当前
-                状态不允许编辑，或 pending → running 认领未命中。
-            RuntimeError: 快照重建后仍缺该 run（不变量被破坏）。
+            ValueError: ``run_id`` 不是该 task 最近 run，或 task 已有 active run
+                （由 API 层翻译为可重试的 409）。
             KeyError: task 或 run 不存在。
 
         副作用:
-            在同一事务内重置 run（写回输入、换 checkpoint thread、清空终态字段）、删除该
-            run 的旧 context entries；随后投影 ``RunInitializedEvent``
-            （``replace_existing=True``）重建 Transport 骨架并刷新快照（骨架若因快照分叉
-            未能建立，则先按 canonical 重建快照），最后把该 run 认领为 ``running``
-            （发布一次 RUNNING 状态事件）。不会创建新的 run。事务提交后任一步失败时，先把
-            该 run 当场收敛为 ``cancelled``（end_reason=``run_setup_failed``）再原样抛出，
-            不留下无执行器的 active run。
+            删除该 Run 的 context / checkpoint / 终端元数据；并按 canonical 重建 Transport
+            进程内快照，丢弃仍含该 Run 的 working copy。客户端可见性由随后新建 Run 的响应
+            首帧（full）收敛，本方法不发布帧。
         """
 
-        if run_command is None:
-            raise ValueError("run_command is required for Assistant Transport runs")
-        if not commands:
-            raise ValueError("commands must not be empty")
         latest_run = self._task.get_latest_run(task_id)
         if latest_run is None or latest_run.id != run_id:
             raise ValueError(f"run {run_id} does not belong to task {task_id}")
+        # 显式用 ValueError 判 active：``delete_run_locked`` 抛的
+        # ``RunDeletionConflictError`` 是 RuntimeError，会绕过 API 的 409 映射变成 500。
+        self._assert_no_active_run(task_id)
+        # 调用方（Assistant Transport）已持有 task 操作闸门；该闸门是非可重入的
+        # ``threading.Lock``，因此用已持锁变体删除，不能再进入 ``delete_run``。
+        self._task.delete_run_locked(task_id, run_id)
+        # 进程内 working copy 仍含被删 Run：按 canonical 重建、丢弃它，让随后的 start_run
+        # 把新 Run 投影进这份干净副本。
+        self._state.rebuild_state(task_id)
 
-        with main_session_factory().begin() as session:
-            self._assert_no_active_run(task_id, session)
-            reset = self._conversation_run.reset_run_for_edit(
-                latest_run.id,
-                model_config_id=model_config_id,
-                reasoning_effort=reasoning_effort,
-                session=session,
-                run_command=run_command,
-            )
-            if reset is None:
-                raise ValueError(f"run {latest_run.id} is not editable in its current state")
-            self._context.delete_by_run_id(task_id, latest_run.id, session=session)
-        log.info(
-            "context_message_persisted",
-            extra={
-                "msg": "Run 初始 user context 已提交",
-                "data": {
-                    "task_id": task_id,
-                    "run_id": reset.id,
-                    "message_type": "HumanMessage",
-                },
-            },
-        )
-        try:
-            service_depends.get_conversation_event_projector().process(
-                RunInitializedEvent(
-                    task_id=task_id,
-                    run_id=reset.id,
-                    replace_existing=True,
-                    context_window_total=self._task.get_context_window_total(task_id),
-                )
-            )
-            self._ensure_run_visible(task_id, reset.id)
-            running_run = self._run_state.claim_pending_run(reset.id)
-            if running_run is None:
-                raise ValueError(f"run {reset.id} is not editable in its current state")
-            snapshot: ConversationStateSnapshot = self._state.get_state(task_id)
-            self._state.publish_state(task_id, snapshot)
-        except Exception:
-            # 与新建路径同一补偿语义：提交后的投影/认领/快照失败必须当场收敛。
-            log.exception(
-                "assistant_transport_run_setup_failed",
-                extra={
-                    "msg": "编辑重跑已提交但请求内装配失败，当场收敛该 run 避免阻塞 task",
-                    "data": {"task_id": task_id, "run_id": reset.id},
-                },
-            )
-            self._converge_failed_setup(reset.id)
-            raise
-        return ConversationRunStartResult(
-            run=reset,
-            initial_state=snapshot,
-            execution_mode="fresh",
-            mode="edit",
-        )
-
-
-    def resume_latest_run(self, task_id: int, run_id: int) -> ConversationRunStartResult:
-        """恢复用户显式取消后仍可续跑的最近 Run。
-
-        参数:
-            task_id: Run 所属 Task 标识。
-            run_id: 需要恢复的最近 Run 标识。
-
-        返回:
-            使用既有 checkpoint 的 ``resume`` 执行准备结果。
-
-        异常:
-            ValueError: Run 身份、状态或 snapshot 归属不满足恢复条件。
-            RuntimeError: canonical 与 Transport snapshot 同时缺少该 Run。
-
-        副作用:
-            通过 ``ConversationRunStateService`` 原子迁移状态并发布状态事件。
-        """
-
-        return self._resume_run(
-            task_id,
-            run_id,
-            expected_status=ConversationRunStatus.CANCELLED,
-        )
-
-    def resume_waiting_run(self, task_id: int, run_id: int) -> ConversationRunStartResult:
-        """恢复等待用户输入的最近 Run。
-
-        参数:
-            task_id: Run 所属 Task 标识。
-            run_id: 需要恢复的最近 Run 标识。
-
-        返回:
-            使用既有 checkpoint 的 ``resume`` 执行准备结果。
-
-        异常:
-            ValueError: Run 当前不处于等待状态，或身份/snapshot 校验失败。
-            RuntimeError: canonical 与 Transport snapshot 同时缺少该 Run。
-
-        副作用:
-            将 Run 原子迁移回 ``running`` 并发布状态事件；不直接启动执行器。
-        """
-
-        return self._resume_run(
-            task_id,
-            run_id,
-            expected_status=ConversationRunStatus.WAITING_FOR_INPUT,
-        )
-
-    def _resume_run(
+    def resume_run(
         self,
         task_id: int,
         run_id: int,
@@ -392,7 +367,6 @@ class ConversationRunCommandService:
             run=resumed,
             initial_state=state,
             execution_mode="resume",
-            mode="resume",
         )
 
     def _ensure_run_visible(

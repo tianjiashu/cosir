@@ -549,43 +549,6 @@ class ConversationRunCrud:
                 clear_terminal_fields,
             )
 
-    def reset_for_edit(
-        self,
-        run_id: int,
-        input_text: str,
-        checkpoint_thread_id: str,
-        allowed_statuses: tuple[str, ...],
-        session: Session | None = None,
-        model_config_id: int | None = None,
-        image_paths: list[str] | None = None,
-        extra: ConversationRunExtra | None = None,
-    ) -> ConversationRunRecord | None:
-        """原子替换一个非活动 run 的输入与执行基线。"""
-
-        if session is not None:
-            return self.reset_for_edit_in_session(
-                session,
-                run_id,
-                input_text,
-                checkpoint_thread_id,
-                allowed_statuses,
-                model_config_id,
-                image_paths,
-                extra,
-            )
-
-        with self._session_factory.begin() as managed_session:
-            return self.reset_for_edit_in_session(
-                managed_session,
-                run_id,
-                input_text,
-                checkpoint_thread_id,
-                allowed_statuses,
-                model_config_id,
-                image_paths,
-                extra,
-            )
-
     def update_extra(
         self,
         run_id: int,
@@ -684,43 +647,6 @@ class ConversationRunCrud:
             return update_in_session(managed_session)
 
     @staticmethod
-    def reset_for_edit_in_session(
-        session: Session,
-        run_id: int,
-        input_text: str,
-        checkpoint_thread_id: str,
-        allowed_statuses: tuple[str, ...],
-        model_config_id: int | None = None,
-        image_paths: list[str] | None = None,
-        extra: ConversationRunExtra | None = None,
-    ) -> ConversationRunRecord | None:
-        """在外部事务中把 run 重置为待执行，并清空旧输出。"""
-
-        result = session.execute(
-            update(ConversationRunModel)
-            .where(
-                ConversationRunModel.id == run_id,
-                ConversationRunModel.status.in_(allowed_statuses),
-            )
-            .values(
-                input_text=input_text,
-                checkpoint_thread_id=checkpoint_thread_id,
-                status=ConversationRunStatus.PENDING.value,
-                model_config_id=model_config_id,
-                image_paths=image_paths,
-                extra=extra.to_dict() if extra is not None else None,
-                end_reason=None,
-                final_output=None,
-                usage_json=None,
-                error_json=None,
-            )
-        )
-        if not result.rowcount:
-            return None
-        session.flush()
-        return ConversationRunCrud.get_in_session(session, run_id)
-
-    @staticmethod
     def update_status_if_in_session(
         session: Session,
         run_id: int,
@@ -741,7 +667,7 @@ class ConversationRunCrud:
         本方法**不**改动 ``checkpoint_thread_id``。``resume`` 执行模式下 workflow 会以
         ``input_state=None`` 让 LangGraph 从该线程的**既有 checkpoint** 继续，因此续跑
         必须复用原线程；一旦轮换，续跑就会落到一个没有任何 checkpoint 的空线程上，续跑
-        语义直接失效。线程的轮换只发生在「以新输入重新执行」的路径（``reset_for_edit``）。
+        语义直接失效。线程的轮换只发生在「以新输入重新执行」的路径（删除旧 Run 并新建）。
 
         参数:
             session: 处于事务中的 SQLAlchemy session（本方法不提交）。

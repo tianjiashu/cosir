@@ -1,6 +1,7 @@
 """Agent Team 静态契约和持久化运行意图测试。"""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -104,11 +105,20 @@ def test_configuration_rejects_invalid_identifier_and_status_formats(
         AgentTeamConfiguration.model_validate(document)
 
 
-def test_proposal_tool_separates_argument_and_configuration_validation() -> None:
+def test_proposal_tool_separates_argument_and_configuration_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.service.agent_team.agent_team_preparation_service.resolve_node_profile",
+        lambda *args, **kwargs: None,
+    )
     proposal = _configuration()
     proposal.pop("scope")
 
-    observation = ProposeAgentTeamConfigurationTool().execute(**proposal)
+    observation = ProposeAgentTeamConfigurationTool().execute(
+        execution_context=SimpleNamespace(workspace_root="."),
+        **proposal,
+    )
 
     assert observation.status == "success"
     assert observation.display_data["scope"] == "workspace"
@@ -145,6 +155,10 @@ def test_proposal_tool_does_not_construct_persisted_configuration(
 ) -> None:
     """提案工具只使用 Args 校验，不提前构造持久化配置模型。"""
 
+    monkeypatch.setattr(
+        "app.service.agent_team.agent_team_preparation_service.resolve_node_profile",
+        lambda *args, **kwargs: None,
+    )
     proposal = _configuration()
     proposal.pop("scope")
 
@@ -157,7 +171,10 @@ def test_proposal_tool_does_not_construct_persisted_configuration(
         classmethod(fail_domain_validation),
     )
 
-    observation = ProposeAgentTeamConfigurationTool().execute(**proposal)
+    observation = ProposeAgentTeamConfigurationTool().execute(
+        execution_context=SimpleNamespace(workspace_root="."),
+        **proposal,
+    )
 
     assert observation.status == "success"
     assert observation.display_data["scope"] == "workspace"

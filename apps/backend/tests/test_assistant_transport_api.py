@@ -17,10 +17,10 @@ from app.assistant_transport.request import AddMessageCommand, AssistantAttachRe
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunCommandService,
+    _build_ordered_display_text,
 )
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
-    _build_ordered_display_text,
 )
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -148,53 +148,6 @@ async def test_task_endpoint_returns_task_response_with_fork_status() -> None:
     assert result.task_id == 7
     assert result.workspace_id == 3
     assert result.fork_available is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "end_reason", [None, "user_cancelled", "runtime_restarted", "executor_cancelled"]
-)
-async def test_resume_task_accepts_any_cancelled_end_reason(
-    end_reason: str | None,
-) -> None:
-    status = "cancelled"
-    state = _snapshot(7, status, end_reason)
-    latest_run = SimpleNamespace(id=7, status=status, end_reason=end_reason)
-
-    class _TaskService:
-        def get_latest_run(self, _task_id: int) -> object:
-            return latest_run
-
-    class _StateService:
-        def get_state(self, _task_id: int) -> dict[str, object]:
-            return state
-
-    class _RunService:
-        def resume_cancelled_run(self, _run_id: int) -> object:
-            return SimpleNamespace(id=7, task_id=1, status="running")
-
-    service = ConversationRunCommandService.__new__(ConversationRunCommandService)
-    service._task = _TaskService()
-    service._state = _StateService()
-    service._run_state = _RunService()
-
-    result = service.resume_latest_run(task_id=1, run_id=7)
-
-    assert result.initial_state == state
-    assert result.execution_mode == "resume"
-    assert result.mode == "resume"
-
-
-@pytest.mark.asyncio
-async def test_resume_task_requires_cancelled_status() -> None:
-    class _TaskService:
-        def get_latest_run(self, _task_id: int) -> object:
-            return SimpleNamespace(id=7, status="running", end_reason="executor_cancelled")
-
-    service = ConversationRunCommandService.__new__(ConversationRunCommandService)
-    service._task = _TaskService()
-    with pytest.raises(ValueError, match="not resumable"):
-        service.resume_latest_run(task_id=1, run_id=7)
 
 
 def test_attach_route_is_separate_from_business_resume() -> None:
@@ -370,85 +323,6 @@ async def test_state_endpoint_returns_nested_run_snapshot() -> None:
         "context_window_total",
         "error",
     }
-
-
-@pytest.mark.asyncio
-async def test_resume_setup_failure_settles_run() -> None:
-    """写操作之后再次读取快照失败时，必须补偿收敛 run，不能留下无执行器的 active run。"""
-
-    state = _snapshot(7, "cancelled")
-    snapshot_reads = 0
-    settled: list[tuple[int, str]] = []
-
-    class _TaskService:
-        def get_latest_run(self, _task_id: int) -> object:
-            return SimpleNamespace(id=7, status="cancelled", end_reason="user_cancelled")
-
-    class _StateService:
-        def get_state(self, _task_id: int) -> dict[str, object]:
-            nonlocal snapshot_reads
-            snapshot_reads += 1
-            if snapshot_reads > 1:
-                raise RuntimeError("snapshot read failed")
-            return state
-
-    class _RunService:
-        def resume_cancelled_run(self, _run_id: int) -> object:
-            return SimpleNamespace(id=7, task_id=1, status="running")
-
-        def cancel_run_if_running(
-            self,
-            run_id: int,
-            end_reason: str = "user_cancelled",
-            final_output: str | None = None,
-            usage_stats: object | None = None,
-        ) -> object:
-            settled.append((run_id, end_reason))
-            return SimpleNamespace(id=run_id, task_id=1, status="cancelled")
-
-    service = ConversationRunCommandService.__new__(ConversationRunCommandService)
-    service._task = _TaskService()
-    service._state = _StateService()
-    service._run_state = _RunService()
-
-    with pytest.raises(RuntimeError, match="snapshot read failed"):
-        service.resume_latest_run(task_id=1, run_id=7)
-
-    assert snapshot_reads == 2
-    assert settled == [(7, "resume_setup_failed")]
-
-
-@pytest.mark.asyncio
-async def test_resume_does_not_depend_on_persisted_commands() -> None:
-    """恢复 Run 不依赖任何命令持久化记录。"""
-
-    state = _snapshot(7, "cancelled")
-    resumed = False
-
-    class _TaskService:
-        def get_latest_run(self, _task_id: int) -> object:
-            return SimpleNamespace(id=7, status="cancelled", end_reason="user_cancelled")
-
-    class _StateService:
-        def get_state(self, _task_id: int) -> dict[str, object]:
-            return state
-
-    class _RunService:
-        def resume_cancelled_run(self, _run_id: int) -> object:
-            nonlocal resumed
-            resumed = True
-            return SimpleNamespace(id=7, task_id=1, status="running")
-
-    service = ConversationRunCommandService.__new__(ConversationRunCommandService)
-    service._task = _TaskService()
-    service._state = _StateService()
-    service._run_state = _RunService()
-
-    result = service.resume_latest_run(task_id=1, run_id=7)
-
-    assert resumed is True
-    assert result.mode == "resume"
-    assert result.run.id == 7
 
 
 def test_settle_run_start_failure_cancels_active_run() -> None:

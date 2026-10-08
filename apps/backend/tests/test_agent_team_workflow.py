@@ -3,6 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
@@ -45,8 +46,19 @@ def _state() -> ReactGraphState:
     )
 
 
-def test_user_input_wait_node_resumes_to_model_path() -> None:
+def test_user_input_wait_node_resumes_to_model_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """通用等待节点初次执行保存断点，恢复后才离开节点。"""
+
+    runtime_config = SimpleNamespace(
+        resuming_user_input_wait=False,
+        operations=SimpleNamespace(mark_waiting_for_input_if_running=lambda: None),
+    )
+    monkeypatch.setattr(
+        "app.core.workflows.react.nodes.user_input_wait_node._runtime_config",
+        lambda: runtime_config,
+    )
 
     builder = StateGraph(ReactGraphState)
     builder.add_node("wait", user_input_wait_node)
@@ -88,18 +100,18 @@ def test_team_run_payload_hides_runtime_profile_snapshots() -> None:
 
     payload = _run_payload(row)
     assert "node_runtime" not in payload["state"]
-    assert payload["active_node"] is None
     assert payload["node_results"] == []
 
 
 def test_team_model_snapshot_falls_back_to_parent_materialized_settings() -> None:
     """没有独立 model_config 的子 Agent 使用主 Run 已物化模型并保留自身偏好。"""
 
-    profile = SimpleNamespace(
+    child_profile = SimpleNamespace(
         agent_id="general-assistant",
+        model_config_id=None,
         model_settings=ModelSettings.default_settings(),
     )
-    fallback = ModelSettings(
+    parent_materialized = ModelSettings(
         base_url="http://127.0.0.1/v1",
         api_key="secret",
         model_name="local-model",
@@ -108,9 +120,13 @@ def test_team_model_snapshot_falls_back_to_parent_materialized_settings() -> Non
         supports_reasoning_effort=True,
         supports_image=False,
     )
+    parent_profile = SimpleNamespace(
+        model_settings=parent_materialized,
+        model_config_id=None,
+    )
 
-    effective = resolve_effective_model_settings(profile, fallback)
+    effective = resolve_effective_model_settings(child_profile, parent_profile)
 
     assert effective.model_name == "local-model"
-    assert effective.base_url == fallback.base_url
+    assert effective.base_url == parent_materialized.base_url
     assert effective.reasoning_effort == "high"

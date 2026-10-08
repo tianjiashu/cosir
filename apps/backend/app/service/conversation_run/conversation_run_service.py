@@ -5,7 +5,7 @@
 遗留 active run 收口。
 
 职责边界：
-- 负责：``create_run`` / ``reset_run_for_edit`` 的用例编排、``recover_orphaned_runs`` 的
+- 负责：``create_run`` 的用例编排、``recover_orphaned_runs`` 的
   崩溃恢复收口（Run 终态与未闭合工具调用在同一事务内写入）、命令输入与附件解析。
 - 不负责：Run 状态迁移与查询（见 ``ConversationRunStateService``）；直接 SQL 操作
   （委托给 ``ConversationRunCrud``/``TaskCrud``）；Run 创建期的 canonical 初始 user
@@ -321,91 +321,6 @@ class ConversationRunService:
                 ),
             )
         return run
-
-    def reset_run_for_edit(
-        self,
-        run_id: int,
-        model_config_id: int | None = None,
-        reasoning_effort: str | None = None,
-        session: Session | None = None,
-        run_command: ConversationRunCommand | None = None,
-    ) -> ConversationRunRecord | None:
-        """原地重置一个已结束 run，替换输入并创建新的 checkpoint 身份。
-
-        仅允许非 active run 编辑；调用方负责在同一 task 锁内清理并重建 context。
-        传入 ``run_command`` 时，本方法根据旧 Run 解析编辑请求中缺失的普通附件路径，
-        并生成最终的文本、图片路径和 ``ConversationRunExtra``。传入 ``session`` 时复用
-        外部事务且不自行提交。
-        """
-        input_text = None
-        image_paths = None
-        extra = None
-        if model_config_id is None:
-            raise ValueError("model_config_id is required")
-        config = get_model_config_service().get_config(model_config_id)
-        if reasoning_effort is not None and not config.supports_reasoning_effort:
-            raise ValueError("reasoning_effort is not supported by the selected model")
-        supports_image = config.supports_image
-        if run_command is not None:
-            existing_run = self._run.get(run_id)
-            workspace_id = (
-                self._task.get(existing_run.task_id).workspace_id
-                if run_command.image_asset_ids
-                else None
-            )
-            prepared = self._prepare_command(
-                workspace_id,
-                run_command,
-                run_id=run_id,
-                supports_image=supports_image,
-                reasoning_effort=reasoning_effort,
-            )
-            input_text = prepared.input_text
-            image_paths = prepared.image_paths
-            extra = prepared.extra
-        if input_text is None:
-            raise ValueError("input_text is required when run_command is not provided")
-        if not input_text.strip() and not image_paths:
-            raise ValueError("input_text must be a non-empty string")
-        # 「可原地编辑」的前置状态即 Run 终态集合，引用唯一事实源而非另立字面量。
-        allowed_statuses = tuple(Constant.Run.TERMINAL_STATUSES)
-        extra = ConversationRunExtra(
-            display_text=extra.display_text if extra is not None else input_text,
-            attachments=extra.attachments if extra is not None else [],
-            ban_tools=extra.ban_tools if extra is not None else [],
-            reasoning_effort=reasoning_effort,
-            propose_agent_configuration=(
-                extra.propose_agent_configuration if extra is not None else False
-            ),
-        )
-        context_window_total = config.context_window_k * 1000
-
-        def reset_facts(persist_session: Session | None) -> ConversationRunRecord | None:
-            reset = self._run.reset_for_edit(
-                run_id=run_id,
-                input_text=input_text,
-                checkpoint_thread_id=str(uuid4()),
-                allowed_statuses=allowed_statuses,
-                model_config_id=model_config_id,
-                image_paths=image_paths,
-                extra=extra,
-                session=persist_session,
-            )
-            if reset is not None:
-                self._task.set_current_run_id(
-                    reset.task_id,
-                    reset.id,
-                    context_window_total=context_window_total,
-                    session=persist_session,
-                )
-            return reset
-
-        if session is not None:
-            return reset_facts(session)
-        if self._session_factory is not None:
-            with self._session_factory.begin() as owned_session:
-                return reset_facts(owned_session)
-        return reset_facts(None)
 
     def recover_orphaned_runs(
         self, end_reason: str = "runtime_restarted"

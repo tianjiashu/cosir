@@ -196,9 +196,10 @@ class AgentTeamParentRunService:
         from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
         resumed = await asyncio.to_thread(
-            get_conversation_run_command_service().resume_waiting_run,
+            get_conversation_run_command_service().resume_run,
             team.parent_task_id,
             team.parent_run_id,
+            expected_status=ConversationRunStatus.WAITING_FOR_INPUT,
         )
         task_runtime_spaces.get_or_create(team.parent_task_id).defer_system_message(
             SystemMessage(

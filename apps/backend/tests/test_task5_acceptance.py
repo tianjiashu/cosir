@@ -629,10 +629,10 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_without_command_persi
     assert len(store.runs.list_by_task(second_task.id)) == 1
 
 
-def test_real_sqlite_fork_and_edit_preserve_canonical_identity(
+def test_real_sqlite_fork_preserves_canonical_identity(
     canonical_store,
 ) -> None:
-    """Fork and edit preserve canonical ownership without sharing message/checkpoint identity."""
+    """Fork preserves canonical ownership without sharing message/checkpoint identity."""
 
     store = canonical_store
     source_run = _create_run(store, current=True)
@@ -657,35 +657,6 @@ def test_real_sqlite_fork_and_edit_preserve_canonical_identity(
     target_rows = store.contexts.get(target.id, include_in_context=False)
     assert [row.id for row in target_rows] != [row.id for row in source_rows]
     assert [row.message for row in target_rows] == [row.message for row in source_rows]
-
-    new_checkpoint = "edit-checkpoint"
-    with store.factory.begin() as session:
-        reset = store.runs.reset_for_edit(
-            source_run.id,
-            "edited input",
-            new_checkpoint,
-            (ConversationRunStatus.COMPLETED.value,),
-            session=session,
-        )
-        assert reset is not None
-        store.context.delete_by_run_id(store.task.id, source_run.id, session=session)
-        store.context.append(
-            store.task.id,
-            source_run.id,
-            HumanMessage(content="edited input"),
-            1,
-            True,
-            None,
-            session=session,
-        )
-    edited = store.runs.get(source_run.id)
-    assert edited.status == "pending"
-    assert edited.final_output is None
-    assert edited.usage is None
-    assert edited.checkpoint_thread_id == new_checkpoint
-    rows_after_edit = store.contexts.get(store.task.id, include_in_context=False)
-    assert len(rows_after_edit) == 1
-    assert rows_after_edit[0].message.content == "edited input"
 
 
 def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays(

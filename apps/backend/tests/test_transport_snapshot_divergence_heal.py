@@ -148,16 +148,15 @@ def _build_command_service(
         create_run=lambda **_kwargs: SimpleNamespace(
             id=_RUN_ID, task_id=_TASK_ID, status="pending"
         ),
-        reset_run_for_edit=lambda *_args, **_kwargs: SimpleNamespace(
-            id=_RUN_ID, task_id=_TASK_ID, status="pending"
-        ),
     )
-    service._context = SimpleNamespace(delete_by_run_id=lambda *_args, **_kwargs: None)
     service._run_state = run_state
     service._state = state_service
+    deleted_runs: list[int] = []
     service._task = SimpleNamespace(
         get_latest_run=lambda _task_id: SimpleNamespace(id=_RUN_ID, status="cancelled"),
         get_context_window_total=lambda _task_id: None,
+        delete_run_locked=lambda _task_id, run_id: deleted_runs.append(run_id),
+        deleted_runs=deleted_runs,
     )
     return service
 
@@ -171,14 +170,8 @@ def _start_run(service: ConversationRunCommandService) -> object:
     )
 
 
-def _edit_or_restart(service: ConversationRunCommandService) -> object:
-    return service.edit_or_restart(
-        commands=[ConversationRunCommandInput(command_id="cmd-2", command_type="edit")],
-        task_id=_TASK_ID,
-        run_id=_RUN_ID,
-        model_config_id=None,
-        run_command=SimpleNamespace(),  # type: ignore[arg-type]
-    )
+def _delete_edited_run(service: ConversationRunCommandService) -> None:
+    service.delete_edited_run(task_id=_TASK_ID, run_id=_RUN_ID)
 
 
 def test_start_run_rebuilds_diverged_snapshot_before_claim(
@@ -203,51 +196,28 @@ def test_start_run_rebuilds_diverged_snapshot_before_claim(
     assert run_state.settled == []
 
 
-def test_edit_or_restart_rebuilds_diverged_snapshot_before_claim(
+def test_delete_edited_run_rebuilds_snapshot_to_drop_the_edited_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """编辑重跑同样在认领前自愈；自愈帧之外仍保留该路径收尾的 full 帧。"""
+    """编辑重跑第一步：删除被编辑的 Run，并重建快照丢弃它；本步骤不发布帧。"""
 
     run_state = _RunState()
     state_service = _StateService(
-        current=_snapshot(runs=[(10, "running")], current_run_id=10),
-        rebuilt=_snapshot(runs=[(10, "cancelled"), (_RUN_ID, "pending")], current_run_id=_RUN_ID),
+        current=_snapshot(runs=[(_RUN_ID, "cancelled")], current_run_id=_RUN_ID),
+        rebuilt=_snapshot(runs=[(10, "cancelled")], current_run_id=10),
     )
     service = _build_command_service(
         monkeypatch, run_state=run_state, state_service=state_service
     )
 
-    result = _edit_or_restart(service)
+    _delete_edited_run(service)
 
+    assert service._task.deleted_runs == [_RUN_ID]  # type: ignore[attr-defined]
+    # 删除旧 Run 后按 canonical 重建一次（丢弃仍含旧 Run 的 working copy）。
     assert state_service.rebuild_calls == [_TASK_ID]
-    # 自愈发布一次 full 帧，编辑路径收尾再发布一次（既有行为）。
-    assert state_service.published == [_TASK_ID, _TASK_ID]
-    assert run_state.claimed == [_RUN_ID]
-    assert result.mode == "edit"  # type: ignore[attr-defined]
-
-
-def test_resume_latest_run_rebuilds_diverged_snapshot_before_validation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """快照缺该 run 时 resume 先自愈再校验归属，否则会永久返回「不是当前 run」。"""
-
-    run_state = _RunState()
-    state_service = _StateService(
-        current=_snapshot(runs=[(10, "completed")], current_run_id=10),
-        rebuilt=_snapshot(
-            runs=[(10, "completed"), (_RUN_ID, "cancelled")], current_run_id=_RUN_ID
-        ),
-    )
-    service = _build_command_service(
-        monkeypatch, run_state=run_state, state_service=state_service
-    )
-
-    result = service.resume_latest_run(task_id=_TASK_ID, run_id=_RUN_ID)
-
-    assert state_service.rebuild_calls == [_TASK_ID]
-    assert run_state.resumed == [_RUN_ID]
-    assert result.execution_mode == "resume"
-    assert result.mode == "resume"
+    # 可见性由随后 start_run 的响应首帧（full）收敛，删除步骤不发布帧。
+    assert state_service.published == []
+    assert run_state.claimed == []
 
 
 def test_ensure_run_visible_fails_fast_when_run_absent_after_rebuild(

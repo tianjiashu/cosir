@@ -5,7 +5,7 @@
 
 - ``ConversationRunExecutor._execute``：驱动结束（runner 抛错 / 被取消）但 run 仍
   pending/running 时，经 ``_converge_unfinished_run`` 条件收敛为 failed/cancelled；
-- ``ConversationRunCommandService``：``start_run`` / ``edit_or_restart`` 事务
+- ``ConversationRunCommandService``：``start_run``（编辑重跑复用同一条新建路径）事务
   提交后的投影、认领、快照重读任一步失败时，以 ``run_setup_failed`` 当场收敛再抛出。
 """
 
@@ -258,11 +258,7 @@ def _build_command_service(
     service = ConversationRunCommandService.__new__(ConversationRunCommandService)
     service._conversation_run = SimpleNamespace(
         create_run=lambda **_kwargs: SimpleNamespace(id=11, task_id=_TASK_ID, status="pending"),
-        reset_run_for_edit=lambda *_args, **_kwargs: SimpleNamespace(
-            id=11, task_id=_TASK_ID, status="pending"
-        ),
     )
-    service._context = SimpleNamespace(delete_by_run_id=lambda *_args, **_kwargs: None)
     service._run_state = run_state
     service._state = state_service
     service._task = SimpleNamespace(
@@ -399,33 +395,6 @@ def test_start_run_settles_run_when_snapshot_reread_fails(
             commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
             model_config_id=None,
             task_id=_TASK_ID,
-            run_command=SimpleNamespace(),  # type: ignore[arg-type]
-        )
-
-    assert run_state.claimed == [11]
-    assert run_state.settled == [(11, "run_setup_failed")]
-
-
-def test_edit_or_restart_settles_run_when_post_commit_step_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """编辑重跑提交后快照重读失败：与新建路径同一补偿语义，收敛为 cancelled 再抛出。"""
-
-    run_state = _CommandServiceRunState()
-    service = _build_command_service(
-        monkeypatch,
-        run_state=run_state,
-        projector=_Projector(),
-        # 编辑路径的读顺序与新建一致：先复核可见性，再在认领后取 initial_state。
-        state_service=_state_service(_snapshot_with_run(), fail_after_reads=1),
-    )
-
-    with pytest.raises(RuntimeError, match="snapshot read failed"):
-        service.edit_or_restart(
-            commands=[ConversationRunCommandInput(command_id="cmd-2", command_type="edit")],
-            task_id=_TASK_ID,
-            run_id=11,
-            model_config_id=None,
             run_command=SimpleNamespace(),  # type: ignore[arg-type]
         )
 

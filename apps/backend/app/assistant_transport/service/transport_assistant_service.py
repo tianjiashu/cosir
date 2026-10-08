@@ -3,23 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import NoReturn
+from typing import Literal, NoReturn
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.assistant_transport.request import AddMessageCommand, AssistantTransportRequest
-from app.assistant_transport.request.command.ban_tools_command import BanToolsCommand
-from app.assistant_transport.request.command.propose_agent_configuration_command import (
-    ProposeAgentConfigurationCommand,
-)
-from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.service.conversation_run_command_service import (
-    ConversationRunCommandInput,
     ConversationRunStartResult,
-    RunCommandMode,
 )
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
@@ -31,41 +24,12 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     find_run,
 )
-from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.models import (
-    ConversationRunAttachmentInput,
-    ConversationRunCommand,
-    ConversationRunStatus,
-)
+from app.models import ConversationRunStatus
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
-def _build_ordered_display_text(
-    parts: Sequence[AssistantTextPart | AssistantImagePart],
-) -> str:
-    """将 composer 的文本/图片顺序编码进既有 Run 展示文本值。"""
-
-    image_token = Constant.Cosir.LOCAL_IMAGE_TOKEN
-    emitted_image_ids = {
-        image_id
-        for part in parts
-        if isinstance(part, AssistantTextPart)
-        for image_id in image_token.findall(
-            Constant.Transport.HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text)
-        )
-    }
-    segments: list[str] = []
-    for part in parts:
-        if isinstance(part, AssistantTextPart):
-            segments.append(Constant.Transport.HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text))
-        else:
-            asset_id = part.image.removeprefix("cosir-attachment://")
-            if asset_id in emitted_image_ids:
-                continue
-            segments.append(f"[[cosir-image:{asset_id}]]")
-            emitted_image_ids.add(asset_id)
-    return "\n".join(segments)
+RunCommandMode = Literal["new", "edit", "resume"]
 
 
 class TransportAssistantService:
@@ -377,65 +341,23 @@ class TransportAssistantService:
             # ensure_run_target 已校验 run_id 非空；此处 assert 仅做静态类型收窄。
             assert request.runId is not None
             return await asyncio.to_thread(
-                self._commands.resume_latest_run,
+                self._commands.resume_run,
                 task_id=task_id,
                 run_id=request.runId,
+                expected_status=ConversationRunStatus.CANCELLED,
             )
         # 非 resume 模式 command 必非空（详见 _classify_run_command）；assert 仅类型收窄。
         assert command is not None
-        ban_command = next(
-            (item for item in request.commands if isinstance(item, BanToolsCommand)), None
-        )
-        proposal_command = next(
-            (
-                item
-                for item in request.commands
-                if isinstance(item, ProposeAgentConfigurationCommand)
-            ),
-            None,
-        )
-        ban_tools = list(ban_command.payload.ban_tools) if ban_command is not None else []
-        commands = [
-            ConversationRunCommandInput(
-                command_id=item.commandId,
-                command_type=item.type,
-            )
-            for item in request.commands
-        ]
-        # image_paths 仍由 Run 记录保存；marker 只复用既有 extra.display_text，用于冷重建
-        # 时恢复图片与文字/文件的原始顺序，不新增数据库字段。
-        display_text = _build_ordered_display_text(command.message.parts)
-        image_asset_ids = list(dict.fromkeys(
-            part.image.removeprefix("cosir-attachment://")
-            for part in command.message.parts
-            if isinstance(part, AssistantImagePart)
-        ))
-        run_command = ConversationRunCommand(
-            display_text=display_text,
-            image_asset_ids=image_asset_ids,
-            ban_tools=ban_tools,
-            propose_agent_configuration=proposal_command is not None,
-            attachments=[
-                ConversationRunAttachmentInput(
-                    id=attachment.id,
-                    name=attachment.name,
-                    content_type=attachment.contentType,
-                    path=attachment.path,
-                )
-                for attachment in command.message.attachments
-            ],
-        )
+        commands = self._commands.build_command_inputs(request)
+        run_command = self._commands.build_run_command(request, command)
         model_config_id = request.modelConfigId
         if mode == "edit":
+            # 编辑重跑 = 先删除被编辑的 Run，再复用下面的新建路径创建一条全新 Run。
             assert request.runId is not None
-            return await asyncio.to_thread(
-                self._commands.edit_or_restart,
-                commands=commands,
+            await asyncio.to_thread(
+                self._commands.delete_edited_run,
                 task_id=task_id,
                 run_id=request.runId,
-                model_config_id=model_config_id,
-                reasoning_effort=request.reasoningEffort,
-                run_command=run_command,
             )
         return await asyncio.to_thread(
             self._commands.start_run,
