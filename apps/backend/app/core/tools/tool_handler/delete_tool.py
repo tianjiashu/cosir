@@ -48,7 +48,6 @@ class DeleteTool(HandlerBase):
 
     name = TOOL_DELETE_FILE
     description = DELETE_FILE_DESCRIPTION
-    permission = "file_write"
     args_model = DeleteFileArgs
     timeout_seconds = 15.0
     group = TOOL_GROUP_FILE_EDIT
@@ -86,7 +85,6 @@ class DeleteTool(HandlerBase):
                     "directories are not supported."
                 ),
                 retryable=False,
-                permission=self.permission,
             )
         if not resolved.is_file():
             return tool_error(
@@ -94,10 +92,9 @@ class DeleteTool(HandlerBase):
                 error="delete target is not an existing regular file",
                 reason="provide a path to one existing regular file inside the workspace.",
                 retryable=False,
-                permission=self.permission,
             )
         if cancellation_registry.is_cancelled(execution_context.run_id):
-            return tool_cancelled(tool_name=self.name, permission=self.permission)
+            return tool_cancelled(tool_name=self.name)
         try:
             current, current_error = resolver.resolve_within_workspace(path.replace("\\", "/"))
             if current is None or current_error or current != resolved or not resolved.is_file():
@@ -109,7 +106,6 @@ class DeleteTool(HandlerBase):
                 error=os_error_message(exc, "delete the target file"),
                 reason="check the file's current state and permissions before trying again.",
                 retryable=True,
-                permission=self.permission,
             )
         except (RuntimeError, ValueError) as exc:
             return tool_error(
@@ -119,13 +115,11 @@ class DeleteTool(HandlerBase):
                     "re-read the target path and confirm it is still the intended workspace file."
                 ),
                 retryable=False,
-                permission=self.permission,
             )
 
         relative = resolved.relative_to(execution_context.workspace_root.resolve()).as_posix()
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=None,
             display_data=build_file_delete_display_data(relative),
         )

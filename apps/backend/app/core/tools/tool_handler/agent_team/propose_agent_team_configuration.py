@@ -27,7 +27,6 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
     description = (
         "Create an Agent Team configuration draft for user review. Do not save or execute it."
     )
-    permission: ClassVar[str] = "agent_team_configuration_proposal"
     args_model = ProposeAgentTeamConfigurationArgs
     timeout_seconds: ClassVar[float] = 20.0
     group = TOOL_GROUP_AGENT_TEAM
@@ -59,7 +58,6 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
                     )
             return tool_success(
                 tool_name=self.name,
-                permission=self.permission,
                 content="Agent Team configuration draft is ready for user review.",
                 display_data=build_agent_team_configuration_display_data(
                     proposal,
@@ -75,7 +73,6 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
                 tool_name=self.name,
                 error="agent_team_configuration_invalid",
                 reason="The Team configuration is invalid. Please review and try again.",
-                permission=self.permission,
                 retryable=True,
             )
 

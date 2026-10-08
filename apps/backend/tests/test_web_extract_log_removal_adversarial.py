@@ -856,7 +856,6 @@ def test_state_hint_present_on_all_error_paths_unchanged() -> None:
     for obs in (over, blocked, unavailable):
         assert obs.status == "error"
         assert obs.display_data == {"status_hint": "提取失败"}
-        assert obs.permission == "network"
         assert obs.tool_name == "web_extract"
 
 

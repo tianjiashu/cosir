@@ -33,7 +33,7 @@ def _run_payload(row: Any) -> dict[str, Any]:
     public_state = state.model_dump(mode="json")
     # 节点运行快照包含 system_prompt 和内部模型 schema，只供 coordinator 恢复执行，
     # 不属于前端 Team 进度契约，避免通过状态查询泄露内部提示词。
-    public_state.pop("runtime", None)
+    public_state.pop("node_runtime", None)
     active_execution = state.active_execution()
     node_results = [
         execution.model_dump(mode="json")

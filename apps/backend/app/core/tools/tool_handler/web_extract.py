@@ -59,7 +59,6 @@ class WebExtractTool(HandlerBase):
         "read_file. If a URL fails, inspect the result and choose whether to use another "
         "URL or provider."
     )
-    permission: ClassVar[str] = "network"
     args_model: type[WebExtractArgs] = WebExtractArgs
     timeout_seconds: ClassVar[float] = Constant.Web.REQUEST_TIMEOUT_SECONDS + 10
     group = TOOL_GROUP_WEB
@@ -128,7 +127,6 @@ class WebExtractTool(HandlerBase):
                 "Web extraction is not available.",
                 reason="configure the selected provider locally before calling web_extract again.",
                 retryable=False,
-                permission=self.permission,
             )
         if len(urls) > Constant.Web.EXTRACT_URL_LIMIT_MAX:
             return tool_error(
@@ -139,7 +137,6 @@ class WebExtractTool(HandlerBase):
                 ),
                 reason="split the URLs into smaller batches and call web_extract again.",
                 retryable=True,
-                permission=self.permission,
             )
 
         normalized_urls_or_error = self._validate_urls(urls)
@@ -157,7 +154,6 @@ class WebExtractTool(HandlerBase):
                 unsupported_extract_format_message(provider.display_name, format),
                 reason="select a format supported by the configured extraction provider.",
                 retryable=True,
-                permission=self.permission,
             )
         started = time.monotonic()
         try:
@@ -180,7 +176,6 @@ class WebExtractTool(HandlerBase):
                 str(exc),
                 reason="configure the selected provider locally before calling web_extract again.",
                 retryable=False,
-                permission=self.permission,
             )
         except Exception:
             provider_name = provider.name
@@ -196,7 +191,6 @@ class WebExtractTool(HandlerBase):
                 f"Web extraction failed using provider '{provider_name}'.",
                 reason="try the extraction again or choose another configured provider.",
                 retryable=True,
-                permission=self.permission,
             )
         try:
             results = self._build_results(extracted_items, provider.name)
@@ -213,7 +207,6 @@ class WebExtractTool(HandlerBase):
                 "Web extraction result assembly failed.",
                 reason="inspect the provider configuration or choose another extraction provider.",
                 retryable=False,
-                permission=self.permission,
             )
         del execution_context
         failures = [str(item["error"]) for item in results if item.get("error")]
@@ -234,7 +227,6 @@ class WebExtractTool(HandlerBase):
                 f"Web extraction failed for all {len(results)} URL(s): " + "; ".join(failures),
                 reason="try fewer URLs or choose different source URLs.",
                 retryable=True,
-                permission=self.permission,
             )
         payload: dict[str, object] = {"results": results}
         if failures:
@@ -243,7 +235,6 @@ class WebExtractTool(HandlerBase):
         content = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=content,
             display_data=build_web_extract_display_data(
                 urls=[
@@ -285,13 +276,11 @@ class WebExtractTool(HandlerBase):
                         "configure WEB_EXTRACT_BACKEND or WEB_BACKEND with a registered "
                         "extraction provider."
                     ),
-                    permission=self.permission,
                 )
             return tool_error(
                 self.name,
                 "No web extraction provider configured.",
                 reason="configure an extract-capable web provider before calling again.",
-                permission=self.permission,
             )
         if not provider.supports_extract():
             return tool_error(
@@ -301,7 +290,6 @@ class WebExtractTool(HandlerBase):
                     "select an extract-capable backend through WEB_EXTRACT_BACKEND or "
                     "WEB_BACKEND."
                 ),
-                permission=self.permission,
             )
         return provider
 
@@ -374,7 +362,6 @@ class WebExtractTool(HandlerBase):
             self.name,
             error,
             reason=f"{remediation} No network request was made.",
-            permission=self.permission,
         )
 
     def _execute_provider_extract(

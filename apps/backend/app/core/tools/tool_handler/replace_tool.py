@@ -73,7 +73,6 @@ class ReplaceTool(HandlerBase):
 
     name = TOOL_REPLACE
     description = REPLACE_DESCRIPTION
-    permission = "file_write"
     args_model = ReplaceArgs
     timeout_seconds = 30.0
     group = TOOL_GROUP_FILE_EDIT
@@ -132,7 +131,6 @@ class ReplaceTool(HandlerBase):
                 "replace requires path, old_string, new_string",
                 reason="provide path, old_string, and new_string, then call patch_write again.",
                 retryable=True,
-                permission=self.permission,
             )
         if old_string == new_string:
             return tool_error(
@@ -140,7 +138,6 @@ class ReplaceTool(HandlerBase):
                 "old_string and new_string are identical, no changes would be made",
                 reason="provide a different new_string, or skip the call if no change is needed.",
                 retryable=True,
-                permission=self.permission,
             )
         device_error = resolver.blocked_device_reason(path)
         if device_error:
@@ -148,7 +145,6 @@ class ReplaceTool(HandlerBase):
                 self.name,
                 device_error,
                 reason=blocked_device_reason("patched"),
-                permission=self.permission,
             )
         resolved, error = resolver.resolve_within_workspace(path)
         if resolved is None:
@@ -157,7 +153,6 @@ class ReplaceTool(HandlerBase):
                 f"could not patch_write the file: {error}",
                 reason="provide a file path inside the project workspace.",
                 retryable=True,
-                permission=self.permission,
             )
         device_error = resolver.blocked_device_reason(path, resolved)
         if device_error:
@@ -165,7 +160,6 @@ class ReplaceTool(HandlerBase):
                 self.name,
                 device_error,
                 reason=blocked_device_reason("patched"),
-                permission=self.permission,
             )
         try:
             original = Path(resolved).read_text(encoding="utf-8")
@@ -175,7 +169,6 @@ class ReplaceTool(HandlerBase):
                 os_error_message(exc, "read the file"),
                 reason="make the file readable, then call patch_write again.",
                 retryable=True,
-                permission=self.permission,
             )
         new_content, count, _, match_error = fuzzy_find_and_replace(
             original, old_string, new_string, replace_all
@@ -191,7 +184,6 @@ class ReplaceTool(HandlerBase):
                     "or set replace_all=true."
                 ),
                 retryable=True,
-                permission=self.permission,
             )
         if looks_like_line_numbered(new_content):
             return tool_error(
@@ -199,13 +191,11 @@ class ReplaceTool(HandlerBase):
                 "resulting content appears line-numbered",
                 reason="remove the 'N| ' display prefixes from new_string.",
                 retryable=True,
-                permission=self.permission,
             )
         try:
             if cancellation_registry.is_cancelled(execution_context.run_id):
                 return tool_cancelled(
                     tool_name=self.name,
-                    permission=self.permission,
                 )
             atomic_write_text(
                 resolved,
@@ -218,7 +208,6 @@ class ReplaceTool(HandlerBase):
                 os_error_message(exc, "write the file"),
                 reason="make the file writable, then call patch_write again.",
                 retryable=True,
-                permission=self.permission,
             )
         # 落盘后语法检查（error 驱动）：命中语法错误返回 error 观察（文件已写），
         # 经 reason 引导 Agent 二次编辑覆盖自修复。
@@ -228,7 +217,6 @@ class ReplaceTool(HandlerBase):
         if result.has_error:
             return tool_success(
                 tool_name=self.name,
-                permission=self.permission,
                 content=(
                     "success\nsyntax warning:\n"
                     + format_syntax_reason(result)
@@ -237,7 +225,6 @@ class ReplaceTool(HandlerBase):
             )
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=None,
             display_data=display_data,
         )

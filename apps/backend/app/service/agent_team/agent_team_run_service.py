@@ -88,7 +88,6 @@ class AgentTeamRunService:
                     workspace_id=workspace_id,
                     parent_task_id=parent_task_id,
                     parent_run_id=parent_run_id,
-                    preview_fingerprint=preparation.preview_fingerprint,
                     goal=goal_input,
                     node_runtime_snapshots=preparation.node_runtime_snapshots,
                     session=session,
@@ -114,8 +113,8 @@ class AgentTeamRunService:
         team_run_id: int,
         configuration_document: dict[str, Any],
         *,
-        goal: str | None = None,
-        node_goals: dict[str, str] | None = None,
+        goal: str,
+        node_goals: dict[str, str],
         runtime_loop: asyncio.AbstractEventLoop,
     ) -> AgentTeamRunModel:
         """使用用户最终配置确认 TeamRun，并在提交后交给 Coordinator 启动。
@@ -133,35 +132,28 @@ class AgentTeamRunService:
 
         existing = self.get(team_run_id)
         self._validate_parent_run(existing.parent_task_id, existing.parent_run_id)
-        final_goal = (goal if goal is not None else existing.goal_input).strip()
-        existing_state = AgentTeamRunState.model_validate(existing.state_json)
-        final_node_goals = node_goals if node_goals is not None else {
-            node_id: snapshot["node_goal"]
-            for node_id, snapshot in existing_state.runtime.node_snapshots.items()
-        }
+        final_goal = goal.strip()
         configuration = AgentTeamConfiguration.model_validate(configuration_document)
         final_node_goals = {
             key: value.strip()
-            for key, value in final_node_goals.items()
+            for key, value in node_goals.items()
             if isinstance(key, str) and isinstance(value, str) and value.strip()
         }
-        preparation = self._prepare_final_plan(
+        agent_team_preparation = self._prepare_final_plan(
             existing, configuration, goal=final_goal, node_goals=final_node_goals
         )
 
         with begin_immediate(self._session_factory) as session:
-            row = self._team_run_crud.get_by_id(existing.id, session=session)
-            if row.team_id != configuration.team_id:
+            if existing.team_id != configuration.team_id:
                 raise ValueError("确认配置的 team_id 与待确认 Team 不一致")
-            state = AgentTeamRunState.initial(preparation.node_runtime_snapshots)
+            state = AgentTeamRunState.initial(agent_team_preparation.node_runtime_snapshots)
             updated = self._team_run_crud.update_status_if_in(
-                row.id,
+                existing.id,
                 AgentTeamRunStatus.RUNNING.value,
                 (AgentTeamRunStatus.PENDING.value,),
                 state=state,
                 started=True,
                 configuration_snapshot_json=str(configuration.model_dump(mode="json")),
-                preview_fingerprint=preparation.preview_fingerprint,
                 goal_input=final_goal,
                 session=session,
             )
@@ -191,10 +183,6 @@ class AgentTeamRunService:
 
         workspace_root = get_workspace_service().get_workspace(row.workspace_id).root_path
         parent_run = self._run_service.get_run(row.parent_run_id)
-        fallback_model_settings = self._resolve_parent_model_settings(
-            parent_run,
-            workspace_root,
-        )
         return AgentTeamPreparationService().prepare(
             configuration,
             goal=goal,
@@ -203,8 +191,7 @@ class AgentTeamRunService:
             parent_task_id=row.parent_task_id,
             parent_run_id=row.parent_run_id,
             workspace_id=row.workspace_id,
-            fallback_model_settings=fallback_model_settings,
-            fallback_model_config_id=parent_run.model_config_id,
+            parent_agent_profile=get_agent_registry().resolve(workspace_root, parent_run.agent_id),
         )
 
     @staticmethod

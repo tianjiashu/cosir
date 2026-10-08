@@ -32,7 +32,6 @@ class ChildAgentStatusTool(HandlerBase):
         "Uses the child task's current run; call it after delegate_task when you need "
         "to decide whether the child is still running or already finished."
     )
-    permission: ClassVar[str] = "child_agent_status"
     args_model: type[ChildAgentStatusArgs] = ChildAgentStatusArgs
     timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_CHILD_AGENT
@@ -85,7 +84,6 @@ class ChildAgentStatusTool(HandlerBase):
                 self.name,
                 "child_agent_status requires an execution context.",
                 reason="Call this tool from inside a running turn instead of directly.",
-                permission=self.permission,
             )
 
         try:
@@ -98,7 +96,6 @@ class ChildAgentStatusTool(HandlerBase):
                     "verify child_task_id against the value returned by "
                     "delegate_task; this task does not exist."
                 ),
-                permission=self.permission,
                 retryable=False,
             )
 
@@ -111,7 +108,6 @@ class ChildAgentStatusTool(HandlerBase):
                     "use the child_task_id returned by delegate_task, or "
                     "delegate the subtask first and retry with the corrected child_task_id."
                 ),
-                permission=self.permission,
                 retryable=True,
             )
         run_id = child_task.current_run_id
@@ -126,13 +122,11 @@ class ChildAgentStatusTool(HandlerBase):
                     "the child task points at a run that no longer exists; re-delegate the "
                     "work instead of retrying this read."
                 ),
-                permission=self.permission,
                 retryable=False,
             )
 
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=json.dumps(
                 {
                     "child_task_id": child_task_id,

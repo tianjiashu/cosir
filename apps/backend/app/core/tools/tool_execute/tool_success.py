@@ -3,7 +3,7 @@
 本模块只承载一个纯函数：:func:`tool_success`。它是工具系统构造成功观察的
 **唯一收口**，带 ``data`` 参数以承载结构化成功载荷，与 :func:`tool_error`
 对称：``ToolHandlerRunner._normalize_result`` 的兜底路径与各 handler 的成功分支
-都应经此构造，确保成功观察的字段（``content``/``data``/``permission`` 等）
+都应经此构造，确保成功观察的字段（``content``/``data`` 等）
 填充方式在整个代码库一致。
 """
 
@@ -16,7 +16,6 @@ from app.core.tools.schemas import ToolObservation
 
 def tool_success(
     tool_name: str,
-    permission: str,
     content: str | None,
     tool_call_id: str = "",
     display_data: Mapping[str, Any] | None = None,
@@ -26,8 +25,6 @@ def tool_success(
 
     参数:
         tool_name: 触发本次成功的工具名称（与 :class:`ToolDefinition.name` 对应）。
-        permission: 触发工具所需的权限标识（透传自 :class:`ToolDefinition`），
-            便于上层做审计/展示；失败因权限被拒时仍会回填被拒的权限值。
         content: 面向模型的最小成功正文。只有模型继续工作所需的工具结果或额外
             警告才应返回；如果仅需表达成功可传 ``None``，由 workflow 生成 success。
             不要回显已经存在于工具调用参数或 UI/artifact 数据中的内容。
@@ -37,7 +34,7 @@ def tool_success(
 
     返回:
         不可变的 :class:`ToolObservation`：``status="success"``，
-        ``permission`` 透传自 ``tool``，``error``/``reason`` 为空，
+        ``error``/``reason`` 为空，
         ``retryable=False``。
 
     异常:
@@ -62,7 +59,6 @@ def tool_success(
         tool_name=tool_name,
         status="success",
         content=content,
-        permission=permission,
         tool_call_id=tool_call_id,
     )
     observation.display_data = copy.deepcopy(dict(display_data or {}))

@@ -48,7 +48,6 @@ class TerminalStartTool(HandlerBase):
         "The frontend only previews its output; use terminal_write/read/signal/close "
         "to operate the session."
     )
-    permission: ClassVar[str] = "shell"
     args_model = TerminalStartArgs
     timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_TERMINAL_SESSION
@@ -83,7 +82,7 @@ class TerminalStartTool(HandlerBase):
         if execution_context is None:
             raise ValueError("terminal_start requires a workspace execution context")
         if cancelled(execution_context):
-            return cancelled_observation(self.name, self.permission)
+            return cancelled_observation(self.name)
 
         def action() -> ToolObservation:
             service = require_service(execution_context)
@@ -97,7 +96,6 @@ class TerminalStartTool(HandlerBase):
             )
             return success_observation(
                 self.name,
-                self.permission,
                 payload,
                 summary="Terminal session started.",
                 display_payload=build_terminal_session_display_data(
@@ -106,7 +104,7 @@ class TerminalStartTool(HandlerBase):
                 ),
             )
 
-        return with_terminal_errors(self.name, self.permission, action)
+        return with_terminal_errors(self.name, action)
 
     def to_definition(self) -> ToolDefinition:
         """返回可注册到工具注册表的 ``terminal_start`` 定义。

@@ -69,7 +69,6 @@ class ReadFileTool(HandlerBase):
         "read_file at all (use search_files to find specific content). NOTE: "
         "Cannot read images or other binary files."
     )
-    permission = "safe_read"
     args_model = ReadFileArgs
     timeout_seconds = 10.0
     group = TOOL_GROUP_SEARCH
@@ -169,7 +168,6 @@ class ReadFileTool(HandlerBase):
                     self.name,
                     device_error,
                     reason=_BLOCKED_DEVICE_REASON,
-                    permission=self.permission,
                     status_hint="无法读取",
                 )
 
@@ -181,7 +179,6 @@ class ReadFileTool(HandlerBase):
                     f"could not read the file: {error}",
                     reason="provide a valid file path inside or under the project root.",
                     retryable=True,
-                    permission=self.permission,
                     status_hint="路径无效",
                 )
 
@@ -191,7 +188,6 @@ class ReadFileTool(HandlerBase):
                     self.name,
                     device_error,
                     reason=_BLOCKED_DEVICE_REASON,
-                    permission=self.permission,
                     status_hint="无法读取",
                 )
 
@@ -202,7 +198,6 @@ class ReadFileTool(HandlerBase):
                 result.error,
                 reason=result.reason,
                 retryable=result.retryable,
-                permission=self.permission,
                 status_hint="无法读取",
             )
 
@@ -212,7 +207,6 @@ class ReadFileTool(HandlerBase):
         )
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=result.content,
             display_data=build_read_file_display_data(
                 path,

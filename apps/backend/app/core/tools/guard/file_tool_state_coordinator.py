@@ -319,7 +319,6 @@ class FileToolStateCoordinator:
             tool.name,
             f"file changed since it was last observed: {path_text}",
             reason=reason,
-            permission=tool.permission,
             tool_call_id=tool_call_id,
         )
 
@@ -568,7 +567,6 @@ class FileToolStateCoordinator:
                 tool.name,
                 "repeated search request was blocked because the search scope is unchanged",
                 reason="repeated_call",
-                permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
         if action == "warning":
@@ -587,7 +585,6 @@ class FileToolStateCoordinator:
             tool_name=tool.name,
             status="success",
             content=content,
-            permission=tool.permission,
             tool_call_id=tool_call_id,
             display_data=data,
         )

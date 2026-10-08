@@ -43,7 +43,6 @@ class TerminalSignalTool(HandlerBase):
 
     name = TOOL_TERMINAL_SIGNAL
     description = "Send an interrupt, EOF, or suspend signal to a local terminal session."
-    permission: ClassVar[str] = "shell"
     args_model = TerminalSignalArgs
     timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_TERMINAL_SESSION
@@ -79,7 +78,7 @@ class TerminalSignalTool(HandlerBase):
         if execution_context is None:
             raise ValueError("terminal_signal requires a workspace execution context")
         if cancelled(execution_context):
-            return cancelled_observation(self.name, self.permission)
+            return cancelled_observation(self.name)
 
         def action() -> ToolObservation:
             payload = require_service(execution_context).signal(
@@ -90,7 +89,6 @@ class TerminalSignalTool(HandlerBase):
             )
             return success_observation(
                 self.name,
-                self.permission,
                 payload,
                 summary="Terminal signal sent.",
                 display_payload=build_terminal_session_display_data(
@@ -99,7 +97,7 @@ class TerminalSignalTool(HandlerBase):
                 ),
             )
 
-        return with_terminal_errors(self.name, self.permission, action)
+        return with_terminal_errors(self.name, action)
 
     def to_definition(self) -> ToolDefinition:
         """返回可注册到工具注册表的 ``terminal_signal`` 定义。

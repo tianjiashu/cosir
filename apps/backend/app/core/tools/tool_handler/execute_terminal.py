@@ -83,7 +83,6 @@ class ExecuteTerminalTool(HandlerBase):
 
     name = TOOL_EXECUTE_TERMINAL
     description = _DESCRIPTION
-    permission = "execute_terminal"
     timeout_seconds = 120.0  # 外层 ToolHandlerRunner 硬保险
     default_command_timeout = 60.0  # 内层命令级缺省
     max_command_timeout = 110.0  # 内层钳制上限（< 外层 120 留 10s 收尾）
@@ -289,7 +288,6 @@ class ExecuteTerminalTool(HandlerBase):
                 "could not run the command: execution context is missing",
                 reason="continue without retrying until the runtime supplies an execution context.",
                 retryable=False,
-                permission=self.permission,
             )
 
         if shell not in self._available_shells:
@@ -300,7 +298,6 @@ class ExecuteTerminalTool(HandlerBase):
                     f"choose one of the available shell values: {', '.join(self._available_shells)}"
                 ),
                 retryable=True,
-                permission=self.permission,
             )
 
         verdict = detect_dangerous_command(command)
@@ -344,13 +341,11 @@ class ExecuteTerminalTool(HandlerBase):
                     "the command into smaller steps."
                 ),
                 retryable=True,
-                permission=self.permission,
                 status_hint="命令超时",
             )
         return tool_success(
             tool_name=self.name,
             content=content,
-            permission=self.permission,
             display_data=build_terminal_display_data(
                 command=command,
                 workdir=cwd,
@@ -451,7 +446,6 @@ class ExecuteTerminalTool(HandlerBase):
                 "use a dedicated file tool for filesystem changes or choose a "
                 "non-destructive command."
             ),
-            permission=self.permission,
         )
 
     @staticmethod
@@ -499,7 +493,6 @@ class ExecuteTerminalTool(HandlerBase):
             err,
             reason="provide a safe, existing directory inside the workspace root.",
             retryable=True,
-            permission=self.permission,
         )
 
 

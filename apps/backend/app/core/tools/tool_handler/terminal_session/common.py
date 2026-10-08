@@ -65,12 +65,11 @@ def cancelled(context: ToolExecutionContext) -> bool:
     return should_cancel is not None and should_cancel(context.run_id)
 
 
-def cancelled_observation(tool_name: str, permission: str) -> ToolObservation:
+def cancelled_observation(tool_name: str) -> ToolObservation:
     """构造 terminal handler 的取消观察。
 
     参数:
         tool_name: 工具名，写入观察的工具标识。
-        permission: 该工具的权限标签。
 
     返回:
         ``status="cancelled"`` 的 ``ToolObservation``；用户取消与执行失败是两种不同语义，
@@ -85,20 +84,17 @@ def cancelled_observation(tool_name: str, permission: str) -> ToolObservation:
 
     return tool_cancelled(
         tool_name,
-        permission=permission,
     )
 
 
 def service_error_observation(
     tool_name: str,
-    permission: str,
     exc: TerminalSessionError,
 ) -> ToolObservation:
     """把终端领域错误转换为模型可消费的工具错误观察。
 
     参数:
         tool_name: 工具名，写入观察的工具标识。
-        permission: 该工具的权限标签。
         exc: service 抛出的 ``TerminalSessionError``。
 
     返回:
@@ -125,14 +121,12 @@ def service_error_observation(
             )
         ),
         retryable=exc.retryable,
-        permission=permission,
         status_hint="终端失败",
     )
 
 
 def success_observation(
     tool_name: str,
-    permission: str,
     payload: dict[str, object],
     *,
     summary: str,
@@ -142,7 +136,6 @@ def success_observation(
 
     参数:
         tool_name: 工具名，写入观察的工具标识。
-        permission: 该工具的权限标签。
         payload: 结构化结果，会以紧凑 JSON 追加到 ``content`` 供模型读取。
         summary: 一行英文摘要，作为 ``content`` 首行。
         display_payload: 已按 allowlist 投影的展示数据，写入 ``display_data``。
@@ -160,7 +153,6 @@ def success_observation(
 
     return tool_success(
         tool_name=tool_name,
-        permission=permission,
         content=f"{summary}\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}",
         display_data=display_payload,
     )
@@ -168,14 +160,12 @@ def success_observation(
 
 def with_terminal_errors(
     tool_name: str,
-    permission: str,
     action: Callable[[], ToolObservation],
 ) -> ToolObservation:
     """执行一次终端操作，并把领域错误归一化为错误观察。
 
     参数:
         tool_name: 工具名，写入观察的工具标识。
-        permission: 该工具的权限标签。
         action: 无参可调用对象，内部完成 service 调用与成功观察构造。
 
     返回:
@@ -192,4 +182,4 @@ def with_terminal_errors(
     try:
         return action()
     except TerminalSessionError as exc:
-        return service_error_observation(tool_name, permission, exc)
+        return service_error_observation(tool_name, exc)

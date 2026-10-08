@@ -66,8 +66,6 @@ class ToolObservation:
             ``True`` 表示模型可以修正参数、目标或当前状态后再次调用；``False``
             表示不建议继续重试本工具调用，应停止、换方案或请求用户介入。该字段
             只供模型决策提示使用，不触发执行器自动重试。
-        permission: 触发工具所需的权限标识（透传自 :class:`ToolDefinition`），
-            便于上层做审计/展示；失败因权限被拒时仍会回填被拒的权限值。
         tool_call_id: 与本次观察对应的模型工具调用 id（透传自 :class:`ToolCall`）；
             用于把观察回绑到具体的模型请求，缺失时为空。
         display_data: 面向客户端的结构化机读字典，仅供前端渲染。UI 不应通过本字段之外的
@@ -92,8 +90,6 @@ class ToolObservation:
     # 「按 reason 修正或处理后，模型是否可以再次调用」；仅供模型决策提示使用，
     # 不触发执行器自动重试。
     retryable: bool = False
-    # 触发工具所需权限标识，透传自 ToolDefinition，便于审计与展示。
-    permission: str | None = ""
     # 对应的模型工具调用 id，透传自 ToolCall，用于observation回绑；缺失为空。
     tool_call_id: str = ""
     # 面向客户端的结构化机读字典，仅前端渲染消费，不到模型。

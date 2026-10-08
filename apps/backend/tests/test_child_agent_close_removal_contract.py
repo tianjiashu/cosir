@@ -8,7 +8,7 @@
 3. 装配面：``ToolSystem.build_tool_system()`` 的注册清单不含该名字，且「注册集合 =
    规范集合 - 条件跳过的 Web 工具」这一不变式仍然成立。
 4. 兄弟面（对抗）：仍存在的三个 child 工具（send/status/wait）的 ``args_model`` /
-   ``permission`` / ``to_definition()`` 契约，以及 ``CHILD_DISALLOWED_TOOLS`` 不变式未被破坏。
+   ``to_definition()`` 契约，以及 ``CHILD_DISALLOWED_TOOLS`` 不变式未被破坏。
 
 注明：本文件只做测试与事实固化，不修改任何生产代码。
 """
@@ -377,14 +377,13 @@ def test_child_tool_args_model_permission_and_name_contract(
     factory: object,
     timeout_seconds: float,
 ) -> None:
-    """目的：每个存留 child 工具的 name / permission / args_model / timeout 契约未被破坏。
+    """目的：每个存留 child 工具的 name / args_model / timeout 契约未被破坏。
 
     潜在缺陷类型：删除动作连带改坏兄弟工具的权限标签或参数模型绑定。
     """
 
     tool = tool_cls()
     assert tool.name == tool_name
-    assert tool.permission == tool_name
     assert tool.args_model is args_model
     assert tool.timeout_seconds == timeout_seconds
 
@@ -531,7 +530,7 @@ def test_child_tool_error_observation_contract_when_context_missing(storage: Non
     """目的：存留 child 工具在缺少执行上下文时归一化为错误观察（防御性契约/状态副作用）。
 
     潜在缺陷类型：删除改动破坏 tool_error 归一化，异常逃逸到执行管线；或错误观察的
-    content/status/permission 字段与约定不符。
+    content/status 字段与约定不符。
     """
 
     tool = ChildAgentStatusTool()
@@ -540,7 +539,6 @@ def test_child_tool_error_observation_contract_when_context_missing(storage: Non
     assert observation.status == "error"
     assert observation.content is None
     assert observation.error == "child_agent_status requires an execution context."
-    assert observation.permission == "child_agent_status"
     assert observation.tool_name == "child_agent_status"
     assert isinstance(observation.display_data, dict)
     # 错误通道不承载成功内容：display_data 只保留 UI 短提示。

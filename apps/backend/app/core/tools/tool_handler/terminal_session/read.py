@@ -47,7 +47,6 @@ class TerminalReadTool(HandlerBase):
         "When the command is expected to run for a long time, pass a suitable wait_ms to "
         "wait for its output instead of polling with frequent reads."
     )
-    permission: ClassVar[str] = "shell"
     args_model = TerminalReadArgs
     timeout_seconds: ClassVar[float] = 30.0
     group = TOOL_GROUP_TERMINAL_SESSION
@@ -83,7 +82,7 @@ class TerminalReadTool(HandlerBase):
         if execution_context is None:
             raise ValueError("terminal_read requires a workspace execution context")
         if cancelled(execution_context):
-            return cancelled_observation(self.name, self.permission)
+            return cancelled_observation(self.name)
 
         def action() -> ToolObservation:
             result = require_service(execution_context).read(
@@ -95,10 +94,9 @@ class TerminalReadTool(HandlerBase):
                 is_cancelled=lambda: cancelled(execution_context),
             )
             if cancelled(execution_context):
-                return cancelled_observation(self.name, self.permission)
+                return cancelled_observation(self.name)
             return success_observation(
                 self.name,
-                self.permission,
                 {"session_id": session_id, **result.to_dict()},
                 summary="Terminal output read.",
                 display_payload=build_terminal_session_display_data(
@@ -106,7 +104,7 @@ class TerminalReadTool(HandlerBase):
                 ),
             )
 
-        return with_terminal_errors(self.name, self.permission, action)
+        return with_terminal_errors(self.name, action)
 
     def to_definition(self) -> ToolDefinition:
         """返回可注册到工具注册表的 ``terminal_read`` 定义。

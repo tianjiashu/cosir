@@ -38,7 +38,6 @@ class WebSearchTool(HandlerBase):
         "backend, so operators such as site:domain, filetype:pdf, intitle:word, -term, "
         'and "exact phrase" may work when the backend supports them.'
     )
-    permission: ClassVar[str] = "network"
     args_model: type[WebSearchArgs] = WebSearchArgs
     timeout_seconds: ClassVar[float] = Constant.Web.REQUEST_TIMEOUT_SECONDS + 5
     group = TOOL_GROUP_WEB
@@ -95,7 +94,6 @@ class WebSearchTool(HandlerBase):
                 "Web search is not available.",
                 reason="configure the selected provider locally before continuing.",
                 retryable=False,
-                permission=self.permission,
             )
         effective_limit = min(limit, Constant.Web.SEARCH_LIMIT_MAX)
         backend = Settings.WEB_SEARCH_BACKEND or Settings.WEB_BACKEND
@@ -116,7 +114,6 @@ class WebSearchTool(HandlerBase):
                 str(exc),
                 reason="configure the selected provider locally before continuing.",
                 retryable=False,
-                permission=self.permission,
             )
         except Exception:
             provider_name = (
@@ -134,7 +131,6 @@ class WebSearchTool(HandlerBase):
                 f"Web search failed using provider '{provider_name}'.",
                 reason="try the search again or choose another configured provider.",
                 retryable=True,
-                permission=self.permission,
             )
         web_results = [
             {
@@ -148,7 +144,6 @@ class WebSearchTool(HandlerBase):
         ]
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=json.dumps(
                 {"web": web_results},
                 ensure_ascii=False,

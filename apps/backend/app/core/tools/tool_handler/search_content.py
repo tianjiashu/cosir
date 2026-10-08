@@ -44,7 +44,6 @@ class SearchContentTool(HandlerBase):
 
     name = TOOL_SEARCH_CONTENT
     description = SEARCH_CONTENT_DESCRIPTION
-    permission = "file_search"
     args_model = SearchContentArgs
     timeout_seconds = 30.0
     group = TOOL_GROUP_SEARCH
@@ -70,12 +69,11 @@ class SearchContentTool(HandlerBase):
                 self.name,
                 device_error,
                 reason=blocked_device_reason("searched"),
-                permission=self.permission,
                 status_hint="搜索失败",
             )
         resolved_path, path_error = resolver.resolve_without_boundary(path)
         if resolved_path is None:
-            return _path_error(self.name, self.permission, path_error or path)
+            return _path_error(self.name, path_error or path)
         try:
             scope = SearchScope.from_path(workspace_root, resolved_path)
             device_error = resolver.blocked_recursive_search_reason(path, resolved_path)
@@ -84,7 +82,6 @@ class SearchContentTool(HandlerBase):
                     self.name,
                     device_error,
                     reason=blocked_device_reason("searched"),
-                    permission=self.permission,
                 )
             page = search_content(
                 scope,
@@ -101,7 +98,6 @@ class SearchContentTool(HandlerBase):
                 "content search exceeded its time limit",
                 reason="narrow the path or file_glob and call search_content again.",
                 retryable=True,
-                permission=self.permission,
                 status_hint="搜索超时",
             )
         except InvalidSearchPattern as exc:
@@ -110,18 +106,16 @@ class SearchContentTool(HandlerBase):
                 f"invalid regular expression: {exc}",
                 reason="correct pattern and call search_content again.",
                 retryable=True,
-                permission=self.permission,
                 status_hint="正则无效",
             )
         except SearchPathNotFound as exc:
-            return _path_error(self.name, self.permission, str(exc))
+            return _path_error(self.name, str(exc))
         except SearchPathUnreadable as exc:
             return tool_error(
                 self.name,
                 f"could not search path: {exc}",
                 reason="provide a readable file or directory path.",
                 retryable=True,
-                permission=self.permission,
             )
 
         content = _format_content(page.matches)
@@ -134,7 +128,6 @@ class SearchContentTool(HandlerBase):
             content = "No matches found."
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=content,
             display_data=build_content_search_display_data(
                 pattern=pattern,
@@ -186,7 +179,7 @@ def _format_content(matches: tuple[Any, ...]) -> str:
     )
 
 
-def _path_error(tool_name: str, permission: str, detail: str) -> ToolObservation:
+def _path_error(tool_name: str, detail: str) -> ToolObservation:
     """构造统一的搜索路径错误。"""
 
     return tool_error(
@@ -194,5 +187,4 @@ def _path_error(tool_name: str, permission: str, detail: str) -> ToolObservation
         f"could not search path: {detail}",
         reason="provide an existing file or directory path relative to the workspace.",
         retryable=True,
-        permission=permission,
     )

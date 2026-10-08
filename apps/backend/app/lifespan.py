@@ -321,7 +321,6 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             try:
                 from app.agent_team.coordinator import get_agent_team_coordinator
 
-                get_agent_team_coordinator().shutdown()
                 await get_conversation_run_executor().close()
             finally:
                 try:

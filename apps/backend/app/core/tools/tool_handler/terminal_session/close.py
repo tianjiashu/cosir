@@ -43,7 +43,6 @@ class TerminalCloseTool(HandlerBase):
 
     name = TOOL_TERMINAL_CLOSE
     description = "Close an existing local terminal session and its shell process tree."
-    permission: ClassVar[str] = "shell"
     args_model = TerminalCloseArgs
     timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_TERMINAL_SESSION
@@ -75,7 +74,7 @@ class TerminalCloseTool(HandlerBase):
         if execution_context is None:
             raise ValueError("terminal_close requires a workspace execution context")
         if cancelled(execution_context):
-            return cancelled_observation(self.name, self.permission)
+            return cancelled_observation(self.name)
 
         def action() -> ToolObservation:
             payload = require_service(execution_context).close(
@@ -85,13 +84,12 @@ class TerminalCloseTool(HandlerBase):
             )
             return success_observation(
                 self.name,
-                self.permission,
                 payload,
                 summary="Terminal session closed.",
                 display_payload=build_terminal_session_display_data(payload),
             )
 
-        return with_terminal_errors(self.name, self.permission, action)
+        return with_terminal_errors(self.name, action)
 
     def to_definition(self) -> ToolDefinition:
         """返回可注册到工具注册表的 ``terminal_close`` 定义。

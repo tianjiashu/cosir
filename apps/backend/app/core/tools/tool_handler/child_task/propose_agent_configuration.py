@@ -32,7 +32,6 @@ class ProposeAgentConfigurationTool(HandlerBase):
         "agent_id, role, description, and system_prompt. Do not save files or database "
         "records; the user will configure scope, tools, steps, and model in the editor."
     )
-    permission: ClassVar[str] = "agent_configuration_proposal"
     args_model = ProposeAgentConfigurationArgs
     timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_CONFIGURATION
@@ -61,7 +60,6 @@ class ProposeAgentConfigurationTool(HandlerBase):
             if candidate_agent_id in existing_agent_ids:
                 return tool_error(
                     tool_name=self.name,
-                    permission=self.permission,
                     error=(
                         f"agent_id '{candidate_agent_id}' is already in use in this "
                         "workspace or the system scope."
@@ -80,7 +78,6 @@ class ProposeAgentConfigurationTool(HandlerBase):
         display_data = build_agent_configuration_draft_display_data(**payload)
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content="A child-agent configuration draft is ready for user review in the editor.",
             display_data=display_data,
         )

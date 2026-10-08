@@ -60,16 +60,10 @@ def build_chat_model(
     副作用:
         创建模型使用的同步和异步 HTTP 客户端；不读取配置数据库。
     """
-
-    model_settings.require_runtime_config()
-
     api_key = model_settings.api_key
     # ChatOpenAI 的 api_key 字段期望 SecretStr（避免明文在 repr/日志泄露）；None 时透传 None。
     chat_api_key: SecretStr | None = SecretStr(api_key) if api_key else None
     base_url = model_settings.base_url
-
-
-
 
     resolved_effort = model_settings.reasoning_effort if model_settings.supports_reasoning_effort else "max"
 

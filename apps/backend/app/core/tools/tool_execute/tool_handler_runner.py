@@ -199,7 +199,6 @@ class ToolHandlerRunner:
                     "always fail until the timeout is set."
                 ),
                 retryable=False,
-                permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
 
@@ -270,7 +269,6 @@ class ToolHandlerRunner:
                     f"environment is repaired."
                 ),
                 retryable=False,
-                permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
 
@@ -320,7 +318,6 @@ class ToolHandlerRunner:
                     f"simplify the task or increase the tool's timeout_seconds."
                 ),
                 retryable=True,
-                permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
         except (OSError, EOFError) as exc:
@@ -348,7 +345,6 @@ class ToolHandlerRunner:
                     f"the tool process crashed or its communication pipe broke: {exc}"
                 ),
                 retryable=False,
-                permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
         finally:
@@ -377,7 +373,6 @@ class ToolHandlerRunner:
                     f"{payload.get('message', 'tool handler failed')}"
                 ),
                 retryable=False,
-                permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
 
@@ -685,7 +680,6 @@ class ToolHandlerRunner:
                 str(exc),
                 reason=handler_exception_reason(f"the tool handler raised an exception: {exc}"),
                 retryable=False,
-                permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
         # 执行后边界：handler 已跑完但执行期间被取消，丢弃结果转取消观察。
@@ -880,7 +874,6 @@ class ToolHandlerRunner:
         )
         return tool_cancelled(
             tool.name,
-            permission=tool.permission,
             tool_call_id=tool_call_id,
             reason=(
                 "the user stopped this tool call mid-execution — typically because it was too "
@@ -978,7 +971,6 @@ class ToolHandlerRunner:
             content = str(payload)
         return tool_success(
             tool.name,
-            tool.permission,
             content,
             tool_call_id=tool_call_id,
         )

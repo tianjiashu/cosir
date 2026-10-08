@@ -92,7 +92,6 @@ class MoveTool(HandlerBase):
 
     name = TOOL_MOVE_FILE
     description = MOVE_FILE_DESCRIPTION
-    permission = "file_write"
     args_model = MoveFileArgs
     timeout_seconds = 15.0
     group = TOOL_GROUP_FILE_EDIT
@@ -162,7 +161,7 @@ class MoveTool(HandlerBase):
                 "choose a destination whose parent directory already exists.",
             )
         if cancellation_registry.is_cancelled(execution_context.run_id):
-            return tool_cancelled(tool_name=self.name, permission=self.permission)
+            return tool_cancelled(tool_name=self.name)
         try:
             current_source, source_error = resolver.resolve_within_workspace(
                 source_path.replace("\\", "/")
@@ -188,7 +187,6 @@ class MoveTool(HandlerBase):
                 error=os_error_message(exc, "move the file"),
                 reason="check the current source and destination states before trying again.",
                 retryable=True,
-                permission=self.permission,
             )
         except (RuntimeError, ValueError) as exc:
             return self._error(
@@ -213,7 +211,6 @@ class MoveTool(HandlerBase):
         )
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=None,
             display_data=display_data,
         )
@@ -241,7 +238,6 @@ class MoveTool(HandlerBase):
             error=error,
             reason=reason,
             retryable=False,
-            permission=self.permission,
         )
 
     def to_definition(self) -> ToolDefinition:

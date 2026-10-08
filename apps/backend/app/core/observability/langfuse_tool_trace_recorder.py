@@ -84,7 +84,7 @@ class _LangfuseToolSpan:
         self._span.update(
             output=output,
             level="ERROR" if observation.status == "error" else "DEFAULT",
-            metadata=limit_langfuse_payload({"permission": observation.permission}),
+            metadata=limit_langfuse_payload({}),
         )
         if observation.status == "error" and observation.error:
             self._span.update(status_message=limit_langfuse_payload(observation.error))

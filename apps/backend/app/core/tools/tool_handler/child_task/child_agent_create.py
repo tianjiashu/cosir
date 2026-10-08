@@ -98,7 +98,6 @@ class DelegateTaskTool(HandlerBase):
         "CRITICAL BUDGET LIMIT: an over-budget call is rejected immediately and counts as a "
         "tool error, so trim or split the task instead of overshooting."
     )
-    permission: ClassVar[str] = "delegate_task"
     args_model: type[DelegateTaskArgs] = DelegateTaskArgs
     timeout_seconds: ClassVar[float] = 300.0
     group = TOOL_GROUP_CHILD_AGENT
@@ -160,7 +159,6 @@ class DelegateTaskTool(HandlerBase):
                 self.name,
                 "delegate_task requires an execution context.",
                 reason="Provide the parent task execution context before delegating work.",
-                permission=self.permission,
                 retryable=False,
             )
 
@@ -171,13 +169,11 @@ class DelegateTaskTool(HandlerBase):
                 self.name,
                 "delegate_task_runtime_unavailable",
                 reason="Configure the parent agent profile error before delegating work.",
-                permission=self.permission,
                 retryable=False,
             )
         if cancellation_registry.is_cancelled(execution_context.run_id):
             return tool_cancelled(
                 tool_name=self.name,
-                permission=self.permission,
             )
 
         agent_registry = runtime_dependencies.agent_profile_registry
@@ -186,7 +182,6 @@ class DelegateTaskTool(HandlerBase):
                 self.name,
                 "delegate_task_catalog_unavailable",
                 reason="The child agent catalog for this workspace is unavailable.",
-                permission=self.permission,
                 retryable=False,
             )
         try:
@@ -210,7 +205,6 @@ class DelegateTaskTool(HandlerBase):
                 self.name,
                 "delegate_task_workspace_agent_config_invalid",
                 reason="The child agent configuration for this workspace is invalid.",
-                permission=self.permission,
                 retryable=False,
             )
         if (
@@ -235,7 +229,6 @@ class DelegateTaskTool(HandlerBase):
                     f"verify the child_agent_id against the available child agents "
                     f"before retrying."
                 ),
-                permission=self.permission,
                 retryable=True,
             )
 
@@ -288,7 +281,6 @@ class DelegateTaskTool(HandlerBase):
                         "the parent runtime event loop is unavailable, so the child run "
                         "cannot be started; retry from a normal turn."
                     ),
-                    permission=self.permission,
                     retryable=False,
                 )
             future = asyncio.run_coroutine_threadsafe(
@@ -320,7 +312,6 @@ class DelegateTaskTool(HandlerBase):
             )
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=json.dumps(
                 {
                     "status": "running",

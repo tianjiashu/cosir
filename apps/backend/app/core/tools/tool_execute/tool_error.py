@@ -5,7 +5,7 @@
 :func:`handler_exception_reason`）。
 ``ToolAccessGate``（未知工具/权限拒绝/参数非法）、``ToolHandlerRunner``（启动失败/超时/
 handler 异常）以及各 handler（路径越界/无匹配等）的失败分支全部经此构造，确保失败
-诊断字段（``error``/``reason``/``retryable``/``permission``）在整个代码库的填充方式
+诊断字段（``error``/``reason``/``retryable``）在整个代码库的填充方式
 保持一致。
 
 取消类观察的文案与工厂收口在 :mod:`app.tools.tool_execute.tool_cancelled`，不在本模块——
@@ -176,7 +176,6 @@ def tool_error(
     error: str,
     reason: str,
     retryable: bool = False,
-    permission: str = "",
     tool_call_id: str = "",
     status_hint: str | None = None,
 ) -> ToolObservation:
@@ -195,8 +194,6 @@ def tool_error(
         retryable: 仅供模型判断「按 ``reason`` 修正或处理后是否可以再次调用」，默认
             False。它不触发执行器自动重试，也不表示必须使用相同参数；如果模型可以
             修正参数、目标或当前状态后再次调用，则传 True，否则传 False。
-        permission: 触发工具所需权限标识（用于审计/展示），默认空字符串；权限被
-            拒时由调用方回填被拒的权限值。
         tool_call_id: 关联的模型工具调用 id，默认空字符串。
         status_hint: 可直接传入的客户端短提示，建议约 5 个字，最长 8 个字符；不会
             回传给模型。省略时按 ``tool_name`` 选择工具默认提示。错误观察的
@@ -219,7 +216,6 @@ def tool_error(
         error=error,
         reason=reason,
         retryable=retryable,
-        permission=permission,
         tool_call_id=tool_call_id,
     )
     # 错误 UI 通道只保留后端显式传入的短提示；完整 error/reason/content 仅供模型通道。

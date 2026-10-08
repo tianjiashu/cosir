@@ -150,7 +150,6 @@ class ToolAccessGate:
                     # 策略来源（哪条 profile / 谁关掉的），也不把可用工具集回灌给模型——模型本就
                     # 持有工具声明，回灌只会放大提示面。retryable=False 与该信号配套。
                     reason="This tool is disabled for the current run. Do not call again",
-                    permission=tool.permission,
                     tool_call_id=call.call_id,
                     retryable=False,
                 )
@@ -171,7 +170,6 @@ class ToolAccessGate:
                         f"the tool's parameter schema and call again. The same "
                         f"arguments will always be rejected."
                     ),
-                    permission=tool.permission,
                     tool_call_id=call.call_id,
                     retryable=True,
                 )
@@ -253,7 +251,6 @@ class ToolAccessGate:
                 tool.name,
                 reason,
                 reason=reason,
-                permission=tool.permission,
                 tool_call_id=tool_call_id,
             )
         if decision.modified_arguments is not None:

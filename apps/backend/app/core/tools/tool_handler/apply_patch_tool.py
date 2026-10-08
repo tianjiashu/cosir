@@ -87,7 +87,6 @@ class ApplyPatchTool(HandlerBase):
         "or rename one. The 'patch' parameter holds the diff text; its description "
         "defines the accepted format."
     )
-    permission = "file_write"
     args_model = ApplyPatchArgs
     timeout_seconds = 30.0
     group = TOOL_GROUP_FILE_EDIT
@@ -136,7 +135,6 @@ class ApplyPatchTool(HandlerBase):
                     "markers. Use write_file, delete_file, or move_file for whole-file operations."
                 ),
                 retryable=True,
-                permission=self.permission,
             )
         operations = outcome.operations
         resolver = PathResolver(execution_context.workspace_root)
@@ -154,10 +152,9 @@ class ApplyPatchTool(HandlerBase):
                     "cannot create, delete, or move files."
                 ),
                 retryable=True,
-                permission=self.permission,
             )
         if cancellation_registry.is_cancelled(execution_context.run_id):
-            return tool_cancelled(tool_name=self.name, permission=self.permission)
+            return tool_cancelled(tool_name=self.name)
         try:
             results = apply_all_with_diff(operations, resolver)
         except PatchApplyError as exc:
@@ -170,7 +167,6 @@ class ApplyPatchTool(HandlerBase):
                         "current contents; do not replay this diff unchanged."
                     ),
                     retryable=False,
-                    permission=self.permission,
                 )
             return tool_error(
                 tool_name=self.name,
@@ -180,7 +176,6 @@ class ApplyPatchTool(HandlerBase):
                     "contents before retrying."
                 ),
                 retryable=_is_patch_retryable_after_correction(exc),
-                permission=self.permission,
             )
 
         display_data = build_file_change_display_data(results)
@@ -195,7 +190,6 @@ class ApplyPatchTool(HandlerBase):
         content = self._build_content(outcome.count_repairs, diagnostics)
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=content,
             display_data=display_data,
         )

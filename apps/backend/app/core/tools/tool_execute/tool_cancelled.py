@@ -10,13 +10,12 @@ CANCELLED_REASON = "the tool call was cancelled before completion; no result was
 
 
 def tool_cancelled(
-    tool_name: str, permission: str = "", tool_call_id: str = "", reason: str = ""
+    tool_name: str, tool_call_id: str = "", reason: str = ""
 ) -> ToolObservation:
     """构造统一的取消态工具观察。
 
     参数:
         tool_name: 被取消的工具名称。
-        permission: 触发工具所需的权限标识。
         tool_call_id: 关联的模型工具调用 id。
         reason: 覆盖默认取消文案的 ``reason``；为空字符串时使用模块常量
             ``CANCELLED_REASON``。工具执行层取消会传入点名取消来源的富文本，使模型能区分
@@ -41,6 +40,5 @@ def tool_cancelled(
         error=None,
         reason=CANCELLED_REASON if reason == "" else reason,
         retryable=False,
-        permission=permission,
         tool_call_id=tool_call_id,
     )

@@ -38,7 +38,6 @@ class FindFilesTool(HandlerBase):
 
     name = TOOL_FIND_FILES
     description = FIND_FILES_DESCRIPTION
-    permission = "file_search"
     args_model = FindFilesArgs
     timeout_seconds = 30.0
     group = TOOL_GROUP_SEARCH
@@ -61,7 +60,6 @@ class FindFilesTool(HandlerBase):
                 self.name,
                 device_error,
                 reason=blocked_device_reason("searched"),
-                permission=self.permission,
             )
         resolved_path, path_error = resolver.resolve_without_boundary(path)
         if resolved_path is None:
@@ -70,7 +68,6 @@ class FindFilesTool(HandlerBase):
                 f"could not search path: {path_error or path}",
                 reason="provide an existing file or directory path relative to the workspace.",
                 retryable=True,
-                permission=self.permission,
             )
         try:
             scope = SearchScope.from_path(execution_context.workspace_root, resolved_path)
@@ -80,7 +77,6 @@ class FindFilesTool(HandlerBase):
                     self.name,
                     device_error,
                     reason=blocked_device_reason("searched"),
-                    permission=self.permission,
                 )
             page = find_files(
                 scope,
@@ -95,7 +91,6 @@ class FindFilesTool(HandlerBase):
                 "file search exceeded its time limit",
                 reason="narrow the path or pattern and call find_files again.",
                 retryable=True,
-                permission=self.permission,
                 status_hint="搜索超时",
             )
         except SearchPathNotFound as exc:
@@ -104,7 +99,6 @@ class FindFilesTool(HandlerBase):
                 f"could not search path: {exc}",
                 reason="provide an existing file or directory path relative to the workspace.",
                 retryable=True,
-                permission=self.permission,
             )
         except SearchPathUnreadable as exc:
             return tool_error(
@@ -112,7 +106,6 @@ class FindFilesTool(HandlerBase):
                 f"could not search path: {exc}",
                 reason="provide a readable file or directory path.",
                 retryable=True,
-                permission=self.permission,
             )
 
         paths = [item.file_path for item in page.matches]
@@ -126,7 +119,6 @@ class FindFilesTool(HandlerBase):
             content = "No files found."
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=content,
             display_data=build_file_search_display_data(
                 pattern=pattern,

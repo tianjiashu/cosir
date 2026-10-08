@@ -13,6 +13,7 @@ from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.depends import get_conversation_run_service
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 
 _PARENT_WAIT_ATTEMPTS = 600
@@ -26,11 +27,11 @@ class AgentTeamParentRunService:
     收尾、延迟系统消息注入与 checkpoint 恢复，避免 Team 图协调器直接编排对话 Run 生命周期。
     """
 
-    def __init__(self, run_service: ConversationRunService | None = None) -> None:
+    def __init__(self) -> None:
         """创建主 Run 交接服务。"""
 
         self._team_run_service = AgentTeamRunService()
-        self._run_service = run_service or ConversationRunService()
+        self._run_service = get_conversation_run_service()
 
     async def wait_for_parent_input(self, team_run_id: int) -> None:
         """等待预览所属主 Run 完成 interrupt 和旧执行器收尾。
@@ -87,7 +88,7 @@ class AgentTeamParentRunService:
         if team.status != AgentTeamRunStatus.PENDING.value:
             raise ValueError("Agent Team 已确认或已处理")
         state = AgentTeamRunState.model_validate(team.state_json)
-        if set(node_goals) != set(state.runtime.node_snapshots):
+        if set(node_goals) != set(state.node_runtime):
             raise ValueError("节点子目标必须完整覆盖当前 Team 的所有节点")
         reviewed_input = json.dumps(
             {

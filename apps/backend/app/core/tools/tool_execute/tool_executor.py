@@ -195,7 +195,6 @@ class ToolExecutor:
                     tool.name,
                     str(exc),
                     reason=exc.reason,
-                    permission=tool.permission,
                     tool_call_id=tool_call_id,
                 ),
                 execution_context,
@@ -209,7 +208,6 @@ class ToolExecutor:
                         f"the file path is invalid: {exc}; pass a well-formed path inside "
                         "the project before retrying."
                     ),
-                    permission=tool.permission,
                     tool_call_id=tool_call_id,
                 ),
                 execution_context,
@@ -252,7 +250,6 @@ class ToolExecutor:
                     "retry after the transient condition clears."
                 ),
                 retryable=True,
-                permission=tool.permission,
                 tool_call_id=tool_call_id,
             ),
             execution_context,

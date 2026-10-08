@@ -573,7 +573,7 @@ def _project_cancelled_via_real_projection(
         project_tool_terminal_state,
     )
 
-    observation = tool_cancelled("execute_terminal", permission="probe", tool_call_id=call_id)
+    observation = tool_cancelled("execute_terminal", tool_call_id=call_id)
     captured: list[ToolCallStatusChangedEvent] = []
 
     def _capture(event: Any) -> None:

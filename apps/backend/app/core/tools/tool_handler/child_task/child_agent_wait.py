@@ -41,7 +41,6 @@ class ChildAgentWaitTool(HandlerBase):
         "produces its final output, the tool returns immediately instead of waiting for the "
         "timeout to elapse."
     )
-    permission: ClassVar[str] = "child_agent_wait"
     args_model: type[ChildAgentWaitArgs] = ChildAgentWaitArgs
     timeout_seconds: ClassVar[float] = 300.0
     group = TOOL_GROUP_CHILD_AGENT
@@ -98,7 +97,6 @@ class ChildAgentWaitTool(HandlerBase):
                 self.name,
                 "child_agent_wait requires an execution context.",
                 reason="Call this tool from inside a running turn instead of directly.",
-                permission=self.permission,
             )
 
         try:
@@ -111,7 +109,6 @@ class ChildAgentWaitTool(HandlerBase):
                     "verify child_task_id against the value returned by delegate_task; "
                     "this task does not exist."
                 ),
-                permission=self.permission,
                 retryable=False,
             )
 
@@ -124,7 +121,6 @@ class ChildAgentWaitTool(HandlerBase):
                     "use the child_task_id returned by delegate_task, or "
                     "delegate the subtask first and retry with the corrected child_task_id."
                 ),
-                permission=self.permission,
                 retryable=True,
             )
 
@@ -134,7 +130,6 @@ class ChildAgentWaitTool(HandlerBase):
             if is_parent_cancelled is not None and is_parent_cancelled(execution_context.run_id):
                 return tool_cancelled(
                     tool_name=self.name,
-                    permission=self.permission,
                 )
 
             run = self._run_service.get_run(child_task.current_run_id)
@@ -142,7 +137,6 @@ class ChildAgentWaitTool(HandlerBase):
             if run.final_output:
                 return tool_success(
                     tool_name=self.name,
-                    permission=self.permission,
                     content=json.dumps(
                         {
                             "child_task_id": child_task_id,
@@ -172,13 +166,11 @@ class ChildAgentWaitTool(HandlerBase):
                         "the child run reached a terminal state without producing output; "
                         "read it with child_agent_status or re-delegate instead of waiting."
                     ),
-                    permission=self.permission,
                     retryable=False,
                 )
             if time.monotonic() >= deadline:
                 return tool_success(
                     tool_name=self.name,
-                    permission=self.permission,
                     content=json.dumps(
                         {
                             "child_task_id": child_task_id,

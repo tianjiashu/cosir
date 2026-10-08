@@ -64,7 +64,6 @@ class WriteFileTool(HandlerBase):
         "write content that looks like line-numbered read_file output. Returns a unified "
         "diff for display."
     )
-    permission = "file_write"
     args_model = WriteFileArgs
     timeout_seconds = 30.0
     group = TOOL_GROUP_FILE_EDIT
@@ -117,7 +116,6 @@ class WriteFileTool(HandlerBase):
                 self.name,
                 device_error,
                 reason=blocked_device_reason("written"),
-                permission=self.permission,
             )
         resolved, error = resolver.resolve_within_workspace(path)
         if resolved is None:
@@ -126,7 +124,6 @@ class WriteFileTool(HandlerBase):
                 f"could not write the file: {error}",
                 reason="provide a file path inside the project workspace.",
                 retryable=True,
-                permission=self.permission,
             )
         device_error = resolver.blocked_device_reason(path, resolved)
         if device_error:
@@ -134,7 +131,6 @@ class WriteFileTool(HandlerBase):
                 self.name,
                 device_error,
                 reason=blocked_device_reason("written"),
-                permission=self.permission,
             )
         if looks_like_line_numbered(content):
             return tool_error(
@@ -142,7 +138,6 @@ class WriteFileTool(HandlerBase):
                 "content appears to be line-numbered read_file output",
                 reason="remove the 'N| ' display prefixes and provide the raw file content.",
                 retryable=True,
-                permission=self.permission,
             )
         existed = resolved.exists()
         original = ""
@@ -155,14 +150,12 @@ class WriteFileTool(HandlerBase):
                     os_error_message(exc, "read the file"),
                     reason="make the existing file readable, then call write_file again.",
                     retryable=True,
-                    permission=self.permission,
                 )
 
         try:
             if cancellation_registry.is_cancelled(execution_context.run_id):
                 return tool_cancelled(
                     tool_name=self.name,
-                    permission=self.permission,
                 )
             atomic_write_text(
                 resolved,
@@ -175,7 +168,6 @@ class WriteFileTool(HandlerBase):
                 error=os_error_message(exc, "write the file"),
                 reason="make the target writable, then call write_file again.",
                 retryable=True,
-                permission=self.permission,
             )
 
         status = "modified" if existed else "added"
@@ -187,7 +179,6 @@ class WriteFileTool(HandlerBase):
         if result.has_error:
             return tool_success(
                 tool_name=self.name,
-                permission=self.permission,
                 content=(
                     "success\nsyntax warning:\n"
                     + format_syntax_reason(result)
@@ -197,7 +188,6 @@ class WriteFileTool(HandlerBase):
 
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=None,
             display_data=display_data,
         )

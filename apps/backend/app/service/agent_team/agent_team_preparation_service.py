@@ -8,9 +8,7 @@
 from __future__ import annotations
 
 import dataclasses
-import json
-from dataclasses import dataclass, fields
-from hashlib import sha256
+from dataclasses import dataclass
 from typing import Any
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
@@ -22,6 +20,7 @@ from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.tools.schemas import ToolDefinition
 from app.core.tools.schemas.tool_names import *
+from app.service.depends import get_model_config_service
 
 TEAM_NODE_DISALLOWED_TOOLS = frozenset(
     {
@@ -42,14 +41,13 @@ class AgentTeamPreparationResult:
     """一次 Agent Team 执行准备的不可变输出。
 
     ``preview_fields`` 是交给展示投影函数的预览输入，包含供用户编辑后回传的静态配置；
-    ``node_runtime_snapshots`` 面向确认后的节点执行，``preview_fingerprint`` 是本次解析
-    结果的稳定指纹。三者来自同一次解析，但最终确认时必须基于用户提交的配置重新生成，
+    ``node_runtime_snapshots`` 面向确认后的节点执行。两者来自同一次解析，但最终确认时
+    必须基于用户提交的配置重新生成，
     不能把展示数据直接当作执行事实。
     """
 
     preview_fields: dict[str, Any]
     node_runtime_snapshots: dict[str, dict[str, Any]]
-    preview_fingerprint: str
 
 
 def resolve_node_profile(
@@ -103,10 +101,17 @@ def materialize_node_tools(agent_id: str, workspace_root: str) -> list[ToolDefin
     ]
     return selected
 
+def require_model_settings(model_settings: ModelSettings) -> ModelSettings | None:
+    """断言模型设置已具备模型构建所需的物化字段。"""
+    try:
+        return model_settings.require_runtime_config()
+    except ModelSettingsError:
+        return None
+
 
 def resolve_effective_model_settings(
         profile: AgentProfile,
-        fallback: ModelSettings | None,
+        parent_agent_profile: AgentProfile | None,
 ) -> ModelSettings:
     """解析节点确认时实际使用的完整模型设置。
 
@@ -117,16 +122,26 @@ def resolve_effective_model_settings(
         TeamToolError: Profile 和 fallback 都不能提供完整模型运行配置。
     """
 
-    try:
-        return profile.model_settings.require_runtime_config()
-    except ModelSettingsError:
-        if fallback is None:
-            raise TeamToolError(f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置") from None
-        try:
-            effective = fallback.with_preference_defaults(profile.model_settings)
-            return effective.require_runtime_config()
-        except ModelSettingsError as exc:
-            raise TeamToolError(f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置") from exc
+    model_settings = require_model_settings(profile.model_settings)
+    if model_settings is not None:
+        return model_settings
+    if parent_agent_profile is None:
+        raise TeamToolError(message=f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置", retryable=False) from None
+
+    parent_settings = parent_agent_profile.model_settings
+    parent_model_config_id = parent_agent_profile.model_config_id
+
+    effective = parent_settings.with_preference_defaults(profile.model_settings)
+    model_settings = require_model_settings(effective)
+    if model_settings is not None:
+        return model_settings
+    model_config = get_model_config_service().get_config(profile.model_config_id if profile.model_config_id is not None else parent_model_config_id)
+    if model_config is None:
+        raise TeamToolError(message=f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置", retryable=False) from None
+    model_settings = profile.model_settings.from_model_config_record(model_config)
+    if model_settings is not None:
+        return model_settings
+    raise TeamToolError(message=f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置", retryable=False) from None
 
 
 def build_node_structured_output(
@@ -281,8 +296,7 @@ class AgentTeamPreparationService:
             parent_task_id: int,
             parent_run_id: int,
             workspace_id: int,
-            fallback_model_settings: ModelSettings | None = None,
-            fallback_model_config_id: int | None = None,
+            parent_agent_profile: AgentProfile,
     ) -> AgentTeamPreparationResult:
         """一次性解析 Team 节点并生成展示预览、运行快照和指纹。
 
@@ -294,8 +308,7 @@ class AgentTeamPreparationService:
             parent_task_id: 主 Agent Task 标识，写入展示预览。
             parent_run_id: 主 Agent Run 标识，写入展示预览。
             workspace_id: workspace 标识，写入展示预览。
-            fallback_model_settings: 节点缺少独立连接配置时使用的主 Agent 模型设置。
-            fallback_model_config_id: 节点缺少独立配置 ID 时使用的主 Agent 配置 ID。
+            parent_agent_profile: 节点缺少独立连接配置时使用的主 Agent Profile。
 
         返回:
         同一次运行时解析产生的预览文档、节点运行快照和指纹。预览文档只供工具结果展示，
@@ -307,7 +320,7 @@ class AgentTeamPreparationService:
 
         goal = goal.strip()
         if not goal:
-            raise TeamToolError("Team goal must not be blank")
+            raise TeamToolError(message="Team goal must not be blank", retryable=True)
         node_ids = {node.node_id for node in configuration.nodes}
         node_goals = {
             key: value.strip() for key, value in node_goals.items()
@@ -315,21 +328,24 @@ class AgentTeamPreparationService:
         unknown_node_goals = set(node_goals) - node_ids
         if unknown_node_goals:
             raise TeamToolError(
-                "node_goals references unknown nodes: "
-                + ", ".join(sorted(unknown_node_goals))
+                message = "node_goals references unknown nodes: "
+                + ", ".join(sorted(unknown_node_goals)),
+                retryable=True
             )
         missing_node_goals = node_ids - set(node_goals)
         if missing_node_goals:
             raise TeamToolError(
-                "node_goals must define every node: "
-                + ", ".join(sorted(missing_node_goals))
+                message="node_goals must define every node: "
+                + ", ".join(sorted(missing_node_goals)),
+                retryable=True
             )
         blank_node_goals = sorted(
             node_id for node_id, value in node_goals.items() if not value
         )
         if blank_node_goals:
             raise TeamToolError(
-                "node_goals must not be blank: " + ", ".join(blank_node_goals)
+                message="node_goals must not be blank: " + ", ".join(blank_node_goals),
+                retryable=True
             )
 
         node_profiles: dict[str, AgentProfile] = {}
@@ -349,7 +365,7 @@ class AgentTeamPreparationService:
         for node in configuration.nodes:
             profile = node_profiles[node.node_id]
             tools = materialize_node_tools(profile.agent_id, workspace_root)
-            model_settings: ModelSettings = resolve_effective_model_settings(profile, fallback_model_settings)
+            model_settings: ModelSettings = resolve_effective_model_settings(profile, parent_agent_profile)
             structured_output = build_node_structured_output(configuration, node)
             node_runtime_snapshots[node.node_id] = {
                 "agent_id": profile.agent_id,
@@ -365,7 +381,7 @@ class AgentTeamPreparationService:
                 "allowed_tools": [tool.name for tool in tools],
                 "max_steps": profile.max_steps,
                 "structured_output": structured_output.to_document(),
-                "model_config_id": profile.model_config_id or fallback_model_config_id,
+                "model_config_id": profile.model_config_id or parent_agent_profile.model_config_id,
                 "model_settings": dataclasses.asdict(model_settings),
             }
             resolved_nodes.append(
@@ -376,7 +392,7 @@ class AgentTeamPreparationService:
                     "node_type": node.node_type,
                     "role": profile.role,
                     "model_config_id": profile.model_config_id
-                                       or fallback_model_config_id,
+                                       or parent_agent_profile.model_config_id,
                     "model_name": model_settings.model_name,
                     "tools": [tool.name for tool in tools],
                     "max_steps": profile.max_steps,
@@ -401,22 +417,7 @@ class AgentTeamPreparationService:
             # 时仍会重新执行 AgentTeamConfiguration 和运行时资源校验。
             "configuration": configuration.model_dump(mode="json"),
         }
-        preview_fingerprint = sha256(
-            json.dumps(
-                {
-                    "team_id": configuration.team_id,
-                    "goal": goal,
-                    "node_goals": node_goals,
-                    "configuration": configuration.model_dump(mode="json"),
-                    "node_runtime_snapshots": node_runtime_snapshots,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
         return AgentTeamPreparationResult(
             preview_fields=preview_fields,
             node_runtime_snapshots=node_runtime_snapshots,
-            preview_fingerprint=preview_fingerprint,
         )

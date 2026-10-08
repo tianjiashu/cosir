@@ -52,7 +52,6 @@ class ListDirectoryTool(HandlerBase):
         "a specific file or the target is still unclear: browse the project directory to get "
         "an overview of the project layout."
     )
-    permission = "file_search"
     args_model = ListDirectoryArgs
     timeout_seconds = 15.0
     group = TOOL_GROUP_SEARCH
@@ -125,7 +124,6 @@ class ListDirectoryTool(HandlerBase):
                 self.name,
                 device_error,
                 reason=blocked_device_reason("listed"),
-                permission=self.permission,
             )
         resolved, error = resolver.resolve_without_boundary(path)
         if resolved is None:
@@ -134,7 +132,6 @@ class ListDirectoryTool(HandlerBase):
                 f"could not list the directory: {error}",
                 reason="provide a valid directory path.",
                 retryable=True,
-                permission=self.permission,
             )
         device_error = resolver.blocked_device_reason(path, resolved)
         if device_error:
@@ -142,7 +139,6 @@ class ListDirectoryTool(HandlerBase):
                 self.name,
                 device_error,
                 reason=blocked_device_reason("listed"),
-                permission=self.permission,
             )
         if not resolved.exists():
             return tool_error(
@@ -150,7 +146,6 @@ class ListDirectoryTool(HandlerBase):
                 f"could not list the directory: no such path at '{resolved}'",
                 reason="provide the current path of an existing directory.",
                 retryable=True,
-                permission=self.permission,
             )
         if not resolved.is_dir():
             return tool_error(
@@ -158,7 +153,6 @@ class ListDirectoryTool(HandlerBase):
                 f"could not list '{resolved}': it is a file, not a directory",
                 reason="provide a directory path, or use read_file for a file.",
                 retryable=True,
-                permission=self.permission,
             )
 
         children: list[os.DirEntry[str]] = []
@@ -190,7 +184,6 @@ class ListDirectoryTool(HandlerBase):
                     "list_directory again."
                 ),
                 retryable=True,
-                permission=self.permission,
             )
         page = children[offset : offset + limit]
         entries: list[str] = []
@@ -229,7 +222,6 @@ class ListDirectoryTool(HandlerBase):
         return tool_success(
             tool_name=self.name,
             content=content,
-            permission=self.permission,
             display_data=build_directory_display_data(
                 path=path,
                 entries=entry_dicts,

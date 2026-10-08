@@ -23,8 +23,6 @@ class AgentTeamRunModel(StorageBase):
         parent_task_id: 发起 TeamRun 的主 Agent Task 数据库主键。
         parent_run_id: 发起 TeamRun 的主 ConversationRun 数据库主键；Team 完成或失败后，
             Coordinator 依据该标识恢复主 Run 的后续流程。
-        preview_fingerprint: 根据最终确认时的 Team 配置、总目标、节点子目标和运行快照计算的
-            稳定指纹，用于记录本次实际执行计划的内容摘要。
         goal_input: 用户或主 Agent 提供的 Team 总体目标，确认后写入各节点的 system prompt。
         configuration_snapshot_json: 当前确认后执行所使用的完整 Team 配置快照，避免运行时
             配置文件变化影响当前执行；待确认阶段的候选配置会在确认时以请求体重新校验并覆盖。
@@ -72,7 +70,6 @@ class AgentTeamRunModel(StorageBase):
     parent_run_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("conversation_runs.id", ondelete="CASCADE"), nullable=False
     )
-    preview_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
     goal_input: Mapped[str] = mapped_column(Text, nullable=False)
     configuration_snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(

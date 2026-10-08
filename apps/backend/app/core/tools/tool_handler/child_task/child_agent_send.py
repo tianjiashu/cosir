@@ -47,7 +47,6 @@ class ChildAgentSendTool(HandlerBase):
         "conclusion in its child task, reusing that child task. Note: if the child agent has "
         "not reached a terminal conclusion yet, this tool fails."
     )
-    permission: ClassVar[str] = "child_agent_send"
     args_model: type[ChildAgentSendArgs] = ChildAgentSendArgs
     timeout_seconds: ClassVar[float] = 30.0
     group = TOOL_GROUP_CHILD_AGENT
@@ -108,7 +107,6 @@ class ChildAgentSendTool(HandlerBase):
                 self.name,
                 "child_agent_send requires an execution context.",
                 reason="Call this tool from inside a running turn instead of directly.",
-                permission=self.permission,
             )
 
 
@@ -123,7 +121,6 @@ class ChildAgentSendTool(HandlerBase):
                     "verify child_task_id against the value returned by delegate_task; "
                     "this task does not exist."
                 ),
-                permission=self.permission,
                 retryable=True,
             )
         if not child_task.is_child or child_task.parent_task_id != execution_context.task_id:
@@ -135,7 +132,6 @@ class ChildAgentSendTool(HandlerBase):
                     "use the child_task_id returned by delegate_task, or "
                     "delegate the subtask first and retry with the corrected child_task_id."
                 ),
-                permission=self.permission,
                 retryable=True,
             )
 
@@ -177,7 +173,6 @@ class ChildAgentSendTool(HandlerBase):
                 self.name,
                 "child_agent_send_profile_unavailable",
                 reason="The child agent configuration for this workspace is invalid.",
-                permission=self.permission,
                 retryable=False,
             )
         if current_profile is None or current_profile.agent_type is not AgentProfileType.CHILD:
@@ -185,7 +180,6 @@ class ChildAgentSendTool(HandlerBase):
                 self.name,
                 "child_agent_send_profile_unavailable",
                 reason="The child agent is no longer available in this workspace.",
-                permission=self.permission,
                 retryable=False,
             )
 
@@ -210,7 +204,6 @@ class ChildAgentSendTool(HandlerBase):
                         "the new child run is not claimable (already terminal or claimed); "
                         "read its status before deciding what to do next."
                     ),
-                    permission=self.permission,
                     retryable=False,
                 )
 
@@ -224,7 +217,6 @@ class ChildAgentSendTool(HandlerBase):
                         "the parent runtime event loop is unavailable, so the child run "
                         "cannot be started; retry from a normal turn."
                     ),
-                    permission=self.permission,
                     retryable=False,
                 )
             # 执行器入口是协程：在父 Run 的事件循环上调度，并只等待登记完成。
@@ -252,13 +244,11 @@ class ChildAgentSendTool(HandlerBase):
                 self.name,
                 "child_agent_send_failed",
                 reason="the follow-up run could not be started; ",
-                permission=self.permission,
                 retryable=False,
             )
 
         return tool_success(
             tool_name=self.name,
-            permission=self.permission,
             content=json.dumps(
                 {
                     "child_task_id": child_task_id,

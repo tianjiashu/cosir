@@ -85,34 +85,6 @@ def test_agent_team_run_state_tracks_repeated_node_executions() -> None:
     assert len(state.transition_history) == 1
 
 
-def test_team_result_message_contains_node_results() -> None:
-    """主 Agent 收到的 TeamResult 包含节点 status/output，而不是只收到终态。"""
-
-    row = SimpleNamespace(
-        id=1,
-        team_id="quality",
-        status="completed",
-        goal_input="完成质量检查",
-        state_json=AgentTeamRunState(
-            node_executions=[
-                {
-                    "node_id": "review",
-                    "task_id": 2,
-                    "run_id": 3,
-                    "completed": True,
-                    "status": "passed",
-                    "output": "检查通过",
-                }
-            ]
-        ).to_json(),
-        end_reason=None,
-    )
-
-    result = AgentTeamCoordinator._build_team_result_message(row)
-
-    assert '"status": "completed"' in result
-    assert '"output": "检查通过"' in result
-
 
 def test_team_run_payload_hides_runtime_profile_snapshots() -> None:
     """Team 状态查询不能把节点 system_prompt 暴露给前端。"""
@@ -126,7 +98,7 @@ def test_team_run_payload_hides_runtime_profile_snapshots() -> None:
         goal_input="goal",
         status="running",
         state_json=AgentTeamRunState(
-            runtime={"node_snapshots": {"review": {"system_prompt": "secret"}}}
+            node_runtime={"review": {"agent_id": "reviewer", "system_prompt": "secret"}}
         ).to_json(),
         end_reason=None,
         started_at=None,
@@ -134,7 +106,7 @@ def test_team_run_payload_hides_runtime_profile_snapshots() -> None:
     )
 
     payload = _run_payload(row)
-    assert "runtime" not in payload["state"]
+    assert "node_runtime" not in payload["state"]
     assert payload["active_node"] is None
     assert payload["node_results"] == []
 

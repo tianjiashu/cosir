@@ -7,6 +7,7 @@ from typing import ClassVar
 
 from app.agent_team.registry import get_agent_team_registry
 from app.agent_team.team_tool_error import TeamToolError
+from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.core.tools.display.agent_team_display import build_agent_team_preview_display_data
 from app.core.tools.schemas import (
@@ -36,7 +37,6 @@ class AgentTeamRunTool(HandlerBase):
         "The plan requires explicit user confirmation before execution; once the user confirms, "
         "the Agent Team starts the TeamRun."
     )
-    permission: ClassVar[str] = "agent_team"
     args_model = AgentTeamArgs
     timeout_seconds: ClassVar[float] = 30.0
     group = TOOL_GROUP_AGENT_TEAM
@@ -44,6 +44,8 @@ class AgentTeamRunTool(HandlerBase):
     def __init__(self):
         self.agent_team_run_service = AgentTeamRunService()
         self.agent_team_preparation_service = AgentTeamPreparationService()
+        self.run_service = get_conversation_run_service()
+        self.team_register = get_agent_team_registry()
 
     def execute(
         self,
@@ -64,19 +66,23 @@ class AgentTeamRunTool(HandlerBase):
                 self.name,
                 "agent_team requires an execution context.",
                 reason="Run the tool from an active Agent context.",
-                permission=self.permission,
             )
         try:
 
-            configuration = get_agent_team_registry().resolve(
+            configuration = self.team_register.resolve(
                 str(execution_context.workspace_root), team_id.strip()
             )
             if configuration is None:
-                raise TeamToolError(f"Team 配置不存在: {team_id}, 请确认一下是否创建了该 Team")
-            parent_run = get_conversation_run_service().get_run(execution_context.run_id)
+                return tool_error(
+                    self.name,
+                    error="agent_team_run_creation_invalid",
+                    reason=f"The Team configuration does not exist: {team_id}; please confirm whether this Team has been created",
+                    retryable=False
+                )
+            parent_run = self.run_service.get_run(execution_context.run_id)
             # Runner 为主 Run 派生的 profile 已经物化了模型连接配置。节点缺少独立配置时，
             # 只能沿用这份本次 Run 快照，不能在确认时重新读取可变配置。
-            fallback_model_settings = (
+            parent_model_settings = (
                 execution_context.runtime_dependencies.parent_agent_profile.model_settings
                 if execution_context.runtime_dependencies.parent_agent_profile is not None
                 else None
@@ -89,8 +95,7 @@ class AgentTeamRunTool(HandlerBase):
                 parent_task_id=execution_context.task_id,
                 parent_run_id=execution_context.run_id,
                 workspace_id=execution_context.workspace_id,
-                fallback_model_settings=fallback_model_settings,
-                fallback_model_config_id=parent_run.model_config_id,
+                parent_agent_profile=get_agent_registry().resolve(execution_context.workspace_root,parent_run.agent_id),
             )
             pending_run = self.agent_team_run_service.create_pending_confirmation(
                 configuration=configuration,
@@ -102,7 +107,6 @@ class AgentTeamRunTool(HandlerBase):
             )
             return tool_success(
                 tool_name=self.name,
-                permission=self.permission,
                 content=json.dumps(
                     {
                         "status": "pending",
@@ -131,7 +135,6 @@ class AgentTeamRunTool(HandlerBase):
                 self.name,
                 "agent_team_run_creation_invalid",
                 reason=f"无法创建 Team 执行方案，请检查 Team 配置或稍后重试,error:{str(exc)}",
-                permission=self.permission,
                 retryable=exc.retryable,
             )
         except Exception as exc:
@@ -146,7 +149,6 @@ class AgentTeamRunTool(HandlerBase):
                 self.name,
                 "agent_team_run_creation_invalid",
                 reason=f"无法创建 Team 执行方案，请检查 Team 配置或稍后重试,error:{str(exc)}",
-                permission=self.permission,
                 retryable=False,
             )
 

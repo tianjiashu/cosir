@@ -73,7 +73,6 @@ class TerminalWriteTool(HandlerBase):
         "Enter as literal \\r/\\n or HTML entities. When the process inside the terminal has "
         "exited, use this tool to write again and reuse the same session for the next task."
     )
-    permission: ClassVar[str] = "shell"
     args_model = TerminalWriteArgs
     timeout_seconds: ClassVar[float] = 30.0
     group = TOOL_GROUP_TERMINAL_SESSION
@@ -116,7 +115,7 @@ class TerminalWriteTool(HandlerBase):
         if execution_context is None:
             raise ValueError("terminal_write requires a workspace execution context")
         if cancelled(execution_context):
-            return cancelled_observation(self.name, self.permission)
+            return cancelled_observation(self.name)
 
         suspicious_tokens = tuple(
             token
@@ -150,10 +149,9 @@ class TerminalWriteTool(HandlerBase):
                 is_cancelled=lambda: cancelled(execution_context),
             )
             if cancelled(execution_context):
-                return cancelled_observation(self.name, self.permission)
+                return cancelled_observation(self.name)
             return success_observation(
                 self.name,
-                self.permission,
                 {"session_id": session_id, **result.to_dict()},
                 summary="Terminal input accepted.",
                 display_payload=build_terminal_session_display_data(
@@ -162,7 +160,7 @@ class TerminalWriteTool(HandlerBase):
                 ),
             )
 
-        return with_terminal_errors(self.name, self.permission, action)
+        return with_terminal_errors(self.name, action)
 
     def to_definition(self) -> ToolDefinition:
         """返回可注册到工具注册表的 ``terminal_write`` 定义。

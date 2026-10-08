@@ -421,7 +421,7 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
     """
 
     order: list[str] = []
-    cancelled = tool_cancelled("probe_tool", permission="test", tool_call_id="call-1")
+    cancelled = tool_cancelled("probe_tool", tool_call_id="call-1")
 
     def _fake_inner(
         _self: ToolExecutor,
