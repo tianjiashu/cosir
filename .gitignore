@@ -69,7 +69,9 @@ node_modules/
 /.agents/
 /.npm-cache/
 /.superpowers/
-/temp/
+# temp/ 目录本体保留在版本库中（靠占位文件 .gitkeep 存活），仅忽略其中内容
+/temp/*
+!/temp/.gitkeep
 
 /apps/backend/_probe_atomic_tmp/
 
