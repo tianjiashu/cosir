@@ -50,7 +50,8 @@ class AgentTeamRunState(BaseModel):
     ``AgentTeamRunModel.status`` 及其条件状态迁移负责。``node_task_ids`` 按 ``node_id``
     固定节点 Task 身份；``node_executions`` 按创建顺序保存每次节点 Run，
     ``active_node_run_id`` 指向唯一尚未提交结果的节点 Run，节点结果和历史转移均从该快照
-    读取。运行时快照只供后端恢复节点执行，API 投影时必须过滤。
+    读取。``runtime.node_snapshots`` 按节点保存运行配置和该节点的 ``node_goal``，是节点
+    执行计划的唯一持久化来源。运行时快照只供后端恢复节点执行，API 投影时必须过滤。
 
     该模型使用严格字段和禁止额外字段的契约。状态结构发生变化时直接要求新数据库状态，
     不对旧 JSON 做兼容转换，避免同一进程同时维护多套状态格式。

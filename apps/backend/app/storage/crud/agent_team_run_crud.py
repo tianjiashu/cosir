@@ -38,7 +38,6 @@ class AgentTeamRunCrud:
         parent_run_id: int,
         preview_fingerprint: str,
         goal: str,
-        instructions: dict[str, str],
         node_runtime_snapshots: dict[str, dict[str, Any]],
         session: Session | None = None,
     ) -> AgentTeamRunModel:
@@ -55,7 +54,6 @@ class AgentTeamRunCrud:
             parent_run_id=parent_run_id,
             preview_fingerprint=preview_fingerprint,
             goal_input=goal,
-            node_instructions_json=dict(instructions),
             configuration_snapshot_json=configuration.model_dump(mode="json"),
             status=AgentTeamRunStatus.PENDING.value,
             state_json=AgentTeamRunState.initial(node_runtime_snapshots).to_json(),
@@ -174,6 +172,9 @@ class AgentTeamRunCrud:
         end_reason: str | None = None,
         started: bool = False,
         ended: bool = False,
+        configuration_snapshot_json: str | None = None,
+        preview_fingerprint: str | None = None,
+        goal_input: str | None = None,
         session: Session | None = None,
     ) -> AgentTeamRunModel | None:
         """仅在当前状态属于白名单时原子更新 TeamRun。
@@ -210,7 +211,10 @@ class AgentTeamRunCrud:
                     end_reason=end_reason,
                     started=started,
                     ended=ended,
-                )
+                    configuration_snapshot_json=configuration_snapshot_json,
+                    preview_fingerprint=preview_fingerprint,
+                    goal_input=goal_input,
+                    )
         return self._update_status_if_in_session(
             session,
             team_run_db_id,
@@ -220,6 +224,9 @@ class AgentTeamRunCrud:
             end_reason=end_reason,
             started=started,
             ended=ended,
+            configuration_snapshot_json=configuration_snapshot_json,
+            preview_fingerprint=preview_fingerprint,
+            goal_input=goal_input,
         )
 
     @staticmethod
@@ -233,6 +240,9 @@ class AgentTeamRunCrud:
         end_reason: str | None,
         started: bool,
         ended: bool,
+        configuration_snapshot_json: str | None,
+        preview_fingerprint: str | None,
+        goal_input: str | None,
     ) -> AgentTeamRunModel | None:
         """在调用方事务中执行 TeamRun 的条件状态更新。"""
 
@@ -243,6 +253,12 @@ class AgentTeamRunCrud:
             values["end_reason"] = end_reason
         if ended:
             values["ended_at"] = to_text(utc_now())
+        if configuration_snapshot_json is not None:
+            values["configuration_snapshot_json"] = configuration_snapshot_json
+        if preview_fingerprint is not None:
+            values["preview_fingerprint"] = preview_fingerprint
+        if goal_input is not None:
+            values["goal_input"] = goal_input
 
         result = session.execute(
             update(AgentTeamRunModel)
@@ -258,6 +274,7 @@ class AgentTeamRunCrud:
         row = session.get(AgentTeamRunModel, team_run_db_id)
         if row is None:
             return None
+        session.refresh(row)
         if started and row.started_at is None:
             row.started_at = to_text(utc_now())
             session.flush()

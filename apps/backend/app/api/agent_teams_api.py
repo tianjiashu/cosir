@@ -16,6 +16,9 @@ from app.api.schemas.request.save_agent_team_configuration_request import (
     SaveAgentTeamConfigurationRequest,
 )
 from app.app import app
+from app.service.agent_team.agent_team_parent_run_service import (
+    AgentTeamParentRunService,
+)
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 from app.service.configuration.agent_team_configuration_service import (
     get_agent_team_configuration_service,
@@ -104,13 +107,13 @@ async def confirm_agent_team_run(
 
     runtime_loop = asyncio.get_running_loop()
     try:
-        await get_agent_team_coordinator().wait_for_parent_input(payload.team_run_id)
+        await AgentTeamParentRunService().wait_for_parent_input(payload.team_run_id)
         row = await asyncio.to_thread(
             AgentTeamRunService().confirm_and_start,
             payload.team_run_id,
             payload.configuration,
             goal=payload.goal,
-            instructions=payload.instructions,
+            node_goals=payload.node_goals,
             runtime_loop=runtime_loop,
         )
         return _run_payload(row)
@@ -126,8 +129,6 @@ async def get_agent_team_run(run_id: int) -> dict[str, Any]:
 
     try:
         row = await asyncio.to_thread(AgentTeamRunService().get, run_id)
-        if row is None:
-            raise KeyError(run_id)
         return _run_payload(row)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Team run not found") from exc
@@ -138,16 +139,28 @@ async def reject_agent_team_run(
     run_id: int,
     payload: RejectAgentTeamRequest,
 ) -> dict[str, Any]:
-    """驳回待确认方案，把反馈交给主 Agent 并恢复等待中的 Run。"""
+    """提交审阅后的目标与驳回意见，让主 Agent 重新生成待确认方案。"""
 
     try:
+        goal = payload.goal.strip()
+        node_goals = {
+            node_id: node_goal.strip()
+            for node_id, node_goal in payload.node_goals.items()
+        }
         feedback = payload.feedback.strip()
+        if not goal:
+            raise ValueError("Agent Team 目标不能为空")
+        if not node_goals or any(not node_goal for node_goal in node_goals.values()):
+            raise ValueError("每个 Agent Team 节点都必须填写子目标")
         if not feedback:
             raise ValueError("驳回意见不能为空")
-        await get_agent_team_coordinator().wait_for_parent_input(run_id)
-        team_run = await asyncio.to_thread(AgentTeamRunService().reject_pending, run_id)
-        await get_agent_team_coordinator().resume_parent_after_rejection(
+        parent_run_service = AgentTeamParentRunService()
+        await parent_run_service.wait_for_parent_input(run_id)
+        team_run = await asyncio.to_thread(AgentTeamRunService().get, run_id)
+        await parent_run_service.resume_parent_after_rejection(
             team_run,
+            goal,
+            node_goals,
             feedback,
         )
         return _run_payload(team_run)

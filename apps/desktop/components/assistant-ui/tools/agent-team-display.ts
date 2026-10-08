@@ -7,7 +7,6 @@ export type AgentTeamNodePreview = {
   nodeType: "start" | "middle" | "end";
   role: string;
   effectiveModelName: string;
-  instructionSummary: string;
   effectiveTools: string[];
   statuses: string[];
   maxSteps: number;
@@ -19,7 +18,7 @@ export type AgentTeamPreviewDisplay = {
   teamId: string;
   name: string;
   goal: string;
-  instructions: Record<string, string>;
+  nodeGoals: Record<string, string>;
   startNode: string;
   parentTaskId: number;
   parentRunId: number;
@@ -80,10 +79,10 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
   const configuration = asRecord(data.configuration);
   if (teamRunId === undefined || !teamId || !name || !goal || !startNode || parentTaskId === undefined || parentRunId === undefined || workspaceId === undefined || Object.keys(configuration).length === 0) return null;
   const edges = recordList(data.edges);
-  const instructions = data.instructions === undefined
+  const nodeGoals = data.node_goals === undefined
     ? {}
     : Object.fromEntries(
-      Object.entries(asRecord(data.instructions)).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+      Object.entries(asRecord(data.node_goals)).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
     );
   if (!Array.isArray(data.nodes) || !edges) return null;
   const nodes: AgentTeamNodePreview[] = [];
@@ -109,7 +108,6 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
       nodeType,
       role,
       effectiveModelName,
-      instructionSummary: text(node.instruction_summary) ?? "",
       effectiveTools,
       statuses,
       maxSteps,
@@ -121,7 +119,7 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
     teamId,
     name,
     goal,
-    instructions,
+    nodeGoals,
     startNode,
     parentTaskId,
     parentRunId,

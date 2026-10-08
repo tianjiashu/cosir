@@ -57,7 +57,6 @@ class AgentTeamRunService:
         parent_task_id: int,
         parent_run_id: int,
         goal: str,
-        instructions: dict[str, str],
     ) -> AgentTeamRunModel:
         """创建并持久化一条处于确认门槛的 ``pending`` TeamRun。
 
@@ -72,9 +71,6 @@ class AgentTeamRunService:
             sqlalchemy.exc.SQLAlchemyError: 主库写入失败时向上抛出。
         """
 
-        instructions = {
-            key: value.strip() for key, value in instructions.items() if value.strip()
-        }
         with begin_immediate(self._session_factory) as session:
             self._team_run_crud.cancel_pending_confirmation_for_parent(
                 parent_task_id,
@@ -88,55 +84,20 @@ class AgentTeamRunService:
                 parent_run_id=parent_run_id,
                 preview_fingerprint=preparation.preview_fingerprint,
                 goal=goal.strip(),
-                instructions=instructions,
                 node_runtime_snapshots=preparation.node_runtime_snapshots,
                 session=session,
             )
             return row
 
-    def get(self, run_id: int) -> AgentTeamRunModel | None:
-        """读取 TeamRun。"""
+    def get(self, run_id: int) -> AgentTeamRunModel:
+        """读取 TeamRun。
 
-        with self._session_factory() as session:
-            try:
-                return self._team_run_crud.get_by_id(run_id, session=session)
-            except KeyError:
-                return None
-
-    def reject_pending(self, team_run_id: int) -> AgentTeamRunModel:
-        """原子驳回待确认 TeamRun。
-
-        参数:
-            team_run_id: 前端预览卡关联的 TeamRun 标识。
-
-        返回:
-            已迁移为 ``cancelled`` 且原因是用户驳回的 TeamRun 记录。
-
-        异常:
-            KeyError: TeamRun 不存在。
-            ValueError: TeamRun 已被处理，或其主 Run 当前不在等待用户输入状态。
-            sqlalchemy.exc.SQLAlchemyError: 条件状态更新失败。
-
-        副作用:
-            以条件更新结束 TeamRun；主 Agent 反馈注入和 checkpoint 恢复由 Coordinator 执行。
+        未找到时由 CRUD 直接抛出 ``KeyError``，交由 API 层统一映射为 404；本方法不吞咽
+        异常、不返回 ``None``，避免「未找到」契约在链路中转。
         """
 
-        existing = self.get(team_run_id)
-        if existing is None:
-            raise KeyError(team_run_id)
-        if existing.status != AgentTeamRunStatus.PENDING.value:
-            raise ValueError("Agent Team 已确认或已处理")
-        self._validate_parent_run(existing.parent_task_id, existing.parent_run_id)
-        updated = self._team_run_crud.update_status_if_in(
-            existing.id,
-            AgentTeamRunStatus.CANCELLED.value,
-            (AgentTeamRunStatus.PENDING.value,),
-            end_reason=AgentTeamRunEndReason.REJECTED_BY_USER.value,
-            ended=True,
-        )
-        if updated is None:
-            raise ValueError("Agent Team 已确认或已处理")
-        return updated
+        with self._session_factory() as session:
+            return self._team_run_crud.get_by_id(run_id, session=session)
 
     def confirm_and_start(
         self,
@@ -144,7 +105,7 @@ class AgentTeamRunService:
         configuration_document: dict[str, Any],
         *,
         goal: str | None = None,
-        instructions: dict[str, str] | None = None,
+        node_goals: dict[str, str] | None = None,
         runtime_loop: asyncio.AbstractEventLoop,
     ) -> AgentTeamRunModel:
         """使用用户最终配置确认 TeamRun，并在提交后交给 Coordinator 启动。
@@ -161,49 +122,37 @@ class AgentTeamRunService:
         """
 
         existing = self.get(team_run_id)
-        if existing is None:
-            raise ValueError("Agent Team 待确认执行方案不存在")
-        if existing.status != AgentTeamRunStatus.PENDING.value:
-            raise ValueError("Agent Team 已确认或已处理")
         self._validate_parent_run(existing.parent_task_id, existing.parent_run_id)
         final_goal = (goal if goal is not None else existing.goal_input).strip()
-        final_instructions = instructions if instructions is not None else existing.node_instructions_json
+        existing_state = AgentTeamRunState.model_validate(existing.state_json)
+        final_node_goals = node_goals if node_goals is not None else {
+            node_id: snapshot["node_goal"]
+            for node_id, snapshot in existing_state.runtime.node_snapshots.items()
+        }
         configuration = AgentTeamConfiguration.model_validate(configuration_document)
-        final_instructions = {
+        final_node_goals = {
             key: value.strip()
-            for key, value in final_instructions.items()
+            for key, value in final_node_goals.items()
             if isinstance(key, str) and isinstance(value, str) and value.strip()
         }
-        if not final_goal:
-            raise ValueError("Team goal must not be blank")
-        unknown_instructions = set(final_instructions) - {
-            node.node_id for node in configuration.nodes
-        }
-        if unknown_instructions:
-            raise ValueError("instructions reference unknown Team nodes")
-        if configuration.team_id != existing.team_id:
-            raise ValueError("确认配置的 team_id 与指定 TeamRun 不一致")
         preparation = self._prepare_final_plan(
-            existing, configuration, goal=final_goal, instructions=final_instructions
+            existing, configuration, goal=final_goal, node_goals=final_node_goals
         )
 
         with begin_immediate(self._session_factory) as session:
             row = self._team_run_crud.get_by_id(existing.id, session=session)
-            if row.status != AgentTeamRunStatus.PENDING.value:
-                raise ValueError("Agent Team 已确认或已处理")
             if row.team_id != configuration.team_id:
                 raise ValueError("确认配置的 team_id 与待确认 Team 不一致")
             state = AgentTeamRunState.initial(preparation.node_runtime_snapshots)
-            row.configuration_snapshot_json = configuration.model_dump(mode="json")
-            row.preview_fingerprint = preparation.preview_fingerprint
-            row.goal_input = final_goal
-            row.node_instructions_json = final_instructions
             updated = self._team_run_crud.update_status_if_in(
                 row.id,
                 AgentTeamRunStatus.RUNNING.value,
                 (AgentTeamRunStatus.PENDING.value,),
                 state=state,
                 started=True,
+                configuration_snapshot_json=str(configuration.model_dump(mode="json")),
+                preview_fingerprint=preparation.preview_fingerprint,
+                goal_input=final_goal,
                 session=session,
             )
             if updated is None:
@@ -222,7 +171,7 @@ class AgentTeamRunService:
         configuration: AgentTeamConfiguration,
         *,
         goal: str,
-        instructions: dict[str, str],
+        node_goals: dict[str, str],
     ) -> AgentTeamPreparationResult:
         """基于确认时的最终配置重新生成执行快照。
 
@@ -239,7 +188,7 @@ class AgentTeamRunService:
         return AgentTeamPreparationService().prepare(
             configuration,
             goal=goal,
-            instructions=instructions,
+            node_goals=node_goals,
             workspace_root=workspace_root,
             parent_task_id=row.parent_task_id,
             parent_run_id=row.parent_run_id,

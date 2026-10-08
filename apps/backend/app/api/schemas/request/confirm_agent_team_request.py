@@ -17,4 +17,10 @@ class ConfirmAgentTeamRequest(BaseModel):
     team_run_id: int = Field(gt=0)
     configuration: dict[str, Any]
     goal: str | None = None
-    instructions: dict[str, str] | None = None
+    node_goals: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "可选的完整节点子目标映射，键必须覆盖 Team 配置中的每个 node_id，值作为该节点的 user input；"
+            "未提供时沿用待确认方案中已校验的子目标。"
+        ),
+    )

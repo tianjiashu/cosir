@@ -328,19 +328,10 @@ class AgentRuntime:
             )
             raise
         finally:
-            try:
-                if isinstance(task.extra, dict) and task.extra.get("agent_team_run_id"):
-                    from app.agent_team.coordinator import get_agent_team_coordinator
-
-                    await asyncio.to_thread(
-                        get_agent_team_coordinator().handle_node_natural_completion,
-                        run_id,
-                    )
-            finally:
-                cancellation_registry.clear(run_id)
-                # 工具级信号由工具执行层在单次调用结束时释放；这里兜底回收「点名了已结束的
-                # 工具调用」这类不会再被消费的信号，避免进程内信号随会话累积。
-                tool_call_cancellation_registry.clear_run(run_id)
+            cancellation_registry.clear(run_id)
+            # 工具级信号由工具执行层在单次调用结束时释放；这里兜底回收「点名了已结束的
+            # 工具调用」这类不会再被消费的信号，避免进程内信号随会话累积。
+            tool_call_cancellation_registry.clear_run(run_id)
 
     def _resolve_execution_context(
         self,

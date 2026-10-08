@@ -21,7 +21,7 @@ def build_agent_team_preview_display_data(
         "team_id",
         "name",
         "goal",
-        "instructions",
+        "node_goals",
         "start_node",
         "nodes",
         "edges",

@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { readToolArtifact } from "./types";
-import { readAgentTeamPreviewDisplay } from "./agent-team-display";
+import { readAgentTeamPreviewDisplay, type AgentTeamPreviewDisplay } from "./agent-team-display";
 import { ToolStatus } from "./tool-status";
 
 type AgentTeamToolProps = ToolCallMessagePartProps;
@@ -26,7 +26,6 @@ type NodeResult = {
 };
 
 const END_REASON_LABELS: Record<string, string> = {
-  rejected_by_user: "方案已被用户驳回",
   superseded_by_new_preview: "执行方案已被新的方案替代",
   team_start_failed: "Team 入口节点启动失败",
   transition_not_found: "节点状态没有匹配的转移规则",
@@ -59,6 +58,19 @@ function readNodeResults(state: Record<string, unknown>): NodeResult[] {
   });
 }
 
+function validateReviewedInputs(
+  goal: string,
+  nodes: AgentTeamPreviewDisplay["nodes"],
+  nodeGoals: Record<string, string>,
+): string | null {
+  if (!goal.trim()) return "请填写 Agent Team 目标";
+  const missingNodeGoals = nodes.filter((node) => !nodeGoals[node.nodeId]?.trim());
+  if (missingNodeGoals.length > 0) {
+    return `请填写所有节点的子目标：${missingNodeGoals.map((node) => node.name).join("、")}`;
+  }
+  return null;
+}
+
 /** Agent Team 方案预览卡；确认时提交用户最终编辑后的配置，由后端重新校验。 */
 export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
   const artifact = readToolArtifact(rawArtifact);
@@ -67,13 +79,13 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
   const [message, setMessage] = useState("");
   const [teamRun, setTeamRun] = useState<AgentTeamRun | null>(null);
   const [goal, setGoal] = useState(preview?.goal ?? "");
-  const [instructions, setInstructions] = useState<Record<string, string>>(preview?.instructions ?? {});
+  const [nodeGoals, setNodeGoals] = useState<Record<string, string>>(preview?.nodeGoals ?? {});
   const [feedback, setFeedback] = useState("");
 
   useEffect(() => {
     if (!preview) return;
     setGoal(preview.goal);
-    setInstructions(preview.instructions);
+    setNodeGoals(preview.nodeGoals);
   }, [preview?.teamRunId]);
 
   useEffect(() => {
@@ -100,9 +112,8 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
           return;
         }
         if (current.status === "failed" || current.status === "cancelled") {
-          const rejected = current.end_reason === "rejected_by_user";
-          setState(rejected ? "rejected" : "failed");
-          setMessage(rejected ? "方案已驳回，主 Agent 将根据反馈重新生成" : current.status === "cancelled" ? "该 Agent Team 执行方案已取消" : "该 Agent Team 执行失败");
+          setState("failed");
+          setMessage(current.status === "cancelled" ? "该 Agent Team 执行方案已取消" : "该 Agent Team 执行失败");
         }
       })
       .catch(() => {
@@ -139,6 +150,12 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
   if (!preview) return null;
 
   const confirm = async () => {
+    const validationMessage = validateReviewedInputs(goal, preview.nodes, nodeGoals);
+    if (validationMessage) {
+      setState("failed");
+      setMessage(validationMessage);
+      return;
+    }
     setState("confirming");
     setMessage("");
     try {
@@ -146,7 +163,7 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
         preview.teamRunId,
         preview.configuration,
         goal,
-        instructions,
+        nodeGoals,
       );
       setTeamRun(result);
       setState("confirmed");
@@ -157,6 +174,12 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
     }
   };
   const reject = async () => {
+    const validationMessage = validateReviewedInputs(goal, preview.nodes, nodeGoals);
+    if (validationMessage) {
+      setState("failed");
+      setMessage(validationMessage);
+      return;
+    }
     const trimmedFeedback = feedback.trim();
     if (!trimmedFeedback) {
       setState("failed");
@@ -166,10 +189,15 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
     setState("rejecting");
     setMessage("");
     try {
-      const result = await rejectAgentTeamRun(preview.teamRunId, trimmedFeedback);
+      const result = await rejectAgentTeamRun(
+        preview.teamRunId,
+        goal,
+        nodeGoals,
+        trimmedFeedback,
+      );
       setTeamRun(result);
       setState("rejected");
-      setMessage("方案已驳回，主 Agent 正在根据意见重新生成");
+      setMessage("已提交审阅后的目标和驳回意见，主 Agent 正在重新生成方案");
     } catch (error) {
       setState("failed");
       setMessage(error instanceof Error ? error.message : "驳回失败");
@@ -206,13 +234,13 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
               状态：{node.statuses.join("、")}
             </div>
             <label className="text-muted-foreground mt-2 block">
-              节点指令
+              节点子目标（必填）
               <Textarea
-                aria-label={`${node.name} 的节点指令`}
+                aria-label={`${node.name} 的节点子目标`}
                 className="mt-1 min-h-14 resize-y bg-background text-xs"
-                value={instructions[node.nodeId] ?? ""}
+                value={nodeGoals[node.nodeId] ?? ""}
                 disabled={state === "confirming" || state === "rejecting" || state === "confirmed" || state === "rejected"}
-                onChange={(event) => setInstructions((current) => ({
+                onChange={(event) => setNodeGoals((current) => ({
                   ...current,
                   [node.nodeId]: event.target.value,
                 }))}

@@ -452,7 +452,6 @@ def test_team_run_crud_round_trips_persisted_confirmation_state(
         parent_run_id=run.id,
         preview_fingerprint="f" * 64,
         goal="检查代码",
-        instructions={},
         node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
     )
 
@@ -493,7 +492,6 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
         parent_run_id=run.id,
         preview_fingerprint="f" * 64,
         goal="检查代码",
-        instructions={},
         node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
     )
 

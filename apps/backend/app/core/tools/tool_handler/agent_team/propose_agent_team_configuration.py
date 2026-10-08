@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from app.config.logging.logger import log
+
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -66,10 +68,14 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
                 ),
             )
         except Exception as exc:
+            log.warning(
+                "agent_team_configuration_proposal_failed",
+                extra={"msg": "Agent Team 配置提案校验失败", "error_type": type(exc).__name__},
+            )
             return tool_error(
                 tool_name=self.name,
                 error="agent_team_configuration_invalid",
-                reason=f"The Team configuration is invalid: {str(exc)[:500]}",
+                reason="The Team configuration is invalid. Please review and try again.",
                 permission=self.permission,
                 retryable=True,
             )

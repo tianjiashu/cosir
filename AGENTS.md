@@ -59,7 +59,8 @@ Tauri 桌面应用
 - **只守信任边界，不重复校验。** 每层只守自身输入契约；上游已保证或下游不消费的内容不再重复校验，同一不变量不在调用链多层各验一遍。
 - **顺着链路定归属。** 校验落在数据来源边界（持久化 / 前端 / 进程外输入）；中间层直接信任上游契约，缺失就让异常上浮，不为「保险」再包一层。
 - **不为低概率事件上过重防御。** 并发竞争、磁盘损坏、手工篡改等极少见情况，用一笔原子操作或一次边界校验覆盖即可，不为它叠多层前置防御；明确「失败可接受」的边界，做好取舍。
-- **捕获就地承担语义，不在链路上转手。** 捕获后必须明确处理（记录 + 收敛 / 转换 / 向上抛），不得只为「包住」而捕获；「未找到」等契约在一处明确归属，不靠 `return None` 再 `raise` 又上层 `except` 中转。
+- **捕获就地承担语义，不在链路上转手。** 捕获后必须明确处理（记录 + 收敛 / 转换 / 向上抛），不得只为「包住」而捕获；「未找到」等契约在一处明确归属，不靠 `return None` 再 `raise` 又上层 `except` 中转。映射 404 的「未找到」契约统一由 service 抛 `KeyError` 自然上浮、API 一处 `except KeyError → 404` 收敛，service 内部不得 `get` 吞成 `None` 再 `raise` 中转。
+- **不为不可能情形设防御（删死代码）。** 上游分支已抛异常被外层捕获、或调用方已保证返回非 `None` 时，不写 `if x is None: raise` 之类的不可达分支；此类死防御无收益且误导维护者，应直接删除。
 
 理由：层层重复校验让契约归属模糊、改一处要改多处，还掩盖「上游已保证」的事实；低概率事件上过重防御无收益且抬升维护成本。本条与「禁止静默失效」互补：那条管捕获后的行为，本条管「该不该捕、捕在哪一层」。
 
@@ -106,6 +107,7 @@ Tauri 桌面应用
 - 后端拥有 task、workspace、Run、Agent context、model_config 配置、Agent Team 配置（文件系统持久化）与 Agent Team run（SQLite）等持久化事实；前端状态只负责交互和渲染。
 - 主业务库为 `<DATA_DIR>/.cosir/storage/app.sqlite3`；运行日志在 `.cosir/logs/`；checkpoint 在 `.cosir/storage/`。三者职责与路径分离，不得跨层复用 session 或事实模型。
 - `ConversationRunModel.status` 是对话 Run 生命周期状态的唯一事实源；Agent Team run 由独立的 `AgentTeamRunModel.status` 承载其生命周期，二者各为自身 Run 类型的唯一事实源。Transport snapshot、Agent context 和 LangGraph checkpoint 都不得演化成任一 Run 类型的第二套状态机。
+- Agent Team 的 `AgentTeamRunModel` 分 `pending` 确认门槛与 `running` 执行两态；同一主 Run 同时只允许一个待确认 TeamRun（pending 唯一约束），确认边界以 `update_status_if_in` 原子迁移。节点运行快照（`AgentTeamRunState.runtime.node_snapshots`）是确认时冻结的执行契约：键 `allowed_tools`（工具名）与 `tool_definitions`（工具 schema）由准备服务写入、coordinator 消费，二者必须同步维护，改一处须同步另一处。
 - Agent context 的持久化事实由 `conversation_task_contexts` 承载；`RuntimeContextManager` 是 Task 级 context 的唯一运行时协调入口和进程内 working copy owner，但不是数据库事实源。
 - `ConversationTaskStateService` 负责 Transport snapshot 的重建与投影编排；`TaskRuntimeSpace` 按 taskId 持有 snapshot working copy，首次读取时懒加载重建，后续复用内存对象。`ConversationEventProjector` 只负责把 conversation event 投影到 snapshot。`ConversationStateSnapshot` 面向前端 Transport，不是 Agent context 的镜像。
 - context 与 Transport snapshot 允许短暂不一致，以最终一致性收敛。snapshot 普通读取不重复重建；数据库写入后由 projector 或明确的 rebuild 边界更新内存 snapshot。不得为了消除流式时序差异而强行把 Run、context、snapshot 放入一个全局事务。

@@ -41,7 +41,7 @@ class AgentTeamRunTool(HandlerBase):
         self,
         team_id: str,
         goal: str,
-        instructions: dict[str, str] | None = None,
+        node_goals: dict[str, str],
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """准备并保存当前主 Agent Run 的待确认 TeamRun。
@@ -82,7 +82,7 @@ class AgentTeamRunTool(HandlerBase):
             preparation = AgentTeamPreparationService().prepare(
                 configuration,
                 goal=goal,
-                instructions=instructions or {},
+                node_goals=node_goals,
                 workspace_root=str(execution_context.workspace_root),
                 parent_task_id=execution_context.task_id,
                 parent_run_id=execution_context.run_id,
@@ -97,7 +97,6 @@ class AgentTeamRunTool(HandlerBase):
                 parent_task_id=execution_context.task_id,
                 parent_run_id=execution_context.run_id,
                 goal=goal,
-                instructions=instructions or {},
             )
             return tool_success(
                 tool_name=self.name,
@@ -125,7 +124,7 @@ class AgentTeamRunTool(HandlerBase):
             return tool_error(
                 self.name,
                 "agent_team_run_creation_invalid",
-                reason=f"无法创建 Team 执行方案: {str(exc)[:500]}",
+                reason=f"无法创建 Team 执行方案，请检查 Team 配置或稍后重试,error:{str(exc)}",
                 permission=self.permission,
                 retryable=True,
             )

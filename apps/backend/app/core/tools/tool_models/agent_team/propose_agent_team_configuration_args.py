@@ -36,7 +36,7 @@ class ProposeAgentTeamNodeArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_id: AgentTeamIdentifier = Field(
-        description="Stable unique node ID used by transitions and runtime instructions.",
+        description="Stable unique node ID used by transitions and runtime node goals.",
         examples=["develop"],
     )
     name: StrictStr = Field(
@@ -90,7 +90,7 @@ class ProposeAgentTeamTransitionArgs(BaseModel):
 class ProposeAgentTeamConfigurationArgs(BaseModel):
     """主 Agent 生成一份待用户确认的 Team 配置候选。
 
-    节点 instruction 不属于这里的静态配置；主 Agent 在调用 ``agent_team`` 启动具体
+    节点 ``node_goals`` 不属于这里的静态配置；主 Agent 在调用 ``agent_team`` 启动具体
     Team 时通过运行时参数提供。该模型只负责工具输入 schema，最终领域校验由
     ``AgentTeamConfiguration`` 在保存或加载配置时独立执行。
     """
@@ -149,7 +149,7 @@ class ProposeAgentTeamConfigurationArgs(BaseModel):
         description=(
             "Pipeline node definitions. Each node references a child Agent profile and "
             "declares its node type and allowed lowercase snake_case business statuses; "
-            "instructions are supplied at run time."
+            "node_goals values are supplied at run time."
         ),
         examples=[
             [

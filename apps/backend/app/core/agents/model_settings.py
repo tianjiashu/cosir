@@ -180,7 +180,6 @@ class ModelSettings:
 
     def to_dict(self) -> dict[str, Any]:
         """序列化用户可持久化的非空覆盖项，不输出运行时字段和 API Key。"""
-
         return {
             name: getattr(self, name)
             for name in _override_fields()
