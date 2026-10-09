@@ -1,12 +1,14 @@
 """Coordinate task lifecycle and workflow execution."""
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import replace
 
 from langchain_core.messages import SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from app.config.configuration import get_agent_registry, get_tool_system
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import (
     AgentProfile,
@@ -17,6 +19,10 @@ from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.hook import HookContext, HookEvent, HookInterceptor
+from app.core.llm_provider.model_failure import (
+    classify_model_failure,
+    extract_model_response_message,
+)
 from app.core.observability import (
     TraceMetadata,
     conversation_run_trace,
@@ -29,10 +35,11 @@ from app.core.runtime.execution_mode import ExecutionMode
 from app.core.runtime.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
-from app.core.tools.schemas import ToolDefinition, ToolExecutionContext
+from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, UserDecision
 from app.core.tools.schemas.tool_names import TOOL_PROPOSE_AGENT_CONFIGURATION
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
+from app.core.workflows.agent_workflow import WorkflowRunFailure
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models import (
     ConversationRunRecord,
@@ -40,13 +47,14 @@ from app.models import (
     TaskRecord,
     WorkspaceRecord,
 )
+from app.models.conversation_run_failure import run_failure_message
 from app.service.depends import (
     get_conversation_run_observability_service,
     get_conversation_run_state_service,
     get_model_config_service,
     get_task_service,
     get_terminal_session_service,
-    get_workspace_service,
+    get_workspace_service, get_conversation_run_service,
 )
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -61,7 +69,8 @@ class AgentRuntime:
     取消作用于 run 并中止该 run 的运行循环（模型节点检查取消状态后停止派发工具）。
 
     职责边界：
-    - 负责：任务执行编排、取消，以及把执行异常向上传播（run 终态由 workflow 落定）。
+    - 负责：任务执行编排、取消，把 workflow 逃逸的异常分类后落定 Run failed 终态，并继续
+      向上传播（正常终态由 workflow 节点落定）。
     - 不负责：checkpoint 回放与历史事件回看（由 Conversation service 提供，细粒度事件仅作
       审计）、工作区 / 任务 /
       轮次的 CRUD 与查询（委托给对应 service 层）；不对外暴露 service 访问器，
@@ -100,12 +109,14 @@ class AgentRuntime:
         self._agent_registry = get_agent_registry()
         self._workspace_service = get_workspace_service()
         self._process_tool_output_channel_factory = process_tool_output_channel_factory
+        self._conversation_run_state_service = get_conversation_run_state_service()
 
     async def execute_run(
         self,
         run: ConversationRunRecord,
         *,
         execution_mode: ExecutionMode = "fresh",
+        user_decisions: Sequence[UserDecision] = (),
     ) -> None:
         """执行一个已被 ConversationRunExecutor 认领（pending→running）的 run。
 
@@ -116,8 +127,9 @@ class AgentRuntime:
         3. ``run`` 非 None 且为已认领 run。
 
         本方法只负责三件事：解析 run 绑定的 agent profile、为本次 run 派生独立副本、
-        驱动 workflow。所有终态（completed / cancelled / failed）由 **workflow** 落定
-        （节点内经 ``WorkflowOperations`` 调 run state service），本方法不落任何终态。
+        驱动 workflow。终态由 workflow 与 ``run_agent`` 分头落定：正常路径在节点内经
+        ``WorkflowOperations`` 调 run state service，异常路径由 ``run_agent`` 的异常边界落定；
+        本方法不落任何终态。
 
         参数:
             run: 已被执行器认领的 Conversation Run 记录（非 None，状态 running）。
@@ -153,10 +165,18 @@ class AgentRuntime:
             )
         # 派生 per-run 副本承载本次 run：共享注册表单例不被原地写，并发 run 互不串扰。
         agent_profile = agent_profile.derive_for_run(run, model_settings=runtime_model_settings)
-        await self.run_agent(agent_profile, execution_mode=execution_mode)
+        await self.run_agent(
+            agent_profile,
+            execution_mode=execution_mode,
+            user_decisions=user_decisions,
+        )
 
     async def run_agent(
-        self, agent: AgentProfile, *, execution_mode: ExecutionMode = "fresh"
+        self,
+        agent: AgentProfile,
+        *,
+        execution_mode: ExecutionMode = "fresh",
+        user_decisions: Sequence[UserDecision] = (),
     ) -> None:
         """驱动一次 agent run 执行并提交 canonical conversation facts。
 
@@ -167,16 +187,20 @@ class AgentRuntime:
                 不污染共享实例。
             execution_mode: 本次执行是 ``fresh`` 还是 ``resume``，原样透传给
                 ``agent.workflow.run``。
+            user_decisions: 本次续跑携带的用户结构化决定（human-in-the-loop），原样透传给
+                ``agent.workflow.run``；创建 / 编辑路径为空序列。
 
         异常:
             RuntimeError: 当 ``agent.run`` 为 None 时抛出。
+            Exception: workflow 逃逸的异常在落定 failed 终态后按原实例继续向上传播（执行器
+                的未收敛安全网对已落终态的 run 是 no-op）。
 
         副作用:
-            触发 USER_PROMPT_SUBMIT/STOP hook；run 的终态（completed / cancelled / failed）
-            **由 workflow 落定**——正常路径经节点内的 ``WorkflowOperations``，异常路径经
-            ``ReactLikeWorkflow._settle_failed_run``；本方法不写任何终态，异常按原文传播并
-            记 ``task_failed``，仅清理进程内取消信号。本轮消息落库、canonical conversation
-            facts 与快照收口由 ``workflow.run`` 内部的 ``RuntimeContextManager`` 负责。
+            触发 USER_PROMPT_SUBMIT/STOP hook；正常终态由 workflow 节点内的
+            ``WorkflowOperations`` 落定，异常终态由本方法的异常边界经 :meth:`_settle_failed_run`
+            落定并记录 ``task_failed``；仅清理进程内取消信号。本轮消息落库、canonical
+            conversation facts 与快照收口由 ``workflow.run`` 内部的 ``RuntimeContextManager``
+            负责。
         """
 
         if agent.run is None:
@@ -194,9 +218,9 @@ class AgentRuntime:
         await HookInterceptor.async_safe_fire(
             HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, turn=run, locatable=None)
         )
-
-        # 自此本连接已持有本轮认领：try/finally 覆盖 RUN_STARTED 之后的全部路径，
-        # 确保无论正常完成、异常逃逸还是客户端断开（GeneratorError），终态都只由本连接决定。
+        # 门面在 try 内构造：trace 装配或门面构建自身失败时没有可落终态的入口，异常只能
+        # 交给执行器的未收敛安全网——因此这里先声明为 None，供异常边界判定能否落定。
+        operations: WorkflowOperations | None = None
         try:
             metadata = TraceMetadata(
                 task_id=task_id,
@@ -232,12 +256,13 @@ class AgentRuntime:
                     callbacks=trace_result.callbacks,
                     langfuse_trace_id=trace_result.trace_id,
                     execution_mode=execution_mode,
+                    user_decisions=user_decisions,
                 )
             # Langfuse recorder 使用 SDK 自带的后台批量上报。不能在对话收尾路径
             # 主动调用同步 flush：网络不可用时 SDK 会等待重试，导致 run 无法及时
             # 进入 completed/failed 终态，前端会一直显示运行中。
             current_run = await asyncio.to_thread(
-                get_conversation_run_state_service().get_run,
+                get_conversation_run_service().get_run,
                 run_id,
             )
             if current_run.status in {
@@ -255,19 +280,61 @@ class AgentRuntime:
                     )
                 )
         except Exception as exc:
+            failure_code = self._failure_code_for(exc)
+            # 门面都没构造出来时无从落终态，交给执行器的未收敛安全网；run 已落终态（完成 /
+            # 取消 / 等待用户输入）时 fail_run_if_running 的条件更新会落空，不覆盖既有终态。
+
+            self._conversation_run_state_service.fail_run_if_running(
+                run_id,
+                end_reason=failure_code,
+                final_output=run_failure_message(failure_code),
+                error_message=extract_model_response_message(exc),
+            )
             log.exception(
                 "task_failed",
                 extra={
-                    "msg": "run 执行失败，异常向上传播（终态已由 workflow 在抛出前落定）",
-                    "data": {"task_id": task_id, "run_id": run_id, "error": str(exc)},
+                    "msg": f"run 执行失败，失败 code: {failure_code}，错误类型: {type(exc).__name__}",
+                    "data": {
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "failure_code": failure_code,
+                        "error_type": type(exc).__name__,
+                        "settled": operations is not None,
+                    },
                 },
             )
-            raise
         finally:
             cancellation_registry.clear(run_id)
             # 工具级信号由工具执行层在单次调用结束时释放；这里兜底回收「点名了已结束的
             # 工具调用」这类不会再被消费的信号，避免进程内信号随会话累积。
             tool_call_cancellation_registry.clear_run(run_id)
+
+    @staticmethod
+    def _failure_code_for(exc: BaseException) -> str:
+        """把异常归类为 Run 失败 code；识别不出模型调用错误时用中性兜底 code。
+
+        工作流已经判定过失败语义的异常（``WorkflowRunFailure``）自带 code，直接用它，不再
+        二次猜测；其余异常交给模型失败分类器，分类不出时回退中性 code，避免把普通执行错误
+        误报成模型问题。
+
+        参数:
+            exc: 待归类的异常。可能来自 workflow 执行期、graph 构建期、门面构建期或
+                trace 装配期。
+
+        返回:
+            ``ErrorKind`` 的模型错误分类值，或 ``Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED``
+            （无法判定时）。
+
+        异常:
+            无。分类器本身不抛异常。
+
+        副作用:
+            无。
+        """
+
+        if isinstance(exc, WorkflowRunFailure):
+            return exc.failure_code
+        return classify_model_failure(exc) or Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
 
     def _resolve_execution_context(
         self,
