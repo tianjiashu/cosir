@@ -6,40 +6,23 @@ import asyncio
 import copy
 import json
 from collections import defaultdict
-from concurrent.futures import Future
 from threading import RLock
 from typing import Any
-
-from sqlalchemy.orm import Session
-
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState, AgentTeamNodeExecution, AgentTeamRunRuntime
-from app.assistant_transport.event import RunInitializedEvent, RunStatusChangedEvent
-from app.assistant_transport.event.dispatch import dispatch_conversation_event
-from app.config.configuration import get_tool_system, get_agent_registry
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
-from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.models import ConversationRunRecord
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
-from app.service import depends as service_depends
-from app.service.agent_team.agent_team_parent_run_service import (
-    AgentTeamParentRunService,
-)
-from app.service.conversation_run.conversation_run_service import ConversationRunService
-from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.service.depends import get_runtime, get_task_service, get_conversation_run_service, \
     get_conversation_run_state_service, get_workspace_service
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
-from app.storage.write_transaction import begin_immediate
-from app.task_runtime.service.task_service import TaskService
-
 
 class AgentTeamCoordinator:
     """拥有 TeamRun 的节点调度状态机，并把单节点执行委托给 ConversationRunExecutor。
@@ -50,12 +33,14 @@ class AgentTeamCoordinator:
     """
 
     def __init__(self) -> None:
+
+        from app.config.configuration import get_tool_system
+
         self._team_run_crud = AgentTeamRunCrud()
         self._task_service = get_task_service()
         self._tool_system = get_tool_system()
         self._run_service = get_conversation_run_service()
         self._run_state_service = get_conversation_run_state_service()
-        self._parent_run_service = AgentTeamParentRunService()
         self._session_factory = main_session_factory()
         self._locks_guard = RLock()
         self._locks: dict[int, RLock] = defaultdict(RLock)
