@@ -38,7 +38,10 @@ from app.core.runtime.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, UserDecision
-from app.core.tools.schemas.tool_names import TOOL_PROPOSE_AGENT_CONFIGURATION
+from app.core.tools.schemas.tool_names import (
+    TOOL_PROPOSE_AGENT_CONFIGURATION,
+    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
+)
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.agent_workflow import WorkflowRunFailure
@@ -52,11 +55,12 @@ from app.models import (
 from app.models.conversation_run_failure import run_failure_message
 from app.service.depends import (
     get_conversation_run_observability_service,
+    get_conversation_run_service,
     get_conversation_run_state_service,
     get_model_config_service,
     get_task_service,
     get_terminal_session_service,
-    get_workspace_service, get_conversation_run_service,
+    get_workspace_service,
 )
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -355,7 +359,7 @@ class AgentRuntime:
         """为单个 run 构建运行时操作门面，并算出本轮的工具准入边界。
 
         本方法不改 Task 固化的工具定义，只产出本轮 ``allows_tools``：以 Task 固化工具名为基准集合，
-        减去本 Run 的 ``ban_tools``、加上 ``propose_agent_configuration`` 打开时的提案工具。该集合
+        减去本 Run 的 ``ban_tools``、加上对应配置提案开关打开时的提案工具。该集合
         同时作用于两处——``WorkflowOperations.task_tool_schemas`` 据此过滤下发给模型的 schema，
         工具执行准入也据此拦截；因此本轮禁用集合 / 提案开关会改变模型看到的工具列表，进而击穿同一
         Task 的前缀缓存（这与 ``docs/plan/conversation-disabled-tool-groups-plan.md`` 第 3 节
@@ -376,7 +380,7 @@ class AgentRuntime:
 
         副作用:
             向本 Task 的延迟系统消息队列投递本轮工具准入说明（禁用集合或「全部放行」，
-            ``propose_agent_configuration`` 打开时追加该工具的 schema 说明），由下一次 model
+            配置草稿提案打开时追加对应工具的 schema 说明），由下一次 model
             节点入口消费并写入上下文；这些消息在队列中等待，模型节点不消费则本轮不会进入模型请求。
         """
         task_space = task_runtime_spaces.get_or_create(task.id)
@@ -409,6 +413,22 @@ class AgentRuntime:
                     content=(
                         "Please follow the user's instructions and use this tool to carry out "
                         f"their request: {tool_schema}"
+                    )
+                )
+            )
+
+        if run.extra is not None and run.extra.propose_agent_team_configuration:
+            allows_tools.add(TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION)
+            definition = self._tool_register.get_tool_definition(
+                TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION
+            )
+            tool_schema = convert_to_openai_tool(definition.to_model_tool_definition(), strict=True)
+            task_space.defer_system_message(
+                SystemMessage(
+                    content=(
+                        "Please generate an Agent Team configuration draft using this tool. "
+                        "Do not execute or save the Team: "
+                        f"{tool_schema}"
                     )
                 )
             )

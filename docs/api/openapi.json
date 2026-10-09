@@ -469,6 +469,45 @@
         }
       }
     },
+    "/model-configs/discover": {
+      "post": {
+        "summary": "Discover Model Configs",
+        "description": "发现远端模型 ID；远端失败时返回空列表而不打断配置表单。",
+        "operationId": "discover_model_configs_model_configs_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelConfigDiscoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConfigDiscoveryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/model-configs/{config_id}": {
       "put": {
         "summary": "Update Model Config",
@@ -561,7 +600,7 @@
     "/model-configs/test": {
       "post": {
         "summary": "Test Draft Model Config",
-        "description": "对尚未保存的配置执行一次真实 OpenAI 兼容请求。",
+        "description": "对完整但尚未保存的表单配置执行一次真实 OpenAI 兼容请求。",
         "operationId": "test_draft_model_config_model_configs_test_post",
         "requestBody": {
           "content": {
@@ -589,55 +628,6 @@
                   },
                   "type": "object",
                   "title": "Response Test Draft Model Config Model Configs Test Post"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/model-configs/{config_id}/test": {
-      "post": {
-        "summary": "Test Model Config",
-        "description": "对已保存的配置执行一次真实 OpenAI 兼容请求。",
-        "operationId": "test_model_config_model_configs__config_id__test_post",
-        "parameters": [
-          {
-            "name": "config_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Config Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "anyOf": [
-                      {},
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "title": "Response Test Model Config Model Configs  Config Id  Test Post"
                 }
               }
             }
@@ -964,10 +954,385 @@
         }
       }
     },
+    "/workspaces/{workspace_id}/configuration/agents": {
+      "get": {
+        "summary": "List Workspace Configuration Agents",
+        "description": "列出 workspace 本地子 Agent。",
+        "operationId": "list_workspace_configuration_agents_workspaces__workspace_id__configuration_agents_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgentConfigurationResponse"
+                  },
+                  "title": "Response List Workspace Configuration Agents Workspaces  Workspace Id  Configuration Agents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create Workspace Configuration Agent",
+        "description": "创建 workspace 本地子 Agent。",
+        "operationId": "create_workspace_configuration_agent_workspaces__workspace_id__configuration_agents_post",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentConfigurationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentConfigurationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/configuration/agents/{agent_id}": {
+      "put": {
+        "summary": "Update Workspace Configuration Agent",
+        "description": "更新 workspace 本地子 Agent。",
+        "operationId": "update_workspace_configuration_agent_workspaces__workspace_id__configuration_agents__agent_id__put",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentConfigurationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentConfigurationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Workspace Configuration Agent",
+        "description": "删除 workspace 本地子 Agent。",
+        "operationId": "delete_workspace_configuration_agent_workspaces__workspace_id__configuration_agents__agent_id__delete",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Delete Workspace Configuration Agent Workspaces  Workspace Id  Configuration Agents  Agent Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/configuration/instructions": {
+      "get": {
+        "summary": "Get Workspace Instruction Configuration",
+        "description": "读取 workspace 当前有效的 AGENTS.md。",
+        "operationId": "get_workspace_instruction_configuration_workspaces__workspace_id__configuration_instructions_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInstructionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Workspace Instruction Configuration",
+        "description": "保存 workspace AGENTS.md，并通知当前进程中匹配的 workspace。",
+        "operationId": "update_workspace_instruction_configuration_workspaces__workspace_id__configuration_instructions_put",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalInstructionUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceInstructionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/configuration/fileignore": {
+      "get": {
+        "summary": "Get Workspace Fileignore Configuration",
+        "description": "读取 workspace .fileignore。",
+        "operationId": "get_workspace_fileignore_configuration_workspaces__workspace_id__configuration_fileignore_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceFileIgnoreResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Workspace Fileignore Configuration",
+        "description": "校验并保存 workspace .fileignore。",
+        "operationId": "update_workspace_fileignore_configuration_workspaces__workspace_id__configuration_fileignore_put",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalInstructionUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceFileIgnoreResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/workspaces/{workspace_id}/attachments": {
       "post": {
         "summary": "Upload Attachment",
-        "description": "上传并规范化一张 JPEG/PNG 图片；相同规范化内容由 SHA-256 自动复用。",
+        "description": "上传并规范化一张 workspace 级 JPEG/PNG 图片；相同内容由 SHA-256 自动复用。",
         "operationId": "upload_attachment_workspaces__workspace_id__attachments_post",
         "parameters": [
           {
@@ -1090,10 +1455,456 @@
         }
       }
     },
+    "/configuration/agent-teams": {
+      "get": {
+        "summary": "List Agent Team Configurations",
+        "description": "列出 system 作用域实际拥有的 Team 配置。",
+        "operationId": "list_agent_team_configurations_configuration_agent_teams_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response List Agent Team Configurations Configuration Agent Teams Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Save Agent Team Configuration",
+        "description": "保存用户确认后的 Team 配置 JSON。",
+        "operationId": "save_agent_team_configuration_configuration_agent_teams_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveAgentTeamConfigurationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Save Agent Team Configuration Configuration Agent Teams Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/agent-teams/{team_id}": {
+      "put": {
+        "summary": "Update System Agent Team Configuration",
+        "description": "更新 system 作用域已有 Team 配置。",
+        "operationId": "update_system_agent_team_configuration_configuration_agent_teams__team_id__put",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveAgentTeamConfigurationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Update System Agent Team Configuration Configuration Agent Teams  Team Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete System Agent Team Configuration",
+        "description": "删除 system 作用域的 Team 配置。",
+        "operationId": "delete_system_agent_team_configuration_configuration_agent_teams__team_id__delete",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Delete System Agent Team Configuration Configuration Agent Teams  Team Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/configuration/agent-teams": {
+      "get": {
+        "summary": "List Workspace Agent Team Configurations",
+        "description": "列出 workspace 可见的 Team 配置，并保留各项的实际所有权作用域。",
+        "operationId": "list_workspace_agent_team_configurations_workspaces__workspace_id__configuration_agent_teams_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response List Workspace Agent Team Configurations Workspaces  Workspace Id  Configuration Agent Teams Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Save Workspace Agent Team Configuration",
+        "description": "创建 workspace 作用域 Team 配置。",
+        "operationId": "save_workspace_agent_team_configuration_workspaces__workspace_id__configuration_agent_teams_post",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveAgentTeamConfigurationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Save Workspace Agent Team Configuration Workspaces  Workspace Id  Configuration Agent Teams Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/configuration/agent-teams/{team_id}": {
+      "put": {
+        "summary": "Update Workspace Agent Team Configuration",
+        "description": "更新 workspace 作用域已有 Team 配置。",
+        "operationId": "update_workspace_agent_team_configuration_workspaces__workspace_id__configuration_agent_teams__team_id__put",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveAgentTeamConfigurationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Update Workspace Agent Team Configuration Workspaces  Workspace Id  Configuration Agent Teams  Team Id  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Workspace Agent Team Configuration",
+        "description": "删除 workspace 自有 Team 配置，system 同名项会重新可见。",
+        "operationId": "delete_workspace_agent_team_configuration_workspaces__workspace_id__configuration_agent_teams__team_id__delete",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Delete Workspace Agent Team Configuration Workspaces  Workspace Id  Configuration Agent Teams  Team Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent-team/runs/{run_id}": {
+      "get": {
+        "summary": "Get Agent Team Run",
+        "description": "读取 TeamRun 聚合状态。",
+        "operationId": "get_agent_team_run_agent_team_runs__run_id__get",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Get Agent Team Run Agent Team Runs  Run Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent-team/runs/{run_id}/cancel": {
+      "post": {
+        "summary": "Cancel Agent Team Run",
+        "description": "取消 TeamRun 及其当前节点。",
+        "operationId": "cancel_agent_team_run_agent_team_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Cancel Agent Team Run Agent Team Runs  Run Id  Cancel Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/assistant": {
       "post": {
         "summary": "Assistant Transport",
-        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。\n    state_service: 负责读取 Task Transport state 的唯一 owner。\n    run_service: 在一个事务中占用 command 并创建、绑定 Conversation Run 的 service。\n\n返回:\n使用项目自有 frame 协议编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在、命令冲突或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；\n    运行期间更新数据库和 canonical conversation facts。",
+        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。\n    run_executor: 负责启动已完成装配的 Conversation Run。\n    transport_service: 负责校验请求、创建或恢复 Run 并建立 Transport 响应。\n\n返回:\n    使用项目自有 frame 协议编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；\n    运行期间更新数据库和 canonical conversation facts。",
         "operationId": "assistant_transport_assistant_post",
         "requestBody": {
           "content": {
@@ -1284,6 +2095,62 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/terminal-denylist": {
+      "get": {
+        "summary": "Get Terminal Denylist Configuration",
+        "description": "读取 deny-list；缺失时由 service 初始化默认配置文件。",
+        "operationId": "get_terminal_denylist_configuration_configuration_terminal_denylist_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalDenylistResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Terminal Denylist Configuration",
+        "description": "校验并保存新的 pattern 列表。",
+        "operationId": "update_terminal_denylist_configuration_configuration_terminal_denylist_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalDenylistUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalDenylistResponse"
+                }
               }
             }
           },
@@ -1540,7 +2407,7 @@
           },
           "threadId": {
             "type": "string",
-            "pattern": "^task-[1-9][0-9]*$",
+            "pattern": "^conversation_run-[1-9][0-9]*$",
             "title": "Threadid"
           },
           "runId": {
@@ -1555,7 +2422,7 @@
           "runId"
         ],
         "title": "AssistantAttachRequest",
-        "description": "只订阅已有 Conversation Run 的 transport 请求。\n\nattach 请求不携带业务命令（由 ``assistant_transport_attach`` 端点校验拒绝），仅用于\n重新订阅一个已存在、可能仍在运行的 Run 的 SSE 流。为兼容 assistant-ui resume 请求的\n通用 transport envelope，``commands`` 字段允许为空并被显式忽略。"
+        "description": "只订阅已有 Conversation Run 的 transport 请求。\n\nattach 请求不携带业务命令（由 ``assistant_transport_attach`` 端点校验拒绝），仅用于\n重新订阅一个已存在、可能仍在运行的 Run 的 SSE 流。为兼容 assistant-ui resume 请求的\n通用 transport envelope，``commands`` 字段允许为空并被显式忽略。其 ``threadId`` 使用\n``conversation_run-{task_id}`` 标识当前 Task 的 Conversation Run 线程；具体 Task 归属\n由 attach 路由结合路径和 Run 校验。"
       },
       "AssistantFileAttachment": {
         "properties": {
@@ -1653,6 +2520,15 @@
                 },
                 {
                   "$ref": "#/components/schemas/BanToolsCommand"
+                },
+                {
+                  "$ref": "#/components/schemas/ProposeAgentConfigurationCommand"
+                },
+                {
+                  "$ref": "#/components/schemas/ProposeAgentTeamConfigurationCommand"
+                },
+                {
+                  "$ref": "#/components/schemas/UserInputDecisionCommand"
                 }
               ]
             },
@@ -1882,7 +2758,7 @@
           "payload"
         ],
         "title": "BanToolsCommand",
-        "description": "Assistant UI custom command that configures disabled tools for one Run.\n\nThis schema preserves the wire shape ``type=\"custom\"``, ``name=\"ban-tools\"`` and a typed\n``payload``. It validates command identity and payload shape only; the Run service validates\ntool names against the current Task catalog and persists the original ``ban_tools`` intent in\nRun Extra. The runtime derives the final ``allows_tools`` set when execution starts.\n\nRaises:\n    ValidationError: When the wire discriminator, command name, command ID, or payload is\n        malformed.\n\nSide effects:\n    None. Persistence and catalog lookup belong to the Run service."
+        "description": "为单个新 Run 传递用户禁用的工具名集合。"
       },
       "BanToolsPayload": {
         "properties": {
@@ -1900,7 +2776,7 @@
           "ban_tools"
         ],
         "title": "BanToolsPayload",
-        "description": "Validated tool-name selection carried by ``BanToolsCommand``.\n\n``ban_tools`` may be empty to preserve the default where every Task tool remains available.\nNames must be unique, nonblank strings; availability against the current Task catalog is\nchecked by the transport service after request parsing, which then derives ``allows_tools``.\n\nRaises:\n    ValidationError: When a name is blank, duplicated, or not a string.\n\nSide effects:\n    None. This model only validates and stores the request payload."
+        "description": "校验本次 Run 由用户禁用的工具名集合。"
       },
       "Body_upload_attachment_workspaces__workspace_id__attachments_post": {
         "properties": {
@@ -1937,6 +2813,17 @@
             ],
             "title": "Endreason"
           },
+          "langfuseTraceId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Langfusetraceid"
+          },
           "messages": {
             "items": {
               "$ref": "#/components/schemas/ConversationStateMessage"
@@ -1970,12 +2857,13 @@
           "runId",
           "status",
           "endReason",
+          "langfuseTraceId",
           "messages",
           "usage",
           "error"
         ],
         "title": "ConversationRunSnapshot",
-        "description": "一个 Run 的完整 UI 投影。\n\n``runId`` 是内部消息、tool part 和 Run usage 的共同归属键；Run 的状态、终态原因、受控\n错误、消息及累计模型 usage 必须在同一对象内保持一致。\n\n``error`` 只在 Run 进入失败/取消终态时携带受控文案（``code`` + provider 无关的\n``message``），供前端展示失败原因；运行中、已结束成功或未发生错误时为 ``None``。它只服务\nUI 渲染与重连恢复，不是 Run 生命周期状态机的第二来源。"
+        "description": "一个 Run 的完整 UI 投影。\n\n``runId`` 是内部消息、tool part 和 Run usage 的共同归属键；Run 的状态、终态原因、错误、\n消息及累计模型 usage 必须在同一对象内保持一致。\n\n``error`` 只在 Run 进入失败/取消终态时携带 ``code`` + UI 展示 ``message``；模型 HTTP 失败\n时 ``message`` 可直接来自响应体。运行中、已结束成功或未发生错误时为 ``None``。它只服务\nUI 渲染与重连恢复，不是 Run 生命周期状态机的第二来源。"
       },
       "ConversationStateError": {
         "properties": {
@@ -1994,7 +2882,7 @@
           "message"
         ],
         "title": "ConversationStateError",
-        "description": "面向 UI 的稳定错误结构。\n\n只包含稳定的机器可读 ``code`` 与面向用户的安全 ``message``。``retryable`` 是工具观察的\n字段（仅面向模型），不属于 Transport 错误契约。"
+        "description": "面向 UI 的 Run 错误结构。\n\n``code`` 是内部稳定类别；``message`` 可以是模型 HTTP 响应体直接提供的消息。Transport\n只承载这两个字段，不透传完整响应体。``retryable`` 是工具观察的字段，不属于此契约。"
       },
       "ConversationStateFilePart": {
         "properties": {
@@ -2452,7 +3340,8 @@
             "type": "string",
             "enum": [
               "string",
-              "boolean"
+              "boolean",
+              "integer"
             ],
             "title": "Type"
           },
@@ -2480,6 +3369,9 @@
                 "type": "string"
               },
               {
+                "type": "integer"
+              },
+              {
                 "type": "boolean"
               },
               {
@@ -2494,6 +3386,9 @@
                 "type": "string"
               },
               {
+                "type": "integer"
+              },
+              {
                 "type": "boolean"
               },
               {
@@ -2506,6 +3401,9 @@
             "anyOf": [
               {
                 "type": "string"
+              },
+              {
+                "type": "integer"
               },
               {
                 "type": "boolean"
@@ -2558,6 +3456,28 @@
           "clearable": {
             "type": "boolean",
             "title": "Clearable"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
           }
         },
         "additionalProperties": false,
@@ -2577,7 +3497,9 @@
           "process_override",
           "options",
           "placeholder",
-          "clearable"
+          "clearable",
+          "minimum",
+          "maximum"
         ],
         "title": "EnvironmentFieldResponse",
         "description": "单个环境变量的展示元数据与脱敏状态。\n\n``value`` 与 ``disk_value`` 对 secret 字段始终为 ``None``；调用方只能通过 ``masked``\n判断是否已经配置，不能从响应中恢复敏感值。"
@@ -2871,7 +3793,43 @@
           "context_window_k"
         ],
         "title": "ModelConfigCreateRequest",
-        "description": "校验模型连接配置的连接字段和必填上下文窗口。"
+        "description": "校验创建模型连接配置所需的完整表单字段。"
+      },
+      "ModelConfigDiscoveryRequest": {
+        "properties": {
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_url",
+          "api_key"
+        ],
+        "title": "ModelConfigDiscoveryRequest",
+        "description": "校验请求远端模型目录所需的连接字段。\n\n本模型只负责清洗 Base URL 和 API Key，不负责发起网络请求、保存配置或判断模型能力。\nBase URL 的路径会被保留，服务层在其后追加 ``/models``。"
+      },
+      "ModelConfigDiscoveryResponse": {
+        "properties": {
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "title": "ModelConfigDiscoveryResponse",
+        "description": "返回可用于模型名称下拉列表的模型 ID。\n\n响应只保留标准模型对象的 ``id``，不把供应商的完整响应、能力猜测或错误正文透传给前端。\n请求失败时由服务层返回空列表，前端可继续使用手动输入。"
       },
       "ModelConfigResponse": {
         "properties": {
@@ -2954,6 +3912,10 @@
       },
       "ModelConfigTestRequest": {
         "properties": {
+          "config_name": {
+            "type": "string",
+            "title": "Config Name"
+          },
           "base_url": {
             "type": "string",
             "title": "Base Url"
@@ -2965,16 +3927,38 @@
           "model_name": {
             "type": "string",
             "title": "Model Name"
+          },
+          "context_window_k": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Context Window K"
+          },
+          "supports_thinking": {
+            "type": "boolean",
+            "title": "Supports Thinking",
+            "default": false
+          },
+          "supports_reasoning_effort": {
+            "type": "boolean",
+            "title": "Supports Reasoning Effort",
+            "default": false
+          },
+          "supports_image": {
+            "type": "boolean",
+            "title": "Supports Image",
+            "default": false
           }
         },
         "type": "object",
         "required": [
+          "config_name",
           "base_url",
           "api_key",
-          "model_name"
+          "model_name",
+          "context_window_k"
         ],
         "title": "ModelConfigTestRequest",
-        "description": "承载一次不落库的真实 OpenAI 兼容连接测试参数。"
+        "description": "承载完整表单的一次不落库 OpenAI 兼容连接测试请求。\n\n连接测试不写入数据库，但仍要求提交与保存相同的完整字段，确保前端只能在表单完整\n时发起测试，并让测试使用与最终保存一致的上下文窗口和能力声明。"
       },
       "ModelConfigUpdateRequest": {
         "properties": {
@@ -3094,6 +4078,88 @@
         "title": "ModelConfigUpdateRequest",
         "description": "只覆盖显式传入的模型连接配置字段。"
       },
+      "ProposeAgentConfigurationCommand": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "custom",
+            "title": "Type"
+          },
+          "commandId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Commandid"
+          },
+          "name": {
+            "type": "string",
+            "const": "propose-agent-configuration",
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "commandId",
+          "name"
+        ],
+        "title": "ProposeAgentConfigurationCommand",
+        "description": "声明当前消息需要临时开放配置提案工具。\n\n该命令没有 payload、版本或兼容性字段；它只表达本次 Run 的能力意图，真正的草稿仍由\n模型调用工具生成，配置保存也不在此命令内发生。"
+      },
+      "ProposeAgentTeamConfigurationCommand": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "custom",
+            "title": "Type"
+          },
+          "commandId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Commandid"
+          },
+          "name": {
+            "type": "string",
+            "const": "propose-agent-team-configuration",
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "commandId",
+          "name"
+        ],
+        "title": "ProposeAgentTeamConfigurationCommand",
+        "description": "声明当前消息需要临时开放 Team 配置提案工具。\n\n命令只记录本轮能力意图；草稿由工具生成，保存由用户在配置编辑器中显式触发。"
+      },
+      "SaveAgentTeamConfigurationRequest": {
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "system",
+              "workspace"
+            ],
+            "title": "Scope"
+          },
+          "configuration": {
+            "type": "object",
+            "title": "Configuration"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scope",
+          "configuration"
+        ],
+        "title": "SaveAgentTeamConfigurationRequest",
+        "description": "保存 Team 配置文件所需的本地参数。"
+      },
       "TaskResponse": {
         "properties": {
           "task_id": {
@@ -3204,6 +4270,94 @@
         "title": "TaskResponse",
         "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"fork\"`` 为历史分支，\n        ``\"delegate_task\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_run_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    context_window_total: 最后一个 Run 使用的模型上下文窗口上限 token，可能为 None。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
+      "UserDecisionKind": {
+        "type": "string",
+        "enum": [
+          "approve",
+          "reject",
+          "abort"
+        ],
+        "title": "UserDecisionKind",
+        "description": "用户可作出的决定种类（框架级闭集）。\n\n路由目标由工作流的固定映射决定，提问工具不能改写：\n\n- ``APPROVE``：批准该调用。``tools`` 节点以「已确认」上下文重新执行该调用。\n- ``REJECT``：驳回该调用。不执行，用户意见内联进该调用的观察交给模型重新提案。\n- ``ABORT``：放弃该调用。不执行，观察按取消收口，模型按「被用户取消」继续。"
+      },
+      "UserInputDecisionCommand": {
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "custom",
+            "title": "Type"
+          },
+          "commandId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Commandid"
+          },
+          "name": {
+            "type": "string",
+            "const": "user-input-decision",
+            "title": "Name"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/UserInputDecisionPayload"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "type",
+          "commandId",
+          "name",
+          "payload"
+        ],
+        "title": "UserInputDecisionCommand",
+        "description": "把用户决定绑定到某个等待中的 Run 并触发续跑。"
+      },
+      "UserInputDecisionItem": {
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Request Id"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/UserDecisionKind"
+          },
+          "data": {
+            "type": "object",
+            "title": "Data"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "request_id",
+          "decision"
+        ],
+        "title": "UserInputDecisionItem",
+        "description": "单条用户决定（wire 形状）。\n\n``decision`` 直接复用领域枚举，避免 wire 值与领域值各维护一份导致漂移；``data`` 是用户\n编辑后的结构化输入，形状由提问工具定义（后端在此不做业务校验）。"
+      },
+      "UserInputDecisionPayload": {
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/UserInputDecisionItem"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Decisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decisions"
+        ],
+        "title": "UserInputDecisionPayload",
+        "description": "一次续跑携带的决定集合。"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -3236,6 +4390,84 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WorkspaceFileIgnoreResponse": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "exists": {
+            "type": "boolean",
+            "title": "Exists"
+          },
+          "rule_count": {
+            "type": "integer",
+            "title": "Rule Count"
+          },
+          "max_rules": {
+            "type": "integer",
+            "title": "Max Rules"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "path",
+          "exists",
+          "rule_count",
+          "max_rules"
+        ],
+        "title": "WorkspaceFileIgnoreResponse",
+        "description": "序列化 workspace 忽略规则正文及规则数量。"
+      },
+      "WorkspaceInstructionResponse": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "relative_path": {
+            "type": "string",
+            "title": "Relative Path"
+          },
+          "token_length": {
+            "type": "integer",
+            "title": "Token Length"
+          },
+          "max_tokens": {
+            "type": "integer",
+            "title": "Max Tokens"
+          },
+          "exists": {
+            "type": "boolean",
+            "title": "Exists"
+          },
+          "effective_on": {
+            "type": "string",
+            "title": "Effective On",
+            "default": "next_run"
+          }
+        },
+        "type": "object",
+        "required": [
+          "content",
+          "path",
+          "relative_path",
+          "token_length",
+          "max_tokens",
+          "exists"
+        ],
+        "title": "WorkspaceInstructionResponse",
+        "description": "序列化 workspace 当前有效指令文件及 token 预算。"
       },
       "WorkspaceResponse": {
         "properties": {
@@ -3270,6 +4502,45 @@
         ],
         "title": "WorkspaceResponse",
         "description": "校验并序列化工作区状态响应（与 ``WorkspaceRecord.to_dict()`` 对齐）。\n\n参数:\n    workspace_id: 工作区标识。\n    name: 工作区名称。\n    root_path: 工作区根目录路径。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "TerminalDenylistResponse": {
+        "properties": {
+          "patterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Patterns"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patterns"
+        ],
+        "title": "TerminalDenylistResponse",
+        "description": "向配置界面返回当前正则字符串列表。"
+      },
+      "TerminalDenylistUpdateRequest": {
+        "properties": {
+          "patterns": {
+            "items": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "type": "array",
+            "maxItems": 256,
+            "minItems": 0,
+            "title": "Patterns"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patterns"
+        ],
+        "title": "TerminalDenylistUpdateRequest",
+        "description": "只接受有限长度的正则字符串列表。"
       }
     }
   }

@@ -84,7 +84,6 @@ class MainAgentPromptConfigurationService:
             空正文，不修改已有文件内容。
         """
 
-        self.store.assert_safe_child(self.root, self.path)
         self.root.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             try:

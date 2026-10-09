@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronLeftIcon, Code2Icon, FileTextIcon, FilterIcon, SaveIcon, Settings2Icon } from "lucide-react";
+import { ChevronLeftIcon, Code2Icon, FileTextIcon, FilterIcon, SaveIcon, Settings2Icon, UsersIcon } from "lucide-react";
 
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
 import { AgentConfigurationPanel, type AgentConfigurationApi } from "@/components/system-configuration-page";
+import { AgentTeamConfigurationPanel } from "@/components/agent-team-configuration-panel";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -65,7 +66,7 @@ function WorkspaceFileIgnorePanel({ workspaceId }: { workspaceId: number }) {
 }
 
 export function WorkspaceConfigurationPage({ workspaceId, workspaceName, onClose }: { workspaceId: number; workspaceName: string; onClose: () => void }) {
-  const [tab, setTab] = useState<"agents" | "instructions" | "fileignore">("agents");
+  const [tab, setTab] = useState<"agents" | "agent-teams" | "instructions" | "fileignore">("agents");
   const agentApi = useMemo<AgentConfigurationApi>(() => ({
     list: () => getWorkspaceAgentConfigurations(workspaceId),
     create: (input: AgentConfigurationInput) => createWorkspaceAgentConfiguration(workspaceId, input),
@@ -80,8 +81,9 @@ export function WorkspaceConfigurationPage({ workspaceId, workspaceName, onClose
 
   const tabs = [
     { id: "agents" as const, label: "子 Agent", icon: Code2Icon },
+    { id: "agent-teams" as const, label: "Agent Team", icon: UsersIcon },
     { id: "instructions" as const, label: "AGENTS.md", icon: FileTextIcon },
     { id: "fileignore" as const, label: ".fileignore", icon: FilterIcon },
   ];
-  return <div className="bg-background/95 absolute inset-0 z-30 overflow-y-auto backdrop-blur-sm"><div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-5 py-6 lg:px-10"><header className="mb-8 flex flex-wrap items-start justify-between gap-4"><div><div className="text-muted-foreground mb-3 flex items-center gap-2 text-xs"><Settings2Icon className="size-3.5" />工作区配置 · {workspaceName}</div><h1 className="text-2xl font-semibold tracking-tight">配置当前 workspace</h1></div><Button variant="outline" onClick={onClose}><ChevronLeftIcon />返回工作区</Button></header><div className="grid min-h-0 flex-1 gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]"><nav className="flex gap-2 overflow-x-auto lg:block lg:space-y-2" aria-label="工作区配置分类">{tabs.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setTab(id)} className={`flex min-w-44 items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors lg:w-full ${tab === id ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}><Icon className="size-4 shrink-0" /><span className="text-sm font-medium">{label}</span></button>)}</nav><main className="min-w-0">{tab === "agents" && <AgentConfigurationPanel api={agentApi} />}{tab === "instructions" && <MarkdownConfigurationPanel adapter={instructionAdapter} placeholder="写入当前 workspace 的项目约束…" saveLabel="保存 AGENTS.md" initialMode="split" />}{tab === "fileignore" && <WorkspaceFileIgnorePanel workspaceId={workspaceId} />}</main></div></div></div>;
+  return <div className="bg-background/95 absolute inset-0 z-30 overflow-y-auto backdrop-blur-sm"><div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-5 py-6 lg:px-10"><header className="mb-8 flex flex-wrap items-start justify-between gap-4"><div><div className="text-muted-foreground mb-3 flex items-center gap-2 text-xs"><Settings2Icon className="size-3.5" />工作区配置 · {workspaceName}</div><h1 className="text-2xl font-semibold tracking-tight">配置当前 workspace</h1></div><Button variant="outline" onClick={onClose}><ChevronLeftIcon />返回工作区</Button></header><div className="grid min-h-0 flex-1 gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]"><nav className="flex gap-2 overflow-x-auto lg:block lg:space-y-2" aria-label="工作区配置分类">{tabs.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setTab(id)} className={`flex min-w-44 items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors lg:w-full ${tab === id ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}><Icon className="size-4 shrink-0" /><span className="text-sm font-medium">{label}</span></button>)}</nav><main className="min-w-0">{tab === "agents" && <AgentConfigurationPanel api={agentApi} />}{tab === "agent-teams" && <AgentTeamConfigurationPanel scope="workspace" workspaceId={workspaceId} />}{tab === "instructions" && <MarkdownConfigurationPanel adapter={instructionAdapter} placeholder="写入当前 workspace 的项目约束…" saveLabel="保存 AGENTS.md" initialMode="split" />}{tab === "fileignore" && <WorkspaceFileIgnorePanel workspaceId={workspaceId} />}</main></div></div></div>;
 }

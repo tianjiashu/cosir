@@ -76,7 +76,6 @@ class EnvironmentConfigurationService:
         分组契约。
         """
 
-        self.store.assert_safe_child(self.root, self.env_file)
         file_values = self._read_values(self.env_file)
         result: list[dict[str, Any]] = []
         for field in ENVIRONMENT_FIELDS.values():
@@ -187,7 +186,6 @@ class EnvironmentConfigurationService:
             if change.operation != "replace":
                 raise EnvironmentConfigurationError(f"不支持的环境配置操作: {change.operation}")
             values[name] = self._validate_value(field, change.value)
-        self.store.assert_safe_child(self.root, self.env_file)
         with self.store.locked(self.env_file):
             current = (
                 self.store.read_text(self.env_file, root=self.root)

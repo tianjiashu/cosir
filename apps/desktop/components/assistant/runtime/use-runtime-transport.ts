@@ -45,7 +45,7 @@ export function useRuntimeTransport(
   recovery: RuntimeRecovery,
   onStateCommit: (state: TransportState) => void,
   selectedBanTools: readonly string[],
-  proposeAgentConfiguration: boolean,
+  configurationProposalMode: "agent" | "agent-team" | null,
   onProposalModeConsumed: () => void,
 ): RuntimeTransport {
   const attachmentAdapter = useMemo(
@@ -289,11 +289,18 @@ export function useRuntimeTransport(
           commandId: `${addMessage.commandId}-ban-tools`,
           payload: { ban_tools: [...selectedBanTools] },
         });
-        if (proposeAgentConfiguration) {
+        if (configurationProposalMode === "agent") {
           commands.push({
             type: "custom",
             name: "propose-agent-configuration",
             commandId: `${addMessage.commandId}-agent-configuration-proposal`,
+          });
+        }
+        if (configurationProposalMode === "agent-team") {
+          commands.push({
+            type: "custom",
+            name: "propose-agent-team-configuration",
+            commandId: `${addMessage.commandId}-agent-team-configuration-proposal`,
           });
         }
       }
@@ -333,7 +340,7 @@ export function useRuntimeTransport(
       };
     },
     onResponse: (response) => {
-      if (proposeAgentConfiguration) onProposalModeConsumed();
+      if (configurationProposalMode !== null) onProposalModeConsumed();
       void frontendLog("INFO", "assistant_transport_response_received", "Assistant Transport 已收到响应头", {
         traceId: context.traceId,
         data: {

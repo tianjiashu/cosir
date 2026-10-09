@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from app.agent_team.team_tool_error import TeamToolError
 from app.config.logging.logger import log
-
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -27,9 +27,9 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
     description = (
         "Create an Agent Team configuration draft for user review. Declare exactly one entry "
         "node via start_node_id, and finish the Team by routing transitions to the literal "
-        "target END (at least one transition must reach END). Node transitions must be "
-        "directed and strictly one-way; cycles are invalid, e.g. "
-        "develop --done--> review --done--> develop."
+        "target END. Every node must be reachable from the entry and able to reach END. "
+        "Cycles are allowed; max_runs bounds repeated execution. This tool only drafts config; "
+        "it must not start a Team run or save the config."
     )
     args_model = ProposeAgentTeamConfigurationArgs
     timeout_seconds: ClassVar[float] = 20.0
@@ -77,6 +77,17 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
                 error="agent_team_configuration_invalid",
                 reason=str(exc),
                 retryable=True,
+            )
+        except TeamToolError as exc:
+            log.warning(
+                "agent_team_configuration_proposal_failed",
+                extra={"msg": "Agent Team 配置引用校验失败", "error_type": type(exc).__name__},
+            )
+            return tool_error(
+                tool_name=self.name,
+                error="agent_team_configuration_invalid",
+                reason=str(exc),
+                retryable=exc.retryable,
             )
         except Exception as exc:
             log.warning(

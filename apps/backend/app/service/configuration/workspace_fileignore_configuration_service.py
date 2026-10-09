@@ -43,14 +43,13 @@ class WorkspaceFileIgnoreConfigurationService:
     def __init__(self, workspace_root: str | Path) -> None:
         """绑定 workspace 根目录和固定规则文件路径。"""
 
-        self.root = Path(workspace_root).resolve()
+        self.root = Path(workspace_root)
         self.path = ignore_file_path(self.root)
         self.store = ConfigurationFileStore()
 
     def read(self) -> WorkspaceFileIgnoreDocument:
         """读取规则文件；缺失时返回空正文但不创建文件。"""
 
-        self.store.assert_safe_child(self.root / ".cosir", self.path)
         if not self.path.exists():
             return self._document("", exists=False)
         content = self.store.read_text(self.path, root=self.root / ".cosir")
@@ -60,7 +59,6 @@ class WorkspaceFileIgnoreConfigurationService:
         """校验标准 gitignore 语法、大小和规则数后原子写入规则文件。"""
 
         self._validate(content)
-        self.store.assert_safe_child(self.root / ".cosir", self.path)
         with self.store.locked(self.path):
             self.store.write_text_atomic(self.path, content, root=self.root / ".cosir")
         log.info(

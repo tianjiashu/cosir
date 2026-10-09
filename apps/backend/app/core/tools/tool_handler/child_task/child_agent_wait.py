@@ -139,8 +139,7 @@ class ChildAgentWaitTool(HandlerBase):
                     tool_name=self.name,
                     content=json.dumps(
                         {
-                            "child_task_id": child_task_id,
-                            "child_run_id": run.id,
+                            "hint":"Child agent results may not be fully accurate—review them carefully, especially for large-scale work.",
                             "timed_out": False,
                             "status": run.status,
                             "final_output": run.final_output,

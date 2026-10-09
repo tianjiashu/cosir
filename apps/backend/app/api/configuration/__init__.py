@@ -1,13 +1,14 @@
 """系统配置中心 HTTP API 包。
 
-按子域拆成四个路由模块，共用一份错误映射：
+按子域拆分路由模块，共用一份错误映射：
 
 - :mod:`app.api.configuration.agents`：``/configuration/agents``（子 Agent 文档增删改查，含
   「工具组 ↔ 工具名」双向投影）；
 - :mod:`app.api.configuration.global_instructions`：``/configuration/global-instructions``；
 - :mod:`app.api.configuration.main_agent_prompt`：``/configuration/main-agent-prompt``；
 - :mod:`app.api.configuration.environment`：``/configuration/environment``；
-- :mod:`app.api.configuration.errors`：四个子域共用的「领域异常 → HTTP 错误」映射。
+- :mod:`app.api.configuration.terminal_denylist`：``/configuration/terminal-denylist``；
+- :mod:`app.api.configuration.errors`：各子域共用的「领域异常 → HTTP 错误」映射。
 
 路由仍以模块级 ``@app.*`` 装饰器注册到 ``app.app`` 的单例 FastAPI：由 ``app.app`` 在定义
 ``app`` 之后显式导入各子模块，导入顺序即注册顺序。本包不在 ``__init__`` 中隐式导入子模块，

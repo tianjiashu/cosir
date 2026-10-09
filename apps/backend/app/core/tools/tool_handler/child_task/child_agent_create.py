@@ -87,16 +87,14 @@ class DelegateTaskTool(HandlerBase):
     # HandlerBase 要求提供类级描述；描述与工具集、workspace 候选无关（子 Agent 目录由系统提示词
     # 的工具能力目录层下发），进程级基础定义即为模型可见终稿。
     description: str = (
-        "Delegate one focused subtask to a single child agent. Use it "
-        "when part of the work is separable from your own turn. The child runs its own agent "
-        "loop with only your message as input — it cannot see this conversation — and returns "
-        "only a final summary, so the message must be self-contained. A child cannot delegate "
-        "further. Delegation is asynchronous: after creating the child you can wait for it with "
-        "child_agent_wait, or work on other tasks that do not interfere with it. "
-        "A failed delegation is terminal: adjust "
-        "the contract or ask the user instead of retrying identical arguments. "
-        "CRITICAL BUDGET LIMIT: an over-budget call is rejected immediately and counts as a "
-        "tool error, so trim or split the task instead of overshooting."
+        "Delegate a focused subtask to a child agent. It runs its own loop with only your "
+        "message as input — it cannot see this conversation and cannot delegate further — so "
+        "the message must be a self-contained task contract, and the child returns only a "
+        "final summary. Delegation is asynchronous: after creating the child, wait for it "
+        "with child_agent_wait or continue other non-interfering work. A failed delegation "
+        "is terminal — adjust the contract or ask the user rather than retrying identical "
+        "arguments. Keep inputs within the stated length limits; an oversized call is "
+        "rejected as a tool error, so trim or split the task."
     )
     args_model: type[DelegateTaskArgs] = DelegateTaskArgs
     timeout_seconds: ClassVar[float] = 300.0

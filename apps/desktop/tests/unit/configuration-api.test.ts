@@ -17,6 +17,44 @@ describe("configuration API", () => {
     expect(toolGroupsForNames(["read_file", "write_file", "unknown"], groups)).toEqual(["文件"]);
   });
 
+  it("routes Team CRUD through the explicit system or workspace scope", async () => {
+    requestJson.mockResolvedValue({ team_id: "review-team" });
+    const {
+      createAgentTeamConfiguration,
+      deleteAgentTeamConfiguration,
+      updateAgentTeamConfiguration,
+    } = await import("@/lib/api/agent-teams");
+    const configuration = {
+      team_id: "review-team",
+      name: "Review Team",
+      description: "Review changes",
+      max_runs: 8,
+      start_node_id: "review",
+      nodes: [{ node_id: "review", name: "Review", agent_id: "reviewer", statuses: ["done"] }],
+      transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
+      scope: "workspace" as const,
+    };
+
+    await createAgentTeamConfiguration({ scope: "workspace", configuration }, 3);
+    expect(requestJson).toHaveBeenCalledWith(
+      "/workspaces/3/configuration/agent-teams",
+      expect.objectContaining({ method: "POST" }),
+    );
+    await updateAgentTeamConfiguration("review-team", {
+      scope: "system",
+      configuration: { ...configuration, scope: "system" },
+    });
+    expect(requestJson).toHaveBeenCalledWith(
+      "/configuration/agent-teams/review-team",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    await deleteAgentTeamConfiguration("review-team", "workspace", 3);
+    expect(requestJson).toHaveBeenCalledWith(
+      "/workspaces/3/configuration/agent-teams/review-team",
+      { method: "DELETE" },
+    );
+  });
+
   it("sends agent model overrides without configuration version metadata", async () => {
     requestJson.mockResolvedValueOnce({ agent_id: "reviewer" });
     const { updateAgentConfiguration } = await import("@/lib/api/configuration");
@@ -58,6 +96,27 @@ describe("configuration API", () => {
           DEFAULT_LANGUAGE: { operation: "clear" },
         },
       },
+      { method: "PUT" },
+    );
+  });
+
+  it("reads and replaces the terminal deny-list pattern array", async () => {
+    requestJson.mockResolvedValueOnce({ patterns: ["\\brm\\b"] });
+    const {
+      getTerminalDenylistConfiguration,
+      updateTerminalDenylistConfiguration,
+    } = await import("@/lib/api/configuration");
+
+    await getTerminalDenylistConfiguration();
+    expect(requestJson).toHaveBeenCalledWith("/configuration/terminal-denylist");
+
+    await updateTerminalDenylistConfiguration(["\\bmkfs\\b"]);
+    expect(requestJson).toHaveBeenCalledWith(
+      "/configuration/terminal-denylist",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(jsonRequestInit).toHaveBeenCalledWith(
+      { patterns: ["\\bmkfs\\b"] },
       { method: "PUT" },
     );
   });

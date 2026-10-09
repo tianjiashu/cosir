@@ -65,6 +65,10 @@ export type WorkspaceFileIgnoreConfiguration = {
   max_rules: number;
 };
 
+export type TerminalDenylistConfiguration = {
+  patterns: string[];
+};
+
 export type EnvironmentField = {
   name: string;
   type: "string" | "boolean" | "integer";
@@ -130,6 +134,17 @@ export function getEnvironmentConfiguration(): Promise<{ groups: EnvironmentGrou
 
 export function updateEnvironmentConfiguration(changes: Record<string, { operation: "replace" | "clear" | "unchanged"; value?: unknown }>): Promise<{ groups: EnvironmentGroup[] }> {
   return requestJson("/configuration/environment", jsonRequestInit({ changes }, { method: "PUT" }));
+}
+
+export function getTerminalDenylistConfiguration(): Promise<TerminalDenylistConfiguration> {
+  return requestJson<TerminalDenylistConfiguration>("/configuration/terminal-denylist");
+}
+
+export function updateTerminalDenylistConfiguration(patterns: string[]): Promise<TerminalDenylistConfiguration> {
+  return requestJson<TerminalDenylistConfiguration>(
+    "/configuration/terminal-denylist",
+    jsonRequestInit({ patterns }, { method: "PUT" }),
+  );
 }
 
 export function getWorkspaceAgentConfigurations(workspaceId: number): Promise<AgentConfiguration[]> {

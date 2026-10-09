@@ -202,7 +202,7 @@ async def assistant_transport_attach(
         task_service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
-    if request.threadId != f"task-{task_id}":
+    if request.threadId != f"conversation_run-{task_id}":
         _raise_transport_error(
             409,
             "THREAD_TASK_MISMATCH",

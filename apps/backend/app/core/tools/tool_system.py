@@ -122,9 +122,9 @@ class ToolSystem:
         registry.register(build_child_agent_status_definition())
         registry.register(build_child_agent_wait_definition())
         registry.register(build_propose_agent_configuration_definition())
-        # Agent Team 工具暂不注册，待确认后按 Run 投影。
-        # registry.register(build_propose_agent_team_configuration_definition())
-        # registry.register(build_agent_team_run_definition())
+        # Team 配置生成只按本 Run 请求临时开放；Team 执行工具保持未注册。
+        registry.register(build_propose_agent_team_configuration_definition())
+        registry.register(build_agent_team_run_definition())
         executor = ToolExecutor(
             registry=registry,
             output_budget=ToolOutputBudget(Constant.Tools.MAX_OUTPUT_CHARS),

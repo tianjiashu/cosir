@@ -11,5 +11,4 @@ class SaveAgentTeamConfigurationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scope: Literal["system", "workspace"]
-    workspace_id: int | None = None
     configuration: dict[str, Any]

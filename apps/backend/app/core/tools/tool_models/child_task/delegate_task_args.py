@@ -29,7 +29,8 @@ class DelegateTaskArgs(BaseModel):
     message: str = Field(
         description=(
             "The complete task contract as free-form text, passed verbatim as the child's "
-            f"entire input. REQUIRED, at most {MESSAGE_MAX} characters."
+            f"entire input. REQUIRED, at most {MESSAGE_MAX} characters. "
+            "The child agent starts with a clean context, so provide as detailed a brief as possible."
         )
     )
 

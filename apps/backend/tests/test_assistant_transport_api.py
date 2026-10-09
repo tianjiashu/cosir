@@ -206,7 +206,7 @@ async def test_attach_run_rejects_terminal_run_even_when_snapshot_matches() -> N
     service._snapshots = _SnapshotService()
 
     with pytest.raises(HTTPException) as error:
-        await service.attach_run(task_id=1, thread_id="task-1", run_id=7)
+        await service.attach_run(task_id=1, thread_id="conversation_run-1", run_id=7)
 
     assert error.value.status_code == 409
     assert error.value.detail["error"]["code"] == "RUN_NOT_ATTACHABLE"
@@ -224,7 +224,7 @@ async def test_attach_endpoint_rejects_business_commands() -> None:
             AssistantAttachRequest(
                 commands=[{"type": "add-message"}],
                 taskId=1,
-                threadId="task-1",
+                threadId="conversation_run-1",
                 runId=7,
             ),
             _TaskService(),

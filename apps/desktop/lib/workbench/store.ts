@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import type { WorkbenchAgentConfigurationDraftTab, WorkbenchAgentTab, WorkbenchTab } from "./types";
+import type { WorkbenchAgentConfigurationDraftTab, WorkbenchAgentTeamConfigurationDraftTab, WorkbenchAgentTab, WorkbenchTab } from "./types";
+import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
 
 type WorkbenchState = {
   workspaceId: number | null;
@@ -13,6 +14,10 @@ type WorkbenchState = {
   openAgentConfigurationDraftTab: (input: Omit<WorkbenchAgentConfigurationDraftTab, "id" | "kind" | "dirty">) => void;
   updateAgentConfigurationDraft: (tabId: string, draft: WorkbenchAgentConfigurationDraftTab["draft"]) => void;
   setAgentConfigurationDraftScope: (tabId: string, scope: WorkbenchAgentConfigurationDraftTab["scope"]) => void;
+  openAgentTeamConfigurationDraftTab: (input: Omit<WorkbenchAgentTeamConfigurationDraftTab, "id" | "kind" | "dirty" | "savedScope">) => void;
+  updateAgentTeamConfigurationDraft: (tabId: string, draft: AgentTeamConfiguration) => void;
+  markAgentTeamDraftSaved: (tabId: string, scope: AgentTeamConfiguration["scope"]) => void;
+  setAgentTeamDraftDirty: (tabId: string, dirty: boolean) => void;
   setDraftDirty: (tabId: string, dirty: boolean) => void;
   activateTab: (tabId: string) => void;
   closeTab: (tabId: string) => void;
@@ -23,6 +28,7 @@ type WorkbenchState = {
 
 const tabId = (taskId: number): `agent-task:${number}` => `agent-task:${taskId}`;
 const draftTabId = (toolCallId: string): WorkbenchAgentConfigurationDraftTab["id"] => `agent-config-draft:${toolCallId}`;
+const teamDraftTabId = (toolCallId: string): WorkbenchAgentTeamConfigurationDraftTab["id"] => `agent-team-config-draft:${toolCallId}`;
 
 export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   workspaceId: null,
@@ -66,6 +72,57 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
         : [...state.tabs, nextTab],
       activeTabId: id,
       panelOpen: true,
+    };
+  }),
+  openAgentTeamConfigurationDraftTab: (input) => set((state) => {
+    const id = teamDraftTabId(input.toolCallId);
+    const existing = state.tabs.find((tab) => tab.id === id);
+    const existingDraft = existing?.kind === "agent-team-configuration-draft" ? existing : null;
+    const nextTab: WorkbenchAgentTeamConfigurationDraftTab = {
+      ...input,
+      id,
+      kind: "agent-team-configuration-draft",
+      dirty: existingDraft?.dirty ?? true,
+      savedScope: existingDraft?.savedScope ?? null,
+    };
+    return {
+      ...state,
+      savedDraftToolCallIds: existingDraft
+        ? state.savedDraftToolCallIds
+        : state.savedDraftToolCallIds.filter((toolCallId) => toolCallId !== input.toolCallId),
+      workspaceId: input.workspaceId,
+      tabs: existingDraft
+        ? state.tabs
+        : existing ? state.tabs.map((tab) => tab.id === id ? nextTab : tab) : [...state.tabs, nextTab],
+      activeTabId: id,
+      panelOpen: true,
+    };
+  }),
+  updateAgentTeamConfigurationDraft: (tabId, draft) => set((state) => ({
+    ...state,
+    tabs: state.tabs.map((tab) => tab.id === tabId && tab.kind === "agent-team-configuration-draft" ? { ...tab, draft } : tab),
+  })),
+  markAgentTeamDraftSaved: (tabId, scope) => set((state) => {
+    const tab = state.tabs.find((candidate) => candidate.id === tabId);
+    if (tab?.kind !== "agent-team-configuration-draft") return state;
+    return {
+      ...state,
+      savedDraftToolCallIds: [...new Set([...state.savedDraftToolCallIds, tab.toolCallId])],
+      tabs: state.tabs.map((candidate) => candidate.id === tabId
+        ? { ...candidate, savedScope: scope, dirty: false }
+        : candidate),
+    };
+  }),
+  setAgentTeamDraftDirty: (tabId, dirty) => set((state) => {
+    const tab = state.tabs.find((candidate) => candidate.id === tabId);
+    if (tab?.kind !== "agent-team-configuration-draft") return state;
+    const savedDraftToolCallIds = new Set(state.savedDraftToolCallIds);
+    if (dirty) savedDraftToolCallIds.delete(tab.toolCallId);
+    else savedDraftToolCallIds.add(tab.toolCallId);
+    return {
+      ...state,
+      savedDraftToolCallIds: [...savedDraftToolCallIds],
+      tabs: state.tabs.map((candidate) => candidate.id === tabId ? { ...candidate, dirty } : candidate),
     };
   }),
   setDraftDirty: (tabId, dirty) => set((state) => {

@@ -26,7 +26,6 @@ from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.service.configuration.file_store import (
     ConfigurationFileStore,
-    ConfigurationPathError,
 )
 from app.task_runtime.agent_catalog_change import (
     AgentCatalogChange,
@@ -111,7 +110,7 @@ class AgentConfigurationService:
         self._ensure_not_builtin(document.agent_id)
         target = self._path_for(document.agent_id)
         with self.store.locked(target):
-            if target.exists() or target.is_symlink():
+            if target.exists():
                 raise FileExistsError(document.agent_id)
             profile = self._profile_from_document(document, target)
             if not self.registry.register(self.scope, profile):
@@ -191,10 +190,6 @@ class AgentConfigurationService:
         if existing is None:
             raise KeyError(agent_id)
         with self.store.locked(target):
-            if target.is_symlink() or not target.is_file():
-                raise ConfigurationPathError(
-                    f"configuration target must be a regular file: {target}"
-                )
             self.store.delete_file(target, root=self.directory)
             self.registry.unregister(self.scope, agent_id)
         log.info(
@@ -297,7 +292,7 @@ class AgentConfigurationService:
             raise AgentConfigurationError(str(exc)) from exc
 
     def _path_for(self, agent_id: str) -> Path:
-        return self.store.assert_safe_child(self.directory, self.directory / f"{agent_id}.json")
+        return self.directory / f"{agent_id}.json"
 
     def _ensure_not_builtin(self, agent_id: str) -> None:
         """拒绝用系统内置 Agent ID 创建或操作用户文件。"""

@@ -90,6 +90,88 @@ class AgentTeamConfigurationService:
         self._validate_node_profiles(configuration, workspace_root)
         return self.save(configuration, workspace_root=workspace_root)
 
+    def list_documents(
+        self,
+        *,
+        scope: TeamScope,
+        workspace_root: str | Path | None = None,
+    ) -> list[AgentTeamConfiguration]:
+        """列出该作用域实际拥有的配置，不把继承的 system 项混入编辑列表。"""
+
+        return self._registry.list_scope(
+            scope,
+            workspace_root=workspace_root,
+        )
+
+    def update_confirmed(
+        self,
+        team_id: str,
+        document: Mapping[str, Any],
+        *,
+        scope: TeamScope,
+        workspace_root: str | Path | None = None,
+    ) -> AgentTeamConfiguration:
+        """校验并替换指定作用域已有 Team 配置，Team ID 保持不变。"""
+
+        payload = dict(document)
+        payload["scope"] = scope
+        configuration = AgentTeamConfiguration.model_validate(payload)
+        if configuration.team_id != team_id:
+            raise ValueError("Team ID 不可变")
+        self._validate_node_profiles(configuration, workspace_root)
+        return self.update(configuration, workspace_root=workspace_root)
+
+    def update(
+        self,
+        configuration: AgentTeamConfiguration,
+        *,
+        workspace_root: str | Path | None = None,
+    ) -> AgentTeamConfiguration:
+        """原子替换指定作用域现有 Team 文件，再更新进程内注册表。"""
+
+        root = self._directory_for(configuration.scope, workspace_root)
+        path = root / f"{configuration.team_id}.json"
+        with ConfigurationFileStore.locked(path):
+            if not path.exists():
+                raise KeyError(configuration.team_id)
+            ConfigurationFileStore.write_text_atomic(
+                path,
+                self._encode(configuration),
+                root=root,
+            )
+            self._registry.register(configuration, workspace_root=workspace_root)
+        return configuration
+
+    def delete(
+        self,
+        team_id: str,
+        *,
+        scope: TeamScope,
+        workspace_root: str | Path | None = None,
+    ) -> None:
+        """删除指定作用域的 Team 配置；同名继承项不受影响。"""
+
+        root = self._directory_for(scope, workspace_root)
+        path = root / f"{team_id}.json"
+        with ConfigurationFileStore.locked(path):
+            if not path.exists():
+                raise KeyError(team_id)
+            owned_ids = {
+                configuration.team_id
+                for configuration in self._registry.list_scope(
+                    scope,
+                    workspace_root=workspace_root,
+                )
+            }
+            if team_id not in owned_ids:
+                raise KeyError(team_id)
+            ConfigurationFileStore.delete_file(path, root=root)
+            self._registry.unregister(
+                team_id,
+                scope=scope,
+                workspace_root=workspace_root,
+            )
+
     def save(
         self,
         configuration: AgentTeamConfiguration,
@@ -102,14 +184,32 @@ class AgentTeamConfigurationService:
         的保存入口应使用 :meth:`save_confirmed`。
         """
 
-        root = (
-            system_cosir.system_agent_team_config_dir()
-            if configuration.scope == self._registry.SYSTEM_SCOPE
-            else workspace_agent_team_config_dir(workspace_root or "")
-        )
+        root = self._directory_for(configuration.scope, workspace_root)
         self._create_configuration_file(configuration, directory=root)
         self._registry.register(configuration, workspace_root=workspace_root)
         return configuration
+
+    @staticmethod
+    def _directory_for(
+        scope: str,
+        workspace_root: str | Path | None,
+    ) -> Path:
+        """映射已验证的配置作用域到其固定文件目录。"""
+
+        if scope == AgentTeamConfigurationRegistry.SYSTEM_SCOPE:
+            return system_cosir.system_agent_team_config_dir()
+        if workspace_root is None:
+            raise ValueError("workspace_root is required for workspace Team configuration")
+        return workspace_agent_team_config_dir(workspace_root)
+
+    @staticmethod
+    def _encode(configuration: AgentTeamConfiguration) -> str:
+        """序列化已校验的领域配置，供原子文件写入复用。"""
+
+        return (
+            json.dumps(configuration_document(configuration), ensure_ascii=False, indent=2)
+            + "\n"
+        )
 
     @staticmethod
     def _load_directory_documents(
@@ -126,7 +226,7 @@ class AgentTeamConfigurationService:
         loaded: dict[str, AgentTeamConfiguration] = {}
         for path in sorted(target.glob("*.json")):
             try:
-                document = json.loads(ConfigurationFileStore.read_text(path, root=target))
+                document = json.loads(ConfigurationFileStore.read_text(path))
                 configuration = AgentTeamConfiguration.model_validate(document)
             except Exception as exc:
                 log.error(
@@ -149,17 +249,13 @@ class AgentTeamConfigurationService:
         """原子创建一份已校验的 Team 配置文件，不覆盖已有文件。"""
 
         root = Path(directory)
-        path = ConfigurationFileStore.assert_safe_child(
-            root,
-            root / f"{configuration.team_id}.json",
-        )
+        path = root / f"{configuration.team_id}.json"
         with ConfigurationFileStore.locked(path):
             if path.exists():
                 raise FileExistsError(f"Team 配置已存在: {configuration.team_id}")
             ConfigurationFileStore._write_text_atomic(
                 path,
-                json.dumps(configuration_document(configuration), ensure_ascii=False, indent=2)
-                + "\n",
+                AgentTeamConfigurationService._encode(configuration),
                 root=root,
             )
         return path

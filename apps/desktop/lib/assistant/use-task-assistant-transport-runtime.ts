@@ -201,7 +201,7 @@ function useTaskAssistantTransportAdapter(
     if (runId === null) return;
     await openStream(
       optionsRef.current.resumeApi,
-      { ...body, commands: [], runId, taskId, threadId: `task-${taskId}` },
+      { ...body, commands: [], runId, taskId, threadId: `conversation_run-${taskId}` },
       [],
     );
   }, [openStream, store, taskId]);

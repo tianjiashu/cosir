@@ -2,11 +2,13 @@ import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { useWorkbenchStore } from "./store";
 import type { AgentConfigurationDraft } from "./types";
 import type { AgentConfigurationInput } from "@/lib/api/configuration";
+import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
 
 type WorkbenchContextValue = {
   workspaceId: number | null;
   openAgent: (input: { taskId: number; title: string; role: string | null }) => void;
   openAgentConfigurationDraft: (input: { taskId: number; toolCallId: string; draft: AgentConfigurationDraft }) => void;
+  openAgentTeamConfigurationDraft: (input: { taskId: number; toolCallId: string; draft: AgentTeamConfiguration }) => void;
 };
 
 const WorkbenchContext = createContext<WorkbenchContextValue | null>(null);
@@ -15,6 +17,7 @@ export function WorkbenchProvider({ workspaceId, children }: { workspaceId: numb
   const ensureWorkspace = useWorkbenchStore((state) => state.ensureWorkspace);
   const openAgentTab = useWorkbenchStore((state) => state.openAgentTab);
   const openAgentConfigurationDraftTab = useWorkbenchStore((state) => state.openAgentConfigurationDraftTab);
+  const openAgentTeamConfigurationDraftTab = useWorkbenchStore((state) => state.openAgentTeamConfigurationDraftTab);
   useEffect(() => ensureWorkspace(workspaceId), [ensureWorkspace, workspaceId]);
   return <WorkbenchContext.Provider value={{
     workspaceId,
@@ -33,6 +36,16 @@ export function WorkbenchProvider({ workspaceId, children }: { workspaceId: numb
             model_config_id: null,
             model_settings: {},
           } satisfies AgentConfigurationInput,
+        });
+      }
+    },
+    openAgentTeamConfigurationDraft: (input) => {
+      if (workspaceId !== null) {
+        openAgentTeamConfigurationDraftTab({
+          ...input,
+          workspaceId,
+          title: input.draft.name || "Agent Team 配置草稿",
+          draft: { ...input.draft, scope: "workspace" },
         });
       }
     },

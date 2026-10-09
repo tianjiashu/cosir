@@ -99,6 +99,41 @@ class AgentTeamConfigurationRegistry:
         with self._lock:
             self._configs[(scope, configuration.team_id)] = configuration
 
+    def unregister(
+        self,
+        team_id: str,
+        *,
+        scope: str,
+        workspace_root: str | Path | None = None,
+    ) -> AgentTeamConfiguration:
+        """从指定作用域移除 Team，并返回被移除配置。
+
+        删除按配置所有权作用域执行，避免删除 workspace 覆盖时误删同名 system 配置。
+        """
+
+        normalized_scope = self.normalize_scope(scope, workspace_root)
+        with self._lock:
+            return self._configs.pop((normalized_scope, team_id))
+
+    def list_scope(
+        self,
+        scope: str,
+        *,
+        workspace_root: str | Path | None = None,
+    ) -> list[AgentTeamConfiguration]:
+        """列出指定作用域实际拥有的配置，不合并继承的 system 项。"""
+
+        normalized_scope = self.normalize_scope(scope, workspace_root)
+        with self._lock:
+            return sorted(
+                (
+                    configuration
+                    for (config_scope, _), configuration in self._configs.items()
+                    if config_scope == normalized_scope
+                ),
+                key=lambda item: item.team_id,
+            )
+
     def resolve(
         self,
         workspace_root: str | Path,

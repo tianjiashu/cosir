@@ -18,7 +18,7 @@ test("系统配置入口固定在左侧栏底部", async ({ page }) => {
   expect(settingsBox!.y).toBeGreaterThan(sidebarBox!.y + sidebarBox!.height - 140);
 });
 
-test("系统配置中心从 settings 路由打开并展示三类配置", async ({ page }) => {
+test("系统配置中心从 settings 路由打开并支持配置编辑", async ({ page }) => {
   const reviewer = {
     agent_id: "reviewer",
     role: "child",
@@ -61,6 +61,13 @@ test("系统配置中心从 settings 路由打开并展示三类配置", async (
       effective_on: "next_run",
     },
   }));
+  let terminalPatterns = ["\\brm\\b"];
+  await page.route("http://127.0.0.1:8000/configuration/terminal-denylist", (route) => {
+    if (route.request().method() === "PUT") {
+      terminalPatterns = (route.request().postDataJSON() as { patterns: string[] }).patterns;
+    }
+    return route.fulfill({ json: { patterns: terminalPatterns } });
+  });
   await page.route("http://127.0.0.1:8000/configuration/environment", (route) => route.fulfill({
     json: {
       groups: [{
@@ -170,4 +177,12 @@ test("系统配置中心从 settings 路由打开并展示三类配置", async (
   await page.getByPlaceholder("请输入 Secret Key", { exact: true }).fill("new-secret");
   await page.getByRole("button", { name: /保存变量/ }).click();
   await expect(page.getByRole("button", { name: "已保存" })).toBeVisible();
+
+  await page.getByRole("button", { name: /终端命令规则/ }).click();
+  const denylistEditor = page.getByRole("textbox", { name: "终端 deny-list 正则列表" });
+  await expect(denylistEditor).toHaveValue("\\brm\\b");
+  await denylistEditor.fill("\\bmkfs\\b");
+  await page.getByRole("button", { name: "保存规则" }).click();
+  await expect(page.getByRole("status")).toHaveText("配置已保存，下一次 execute_terminal 调用立即生效。");
+  expect(terminalPatterns).toEqual(["\\bmkfs\\b"]);
 });

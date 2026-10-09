@@ -2,8 +2,31 @@ import { jsonRequestInit, requestJson } from "@/lib/http/client";
 
 export type AgentTeamConfigurationInput = {
   scope: "system" | "workspace";
-  workspace_id?: number | null;
-  configuration: Record<string, unknown>;
+  configuration: AgentTeamConfiguration;
+};
+
+export type AgentTeamNodeConfiguration = {
+  node_id: string;
+  name: string;
+  agent_id: string;
+  statuses: string[];
+};
+
+export type AgentTeamTransitionConfiguration = {
+  from_node_id: string;
+  status: string;
+  target_node_id: string;
+};
+
+export type AgentTeamConfiguration = {
+  team_id: string;
+  name: string;
+  description: string;
+  max_runs: number;
+  start_node_id: string;
+  nodes: AgentTeamNodeConfiguration[];
+  transitions: AgentTeamTransitionConfiguration[];
+  scope: "system" | "workspace";
 };
 
 export type AgentTeamRun = {
@@ -35,10 +58,53 @@ export type AgentTeamRun = {
   ended_at: string | null;
 };
 
-export function saveAgentTeamConfiguration(input: AgentTeamConfigurationInput): Promise<Record<string, unknown>> {
-  return requestJson<Record<string, unknown>>(
-    "/configuration/agent-teams",
+function teamConfigurationPath(scope: "system" | "workspace", workspaceId?: number, teamId?: string) {
+  let root: string;
+  if (scope === "system") {
+    root = "/configuration/agent-teams";
+  } else {
+    if (workspaceId === undefined) throw new Error("workspace_id is required for workspace Team configuration");
+    root = `/workspaces/${encodeURIComponent(workspaceId)}/configuration/agent-teams`;
+  }
+  return teamId === undefined ? root : `${root}/${encodeURIComponent(teamId)}`;
+}
+
+export function createAgentTeamConfiguration(
+  input: AgentTeamConfigurationInput,
+  workspaceId?: number,
+): Promise<AgentTeamConfiguration> {
+  return requestJson<AgentTeamConfiguration>(
+    teamConfigurationPath(input.scope, workspaceId),
     jsonRequestInit(input, { method: "POST" }),
+  );
+}
+
+export function updateAgentTeamConfiguration(
+  teamId: string,
+  input: AgentTeamConfigurationInput,
+  workspaceId?: number,
+): Promise<AgentTeamConfiguration> {
+  return requestJson<AgentTeamConfiguration>(
+    teamConfigurationPath(input.scope, workspaceId, teamId),
+    jsonRequestInit(input, { method: "PUT" }),
+  );
+}
+
+export function deleteAgentTeamConfiguration(
+  teamId: string,
+  scope: "system" | "workspace",
+  workspaceId?: number,
+): Promise<void> {
+  return requestJson(teamConfigurationPath(scope, workspaceId, teamId), { method: "DELETE" }).then(() => undefined);
+}
+
+export function getSystemAgentTeamConfigurations(): Promise<AgentTeamConfiguration[]> {
+  return requestJson<AgentTeamConfiguration[]>("/configuration/agent-teams");
+}
+
+export function getWorkspaceAgentTeamConfigurations(workspaceId: number): Promise<AgentTeamConfiguration[]> {
+  return requestJson<AgentTeamConfiguration[]>(
+    `/workspaces/${encodeURIComponent(workspaceId)}/configuration/agent-teams`,
   );
 }
 

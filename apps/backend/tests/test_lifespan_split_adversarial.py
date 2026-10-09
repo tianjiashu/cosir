@@ -128,6 +128,7 @@ def test_all_domain_routes_registered_on_same_app() -> None:
         "/tasks/{task_id}/assistant/state",
         "/runs/{run_id}/cancel",
         "/runs/{run_id}/tool-calls/{tool_call_id}/cancel",
+        "/configuration/terminal-denylist",
     }
     missing = expected - oa_paths
     assert missing == set(), f"拆分后丢失的域路由：{sorted(missing)}"
@@ -141,6 +142,7 @@ def test_domain_route_modules_share_the_singleton() -> None:
         "app.api.workspaces_api",
         "app.api.model_configs_api",
         "app.assistant_transport.assistant_api",
+        "app.api.configuration.terminal_denylist",
     ):
         module = sys.modules.get(module_name) or importlib.import_module(module_name)
         assert module.app is app_module.app, module_name

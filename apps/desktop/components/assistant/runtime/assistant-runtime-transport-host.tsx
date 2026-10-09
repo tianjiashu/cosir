@@ -69,14 +69,14 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
   cancellingRunId,
   performanceProbe,
 }: AssistantRuntimeTransportHostProps) {
-  const [proposeAgentConfiguration, setProposeAgentConfiguration] = useState(false);
-  const consumeProposalMode = useCallback(() => setProposeAgentConfiguration(false), []);
+  const [configurationProposalMode, setConfigurationProposalMode] = useState<"agent" | "agent-team" | null>(null);
+  const consumeProposalMode = useCallback(() => setConfigurationProposalMode(null), []);
   const runtime = useRuntimeTransport(
     context,
     recovery,
     commitTransportState,
     selectedBanTools,
-    proposeAgentConfiguration,
+    configurationProposalMode,
     consumeProposalMode,
   );
   const resumeOnMount = context.initialState.runs.some((run) =>
@@ -116,8 +116,8 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
         onCancelResult={onCancelResult}
         cancellingRunId={cancellingRunId}
         performanceProbe={performanceProbe}
-        proposeAgentConfiguration={proposeAgentConfiguration}
-        onProposeAgentConfigurationChange={setProposeAgentConfiguration}
+        configurationProposalMode={configurationProposalMode}
+        onConfigurationProposalModeChange={setConfigurationProposalMode}
       />
     </AssistantRuntimeProvider>
   );

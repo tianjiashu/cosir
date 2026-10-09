@@ -54,7 +54,7 @@ class ToolExecutionContext:
         参数:
             无。
         返回:
-            与当前对象拥有相同任务、工作区、根路径、turn、trace 边界与用户决定，但清空
+            与当前对象拥有相同任务、工作区、根路径、turn、trace 边界和用户决定，但清空
             ``runtime_dependencies`` 的 ``ToolExecutionContext``（用户决定是纯数据，子进程
             handler 同样需要它来决定走执行分支还是待决分支）。
         异常:

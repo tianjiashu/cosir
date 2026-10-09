@@ -41,7 +41,6 @@ class InstructionConfigurationService:
     def read(self) -> GlobalInstructionDocument:
         """读取缺失时视为空文本的全局指令。"""
 
-        self.store.assert_safe_child(self.root, self.path)
         self.root.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             return self._document("")

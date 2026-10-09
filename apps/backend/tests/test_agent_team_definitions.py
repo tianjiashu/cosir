@@ -403,6 +403,51 @@ def test_registry_saves_and_reloads_workspace_configuration(tmp_path: Path) -> N
     assert restored.resolve(tmp_path, "code-quality").team_id == "code-quality"
 
 
+def test_configuration_service_crud_preserves_system_workspace_ownership(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同名 workspace 配置覆盖 system 配置，删除覆盖后应恢复 system 可见性。"""
+
+    system_directory = tmp_path / "system-agent-teams"
+    monkeypatch.setattr(
+        "app.service.configuration.agent_team_configuration_service.system_cosir.system_agent_team_config_dir",
+        lambda: system_directory,
+    )
+    monkeypatch.setattr(
+        AgentTeamConfigurationService,
+        "_validate_node_profiles",
+        staticmethod(lambda *_args, **_kwargs: None),
+    )
+    registry = AgentTeamConfigurationRegistry()
+    service = AgentTeamConfigurationService(registry=registry)
+    workspace_root = tmp_path / "workspace"
+
+    service.save_confirmed(_configuration(), scope="system")
+    service.save_confirmed(_configuration(), scope="workspace", workspace_root=workspace_root)
+    assert service.list_documents(scope="system")[0].scope == "system"
+    workspace_documents = service.list_documents(
+        scope="workspace",
+        workspace_root=workspace_root,
+    )
+    assert workspace_documents[0].scope == "workspace"
+    assert registry.resolve(workspace_root, "code-quality").scope == "workspace"
+
+    update_document = _configuration(name="工作区自定义 Team")
+    updated = service.update_confirmed(
+        "code-quality",
+        update_document,
+        scope="workspace",
+        workspace_root=workspace_root,
+    )
+    assert updated.name == "工作区自定义 Team"
+    assert registry.resolve(workspace_root, "code-quality").name == "工作区自定义 Team"
+
+    service.delete("code-quality", scope="workspace", workspace_root=workspace_root)
+    assert service.list_documents(scope="workspace", workspace_root=workspace_root) == []
+    assert registry.resolve(workspace_root, "code-quality").scope == "system"
+
+
 def test_agent_team_run_table_persists_confirmation_state(tmp_path: Path) -> None:
     engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
     initialize_app_schema(engine)

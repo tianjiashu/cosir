@@ -47,10 +47,9 @@ def get_workspace_configuration_context(workspace_id: int) -> WorkspaceConfigura
     """
 
     workspace = service_depends.get_workspace_service().get_workspace(workspace_id)
-    root = Path(workspace.root_path).expanduser()
-    if not root.is_absolute() or not root.exists() or not root.is_dir():
-        raise ValueError("workspace root_path must be an existing absolute directory")
-    root = root.resolve()
+    root = Path(workspace.root_path)
+    if not root.is_dir():
+        raise ValueError("workspace root_path must be an existing directory")
     cosir_root = workspace_cosir_dir(root)
     return WorkspaceConfigurationContext(
         workspace=workspace,

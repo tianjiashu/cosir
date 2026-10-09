@@ -38,7 +38,7 @@ class WorkspaceInstructionConfigurationService:
     def __init__(self, workspace_root: str | Path) -> None:
         """绑定已校验的 workspace 根目录，不在构造阶段读写文件。"""
 
-        self.root = Path(workspace_root).resolve()
+        self.root = Path(workspace_root)
         self.store = ConfigurationFileStore()
 
     def read(self) -> WorkspaceInstructionDocument:

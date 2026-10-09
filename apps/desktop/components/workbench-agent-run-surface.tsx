@@ -56,7 +56,7 @@ function AgentRunTransport({ taskId, initialState, onError }: { taskId: number; 
       "Content-Type": "application/json",
       "X-Trace-Id": traceId,
     }),
-    body: async () => ({ taskId, threadId: `task-${taskId}`, runId }),
+    body: async () => ({ taskId, threadId: `conversation_run-${taskId}`, runId }),
     onError: async (error) => onError(error),
     onAttachReady: attachController.setAttach,
   });

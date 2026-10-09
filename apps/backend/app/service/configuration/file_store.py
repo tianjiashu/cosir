@@ -25,51 +25,34 @@ class ConfigurationFileError(OSError):
 
 
 class ConfigurationPathError(ValueError):
-    """配置目标不在受信任目录内或命中了符号链接安全边界。"""
+    """配置目标不在受信任目录内。"""
 
 
 class ConfigurationFileStore:
-    """为系统 `.cosir` 配置提供受限路径和原子文本文件操作。
+    """为配置文件提供路径包含校验和原子文本文件操作。
 
-    本类不创建业务目录、不解析内容、不维护缓存。写入目标必须由后端根据固定路径函数生成；
-    `assert_safe_child` 只允许目标位于给定根目录内，并拒绝目录、目标文件和祖先路径中的符号链接。
+    本类不创建业务目录、不解析内容、不维护缓存。写入目标必须由后端根据固定路径函数与已校验
+    标识生成；路径检查只阻止词法路径逃出给定根目录，不探测本机配置目录的符号链接或文件类型。
     """
 
     @staticmethod
     def assert_safe_child(root: Path, candidate: Path) -> Path:
-        """校验并返回位于 ``root`` 下的普通文件候选路径。"""
+        """校验并返回词法上位于 ``root`` 下的配置路径。"""
 
         root = Path(root)
         candidate = Path(candidate)
-        if not candidate.is_absolute():
+        if not root.is_absolute() or not candidate.is_absolute():
             raise ConfigurationPathError("configuration path must be absolute")
+        root = Path(os.path.abspath(root))
+        candidate = Path(os.path.abspath(candidate))
         try:
-            root_resolved = root.resolve(strict=False)
-            candidate_resolved = candidate.resolve(strict=False)
-            candidate_resolved.relative_to(root_resolved)
-        except (OSError, ValueError) as exc:
+            candidate.relative_to(root)
+        except ValueError as exc:
             raise ConfigurationPathError(
                 f"configuration path escapes trusted root: {candidate}"
             ) from exc
-        if candidate_resolved == root_resolved:
+        if candidate == root:
             raise ConfigurationPathError("configuration target must be a child file")
-        if root.exists() and root.is_symlink():
-            raise ConfigurationPathError(f"configuration root must not be a symlink: {root}")
-        current = candidate
-        while current != root:
-            if current.is_symlink():
-                raise ConfigurationPathError(
-                    f"configuration path must not contain symlink: {current}"
-                )
-            current = current.parent
-            if len(current.parts) < len(root.parts):
-                raise ConfigurationPathError(
-                    f"configuration path escapes trusted root: {candidate}"
-                )
-        if candidate.exists() and (candidate.is_symlink() or not candidate.is_file()):
-            raise ConfigurationPathError(
-                f"configuration target must be a regular file: {candidate}"
-            )
         return candidate
 
     @classmethod
@@ -136,8 +119,6 @@ class ConfigurationFileStore:
 
         target = cls.assert_safe_child(root, path) if root is not None else Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists() and target.is_symlink():
-            raise ConfigurationPathError(f"configuration target must not be a symlink: {target}")
         temporary_path: Path | None = None
         try:
             fd, raw_path = tempfile.mkstemp(

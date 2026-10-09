@@ -19,6 +19,13 @@ from typing import get_args
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tools.display.terminal_display import build_terminal_display_data
+from app.core.tools.policy.terminal_denylist import (
+    DangerousCommandVerdict,
+    detect_dangerous_command,
+)
+from app.core.tools.policy.terminal_denylist_configuration import (
+    read_terminal_deny_patterns,
+)
 from app.core.tools.schemas import (
     TOOL_EXECUTE_TERMINAL,
     OutputSink,
@@ -30,11 +37,7 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL
-from app.core.tools.tool_handler.terminal import (
-    DangerousCommandVerdict,
-    create_backend,
-    detect_dangerous_command,
-)
+from app.core.tools.tool_handler.terminal import create_backend
 from app.core.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.execute_terminal_args import (
@@ -300,7 +303,25 @@ class ExecuteTerminalTool(HandlerBase):
                 retryable=True,
             )
 
-        verdict = detect_dangerous_command(command)
+        try:
+            verdict = detect_dangerous_command(
+                command,
+                read_terminal_deny_patterns(),
+            )
+        except (OSError, ValueError, TimeoutError) as exc:
+            log.exception(
+                "terminal_denylist_evaluation_failed",
+                extra={
+                    "msg": "终端 deny-list 无法可靠校验命令，已拒绝执行",
+                    "data": {"error_type": type(exc).__name__},
+                },
+            )
+            return tool_error(
+                self.name,
+                "command was not run because the terminal deny-list could not be evaluated",
+                reason="repair the terminal deny-list configuration before retrying.",
+                retryable=False,
+            )
         if verdict.is_dangerous:
             log.warning(
                 "terminal_command_blocked",

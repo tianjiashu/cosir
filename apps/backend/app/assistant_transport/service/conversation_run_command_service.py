@@ -13,6 +13,9 @@ from app.assistant_transport.request.command.ban_tools_command import BanToolsCo
 from app.assistant_transport.request.command.propose_agent_configuration_command import (
     ProposeAgentConfigurationCommand,
 )
+from app.assistant_transport.request.command.propose_agent_team_configuration_command import (
+    ProposeAgentTeamConfigurationCommand,
+)
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
@@ -167,6 +170,14 @@ class ConversationRunCommandService:
             ),
             None,
         )
+        team_proposal_command = next(
+            (
+                item
+                for item in request.commands
+                if isinstance(item, ProposeAgentTeamConfigurationCommand)
+            ),
+            None,
+        )
         display_text = _build_ordered_display_text(command.message.parts)
         image_asset_ids = list(
             dict.fromkeys(
@@ -180,6 +191,7 @@ class ConversationRunCommandService:
             image_asset_ids=image_asset_ids,
             ban_tools=list(ban_command.payload.ban_tools) if ban_command is not None else [],
             propose_agent_configuration=proposal_command is not None,
+            propose_agent_team_configuration=team_proposal_command is not None,
             attachments=[
                 ConversationRunAttachmentInput(
                     id=attachment.id,

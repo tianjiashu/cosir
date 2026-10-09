@@ -1,4 +1,5 @@
 import { asRecord } from "./types";
+import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
 
 export type AgentTeamNodePreview = {
   nodeId: string;
@@ -49,7 +50,7 @@ export type AgentTeamConfigurationDraftDisplay = {
   name: string;
   description: string;
   scope: "system" | "workspace";
-  configuration: Record<string, unknown>;
+  configuration: AgentTeamConfiguration;
   nodeCount: number;
 };
 
@@ -199,8 +200,51 @@ export function readAgentTeamConfigurationDraftDisplay(
   const name = text(data.name);
   const description = text(data.description);
   const scope = data.scope === "system" || data.scope === "workspace" ? data.scope : undefined;
-  const configuration = asRecord(data.configuration);
-  if (!teamId || !name || !description || !scope || Object.keys(configuration).length === 0) return null;
+  const rawConfiguration = asRecord(data.configuration);
+  if (!teamId || !name || !description || !scope) return null;
+  const configurationScope = rawConfiguration.scope === "system" || rawConfiguration.scope === "workspace"
+    ? rawConfiguration.scope
+    : undefined;
+  const configurationId = text(rawConfiguration.team_id);
+  const configurationName = text(rawConfiguration.name);
+  const configurationDescription = text(rawConfiguration.description);
+  const startNodeId = text(rawConfiguration.start_node_id);
+  const maxRuns = positiveInteger(rawConfiguration.max_runs);
+  if (!configurationId || !configurationName || !configurationDescription || !startNodeId || !configurationScope || maxRuns === undefined) return null;
+  if (configurationScope !== scope || configurationName !== name || configurationDescription !== description) return null;
+  if (!Array.isArray(rawConfiguration.nodes) || !Array.isArray(rawConfiguration.transitions)) return null;
+  const nodes = rawConfiguration.nodes.map((item) => {
+    const node = asRecord(item);
+    const nodeId = text(node.node_id);
+    const nodeName = text(node.name);
+    const agentId = text(node.agent_id);
+    const statuses = stringList(node.statuses);
+    return nodeId && nodeName && agentId && statuses
+      ? { node_id: nodeId, name: nodeName, agent_id: agentId, statuses }
+      : null;
+  });
+  if (nodes.length === 0 || nodes.some((node) => node === null)) return null;
+  const transitions = rawConfiguration.transitions.map((item) => {
+    const edge = asRecord(item);
+    const fromNodeId = text(edge.from_node_id);
+    const status = text(edge.status);
+    const targetNodeId = text(edge.target_node_id);
+    return fromNodeId && status && targetNodeId
+      ? { from_node_id: fromNodeId, status, target_node_id: targetNodeId }
+      : null;
+  });
+  if (transitions.some((edge) => edge === null)) return null;
+  const configuration: AgentTeamConfiguration = {
+    team_id: configurationId,
+    name: configurationName,
+    description: configurationDescription,
+    max_runs: maxRuns,
+    start_node_id: startNodeId,
+    nodes: nodes as AgentTeamConfiguration["nodes"],
+    transitions: transitions as AgentTeamConfiguration["transitions"],
+    scope: configurationScope,
+  };
+  if (configuration.team_id !== teamId) return null;
   return {
     kind: "agent-team-configuration-draft",
     teamId,

@@ -373,13 +373,8 @@ class AgentTeamCoordinator:
                 *self._team_run_crud.list_pending_confirmations(),
                 *self._team_run_crud.list_active(),
         ):
-            state = AgentTeamRunState.model_validate(row.state_json)
-            node_task_ids = {task_id for task_id, _ in state.node_references()}
-            if row.parent_task_id not in task_ids and not node_task_ids.intersection(task_ids):
-                continue
-            previous = row.status
-            self.cancel(row.id)
-            if previous in {"pending", "running"}:
+            team = self.cancel(row.id)
+            if team is not None:
                 cancelled += 1
         return cancelled
 
@@ -407,9 +402,8 @@ class AgentTeamCoordinator:
         ):
             if row.parent_run_id != parent_run_id:
                 continue
-            previous = row.status
-            self.cancel(row.id)
-            if previous in {"pending", "running"}:
+            team = self.cancel(row.id)
+            if team is not None:
                 cancelled += 1
         return cancelled
 

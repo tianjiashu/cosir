@@ -14,7 +14,9 @@ class AssistantAttachRequest(BaseModel):
 
     attach 请求不携带业务命令（由 ``assistant_transport_attach`` 端点校验拒绝），仅用于
     重新订阅一个已存在、可能仍在运行的 Run 的 SSE 流。为兼容 assistant-ui resume 请求的
-    通用 transport envelope，``commands`` 字段允许为空并被显式忽略。
+    通用 transport envelope，``commands`` 字段允许为空并被显式忽略。其 ``threadId`` 使用
+    ``conversation_run-{task_id}`` 标识当前 Task 的 Conversation Run 线程；具体 Task 归属
+    由 attach 路由结合路径和 Run 校验。
     """
 
     # assistant-ui resume requests carry the common transport envelope

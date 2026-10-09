@@ -29,15 +29,19 @@ if TYPE_CHECKING:
         ConversationRunExecutor,
     )
     from app.core.runtime.runner import AgentRuntime
-    from app.service.model_config import ModelConfigService
-    from app.service.model_config.model_discovery_service import ModelDiscoveryService
     from app.service.conversation_run.conversation_run_observability_service import (
         ConversationRunObservabilityService,
     )
     from app.service.conversation_run.conversation_run_service import ConversationRunService
-    from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
-    from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
+    from app.service.conversation_run.conversation_run_state_service import (
+        ConversationRunStateService,
+    )
+    from app.service.conversation_run.conversation_task_context_service import (
+        ConversationTaskContextService,
+    )
     from app.service.conversation_run.workspace_service import WorkspaceService
+    from app.service.model_config import ModelConfigService
+    from app.service.model_config.model_discovery_service import ModelDiscoveryService
     from app.service.terminal.terminal_session_service import TerminalSessionService
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
@@ -264,7 +268,9 @@ def get_conversation_task_state_service() -> ConversationTaskStateService:
 def get_conversation_task_context_service() -> ConversationTaskContextService:
     """返回进程级 Task Agent context owner。"""
 
-    from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
+    from app.service.conversation_run.conversation_task_context_service import (
+        ConversationTaskContextService,
+    )
 
     return ConversationTaskContextService()
 
@@ -388,7 +394,9 @@ def get_conversation_run_state_service() -> ConversationRunStateService:
         RuntimeError: 若存储初始化失败。
     """
 
-    from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
+    from app.service.conversation_run.conversation_run_state_service import (
+        ConversationRunStateService,
+    )
 
     return ConversationRunStateService()
 

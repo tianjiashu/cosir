@@ -20,7 +20,8 @@ class ToolRuntimeDependencies:
     避免 tools → service 的运行期导入。输出通道工厂由 WorkflowOperations 在事件循环线程
     调用并创建逐调用通道，ToolHandlerRunner 使用该通道将子进程队列中的输出增量接入运行期事件。
     所有 runtime dependency 都会
-    在 ``ToolExecutionContext.for_process_execution`` 中剔除，不进入工具子进程。
+    在 ``ToolExecutionContext.for_process_execution`` 中剔除，不进入工具子进程；隔离工具需要的
+    配置由该工具在执行边界自行读取，避免把父进程 service 或依赖对象跨进程传递。
     """
 
     # 委派所需的父 Run 事实：父 Agent 的 per-run profile（child 未显式配置模型时的默认值）

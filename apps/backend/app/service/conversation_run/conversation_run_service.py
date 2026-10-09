@@ -112,6 +112,7 @@ class ConversationRunService:
                 reasoning_effort=reasoning_effort,
                 ban_tools=command.ban_tools,
                 propose_agent_configuration=command.propose_agent_configuration,
+                propose_agent_team_configuration=command.propose_agent_team_configuration,
             ),
         )
 
@@ -277,6 +278,9 @@ class ConversationRunService:
             reasoning_effort=reasoning_effort,
             propose_agent_configuration=(
                 extra.propose_agent_configuration if extra is not None else False
+            ),
+            propose_agent_team_configuration=(
+                extra.propose_agent_team_configuration if extra is not None else False
             ),
         )
         context_window_total = config.context_window_k * 1000

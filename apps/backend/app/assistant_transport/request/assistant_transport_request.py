@@ -12,6 +12,9 @@ from app.assistant_transport.request.command.ban_tools_command import BanToolsCo
 from app.assistant_transport.request.command.propose_agent_configuration_command import (
     ProposeAgentConfigurationCommand,
 )
+from app.assistant_transport.request.command.propose_agent_team_configuration_command import (
+    ProposeAgentTeamConfigurationCommand,
+)
 from app.assistant_transport.request.command.user_input_decision_command import (
     UserInputDecisionCommand,
 )
@@ -24,6 +27,7 @@ AssistantCommand = (
     AddMessageCommand
     | BanToolsCommand
     | ProposeAgentConfigurationCommand
+    | ProposeAgentTeamConfigurationCommand
     | UserInputDecisionCommand
 )
 
@@ -71,8 +75,7 @@ class AssistantTransportRequest(BaseModel):
         - ``commands`` 内 ``commandId`` 必须唯一；
         - ``threadId`` 必须与 ``task-{taskId}`` 一致，二者是同一领域身份的两种表达；
         - 一次请求最多包含一个 ``add-message`` 命令（首版运行模型不支持批量消息）；
-        - custom 命令必须是与 add-message 同批的 ``BanToolsCommand`` 或
-          ``ProposeAgentConfigurationCommand``；
+        - custom 命令必须是与 add-message 同批的工具禁用或配置草稿提案命令；
         - ``UserInputDecisionCommand``（human-in-the-loop 决定）必须单独提交、携带
           ``runId``，且一次请求最多一条；
         - 空命令必须携带 ``runId`` 用于恢复已有 run；add-message 是否重放只由
@@ -133,7 +136,10 @@ class AssistantTransportRequest(BaseModel):
         proposal_commands = [
             command
             for command in self.commands
-            if isinstance(command, ProposeAgentConfigurationCommand)
+            if isinstance(
+                command,
+                ProposeAgentConfigurationCommand | ProposeAgentTeamConfigurationCommand,
+            )
         ]
         # 启动对话时只携带模型配置身份，具体模型名由后端配置事实解析。
         has_message = any(isinstance(command, AddMessageCommand) for command in self.commands)
@@ -144,11 +150,14 @@ class AssistantTransportRequest(BaseModel):
                 message="ban-tools 必须与唯一 add-message 命令同批提交",
                 retryable=False,
             )
-        if proposal_commands and (not has_message or len(proposal_commands) != 1):
+        if proposal_commands and (
+            not has_message
+            or len(proposal_commands) > 1
+        ):
             raise TransportRequestError(
                 status_code=400,
                 code="AGENT_CONFIGURATION_PROPOSAL_COMMAND_INVALID",
-                message="配置提案命令必须与唯一 add-message 命令同批提交",
+                message="一次请求最多启用一种配置提案模式，且必须与唯一 add-message 命令同批提交",
                 retryable=False,
             )
         # 用户决定走的是一条独立的续跑路径：它消费既有 Run 的挂起断点，语义上与新消息互斥

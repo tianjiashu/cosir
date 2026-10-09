@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { FileTextIcon, Loader2Icon, SendIcon, XIcon } from "lucide-react";
 
 import { ComposerControls } from "@/components/composer/composer-controls";
+import { ConfigurationProposalModeSelector } from "@/components/composer/configuration-proposal-mode-selector";
+import type { ConfigurationProposalMode } from "@/lib/assistant/configuration-proposal-mode";
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
 import { ToolGroupSelector } from "@/components/composer/tool-group-selector";
 import {
@@ -163,6 +165,7 @@ export function NewConversation({
   const [attachments, setAttachments] = useState<PickedComposerAttachment[]>([]);
   const [toolGroups, setToolGroups] = useState<ToolGroupCatalog[]>([]);
   const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>([]);
+  const [configurationProposalMode, setConfigurationProposalMode] = useState<ConfigurationProposalMode>(null);
   const [toolGroupsLoading, setToolGroupsLoading] = useState(true);
   const [toolGroupsError, setToolGroupsError] = useState<string | null>(null);
   const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
@@ -220,6 +223,7 @@ export function NewConversation({
           .flatMap(({ tools }) => tools.map(({ name }) => name)),
         modelConfigId: selection.modelConfigId,
         reasoningEffort: selection.reasoningEffort ?? null,
+        configurationProposalMode,
       });
       writeStoredSelection({ kind: "task", id: task.task_id }, {
         modelConfigId: selection.modelConfigId,
@@ -275,7 +279,7 @@ export function NewConversation({
               onWorkspaceCreated={async () => onWorkspaceCreated()}
             />
           </div>
-          <div className="flex min-w-0 items-center gap-2 px-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 px-2">
             <FavoritePromptToolbar disabled={submitting} />
             <ToolGroupSelector
               toolGroups={toolGroups}
@@ -283,6 +287,11 @@ export function NewConversation({
               onSelectedToolGroupsChange={setSelectedToolGroups}
               loading={toolGroupsLoading}
               error={toolGroupsError}
+              disabled={submitting}
+            />
+            <ConfigurationProposalModeSelector
+              value={configurationProposalMode}
+              onChange={setConfigurationProposalMode}
               disabled={submitting}
             />
           </div>

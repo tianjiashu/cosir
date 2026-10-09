@@ -91,6 +91,45 @@ describe("workbench store", () => {
     store.ensureWorkspace(null);
   });
 
+  it("remembers the saved Team draft scope so later edits update the existing file", () => {
+    const store = useWorkbenchStore.getState();
+    store.ensureWorkspace(11);
+    const draft = {
+      team_id: "review-team",
+      name: "Review Team",
+      description: "审查代码",
+      max_runs: 8,
+      start_node_id: "review",
+      nodes: [{ node_id: "review", name: "审查", agent_id: "reviewer", statuses: ["done"] }],
+      transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
+      scope: "workspace" as const,
+    };
+    store.openAgentTeamConfigurationDraftTab({
+      workspaceId: 11,
+      taskId: 801,
+      toolCallId: "team-tool-call-801",
+      title: draft.name,
+      draft,
+    });
+    store.markAgentTeamDraftSaved("agent-team-config-draft:team-tool-call-801", "workspace");
+    store.activateTab("agent-task:801");
+    store.openAgentTeamConfigurationDraftTab({
+      workspaceId: 11,
+      taskId: 801,
+      toolCallId: "team-tool-call-801",
+      title: draft.name,
+      draft,
+    });
+
+    const tab = useWorkbenchStore.getState().tabs.find(
+      (candidate) => candidate.id === "agent-team-config-draft:team-tool-call-801",
+    );
+    expect(tab?.kind === "agent-team-configuration-draft" && tab.savedScope).toBe("workspace");
+    expect(tab?.kind === "agent-team-configuration-draft" && tab.dirty).toBe(false);
+    expect(useWorkbenchStore.getState().savedDraftToolCallIds).toContain("team-tool-call-801");
+    store.ensureWorkspace(null);
+  });
+
   it("does not overwrite an open draft and resets saved state when reopening it", () => {
     const store = useWorkbenchStore.getState();
     const draft = {

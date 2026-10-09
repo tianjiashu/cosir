@@ -583,7 +583,7 @@ async function handleAssistant(req, res, body) {
   await streamState(res, initialState, finalState, assistantIndex, chunks, runId, testGeneration);
 }
 
-async function handleResume(req, res, body) {
+async function handleResume(req, res, body, threadIdPrefix = "task") {
   const taskId = Number.isInteger(body.taskId) ? body.taskId : TASK_ID;
   const previous = states.get(taskId);
   const previousRun = previous?.runs.find((run) => run.runId === previous.current_run_id);
@@ -613,7 +613,7 @@ async function handleResume(req, res, body) {
   finalState.runs[runIndex].endReason = "stop";
   states.set(taskId, finalState);
   res.setHeader("X-Cosir-Task-Id", String(taskId));
-  res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
+  res.setHeader("X-Cosir-Thread-Id", `${threadIdPrefix}-${taskId}`);
   await streamState(res, initialState, finalState, assistantIndex, ["resumed", " response"], runId, testGeneration);
 }
 
@@ -628,11 +628,11 @@ async function handleAttach(req, res, body) {
   if (previousRun?.status === "completed" && lastMessage?.role === "assistant") {
     const assistantIndex = previousRun.messages.length - 1;
     res.setHeader("X-Cosir-Task-Id", String(taskId));
-    res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
+    res.setHeader("X-Cosir-Thread-Id", `conversation_run-${taskId}`);
     await streamState(res, previous, previous, assistantIndex, [], previousRun.runId, testGeneration);
     return;
   }
-  await handleResume(req, res, body);
+  await handleResume(req, res, body, "conversation_run");
 }
 
 const server = createServer(async (req, res) => {

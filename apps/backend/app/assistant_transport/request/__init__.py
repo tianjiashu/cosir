@@ -18,6 +18,9 @@ from app.assistant_transport.request.command.ban_tools_command import (
 from app.assistant_transport.request.command.propose_agent_configuration_command import (
     ProposeAgentConfigurationCommand,
 )
+from app.assistant_transport.request.command.propose_agent_team_configuration_command import (
+    ProposeAgentTeamConfigurationCommand,
+)
 from app.assistant_transport.request.command.user_input_decision_command import (
     UserInputDecisionCommand,
     UserInputDecisionItem,
@@ -34,6 +37,7 @@ __all__ = [
     "AssistantImagePart",
     "AssistantTransportRequest",
     "ProposeAgentConfigurationCommand",
+    "ProposeAgentTeamConfigurationCommand",
     "BanToolsCommand",
     "BanToolsPayload",
     "TransportRequestError",

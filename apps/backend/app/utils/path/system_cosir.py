@@ -11,6 +11,7 @@
 ``<DATA_DIR>/.cosir/storage/app.sqlite3``
 ``<DATA_DIR>/.cosir/storage/langgraph_checkpoints.sqlite``
 ``<DATA_DIR>/.cosir/runtime/``
+``<DATA_DIR>/.cosir/config/terminal_denylist.json``
 
 本模块只做路径推导，不创建目录、不读写文件。目录创建由 Tauri 宿主、日志配置和存储初始化
 各自负责；``Settings.load`` 在加载系统 ``.env`` 后调用 ``reset``，使环境变量与固定路径重新对齐。
@@ -38,6 +39,8 @@ from app.utils.path.workspace_cosir import (
 _STORAGE_DIR_NAME: Final[str] = "storage"
 _LOG_DIR_NAME: Final[str] = "logs"
 _RUNTIME_DIR_NAME: Final[str] = "runtime"
+_CONFIG_DIR_NAME: Final[str] = "config"
+_TERMINAL_DENYLIST_FILE_NAME: Final[str] = "terminal_denylist.json"
 _DATABASE_FILE_NAME: Final[str] = "app.sqlite3"
 _CHECKPOINT_FILE_NAME: Final[str] = "langgraph_checkpoints.sqlite"
 LOG_FILE_NAME: Final[str] = "backend.log"
@@ -171,6 +174,12 @@ def system_env_file() -> Path:
     """返回系统级基础环境配置文件路径（``<system_cosir_dir>/.env``）。"""
 
     return system_cosir_dir() / COSIR_ENV_FILE_NAME
+
+
+def system_terminal_denylist_file() -> Path:
+    """返回系统级终端 deny-list 配置文件路径。"""
+
+    return system_cosir_dir() / _CONFIG_DIR_NAME / _TERMINAL_DENYLIST_FILE_NAME
 
 
 def env_file() -> Path:

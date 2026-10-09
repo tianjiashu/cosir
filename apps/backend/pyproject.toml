@@ -40,6 +40,7 @@ dependencies = [
     "langchain-openai==1.6.0",
     "unidiff==0.7.5",
     "pathspec==0.12.1",
+    "regex==2026.7.19",
 ]
 
 [dependency-groups]
