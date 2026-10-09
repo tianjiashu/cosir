@@ -2,5 +2,5 @@
 
 from typing import Literal
 
-ExecutionMode = Literal["fresh", "resume"]
+ExecutionMode = Literal["fresh", "resume","resume_with_input"]
 """``fresh`` 创建新的工作流输入；``resume`` 从既有 checkpoint 继续。"""

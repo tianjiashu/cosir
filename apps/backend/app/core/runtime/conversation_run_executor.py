@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from app.assistant_transport.event import ToolCallsSettledEvent
@@ -12,6 +12,7 @@ from app.config.logging.logger import log
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
+from app.core.tools.schemas.user_decision import UserDecision
 from app.models import ConversationRunRecord, ConversationRunStatus
 from app.service.depends import (
     get_conversation_run_service,
@@ -66,11 +67,13 @@ class ConversationRunExecutor:
         self._event_projector = ConversationEventProjector()
         self._signal = cancellation_registry
         self._executions: dict[int, _Execution] = {}
+        self._terminal_session_service = get_terminal_session_service()
 
     async def start(
         self,
         run_id: int,
         start_mode: ExecutionMode,
+        user_decisions: Sequence[UserDecision] = (),
     ) -> asyncio.Task[None]:
         """登记 run 并在当前事件循环创建独立后台 task。
 
@@ -84,7 +87,9 @@ class ConversationRunExecutor:
         参数:
             run_id: 运行对应的 ``ConversationRunRecord.id``。
             start_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``），
-                原样透传给 ``_execute`` → ``AgentRuntime.execute_run``。
+                原样透传给 ``_execute`` → ``AgentRuntime.run_agent``。
+            user_decisions: 本次续跑携带的用户结构化决定（human-in-the-loop），原样透传到
+                workflow 的 ``Command(resume=...)``；非续跑路径为空序列。
 
         返回:
             已创建的后台 ``asyncio.Task``。
@@ -103,7 +108,7 @@ class ConversationRunExecutor:
         run = await asyncio.to_thread(self._run_service.get_run, run_id)
         if run.status != ConversationRunStatus.RUNNING:
             raise ValueError(f"run {run_id} is not running")
-        thread_task = asyncio.create_task(self._execute(run_id, start_mode))
+        thread_task = asyncio.create_task(self._execute(run_id, start_mode, user_decisions))
         # 后台 task 无人 await：不挂回调时其异常会被 asyncio 静默吞掉，排障只能靠间接日志。
         thread_task.add_done_callback(lambda task: self._log_execution_result(run_id, task))
         self._executions[run_id] = _Execution(thread_task=thread_task)
@@ -293,7 +298,7 @@ class ConversationRunExecutor:
             )
         # 取消请求必须立即关闭本 Run 的 PTY；workflow 之后仍会协作收束，
         # ``_execute`` 的 finally 还会再次幂等兜底。
-        await asyncio.to_thread(self._close_run_terminals, run_id, end_reason)
+        await asyncio.to_thread(self._terminal_session_service.close_run_terminals, run_id, end_reason)
         return True
 
     async def cancel_tool_call(self, run_id: int, tool_call_id: str) -> bool:
@@ -344,19 +349,22 @@ class ConversationRunExecutor:
         self,
         run_id: int,
         start_mode: ExecutionMode,
+        user_decisions: Sequence[UserDecision] = (),
     ) -> None:
         """驱动 runner 执行一次 ConversationRun；执行器不拥有 run 终态。
 
-        本方法只负责「执行」：读取 run 后把控制权交给 ``AgentRuntime.execute_run`` 驱动
-        workflow，退出时关闭本 Run 的 terminal 并从进程内 ``_executions`` 注销本次执行。
-        workflow 正常终态由节点落定；用户输入等待节点直接迁移 Run 状态，本方法在资源清理
-        完成前保留该等待状态。本方法也不清理进程内取消信号（该清理由
-        ``AgentRuntime`` 的收尾负责）。
+        本方法只负责「执行」：读取 run 后解析出本次 run 独占的 agent profile，并把控制权
+        交给 ``AgentRuntime.run_agent`` 驱动 workflow，退出时关闭本 Run 的 terminal 并从
+        进程内 ``_executions`` 注销本次执行。workflow 正常终态由节点落定；用户输入等待节点
+        直接迁移 Run 状态，本方法在资源清理完成前保留该等待状态。本方法也不清理进程内取消
+        信号（该清理由 ``AgentRuntime`` 的收尾负责）。
 
         参数:
             run_id: 当前运行标识。
             start_mode: 本次执行是 ``fresh`` 还是 ``resume``，原样透传给
-                ``AgentRuntime.execute_run``。
+                ``AgentRuntime.run_agent``。
+            user_decisions: 本次续跑携带的用户结构化决定，原样透传给
+                ``AgentRuntime.run_agent``。
 
         返回:
             无。
@@ -378,11 +386,14 @@ class ConversationRunExecutor:
         try:
             try:
                 run = self._run_service.get_run(run_id)
-                get_terminal_session_service().begin_run(run_id)
+                self._terminal_session_service.begin_run(run_id)
                 runner_started = True
-                await get_runtime().execute_run(
-                    run=run,
+                runtime = get_runtime()
+                agent_profile = runtime.resolve_agent_profile_for_run(run)
+                await runtime.run_agent(
+                    agent_profile,
                     execution_mode=start_mode,
+                    user_decisions=user_decisions,
                 )
             except asyncio.CancelledError:
                 cancelled = runner_started
@@ -397,7 +408,7 @@ class ConversationRunExecutor:
         finally:
             try:
                 await asyncio.to_thread(
-                    self._close_run_terminals,
+                    self._terminal_session_service.close_run_terminals,
                     run_id,
                     "run_execution_finished",
                 )
@@ -460,12 +471,6 @@ class ConversationRunExecutor:
                 "data": {"run_id": run_id, "stage": stage},
             },
         )
-
-    @staticmethod
-    def _close_run_terminals(run_id: int, reason: str) -> None:
-        """Close terminal workers in a worker thread, never in the event loop."""
-
-        get_terminal_session_service().close_run_terminals(run_id, reason=reason)
 
     async def _converge_unfinished_run(
         self,

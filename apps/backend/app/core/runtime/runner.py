@@ -78,9 +78,9 @@ class AgentRuntime:
     """
 
     def __init__(
-        self,
-        *,
-        process_tool_output_channel_factory: (ProcessToolOutputChannelFactory | None) = None,
+            self,
+            *,
+            process_tool_output_channel_factory: (ProcessToolOutputChannelFactory | None) = None,
     ) -> None:
         """Initialize the execution engine with its private collaborators.
 
@@ -111,44 +111,26 @@ class AgentRuntime:
         self._process_tool_output_channel_factory = process_tool_output_channel_factory
         self._conversation_run_state_service = get_conversation_run_state_service()
 
-    async def execute_run(
-        self,
-        run: ConversationRunRecord,
-        *,
-        execution_mode: ExecutionMode = "fresh",
-        user_decisions: Sequence[UserDecision] = (),
-    ) -> None:
-        """执行一个已被 ConversationRunExecutor 认领（pending→running）的 run。
-
-        前置条件由执行器保证，本方法不再重复认领或做状态复查：
-        1. 调用前执行器已 ``claim_pending_run``，run 处于 running；
-        2. 同 task 内一次只有一个 running run：由准入（``prepare_run_start`` 拒绝已有
-           active run）与 ``claim_pending_run`` 的原子条件更新共同保证，不依赖进程内锁；
-        3. ``run`` 非 None 且为已认领 run。
-
-        本方法只负责三件事：解析 run 绑定的 agent profile、为本次 run 派生独立副本、
-        驱动 workflow。终态由 workflow 与 ``run_agent`` 分头落定：正常路径在节点内经
-        ``WorkflowOperations`` 调 run state service，异常路径由 ``run_agent`` 的异常边界落定；
-        本方法不落任何终态。
+    def resolve_agent_profile_for_run(self, run: ConversationRunRecord) -> "AgentProfile":
+        """解析并派生单次 run 独占的 agent profile。
 
         参数:
-            run: 已被执行器认领的 Conversation Run 记录（非 None，状态 running）。
-            execution_mode: 本次执行是 ``fresh`` 还是从既有 checkpoint 恢复（``resume``）；
-                透传给 workflow，由其决定是否清空旧上下文与如何构造 graph 输入。
+            run: 已被执行器认领的 Conversation Run 记录。
 
         返回:
-            无。workflow 完成或挂起后，本方法正常返回。
+            经 :meth:`AgentProfile.derive_for_run` 派生的 per-run 副本；共享注册表单例
+            不被原地写，并发 run 互不串扰。
 
         异常:
-            RuntimeError: 轮次绑定的 agent profile 不可用时抛出，由执行器捕获收束为 failed。
+            RuntimeError: 轮次绑定的 agent profile 不可用时抛出（child agent 配置缺失或
+                registry 解析返回 None），由调用方捕获收束为 failed。
         """
         run_id = run.id
         task = self._task_service.get_task(run.task_id)
         workspace = self._workspace_service.get_workspace(task.workspace_id)
-        agent_id = run.agent_id or "main_agent"
-        is_main_agent = agent_id == "main_agent"
+        agent_id: str = run.agent_id or "main_agent"
         workspace_scope = (
-            AgentProfileRegistry.SYSTEM_WORKSPACE if is_main_agent else workspace.root_path
+            AgentProfileRegistry.SYSTEM_WORKSPACE if agent_id == "main_agent" else workspace.root_path
         )
         try:
             agent_profile = self._agent_registry.resolve(workspace_scope, agent_id)
@@ -164,19 +146,14 @@ class AgentRuntime:
                 get_model_config_service().get_config(run.model_config_id)
             )
         # 派生 per-run 副本承载本次 run：共享注册表单例不被原地写，并发 run 互不串扰。
-        agent_profile = agent_profile.derive_for_run(run, model_settings=runtime_model_settings)
-        await self.run_agent(
-            agent_profile,
-            execution_mode=execution_mode,
-            user_decisions=user_decisions,
-        )
+        return agent_profile.derive_for_run(run, model_settings=runtime_model_settings)
 
     async def run_agent(
-        self,
-        agent: AgentProfile,
-        *,
-        execution_mode: ExecutionMode = "fresh",
-        user_decisions: Sequence[UserDecision] = (),
+            self,
+            agent: AgentProfile,
+            *,
+            execution_mode: ExecutionMode = "fresh",
+            user_decisions: Sequence[UserDecision] = (),
     ) -> None:
         """驱动一次 agent run 执行并提交 canonical conversation facts。
 
@@ -337,9 +314,9 @@ class AgentRuntime:
         return classify_model_failure(exc) or Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
 
     def _resolve_execution_context(
-        self,
-        task: TaskRecord,
-        run_id: int = 0,
+            self,
+            task: TaskRecord,
+            run_id: int = 0,
     ) -> ToolExecutionContext | None:
         """按 task 解析其所属 workspace 的执行上下文；缺失时返回 None。
 
@@ -374,12 +351,12 @@ class AgentRuntime:
         return ToolExecutionContext.from_workspace(task.id, workspace, run_id=run_id)
 
     def _build_operations(
-        self,
-        workspace: WorkspaceRecord,
-        task: TaskRecord,
-        run: ConversationRunRecord,
-        agent_profile: AgentProfile,
-        tool_trace_recorder: ToolTraceRecorder | None = None,
+            self,
+            workspace: WorkspaceRecord,
+            task: TaskRecord,
+            run: ConversationRunRecord,
+            agent_profile: AgentProfile,
+            tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> WorkflowOperations:
         """为单个 run 构建运行时操作门面，按 workspace 解析工具边界。
 
