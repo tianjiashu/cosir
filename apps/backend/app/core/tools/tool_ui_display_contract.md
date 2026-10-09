@@ -77,6 +77,34 @@ Tauri Rust 主进程
 
 错误态不在 `display_data` 中携带目标、结果或其它业务字段。无法生成安全短提示时，错误 `display_data` 仍只返回通用短提示，不把未经筛选的原始参数传给 UI。
 
+#### 2.2.1 human-in-the-loop 请求声明
+
+工具需要用户先作出决定才能继续时，在同一份 `display_data` 上声明：
+
+```json
+{
+  "kind": "<stable-display-kind>",
+  "requires_user_input": true,
+  "user_input_request": {
+    "kind": "<request-kind>",
+    "request_id": "<stable-id>",
+    "prompt": "<可选：受控短文案>",
+    "decisions": ["approve", "reject"],
+    "draft_schema": "<draft-schema-id>",
+    "draft": { "…": "用户可编辑的结构化草稿" }
+  }
+}
+```
+
+约束：
+
+- `request_id` 必须在本 Run 内唯一，是对外稳定标识（前端提交决定、后端匹配请求都用它）；`tool_call_id` 由后端从观察中获得，不放进声明。
+- `decisions` 是该工具接受的**决定子集**，取值只有 `approve` / `reject` / `abort`；缺省为 `approve` + `reject`。提交未声明的决定会被拒绝（不静默忽略）。
+- `draft` + `draft_schema` 只服务前端渲染「可编辑草稿」；`draft_schema` 变更必须升版本，避免旧前端按旧结构渲染新草稿。
+- 决定的路由目标是框架级固定映射（`approve` → 重新执行该调用，`reject` / `abort` → 交给观察节点），**不由工具声明**：控制流属于工作流事实，不放在展示数据里。
+- 声明与决定的消费见 `app/core/workflows/react/node_helper/user_input_projection.py`；挂起、等待与放行节点见 `app/core/workflows/react/nodes/wait_user_node.py`。
+- 批准后的第二阶段展示数据必须**不再**携带 `requires_user_input`，否则会形成无法结束的挂起。
+
 ### 2.3 错误展示策略
 
 `retryable` 只属于工具观察（`ToolObservation.retryable`），用于告诉模型某次工具调用按 `reason` 修正后能否重试；它既不进入 Transport tool-call part，也不进入 Run 级错误契约（`ConversationRunError` / `ConversationStateError` 只有 `code` / `message`）。Transport/HTTP 错误体上的 `retryable` 是另一套「客户端能否重试」的传输层契约，不要与工具侧混用。

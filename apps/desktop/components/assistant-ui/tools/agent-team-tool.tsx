@@ -2,19 +2,24 @@ import { useEffect, useState } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { CheckCircle2, UsersIcon } from "lucide-react";
 
-import {
-  confirmAgentTeamRun,
-  getAgentTeamRun,
-  rejectAgentTeamRun,
-  type AgentTeamRun,
-} from "@/lib/api/agent-teams";
+import { getAgentTeamRun, type AgentTeamRun } from "@/lib/api/agent-teams";
+import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decision";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { readToolArtifact } from "./types";
-import { readAgentTeamPreviewDisplay, type AgentTeamPreviewDisplay } from "./agent-team-display";
+import {
+  readAgentTeamPreviewDisplay,
+  readAgentTeamReviewRequest,
+  readAgentTeamRunDisplay,
+  type AgentTeamPreviewDisplay,
+} from "./agent-team-display";
 import { ToolStatus } from "./tool-status";
 
-type AgentTeamToolProps = ToolCallMessagePartProps;
+/** 渲染器额外收到所属 Run / Task：提交用户决定必须定位到具体 Run。 */
+type AgentTeamToolProps = ToolCallMessagePartProps & {
+  runId?: number | null;
+  taskId?: number;
+};
 
 type NodeResult = {
   node_id: string;
@@ -71,10 +76,14 @@ function validateReviewedInputs(
   return null;
 }
 
-/** Agent Team 方案预览卡；确认时提交用户最终编辑后的配置，由后端重新校验。 */
-export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
+/** Agent Team 方案预览卡；确认时把用户决定交回等待中的 Run，由后端在确认边界重新校验。 */
+export function AgentTeamTool({ artifact: rawArtifact, runId, taskId }: AgentTeamToolProps) {
   const artifact = readToolArtifact(rawArtifact);
   const preview = readAgentTeamPreviewDisplay(artifact.display_data);
+  const review = readAgentTeamReviewRequest(artifact.display_data);
+  const runDisplay = readAgentTeamRunDisplay(artifact.display_data);
+  // 待确认态用方案里的 TeamRun；已启动/恢复态用展示数据里的 TeamRun。两者共用同一套状态查询。
+  const trackedRunId = preview?.teamRunId ?? runDisplay?.teamRunId;
   const [state, setState] = useState<"idle" | "confirming" | "rejecting" | "confirmed" | "rejected" | "failed">("idle");
   const [message, setMessage] = useState("");
   const [teamRun, setTeamRun] = useState<AgentTeamRun | null>(null);
@@ -89,9 +98,9 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
   }, [preview?.teamRunId]);
 
   useEffect(() => {
-    if (!preview) return undefined;
+    if (trackedRunId === undefined) return undefined;
     let disposed = false;
-    void getAgentTeamRun(preview.teamRunId)
+    void getAgentTeamRun(trackedRunId)
       .then((current) => {
         if (disposed) return;
         if (current.status === "pending") {
@@ -122,7 +131,7 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
     return () => {
       disposed = true;
     };
-  }, [preview?.teamRunId]);
+  }, [trackedRunId]);
 
   useEffect(() => {
     if (!teamRun || teamRun.status !== "running") return undefined;
@@ -147,8 +156,70 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
     };
   }, [teamRun]);
 
-  if (!preview) return null;
+  if (!preview || !review) {
+    // 没有可编辑方案时只剩运行态（用户已批准 / 恢复查看）：只展示 Team 进度。
+    if (!runDisplay) return null;
+    const currentStatus = teamRun?.status ?? runDisplay.status;
+    return (
+      <div className="space-y-2 rounded-xl border border-border/70 bg-card p-3 shadow-sm">
+        <div className="flex items-center gap-2">
+          <UsersIcon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+          <span className="font-medium text-sm">{runDisplay.teamId}</span>
+          <ToolStatus status={artifact.backendStatus} className="text-muted-foreground" />
+        </div>
+        {runDisplay.goal && <p className="text-muted-foreground text-xs">目标：{runDisplay.goal}</p>}
+        <div className="text-xs">
+          Team 状态：{currentStatus}
+          {teamRun?.active_node ? ` · 当前节点：${teamRun.active_node.node_id}` : ""}
+        </div>
+        {teamRun && readNodeResults(teamRun.state).length > 0 && (
+          <div className="space-y-1.5 border-t border-border/50 pt-2 text-xs">
+            {readNodeResults(teamRun.state).map((result, index) => (
+              <div key={`${result.node_id}-${index}`} className="rounded-md bg-muted/40 px-2 py-1.5">
+                <div className="font-medium">{result.node_id} · {result.status}</div>
+                <div className="text-muted-foreground line-clamp-3">{result.output || "（无输出）"}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {teamRun?.end_reason && (
+          <div className="text-destructive text-xs">{endReasonLabel(teamRun.end_reason)}</div>
+        )}
+        <p className="text-muted-foreground text-xs">该执行方案已提交用户决定，不再接受重复确认。</p>
+      </div>
+    );
+  }
 
+  /** 提交决定并把控制权交回等待中的 Run；失败只影响本卡片的提示状态。 */
+  const submitDecision = async (
+    decision: "approve" | "reject",
+    data: Record<string, unknown>,
+    phase: "confirming" | "rejecting",
+  ) => {
+    if (runId === undefined || runId === null || taskId === undefined) {
+      setState("failed");
+      setMessage("无法定位该执行方案所属的运行，请刷新页面后重试");
+      return;
+    }
+    setState(phase);
+    setMessage("");
+    try {
+      await submitUserInputDecision({
+        taskId,
+        runId,
+        decisions: [{ request_id: review.requestId, decision, data }],
+      });
+      setState(decision === "approve" ? "confirmed" : "rejected");
+      setMessage(
+        decision === "approve"
+          ? "已提交确认，Agent Team 正在启动"
+          : "已提交审阅后的目标和驳回意见，主 Agent 正在重新生成方案",
+      );
+    } catch (error) {
+      setState("failed");
+      setMessage(error instanceof Error ? error.message : "提交失败，请重试");
+    }
+  };
   const confirm = async () => {
     const validationMessage = validateReviewedInputs(goal, preview.nodes, nodeGoals);
     if (validationMessage) {
@@ -156,22 +227,11 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
       setMessage(validationMessage);
       return;
     }
-    setState("confirming");
-    setMessage("");
-    try {
-      const result = await confirmAgentTeamRun(
-        preview.teamRunId,
-        preview.configuration,
-        goal,
-        nodeGoals,
-      );
-      setTeamRun(result);
-      setState("confirmed");
-      setMessage(`已启动，当前节点：${result.active_node?.node_id ?? "入口"}`);
-    } catch (error) {
-      setState("failed");
-      setMessage(error instanceof Error ? error.message : "确认失败，请让主 Agent 重新生成方案");
-    }
+    await submitDecision(
+      "approve",
+      { configuration: preview.configuration, goal, node_goals: nodeGoals },
+      "confirming",
+    );
   };
   const reject = async () => {
     const validationMessage = validateReviewedInputs(goal, preview.nodes, nodeGoals);
@@ -186,22 +246,11 @@ export function AgentTeamTool({ artifact: rawArtifact }: AgentTeamToolProps) {
       setMessage("请填写驳回意见，主 Agent 才能据此重新生成方案");
       return;
     }
-    setState("rejecting");
-    setMessage("");
-    try {
-      const result = await rejectAgentTeamRun(
-        preview.teamRunId,
-        goal,
-        nodeGoals,
-        trimmedFeedback,
-      );
-      setTeamRun(result);
-      setState("rejected");
-      setMessage("已提交审阅后的目标和驳回意见，主 Agent 正在重新生成方案");
-    } catch (error) {
-      setState("failed");
-      setMessage(error instanceof Error ? error.message : "驳回失败");
-    }
+    await submitDecision(
+      "reject",
+      { feedback: trimmedFeedback, goal, node_goals: nodeGoals },
+      "rejecting",
+    );
   };
   return (
     <div className="space-y-3 rounded-xl border border-border/70 bg-card p-3 shadow-sm">

@@ -28,6 +28,21 @@ export type AgentTeamPreviewDisplay = {
   configuration: Record<string, unknown>;
 };
 
+/** 后端对一次「待用户决定」请求的声明（工具展示契约的 human-in-the-loop 部分）。 */
+export type AgentTeamReviewRequest = {
+  requestId: string;
+  decisions: string[];
+  draftSchema: string;
+};
+
+/** 已批准后的运行态展示（同一张卡从「待确认」翻到「运行中」，没有可编辑草稿）。 */
+export type AgentTeamRunDisplay = {
+  status: string;
+  teamRunId: number;
+  teamId: string;
+  goal: string;
+};
+
 export type AgentTeamConfigurationDraftDisplay = {
   kind: "agent-team-configuration-draft";
   teamId: string;
@@ -95,9 +110,12 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
       ? node.node_type
       : undefined;
     const role = text(node.role);
-    const effectiveModelName = text(node.effective_model_name);
+    // 后端预览节点使用 `model_name` / `tools`（见 agent_team_preparation_service）：
+    // 这两个键曾与前端读取的 `effective_model_name` / `effective_tools` 不一致，导致整张卡
+    // 解析失败（返回 null，用户看不到方案也无法作答）。以实际下发的契约为准。
+    const effectiveModelName = text(node.model_name);
     if (!nodeId || !nodeName || !agentId || !nodeType || !role || !effectiveModelName) return null;
-    const effectiveTools = stringList(node.effective_tools);
+    const effectiveTools = stringList(node.tools);
     const statuses = stringList(node.statuses);
     const maxSteps = positiveInteger(node.max_steps);
     if (!effectiveTools || !statuses || maxSteps === undefined) return null;
@@ -128,6 +146,36 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
     edges,
     configuration,
   };
+}
+
+/**
+ * 严格读取「待用户决定」请求标识。
+ *
+ * 前端提交决定时用 `request_id` 定位请求（不是从 `team_run_id` 反推）：请求标识是后端与前端
+ * 之间的稳定契约，工具可以改变内部标识（例如未来不再用 TeamRun 主键）。
+ */
+export function readAgentTeamReviewRequest(value: unknown): AgentTeamReviewRequest | null {
+  const data = asRecord(value);
+  if (data.requires_user_input !== true) return null;
+  const request = asRecord(data.user_input_request);
+  const requestId = text(request.request_id);
+  const draftSchema = text(request.draft_schema);
+  if (!requestId || !draftSchema) return null;
+  const decisions = stringList(request.decisions);
+  if (!decisions) return null;
+  return { requestId, decisions, draftSchema };
+}
+
+/** 读取「用户已批准、Team 已启动」的运行态展示。 */
+export function readAgentTeamRunDisplay(value: unknown): AgentTeamRunDisplay | null {
+  const data = asRecord(value);
+  if (data.kind !== "agent-team-preview") return null;
+  if (data.requires_user_input === true) return null;
+  const teamRunId = positiveId(data.team_run_id);
+  const teamId = text(data.team_id);
+  const status = text(data.status);
+  if (teamRunId === undefined || !teamId || !status) return null;
+  return { status, teamRunId, teamId, goal: text(data.goal) ?? "" };
 }
 
 /** 严格读取 Team 配置候选展示数据。 */

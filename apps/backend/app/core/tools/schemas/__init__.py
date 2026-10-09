@@ -38,9 +38,16 @@ from app.core.tools.schemas.tool_output import (
     ProcessToolOutputChannel,
     ProcessToolOutputChannelFactory,
 )
+from app.core.tools.schemas.user_decision import (
+    EXECUTING_DECISION_KINDS,
+    UserDecision,
+    UserDecisionKind,
+    build_resume_payload,
+)
 
 __all__ = [
     "ALL_TOOL_NAMES",
+    "EXECUTING_DECISION_KINDS",
     "TOOL_AGENT_TEAM",
     "TOOL_APPLY_PATCH",
     "TOOL_CHILD_AGENT_SEND",
@@ -74,4 +81,7 @@ __all__ = [
     "ToolExecutionContext",
     "ToolName",
     "ToolObservation",
+    "UserDecision",
+    "UserDecisionKind",
+    "build_resume_payload",
 ]

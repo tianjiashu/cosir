@@ -42,38 +42,6 @@ export function saveAgentTeamConfiguration(input: AgentTeamConfigurationInput): 
   );
 }
 
-export function confirmAgentTeamRun(
-  teamRunId: number,
-  configuration: Record<string, unknown>,
-  goal: string,
-  nodeGoals: Record<string, string>,
-): Promise<AgentTeamRun> {
-  return requestJson<AgentTeamRun>(
-    "/agent-team/runs/confirm",
-    jsonRequestInit(
-      {
-        team_run_id: teamRunId,
-        configuration,
-        goal,
-        node_goals: nodeGoals,
-      },
-      { method: "POST" },
-    ),
-  );
-}
-
-export function rejectAgentTeamRun(
-  teamRunId: number,
-  goal: string,
-  nodeGoals: Record<string, string>,
-  feedback: string,
-): Promise<AgentTeamRun> {
-  return requestJson<AgentTeamRun>(
-    `/agent-team/runs/${encodeURIComponent(teamRunId)}/reject`,
-    jsonRequestInit({ goal, node_goals: nodeGoals, feedback }, { method: "POST" }),
-  );
-}
-
 export function getAgentTeamRun(runId: number): Promise<AgentTeamRun> {
   return requestJson<AgentTeamRun>(`/agent-team/runs/${encodeURIComponent(runId)}`);
 }

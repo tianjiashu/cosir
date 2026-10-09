@@ -18,6 +18,11 @@ from app.assistant_transport.request.command.ban_tools_command import (
 from app.assistant_transport.request.command.propose_agent_configuration_command import (
     ProposeAgentConfigurationCommand,
 )
+from app.assistant_transport.request.command.user_input_decision_command import (
+    UserInputDecisionCommand,
+    UserInputDecisionItem,
+    UserInputDecisionPayload,
+)
 from app.assistant_transport.request.part.assistant_file_attachment import AssistantFileAttachment
 from app.assistant_transport.request.part.assistant_image_part import AssistantImagePart
 
@@ -32,4 +37,7 @@ __all__ = [
     "BanToolsCommand",
     "BanToolsPayload",
     "TransportRequestError",
+    "UserInputDecisionCommand",
+    "UserInputDecisionItem",
+    "UserInputDecisionPayload",
 ]
