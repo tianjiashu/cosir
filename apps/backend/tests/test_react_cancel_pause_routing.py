@@ -40,7 +40,8 @@ def test_react_edges_route_only_from_current_graph_state() -> None:
     assert _route_target(_state(next_node=ReactRoute.TOOLS)) == "tools"
     assert _route_target(_state(next_node=ReactRoute.MODEL)) == "model"
     assert _route_target(_state(next_node=ReactRoute.STRUCTURED_OUTPUT)) == "structured_output"
-    assert _route_target(_state(next_node=ReactRoute.USER_INPUT_WAIT)) == "user_input_wait"
+    assert _route_target(_state(next_node=ReactRoute.OBSERVE)) == "observe"
+    assert _route_target(_state(next_node=ReactRoute.WAIT_USER)) == "wait_user"
     assert _route_target(_state(next_node=ReactRoute.END)) == END
 
 

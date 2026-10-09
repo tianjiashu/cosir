@@ -356,11 +356,13 @@ async def test_t1_begin_snapshot_is_written_back_to_state_patch() -> None:
         ("fresh-pending", "running"),
     ]
 
-    # 事实：返回的 patch 写入了 begin 后的快照，已起跑的记录为 running。
+    # 事实：返回的 patch 写入了 begin 后的快照，已起跑的记录为 running；
+    # ``user_input_hold`` 是 human-in-the-loop 的待决请求列表（本批无声明，故为空）。
     assert set(patch) == {
         "last_tool_results",
         "terminal_sessions",
         "tool_call_lifecycle",
+        "user_input_hold",
     }, f"patch 键={sorted(patch)}"
     written_back = patch["tool_call_lifecycle"]
     assert written_back.valid_calls["fresh-pending"].status == "running"

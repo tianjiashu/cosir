@@ -4,9 +4,9 @@
 为 ``graph.astream`` 选择的输入，不连接真实模型 / 数据库 / checkpointer。
 
 背景：工具执行期崩溃 → 后端重启收敛为 cancelled → 用户续跑时，若从 ``tools_node`` /
-``observe_node`` 重入会把整批工具调用静默重放（高危）。修复后，除「用户中途补充输入」
-的 ``user_input_wait`` 中断态需要把新消息经该节点喂入外，其余中断（用户取消 / 工具阶段
-崩溃 / 重启收敛）一律 ``Command(goto="model")`` 回退到 model 节点重跑，由模型重新决策。
+``observe_node`` 重入会把整批工具调用静默重放（高危）。修复后，除「等待用户决定」的
+``wait_user`` 中断态需要把用户决定作为 resume 载荷喂入该节点外，其余中断（用户取消 /
+工具阶段崩溃 / 重启收敛）一律 ``Command(goto="model")`` 回退到 model 节点重跑，由模型重新决策。
 """
 
 from __future__ import annotations
@@ -170,17 +170,18 @@ async def test_resume_user_cancel_at_model_rewinds_to_model(patched: SimpleNames
     assert patched._deferred
 
 
-async def test_resume_user_input_wait_keeps_command_resume(patched: SimpleNamespace) -> None:
-    """用户中途补充输入（``user_input_wait`` 中断）的续跑：保留 ``Command(resume=...)``，不回退 model。"""
+async def test_resume_wait_user_keeps_command_resume(patched: SimpleNamespace) -> None:
+    """等待用户决定的续跑：保留 ``Command(resume=...)``，不回退 model。"""
 
     graph = await _run_with(
         patched,
-        next_nodes=("user_input_wait",),
-        tasks=[SimpleNamespace(name="user_input_wait", interrupts=[object()])],
+        next_nodes=("wait_user",),
+        tasks=[SimpleNamespace(name="wait_user", interrupts=[object()])],
     )
     assert _goto_target(graph.captured_input) is None
-    assert _resume_target(graph.captured_input) == {"action": "resume"}
-    assert patched._deferred == [], "user_input_wait 不应注入工具重放提示"
+    # 无决定时注入空决定集合：``wait_user`` 据此重新挂起同一请求，而不是把空值当批准。
+    assert _resume_target(graph.captured_input) == {"decisions": []}
+    assert patched._deferred == [], "wait_user 不应注入工具重放提示"
 
 
 async def test_resume_finished_graph_is_rejected(patched: SimpleNamespace) -> None:

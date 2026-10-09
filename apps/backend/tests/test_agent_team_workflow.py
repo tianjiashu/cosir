@@ -1,82 +1,89 @@
-"""Agent Team 主 Agent 挂起、恢复和结果投影测试。"""
+"""Agent Team 预览展示契约与结果投影测试。"""
 
-import asyncio
 from types import SimpleNamespace
-
-import pytest
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command
 
 from app.agent_team.coordinator import AgentTeamCoordinator
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.api.agent_teams_api import _run_payload
 from app.core.agents.model_settings import ModelSettings
-from app.core.workflows.react.nodes.user_input_wait_node import user_input_wait_node
-from app.core.workflows.react.worflow_state.route import ReactRoute
-from app.core.workflows.react.worflow_state.state import ReactGraphState
+from app.core.tools.display.agent_team_display import (
+    AGENT_TEAM_REVIEW_DRAFT_SCHEMA,
+    build_agent_team_preview_display_data,
+    build_agent_team_run_display_data,
+)
+from app.core.workflows.react.node_helper.user_input_projection import extract_holds
 from app.service.agent_team.agent_team_preparation_service import (
     resolve_effective_model_settings,
 )
 
 
-def _state() -> ReactGraphState:
-    """构造通用用户输入等待节点所需的最小 graph state。"""
+def _preview_fields() -> dict[str, object]:
+    """构造准备服务实际会给出的预览字段（含用户可编辑的目标与子目标）。"""
 
-    return ReactGraphState(
-        step_count=0,
-        tool_error_count=0,
-        next_node=ReactRoute.MODEL,
-        max_steps=10,
-        final_text="",
-        last_tool_results={
-            "observations": [
-                {
-                    "status": "success",
-                    "display_data": {
-                        "requires_user_input": True,
-                        "user_input_request": {
-                            "kind": "agent_team_review",
-                            "request_id": "1",
-                        },
-                    },
-                }
-            ]
-        },
+    return {
+        "team_id": "code-quality",
+        "name": "代码质量 Team",
+        "goal": "交付报告",
+        "node_goals": {"develop": "实现", "review": "审查"},
+        "start_node": "develop",
+        "nodes": [],
+        "edges": [],
+        "parent_task_id": 2,
+        "parent_run_id": 3,
+        "workspace_id": 1,
+        "configuration": {"team_id": "code-quality"},
+    }
+
+
+def test_agent_team_preview_declares_human_in_the_loop_contract() -> None:
+    """预览卡片必须声明人类决策契约：由通用等待节点消费，前端无需按工具名分支。"""
+
+    display_data = build_agent_team_preview_display_data(_preview_fields(), team_run_id=17)
+
+    assert display_data["requires_user_input"] is True
+    request = display_data["user_input_request"]
+    assert request["kind"] == "agent_team_review"
+    assert request["request_id"] == "17"
+    assert request["decisions"] == ["approve", "reject"]
+    assert request["draft_schema"] == AGENT_TEAM_REVIEW_DRAFT_SCHEMA
+    assert request["draft"] == {
+        "goal": "交付报告",
+        "node_goals": {"develop": "实现", "review": "审查"},
+        "configuration": {"team_id": "code-quality"},
+    }
+
+    observations = [
+        {
+            "tool_name": "agent_team",
+            "status": "success",
+            "content": "{}",
+            "error": "",
+            "reason": "",
+            "retryable": False,
+            "tool_call_id": "call-1",
+            "display_data": display_data,
+        }
+    ]
+    (hold,) = extract_holds(observations)
+    assert hold.request_id == "17"
+    assert hold.tool_call_id == "call-1"
+    assert [kind.value for kind in hold.decisions] == ["approve", "reject"]
+
+
+def test_confirmed_team_display_data_stops_requesting_user_input() -> None:
+    """启动分支的展示数据不得再声明待决，否则会形成无法结束的挂起。"""
+
+    display_data = build_agent_team_run_display_data(
+        team_run_id=17,
+        team_id="code-quality",
+        goal="交付报告",
+        node_goals={"develop": "实现"},
     )
 
-
-def test_user_input_wait_node_resumes_to_model_path(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """通用等待节点初次执行保存断点，恢复后才离开节点。"""
-
-    runtime_config = SimpleNamespace(
-        resuming_user_input_wait=False,
-        operations=SimpleNamespace(mark_waiting_for_input_if_running=lambda: None),
-    )
-    monkeypatch.setattr(
-        "app.core.workflows.react.nodes.user_input_wait_node._runtime_config",
-        lambda: runtime_config,
-    )
-
-    builder = StateGraph(ReactGraphState)
-    builder.add_node("wait", user_input_wait_node)
-    builder.add_node("finish", lambda _state: {"next_node": ReactRoute.END})
-    builder.add_edge(START, "wait")
-    builder.add_edge("wait", "finish")
-    builder.add_edge("finish", END)
-    graph = builder.compile(checkpointer=InMemorySaver())
-    config = {"configurable": {"thread_id": "agent-team-wait"}}
-
-    async def run() -> None:
-        await graph.ainvoke(_state(), config)
-        snapshot = await graph.aget_state(config)
-        assert snapshot.next == ("wait",)
-        await graph.ainvoke(Command(resume={"action": "team_completed"}), config)
-        assert (await graph.aget_state(config)).next == ()
-
-    asyncio.run(run())
+    assert display_data["kind"] == "agent-team-preview"
+    assert display_data["status"] == "running"
+    assert "requires_user_input" not in display_data
+    assert "user_input_request" not in display_data
 
 
 def test_team_run_payload_hides_runtime_profile_snapshots() -> None:
