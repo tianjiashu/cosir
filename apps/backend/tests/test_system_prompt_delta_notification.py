@@ -127,3 +127,6 @@ def test_global_delta_reaches_all_materialized_context_spaces() -> None:
     assert broadcast_system_prompt_delta(delta) == 2
     assert len(first.take_deferred_system_messages()) == 1
     assert len(second.take_deferred_system_messages()) == 1
+
+# 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
+pytestmark = pytest.mark.usefixtures("backend_env")

@@ -29,8 +29,12 @@ from app.utils.path import system_cosir as paths
 
 
 @pytest.fixture
-def storage(tmp_path: Path):
-    """为删除测试提供隔离的主库和 checkpoint 路径。"""
+def storage(tmp_path: Path, install_process_singletons):
+    """为删除测试提供隔离的主库和 checkpoint 路径，并装配进程级单例。
+
+    删除链路会经工具系统与 agent 目录做收敛（未装配即 ``RuntimeError``）；单例必须在主库初始化
+    之后安装，故经 ``install_process_singletons()`` 显式调用。
+    """
 
     close_service_dependencies()
     db_dir = tmp_path / "storage"
@@ -41,6 +45,7 @@ def storage(tmp_path: Path):
         LOG_DIR=db_dir / "logs",
     )
     init_storage()
+    install_process_singletons()
     task_runtime_spaces.close()
     yield
     task_runtime_spaces.close()

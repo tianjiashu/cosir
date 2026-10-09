@@ -1,5 +1,6 @@
 """Agent Team 预览展示契约与结果投影测试。"""
 
+from dataclasses import asdict
 from types import SimpleNamespace
 
 from app.agent_team.coordinator import AgentTeamCoordinator
@@ -7,11 +8,14 @@ from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.api.agent_teams_api import _run_payload
 from app.core.agents.model_settings import ModelSettings
 from app.core.tools.display.agent_team_display import (
-    AGENT_TEAM_REVIEW_DRAFT_SCHEMA,
     build_agent_team_preview_display_data,
     build_agent_team_run_display_data,
 )
-from app.core.workflows.react.node_helper.user_input_projection import extract_holds
+from app.core.tools.tool_handler.agent_team.review_request import (
+    AGENT_TEAM_REVIEW_DRAFT_SCHEMA,
+    build_team_review_request,
+)
+from app.core.workflows.react.node_helper.user_input_projection import extract_requests
 from app.service.agent_team.agent_team_preparation_service import (
     resolve_effective_model_settings,
 )
@@ -35,18 +39,27 @@ def _preview_fields() -> dict[str, object]:
     }
 
 
-def test_agent_team_preview_declares_human_in_the_loop_contract() -> None:
-    """预览卡片必须声明人类决策契约：由通用等待节点消费，前端无需按工具名分支。"""
+def test_agent_team_preview_separates_display_from_review_request() -> None:
+    """待确认事实挂在观察的专用字段上，展示数据只承载卡片内容。
+
+    请求经 ``dataclasses.asdict`` 进 workflow state 后由 ``extract_requests`` 派生；展示数据里
+    没有（也不应有）待决声明——那是工作流控制流事实，不是展示数据。
+    """
 
     display_data = build_agent_team_preview_display_data(_preview_fields(), team_run_id=17)
+    request = build_team_review_request(_preview_fields(), team_run_id=17)
 
-    assert display_data["requires_user_input"] is True
-    request = display_data["user_input_request"]
-    assert request["kind"] == "agent_team_review"
-    assert request["request_id"] == "17"
-    assert request["decisions"] == ["approve", "reject"]
-    assert request["draft_schema"] == AGENT_TEAM_REVIEW_DRAFT_SCHEMA
-    assert request["draft"] == {
+    assert display_data["kind"] == "agent-team-preview"
+    assert display_data["status"] == "pending"
+    assert display_data["team_run_id"] == 17
+    assert "requires_user_input" not in display_data
+    assert "user_input_request" not in display_data
+
+    assert request.kind == "agent_team_review"
+    assert request.request_id == "17"
+    assert [kind.value for kind in request.decisions] == ["approve", "reject"]
+    assert request.draft_schema == AGENT_TEAM_REVIEW_DRAFT_SCHEMA
+    assert request.draft == {
         "goal": "交付报告",
         "node_goals": {"develop": "实现", "review": "审查"},
         "configuration": {"team_id": "code-quality"},
@@ -62,16 +75,18 @@ def test_agent_team_preview_declares_human_in_the_loop_contract() -> None:
             "retryable": False,
             "tool_call_id": "call-1",
             "display_data": display_data,
+            # 工作流看到的形状就是 asdict 投影后的普通 dict。
+            "user_input_request": asdict(request),
         }
     ]
-    (hold,) = extract_holds(observations)
-    assert hold.request_id == "17"
-    assert hold.tool_call_id == "call-1"
-    assert [kind.value for kind in hold.decisions] == ["approve", "reject"]
+    (derived,) = extract_requests(observations)
+    assert derived.request_id == "17"
+    assert [kind.value for kind in derived.decisions] == ["approve", "reject"]
+    assert derived.draft == request.draft
 
 
 def test_confirmed_team_display_data_stops_requesting_user_input() -> None:
-    """启动分支的展示数据不得再声明待决，否则会形成无法结束的挂起。"""
+    """启动分支的展示数据与观察都不再携带待决声明，否则会形成无法结束的挂起。"""
 
     display_data = build_agent_team_run_display_data(
         team_run_id=17,

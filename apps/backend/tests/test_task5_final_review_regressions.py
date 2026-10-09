@@ -111,26 +111,27 @@ def _context_row(
 async def test_executor_settles_run_and_swallows_projector_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """驱动期失败时执行器投影「工具失败收束」并兜底收敛未落终态的 run。
+    """驱动期失败时执行器兜底收敛未落终态的 run，且投影失败不影响收敛。
 
-    执行器不拥有 run 的业务终态（正常路径由 workflow 经 run_service 落定），但驱动结束
+    执行器不拥有 run 的业务终态（正常路径由 workflow / ``AgentRuntime`` 落定），但驱动结束
     后 run 仍 active 时必须条件收敛，否则会留下无执行器的僵尸 running。本用例锁定两点
     当前行为：驱动期异常在 ``_execute`` 内被收口（不外抛）、投影失败被降级为日志，
-    且执行器退出时对未落终态的 run 调用一次条件收敛。
+    且执行器退出时对未落终态的 run 调用一次条件收敛（``run_execution_cancelled``）。
     """
 
     run = SimpleNamespace(id=1, task_id=7, status="running", end_reason=None)
     converged: list[tuple[int, str | None]] = []
 
-    class RunService:
-        def get_run(self, _run_id: int) -> SimpleNamespace:
-            return run
-
-        def fail_run_if_running(
+    class RunStateService:
+        def cancel_run_if_running(
             self, run_id: int, end_reason: str | None = None, **_kwargs: Any
         ) -> SimpleNamespace:
             converged.append((run_id, end_reason))
-            return SimpleNamespace(id=run_id, task_id=7, status="failed")
+            return SimpleNamespace(id=run_id, task_id=7, status="cancelled")
+
+    class RunService:
+        def get_run(self, _run_id: int) -> SimpleNamespace:
+            return run
 
     class FailingProjector:
         def process(self, _event: object) -> None:
@@ -138,6 +139,7 @@ async def test_executor_settles_run_and_swallows_projector_failure(
 
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = RunService()
+    executor._run_state_service = RunStateService()
     executor._event_projector = FailingProjector()
     executor._executions = {}
 
@@ -145,7 +147,10 @@ async def test_executor_settles_run_and_swallows_projector_failure(
         raise RuntimeError("runner failed")
 
     class _Runtime:
-        async def execute_run(self, **_kwargs: Any) -> None:
+        def resolve_agent_profile_for_run(self, _run: Any) -> Any:
+            return object()
+
+        async def run_agent(self, _agent: Any, **_kwargs: Any) -> None:
             await runner()
 
     class _Terminal:
@@ -156,17 +161,26 @@ async def test_executor_settles_run_and_swallows_projector_failure(
             return None
 
     monkeypatch.setattr(executor_module, "get_runtime", lambda: _Runtime())
-    monkeypatch.setattr(executor_module, "get_terminal_session_service", lambda: _Terminal())
+    executor._terminal_session_service = _Terminal()
 
     await executor._execute(1, "fresh")
 
-    assert converged == [(1, "run_execution_ended_without_terminal")]
+    assert converged == [(1, "run_execution_cancelled")]
 
 
-def test_tool_settlement_projection_failure_is_swallowed() -> None:
-    """工具收束投影失败只记日志：不得把已收束的执行再次打回异常路径。"""
+@pytest.mark.asyncio
+async def test_convergence_projection_failure_is_swallowed() -> None:
+    """兜底收敛里的工具收束投影失败只记日志：收敛本身不得被它打断。"""
 
-    run = SimpleNamespace(id=1, task_id=7, status="failed", end_reason=None)
+    run = SimpleNamespace(id=1, task_id=7, status="running", end_reason=None)
+    cancelled: list[tuple[int, str | None]] = []
+
+    class RunStateService:
+        def cancel_run_if_running(
+            self, run_id: int, end_reason: str | None = None, **_kwargs: Any
+        ) -> SimpleNamespace:
+            cancelled.append((run_id, end_reason))
+            return SimpleNamespace(id=run_id, task_id=7, status="cancelled")
 
     class RunService:
         def get_run(self, _run_id: int) -> SimpleNamespace:
@@ -178,10 +192,13 @@ def test_tool_settlement_projection_failure_is_swallowed() -> None:
 
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = RunService()
+    executor._run_state_service = RunStateService()
     executor._event_projector = FailingProjector()
 
-    # 不抛异常即通过：投影失败在 _project_tools_settled 内部被降级为日志。
-    executor._project_tools_settled(1, "failed", "runtime_failed")
+    # 不抛异常即通过：投影失败在 _converge_unfinished_run 内部被降级为日志。
+    await executor._converge_unfinished_run(1)
+
+    assert cancelled == [(1, "run_execution_cancelled")]
 
 
 def test_workflow_event_dispatcher_swallows_projector_failure() -> None:
@@ -220,7 +237,7 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     service._session_factory = None
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: Projector())
     monkeypatch.setattr(
-        "app.service.task.conversation_run_service.get_model_config_service",
+        "app.service.conversation_run.conversation_run_service.get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _config_id: SimpleNamespace(
                 supports_reasoning_effort=False,

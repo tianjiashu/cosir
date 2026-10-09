@@ -636,3 +636,6 @@ async def test_preview_websocket_rejects_input_after_attach(tmp_path: Path) -> N
     assert any(item["type"] == "protocol_error" for item in websocket.sent)
     assert websocket.closed_with is not None and websocket.closed_with[0] == 1008
     assert factory.workers[0].writes == []
+
+# 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
+pytestmark = pytest.mark.usefixtures("backend_env")

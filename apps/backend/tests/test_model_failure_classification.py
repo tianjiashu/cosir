@@ -1,13 +1,16 @@
-"""模型失败分类与 Run 失败文案目录的契约测试。
+"""模型失败分类与响应消息提取的契约测试。
 
-本模块锁定三条对外契约：
+本模块锁定当前已定稿的两条对外契约（状态码不再参与分类，理由见 ``model_failure`` 模块
+docstring：端点业务码与状态码并不统一，框架不推断业务类别）：
 
-1. ``classify_model_failure`` 只按异常的**通用形状**（HTTP 状态码、异常类型名、错误文本里的
-   通用语义词）归类，输出必须是 ``ErrorKind`` 的 model 分类值；无法判定时返回 ``None``，而不是
-   猜测来源或抛出异常。
-2. 分类词表只有一处事实源：模型错误 code 一律取 ``ErrorKind``，本模块不另行定义字面量。
-3. ``run_failure_message`` 对每个可产出的 code 都给出**非空且 provider 无关**的中文文案：不含
-   任何厂商/模型名、不含状态码数字，未知 code 一律回退通用文案。
+1. ``classify_model_failure`` 只按异常的**类型名**识别「没有响应体」的传输层失败（超时 / 连接），
+   输出必须是 ``ErrorKind`` 的 model 分类值；其余一律返回 ``None``——不读状态码、不读异常文本、
+   不猜 provider 业务错误。
+2. ``extract_model_response_message`` 只从异常（含异常链）的响应体数据属性里取 provider 原始
+   ``message``，读不到返回 ``None``，且绝不上抛。
+
+另锁定两条文案契约：分类词表只有一处事实源（``ErrorKind``）；``run_failure_message`` 对每个可
+产出的 code 都给出非空、provider 无关且不含状态码数字的中文文案。
 """
 
 from __future__ import annotations
@@ -17,7 +20,10 @@ from types import SimpleNamespace
 import pytest
 
 from app.config.constant import Constant
-from app.core.llm_provider.model_failure import classify_model_failure
+from app.core.llm_provider.model_failure import (
+    classify_model_failure,
+    extract_model_response_message,
+)
 from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.error_kind import ErrorKind
 
@@ -37,19 +43,19 @@ _PROVIDER_TOKENS = (
 
 
 class _StatusError(Exception):
-    """等价于 provider SDK 状态异常的替身：只带 ``status_code``。"""
+    """只带 ``status_code`` 的替身：用于钉住「状态码不参与分类」。"""
 
     def __init__(self, status_code: object, message: str = "") -> None:
         super().__init__(message)
         self.status_code = status_code
 
 
-class _ResponseStatusError(Exception):
-    """只把状态码挂在 ``response`` 上的替身，覆盖鸭子类型读取的第二条路径。"""
+class _BodyError(Exception):
+    """带响应体数据属性的替身（OpenAI 兼容 SDK 形状）。"""
 
-    def __init__(self, status_code: int, message: str = "") -> None:
+    def __init__(self, body: object, message: str = "") -> None:
         super().__init__(message)
-        self.response = SimpleNamespace(status_code=status_code)
+        self.body = body
 
 
 class _TimeoutLikeError(Exception):
@@ -76,45 +82,11 @@ def _model_codes() -> list[str]:
     return [member.value for member in ErrorKind if member.name.startswith("MODEL_")]
 
 
-@pytest.mark.parametrize(
-    ("status_code", "expected_kind"),
-    [
-        (401, ErrorKind.MODEL_AUTH_FAILED),
-        (403, ErrorKind.MODEL_AUTH_FAILED),
-        (402, ErrorKind.MODEL_INSUFFICIENT_QUOTA),
-        (404, ErrorKind.MODEL_NOT_FOUND),
-        (408, ErrorKind.MODEL_TIMEOUT),
-        (413, ErrorKind.MODEL_CONTEXT_WINDOW_EXCEEDED),
-        (429, ErrorKind.MODEL_RATE_LIMITED),
-        (500, ErrorKind.MODEL_SERVICE_ERROR),
-        (503, ErrorKind.MODEL_SERVICE_ERROR),
-        (504, ErrorKind.MODEL_TIMEOUT),
-        (400, ErrorKind.MODEL_INVALID_REQUEST),
-        (418, ErrorKind.MODEL_INVALID_REQUEST),
-    ],
-)
-def test_status_code_is_classified_into_error_kind(
-    status_code: int, expected_kind: ErrorKind
-) -> None:
-    """状态码是首选判据：4xx 分档、5xx 统一服务端故障，输出取 ``ErrorKind``。"""
-
-    assert classify_model_failure(_StatusError(status_code)) == expected_kind.value
-
-
-def test_status_code_is_read_from_response_when_missing_at_top_level() -> None:
-    """顶层没有 ``status_code`` 时回退读 ``response.status_code``。"""
-
-    assert classify_model_failure(_ResponseStatusError(429)) == ErrorKind.MODEL_RATE_LIMITED.value
-
-
-def test_boolean_status_code_is_not_treated_as_http_status() -> None:
-    """``bool`` 是 ``int`` 的子类，但不得被当作状态码（否则 1xx 判定会误命中）。"""
-
-    assert classify_model_failure(_StatusError(True)) is None
+# --- classify_model_failure：只认传输层类型名 --------------------------------------------
 
 
 def test_exception_type_name_carries_timeout_and_connection_semantics() -> None:
-    """顶层无语义状态码时，按异常类型名判定超时与网络不可达。"""
+    """按异常类型名判定超时与网络不可达——这两类通常没有响应体。"""
 
     assert classify_model_failure(_TimeoutLikeError("boom")) == ErrorKind.MODEL_TIMEOUT.value
     assert (
@@ -123,36 +95,19 @@ def test_exception_type_name_carries_timeout_and_connection_semantics() -> None:
     assert classify_model_failure(TimeoutError("boom")) == ErrorKind.MODEL_TIMEOUT.value
 
 
-@pytest.mark.parametrize(
-    ("message", "expected_kind"),
-    [
-        ("Error code: 402 - Insufficient Balance", ErrorKind.MODEL_INSUFFICIENT_QUOTA),
-        ("you exceeded your current quota", ErrorKind.MODEL_INSUFFICIENT_QUOTA),
-        ("Rate limit reached for requests", ErrorKind.MODEL_RATE_LIMITED),
-        ("Too Many Requests", ErrorKind.MODEL_RATE_LIMITED),
-        ("invalid api key provided", ErrorKind.MODEL_AUTH_FAILED),
-        ("Unauthorized", ErrorKind.MODEL_AUTH_FAILED),
-        ("no such model: foo", ErrorKind.MODEL_NOT_FOUND),
-        ("maximum context length is 128000 tokens", ErrorKind.MODEL_CONTEXT_WINDOW_EXCEEDED),
-        ("content filter triggered", ErrorKind.MODEL_CONTENT_BLOCKED),
-        ("request timed out", ErrorKind.MODEL_TIMEOUT),
-    ],
-)
-def test_error_text_keywords_are_used_as_last_resort(
-    message: str, expected_kind: ErrorKind
-) -> None:
-    """文本语义只作兜底，且只匹配通用计费/限流/鉴权/模型/上下文/审核语义词。"""
+def test_status_code_attributes_are_ignored() -> None:
+    """状态码不参与分类：带状态码的异常同样返回 ``None``，业务类别交给响应体消息通道。"""
 
-    assert classify_model_failure(Exception(message)) == expected_kind.value
+    for status_code in (400, 401, 402, 403, 404, 408, 413, 418, 429, 500, 503, 504, True):
+        assert classify_model_failure(_StatusError(status_code)) is None
 
 
-def test_status_code_wins_over_error_text() -> None:
-    """状态码优先：429 的报文里即使出现余额字样，也应归类为限流。"""
+def test_error_text_is_never_guessed_into_a_business_kind() -> None:
+    """异常文本不参与分类：报文体里的限流/余额字样不得被推断成业务类别。"""
 
-    assert (
-        classify_model_failure(_StatusError(429, "insufficient balance"))
-        == ErrorKind.MODEL_RATE_LIMITED.value
-    )
+    assert classify_model_failure(Exception("insufficient balance")) is None
+    assert classify_model_failure(Exception("Rate limit reached for requests")) is None
+    assert classify_model_failure(_StatusError(429, "insufficient balance")) is None
 
 
 def test_unrecognized_exception_returns_none_instead_of_guessing() -> None:
@@ -165,16 +120,79 @@ def test_classification_result_is_always_a_usable_end_reason_identifier() -> Non
     """分类结果必须可直接写入 ``end_reason``（合法标识符）。"""
 
     samples: list[BaseException] = [
-        _StatusError(402),
-        _StatusError(503),
-        _ResponseStatusError(404),
         _TimeoutLikeError("boom"),
-        Exception("insufficient balance"),
+        _ConnectionLikeError("boom"),
+        TimeoutError("boom"),
+        ConnectionError("boom"),
     ]
+
     for sample in samples:
         outcome = classify_model_failure(sample)
         assert outcome is not None
         assert outcome.isidentifier()
+
+
+# --- extract_model_response_message：只取响应体里的原始 message --------------------------
+
+
+def test_response_message_is_extracted_from_nested_error_body() -> None:
+    """OpenAI 兼容形状：``body["error"]["message"]`` 必须原样取出（仅去首尾空白）。"""
+
+    exc = _BodyError({"error": {"message": "  Insufficient Balance  ", "type": "quota"}})
+
+    assert extract_model_response_message(exc) == "Insufficient Balance"
+
+
+def test_response_message_reads_plain_and_json_bodies() -> None:
+    """裸 ``{"message": ...}``、``msg`` 别名与 JSON 字符串响应体都要能提取。"""
+
+    assert extract_model_response_message(_BodyError({"message": "bad request"})) == "bad request"
+    assert extract_model_response_message(_BodyError({"error": {"msg": "boom"}})) == "boom"
+    assert (
+        extract_model_response_message(_BodyError('{"error": {"message": "quota exceeded"}}'))
+        == "quota exceeded"
+    )
+
+
+def test_response_message_walks_the_exception_chain() -> None:
+    """外层异常没有响应体时，沿异常链向 cause 查找。"""
+
+    inner = _BodyError({"error": {"message": "model not found"}})
+    outer = RuntimeError("wrapped provider failure")
+    outer.__cause__ = inner
+
+    assert extract_model_response_message(outer) == "model not found"
+
+
+def test_response_message_is_none_without_readable_body() -> None:
+    """没有响应体、响应体不是映射、或映射里没有 message 时返回 ``None``。"""
+
+    assert extract_model_response_message(TimeoutError("boom")) is None
+    assert extract_model_response_message(_BodyError("not json")) is None
+    assert extract_model_response_message(_BodyError({"error": {"code": "x"}})) is None
+    assert extract_model_response_message(_BodyError(None)) is None
+
+
+def test_response_message_ignores_blank_and_non_string_messages() -> None:
+    """空串、纯空白与非字符串 message 都不算有效消息。"""
+
+    assert extract_model_response_message(_BodyError({"error": {"message": "   "}})) is None
+    assert extract_model_response_message(_BodyError({"error": {"message": 42}})) is None
+
+
+def test_response_message_never_raises_on_hostile_body() -> None:
+    """响应体属性读取抛异常时返回 ``None``，不影响失败收尾。"""
+
+    class _HostileBody:
+        def __getitem__(self, _key: object) -> object:
+            raise RuntimeError("hostile body")
+
+    exc = _BodyError(_HostileBody())
+
+    assert extract_model_response_message(exc) is None
+
+
+# --- 文案目录 ---------------------------------------------------------------------------
 
 
 def test_failure_codes_are_unique_identifiers_with_message() -> None:
@@ -193,16 +211,9 @@ def test_every_classifiable_code_has_its_own_message() -> None:
 
     fallback = run_failure_message(None)
     produced = {
-        classify_model_failure(_StatusError(status_code))
-        for status_code in (400, 401, 402, 403, 404, 408, 413, 418, 429, 500, 503, 504)
+        classify_model_failure(_TimeoutLikeError("boom")),
+        classify_model_failure(_ConnectionLikeError("boom")),
     }
-    produced.update(
-        {
-            classify_model_failure(_TimeoutLikeError("boom")),
-            classify_model_failure(_ConnectionLikeError("boom")),
-            classify_model_failure(Exception("content filter triggered")),
-        }
-    )
     produced.discard(None)
     assert produced
     for code in produced:
@@ -226,3 +237,18 @@ def test_unknown_code_falls_back_to_generic_message() -> None:
     assert fallback.strip()
     assert run_failure_message(Constant.Run.RUN_FAILURE_CODE_UNKNOWN) == fallback
     assert run_failure_message("totally_unknown_code") == fallback
+
+
+@pytest.mark.parametrize("body", [{"error": {"message": "x"}}, "{\"message\": \"x\"}"])
+def test_response_message_shapes_stay_supported(body: object) -> None:
+    """两种受支持形状（映射与 JSON 字符串）在参数化输入下都返回同一条消息。"""
+
+    assert extract_model_response_message(_BodyError(body)) == "x"
+
+
+def test_simple_namespace_body_is_not_a_mapping() -> None:
+    """``SimpleNamespace`` 不是 ``Mapping``：按无响应体处理，不猜属性。"""
+
+    exc = _BodyError(SimpleNamespace(message="should not be read"))
+
+    assert extract_model_response_message(exc) is None

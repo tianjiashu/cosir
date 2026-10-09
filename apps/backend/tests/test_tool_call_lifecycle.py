@@ -97,25 +97,30 @@ class _LifecycleHarness:
         return result
 
     def create(self, tool_call: ToolCall) -> None:
-        """创建工具调用并保存返回的 state 快照。"""
+        """创建工具调用并保存返回的 state 快照（参数在创建期落进记录）。"""
 
         with self._patch_runtime():
             self.manager = self.manager.create(
                 task_id=1,
                 run_id=2,
                 step_id="step-3",
-                raw_tool_calls=[{"id": tool_call.call_id, "name": tool_call.tool_name}],
+                raw_tool_calls=[
+                    {
+                        "id": tool_call.call_id,
+                        "name": tool_call.tool_name,
+                        "args": tool_call.arguments,
+                    }
+                ],
             )
 
-    def begin(self, call_id: str, args: dict[str, object] | None = None) -> None:
-        """开始一个已创建的工具调用。"""
+    def begin(self, call_id: str) -> None:
+        """把已创建的工具调用迁移为 running（迁移只按状态判定，不再重传参数）。"""
 
         with self._patch_runtime():
             self.manager = self.manager.begin(
                 task_id=1,
                 run_id=2,
                 step_id="step-3",
-                tool_calls=[ToolCall(tool_name="read_file", call_id=call_id, arguments=args or {})],
             )
 
     def cancel(self) -> None:
@@ -208,12 +213,14 @@ def test_create_begin_and_cancel_update_serializable_state() -> None:
 
     harness = _LifecycleHarness()
     original = harness.manager
-    harness.create(ToolCall(tool_name="read_file", call_id="call-1"))
+    harness.create(
+        ToolCall(tool_name="read_file", call_id="call-1", arguments={"path": "a.py"})
+    )
     assert harness.manager is not original
     assert harness.manager.valid_calls["call-1"].status == "pending"
     assert harness.events[0].type == "tool_call_created"
 
-    harness.begin("call-1", {"path": "a.py"})
+    harness.begin("call-1")
     assert harness.manager.valid_calls["call-1"].status == "running"
     assert harness.manager.valid_calls["call-1"].args == {"path": "a.py"}
     assert harness.events[1].args == {"path": "a.py"}
@@ -262,17 +269,15 @@ def test_banned_tool_is_filtered_from_live_projection_and_execution() -> None:
 
     with harness._patch_runtime():
         harness.manager = harness.manager.classify(
-            task_id=1,
-            run_id=2,
-            step_id="step-3",
-            tool_calls=[ToolCall(tool_name="read_file", call_id="blocked-call")],
+            tool_calls=[{"name": "read_file", "args": {}, "id": "blocked-call"}],
             invalid_tool_calls=[],
         )
 
     assert harness.events == []
     assert harness.manager.valid_calls == {}
     assert harness.manager.valid_tools == []
-    assert not harness.manager.has_call
+    # 隐藏闭合的调用同样算「已登记」：``has_call`` 覆盖两个集合，只是前端没有对应 part。
+    assert harness.manager.has_call
     assert [record.tool_call_id for record in harness.manager.blocked_calls.values()] == [
         "blocked-call"
     ]
@@ -299,23 +304,25 @@ def test_mixed_banned_tool_only_projects_and_executes_allowed_call() -> None:
             ],
         )
         harness.manager = harness.manager.classify(
-            task_id=1,
-            run_id=2,
-            step_id="step-3",
             tool_calls=[
-                ToolCall(tool_name="read_file", call_id="blocked"),
-                ToolCall(tool_name="write_file", call_id="allowed"),
+                {"name": "read_file", "args": {}, "id": "blocked"},
+                {"name": "write_file", "args": {}, "id": "allowed"},
             ],
             invalid_tool_calls=[],
         )
 
-    assert [event.tool_call_id for event in harness.events] == ["allowed", "allowed"]
+    # ``classify`` 只重建集合、不发事件；创建事件由 ``create`` 发出（此处只有一条 allowed）。
+    assert [event.tool_call_id for event in harness.events] == ["allowed"]
     assert [record.tool_call_id for record in harness.manager.valid_tools] == ["allowed"]
     assert [record.tool_call_id for record in harness.manager.blocked_calls.values()] == ["blocked"]
 
 
-def test_close_blocked_calls_injects_cancelled_tool_message() -> None:
-    """close_blocked_calls 为每个禁用调用补发 cancelled ToolMessage 并返回数量。"""
+def test_blocked_call_closure_is_settled_without_status_event() -> None:
+    """禁用调用的模型协议闭合由 ``settle`` 负责：写 ToolMessage，但不发终态事件。
+
+    禁用调用同样会送执行层（由门禁产出拒绝观察），因此它走正常结算路径；它没有前端 part，
+    事件必须被跳过（判据与 ``cancel`` 共用 ``part_projected``）。
+    """
 
     # 注册工具集含 read_file（真实禁用场景：已注册但不在本轮白名单），
     # 仅 write_file 在本轮 allows_tools 中。
@@ -333,14 +340,21 @@ def test_close_blocked_calls_injects_cancelled_tool_message() -> None:
             step_id="step-3",
             raw_tool_calls=[{"id": "blocked", "name": "read_file"}],
         )
-        count = harness.manager.close_blocked_calls(task_id=1, run_id=2, step_id="step-3")
-    assert count == 1
+        harness.manager, event_status = harness.manager.settle(
+            task_id=1,
+            run_id=2,
+            step_id="step-3",
+            summary=_summary(
+                tool_call_id="blocked",
+                status="error",
+                error="tool is not allowed for this run",
+            ),
+        )
+
+    assert event_status == "failed"
     assert len(harness.messages) == 1
-    msg = harness.messages[0]
-    assert isinstance(msg, ToolMessage)
-    assert msg.tool_call_id == "blocked"
-    assert msg.name == "read_file"
-    assert msg.content == "This tool is disabled for the current run.Do not call again"
+    assert harness.events == [], "隐藏闭合不得发终态事件"
+    assert harness.manager.blocked_calls["blocked"].status == "failed"
 
 
 def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:

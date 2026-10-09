@@ -25,42 +25,55 @@ class _RunService:
         return self.run
 
 
-def _build_executor(service: object) -> ConversationRunExecutor:
-    """绕过依赖装配构造只注入 run service 与进程内信号源的执行器实例。"""
+class _TerminalStub:
+    """terminal session service 替身：签名与真实服务一致（``reason`` 为 keyword-only）。"""
+
+    def begin_run(self, _run_id: int) -> None:
+        return None
+
+    def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
+        return None
+
+
+def _build_executor(service: object, terminal: object | None = None) -> ConversationRunExecutor:
+    """绕过依赖装配构造执行器实例，显式注入它在 ``__init__`` 中捕获的协作者。
+
+    ``get_runtime`` 是调用期解析（见 ``_patch_drivers``），不需要注入。
+    """
 
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = service
     executor._signal = cancellation_registry
     executor._event_projector = None
     executor._executions = {}
+    executor._terminal_session_service = terminal or _TerminalStub()
     return executor
 
 
 class _StubRuntime:
-    """替代真实 AgentRuntime：``execute_run`` 的行为由用例注入。"""
+    """替代真实 AgentRuntime：``run_agent`` 的驱动行为由用例注入。"""
 
     def __init__(self, behavior: Callable[[], Awaitable[None]]) -> None:
         self._behavior = behavior
 
-    async def execute_run(self, **_kwargs: Any) -> None:
+    def resolve_agent_profile_for_run(self, _run: Any) -> Any:
+        return object()
+
+    async def run_agent(self, _agent: Any, **_kwargs: Any) -> None:
         await self._behavior()
 
 
 def _patch_drivers(
     monkeypatch: pytest.MonkeyPatch,
     behavior: Callable[[], Awaitable[None]],
+    *,
+    executor: ConversationRunExecutor,
+    terminal: object | None = None,
 ) -> None:
-    """把执行器依赖的 runtime 与 terminal service 替换为可控替身。"""
+    """把 ``get_runtime`` 替换为可控替身，并把 terminal service 替身注入执行器。"""
 
     monkeypatch.setattr(executor_module, "get_runtime", lambda: _StubRuntime(behavior))
-    monkeypatch.setattr(
-        executor_module,
-        "get_terminal_session_service",
-        lambda: SimpleNamespace(
-            begin_run=lambda _run_id: None,
-            close_run_terminals=lambda *_args, **_kwargs: None,
-        ),
-    )
+    executor._terminal_session_service = terminal or _TerminalStub()
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +97,7 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
     async def runner() -> None:
         await asyncio.Event().wait()
 
-    _patch_drivers(monkeypatch, runner)
+    _patch_drivers(monkeypatch, runner, executor=executor)
 
     execution = await executor.start(_RUN_ID, "fresh")
     try:
@@ -100,23 +113,17 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
 @pytest.mark.asyncio
 async def test_cancel_closes_terminals_off_event_loop() -> None:
     service = _RunService(status="running")
-    executor = _build_executor(service)
     entered = threading.Event()
     release = threading.Event()
     close_thread_id: list[int] = []
 
-    class _BlockingTerminalService:
-        def close_run_terminals(self, run_id: int, *, reason: str) -> None:
+    class _BlockingTerminalService(_TerminalStub):
+        def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
             close_thread_id.append(threading.get_ident())
             entered.set()
             release.wait()
 
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(
-        executor_module,
-        "get_terminal_session_service",
-        lambda: _BlockingTerminalService(),
-    )
+    executor = _build_executor(service, _BlockingTerminalService())
     try:
         cancel_task = asyncio.create_task(executor.cancel(_RUN_ID))
         await asyncio.wait_for(asyncio.to_thread(entered.wait), timeout=1)
@@ -135,7 +142,6 @@ async def test_cancel_closes_terminals_off_event_loop() -> None:
         assert close_thread_id[0] != threading.get_ident()
     finally:
         release.set()
-        monkeypatch.undo()
 
 
 @pytest.mark.asyncio

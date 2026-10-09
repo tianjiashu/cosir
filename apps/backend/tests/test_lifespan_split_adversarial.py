@@ -1016,3 +1016,6 @@ def test_lifespan_shutdown_failure_still_calls_shutdown_logging(
         asyncio.run(_drive())
 
     assert stubbed_lifespan.shutdown_logging_calls == 2
+
+# 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
+pytestmark = pytest.mark.usefixtures("backend_env")

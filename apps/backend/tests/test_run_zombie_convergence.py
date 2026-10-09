@@ -4,7 +4,9 @@
 移交能保证落终态的执行体（workflow / executor），要么当场收敛。覆盖两条链路：
 
 - ``ConversationRunExecutor._execute``：驱动结束（runner 抛错 / 被取消）但 run 仍
-  pending/running 时，经 ``_converge_unfinished_run`` 条件收敛为 failed/cancelled；
+  pending/running 时，经 ``_converge_unfinished_run`` 条件收敛为 ``cancelled``
+  （``run_execution_cancelled``）；「驱动异常死亡」与「关闭期取消」共用同一条收敛路径，
+  前者若已由 ``AgentRuntime`` 落定为 failed，条件更新自然落空、不覆盖；
 - ``ConversationRunCommandService``：``start_run``（编辑重跑复用同一条新建路径）事务
   提交后的投影、认领、快照重读任一步失败时，以 ``run_setup_failed`` 当场收敛再抛出。
 """
@@ -37,20 +39,13 @@ _TASK_ID = 7
 
 
 class _ExecutorRunService:
-    """复刻执行器所需的最小 run service 语义，记录两条条件收敛入口的调用。"""
+    """复刻执行器所需的 run service / run 状态服务语义，记录条件收敛入口的调用。"""
 
     def __init__(self, status: str = "running") -> None:
         self.run = SimpleNamespace(id=_RUN_ID, task_id=_TASK_ID, status=status)
-        self.failed: list[tuple[int, str | None]] = []
         self.cancelled: list[tuple[int, str]] = []
 
     def get_run(self, _run_id: int) -> SimpleNamespace:
-        return self.run
-
-    def fail_run_if_running(
-        self, run_id: int, end_reason: str | None = None, **_kwargs: Any
-    ) -> SimpleNamespace:
-        self.failed.append((run_id, end_reason))
         return self.run
 
     def cancel_run_if_running(
@@ -60,24 +55,36 @@ class _ExecutorRunService:
         return self.run
 
 
-def _build_executor(service: _ExecutorRunService) -> ConversationRunExecutor:
-    """绕过依赖装配构造只注入 run service 的执行器实例（projector 置空跳过工具投影）。"""
+def _build_executor(
+    service: _ExecutorRunService,
+    terminal: "_StubTerminal | None" = None,
+) -> ConversationRunExecutor:
+    """绕过依赖装配构造执行器实例，显式注入它捕获的协作者（projector 置空跳过工具投影）。
+
+    执行器在 ``__init__`` 中捕获 run service / run 状态服务 / terminal service，因此这里必须
+    逐个注入；``get_runtime`` 是调用期解析（见 ``_patch_drivers``），不需要注入。
+    """
 
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = service
+    executor._run_state_service = service
+    executor._terminal_session_service = terminal or _StubTerminal([])
     executor._event_projector = None
     executor._executions = {}
     return executor
 
 
 class _StubRuntime:
-    """替代真实 AgentRuntime：``execute_run`` 的行为由用例注入（旧契约里的 runner 角色）。"""
+    """替代真实 AgentRuntime：``run_agent`` 的驱动行为由用例注入。"""
 
     def __init__(self, behavior: Callable[[], Awaitable[None]]) -> None:
         self._behavior = behavior
         self.calls: list[dict[str, Any]] = []
 
-    async def execute_run(self, **kwargs: Any) -> None:
+    def resolve_agent_profile_for_run(self, _run: Any) -> Any:
+        return object()
+
+    async def run_agent(self, _agent: Any, **kwargs: Any) -> None:
         self.calls.append(kwargs)
         await self._behavior()
 
@@ -98,17 +105,15 @@ class _StubTerminal:
 def _patch_drivers(
     monkeypatch: pytest.MonkeyPatch,
     behavior: Callable[[], Awaitable[None]],
-    calls: list[str] | None = None,
+    *,
+    executor: ConversationRunExecutor,
+    terminal: "_StubTerminal | None" = None,
 ) -> _StubRuntime:
-    """把执行器依赖的 runtime 与 terminal service 替换为可控替身。"""
+    """把执行器依赖的 runtime 替换为可控替身，并注入 terminal service 替身。"""
 
     runtime = _StubRuntime(behavior)
     monkeypatch.setattr(executor_module, "get_runtime", lambda: runtime)
-    monkeypatch.setattr(
-        executor_module,
-        "get_terminal_session_service",
-        lambda: _StubTerminal(calls if calls is not None else []),
-    )
+    executor._terminal_session_service = terminal or _StubTerminal([])
     return runtime
 
 
@@ -116,7 +121,7 @@ def _patch_drivers(
 async def test_executor_converges_run_when_runner_raises_before_terminal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """runner（含 workflow 进入前的 setup 步骤）抛错且 run 未落终态时，兜底收敛为 failed。"""
+    """runner（含 workflow 进入前的 setup 步骤）抛错且 run 未落终态时，兜底收敛为 cancelled。"""
 
     service = _ExecutorRunService()
     executor = _build_executor(service)
@@ -124,13 +129,12 @@ async def test_executor_converges_run_when_runner_raises_before_terminal(
     async def runner() -> None:
         raise RuntimeError("setup died before workflow")
 
-    _patch_drivers(monkeypatch, runner)
+    _patch_drivers(monkeypatch, runner, executor=executor)
 
     # ``_execute`` 在内部收口驱动期异常（不外抛），由兜底收敛把仍未落终态的 run 收敛。
     await executor._execute(_RUN_ID, "fresh")
 
-    assert service.failed == [(_RUN_ID, "run_execution_ended_without_terminal")]
-    assert service.cancelled == []
+    assert service.cancelled == [(_RUN_ID, "run_execution_cancelled")]
 
 
 @pytest.mark.asyncio
@@ -145,7 +149,7 @@ async def test_executor_converges_run_when_task_cancelled(
     async def runner() -> None:
         await asyncio.Event().wait()
 
-    _patch_drivers(monkeypatch, runner)
+    _patch_drivers(monkeypatch, runner, executor=executor)
 
     execution = await executor.start(_RUN_ID, "fresh")
     # 先让后台 task 真正开始驱动，再取消：未调度就取消会让 _execute 整体不执行。
@@ -155,7 +159,6 @@ async def test_executor_converges_run_when_task_cancelled(
     await asyncio.gather(execution, return_exceptions=True)
 
     assert service.cancelled == [(_RUN_ID, "run_execution_cancelled")]
-    assert service.failed == []
 
 
 @pytest.mark.asyncio
@@ -178,10 +181,7 @@ async def test_executor_cleanup_failures_do_not_skip_later_cleanup(
         calls.append("runner")
         raise RuntimeError("runner failed")
 
-    _patch_drivers(monkeypatch, runner, calls)
-    monkeypatch.setattr(
-        executor_module, "get_terminal_session_service", lambda: _BrokenTerminal(calls)
-    )
+    _patch_drivers(monkeypatch, runner, executor=executor, terminal=_BrokenTerminal(calls))
 
     # 驱动期异常与清理失败都在执行器内收口为日志，收尾仍按序执行。
     await executor._execute(_RUN_ID, "fresh")
@@ -192,7 +192,7 @@ async def test_executor_cleanup_failures_do_not_skip_later_cleanup(
         "terminal_close:run_execution_finished",
     ]
     assert executor._executions == {}
-    assert service.failed == [(_RUN_ID, "run_execution_ended_without_terminal")]
+    assert service.cancelled == [(_RUN_ID, "run_execution_cancelled")]
 
 
 # --------------------------------------------------------------------- command service

@@ -18,8 +18,11 @@ from app.utils.path import system_cosir as paths
 
 
 @pytest.fixture
-def storage(tmp_path: Path):
-    """为 provisional Task 测试提供隔离数据库和附件目录。"""
+def storage(tmp_path: Path, install_process_singletons):
+    """为 provisional Task 测试提供隔离数据库和附件目录，并装配进程级单例。
+
+    Task 清理链路会读 agent 目录（未装配即 ``RuntimeError``）；单例必须在主库初始化之后安装。
+    """
 
     close_service_dependencies()
     db_dir = tmp_path / "storage"
@@ -30,6 +33,7 @@ def storage(tmp_path: Path):
         LOG_DIR=db_dir / "logs",
     )
     init_storage()
+    install_process_singletons()
     task_runtime_spaces.close()
     yield tmp_path
     task_runtime_spaces.close()

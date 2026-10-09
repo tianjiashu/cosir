@@ -1109,22 +1109,29 @@ def test_module_reads_projector_from_service_depends() -> None:
 
 def test_real_storage_backed_projection_updates_snapshot(
     monkeypatch: pytest.MonkeyPatch,
+    backend_env: None,
+    tmp_path: Path,
 ) -> None:
-    """判据 E 真实 storage：用 ``init_storage()`` 后经真实 state service 投影，快照终态落值。"""
+    """判据 E 真实 storage：经真实 state service 投影后，快照终态落值。
 
-    from app.storage.store_engines import init_storage
-
-    init_storage()
+    任务运行时空间在构造时会从主库读 task / workspace，因此这里先经真实服务建出容器，再用它们
+    的 id 驱动投影（不再硬编码一个不存在的 task_id）。
+    """
 
     from app.assistant_transport.service.conversation_task_state_service import (
         ConversationTaskStateService,
     )
+    from app.service.depends import get_workspace_service
 
     ConversationTaskStateService.clear_process_state()
     projector = ConversationEventProjector()
     _install_projector(monkeypatch, projector)
 
-    task_id = 991_873
+    root = tmp_path / "projection-workspace"
+    root.mkdir()
+    workspace = get_workspace_service().create_workspace("projection", str(root))
+    task = get_workspace_service().create_task(workspace.id, "projection-task")
+    task_id = task.id
     # 直接向进程内 state service 注入一条 run 骨架，使投影能命中 part。
     state = empty_snapshot()
     state["runs"] = [
@@ -1186,13 +1193,6 @@ def _part_from_state(state: ConversationStateSnapshot, run_id: int, call_id: str
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("status", ["success", "error", "cancelled", "weird", ""])
-def test_lifecycle_event_status_delegates_to_projection(status: str) -> None:
-    """judged: lifecycle ``_event_status`` 逐分支等于投影模块 ``terminal_status``（无第二份映射）。"""
-
-    from app.core.workflows.react.node_helper.tool_call_lifecycle import _event_status
-
-    assert _event_status(status) == terminal_status(status)
 
 
 @pytest.mark.parametrize(
@@ -1568,59 +1568,6 @@ def test_settle_overwrites_existing_result_row_and_still_emits_terminal_event() 
     assert [event.status for event in harness.events] == ["completed"]
 
 
-def test_fail_invalid_tools_emits_failed_and_returns_repair_message() -> None:
-    """非法调用收口：补发恰一次 failed 终态事件，返回**状态已前进**的新快照与修复提示。
-
-    ``fail_invalid_tools`` 遵循本类的 copy-on-write 约定，必须在返回值里交出迁移后的 manager；
-    调用方丢弃该返回值会让记录停在 ``pending``（历史缺陷），故本用例同时锁定「返回的新快照中
-    该调用已为 failed」这一契约。
-    """
-
-    harness = _LifecycleHarness()
-    harness.manager.invalid_calls["bad"] = ToolCallLifecycleRecord(
-        tool_call_id="bad",
-        tool_name="read_file",
-        invalid_detail={"name": "read_file", "args": "{bad", "error": "invalid json"},
-    )
-
-    with harness._patch_runtime():
-        updated, repair = harness.manager.fail_invalid_tools(
-            task_id=1, run_id=2, step_id="step-3"
-        )
-
-    events = [e for e in harness.events if isinstance(e, ToolCallStatusChangedEvent)]
-    assert len(events) == 1
-    assert events[0].tool_call_id == "bad"
-    assert events[0].status == "failed"
-    assert events[0].error == "参数无效"
-    assert repair is not None and "read_file" in repair
-    assert updated.invalid_calls["bad"].status == "failed"
-    # 原快照不被就地改写（copy-on-write）：状态与对象身份都必须不同，浅共享的伪实现会在此失败。
-    assert harness.manager.invalid_calls["bad"].status == "pending"
-    assert harness.manager.invalid_calls["bad"] is not updated.invalid_calls["bad"]
-
-
-def test_fail_invalid_tools_no_repair_for_non_pending() -> None:
-    """缺陷类型：已终态的非法调用被重复收口（应跳过、返回 None）。"""
-
-    harness = _LifecycleHarness()
-    harness.manager.invalid_calls["bad"] = ToolCallLifecycleRecord(
-        tool_call_id="bad",
-        tool_name="read_file",
-        status="failed",
-        invalid_detail={"name": "read_file", "args": "{}", "error": "x"},
-    )
-
-    with harness._patch_runtime():
-        updated, repair = harness.manager.fail_invalid_tools(
-            task_id=1, run_id=2, step_id="step-3"
-        )
-
-    assert repair is None
-    assert harness.events == []
-    assert updated.invalid_calls["bad"].status == "failed"
-
-
 def test_cancel_moves_pending_and_running_only() -> None:
     """缺陷类型：cancel 误伤已终态调用，将其改写为 cancelled（判据：收口判据是状态）。"""
 
@@ -1642,73 +1589,6 @@ def test_cancel_moves_pending_and_running_only() -> None:
     assert sorted(e.tool_call_id for e in harness.events) == ["p", "r"]
     assert all(e.status == "cancelled" for e in harness.events)
 
-
-def test_classify_invalid_id_never_enters_running() -> None:
-    """缺陷类型：非法调用（id 命中非法集合）被当作合法进入 running，污染展示。"""
-
-    harness = _LifecycleHarness()
-    harness.manager.valid_calls["bad"] = ToolCallLifecycleRecord(
-        tool_call_id="bad", tool_name="read_file", status="pending"
-    )
-
-    with harness._patch_runtime():
-        harness.manager = harness.manager.classify(
-            task_id=1,
-            run_id=2,
-            step_id="step-3",
-            tool_calls=[ToolCall(tool_name="read_file", call_id="bad", arguments={"path": "a"})],
-            invalid_tool_calls=[{"id": "bad", "name": "read_file", "args": "{", "error": "e"}],
-        )
-
-    record = harness.manager.invalid_calls["bad"]
-    assert record.status == "pending", "非法调用不得进入 running"
-    assert record.invalid_detail is not None
-    assert record.invalid_detail["error"] == "e"
-
-
-def test_classify_invalid_without_id_is_ignored_with_warning(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """缺陷类型：缺 id 的非法调用被强行建记录，污染生命周期（混合 id/无 id 场景）。"""
-
-    harness = _LifecycleHarness()
-    with caplog.at_level("WARNING", logger="coding_agent.backend"):
-        with harness._patch_runtime():
-            harness.manager = harness.manager.classify(
-                task_id=1,
-                run_id=2,
-                step_id="step-3",
-                tool_calls=[],
-                invalid_tool_calls=[
-                    {"id": "with-id", "name": "read_file", "args": "{", "error": "e"},
-                    {"name": "read_file", "args": "{", "error": "e"},
-                ],
-            )
-
-    assert set(harness.manager.invalid_calls) == {"with-id"}
-    assert "lifecycle_invalid_tool_call_no_id" in {r.message for r in caplog.records}
-
-
-def test_classify_all_id_less_invalid_calls_are_ignored(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """缺陷类型：全部非法调用都缺 id 时，不得为它们建记录（判据：无法对齐即噪声）。
-
-    ``lifecycle_invalid_tool_call_no_id`` warning 现已上移到 ``classify`` 提前返回之前，
-    本场景同样会留痕；本用例只断言无记录被建。
-    """
-
-    harness = _LifecycleHarness()
-    with harness._patch_runtime():
-        harness.manager = harness.manager.classify(
-            task_id=1,
-            run_id=2,
-            step_id="step-3",
-            tool_calls=[],
-            invalid_tool_calls=[{"name": "read_file", "args": "{", "error": "e"}],
-        )
-
-    assert harness.manager.valid_calls == {} and harness.manager.invalid_calls == {}
 
 
 # ---------------------------------------------------------------------------

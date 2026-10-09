@@ -19,6 +19,10 @@ from langchain_core.messages import ToolMessage
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolObservation
+from app.core.workflows.react.node_helper.tool_call_lifecycle import (
+    ToolCallLifecycleManager,
+    ToolCallLifecycleRecord,
+)
 from app.core.workflows.react.nodes import observation_node as observe_module
 from app.core.workflows.react.nodes import tools_node as tools_module
 from app.core.workflows.react.worflow_state.route import ReactRoute
@@ -26,7 +30,11 @@ from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
 def _state(**overrides: Any) -> ReactGraphState:
-    """构造最小可执行的 ReAct graph state。"""
+    """构造最小可执行的 ReAct graph state。
+
+    ``tool_request`` 是历史 state 字段，现在只作为用例声明「本批有哪些调用」的输入：真正的调用
+    集合由 ``tool_call_lifecycle`` 承载（``model`` 节点写入），因此这里把它翻译成一份未起跑的快照。
+    """
 
     values: dict[str, Any] = {
         "step_count": 1,
@@ -36,10 +44,27 @@ def _state(**overrides: Any) -> ReactGraphState:
         "max_steps": 10,
         "final_text": "",
         "last_tool_results": {"instruction": "", "observations": []},
-        "tool_request": {},
+        "tool_call_lifecycle": _pending_lifecycle(overrides.get("tool_request")),
     }
     values.update(overrides)
     return ReactGraphState(**values)
+
+
+def _pending_lifecycle(tool_request: dict[str, Any] | None) -> ToolCallLifecycleManager:
+    """把用例声明的调用集合构造成本批「尚未起跑」的生命周期快照。"""
+
+    calls = (tool_request or {}).get("tool_calls", [])
+    return ToolCallLifecycleManager(
+        allows_tools=("list_directory",),
+        valid_calls={
+            call["id"]: ToolCallLifecycleRecord(
+                tool_call_id=call["id"],
+                tool_name=call["name"],
+                status="pending",
+            )
+            for call in calls
+        },
+    )
 
 
 class _WorkflowHarness:
@@ -65,7 +90,12 @@ class _WorkflowHarness:
                 content=observation.content, tool_call_id=observation.tool_call_id
             ),
         )
-        self.runtime_config = SimpleNamespace(operations=self.operations, usage_stats=None)
+        # ``run`` 供 ``begin`` 发 running 事件时定位（run_id）；缺失会在工具节点内 AttributeError。
+        self.runtime_config = SimpleNamespace(
+            operations=self.operations,
+            run=SimpleNamespace(id=2),
+            usage_stats=None,
+        )
 
         def add_message(message: Any, **_kwargs: Any) -> str:
             self.messages.append(message)

@@ -362,12 +362,14 @@ async def test_p1_running_records_are_not_replayed() -> None:
     assert captured["calls"] == [], f"实际执行集合={captured['calls']}"
 
 
-async def test_p1_blocked_calls_never_leave_pending_so_always_replayed() -> None:
-    """P1-c：``blocked_calls`` 永远停在 ``pending``（``begin`` 只遍历 ``valid_calls``）。
+async def test_p1_begin_migrates_blocked_calls_without_projecting_event() -> None:
+    """P1-c（已修复）：``begin`` 覆盖 ``blocked_calls``，且隐藏调用不发状态事件。
 
-    被测行为：``begin()`` 只对 ``valid_calls`` 做 pending→running 迁移，``blocked_calls``
-    状态恒为 ``pending``，因此每次重入都会被再次送去执行层。
-    缺陷判定：低危缺陷（必被门禁拒绝、无副作用，但会重复写 ToolMessage / 重复日志）。
+    被测行为：``begin()`` 把 ``valid_calls`` 与 ``blocked_calls`` 中 ``pending`` 的记录一并迁移为
+    ``running``，使「未起跑」恒等价于「仍是 ``pending``」——``tools`` 只按该判据选取执行集合，
+    因此重入不会把已被门禁拒绝的调用再次送去执行层。``blocked_calls`` 从未建立前端 part
+    （``part_projected=False``），迁移不发状态事件，否则 projector 只会记一条「part 缺失」告警。
+    缺陷判定：原缺陷（blocked 恒 pending ⇒ 每次重入都被重复送去执行层）已消除。
     """
 
     harness = _LifecycleHarness(
@@ -378,7 +380,10 @@ async def test_p1_blocked_calls_never_leave_pending_so_always_replayed() -> None
         allows_tools=("read_file",),
         blocked_calls={
             "hidden-1": ToolCallLifecycleRecord(
-                tool_call_id="hidden-1", tool_name="write_file", status="pending"
+                tool_call_id="hidden-1",
+                tool_name="write_file",
+                status="pending",
+                part_projected=False,
             ),
         },
     )
@@ -386,7 +391,8 @@ async def test_p1_blocked_calls_never_leave_pending_so_always_replayed() -> None
     with harness.runtime():
         after_begin = harness.manager.begin(task_id=_TASK_ID, run_id=_RUN_ID, step_id="step-3")
 
-    assert after_begin.blocked_calls["hidden-1"].status == "pending"
+    assert after_begin.blocked_calls["hidden-1"].status == "running"
+    assert [event.status for event in harness.writer.status_events] == []
 
 
 # ============================================================================

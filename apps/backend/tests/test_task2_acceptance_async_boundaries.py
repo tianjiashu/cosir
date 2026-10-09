@@ -51,39 +51,51 @@ class _ThreadRecordingRunService(_ThreadCheckedRunService):
 
 
 class _StubRuntime:
-    """替代真实 AgentRuntime：``execute_run`` 的行为由用例注入。"""
+    """替代真实 AgentRuntime：``run_agent`` 的驱动行为由用例注入。"""
 
     def __init__(self, behavior: Callable[[], Awaitable[None]]) -> None:
         self._behavior = behavior
 
-    async def execute_run(self, **_kwargs: Any) -> None:
+    def resolve_agent_profile_for_run(self, _run: Any) -> Any:
+        return object()
+
+    async def run_agent(self, _agent: Any, **_kwargs: Any) -> None:
         await self._behavior()
 
 
+class _Terminal:
+    """terminal session service 替身：签名与真实服务一致（``reason`` 为 keyword-only）。"""
+
+    def begin_run(self, _run_id: int) -> None:
+        return None
+
+    def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
+        return None
+
+
 def _executor(run_service: object) -> ConversationRunExecutor:
+    """构造执行器替身：显式注入它在 ``__init__`` 中捕获的 run service 与 terminal service。"""
+
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = run_service
+    executor._run_state_service = run_service
     executor._event_projector = None
     executor._signal = cancellation_registry
     executor._executions = {}
+    executor._terminal_session_service = _Terminal()
     return executor
 
 
 def _patch_execute_drivers(
     monkeypatch: pytest.MonkeyPatch,
     behavior: Callable[[], Awaitable[None]],
+    *,
+    executor: ConversationRunExecutor,
 ) -> None:
-    """把执行器依赖的 runtime 与 terminal service 替换为可控替身。"""
+    """把执行器依赖的 runtime 替换为可控替身（terminal service 由替身实例注入）。"""
 
     monkeypatch.setattr(executor_module, "get_runtime", lambda: _StubRuntime(behavior))
-    monkeypatch.setattr(
-        executor_module,
-        "get_terminal_session_service",
-        lambda: SimpleNamespace(
-            begin_run=lambda _run_id: None,
-            close_run_terminals=lambda *_args, **_kwargs: None,
-        ),
-    )
+    executor._terminal_session_service = _Terminal()
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +115,7 @@ async def test_executor_start_reads_canonical_run_off_event_loop(
     async def runner() -> None:
         return None
 
-    _patch_execute_drivers(monkeypatch, runner)
+    _patch_execute_drivers(monkeypatch, runner, executor=executor)
 
     task = await executor.start(_RUN_ID, "fresh")
     await task
@@ -123,7 +135,7 @@ async def test_executor_tool_settlement_reads_canonical_run_off_event_loop(
     async def failing_runner() -> None:
         raise RuntimeError("runner failed")
 
-    _patch_execute_drivers(monkeypatch, failing_runner)
+    _patch_execute_drivers(monkeypatch, failing_runner, executor=executor)
 
     # ``_execute`` 内部收口驱动期异常，工具收束投影仍在同一路径上执行。
     await executor._execute(_RUN_ID, "fresh")
@@ -136,16 +148,8 @@ async def test_executor_tool_settlement_reads_canonical_run_off_event_loop(
 async def test_executor_cancel_reads_canonical_run_off_event_loop() -> None:
     service = _ThreadCheckedRunService()
     executor = _executor(service)
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(
-        executor_module,
-        "get_terminal_session_service",
-        lambda: SimpleNamespace(close_run_terminals=lambda *_args, **_kwargs: None),
-    )
-    try:
-        assert await executor.cancel(_RUN_ID) is True
-    finally:
-        monkeypatch.undo()
+
+    assert await executor.cancel(_RUN_ID) is True
 
 
 @pytest.mark.asyncio
@@ -249,7 +253,7 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     monkeypatch.setattr(
         lifespan_module,
         "build_agent_registry",
-        lambda *_args: SimpleNamespace(load_agent_profiles=lambda *_load_args: None),
+        lambda *_args, **_kwargs: SimpleNamespace(load_agent_profiles=lambda *_load_args: None),
     )
     monkeypatch.setattr(lifespan_module, "set_tool_system", lambda _value: None)
     monkeypatch.setattr(lifespan_module, "set_agent_registry", lambda _value: None)
@@ -264,6 +268,11 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
         calls.append("close_dependencies")
 
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", close_dependencies)
+    # 启动流程里的 Agent Team 收敛在函数内惰性 import，因此按模块路径打桩（替身不触达存储）。
+    monkeypatch.setattr(
+        "app.agent_team.coordinator.get_agent_team_coordinator",
+        lambda: SimpleNamespace(recover_after_restart=lambda: []),
+    )
 
     async with lifespan_module._lifespan_impl(SimpleNamespace()):
         pass

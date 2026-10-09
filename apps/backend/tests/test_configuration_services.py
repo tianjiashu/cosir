@@ -666,3 +666,6 @@ def test_environment_configuration_schema_error(
         )
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "configuration_invalid"
+
+# 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
+pytestmark = pytest.mark.usefixtures("backend_env")

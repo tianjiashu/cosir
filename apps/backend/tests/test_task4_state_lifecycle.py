@@ -23,6 +23,9 @@ from app.models.task_record import TaskRecord
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
+# 任务运行时空间在构造时会读当前 task，因此本文件全部用例都需要隔离主库。
+pytestmark = pytest.mark.usefixtures("isolated_storage")
+
 
 def _task() -> TaskRecord:
     now = datetime(2026, 9, 12, tzinfo=UTC)

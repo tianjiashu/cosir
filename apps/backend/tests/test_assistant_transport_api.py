@@ -401,3 +401,6 @@ async def test_task_run_operation_waits_without_blocking_event_loop() -> None:
     assert not holder.is_alive()
     # 同步 ``operation()`` 会把事件循环停住，心跳一次都跑不到。
     assert ticks >= 5
+
+# 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
+pytestmark = pytest.mark.usefixtures("backend_env")

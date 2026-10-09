@@ -2,12 +2,12 @@
 
 本模块**不**重复既有正向契约测试，而是从对抗视角攻击本次修复声称的四条不变量：
 
-1. 落定链路（``_settle_failed_run`` / ``ReactLikeWorkflow.run`` / ``_run_graph``）在
-   「落定自身失败」「Run 已被别处落终态」「异常是 ``BaseException`` 子类」「分类器自身
-   抛异常」等边界下都必须保证：**Run 先落 failed 再抛原异常**，且不得替换/掩盖原始异常。
-2. 分类器 ``classify_model_failure`` 的状态码边界（99/100/599/600/负数/bool/字符串）、
-   属性访问抛异常、``__str__`` 抛异常、语义串冲突、大小写与中文报文都必须返回稳定结果
-   或 ``None``，绝不抛出。
+1. 落定链路（``AgentRuntime._settle_failed_run`` / ``AgentRuntime._failure_code_for``）在
+   「落定自身失败」「Run 已被别处落终态」「异常是 ``BaseException`` 子类」「异常文本不可
+   读」等边界下都必须保证：**Run 先落 failed 再抛原异常**，且不得替换/掩盖原始异常。
+2. 分类器 ``classify_model_failure`` **只按异常类型名**识别传输层失败（超时 / 连接）：
+   状态码（含边界值、bool、字符串、非法形状）、异常文本（含大小写与业务语义词）、
+   属性访问抛异常、``__str__`` 抛异常都必须返回稳定结果或 ``None``，绝不抛出。
 3. 文案目录 ``run_failure_message`` 对每个可产出 code 都有专属非空文案，且不含厂商名、
    模型名与数字；未知 code / ``None`` 回退通用文案。
 4. Run 级 ``error`` 跨层契约（``terminal_error`` → ``build_run_error`` → snapshot 校验）
@@ -16,12 +16,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+import app.core.runtime.runner as runner_module
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
@@ -33,8 +36,8 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.config.constant import Constant
 from app.core.llm_provider.model_failure import classify_model_failure
-from app.core.workflows.react.workflow import ReactLikeWorkflow
-from app.core.workflows.workflow_operations import WorkflowOperations
+from app.core.runtime.runner import AgentRuntime
+from app.core.workflows.agent_workflow import WorkflowRunFailure
 from app.models import conversation_run_failure as failure_catalog
 from app.models.conversation_run_failure import (
     run_failure_message,
@@ -50,38 +53,86 @@ from app.service.conversation_run.conversation_run_state_service import Conversa
 # --------------------------------------------------------------------------------------
 
 
-class _RecordingOperations:
-    """记录 ``fail_run_if_running`` 入参的假门面；可按需模拟抛异常 / 返回 None。"""
+class _RecordingRunStateService:
+    """记录 ``fail_run_if_running`` 入参的假 run 级状态服务；可模拟抛异常 / 条件更新落空。"""
 
     def __init__(self, *, settles: bool = True, failure: BaseException | None = None) -> None:
         self.calls: list[dict[str, object]] = []
         self._settles = settles
         self._failure = failure
-        # ``get_current_run`` 自身可被独立注入异常，用于攻击日志分支。
-        self.get_current_run_failure: BaseException | None = None
-
-    def get_current_run(self) -> SimpleNamespace:
-        if self.get_current_run_failure is not None:
-            raise self.get_current_run_failure
-        return SimpleNamespace(id=7)
 
     def fail_run_if_running(
         self,
-        *,
+        run_id: int,
         end_reason: str | None = None,
-        usage_stats: object = None,
         final_output: str | None = None,
+        usage_stats: object = None,
+        error_message: str | None = None,
     ) -> SimpleNamespace | None:
         self.calls.append(
             {
+                "run_id": run_id,
                 "end_reason": end_reason,
                 "usage_stats": usage_stats,
                 "final_output": final_output,
+                "error_message": error_message,
             }
         )
         if self._failure is not None:
             raise self._failure
-        return SimpleNamespace(id=7) if self._settles else None
+        return SimpleNamespace(id=run_id) if self._settles else None
+
+
+def _make_agent(workflow_error: BaseException) -> SimpleNamespace:
+    """构造带失败 workflow 的 agent profile 替身（``run`` 必须非 None）。"""
+
+    async def _boom(*_args: object, **_kwargs: object) -> None:
+        raise workflow_error
+
+    return SimpleNamespace(
+        agent_id="main_agent",
+        run=SimpleNamespace(id=7, task_id=3),
+        workflow=SimpleNamespace(run=_boom),
+    )
+
+
+def _make_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    run_state_service: _RecordingRunStateService,
+    *,
+    operations_available: bool = True,
+) -> AgentRuntime:
+    """构造只保留 ``run_agent`` 异常边界所需协作者的 AgentRuntime 替身。
+
+    ``operations_available`` 为假时模拟「门面尚未构造就失败」：门面构造抛错，落定必须仍然发生
+    （它只依赖 run 级状态服务）。
+    """
+
+    runtime = AgentRuntime.__new__(AgentRuntime)
+    runtime._task_service = SimpleNamespace(
+        get_task=lambda task_id: SimpleNamespace(id=task_id, workspace_id=9)
+    )
+    runtime._workspace_service = SimpleNamespace(
+        get_workspace=lambda workspace_id: SimpleNamespace(id=workspace_id)
+    )
+    runtime._conversation_run_state_service = run_state_service
+
+    async def _noop_fire(_context: object) -> None:
+        return None
+
+    @asynccontextmanager
+    async def _trace(_metadata: object) -> object:
+        yield SimpleNamespace(trace_id=None, callbacks=[], tool_trace_recorder=None)
+
+    def _build(_self: AgentRuntime, *_args: object, **_kwargs: object) -> object:
+        if operations_available:
+            return SimpleNamespace()
+        raise RuntimeError("operations unavailable")
+
+    monkeypatch.setattr(runner_module.HookInterceptor, "async_safe_fire", _noop_fire)
+    monkeypatch.setattr(runner_module, "conversation_run_trace", _trace)
+    monkeypatch.setattr(AgentRuntime, "_build_operations", _build)
+    return runtime
 
 
 def _record_state() -> ConversationStateSnapshot:
@@ -133,7 +184,7 @@ class _BoolStatusError(Exception):
 
 
 class _StrStatusError(Exception):
-    """``status_code`` 是字符串：不得被当作 HTTP 状态码。"""
+    """只带 ``status_code`` 的替身：用于钉住「状态码不参与分类」。"""
 
     def __init__(self, status_code: object, message: str = "") -> None:
         super().__init__(message)
@@ -160,7 +211,7 @@ class _StrBoomError(Exception):
 
 
 class _StrBoomStatusError(Exception):
-    """带可用状态码但 ``__str__`` 抛异常：状态码应仍生效。"""
+    """带状态码且 ``__str__`` 抛异常：两者都不参与分类，必须返回 ``None``。"""
 
     def __init__(self, status_code: int) -> None:
         super().__init__()
@@ -170,51 +221,23 @@ class _StrBoomStatusError(Exception):
         raise RuntimeError("__str__ exploded")
 
 
+class _NestedTimeoutError(Exception):
+    """外层异常无传输语义，异常链里的 cause 才是超时类。"""
+
+
 @pytest.mark.parametrize(
-    ("status_code", "expected"),
-    [
-        (99, None),  # 边界外下限：不映射，且必须继续走类型名/文本判据
-        (100, ErrorKind.MODEL_INVALID_REQUEST.value),
-        (599, ErrorKind.MODEL_SERVICE_ERROR.value),
-        (600, None),  # 边界外上限
-        (-1, None),
-        (0, None),
-    ],
+    "status_code",
+    [99, 100, 401, 402, 408, 429, 500, 503, 599, 600, -1, 0, -402, True, False, "402", None, [], {"a": 1}],
 )
-def test_status_code_boundaries(status_code: int, expected: str | None) -> None:
-    """状态码边界（99/100/599/600/负数/0）必须按 100<=code<600 白名单判定，越界返回 None。
+def test_status_codes_never_drive_classification(status_code: object) -> None:
+    """任何形状的状态码都不参与分类：一律返回 ``None``。
 
-    潜在缺陷：边界写成 ``<= 600`` 或 ``0 < code`` 会把非法状态码误映射到具体分类。
+    端点业务码与状态码并不统一，框架按约定不推断业务类别（见 ``model_failure`` docstring），
+    业务失败的原始说明改由响应体 message 通道展示。
     """
 
-    assert classify_model_failure(_StrStatusError(status_code)) == expected
-
-
-def test_negative_status_code_with_no_other_signal_returns_none() -> None:
-    """负状态码不得落到 4xx 分档（``code >= 500`` 为假会掉进 INVALID_REQUEST）。
-
-    潜在缺陷：``_kind_from_status_code`` 对负数返回 INVALID_REQUEST；若上层忘了白名单
-    过滤，负状态码会被误报成「请求被拒绝」。
-    """
-
-    assert classify_model_failure(_StrStatusError(-402)) is None
-
-
-def test_boolean_status_code_without_other_signal_returns_none() -> None:
-    """``True`` / ``False`` 都不得被当作状态码。"""
-
-    assert classify_model_failure(_BoolStatusError(True)) is None
-    assert classify_model_failure(_BoolStatusError(False)) is None
-
-
-def test_string_status_code_is_ignored() -> None:
-    """字符串状态码（如 ``"402"``）不是 int，必须被忽略。
-
-    潜在缺陷：若实现用 ``str(exc.status_code).isdigit()`` 之类宽松判定，会把字符串
-    状态码误当数字。
-    """
-
-    assert classify_model_failure(_StrStatusError("402")) is None
+    assert classify_model_failure(_StrStatusError(status_code)) is None
+    assert classify_model_failure(_BoolStatusError(status_code)) is None
 
 
 def test_status_code_property_exploding_does_not_raise() -> None:
@@ -229,34 +252,33 @@ def test_exception_str_exploding_does_not_raise() -> None:
     assert classify_model_failure(_StrBoomError()) is None
 
 
-def test_usable_status_code_wins_even_when_str_explodes() -> None:
-    """状态码可用时，``__str__`` 抛异常不影响状态码判据。"""
+def test_status_code_with_exploding_str_is_still_none() -> None:
+    """带状态码且 ``__str__`` 抛异常：分类器不读两者，返回 ``None`` 且不上抛。"""
 
-    assert (
-        classify_model_failure(_StrBoomStatusError(402)) == ErrorKind.MODEL_INSUFFICIENT_QUOTA.value
-    )
+    assert classify_model_failure(_StrBoomStatusError(402)) is None
 
-
-def test_status_code_wins_over_conflicting_message_keywords() -> None:
-    """429 报文含 ``insufficient`` 时仍必须归为限流（状态码优先级最高）。"""
-
-    assert (
-        classify_model_failure(_StrStatusError(429, "insufficient balance, rate limit"))
-        == ErrorKind.MODEL_RATE_LIMITED.value
-    )
+    assert classify_model_failure(_StrStatusError(429, "insufficient balance, rate limit")) is None
 
 
-def test_message_is_lowercased_before_keyword_match() -> None:
-    """语义串匹配必须大小写不敏感。"""
+def test_business_keywords_in_text_never_drive_classification() -> None:
+    """异常文本（含大小写变体）不参与分类：限流/余额等业务类别不由框架推断。"""
 
-    assert (
-        classify_model_failure(Exception("INSUFFICIENT BALANCE"))
-        == ErrorKind.MODEL_INSUFFICIENT_QUOTA.value
-    )
-    assert (
-        classify_model_failure(Exception("RATE LIMIT EXCEEDED"))
-        == ErrorKind.MODEL_RATE_LIMITED.value
-    )
+    for message in (
+        "INSUFFICIENT BALANCE",
+        "RATE LIMIT EXCEEDED",
+        "insufficient balance, rate limit",
+        "invalid api key provided",
+    ):
+        assert classify_model_failure(Exception(message)) is None
+
+
+def test_transport_type_name_is_classified_even_through_exception_chain() -> None:
+    """包装异常自身无传输语义时，异常链里的超时类仍必须被识别。"""
+
+    outer = _NestedTimeoutError("wrapped")
+    outer.__cause__ = TimeoutError("read timed out")
+
+    assert classify_model_failure(outer) == ErrorKind.MODEL_TIMEOUT.value
 
 
 def test_chinese_message_is_not_misclassified() -> None:
@@ -304,8 +326,9 @@ def test_classification_result_is_always_error_kind_model_value_or_none() -> Non
 
     model_values = {member.value for member in ErrorKind if member.name.startswith("MODEL_")}
     samples: list[BaseException] = [
+        TimeoutError("boom"),
+        ConnectionError("boom"),
         _StrStatusError(402),
-        _StrStatusError(503),
         Exception("insufficient balance"),
         Exception("totally unknown"),
         _PropertyBoomError("x"),
@@ -463,186 +486,130 @@ def test_terminal_error_message_is_non_empty_and_controlled() -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 4. ``_settle_failed_run`` 落定链路对抗测试
+# 4. ``AgentRuntime`` 失败收口链路对抗测试
 # --------------------------------------------------------------------------------------
 
 
-def test_settle_failed_run_swallows_runtime_error() -> None:
-    """落终态抛 ``RuntimeError`` 时必须吞掉，不得替换原始异常。"""
+def test_run_agent_propagates_settlement_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """落定自身抛 ``RuntimeError``（数据库不可用）时必须上抛，交由执行器兜底收敛。
 
-    workflow = ReactLikeWorkflow()
-    operations = _RecordingOperations(failure=RuntimeError("db down"))
-    workflow._settle_failed_run(
-        cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
-    )
-    assert len(operations.calls) == 1
-
-
-def test_settle_failed_run_swallows_key_error() -> None:
-    """落终态抛 ``KeyError``（run 不存在）时也必须吞掉。"""
-
-    workflow = ReactLikeWorkflow()
-    operations = _RecordingOperations(failure=KeyError("run not found"))
-    workflow._settle_failed_run(
-        cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
-    )
-    assert len(operations.calls) == 1
-
-
-def test_settle_failed_run_does_not_swallow_base_exception() -> None:
-    """``BaseException``（如 ``KeyboardInterrupt``）当前不在 ``except Exception`` 覆盖内。
-
-    这是**记录在案的疑点**：本用例锁定当前行为（向上抛出），以便实现变化时显式失败。
+    该路径不能吞：Run 仍是 running，只有执行器的 ``_converge_unfinished_run`` 能收敛它；
+    吞掉会让 run 永久停在 running。
     """
 
-    workflow = ReactLikeWorkflow()
-    operations = _RecordingOperations(failure=KeyboardInterrupt())
-    with pytest.raises(KeyboardInterrupt):
-        workflow._settle_failed_run(
-            cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+    run_state_service = _RecordingRunStateService(failure=RuntimeError("db down"))
+    runtime = _make_runtime(monkeypatch, run_state_service)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        asyncio.run(
+            runtime.run_agent(_make_agent(RuntimeError("node exploded")))
         )
-    assert len(operations.calls) == 1
+
+    assert len(run_state_service.calls) == 1
 
 
-def test_settle_failed_run_survives_get_current_run_failure() -> None:
-    """落终态失败且日志取 ``get_current_run()`` 也失败时，不得让异常逃逸。
+def test_run_agent_propagates_settlement_key_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """落定遇到 ``KeyError``（run 不存在）时同样上抛，不静默丢弃。"""
 
-    潜在缺陷：``log.exception`` 的 ``extra`` 里直接调 ``operations.get_current_run().id``，
-    若该调用抛异常，会在 except 分支内二次抛出，替换掉原始异常。
+    run_state_service = _RecordingRunStateService(failure=KeyError("run not found"))
+    runtime = _make_runtime(monkeypatch, run_state_service)
+
+    with pytest.raises(KeyError):
+        asyncio.run(
+            runtime.run_agent(_make_agent(RuntimeError("node exploded")))
+        )
+
+    assert len(run_state_service.calls) == 1
+
+
+def test_run_agent_does_not_swallow_base_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``BaseException``（如 ``KeyboardInterrupt``）不在 ``except Exception`` 覆盖内：不落定、直接上抛。"""
+
+    run_state_service = _RecordingRunStateService()
+    runtime = _make_runtime(monkeypatch, run_state_service)
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(
+            runtime.run_agent(_make_agent(KeyboardInterrupt()))
+        )
+
+    assert run_state_service.calls == []
+
+
+def test_run_agent_settles_with_profile_run_id_without_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """落定目标取 ``agent.run.id``，不依赖门面：门面构造失败时同样能落定。
+
+    历史缺陷：落定入口曾要求已构造的 ``WorkflowOperations``，于是「workflow 还没进入就失败」
+    这条路径无人落终态，留下僵尸 running。
     """
 
-    workflow = ReactLikeWorkflow()
-    operations = _RecordingOperations(failure=RuntimeError("db down"))
-    operations.get_current_run_failure = RuntimeError("run gone")
-    workflow._settle_failed_run(
-        cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
-    )
-    assert len(operations.calls) == 1
+    run_state_service = _RecordingRunStateService()
+    runtime = _make_runtime(monkeypatch, run_state_service, operations_available=False)
+
+    asyncio.run(runtime.run_agent(_make_agent(RuntimeError("operations unavailable"))))
+
+    assert [call["run_id"] for call in run_state_service.calls] == [7]
 
 
-def test_settle_failed_run_survives_get_current_run_failure_on_race_lost() -> None:
-    """「Run 已被别处落终态」分支取 ``get_current_run()`` 失败时也不得抛出。"""
+def test_run_agent_settles_with_empty_string_code_records_empty_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """工作流自带空字符串 code 时原样透传 ``end_reason``，``final_output`` 仍是可展示文案。
 
-    workflow = ReactLikeWorkflow()
-    operations = _RecordingOperations(settles=False)
-    operations.get_current_run_failure = RuntimeError("run gone")
-    workflow._settle_failed_run(
-        cast(WorkflowOperations, operations), Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
-    )
-    assert len(operations.calls) == 1
-
-
-def test_settle_failed_run_with_empty_string_code_records_empty_reason() -> None:
-    """空字符串 code 会被原样透传给落定入口（``run_failure_message`` 回退通用文案）。
-
-    这里锁定契约：``end_reason`` 原样传递，而 ``final_output`` 仍是可展示文案。
     上游不应传空串；若真传入，DB 侧 ``terminal_error`` 会把 code 兜底成 ``run_failed``，
-    因此本用例只断言不抛异常、文案非空。
+    因此本用例只断言 ``end_reason`` 原样、文案非空。
     """
 
-    workflow = ReactLikeWorkflow()
-    operations = _RecordingOperations()
-    workflow._settle_failed_run(cast(WorkflowOperations, operations), "")
-    assert len(operations.calls) == 1
-    assert operations.calls[0]["end_reason"] == ""
-    assert isinstance(operations.calls[0]["final_output"], str)
-    assert str(operations.calls[0]["final_output"]).strip()
+    run_state_service = _RecordingRunStateService()
+    runtime = _make_runtime(monkeypatch, run_state_service)
+    failure = WorkflowRunFailure("", "空 code 的失败")
+
+    asyncio.run(runtime.run_agent(_make_agent(failure)))
+
+    assert run_state_service.calls[0]["end_reason"] == ""
+    assert str(run_state_service.calls[0]["final_output"]).strip()
 
 
-@pytest.mark.asyncio
-async def test_run_settles_before_propagating_and_preserves_original_exception(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """落终态自身失败时，``run`` 必须仍抛出**原始**异常，而不是落定异常。"""
+def test_failure_code_for_ignores_exception_text() -> None:
+    """分类器只按异常类型名判定：``__str__`` 自身抛异常也不得影响兜底 code。
 
-    workflow = ReactLikeWorkflow()
-    original = _StrStatusError(402, "Insufficient Balance")
-    operations = _RecordingOperations(failure=RuntimeError("db down"))
-
-    async def _boom(_self: ReactLikeWorkflow, *_args: object, **_kwargs: object) -> None:
-        raise original
-
-    monkeypatch.setattr(ReactLikeWorkflow, "_run_graph", _boom)
-
-    with pytest.raises(_StrStatusError) as excinfo:
-        await workflow.run(cast(WorkflowOperations, operations))
-
-    assert excinfo.value is original
-    assert operations.calls[0]["end_reason"] == ErrorKind.MODEL_INSUFFICIENT_QUOTA.value
-
-
-@pytest.mark.asyncio
-async def test_run_classifier_failure_does_not_break_settlement(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """分类器若抛异常，``run`` 内的兜底 code 逻辑不得连带失败（异常仍需落定）。"""
-
-    workflow = ReactLikeWorkflow()
-    operations = _RecordingOperations()
+    潜在缺陷：若分类器改回按 ``str(exc)`` 做关键字匹配，本用例会显式失败。
+    """
 
     class _BoomClassifier(Exception):
         def __str__(self) -> str:
             raise RuntimeError("__str__ exploded")
 
-    async def _boom(_self: ReactLikeWorkflow, *_args: object, **_kwargs: object) -> None:
-        raise _BoomClassifier()
-
-    monkeypatch.setattr(ReactLikeWorkflow, "_run_graph", _boom)
-
-    with pytest.raises(_BoomClassifier):
-        await workflow.run(cast(WorkflowOperations, operations))
-
-    assert operations.calls[0]["end_reason"] == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+    assert (
+        AgentRuntime._failure_code_for(_BoomClassifier())
+        == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+    )
 
 
-@pytest.mark.asyncio
-async def test_run_settles_exactly_once_when_settlement_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """异常路径下 ``fail_run_if_running`` 只被调用一次（外层兜底不得重复落定）。
+def test_failure_code_for_returns_graph_failed_for_value_error() -> None:
+    """``model_config_id`` 缺失一类 ``ValueError`` 走中性兜底，不伪装成模型错误。"""
 
-    潜在缺陷：若 ``_run_graph`` 的内部 graph 分支与外层 ``run`` 都落定，且内部落定失败，
-    会出现重复落定写入。本用例锁定「外层兜底仅在内部未落定时补一次」，需通过调用计数
-    验证不会因内部 settles=False（竞态）而重复已成功写入的落定。
-    """
-
-    workflow = ReactLikeWorkflow()
-    operations = _RecordingOperations(settles=True)
-
-    async def _boom(_self: ReactLikeWorkflow, *_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("node exploded")
-
-    monkeypatch.setattr(ReactLikeWorkflow, "_run_graph", _boom)
-
-    with pytest.raises(RuntimeError):
-        await workflow.run(cast(WorkflowOperations, operations))
-
-    assert len(operations.calls) == 1
+    assert (
+        AgentRuntime._failure_code_for(ValueError("Conversation Run model_config_id is required"))
+        == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+    )
 
 
-@pytest.mark.asyncio
-async def test_run_settles_even_when_model_config_id_missing_branch_present(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``model_config_id`` 缺失分支落定后抛 ValueError，外层兜底不得再落定一次。
+def test_failure_code_for_reads_exception_chain() -> None:
+    """被包装的传输错误（cause 链上才是超时异常）也要能识别。"""
 
-    潜在缺陷：内部分支落定成功（返回记录）后外层若再无脑落定，会命中「已非 running」
-    分支产生多余日志；更重要的是若内部分支漏落定，外层必须补上——本用例两者都覆盖。
-    """
+    wrapped = RuntimeError("langchain wrapper")
+    wrapped.__cause__ = TimeoutError("underlying timeout")
 
-    workflow = ReactLikeWorkflow()
-    operations = _RecordingOperations()
-
-    async def _boom(_self: ReactLikeWorkflow, *_args: object, **_kwargs: object) -> None:
-        raise ValueError("Conversation Run model_config_id is required")
-
-    monkeypatch.setattr(ReactLikeWorkflow, "_run_graph", _boom)
-
-    with pytest.raises(ValueError):
-        await workflow.run(cast(WorkflowOperations, operations))
-
-    assert len(operations.calls) == 1
-    assert operations.calls[0]["end_reason"] == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+    assert AgentRuntime._failure_code_for(wrapped) == ErrorKind.MODEL_TIMEOUT.value
 
 
 # --------------------------------------------------------------------------------------
