@@ -5,30 +5,41 @@ from __future__ import annotations
 import json
 from typing import ClassVar
 
+from pydantic import ValidationError
+
 from app.agent_team.registry import get_agent_team_registry
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
-from app.core.tools.display.agent_team_display import build_agent_team_preview_display_data
+from app.core.tools.display.agent_team_display import (
+    build_agent_team_preview_display_data,
+    build_agent_team_run_display_data,
+)
 from app.core.tools.schemas import (
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
+    UserDecision,
 )
 from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM, TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_AGENT_TEAM
 from app.core.tools.tool_handler.tool_base import HandlerBase
-from app.core.tools.tool_models import AgentTeamArgs
+from app.core.tools.tool_models import AgentTeamApproveInput, AgentTeamArgs
+from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_preparation_service import AgentTeamPreparationService
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 from app.service.depends import get_conversation_run_service
 
 
 class AgentTeamRunTool(HandlerBase):
-    """准备 Agent Team 执行方案，并创建等待用户确认的持久化 TeamRun。"""
+    """准备 Agent Team 执行方案，并在用户批准后启动该 TeamRun。
+
+    两阶段的执行语义见 :meth:`execute`：第一遍落待确认的持久化 TeamRun 并把决定权交给用户，
+    第二遍（用户批准后由 ``tools`` 节点重执行）才真正启动执行。
+    """
 
     name = TOOL_AGENT_TEAM
     description = (
@@ -54,11 +65,12 @@ class AgentTeamRunTool(HandlerBase):
         node_goals: dict[str, str],
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
-        """准备并保存当前主 Agent Run 的待确认 TeamRun。
+        """准备待确认方案，或在用户批准后真正启动该 TeamRun。
 
-        预览和运行时快照在同一次准备中生成，并在返回工具结果前写入主 SQLite。此方法不
-        启动 TeamRun；启动发生在用户确认执行方案之后。准备或持久化失败会抛出
-        ``TeamToolError``，由下方 ``except`` 统一映射为不可重试的失败观察。
+        本工具是两阶段的 human-in-the-loop 工具：第一遍（``execution_context.user_decision``
+        为 ``None``）只做准备并把决定权交给用户；用户批准后 ``tools`` 节点以同一调用重新执行，
+        此时决定非空，进入真正的启动分支。分支依据由框架注入（模型不可写），因此不能用参数
+        伪造「已获批准」；驳回与放弃不会重执行本调用（它们在 ``wait_user`` 节点即被翻译成观察）。
         """
 
         if execution_context is None:
@@ -67,6 +79,27 @@ class AgentTeamRunTool(HandlerBase):
                 "agent_team requires an execution context.",
                 reason="Run the tool from an active Agent context.",
             )
+        if execution_context.user_decision is not None and execution_context.user_decision.kind == UserDecision.Kind.APPROVE:
+            return self._start_confirmed_run(execution_context.user_decision)
+        return self._prepare_pending_run(team_id, goal, node_goals, execution_context)
+
+    def _prepare_pending_run(
+        self,
+        team_id: str,
+        goal: str,
+        node_goals: dict[str, str],
+        execution_context: ToolExecutionContext,
+    ) -> ToolObservation:
+        """第一遍：准备并保存待确认 TeamRun（不启动执行）。
+
+        预览和运行时快照在同一次准备中生成，并在返回工具结果前写入主 SQLite；启动发生在用户
+        批准之后（见 :meth:`_start_confirmed_run`）。准备或持久化失败会抛出 ``TeamToolError``，
+        由下方 ``except`` 统一映射为不可重试的失败观察。
+
+        异常:
+            无（失败路径归一化为 ``ToolObservation(status="error")``）。
+        """
+
         try:
 
             configuration = self.team_register.resolve(
@@ -151,6 +184,92 @@ class AgentTeamRunTool(HandlerBase):
                 reason=f"无法创建 Team 执行方案，请检查 Team 配置或稍后重试,error:{str(exc)}",
                 retryable=False,
             )
+
+    def _start_confirmed_run(self, decision: UserDecision) -> ToolObservation:
+        """第二遍：用户批准后启动 TeamRun 并返回启动结果。
+
+        ``decision.request_id`` 是待确认 TeamRun 的主键（第一遍由本工具写入
+        ``user_input_request.request_id``），``decision.data`` 是用户在卡片上编辑后的最终运行输入。
+        配置的领域校验在 ``confirm_and_start`` 边界完成，本方法只做形状校验与失败归一化。
+
+        幂等：重复执行（图重放、用户重试）由 ``confirm_and_start`` 的条件状态迁移兜住，已进入
+        运行 / 终态的 TeamRun 会原样返回当前事实，不重复启动 Coordinator。
+
+        参数:
+            decision: 框架注入的用户决定（批准）。
+
+        返回:
+            启动成功或「已启动」时为 ``success`` 观察；TeamRun 不存在、已被取消 / 失败，或输入
+            形状非法时为 ``error`` 观察（不抛出）。
+
+        异常:
+            无（失败路径归一化为 ``ToolObservation(status="error")``）。
+
+        副作用:
+            经 ``AgentTeamRunService.confirm_and_start`` 把 TeamRun 从 ``pending`` 原子迁移为
+            ``running`` 并启动 Coordinator；写 ``agent_team_confirmation_failed`` 日志。
+        """
+
+        try:
+            team_run_id = int(decision.request_id)
+        except (TypeError, ValueError):
+            return self._confirmation_error(f"无效的 TeamRun 标识：{decision.request_id}")
+        try:
+            inputs = AgentTeamApproveInput.model_validate(decision.data)
+        except ValidationError as exc:
+            return self._confirmation_error(f"确认输入不合法：{exc.error_count()} 处字段错误")
+        try:
+            row = self.agent_team_run_service.confirm_and_start(
+                team_run_id,
+                inputs.configuration,
+                goal=inputs.goal,
+                node_goals=inputs.node_goals,
+            )
+        except KeyError:
+            return self._confirmation_error(f"待确认的 TeamRun 不存在：{team_run_id}")
+        except ValueError as exc:
+            return self._confirmation_error(str(exc))
+        if row.status in {
+            AgentTeamRunStatus.CANCELLED.value,
+            AgentTeamRunStatus.FAILED.value,
+        }:
+            # 条件迁移未生效且行已终态：多为后端重启把 pending 收敛为 cancelled。此时不能报告
+            # 成功，否则模型会继续等一个永远不会运行的 Team。
+            return self._confirmation_error(f"该 Team 运行已结束（{row.status}），请重新提案")
+        return tool_success(
+            tool_name=self.name,
+            content=json.dumps(
+                {
+                    "status": row.status,
+                    "team_id": row.team_id,
+                    "team_run_id": row.id,
+                },
+                ensure_ascii=False,
+            ),
+            display_data=build_agent_team_run_display_data(
+                team_run_id=row.id,
+                team_id=row.team_id,
+                goal=inputs.goal,
+                node_goals=inputs.node_goals,
+            ),
+        )
+
+    def _confirmation_error(self, reason: str) -> ToolObservation:
+        """把确认阶段的失败归一化为不重试的错误观察，并留下可排查日志。"""
+
+        log.warning(
+            "agent_team_confirmation_failed",
+            extra={
+                "msg": "Agent Team 确认执行失败",
+                "data": {"tool": self.name, "reason": reason},
+            },
+        )
+        return tool_error(
+            self.name,
+            "agent_team_confirmation_invalid",
+            reason=f"无法启动 Team 执行方案：{reason}",
+            retryable=False,
+        )
 
     def to_definition(self) -> ToolDefinition:
         """构造 Team 执行工具定义。"""
