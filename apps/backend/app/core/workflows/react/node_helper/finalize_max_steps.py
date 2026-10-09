@@ -82,8 +82,8 @@ async def _finalize_max_steps(
             },
         },
     )
-    # 失败原因与终态由 RuntimeOperations 的 canonical writer 原子落定；附加诊断
-    # 数据只进入结构化日志，不重新引入通用 runtime event payload。
+    # 失败原因与终态由 WorkflowOperations 经 canonical writer 原子落定；附加诊断
+    # 数据只进入结构化日志，不进入事件 payload。
     return _end_state(effective_step_count)
 
 

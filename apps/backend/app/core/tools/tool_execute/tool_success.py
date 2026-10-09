@@ -11,7 +11,7 @@ import copy
 from collections.abc import Mapping
 from typing import Any
 
-from app.core.tools.schemas import ToolObservation
+from app.core.tools.schemas import ToolObservation, UserInputRequest
 
 
 def tool_success(
@@ -19,6 +19,7 @@ def tool_success(
     content: str | None,
     tool_call_id: str = "",
     display_data: Mapping[str, Any] | None = None,
+    user_input_request: UserInputRequest | None = None,
     artifact_data: Mapping[str, Any] | None = None,
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
@@ -31,6 +32,9 @@ def tool_success(
         tool_call_id: 关联本次成功的模型工具调用 id；缺省为空字符串。
         display_data: 仅供客户端展示消费的结构化数据；会写入
             ``ToolObservation.display_data``，不会回传给模型。
+        user_input_request: 本次调用要求用户先作出决定才能继续时的请求；会写入
+            ``ToolObservation.user_input_request``，由 ``wait_user`` 节点据此挂起图。
+            ``None`` 表示不需要用户决定。它不是展示数据，投影给前端的载荷由工作流组装。
 
     返回:
         不可变的 :class:`ToolObservation`：``status="success"``，
@@ -60,6 +64,7 @@ def tool_success(
         status="success",
         content=content,
         tool_call_id=tool_call_id,
+        user_input_request=user_input_request,
     )
     observation.display_data = copy.deepcopy(dict(display_data or {}))
     observation.artifact_data = copy.deepcopy(dict(artifact_data or {}))
