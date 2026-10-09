@@ -13,6 +13,7 @@ class ReactRoute(str, Enum):
 
     MODEL = "model"
     TOOLS = "tools"
+    OBSERVE = "observe"
     STRUCTURED_OUTPUT = "structured_output"
-    USER_INPUT_WAIT = "user_input_wait"
+    WAIT_USER = "wait_user"
     END = "end"

@@ -40,14 +40,18 @@ class RuntimeConfig:
             **当前 workflow 节点不读取该字段**（终态事件不再由 workflow 生产）。
         thinking_channel: 统一 OpenAI-compatible reasoning 输出字段；模型不支持思考时为空串。
         execution_mode: 本次 graph 是新运行（``fresh``）还是从既有 checkpoint 恢复
-            （``resume``），并据此决定是否清空该 run 的旧上下文条目（``fresh`` 清、
-            ``resume`` 保留，见 ``RuntimeContextManager.begin_run``）。工作流据此选择
-            传入 graph 的输入：``fresh`` 传初始 state，``resume`` 传 ``None`` 表示从
-            ``checkpoint_thread_id`` 指向线程的既有 checkpoint 继续（因此续跑**不可**
-            换线程）。工具节点不依赖本字段判断重放，重放由工具调用自身的生命周期状态
-            决定（见 ``tools_node``）。
-        resuming_user_input_wait: 当前输入是否正在恢复用户输入等待节点的 interrupt。
-            只有该节点的 interrupt 恢复重放时为 True；续跑后首次到达等待节点仍为 False。
+            （``resume`` / ``resume_with_input``），并据此决定是否清空该 run 的旧上下文条目
+            （``fresh`` 按 run 清、续跑保留，见 ``RuntimeContextManager.begin_run``）。工作流
+            据此选择传入 graph 的输入：``fresh`` 传初始 state；``resume`` 传
+            ``Command(goto="model")`` 回退重跑；``resume_with_input`` 在恢复现场存在 interrupt
+            时传 ``Command(resume=...)`` 喂入用户决定，否则传 ``None`` 让 LangGraph 从既有
+            checkpoint 继续（因此续跑**不可**换线程）。工具节点不依赖本字段判断重放，重放由
+            工具调用自身的生命周期状态决定（见 ``tools_node``）。
+        resuming_wait_user: 当前输入是否正在恢复 ``wait_user`` 节点（human-in-the-loop）
+            的 interrupt。只有该节点的 interrupt 恢复重放时为 True；续跑后首次到达等待节点
+            仍为 False。**一次性消费令牌**：``wait_user`` 消费掉恢复值后立即复位为 False，
+            使同一 graph 执行内由自环再次进入该节点时不会被误判为「正在消费恢复值」（否则会
+            跳过 Run 状态迁移，让数据库停在 ``running`` 而图已挂起）。
     """
 
     operations: WorkflowOperations
@@ -59,4 +63,4 @@ class RuntimeConfig:
     langfuse_trace_id: str | None = None
     thinking_channel: str = ""
     execution_mode: ExecutionMode = "fresh"
-    resuming_user_input_wait: bool = False
+    resuming_wait_user: bool = False

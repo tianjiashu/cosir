@@ -13,8 +13,12 @@ def build_agent_team_preview_display_data(
 ) -> dict[str, Any]:
     """从准备结果中投影供用户确认的 Team 预览数据。
 
-    ``preview_fields`` 是 preparation service 生成的预览输入，不直接作为 Transport
-    payload；本函数集中决定可进入 UI 的字段，并补充待确认运行所需的交互标识。
+    ``preview_fields`` 是 preparation service 生成的预览输入，不直接作为 Transport payload；
+    本函数集中决定可进入 UI 的字段（目标、节点、边、配置与待确认运行标识）。
+
+    「这张卡需要用户确认」不是展示事实：它由 ``agent_team`` 工具随观察下发的
+    ``ToolObservation.user_input_request`` 表达（见 ``review_request``），投影给前端的载荷由
+    ``ToolCallLifecycleManager.project_user_input_request`` 组装。本函数只负责卡片本身。
     """
 
     fields = (
@@ -35,11 +39,30 @@ def build_agent_team_preview_display_data(
         "status": "pending",
         **{key: preview_fields[key] for key in fields},
         "team_run_id": team_run_id,
-        "requires_user_input": True,
-        "user_input_request": {
-            "kind": "agent_team_review",
-            "request_id": str(team_run_id),
-        },
+    }
+
+
+def build_agent_team_run_display_data(
+    *,
+    team_run_id: int,
+    team_id: str,
+    goal: str,
+    node_goals: Mapping[str, str],
+) -> dict[str, Any]:
+    """投影「用户已批准、Team 已启动」的展示数据。
+
+    复用 ``agent-team-preview`` 这个 ``kind``，使同一张卡片从「待确认」翻到「运行中」而不需要
+    第二套前端渲染分支；``status`` 表达状态跃迁，进度细节由卡片按 ``team_run_id`` 查询运行状态。
+    本函数的产物不携带待决请求声明，这是「用户已确认」在展示层的表现。
+    """
+
+    return {
+        "kind": "agent-team-preview",
+        "status": "running",
+        "team_id": team_id,
+        "team_run_id": team_run_id,
+        "goal": goal,
+        "node_goals": dict(node_goals),
     }
 
 

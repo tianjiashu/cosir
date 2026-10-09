@@ -35,6 +35,7 @@ _RUN_FAILURE_MESSAGES: dict[str, str] = {
     Constant.Run.RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED: "本轮对话已结束，无法继续，请新建对话",
     Constant.Run.RUN_FAILURE_CODE_BACKEND_RESTARTED: "后端已重启，本轮对话被中断，请重新发送",
     Constant.Run.RUN_FAILURE_CODE_CLIENT_DISCONNECTED: "连接已断开，本轮对话被中断，请重新发送",
+    Constant.Run.RUN_FAILURE_CODE_WAITING_FOR_INPUT: "本轮对话正在等待你的确认，请先提交决定再继续",
     # 取消类：领域侧只给到这些原因时的通用文案。
     "user_cancelled": "已取消本轮对话",
     "runtime_cancelled": "已取消本轮对话",

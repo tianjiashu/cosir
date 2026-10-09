@@ -696,18 +696,28 @@ class TerminalSessionService:
         操作期间已投影的终端元数据。
         """
 
-        with self._registry_lock:
-            self._closing_runs.add(run_id)
-        closed = self._close_matching(
-            lambda runtime: runtime.record.run_id == run_id,
-            reason=reason,
-            log_event="terminal_session_run_close_worker_failed",
-        )
-        with self._registry_lock:
-            self._backpressure_notified_runs = {
-                key for key in self._backpressure_notified_runs if key[1] != run_id
-            }
-        return closed
+        try:
+            with self._registry_lock:
+                self._closing_runs.add(run_id)
+            closed = self._close_matching(
+                lambda runtime: runtime.record.run_id == run_id,
+                reason=reason,
+                log_event="terminal_session_run_close_worker_failed",
+            )
+            with self._registry_lock:
+                self._backpressure_notified_runs = {
+                    key for key in self._backpressure_notified_runs if key[1] != run_id
+                }
+            return closed
+        except Exception as e:
+            log.exception(
+                "terminal_session_run_close_failed",
+                extra={
+                    "msg": "Terminal session 关闭失败",
+                    "data": {"run_id": run_id},
+                },
+            )
+            return 0
 
     def _close_matching(
         self,

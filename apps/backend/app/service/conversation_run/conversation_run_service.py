@@ -333,6 +333,11 @@ class ConversationRunService:
         2. 该 Run 最后一个 ``AIMessage`` 上的 ``tool_calls`` 没有结果行——工具可能已执行完但
            结果未落库，也可能根本没执行。
 
+        **等待用户决定的 Run（``waiting_for_input``）不在本方法收口**：它不是「驱动者消失」的
+        遗留，而是图正停在 human-in-the-loop 断点上——图断点与决定通道都还在，用户回来仍能作答，
+        收口它会让用户白等一场。它的终态只由取消 / 异常 / 用户决定收口（见
+        ``ConversationRunStateService`` 的状态图）。
+
         收口方式：先以 ``pending/running -> cancelled`` 条件更新作为原子闸门（重复调用不会
         二次生效，也不会覆盖已被其他路径收敛的终态），再按该 Run 最后一个 ``AIMessage`` 补齐
         ``cancelled`` 占位 ``ToolMessage``（与运行时收口同一套配对规则与文案）。

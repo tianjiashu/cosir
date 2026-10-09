@@ -107,6 +107,8 @@ class Constant:
         RUN_FAILURE_CODE_BACKEND_RESTARTED: str = "backend_restarted"
         # 客户端连接断开导致本轮对话中断。
         RUN_FAILURE_CODE_CLIENT_DISCONNECTED: str = "client_disconnected"
+        # 该 Run 正在等待用户决定，却被不带决定的续跑拉去跑模型（会静默丢掉待决请求）。
+        RUN_FAILURE_CODE_WAITING_FOR_INPUT: str = "waiting_for_user_input"
         # 未知 code 的统一兜底用户文案。
         DEFAULT_MESSAGE: str = "对话运行失败，请重试或查看日志"
 

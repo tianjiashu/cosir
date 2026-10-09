@@ -128,6 +128,7 @@ Tauri 桌面应用
 工具执行结果的前端渲染是后端 `ToolObservation.display_data` 与前端 renderer 之间的稳定契约，不新增进程或服务；完整字段规范见 `apps/backend/app/core/tools/tool_ui_display_contract.md`，本文件只描述边界。
 
 - 两层契约：静态展示声明 `ToolDisplayHints` 随 `ToolDefinition` 传给客户端，只声明 `verb`/`icon`/`variant`/`surface`/`expandable`/`expand_layout`/`default_open`/`show_result` 等 UI 意图，不含动态结果、渲染函数或业务数据；成功态非空 `ToolObservation.display_data` 必须有稳定 `kind`，由后端 `apps/backend/app/core/tools/display/` 纯函数投影，不执行额外 IO。错误态按受控短提示规则，不带成功态 `kind`。
+- human-in-the-loop 请求不是展示数据：工具要求用户先作出决定时，把请求挂在 `ToolObservation.user_input_request`（工具层领域类型 `UserInputRequest`），由 `wait_user` 节点据此挂起图，并在挂起前把它投影进该调用的 tool part 载荷；工具、工作流与前端都不再把审批声明塞进 `display_data`，也不为「是否等待作答」另设布尔字段（请求存在与否即判据）。
 - 状态唯一来源：`ToolObservation.status` 表达工具执行结果，取值 `success`/`error`/`cancelled`；Transport 侧工具 part 生命周期为 `pending`/`running`/`completed`/`failed`/`cancelled`，其中 `completed`/`failed`/`cancelled` 由 observation 经 `success→completed`、`error→failed`、`cancelled→cancelled` 投影，`pending`/`running` 为执行前/执行中状态。前端不得建立第二套状态机，也不得从 `args`/`result` 反推展示结果。
 - 前端路由：`components/assistant-ui/tools/tool-part.tsx` 通过 `tool-renderer-registry.ts` 按 `data.kind` 与 `presentation.expand_layout` 选择 renderer；通用布局为 `details`/`list`/`diff`/`write`/`terminal`/`none`，专用 renderer 可承载明确的业务交互。禁止按工具名编写专用渲染分支；未知 `kind` 走 `ToolFallback`，不导致消息流崩溃。
 - 错误三通道隔离：工具 UI 短提示走受控 `display_data.status_hint`（约 5 字，来自后端分类映射）；Run 错误 `error.message` 可直接使用模型 HTTP 响应体的 `message` 字段供用户排查，但不得透传完整响应体。生命周期走 Transport status。前端不展示堆栈、原始异常、原始 prompt、凭据或大段模型正文；失败 `display_data` 不得携带成功态的目标、结果或输出字段。

@@ -26,6 +26,7 @@ from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM, TOOL_PROPOSE_AGEN
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_AGENT_TEAM
+from app.core.tools.tool_handler.agent_team.review_request import build_team_review_request
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import AgentTeamApproveInput, AgentTeamArgs
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
@@ -148,6 +149,12 @@ class AgentTeamRunTool(HandlerBase):
                     ensure_ascii=False,
                 ),
                 display_data=build_agent_team_preview_display_data(
+                    preparation.preview_fields,
+                    team_run_id=pending_run.id,
+                ),
+                # 待用户确认的事实经观察的专用字段下发（不是展示数据）：工作流据此挂起图，
+                # 展示模块只负责卡片本身。
+                user_input_request=build_team_review_request(
                     preparation.preview_fields,
                     team_run_id=pending_run.id,
                 ),

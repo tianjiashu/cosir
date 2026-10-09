@@ -57,6 +57,17 @@ function positiveId(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
+/**
+ * 载荷是否带着待决请求声明。
+ *
+ * `user_input_request` 的存在本身就是「这张卡等待用户作答」的标记：后端的展示投影只在该调用
+ * 待作答时把它并进载荷，因此这里不再需要第二个布尔字段（两个表示会各自漂移）。
+ */
+function hasReviewRequest(data: Record<string, unknown>): boolean {
+  const request = data.user_input_request;
+  return typeof request === "object" && request !== null;
+}
+
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -156,7 +167,7 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
  */
 export function readAgentTeamReviewRequest(value: unknown): AgentTeamReviewRequest | null {
   const data = asRecord(value);
-  if (data.requires_user_input !== true) return null;
+  if (!hasReviewRequest(data)) return null;
   const request = asRecord(data.user_input_request);
   const requestId = text(request.request_id);
   const draftSchema = text(request.draft_schema);
@@ -170,7 +181,7 @@ export function readAgentTeamReviewRequest(value: unknown): AgentTeamReviewReque
 export function readAgentTeamRunDisplay(value: unknown): AgentTeamRunDisplay | null {
   const data = asRecord(value);
   if (data.kind !== "agent-team-preview") return null;
-  if (data.requires_user_input === true) return null;
+  if (hasReviewRequest(data)) return null;
   const teamRunId = positiveId(data.team_run_id);
   const teamId = text(data.team_id);
   const status = text(data.status);

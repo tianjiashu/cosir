@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
+from app.core.tools.schemas.user_decision import UserDecision
 from app.models.workspace_record import WorkspaceRecord
 
 
@@ -30,6 +31,8 @@ class ToolExecutionContext:
         run_id: 当前工具调用所属 turn 标识；缺省为空字符串。
         trace_id: 当前请求的日志链路标识；进程隔离执行时显式传入子进程。
         runtime_dependencies: 同进程工具可用的运行期依赖，跨进程执行时必须清空。
+        user_decision: 本调用对应的用户决定（human-in-the-loop）。仅当该调用被用户批准并
+            重新执行时非 ``None``；进程隔离执行同样需要它，故随副本一起传入子进程。
     """
 
     task_id: int
@@ -40,6 +43,9 @@ class ToolExecutionContext:
     # Runtime-only locator for the currently executing tool. It is intentionally
     # not persisted and is cleared from process-isolated copies.
     tool_call_id: str = ""
+    # 每次调用由执行层用 ``replace`` 特化（与 tool_call_id 同口径）：它属于单次调用，
+    # 而不是整个 Run。
+    user_decision: UserDecision | None = None
     runtime_dependencies: ToolRuntimeDependencies = field(default_factory=ToolRuntimeDependencies)
 
     def for_process_execution(self) -> "ToolExecutionContext":
@@ -48,8 +54,9 @@ class ToolExecutionContext:
         参数:
             无。
         返回:
-            与当前对象拥有相同任务、工作区、根路径、turn 和 trace 边界，但清空
-            ``runtime_dependencies`` 的 ``ToolExecutionContext``。
+            与当前对象拥有相同任务、工作区、根路径、turn、trace 边界与用户决定，但清空
+            ``runtime_dependencies`` 的 ``ToolExecutionContext``（用户决定是纯数据，子进程
+            handler 同样需要它来决定走执行分支还是待决分支）。
         异常:
             无。
         副作用:
@@ -62,6 +69,7 @@ class ToolExecutionContext:
             workspace_root=self.workspace_root,
             run_id=self.run_id,
             trace_id=self.trace_id,
+            user_decision=self.user_decision,
         )
 
     @classmethod

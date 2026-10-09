@@ -44,9 +44,15 @@ from app.core.tools.schemas.user_decision import (
     UserDecisionKind,
     build_resume_payload,
 )
+from app.core.tools.schemas.user_input_request import (
+    DEFAULT_DECISIONS,
+    USER_INPUT_REQUEST_KEY,
+    UserInputRequest,
+)
 
 __all__ = [
     "ALL_TOOL_NAMES",
+    "DEFAULT_DECISIONS",
     "EXECUTING_DECISION_KINDS",
     "TOOL_AGENT_TEAM",
     "TOOL_APPLY_PATCH",
@@ -72,6 +78,7 @@ __all__ = [
     "TOOL_WEB_EXTRACT",
     "TOOL_WEB_SEARCH",
     "TOOL_WRITE_FILE",
+    "USER_INPUT_REQUEST_KEY",
     "OutputSink",
     "ProcessToolOutputChannel",
     "ProcessToolOutputChannelFactory",
@@ -83,5 +90,6 @@ __all__ = [
     "ToolObservation",
     "UserDecision",
     "UserDecisionKind",
+    "UserInputRequest",
     "build_resume_payload",
 ]

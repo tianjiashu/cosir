@@ -617,8 +617,14 @@ class WorkflowOperations:
         """
         try:
             with self._trace_recorder.span(call, step_id or "") as tool_span:
+                # 逐调用特化：``tool_call_id`` 与 ``user_decision`` 都属于单次调用，
+                # 不能挂在 Run 级共享上下文上（同批调用会互相串味）。
                 execution_context = (
-                    replace(self._execution_context, tool_call_id=call.call_id)
+                    replace(
+                        self._execution_context,
+                        tool_call_id=call.call_id,
+                        user_decision=call.user_decision,
+                    )
                     if self._execution_context is not None
                     else None
                 )

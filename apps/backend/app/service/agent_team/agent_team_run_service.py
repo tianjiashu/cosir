@@ -9,10 +9,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_agent_registry
+from app.config.logging.logger import log
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.model_settings import ModelSettings
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
@@ -20,13 +23,19 @@ from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationResult,
     AgentTeamPreparationService,
 )
-from app.service.depends import get_model_config_service, get_workspace_service, get_conversation_run_service
 from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.depends import (
+    get_conversation_run_service,
+    get_model_config_service,
+    get_workspace_service,
+)
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
-from sqlalchemy.exc import SQLAlchemyError
+
+# 主 Run 的终态集合：确认边界只排除它们，不再要求主 Run 停在等待态（见 ``_validate_parent_run``）。
+_TERMINAL_PARENT_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 class AgentTeamRunService:
@@ -78,7 +87,14 @@ class AgentTeamRunService:
         goal_input = goal.strip()
         try:
             with begin_immediate(self._session_factory) as session:
-                return self._team_run_crud.create(
+                # 先收敛同一主 Run 遗留的 pending：主 Run 内同时只允许一条待确认方案（部分唯一
+                # 索引约束），用户驳回后重新提案若不先收敛旧行就会撞唯一索引，使驳回变成死路。
+                superseded = self._team_run_crud.supersede_pending_for_parent(
+                    parent_task_id=parent_task_id,
+                    parent_run_id=parent_run_id,
+                    session=session,
+                )
+                created = self._team_run_crud.create(
                     configuration=configuration,
                     workspace_id=workspace_id,
                     parent_task_id=parent_task_id,
@@ -87,6 +103,19 @@ class AgentTeamRunService:
                     node_runtime_snapshots=preparation.node_runtime_snapshots,
                     session=session,
                 )
+            if superseded:
+                log.info(
+                    "agent_team_pending_superseded",
+                    extra={
+                        "msg": "新方案替代了旧的待确认 TeamRun",
+                        "data": {
+                            "parent_run_id": parent_run_id,
+                            "superseded_count": superseded,
+                            "new_team_run_id": created.id,
+                        },
+                    },
+                )
+            return created
         except SQLAlchemyError as exc:
             raise TeamToolError(
                 f"Agent Team 待确认记录持久化失败: {exc}",
@@ -119,8 +148,14 @@ class AgentTeamRunService:
         并同时写入最终配置和运行快照；事务提交后才启动 Coordinator，因此数据库中的
         TeamRun 始终是唯一执行事实源。两个并发确认请求中只有一个能够成功迁移状态。
 
+        幂等：条件迁移未命中（``rowcount == 0``）时不再抛错，而是返回该行的当前事实。
+        human-in-the-loop 的批准由图重放投递，进程在「已启动」与「写 checkpoint」之间终止会
+        重复确认；此时必须如实返回「已在运行 / 已结束」，既不重复启动 Coordinator，也不让
+        调用方误判为失败。
+
         异常:
-            ValueError: TeamRun 不存在、已处理、Team 标识或配置无效，或主 Run 不可恢复。
+            ValueError: TeamRun 不存在、Team 标识或配置无效、主 Run 不可恢复，或同一 pending
+                行被两个并发确认同时命中（真正的竞争，调用方应重试）。
             KeyError: 关联的主 Agent Run 不存在。
         """
 
@@ -152,12 +187,24 @@ class AgentTeamRunService:
                 session=session,
             )
             if updated is None:
-                raise ValueError("Agent Team 已确认或已处理")
+                latest = self._team_run_crud.get_by_id(existing.id, session=session)
+                if latest.status == AgentTeamRunStatus.PENDING.value:
+                    # 事务内读到的状态仍是 pending 却迁移失败，只可能是并发确认刚刚提交；
+                    # 交给调用方重试，不静默返回一个未启动的运行。
+                    raise ValueError("Agent Team 确认竞争失败，请稍后重试")
+                log.info(
+                    "agent_team_confirmation_replayed",
+                    extra={
+                        "msg": "TeamRun 已被确认过，按当前事实返回而不重复启动",
+                        "data": {"team_run_id": existing.id, "status": latest.status},
+                    },
+                )
+                return latest
 
         from app.agent_team.coordinator import get_agent_team_coordinator
 
         return get_agent_team_coordinator().start(
-            existing,
+            updated,
         )
 
     def _prepare_final_plan(
@@ -188,10 +235,16 @@ class AgentTeamRunService:
         )
 
     def _validate_parent_run(self, parent_task_id: int, parent_run_id: int) -> None:
-        """校验 TeamRun 关联的主 Agent Run 仍属于该 Task 且可继续。"""
+        """校验 TeamRun 关联的主 Agent Run 仍属于该 Task 且可继续。
+
+        只校验归属与「未终态」：user-input 决定由 graph 重放投递，批准发生在主 Run 已由
+        续跑入口迁移为 ``running`` 之后（``resume_waiting_run``），因此这里**不能**再要求
+        ``waiting_for_input``——那会让每一次真实批准都失败（旧 REST 流程的前置
+        ``wait_for_parent_input`` 已随专用端点删除）。
+        """
 
         parent_run = self._run_service.get_run(parent_run_id)
         if parent_run.task_id != parent_task_id:
             raise ValueError("TeamRun 不属于指定主 Agent Task")
-        if parent_run.status != "waiting_for_input":
-            raise ValueError("主 Agent Run 当前没有等待用户确认 TeamRun")
+        if parent_run.status in _TERMINAL_PARENT_STATUSES:
+            raise ValueError("主 Agent Run 已结束，不能确认 TeamRun")

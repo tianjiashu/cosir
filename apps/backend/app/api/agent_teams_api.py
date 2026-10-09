@@ -1,4 +1,9 @@
-"""Agent Team 配置保存、运行确认和本地状态查询接口。"""
+"""Agent Team 配置保存与本地状态查询接口。
+
+TeamRun 的「确认 / 驳回」不在本模块：用户决定走通用 human-in-the-loop 通道（Assistant
+Transport 的 ``user-input-decision`` 命令 → ``wait_user`` 节点 → ``tools`` 节点重执行被批准的
+调用），使每个提问工具都不需要自带端点和「等主 Run 挂起」的轮询。
+"""
 
 from __future__ import annotations
 
@@ -10,15 +15,10 @@ from fastapi import HTTPException
 from app.agent_team.coordinator import get_agent_team_coordinator
 from app.agent_team.registry import get_agent_team_registry
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
-from app.api.schemas.request.confirm_agent_team_request import ConfirmAgentTeamRequest
-from app.api.schemas.request.reject_agent_team_request import RejectAgentTeamRequest
 from app.api.schemas.request.save_agent_team_configuration_request import (
     SaveAgentTeamConfigurationRequest,
 )
 from app.app import app
-from app.service.agent_team.agent_team_parent_run_service import (
-    AgentTeamParentRunService,
-)
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 from app.service.configuration.agent_team_configuration_service import (
     get_agent_team_configuration_service,
@@ -95,28 +95,6 @@ async def list_agent_team_configurations(workspace_id: int) -> list[dict[str, An
         raise HTTPException(status_code=404, detail="workspace not found") from exc
 
 
-@app.post("/agent-team/runs/confirm")
-async def confirm_agent_team_run(
-    payload: ConfirmAgentTeamRequest,
-) -> dict[str, Any]:
-    """提交最终配置，确认主 Run 下的待确认 TeamRun 并异步启动对应节点。"""
-
-    try:
-        await AgentTeamParentRunService().wait_for_parent_input(payload.team_run_id)
-        row = await asyncio.to_thread(
-            AgentTeamRunService().confirm_and_start,
-            payload.team_run_id,
-            payload.configuration,
-            goal=payload.goal,
-            node_goals=payload.node_goals,
-        )
-        return _run_payload(row)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
 @app.get("/agent-team/runs/{run_id}")
 async def get_agent_team_run(run_id: int) -> dict[str, Any]:
     """读取 TeamRun 聚合状态。"""
@@ -124,42 +102,6 @@ async def get_agent_team_run(run_id: int) -> dict[str, Any]:
     try:
         row = await asyncio.to_thread(AgentTeamRunService().get, run_id)
         return _run_payload(row)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Team run not found") from exc
-
-
-@app.post("/agent-team/runs/{run_id}/reject")
-async def reject_agent_team_run(
-    run_id: int,
-    payload: RejectAgentTeamRequest,
-) -> dict[str, Any]:
-    """提交审阅后的目标与驳回意见，让主 Agent 重新生成待确认方案。"""
-
-    try:
-        goal = payload.goal.strip()
-        node_goals = {
-            node_id: node_goal.strip()
-            for node_id, node_goal in payload.node_goals.items()
-        }
-        feedback = payload.feedback.strip()
-        if not goal:
-            raise ValueError("Agent Team 目标不能为空")
-        if not node_goals or any(not node_goal for node_goal in node_goals.values()):
-            raise ValueError("每个 Agent Team 节点都必须填写子目标")
-        if not feedback:
-            raise ValueError("驳回意见不能为空")
-        parent_run_service = AgentTeamParentRunService()
-        await parent_run_service.wait_for_parent_input(run_id)
-        team_run = await asyncio.to_thread(AgentTeamRunService().get, run_id)
-        await parent_run_service.resume_parent_after_rejection(
-            team_run,
-            goal,
-            node_goals,
-            feedback,
-        )
-        return _run_payload(team_run)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Team run not found") from exc
 

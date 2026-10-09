@@ -79,31 +79,30 @@ Tauri Rust 主进程
 
 #### 2.2.1 human-in-the-loop 请求声明
 
-工具需要用户先作出决定才能继续时，在同一份 `display_data` 上声明：
+工具需要用户先作出决定才能继续时，把请求挂在**观察自己的字段**上
+（`ToolObservation.user_input_request`，类型 `UserInputRequest`），**不放在 `display_data` 里**：
 
 ```json
 {
-  "kind": "<stable-display-kind>",
-  "requires_user_input": true,
-  "user_input_request": {
-    "kind": "<request-kind>",
-    "request_id": "<stable-id>",
-    "prompt": "<可选：受控短文案>",
-    "decisions": ["approve", "reject"],
-    "draft_schema": "<draft-schema-id>",
-    "draft": { "…": "用户可编辑的结构化草稿" }
-  }
+  "request_id": "<stable-id>",
+  "kind": "<request-kind>",
+  "prompt": "<可选：受控短文案>",
+  "decisions": ["approve", "reject"],
+  "draft_schema": "<draft-schema-id>",
+  "draft": { "…": "用户可编辑的结构化草稿" }
 }
 ```
 
 约束：
 
-- `request_id` 必须在本 Run 内唯一，是对外稳定标识（前端提交决定、后端匹配请求都用它）；`tool_call_id` 由后端从观察中获得，不放进声明。
+- 它是**工作流控制流事实**（`wait_user` 据此决定是否挂起图、要问用户什么），不是展示数据：不进入模型上下文，也不由工具写进 `display_data`——后者只服务渲染，且本契约明确禁止把它当作后端业务事实源。
+- 前端载荷由后端在挂起前投影组装：`wait_user` 把请求并进该调用的 tool part 展示载荷，键为 `user_input_request`，形状为 `request_id` / `request_kind` / `prompt` / `decisions` / `draft_schema` / `draft`。前端以「载荷里有没有 `user_input_request`」判断这张卡是否等待作答，**不需要**第二个布尔字段（两个表示会各自漂移）。
+- `request_id` 必须在本 Run 内唯一，是对外稳定标识（前端提交决定、后端匹配请求都用它）；`tool_call_id` 由后端从观察中获得，不放进请求。
 - `decisions` 是该工具接受的**决定子集**，取值只有 `approve` / `reject` / `abort`；缺省为 `approve` + `reject`。提交未声明的决定会被拒绝（不静默忽略）。
 - `draft` + `draft_schema` 只服务前端渲染「可编辑草稿」；`draft_schema` 变更必须升版本，避免旧前端按旧结构渲染新草稿。
 - 决定的路由目标是框架级固定映射（`approve` → 重新执行该调用，`reject` / `abort` → 交给观察节点），**不由工具声明**：控制流属于工作流事实，不放在展示数据里。
-- 声明与决定的消费见 `app/core/workflows/react/node_helper/user_input_projection.py`；挂起、等待与放行节点见 `app/core/workflows/react/nodes/wait_user_node.py`。
-- 批准后的第二阶段展示数据必须**不再**携带 `requires_user_input`，否则会形成无法结束的挂起。
+- 请求的派生与决定写回见 `app/core/workflows/react/node_helper/user_input_projection.py`；挂起、投影与决定物化见 `app/core/workflows/react/nodes/wait_user_node.py`。
+- **决定被消费即清掉请求**：工作流在消费决定时清空该观察上的 `user_input_request`（批准与驳回一视同仁），它同时是「尚未作答」的唯一标记。工具自身产出的第二阶段结果（批准后重执行）也不得携带该字段，否则会形成无法结束的挂起。
 
 ### 2.3 错误展示策略
 

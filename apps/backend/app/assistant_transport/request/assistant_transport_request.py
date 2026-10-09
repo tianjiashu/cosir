@@ -12,10 +12,20 @@ from app.assistant_transport.request.command.ban_tools_command import BanToolsCo
 from app.assistant_transport.request.command.propose_agent_configuration_command import (
     ProposeAgentConfigurationCommand,
 )
+from app.assistant_transport.request.command.user_input_decision_command import (
+    UserInputDecisionCommand,
+)
+from app.config.logging.logger import log
+from app.core.tools.schemas import UserDecision
 
 # custom 命令共用 wire ``type`` discriminator，因此每种受支持的项目命令都按明确 schema
 # 定义，并通过字面量 ``name`` 区分。
-AssistantCommand = AddMessageCommand | BanToolsCommand | ProposeAgentConfigurationCommand
+AssistantCommand = (
+    AddMessageCommand
+    | BanToolsCommand
+    | ProposeAgentConfigurationCommand
+    | UserInputDecisionCommand
+)
 
 
 class AssistantTransportRequest(BaseModel):
@@ -63,6 +73,8 @@ class AssistantTransportRequest(BaseModel):
         - 一次请求最多包含一个 ``add-message`` 命令（首版运行模型不支持批量消息）；
         - custom 命令必须是与 add-message 同批的 ``BanToolsCommand`` 或
           ``ProposeAgentConfigurationCommand``；
+        - ``UserInputDecisionCommand``（human-in-the-loop 决定）必须单独提交、携带
+          ``runId``，且一次请求最多一条；
         - 空命令必须携带 ``runId`` 用于恢复已有 run；add-message 是否重放只由
           ``runId`` 是否存在决定，不能由 ``sourceId`` 推导；
         - 含 ``add-message`` 时 ``modelConfigId`` 必填；模型名由后端配置事实读取；
@@ -139,6 +151,27 @@ class AssistantTransportRequest(BaseModel):
                 message="配置提案命令必须与唯一 add-message 命令同批提交",
                 retryable=False,
             )
+        # 用户决定走的是一条独立的续跑路径：它消费既有 Run 的挂起断点，语义上与新消息互斥
+        # （同批会把「新建/编辑」和「恢复」两种 Run 模式混在一次请求里）。
+        decision_commands = [
+            command
+            for command in self.commands
+            if isinstance(command, UserInputDecisionCommand)
+        ]
+        if len(decision_commands) > 1:
+            raise TransportRequestError(
+                status_code=400,
+                code="MULTIPLE_USER_DECISION_COMMANDS",
+                message="一次请求最多提交一个用户决定命令",
+                retryable=False,
+            )
+        if decision_commands and has_message:
+            raise TransportRequestError(
+                status_code=400,
+                code="USER_DECISION_COMMAND_INVALID",
+                message="用户决定必须单独提交，不能与新消息同批",
+                retryable=False,
+            )
         if not has_message and self.runId is None:
             raise TransportRequestError(
                 status_code=400,
@@ -154,6 +187,49 @@ class AssistantTransportRequest(BaseModel):
                 retryable=False,
             )
         return self
+
+    def user_decisions(self) -> tuple[UserDecision, ...]:
+        """取出本请求携带的用户决定（human-in-the-loop）。
+
+        wire 契约保证决定命令至多一条且必须单独提交，因此这里取首条并映射为领域值；没有决定命令时
+        返回空序列——空决定不是错误，它表达「用户还没作答」，``wait_user`` 会重新挂起同一请求。
+
+        参数:
+            request: 已通过 wire 校验的 Assistant Transport 请求。
+
+        返回:
+            领域决定序列（可能为空）。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        for command in self.commands:
+            if isinstance(command, UserInputDecisionCommand):
+                decisions = command.to_user_decisions()
+                # 只记请求标识与决定种类：``decision.data`` 是用户编辑过的业务正文，不进日志。
+                log.info(
+                    "user_input_decision_received",
+                    extra={
+                        "msg": "收到用户决定命令",
+                        "data": {
+                            "task_id": self.taskId,
+                            "run_id": self.runId,
+                            "decisions": [
+                                {
+                                    "request_id": decision.request_id,
+                                    "decision": decision.kind.value,
+                                }
+                                for decision in decisions
+                            ],
+                        },
+                    },
+                )
+                return decisions
+        return ()
 
 class TransportRequestError(Exception):
     """纯 wire 契约校验失败的结构化异常。

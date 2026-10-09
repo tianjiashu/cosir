@@ -31,23 +31,27 @@ class ReactGraphState(BaseModel):
         tool_error_count: 连续工具失败次数，成功即清零。observe 节点从本批
             ``last_tool_results`` 重算并消费（超 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 判定）。
         next_node: 下一个图节点或 ``end``。model 节点选择工具、续写、结构化输出或结束；
-        observe 节点选择继续模型、等待用户输入或结束。固定转移由图边表达。
+        wait_user 节点选择放行 observe、回到 tools 或自环重新挂起；observe 节点选择继续模型或
+        结束。固定转移由图边表达。
         max_steps: 本轮允许的最大模型步骤数，执行期常量。编排层初始化；model 节点
             ``step_count > max_steps`` 判定用。
         final_text: 终态可见文本：正常完成为模型最终回答，步数耗尽由 ``_finalize_max_steps``
             写默认失败说明。
         last_tool_results: 本批工具结果摘要（可序列化 dict，由 tools 节点对本批
             ``ToolObservation`` 做 ``dataclasses.asdict`` 投影，键名即执行层字段名
-            ``tool_call_id`` / ``display_data``）。tools 节点写；observe 节点做事件分发、
-            错误计数与错误上限判定，其中 ``display_data`` 不会进入模型消息。
+            ``tool_call_id`` / ``display_data``）。tools 节点按 ``tool_call_id`` 合并写入
+            （同一模型步可分多遍执行），observe 节点做事件分发、错误计数与错误上限判定并在结算后
+            清空（这就是批次边界），其中 ``display_data`` 不会进入模型消息。
         terminal_sessions: 当前 Run 创建的 terminal 元数据，键为 session id，值为
             ``TerminalSessionCheckpoint``。只保存由工具展示契约 allowlist 后的可序列化字段，
             不保存 worker、PTY、输出 ring buffer 或 subscriber。活终端的真实性仍由 backend
             进程内 ``TerminalSessionService`` registry 负责。
         tool_call_lifecycle: 当前 workflow 已创建工具调用的可序列化生命周期记录。model
-            节点写入创建 / 运行状态与非法调用标记，tools 节点回写同一快照，observe 节点写入
+            节点写入调用身份与归属桶，tools 节点经 ``begin`` 迁移起跑状态并回写同一快照，
+            wait_user 节点在用户批准后把被批准的记录重置为未起跑并写入用户决定，observe 节点写入
             终态；不含 operations、stream writer 或 runtime context。
     """
+
 
     step_count: int
     tool_error_count: int

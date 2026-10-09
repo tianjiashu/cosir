@@ -124,7 +124,7 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
 
     返回:
         指向 ``END`` 的 LangGraph state 增量。Run 的完成、失败或取消状态由
-        ``RuntimeOperations`` 写入；JSON 内容不进入 graph state、RuntimeContextManager
+        ``WorkflowOperations`` 写入；JSON 内容不进入 graph state、RuntimeContextManager
         或对话消息。
 
     异常:

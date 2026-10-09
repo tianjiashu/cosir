@@ -9,6 +9,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from app.core.tools.schemas.user_input_request import UserInputRequest
+
 
 @dataclass(frozen=False)
 class ToolObservation:
@@ -70,6 +72,11 @@ class ToolObservation:
             用于把观察回绑到具体的模型请求，缺失时为空。
         display_data: 面向客户端的结构化机读字典，仅供前端渲染。UI 不应通过本字段之外的
             Observation 字段推导展示结果。
+        user_input_request: 工具要求用户先作出决定才能继续时的请求（human-in-the-loop 的请求侧）。
+            它是**工作流控制流事实**——``wait_user`` 据此决定是否挂起图、要问用户什么；因此既
+            不进模型上下文，也不随 ``display_data`` 下发给前端，投影载荷由
+            ``ToolCallLifecycleManager.project_user_input_request`` 组装。``None`` 表示本次调用
+            不需要用户决定。
         artifact_data: 工具执行产出的内部产物数据；不进入事件、快照或模型上下文。
             文件展示数据不代表持久化的变更事实。
     """
@@ -94,5 +101,7 @@ class ToolObservation:
     tool_call_id: str = ""
     # 面向客户端的结构化机读字典，仅前端渲染消费，不到模型。
     display_data: dict[str, Any] | None = field(default_factory=dict)
+    # 待用户决定的请求（工作流控制流事实）：``wait_user`` 据此挂起图并投影给前端。
+    user_input_request: UserInputRequest | None = None
     # 工具执行产出的内部结构化事实（产物数据）；不进入 Transport 或模型上下文。
     artifact_data: dict[str, Any] | None = field(default_factory=dict)

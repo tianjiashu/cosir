@@ -53,8 +53,6 @@ _RUN_STATUS_TRANSITIONS: dict[ConversationRunStatus, tuple[ConversationRunStatus
     ),
     ConversationRunStatus.WAITING_FOR_INPUT: (
         ConversationRunStatus.RUNNING,
-        ConversationRunStatus.FAILED,
-        ConversationRunStatus.CANCELLED,
     ),
     ConversationRunStatus.CANCELLED: (ConversationRunStatus.RUNNING,),
     ConversationRunStatus.COMPLETED: (),

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
+from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
@@ -64,6 +65,50 @@ class AgentTeamRunCrud:
             session.add(row)
             session.flush()
         return row
+
+    def supersede_pending_for_parent(
+        self,
+        *,
+        parent_task_id: int,
+        parent_run_id: int,
+        session: Session,
+    ) -> int:
+        """把同一主 Run 遗留的 ``pending`` TeamRun 收敛为 ``cancelled``。
+
+        主 Run 内同时只允许一条 pending（部分唯一索引 ``uq_agent_team_runs_pending_parent``）。
+        用户驳回后主 Agent 会重新提案，若不先收敛旧行，插入新的待确认方案会直接撞唯一索引，
+        驳回就变成死路（工具只能返回「无法创建执行方案」）。收敛原因码取
+        ``superseded_by_new_preview``，表达「被新方案替代」而非用户主动取消。
+
+        参数:
+            parent_task_id: 发起 TeamRun 的主 Agent Task 主键。
+            parent_run_id: 发起 TeamRun 的主 ConversationRun 主键。
+            session: 调用方事务；本方法不提交，由调用方与后续插入同批提交。
+
+        返回:
+            实际被收敛的行数（``0`` 表示没有遗留 pending）。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 写入失败，由调用方收敛为领域错误。
+
+        副作用:
+            条件更新 ``agent_team_runs`` 中同主 Run 且仍为 ``pending`` 的行。
+        """
+
+        result = session.execute(
+            update(AgentTeamRunModel)
+            .where(
+                AgentTeamRunModel.parent_task_id == parent_task_id,
+                AgentTeamRunModel.parent_run_id == parent_run_id,
+                AgentTeamRunModel.status == AgentTeamRunStatus.PENDING.value,
+            )
+            .values(
+                status=AgentTeamRunStatus.CANCELLED.value,
+                end_reason=AgentTeamRunEndReason.SUPERSEDED_BY_NEW_PREVIEW.value,
+                ended_at=to_text(utc_now()),
+            )
+        )
+        return int(result.rowcount or 0)
 
     def get_by_id(
         self,

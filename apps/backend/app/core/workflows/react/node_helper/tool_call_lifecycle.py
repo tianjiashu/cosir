@@ -26,7 +26,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.assistant_transport.event import ToolCallCreatedEvent, ToolCallStatusChangedEvent
 from app.config.logging.logger import log
 from app.core.context.runtime_context_manager import RuntimeContextManager
-from app.core.tools.schemas import ToolObservation
+from app.core.context.tool_call_closure import (
+    build_placeholder_tool_message,
+    build_waiting_input_tool_message,
+)
+from app.core.tools.schemas import (
+    USER_INPUT_REQUEST_KEY,
+    ToolObservation,
+    UserDecision,
+    UserInputRequest,
+)
 from app.core.tools.tool_execute.tool_terminal_projection import (
     normalize_display_data,
     terminal_error_hint,
@@ -46,13 +55,17 @@ class ToolCallLifecycleRecord(BaseModel):
     记录的补建按工具名写入）与 ``part_projected``。
 
     ``part_projected`` 表示前端是否已建立对应的 tool-call part（等价于「本调用是否已发过
-    ``ToolCallCreatedEvent``」）。它是「终态能否投影给前端」的**唯一裁决依据**，由 ``settle`` 与
-    ``cancel`` 共用，避免两处各自按工具名 / 白名单推断而漂移。
+    ``ToolCallCreatedEvent``」）。它是「能否向投影前端发状态事件」的**唯一裁决依据**，由 ``begin``
+    与 ``settle`` 共用，避免几处各自按工具名 / 白名单推断而漂移。
 
     取值由 ``create`` / ``classify`` 按归属桶显式写入：``allowed`` 桶为 ``True``，``blocked`` 与
     工具名未注册者为 ``False``，``settle`` 补建的孤儿记录同样为 ``False``。默认值 ``True`` 只是
     兜底——从非 ``create`` / ``classify`` 路径产生的记录（如直接构造或旧 checkpoint 反序列化）
     按「前端有 part」处理，宁可多投影一次（多一条告警），也不让真实存在的 part 永远收不到终态。
+
+    ``user_decision`` 只在「用户批准后重执行」这条路径上非空：由 ``wait_user`` 在
+    :meth:`reopen_for_approved_replay` 中写入，``tools`` 节点经 ``ToolCall`` 交给执行层，handler
+    据此走真正的执行分支。它是**执行门控的输入**而非展示数据，因此不进 ``args``。
 
     异常:
         pydantic.ValidationError: 字段不满足契约（``tool_call_id`` / ``tool_name`` 为空，或出现
@@ -67,6 +80,7 @@ class ToolCallLifecycleRecord(BaseModel):
     args: dict[str, object] = Field(default_factory=dict)
     presentation: dict[str, object] = Field(default_factory=dict)
     part_projected: bool = True
+    user_decision: UserDecision | None = None
 
 
 @dataclasses.dataclass
@@ -85,28 +99,6 @@ class SettlementResult:
     error_count: int
     # settle_batch / settle 始终返回非空的 manager（未命中调用会即时补建），无需 Optional。
     lifecycle: ToolCallLifecycleManager = dataclasses.field(compare=False, repr=False)
-
-
-def _event_status(status: str) -> Literal["completed", "failed", "cancelled"]:
-    """把 ``ToolObservation.status`` 映射为事件契约的终态状态。
-
-    映射规则收口在 ``tool_terminal_projection.terminal_status``：执行层提前投影与本结算兜底必须
-    给出同一终态，故本函数只做委托，不维护第二份映射。
-
-    参数:
-        status: ``ToolObservation.status``（``success`` / ``cancelled`` / 其它错误态）。
-
-    返回:
-        ``completed`` / ``cancelled``；其余一律 ``failed``。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    return terminal_status(status)
 
 
 def _record_args(raw_args: object) -> dict[str, object]:
@@ -233,11 +225,12 @@ class ToolCallLifecycleManager(BaseModel):
     闭合模型协议）、``allows_tools``（本 Run 允许执行的工具名快照）。
 
     归属由 :meth:`_resolve_call_bucket` 在 ``create`` / ``classify`` 阶段一次性裁定；``classify``
-    整体重建 ``valid_calls`` / ``blocked_calls``，``settle`` 对缺失记录即时补建 ``pending``，其余
-    状态方法在既有记录上演化状态。状态方法恒返回深拷贝的新快照（``settle`` 返回
-    ``(manager, 终态)``，``settle_batch`` 返回 ``SettlementResult``），调用节点必须把返回值写入
-    state patch。事件发射与模型上下文写回是运行期副作用，依赖取自当前 graph config，不经 Pydantic
-    / LangGraph 序列化。
+    整体重建 ``valid_calls`` / ``blocked_calls``，``settle`` 对缺失记录即时补建 ``pending``，
+    ``begin`` 把本批将送执行层的记录迁移到 ``running``（起跑边界），``reopen_for_approved_replay``
+    把用户批准的调用重置回 ``pending`` 并附上用户决定（重执行门控），其余状态方法在既有记录上
+    演化状态。状态方法恒返回深拷贝的新快照（``settle`` 返回 ``(manager, 终态)``，``settle_batch``
+    返回 ``SettlementResult``），调用节点必须把返回值写入 state patch。事件发射与模型上下文写回是
+    运行期副作用，依赖取自当前 graph config，不经 Pydantic / LangGraph 序列化。
 
     异常:
         pydantic.ValidationError: manager state 或事件字段不满足契约时抛出。
@@ -541,10 +534,16 @@ class ToolCallLifecycleManager(BaseModel):
             run_id: int,
             step_id: str,
     ) -> ToolCallLifecycleManager:
-        """把 ``valid_calls`` 中状态为 ``pending`` 的调用迁移到 ``running``。
+        """把本批将送执行层的调用迁移到 ``running``，并为已投影的调用发出状态事件。
 
-        仅迁移状态为 ``pending`` 且工具名当前仍注册的记录；已是 ``running`` / 终态、或工具名已不在
-        运行时注册表中的记录跳过。参数直接沿用记录内的 ``args``，无需在此重新解析。
+        这是「起跑」的唯一边界：``valid_calls`` 与 ``blocked_calls`` 中状态为 ``pending`` 的记录
+        都会被迁移，使「未起跑」等价于「仍是 ``pending``」——``tools`` 节点据此选取本批执行集合，
+        重入时不会对有副作用的工具造成二次写入。禁用工具与工具名未注册的调用同样要送到执行层
+        （由 ``ToolAccessGate`` 拒绝），因此也属于已起跑，必须一并迁移，否则重执行那一遍会把它们
+        再送一次。参数直接沿用记录内的 ``args``，无需在此重新解析。
+
+        只有 ``part_projected`` 为真的记录发出 ``running`` 事件：其余记录前端没有 part，发事件只会
+        让 projector 记一条「part 缺失」告警。判据与 :meth:`settle` / :meth:`cancel` 共用同一字段。
 
         参数:
             task_id, run_id, step_id: 事件定位三元组。
@@ -554,32 +553,154 @@ class ToolCallLifecycleManager(BaseModel):
 
         异常:
             RuntimeError / KeyError / TypeError: 仅可在 graph 运行上下文内调用
-                （:meth:`_valid_tool_name` 经 :func:`_runtime_config`、:meth:`_emit_status` 经
-                ``get_stream_writer`` 取不到上下文时抛出）。
+                （:meth:`_emit_status` 经 ``get_stream_writer`` 取不到上下文时抛出）。
             pydantic.ValidationError: :meth:`_emit_status` 的事件字段不满足契约时抛出。
 
         副作用:
-            每条迁移经 :meth:`_emit_status` 发出一次 ``running`` 状态事件；事件构造或入队失败直接
-            向上抛出，不在本方法内降级。
+            每条已投影记录的迁移经 :meth:`_emit_status` 发出一次 ``running`` 状态事件；事件构造或
+            入队失败直接向上抛出，不在本方法内降级。
         """
 
         # 与 ``cancel`` 同口径：恒以新快照起手，返回值身份可预期；起手即复制后，迁移过程直接在
         # 该快照上推进即可，无需逐步复制。
         updated = self._copy()
-        for record in self.valid_calls.values():
-            if record is None or record.status != "pending":
+        for records in (updated.valid_calls, updated.blocked_calls):
+            for record in records.values():
+                if record.status != "pending":
+                    continue
+                if record.part_projected:
+                    updated._emit_status(
+                        task_id=task_id,
+                        run_id=run_id,
+                        step_id=step_id,
+                        call_id=record.tool_call_id,
+                        to_status="running",
+                        args=record.args,
+                    )
+                record.status = "running"
+        return updated
+
+    def mark_waiting_for_user_input(
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            step_id: str,
+            summaries: list[dict[str, Any]],
+    ) -> None:
+        """把「等待用户决定」的调用投影给前端，并把卡片载荷持久化成占位结果行。
+
+        两件事必须一起做，且都在 ``interrupt()`` 之前（``wait_user`` 的挂起半程）：
+
+        1. **实时投影**：把请求并进该调用的 part 载荷。用户的审批表单只来自 tool part 的展示载荷，
+           而 ``wait_user`` 在本批结果被 ``observe`` 结算**之前**就挂起，不投影则用户看到一张没有
+           任何内容、也无法作答的卡片。这里是**前端载荷的唯一组装点**：待决请求是工作流控制流事实
+           （挂在 ``ToolObservation.user_input_request`` 上），前端需要它随 part 下发，于是按对外
+           契约（``UserInputRequest.to_request_payload``）并入展示载荷；领域事实与展示载荷的转换
+           只此一处。
+        2. **持久化占位行**：为每条待决调用写一条占位 ``ToolMessage`` 行，``transport_metadata`` 带
+           卡片载荷与请求。原因是 part 的动态数据只从该行读取（冷重建只认 ``conversation_task_
+           contexts``，见 ``ConversationTaskStateRebuilder.build_pair_tool_part``），进程重启后要靠
+           它把卡片与表单重建出来。同一调用最终只有一个结果行——批准后重执行的真实结果会经
+           ``RuntimeContextManager.add_message`` **原地覆盖**这一行（沿用 sequence / run_id）。
+
+        状态保持 ``running``：该调用确实尚未结算，真实终态仍由 ``observe`` 在用户决定之后
+        （批准则重执行后）下发。
+
+        参数:
+            task_id, run_id, step_id: 事件定位三元组。
+            summaries: 本批观察摘要；只有带 ``user_input_request`` 声明的条目会被处理。
+
+        返回:
+            无（本方法不改变任何记录状态，只做对外写入）。
+
+        异常:
+            KeyError: 观察对应的调用不在本快照内（state 与调用记录已分叉）。
+            ValueError: 声明形状不合法（应由 ``user_input_projection`` 的派生更早上抛）。
+            pydantic.ValidationError / RuntimeError: 事件字段不合法或不在 graph 运行上下文内。
+
+        副作用:
+            - 每条待决调用发出一次带展示载荷的 ``running`` 状态事件；
+            - 每条待决调用写 / 覆盖一条占位结果行（``include_in_context=True``，见
+              ``RuntimeContextManager.add_message`` 的覆盖判据）。
+        """
+
+        runtime_context = _runtime_context()
+        for summary in summaries:
+            raw_request = summary.get(USER_INPUT_REQUEST_KEY)
+            if raw_request is None:
                 continue
-            if not self._valid_tool_name(record.tool_name):
+            request = UserInputRequest.from_dict(raw_request)
+            call_id = str(summary.get("tool_call_id") or "")
+            record = self.valid_calls.get(call_id)
+            if record is None:
+                record = self.blocked_calls.get(call_id)
+            if record is None:
+                raise KeyError(call_id)
+            if not record.part_projected:
+                # 隐藏调用（本轮未放行 / 工具名未注册）前端没有 part，投影与占位行都无从落点——
+                # 不发事件、不写行。请求本身仍然成立（图会挂起），但这类请求不可被批准
+                # （见 :meth:`reopen_for_approved_replay` 的白名单校验），因此不会停在无人可答的
+                # 挂起里。
                 continue
-            updated._emit_status(
+            display_data = dict(_ui_data(summary) or {})
+            display_data[USER_INPUT_REQUEST_KEY] = request.to_request_payload()
+            self._emit_status(
                 task_id=task_id,
                 run_id=run_id,
                 step_id=step_id,
-                call_id=record.tool_call_id,
+                call_id=call_id,
                 to_status="running",
-                args=record.args,
+                display_data=display_data,
             )
-            updated.valid_calls[record.tool_call_id].status = "running"
+            runtime_context.add_message(
+                build_waiting_input_tool_message(call_id, record.tool_name),
+                transport_metadata=TransportMetadata(
+                    status="running",
+                    display_data=display_data,
+                    error=None,
+                ),
+                run_id=run_id,
+            )
+
+    def reopen_for_approved_replay(
+            self,
+            *,
+            decisions: Mapping[str, UserDecision],
+    ) -> ToolCallLifecycleManager:
+        """把用户批准的调用重置为 ``pending`` 并附上用户决定，供 ``tools`` 节点重执行。
+
+        第一遍执行已把这些记录经 :meth:`begin` 迁移为 ``running``，且 ``observe`` 尚未结算；
+        因此这里的 ``pending`` 只表达「尚未起跑」的执行门控语义（:meth:`begin` 的迁移依据），
+        不表示重新创建调用，也不改变调用参数。用户决定写进记录的 ``user_decision`` 字段而不是
+        ``args``：参数面向模型可见可写，把「已获批准」放进参数等于把审批绕过口开在模型协议层。
+
+        参数:
+            decisions: ``tool_call_id`` → 该调用获得的用户决定。
+
+        返回:
+            新快照：指定记录状态为 ``pending`` 且带 ``user_decision``，其余记录保持原状态。
+
+        异常:
+            KeyError: 指定 id 不在 ``valid_calls`` / ``blocked_calls`` 中——等待请求与调用
+                记录已经分叉（如旧 checkpoint 与本轮决定不匹配），必须上抛而不是静默跳过，
+                否则会退化为「用户批了但什么都没执行」。
+            ValueError: 指定 id 落在 ``blocked_calls``（本轮 ``allows_tools`` 未放行的调用）——
+                批准不能扩大权限：凭用户决定就把被拦下的调用送去执行等于绕过工具白名单。
+
+        副作用:
+            无事件、无日志；调用方随后应经 :meth:`begin` 迁移状态并发 ``running`` 事件。
+        """
+
+        updated = self._copy()
+        for call_id, decision in decisions.items():
+            if call_id in updated.blocked_calls:
+                raise ValueError(f"被本轮工具白名单拦下的调用不能被批准重执行：{call_id}")
+            record = updated.valid_calls.get(call_id)
+            if record is None:
+                raise KeyError(call_id)
+            record.status = "pending"
+            record.user_decision = decision
         return updated
 
     def classify(
@@ -681,11 +802,14 @@ class ToolCallLifecycleManager(BaseModel):
                 （:meth:`_emit_status` 经 ``get_stream_writer`` 取不到 stream writer 时抛出）。
 
         副作用:
-            经 :meth:`_emit_status` 为每条被收口的调用发出一次 ``cancelled`` 终态事件；事件构造或
-            入队失败直接向上抛出，不在本方法内降级。
+            - 经 :meth:`_emit_status` 为每条被收口的调用发出一次 ``cancelled`` 终态事件；事件构造或
+              入队失败直接向上抛出，不在本方法内降级；
+            - 为每条被收口的调用写 / 覆盖一条 ``cancelled`` 结果行（覆盖等待用户决定时写的占位行，
+              使冷重建与实时快照口径一致）。
         """
 
         updated = self._copy()
+        runtime_context = _runtime_context()
 
         # 只有前端存在 part（``part_projected``）的调用需要收口：没有 part 的调用发终态事件只会
         # 让 projector 记一条「part 缺失」告警。判据与 :meth:`settle` 共用同一字段，避免两处
@@ -703,6 +827,21 @@ class ToolCallLifecycleManager(BaseModel):
                 to_status="cancelled",
             )
             updated.valid_calls[record.tool_call_id].status = "cancelled"
+            # 占位行收敛：等待用户决定的调用在挂起前写过一条占位结果行（见
+            # :meth:`mark_waiting_for_user_input`），该行的 ``transport_metadata.status`` 仍是
+            # ``running``。冷重建只认这行，不收敛就会出现「Run 已取消、卡片仍显示执行中」。同一
+            # ``tool_call_id``
+            # 命中既有行即原地覆盖（``RuntimeContextManager.add_message`` 的既有机制），因此不会
+            # 留下第二行；尚未写过行的调用补一条 cancelled 占位，与启动期补占位同口径。
+            runtime_context.add_message(
+                build_placeholder_tool_message(record.tool_call_id, record.tool_name),
+                transport_metadata=TransportMetadata(
+                    status="cancelled",
+                    display_data=None,
+                    error=None,
+                ),
+                run_id=run_id,
+            )
         return updated
 
     def settle(
@@ -758,7 +897,7 @@ class ToolCallLifecycleManager(BaseModel):
         """
 
         observation = _summary_to_observation(summary)
-        event_status = _event_status(observation.status)
+        event_status = terminal_status(observation.status)
         call_id = summary["tool_call_id"]
         existing = self.valid_calls.get(call_id)
         if existing is None:

@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 
 
 class AgentTeamNodeExecution(BaseModel):
@@ -134,6 +135,18 @@ class AgentTeamRunState(BaseModel):
                 target_node_id=target_node_id,
             )
         )
+
+    def cancel(self):
+        node_id = self.current_node_id
+        if node_id is None:
+            return
+        execution = self.node_executions[node_id]
+        if not execution.conversation_run_ids:
+            return
+        run_id = execution.conversation_run_ids[-1]
+        if cancellation_registry.is_cancelled(run_id):
+            return
+        cancellation_registry.mark_cancelled(run_id)
 
     def node_references(self) -> list[tuple[int, int]]:
         """返回所有节点 Task/Run 引用，供取消和诊断使用。"""

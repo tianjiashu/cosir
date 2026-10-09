@@ -423,13 +423,19 @@ class ConversationRunCrud:
         return list(latest_by_task.values())
 
     def list_recoverable(self) -> list[ConversationRunRecord]:
-        """返回进程重启后仍需收敛的 pending/running/waiting 运行。
+        """返回进程重启后仍需收敛的 pending/running 运行。
+
+        **``waiting_for_input`` 不在内**：它不是「驱动者随进程消失」的遗留，而是图正停在
+        human-in-the-loop 断点上——图断点与决定通道都还在，用户回来仍能作答。收口它会让用户白等
+        一场，还会把待确认的卡片变成一张已取消的空壳。它的终态只由取消 / 异常 / 用户决定收口
+        （判据见 :class:`ConversationRunStateService` 的状态图）。「等待用户输入的 Run 也是 active
+        run」这条仍然成立，见 :meth:`has_active_for_task`。
 
         参数:
             无。
 
         返回:
-            状态为 ``pending``、``running`` 或 ``waiting_for_input`` 的 run 列表，按 ``created_at`` 再 ``id``
+            状态为 ``pending`` 或 ``running`` 的 run 列表，按 ``created_at`` 再 ``id``
             升序；无匹配时为空列表。
 
         异常:
@@ -447,7 +453,6 @@ class ConversationRunCrud:
                             (
                                 ConversationRunStatus.PENDING.value,
                                 ConversationRunStatus.RUNNING.value,
-                                ConversationRunStatus.WAITING_FOR_INPUT.value,
                             )
                         )
                     )

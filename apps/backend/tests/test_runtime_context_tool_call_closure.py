@@ -618,6 +618,34 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     }
 
 
+def test_recover_orphaned_runs_preserves_waiting_run(env: SimpleNamespace) -> None:
+    """重启恢复不收口「等待用户决定」的 Run：图断点与决定通道都还在，用户回来仍能作答。
+
+    running 的 Run 才是「驱动者已随进程消失」的遗留，必须收敛；waiting 被收口会让用户白等一场
+    （还会把待确认的卡片变成一张已取消的空壳）。
+    """
+
+    waiting = env.seed_run("waiting_for_input")
+    running = env.seed_run("running")
+
+    run_crud = _bind(ConversationRunCrud, env.factory)
+    service = ConversationRunService.__new__(ConversationRunService)
+    service._run = run_crud
+    service._context = env.context
+    service._session_factory = env.factory
+
+    recovered = service.recover_orphaned_runs()
+
+    assert [record.id for record in recovered] == [running.id]
+    assert run_crud.get(running.id).status == "cancelled"
+    # 等待态原样保留：不写终态、不补占位、不动它的上下文。
+    assert run_crud.get(waiting.id).status == "waiting_for_input"
+    assert run_crud.get(waiting.id).end_reason is None
+    assert [row for row in _rows(env) if row.run_id == waiting.id] == []
+    # 幂等：重复恢复不再把 waiting 收进来。
+    assert service.recover_orphaned_runs() == []
+
+
 def test_ensure_run_user_message_writes_once_per_run(
     env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { CheckCircle2, UsersIcon } from "lucide-react";
+import { CheckCircle2, ClockIcon, UsersIcon } from "lucide-react";
 
 import { getAgentTeamRun, type AgentTeamRun } from "@/lib/api/agent-teams";
 import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decision";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import { readToolArtifact } from "./types";
 import {
   readAgentTeamPreviewDisplay,
@@ -76,6 +77,25 @@ function validateReviewedInputs(
   return null;
 }
 
+/** 待确认态的卡片状态文案：它不是工具生命周期状态，只是「这张卡在等用户」的展示提示。 */
+const AWAITING_REVIEW_LABEL = "等待确认";
+
+/**
+ * 待确认提示。
+ *
+ * 为什么不复用 ``ToolStatus``：该组件渲染的是**工具生命周期状态**（此时确实是 ``running``——
+ * 调用尚未结算），而用户此刻看到的是「等我确认」。两者不是同一维度，因此这里显式给一个展示提示，
+ * 不改动状态语义（后端状态机里没有、也不需要 ``waiting``）。
+ */
+function AwaitingReviewStatus({ className }: { className?: string }) {
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 text-xs text-amber-600", className)}>
+      <ClockIcon className="size-3.5" aria-hidden="true" />
+      {AWAITING_REVIEW_LABEL}
+    </span>
+  );
+}
+
 /** Agent Team 方案预览卡；确认时把用户决定交回等待中的 Run，由后端在确认边界重新校验。 */
 export function AgentTeamTool({ artifact: rawArtifact, runId, taskId }: AgentTeamToolProps) {
   const artifact = readToolArtifact(rawArtifact);
@@ -90,6 +110,9 @@ export function AgentTeamTool({ artifact: rawArtifact, runId, taskId }: AgentTea
   const [goal, setGoal] = useState(preview?.goal ?? "");
   const [nodeGoals, setNodeGoals] = useState<Record<string, string>>(preview?.nodeGoals ?? {});
   const [feedback, setFeedback] = useState("");
+  // 「还在等用户作答」只取决于两件事：载荷里带着待决请求（后端挂起前投影的唯一标记），
+  // 且本次会话内尚未提交决定。两者任一不成立就回到通用生命周期状态展示。
+  const awaitingReview = review !== null && state !== "confirmed" && state !== "rejected";
 
   useEffect(() => {
     if (!preview) return;
@@ -259,7 +282,9 @@ export function AgentTeamTool({ artifact: rawArtifact, runId, taskId }: AgentTea
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">{preview.name}</span>
-            <ToolStatus status={artifact.backendStatus} className="text-muted-foreground" />
+            {awaitingReview
+              ? <AwaitingReviewStatus />
+              : <ToolStatus status={artifact.backendStatus} className="text-muted-foreground" />}
           </div>
           <p className="text-muted-foreground mt-1 text-xs">目标</p>
           <Textarea

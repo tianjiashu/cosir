@@ -160,3 +160,39 @@ def build_placeholder_tool_message(call_id: str, tool_name: str) -> ToolMessage:
         ),
         tool_call_id=call_id,
     )
+
+
+def build_waiting_input_tool_message(call_id: str, tool_name: str) -> ToolMessage:
+    """构造「调用正在等待用户决定」的占位 ``ToolMessage``。
+
+    与 :func:`build_placeholder_tool_message` 的区别：本占位表示调用**尚未执行**、正在等用户作答，
+    而不是已取消 / 中断。它让该调用在模型协议上成为「已配对」，从而：
+
+    - 启动期崩溃恢复不会再为它补一条 ``cancelled`` 占位（那会谎报调用已取消）；
+    - 冷重建（进程重启 / 前端重连）能从该行的 ``transport_metadata`` 恢复审批卡片与表单——
+      part 的动态展示数据只从这张表读取（见 ``ConversationTaskStateRebuilder``）。
+
+    文案面向模型、纯英文，且不说「失败 / 取消」：万一某条路径让模型在等待期间看到它，模型会知道
+    调用还没执行，而不是重发一次。
+
+    参数:
+        call_id: 等待用户决定的调用标识。
+        tool_name: 调用名；未知时传 ``"unknown"``。
+
+    返回:
+        可直接写入上下文的 ``ToolMessage``。
+
+    异常:
+        无。
+
+    副作用:
+        无。
+    """
+
+    return ToolMessage(
+        content=(
+            f"The tool call '{tool_name}' (id={call_id}) has not executed yet because it is "
+            f"waiting for the user's decision; no tool output is available."
+        ),
+        tool_call_id=call_id,
+    )

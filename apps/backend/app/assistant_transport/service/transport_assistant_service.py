@@ -10,7 +10,11 @@ from typing import Literal, NoReturn
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.assistant_transport.request import AddMessageCommand, AssistantTransportRequest
+from app.assistant_transport.request import (
+    AddMessageCommand,
+    AssistantTransportRequest,
+    UserInputDecisionCommand,
+)
 from app.assistant_transport.service.conversation_run_command_service import (
     ConversationRunStartResult,
 )
@@ -25,11 +29,12 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     find_run,
 )
 from app.config.logging.logger import log
+from app.core.tools.schemas.user_decision import UserDecision
 from app.models import ConversationRunStatus
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-
 RunCommandMode = Literal["new", "edit", "resume"]
+
 
 
 class TransportAssistantService:
@@ -186,7 +191,8 @@ class TransportAssistantService:
 
         返回:
             ``new`` 表示新建 Conversation Run；``edit`` 表示原地重置最近 Run 后重新执行；
-            ``resume`` 表示恢复可续跑的 cancelled Run。
+            ``resume`` 表示恢复可续跑的 Run（``cancelled`` 或 ``waiting_for_input``），
+            并可携带用户决定。
 
         异常:
             ValueError: command batch 既没有消息又没有 run_id；正常请求解析已在 Pydantic
@@ -340,11 +346,13 @@ class TransportAssistantService:
         if mode == "resume":
             # ensure_run_target 已校验 run_id 非空；此处 assert 仅做静态类型收窄。
             assert request.runId is not None
+            # 不指定 ``expected_status``：由领域服务按 Run 当前状态判定续跑源，使「取消后继续」
+            # 与「等待用户决定后带决定继续」走同一条入口（两者续跑同一 checkpoint）。
             return await asyncio.to_thread(
                 self._commands.resume_run,
                 task_id=task_id,
                 run_id=request.runId,
-                expected_status=ConversationRunStatus.CANCELLED,
+                user_decisions=request.user_decisions(),
             )
         # 非 resume 模式 command 必非空（详见 _classify_run_command）；assert 仅类型收窄。
         assert command is not None

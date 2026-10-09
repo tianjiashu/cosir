@@ -85,7 +85,13 @@ async def assistant_transport(
             initial_state = start_result.initial_state
 
             try:
-                await run_executor.start(run.id, start_result.execution_mode)
+                # 用户决定随启动一并交给执行器：它是一次请求级的输入，不能经进程内旁路或
+                # 二次查询传递（决定不落库）。
+                await run_executor.start(
+                    run.id,
+                    start_result.execution_mode,
+                    start_result.user_decisions,
+                )
             except Exception:
                 # 真失败：run 已被本次请求置为 active，但执行器没有起来，必须收敛，否则该 task
                 # 会残留一个无执行器的 active run（new 与 resume 都会被状态校验拒绝）。

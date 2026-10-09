@@ -7,7 +7,7 @@
    （``ToolCallStatusChangedEvent`` 终态）与模型上下文（``ToolMessage`` 配对闭合），
    同时重算连续失败计数；命中 ``blocked_calls`` 的观察只写 ``ToolMessage``（隐藏闭合）；
 2. **错误计数与上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时经
-   ``RuntimeOperations`` 标记失败终态；否则写回计数，让 graph 经条件边回到 ``model``
+   ``WorkflowOperations`` 标记失败终态；否则写回计数，让 graph 经条件边回到 ``model``
    节点继续推理。
 
 设计动机（与阶段二演进对齐）：
@@ -21,24 +21,11 @@
   仍会兜底收束未决 tool-call part。
 """
 
-from typing import Any
-
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.workflows.react.node_helper.common import _runtime_config
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
-
-
-def _contains_user_input_request(observations: list[dict[str, Any]]) -> bool:
-    """判断本批工具结果是否声明需要用户输入后才能继续工作流。"""
-
-    return any(
-        observation.get("status") == "success"
-        and isinstance(observation.get("display_data"), dict)
-        and observation["display_data"].get("requires_user_input") is True
-        for observation in observations
-    )
 
 
 async def _observe_node(state: ReactGraphState) -> dict:
@@ -55,15 +42,22 @@ async def _observe_node(state: ReactGraphState) -> dict:
     2. **空结果批次**：本批无观察时循环不执行，不计数也不判定，保留继承的
        ``tool_error_count``（无信息即不改写），避免无新结果时误发 RUN_FAILED。
     3. **错误上限判定**：连续失败计数达到 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 时经
-       ``RuntimeOperations.fail_run_if_running`` 标记失败终态；否则写回计数，
+       ``WorkflowOperations.fail_run_if_running`` 标记失败终态；否则写回计数，
        让 graph 经条件边回到 ``model`` 节点。
 
     参数:
         state: 当前 graph state，含本批 ``last_tool_results``、继承的 ``tool_error_count``。
 
     返回:
-        需要合并回 graph state 的增量。所有分支均回写动态 ``next_node`` 与工具调用生命周期；
-        路由值为 ``model``、``user_input_wait`` 或 ``end``。
+        需要合并回 graph state 的增量。所有分支均回写动态 ``next_node``、工具调用生命周期，并清空
+        已结算的本批摘要 ``last_tool_results``；路由值为 ``model`` 或 ``end``（等待用户输入由
+        ``wait_user`` 节点在进入本节点之前处理）。
+
+        清空 ``last_tool_results`` 是**批次边界**：``tools`` 节点恒定按 ``tool_call_id`` 合并
+        新观察进本批摘要（同一模型步可能分多遍执行），若本节点不清理，上一批的观察会被下一批
+        连带重新结算——而 ``settle_batch`` 依摘要重算连续失败计数，陈旧的成功记录会把计数清零
+        （掩盖真实的连续失败），陈旧的失败记录会反复累加（无新失败也可能被判定达到错误上限）。
+        待决请求不需要在这里清算：它由观察上的声明表达，随本批摘要一并消失。
 
     异常:
         RuntimeError: ``state.tool_call_lifecycle`` 缺失（应由 ``model`` 节点写入）。
@@ -98,14 +92,6 @@ async def _observe_node(state: ReactGraphState) -> dict:
     )
     lifecycle = dispatch.lifecycle
     tool_error_count = dispatch.tool_error_count
-    waiting_for_user_input = _contains_user_input_request(observations)
-
-    if waiting_for_user_input:
-        return {
-            "tool_error_count": tool_error_count,
-            "tool_call_lifecycle": lifecycle,
-            "next_node": ReactRoute.USER_INPUT_WAIT,
-        }
 
     log.info(
         "observe_node_completed",
@@ -140,6 +126,7 @@ async def _observe_node(state: ReactGraphState) -> dict:
                 "tool_error_count": tool_error_count,
                 "tool_call_lifecycle": lifecycle,
                 "next_node": ReactRoute.END,
+                "last_tool_results": {},
             }
         log.warning(
             "observe_node_error_limit",
@@ -158,13 +145,15 @@ async def _observe_node(state: ReactGraphState) -> dict:
             "tool_error_count": tool_error_count,
             "tool_call_lifecycle": lifecycle,
             "next_node": ReactRoute.END,
+            "last_tool_results": {},
         }
 
-    # 正常返回：把更新后的计数与 lifecycle 写回 state。
+    # 正常返回：把更新后的计数与 lifecycle 写回 state，并清空已结算的本批摘要——本节点是
+    # 「工具结果观察处理」的单一收口，也是批次摘要的唯一清算点：下一模型步不应再看到上一批的观察
+    # （否则会被连带重新结算，见上文批次边界说明）。
     return {
         "tool_error_count": tool_error_count,
         "tool_call_lifecycle": lifecycle,
-        "next_node": (
-            ReactRoute.USER_INPUT_WAIT if waiting_for_user_input else ReactRoute.MODEL
-        ),
+        "next_node": ReactRoute.MODEL,
+        "last_tool_results": {},
     }

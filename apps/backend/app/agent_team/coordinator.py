@@ -24,6 +24,7 @@ from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
 
+
 class AgentTeamCoordinator:
     """拥有 TeamRun 的节点调度状态机，并把单节点执行委托给 ConversationRunExecutor。
 
@@ -35,6 +36,7 @@ class AgentTeamCoordinator:
     def __init__(self) -> None:
 
         from app.config.configuration import get_tool_system
+        from app.service.agent_team.agent_team_run_service import get_agent_registry
 
         self._team_run_crud = AgentTeamRunCrud()
         self._task_service = get_task_service()
@@ -49,10 +51,6 @@ class AgentTeamCoordinator:
         self._runner = get_runtime()
         self._workspace_service = get_workspace_service()
         self._agent_registry = get_agent_registry()
-
-    def _lock_for(self, team_run_db_id: int) -> RLock:
-        with self._locks_guard:
-            return self._locks[team_run_db_id]
 
     def start(
             self,
@@ -100,8 +98,18 @@ class AgentTeamCoordinator:
                     )
                     break
                 rounds += 1
-                self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.RUNNING.value,
-                                                        (AgentTeamRunStatus.RUNNING.value,), state=state)
+                row = self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.RUNNING.value,
+                                                                (AgentTeamRunStatus.RUNNING.value,), state=state)
+                if row is None:
+                    log.info(
+                        "agent_team_start_failed",
+                        extra={
+                            "msg": "Agent Team 已被取消",
+                            "data": {"run_id": team_run.id},
+                        },
+                    )
+                    break
+
                 node_execution, node_run = self._start_node(
                     team_run,
                     state,
@@ -109,6 +117,17 @@ class AgentTeamCoordinator:
                     next_node_input,
                 )
                 if node_run.status != ConversationRunStatus.COMPLETED.value:
+                    log.info(
+                        "agent_team_start_failed",
+                        extra={
+                            "msg": "Agent Team 节点执行失败",
+                            "data": {
+                                "run_id": team_run.id,
+                                "node_id": state.current_node_id,
+                                "output": node_run.final_output,
+                            },
+                        },
+                    )
                     break
 
                 final_output = node_run.final_output
@@ -240,8 +259,18 @@ class AgentTeamCoordinator:
         workspace_root = self._workspace_root(row.workspace_id)
         agent_profile: AgentProfile = self._agent_registry.resolve(workspace_root, agent_id)
 
-        self._team_run_crud.update_status_if_in(row.id, AgentTeamRunStatus.RUNNING.value,
+        row = self._team_run_crud.update_status_if_in(row.id, AgentTeamRunStatus.RUNNING.value,
                                                 (AgentTeamRunStatus.RUNNING.value,), state=state)
+        if row is None:
+            log.info(
+                "agent_team_start_failed",
+                extra={
+                    "msg": "Agent Team 已被取消",
+                    "data": {"run_id": row.id},
+                },
+            )
+            return node_execution, node_run
+
 
         asyncio.run(self._runner.run_agent(AgentProfile(
             agent_id=agent_id,
@@ -276,8 +305,6 @@ class AgentTeamCoordinator:
         异常:
             ValueError: 某个工具名在当前注册表中不存在（可能已在确认后从 workspace 移除）。
         """
-        if self._tool_system is None:
-            self._tool_system = get_tool_system()
         registered = {tool.name: tool for tool in self._tool_system.executor.list_tools()}
         definitions: list[dict[str, object]] = []
         for name in allowed_tools:
@@ -306,8 +333,20 @@ class AgentTeamCoordinator:
 
         return self._workspace_service.get_workspace(workspace_id).root_path
 
-    def cancel(self, team_run_id: int) -> AgentTeamRunModel:
-        pass
+    def cancel(self, team_run_id: int) -> AgentTeamRunModel | None:
+
+        row = self._team_run_crud.get_by_id(team_run_id)
+        if row.status not in {"pending", "running"}:
+            return row
+        state = AgentTeamRunState.model_validate(row.state_json)
+
+        row = self._team_run_crud.update_status_if_in(row.id, AgentTeamRunStatus.CANCELLED.value,
+                                                      (AgentTeamRunStatus.RUNNING.value,))
+        if row is None:
+            return row
+
+        state.cancel()
+        return row
 
     def cancel_for_task_ids(self, task_ids: set[int]) -> int:
         """在删除任务树前取消与其关联的活动 Team。

@@ -171,6 +171,10 @@ class ConversationRunExecutor:
         ``KeyError``（API 层映射 404）。主 Agent 取消会传播到其 Agent Team（team 尚未创建的
         内部暂停语义不反向取消）。
 
+        唯一例外是**等待用户决定的 Run**：图挂起时没有节点会去读取消信号，因此本方法额外把它
+        迁回 ``running`` 并以续跑模式重新驱动，让 ``model_node`` 检出信号并落 cancelled（详见
+        :meth:`_drive_waiting_run_into_cancellation`）。这是本类唯一会启动驱动的路径。
+
         返回: 新标记取消请求返回 ``True``；已标记则返回 ``False``。
         """
 
@@ -181,10 +185,11 @@ class ConversationRunExecutor:
             return False
         self._signal.mark_cancelled(run_id)
         try:
-            await asyncio.to_thread(self._run_service.get_run, run_id)
+            run = await asyncio.to_thread(self._run_service.get_run, run_id)
         except KeyError:
             self._signal.clear(run_id)
             raise
+        waiting = run.status == ConversationRunStatus.WAITING_FOR_INPUT
         # 主 Agent 被用户或其它业务入口显式取消时，不能留下仍在运行的 Team。等待用户
         # 确认是 Agent Team 自己使用的内部暂停语义，此时 Team 尚未创建，不能反向取消。
         try:
@@ -203,9 +208,57 @@ class ConversationRunExecutor:
                 },
             )
         # 取消请求必须立即关闭本 Run 的 PTY；workflow 之后仍会协作收束，
-        # ``_execute`` 的 finally 还会再次幂等兜底。
-        await asyncio.to_thread(self._terminal_session_service.close_run_terminals, run_id, end_reason)
+        # ``_execute`` 的 finally 还会再次幂等兜底。``reason`` 是关键字段（服务签名为
+        # keyword-only），必须按关键字传，否则取消路径会以 TypeError 中断。
+        await asyncio.to_thread(
+            self._terminal_session_service.close_run_terminals,
+            run_id,
+            reason=end_reason,
+        )
+        if waiting:
+            await self._drive_waiting_run_into_cancellation(run_id)
         return True
+
+    async def _drive_waiting_run_into_cancellation(self, run_id: int) -> None:
+        """把「等待用户决定」的 Run 迁回 running 并以续跑模式重新驱动，让取消信号有节点消费。
+
+        为什么必须重新驱动：取消信号只在**节点执行时**被检查（``model_node`` 请求前 / 流式循环中、
+        ``structured_output_node``、各工具 handler），而等待态下图是**挂起**的——没有任何节点在跑，
+        信号无人消费。不改的话用户点了停止却毫无反应，还要等他先作答才生效（表现为「点停止 → 又
+        点确认 → 整轮才取消」的反直觉结果）。
+
+        因此这里先把 Run 条件迁回 ``running``（``resume_waiting_run``），再以 ``resume`` 模式驱动：
+        workflow 的续跑回退是 ``Command(goto=model)``，而 ``model_node`` 的第一件事就是检出取消
+        信号、落 cancelled 终态并 ``interrupt`` ——「停止」于是立即生效。这条路径会丢弃尚未消费的
+        human-in-the-loop 断点，因此 ``workflow`` 的续跑守卫只对「未标记取消」的 Run 拦截。
+
+        参数:
+            run_id: 处于 ``waiting_for_input`` 的 Run 标识。
+
+        返回:
+            无。
+
+        异常:
+            ValueError: 条件迁移未命中时由 :meth:`start` 抛出（Run 已被并发路径迁走）；本方法不吞。
+
+        副作用:
+            - 条件更新 Run 为 ``running`` 并发布状态事件（未命中时只记告警、不驱动）；
+            - 新建一个后台驱动 task。
+        """
+
+        resumed = await asyncio.to_thread(self._run_state_service.resume_waiting_run, run_id)
+        if resumed is None:
+            # 条件迁移未命中：Run 已被并发路径迁走（例如用户同时提交了决定）。取消信号仍在，
+            # 由那条路径上的节点自行检出，这里不再驱动——避免两个驱动者同时跑一张图。
+            log.warning(
+                "conversation_run_cancel_waiting_transition_missed",
+                extra={
+                    "msg": "Run 已不在 waiting_for_input，取消信号交由既有驱动检出",
+                    "data": {"run_id": run_id},
+                },
+            )
+            return
+        await self.start(run_id, "resume")
 
     async def cancel_tool_call(self, run_id: int, tool_call_id: str) -> bool:
         """标记工具级取消信号（只中止一次工具调用，run 继续）。
@@ -248,7 +301,8 @@ class ConversationRunExecutor:
         """
         runner_started = False
         try:
-            run = self._run_service.get_run(run_id)
+            # canonical 读取一律走线程池：事件循环线程上不做数据库 IO（与 start / cancel 同口径）。
+            run = await asyncio.to_thread(self._run_service.get_run, run_id)
             self._terminal_session_service.begin_run(run_id)
             runner_started = True
             runtime = get_runtime()
@@ -267,11 +321,23 @@ class ConversationRunExecutor:
                 },
             )
         finally:
-            await asyncio.to_thread(
-                self._terminal_session_service.close_run_terminals,
-                run_id,
-                "run_execution_finished",
-            )
+            # 收尾三步（关 terminal → 兜底收敛 → 注销执行登记）是「不遗留无驱动者 active run」
+            # 的保证，任一步失败都不得跳过后续步骤：关闭 terminal 失败只记日志。
+            # ``reason`` 是 keyword-only：位置传参会抛 TypeError，同样会打断后面的兜底收敛。
+            try:
+                await asyncio.to_thread(
+                    self._terminal_session_service.close_run_terminals,
+                    run_id,
+                    reason="run_execution_finished",
+                )
+            except Exception:
+                log.exception(
+                    "conversation_run_terminal_close_failed",
+                    extra={
+                        "msg": "Run 收尾关闭 terminal 失败，继续兜底收敛",
+                        "data": {"run_id": run_id},
+                    },
+                )
             await self._converge_unfinished_run(run_id)
             current = self._executions.get(run_id)
             current_task = asyncio.current_task()
@@ -300,7 +366,7 @@ class ConversationRunExecutor:
             )
             if self._event_projector is None:
                 return
-            run = self._run_service.get_run(run_id)
+            run = await asyncio.to_thread(self._run_service.get_run, run_id)
             self._event_projector.process(
                 ToolCallsSettledEvent(
                     task_id=run.task_id,
