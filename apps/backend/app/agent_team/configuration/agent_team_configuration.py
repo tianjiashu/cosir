@@ -87,8 +87,8 @@ class AgentTeamConfiguration(BaseModel):
     )
     nodes: list[TeamNodeDefinition] = Field(
         min_length=1,
-        max_length=256,
-        description="Team 的节点定义列表；节点之间通过转移规则串行衔接。",
+        max_length=10,
+        description="Team 的节点定义列表；节点之间通过转移规则串行衔接，最多 10 个节点。",
     )
     transitions: list[TeamTransitionDefinition] = Field(
         max_length=2_000,

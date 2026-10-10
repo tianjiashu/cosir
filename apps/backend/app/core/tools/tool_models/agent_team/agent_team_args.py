@@ -22,7 +22,7 @@ class AgentTeamArgs(BaseModel):
     )
     node_goals: dict[str, StrictStr] = Field(
         min_length=1,
-        max_length=256,
+        max_length=10,
         description=(
             "Required mapping keyed by every node_id in the Team configuration. Give each node a specific, "
             "non-empty responsibility and expected outcome. Split the overall goal into complementary "

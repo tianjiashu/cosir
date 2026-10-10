@@ -43,11 +43,14 @@ class AgentTeamRunTool(HandlerBase):
     """
 
     name = TOOL_AGENT_TEAM
+    # 描述刻意只讲「运行一个已存在的 Team」：曾经的措辞「Prepare a configured Agent Team
+    # execution plan」与「配置 Team 草稿」语义重叠，实测让模型在用户说「帮我配置个 team」时
+    # 反复选中本工具（而它只运行已存在配置），因此显式声明它不能创建或修改 Team 配置。
     description = (
-        "Prepare a configured Agent Team execution plan for the user to review. "
-        "The referenced team must already exist; if it does not, ask the user to create it first. "
-        "The plan requires explicit user confirmation before execution; once the user confirms, "
-        "the Agent Team starts the TeamRun. "
+        "Run an existing Agent Team: prepare its execution plan for the user to review, then "
+        "start the TeamRun once the user confirms. "
+        "The referenced team must already exist; this tool cannot create or modify Team "
+        "configurations, so if the team does not exist, stop and tell the user to create it first. "
         "This tool must be invoked serially and cannot run in parallel with other tools."
     )
     args_model = AgentTeamArgs
@@ -284,7 +287,9 @@ class AgentTeamRunTool(HandlerBase):
             execution_mode="thread",
             need_HIL=True,
             display=ToolDisplayHints(
-                verb="Prepare Agent Team execution plan",
+                # verb 与同组 propose 工具的中文口径一致；原英文 "Prepare Agent Team
+                # execution plan" 会被读成「配置 Team」，与工具实际职责不符。
+                verb="运行已有 Agent Team",
                 icon="workflow",
                 surface="standalone",
                 expandable=True,

@@ -1,5 +1,6 @@
 """Static Tool UI declarations for long-running tool shells."""
 
+from app.core.tools.tool_handler.agent_team.agent_team_run import AgentTeamRunTool
 from app.core.tools.tool_handler.child_task.child_agent_create import DelegateTaskTool
 from app.core.tools.tool_handler.child_task.child_agent_send import ChildAgentSendTool
 from app.core.tools.tool_handler.child_task.child_agent_status import ChildAgentStatusTool
@@ -33,3 +34,24 @@ def test_child_agent_tools_declare_standalone_details_rows() -> None:
 
     assert delegate.display.expandable is True
     assert all(definition.display.expandable is False for definition in (send, status, wait))
+
+
+def test_agent_team_run_tool_advertises_only_running_existing_teams() -> None:
+    """``agent_team`` 只运行已存在的 Team，描述与展示标题都不得暗示它能创建/配置 Team。
+
+    目的：固化「运行」与「配置」的职责边界。历史上描述写作 "Prepare a configured Agent
+    Team execution plan"、标题同样是英文 Prepare 口径，实测让模型在用户说「帮我配置个
+    team」时反复选中本工具，而它只接受已存在的配置，于是以 ``agent_team_run_creation_invalid``
+    失败收场。潜在缺陷：描述或标题重新出现「配置 / 准备 / Prepare / Configure」这类口径，
+    再次把模型引向错误工具。
+    """
+
+    definition = AgentTeamRunTool.to_definition(object.__new__(AgentTeamRunTool))
+
+    assert "must already exist" in definition.description
+    assert "cannot create or modify" in definition.description
+
+    display = definition.display
+    assert display is not None
+    for forbidden in ("Prepare", "Configur", "配置", "准备"):
+        assert forbidden not in display.verb, f"agent_team 标题不得出现「{forbidden}」口径"
