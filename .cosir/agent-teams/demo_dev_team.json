@@ -1,0 +1,69 @@
+{
+  "team_id": "demo_dev_team",
+  "name": "Demo Development Team",
+  "description": "A minimal three-node demo Team for testing the Agent Team feature end to end. The Development node implements or edits code, the Review node inspects the change, and the Verify node validates the result. The Team loops back to Development when Review requests changes or Verify fails, and finishes when Verify passes.",
+  "max_runs": 12,
+  "start_node_id": "develop",
+  "nodes": [
+    {
+      "node_id": "develop",
+      "name": "Development",
+      "agent_id": "general-assistant",
+      "statuses": [
+        "done",
+        "blocked"
+      ]
+    },
+    {
+      "node_id": "review",
+      "name": "Review",
+      "agent_id": "general-assistant",
+      "statuses": [
+        "pass",
+        "needs_changes"
+      ]
+    },
+    {
+      "node_id": "verify",
+      "name": "Verification",
+      "agent_id": "general-assistant",
+      "statuses": [
+        "pass",
+        "fail"
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "from_node_id": "develop",
+      "status": "done",
+      "target_node_id": "review"
+    },
+    {
+      "from_node_id": "develop",
+      "status": "blocked",
+      "target_node_id": "END"
+    },
+    {
+      "from_node_id": "review",
+      "status": "needs_changes",
+      "target_node_id": "develop"
+    },
+    {
+      "from_node_id": "review",
+      "status": "pass",
+      "target_node_id": "verify"
+    },
+    {
+      "from_node_id": "verify",
+      "status": "fail",
+      "target_node_id": "develop"
+    },
+    {
+      "from_node_id": "verify",
+      "status": "pass",
+      "target_node_id": "END"
+    }
+  ],
+  "scope": "workspace"
+}
