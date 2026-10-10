@@ -206,9 +206,12 @@ def _base_schema(con: sqlite3.Connection) -> None:
             model_config_id INTEGER, image_paths TEXT, end_reason TEXT, final_output TEXT,
             extra TEXT, usage_json TEXT, error_json TEXT, status TEXT NOT NULL,
             created_at TEXT, updated_at TEXT);
-        CREATE TABLE conversation_commands (id INTEGER PRIMARY KEY, task_id INTEGER,
-            command_id TEXT, command_type TEXT, payload_hash TEXT, run_id INTEGER,
-            error_code TEXT, created_at TEXT);
+        CREATE TABLE agent_team_runs (id INTEGER PRIMARY KEY, team_id TEXT NOT NULL,
+            workspace_id INTEGER NOT NULL, parent_task_id INTEGER NOT NULL,
+            parent_run_id INTEGER NOT NULL, goal_input TEXT NOT NULL,
+            configuration_snapshot_json TEXT NOT NULL, status TEXT NOT NULL,
+            state_json TEXT NOT NULL, end_reason TEXT, started_at TEXT, ended_at TEXT,
+            created_at TEXT, updated_at TEXT);
         CREATE TABLE conversation_task_contexts (id INTEGER PRIMARY KEY, task_id INTEGER,
             run_id INTEGER, message_json TEXT NOT NULL,
             transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,

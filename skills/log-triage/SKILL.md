@@ -42,9 +42,17 @@ allowed-tools: Read,Write,Bash
 
 ## 1. 证据源与落盘位置（唯一事实清单）
 
-`<repo>` = 仓库根；`<数据根>` = 桌面应用数据根（Tauri `app_data_dir()`）：Windows 实测
-`%APPDATA%\com.cosir.desktop`（**Roaming，不是 LocalAppData**）、
-macOS `~/Library/Application Support/com.cosir.desktop`、Linux `~/.local/share/com.cosir.desktop`。
+`<repo>` = 仓库根；`<数据根>` = 桌面宿主注入 `CODING_AGENT_DATA_DIR` 的目录
+（事实源 `apps/desktop/src-tauri/src/data_paths.rs::system_data_root`）：**Windows 与 macOS 是
+用户主目录**（`.cosir` 落在 `%USERPROFILE%\.cosir` / `~/.cosir`），
+其余桌面平台是 Tauri `app_data_dir()` ⇒ `~/.local/share/com.cosir.desktop`。
+
+> ⚠️ **历史布局残留**：Windows 旧的 `%APPDATA%\com.cosir.desktop\.cosir\`、
+> macOS 旧的 `~/Library/Application Support/com.cosir.desktop/.cosir/` 可能仍留在磁盘上
+> （含一份**早已停止更新**的 `app.sqlite3` 与日志）。它们是布局变更前的产物，**不是**当前数据根；
+> 若脚本默认查到的库表仍是 `conversation_commands` / `delegations` / `models` / `providers`，
+> 说明命中了残留目录——按 §3「已从 schema 移除」处理，并改用 `--db` / `--log-file` 显式指向
+> `<用户主目录>/.cosir/`。
 
 **所有运行期数据都在 `<数据根>/.cosir/` 下**（日志、业务库、checkpoint、runtime）。
 
@@ -62,15 +70,15 @@ macOS `~/Library/Application Support/com.cosir.desktop`、Linux `~/.local/share/
 `DATA_DIR = CODING_AGENT_DATA_DIR or 仓库根`，其余路径**全部**由它派生到 `<DATA_DIR>/.cosir/` 下。
 
 - **经桌面宿主启动（含 `tauri dev`）**：Rust `spawn_backend` **无条件**注入
-  `CODING_AGENT_DATA_DIR = app_data_dir()`（`backend_supervisor.rs`，**没有 dev/prod 分支**）
-  ⇒ 数据根 = `%APPDATA%\com.cosir.desktop`，日志/库/checkpoint 全在这份 `.cosir` 里。
+  `CODING_AGENT_DATA_DIR`，取值来自 `data_paths.rs::system_data_root`——**Windows / macOS 是用户
+  主目录**（`backend_supervisor.rs`，**没有 dev/prod 分支**）⇒ 数据根 = `%USERPROFILE%` / `~`，
+  日志/库/checkpoint 全在 `%USERPROFILE%\.cosir\` / `~/.cosir/` 里。
   **用户报 bug 时通常要看的就是这一份。**
 - **绕过 Tauri 直跑后端**（`uv run --project apps/backend python -m app`、pytest）：不注入该变量
   ⇒ 数据根回落仓库根 ⇒ `<repo>/.cosir/`。
 
 > ⚠️ `CODING_AGENT_LOG_DIR` / `CODING_AGENT_DATABASE_FILE` / `CODING_AGENT_CHECKPOINT_FILE`
-> **均已废弃**，入口只剩 `CODING_AGENT_DATA_DIR`。若发现日志落在
-> `%APPDATA%\com.cosir.desktop\logs\`（**没有** `.cosir` 那层），那是布局变更前的历史残留。
+> **均已废弃**，入口只剩 `CODING_AGENT_DATA_DIR`。
 
 **排查前先定位数据根**：两个脚本会自动判定（显式 `CODING_AGENT_DATA_DIR` → 已存在的桌面数据根
 → 仓库根），输出里的 `data root:` 一行说明用的是哪一份；需要指定另一份时用 `--log-file` / `--db`
@@ -149,12 +157,14 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 | `workspaces` | 工作区身份与根路径 | 路径越界、找不到文件、工作区切换异常 |
 | `tasks` | 任务身份、`task_type`（`user` / `fork` / `delegate_task`）、委派关系 `parent_task_id` / `parent_run_id`（`fork` 任务**不写**这两列，来源记在 `extra.fork.source_task_id` / `source_run_id`）、`current_run_id`、最后一个 Run 的上下文窗口上限 `context_window_total`；最后一个 Run 的 provider usage 从 `conversation_runs.usage_json` 读取；`extra` 为自由 JSON | 任务列表状态不对、上下文占用异常、委派链路、fork 来源 |
 | `conversation_runs` | **Run 生命周期唯一事实源**：`status` / `end_reason` / `error_json` / `final_output` / `usage_json` / `agent_id` / `model_config_id`（模型名与能力不复制进 Run，由 `model_configs` 派生）/ `checkpoint_thread_id` | 一直转圈、失败原因、用量与成本、模型路由错 |
-| `conversation_commands` | Transport 命令幂等占用：`(task_id, command_id)` 唯一、`payload_hash`、`error_code` | 重复提交被拒、幂等冲突、命令失败码 |
+| `agent_team_runs` | **Agent Team 运行唯一事实源**：`status`（`pending` 待确认 / `running` / `completed` / `failed` / `cancelled`，`pending` 有 `(parent_task_id, parent_run_id)` 唯一约束）、`team_id`、`parent_task_id` / `parent_run_id`（发起 TeamRun 的主 Agent Task/Run）、`goal_input`、`configuration_snapshot_json`（确认时的冻结配置）、`state_json`（聚合运行态，含节点快照）、`end_reason` / `started_at` / `ended_at` | 草稿无法确认、Team 卡在 pending、节点调度异常、Team 未收敛 |
 | `conversation_task_contexts` | **canonical 上下文消息**：`message_json` / `transport_metadata_json` / `sequence` / `is_streaming` / `include_in_context`（工具调用 id 在 `message_json.data.tool_call_id`，表上不再单列） | Agent 回放、工具调用与结果、上下文缺口、工具状态不符 |
 | `model_configs` | 模型连接配置：`config_name` / `base_url` / `api_key`（**明文 secret，任何输出都不得包含**）/ `model_name` / `context_window_k` / `supports_thinking` / `supports_reasoning_effort` / `supports_image` / `enabled` / `sort_order` | 模型解析失败、窗口/能力标志错、Key 缺失 |
 
 **已从 schema 移除、不要再查**：`providers` / `models`（已合并为单表 `model_configs`）、
 `delegations`（委派事实改由 `tasks.parent_task_id` / `parent_run_id` 承载，见 `child-tasks` 子命令）、
+`conversation_commands`（Transport 命令的幂等占用不再落库，`commandId` 只在单次请求内做结构化去重；
+其查询位由 `agent-team-runs` 取代）、
 `terminal_sessions`（终端会话元数据不再落库）、`attachment_assets`（附件改为纯文件系统，落 workspace 的
 `.cosir/Attachment/`，`storage` 层已无 attachment 模型）；更早的 `turn_id` / `turns` /
 `turn_messages` / `runtime_events`。查这些表会直接报 `table not found`（`require_tables` 会连带
@@ -310,7 +320,7 @@ tasks       [--workspace-id I] [--contains T] [--limit N]
 runs        [--task-id I] [--status S] [--contains T] [--limit N]
 run         <RUN_ID> [--limit N]                              # run 排障快照
 task        <TASK_ID> [--limit N]                             # task 排障快照
-commands    [--task-id I] [--run-id I] [--limit N]
+agent-team-runs [--parent-task-id I] [--parent-run-id I] [--limit N]   # Agent Team 运行
 messages    <TASK_ID> [--run-id I] [--order asc|desc] [--exclude-streaming] [--limit N]
 tools       <TASK_ID> [--run-id I] [--contains T] [--failures-only] [--limit N]
 child-tasks [--parent-task-id I] [--limit N]                  # 委派子任务（取代原 delegations）
@@ -350,9 +360,10 @@ stuck       [--limit N]
 > 脚本与测试同时受项目 ruff 规则约束：
 > `uv run --project apps/backend ruff check --config apps/backend/pyproject.toml skills/log-triage/scripts skills/log-triage/test`。
 >
-> **路径解析约定**（实现见 `scripts/triage_paths.py`，规则与 `apps/backend/app/utils/path/system_cosir.py`
-> 同源）：数据根按「`CODING_AGENT_DATA_DIR` → 已存在的桌面数据根（`%APPDATA%\com.cosir.desktop`）
-> → 仓库根（向上查找含 `apps/backend` 的目录）」顺序判定，因此桌面应用在跑时默认查的就是它那份
+> **路径解析约定**（实现见 `scripts/triage_paths.py`，与 `apps/backend/app/utils/path/system_cosir.py`
+> 和 `apps/desktop/src-tauri/src/data_paths.rs` 同源）：数据根按「`CODING_AGENT_DATA_DIR` →
+> 已存在的桌面数据根（Windows/macOS = **用户主目录**，其余平台 = `app_data_dir()`）→ 仓库根
+> （向上查找含 `apps/backend` 的目录）」顺序判定，因此桌面应用在跑时默认查的就是它那份
 > `.cosir`；业务库 = `<数据根>/.cosir/storage/app.sqlite3`，日志目录 = `<数据根>/.cosir/logs`。
 > 需要查另一份时用 `--db` / `--log-file` 显式覆盖（输出里的 `data root:` 一行会说明本次用的是
 > 哪一份）。仓库定位失败且未显式指定时会直接报错，而不是静默查空目录。

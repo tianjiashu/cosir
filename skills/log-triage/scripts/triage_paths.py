@@ -12,7 +12,8 @@
 设计边界：**不导入 ``app.*``**——本 skill 必须能在后端未启动、启动失败或 UI 打不开时运行，
 因此这里复制后端的推导规则而非复用其代码。事实源：``apps/backend/app/utils/paths.py``
 （``DATA_DIR`` 只认 ``CODING_AGENT_DATA_DIR``，其余路径统一落在 ``<DATA_DIR>/.cosir/`` 下）与
-``apps/desktop/src-tauri/tauri.conf.json`` 的 ``identifier``；三者任一变更都必须同步本文件。
+``apps/desktop/src-tauri/src/data_paths.rs::system_data_root``（决定桌面宿主注入哪个目录）；
+任一变更都必须同步本文件。
 """
 
 from __future__ import annotations
@@ -27,9 +28,13 @@ LOG_DIR_NAME = "logs"
 STORAGE_DIR_NAME = "storage"
 APP_DB_FILE_NAME = "app.sqlite3"
 
-# Tauri 的 bundle identifier（apps/desktop/src-tauri/tauri.conf.json），决定 app_data_dir()
-# 的目录名，也就是「桌面态数据根」。桌面宿主无条件把该目录注入 CODING_AGENT_DATA_DIR。
+# Tauri 的 bundle identifier（apps/desktop/src-tauri/tauri.conf.json），只在非 macOS/Windows
+# 平台参与桌面数据根拼接（见 :func:`desktop_data_root`）。
 _DESKTOP_BUNDLE_ID = "com.cosir.desktop"
+
+# 桌面宿主注入 CODING_AGENT_DATA_DIR 的目录（``data_paths.rs::system_data_root``）：
+# macOS 与 Windows 是**用户主目录**，其余平台是 Tauri ``app_data_dir()``。
+_DESKTOP_USES_HOME_DIR = ("win32", "darwin")
 
 
 def repository_root() -> Path:
@@ -63,30 +68,30 @@ def repository_root() -> Path:
 
 
 def desktop_data_root() -> Path:
-    """返回平台默认的桌面应用数据根（等价于 Tauri ``app_data_dir()``）。
+    """返回桌面宿主注入 ``CODING_AGENT_DATA_DIR`` 的目录（等价于 ``system_data_root``）。
+
+    事实源 ``apps/desktop/src-tauri/src/data_paths.rs``：**macOS 与 Windows 使用当前用户主
+    目录**（``.cosir`` 直接落在 ``~/.cosir``），其余桌面平台沿用 Tauri ``app_data_dir()``。
+    这与历史布局（Windows ``%APPDATA%\\com.cosir.desktop``、macOS
+    ``~/Library/Application Support/com.cosir.desktop``）不同——旧目录若仍存在，属于布局
+    变更前的残留，**不得**被当作当前数据根，否则会稳定查到一份早已停止更新的库与日志。
 
     参数:
         无。
 
     返回:
-        Windows 为 ``%APPDATA%\\com.cosir.desktop``（Roaming），macOS 为
-        ``~/Library/Application Support/com.cosir.desktop``，其余平台为
-        ``$XDG_DATA_HOME``（缺省 ``~/.local/share``）下的同名目录。
+        Windows / macOS 为用户主目录；其余平台为 ``$XDG_DATA_HOME``（缺省
+        ``~/.local/share``）下的 ``com.cosir.desktop``。
 
     异常:
-        ValueError: Windows 上 ``APPDATA`` 未设置时抛出。
+        无。
 
     副作用:
-        读取 ``APPDATA`` / ``XDG_DATA_HOME`` 环境变量。
+        读取 ``XDG_DATA_HOME`` 环境变量（非 macOS/Windows 分支）并解析用户主目录。
     """
 
-    if sys.platform == "win32":
-        base = os.environ.get("APPDATA", "").strip()
-        if not base:
-            raise ValueError("APPDATA is not set; cannot locate the desktop data root")
-        return Path(base) / _DESKTOP_BUNDLE_ID
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / _DESKTOP_BUNDLE_ID
+    if sys.platform in _DESKTOP_USES_HOME_DIR:
+        return Path.home()
     xdg = os.environ.get("XDG_DATA_HOME", "").strip()
     base = Path(xdg) if xdg else Path.home() / ".local" / "share"
     return base / _DESKTOP_BUNDLE_ID
@@ -126,7 +131,7 @@ def data_root_with_reason() -> tuple[Path, str]:
 
     返回:
         ``(数据根, 来源说明)``；来源为 ``from CODING_AGENT_DATA_DIR``、
-        ``desktop app_data_dir (.cosir present)``、``repository root``（仓库根含 ``.cosir``）
+        ``desktop data root (.cosir present)``、``repository root``（仓库根含 ``.cosir``）
         或 ``repository root, fallback: no .cosir found``（两处都没有 ``.cosir``，仅兜底）。
 
     异常:
@@ -140,13 +145,13 @@ def data_root_with_reason() -> tuple[Path, str]:
     if explicit:
         return Path(explicit), "from CODING_AGENT_DATA_DIR"
 
-    # 桌面数据根必须「已有 .cosir」才算命中；缺 APPDATA 或目录不存在都不阻断后续回退。
+    # 桌面数据根必须「已有 .cosir」才算命中；目录不存在不阻断后续回退。
     # 仓库根故意惰性求值：skill 装在用户级目录且 cwd 不在仓库内时它会抛错，但那种场景
     # 只要桌面数据根可用就应当正常工作。
     with contextlib.suppress(ValueError):
         desktop = desktop_data_root()
         if (desktop / COSIR_DIR_NAME).is_dir():
-            return desktop, "desktop app_data_dir (.cosir present)"
+            return desktop, "desktop data root (.cosir present)"
 
     try:
         repository = repository_root()

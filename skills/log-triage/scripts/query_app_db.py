@@ -28,7 +28,7 @@ import triage_paths as paths
 from appdb_agent_facts import (
     list_child_tasks,
     list_model_configs,
-    recent_commands,
+    recent_agent_team_runs,
     recent_runs,
     recent_tasks,
     recent_workspaces,
@@ -99,11 +99,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_limit(task)
     task.add_argument("task_id", type=int)
 
-    commands = subparsers.add_parser("commands", help="列出 Transport 命令（幂等占用）。")
-    _add_common_options(commands)
-    _add_limit(commands)
-    commands.add_argument("--task-id", type=int, default=None)
-    commands.add_argument("--run-id", type=int, default=None)
+    agent_team_runs = subparsers.add_parser(
+        "agent-team-runs", help="列出 Agent Team 运行（一次 Team 执行意图）。"
+    )
+    _add_common_options(agent_team_runs)
+    _add_limit(agent_team_runs)
+    agent_team_runs.add_argument("--parent-task-id", type=int, default=None)
+    agent_team_runs.add_argument("--parent-run-id", type=int, default=None)
 
     messages = subparsers.add_parser("messages", help="按顺序回放会话上下文消息。")
     _add_common_options(messages)
@@ -241,8 +243,11 @@ def dispatch(connection: sqlite3.Connection, args: argparse.Namespace) -> Any:
         ),
         "run": lambda: run_snapshot(connection, run_id=args.run_id, limit=limit),
         "task": lambda: task_snapshot(connection, task_id=args.task_id, limit=limit),
-        "commands": lambda: recent_commands(
-            connection, limit=limit, task_id=args.task_id, run_id=args.run_id
+        "agent-team-runs": lambda: recent_agent_team_runs(
+            connection,
+            limit=limit,
+            parent_task_id=args.parent_task_id,
+            parent_run_id=args.parent_run_id,
         ),
         "messages": lambda: list_messages(
             connection,

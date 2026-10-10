@@ -133,15 +133,18 @@ class TestDataRootFallbackOrder:
         monkeypatch.setattr(tp, "repository_root", lambda: repo)
         assert tp.data_root() == repo
 
-    # 目的：Windows 上 APPDATA 缺失不得崩溃，应继续尝试仓库根。潜在缺陷：未捕获 ValueError 导致直接抛错。
-    def test_apdata_missing_falls_back_to_repo(
+    # 目的：桌面数据根解析抛错时不得中断回退，应继续尝试仓库根。潜在缺陷：未捕获 ValueError 导致直接抛错。
+    def test_desktop_root_error_falls_back_to_repo(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         repo = tmp_path / "repo"
-        monkeypatch.setattr(sys, "platform", "win32")
-        monkeypatch.delenv("APPDATA", raising=False)
+
+        def _boom() -> Path:
+            raise ValueError("cannot locate the desktop data root")
+
+        monkeypatch.setattr(tp, "desktop_data_root", _boom)
         monkeypatch.setattr(tp, "repository_root", lambda: repo)
-        # desktop_data_root 应抛 ValueError，被吞掉；data_root 回退仓库根
+        # desktop_data_root 的异常应被吞掉；data_root 回退仓库根
         with pytest.raises(ValueError):
             tp.desktop_data_root()
         assert tp.data_root() == repo
@@ -165,30 +168,30 @@ class TestDataRootFallbackOrder:
 class TestPlatformDesktopRoot:
     """desktop_data_root 的平台推导。"""
 
-    # 目的：Windows 用 %APPDATA%\\com.cosir.desktop（Roaming），不得误用 LOCALAPPDATA。潜在缺陷：平台分支写错。
-    def test_windows_uses_appdata(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 目的：Windows 数据根是**用户主目录**（``data_paths.rs::system_data_root``），
+    # 不得再落到 %APPDATA%\\com.cosir.desktop——后者是布局变更前的残留目录，命中它会静默查到早期库/日志。
+    def test_windows_uses_home_dir_not_appdata(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path(r"C:\Users\u")))
         monkeypatch.setenv("APPDATA", r"C:\Users\u\AppData\Roaming")
         monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\u\AppData\Local")
-        # 用 os.path.join 表达期望：拼接分隔符随平台（实现同样是 Path / 运算符）。
-        assert str(tp.desktop_data_root()) == os.path.join(
-            r"C:\Users\u\AppData\Roaming", "com.cosir.desktop"
-        )
+        assert tp.desktop_data_root() == Path(r"C:\Users\u")
 
-    # 目的：Windows 上 APPDATA 存在但为纯空白时同样视为缺失。潜在缺陷：只判 truthy 不 strip。
-    def test_windows_blank_appdata_treated_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 目的：Windows 上 APPDATA 缺失也不得崩溃，也不能因此改变数据根（主目录推导不依赖 APPDATA）。
+    def test_windows_ignores_missing_appdata(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "platform", "win32")
-        monkeypatch.setenv("APPDATA", "   ")
-        with pytest.raises(ValueError):
-            tp.desktop_data_root()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path(r"C:\Users\u")))
+        monkeypatch.delenv("APPDATA", raising=False)
+        assert tp.desktop_data_root() == Path(r"C:\Users\u")
 
-    # 目的：Windows 仅 LOCALAPPDATA 存在（无 APPDATA）时应抛 ValueError 交由上层回退，不得误用 LOCALAPPDATA。潜在缺陷：错误回退到 LocalData 布局。
-    def test_windows_localappdata_only_does_not_change_choice(
+    # 目的：Windows 上遗留的 %APPDATA%\\com.cosir.desktop 存在时也必须被忽略（主目录无 .cosir 则回退仓库根）。
+    # 潜在缺陷：把历史残留当作当前桌面数据根。
+    def test_windows_ignores_legacy_appdata_root(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setattr(sys, "platform", "win32")
-        monkeypatch.delenv("APPDATA", raising=False)
-        monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\u\AppData\Local")
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+        monkeypatch.setenv("APPDATA", str(_make_root_with_cosir(tmp_path / "legacy")))
         monkeypatch.setattr(tp, "repository_root", lambda: _make_root_with_cosir(tmp_path / "r"))
         assert tp.data_root() == tmp_path / "r"
 
@@ -206,13 +209,11 @@ class TestPlatformDesktopRoot:
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/home/u")))
         assert tp.desktop_data_root() == Path("/home/u/.local/share") / "com.cosir.desktop"
 
-    # 目的：macOS 使用 ~/Library/Application Support。潜在缺陷：平台分支缺失。
-    def test_macos(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 目的：macOS 与 Windows 同源，数据根是用户主目录（``~/.cosir``），不再是 Application Support。
+    def test_macos_uses_home_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "platform", "darwin")
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/Users/u")))
-        assert tp.desktop_data_root() == (
-            Path("/Users/u/Library/Application Support") / "com.cosir.desktop"
-        )
+        assert tp.desktop_data_root() == Path("/Users/u")
 
 
 # --------------------------------------------------------------------------- #
@@ -277,12 +278,12 @@ class TestDescribePathChoice:
             f"data root: {Path('C:/explicit')} (from CODING_AGENT_DATA_DIR)"
         )
 
-    # 目的：桌面根胜出时来源标注为 desktop app_data_dir。潜在缺陷：来源标签写反。
+    # 目的：桌面根胜出时来源标注为 desktop data root。潜在缺陷：来源标签写反。
     def test_desktop_label(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         desktop = _make_root_with_cosir(tmp_path / "desktop")
         monkeypatch.setattr(tp, "desktop_data_root", lambda: desktop)
         monkeypatch.setattr(tp, "repository_root", lambda: tmp_path / "repo")
-        assert "desktop app_data_dir" in tp.describe_path_choice()
+        assert "desktop data root" in tp.describe_path_choice()
 
     # 目的：回退到仓库根时来源标注为 repository root。潜在缺陷：误标为 desktop。
     def test_repo_label(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -520,9 +521,16 @@ class TestAppDbSubcommands:
             a for a in parser._actions
             if isinstance(a, __import__("argparse")._SubParsersAction)
         )
-        for legacy in ("providers", "models", "sessions", "delegations"):
+        for legacy in ("providers", "models", "sessions", "delegations", "commands"):
             assert legacy not in sub.choices
-        for current in ("child-tasks", "model-configs", "tasks", "runs", "stuck"):
+        for current in (
+            "child-tasks",
+            "model-configs",
+            "agent-team-runs",
+            "tasks",
+            "runs",
+            "stuck",
+        ):
             assert current in sub.choices
 
     # 目的：--db 显式时 stderr 文案为 explicit 且含实际路径。潜在缺陷：显式路径提示缺失或标注错误。
@@ -608,11 +616,8 @@ class TestAdversarialPathInputs:
         monkeypatch.setenv("CODING_AGENT_DATA_DIR", ".")
         assert str(tp.data_root()) == "."
 
-    # 目的：Windows 上 APPDATA 存在但带前后空格时应裁剪，避免拼出带空格脏目录。
-    def test_appdata_stripped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sys, "platform", "win32")
-        monkeypatch.setenv("APPDATA", "  C:\\Roam  ")
-        assert str(tp.desktop_data_root()) == os.path.join("C:\\Roam", "com.cosir.desktop")
+    # 说明：原先在此锁「Windows 上 APPDATA 带空格需裁剪」——该契约已随数据根改为用户主目录
+    # 而失效（实现不再消费 APPDATA），对应覆盖由 TestPlatformDesktopRoot 的 Windows 用例承担。
 
     # 目的：仓库根查找同时覆盖“脚本路径向上”和“cwd 向上”两条路径：当脚本路径找不到时，cwd 命中应可用。
     # 潜在缺陷：只查一条路径导致用户级安装目录下永远找不到仓库。
@@ -680,7 +685,7 @@ APPDB_SUBCOMMANDS: list[list[str]] = [
     ["workspaces"],
     ["tasks", "--limit", "5"],
     ["runs", "--limit", "5"],
-    ["commands"],
+    ["agent-team-runs"],
     ["child-tasks"],
     ["model-configs"],
     ["stuck"],

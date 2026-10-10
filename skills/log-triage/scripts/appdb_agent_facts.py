@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """业务库 Agent 执行事实查询（log-triage skill 内置）。
 
-单一职责：只读查询承载「任务 / 运行 / 命令 / 工作区 / 模型连接配置」的持久化事实行：
-``workspaces``、``tasks``、``conversation_runs``、``conversation_commands``、``model_configs``。
+单一职责：只读查询承载「任务 / 运行 / Agent Team 运行 / 工作区 / 模型连接配置」的持久化事实行：
+``workspaces``、``tasks``、``conversation_runs``、``agent_team_runs``、``model_configs``。
 
 职责边界：
 - 负责：按标识与过滤条件下发只读 SELECT，并返回原始行字典（不做文本渲染、不做截断）。
@@ -16,6 +16,9 @@
   ``model_config_id``，模型名称、上下文窗口与能力不再复制进 Run，需要时 JOIN 取回。
 - ``delegations`` / ``terminal_sessions`` 两表已移除：委派事实由 ``tasks.parent_task_id`` /
   ``parent_run_id`` / ``task_type`` 承载（见 :func:`list_child_tasks`），终端会话元数据不再落库。
+- ``conversation_commands`` 表已移除：Transport 命令的幂等占用事实不再落库（``commandId``
+  只在单次请求内做结构化去重，不入库）。同批新增 ``agent_team_runs`` 表承载 Agent Team
+  运行事实，故「命令」查询位由 :func:`recent_agent_team_runs` 取代。
 """
 
 from __future__ import annotations
@@ -197,44 +200,47 @@ def recent_runs(
     return query_rows(connection, sql, tuple(params))
 
 
-def recent_commands(
+def recent_agent_team_runs(
     connection: sqlite3.Connection,
     *,
     limit: int,
-    task_id: int | None = None,
-    run_id: int | None = None,
+    parent_task_id: int | None = None,
+    parent_run_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    """查询最近的 Assistant Transport 命令（幂等占用事实）。
+    """查询最近的 Agent Team 运行（一次 Team 执行意图及其生命周期）。
 
     参数:
         connection: 只读 SQLite 连接。
         limit: 最大返回行数。
-        task_id: 可选任务过滤。
-        run_id: 可选运行过滤。
+        parent_task_id: 可选主 Agent 任务过滤。
+        parent_run_id: 可选主 Agent 运行过滤（``pending`` 唯一约束的定位键之一）。
 
     返回:
-        命令行列表（id 降序）。
+        TeamRun 行列表（id 降序），只含标量列与生命周期字段；``state_json`` /
+        ``configuration_snapshot_json`` 体积大且属内部运行态，不在此查询返回。
 
     异常:
-        ValueError: ``conversation_commands`` 表缺失。
+        ValueError: ``agent_team_runs`` 表缺失。
         sqlite3.Error: 查询失败。
 
     副作用:
         无。
     """
 
-    require_tables(connection, "conversation_commands")
+    require_tables(connection, "agent_team_runs")
     where: list[str] = []
     params: list[Any] = []
-    if task_id is not None:
-        where.append("task_id = ?")
-        params.append(task_id)
-    if run_id is not None:
-        where.append("run_id = ?")
-        params.append(run_id)
+    if parent_task_id is not None:
+        where.append("parent_task_id = ?")
+        params.append(parent_task_id)
+    if parent_run_id is not None:
+        where.append("parent_run_id = ?")
+        params.append(parent_run_id)
+    # SQL 为字面量拼接（无 f-string），过滤值全部走占位符，无注入面。
     sql = (
-        "SELECT id, task_id, command_id, command_type, payload_hash, run_id, "
-        "error_code, created_at FROM conversation_commands"
+        "SELECT id, team_id, workspace_id, parent_task_id, parent_run_id, status, "
+        "end_reason, started_at, ended_at, created_at, updated_at "
+        "FROM agent_team_runs"
     )
     if where:
         sql += " WHERE " + " AND ".join(where)

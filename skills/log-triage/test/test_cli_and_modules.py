@@ -28,7 +28,7 @@ import query_logs as ql  # noqa: E402
 from appdb_agent_facts import (  # noqa: E402
     list_child_tasks,
     list_model_configs,
-    recent_commands,
+    recent_agent_team_runs,
     recent_runs,
     recent_tasks,
     recent_workspaces,
@@ -59,9 +59,12 @@ def _schema(con: sqlite3.Connection) -> None:
             model_config_id INTEGER, image_paths TEXT, end_reason TEXT, final_output TEXT,
             extra TEXT, usage_json TEXT, error_json TEXT, status TEXT NOT NULL,
             created_at TEXT, updated_at TEXT);
-        CREATE TABLE conversation_commands (id INTEGER PRIMARY KEY, task_id INTEGER,
-            command_id TEXT, command_type TEXT, payload_hash TEXT, run_id INTEGER,
-            error_code TEXT, created_at TEXT);
+        CREATE TABLE agent_team_runs (id INTEGER PRIMARY KEY, team_id TEXT NOT NULL,
+            workspace_id INTEGER NOT NULL, parent_task_id INTEGER NOT NULL,
+            parent_run_id INTEGER NOT NULL, goal_input TEXT NOT NULL,
+            configuration_snapshot_json TEXT NOT NULL, status TEXT NOT NULL,
+            state_json TEXT NOT NULL, end_reason TEXT, started_at TEXT, ended_at TEXT,
+            created_at TEXT, updated_at TEXT);
         CREATE TABLE conversation_task_contexts (id INTEGER PRIMARY KEY, task_id INTEGER,
             run_id INTEGER, message_json TEXT NOT NULL,
             transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,
@@ -295,13 +298,23 @@ class TestAgentFacts:
         assert [r["id"] for r in list_model_configs(con, limit=10)] == [1, 2]
         assert [r["id"] for r in list_model_configs(con, limit=1)] == [1]
 
-    # 目的：commands 可选 task/run 过滤。潜在缺陷：过滤组合错。
-    def test_commands_filters(self, con: sqlite3.Connection) -> None:
-        con.execute("INSERT INTO conversation_commands VALUES (1,1,'c1','t','h',1,NULL,'t')")
-        con.execute("INSERT INTO conversation_commands VALUES (2,1,'c2','t','h',2,NULL,'t')")
+    # 目的：agent-team-runs 可选 parent_task_id / parent_run_id 过滤。潜在缺陷：过滤组合错。
+    def test_agent_team_runs_filters(self, con: sqlite3.Connection) -> None:
+        con.execute(
+            "INSERT INTO agent_team_runs (id, team_id, workspace_id, parent_task_id, "
+            "parent_run_id, goal_input, configuration_snapshot_json, status, state_json, "
+            "created_at, updated_at) "
+            "VALUES (1, 't1', 1, 1, 1, 'g', '{}', 'pending', '{}', 't', 't')"
+        )
+        con.execute(
+            "INSERT INTO agent_team_runs (id, team_id, workspace_id, parent_task_id, "
+            "parent_run_id, goal_input, configuration_snapshot_json, status, state_json, "
+            "created_at, updated_at) "
+            "VALUES (2, 't2', 1, 1, 2, 'g', '{}', 'running', '{}', 't', 't')"
+        )
         con.commit()
-        assert [r["id"] for r in recent_commands(con, limit=10, run_id=2)] == [2]
-        assert len(recent_commands(con, limit=10, task_id=1)) == 2
+        assert [r["id"] for r in recent_agent_team_runs(con, limit=10, parent_run_id=2)] == [2]
+        assert len(recent_agent_team_runs(con, limit=10, parent_task_id=1)) == 2
 
 
 # --------------------------------------------------------------------------- #
@@ -356,7 +369,7 @@ class TestSnapshots:
             "task",
             "workspace",
             "runs",
-            "commands",
+            "agent_team_runs",
             "child_tasks",
             "context",
         }
