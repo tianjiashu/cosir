@@ -177,7 +177,7 @@ class AgentTeamRunCrud:
         end_reason: str | None = None,
         started: bool = False,
         ended: bool = False,
-        configuration_snapshot_json: str | None = None,
+        configuration_snapshot_json: dict[str, Any] | None = None,
         goal_input: str | None = None,
         session: Session | None = None,
     ) -> AgentTeamRunModel | None:
@@ -242,7 +242,7 @@ class AgentTeamRunCrud:
         end_reason: str | None,
         started: bool,
         ended: bool,
-        configuration_snapshot_json: str | None,
+        configuration_snapshot_json: dict[str, Any] | None,
         goal_input: str | None,
     ) -> AgentTeamRunModel | None:
         """在调用方事务中执行 TeamRun 的条件状态更新。"""

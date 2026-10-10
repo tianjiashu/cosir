@@ -191,7 +191,7 @@ class AgentTeamRunService:
                 (AgentTeamRunStatus.PENDING.value,),
                 state=state,
                 started=True,
-                configuration_snapshot_json=str(configuration.model_dump(mode="json")),
+                configuration_snapshot_json=configuration.model_dump(mode="json"),
                 goal_input=final_goal,
                 session=session,
             )

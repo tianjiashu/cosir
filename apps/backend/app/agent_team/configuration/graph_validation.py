@@ -64,9 +64,10 @@ def validate_team_graph(
         raise TeamGraphValidationError("node_id must be unique")
     node_map = {node.node_id: node for node in nodes}
 
-    if start_node_id not in node_map:
+    start_nodes = [node_id for node_id in node_ids if node_id == start_node_id]
+    if len(start_nodes) != 1:
         raise TeamGraphValidationError(
-            f"start_node_id '{start_node_id}' is not a declared node"
+            f"Team must have exactly one start node; '{start_node_id}' must identify it"
         )
     if END_TARGET_NODE_ID in node_map:
         raise TeamGraphValidationError(
@@ -116,6 +117,16 @@ def validate_team_graph(
                 "node "
                 f"'{node.node_id}' has statuses without transitions: {', '.join(missing_statuses)}"
             )
+
+    terminal_targets = {
+        transition.target_node_id
+        for transition in transitions
+        if transition.target_node_id == END_TARGET_NODE_ID
+    }
+    if terminal_targets != {END_TARGET_NODE_ID}:
+        raise TeamGraphValidationError(
+            f"Team must use exactly one logical terminal target '{END_TARGET_NODE_ID}'"
+        )
 
     reachable = _walk_graph(start_node_id, adjacency)
     unreachable = sorted(set(node_ids) - reachable)

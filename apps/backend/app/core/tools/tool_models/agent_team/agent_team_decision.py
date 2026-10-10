@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
+
+from app.agent_team.configuration.team_node_definition import TeamNodeIdentifier
 
 
 class AgentTeamApproveInput(BaseModel):
@@ -25,7 +27,19 @@ class AgentTeamApproveInput(BaseModel):
 
     configuration: dict[str, Any]
     goal: StrictStr = Field(min_length=1, max_length=50_000)
-    node_goals: dict[str, StrictStr] = Field(min_length=1, max_length=256)
+    node_goals: dict[TeamNodeIdentifier, StrictStr] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_run_inputs(self) -> AgentTeamApproveInput:
+        """在用户确认输入边界拒绝空白目标与保留节点标识。"""
+
+        if not self.goal.strip():
+            raise ValueError("goal must not be blank")
+        if any(not value.strip() for value in self.node_goals.values()):
+            raise ValueError("node_goals values must not be blank")
+        if "END" in self.node_goals:
+            raise ValueError("END is a reserved terminal target, not a Team node")
+        return self
 
 
 __all__ = ["AgentTeamApproveInput"]

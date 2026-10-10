@@ -162,11 +162,11 @@ class ProposeAgentTeamConfigurationArgs(BaseModel):
     )
     nodes: list[ProposeAgentTeamNodeArgs] = Field(
         min_length=1,
-        max_length=256,
+        max_length=10,
         description=(
-            "Pipeline node definitions. Exactly one entry node (start_node_id); do not "
-            "declare an end node; route a transition to 'END' to finish. node_goals are "
-            "supplied at run time, not here."
+            "Declare between 1 and 10 pipeline nodes. start_node_id identifies the one and only "
+            "start node. Do not declare END as a node; all ending transitions share the single "
+            "logical terminal target 'END'. node_goals are supplied when starting a TeamRun."
         ),
         examples=[
             [
@@ -182,10 +182,11 @@ class ProposeAgentTeamConfigurationArgs(BaseModel):
     transitions: list[ProposeAgentTeamTransitionArgs] = Field(
         max_length=2_000,
         description=(
-            "Status transitions. Each (from_node_id, status) pair may appear at most once; "
-            "target 'END' to finish the Team. Every declared status needs a transition, all "
-            "nodes must be reachable from start_node_id, and every node must be able to reach "
-            "END. Cycles are allowed and bounded at run time by max_runs."
+            "Status transitions. Each (from_node_id, status) pair must have exactly one target. "
+            "Use the shared terminal target 'END' to finish; multiple statuses may point to this "
+            "same logical END target. Every declared status needs a transition, all nodes must be "
+            "reachable from the single start_node_id, and every node must be able to reach END. "
+            "Cycles are allowed and bounded at run time by max_runs."
         ),
         examples=[
             [

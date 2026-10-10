@@ -47,11 +47,13 @@ class AgentTeamRunTool(HandlerBase):
     # execution plan」与「配置 Team 草稿」语义重叠，实测让模型在用户说「帮我配置个 team」时
     # 反复选中本工具（而它只运行已存在配置），因此显式声明它不能创建或修改 Team 配置。
     description = (
-        "Run an existing Agent Team: prepare its execution plan for the user to review, then "
-        "start the TeamRun once the user confirms. "
-        "The referenced team must already exist; this tool cannot create or modify Team "
-        "configurations, so if the team does not exist, stop and tell the user to create it first. "
-        "This tool must be invoked serially and cannot run in parallel with other tools."
+        "Run an existing Agent Team configuration. Provide a non-empty overall goal and exactly "
+        "one non-empty node_goals entry for every configured node_id; do not add or omit node IDs. "
+        "The configuration has one start node and one logical terminal target named END. Nodes "
+        "execute serially according to their status transitions; END finishes the Team. This tool "
+        "prepares the plan for user review and starts it only after approval. It cannot create or "
+        "edit Team configurations. If the Team does not exist, ask the user to create it first. "
+        "Invoke this tool serially, not in parallel with other tools."
     )
     args_model = AgentTeamArgs
     timeout_seconds: ClassVar[float] = 30.0
