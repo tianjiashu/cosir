@@ -111,9 +111,12 @@ export function AgentTeamConfigurationPanel({
 
   if (editing !== undefined && profiles) {
     return <AgentTeamConfigurationEditor
+      key={`${scope}:${editing?.team_id ?? "new"}`}
       initial={editing}
       profilesByScope={profiles}
       scopeEditable={false}
+      defaultScope={scope}
+      graphLayoutKey={`cosir:agent-team-graph:${scope}:${workspaceId ?? "system"}:${editing?.team_id ?? "new"}`}
       onCancel={() => setEditing(undefined)}
       onSave={save}
     />;

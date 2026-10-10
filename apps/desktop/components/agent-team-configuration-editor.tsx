@@ -4,13 +4,15 @@ import { useState } from "react";
 import { PlusIcon, Trash2Icon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { AgentTeamGraphEditor } from "@/components/agent-team-graph-editor";
+import { transitionKey, updateNodeInConfiguration, upsertTransition } from "@/components/agent-team-graph-model";
 import { Input } from "@/components/ui/input";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamConfiguration, AgentTeamNodeConfiguration, AgentTeamTransitionConfiguration } from "@/lib/api/agent-teams";
 
 type AgentProfilesByScope = Record<AgentTeamConfiguration["scope"], AgentConfiguration[]>;
 
-const emptyConfiguration = (): AgentTeamConfiguration => ({
+const emptyConfiguration = (scope: AgentTeamConfiguration["scope"]): AgentTeamConfiguration => ({
   team_id: "",
   name: "",
   description: "",
@@ -18,7 +20,7 @@ const emptyConfiguration = (): AgentTeamConfiguration => ({
   start_node_id: "",
   nodes: [],
   transitions: [],
-  scope: "workspace",
+  scope,
 });
 
 function parseStatuses(value: string): string[] {
@@ -36,6 +38,8 @@ export function AgentTeamConfigurationEditor({
   initial,
   profilesByScope,
   scopeEditable,
+  defaultScope = "workspace",
+  graphLayoutKey,
   onChange,
   onCancel,
   onSave,
@@ -43,13 +47,17 @@ export function AgentTeamConfigurationEditor({
   initial: AgentTeamConfiguration | null;
   profilesByScope: AgentProfilesByScope;
   scopeEditable: boolean;
+  defaultScope?: AgentTeamConfiguration["scope"];
+  graphLayoutKey?: string;
   onChange?: (configuration: AgentTeamConfiguration) => void;
   onCancel: () => void;
   onSave: (configuration: AgentTeamConfiguration) => Promise<void>;
 }) {
-  const [configuration, setConfiguration] = useState<AgentTeamConfiguration>(() => initial ? { ...initial } : emptyConfiguration());
+  const [configuration, setConfiguration] = useState<AgentTeamConfiguration>(() => initial ? { ...initial } : emptyConfiguration(defaultScope));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editorMode, setEditorMode] = useState<"form" | "canvas">("form");
+  const [canvasVisited, setCanvasVisited] = useState(false);
   const profiles = profilesByScope[configuration.scope].filter((profile) => profile.validation_status === "valid");
 
   const update = (changes: Partial<AgentTeamConfiguration>) => {
@@ -61,21 +69,7 @@ export function AgentTeamConfigurationEditor({
 
   const updateNode = (index: number, changes: Partial<AgentTeamNodeConfiguration>) => {
     const currentNode = configuration.nodes[index];
-    const nextNodes = configuration.nodes.map((node, nodeIndex) => nodeIndex === index ? { ...node, ...changes } : node);
-    const nextId = changes.node_id ?? currentNode.node_id;
-    const nodeIdChanged = changes.node_id !== undefined && nextId !== currentNode.node_id;
-    const transitions = nodeIdChanged
-      ? configuration.transitions.map((transition) => ({
-        ...transition,
-        from_node_id: transition.from_node_id === currentNode.node_id ? nextId : transition.from_node_id,
-        target_node_id: transition.target_node_id === currentNode.node_id ? nextId : transition.target_node_id,
-      }))
-      : configuration.transitions;
-    update({
-      nodes: nextNodes,
-      transitions,
-      start_node_id: configuration.start_node_id === currentNode.node_id && nextId ? nextId : configuration.start_node_id,
-    });
+    update(updateNodeInConfiguration(configuration, currentNode.node_id, changes));
   };
 
   const addNode = () => {
@@ -108,17 +102,26 @@ export function AgentTeamConfigurationEditor({
   };
 
   const addTransition = () => {
-    const node = configuration.nodes[0];
-    if (!node) {
-      setError("请先添加 Team 节点");
+    const availableRoute = configuration.nodes.flatMap((node) => node.statuses.map((status) => ({ node, status })))
+      .find(({ node, status }) => !configuration.transitions.some(
+        (transition) => transitionKey(transition.from_node_id, transition.status) === transitionKey(node.node_id, status),
+      ));
+    if (!availableRoute) {
+      if (configuration.nodes.length === 0) {
+        setError("请先添加 Team 节点");
+      } else {
+        setError("所有节点状态都已设置转移，请先添加状态");
+      }
       return;
     }
+    const { node, status } = availableRoute;
+    // 来源节点与状态共同标识一条转移；表单与画布共享此唯一性规则。
     update({
-      transitions: [...configuration.transitions, {
+      transitions: upsertTransition(configuration.transitions, {
         from_node_id: node.node_id,
-        status: node.statuses[0] ?? "done",
+        status,
         target_node_id: "END",
-      }],
+      }),
     });
   };
 
@@ -150,7 +153,13 @@ export function AgentTeamConfigurationEditor({
     <section className="border-border/70 bg-card/80 rounded-2xl border shadow-sm">
       <header className="flex items-start justify-between gap-3 border-b px-5 py-4">
         <div><h2 className="font-medium">{initial ? "编辑 Agent Team" : "新建 Agent Team"}</h2><p className="text-muted-foreground mt-1 text-xs">节点按顺序执行；每个节点状态对应一条转移规则。</p></div>
-        <Button type="button" variant="outline" onClick={onCancel}>返回 Team 列表</Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <div className="bg-muted flex rounded-lg p-1" aria-label="编辑模式">
+            <Button type="button" size="sm" variant={editorMode === "form" ? "secondary" : "ghost"} aria-pressed={editorMode === "form"} onClick={() => setEditorMode("form")}>表单</Button>
+            <Button type="button" size="sm" variant={editorMode === "canvas" ? "secondary" : "ghost"} aria-pressed={editorMode === "canvas"} onClick={() => { setCanvasVisited(true); setEditorMode("canvas"); }}>画布</Button>
+          </div>
+          <Button type="button" variant="outline" onClick={onCancel}>返回 Team 列表</Button>
+        </div>
       </header>
       <div className="space-y-5 p-5">
         {error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}
@@ -165,6 +174,7 @@ export function AgentTeamConfigurationEditor({
           <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">入口节点</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={configuration.start_node_id} onChange={(event) => update({ start_node_id: event.target.value })}><option value="">选择入口节点</option>{configuration.nodes.map((node) => <option key={node.node_id} value={node.node_id}>{node.name || node.node_id}</option>)}</select></label>
         </div>
 
+        {editorMode === "form" && <>
         <section className="space-y-3">
           <div className="flex items-center justify-between"><h3 className="text-sm font-medium">Team 节点</h3><Button type="button" variant="outline" size="sm" onClick={addNode}><PlusIcon />添加节点</Button></div>
           {configuration.nodes.length === 0 && <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-sm">添加至少一个节点，再设置入口与转移。</p>}
@@ -188,6 +198,24 @@ export function AgentTeamConfigurationEditor({
             <Button type="button" variant="ghost" size="icon-sm" className="text-destructive" aria-label="删除转移" onClick={() => update({ transitions: configuration.transitions.filter((_, edgeIndex) => edgeIndex !== index) })}><Trash2Icon /></Button>
           </div>)}
         </section>
+        </>}
+        {canvasVisited && <div className={editorMode === "canvas" ? "w-full" : "hidden"}>
+          <AgentTeamGraphEditor
+            configuration={configuration}
+            profiles={profiles}
+            storageKey={graphLayoutKey ?? `cosir:agent-team-graph:${configuration.scope}:${configuration.team_id || "new"}`}
+            onSave={() => void save()}
+            onExit={() => setEditorMode("form")}
+            error={error}
+            saving={saving}
+            scopeEditable={scopeEditable}
+            onChange={(next) => {
+              setConfiguration(next);
+              onChange?.(next);
+              setError(null);
+            }}
+          />
+        </div>}
 
         {profiles.length === 0 && <p className="text-destructive text-sm">当前作用域没有可用的子 Agent。请先配置子 Agent，或调整保存范围。</p>}
         <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="outline" onClick={onCancel}>取消</Button><Button type="button" onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : "保存配置"}</Button></div>
