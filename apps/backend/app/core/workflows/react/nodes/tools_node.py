@@ -1,12 +1,12 @@
 """ReAct-like 工作流的工具节点（``_tools_node``）。
 
 本模块只承载「工具执行」单一职责：执行本批尚未起跑的调用，并把本批结果事实登记进 graph state。
-它**不认识用户审批**：工具要求用户先作决定时，把请求挂在观察自身的字段上
-（``ToolObservation.user_input_request``）；派生请求、挂起图、投影给前端与消费决定全部由
-``wait_user`` 负责。
+本节点只读取工具定义中的 ``need_HIL`` 来拒绝混有 HIL 工具的多调用批次，不处理用户决定；实际工具
+返回的 ``ToolObservation.user_input_request`` 由 ``wait_user`` 负责派生、投影、挂起与消费。
 
 执行集合取 ``valid_calls`` + ``blocked_calls`` 中**尚未起跑**的记录（``status == "pending"``）；
-``begin`` 把它们迁移为 ``running`` 并随 patch 写回 state，使 checkpoint 反映本批实际起跑状态。
+合法批次由 ``begin`` 把它们迁移为 ``running`` 并随 patch 写回 state；违规 HIL 批次保持 ``pending``，
+由 ``observe`` 直接结算为失败，使前端不会看到未执行调用短暂进入 ``running``。
 「用户批准后重执行」由 ``wait_user`` 负责（``reopen_for_approved_replay`` 把被批准的记录重置回
 ``pending`` 并附上用户决定），因此本节点**不需要**知道调用为何待执行——首次执行与批准后重执行
 在上面这条判据下完全同构，也就没有「同批其它调用被二次执行」的风险。
@@ -33,10 +33,14 @@ import asyncio
 import dataclasses
 from typing import Any
 
+from langchain_core.messages import SystemMessage
+
 from app.config.logging.logger import log
-from app.core.tools.schemas import ToolCall, ToolObservation
+from app.core.tools.schemas import ToolCall
+from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.workflows.react.node_helper.common import _runtime_config
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleRecord
+from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 _TERMINAL_CHECKPOINT_FIELDS = frozenset(
@@ -167,9 +171,9 @@ def _to_tool_call(record: ToolCallLifecycleRecord) -> ToolCall:
 async def _tools_node(state: ReactGraphState) -> dict:
     """ReAct 工具节点：执行本批尚未起跑的调用，并登记本批结果事实。
 
-    工具执行通过 ``RuntimeOperations`` 完成，工具生命周期事实经 ``begin`` 与执行层出口投影写入
-    canonical state。本节点只负责「取待执行调用 + 执行 + 登记结果」；终态事件、模型上下文写回、
-    错误计数与上限判定下沉到 ``observe``，待决请求的派生与消费下沉到 ``wait_user``。
+    本节点按工具定义检查 HIL 批次约束，再执行合法调用并登记结果；包含 HIL 工具的多调用批次整体
+    生成可修正的失败观察，延迟提示下一次模型调用，所有结果仍由 ``observe`` 结算。待决请求的派生与
+    消费下沉到 ``wait_user``。
 
     本节点为 ``async``，工具批次执行经 ``asyncio.to_thread`` 移出事件循环线程：
     ``execute_terminal`` 会同步阻塞至命令结束（最长 ``max_command_timeout``），
@@ -182,11 +186,12 @@ async def _tools_node(state: ReactGraphState) -> dict:
     返回:
         需要合并回 graph state 的增量：``last_tool_results``（本批观察摘要，按 ``tool_call_id``
         合并进本模型步批次，可落 checkpoint）、``terminal_sessions``（终端会话展示元数据投影）与
-        ``tool_call_lifecycle``（``begin`` 迁移后的快照）。
+        ``tool_call_lifecycle``（执行批次经 ``begin`` 迁移后的快照；拦截批次保留原快照）、
+        ``next_node``（待决请求进入
+        ``wait_user``，其它观察进入 ``observe``）。
 
-        执行集合在 ``begin`` 之前按 ``pending`` 判定：``begin`` 之后所有送执行层的记录都已迁移为
-        ``running``，重入本节点（自环 / 重放）不会对同一批调用二次发起——对有副作用的工具来说，
-        二次发起就是二次写入。
+        执行集合按 ``pending`` 判定：合法批次的记录在送执行层前迁移为 ``running``，重入本节点
+        （自环 / 重放）不会对同一批调用二次发起；被拦截批次不迁移，直接由 ``observe`` 结算。
 
     异常:
         RuntimeError: ``state.tool_call_lifecycle`` 缺失（应由 ``model`` 节点写入），或 ``begin``
@@ -198,6 +203,8 @@ async def _tools_node(state: ReactGraphState) -> dict:
         - 执行工具（文件、终端、搜索、委派等）并产出工具生命周期事实；状态写入 **run**；
         - ``running`` 状态事件由 ``begin`` 在本节点发出；终态事件不在本节点发出，也不在此
           收口取消（两者分别由执行层出口投影与 ``observe`` 节点的 ``settle`` 负责）；
+        - 多调用批次包含 HIL 工具时不运行 handler，写入可重试观察并向当前 Task 的延迟系统消息队列
+          投递模型修正指令；
         - 模型协议层面的配对闭合统一由 ``RuntimeContextManager.load_message`` 在下次取数时
           自动补 ``ToolMessage`` 占位，本节点不构造/落库占位消息、亦不越界访问 service
           受保护成员。
@@ -225,8 +232,18 @@ async def _tools_node(state: ReactGraphState) -> dict:
         for record in lifecycle.valid_tools + lifecycle.blocked_tool_calls
         if record.status == "pending"
     ]
-    lifecycle = lifecycle.begin(task_id=task_id, run_id=rc.run.id, step_id=step_id)
     calls = [_to_tool_call(record) for record in pending_records]
+
+    definitions_by_name = {definition.name: definition for definition in operations.all_vaild_tools}
+    hil_tool_names = sorted(
+        {
+            call.tool_name
+            for call in calls
+            if (definition := definitions_by_name.get(call.tool_name)) is not None
+            and definition.need_HIL
+        }
+    )
+    blocked_batch = len(calls) > 1 and bool(hil_tool_names)
 
     log.info(
         "tools_node_started",
@@ -234,32 +251,79 @@ async def _tools_node(state: ReactGraphState) -> dict:
             "msg": f"准备执行 {len(calls)} 个工具调用，step_id={step_id}",
             "data": {
                 "step_id": step_id,
-                "executed_count": len(calls),
+                "call_count": len(calls),
                 "call_ids": [call.call_id for call in calls],
                 "instruction": instruction,
             },
         },
     )
 
-    tool_run = await operations.run_tool_calls(
-        task_id, calls, step_id, asyncio.get_running_loop()
-    )
+    if blocked_batch:
+        # 整批拒绝，避免并行调用中的普通工具先产生副作用、HIL 工具再等待用户确认。
+        observations = [
+            tool_error(
+                tool_name=call.tool_name,
+                error="error",
+                reason="blocked_batch",
+                retryable=True,
+                tool_call_id=call.call_id,
+            )
+            for call in calls
+        ]
+        from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+        task_runtime_spaces.get_or_create(task_id).defer_system_message(
+            SystemMessage(
+                content=(
+                    f"The tool(s) {', '.join(hil_tool_names)} require human approval and can "
+                    "only be called alone in a tool batch. The previous batch was blocked and "
+                    "none of its tools ran. Retry the human approval tool in a separate batch."
+                ),
+                additional_kwargs={"run_id": rc.run.id},
+            )
+        )
+        next_node = ReactRoute.OBSERVE
+        log.warning(
+            "tools_node_hil_batch_blocked",
+            extra={
+                "msg": "包含人工确认工具的多调用批次已整体拦截，未执行任何工具",
+                "data": {
+                    "run_id": rc.run.id,
+                    "step_id": step_id,
+                    "hil_tool_names": hil_tool_names,
+                    "call_ids": [call.call_id for call in calls],
+                },
+            },
+        )
+    else:
+        lifecycle = lifecycle.begin(task_id=task_id, run_id=rc.run.id, step_id=step_id)
+        tool_run = await operations.run_tool_calls(
+            task_id, calls, step_id, asyncio.get_running_loop()
+        )
+        observations = tool_run.observations
+        next_node = (
+            ReactRoute.WAIT_USER
+            if any(observation.user_input_request is not None for observation in observations)
+            else ReactRoute.OBSERVE
+        )
 
     log.info(
         "tools_node_tool_run",
         extra={
             "msg": f"工具批次执行结果，step_id={step_id}",
-            "data": {"tool_run": dataclasses.asdict(tool_run)},
+            "data": {
+                "blocked_batch": blocked_batch,
+                "observations": [dataclasses.asdict(observation) for observation in observations],
+            },
         },
     )
 
-    observations:list[ToolObservation] = tool_run.observations  # 每个工具调用的观察结果
     # 终态事件（completed/failed/cancelled）、模型上下文写回与错误计数统一收敛到
     # observe 节点（经 ToolCallLifecycleManager.settle_batch 分发），本节点只产出治理摘要。
     log.info(
         "tools_node_completed",
         extra={
-            "msg": f"工具执行完成，step_id={step_id}",
+            "msg": f"工具批次处理完成，step_id={step_id}",
             "data": {
                 "step_id": step_id,
                 "tool_count": len(observations),
@@ -284,4 +348,5 @@ async def _tools_node(state: ReactGraphState) -> dict:
             observation_dicts,
         ),
         "tool_call_lifecycle": lifecycle,
+        "next_node": next_node,
     }

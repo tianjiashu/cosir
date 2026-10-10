@@ -100,14 +100,14 @@ class ConversationRunStartResult:
     Run、再走新建路径实现，因此其结果就是普通新建结果（``execution_mode="fresh"``，
     ``run`` 与被编辑的 Run 不同）。
 
-    ``user_decisions`` 是本次续跑携带的用户结构化决定（human-in-the-loop）；创建 / 编辑
-    路径恒为空。它随结果一并交给调用方，避免决定经过进程内旁路或二次查询传递。
+    ``user_decision`` 是本次续跑携带的用户结构化决定（human-in-the-loop）；创建 / 编辑
+    路径恒为 ``None``。它随结果一并交给调用方，避免决定经过进程内旁路或二次查询传递。
     """
 
     run: ConversationRunRecord
     initial_state: ConversationStateSnapshot
     execution_mode: ExecutionMode = "fresh"
-    user_decisions: tuple[UserDecision, ...] = ()
+    user_decision: UserDecision | None = None
 
 
 @dataclass(frozen=True)
@@ -368,7 +368,7 @@ class ConversationRunCommandService:
             run_id: int,
             *,
             expected_status: ConversationRunStatus | None = None,
-            user_decisions: tuple[UserDecision, ...] = (),
+            user_decision: UserDecision | None = None,
     ) -> ConversationRunStartResult:
         """校验最近 Run 的身份和状态，迁移为 running 并返回 checkpoint 续跑结果。
 
@@ -378,7 +378,7 @@ class ConversationRunCommandService:
             expected_status: 允许的续跑源状态；``None`` 表示按 Run 当前持久化状态自动判定
                 （``cancelled`` 与 ``waiting_for_input`` 都续跑同一 checkpoint，差别只在
                 语义来源）。显式传入用于「只允许等待态恢复」这类收窄场景。
-            user_decisions: 本次续跑携带的用户结构化决定（human-in-the-loop）；随结果原样
+            user_decision: 本次续跑携带的用户结构化决定（human-in-the-loop）；随结果原样
                 交给调用方，由执行器透传进图。
 
         异常:
@@ -424,7 +424,7 @@ class ConversationRunCommandService:
             run=resumed,
             initial_state=state,
             execution_mode=execution_mode,
-            user_decisions=user_decisions,
+            user_decision=user_decision,
         )
 
     def _ensure_run_visible(

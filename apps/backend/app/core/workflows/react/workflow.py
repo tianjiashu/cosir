@@ -5,16 +5,16 @@
 工具和终态事实由 ``WorkflowOperations`` 写入 canonical conversation state，Transport 只订阅该事实。
 graph 编译时挂既有 checkpointer，由 LangGraph 负责控制流状态持久化。
 
-协作取消与用户输入等待通过 LangGraph ``interrupt`` 保留图断点；其中 human-in-the-loop 走
-``tools → wait_user →（批准回 tools 真执行 / 其余进 observe）`` 的固定通路，用户的结构化决定
-由续跑入口经 ``run(..., user_decisions=...)`` 传入并被 ``wait_user`` 消费；待决请求投影给前端与
-挂起图都发生在 ``wait_user``；terminal checkpoint 在 ``run`` 的 ``finally`` 中收敛。
+协作取消与用户输入等待通过 LangGraph ``interrupt`` 保留图断点；其中 human-in-the-loop 根据工具观察
+从 ``tools`` 条件路由到 ``wait_user``，批准后回 ``tools`` 真执行，驳回 / 放弃后交给 ``observe``；
+用户的单个结构化决定由续跑入口经 ``run(..., user_decision=...)`` 传入并被 ``wait_user`` 消费；待决请求
+投影给前端与挂起图都发生在 ``wait_user``；terminal checkpoint 在 ``run`` 的 ``finally`` 中收敛。
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
 
 import asyncio
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from time import perf_counter
 from typing import Any, cast
 
@@ -84,10 +84,10 @@ class ReactLikeWorkflow(AgentWorkflow):
     def _build_graph(self, checkpointer) -> Any:
         """构建并编译 ReAct StateGraph。
 
-        ``model`` / ``tools`` / ``observe`` 三节点经条件边形成 ReAct 循环；每个工具批次都先经过
-        human-in-the-loop 门 ``wait_user``：无待决请求时直通 ``observe``，有待决请求时经
-        ``interrupt`` 挂起，用户批准后回到 ``tools`` 真正执行。graph 编译时挂入 ``checkpointer``
-        以启用 graph 控制流持久化。普通协作取消仍由 ``model`` 节点的 ``interrupt`` 中断。
+        ``model`` / ``tools`` / ``observe`` 三节点经条件边形成 ReAct 循环；工具结果带待决用户请求时
+        才进入 ``wait_user``，否则直接由 ``observe`` 收口。用户批准后回到 ``tools`` 真正执行。
+        graph 编译时挂入 ``checkpointer`` 以启用 graph 控制流持久化。普通协作取消仍由 ``model``
+        节点的 ``interrupt`` 中断。
 
         参数:
             checkpointer: 已配置好的 LangGraph checkpointer。
@@ -126,13 +126,17 @@ class ReactLikeWorkflow(AgentWorkflow):
             },
         )
         builder.add_edge("structured_output", END)
-        # 工具批次先交给 human-in-the-loop 门：无待决请求时它直通 observe。这条边必须保持
-        # **无条件直达**——待决请求的对外投影由 wait_user 在挂起前完成，中间插入节点或改成条件边
-        # 会让用户在挂起期间看到没有内容的审批卡片（见 wait_user_node 的链路契约）。
-        builder.add_edge("tools", "wait_user")
-        # 用户批准后回 tools 真正执行；无待执行批准（含驳回 / 放弃）则交给 observe 收口。
-        # 自环：恢复值没有覆盖全部待决请求时重新挂起剩余请求（LangGraph 不允许在同一节点执行内
-        # 二次 interrupt，只能回到本节点产生新的节点执行）。
+        # tools 根据结果中的待决请求选择等待用户，违规 HIL 批次与普通结果直接交给 observe。
+        builder.add_conditional_edges(
+            "tools",
+            _route_target,
+            {
+                ReactRoute.WAIT_USER.value: "wait_user",
+                ReactRoute.OBSERVE.value: "observe",
+            },
+        )
+        # 用户批准后回 tools 真正执行；驳回 / 放弃交给 observe 收口。空恢复值时自环，
+        # 使 LangGraph 在新的节点执行中重新挂起同一请求。
         builder.add_conditional_edges(
             "wait_user",
             _route_target,
@@ -159,7 +163,7 @@ class ReactLikeWorkflow(AgentWorkflow):
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,
         execution_mode: ExecutionMode = "fresh",
-        user_decisions: Sequence[UserDecision] | None = None,
+        user_decision: UserDecision | None = None,
     ) -> None:
         """驱动 ReAct graph 执行一次任务，直到完成、挂起或异常终止。
 
@@ -186,9 +190,9 @@ class ReactLikeWorkflow(AgentWorkflow):
                 ``Command(goto="model")`` 回退到 model 节点重跑，``resume_with_input`` 在
                 ``wait_user`` 处于 interrupt 时传 ``Command(resume=...)``）以及上下文是否
                 清空该 run 的旧条目（见 ``RuntimeContextManager.begin_run``）。
-            user_decisions: 本次续跑携带的用户结构化决定；``resume_with_input`` 下若恢复现场的
+            user_decision: 本次续跑携带的用户结构化决定；``resume_with_input`` 下若恢复现场的
                 图状态里存在处于 interrupt 的任务，就把它作为 ``Command(resume=...)`` 的载荷注入
-                （当前只有 ``wait_user`` 会把 Run 置为等待用户输入）。为空时注入空决定集合，由
+                （当前只有 ``wait_user`` 会把 Run 置为等待用户输入）。为空时注入空决定，由
                 ``wait_user`` 重新挂起等待用户输入。
 
         返回:
@@ -313,7 +317,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                     if execution_mode == "resume_with_input":
                         runtime_config.resuming_wait_user = parked_at_interrupt
                         input_state = (
-                            Command(resume=build_resume_payload(user_decisions or ()))
+                            Command(resume=build_resume_payload(user_decision))
                             if runtime_config.resuming_wait_user
                             else None
                         )

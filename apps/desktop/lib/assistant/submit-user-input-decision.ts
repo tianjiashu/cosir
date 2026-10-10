@@ -14,7 +14,7 @@ export type SubmitUserInputDecisionInput = {
   taskId: number;
   /** 处于等待用户输入的 Run；决定随该 Run 的续跑请求一起提交。 */
   runId: number;
-  decisions: readonly UserInputDecision[];
+  decision: UserInputDecision;
 };
 
 /**
@@ -45,7 +45,7 @@ export async function submitUserInputDecision(
           type: "custom",
           name: "user-input-decision",
           commandId: `user-input-decision-${globalThis.crypto.randomUUID()}`,
-          payload: { decisions: input.decisions },
+          payload: { decision: input.decision },
         },
       ],
     }),

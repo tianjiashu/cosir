@@ -43,6 +43,8 @@ class ToolDefinition:
     execution_mode: Literal["thread", "process"] = "thread"
     # 调度字段：与 execution_mode 正交（前者选隔离方式，本字段选串行/并行调度）。
     parallel_mode: Literal["serial", "parallel"] = "serial"
+    # 工作流批次约束：需要用户参与的工具必须独占一个 tool-call 批次。
+    need_HIL: bool = False
 
     def normalized(self) -> "ToolDefinition":
         """Return a copy with a derived schema when none was supplied.
@@ -67,6 +69,7 @@ class ToolDefinition:
             display=self.display,
             execution_mode=self.execution_mode,
             parallel_mode=self.parallel_mode,
+            need_HIL=self.need_HIL,
         )
 
     def to_model_tool_definition(self) -> dict[str, Any]:

@@ -90,7 +90,7 @@ async def assistant_transport(
                 await run_executor.start(
                     run.id,
                     start_result.execution_mode,
-                    start_result.user_decisions,
+                    start_result.user_decision,
                 )
             except Exception:
                 # 真失败：run 已被本次请求置为 active，但执行器没有起来，必须收敛，否则该 task

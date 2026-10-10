@@ -2,7 +2,7 @@ import { jsonRequestInit, requestJson } from "@/lib/http/client";
 
 export type AgentTeamConfigurationInput = {
   scope: "system" | "workspace";
-  configuration: AgentTeamConfiguration;
+  configuration: AgentTeamConfigurationDraft;
 };
 
 export type AgentTeamNodeConfiguration = {
@@ -27,6 +27,10 @@ export type AgentTeamConfiguration = {
   nodes: AgentTeamNodeConfiguration[];
   transitions: AgentTeamTransitionConfiguration[];
   scope: "system" | "workspace";
+};
+
+export type AgentTeamConfigurationDraft = Omit<AgentTeamConfiguration, "max_runs"> & {
+  max_runs: number | string;
 };
 
 export type AgentTeamRun = {

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { WorkbenchAgentConfigurationDraftTab, WorkbenchAgentTeamConfigurationDraftTab, WorkbenchAgentTab, WorkbenchTab } from "./types";
-import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
+import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
 
 type WorkbenchState = {
   workspaceId: number | null;
@@ -15,8 +15,8 @@ type WorkbenchState = {
   updateAgentConfigurationDraft: (tabId: string, draft: WorkbenchAgentConfigurationDraftTab["draft"]) => void;
   setAgentConfigurationDraftScope: (tabId: string, scope: WorkbenchAgentConfigurationDraftTab["scope"]) => void;
   openAgentTeamConfigurationDraftTab: (input: Omit<WorkbenchAgentTeamConfigurationDraftTab, "id" | "kind" | "dirty" | "savedScope">) => void;
-  updateAgentTeamConfigurationDraft: (tabId: string, draft: AgentTeamConfiguration) => void;
-  markAgentTeamDraftSaved: (tabId: string, scope: AgentTeamConfiguration["scope"]) => void;
+  updateAgentTeamConfigurationDraft: (tabId: string, draft: AgentTeamConfigurationDraft) => void;
+  markAgentTeamDraftSaved: (tabId: string, scope: AgentTeamConfigurationDraft["scope"]) => void;
   setAgentTeamDraftDirty: (tabId: string, dirty: boolean) => void;
   setDraftDirty: (tabId: string, dirty: boolean) => void;
   activateTab: (tabId: string) => void;

@@ -2,13 +2,13 @@ import { createContext, useContext, useEffect, type ReactNode } from "react";
 import { useWorkbenchStore } from "./store";
 import type { AgentConfigurationDraft } from "./types";
 import type { AgentConfigurationInput } from "@/lib/api/configuration";
-import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
+import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
 
 type WorkbenchContextValue = {
   workspaceId: number | null;
   openAgent: (input: { taskId: number; title: string; role: string | null }) => void;
   openAgentConfigurationDraft: (input: { taskId: number; toolCallId: string; draft: AgentConfigurationDraft }) => void;
-  openAgentTeamConfigurationDraft: (input: { taskId: number; toolCallId: string; draft: AgentTeamConfiguration }) => void;
+  openAgentTeamConfigurationDraft: (input: { taskId: number; toolCallId: string; draft: AgentTeamConfigurationDraft }) => void;
 };
 
 const WorkbenchContext = createContext<WorkbenchContextValue | null>(null);

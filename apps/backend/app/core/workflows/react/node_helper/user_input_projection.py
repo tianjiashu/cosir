@@ -45,8 +45,8 @@ _REJECT_REASON_PREFIX = (
 _ABORT_REASON_PREFIX = "the user aborted this tool call; do not retry it."
 
 
-def extract_requests(observations: list[dict[str, Any]]) -> list[UserInputRequest]:
-    """从本批工具观察派生出「要求用户先作出决定」的请求。
+def extract_request(observations: list[dict[str, Any]]) -> UserInputRequest | None:
+    """从本批工具观察派生唯一的「要求用户先作出决定」请求。
 
     判据只有一个：观察上带 ``user_input_request`` 声明。已批准调用的声明在决定被消费时就清掉了，
     重执行产出的新观察也不带声明，因此本函数天然只返回**尚未作答**的请求。
@@ -56,115 +56,107 @@ def extract_requests(observations: list[dict[str, Any]]) -> list[UserInputReques
             投影列表；只读，不修改入参。
 
     返回:
-        待决请求列表，顺序与入参中声明的观察一致；无声明时返回空列表。
+        唯一待决请求；没有声明时返回 ``None``。
 
     异常:
         ValueError: 声明的形状不合法（缺 ``request_id`` / ``kind``、``decisions`` 非法），或
-            ``request_id`` 在本批内重复——后者会让「决定 → 请求」无法唯一匹配。
+            本批观察带有多个待决请求，违反单 HIL 调用契约。
 
     副作用:
         无（纯函数）。
     """
 
-    requests: list[UserInputRequest] = []
-    seen: set[str] = set()
+    found: UserInputRequest | None = None
     for observation in observations:
         request = _request_of(observation)
         if request is None:
             continue
-        if request.request_id in seen:
-            raise ValueError(f"同一批工具结果出现重复的 request_id：{request.request_id}")
-        seen.add(request.request_id)
-        requests.append(request)
-    return requests
+        if found is not None:
+            raise ValueError("同一批工具结果只能包含一个待决请求")
+        found = request
+    return found
 
 
-def request_call_ids(observations: list[dict[str, Any]]) -> dict[str, str]:
-    """建立 ``request_id`` → ``tool_call_id`` 的关联。
+def request_call_id(observations: list[dict[str, Any]], request_id: str) -> str:
+    """查找待决请求所属的 ``tool_call_id``。
 
     观察是「请求」与「调用」的接合点：请求本身不带 ``tool_call_id``（它是图内部标识，不进对外
     契约），因此「批准后要重开哪条调用」必须由观察给出。
 
     参数:
-        observations: 本批观察摘要，与 :func:`extract_requests` 同一份。
+        observations: 本批观察摘要，与 :func:`extract_request` 同一份。
+        request_id: 需要关联到工具调用的待决请求标识。
 
     返回:
-        声明了待决请求的观察上，``request_id`` 到 ``tool_call_id`` 的映射。
+        声明该请求的观察所关联的 ``tool_call_id``。
 
     异常:
         ValueError: 声明了请求的观察缺少 ``tool_call_id``——没有它就无法把批准关联回调用，
             必须显式失败，而不是让「用户批了却什么都没执行」静默发生。
+        KeyError: 本批观察没有声明该 ``request_id``。
 
     副作用:
         无（纯函数）。
     """
 
-    mapping: dict[str, str] = {}
     for observation in observations:
         request = _request_of(observation)
-        if request is None:
+        if request is None or request.request_id != request_id:
             continue
         call_id = observation.get("tool_call_id")
         if not isinstance(call_id, str) or not call_id:
             raise ValueError("待决请求缺少 tool_call_id，无法关联调用与结果")
-        mapping[request.request_id] = call_id
-    return mapping
+        return call_id
+    raise KeyError(request_id)
 
 
-def parse_resume_decisions(resume_value: object) -> list[UserDecision]:
-    """把外部恢复值解析为领域决定列表。
+def parse_resume_decision(resume_value: object) -> UserDecision | None:
+    """把外部恢复值解析为单个领域决定。
 
-    这是进程外输入（HTTP → LangGraph resume）的**唯一解析点**：恢复值可能为空、可能来自
-    旧客户端，因此在此做形状校验并上抛，不把宽容解析扩散到节点内部。
+    这是进程外输入（HTTP → LangGraph resume）的**唯一解析点**：恢复值可能为空，因此在此做形状
+    校验并上抛，不把宽容解析扩散到节点内部。
 
     参数:
-        resume_value: ``interrupt`` 的返回值；缺省/无决定时为 ``None`` 或空 ``decisions``。
+        resume_value: ``interrupt`` 的返回值；缺省/无决定时为 ``None`` 或 ``{"decision": None}``。
 
     返回:
-        已校验的领域决定列表；无决定时返回空列表（调用方据此重新挂起）。
+        已校验的领域决定；无决定时返回 ``None``（调用方据此重新挂起）。
 
     异常:
-        ValueError: 恢复值不是预期结构，或单条决定缺少 ``request_id`` / 合法 ``decision``。
+        ValueError: 恢复值不是预期结构，或决定缺少 ``request_id`` / 合法 ``decision``。
 
     副作用:
         无（纯函数）。
     """
 
     if resume_value is None:
-        return []
+        return None
     if not isinstance(resume_value, dict):
-        raise ValueError("恢复值必须是包含 decisions 的对象")
-    raw_decisions = resume_value.get("decisions")
-    if raw_decisions is None:
-        return []
-    if not isinstance(raw_decisions, list):
-        raise ValueError("恢复值的 decisions 必须是列表")
-    decisions: list[UserDecision] = []
-    for raw in raw_decisions:
-        if not isinstance(raw, dict):
-            raise ValueError("decisions 的每一项都必须是对象")
-        request_id = raw.get("request_id")
-        kind = raw.get("decision")
-        if not isinstance(request_id, str) or not request_id:
-            raise ValueError("决定必须携带非空 request_id")
-        if not isinstance(kind, str):
-            raise ValueError("决定必须携带 decision")
-        try:
-            resolved_kind = UserDecisionKind(kind)
-        except ValueError as exc:
-            raise ValueError(f"未知的决定种类：{kind}") from exc
-        decisions.append(
-            UserDecision(
-                request_id=request_id,
-                kind=resolved_kind,
-                data=_mapping(raw.get("data")),
-            )
-        )
-    return decisions
+        raise ValueError("恢复值必须是包含 decision 的对象")
+    raw = resume_value.get("decision")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("恢复值的 decision 必须是对象")
+    request_id = raw.get("request_id")
+    kind = raw.get("decision")
+    if not isinstance(request_id, str) or not request_id:
+        raise ValueError("决定必须携带非空 request_id")
+    if not isinstance(kind, str):
+        raise ValueError("决定必须携带 decision")
+    try:
+        resolved_kind = UserDecisionKind(kind)
+    except ValueError as exc:
+        raise ValueError(f"未知的决定种类：{kind}") from exc
+    return UserDecision(
+        request_id=request_id,
+        kind=resolved_kind,
+        data=_mapping(raw.get("data")),
+    )
 
 
-def apply_decisions_to_observations(
-    observations: list[dict[str, Any]], decisions: list[UserDecision]
+def apply_decision_to_observations(
+    observations: list[dict[str, Any]], decision: UserDecision | None
 ) -> list[dict[str, Any]]:
     """把用户决定写回观察：清掉待决声明，并把「驳回 / 放弃」改写为取消终态。
 
@@ -173,11 +165,11 @@ def apply_decisions_to_observations(
 
     参数:
         observations: 本批观察摘要列表（第一遍工具执行结果）。
-        decisions: 本次收到的决定，按 ``request_id`` 关联到观察上的声明。调用方（``wait_user``）
+        decision: 本次收到的单个决定，按 ``request_id`` 关联到观察上的声明。调用方（``wait_user``）
             已经校验过「决定指向的请求存在且接受该决定种类」，因此这里只做写回。
 
     返回:
-        改写后的观察列表；没有决定命中任何观察时**原样返回入参**（同一对象），使调用方可以
+        改写后的观察列表；决定为空或没有命中观察时**原样返回入参**（同一对象），使调用方可以
         据此跳过无意义的 state 写入。
 
     异常:
@@ -188,13 +180,13 @@ def apply_decisions_to_observations(
         无；改写副本，不修改入参中的观察。
     """
 
-    by_request = {decision.request_id: decision for decision in decisions}
+    if decision is None:
+        return observations
     amended: list[dict[str, Any]] = []
     changed = False
     for observation in observations:
         request = _request_of(observation)
-        decision = by_request.get(request.request_id) if request is not None else None
-        if decision is None:
+        if request is None or request.request_id != decision.request_id:
             amended.append(observation)
             continue
         changed = True

@@ -197,17 +197,17 @@ class AssistantTransportRequest(BaseModel):
             )
         return self
 
-    def user_decisions(self) -> tuple[UserDecision, ...]:
-        """取出本请求携带的用户决定（human-in-the-loop）。
+    def user_decision(self) -> UserDecision | None:
+        """取出本请求携带的单个用户决定（human-in-the-loop）。
 
-        wire 契约保证决定命令至多一条且必须单独提交，因此这里取首条并映射为领域值；没有决定命令时
-        返回空序列——空决定不是错误，它表达「用户还没作答」，``wait_user`` 会重新挂起同一请求。
+        wire 契约保证决定命令至多一条且必须单独提交；没有决定命令时返回 ``None``，表示「用户还没
+        作答」，``wait_user`` 会重新挂起同一请求。
 
         参数:
             request: 已通过 wire 校验的 Assistant Transport 请求。
 
         返回:
-            领域决定序列（可能为空）。
+            领域决定；没有决定命令时为 ``None``。
 
         异常:
             无。
@@ -218,7 +218,7 @@ class AssistantTransportRequest(BaseModel):
 
         for command in self.commands:
             if isinstance(command, UserInputDecisionCommand):
-                decisions = command.to_user_decisions()
+                decision = command.to_user_decision()
                 # 只记请求标识与决定种类：``decision.data`` 是用户编辑过的业务正文，不进日志。
                 log.info(
                     "user_input_decision_received",
@@ -227,18 +227,13 @@ class AssistantTransportRequest(BaseModel):
                         "data": {
                             "task_id": self.taskId,
                             "run_id": self.runId,
-                            "decisions": [
-                                {
-                                    "request_id": decision.request_id,
-                                    "decision": decision.kind.value,
-                                }
-                                for decision in decisions
-                            ],
+                            "request_id": decision.request_id,
+                            "decision": decision.kind.value,
                         },
                     },
                 )
-                return decisions
-        return ()
+                return decision
+        return None
 
 class TransportRequestError(Exception):
     """纯 wire 契约校验失败的结构化异常。

@@ -14,7 +14,7 @@
 """
 
 from abc import ABC
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import ClassVar
 
@@ -63,7 +63,7 @@ class AgentWorkflow(ABC):
         callbacks: list | None = None,
         langfuse_trace_id: str | None = None,
         execution_mode: ExecutionMode = "fresh",
-        user_decisions: Sequence[UserDecision] | None = None,
+        user_decision: UserDecision | None = None,
     ) -> None:
         """通过一个工作流策略运行一个任务。
 
@@ -76,7 +76,7 @@ class AgentWorkflow(ABC):
             execution_mode: 本次执行是 ``fresh``（新建输入）还是从既有 checkpoint 恢复
                 （``resume`` / ``resume_with_input``）；实现据此决定是否清空该 run 的旧上下文、
                 以及构造什么 graph 输入。
-            user_decisions: 本次续跑携带的用户结构化决定（human-in-the-loop）；只有恢复
+            user_decision: 本次续跑携带的用户结构化决定（human-in-the-loop）；只有恢复
                 human-in-the-loop 断点的实现会消费它，为空表示用户尚未作答。
 
         返回:

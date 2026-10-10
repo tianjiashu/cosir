@@ -4,15 +4,22 @@ import { useState } from "react";
 import { AgentTeamConfigurationForm } from "@/components/agent-team-configuration-form";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { AgentTeamGraphEditor } from "@/components/agent-team-graph-editor";
 import type { AgentConfiguration } from "@/lib/api/configuration";
-import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
+import type { AgentTeamConfiguration, AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
 
 type AgentProfilesByScope = Record<AgentTeamConfiguration["scope"], AgentConfiguration[]>;
 
-const emptyConfiguration = (scope: AgentTeamConfiguration["scope"]): AgentTeamConfiguration => ({
+const emptyConfiguration = (scope: AgentTeamConfiguration["scope"]): AgentTeamConfigurationDraft => ({
   team_id: "",
   name: "",
   description: "",
@@ -23,7 +30,7 @@ const emptyConfiguration = (scope: AgentTeamConfiguration["scope"]): AgentTeamCo
   scope,
 });
 
-/** 统一协调互斥的表单与画布视图，并持有共享配置、错误和保存状态。 */
+/** 统一协调表单与画布编辑，并把保存结果作为后端校验反馈呈现给用户。 */
 export function AgentTeamConfigurationEditor({
   initial,
   profilesByScope,
@@ -34,46 +41,33 @@ export function AgentTeamConfigurationEditor({
   onCancel,
   onSave,
 }: {
-  initial: AgentTeamConfiguration | null;
+  initial: AgentTeamConfiguration | AgentTeamConfigurationDraft | null;
   profilesByScope: AgentProfilesByScope;
   scopeEditable: boolean;
   defaultScope?: AgentTeamConfiguration["scope"];
-  graphLayoutKey?: (configuration: AgentTeamConfiguration) => string;
-  onChange?: (configuration: AgentTeamConfiguration) => void;
+  graphLayoutKey?: (configuration: AgentTeamConfigurationDraft) => string;
+  onChange?: (configuration: AgentTeamConfigurationDraft) => void;
   onCancel: () => void;
-  onSave: (configuration: AgentTeamConfiguration) => Promise<void>;
+  onSave: (configuration: AgentTeamConfigurationDraft) => Promise<void>;
 }) {
-  const [configuration, setConfiguration] = useState<AgentTeamConfiguration>(() => initial ? { ...initial } : emptyConfiguration(defaultScope));
+  const [configuration, setConfiguration] = useState<AgentTeamConfigurationDraft>(() => initial ? { ...initial } : emptyConfiguration(defaultScope));
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [saveFeedback, setSaveFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [editorMode, setEditorMode] = useState<"form" | "canvas">("form");
   const [canvasVisited, setCanvasVisited] = useState(false);
-  const graphLayoutKeyFor = graphLayoutKey ?? ((value: AgentTeamConfiguration) => `cosir:agent-team-graph:${value.scope}:${value.team_id || "new"}`);
-  const [resolvedGraphLayoutKey] = useState(() => graphLayoutKeyFor(initial ?? emptyConfiguration(defaultScope)));
-  const profiles = profilesByScope[configuration.scope].filter((profile) => profile.validation_status === "valid");
+  const graphLayoutKeyFor = graphLayoutKey ?? ((value: AgentTeamConfigurationDraft) => `cosir:agent-team-graph:${value.scope}:${value.team_id || "new"}`);
+  const [resolvedGraphLayoutKey, setResolvedGraphLayoutKey] = useState(() => graphLayoutKeyFor(initial ?? emptyConfiguration(defaultScope)));
+  const profiles = profilesByScope[configuration.scope];
 
-  const applyConfiguration = (next: AgentTeamConfiguration) => {
+  const applyConfiguration = (next: AgentTeamConfigurationDraft) => {
     setConfiguration(next);
     onChange?.(next);
-    setError(null);
   };
 
   const save = async () => {
-    if (!configuration.team_id.trim() || !/^[A-Za-z0-9_-]+$/.test(configuration.team_id)) {
-      setError("Team ID 只能包含字母、数字、下划线和连字符");
-      return;
-    }
-    if (!configuration.name.trim() || !configuration.description.trim()) {
-      setError("请填写 Team 名称和用途说明");
-      return;
-    }
-    if (!Number.isInteger(configuration.max_runs) || configuration.max_runs < 1) {
-      setError("最大轮数必须是正整数");
-      return;
-    }
     setSaving(true);
-    setError(null);
-    const savedConfiguration = { ...configuration, team_id: configuration.team_id.trim() };
+    setSaveFeedback(null);
+    const savedConfiguration = { ...configuration };
     try {
       await onSave(savedConfiguration);
       const savedGraphLayoutKey = graphLayoutKeyFor(savedConfiguration);
@@ -84,6 +78,7 @@ export function AgentTeamConfigurationEditor({
             window.localStorage.setItem(savedGraphLayoutKey, layout);
             window.localStorage.removeItem(resolvedGraphLayoutKey);
           }
+          setResolvedGraphLayoutKey(savedGraphLayoutKey);
         } catch (cause) {
           void frontendLog("WARNING", "agent_team_graph_layout_migration_failed", "保存 Team 后迁移画布布局失败", {
             traceId: newTraceId(),
@@ -92,15 +87,19 @@ export function AgentTeamConfigurationEditor({
           });
         }
       }
+      setSaveFeedback({ kind: "success", message: "Agent Team 配置已保存。" });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "保存失败，请重试");
+      setSaveFeedback({
+        kind: "error",
+        message: cause instanceof Error && cause.message ? cause.message : "保存失败，请检查配置后重试。",
+      });
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <section className="border-border/70 bg-card/80 rounded-2xl border shadow-sm">
+    <section className={editorMode === "canvas" ? "min-w-0" : "border-border/70 bg-card/80 rounded-2xl border shadow-sm"}>
       <header className="flex items-start justify-between gap-3 border-b px-5 py-4">
         <h2 className="font-medium">{initial ? "编辑 Agent Team" : "新建 Agent Team"}</h2>
         <div className="flex shrink-0 items-center gap-2">
@@ -131,28 +130,38 @@ export function AgentTeamConfigurationEditor({
           profiles={profiles}
           scopeEditable={scopeEditable}
           teamIdEditable={!initial}
-          error={error}
           saving={saving}
           onChange={applyConfiguration}
-          onError={setError}
           onSave={save}
           onCancel={onCancel}
         />
       </div>
-      {canvasVisited && <div className={editorMode === "canvas" ? "p-5" : "hidden"}>
+      {canvasVisited && <div className={editorMode === "canvas" ? "min-w-0" : "hidden"}>
         <AgentTeamGraphEditor
           configuration={configuration}
           profiles={profiles}
           storageKey={resolvedGraphLayoutKey}
           onSave={() => void save()}
           onExit={() => setEditorMode("form")}
-          error={error}
           saving={saving}
           scopeEditable={scopeEditable}
           teamIdEditable={!initial}
           onChange={applyConfiguration}
         />
       </div>}
+      <Dialog open={saveFeedback !== null} onOpenChange={(open) => { if (!open) setSaveFeedback(null); }}>
+        <DialogContent showCloseButton={false}>
+          <DialogTitle>{saveFeedback?.kind === "success" ? "保存成功" : "保存失败"}</DialogTitle>
+          <DialogDescription className={saveFeedback?.kind === "error" ? "whitespace-pre-wrap text-destructive" : undefined}>
+            {saveFeedback?.message}
+          </DialogDescription>
+          <DialogFooter>
+            <Button type="button" onClick={() => setSaveFeedback(null)}>
+              {saveFeedback?.kind === "success" ? "继续编辑" : "返回修改"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

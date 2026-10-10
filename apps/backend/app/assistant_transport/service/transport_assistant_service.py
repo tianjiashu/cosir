@@ -352,7 +352,7 @@ class TransportAssistantService:
                 self._commands.resume_run,
                 task_id=task_id,
                 run_id=request.runId,
-                user_decisions=request.user_decisions(),
+                user_decision=request.user_decision(),
             )
         # 非 resume 模式 command 必非空（详见 _classify_run_command）；assert 仅类型收窄。
         assert command is not None

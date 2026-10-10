@@ -47,7 +47,8 @@ class AgentTeamRunTool(HandlerBase):
         "Prepare a configured Agent Team execution plan for the user to review. "
         "The referenced team must already exist; if it does not, ask the user to create it first. "
         "The plan requires explicit user confirmation before execution; once the user confirms, "
-        "the Agent Team starts the TeamRun."
+        "the Agent Team starts the TeamRun. "
+        "This tool must be invoked serially and cannot run in parallel with other tools."
     )
     args_model = AgentTeamArgs
     timeout_seconds: ClassVar[float] = 30.0
@@ -174,7 +175,7 @@ class AgentTeamRunTool(HandlerBase):
             return tool_error(
                 self.name,
                 "agent_team_run_creation_invalid",
-                reason=f"无法创建 Team 执行方案，请检查 Team 配置或稍后重试,error:{str(exc)}",
+                reason=f"Failed to create the Team execution plan. Please check the Team configuration or retry later. error:{str(exc)}",
                 retryable=exc.retryable,
             )
         except Exception as exc:
@@ -188,7 +189,7 @@ class AgentTeamRunTool(HandlerBase):
             return tool_error(
                 self.name,
                 "agent_team_run_creation_invalid",
-                reason=f"无法创建 Team 执行方案，请检查 Team 配置或稍后重试,error:{str(exc)}",
+                reason=f"Failed to create the Team execution plan. Please check the Team configuration or retry later. error:{str(exc)}",
                 retryable=False,
             )
 
@@ -220,11 +221,11 @@ class AgentTeamRunTool(HandlerBase):
         try:
             team_run_id = int(decision.request_id)
         except (TypeError, ValueError):
-            return self._confirmation_error(f"无效的 TeamRun 标识：{decision.request_id}")
+            return self._confirmation_error(f"Invalid TeamRun identifier: {decision.request_id}")
         try:
             inputs = AgentTeamApproveInput.model_validate(decision.data)
         except ValidationError as exc:
-            return self._confirmation_error(f"确认输入不合法：{exc.error_count()} 处字段错误")
+            return self._confirmation_error(f"Invalid confirmation input: {exc.error_count()} field errors")
         try:
             row = self.agent_team_run_service.confirm_and_start(
                 team_run_id,
@@ -233,7 +234,7 @@ class AgentTeamRunTool(HandlerBase):
                 node_goals=inputs.node_goals,
             )
         except KeyError:
-            return self._confirmation_error(f"待确认的 TeamRun 不存在：{team_run_id}")
+            return self._confirmation_error(f"The pending TeamRun does not exist: {team_run_id}")
         except ValueError as exc:
             return self._confirmation_error(str(exc))
         if row.status in {
@@ -242,14 +243,13 @@ class AgentTeamRunTool(HandlerBase):
         }:
             # 条件迁移未生效且行已终态：多为后端重启把 pending 收敛为 cancelled。此时不能报告
             # 成功，否则模型会继续等一个永远不会运行的 Team。
-            return self._confirmation_error(f"该 Team 运行已结束（{row.status}），请重新提案")
+            return self._confirmation_error(f"This Team run has already ended ({row.status})")
         return tool_success(
             tool_name=self.name,
             content=json.dumps(
                 {
                     "status": row.status,
                     "team_id": row.team_id,
-                    "team_run_id": row.id,
                 },
                 ensure_ascii=False,
             ),
@@ -274,7 +274,7 @@ class AgentTeamRunTool(HandlerBase):
         return tool_error(
             self.name,
             "agent_team_confirmation_invalid",
-            reason=f"无法启动 Team 执行方案：{reason}",
+            reason=f"Failed to start the Team execution plan: {reason}",
             retryable=False,
         )
 
@@ -289,8 +289,9 @@ class AgentTeamRunTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             execution_mode="thread",
+            need_HIL=True,
             display=ToolDisplayHints(
-                verb="准备 Agent Team 执行方案",
+                verb="Prepare Agent Team execution plan",
                 icon="workflow",
                 surface="standalone",
                 expandable=True,

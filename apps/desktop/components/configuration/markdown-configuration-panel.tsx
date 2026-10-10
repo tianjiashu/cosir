@@ -61,7 +61,7 @@ export function MarkdownConfigurationPanel<TDocument extends MarkdownDocumentCon
     <div className="space-y-4">
       <ErrorNotice message={state.error} />
       {description && (
-        <p className="text-foreground text-xs font-semibold">
+        <p className="text-destructive text-xs font-semibold">
           {description}
         </p>
       )}

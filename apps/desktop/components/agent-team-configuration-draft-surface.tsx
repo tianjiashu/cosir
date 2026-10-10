@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import {
   createAgentTeamConfiguration,
   updateAgentTeamConfiguration,
-  type AgentTeamConfiguration,
+  type AgentTeamConfigurationDraft,
 } from "@/lib/api/agent-teams";
 import {
   getAgentConfigurations,
@@ -18,7 +18,7 @@ import {
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import type { WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
 
-type ProfilesByScope = Record<AgentTeamConfiguration["scope"], AgentConfiguration[]>;
+type ProfilesByScope = Record<AgentTeamConfigurationDraft["scope"], AgentConfiguration[]>;
 
 function visibleWorkspaceProfiles(system: AgentConfiguration[], workspace: AgentConfiguration[]) {
   return [...new Map([...system, ...workspace].map((profile) => [profile.agent_id, profile])).values()];

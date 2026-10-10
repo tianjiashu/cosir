@@ -11,6 +11,7 @@ import {
 import { MarkdownSourcePreviewEditor } from "@/components/configuration/markdown-source-preview-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import {
   createAgentConfiguration,
@@ -130,7 +131,7 @@ export function AgentConfigurationDraftSurface({
             <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Agent ID</span><Input value={form.agent_id} onChange={(event) => setField("agent_id", event.target.value)} /></label>
             <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">角色</span><Input value={form.role} onChange={(event) => setField("role", event.target.value)} /></label>
           </div>
-          <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">描述</span><Input value={form.description} onChange={(event) => setField("description", event.target.value)} /></label>
+          <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">描述</span><Textarea className="h-24 min-h-24 max-h-24 resize-none overflow-y-auto" value={form.description} onChange={(event) => setField("description", event.target.value)} /></label>
           <div className="space-y-1.5 text-sm"><span className="text-muted-foreground">系统提示词</span><MarkdownSourcePreviewEditor value={form.system_prompt} onChange={(value) => setField("system_prompt", value)} initialMode="source" minHeight="14rem" placeholder="定义子 Agent 的工作边界与输出要求…" ariaLabel="子 Agent 配置草稿系统提示词" /></div>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">最大步数</span><Input type="number" min={1} max={10000} value={form.max_steps} onChange={(event) => setField("max_steps", Number(event.target.value))} /></label>

@@ -65,12 +65,6 @@ function shellLabel(data: Record<string, unknown>): string {
   return shell ?? "默认 Shell";
 }
 
-function sessionIdLabel(data: Record<string, unknown>): string {
-  const sessionId = text(data.session_id);
-  if (!sessionId) return "终端会话";
-  return sessionId.length > 20 ? `${sessionId.slice(0, 17)}…` : sessionId;
-}
-
 function actionLabel(variant: Exclude<TerminalSessionVariant, "start" | "unknown">, data: Record<string, unknown>): string {
   if (variant === "read") return "读取终端输出";
   if (variant === "write") return data.submitted === true ? "提交终端输入" : "写入终端输入";
@@ -130,7 +124,6 @@ function TerminalSessionStartCard({ artifact, taskId }: { artifact: ReturnType<t
         {status && <span className={cn("shrink-0", sessionStatusClass(data.status))}>· {status}</span>}
       </div>
       <div className="flex items-center justify-between gap-2 pl-6">
-        <code className="truncate text-[11px] text-zinc-500" title={sessionId}>{sessionIdLabel(data)}</code>
         <Button
           type="button"
           variant="secondary"
@@ -157,7 +150,7 @@ function TerminalSessionActionRow({
 }) {
   const data = asRecord(artifact.display_data);
   const title = actionLabel(variant, data);
-  const meta = artifact.error ?? `${sessionIdLabel(data)} · ${actionMeta(variant, data)}`;
+  const meta = artifact.error ?? actionMeta(variant, data);
   return (
     <DisclosureRowStatic
       role="status"
@@ -172,7 +165,6 @@ function TerminalSessionActionRow({
 /** Render one terminal-session call as either the session anchor or an action trace. */
 export function TerminalSessionTool({ taskId, artifact: rawArtifact }: TerminalSessionToolProps) {
   const artifact = readToolArtifact(rawArtifact);
-  const data = asRecord(artifact.display_data);
   const variant = resolveVariant(asRecord(artifact.presentation));
 
   if (variant === "start") return <TerminalSessionStartCard artifact={artifact} taskId={taskId} />;
@@ -183,7 +175,7 @@ export function TerminalSessionTool({ taskId, artifact: rawArtifact }: TerminalS
       role="status"
       leading={<SquareTerminalIcon className="size-4 text-zinc-400" aria-hidden="true" />}
       label={<span className="text-sm font-medium">终端会话操作</span>}
-      meta={<span className="text-muted-foreground max-w-[55%] truncate">{artifact.error ?? sessionIdLabel(data)}</span>}
+      meta={<span className="text-muted-foreground max-w-[55%] truncate">{artifact.error ?? "终端会话操作"}</span>}
       trailing={<ToolStatus status={artifact.backendStatus} />}
       className={artifact.backendStatus === "failed" ? "text-destructive" : undefined}
     />

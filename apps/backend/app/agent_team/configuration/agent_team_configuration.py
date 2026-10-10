@@ -79,8 +79,8 @@ class AgentTeamConfiguration(BaseModel):
     )
     max_runs: int = Field(
         default=10,
-        ge=1,
-        description="整个 Team 允许的最大执行轮数（节点执行次数）；超过该轮数时 Team 收敛为失败。",
+        ge=10,
+        description="整个 Team 允许的最大执行轮数（节点执行次数），至少为 10；超过该轮数时 Team 收敛为失败。",
     )
     start_node_id: TeamNodeIdentifier = Field(
         description="唯一入口节点标识，必须声明在 nodes 中，且不能为 END。",

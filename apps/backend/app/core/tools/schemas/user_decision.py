@@ -11,7 +11,6 @@ wire 字段名——wire 与领域参数的映射由 Assistant Transport 边界�
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from enum import Enum
 from typing import Any
 
@@ -56,21 +55,20 @@ class UserDecision(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
-def build_resume_payload(decisions: Sequence[UserDecision]) -> dict[str, Any]:
-    """把领域决定序列投影为 graph 恢复载荷。
+def build_resume_payload(decision: UserDecision | None) -> dict[str, Any]:
+    """把单个领域决定投影为 graph 恢复载荷。
 
-    载荷与 Assistant Transport 的 ``user-input-decision`` 命令同形（键 ``request_id`` /
-    ``decision`` / ``data``），因此恢复值与 wire 输入共用同一个解析函数
-    （``user_input_projection.parse_resume_decisions``）。**不要改用
+    恢复载荷以 ``decision`` 承载一个请求的决定；``None`` 表示空恢复，等待节点据此重新挂起。
+    Assistant Transport wire 字段映射由各自边界负责，不让工作流依赖 wire command 模型。**不要改用
     ``model_dump()``**：那会产出领域键 ``kind``，与解析端期望的 ``decision`` 不一致，
     导致真实链路（而非手写测试载荷）在节点内抛错。
 
     参数:
-        decisions: 本次续跑携带的决定；可为空，表示「用户尚未作答」。
+        decision: 本次续跑携带的决定；为 ``None`` 表示「用户尚未作答」。
 
     返回:
-        形如 ``{"decisions": [{"request_id": ..., "decision": ..., "data": {...}}]}``
-        的普通 dict，可直接作为 ``Command(resume=...)`` 的载荷。
+        形如 ``{"decision": {"request_id": ..., "decision": ..., "data": {...}}}``，
+        或空决定 ``{"decision": None}`` 的普通 dict，可直接作为 ``Command(resume=...)`` 的载荷。
 
     异常:
         无。
@@ -80,14 +78,15 @@ def build_resume_payload(decisions: Sequence[UserDecision]) -> dict[str, Any]:
     """
 
     return {
-        "decisions": [
+        "decision": (
             {
                 "request_id": decision.request_id,
                 "decision": decision.kind.value,
                 "data": dict(decision.data),
             }
-            for decision in decisions
-        ]
+            if decision is not None
+            else None
+        )
     }
 
 

@@ -34,6 +34,7 @@ import {
 } from "@/components/model-selector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import { modelOptionId, useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
 import {
@@ -290,7 +291,7 @@ function AgentEditor({
           <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Agent ID</span><Input value={form.agent_id} disabled={Boolean(initial)} onChange={(event) => setField("agent_id", event.target.value)} placeholder="面向主Agent使用的Agent ID" /></label>
           <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">角色</span><Input value={form.role} onChange={(event) => setField("role", event.target.value)} placeholder="给子Agent定义的身份" /></label>
         </div>
-        <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">描述</span><Input value={form.description} onChange={(event) => setField("description", event.target.value)} placeholder="面向主Agent描述这个 Agent 负责什么？" /></label>
+        <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">描述</span><Textarea className="h-24 min-h-24 max-h-24 resize-none overflow-y-auto" value={form.description} onChange={(event) => setField("description", event.target.value)} placeholder="面向主Agent描述这个 Agent 负责什么？" /></label>
         <div className="space-y-1.5 text-sm">
           <span className="text-muted-foreground">系统提示词</span>
           <MarkdownSourcePreviewEditor
@@ -369,7 +370,36 @@ export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: {
       {configurationSaved && <div role="status" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">配置更改成功</div>}
       <div className="flex items-center justify-end"><Button onClick={() => setEditing(null)}><PlusIcon />新建 Agent</Button></div>
       <div className="grid gap-3 xl:grid-cols-2">
-        {agents.map((agent) => <article key={`${agent.source}:${agent.agent_id}`} className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm transition-shadow hover:shadow-md"><div className="flex items-start justify-between gap-3"><div className="flex min-w-0 items-center gap-3"><div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-xl"><Code2Icon className="size-4" /></div><div className="min-w-0"><div className="flex items-center gap-2"><h3 className="truncate font-medium">{agent.agent_id}</h3><span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-[10px]">{agent.source === "builtin" ? "内置" : "文件"}</span></div><p className="text-muted-foreground mt-1 truncate text-xs">{agent.description || "暂无描述"}</p></div></div>{agent.editable || agent.deletable ? <div className="flex gap-1">{agent.editable && <Button variant="ghost" size="icon-sm" onClick={() => setEditing(agent)} aria-label={`编辑 ${agent.agent_id}`}><Settings2Icon /></Button>}{agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => { if (window.confirm(`删除 Agent “${agent.agent_id}”？`)) void api.remove(agent.agent_id).then(() => { setConfigurationSaved(true); setAgents((current) => current?.filter((item) => item.agent_id !== agent.agent_id) ?? null); }).catch((cause) => setError(cause instanceof Error ? cause.message : "删除失败")); }} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}</div> : <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置 Agent，不可编辑或删除" title="内置 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>}</div><div className="text-muted-foreground mt-4 flex flex-wrap gap-2 text-xs"><span className="bg-muted rounded-md px-2 py-1">{agent.role || "未指定角色"}</span><span className="bg-muted text-muted-foreground rounded-md px-2 py-1">{agent.allowed_tool_groups.length} 个工具组</span><span className="bg-muted rounded-md px-2 py-1">{agent.model_config_id ? `配置 ${agent.model_config_id}` : "跟随默认模型"}</span></div>{agent.validation_status !== "valid" && <p className="text-destructive mt-3 text-xs">{agent.validation_error ?? "配置无效"}</p>}</article>)}
+        {agents.map((agent) => (
+          <article key={`${agent.source}:${agent.agent_id}`} className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm transition-shadow hover:shadow-md">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-xl"><Code2Icon className="size-4" /></div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="min-w-0 truncate font-medium">{agent.agent_id}</h3>
+                    <span className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] ${agent.source === "builtin" ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary"}`}>
+                      {agent.source === "builtin" ? "内置" : "自定义"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              {agent.editable || agent.deletable ? (
+                <div className="flex gap-1">
+                  {agent.editable && <Button variant="ghost" size="icon-sm" onClick={() => setEditing(agent)} aria-label={`编辑 ${agent.agent_id}`}><Settings2Icon /></Button>}
+                  {agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => { if (window.confirm(`删除 Agent “${agent.agent_id}”？`)) void api.remove(agent.agent_id).then(() => { setConfigurationSaved(true); setAgents((current) => current?.filter((item) => item.agent_id !== agent.agent_id) ?? null); }).catch((cause) => setError(cause instanceof Error ? cause.message : "删除失败")); }} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}
+                </div>
+              ) : (
+                <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置 Agent，不可编辑或删除" title="内置 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>
+              )}
+            </div>
+            <div className="text-muted-foreground mt-3 flex flex-wrap gap-2 text-xs">
+              <span className="bg-muted text-muted-foreground rounded-md px-2 py-1">{agent.allowed_tool_groups.length} 个工具组</span>
+              <span className="bg-muted rounded-md px-2 py-1">{agent.model_config_id ? `配置 ${agent.model_config_id}` : "跟随默认模型"}</span>
+            </div>
+            {agent.validation_status !== "valid" && <p className="text-destructive mt-3 text-xs">{agent.validation_error ?? "配置无效"}</p>}
+          </article>
+        ))}
       </div>
     </div>
   );

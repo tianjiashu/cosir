@@ -9,8 +9,6 @@
 """
 
 import asyncio
-from collections.abc import Sequence
-
 from langchain_core.messages import SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
@@ -155,7 +153,7 @@ class AgentRuntime:
             agent: AgentProfile,
             *,
             execution_mode: ExecutionMode = "fresh",
-            user_decisions: Sequence[UserDecision] = (),
+            user_decision: UserDecision | None = None,
     ) -> None:
         """驱动一次 agent run 执行，并作为 workflow 异常的收敛边界。
 
@@ -169,8 +167,8 @@ class AgentRuntime:
                 不污染共享实例。
             execution_mode: 本次执行是 ``fresh`` / ``resume`` / ``resume_with_input``，原样透传给
                 ``agent.workflow.run``。
-            user_decisions: 本次续跑携带的用户结构化决定（human-in-the-loop），原样透传给
-                ``agent.workflow.run``；创建 / 编辑路径为空序列。
+            user_decision: 本次续跑携带的用户结构化决定（human-in-the-loop），原样透传给
+                ``agent.workflow.run``；创建 / 编辑路径为 ``None``。
 
         异常:
             RuntimeError: ``agent.run`` 为 None（profile 未绑定 run）时抛出。
@@ -237,7 +235,7 @@ class AgentRuntime:
                     callbacks=trace_result.callbacks,
                     langfuse_trace_id=trace_result.trace_id,
                     execution_mode=execution_mode,
-                    user_decisions=user_decisions,
+                    user_decision=user_decision,
                 )
             # Langfuse recorder 使用 SDK 自带的后台批量上报。不能在对话收尾路径
             # 主动调用同步 flush：网络不可用时 SDK 会等待重试，导致 run 无法及时

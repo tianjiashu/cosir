@@ -1,17 +1,15 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { PlusIcon, Trash2Icon } from "lucide-react";
 
 import { AgentTeamConfigurationFields } from "@/components/agent-team-configuration-fields";
+import { AgentTeamStatusEditor } from "@/components/agent-team-status-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { transitionKey, updateNodeInConfiguration, upsertTransition } from "@/components/agent-team-graph-model";
+import { removeNodesFromConfiguration, updateNodeInConfiguration } from "@/components/agent-team-graph-model";
 import type { AgentConfiguration } from "@/lib/api/configuration";
-import type { AgentTeamConfiguration, AgentTeamNodeConfiguration, AgentTeamTransitionConfiguration } from "@/lib/api/agent-teams";
-
-function parseStatuses(value: string): string[] {
-  return [...new Set(value.split(",").map((status) => status.trim()).filter(Boolean))];
-}
+import type { AgentTeamConfigurationDraft, AgentTeamNodeConfiguration, AgentTeamTransitionConfiguration } from "@/lib/api/agent-teams";
 
 function nextNodeId(nodes: AgentTeamNodeConfiguration[]): string {
   let suffix = nodes.length + 1;
@@ -25,29 +23,61 @@ export function AgentTeamConfigurationForm({
   profiles,
   scopeEditable,
   teamIdEditable,
-  error,
   saving,
   onChange,
-  onError,
   onSave,
   onCancel,
 }: {
-  configuration: AgentTeamConfiguration;
+  configuration: AgentTeamConfigurationDraft;
   profiles: AgentConfiguration[];
   scopeEditable: boolean;
   teamIdEditable: boolean;
-  error: string | null;
   saving: boolean;
-  onChange: (configuration: AgentTeamConfiguration) => void;
-  onError: (message: string) => void;
+  onChange: (configuration: AgentTeamConfigurationDraft) => void;
   onSave: () => Promise<void>;
   onCancel: () => void;
 }) {
-  const update = (changes: Partial<AgentTeamConfiguration>) => onChange({ ...configuration, ...changes });
+  const [newlyAddedEntry, setNewlyAddedEntry] = useState<{
+    kind: "node" | "transition";
+    sequence: number;
+  } | null>(null);
+  const nodeListRef = useRef<HTMLElement | null>(null);
+  const transitionListRef = useRef<HTMLElement | null>(null);
+  const additionSequence = useRef(0);
 
-  const updateNode = (index: number, changes: Partial<AgentTeamNodeConfiguration>) => {
-    const currentNode = configuration.nodes[index];
-    onChange(updateNodeInConfiguration(configuration, currentNode.node_id, changes));
+  useEffect(() => {
+    if (!newlyAddedEntry) return;
+    const list = newlyAddedEntry.kind === "node" ? nodeListRef.current : transitionListRef.current;
+    const entries = list?.querySelectorAll<HTMLElement>("[data-team-entry-card]");
+    const entry = newlyAddedEntry.kind === "node" ? entries?.item(entries.length - 1) : entries?.item(0);
+    if (!entry) return;
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    entry.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+    const timeout = window.setTimeout(() => {
+      setNewlyAddedEntry((current) => current?.sequence === newlyAddedEntry.sequence ? null : current);
+    }, 1_450);
+    return () => window.clearTimeout(timeout);
+  }, [newlyAddedEntry]);
+
+  const highlightNewEntry = (kind: "node" | "transition") => {
+    additionSequence.current += 1;
+    setNewlyAddedEntry({ kind, sequence: additionSequence.current });
+  };
+
+  const update = (changes: Partial<AgentTeamConfigurationDraft>) => onChange({ ...configuration, ...changes });
+
+  const updateNode = (index: number, changes: Partial<AgentTeamNodeConfiguration>) => onChange(updateNodeInConfiguration(configuration, index, changes));
+
+  const addNodeStatuses = (index: number, additions: string[]) => {
+    const node = configuration.nodes[index];
+    updateNode(index, { statuses: [...node.statuses, ...additions] });
+  };
+
+  const removeNodeStatus = (nodeIndex: number, statusIndex: number) => {
+    const node = configuration.nodes[nodeIndex];
+    if (!node) return;
+    updateNode(nodeIndex, { statuses: node.statuses.filter((_, index) => index !== statusIndex) });
   };
 
   const addNode = () => {
@@ -62,16 +92,10 @@ export function AgentTeamConfigurationForm({
       nodes: [...configuration.nodes, node],
       start_node_id: configuration.start_node_id || nodeId,
     });
+    highlightNewEntry("node");
   };
 
-  const removeNode = (nodeId: string) => {
-    const nodes = configuration.nodes.filter((node) => node.node_id !== nodeId);
-    update({
-      nodes,
-      transitions: configuration.transitions.filter((edge) => edge.from_node_id !== nodeId && edge.target_node_id !== nodeId),
-      start_node_id: configuration.start_node_id === nodeId ? nodes[0]?.node_id ?? "" : configuration.start_node_id,
-    });
-  };
+  const removeNode = (nodeIndex: number) => onChange(removeNodesFromConfiguration(configuration, new Set([nodeIndex])));
 
   const updateTransition = (index: number, changes: Partial<AgentTeamTransitionConfiguration>) => {
     update({
@@ -80,30 +104,15 @@ export function AgentTeamConfigurationForm({
   };
 
   const addTransition = () => {
-    const availableRoute = configuration.nodes.flatMap((node) => node.statuses.map((status) => ({ node, status })))
-      .find(({ node, status }) => !configuration.transitions.some(
-        (transition) => transitionKey(transition.from_node_id, transition.status) === transitionKey(node.node_id, status),
-      ));
-    if (!availableRoute) {
-      onError(configuration.nodes.length === 0
-        ? "请先添加 Team 节点"
-        : "所有节点状态都已设置转移，请先添加状态");
-      return;
-    }
-    const { node, status } = availableRoute;
-    // 来源节点与状态共同标识一条转移；表单与画布共享此唯一性规则。
+    const nextTransition = { from_node_id: "", status: "", target_node_id: "END" };
     update({
-      transitions: upsertTransition(configuration.transitions, {
-        from_node_id: node.node_id,
-        status,
-        target_node_id: "END",
-      }),
+      transitions: [nextTransition, ...configuration.transitions],
     });
+    highlightNewEntry("transition");
   };
 
   return (
     <div className="space-y-5 p-5">
-      {error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}
       <AgentTeamConfigurationFields
         configuration={configuration}
         teamIdEditable={teamIdEditable}
@@ -115,35 +124,43 @@ export function AgentTeamConfigurationForm({
         <span className="text-muted-foreground">入口节点</span>
         <select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={configuration.start_node_id} onChange={(event) => update({ start_node_id: event.target.value })}>
           <option value="">选择入口节点</option>
-          {configuration.nodes.map((node) => <option key={node.node_id} value={node.node_id}>{node.name || node.node_id}</option>)}
+          {configuration.nodes.map((node, index) => <option key={`start-${index}`} value={node.node_id}>{node.name || node.node_id} · {node.node_id} · {index + 1}</option>)}
         </select>
       </label>
 
-      <section className="space-y-3">
+      <section ref={nodeListRef} className="space-y-3">
         <div className="flex items-center justify-between"><h3 className="text-sm font-medium">Team 节点</h3><Button type="button" variant="outline" size="sm" onClick={addNode}><PlusIcon />添加节点</Button></div>
         {configuration.nodes.length === 0 && <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-sm">添加至少一个节点，再设置入口与转移。</p>}
-        {configuration.nodes.map((node, index) => <article key={`${index}-${node.node_id}`} className="border-border/70 space-y-3 rounded-xl border p-3">
-          <div className="flex items-start gap-2"><label className="min-w-0 flex-1 space-y-1 text-xs"><span className="text-muted-foreground">节点 ID</span><Input value={node.node_id} onChange={(event) => updateNode(index, { node_id: event.target.value })} /></label><Button type="button" variant="ghost" size="icon-sm" className="mt-5 text-destructive" aria-label={`删除节点 ${node.name}`} onClick={() => removeNode(node.node_id)}><Trash2Icon /></Button></div>
+        {configuration.nodes.map((node, index) => <article key={`node-${index}`} data-team-entry-card className={`border-border/70 space-y-3 rounded-xl border p-3 ${index === 0 && newlyAddedEntry?.kind === "node" ? "agent-team-entry-highlight" : ""}`}>
+          <div className="flex items-start gap-2"><label className="min-w-0 flex-1 space-y-1 text-xs"><span className="text-muted-foreground">节点 ID</span><Input value={node.node_id} onChange={(event) => updateNode(index, { node_id: event.target.value })} /></label><Button type="button" variant="ghost" size="icon-sm" className="mt-5 text-destructive" aria-label={`删除节点 ${node.name} ${index + 1}`} onClick={() => removeNode(index)}><Trash2Icon /></Button></div>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-xs"><span className="text-muted-foreground">节点名称</span><Input value={node.name} onChange={(event) => updateNode(index, { name: event.target.value })} /></label>
-            <label className="space-y-1 text-xs"><span className="text-muted-foreground">执行子 Agent</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={node.agent_id} onChange={(event) => updateNode(index, { agent_id: event.target.value })}><option value="">选择子 Agent</option>{profiles.map((profile) => <option key={profile.agent_id} value={profile.agent_id}>{profile.agent_id} · {profile.role}</option>)}</select></label>
+            <label className="space-y-1 text-xs"><span className="text-muted-foreground">执行子 Agent</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={node.agent_id} onChange={(event) => updateNode(index, { agent_id: event.target.value })}><option value="">选择子 Agent</option>{profiles.map((profile) => <option key={profile.agent_id} value={profile.agent_id}>{profile.agent_id}</option>)}</select></label>
           </div>
-          <label className="block space-y-1 text-xs"><span className="text-muted-foreground">业务状态（逗号分隔）</span><Input value={node.statuses.join(", ")} onChange={(event) => updateNode(index, { statuses: parseStatuses(event.target.value) })} placeholder="done, needs_changes" /></label>
+          <div className="space-y-1 text-xs">
+            <span className="text-muted-foreground">业务状态</span>
+            <AgentTeamStatusEditor
+              key={`node-statuses-${index}`}
+              statuses={node.statuses}
+              onAdd={(statuses) => addNodeStatuses(index, statuses)}
+              onRemove={(statusIndex) => removeNodeStatus(index, statusIndex)}
+            />
+          </div>
         </article>)}
       </section>
 
-      <section className="space-y-3">
+      <section ref={transitionListRef} className="space-y-3">
         <div className="flex items-center justify-between"><h3 className="text-sm font-medium">状态转移</h3><Button type="button" variant="outline" size="sm" onClick={addTransition}><PlusIcon />添加转移</Button></div>
-        {configuration.transitions.length === 0 && <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-sm">每个节点状态都需要一条转移；结束目标填写 END。</p>}
-        {configuration.transitions.map((edge, index) => <div key={`${index}-${edge.from_node_id}-${edge.status}`} className="grid items-end gap-2 rounded-xl border p-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
-          <label className="space-y-1 text-xs"><span className="text-muted-foreground">来源节点</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={edge.from_node_id} onChange={(event) => updateTransition(index, { from_node_id: event.target.value })}><option value="">选择节点</option>{configuration.nodes.map((node) => <option key={node.node_id} value={node.node_id}>{node.name || node.node_id}</option>)}</select></label>
+        {configuration.transitions.length === 0 && <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-sm">尚无状态转移。可以在画布中拖动状态出口创建连线，或在这里添加转移草稿。</p>}
+        {configuration.transitions.map((edge, index) => <div key={`transition-draft-${index}`} data-team-entry-card className={`grid items-end gap-2 rounded-xl border p-3 sm:grid-cols-[1fr_1fr_1fr_auto] ${index === 0 && newlyAddedEntry?.kind === "transition" ? "agent-team-entry-highlight" : ""}`}>
+          <label className="space-y-1 text-xs"><span className="text-muted-foreground">来源节点</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={edge.from_node_id} onChange={(event) => updateTransition(index, { from_node_id: event.target.value })}><option value="">选择节点</option>{configuration.nodes.map((node, nodeIndex) => <option key={`source-${nodeIndex}`} value={node.node_id}>{node.name || node.node_id} · {node.node_id} · {nodeIndex + 1}</option>)}</select></label>
           <label className="space-y-1 text-xs"><span className="text-muted-foreground">触发状态</span><Input value={edge.status} onChange={(event) => updateTransition(index, { status: event.target.value })} /></label>
-          <label className="space-y-1 text-xs"><span className="text-muted-foreground">目标节点或 END</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={edge.target_node_id} onChange={(event) => updateTransition(index, { target_node_id: event.target.value })}><option value="END">END（结束 Team）</option>{configuration.nodes.map((node) => <option key={node.node_id} value={node.node_id}>{node.name || node.node_id}</option>)}</select></label>
+          <label className="space-y-1 text-xs"><span className="text-muted-foreground">目标节点</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={edge.target_node_id} onChange={(event) => updateTransition(index, { target_node_id: event.target.value })}><option value="">选择节点或 END</option><option value="END">END（结束 Team）</option>{configuration.nodes.map((node, nodeIndex) => <option key={`target-${nodeIndex}`} value={node.node_id}>{node.name || node.node_id} · {node.node_id} · {nodeIndex + 1}</option>)}</select></label>
           <Button type="button" variant="ghost" size="icon-sm" className="text-destructive" aria-label="删除转移" onClick={() => update({ transitions: configuration.transitions.filter((_, edgeIndex) => edgeIndex !== index) })}><Trash2Icon /></Button>
         </div>)}
       </section>
 
-      {profiles.length === 0 && <p className="text-destructive text-sm">当前作用域没有可用的子 Agent。请先配置子 Agent，或调整保存范围。</p>}
+      {profiles.length === 0 && <p className="text-muted-foreground text-sm">当前作用域暂无子 Agent 配置，可先添加节点草稿并稍后选择 Agent。</p>}
       <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="outline" onClick={onCancel}>取消</Button><Button type="button" onClick={() => void onSave()} disabled={saving}>{saving ? "保存中…" : "保存配置"}</Button></div>
     </div>
   );

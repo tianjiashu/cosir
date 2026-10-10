@@ -146,13 +146,13 @@ Tool 可以复用现有 `AgentConfigurationDocument` 的四字段校验逻辑，
 ### 4.4 Task 固化与 Run 允许集合
 
 为保持同一 Task 的模型请求前缀稳定，首次创建 Task 时把模型可见的完整工具 schema 固化到
-`TaskModel.tool_definitions`。该字段只保存 `name`、`description`、`parameters`，不保存
+`TaskModel.tool_schemas`。该字段只保存 `name`、`description`、`parameters`，不保存
 handler、运行期权限对象或任何 version 字段；`TaskRuntimeSpace` 只作为进程内只读缓存。
 
 每个 Run 单独计算 `allows_tools`：
 
 ```text
-allows_tools = TaskModel.tool_definitions 的工具名集合 - 用户禁用的工具组
+allows_tools = TaskModel.tool_schemas 的工具名集合 - 用户禁用的工具组
 proposal Run 额外加入 propose_agent_configuration
 ```
 

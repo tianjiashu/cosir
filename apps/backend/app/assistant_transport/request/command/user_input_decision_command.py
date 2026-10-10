@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.tools.schemas.user_decision import UserDecision, UserDecisionKind
 
@@ -32,27 +32,11 @@ class UserInputDecisionItem(BaseModel):
 
 
 class UserInputDecisionPayload(BaseModel):
-    """一次续跑携带的决定集合。"""
+    """一次续跑携带的单个用户决定。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    decisions: list[UserInputDecisionItem] = Field(min_length=1, max_length=32)
-
-    @field_validator("decisions")
-    @classmethod
-    def validate_unique_request_ids(
-        cls, value: list[UserInputDecisionItem]
-    ) -> list[UserInputDecisionItem]:
-        """拒绝同一请求的重复决定。
-
-        同请求给两个决定时「哪个生效」没有业务含义，且会让后端与前端各自以为生效的是自己那条，
-        因此在 wire 边界直接拒绝（领域层的重复决定语义是「以最后一次为准」，只用于重试同值）。
-        """
-
-        request_ids = [item.request_id for item in value]
-        if len(request_ids) != len(set(request_ids)):
-            raise ValueError("同一请求不能在一次提交里出现多个决定")
-        return value
+    decision: UserInputDecisionItem
 
 
 class UserInputDecisionCommand(BaseModel):
@@ -66,14 +50,14 @@ class UserInputDecisionCommand(BaseModel):
     payload: UserInputDecisionPayload
 
 
-    def to_user_decisions(self) -> tuple[UserDecision, ...]:
-        """把已校验的 wire 命令映射为领域决定序列。
+    def to_user_decision(self) -> UserDecision:
+        """把已校验的 wire 命令映射为领域决定。
 
         参数:
             command: 已通过 pydantic 校验的决定命令。
 
         返回:
-            领域值对象序列，顺序与 wire 提交一致。
+            对应的领域值对象。
 
         异常:
             无（形状问题已在 wire 校验阶段拒绝）。
@@ -82,13 +66,11 @@ class UserInputDecisionCommand(BaseModel):
             无。
         """
 
-        return tuple(
-            UserDecision(
-                request_id=item.request_id,
-                kind=item.decision,
-                data=dict(item.data),
-            )
-            for item in self.payload.decisions
+        item = self.payload.decision
+        return UserDecision(
+            request_id=item.request_id,
+            kind=item.decision,
+            data=dict(item.data),
         )
 
 

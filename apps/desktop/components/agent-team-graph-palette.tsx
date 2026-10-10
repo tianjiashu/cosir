@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, type PointerEvent } from "react";
-import { BotIcon, GripVerticalIcon, PlusIcon, SearchIcon } from "lucide-react";
+import { BotIcon, CheckCircle2Icon, GripVerticalIcon, PlusIcon, SearchIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,10 +11,12 @@ export function AgentTeamGraphPalette({
   profiles,
   onAdd,
   onBeginDrag,
+  onBeginEndDrag,
 }: {
   profiles: AgentConfiguration[];
   onAdd: (profile: AgentConfiguration) => void;
   onBeginDrag: (profile: AgentConfiguration, event: PointerEvent<HTMLElement>) => void;
+  onBeginEndDrag: (event: PointerEvent<HTMLElement>) => void;
 }) {
   const [query, setQuery] = useState("");
   const filteredProfiles = useMemo(() => {
@@ -45,8 +47,16 @@ export function AgentTeamGraphPalette({
           {profile.description && <p className="text-muted-foreground mt-2 line-clamp-2 text-[10px] leading-relaxed">{profile.description}</p>}
         </article>)}
         {filteredProfiles.length === 0 && <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-center text-xs">{profiles.length ? "没有匹配的子 Agent" : "当前作用域没有可用的子 Agent"}</p>}
+        <article
+          onPointerDown={onBeginEndDrag}
+          className="group flex cursor-grab touch-none items-center gap-2 rounded-xl border border-emerald-600/30 bg-emerald-500/10 p-3 text-emerald-700 shadow-sm transition hover:border-emerald-600/50 hover:shadow-md active:cursor-grabbing dark:text-emerald-300"
+          aria-label="可拖拽结束出口 END"
+        >
+          <GripVerticalIcon className="size-4 shrink-0 opacity-50 group-hover:opacity-100" />
+          <CheckCircle2Icon className="size-4 shrink-0" />
+          <div className="min-w-0"><p className="text-xs font-semibold">END</p><p className="mt-0.5 text-[10px] opacity-80">拖入画布添加结束出口</p></div>
+        </article>
       </div>
-      <footer className="text-muted-foreground border-t px-3 py-2 text-[10px]">可重复添加同一个 Agent</footer>
     </aside>
   );
 }

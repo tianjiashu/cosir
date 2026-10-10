@@ -1,7 +1,8 @@
 "use client";
 
 import { Input } from "@/components/ui/input";
-import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
+import { Textarea } from "@/components/ui/textarea";
+import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
 
 export function AgentTeamConfigurationFields({
   configuration,
@@ -10,8 +11,8 @@ export function AgentTeamConfigurationFields({
   scopeEditable,
   layout,
 }: {
-  configuration: AgentTeamConfiguration;
-  onChange: (changes: Partial<AgentTeamConfiguration>, historyKey?: string) => void;
+  configuration: AgentTeamConfigurationDraft;
+  onChange: (changes: Partial<AgentTeamConfigurationDraft>, historyKey?: string) => void;
   teamIdEditable: boolean;
   scopeEditable: boolean;
   layout: "form" | "dialog";
@@ -26,7 +27,7 @@ export function AgentTeamConfigurationFields({
         <select
           className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm"
           value={configuration.scope}
-          onChange={(event) => onChange({ scope: event.target.value as AgentTeamConfiguration["scope"] }, "team-scope")}
+          onChange={(event) => onChange({ scope: event.target.value as AgentTeamConfigurationDraft["scope"] }, "team-scope")}
         >
           <option value="workspace">当前工作区</option>
           <option value="system">系统级</option>
@@ -49,15 +50,16 @@ export function AgentTeamConfigurationFields({
       </div>
       <label className={`block ${labelClassName}`}>
         <span className={labelTextClassName}>用途说明</span>
-        <Input value={configuration.description} onChange={(event) => onChange({ description: event.target.value }, "team-description")} />
+        <Textarea className="h-24 min-h-24 max-h-24 resize-none overflow-y-auto" value={configuration.description} onChange={(event) => onChange({ description: event.target.value }, "team-description")} />
       </label>
       <label className={`block ${labelClassName}`}>
         <span className={labelTextClassName}>最大轮数</span>
         <Input
           type="number"
-          min={1}
+          min={10}
+          step={1}
           value={configuration.max_runs}
-          onChange={(event) => onChange({ max_runs: Number(event.target.value) }, "team-max-runs")}
+          onChange={(event) => onChange({ max_runs: event.target.value }, "team-max-runs")}
         />
       </label>
     </div>

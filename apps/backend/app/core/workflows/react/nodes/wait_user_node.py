@@ -9,14 +9,13 @@
    才看得见卡片）、把卡片载荷持久化成占位结果行（进程重启后冷重建据此恢复卡片与表单）、把
    Conversation Run 迁移为 ``waiting_for_input``；最后经 LangGraph ``interrupt`` 保存断点，并把
    「需要用户决定什么」作为结构化载荷交给外部驱动方；
-3. 恢复时消费用户的结构化决定并**立即物化**：批准把调用重置回「未起跑」并附上用户决定（交由
-   ``tools`` 真正执行），驳回 / 放弃把观察改写为模型可见的取消终态，全部决定都会清掉对应观察上的
-   待决声明（「尚未作答」的唯一标记）；随后按物化后的观察重新派生，仍有未决请求就自环重新挂起，
-   否则按本轮有没有批准在 ``tools`` 与 ``observe`` 之间路由。
+3. 恢复时消费唯一请求的结构化决定并**立即物化**：批准把调用重置回「未起跑」并附上用户决定
+   （交由 ``tools`` 真正执行），驳回 / 放弃把观察改写为模型可见的取消终态；决定会清掉观察上的
+   待决声明（「尚未作答」的唯一标记），随后路由到 ``tools`` 或 ``observe``。
 
-链路契约（不明显但关键）：**本节点必须紧接 ``tools`` 且无条件到达**。请求的对外可见性只来自
+链路契约（不明显但关键）：本节点仅在 ``tools`` 观察带单个待决请求时到达。请求的对外可见性只来自
 tool part 的展示载荷，而这次投影由本节点在挂起前完成；若将来在 ``tools`` 与本节点之间插入节点或
-改成条件边，用户会在挂起期间看到空白卡片、也无从作答，且不会有任何报错。
+改动待决观察的传递，用户会在挂起期间看到空白卡片、也无从作答，且不会有任何报错。
 
 恢复语义（不明显但关键）：
 
@@ -25,10 +24,8 @@ tool part 的展示载荷，而这次投影由本节点在挂起前完成；若�
   （该 Run 已由续跑入口原子迁移为 ``running``），后者会重复发一遍同内容事件（幂等但无意义）。
   恢复值一经消费即把 ``resuming_wait_user`` 复位，使后续挂起（含自环重新挂起）重新按「首次
   挂起」处理。
-- 恢复值没有覆盖全部待决请求时（崩溃后用旧客户端提交的空恢复值、或用户只答了一部分），本节点
-  经**自环**回到自身重新挂起剩余请求，而不是在同一节点执行内二次 ``interrupt``——LangGraph 对
-  已被恢复的任务再次 ``interrupt`` 不会挂起图，而是让节点静默结束，从而把「用户还没作答」误判
-  为「放行」。自环不需要额外携带待决状态：剩余请求会从观察重新派生出来。
+- 恢复值为空时，本节点经**自环**重新挂起同一请求，而不是在同一节点执行内二次 ``interrupt``；
+  LangGraph 对已恢复的任务再次 ``interrupt`` 不会挂起图。请求仍由原观察承载，无需另存状态。
 - 本节点不创建业务记录、不执行工具、不访问数据库以外的外部系统；待决请求的事实源是 ``tools``
   节点写入的观察。
 """
@@ -47,10 +44,10 @@ from app.core.tools.schemas import (
 )
 from app.core.workflows.react.node_helper.common import _runtime_config
 from app.core.workflows.react.node_helper.user_input_projection import (
-    apply_decisions_to_observations,
-    extract_requests,
-    parse_resume_decisions,
-    request_call_ids,
+    apply_decision_to_observations,
+    extract_request,
+    parse_resume_decision,
+    request_call_id,
 )
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
@@ -66,7 +63,7 @@ def _observations(state: ReactGraphState) -> list[dict[str, Any]]:
     """取本模型步的观察摘要列表。
 
     只做容器形状归一：元素形状由 ``tools`` 节点的 ``dataclasses.asdict`` 投影保证，这里不逐条
-    防御——声明形状不合法会在 :func:`extract_requests` 处显式上抛，而不是被静默丢掉。
+    防御——声明形状不合法会在 :func:`extract_request` 处显式上抛，而不是被静默丢掉。
 
     参数:
         state: 当前 graph state。
@@ -88,8 +85,8 @@ def _observations(state: ReactGraphState) -> list[dict[str, Any]]:
 def _await_decisions(
     state: ReactGraphState,
     runtime_config: RuntimeConfig,
-    requests: list[UserInputRequest],
-) -> list[UserDecision]:
+    request: UserInputRequest,
+) -> UserDecision | None:
     """挂起图并返回本次收到的用户决定。
 
     调用点必须排在「首次挂起的副作用」之后（即 :func:`_begin_suspension` 的投影、持久化与 Run
@@ -101,10 +98,10 @@ def _await_decisions(
     参数:
         state: 当前 graph state；提供 ``step_id`` 供日志定位。
         runtime_config: 运行时配置；提供 Run 身份与 ``resuming_wait_user`` 标记。
-        requests: 本次挂起的待决请求。
+        request: 本次挂起的唯一待决请求。
 
     返回:
-        本次恢复值解析出的领域决定列表；恢复值为空时为空列表（调用方据此重新挂起剩余请求）。
+        本次恢复的单个领域决定；恢复值为空时返回 ``None``，调用方据此重新挂起该请求。
 
     异常:
         ValueError: 恢复值结构非法（进程外输入的信任边界，必须显式失败而非静默忽略）。
@@ -123,18 +120,18 @@ def _await_decisions(
             "data": {
                 "run_id": runtime_config.run.id,
                 "step_id": f"step-{state.step_count}",
-                "request_ids": [request.request_id for request in requests],
+                "request_id": request.request_id,
             },
         },
     )
     resume_value = interrupt({
         "kind": "user_input_required",
-        "requests": [request.to_request_payload() for request in requests],
+        "request": request.to_request_payload(),
     })
     # 恢复值已消费：后续再次进入本节点（自环重新挂起、或本轮内又一次提问）都属于新的挂起，
     # 必须重新迁移 Run 状态并重新投影，不能继续沿用「正在消费恢复值」的判定。
     runtime_config.resuming_wait_user = False
-    decisions:list[UserDecision] = parse_resume_decisions(resume_value)
+    decision = parse_resume_decision(resume_value)
     log.info(
         "wait_user_node_decisions_received",
         extra={
@@ -142,22 +139,23 @@ def _await_decisions(
             "data": {
                 "run_id": runtime_config.run.id,
                 "step_id": f"step-{state.step_count}",
-                "decisions": [
+                "decision": (
                     {"request_id": decision.request_id, "decision": decision.kind.value}
-                    for decision in decisions
-                ],
+                    if decision is not None
+                    else None
+                ),
             },
         },
     )
-    return decisions
+    return decision
 
 
-def _apply_decisions(
+def _apply_decision(
     state: ReactGraphState,
     runtime_config: RuntimeConfig,
     lifecycle: ToolCallLifecycleManager,
-    requests: list[UserInputRequest],
-    decisions: list[UserDecision],
+    request: UserInputRequest,
+    decision: UserDecision | None,
 ) -> dict[str, object]:
     """把用户决定物化进调用记录与观察，并给出下一步节点。
 
@@ -167,23 +165,18 @@ def _apply_decisions(
       执行（决定落在记录上而不是调用参数上，见 ``reopen_for_approved_replay``）；
     - 驳回 / 放弃 → ``last_tool_results``：观察改写为取消终态并带上用户意见，``observe`` 据此写
       模型消息与终态事件；
-    - 全部决定：清掉对应观察上的待决声明——它是「尚未作答」的唯一标记，留着会被下一次派生重新
-      当成待决。
+    - 收到用户决定时：清掉观察上的待决声明——它是「尚未作答」的唯一标记，留着会被下一次派生重新当成
+      待决。
 
-    随后按物化后的观察重新派生剩余请求：还有就自环 ``wait_user``（LangGraph 不允许在同一节点执行
-    内二次 ``interrupt``，必须产生新的节点执行），否则路由：只要还存在「已批准但尚未执行」的调用
-    就回 ``tools`` 真正执行，否则交给 ``observe`` 收口。
-
-    路由判据取**迁移后的快照**而不是「本轮收到的批准」：部分作答会自环，用户可能把批准分散在多轮里
-    给出，而上一轮批准过的调用在快照里一直是「未起跑 + 带用户决定」；只看本轮会把它们漏在
-    ``pending`` 上，``observe`` 随后按第一遍的旧观察把它结算成 completed——用户批了却从未真正执行。
+    空恢复值自环 ``wait_user``，让 LangGraph 在新的节点执行中重新挂起；有决定时，只要快照中存在
+    「已批准但尚未执行」的调用就回 ``tools``，否则交给 ``observe`` 收口。
 
     参数:
         state: 当前 graph state；取本批观察用于建立「请求 ↔ 调用」关联并改写驳回观察。
         runtime_config: 运行时配置；提供 Run 身份供日志定位。
         lifecycle: 当前工具调用生命周期快照（调用方已校验非空）。
-        requests: 本次挂起的待决请求（决定必须指向其中一条，否则即契约分叉）。
-        decisions: 本次收到的用户决定。
+        request: 本次挂起的唯一请求（决定必须指向它，否则即契约分叉）。
+        decision: 本次收到的单个用户决定；无决定时为 ``None``。
 
     返回:
         可直接返回给 LangGraph 的 state 增量：``next_node``（``tools`` / ``observe`` / 自环
@@ -200,10 +193,8 @@ def _apply_decisions(
         写 ``wait_user_node_resolved`` 结构化日志。
     """
 
-    by_request = {request.request_id: request for request in requests}
-    for decision in decisions:
-        request = by_request.get(decision.request_id)
-        if request is None:
+    if decision is not None:
+        if decision.request_id != request.request_id:
             raise ValueError(f"决定指向未知的等待请求：{decision.request_id}")
         if not request.accepts(decision.kind):
             raise ValueError(
@@ -212,36 +203,33 @@ def _apply_decisions(
             )
 
     observations = _observations(state)
-    approved = {
-        decision.request_id: decision
-        for decision in decisions
-        if decision.kind in EXECUTING_DECISION_KINDS
-    }
+    approved = (
+        decision
+        if decision is not None and decision.kind in EXECUTING_DECISION_KINDS
+        else None
+    )
     patch: dict[str, object] = {}
     snapshot = lifecycle
     if approved:
         # 「请求 ↔ 调用」的关联来自观察本身：请求不带 tool_call_id（它是图内部标识）。
-        call_ids = request_call_ids(observations)
+        call_id = request_call_id(observations, request.request_id)
         snapshot = lifecycle.reopen_for_approved_replay(
-            decisions={
-                call_ids[request_id]: decision for request_id, decision in approved.items()
-            }
+            decisions={call_id: approved}
         )
         patch["tool_call_lifecycle"] = snapshot
-    amended = apply_decisions_to_observations(observations, decisions)
+    amended = apply_decision_to_observations(observations, decision)
     if amended is not observations:
         patch["last_tool_results"] = {
             **state.last_tool_results,
             "observations": amended,
         }
-    remaining = extract_requests(amended)
     # 「已批准但尚未执行」在本快照上就是「未起跑且带用户决定」：``begin`` 会把执行过的迁出
-    # pending，settle 会落终态，因此它天然只命中等待执行的那些（含前几轮自环里批准过的）。
+    # pending，settle 会落终态，因此它只命中这条请求刚获批准并等待重执行的调用。
     awaiting_execution = any(
         record.status == "pending" and record.user_decision is not None
         for record in snapshot.valid_tools
     )
-    if remaining:
+    if decision is None:
         next_node = ReactRoute.WAIT_USER
     else:
         next_node = ReactRoute.TOOLS if awaiting_execution else ReactRoute.OBSERVE
@@ -254,9 +242,9 @@ def _apply_decisions(
                 "run_id": runtime_config.run.id,
                 "step_id": f"step-{state.step_count}",
                 "next_node": next_node.value,
-                "decision_count": len(decisions),
-                "replay_call_ids": sorted(approved),
-                "still_pending": [request.request_id for request in remaining],
+                "decision": decision.kind.value if decision is not None else None,
+                "replay_call_id": call_id if approved else None,
+                "request_id": request.request_id,
             },
         },
     )
@@ -274,7 +262,7 @@ def wait_user_node(state: ReactGraphState) -> dict[str, object]:
 
     返回:
         需要合并回 graph state 的增量：无待决请求时只写 ``next_node=observe``；有请求时由
-        :func:`_apply_decisions` 产出最终增量（``next_node`` 与必要的 ``tool_call_lifecycle`` /
+        :func:`_apply_decision` 产出最终增量（``next_node`` 与必要的 ``tool_call_lifecycle`` /
         ``last_tool_results``）。
 
     异常:
@@ -290,8 +278,8 @@ def wait_user_node(state: ReactGraphState) -> dict[str, object]:
         - 写 ``wait_user_node_*`` 结构化日志。
     """
 
-    requests:list[UserInputRequest] = extract_requests(_observations(state))
-    if not requests:
+    request = extract_request(_observations(state))
+    if request is None:
         return {"next_node": ReactRoute.OBSERVE}
 
     runtime_config = _runtime_config()
@@ -301,8 +289,8 @@ def wait_user_node(state: ReactGraphState) -> dict[str, object]:
 
     if not runtime_config.resuming_wait_user:
         _begin_suspension(state, runtime_config, lifecycle)
-    decisions:list[UserDecision] = _await_decisions(state, runtime_config, requests)
-    return _apply_decisions(state, runtime_config, lifecycle, requests, decisions)
+    decision = _await_decisions(state, runtime_config, request)
+    return _apply_decision(state, runtime_config, lifecycle, request, decision)
 
 
 def _begin_suspension(

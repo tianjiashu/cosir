@@ -1,8 +1,8 @@
-import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
+import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
 import type { AgentTeamGraphLayout } from "@/components/agent-team-graph-model";
 
 export type AgentTeamGraphSnapshot = {
-  configuration: AgentTeamConfiguration;
+  configuration: AgentTeamConfigurationDraft;
   layout: AgentTeamGraphLayout;
 };
 

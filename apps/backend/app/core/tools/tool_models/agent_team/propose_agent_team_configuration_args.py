@@ -146,10 +146,10 @@ class ProposeAgentTeamConfigurationArgs(BaseModel):
     )
     max_runs: int = Field(
         default=10,
-        ge=1,
+        ge=10,
         description=(
-            "Maximum number of node rounds the whole Team may run before it fails. "
-            "Optional; defaults to 10."
+            "Maximum number of node executions the whole Team may run before it fails. "
+            "Must be at least 10; optional and defaults to 10."
         ),
         examples=[10],
     )

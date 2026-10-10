@@ -19,6 +19,9 @@ from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.api.schemas.request.save_agent_team_configuration_request import (
     SaveAgentTeamConfigurationRequest,
 )
+from app.api.configuration.agent_team_error_messages import (
+    agent_team_configuration_error_message,
+)
 from app.app import app
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 from app.service.configuration.agent_team_configuration_service import (
@@ -83,7 +86,10 @@ async def save_agent_team_configuration(
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=agent_team_configuration_error_message(exc),
+        ) from exc
 
 
 @app.get("/configuration/agent-teams")
@@ -115,7 +121,10 @@ async def update_system_agent_team_configuration(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Team configuration not found") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=agent_team_configuration_error_message(exc),
+        ) from exc
 
 
 @app.delete("/configuration/agent-teams/{team_id}")
@@ -169,7 +178,10 @@ async def save_workspace_agent_team_configuration(
             detail="workspace or Team configuration not found",
         ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=agent_team_configuration_error_message(exc),
+        ) from exc
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -202,7 +214,10 @@ async def update_workspace_agent_team_configuration(
             detail="workspace or Team configuration not found",
         ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=agent_team_configuration_error_message(exc),
+        ) from exc
 
 
 @app.delete("/workspaces/{workspace_id}/configuration/agent-teams/{team_id}")

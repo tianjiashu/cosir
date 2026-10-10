@@ -114,6 +114,7 @@ class AgentTeamCoordinator:
                     team_run,
                     state,
                     configuration,
+                    configuration.max_runs - rounds + 1,
                     next_node_input,
                 )
                 if node_run.status != ConversationRunStatus.COMPLETED.value:
@@ -128,6 +129,9 @@ class AgentTeamCoordinator:
                             },
                         },
                     )
+                    self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.FAILED.value,
+                                                            (AgentTeamRunStatus.RUNNING.value,), state=state,
+                                                            end_reason=f"节点 {state.current_node_id} 执行失败", ended=True)
                     break
 
                 final_output = node_run.final_output
@@ -201,6 +205,7 @@ class AgentTeamCoordinator:
             row: AgentTeamRunModel,
             state: AgentTeamRunState,
             configuration: AgentTeamConfiguration,
+            remaining_rounds: int,
             node_input: str | None = None,
     ) -> tuple[AgentTeamNodeExecution, ConversationRunRecord]:
         """在调用方事务中复用或创建节点 Task，并创建本次节点 Run（只写执行事实）。
@@ -223,8 +228,10 @@ class AgentTeamCoordinator:
         node_execution: AgentTeamNodeExecution | None = state.node_execution_for_node(node_id)
         node_goal = node_runtime.node_goal
         input_text = self._build_node_input(
-            node_goal,
-            node_input,
+            node_goal=node_goal,
+            remaining_rounds=remaining_rounds,
+            max_rounds=configuration.max_runs,
+            node_input=node_input,
         )
         model_settings = node_runtime.model_settings
         reasoning_effort = model_settings.get("reasoning_effort")
@@ -318,15 +325,57 @@ class AgentTeamCoordinator:
         return schemas
 
     @staticmethod
-    def _build_node_input(node_goal: str, node_input: str | None = None) -> str:
-        """只把当前节点子目标和直接前置输出放入 user input；全局目标在 system prompt。"""
+    def _build_node_input(
+            node_goal: str,
+            remaining_rounds: int,
+            max_rounds: int,
+            node_input: str | None = None,
+    ) -> str:
+        """组装节点输入，并按剩余执行预算递进提醒节点收敛工作。
+
+        剩余轮次是整个 Team 共享的节点执行预算，并包含当前即将启动的节点执行。
+        提示只在剩余预算首次到达 50%、30%、10% 阈值时发送一次；离散额度取第一个不高于
+        阈值的整数轮数。最后一次执行机会单独说明，避免把小额度下的最后一轮误报为约一成。
+        """
 
         sections = []
         if node_goal:
-            sections.append(f"本节点子目标:\n{node_goal}")
+            sections.append(f"Current node subgoal:\n{node_goal}")
         if node_input:
-            sections.append("前置节点输出:\n" + node_input)
-        return "\n\n".join(sections) or "请依据当前节点职责推进 Team 总目标。"
+            sections.append("Previous node output:\n" + node_input)
+        ten_percent_round = max(1, int(max_rounds * 0.1))
+        thirty_percent_round = max(1, int(max_rounds * 0.3))
+        half_round = max(1, int(max_rounds * 0.5))
+        if remaining_rounds == 1:
+            sections.append(
+                f"Team budget reminder: This is the Agent Team's final node execution ({remaining_rounds}/{max_rounds} remaining, "
+                "including the current node). Complete the highest-value work this node can contribute. If the overall goal "
+                "is met and this node has an allowed route that ends the Team, choose that route. Otherwise, use the allowed "
+                "route that best advances the goal, make the final handoff, and clearly state any unfinished work. No execution "
+                "budget will remain after this run."
+            )
+        elif remaining_rounds == ten_percent_round:
+            sections.append(
+                f"Team budget reminder: The shared node-execution budget for the entire Agent Team is at or below 10% "
+                f"({remaining_rounds}/{max_rounds} remaining, including the current node). Focus on the highest-priority "
+                "outcome for the overall goal. Avoid expanding scope or repeating cycles; if handing off, state the conclusions "
+                "and remaining work clearly."
+            )
+        elif remaining_rounds == thirty_percent_round:
+            sections.append(
+                f"Team budget reminder: The shared node-execution budget for the entire Agent Team is at or below 30% "
+                f"({remaining_rounds}/{max_rounds} remaining, including the current node). Narrow the scope and prioritize "
+                "work essential to the overall goal. Avoid repeated exploration; for handoffs, clearly state conclusions, "
+                "next steps, and blockers."
+            )
+        elif remaining_rounds == half_round:
+            sections.append(
+                f"Team budget reminder: At most half of the shared node-execution budget for the entire Agent Team remains "
+                f"({remaining_rounds}/{max_rounds}, including the current node). Prioritize the critical path toward the "
+                "overall goal, avoid redundant work and unnecessary cycles, and preserve conclusions needed by downstream "
+                "nodes when handing off."
+            )
+        return "\n\n".join(sections) or "Advance the Team's overall goal according to the current node's responsibilities."
 
     def _workspace_root(self, workspace_id: int) -> str:
         """读取 workspace 根路径。"""

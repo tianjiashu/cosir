@@ -230,7 +230,7 @@ export function AgentTeamTool({ artifact: rawArtifact, runId, taskId }: AgentTea
       await submitUserInputDecision({
         taskId,
         runId,
-        decisions: [{ request_id: review.requestId, decision, data }],
+        decision: { request_id: review.requestId, decision, data },
       });
       setState(decision === "approve" ? "confirmed" : "rejected");
       setMessage(

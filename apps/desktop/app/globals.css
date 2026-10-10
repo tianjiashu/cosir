@@ -13,6 +13,32 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@keyframes agent-team-entry-highlight {
+  0%,
+  45% {
+    background-color: color-mix(in oklab, #3b82f6 8%, var(--card));
+    border-color: color-mix(in oklab, #3b82f6 38%, var(--border));
+    box-shadow: 0 0 0 2px color-mix(in oklab, #3b82f6 12%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    border-color: var(--border);
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.agent-team-entry-highlight {
+  animation: agent-team-entry-highlight 1.3s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-team-entry-highlight {
+    animation: none;
+    outline: 2px solid color-mix(in oklab, #3b82f6 38%, var(--border));
+    outline-offset: 2px;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

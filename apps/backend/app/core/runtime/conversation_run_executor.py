@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from app.assistant_transport.event import ToolCallsSettledEvent
@@ -65,21 +65,21 @@ class ConversationRunExecutor:
             self,
             run_id: int,
             start_mode: ExecutionMode,
-            user_decisions: Sequence[UserDecision] = (),
+            user_decision: UserDecision | None = None,
     ) -> asyncio.Task[None]:
         """登记 run 并创建独立后台 task。
 
         仅做「canonical 前置断言 + 进程内登记 + 建 task」：确认目标 run 已处于 ``running``
         （由 ``prepare_run_start`` 经 ``claim_pending_run`` 落定）否则抛 ``ValueError``
         视作调用方违约；不做业务准入、不落库、不认领 run、不等待结果；HTTP 订阅断开不会取消该
-        task。``start_mode``/``user_decisions`` 原样透传至 ``run_agent``（续跑决定经 workflow
+        task。``start_mode``/``user_decision`` 原样透传至 ``run_agent``（续跑决定经 workflow
         的 ``Command(resume=...)``）。
         """
 
         run = await asyncio.to_thread(self._run_service.get_run, run_id)
         if run.status != ConversationRunStatus.RUNNING:
             raise ValueError(f"run {run_id} is not running")
-        thread_task = asyncio.create_task(self._execute(run_id, start_mode, user_decisions))
+        thread_task = asyncio.create_task(self._execute(run_id, start_mode, user_decision))
         # 后台 task 无人 await：不挂回调时其异常会被 asyncio 静默吞掉，排障只能靠间接日志。
         thread_task.add_done_callback(lambda task: self._log_execution_result(run_id, task))
         self._executions[run_id] = _Execution(thread_task=thread_task)
@@ -288,7 +288,7 @@ class ConversationRunExecutor:
             self,
             run_id: int,
             start_mode: ExecutionMode,
-            user_decisions: Sequence[UserDecision] = (),
+            user_decision: UserDecision | None = None,
     ) -> None:
         """驱动一次 run 执行；执行器不拥有 run 终态（由 workflow 落定），只负责收尾兜底。
 
@@ -310,7 +310,7 @@ class ConversationRunExecutor:
             await runtime.run_agent(
                 agent_profile,
                 execution_mode=start_mode,
-                user_decisions=user_decisions,
+                user_decision=user_decision,
             )
         except Exception:
             log.exception(
