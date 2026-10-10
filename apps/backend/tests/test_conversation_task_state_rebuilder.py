@@ -15,6 +15,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -259,7 +260,7 @@ def test_legacy_role_lookup_uses_child_task_workspace(
         agent_type=AgentProfileType.CHILD,
         system_prompt="Review the requested code.",
     )
-    registry = AgentProfileRegistry()
+    registry = AgentProfileRegistry(AgentProfileScopeSource())
     registry.register("workspace-eight", configured_profile)
 
     class _TaskSource:

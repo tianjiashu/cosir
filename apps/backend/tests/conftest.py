@@ -18,8 +18,10 @@ from pathlib import Path
 
 import pytest
 
+from app.agent_team import configuration_scope_source
 from app.config import configuration
 from app.config.configuration import build_agent_registry
+from app.core.agents import agent_profile_config, agent_profile_source
 from app.core.runtime.runner import AgentRuntime
 from app.core.tools.tool_system import ToolSystem
 from app.service import depends as depends_module
@@ -114,6 +116,45 @@ def restore_backend_logging_state() -> Iterator[None]:
         yield
     finally:
         _restore(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """把系统作用域的配置文件目录隔离到用例临时目录。
+
+    为什么需要：Agent profile 与 Agent Team 注册表现在按作用域**懒装载**，任何一次读取都会去
+    访问该作用域的配置目录。若系统作用域仍指向开发者本机的 ``~/.cosir/agents`` 与
+    ``~/.cosir/agent-teams``，用例结果会随本机已放置的自定义配置漂移（典型失败形态是「索引里
+    多出别人的 profile」）。workspace 作用域天然落在用例自己的临时 workspace 下，无需隔离。
+
+    参数:
+        tmp_path: pytest 提供的用例级临时目录。
+        monkeypatch: pytest 提供的补丁器，用例结束后自动复原。
+
+    返回:
+        无（夹具上下文）。
+
+    异常:
+        无。
+
+    副作用:
+        改写两个配置来源模块内 ``system_agent_config_dir`` / ``system_agent_team_config_dir``
+        的引用；不触碰真实的路径模块，也不创建目录。需要验证真实目录推导的用例可再自行覆盖。
+    """
+
+    system_agents = tmp_path / "system-agents"
+    system_teams = tmp_path / "system-agent-teams"
+    # 需要覆盖三处已导入符号：Agent 侧的装载、配置中心写入与目录 provisioning 都经
+    # ``agent_profile_source`` 取值；Team 侧的装载与写入经 ``configuration_scope_source``；
+    # Team 目录 provisioning 直接调用路径函数（``agent_profile_config``）。三处都覆盖，
+    # 用例内的读、写与 provisioning 才会指向同一目录，且不触碰开发者本机的 ``~/.cosir``。
+    monkeypatch.setattr(agent_profile_source, "system_agent_config_dir", lambda: system_agents)
+    monkeypatch.setattr(
+        configuration_scope_source, "system_agent_team_config_dir", lambda: system_teams
+    )
+    monkeypatch.setattr(
+        agent_profile_config, "system_agent_team_config_dir", lambda: system_teams
+    )
 
 
 @pytest.fixture

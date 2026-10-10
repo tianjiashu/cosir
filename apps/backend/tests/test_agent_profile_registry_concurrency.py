@@ -17,6 +17,7 @@ import threading
 
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.agents.agent_profile_source import AgentProfileScopeSource
 
 _SCOPE = AgentProfileRegistry.SYSTEM_WORKSPACE
 _WRITER_ROUNDS = 2000
@@ -40,7 +41,7 @@ def _profile(agent_id: str) -> AgentProfile:
 def test_concurrent_register_of_same_key_accepts_exactly_one() -> None:
     """同一 key 被多线程同时注册时，只有一个线程能成功。"""
 
-    registry = AgentProfileRegistry()
+    registry = AgentProfileRegistry(AgentProfileScopeSource())
     profile = _profile("duplicated")
     barrier = threading.Barrier(8)
     results: list[bool] = []
@@ -66,7 +67,7 @@ def test_concurrent_register_of_same_key_accepts_exactly_one() -> None:
 def test_reads_are_safe_while_writes_are_in_flight() -> None:
     """注册/卸载交错进行时，``list`` 与 ``resolve`` 不抛异常且只看到完整快照。"""
 
-    registry = AgentProfileRegistry()
+    registry = AgentProfileRegistry(AgentProfileScopeSource())
     done = threading.Event()
     failures: list[BaseException] = []
 

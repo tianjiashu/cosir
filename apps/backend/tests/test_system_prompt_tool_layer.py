@@ -15,6 +15,7 @@ import pytest
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import main_agent
 from app.core.context import system_prompt_builder as spb
 from app.utils.path import system_cosir as paths
@@ -44,7 +45,7 @@ def _child_profile(
 def _registry_with(*profiles: AgentProfile) -> AgentProfileRegistry:
     """把给定 profile 注册进 system 作用域并返回 Registry。"""
 
-    registry = AgentProfileRegistry()
+    registry = AgentProfileRegistry(AgentProfileScopeSource())
     for profile in profiles:
         registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, profile)
     return registry

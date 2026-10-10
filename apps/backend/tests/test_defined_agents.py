@@ -16,6 +16,7 @@ import pytest
 from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.core.agents.model_settings import ModelSettings
 from app.core.context.system_prompt_builder import SystemPromptBuilder
@@ -36,7 +37,7 @@ def _code_defined_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> l
     """
 
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        "app.core.agents.agent_profile_source.system_agent_config_dir",
         lambda: tmp_path / "agents",
     )
     registry = build_agent_registry()
@@ -91,7 +92,7 @@ def test_system_registry_contains_only_code_defined_children(
 
     monkeypatch.setattr("app.config.configuration._TOOL_SYSTEM", None, raising=False)
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        "app.core.agents.agent_profile_source.system_agent_config_dir",
         lambda: tmp_path / "agents",
     )
     registry = build_agent_registry()
@@ -119,7 +120,7 @@ def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools
     assert "<tool_layer>" not in prompt_without_tools
     assert "general-assistant" not in prompt_without_tools
 
-    registry = AgentProfileRegistry()
+    registry = AgentProfileRegistry(AgentProfileScopeSource())
     registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, general_child_agent())
     monkeypatch.setattr(
         "app.config.configuration.get_agent_registry",
@@ -145,7 +146,7 @@ def test_main_profile_without_configured_prompt_skips_agent_layer() -> None:
 def test_registry_projects_only_child_profiles() -> None:
     """registry 摘要和 ID 列表只暴露 CHILD，不包含 MAIN。"""
 
-    registry = AgentProfileRegistry()
+    registry = AgentProfileRegistry(AgentProfileScopeSource())
     generic = general_child_agent()
     main_profile = main_agent()
     registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, generic)

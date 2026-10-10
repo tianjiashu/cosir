@@ -8,8 +8,10 @@ from pydantic import ValidationError
 from sqlalchemy import inspect
 from sqlalchemy.orm import sessionmaker
 
+from app.agent_team import configuration_scope_source
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
+from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
 from app.agent_team.registry import AgentTeamConfigurationRegistry
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.core.tools.tool_handler.agent_team.propose_agent_team_configuration import (
@@ -391,15 +393,12 @@ def test_configuration_rejects_removed_join_fields() -> None:
 
 
 def test_registry_saves_and_reloads_workspace_configuration(tmp_path: Path) -> None:
-    registry = AgentTeamConfigurationRegistry()
+    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
     configuration = AgentTeamConfiguration.model_validate(_configuration())
     AgentTeamConfigurationService(registry=registry).save(configuration, workspace_root=tmp_path)
 
-    restored = AgentTeamConfigurationRegistry()
-    AgentTeamConfigurationService(registry=restored).load_directory(
-        str(tmp_path),
-        tmp_path / ".cosir" / "agent-teams",
-    )
+    # 新注册表无需显式装载：首次读取该 workspace 作用域时按 ``.cosir/agent-teams`` 自行装载。
+    restored = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
     assert restored.resolve(tmp_path, "code-quality").team_id == "code-quality"
 
 
@@ -410,8 +409,10 @@ def test_configuration_service_crud_preserves_system_workspace_ownership(
     """同名 workspace 配置覆盖 system 配置，删除覆盖后应恢复 system 可见性。"""
 
     system_directory = tmp_path / "system-agent-teams"
+    # 系统作用域目录的唯一映射点是装载来源（写入与读取共用），因此在这里重定向。
     monkeypatch.setattr(
-        "app.service.configuration.agent_team_configuration_service.system_cosir.system_agent_team_config_dir",
+        configuration_scope_source,
+        "system_agent_team_config_dir",
         lambda: system_directory,
     )
     monkeypatch.setattr(
@@ -419,7 +420,7 @@ def test_configuration_service_crud_preserves_system_workspace_ownership(
         "_validate_node_profiles",
         staticmethod(lambda *_args, **_kwargs: None),
     )
-    registry = AgentTeamConfigurationRegistry()
+    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
     service = AgentTeamConfigurationService(registry=registry)
     workspace_root = tmp_path / "workspace"
 

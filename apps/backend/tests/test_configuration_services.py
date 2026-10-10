@@ -11,6 +11,7 @@ from app.api.schemas.response.EnvironmentResponse import EnvironmentResponse
 from app.app import app
 from app.config.settings import Settings
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.models.environment.environment_change import EnvironmentChange
 from app.service.configuration.agent_configuration_service import (
@@ -34,7 +35,7 @@ from app.service.configuration.instruction_configuration_service import (
 def _configuration_registry() -> AgentProfileRegistry:
     """构造包含系统内置 profile 的配置中心测试注册表。"""
 
-    registry = AgentProfileRegistry()
+    registry = AgentProfileRegistry(AgentProfileScopeSource())
     registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, general_child_agent())
     registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, main_agent())
     return registry
@@ -112,7 +113,7 @@ def test_agent_configuration_round_trip_preserves_model_override(
         )(),
     )
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        "app.core.agents.agent_profile_source.system_agent_config_dir",
         lambda: tmp_path / "agents",
     )
     registry = _configuration_registry()
@@ -170,7 +171,7 @@ def test_agent_create_emits_deferred_catalog_change(
     """创建子 Agent 后发布目录变更通知。"""
 
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        "app.core.agents.agent_profile_source.system_agent_config_dir",
         lambda: tmp_path / "agents",
     )
     registry = _configuration_registry()
@@ -205,7 +206,7 @@ def test_agent_update_notifies_only_when_description_changes(
     """更新子 Agent 的非描述字段不通知，描述变化才通知。"""
 
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        "app.core.agents.agent_profile_source.system_agent_config_dir",
         lambda: tmp_path / "agents",
     )
     registry = _configuration_registry()
@@ -252,7 +253,7 @@ def test_agent_delete_emits_deferred_catalog_change(
     """删除子 Agent 后发布目录变更通知。"""
 
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        "app.core.agents.agent_profile_source.system_agent_config_dir",
         lambda: tmp_path / "agents",
     )
     registry = _configuration_registry()
@@ -287,7 +288,7 @@ def test_builtin_agent_is_editable_but_not_deletable(
     """系统内置子 Agent 可写入覆盖配置，但始终不能从注册表卸载。"""
 
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        "app.core.agents.agent_profile_source.system_agent_config_dir",
         lambda: tmp_path / "agents",
     )
     registry = _configuration_registry()
@@ -549,7 +550,7 @@ def test_agent_operations_require_canonical_file_name(
     directory = tmp_path / "agents"
     directory.mkdir()
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        "app.core.agents.agent_profile_source.system_agent_config_dir",
         lambda: directory,
     )
     path = directory / "legacy-name.json"
@@ -585,7 +586,7 @@ def test_agent_configuration_lists_only_registered_profiles(
     directory = tmp_path / "agents"
     directory.mkdir()
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.system_agent_config_dir",
+        "app.core.agents.agent_profile_source.system_agent_config_dir",
         lambda: directory,
     )
     (directory / "broken.json").write_text("{broken", encoding="utf-8")

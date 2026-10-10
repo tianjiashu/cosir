@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 
 from app.config.constant import Constant
-from app.core.agents import agent_profile_config
+from app.core.agents import agent_profile_source
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.core.context import system_prompt_builder
 from app.utils.token_estimator import TokenEstimator
@@ -41,10 +42,17 @@ def _write_config(directory: Path, agent_id: str, data: dict | str | None = None
     return path
 
 
+def _system_source(monkeypatch: pytest.MonkeyPatch, directory: Path) -> AgentProfileScopeSource:
+    """构造 system 作用域指向指定目录的 profile 来源，隔离开发者本机 ``~/.cosir``。"""
+
+    monkeypatch.setattr(agent_profile_source, "system_agent_config_dir", lambda: directory)
+    return AgentProfileScopeSource()
+
+
 def _base_registry() -> AgentProfileRegistry:
     """构造包含代码内通用 Agent 和主 Agent 的进程目录。"""
 
-    registry = AgentProfileRegistry()
+    registry = AgentProfileRegistry(AgentProfileScopeSource())
     registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, general_child_agent())
     registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, main_agent())
     return registry
@@ -67,20 +75,19 @@ def test_system_agent_config_dir_creates_empty_workspace_when_no_packaged_defaul
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """没有随包分发的默认 JSON 时，系统 Agent 配置目录仍会被创建且加载为空。
+    """没有随包分发的默认 JSON 时，系统 Agent 配置目录仍会被创建且装载为空。
 
     专用 CHILD（code-developer 等）已从内置 defaults 迁出仓库，唯一代码内置 CHILD 由
-    ``define_agents.general_child_agent`` 直接注册；目录存在但无 JSON 不得让加载失败。
+    ``define_agents.general_child_agent`` 直接注册；目录存在但无 JSON 不得让装载失败。
     """
 
     target = tmp_path / "system-agents"
-    monkeypatch.setattr(agent_profile_config, "system_agent_config_dir", lambda: target)
+    monkeypatch.setattr(agent_profile_source, "system_agent_config_dir", lambda: target)
 
     ensure_system_agent_config_dir()
     assert target.is_dir()
 
-    registry = AgentProfileRegistry()
-    registry.load_agent_profiles(AgentProfileRegistry.SYSTEM_WORKSPACE, target)
+    registry = AgentProfileRegistry(_system_source(monkeypatch, target))
 
     assert registry.list(AgentProfileRegistry.SYSTEM_WORKSPACE) == []
 
@@ -157,24 +164,23 @@ def test_invalid_config_log_does_not_expose_prompt(
 
 def test_loader_does_not_check_filename_id_and_keeps_skipping_duplicates(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """文件名与 agent_id 不一致不是错误；同作用域重复 ID 跳过而不中断整批加载。
+    """文件名与 agent_id 不一致不是错误；同作用域重复 ID 跳过而不中断整批装载。
 
     文件名一致性属 ``AgentProfileRegistry`` 的已知缺口（见类 docstring）；重复 ID 由
-    ``register`` 保留先注册者并告警，同样不抛错。
+    ``_decide_registration`` 保留先读到的文件并告警，同样不抛错。
     """
 
     _write_config(tmp_path, "filename", _document("different-id"))
-    mismatched = AgentProfileRegistry()
-    mismatched.load_agent_profiles(AgentProfileRegistry.SYSTEM_WORKSPACE, tmp_path)
+    mismatched = AgentProfileRegistry(_system_source(monkeypatch, tmp_path))
 
     assert mismatched.list_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {"different-id"}
 
     (tmp_path / "filename.json").unlink()
     _write_config(tmp_path, "same-agent")
     _write_config(tmp_path, "same-agent-copy", _document("same-agent"))
-    duplicated = AgentProfileRegistry()
-    duplicated.load_agent_profiles(AgentProfileRegistry.SYSTEM_WORKSPACE, tmp_path)
+    duplicated = AgentProfileRegistry(_system_source(monkeypatch, tmp_path))
 
     # 同作用域重复 ID（``same-agent-copy.json``）被跳过，不进入索引。
     assert duplicated.list_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {"same-agent"}
@@ -187,19 +193,16 @@ def test_workspace_catalog_isolated_and_rejects_baseline_collision(tmp_path: Pat
     directory = workspace / ".cosir" / "agents"
     _write_config(directory, "workspace-reader")
     catalog = _base_registry()
-    catalog.load_agent_profiles(workspace, directory)
 
     assert catalog.resolve(workspace, "general-assistant") is not None
     assert catalog.resolve(workspace, "workspace-reader") is not None
     assert catalog.resolve(workspace.parent / "other", "workspace-reader") is None
 
     # agent_id 与 system 基线冲突：保留先注册的 system profile，workspace 文件被跳过，
-    # 整批加载不因冲突中断（冲突由 ``_decide_registration`` 裁决，不抛配置异常）。
+    # 装载不因冲突中断（冲突由 ``_decide_registration`` 裁决，不抛配置异常）。
     _write_config(directory, "general-assistant", _document("general-assistant"))
-    _base_registry().load_agent_profiles(workspace, directory)
 
     collision = _base_registry()
-    collision.load_agent_profiles(workspace, directory)
     resolved = collision.resolve(workspace, "general-assistant")
     assert resolved is not None
     assert resolved.description == general_child_agent().description
@@ -218,7 +221,7 @@ def test_system_agent_config_dir_ensured_without_touching_user_files(
     """
 
     target = tmp_path / "system-agents"
-    monkeypatch.setattr(agent_profile_config, "system_agent_config_dir", lambda: target)
+    monkeypatch.setattr(agent_profile_source, "system_agent_config_dir", lambda: target)
 
     assert ensure_system_agent_config_dir() == target
     assert target.is_dir()

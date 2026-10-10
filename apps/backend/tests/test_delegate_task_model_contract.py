@@ -95,9 +95,7 @@ def test_workspace_profiles_do_not_cross_workspace_boundaries(
     _write_workspace_agent(workspace_a, "workspace-a-agent")
     _write_workspace_agent(workspace_b, "workspace-b-agent")
 
-    system_registry.load_agent_profiles(workspace_a, workspace_a / ".cosir" / "agents")
-    system_registry.load_agent_profiles(workspace_b, workspace_b / ".cosir" / "agents")
-
+    # 装载不需要显式调用：registry 在作用域首次被读取时按 ``<workspace>/.cosir/agents`` 自行装载。
     assert system_registry.resolve(workspace_a, "workspace-a-agent") is not None
     assert system_registry.resolve(workspace_a, "workspace-b-agent") is None
     assert system_registry.resolve(workspace_b, "workspace-b-agent") is not None
@@ -170,8 +168,8 @@ def test_workspace_config_error_is_not_silently_merged(
 ) -> None:
     """无效 workspace 配置不得被静默合并：坏文件只被跳过并留 error 日志，不注册任何 profile。
 
-    目录级问题（目录不是目录 / 符号链接越界等）才抛 ``AgentProfileConfigError``（``ValueError``
-    子类），由启动编排捕获后禁用该 workspace 的委派。
+    目录级问题（路径不是目录、符号链接越界等）同样不影响运行：装载来源记 warning 后按
+    「该作用域没有配置」降级，读取方只会解析不到该 workspace 的 agent，不会让 Run 中断。
     """
 
     workspace = tmp_path / "workspace"
@@ -182,20 +180,22 @@ def test_workspace_config_error_is_not_silently_merged(
 
     registry = configuration.build_agent_registry()
     with caplog.at_level(logging.ERROR):
-        registry.load_agent_profiles(workspace, directory)
+        # 坏配置未进入 registry，也没有从 system 作用域回退出一个同名 profile。
+        assert registry.resolve(workspace, "broken") is None
 
-    # 坏配置未进入 registry，也没有从 system 作用域回退出一个同名 profile。
-    assert registry.resolve(workspace, "broken") is None
     records = [record for record in caplog.records if record.levelno >= logging.ERROR]
     assert any(
         record.message == "agent_profile_config_invalid" for record in records
     ), "坏配置必须写 error 日志留痕，否则「跳过」无法排查"
 
-    # 目录级问题才向上抛出，调用方据此禁用该 workspace 的委派工具。
-    not_a_directory = workspace / ".cosir" / "agents-file"
-    not_a_directory.write_text("", encoding="utf-8")
-    with pytest.raises(ValueError, match="Agent 配置路径不是目录"):
-        configuration.build_agent_registry().load_agent_profiles(
-            workspace,
-            not_a_directory,
-        )
+    # 目录级问题：配置路径是普通文件而非目录，装载降级为空并留 warning 日志，不抛异常。
+    failing_workspace = tmp_path / "failing-workspace"
+    (failing_workspace / ".cosir").mkdir(parents=True)
+    (failing_workspace / ".cosir" / "agents").write_text("", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        assert configuration.build_agent_registry().resolve(failing_workspace, "any") is None
+
+    assert any(
+        record.message == "agent_profile_scope_load_failed" for record in caplog.records
+    ), "目录级失败必须写 warning 日志留痕，否则「降级为空」无法排查"

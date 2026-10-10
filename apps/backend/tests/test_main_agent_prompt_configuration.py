@@ -12,8 +12,9 @@ from app.app import app
 from app.config import configuration
 from app.config.configuration import build_agent_registry
 from app.config.constant import Constant
-from app.core.agents import agent_profile_config
+from app.core.agents import agent_profile_source
 from app.core.agents.agent_profile import AgentProfileType
+from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.define_agents import main_agent
 from app.service.configuration.main_agent_prompt_configuration_service import (
@@ -47,9 +48,9 @@ def test_system_agent_config_dir_is_created_even_without_packaged_defaults(
     """没有随包分发的子 Agent JSON 时，启动初始化仍应成功创建目录。"""
 
     target = tmp_path / "system-agents"
-    monkeypatch.setattr(agent_profile_config, "system_agent_config_dir", lambda: target)
+    monkeypatch.setattr(agent_profile_source, "system_agent_config_dir", lambda: target)
 
-    assert agent_profile_config.ensure_system_agent_config_dir() == target
+    assert ensure_system_agent_config_dir() == target
     assert target.is_dir()
 
 

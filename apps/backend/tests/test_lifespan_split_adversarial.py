@@ -726,12 +726,14 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         "ensure_system_agent_config_dir",
         record("ensure_system_agent_config_dir"),
     )
-    registry_stub = SimpleNamespace(load_agent_profiles=record("load_agent_profiles"))
     monkeypatch.setattr(
         lifespan_module,
-        "get_workspace_service",
-        record("get_workspace_service", SimpleNamespace(list_workspaces=lambda: [])),
+        "ensure_system_agent_team_config_dir",
+        record("ensure_system_agent_team_config_dir"),
     )
+    # 注册表只播种代码内置 profile；用户 JSON 由注册表在作用域首次被读取时按需装载，
+    # 启动编排不再持有任何「装载目录」的调用。
+    registry_stub = SimpleNamespace()
 
     class _RunService:
         def recover_orphaned_runs(self) -> list[Any]:
@@ -778,6 +780,14 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     )
     monkeypatch.setattr(lifespan_module, "set_tool_system", record("set_tool_system"))
     monkeypatch.setattr(lifespan_module, "set_agent_registry", record("set_agent_registry"))
+    monkeypatch.setattr(
+        lifespan_module, "set_agent_team_registry", record("set_agent_team_registry")
+    )
+    monkeypatch.setattr(
+        lifespan_module,
+        "set_agent_team_configuration_service",
+        record("set_agent_team_configuration_service"),
+    )
     monkeypatch.setattr(lifespan_module, "set_runtime", record("set_runtime"))
     monkeypatch.setattr(lifespan_module, "AgentRuntime", record("agent_runtime", "runtime"))
     monkeypatch.setattr(
@@ -852,9 +862,11 @@ def test_lifespan_happy_path_marks_ready_then_stopped(
     calls = stubbed_lifespan.calls
     assert calls.index("install_logging") < calls.index("settings_load")
     assert calls.index("settings_load") < calls.index("init_deps")
-    assert calls.index("ensure_system_agent_config_dir") < calls.index("build_agent_registry")
-    assert calls.index("build_agent_registry") < calls.index("load_agent_profiles")
-    assert calls.index("load_agent_profiles") < calls.index("set_agent_registry")
+    assert calls.index("ensure_system_agent_config_dir") < calls.index(
+        "ensure_system_agent_team_config_dir"
+    )
+    assert calls.index("ensure_system_agent_team_config_dir") < calls.index("build_agent_registry")
+    assert calls.index("build_agent_registry") < calls.index("set_agent_registry")
     assert "init_hook_registry" in calls
     assert calls.count("install_logging") == 2, "启动期应重建一次日志管线"
 
