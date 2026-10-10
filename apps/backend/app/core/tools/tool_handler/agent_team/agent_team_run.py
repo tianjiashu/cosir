@@ -22,7 +22,7 @@ from app.core.tools.schemas import (
     ToolObservation,
     UserDecision,
 )
-from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM, TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION
+from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_AGENT_TEAM
@@ -115,13 +115,6 @@ class AgentTeamRunTool(HandlerBase):
                     retryable=False
                 )
             parent_run = self.run_service.get_run(execution_context.run_id)
-            # Runner 为主 Run 派生的 profile 已经物化了模型连接配置。节点缺少独立配置时，
-            # 只能沿用这份本次 Run 快照，不能在确认时重新读取可变配置。
-            parent_model_settings = (
-                execution_context.runtime_dependencies.parent_agent_profile.model_settings
-                if execution_context.runtime_dependencies.parent_agent_profile is not None
-                else None
-            )
             preparation = self.agent_team_preparation_service.prepare(
                 configuration,
                 goal=goal,

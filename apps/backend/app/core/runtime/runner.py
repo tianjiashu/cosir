@@ -422,9 +422,8 @@ class AgentRuntime:
             task_space.defer_system_message(
                 SystemMessage(
                     content=(
-                        "Please generate an Agent Team configuration draft using this tool. "
-                        "Do not execute or save the Team: "
-                        f"{tool_schema}"
+                        "Please follow the user's instructions and use this tool to carry out "
+                        f"their request: {tool_schema}"
                     )
                 )
             )
