@@ -195,7 +195,8 @@ class SystemPromptBuilder:
                 .get_agent_registry`` 的装配错误）时原样抛出，不静默降级。
 
         副作用:
-            读取进程级 Agent 目录的内存索引（不读文件、不修改注册表）。
+            读取进程级 Agent 目录；该作用域**首次**被访问时会读取其 ``.cosir/agents`` 配置目录
+            （此后只读内存索引），不修改注册表。
         """
         if TOOL_DELEGATE_TASK not in available_tool_names:
             return ""

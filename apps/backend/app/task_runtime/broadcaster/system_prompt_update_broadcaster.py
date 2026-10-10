@@ -12,11 +12,11 @@ import difflib
 from app.core.agents.agent_profile import AgentProfileType
 from app.task_runtime.broadcaster.deferred_system_message_broadcaster import (
     broadcast_deferred_system_message,
-    normalize_scope_path,
 )
 from app.task_runtime.system_prompt_delta import SystemPromptDelta
 from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
+from app.utils.workspace_scope import normalize_scope_path
 
 
 def build_system_prompt_delta(

@@ -15,7 +15,6 @@ from typing import ClassVar
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import (
     AgentProfile,
-    AgentProfileConfigError,
     AgentProfileType,
 )
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
@@ -182,29 +181,12 @@ class DelegateTaskTool(HandlerBase):
                 reason="The child agent catalog for this workspace is unavailable.",
                 retryable=False,
             )
-        try:
-            child_agent_profile: AgentProfile | None = agent_registry.resolve(
-                execution_context.workspace_root,
-                child_agent_id,
-            )
-        except AgentProfileConfigError as exc:
-            log.warning(
-                "delegate_workspace_agent_config_invalid",
-                extra={
-                    "msg": "workspace 子 Agent 配置无效，拒绝委派",
-                    "data": {
-                        "parent_run_id": execution_context.run_id,
-                        "workspace_id": execution_context.workspace_id,
-                        "error_type": type(exc).__name__,
-                    },
-                },
-            )
-            return tool_error(
-                self.name,
-                "delegate_task_workspace_agent_config_invalid",
-                reason="The child agent configuration for this workspace is invalid.",
-                retryable=False,
-            )
+        # ``resolve`` 的契约是不抛配置异常：坏配置由装载来源记日志后按「无配置」降级
+        # （见 ``AgentProfileScopeSource``），因此这里只有「解析不到」这一条失败路径。
+        child_agent_profile: AgentProfile | None = agent_registry.resolve(
+            execution_context.workspace_root,
+            child_agent_id,
+        )
         if (
                 child_agent_profile is None
                 or child_agent_profile.agent_type is not AgentProfileType.CHILD

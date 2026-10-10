@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
 from app.agent_team.registry import (
     AgentTeamConfigurationRegistry,
     set_agent_team_registry,
@@ -44,9 +45,10 @@ from app.config.constant import Constant
 from app.config.logging.configuration import install_logging_for_current_process, shutdown_logging
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.core.agents.agent_profile import AgentProfileConfigError
-from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
-from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.agents.agent_profile_config import (
+    ensure_system_agent_config_dir,
+    ensure_system_agent_team_config_dir,
+)
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.observability import flush_langfuse
 from app.core.observability.langfuse_runtime import reload_langfuse_from_settings
@@ -65,21 +67,12 @@ from app.service.depends import (
     get_conversation_run_executor,
     get_conversation_run_service,
     get_terminal_session_service,
-    get_workspace_service,
     initialize_service_dependencies,
     set_runtime,
 )
 from app.utils.json_utils import JsonFileError, read_json_object
 from app.utils.path import system_cosir as paths
-from app.utils.path.system_cosir import (
-    system_agent_config_dir,
-    system_agent_team_config_dir,
-    system_cosir_dir,
-)
-from app.utils.path.workspace_cosir import (
-    workspace_agent_config_dir,
-    workspace_agent_team_config_dir,
-)
+from app.utils.path.system_cosir import system_cosir_dir
 
 
 @asynccontextmanager
@@ -187,7 +180,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
 
     副作用:
         按启动顺序安装日志管线、加载配置、初始化服务依赖、创建系统级 ``.cosir`` 目录、
-        播种 Hook 与 Agent 注册表、装配工具系统和 Agent Runtime，再收敛遗留 Run 与最近 Run
+        播种 Hook 与 Agent 注册表（注册表只播种代码内置 profile，用户 JSON 由注册表在作用域
+        首次被读取时按需装载）、装配工具系统和 Agent Runtime，再收敛遗留 Run 与最近 Run
         的 terminal checkpoint，并在就绪后写入 ``ready`` 启动状态；关闭时触发 ``SESSION_END``、
         关闭 Run executor 与终端会话、flush 观测数据、关闭服务依赖，最后写入 ``stopped``
         启动状态并卸载日志管线。日志管线共安装两次：先按当前 ``paths.LOG_DIR`` 建立最小
@@ -217,45 +211,20 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
 
     initialize_hook_registry()
 
-    # 确保系统级子 Agent 配置目录存在，随后把系统和全部已登记 workspace 的 Agent JSON
-    # 装入进程内 Registry。
+    # 确保系统级 Agent / Team 配置目录存在，作为用户手工放置自定义配置的固定位置。
+    # 配置内容不在此处装载：两个 registry 都在各自作用域首次被读取时按需装载，因此启动之后
+    # 才创建的 workspace（或运行期新放入的 JSON）无需重启后端就能被解析到；坏配置由装载来源
+    # 记日志并降级，不影响 Run。
     ensure_system_agent_config_dir()
+    ensure_system_agent_team_config_dir()
     main_agent_prompt = MainAgentPromptConfigurationService().read().content
     agent_registry = build_agent_registry(
         main_agent_prompt,
         main_agent_max_steps=Settings.MAIN_AGENT_MAX_STEPS,
     )
-    agent_registry.load_agent_profiles(
-        AgentProfileRegistry.SYSTEM_WORKSPACE,
-        system_agent_config_dir(),
-    )
-    for workspace in get_workspace_service().list_workspaces():
-        try:
-            agent_registry.load_agent_profiles(
-                workspace.root_path,
-                workspace_agent_config_dir(workspace.root_path),
-            )
-        except AgentProfileConfigError as exc:
-            log.warning(
-                "workspace_agent_profile_config_invalid",
-                extra={
-                    "msg": "workspace 子 Agent 配置无效，该 workspace 将禁用委派",
-                    "data": {
-                        "workspace_id": workspace.id,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc)[:500],
-                    },
-                },
-            )
     set_agent_registry(agent_registry)
-    team_registry = AgentTeamConfigurationRegistry()
+    team_registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
     team_configuration_service = AgentTeamConfigurationService(registry=team_registry)
-    team_configuration_service.load_directory("system", system_agent_team_config_dir())
-    for workspace in get_workspace_service().list_workspaces():
-        team_configuration_service.load_directory(
-            workspace.root_path,
-            workspace_agent_team_config_dir(workspace.root_path),
-        )
     set_agent_team_configuration_service(team_configuration_service)
     set_agent_team_registry(team_registry)
     tool_system = ToolSystem.build_tool_system()

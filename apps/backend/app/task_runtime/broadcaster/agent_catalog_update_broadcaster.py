@@ -12,9 +12,9 @@ from app.core.tools.schemas.tool_names import TOOL_DELEGATE_TASK
 from app.task_runtime.agent_catalog_change import AgentCatalogChange
 from app.task_runtime.broadcaster.deferred_system_message_broadcaster import (
     broadcast_deferred_system_message,
-    normalize_scope_path,
 )
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
+from app.utils.workspace_scope import normalize_scope_path
 
 
 def broadcast_agent_catalog_change(change: AgentCatalogChange) -> int:

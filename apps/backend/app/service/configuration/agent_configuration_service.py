@@ -34,8 +34,6 @@ from app.task_runtime.agent_catalog_change import (
 from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
     broadcast_agent_catalog_change,
 )
-from app.utils.path.system_cosir import system_agent_config_dir
-from app.utils.path.workspace_cosir import workspace_agent_config_dir
 
 
 class AgentConfigurationError(ValueError):
@@ -68,7 +66,8 @@ class AgentConfigurationService:
             RuntimeError: 进程级注册表尚未初始化（调用顺序错误，见 ``get_agent_registry``）。
 
         副作用:
-            解析配置目录、取得注册表引用并构造 ``ConfigurationFileStore``，不读写文件系统。
+            取得注册表引用、由其配置来源解析出该作用域的配置目录并构造 ``ConfigurationFileStore``，
+            不读写文件系统。
         """
 
         self.workspace_root = (
@@ -81,12 +80,10 @@ class AgentConfigurationService:
             if self.workspace_root is None
             else self.workspace_root
         )
-        self.directory = (
-            system_agent_config_dir()
-            if self.workspace_root is None
-            else workspace_agent_config_dir(self.workspace_root)
-        )
         self.registry = get_agent_registry()
+        # 目录直接取自注册表的配置来源：写入目录与装载目录必须是同一映射，否则保存后的配置
+        # 可能落在读取方看不到的位置（「保存成功但列表为空」）。
+        self.directory = self.registry.source.directory(self.scope)
         self.store = ConfigurationFileStore()
 
     def list_documents(self) -> list[AgentConfigurationDocument]:
@@ -103,11 +100,13 @@ class AgentConfigurationService:
         """校验并创建当前作用域的 Agent JSON，并延迟通知目录消费者。
 
         Agent 文件与 Registry 均成功更新后才广播新增事件；通知失败只记录旁路日志，不回滚
-        已提交的配置事实。
+        已提交的配置事实。落盘前先确保该作用域已装载，避免「先注册、后首次读取」时新文件被
+        读回并与内存项撞成重复，产生与实际不符的告警。
         """
 
         self._validate_agent_id(document.agent_id)
         self._ensure_not_builtin(document.agent_id)
+        self.registry.ensure_scope_loaded(self.scope)
         target = self._path_for(document.agent_id)
         with self.store.locked(target):
             if target.exists():

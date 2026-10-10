@@ -7,7 +7,6 @@ Registry；具体通知类型由各自的 configuration service 构造。
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Mapping
 
 from langchain_core.messages import SystemMessage
@@ -67,9 +66,3 @@ def broadcast_deferred_system_message(
         },
     )
     return delivered
-
-
-def normalize_scope_path(path: str) -> str:
-    """把用于通知匹配的 workspace 路径归一化为稳定字符串。"""
-
-    return os.path.normcase(os.path.abspath(os.path.normpath(path)))

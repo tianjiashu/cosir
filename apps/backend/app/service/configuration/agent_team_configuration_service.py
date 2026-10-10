@@ -1,8 +1,12 @@
 """Agent Team 配置的应用服务。
 
-本模块负责 system/workspace 配置的文件加载、保存和作用域校验，并把已校验配置同步到
+本模块负责 system/workspace 配置的保存、删除和作用域校验，并把已校验配置同步到
 ``app.agent_team.registry``。静态字段与图结构由 ``app.agent_team.configuration`` 领域模型
 负责；本模块不负责 TeamRun 生命周期、节点执行或主 Agent workflow。
+
+配置的**读取与装载**不在本模块：目录装载由 ``app.agent_team.registry`` 在作用域首次被读取时
+经 ``AgentTeamConfigurationScopeSource`` 完成（见该模块说明），本模块只负责写路径与校验，
+避免同一份配置存在「启动期装载」和「按需装载」两套口径。
 """
 
 from __future__ import annotations
@@ -17,12 +21,10 @@ from app.agent_team.configuration.agent_team_configuration import (
     TeamScope,
     configuration_document,
 )
+from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
 from app.agent_team.registry import AgentTeamConfigurationRegistry
-from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileType
 from app.service.configuration.file_store import ConfigurationFileStore
-from app.utils.path import system_cosir
-from app.utils.path.workspace_cosir import workspace_agent_team_config_dir
 
 
 class AgentTeamConfigurationService:
@@ -34,33 +36,25 @@ class AgentTeamConfigurationService:
     """
 
     def __init__(self, registry: AgentTeamConfigurationRegistry | None = None) -> None:
-        """创建配置文件仓储，并绑定一个 Agent Team 注册表。
+        """创建配置服务并绑定 Agent Team 注册表。
+
+        参数:
+            registry: 进程级 Team 配置注册表；为 ``None`` 时自建一个带默认配置来源的实例
+                （仅用于测试等不接装配期的场景，生产由生命周期显式注入共享注册表）。
 
         返回:
             无。
 
         副作用:
-            只创建注册表引用和文件仓储对象；不会读取目录或修改文件。
+            只创建注册表引用与文件仓储对象；不会读取目录或修改文件。
         """
 
-        self._registry = registry or AgentTeamConfigurationRegistry()
-
-    def load_directory(self, scope: str, directory: str | Path) -> None:
-        """加载一个作用域目录，并原子替换注册表中的该作用域索引。
-
-        参数:
-            scope: ``system`` 或 workspace 根路径。
-            directory: 该作用域对应的配置目录。
-
-        异常:
-            OSError: 目录创建或基础文件系统操作失败时抛出。
-
-        副作用:
-            读取目录中的 JSON 文件并更新进程内索引；无效文件由仓储记录日志并跳过。
-        """
-
-        loaded = self._load_directory_documents(directory)
-        self._registry.replace_scope(scope, loaded)
+        self._registry = registry or AgentTeamConfigurationRegistry(
+            AgentTeamConfigurationScopeSource()
+        )
+        # 写入目录直接取自注册表的配置来源：写目录与装载目录必须是同一映射，否则保存后的配置
+        # 可能落在读取方看不到的位置（「保存成功但列表为空」）。
+        self._source = self._registry.source
 
     def save_confirmed(
         self,
@@ -189,18 +183,20 @@ class AgentTeamConfigurationService:
         self._registry.register(configuration, workspace_root=workspace_root)
         return configuration
 
-    @staticmethod
     def _directory_for(
+        self,
         scope: str,
         workspace_root: str | Path | None,
     ) -> Path:
-        """映射已验证的配置作用域到其固定文件目录。"""
+        """映射已验证的配置作用域到其固定文件目录。
 
-        if scope == AgentTeamConfigurationRegistry.SYSTEM_SCOPE:
-            return system_cosir.system_agent_team_config_dir()
-        if workspace_root is None:
-            raise ValueError("workspace_root is required for workspace Team configuration")
-        return workspace_agent_team_config_dir(workspace_root)
+        目录映射与装载来源共用 ``AgentTeamConfigurationScopeSource``：若写入与读取各自维护一套
+        映射，保存后的配置可能落在读取方看不到的目录里，表现为「保存成功但列表为空」。
+        """
+
+        return self._source.directory(
+            self._registry.normalize_scope(scope, workspace_root)
+        )
 
     @staticmethod
     def _encode(configuration: AgentTeamConfiguration) -> str:
@@ -210,35 +206,6 @@ class AgentTeamConfigurationService:
             json.dumps(configuration_document(configuration), ensure_ascii=False, indent=2)
             + "\n"
         )
-
-    @staticmethod
-    def _load_directory_documents(
-        directory: str | Path,
-    ) -> dict[str, AgentTeamConfiguration]:
-        """读取并解析一个配置目录中的 Team JSON 文件。
-
-        单个配置文件无效时记录结构化日志并跳过，不影响同目录其他配置的加载；目录级
-        文件系统异常向调用方抛出，由生命周期决定是否终止启动。
-        """
-
-        target = Path(directory)
-        target.mkdir(parents=True, exist_ok=True)
-        loaded: dict[str, AgentTeamConfiguration] = {}
-        for path in sorted(target.glob("*.json")):
-            try:
-                document = json.loads(ConfigurationFileStore.read_text(path))
-                configuration = AgentTeamConfiguration.model_validate(document)
-            except Exception as exc:
-                log.error(
-                    "agent_team_config_invalid",
-                    extra={
-                        "msg": "Agent Team 配置无效，已跳过该文件",
-                        "data": {"path": str(path), "error_type": type(exc).__name__},
-                    },
-                )
-                continue
-            loaded[configuration.team_id] = configuration
-        return loaded
 
     @staticmethod
     def _create_configuration_file(

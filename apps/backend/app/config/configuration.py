@@ -91,7 +91,8 @@ def build_agent_registry(
     通用子 Agent 和主 Agent 由代码构造并注册到 `system` 作用域；主 Agent prompt 由系统配置
     service 从用户文件读取后注入，用户尚未配置时传空串（主 Agent 不生成 ``<agent_layer>``）。
     主 Agent 的 ``max_steps`` 由装配层传入，默认值与 ``Settings`` 的默认配置一致。
-    系统与 workspace JSON 由生命周期启动阶段一次性读取到同一个 Registry。
+    用户 JSON（系统级与 workspace 级）不在此处读取：Registry 在某个作用域首次被读取时经注入的
+    ``AgentProfileScopeSource`` 自行装载，因此运行期新建的 workspace 同样能被解析到。
 
     返回:
         已播种完成的 ``AgentProfileRegistry``。
@@ -107,12 +108,13 @@ def build_agent_registry(
 
     """
 
+    from app.core.agents.agent_profile_source import AgentProfileScopeSource
     from app.core.agents.define_agents import (
         general_child_agent,
         main_agent,
     )
 
-    registry = AgentProfileRegistry()
+    registry = AgentProfileRegistry(AgentProfileScopeSource())
     for profile in (
         general_child_agent(),
         main_agent(system_prompt=main_agent_system_prompt, max_steps=main_agent_max_steps),

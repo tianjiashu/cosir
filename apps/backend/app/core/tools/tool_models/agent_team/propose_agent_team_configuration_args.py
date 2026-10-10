@@ -53,7 +53,7 @@ class ProposeAgentTeamNodeArgs(BaseModel):
         examples=["Development"],
     )
     agent_id: AgentTeamIdentifier = Field(
-        description="ID of the registered child Agent profile that executes this node.",
+        description="ID of the registered child Agent profile that executes this node. Same agent_id can be used in different nodes.",
         examples=["developer_agent"],
     )
     statuses: list[AgentTeamStatusName] = Field(

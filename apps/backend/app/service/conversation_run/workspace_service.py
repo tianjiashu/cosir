@@ -13,6 +13,7 @@ import copy
 from contextlib import ExitStack
 from pathlib import Path
 
+from app.agent_team.registry import get_agent_team_registry
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.logging.logger import log
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
@@ -24,7 +25,12 @@ from app.storage.write_transaction import begin_immediate
 from app.task_runtime.service.task_service import TaskDeletionResult
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
-from app.utils.path.workspace_cosir import workspace_attachment_dir, workspace_cosir_dir
+from app.utils.path.workspace_cosir import (
+    workspace_agent_config_dir,
+    workspace_agent_team_config_dir,
+    workspace_attachment_dir,
+    workspace_cosir_dir,
+)
 
 
 class WorkspaceService:
@@ -132,14 +138,21 @@ class WorkspaceService:
             无；目录创建失败仅记 error 日志，不向上抛出。
 
         副作用:
-            在 ``<root_path>/.cosir`` 与 ``<root_path>/.cosir/Attachment`` 创建目录
-            （已存在则幂等跳过）。
+            在 ``<root_path>/.cosir`` 及 ``Attachment`` / ``agents`` / ``agent-teams`` 子目录
+            创建目录（已存在则幂等跳过）。
         """
         cosir_dir = workspace_cosir_dir(normalized_path)
+        # agents / agent-teams 是用户放置自定义子 Agent 与 Team 配置的位置：装载路径只在目录
+        # 存在时读到内容，因此不建目录就等于「配置永远为空，且用户不知道往哪放」。
+        children = (
+            workspace_attachment_dir(normalized_path),
+            workspace_agent_config_dir(normalized_path),
+            workspace_agent_team_config_dir(normalized_path),
+        )
         try:
             cosir_dir.mkdir(parents=True, exist_ok=True)
-            attachment_dir = workspace_attachment_dir(normalized_path)
-            attachment_dir.mkdir(parents=True, exist_ok=True)
+            for child in children:
+                child.mkdir(parents=True, exist_ok=True)
             log.info(
                 "workspace_cosir_initialized",
                 extra={
@@ -148,7 +161,7 @@ class WorkspaceService:
                         "workspace_name": name,
                         "root_path": normalized_path,
                         "cosir_dir": str(cosir_dir),
-                        "attachment_dir": str(attachment_dir),
+                        "created_dirs": [str(child) for child in children],
                     },
                 },
             )
@@ -313,7 +326,8 @@ class WorkspaceService:
         副作用:
             删除工作区下全部 task 树（task / turn / run / trace / delegation / context）及其
             孤儿 checkpoint；并删除 ``workspaces`` 表记录（旧 Runtime
-            事件体系已删除，不再参与级联删除）。
+            事件体系已删除，不再参与级联删除）；提交后卸载该根路径在 Agent profile 与
+            Agent Team 配置注册表中的作用域缓存（见 :meth:`_drop_workspace_config_scopes`）。
         """
 
         try:
@@ -335,7 +349,7 @@ class WorkspaceService:
                     deleted_task_ids: set[int] = set()
                     orphan_threads: set[str] = set()
                     with begin_immediate(main_session_factory()) as session:
-                        self._workspace.get_in_session(session, workspace_id)
+                        workspace_record = self._workspace.get_in_session(session, workspace_id)
                         root_task_ids = self._task_crud.list_root_ids_by_workspace(
                             workspace_id, session=session
                         )
@@ -362,12 +376,39 @@ class WorkspaceService:
                         orphan_checkpoint_threads=frozenset(orphan_threads),
                     )
                 )
+                self._drop_workspace_config_scopes(workspace_record.root_path)
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc
         log.info(
             "workspace_deleted",
             extra={"msg": "workspace deleted", "data": {"workspace_id": workspace_id}},
         )
+
+    @staticmethod
+    def _drop_workspace_config_scopes(root_path: str) -> None:
+        """卸载已删除 workspace 的 Agent / Team 配置作用域缓存。
+
+        为什么需要：两类配置注册表都按「作用域只装载一次」缓存（见
+        ``AgentProfileRegistry`` / ``AgentTeamConfigurationRegistry``）。workspace 删除后同一
+        路径可能被重新创建（``create_workspace`` 复用同路径记录），若保留缓存就再也读不到新目录
+        内容，已删除的 Agent / Team 也会一直留在进程内。清理在数据库提交成功后进行，与 checkpoint
+        回收同一时机。
+
+        参数:
+            root_path: 被删除 workspace 的根路径。
+
+        返回:
+            无。
+
+        异常:
+            ValueError: 根路径为空（不应出现；数据库中的 ``root_path`` 非空）。
+
+        副作用:
+            清空两个注册表中该根路径作用域的索引与已装载标记；不触碰文件系统。
+        """
+
+        get_agent_registry().drop_scope(root_path)
+        get_agent_team_registry().drop_scope(root_path)
 
     def _acquire_task_operations(
         self,

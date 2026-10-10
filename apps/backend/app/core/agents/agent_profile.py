@@ -8,8 +8,10 @@
 
 失败语义：单个配置文件无效只影响该文件——``vaild_agent_profile`` 捕获校验异常、以
 ``agent_profile_config_invalid`` 事件写 error 日志后返回 ``None``，由调用方决定跳过或降级；
-目录级问题（目录不存在、符号链接越界、目录不可读）才由 ``AgentProfileRegistry`` 抛出
-``AgentProfileConfigError``。
+目录级问题由 ``app.utils.scope_config_directory.read_scope_json_files`` 以
+``ScopeDirectoryError`` 表达，经 ``AgentProfileScopeSource`` 记为
+``agent_profile_scope_load_failed`` warning 后按「该作用域没有配置」降级，**不向读取方抛异常**
+（读取路径遍布运行期热点，坏配置不得打断 Run）。
 """
 
 from __future__ import annotations
@@ -47,13 +49,16 @@ class AgentProfileType(str, Enum):
 
 
 class AgentProfileConfigError(ValueError):
-    """表示 Agent 配置加载失败（目录级问题）。
+    """表示 Agent 配置构造或校验失败。
 
-    由 ``AgentProfileRegistry`` 在配置目录不存在、符号链接越界或目录不可读时抛出，消息中
-    始终带有路径。``AgentProfile.vaild_agent_profile`` 内部也用它标记单个文件的校验失败，
-    但不会向外抛出：该方法捕获全部异常、写 error 日志后返回 ``None``（见模块 docstring 的
-    失败语义）。调用方按作用域决定处置方式：系统目录出错阻止启动，workspace 目录出错由
-    启动编排记录后继续装配其他 workspace。
+    用于「JSON 文档 → profile」阶段的失败：必填字段缺失、字段类型不符、工具名非法、
+    ``max_steps`` 非正、模型配置引用无效等（见 ``parse_agent_profile_document``），以及
+    ``ensure_system_agent_config_dir`` 创建系统配置目录失败。消息中始终带有文件路径。
+
+    目录级**读取**失败不属于本异常：它由 ``app.utils.scope_config_directory.ScopeDirectoryError``
+    表达，并由各配置来源捕获后降级为「该作用域没有配置」+ 日志，因此读取方看不到异常
+    （见模块 docstring 的失败语义）。``AgentProfile.vaild_agent_profile`` 也使用本异常标记单个
+    文件的校验失败，但会捕获全部异常、写 error 日志后返回 ``None``，不向外抛出。
     """
 
 
