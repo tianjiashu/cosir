@@ -293,6 +293,49 @@ class AgentTeamConfigurationRegistry:
             )
             return sorted(merged.values(), key=lambda item: item.team_id)
 
+    def team_summary(self, workspace_root: str | Path) -> str:
+        """将指定 workspace 可见的 Team 配置投影为能力摘要。
+
+        与 :meth:`AgentProfileRegistry.child_agent_summary` 同构，但 Team 摘要更完整：除标识、
+        名称与用途外，还列出 Team 的节点清单与状态转移，供主 Agent 在调用 ``agent_team`` 工具前
+        知悉可选 Team，并据此构造 ``node_goals``（键为各 ``node_id``）、理解节点流转。不暴露运行态。
+
+        参数:
+            workspace_root: 当前 workspace 根路径。
+
+        返回:
+            以 ``team_id | name | description`` 加节点/转移明细列出的 Team 目录；没有可见 Team 时
+            返回 ``""``（整层不出现），避免向模型下发不存在的契约。
+
+        异常:
+            ValueError: workspace 根路径为空时由 :meth:`normalize_scope` 抛出。
+
+        副作用:
+            若该作用域尚未装载，则读取它的配置文件（连带装载 system 基线，见 :meth:`_ensure_scope`）；
+            此后仅读取内存索引，不包含系统提示词正文。
+        """
+
+        teams = self.list_visible(workspace_root)
+        if not teams:
+            return "no agent teams available"
+        blocks = []
+        for configuration in teams:
+            lines = [
+                f"team_id: {configuration.team_id} | name: {configuration.name} | description: {configuration.description}",
+                "  nodes:",
+            ]
+            lines.extend(
+                f"    - node_id: {node.node_id} | name: {node.name} | agent_id: {node.agent_id} | statuses: {node.statuses}"
+                for node in configuration.nodes
+            )
+            lines.append("  transitions:")
+            lines.extend(
+                f"    - {transition.from_node_id} (status={transition.status}) -> {transition.target_node_id}"
+                for transition in configuration.transitions
+            )
+            blocks.append("\n".join(lines))
+        return "Available agent teams:\n" + "\n\n".join(blocks)
+
     def _ensure_scope(self, scope: str) -> None:
         """确保指定作用域的 Team 配置已装载（每个作用域在本进程内只读盘一次）。
 

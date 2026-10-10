@@ -407,8 +407,8 @@ class AgentRuntime:
             task_space.defer_system_message(
                 SystemMessage(
                     content=(
-                        "Please follow the user's instructions and use this tool to carry out "
-                        f"their request: {tool_schema}"
+                        "Please follow the user's instructions to call this tool to carry out "
+                        f"their request: {tool_schema}. Do not generate JSON; invoke the tool instead."
                     )
                 )
             )
@@ -422,8 +422,8 @@ class AgentRuntime:
             task_space.defer_system_message(
                 SystemMessage(
                     content=(
-                        "Please follow the user's instructions and use this tool to carry out "
-                        f"their request: {tool_schema}"
+                        "Please follow the user's instructions to call this tool to carry out "
+                        f"their request: {tool_schema}. Do not generate JSON; invoke the tool instead."
                     )
                 )
             )

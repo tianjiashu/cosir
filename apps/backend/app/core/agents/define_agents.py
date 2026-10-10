@@ -68,6 +68,7 @@ def main_agent(*, system_prompt: str = "", max_steps: int = 300) -> AgentProfile
             TOOL_CHILD_AGENT_SEND,
             TOOL_CHILD_AGENT_STATUS,
             TOOL_CHILD_AGENT_WAIT,
+            TOOL_AGENT_TEAM,
         ],
         agent_type=AgentProfileType.MAIN,
         system_prompt=system_prompt,

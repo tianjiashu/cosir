@@ -583,12 +583,12 @@ class AgentProfileRegistry:
         """
 
         blocks = [
-            f"agent_id: {profile.agent_id} | description: {profile.description or ''}"
+            f"agent_id: {profile.agent_id} | description: {profile.description or ''} | allowed_tools: {profile.allowed_tools}"
             for profile in self.list(workspace)
             if profile.agent_type is AgentProfileType.CHILD
         ]
         if not blocks:
-            return ""
+            return "no child agents available"
         return "Available child agents:\n" + "\n".join(blocks)
 
     def child_agent_ids(self, workspace: str | Path) -> set[str]:
