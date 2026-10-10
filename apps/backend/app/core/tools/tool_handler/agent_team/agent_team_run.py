@@ -9,13 +9,14 @@ from pydantic import ValidationError
 
 from app.agent_team.registry import get_agent_team_registry
 from app.agent_team.team_tool_error import TeamToolError
-from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
+from app.core.agents.agent_profile import AgentProfile
 from app.core.tools.display.agent_team_display import (
     build_agent_team_preview_display_data,
     build_agent_team_run_display_data,
 )
 from app.core.tools.schemas import (
+    EXECUTING_DECISION_KINDS,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -32,7 +33,6 @@ from app.core.tools.tool_models import AgentTeamApproveInput, AgentTeamArgs
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_preparation_service import AgentTeamPreparationService
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
-from app.service.depends import get_conversation_run_service
 
 
 class AgentTeamRunTool(HandlerBase):
@@ -60,7 +60,6 @@ class AgentTeamRunTool(HandlerBase):
     def __init__(self):
         self.agent_team_run_service = AgentTeamRunService()
         self.agent_team_preparation_service = AgentTeamPreparationService()
-        self.run_service = get_conversation_run_service()
         self.team_register = get_agent_team_registry()
 
     def execute(
@@ -76,6 +75,11 @@ class AgentTeamRunTool(HandlerBase):
         为 ``None``）只做准备并把决定权交给用户；用户批准后 ``tools`` 节点以同一调用重新执行，
         此时决定非空，进入真正的启动分支。分支依据由框架注入（模型不可写），因此不能用参数
         伪造「已获批准」；驳回与放弃不会重执行本调用（它们在 ``wait_user`` 节点即被翻译成观察）。
+
+        两遍都消费运行时注入的父 Agent profile（本 Run 已物化模型设置的 per-run 副本），节点
+        未自带模型连接配置时以它作为 fallback。**不得**改为从注册表重新解析：注册表里是共享
+        单例，内置 Agent 没有模型连接字段，会让 ``get_model_config_service().get_config(None)``
+        抛 ``KeyError``，使准备阶段整体失败。
         """
 
         if execution_context is None:
@@ -84,9 +88,34 @@ class AgentTeamRunTool(HandlerBase):
                 "agent_team requires an execution context.",
                 reason="Run the tool from an active Agent context.",
             )
-        if execution_context.user_decision is not None and execution_context.user_decision.kind == UserDecision.Kind.APPROVE:
-            return self._start_confirmed_run(execution_context.user_decision)
-        return self._prepare_pending_run(team_id, goal, node_goals, execution_context)
+        parent_agent_profile = execution_context.runtime_dependencies.parent_agent_profile
+        if parent_agent_profile is None:
+            log.warning(
+                "agent_team_parent_profile_unavailable",
+                extra={
+                    "msg": "本次 Run 未注入父 Agent profile，无法准备 Team 运行",
+                    "data": {
+                        "team_id": team_id,
+                        "run_id": execution_context.run_id,
+                        "task_id": execution_context.task_id,
+                    },
+                },
+            )
+            return tool_error(
+                self.name,
+                error="agent_team_runtime_unavailable",
+                reason=(
+                    "The parent Agent profile was not injected into this run, so the Team "
+                    "execution plan cannot be prepared."
+                ),
+                retryable=False,
+            )
+        decision = execution_context.user_decision
+        if decision is not None and decision.kind in EXECUTING_DECISION_KINDS:
+            return self._start_confirmed_run(decision, parent_agent_profile)
+        return self._prepare_pending_run(
+            team_id, goal, node_goals, execution_context, parent_agent_profile
+        )
 
     def _prepare_pending_run(
         self,
@@ -94,15 +123,23 @@ class AgentTeamRunTool(HandlerBase):
         goal: str,
         node_goals: dict[str, str],
         execution_context: ToolExecutionContext,
+        parent_agent_profile: AgentProfile,
     ) -> ToolObservation:
         """第一遍：准备并保存待确认 TeamRun（不启动执行）。
 
         预览和运行时快照在同一次准备中生成，并在返回工具结果前写入主 SQLite；启动发生在用户
-        批准之后（见 :meth:`_start_confirmed_run`）。准备或持久化失败会抛出 ``TeamToolError``，
-        由下方 ``except`` 统一映射为不可重试的失败观察。
+        批准之后（见 :meth:`_start_confirmed_run`）。
+
+        参数:
+            parent_agent_profile: 本次 Run 由运行时注入的父 Agent profile，供节点在缺少独立
+                模型连接配置时回落（节点快照的模型设置与 ``model_config_id`` 都由它补全）。
 
         异常:
             无（失败路径归一化为 ``ToolObservation(status="error")``）。
+
+        副作用:
+            成功后向主 SQLite 写入一条 ``pending`` TeamRun；失败路径写 warning / error 日志
+            （未知异常带堆栈，避免只留一个 ``error:None``）。
         """
 
         try:
@@ -117,7 +154,6 @@ class AgentTeamRunTool(HandlerBase):
                     reason=f"The Team configuration does not exist: {team_id}; please confirm whether this Team has been created",
                     retryable=False
                 )
-            parent_run = self.run_service.get_run(execution_context.run_id)
             preparation = self.agent_team_preparation_service.prepare(
                 configuration,
                 goal=goal,
@@ -126,7 +162,7 @@ class AgentTeamRunTool(HandlerBase):
                 parent_task_id=execution_context.task_id,
                 parent_run_id=execution_context.run_id,
                 workspace_id=execution_context.workspace_id,
-                parent_agent_profile=get_agent_registry().resolve(execution_context.workspace_root,parent_run.agent_id),
+                parent_agent_profile=parent_agent_profile,
             )
             pending_run = self.agent_team_run_service.create_pending_confirmation(
                 configuration=configuration,
@@ -163,8 +199,10 @@ class AgentTeamRunTool(HandlerBase):
                     "msg": "Agent Team 待确认运行创建失败",
                     "data": {
                         "team_id": team_id,
+                        "run_id": execution_context.run_id,
                         "error_type": type(exc).__name__,
                         "retryable": exc.retryable,
+                        "reason": str(exc),
                     },
                 },
             )
@@ -175,21 +213,35 @@ class AgentTeamRunTool(HandlerBase):
                 retryable=exc.retryable,
             )
         except Exception as exc:
-            log.warning(
+            # 兜底分支只应捕获代码缺陷：堆栈是唯一能定位它的证据，必须带 exc_info 落盘。
+            log.error(
                 "agent_team_run_creation_failed",
                 extra={
-                    "msg": "Agent Team 待确认运行创建失败（未知异常）",
-                    "data": {"team_id": team_id, "error_type": type(exc).__name__},
+                    "msg": f"Agent Team 待确认运行创建失败（未预期异常 {type(exc).__name__}）",
+                    "data": {
+                        "team_id": team_id,
+                        "run_id": execution_context.run_id,
+                        "task_id": execution_context.task_id,
+                    },
                 },
+                exc_info=True,
             )
             return tool_error(
                 self.name,
                 "agent_team_run_creation_invalid",
-                reason=f"Failed to create the Team execution plan. Please check the Team configuration or retry later. error:{str(exc)}",
+                reason=(
+                    "Preparing the Team execution plan failed with an internal error "
+                    f"({type(exc).__name__}: {exc}); the Team configuration itself may be valid, "
+                    "so do not retry this call."
+                ),
                 retryable=False,
             )
 
-    def _start_confirmed_run(self, decision: UserDecision) -> ToolObservation:
+    def _start_confirmed_run(
+        self,
+        decision: UserDecision,
+        parent_agent_profile: AgentProfile,
+    ) -> ToolObservation:
         """第二遍：用户批准后启动 TeamRun 并返回启动结果。
 
         ``decision.request_id`` 是待确认 TeamRun 的主键（第一遍由本工具写入
@@ -201,6 +253,8 @@ class AgentTeamRunTool(HandlerBase):
 
         参数:
             decision: 框架注入的用户决定（批准）。
+            parent_agent_profile: 本次 Run 由运行时注入的父 Agent profile；确认边界会用它重新
+                生成节点运行快照（见 :meth:`_prepare_pending_run` 的同名说明）。
 
         返回:
             启动成功或「已启动」时为 ``success`` 观察；TeamRun 不存在、已被取消 / 失败，或输入
@@ -228,6 +282,7 @@ class AgentTeamRunTool(HandlerBase):
                 inputs.configuration,
                 goal=inputs.goal,
                 node_goals=inputs.node_goals,
+                parent_agent_profile=parent_agent_profile,
             )
         except KeyError:
             return self._confirmation_error(f"The pending TeamRun does not exist: {team_run_id}")

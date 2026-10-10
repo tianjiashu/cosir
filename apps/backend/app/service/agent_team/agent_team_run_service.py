@@ -14,9 +14,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.agent_team.team_tool_error import TeamToolError
-from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
-from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.model_settings import ModelSettings
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_preparation_service import (
@@ -139,6 +138,7 @@ class AgentTeamRunService:
         *,
         goal: str,
         node_goals: dict[str, str],
+        parent_agent_profile: AgentProfile,
     ) -> AgentTeamRunModel:
         """使用用户最终配置确认 TeamRun，并在提交后交给 Coordinator 启动。
 
@@ -152,6 +152,11 @@ class AgentTeamRunService:
         human-in-the-loop 的批准由图重放投递，进程在「已启动」与「写 checkpoint」之间终止会
         重复确认；此时必须如实返回「已在运行 / 已结束」，既不重复启动 Coordinator，也不让
         调用方误判为失败。
+
+        参数:
+            parent_agent_profile: 本次确认所属主 Run 的 per-run Agent profile（由运行时注入）。
+                节点缺少独立模型连接配置时以它回落，因此必须由调用方传入已物化模型设置的副本；
+                本层不再自行解析注册表（共享单例没有模型连接字段，会让准备阶段抛 ``KeyError``）。
 
         异常:
             ValueError: TeamRun 不存在、Team 标识或配置无效、主 Run 不可恢复，或同一 pending
@@ -169,7 +174,11 @@ class AgentTeamRunService:
             if isinstance(key, str) and isinstance(value, str) and value.strip()
         }
         agent_team_preparation:AgentTeamPreparationResult = self._prepare_final_plan(
-            existing, configuration, goal=final_goal, node_goals=final_node_goals
+            existing,
+            configuration,
+            goal=final_goal,
+            node_goals=final_node_goals,
+            parent_agent_profile=parent_agent_profile,
         )
 
         with begin_immediate(self._session_factory) as session:
@@ -214,15 +223,19 @@ class AgentTeamRunService:
         *,
         goal: str,
         node_goals: dict[str, str],
+        parent_agent_profile: AgentProfile,
     ) -> AgentTeamPreparationResult:
         """基于确认时的最终配置重新生成执行快照。
 
-        该方法只读取主 Run、workspace 和运行时注册表，不写数据库。返回结果由确认事务
-        统一写入 TeamRun；初始工具预览产生的候选快照不作为确认依据。
+        该方法只读取 workspace 与运行时注册表（节点 Profile 与工具），不写数据库。返回结果由
+        确认事务统一写入 TeamRun；初始工具预览产生的候选快照不作为确认依据。
+
+        参数:
+            parent_agent_profile: 与 :meth:`confirm_and_start` 同一份 per-run profile，供节点
+                在缺少独立模型连接配置时回落。
         """
 
         workspace_root = get_workspace_service().get_workspace(row.workspace_id).root_path
-        parent_run = self._run_service.get_run(row.parent_run_id)
         return AgentTeamPreparationService().prepare(
             configuration,
             goal=goal,
@@ -231,7 +244,7 @@ class AgentTeamRunService:
             parent_task_id=row.parent_task_id,
             parent_run_id=row.parent_run_id,
             workspace_id=row.workspace_id,
-            parent_agent_profile=get_agent_registry().resolve(workspace_root, parent_run.agent_id),
+            parent_agent_profile=parent_agent_profile,
         )
 
     def _validate_parent_run(self, parent_task_id: int, parent_run_id: int) -> None:

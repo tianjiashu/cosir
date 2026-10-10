@@ -31,8 +31,8 @@ from app.core.tools.schemas import (
     UserDecisionKind,
 )
 from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM
+from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_grouping import TOOL_GROUP_AGENT_TEAM
-from app.core.tools.tool_handler.agent_team import agent_team_run as agent_team_run_module
 from app.core.tools.tool_handler.agent_team.agent_team_run import (
     AgentTeamRunTool,
     build_agent_team_run_definition,
@@ -98,12 +98,22 @@ def _bare_tool() -> AgentTeamRunTool:
 
 
 def _context(user_decision: UserDecision | None = None) -> ToolExecutionContext:
+    """构造带运行时依赖的执行上下文。
+
+    生产上下文的 ``runtime_dependencies.parent_agent_profile`` 由 runtime 注入本次 Run 的 per-run
+    profile；工具依赖它准备节点模型设置，因此这里默认注入一份已物化的父 profile。需要验证
+    「未注入」口径的用例直接自行构造 ``ToolExecutionContext``。
+    """
+
     return ToolExecutionContext(
         task_id=1,
         workspace_id=1,
         workspace_root=Path("C:/ws-root"),
         run_id=2,
         user_decision=user_decision,
+        runtime_dependencies=ToolRuntimeDependencies(
+            parent_agent_profile=_parent_run_profile()
+        ),
     )
 
 
@@ -127,24 +137,55 @@ def _child_profile() -> AgentProfile:
         system_prompt="child system prompt",
         allowed_tools=["read_file"],
         agent_type=AgentProfileType.CHILD,
-        model_settings=ModelSettings(
-            base_url="http://127.0.0.1/v1",
-            api_key="secret",
-            model_name="local-model",
-            context_window_k=32,
-            supports_thinking=True,
-            supports_reasoning_effort=True,
-            supports_image=False,
-        ),
+        model_settings=_materialized_model_settings(),
+    )
+
+
+def _materialized_model_settings() -> ModelSettings:
+    """构造「已物化连接与能力字段」的模型运行设置。
+
+    真实链路由 ``run.model_config_id`` 经 ``ModelSettings.from_model_config_record`` 物化；
+    测试用等价的显式值，避免用例依赖数据库中的模型配置记录。
+    """
+
+    return ModelSettings(
+        base_url="http://127.0.0.1/v1",
+        api_key="secret",
+        model_name="local-model",
+        context_window_k=32,
+        supports_thinking=True,
+        supports_reasoning_effort=True,
+        supports_image=False,
+    )
+
+
+def _parent_run_profile() -> AgentProfile:
+    """构造本次 Run 由运行时注入的父 Agent profile（主 Agent + 已物化模型设置）。
+
+    潜在缺陷：若调用方改用注册表共享单例（内置 profile 的 ``model_settings`` 只有偏好项、
+    ``model_config_id`` 为空），节点模型设置回落会走 ``get_config(None)`` 抛 ``KeyError``。
+    """
+
+    return AgentProfile(
+        agent_id="main_agent",
+        role="main_agent",
+        system_prompt="main system prompt",
+        allowed_tools=["agent_team", "read_file"],
+        agent_type=AgentProfileType.MAIN,
+        model_config_id=1,
+        model_settings=_materialized_model_settings(),
     )
 
 
 def _stub_preparation_lookups(monkeypatch: pytest.MonkeyPatch, child: AgentProfile) -> None:
-    """把准备服务对外部注册表 / 工具系统的查找替换为最小桩，保留装配逻辑本体。"""
+    """把准备服务对 Agent 注册表的查找替换为最小桩，保留装配逻辑本体。
+
+    节点工具来自 Profile 的 ``allowed_tools``（不经工具系统解析 schema），因此这里只需桩掉
+    节点 Profile 的解析来源。
+    """
 
     registry = SimpleNamespace(resolve=lambda scope, agent_id: child)
     monkeypatch.setattr(prep_module, "get_agent_registry", lambda: registry)
-    monkeypatch.setattr(prep_module, "get_tool_system", lambda: SimpleNamespace(executor=None))
 
 
 @pytest.fixture
@@ -382,26 +423,27 @@ def test_approve_decision_routes_to_start_branch_only() -> None:
     """(两阶段契约) APPROVE 必须走启动分支：调用 ``confirm_and_start`` 并返回 running 观察。
 
     潜在缺陷：分流条件引用不存在的 ``UserDecision.Kind``，任何非空决定都抛
-    ``AttributeError``，使「用户批准 → 启动 Team」这一必经路径彻底不可达。
+    ``AttributeError``，使「用户批准 → 启动 Team」这一必经路径彻底不可达；或启动分支不再
+    转发运行时注入的父 profile，使确认边界重新从注册表解析出无模型连接的单例。
     """
 
     tool = _bare_tool()
     calls: list[tuple] = []
     row = SimpleNamespace(id=7, status=AgentTeamRunStatus.RUNNING.value, team_id="code-quality")
 
-    def confirm_and_start(team_run_id, configuration, *, goal, node_goals):
-        calls.append((team_run_id, configuration, goal, node_goals))
+    def confirm_and_start(team_run_id, configuration, *, goal, node_goals, parent_agent_profile):
+        calls.append((team_run_id, configuration, goal, node_goals, parent_agent_profile))
         return row
 
     tool.agent_team_run_service = SimpleNamespace(confirm_and_start=confirm_and_start)
     tool.team_register = SimpleNamespace(resolve=lambda *a: pytest.fail("准备分支不应被触达"))
-    tool.run_service = SimpleNamespace(get_run=lambda *a: pytest.fail("准备分支不应被触达"))
+    context = _context(_approve_decision())
 
     observation = tool.execute(
         team_id="code-quality",
         goal="交付报告",
         node_goals={"develop": "实现", "review": "审查"},
-        execution_context=_context(_approve_decision()),
+        execution_context=context,
     )
 
     assert observation.status == "success"
@@ -410,7 +452,46 @@ def test_approve_decision_routes_to_start_branch_only() -> None:
     assert observation.display_data["status"] == "running"
     # 启动分支不得再向工作流下发待决请求，否则会形成无法结束的挂起。
     assert observation.user_input_request is None
-    assert calls == [(7, _configuration(), "交付报告", {"develop": "实现", "review": "审查"})]
+    assert calls == [
+        (
+            7,
+            _configuration(),
+            "交付报告",
+            {"develop": "实现", "review": "审查"},
+            context.runtime_dependencies.parent_agent_profile,
+        )
+    ]
+
+
+def test_execute_reports_runtime_unavailable_without_injected_parent_profile() -> None:
+    """(异常/装配契约) 运行时未注入父 profile 时给出专用不可重试错误，不进入准备分支。
+
+    潜在缺陷：把「依赖未注入」当成输入问题继续执行，最终以无信息的
+    ``agent_team_run_creation_invalid`` 收场，掩盖真正的装配缺失。
+    """
+
+    tool = _bare_tool()
+    # 刻意不经 ``_context``：这里要构造「runtime_dependencies 为空」的真实缺失形态。
+    context = ToolExecutionContext(
+        task_id=1,
+        workspace_id=1,
+        workspace_root=Path("C:/ws-root"),
+        run_id=2,
+    )
+    tool.team_register = SimpleNamespace(
+        resolve=lambda *a: pytest.fail("未注入父 profile 时不得进入准备分支")
+    )
+
+    observation = tool.execute(
+        team_id="code-quality",
+        goal="交付报告",
+        node_goals={"develop": "实现"},
+        execution_context=context,
+    )
+
+    assert observation.status == "error"
+    assert observation.error == "agent_team_runtime_unavailable"
+    assert observation.retryable is False
 
 
 @pytest.mark.parametrize("kind", [UserDecisionKind.REJECT, UserDecisionKind.ABORT])
@@ -444,8 +525,8 @@ def test_non_approve_decision_never_starts_a_run(kind: UserDecisionKind) -> None
 # --------------------------------------------------------------------------- #
 # 第二遍实现 _start_confirmed_run：失败映射与终态语义
 #
-# 说明：以下用例直接调用第二遍实现，以把「分流缺陷」（上面 execute 用例）与
-# 「确认分支自身的失败映射」解耦——当前 execute() 无法把任何决定送达这里。
+# 说明：以下用例直接调用第二遍实现，把「分流」（上面 execute 用例）与「确认分支自身的失败
+# 映射」解耦，便于分别定位缺陷。
 # --------------------------------------------------------------------------- #
 
 
@@ -461,7 +542,7 @@ def test_confirmed_start_returns_running_observation() -> None:
     row = SimpleNamespace(id=11, status=AgentTeamRunStatus.RUNNING.value, team_id="code-quality")
     tool = _start_branch_tool(lambda *a, **k: row)
 
-    observation = tool._start_confirmed_run(_approve_decision())
+    observation = tool._start_confirmed_run(_approve_decision(), _parent_run_profile())
 
     assert observation.status == "success"
     assert json.loads(observation.content) == {"status": "running", "team_id": "code-quality"}
@@ -479,7 +560,7 @@ def test_confirmed_start_rejects_non_numeric_request_id() -> None:
     tool = _start_branch_tool(lambda *a, **k: pytest.fail("非法 request_id 不得触达启动服务"))
     decision = UserDecision(request_id="not-a-number", kind=UserDecisionKind.APPROVE, data={})
 
-    observation = tool._start_confirmed_run(decision)
+    observation = tool._start_confirmed_run(decision, _parent_run_profile())
 
     assert observation.status == "error"
     assert observation.error == "agent_team_confirmation_invalid"
@@ -498,7 +579,7 @@ def test_confirmed_start_rejects_malformed_payload() -> None:
         request_id="7", kind=UserDecisionKind.APPROVE, data={"goal": "交付报告"}
     )
 
-    observation = tool._start_confirmed_run(decision)
+    observation = tool._start_confirmed_run(decision, _parent_run_profile())
 
     assert observation.status == "error"
     assert observation.error == "agent_team_confirmation_invalid"
@@ -515,7 +596,9 @@ def test_confirmed_start_maps_missing_pending_run_to_error() -> None:
     def confirm_and_start(*args, **kwargs):
         raise KeyError(7)
 
-    observation = _start_branch_tool(confirm_and_start)._start_confirmed_run(_approve_decision())
+    observation = _start_branch_tool(confirm_and_start)._start_confirmed_run(
+        _approve_decision(), _parent_run_profile()
+    )
 
     assert observation.status == "error"
     assert observation.error == "agent_team_confirmation_invalid"
@@ -532,7 +615,9 @@ def test_confirmed_start_surfaces_domain_value_error() -> None:
     def confirm_and_start(*args, **kwargs):
         raise ValueError("确认配置的 team_id 与待确认 Team 不一致")
 
-    observation = _start_branch_tool(confirm_and_start)._start_confirmed_run(_approve_decision())
+    observation = _start_branch_tool(confirm_and_start)._start_confirmed_run(
+        _approve_decision(), _parent_run_profile()
+    )
 
     assert observation.status == "error"
     assert observation.error == "agent_team_confirmation_invalid"
@@ -550,7 +635,9 @@ def test_confirmed_start_does_not_report_success_for_terminal_runs(terminal_stat
     """
 
     row = SimpleNamespace(id=7, status=terminal_status, team_id="code-quality")
-    observation = _start_branch_tool(lambda *a, **k: row)._start_confirmed_run(_approve_decision())
+    observation = _start_branch_tool(lambda *a, **k: row)._start_confirmed_run(
+        _approve_decision(), _parent_run_profile()
+    )
 
     assert observation.status == "error"
     assert observation.error == "agent_team_confirmation_invalid"
@@ -601,18 +688,10 @@ def test_prepare_branch_succeeds_for_an_existing_team(monkeypatch) -> None:
 
     child = _child_profile()
     _stub_preparation_lookups(monkeypatch, child)
-    monkeypatch.setattr(
-        agent_team_run_module,
-        "get_agent_registry",
-        lambda: SimpleNamespace(resolve=lambda *a: child),
-    )
 
     tool = _bare_tool()
     tool.team_register = SimpleNamespace(
         resolve=lambda scope, team_id: AgentTeamConfiguration.model_validate(_configuration())
-    )
-    tool.run_service = SimpleNamespace(
-        get_run=lambda run_id: SimpleNamespace(agent_id="main_agent")
     )
     tool.agent_team_preparation_service = AgentTeamPreparationService()
 

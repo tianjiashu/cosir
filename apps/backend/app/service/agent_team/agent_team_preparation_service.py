@@ -15,11 +15,10 @@ from app.agent_team.configuration.agent_team_configuration import AgentTeamConfi
 from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
 from app.agent_team.team_tool_error import TeamToolError
-from app.config.configuration import get_agent_registry, get_tool_system
+from app.config.configuration import get_agent_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.core.tools.schemas import ToolDefinition
 from app.core.tools.schemas.tool_names import *
 from app.service.depends import get_model_config_service
 
@@ -80,23 +79,35 @@ def resolve_node_profile(
     return node, profile
 
 
-def materialize_node_tools(agent_id: str, workspace_root: str) -> list[str]:
-    """根据节点 Agent Profile 固化工具定义。
+def materialize_node_tools(profile: AgentProfile) -> list[str]:
+    """按节点 Agent Profile 固化本次运行的节点工具名清单。
 
-    Team 节点不能递归创建 Team、子 Agent 或配置提案；可固化工具来自节点 Profile 允许的工具
-    集，再剔除 Team 节点禁用的工具。返回的工具定义属于本次准备结果，确认后不会再次从可变
-    注册表解析。
+    节点工具 = Profile 允许的工具 ∪ 子 Agent 协作工具（``delegate_task`` / ``child_agent_*``，
+    节点需要把子工作再委派下去），再减去 :data:`TEAM_NODE_DISALLOWED_TOOLS`（Team 禁止节点
+    递归建 Team、提案配置或占用可交互终端）。返回值是新列表：Profile 是注册表共享单例，
+    **不得**就地 ``extend``，否则本次 Team 的工具集会污染同一进程后续所有 Agent。
+
+    参数:
+        profile: 已解析的节点 Agent Profile（由 :func:`resolve_node_profile` 解析）。
+
+    返回:
+        本次运行冻结的节点工具名列表，顺序为 Profile 原顺序 + 追加的协作工具。
 
     异常:
-        TeamToolError: Agent Profile 不存在。
+        无（节点工具可用性由本函数归一化；工具名合法性已由 Profile 加载期校验）。
     """
 
-    tool_system = get_tool_system()
-    profile = get_agent_registry().resolve(workspace_root, agent_id)
-    if profile is None:
-        raise TeamToolError(f"Team 节点 Agent 不可用: {agent_id}")
-    allowed_tools = profile.allowed_tools
-    allowed_tools.extend([TOOL_DELEGATE_TASK, TOOL_CHILD_AGENT_SEND, TOOL_CHILD_AGENT_STATUS, TOOL_CHILD_AGENT_WAIT])
+    allowed_tools = [
+        name for name in profile.allowed_tools if name not in TEAM_NODE_DISALLOWED_TOOLS
+    ]
+    for name in (
+        TOOL_DELEGATE_TASK,
+        TOOL_CHILD_AGENT_SEND,
+        TOOL_CHILD_AGENT_STATUS,
+        TOOL_CHILD_AGENT_WAIT,
+    ):
+        if name not in allowed_tools:
+            allowed_tools.append(name)
     return allowed_tools
 
 def require_model_settings(model_settings: ModelSettings) -> ModelSettings | None:
@@ -369,7 +380,7 @@ class AgentTeamPreparationService:
         node_runtime_snapshots: dict[str, dict[str, Any]] = {}
         for node in configuration.nodes:
             profile = node_profiles[node.node_id]
-            allowed_tools = materialize_node_tools(profile.agent_id, workspace_root)
+            allowed_tools = materialize_node_tools(profile)
             model_settings: ModelSettings = resolve_effective_model_settings(profile, parent_agent_profile)
             structured_output = build_node_structured_output(configuration, node)
             node_runtime_snapshots[node.node_id] = {
@@ -400,7 +411,9 @@ class AgentTeamPreparationService:
                     "model_config_id": profile.model_config_id
                                        or parent_agent_profile.model_config_id,
                     "model_name": model_settings.model_name,
-                    "tools": [tool.name for tool in tools],
+                    # 与 node_runtime_snapshots 用同一份工具名清单：预览展示的节点工具必须就是
+                    # 确认后冻结执行的那一份，否则用户看到的与真正执行的不一致。
+                    "tools": list(allowed_tools),
                     "max_steps": profile.max_steps,
                     "statuses": node.statuses,
                 }

@@ -35,8 +35,7 @@ class AgentTeamCoordinator:
 
     def __init__(self) -> None:
 
-        from app.config.configuration import get_tool_system
-        from app.service.agent_team.agent_team_run_service import get_agent_registry
+        from app.config.configuration import get_agent_registry, get_tool_system
 
         self._team_run_crud = AgentTeamRunCrud()
         self._task_service = get_task_service()
