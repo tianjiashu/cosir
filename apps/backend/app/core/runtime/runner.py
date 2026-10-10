@@ -359,12 +359,10 @@ class AgentRuntime:
         """为单个 run 构建运行时操作门面，并算出本轮的工具准入边界。
 
         本方法不改 Task 固化的工具定义，只产出本轮 ``allows_tools``：以 Task 固化工具名为基准集合，
-        减去本 Run 的 ``ban_tools``、加上对应配置提案开关打开时的提案工具。该集合
-        同时作用于两处——``WorkflowOperations.task_tool_schemas`` 据此过滤下发给模型的 schema，
-        工具执行准入也据此拦截；因此本轮禁用集合 / 提案开关会改变模型看到的工具列表，进而击穿同一
-        Task 的前缀缓存（这与 ``docs/plan/conversation-disabled-tool-groups-plan.md`` 第 3 节
-        「稳定 bind_tools」的设计意图不一致，属当前代码事实）。workspace 可见性由
-        ``execution_context`` 负责，是另一道独立边界。
+        减去本 Run 的 ``ban_tools``、加上对应配置提案开关打开时的提案工具。该集合只供
+        ``ToolCallLifecycleManager`` 在模型返回工具调用后执行运行期准入拦截；模型绑定始终使用 Task
+        创建时固化的完整 schema，不得按本轮 ``allows_tools`` 过滤，否则会改变同一 Task 的模型请求前缀
+        并破坏缓存复用。workspace 可见性由 ``execution_context`` 负责，是另一道独立边界。
 
         参数:
             workspace: 当前 run 所属的 workspace 记录，用于解析工具执行边界。
@@ -384,7 +382,7 @@ class AgentRuntime:
             节点入口消费并写入上下文；这些消息在队列中等待，模型节点不消费则本轮不会进入模型请求。
         """
         task_space = task_runtime_spaces.get_or_create(task.id)
-        allows_tools = {tool.get("name") for tool in task_space.task_tool_definitions}
+        allows_tools = {tool.get("name") for tool in task_space.task_tool_schemas}
 
         ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
         if run.extra is not None and len(run.extra.ban_tools) > 0:

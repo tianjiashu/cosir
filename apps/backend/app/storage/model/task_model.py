@@ -18,7 +18,7 @@ class TaskModel(StorageBase):
     title: Mapped[str] = mapped_column(Text, nullable=False)
     extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Task 创建时冻结的模型可见工具 schema；本字段不包含 handler、权限运行态或版本号。
-    tool_definitions: Mapped[list[dict[str, Any]]] = mapped_column(
+    tool_schemas: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON, nullable=False, default=list
     )
 

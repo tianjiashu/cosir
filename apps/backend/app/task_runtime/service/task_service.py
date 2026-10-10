@@ -80,17 +80,17 @@ class TaskService:
         parent_run_id: int | None = None,
         session: Session | None = None,
         extra: dict[str, object] | None = None,
-        tool_definitions: list[dict[str, object]] | None = None,
+        tool_schemas: list[dict[str, object]] | None = None,
     ) -> TaskRecord:
         """创建新 Task 或读取已有 Task，并在新建时固化工具 schema。
 
-        新建用户 Task 时，``tool_definitions`` 由调用方显式提供并固化，本方法不会自行从
+        新建用户 Task 时，``tool_schemas`` 由调用方显式提供并固化，本方法不会自行从
         主 Agent profile 或 ToolSystem 推导（设计意图上曾希望以当前 profile 与 ToolSystem
         解析出的 schema 作为默认来源，但当前实现未内置该推导，统一交由调用方负责——此为
-        有意为之，以保持本方法的通用性）。传入 ``None`` 时 ``tasks.tool_definitions`` 会
+        有意为之，以保持本方法的通用性）。传入 ``None`` 时 ``tasks.tool_schemas`` 会
         持久化为**空列表**，意味着该 Task 运行期无任何可调用工具（运行期
-        ``task_tool_definitions`` 为空 → ``allows_tools`` 为空）。主 Agent Task 的 schema 由
-        ``WorkspaceService._main_agent_tool_definitions`` 解析后传入，委派/Team 节点等由各自
+        ``task_tool_schemas`` 为空 → ``allows_tools`` 为空）。主 Agent Task 的 schema 由
+        ``WorkspaceService._main_agent_tool_schemas`` 解析后传入，委派/Team 节点等由各自
         调用方筛选后传入。已有 Task 只读取持久化记录，不重新根据当前 profile 改写工具集合。
 
         参数:
@@ -103,7 +103,7 @@ class TaskService:
             parent_run_id: 委派子 Task 的父 Run 标识。
             session: 可选的外部数据库事务会话。
             extra: Task 扩展 JSON。
-            tool_definitions: 新建 Task 时固化的固定模型工具 schema；传入 ``None`` 会持久化为空列表（即该 Task 无可用工具），调用方须显式提供已筛选的 schema。
+            tool_schemas: 新建 Task 时固化的固定模型工具 schema；传入 ``None`` 会持久化为空列表（即该 Task 无可用工具），调用方须显式提供已筛选的 schema。
 
         返回:
             新建或读取的 ``TaskRecord``。
@@ -113,7 +113,7 @@ class TaskService:
             KeyError: 读取不存在的已有 Task。
 
         副作用:
-            新建路径向 ``tasks.tool_definitions`` 写入 schema；已有 Task 路径只初始化运行时
+            新建路径向 ``tasks.tool_schemas`` 写入 schema；已有 Task 路径只初始化运行时
             space 并读取，不修改数据库。
         """
 
@@ -121,10 +121,10 @@ class TaskService:
             raise ValueError("workspace_id is None")
 
         if task_id is None:
-            frozen_tools = (
+            frozen_schemas = (
                 []
-                if tool_definitions is None
-                else tool_definitions
+                if tool_schemas is None
+                else tool_schemas
             )
             task = self._task.create(
                 workspace_id=workspace_id,
@@ -134,17 +134,17 @@ class TaskService:
                 parent_run_id=parent_run_id,
                 creation_command_id=creation_command_id,
                 extra=extra,
-                tool_definitions=frozen_tools,
+                tool_schemas=frozen_schemas,
                 session=session,
             )
             log.info(
-                "task_tool_definitions_frozen",
+                "task_tool_schemas_frozen",
                 extra={
                     "msg": "Task 创建时已固化主 Agent 工具 schema",
                     "data": {
                         "task_id": task.id,
                         "task_type": task_type,
-                        "tool_count": len(frozen_tools),
+                        "tool_count": len(frozen_schemas),
                     },
                 },
             )
@@ -327,7 +327,7 @@ class TaskService:
                         "source_run_id": source_run_id,
                     }
                 },
-                tool_definitions=source.tool_definitions,
+                tool_schemas=source.tool_schemas,
                 session=session,
             )
 

@@ -175,7 +175,7 @@ def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
     service = ConversationRunService.__new__(ConversationRunService)
     service._task = SimpleNamespace(
         get=lambda _task_id: SimpleNamespace(
-            tool_definitions=[
+            tool_schemas=[
                 {"name": "read_file"},
                 {"name": "web_search"},
                 {"name": "propose_agent_configuration"},
@@ -213,7 +213,7 @@ def test_run_service_delays_banned_tools_to_task_resolution() -> None:
     service = ConversationRunService.__new__(ConversationRunService)
     service._task = SimpleNamespace(
         get=lambda _task_id: SimpleNamespace(
-            tool_definitions=[
+            tool_schemas=[
                 {"name": "execute_terminal"},
                 {"name": "web_search"},
                 {"name": "propose_agent_configuration"},
@@ -242,7 +242,7 @@ def test_run_service_delays_banned_tools_to_task_resolution() -> None:
 def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
     attachment_path = Path(__file__).parent
     service = ConversationRunService.__new__(ConversationRunService)
-    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(tool_definitions=[]))
+    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(tool_schemas=[]))
     command = ConversationRunCommand(
         display_text="请检查 [[cosir-file:references]]",
         attachments=[
@@ -290,7 +290,7 @@ def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
         reasoning_effort=None,
     )
     service = ConversationRunService.__new__(ConversationRunService)
-    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(tool_definitions=[]))
+    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(tool_schemas=[]))
     service._run = SimpleNamespace(get=lambda _run_id: SimpleNamespace(extra=existing_extra))
     command = ConversationRunCommand(
         display_text="请再次阅读 [[cosir-file:readme]]",

@@ -178,9 +178,9 @@ class Constant:
         # Layer 2（Agent 系统预设）token 上限。
         AGENT_PERSONA_MAX_TOKENS: int = 2_000
         # Layer G（系统级全局指令）token 上限。
-        GLOBAL_INSTRUCTION_MAX_FILE_TOKENS: int = 5_000
+        GLOBAL_INSTRUCTION_MAX_FILE_TOKENS: int = 10_000
         # Layer 3（Workspace 项目指令）token 上限。
-        WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: int = 5_000
+        WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: int = 10_000
 
     class Context:
         """Task 级 context 运行时（``RuntimeContextManager``）的共享常量。

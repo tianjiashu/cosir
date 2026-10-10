@@ -267,13 +267,13 @@ class WorkspaceService:
                     workspace_id,
                     title,
                     creation_command_id=creation_command_id,
-                    tool_definitions=self._main_agent_tool_definitions()
+                    tool_schemas=self._main_agent_tool_schemas(),
                 )
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc
 
 
-    def _main_agent_tool_definitions(self) -> list[dict[str, object]]:
+    def _main_agent_tool_schemas(self) -> list[dict[str, object]]:
         """从主 Agent profile 固化新 Task 的模型工具 schema。
 
         主 Agent Task 创建时读取系统作用域中的 ``main_agent`` profile，并从当前
@@ -289,7 +289,7 @@ class WorkspaceService:
 
         副作用:
             无；只读取进程级 Agent/Tool 装配结果并深拷贝 schema，不写数据库。调用方随后
-            将返回值作为 Task 创建事务的一部分写入 ``TaskModel.tool_definitions``。
+            将返回值作为 Task 创建事务的一部分写入 ``TaskModel.tool_schemas``。
         """
 
         profile = get_agent_registry().resolve(

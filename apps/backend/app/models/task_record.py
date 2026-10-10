@@ -25,7 +25,7 @@ class TaskRecord:
     created_at: datetime
     updated_at: datetime
     extra: dict[str, Any] | None = None
-    tool_definitions: list[dict[str, Any]] = field(default_factory=list)
+    tool_schemas: list[dict[str, Any]] = field(default_factory=list)
     execution_status: str | None = None
     task_type: str = "user"
     parent_task_id: int | None = None
@@ -108,7 +108,7 @@ class TaskRecord:
             workspace_id=row.workspace_id,
             title=row.title,
             extra=row.extra,
-            tool_definitions=row.tool_definitions or [],
+            tool_schemas=row.tool_schemas or [],
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
             task_type=row.task_type,
@@ -127,7 +127,7 @@ class TaskRecord:
             "workspace_id": self.workspace_id,
             "title": self.title,
             "extra": self.extra,
-            "tool_definitions": self.tool_definitions or [],
+            "tool_schemas": self.tool_schemas or [],
             "task_type": self.task_type,
             "parent_task_id": self.parent_task_id,
             "parent_run_id": self.parent_run_id,

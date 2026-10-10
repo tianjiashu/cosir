@@ -50,6 +50,7 @@ from app.service.depends import (
     get_conversation_event_projector,
     get_conversation_run_state_service,
 )
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 if TYPE_CHECKING:
     from app.core.agents.agent_profile import AgentProfile
@@ -141,12 +142,11 @@ class WorkflowOperations:
 
     @property
     def task_tool_schemas(self) -> list[dict[str, Any]]:
-        tools: list[ToolDefinition] = self.all_vaild_tools
-        return [
-            tool_definition.to_model_tool_definition()
-            for tool_definition in tools
-            if tool_definition.name in self.allows_tools
-        ]
+        # Task 快照已经是 bind_tools 使用的模型 schema。禁用策略只由
+        # ToolCallLifecycleManager 执行；这里不得按 allows_tools 过滤，否则每 Run 的工具
+        # schema 都会变化，破坏同一 Task 的模型前缀缓存。
+        task_runtime_space = task_runtime_spaces.get_or_create(self._current_task.id)
+        return list(task_runtime_space.task_tool_schemas)
 
     @property
     def allows_tools(self) -> frozenset[str]:

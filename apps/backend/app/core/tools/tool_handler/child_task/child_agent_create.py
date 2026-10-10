@@ -230,7 +230,7 @@ class DelegateTaskTool(HandlerBase):
                 task_type="delegate_task",
                 parent_task_id=execution_context.task_id,
                 parent_run_id=execution_context.run_id,
-                tool_definitions=[
+                tool_schemas=[
                     copy.deepcopy(definition.to_model_tool_definition())
                     for definition in child_final_task_tools
                 ]

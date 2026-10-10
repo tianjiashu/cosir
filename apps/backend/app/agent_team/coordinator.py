@@ -219,7 +219,7 @@ class AgentTeamCoordinator:
         node: TeamNodeDefinition = configuration.node(node_id)
         node_runtime: AgentTeamRunRuntime = state.node_runtime.get(node_id)
         agent_id = node.agent_id
-        tool_definitions = self._resolve_node_tool_definitions(node_runtime.allowed_tools)
+        tool_schemas = self._resolve_node_tool_schemas(node_runtime.allowed_tools)
         node_execution: AgentTeamNodeExecution | None = state.node_execution_for_node(node_id)
         node_goal = node_runtime.node_goal
         input_text = self._build_node_input(
@@ -241,7 +241,7 @@ class AgentTeamCoordinator:
                     "agent_team_node_id": node_id,
                     "agent_team_profile_snapshot": node_runtime.model_dump(mode="json"),
                 },
-                tool_definitions=tool_definitions,
+                tool_schemas=tool_schemas,
             )
             node_execution: AgentTeamNodeExecution = state.create_execution_node(node_id,
                                                                                  AgentTeamNodeExecution(node_id=node_id,
@@ -288,7 +288,7 @@ class AgentTeamCoordinator:
 
         return node_execution, node_run
 
-    def _resolve_node_tool_definitions(self, allowed_tools: list[str]) -> list[dict[str, object]]:
+    def _resolve_node_tool_schemas(self, allowed_tools: list[str]) -> list[dict[str, object]]:
         """按节点快照声明的 ``allowed_tools`` 名字，从当前工具注册表解析冻结 schema。
 
         节点运行快照只持久化工具名（``allowed_tools``），工具 schema 在节点启动时按名字
@@ -300,13 +300,13 @@ class AgentTeamCoordinator:
 
         返回:
             与运行期模型 schema 同源的 JSON 字典列表，可直接传给
-            ``TaskService.get_or_create_task`` 的 ``tool_definitions``。
+            ``TaskService.get_or_create_task`` 的 ``tool_schemas``。
 
         异常:
             ValueError: 某个工具名在当前注册表中不存在（可能已在确认后从 workspace 移除）。
         """
         registered = {tool.name: tool for tool in self._tool_system.executor.list_tools()}
-        definitions: list[dict[str, object]] = []
+        schemas: list[dict[str, object]] = []
         for name in allowed_tools:
             tool = registered.get(name)
             if tool is None:
@@ -314,8 +314,8 @@ class AgentTeamCoordinator:
                     f"Team 节点声明的工具 '{name}' 不在当前工具注册表中，"
                     f"无法解析其 schema（可能已在确认后从 workspace 移除）"
                 )
-            definitions.append(copy.deepcopy(tool.to_model_tool_definition()))
-        return definitions
+            schemas.append(copy.deepcopy(tool.to_model_tool_definition()))
+        return schemas
 
     @staticmethod
     def _build_node_input(node_goal: str, node_input: str | None = None) -> str:

@@ -219,8 +219,9 @@ class ReactLikeWorkflow(AgentWorkflow):
                 Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE,
                 "运行期模型解析失败",
             ) from exc
-        # 绑定的是 operations.task_tool_schemas——按本 Run allows_tools 过滤后的结果（口径与偏差说明
-        # 见 AgentRuntime._build_operations）。
+        # 绑定的是 Task 创建时固化的完整模型 schema。禁用工具只由
+        # ToolCallLifecycleManager 按本 Run 的 allows_tools 拦截，不能据此过滤 bind_tools；
+        # 否则同一 Task 的模型工具定义会随 Run 改变，破坏前缀缓存复用。
         tool_schemas = operations.task_tool_schemas
         if len(tool_schemas) > 0:
             bound_model = base_model.bind_tools(

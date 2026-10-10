@@ -99,7 +99,7 @@ class TaskRuntimeSpace:
     current_task: TaskRecord = None
 
     @property
-    def task_tool_definitions(self) -> tuple[dict[str, Any], ...]:
+    def task_tool_schemas(self) -> tuple[dict[str, Any], ...]:
         """返回 Task 创建时固化的模型工具 schema 快照。
 
         返回:
@@ -112,7 +112,7 @@ class TaskRuntimeSpace:
         副作用:
             无；该属性只读当前 Task 记录，不读取数据库，也不修改运行时状态。
         """
-        return tuple(copy.deepcopy(self.current_task.tool_definitions or []))
+        return tuple(copy.deepcopy(self.current_task.tool_schemas or []))
 
     def __post_init__(self) -> None:
         """初始化统一执行闸门与 context manager 槽位锁。"""
