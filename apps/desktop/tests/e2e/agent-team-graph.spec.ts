@@ -42,10 +42,17 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await page.goto("/settings");
   await page.getByRole("button", { name: "Agent Team 配置", exact: true }).click();
   await page.getByRole("button", { name: "新建 Team" }).click();
-  await page.getByLabel("Team ID").fill("review_flow");
-  await page.getByLabel("Team 名称").fill("Review Flow");
-  await page.getByLabel("用途说明").fill("审查并修复代码");
   await page.getByRole("button", { name: "画布" }).click();
+  await expect(page.getByLabel("Team ID")).toBeHidden();
+  await expect(page.getByLabel("入口节点")).toBeHidden();
+  await expect(page.getByRole("button", { name: "保存配置" })).toBeHidden();
+  await page.getByRole("button", { name: "Team 设置" }).click();
+  const teamSettings = page.getByRole("dialog");
+  await teamSettings.getByLabel("Team ID").fill("review_flow");
+  await teamSettings.getByLabel("Team 名称").fill("Review Flow");
+  await teamSettings.getByLabel("用途说明").fill("审查并修复代码");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
 
   const paletteItem = page.getByLabel("可拖拽子 Agent reviewer");
   await paletteItem.dragTo(page.locator(".react-flow__pane"), { targetPosition: { x: 330, y: 260 }, steps: 12 });
@@ -58,6 +65,10 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
 
   await page.getByRole("button", { name: "全屏画布" }).click();
   await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toHaveClass(/fixed/);
+  await page.getByRole("button", { name: "Team 设置" }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toHaveClass(/fixed/);
 
   await page.getByRole("button", { name: "添加 reviewer" }).click();
   await expect(page.locator('.react-flow__node[data-id="node_2"]')).toBeVisible();
@@ -65,6 +76,7 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await page.getByRole("textbox", { name: "节点 ID" }).fill("node_1");
   await page.getByRole("textbox", { name: "节点 ID" }).press("Tab");
   await expect(page.getByRole("alert")).toHaveText("该节点 ID 已被使用");
+  await expect(page.getByRole("alert")).toHaveCount(1);
   await expect(page.locator('.react-flow__node[data-id="node_2"]')).toBeVisible();
   await page.getByRole("button", { name: "添加 END" }).click();
   await expect(page.locator('.react-flow__node[data-id^="@@canvas-end-"]')).toHaveCount(2);
@@ -80,11 +92,11 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   const secondEndInput = page.locator('.react-flow__node[data-id="@@canvas-end-2"] .react-flow__handle[data-handleid="input"]');
   await doneEdge.click();
   await page.keyboard.press("Delete");
-  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(1);
   await page.keyboard.press("Control+z");
-  await expect(page.locator(".react-flow__edge")).toHaveCount(3);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
   await doneEdge.click();
-  await page.getByLabel("目标节点").selectOption("node_2");
+  await page.getByLabel("转移属性").getByLabel("目标节点").selectOption("node_2");
   await expect(page.getByRole("group", { name: "Edge from node_1 to node_2" })).toBeVisible();
   await page.getByRole("button", { name: "关闭转移属性" }).click();
   await reviewOutput.dragTo(secondEndInput, { steps: 12 });
@@ -111,7 +123,7 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await page.locator('.react-flow__node[data-id="node_2"]').click();
   await page.keyboard.press("Delete");
   await expect(page.locator(".react-flow__node")).toHaveCount(3);
-  await expect(page.locator(".react-flow__edge")).toHaveCount(2);
+  await expect(page.locator(".react-flow__edge")).toHaveCount(1);
   await page.keyboard.press("Control+z");
   await expect(page.locator(".react-flow__node")).toHaveCount(4);
   await expect(page.locator(".react-flow__edge")).toHaveCount(3);
@@ -125,8 +137,14 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).not.toHaveClass(/fixed/);
 
   await page.getByRole("button", { name: "表单" }).click();
+  await expect(page.getByLabel("Team ID")).toHaveValue("review_flow");
+  await expect(page.getByLabel("Team 名称")).toHaveValue("Review Flow");
+  await expect(page.getByLabel("用途说明")).toHaveValue("审查并修复代码");
+  await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toBeHidden();
   await expect(page.getByLabel("入口节点")).toHaveValue("node_1");
   await page.getByRole("button", { name: "画布" }).click();
+  await expect(page.getByLabel("Team ID")).toBeHidden();
+  await expect(page.getByLabel("入口节点")).toBeHidden();
   await expect(page.locator('.react-flow__node[data-id^="@@canvas-end-"]')).toHaveCount(2);
   await expect(page.locator(".react-flow__edge")).toHaveCount(3);
   await expect(page.getByRole("button", { name: "撤销" })).toBeEnabled();
@@ -157,5 +175,7 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
       { from_node_id: "node_1", status: "needs_review", target_node_id: "END" },
     ],
   });
+  await expect.poll(() => page.evaluate(() => Object.keys(window.localStorage).some((key) => key.includes("agent-team-graph") && key.endsWith(":review_flow")))).toBe(true);
+  expect(await page.evaluate(() => Object.keys(window.localStorage).some((key) => key.includes("agent-team-graph") && key.endsWith(":new")))).toBe(false);
   await expect(page.getByRole("status")).toHaveText("配置更改成功");
 });

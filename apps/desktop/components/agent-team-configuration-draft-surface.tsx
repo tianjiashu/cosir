@@ -76,7 +76,7 @@ export function AgentTeamConfigurationDraftSurface({
           initial={tab.draft}
           profilesByScope={profiles}
           scopeEditable={tab.savedScope === null}
-          graphLayoutKey={`cosir:agent-team-graph:draft:${tab.id}:${tab.draft.scope}:${tab.draft.team_id || "new"}`}
+          graphLayoutKey={(configuration) => `cosir:agent-team-graph:draft:${tab.id}:${configuration.scope}:${configuration.team_id || "new"}`}
           onChange={(configuration) => {
             updateDraft(tab.id, configuration);
             setDirty(tab.id, true);

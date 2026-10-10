@@ -24,6 +24,7 @@ import {
 import { BotIcon, Maximize2Icon, PlusIcon, Redo2Icon, SaveIcon, Settings2Icon, ShrinkIcon, Undo2Icon, XIcon } from "lucide-react";
 
 import { AgentTeamGraphInspector } from "@/components/agent-team-graph-inspector";
+import { AgentTeamConfigurationFields } from "@/components/agent-team-configuration-fields";
 import { AgentTeamGraphNode, AgentTeamGraphTerminalNode, GraphNodeEditorContext } from "@/components/agent-team-graph-nodes";
 import { AgentTeamGraphPalette } from "@/components/agent-team-graph-palette";
 import {
@@ -53,8 +54,6 @@ import {
 } from "@/components/agent-team-graph-model";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamConfiguration, AgentTeamNodeConfiguration } from "@/lib/api/agent-teams";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -171,6 +170,7 @@ function GraphCanvas({
   error,
   saving,
   scopeEditable,
+  teamIdEditable,
 }: {
   configuration: AgentTeamConfiguration;
   profiles: AgentConfiguration[];
@@ -181,6 +181,7 @@ function GraphCanvas({
   error?: string | null;
   saving?: boolean;
   scopeEditable?: boolean;
+  teamIdEditable: boolean;
 }) {
   const flow = useReactFlow<TeamGraphNode>();
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -227,14 +228,14 @@ function GraphCanvas({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const exitOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFullscreen(false);
+      if (event.key === "Escape" && !settingsOpen) setFullscreen(false);
     };
     window.addEventListener("keydown", exitOnEscape);
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", exitOnEscape);
     };
-  }, [fullscreen]);
+  }, [fullscreen, settingsOpen]);
 
   useEffect(() => {
     if (!selectedNodeId && !selectedTransition) return;
@@ -721,12 +722,13 @@ function GraphCanvas({
             <Button type="button" variant="outline" size="sm" onClick={() => setSettingsOpen(true)}><Settings2Icon />Team 设置</Button>
             <DialogContent>
               <DialogHeader><DialogTitle>Team 设置</DialogTitle><DialogDescription>编辑 Team 信息和执行上限。</DialogDescription></DialogHeader>
-              <div className="space-y-3">
-                <label className="block space-y-1 text-xs"><span>Team 名称</span><Input value={configuration.name} onChange={(event) => updateConfiguration({ ...configuration, name: event.target.value }, "team-name")} /></label>
-                <label className="block space-y-1 text-xs"><span>用途说明</span><Textarea value={configuration.description} onChange={(event) => updateConfiguration({ ...configuration, description: event.target.value }, "team-description")} /></label>
-                <label className="block space-y-1 text-xs"><span>最大轮数</span><Input type="number" min={1} value={configuration.max_runs} onChange={(event) => updateConfiguration({ ...configuration, max_runs: Number(event.target.value) }, "team-max-runs")} /></label>
-                {scopeEditable && <label className="block space-y-1 text-xs"><span>保存范围</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={configuration.scope} onChange={(event) => updateConfiguration({ ...configuration, scope: event.target.value as AgentTeamConfiguration["scope"] })}><option value="workspace">当前工作区</option><option value="system">系统级</option></select></label>}
-              </div>
+              <AgentTeamConfigurationFields
+                configuration={configuration}
+                teamIdEditable={teamIdEditable}
+                scopeEditable={scopeEditable ?? false}
+                layout="dialog"
+                onChange={(changes, historyKey) => updateConfiguration({ ...configuration, ...changes }, historyKey)}
+              />
             </DialogContent>
           </Dialog>
         </div>
@@ -735,7 +737,7 @@ function GraphCanvas({
           <Button type="button" variant="outline" size="icon-sm" aria-label="重做" title="重做 (Ctrl+Y / Ctrl+Shift+Z / ⌘Shift+Z)" onClick={redo} disabled={!history.future.length}><Redo2Icon /></Button>
           <Button type="button" variant="outline" size="sm" onClick={addEndNode}><PlusIcon />添加 END</Button>
           <Button type="button" variant="outline" size="icon-sm" aria-label={fullscreen ? "退出全屏画布" : "全屏画布"} title={fullscreen ? "退出全屏画布 (Esc)" : "全屏画布"} onClick={() => setFullscreen((value) => !value)}>{fullscreen ? <ShrinkIcon /> : <Maximize2Icon />}</Button>
-          {onExit && <Button type="button" variant="ghost" size="icon-sm" aria-label="返回 Team 编辑" onClick={onExit}><XIcon /></Button>}
+          {onExit && <Button type="button" variant="ghost" size="icon-sm" aria-label="返回 Team 编辑" onClick={() => { setFullscreen(false); onExit(); }}><XIcon /></Button>}
           {onSave && <Button type="button" size="sm" onClick={onSave} disabled={saving}><SaveIcon />{saving ? "保存中…" : "保存"}</Button>}
         </div>
       </header>
@@ -827,6 +829,7 @@ export function AgentTeamGraphEditor(props: {
   error?: string | null;
   saving?: boolean;
   scopeEditable?: boolean;
+  teamIdEditable: boolean;
 }) {
   return <ReactFlowProvider key={props.storageKey}><GraphCanvas {...props} /></ReactFlowProvider>;
 }
