@@ -4,19 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 
 
 class AgentTeamNodeExecution(BaseModel):
-    """记录一次节点 ConversationRun 执行及其提交结果。
-
-    同一个节点可能因为转移回环被执行多次，因此该模型以 ``run_id`` 作为一次执行的
-    唯一标识，不把节点标识当作执行记录的唯一键。节点尚未提交结果时，``completed``
-    为假，``status`` 和 ``output`` 均为空。
-    """
+    """绑定节点的稳定 Task，并按执行顺序记录该节点创建的 ConversationRun。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -60,11 +55,9 @@ class AgentTeamRunState(BaseModel):
     """Agent Team 的持久化执行快照。
 
     本模型保存 Team 的执行聚合状态，但不承载 Team 生命周期状态；生命周期状态由
-    ``AgentTeamRunModel.status`` 及其条件状态迁移负责。``node_task_ids`` 按 ``node_id``
-    固定节点 Task 身份；``node_executions`` 按创建顺序保存每次节点 Run，
-    ``active_node_run_id`` 指向唯一尚未提交结果的节点 Run，节点结果和历史转移均从该快照
-    读取。``node_runtime`` 按节点保存运行配置和该节点的 ``node_goal``，是节点
-    执行计划的唯一持久化来源。运行时快照只供后端恢复节点执行，API 投影时必须过滤。
+    ``AgentTeamRunModel.status`` 及其条件状态迁移负责。``node_executions`` 按节点固定 Task
+    身份并保存该节点创建的 ConversationRun ID；``current_node_id`` 是协调器的节点游标。
+    ``node_runtime`` 保存节点执行配置，只供后端恢复执行，API 投影时必须过滤。
 
     该模型使用严格字段和禁止额外字段的契约。状态结构发生变化时直接要求新数据库状态，
     不对旧 JSON 做兼容转换，避免同一进程同时维护多套状态格式。
@@ -114,7 +107,9 @@ class AgentTeamRunState(BaseModel):
 
         return self.node_executions.get(node_id)
 
-    def create_execution_node(self, node_id: str, execution: AgentTeamNodeExecution) -> AgentTeamNodeExecution:
+    def create_execution_node(
+        self, node_id: str, execution: AgentTeamNodeExecution
+    ) -> AgentTeamNodeExecution:
         """创建节点执行记录。"""
 
         self.node_executions[node_id] = execution
@@ -151,7 +146,11 @@ class AgentTeamRunState(BaseModel):
     def node_references(self) -> list[tuple[int, int]]:
         """返回所有节点 Task/Run 引用，供取消和诊断使用。"""
 
-        return [(execution.task_id, execution.run_id) for execution in self.node_executions]
+        return [
+            (execution.task_id, run_id)
+            for execution in self.node_executions.values()
+            for run_id in execution.conversation_run_ids
+        ]
 
     def to_json(self) -> dict[str, Any]:
         """转换为可直接写入 SQLAlchemy JSON 列的字典。"""

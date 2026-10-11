@@ -10,8 +10,7 @@ import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decis
 /** 构造后端预览展示数据（字段名以后端实际下发的契约为准）。 */
 function previewDisplayData(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    kind: "agent-team-preview",
-    status: "pending",
+    kind: "agent-team-approval",
     team_run_id: 17,
     team_id: "code-quality",
     name: "代码质量 Team",
@@ -69,7 +68,7 @@ describe("agent team human-in-the-loop 展示解析", () => {
   });
 
   it("未声明待决或缺少请求标识时不产生可提交的请求", () => {
-    expect(readAgentTeamReviewRequest({ kind: "agent-team-preview" })).toBeNull();
+    expect(readAgentTeamReviewRequest({ kind: "agent-team-approval" })).toBeNull();
     expect(
       readAgentTeamReviewRequest(
         previewDisplayData({ user_input_request: { request_id: "17" } }),
@@ -79,15 +78,13 @@ describe("agent team human-in-the-loop 展示解析", () => {
 
   it("区分运行态展示：已批准后不再有可编辑草稿", () => {
     const running = {
-      kind: "agent-team-preview",
-      status: "running",
+      kind: "agent-team-execution",
       team_run_id: 17,
       team_id: "code-quality",
       goal: "交付报告",
     };
 
     expect(readAgentTeamRunDisplay(running)).toEqual({
-      status: "running",
       teamRunId: 17,
       teamId: "code-quality",
       goal: "交付报告",
@@ -108,13 +105,11 @@ describe("submitUserInputDecision", () => {
       submitUserInputDecision({
         taskId: 7,
         runId: 31,
-        decisions: [
-          {
-            request_id: "17",
-            decision: "approve",
-            data: { goal: "交付报告", node_goals: { develop: "实现" } },
-          },
-        ],
+        decision: {
+          request_id: "17",
+          decision: "approve",
+          data: { goal: "交付报告", node_goals: { develop: "实现" } },
+        },
       }),
     ).resolves.toBeUndefined();
 
@@ -124,20 +119,18 @@ describe("submitUserInputDecision", () => {
       taskId: number;
       runId: number;
       threadId: string;
-      commands: Array<{ name: string; payload: { decisions: unknown[] } }>;
+      commands: Array<{ name: string; payload: { decision: unknown }; commandId: string }>;
     };
     expect(body.taskId).toBe(7);
     expect(body.runId).toBe(31);
     expect(body.threadId).toBe("task-7");
     expect(body.commands).toHaveLength(1);
     expect(body.commands[0].name).toBe("user-input-decision");
-    expect(body.commands[0].payload.decisions).toEqual([
-      {
-        request_id: "17",
-        decision: "approve",
-        data: { goal: "交付报告", node_goals: { develop: "实现" } },
-      },
-    ]);
+    expect(body.commands[0].payload.decision).toEqual({
+      request_id: "17",
+      decision: "approve",
+      data: { goal: "交付报告", node_goals: { develop: "实现" } },
+    });
     vi.unstubAllGlobals();
   });
 
@@ -151,7 +144,7 @@ describe("submitUserInputDecision", () => {
       submitUserInputDecision({
         taskId: 7,
         runId: 31,
-        decisions: [{ request_id: "17", decision: "approve" }],
+        decision: { request_id: "17", decision: "approve" },
       }),
     ).rejects.toThrow(/409/);
     vi.unstubAllGlobals();

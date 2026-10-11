@@ -229,6 +229,17 @@ class ConversationRunCrud:
                 raise KeyError(run_id)
             return ConversationRunRecord.from_model(row)
 
+    def get_many(self, run_ids: list[int]) -> dict[int, ConversationRunRecord]:
+        """批量读取已知 Run 标识，供聚合只读投影避免逐条查询。"""
+
+        if not run_ids:
+            return {}
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(ConversationRunModel).where(ConversationRunModel.id.in_(run_ids))
+            ).all()
+        return {row.id: ConversationRunRecord.from_model(row) for row in rows}
+
     @staticmethod
     def get_in_session(session: Session, run_id: int) -> ConversationRunRecord:
         """在调用方事务 session 中读取单个 run。"""

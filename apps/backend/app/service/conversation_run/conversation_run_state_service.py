@@ -38,7 +38,6 @@ from app.models.conversation_run_usage import ConversationRunUsage
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
 
-
 _RUN_STATUS_TRANSITIONS: dict[ConversationRunStatus, tuple[ConversationRunStatus, ...]] = {
     ConversationRunStatus.PENDING: (
         ConversationRunStatus.RUNNING,
@@ -84,8 +83,8 @@ class ConversationRunStateService:
 
     @staticmethod
     def _allowed_source_statuses(
-        target_status: ConversationRunStatus,
-        candidates: tuple[ConversationRunStatus, ...] | None = None,
+            target_status: ConversationRunStatus,
+            candidates: tuple[ConversationRunStatus, ...] | None = None,
     ) -> tuple[str, ...]:
         """从唯一状态图按候选范围派生允许迁入目标状态的来源状态值。"""
 
@@ -97,7 +96,7 @@ class ConversationRunStateService:
 
     @staticmethod
     def usage_payload(
-        usage_stats: ConversationRunUsageStats | None,
+            usage_stats: ConversationRunUsageStats | None,
     ) -> ConversationRunUsage | None:
         """把运行时 token 累加器转成 Run 行可持久化的六键字典。
 
@@ -120,9 +119,9 @@ class ConversationRunStateService:
 
     @staticmethod
     def terminal_error(
-        status: ConversationRunStatus,
-        end_reason: str | None,
-        message: str | None = None,
+            status: ConversationRunStatus,
+            end_reason: str | None,
+            message: str | None = None,
     ) -> ConversationRunError | None:
         """把终态状态映射为持久化错误契约。
 
@@ -237,7 +236,7 @@ class ConversationRunStateService:
         return record
 
     def mark_waiting_for_input_if_running(
-        self, run_id: int
+            self, run_id: int, usage_stats: ConversationRunUsageStats | None = None
     ) -> ConversationRunRecord | None:
         """将运行中的 Run 原子迁移到等待用户输入状态。
 
@@ -263,6 +262,7 @@ class ConversationRunStateService:
             self._allowed_source_statuses(ConversationRunStatus.WAITING_FOR_INPUT),
             end_reason=None,
             error=None,
+            usage=self.usage_payload(usage_stats),
         )
         if record is None:
             return None
@@ -271,6 +271,7 @@ class ConversationRunStateService:
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.WAITING_FOR_INPUT,
+                usage_stats=usage_stats,
             ),
         )
         return record
@@ -352,10 +353,10 @@ class ConversationRunStateService:
         return None
 
     def complete_run_if_running(
-        self,
-        run_id: int,
-        final_output: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
+            self,
+            run_id: int,
+            final_output: str | None = None,
+            usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
         """Complete a running Conversation Run atomically.
 
@@ -402,12 +403,12 @@ class ConversationRunStateService:
         return record
 
     def fail_run_if_running(
-        self,
-        run_id: int,
-        end_reason: str | None = None,
-        final_output: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
-        error_message: str | None = None,
+            self,
+            run_id: int,
+            end_reason: str | None = None,
+            final_output: str | None = None,
+            usage_stats: ConversationRunUsageStats | None = None,
+            error_message: str | None = None,
     ) -> ConversationRunRecord | None:
         """原子失败结束仍处于可失败状态的 Run，并发布错误事件。
 
@@ -461,11 +462,11 @@ class ConversationRunStateService:
         return record
 
     def cancel_run_if_running(
-        self,
-        run_id: int,
-        end_reason: str = "user_cancelled",
-        final_output: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
+            self,
+            run_id: int,
+            end_reason: str = "user_cancelled",
+            final_output: str | None = None,
+            usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
         """将 active Run 标记 cancelled，并发布其 Transport 展示状态。
 
@@ -516,7 +517,7 @@ class ConversationRunStateService:
         return record
 
     def cancel_run_for_startup_recovery(
-        self, run_id: int, end_reason: str = "runtime_restarted"
+            self, run_id: int, end_reason: str = "runtime_restarted"
     ) -> ConversationRunRecord | None:
         """启动恢复时取消遗留 Run，不发布进程内实时事件或安排后续执行。"""
 

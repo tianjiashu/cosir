@@ -8,7 +8,7 @@
 各展示构造器负责，内容预算通过现有守卫处理后由 Transport 返回前端。execute_terminal
 的终端输出在模型通道、artifact 和展示通道都保持原文。
 """
-
+from app.config.constant import Constant
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 
@@ -16,10 +16,7 @@ from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 class ToolObservationBudget:
     """只对模型可见的 ``content`` 应用输出预算。"""
 
-    def __init__(
-        self,
-        output_budget: ToolOutputBudget | None = None,
-    ) -> None:
+    def __init__(self) -> None:
         """初始化模型输出预算。
 
         参数:
@@ -36,12 +33,12 @@ class ToolObservationBudget:
             持有模型输出预算实例，不触发任何工具执行。
         """
 
-        self._output_budget = output_budget or ToolOutputBudget()
+        self._output_budget = ToolOutputBudget(Constant.Tools.MAX_OUTPUT_CHARS)
 
     def apply(
-        self,
-        observation: ToolObservation,
-        execution_context: ToolExecutionContext | None,
+            self,
+            observation: ToolObservation,
+            execution_context: ToolExecutionContext | None,
     ) -> ToolObservation:
         """对任意成功、失败或提前返回观察的模型内容应用输出预算。
 

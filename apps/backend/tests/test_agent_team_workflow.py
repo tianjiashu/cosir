@@ -3,9 +3,9 @@
 from dataclasses import asdict
 from types import SimpleNamespace
 
+import app.agent_team.coordinator as coordinator_module
 from app.agent_team.coordinator import AgentTeamCoordinator
-from app.agent_team.state.agent_team_run_state import AgentTeamRunState
-from app.api.agent_teams_api import _run_payload
+from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.core.agents.model_settings import ModelSettings
 from app.core.tools.display.agent_team_display import (
     build_agent_team_preview_display_data,
@@ -15,10 +15,12 @@ from app.core.tools.tool_handler.agent_team.review_request import (
     AGENT_TEAM_REVIEW_DRAFT_SCHEMA,
     build_team_review_request,
 )
-from app.core.workflows.react.node_helper.user_input_projection import extract_requests
+from app.core.workflows.react.node_helper.user_input_projection import extract_request
 from app.service.agent_team.agent_team_preparation_service import (
     resolve_effective_model_settings,
 )
+from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
+from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 
 
 def _preview_fields() -> dict[str, object]:
@@ -49,8 +51,7 @@ def test_agent_team_preview_separates_display_from_review_request() -> None:
     display_data = build_agent_team_preview_display_data(_preview_fields(), team_run_id=17)
     request = build_team_review_request(_preview_fields(), team_run_id=17)
 
-    assert display_data["kind"] == "agent-team-preview"
-    assert display_data["status"] == "pending"
+    assert display_data["kind"] == "agent-team-approval"
     assert display_data["team_run_id"] == 17
     assert "requires_user_input" not in display_data
     assert "user_input_request" not in display_data
@@ -79,7 +80,8 @@ def test_agent_team_preview_separates_display_from_review_request() -> None:
             "user_input_request": asdict(request),
         }
     ]
-    (derived,) = extract_requests(observations)
+    derived = extract_request(observations)
+    assert derived is not None
     assert derived.request_id == "17"
     assert [kind.value for kind in derived.decisions] == ["approve", "reject"]
     assert derived.draft == request.draft
@@ -95,34 +97,88 @@ def test_confirmed_team_display_data_stops_requesting_user_input() -> None:
         node_goals={"develop": "实现"},
     )
 
-    assert display_data["kind"] == "agent-team-preview"
-    assert display_data["status"] == "running"
+    assert display_data["kind"] == "agent-team-execution"
     assert "requires_user_input" not in display_data
     assert "user_input_request" not in display_data
 
 
-def test_team_run_payload_hides_runtime_profile_snapshots() -> None:
-    """Team 状态查询不能把节点 system_prompt 暴露给前端。"""
+def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> None:
+    """父 Run 取消时，pending TeamRun 也要原子收敛并写完整终态信息。"""
 
-    row = SimpleNamespace(
-        id=1,
-        team_id="quality",
-        workspace_id=1,
-        parent_task_id=2,
-        parent_run_id=3,
-        goal_input="goal",
-        status="running",
-        state_json=AgentTeamRunState(
-            node_runtime={"review": {"agent_id": "reviewer", "system_prompt": "secret"}}
-        ).to_json(),
-        end_reason=None,
-        started_at=None,
-        ended_at=None,
+    row = SimpleNamespace(id=17, status=AgentTeamRunStatus.PENDING.value, state_json={})
+    updated = SimpleNamespace(
+        id=17,
+        parent_run_id=23,
+        status=AgentTeamRunStatus.CANCELLED.value,
+    )
+    captured: dict[str, object] = {}
+
+    class _State:
+        def cancel(self) -> None:
+            captured["signalled"] = True
+
+    class _Crud:
+        def get_by_id(self, run_id: int) -> SimpleNamespace:
+            assert run_id == 17
+            return row
+
+        def update_status_if_in(
+            self,
+            run_id: int,
+            target: str,
+            allowed: tuple[str, ...],
+            **kwargs: object,
+        ) -> SimpleNamespace:
+            captured.update(run_id=run_id, target=target, allowed=allowed, **kwargs)
+            return updated
+
+    coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
+    coordinator._team_run_crud = _Crud()
+    monkeypatch.setattr(
+        coordinator_module,
+        "AgentTeamRunState",
+        SimpleNamespace(model_validate=lambda _value: _State()),
     )
 
-    payload = _run_payload(row)
-    assert "node_runtime" not in payload["state"]
-    assert payload["node_results"] == []
+    result = coordinator.cancel(17)
+
+    assert result is updated
+    assert captured["allowed"] == (
+        AgentTeamRunStatus.RUNNING.value,
+        AgentTeamRunStatus.PENDING.value,
+    )
+    assert captured["target"] == AgentTeamRunStatus.CANCELLED.value
+    assert captured["end_reason"] == AgentTeamRunEndReason.CANCELLED.value
+    assert captured["ended"] is True
+
+
+def test_team_run_view_is_typed_and_does_not_accept_runtime_state() -> None:
+    """前端 TeamRun 契约只允许安全投影字段，不携带恢复执行快照。"""
+
+    payload = {
+        "id": 1,
+        "team_id": "quality",
+        "workspace_id": 1,
+        "parent_task_id": 2,
+        "parent_run_id": 3,
+        "goal": "goal",
+        "status": "running",
+        "start_node_id": "review",
+        "nodes": [{
+            "node_id": "review", "name": "Review", "agent_id": "reviewer",
+            "task_id": 9, "status": "running", "conversation_run_count": 1,
+            "agent_count": 1, "child_agents": [],
+        }],
+        "transitions": [],
+        "transition_history": [],
+        "current_node_id": "review",
+        "end_reason": None,
+        "started_at": None,
+        "ended_at": None,
+    }
+    view = AgentTeamRunResponse.model_validate(payload)
+    assert view.nodes[0].task_id == 9
+    assert "state" not in view.model_dump()
 
 
 def test_team_model_snapshot_falls_back_to_parent_materialized_settings() -> None:

@@ -8,7 +8,7 @@
         → ToolHandlerRunner（thread 直跑 或 process 隔离 + 硬超时强杀）
         → PostToolUse Hook
         → ToolObservationBudget（模型通道预算与超限落盘）
-        → 工具终态提前投影（``project_tool_terminal_state``，展示旁路）
+        → 工具终态提前投影（``project_tool_terminal_state``，展示旁路；HIL 观察除外）
 
 管线只做编排：每个阶段的实现各自收口在对应协作者中，本模块不含隔离执行细节、
 门禁规则或预算算法。门禁拒绝、状态协调提前返回和执行器返回的观察都会经过模型输出预算；
@@ -16,14 +16,16 @@
 PostToolUse Hook，包括 Runner 在 handler 启动前返回取消观察的情况。上层（``WorkflowOperations``）
 只依赖 ``execute`` 一个入口，正常返回时拿到 :class:`ToolObservation`。
 
-本模块还承载工具终态向进程内 Transport snapshot 提前投影的唯一落点：观察结果只在
+本模块还承载工具终态向进程内 Transport snapshot 提前投影的唯一落点：普通观察只在
 ``execute`` 的统一出口投影，门禁拒绝、路径非法、stale 和协调器错误等正常观察都经过该出口；
-执行管线抛出异常且提供了执行上下文时，则尝试投影为失败后重新抛出原异常。展示投影失败只
-记录日志，不改变工具观察或原异常。
+带 ``user_input_request`` 的观察暂不终结 part，等用户决定后由 workflow 的结算边界收口。执行
+管线抛出异常且提供了执行上下文时，则尝试投影为失败后重新抛出原异常。展示投影失败只记录日志，
+不改变工具观察或原异常。
 """
 
 from collections.abc import Collection
 
+from app.config.logging.logger import log
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.tools.guard.file_resource_paths import FileResourcePathError
 from app.core.tools.guard.file_tool_state_coordinator import (
@@ -60,7 +62,8 @@ class ToolExecutor:
     - 负责：按固定时序编排准入门禁、文件状态协调、handler 隔离执行、PostToolUse Hook
       和输出预算。门禁拒绝、状态协调提前返回及执行器观察都经过输出预算；调用
       ``ToolHandlerRunner`` 的路径触发 PostToolUse Hook（包括 handler 启动前取消）。正常观察在
-      统一出口投影工具终态；异常路径在提供执行上下文时尝试投影失败，再保留并重新抛出原异常。
+      统一出口投影普通工具终态；带待决用户输入的观察由 workflow 决定分支收口。异常路径在提供
+      执行上下文时尝试投影失败，再保留并重新抛出原异常。
     - 不负责：门禁判定规则（``ToolAccessGate``）、文件 revision/stale/锁机制
       （``FileToolStateCoordinator``）、子进程隔离与超时强杀
       （``ToolHandlerRunner``）、预算算法（``ToolObservationBudget``）、
@@ -72,7 +75,6 @@ class ToolExecutor:
         self,
         registry: ToolRegistry,
         state_coordinator: FileToolStateCoordinator | None = None,
-        output_budget: ToolOutputBudget | None = None,
     ) -> None:
         """初始化执行管线并装配各阶段协作者。
 
@@ -96,7 +98,7 @@ class ToolExecutor:
         self._gate = ToolAccessGate(registry)
         self._state_coordinator = state_coordinator or FileToolStateCoordinator()
         self._runner = ToolHandlerRunner()
-        self._budget = ToolObservationBudget(output_budget)
+        self._budget = ToolObservationBudget()
 
     def list_tools(self) -> list[ToolDefinition]:
         """返回全部已注册工具定义。
@@ -294,12 +296,13 @@ class ToolExecutor:
         execution_context: ToolExecutionContext | None = None,
         allowed_tool_names: Collection[str] | None = None,
     ) -> ToolObservation:
-        """执行单次工具调用、投影其终态，并返回归一化观察结果。
+        """执行单次工具调用、按是否需要用户决定投影状态，并返回归一化观察结果。
 
         这是执行管线的唯一出口：先经 :meth:`_execute_inner` 完成五阶段编排，再把该观察的
         终态提前投影到进程内 Transport snapshot（``completed`` / ``failed`` /
-        ``cancelled``），最后原样返回观察。投影写在唯一出口而非各 early return 处，门禁
-        拒绝、路径非法、stale、协调器异常等分支自动覆盖。
+        ``cancelled``），最后原样返回观察。带 ``user_input_request`` 的观察延后终态投影，
+        由 ``wait_user`` 先投影待决载荷并在决定分支结束时收口。投影写在唯一出口而非各 early
+        return 处，门禁拒绝、路径非法、stale、协调器异常等分支自动覆盖。
 
         参数:
             call: 模型请求的工具调用，含工具名、参数与调用 id。
@@ -320,8 +323,9 @@ class ToolExecutor:
                 ``WorkflowOperations`` 随后自行把该异常归一化为内部错误观察。
 
         副作用:
-            除 :meth:`_execute_inner` 的副作用外，额外把工具终态直投进进程内 snapshot；
-            投影失败只记日志、不改写观察（展示层缺口不得中断工具执行链路）。
+            除 :meth:`_execute_inner` 的副作用外，普通观察额外把工具终态直投进进程内 snapshot；
+            待决用户输入观察只记结构化延后日志，投影失败只记日志、不改写观察（展示层缺口不得中断
+            工具执行链路）。
         """
 
         try:
@@ -335,13 +339,27 @@ class ToolExecutor:
                     tool_call_id=call.call_id or execution_context.tool_call_id,
                 )
             raise
-        if execution_context is not None:
+        if execution_context is not None and observation.user_input_request is None:
             project_tool_terminal_state(
                 task_id=execution_context.task_id,
                 run_id=execution_context.run_id,
                 # 与取消通知同口径：归一化后的 call_id 才可能命中事件契约，空串由投影内部跳过。
                 tool_call_id=call.call_id or execution_context.tool_call_id,
                 observation=observation,
+            )
+        elif execution_context is not None:
+            # HIL 工具观察虽已返回预览，但同一调用仍要等用户决定后才会重执行或收口；
+            # 终态由 wait_user 的决定分支投影，不能在审批载荷到达前先封闭 tool part。
+            log.info(
+                "tool_terminal_projection_deferred_for_user_input",
+                extra={
+                    "msg": "工具结果带有待决用户输入，终态投影延后到决定处理阶段",
+                    "data": {
+                        "task_id": execution_context.task_id,
+                        "run_id": execution_context.run_id,
+                        "tool_call_id": call.call_id or execution_context.tool_call_id,
+                    },
+                },
             )
         return observation
 

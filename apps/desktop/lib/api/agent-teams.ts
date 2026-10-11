@@ -40,23 +40,22 @@ export type AgentTeamRun = {
   parent_task_id: number;
   parent_run_id: number;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
-  active_node: {
+  goal: string;
+  start_node_id: string;
+  nodes: Array<{
     node_id: string;
-    task_id: number;
-    run_id: number;
-    completed: false;
-    status: null;
-    output: null;
-  } | null;
-  node_results: Array<{
-    node_id: string;
-    task_id: number;
-    run_id: number;
-    completed: true;
+    name: string;
+    agent_id: string;
+    goal: string;
+    task_id: number | null;
     status: string;
-    output: string;
+    conversation_run_count: number;
+    agent_count: number;
+    child_agents: Array<{ task_id: number; title: string; status: string }>;
   }>;
-  state: Record<string, unknown>;
+  transitions: Array<{ from_node_id: string; status: string; target_node_id: string }>;
+  transition_history: Array<{ from_node_id: string; status: string; target_node_id: string | null }>;
+  current_node_id: string | null;
   end_reason: string | null;
   started_at: string | null;
   ended_at: string | null;

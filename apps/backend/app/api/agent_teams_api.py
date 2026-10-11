@@ -15,13 +15,13 @@ from fastapi import Path as PathParameter
 
 from app.agent_team.coordinator import get_agent_team_coordinator
 from app.agent_team.registry import get_agent_team_registry
-from app.agent_team.state.agent_team_run_state import AgentTeamRunState
-from app.api.schemas.request.save_agent_team_configuration_request import (
-    SaveAgentTeamConfigurationRequest,
-)
 from app.api.configuration.agent_team_error_messages import (
     agent_team_configuration_error_message,
 )
+from app.api.schemas.request.save_agent_team_configuration_request import (
+    SaveAgentTeamConfigurationRequest,
+)
+from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.app import app
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 from app.service.configuration.agent_team_configuration_service import (
@@ -36,35 +36,6 @@ TeamIdPath = Annotated[
     str,
     PathParameter(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
 ]
-
-
-def _run_payload(row: Any) -> dict[str, Any]:
-    """把 ORM TeamRun 投影为前端可读取的有限状态。"""
-
-    state = AgentTeamRunState.model_validate(row.state_json)
-    public_state = state.model_dump(mode="json")
-    # 节点运行快照包含 system_prompt 和内部模型 schema，只供 coordinator 恢复执行，
-    # 不属于前端 Team 进度契约，避免通过状态查询泄露内部提示词。
-    public_state.pop("node_runtime", None)
-    node_results = [
-        execution.model_dump(mode="json")
-        for execution in state.node_executions
-        if execution.completed
-    ]
-    return {
-        "id": row.id,
-        "team_id": row.team_id,
-        "workspace_id": row.workspace_id,
-        "parent_task_id": row.parent_task_id,
-        "parent_run_id": row.parent_run_id,
-        "goal": row.goal_input,
-        "status": row.status,
-        "node_results": node_results,
-        "state": public_state,
-        "end_reason": row.end_reason,
-        "started_at": row.started_at,
-        "ended_at": row.ended_at,
-    }
 
 
 @app.post("/configuration/agent-teams")
@@ -244,23 +215,24 @@ async def delete_workspace_agent_team_configuration(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/agent-team/runs/{run_id}")
-async def get_agent_team_run(run_id: int) -> dict[str, Any]:
+@app.get("/agent-team/runs/{run_id}", response_model=AgentTeamRunResponse)
+async def get_agent_team_run(run_id: int) -> AgentTeamRunResponse:
     """读取 TeamRun 聚合状态。"""
 
     try:
-        row = await asyncio.to_thread(AgentTeamRunService().get, run_id)
-        return _run_payload(row)
+        payload = await asyncio.to_thread(AgentTeamRunService().get_view, run_id)
+        return AgentTeamRunResponse.model_validate(payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Team run not found") from exc
 
 
-@app.post("/agent-team/runs/{run_id}/cancel")
-async def cancel_agent_team_run(run_id: int) -> dict[str, Any]:
+@app.post("/agent-team/runs/{run_id}/cancel", response_model=AgentTeamRunResponse)
+async def cancel_agent_team_run(run_id: int) -> AgentTeamRunResponse:
     """取消 TeamRun 及其当前节点。"""
 
     try:
         row = await asyncio.to_thread(get_agent_team_coordinator().cancel, run_id)
-        return _run_payload(row)
+        payload = await asyncio.to_thread(AgentTeamRunService().get_view, row.id)
+        return AgentTeamRunResponse.model_validate(payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Team run not found") from exc

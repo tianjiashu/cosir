@@ -383,6 +383,9 @@ class AgentRuntime:
         allows_tools = {tool.get("name") for tool in task_space.task_tool_schemas}
 
         ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
+
+        must_tool = None
+
         if run.extra is not None and len(run.extra.ban_tools) > 0:
             allows_tools = allows_tools - ban_tools
             task_space.defer_system_message(
@@ -399,31 +402,24 @@ class AgentRuntime:
             )
 
         if run.extra is not None and run.extra.propose_agent_configuration:
-            allows_tools.add(TOOL_PROPOSE_AGENT_CONFIGURATION)
-            definition: ToolDefinition = self._tool_register.get_tool_definition(
-                TOOL_PROPOSE_AGENT_CONFIGURATION
-            )
-            tool_schema = convert_to_openai_tool(definition.to_model_tool_definition(), strict=True)
-            task_space.defer_system_message(
-                SystemMessage(
-                    content=(
-                        "Please follow the user's instructions to call this tool to carry out "
-                        f"their request: {tool_schema}. Do not generate JSON; invoke the tool instead."
-                    )
-                )
-            )
-
+            must_tool = TOOL_PROPOSE_AGENT_CONFIGURATION
         if run.extra is not None and run.extra.propose_agent_team_configuration:
-            allows_tools.add(TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION)
-            definition = self._tool_register.get_tool_definition(
-                TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION
+            must_tool = TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION
+
+
+        if must_tool is not None:
+            allows_tools.add(must_tool)
+            definition: ToolDefinition = self._tool_register.get_tool_definition(
+                must_tool
             )
             tool_schema = convert_to_openai_tool(definition.to_model_tool_definition(), strict=True)
             task_space.defer_system_message(
                 SystemMessage(
                     content=(
                         "Please follow the user's instructions to call this tool to carry out "
-                        f"their request: {tool_schema}. Do not generate JSON; invoke the tool instead."
+                        "This tool is newly added to your tool registry, but it is allowed only "
+                        "for this round by the user's intent; you must invoke this tool during "
+                        f"this round's tool calls: {tool_schema}. Do not generate JSON; invoke the tool instead."
                     )
                 )
             )
@@ -448,4 +444,5 @@ class AgentRuntime:
             execution_context=execution_context,
             runtime_dependencies=runtime_dependencies,
             tool_trace_recorder=tool_trace_recorder,
+            must_tool=must_tool,
         )

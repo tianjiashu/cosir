@@ -1,0 +1,25 @@
+
+> desktop@0.1.0 tauri:dev
+> node scripts/run-tauri-dev.mjs
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.18s
+        Info BeforeDevCommand (`npm run dev -- --host 127.0.0.1 --port 3000`)
+
+> desktop@0.1.0 dev
+> vite --host 127.0.0.1 --port 3000
+
+
+  [32m[1mVITE[22m v7.3.6[39m  [2mready in [0m[1m634[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m3000[22m/[39m
+        Info DevCommand (`cargo  run --no-default-features --color always --`)
+        Info Watching h:\coding-agent\apps\desktop\src-tauri for changes...
+[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 4.90s
+[1m[92m     Running[0m `h:\coding-agent\target\debug\cosir-desktop.exe`
+[2m15:26:47[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/@fs/H:/coding-agent/apps/desktop/app/globals.css, /@fs/H:/coding-agent/apps/desktop/components/assistant-ui/tools/agent-team-tool.tsx[22m
+[2m15:27:04[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/@fs/H:/coding-agent/apps/desktop/app/globals.css, /@fs/H:/coding-agent/apps/desktop/components/assistant-ui/tools/tool-part.tsx, /@fs/H:/coding-agent/apps/desktop/components/assistant-ui/tools/agent-team-configuration-tool.tsx, /@fs/H:/coding-agent/apps/desktop/components/assistant-ui/tools/agent-team-execution-card.tsx, /@fs/H:/coding-agent/apps/desktop/components/assistant-ui/tools/agent-team-tool.tsx[22m
+[2m15:27:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [33mhmr invalidate [39m[2m/@fs/H:/coding-agent/apps/desktop/components/assistant-ui/tools/tool-part.tsx[22m Could not Fast Refresh ("routeToolPart" export is incompatible). Learn more at https://github.com/vitejs/vite-plugin-react/tree/main/packages/plugin-react-swc#consistent-components-exports
+[2m15:27:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2mH:/coding-agent/apps/desktop/components/assistant-ui/tools/tool-part.tsx[22m[2m (circular import invalidate)[22m
+[2m15:28:03[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/@fs/H:/coding-agent/apps/desktop/app/globals.css, /@fs/H:/coding-agent/apps/desktop/components/assistant-ui/tools/agent-team-tool.tsx[22m
+[2m15:28:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/@fs/H:/coding-agent/apps/desktop/app/globals.css, /@fs/H:/coding-agent/apps/desktop/components/assistant-ui/tools/agent-team-tool.tsx[22m
+[2m15:29:36[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/@fs/H:/coding-agent/apps/desktop/app/globals.css, /@fs/H:/coding-agent/apps/desktop/components/assistant-ui/tools/agent-team-tool.tsx[22m

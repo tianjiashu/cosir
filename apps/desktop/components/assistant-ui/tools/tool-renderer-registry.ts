@@ -9,6 +9,7 @@ import { TerminalTool } from "./terminal-tool";
 import { ToolFallback } from "./tool-fallback";
 import { AgentConfigurationDraftTool } from "./agent-configuration-draft-tool";
 import { AgentTeamTool } from "./agent-team-tool";
+import { AgentTeamExecutionCard } from "./agent-team-execution-card";
 import { AgentTeamConfigurationTool } from "./agent-team-configuration-tool";
 import { readAgentTeamConfigurationDraftDisplay, readAgentTeamPreviewDisplay } from "./agent-team-display";
 import { readAgentConfigurationDraftDisplay } from "./agent-configuration-draft-display";
@@ -21,7 +22,8 @@ export type ToolPartRoute =
   | "terminal-session"
   | "delegation"
   | "agent-configuration-draft"
-  | "agent-team-preview"
+  | "agent-team-approval"
+  | "agent-team-execution"
   | "agent-team-configuration-draft"
   | "details"
   | "fallback";
@@ -29,10 +31,14 @@ export type ToolPartRoute =
 export type ToolPartRendererProps = ToolCallMessagePartProps & {
   /** 拥有该消息的 Run；只读展示面没有可取消工具时可以省略。 */
   runId?: number | null;
+  /** 拥有该消息的 Conversation Run 状态；审批交互以此判断是否仍在等待用户决定。 */
+  runStatus?: string | null;
   /** 整个 Run 已经进入取消流程。 */
   runCancelling?: boolean;
   /** 拥有该工具 part 的任务，只用于打开任务范围的预览面板。 */
   taskId?: number;
+  /** 用户决定提交后重新订阅当前 Run 的事件流。 */
+  onAttachTransport?: () => Promise<void>;
 };
 
 type ToolRendererMatchContext = {
@@ -62,7 +68,8 @@ const KNOWN_DISPLAY_KINDS = new Set([
   "child-agent-result",
   "repeated-call",
   "agent-configuration-draft",
-  "agent-team-preview",
+  "agent-team-approval",
+  "agent-team-execution",
   "agent-team-configuration-draft",
 ]);
 
@@ -87,10 +94,15 @@ const TOOL_RENDERER_DEFINITIONS: readonly ToolRendererDefinition[] = [
       && readAgentTeamConfigurationDraftDisplay(artifact.display_data) !== null,
   },
   {
-    route: "agent-team-preview",
+    route: "agent-team-approval",
     renderer: AgentTeamTool,
-    matches: ({ kind, artifact }) => kind === "agent-team-preview"
+    matches: ({ kind, artifact }) => kind === "agent-team-approval"
       && readAgentTeamPreviewDisplay(artifact.display_data) !== null,
+  },
+  {
+    route: "agent-team-execution",
+    renderer: AgentTeamExecutionCard,
+    matches: ({ kind }) => kind === "agent-team-execution",
   },
   {
     route: "agent-configuration-draft",

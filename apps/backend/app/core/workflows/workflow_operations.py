@@ -74,6 +74,7 @@ class WorkflowOperations:
         allows_tools: Collection[str] | None = None,
         runtime_dependencies: ToolRuntimeDependencies | None = None,
         tool_trace_recorder: ToolTraceRecorder | None = None,
+        must_tool: str | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -118,6 +119,7 @@ class WorkflowOperations:
             if execution_context is not None and runtime_dependencies is not None
             else execution_context
         )
+        self.must_tool = must_tool
 
         # 运行时动态变化的工具白名单
         self._allowed_tool_names = frozenset(allows_tools)
@@ -301,7 +303,7 @@ class WorkflowOperations:
         )
         return record
 
-    def mark_waiting_for_input_if_running(self) -> ConversationRunRecord | None:
+    def mark_waiting_for_input_if_running(self,usage_stats: ConversationRunUsageStats | None = None) -> ConversationRunRecord | None:
         """将当前 Run 迁移到等待用户输入状态并发布状态事件。
 
         用户输入等待节点在调用 LangGraph ``interrupt`` 前调用本方法。状态事实由
@@ -328,7 +330,7 @@ class WorkflowOperations:
             },
         )
         return self._conversation_run_state_service.mark_waiting_for_input_if_running(
-            run_id
+            run_id, usage_stats=usage_stats
         )
 
     def fail_run_if_running(

@@ -13,6 +13,9 @@ from langchain_core.runnables import Runnable
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflows.react.node_helper.user_input_decision_handlers import (
+    UserInputDecisionHandlers,
+)
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models import ConversationRunRecord
 
@@ -64,3 +67,6 @@ class RuntimeConfig:
     thinking_channel: str = ""
     execution_mode: ExecutionMode = "fresh"
     resuming_wait_user: bool = False
+    user_input_decision_handlers: UserInputDecisionHandlers = field(
+        default_factory=UserInputDecisionHandlers
+    )

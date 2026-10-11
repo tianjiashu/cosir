@@ -448,8 +448,7 @@ def test_approve_decision_routes_to_start_branch_only() -> None:
 
     assert observation.status == "success"
     assert json.loads(observation.content) == {"status": "running", "team_id": "code-quality"}
-    assert observation.display_data["kind"] == "agent-team-preview"
-    assert observation.display_data["status"] == "running"
+    assert observation.display_data["kind"] == "agent-team-execution"
     # 启动分支不得再向工作流下发待决请求，否则会形成无法结束的挂起。
     assert observation.user_input_request is None
     assert calls == [
@@ -547,7 +546,6 @@ def test_confirmed_start_returns_running_observation() -> None:
     assert observation.status == "success"
     assert json.loads(observation.content) == {"status": "running", "team_id": "code-quality"}
     assert observation.display_data["team_run_id"] == 11
-    assert observation.display_data["status"] == "running"
     assert observation.user_input_request is None
 
 
@@ -718,7 +716,6 @@ def test_prepare_branch_succeeds_for_an_existing_team(monkeypatch) -> None:
     )
     assert json.loads(observation.content) == {"status": "pending", "team_id": "code-quality"}
     assert observation.display_data["team_run_id"] == 101
-    assert observation.display_data["status"] == "pending"
     assert observation.user_input_request is not None
     assert observation.user_input_request.request_id == "101"
     assert captured["parent_run_id"] == 2

@@ -35,8 +35,7 @@ def build_agent_team_preview_display_data(
         "configuration",
     )
     return {
-        "kind": "agent-team-preview",
-        "status": "pending",
+        "kind": "agent-team-approval",
         **{key: preview_fields[key] for key in fields},
         "team_run_id": team_run_id,
     }
@@ -51,14 +50,11 @@ def build_agent_team_run_display_data(
 ) -> dict[str, Any]:
     """投影「用户已批准、Team 已启动」的展示数据。
 
-    复用 ``agent-team-preview`` 这个 ``kind``，使同一张卡片从「待确认」翻到「运行中」而不需要
-    第二套前端渲染分支；``status`` 表达状态跃迁，进度细节由卡片按 ``team_run_id`` 查询运行状态。
-    本函数的产物不携带待决请求声明，这是「用户已确认」在展示层的表现。
+    执行卡使用独立展示种类，审批卡与只读进度卡拥有不同交互边界；运行生命周期仍由 TeamRun 查询提供。
     """
 
     return {
-        "kind": "agent-team-preview",
-        "status": "running",
+        "kind": "agent-team-execution",
         "team_id": team_id,
         "team_run_id": team_run_id,
         "goal": goal,

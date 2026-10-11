@@ -78,7 +78,7 @@ def _observation(
         "reason": "",
         "retryable": False,
         "tool_call_id": tool_call_id,
-        "display_data": {"kind": "agent-team-preview", "status": "pending"},
+        "display_data": {"kind": "agent-team-approval", "status": "pending"},
         "user_input_request": (
             _request(request_id=request_id, decisions=decisions) if request is _UNSET else request
         ),
@@ -139,12 +139,18 @@ class _Harness:
         self.calls: list[str] = []
         self.migrations: list[str] = []
         self.projected: list[Any] = []
+        self.rejections: list[tuple[str, str]] = []
         # canonical context 写入（待确认占位行 / 真实结果行）：与真实契约同口径，同 tool_call_id
         # 命中既有行时原地覆盖，因此一条调用最终只有一行。
         self.context_writes: list[dict[str, Any]] = []
         self.runtime_config = SimpleNamespace(
             resuming_wait_user=False,
             run=SimpleNamespace(id=99),
+            user_input_decision_handlers=SimpleNamespace(
+                handle_rejection=lambda request, decision: self.rejections.append(
+                    (request.request_id, decision.kind.value)
+                )
+            ),
             operations=SimpleNamespace(
                 mark_waiting_for_input_if_running=self._mark_waiting,
                 get_current_task=lambda: SimpleNamespace(id=42),
@@ -254,6 +260,7 @@ def test_wait_user_node_passes_through_without_declared_request(
 
     asyncio.run(_run())
     assert harness.calls == ["observe"]
+    assert harness.rejections == []
     assert harness.migrations == []
     assert harness.projected == []
 
@@ -313,7 +320,7 @@ def test_wait_user_node_consumes_decision_without_reprojecting(
     async def _run() -> None:
         await harness.start([_observation()])
         await harness.resume(
-            {"decisions": [{"request_id": "12", "decision": "approve", "data": {}}]}
+            {"decision": {"request_id": "12", "decision": "approve", "data": {}}}
         )
         assert (await harness.snapshot()).next == ()
 
@@ -337,9 +344,7 @@ def test_wait_user_node_approval_reopens_gate_and_clears_declaration(
         await harness.start([_observation()])
         await harness.resume(
             {
-                "decisions": [
-                    {"request_id": "12", "decision": "approve", "data": {"goal": "交付报告"}},
-                ]
+                "decision": {"request_id": "12", "decision": "approve", "data": {"goal": "交付报告"}}
             }
         )
         resumed = await harness.snapshot()
@@ -372,9 +377,7 @@ def test_wait_user_node_rejection_inlines_feedback_and_routes_to_observe(
         await harness.start([_observation()])
         await harness.resume(
             {
-                "decisions": [
-                    {"request_id": "12", "decision": "reject", "data": {"feedback": "目标太宽泛"}},
-                ]
+                "decision": {"request_id": "12", "decision": "reject", "data": {"feedback": "目标太宽泛"}}
             }
         )
         snapshot = await harness.snapshot()
@@ -389,12 +392,13 @@ def test_wait_user_node_rejection_inlines_feedback_and_routes_to_observe(
 
     asyncio.run(_run())
     assert harness.calls == ["observe"]
+    assert harness.rejections == [("12", "reject")]
 
 
-def test_wait_user_node_partial_decisions_materialize_then_self_loop(
+def test_wait_user_node_rejects_multiple_pending_requests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """只答了一部分时：已作答的立刻物化，剩余请求自环重新挂起，下一轮只投影仍未答的。"""
+    """当前 HIL 一次只处理一个请求；多个并行请求必须显式拒绝，不能丢掉其中一个。"""
 
     harness = _Harness(monkeypatch)
     observations = [
@@ -403,55 +407,25 @@ def test_wait_user_node_partial_decisions_materialize_then_self_loop(
     ]
 
     async def _run() -> None:
-        await harness.start(observations)
-        await harness.resume(
-            {"decisions": [{"request_id": "12", "decision": "approve", "data": {}}]}
-        )
-        snapshot = await harness.snapshot()
-        assert snapshot.next == ("wait",)
-        # 已批准的那条已经物化（记录回到未起跑），不会因为自环而丢掉用户决定。
-        record = snapshot.values["tool_call_lifecycle"].valid_calls["call-a"]
-        assert record.status == "pending"
-        assert record.user_decision is not None
-        # 未答的那条仍带着声明，等下一轮继续问。
-        undeclared = [
-            observation["user_input_request"]
-            for observation in snapshot.values["last_tool_results"]["observations"]
-        ]
-        assert undeclared[0] is None
-        assert undeclared[1] is not None
+        with pytest.raises(ValueError, match="只能包含一个待决请求"):
+            await harness.start(observations)
 
     asyncio.run(_run())
     assert harness.calls == []
-    # 首次挂起迁移一次；自环重新挂起前再迁移一次（中间那次消费恢复值不迁移）。
-    assert harness.migrations == ["mark", "mark"]
-    # 首次投影两条；自环那轮只投影仍未答的 call-b。
-    assert harness.projected_request_ids() == ["12", "13", "13"]
-    # 占位行同样只补仍未决的那条；已批准那条的真实结果会覆盖它的占位行，因此一条调用始终一行。
-    assert set(harness.waiting_rows()) == {"call-a", "call-b"}
-    assert len(harness.context_writes) == 2
+    assert harness.migrations == []
+    assert harness.projected == []
 
 
-def test_wait_user_node_second_resume_executes_earlier_approval(
+def test_wait_user_node_resume_routes_approved_call_to_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """批准分散在两轮给出时，前一轮的批准不得被漏在未起跑状态：必须回 tools 执行。"""
+    """批准决定经 resume 载荷物化后，图必须返回 tools 执行。"""
 
     harness = _Harness(monkeypatch)
-    observations = [
-        _observation(),
-        _observation(tool_call_id="call-b", request_id="13"),
-    ]
-
     async def _run() -> None:
-        await harness.start(observations)
+        await harness.start([_observation()])
         await harness.resume(
-            build_resume_payload([UserDecision(request_id="12", kind=UserDecisionKind.APPROVE)])
-        )
-        assert (await harness.snapshot()).next == ("wait",)
-
-        await harness.resume(
-            build_resume_payload([UserDecision(request_id="13", kind=UserDecisionKind.REJECT)])
+            build_resume_payload(UserDecision(request_id="12", kind=UserDecisionKind.APPROVE))
         )
         assert (await harness.snapshot()).next == ()
 
@@ -471,7 +445,7 @@ def test_wait_user_node_rejects_decisions_for_unknown_request(
         await harness.start([_observation()])
         with pytest.raises(ValueError, match="未知的等待请求"):
             await harness.resume(
-                {"decisions": [{"request_id": "999", "decision": "approve", "data": {}}]}
+                {"decision": {"request_id": "999", "decision": "approve", "data": {}}}
             )
 
     asyncio.run(_run())
@@ -489,7 +463,7 @@ def test_wait_user_node_rejects_undeclared_decision(
         await harness.start(observations)
         with pytest.raises(ValueError, match="不接受决定"):
             await harness.resume(
-                {"decisions": [{"request_id": "12", "decision": "abort", "data": {}}]}
+                {"decision": {"request_id": "12", "decision": "abort", "data": {}}}
             )
 
     asyncio.run(_run())
@@ -507,7 +481,7 @@ def test_wait_user_node_approval_of_blocked_call_is_rejected(
         await harness.start(observations, lifecycle=_lifecycle("call-a", blocked=("hidden-1",)))
         with pytest.raises(ValueError, match="白名单"):
             await harness.resume(
-                {"decisions": [{"request_id": "12", "decision": "approve", "data": {}}]}
+                {"decision": {"request_id": "12", "decision": "approve", "data": {}}}
             )
 
     asyncio.run(_run())
@@ -537,7 +511,7 @@ def test_wait_user_node_empty_resume_value_suspends_again(
 
     async def _run() -> None:
         await harness.start([_observation()])
-        await harness.resume({"decisions": []})
+        await harness.resume({"decision": None})
         snapshot = await harness.snapshot()
         assert snapshot.next == ("wait",)
         assert any(task.interrupts for task in snapshot.tasks)

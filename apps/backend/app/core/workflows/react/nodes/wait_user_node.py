@@ -40,7 +40,7 @@ from app.config.logging.logger import log
 from app.core.tools.schemas import (
     EXECUTING_DECISION_KINDS,
     UserDecision,
-    UserInputRequest,
+    UserInputRequest, UserDecisionKind,
 )
 from app.core.workflows.react.node_helper.common import _runtime_config
 from app.core.workflows.react.node_helper.user_input_projection import (
@@ -83,9 +83,9 @@ def _observations(state: ReactGraphState) -> list[dict[str, Any]]:
 
 
 def _await_decisions(
-    state: ReactGraphState,
-    runtime_config: RuntimeConfig,
-    request: UserInputRequest,
+        state: ReactGraphState,
+        runtime_config: RuntimeConfig,
+        request: UserInputRequest,
 ) -> UserDecision | None:
     """挂起图并返回本次收到的用户决定。
 
@@ -151,11 +151,11 @@ def _await_decisions(
 
 
 def _apply_decision(
-    state: ReactGraphState,
-    runtime_config: RuntimeConfig,
-    lifecycle: ToolCallLifecycleManager,
-    request: UserInputRequest,
-    decision: UserDecision | None,
+        state: ReactGraphState,
+        runtime_config: RuntimeConfig,
+        lifecycle: ToolCallLifecycleManager,
+        request: UserInputRequest,
+        decision: UserDecision | None,
 ) -> dict[str, object]:
     """把用户决定物化进调用记录与观察，并给出下一步节点。
 
@@ -201,6 +201,9 @@ def _apply_decision(
                 f"等待请求 {decision.request_id} 不接受决定 {decision.kind.value}；"
                 f"允许：{[kind.value for kind in request.decisions]}"
             )
+
+        if decision.kind.value == UserDecisionKind.REJECT.value:
+            runtime_config.user_input_decision_handlers.handle_rejection(request, decision)
 
     observations = _observations(state)
     approved = (
@@ -294,9 +297,9 @@ def wait_user_node(state: ReactGraphState) -> dict[str, object]:
 
 
 def _begin_suspension(
-    state: ReactGraphState,
-    runtime_config: RuntimeConfig,
-    lifecycle: ToolCallLifecycleManager,
+        state: ReactGraphState,
+        runtime_config: RuntimeConfig,
+        lifecycle: ToolCallLifecycleManager,
 ) -> None:
     """挂起前的三个副作用（顺序固定）：投影 → 持久化待决载荷 → 迁移 Run 为等待态。
 
@@ -333,7 +336,7 @@ def _begin_suspension(
         step_id=f"step-{state.step_count}",
         summaries=_observations(state),
     )
-    waiting_run = runtime_config.operations.mark_waiting_for_input_if_running()
+    waiting_run = runtime_config.operations.mark_waiting_for_input_if_running(runtime_config.usage_stats)
     if waiting_run is None:
         # 条件更新未命中：Run 已被并发取消 / 落定终态，而图仍要挂起 —— 这正是「图与 Run 状态
         # 分叉」的现场，必须有痕迹可查（否则只会表现为「决定提交后被拒绝」）。

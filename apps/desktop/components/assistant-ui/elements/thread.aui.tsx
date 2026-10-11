@@ -1,7 +1,7 @@
 "use client";
 
-import { ArrowDownIcon, ArrowUpIcon, BotIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon } from "lucide-react";
-import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FC, type ReactNode } from "react";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon } from "lucide-react";
+import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FC, type MutableRefObject, type ReactNode } from "react";
 import {
   AuiIf,
   ActionBarPrimitive,
@@ -112,12 +112,13 @@ export type ThreadProps = {
   performanceProbe?: AssistantPerformanceProbe | null;
   configurationProposalMode?: "agent" | "agent-team" | null;
   onConfigurationProposalModeChange?: (mode: "agent" | "agent-team" | null) => void;
+  attachTransportRef?: MutableRefObject<(() => Promise<void>) | null>;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "configurationProposalMode" | "onConfigurationProposalModeChange"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "configurationProposalMode" | "onConfigurationProposalModeChange" | "attachTransportRef"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
@@ -166,12 +167,12 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null, configurationProposalMode = null, onConfigurationProposalModeChange }) {
+export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null, configurationProposalMode = null, onConfigurationProposalModeChange, attachTransportRef }) {
   const isEmpty = useAuiState(isNewChatView);
   const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly, configurationProposalMode, onConfigurationProposalModeChange }}>
+    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly, configurationProposalMode, onConfigurationProposalModeChange, attachTransportRef }}>
     <ThreadComponentsContext.Provider value={components}>
       <AttachmentWorkspaceContext.Provider value={workspaceId ?? undefined}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -707,7 +708,7 @@ const AssistantMessageDefault: FC = () => {
     ? custom.runStatus as TransportRun["status"]
     : null;
   const isRunning = useAuiState((state) => state.thread.isRunning);
-  const { forkAvailable = false, forkingRunId = null, onForkRun, cancellingRunId = null, taskId, readonly = false } = useContext(ThreadContext);
+  const { forkAvailable = false, forkingRunId = null, onForkRun, cancellingRunId = null, taskId, readonly = false, attachTransportRef } = useContext(ThreadContext);
   const canFork = !readonly && isLastRunMessage && runId !== null && forkAvailable && !isRunning;
   const isForking = runId !== null && forkingRunId === runId;
 
@@ -801,7 +802,14 @@ const AssistantMessageDefault: FC = () => {
                       />
                     )}
                   >
-                    <ToolPart {...part} taskId={taskId} runId={runId} runCancelling={cancellingRunId === runId} />
+                    <ToolPart
+                      {...part}
+                      taskId={taskId}
+                      runId={runId}
+                      runStatus={runStatus}
+                      runCancelling={cancellingRunId === runId}
+                      onAttachTransport={() => attachTransportRef?.current?.() ?? Promise.resolve()}
+                    />
                   </PartRenderBoundary>
                 );
               case "file":

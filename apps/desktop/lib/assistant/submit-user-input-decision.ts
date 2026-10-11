@@ -24,8 +24,8 @@ export type SubmitUserInputDecisionInput = {
  * LangGraph `Command(resume=...)` 的载荷交给等待节点消费。因此本函数必须携带 `runId`——
  * 它与空 commands 的续跑语义等价，区别只在于额外带上了用户的结构化决定。
  *
- * 只负责请求序列化与 accepted barrier 校验；不订阅返回的事件流（UI 更新由卡片自身的
- * Run 状态查询与既有订阅负责）。
+ * 只负责请求序列化与 accepted barrier 校验，不消费 POST 返回流。等待输入时原订阅已经结束，
+ * 调用方在决定被接受后必须重新 attach 当前 Run，才能接收后续模型输出。
  */
 export async function submitUserInputDecision(
   input: SubmitUserInputDecisionInput,

@@ -237,7 +237,10 @@ class TaskCrud:
         """
         stmt = (
             select(TaskModel)
-            .where(TaskModel.parent_task_id == parent_task_id)
+            .where(
+                TaskModel.parent_task_id == parent_task_id,
+                TaskModel.task_type == "delegate_task",
+            )
             .order_by(TaskModel.created_at.asc(), TaskModel.id.asc())
         )
         if session is not None:
@@ -246,6 +249,25 @@ class TaskCrud:
             with self._session_factory() as owned_session:
                 rows = owned_session.scalars(stmt).all()
         return [TaskRecord.from_model(row) for row in rows]
+
+    def list_by_parent_task_ids(self, parent_task_ids: list[int]) -> dict[int, list[TaskRecord]]:
+        """批量读取一组任务直接委派的子 Agent Task。"""
+
+        if not parent_task_ids:
+            return {}
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(TaskModel)
+                .where(
+                    TaskModel.parent_task_id.in_(parent_task_ids),
+                    TaskModel.task_type == "delegate_task",
+                )
+                .order_by(TaskModel.created_at.asc(), TaskModel.id.asc())
+            ).all()
+        grouped = {task_id: [] for task_id in parent_task_ids}
+        for row in rows:
+            grouped[row.parent_task_id].append(TaskRecord.from_model(row))
+        return grouped
 
     def get(self, task_id: int) -> TaskRecord:
         """按标识返回单个 task。

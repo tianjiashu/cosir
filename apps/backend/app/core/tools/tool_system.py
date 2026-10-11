@@ -11,6 +11,7 @@ from app.core.tools.tool_handler.agent_team.agent_team_run import (
 from app.core.tools.tool_handler.agent_team.propose_agent_team_configuration import (
     build_propose_agent_team_configuration_definition,
 )
+from app.core.tools.tool_handler.agent_team.review_request import AGENT_TEAM_REVIEW_KIND
 from app.core.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
 from app.core.tools.tool_handler.child_task.child_agent_create import build_delegate_task_definition
 from app.core.tools.tool_handler.child_task.child_agent_send import (
@@ -44,6 +45,10 @@ from app.core.tools.tool_handler.web_extract import build_web_extract_definition
 from app.core.tools.tool_handler.web_search import build_web_search_definition
 from app.core.tools.tool_handler.write_file import build_write_file_definition
 from app.core.tools.tool_registry import ToolRegistry
+from app.core.workflows.react.node_helper.user_input_decision_handlers import (
+    UserInputDecisionHandlers,
+)
+from app.service.agent_team.agent_team_run_service import reject_agent_team_confirmation
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,7 @@ class ToolSystem:
 
     registry: ToolRegistry
     executor: ToolExecutor
+    user_input_decision_handlers: UserInputDecisionHandlers
 
     @classmethod
     def build_tool_system(cls) -> "ToolSystem":
@@ -99,6 +105,7 @@ class ToolSystem:
 
         # Agent registry 已由 lifespan 在本方法前注入；delegate_task 候选稍后按 Run 投影。
         registry = ToolRegistry()
+        decision_handlers = UserInputDecisionHandlers()
         registry.register(build_read_file_definition())
         registry.register(build_write_file_definition())
         # patch_write 工具已拆分为 replace(patch_write) 与 apply_patch(Git unified diff)。
@@ -125,8 +132,13 @@ class ToolSystem:
         # Team 配置生成只按本 Run 请求临时开放；Team 执行工具保持未注册。
         registry.register(build_propose_agent_team_configuration_definition())
         registry.register(build_agent_team_run_definition())
-        executor = ToolExecutor(
-            registry=registry,
-            output_budget=ToolOutputBudget(Constant.Tools.MAX_OUTPUT_CHARS),
+        decision_handlers.register(
+            AGENT_TEAM_REVIEW_KIND,
+            reject_agent_team_confirmation,
         )
-        return ToolSystem(registry=registry, executor=executor)
+        executor = ToolExecutor(registry=registry)
+        return ToolSystem(
+            registry=registry,
+            executor=executor,
+            user_input_decision_handlers=decision_handlers,
+        )

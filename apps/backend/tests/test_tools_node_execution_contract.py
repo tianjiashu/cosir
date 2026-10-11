@@ -260,7 +260,7 @@ def test_tools_node_never_projects_or_registers_pending_requests() -> None:
     """带待决声明的结果也只是普通观察：不投影给前端，patch 里没有待决字段。"""
 
     calls: list[dict[str, Any]] = []
-    display_data = {"kind": "agent-team-preview", "status": "pending"}
+    display_data = {"kind": "agent-team-approval", "status": "pending"}
     harness = _Harness(
         calls,
         observations=[

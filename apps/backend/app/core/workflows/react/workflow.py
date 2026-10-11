@@ -22,6 +22,7 @@ from langchain_core.runnables import Runnable
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
+from app.config.configuration import get_tool_system
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.model_factory import resolve_chat_model
@@ -248,6 +249,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             langfuse_trace_id=langfuse_trace_id,
             thinking_channel=thinking_channel,
             execution_mode=execution_mode,
+            user_input_decision_handlers=get_tool_system().user_input_decision_handlers,
         )
         # task 级上下文管理器是 Agent 上下文的唯一运行时协调入口：首次执行时惰性创建，并由
         # task space 以弱引用缓存——本方法必须持有它直到 graph 执行结束，否则实例会被回收，

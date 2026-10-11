@@ -45,7 +45,13 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.assistant_transport.stream import TransportFrame
-from app.core.tools.schemas import ToolCall, ToolExecutionContext, ToolObservation
+from app.core.tools.schemas import (
+    ToolCall,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+    UserInputRequest,
+)
 from app.core.tools.tool_execute import tool_terminal_projection as projection_module
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_execute.tool_terminal_projection import (
@@ -903,6 +909,25 @@ def _process_isolated_probe_handler(
     )
 
 
+def _user_input_probe_handler(
+    *, execution_context: Any, output_sink: Any = None
+) -> ToolObservation:
+    """返回待用户决定的成功观察，验证审批决定前不提前封闭 tool part。"""
+
+    return ToolObservation(
+        tool_name="user_input_probe",
+        status="success",
+        content="preview",
+        tool_call_id=execution_context.tool_call_id,
+        display_data={"kind": "probe"},
+        user_input_request=UserInputRequest(
+            request_id="request-1",
+            kind="agent_team_review",
+            prompt="确认执行方案",
+        ),
+    )
+
+
 def test_projection_happens_in_parent_for_process_isolated_tool(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -946,6 +971,32 @@ def test_projection_happens_in_parent_for_process_isolated_tool(
         # handler 在独立子进程中运行（PID 与父进程不同），投影只发生在父进程。
         assert f"pid={os.getpid()}" not in (observation.content or "")
         assert "probe body pid=" in (observation.content or "")
+
+
+def test_tool_with_user_input_defers_terminal_projection_until_decision(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """待用户决定的观察先投影审批载荷，工具终态留给 wait_user 的决定分支。"""
+
+    projector = _RecordingProjector()
+    _install_projector(monkeypatch, projector)
+    definition = ToolDefinition(
+        name="user_input_probe",
+        group="probe",
+        description="human input projection probe",
+        handler=_user_input_probe_handler,
+        args_model=_ProbeArgs,
+    )
+    executor = ToolExecutor(registry=ToolRegistry([definition]))
+
+    observation = executor.execute(
+        ToolCall(tool_name="user_input_probe", arguments={}, call_id="call-user-input"),
+        execution_context=_make_context(tmp_path),
+    )
+
+    assert observation.status == "success"
+    assert observation.user_input_request is not None
+    assert projector.events == []
 
 
 def test_completed_terminal_event_does_not_clear_streamed_output() -> None:

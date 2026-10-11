@@ -1,68 +1,27 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { CheckCircle2, ClockIcon, UsersIcon } from "lucide-react";
+import { ClockIcon, UsersIcon } from "lucide-react";
 
-import { getAgentTeamRun, type AgentTeamRun } from "@/lib/api/agent-teams";
 import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decision";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { readToolArtifact } from "./types";
+import { ToolStatus } from "./tool-status";
+import { AgentTeamExecutionCard } from "./agent-team-execution-card";
+import { asRecord, readToolArtifact } from "./types";
 import {
   readAgentTeamPreviewDisplay,
   readAgentTeamReviewRequest,
-  readAgentTeamRunDisplay,
   type AgentTeamPreviewDisplay,
 } from "./agent-team-display";
-import { ToolStatus } from "./tool-status";
 
 /** 渲染器额外收到所属 Run / Task：提交用户决定必须定位到具体 Run。 */
 type AgentTeamToolProps = ToolCallMessagePartProps & {
   runId?: number | null;
+  runStatus?: string | null;
   taskId?: number;
+  onAttachTransport?: () => Promise<void>;
 };
-
-type NodeResult = {
-  node_id: string;
-  task_id: number;
-  run_id: number;
-  completed: true;
-  status: string;
-  output: string;
-};
-
-const END_REASON_LABELS: Record<string, string> = {
-  superseded_by_new_preview: "执行方案已被新的方案替代",
-  team_start_failed: "Team 入口节点启动失败",
-  transition_not_found: "节点状态没有匹配的转移规则",
-  runtime_unavailable: "本地运行时不可用",
-  next_node_start_failed: "下一节点启动失败",
-  node_run_failed: "Team 节点执行失败",
-  node_run_cancelled: "Team 节点执行被取消",
-  node_output_invalid: "Team 节点结构化结果无效",
-  implicit_completion_missing: "节点未提交 Team 状态",
-  cancelled: "Team 已取消",
-  runtime_restarted: "后端重启后未自动恢复 Team",
-};
-
-function endReasonLabel(endReason: string): string {
-  return END_REASON_LABELS[endReason] ?? "Agent Team 执行未完成";
-}
-
-function readNodeResults(state: Record<string, unknown>): NodeResult[] {
-  const raw = state.node_executions;
-  if (!Array.isArray(raw)) return [];
-  return raw.filter((item): item is NodeResult => {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
-    const value = item as Record<string, unknown>;
-    return typeof value.node_id === "string"
-      && typeof value.task_id === "number"
-      && typeof value.run_id === "number"
-      && value.completed === true
-      && typeof value.status === "string"
-      && typeof value.output === "string";
-  });
-}
 
 function validateReviewedInputs(
   goal: string,
@@ -79,6 +38,30 @@ function validateReviewedInputs(
 
 /** 待确认态的卡片状态文案：它不是工具生命周期状态，只是「这张卡在等用户」的展示提示。 */
 const AWAITING_REVIEW_LABEL = "等待确认";
+
+const NODE_STATUS_TONES: Record<string, string> = {
+  planned: "border-sky-500/20 bg-sky-500/5 text-sky-700 dark:text-sky-300",
+  completed: "border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300",
+  passed: "border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300",
+  accepted: "border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300",
+  blocked: "border-amber-500/20 bg-amber-500/5 text-amber-700 dark:text-amber-300",
+  needs_rework: "border-amber-500/20 bg-amber-500/5 text-amber-700 dark:text-amber-300",
+  changes_requested: "border-amber-500/20 bg-amber-500/5 text-amber-700 dark:text-amber-300",
+  failed: "border-destructive/20 bg-destructive/5 text-destructive",
+};
+
+function NodeStatusBadge({ status }: { status: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium leading-none",
+        NODE_STATUS_TONES[status] ?? "border-border bg-background text-muted-foreground",
+      )}
+    >
+      {status}
+    </span>
+  );
+}
 
 /**
  * 待确认提示。
@@ -97,118 +80,72 @@ function AwaitingReviewStatus({ className }: { className?: string }) {
 }
 
 /** Agent Team 方案预览卡；确认时把用户决定交回等待中的 Run，由后端在确认边界重新校验。 */
-export function AgentTeamTool({ artifact: rawArtifact, runId, taskId }: AgentTeamToolProps) {
+export function AgentTeamTool(props: AgentTeamToolProps) {
+  const { artifact: rawArtifact, runId, runStatus, taskId, onAttachTransport } = props;
   const artifact = readToolArtifact(rawArtifact);
   const preview = readAgentTeamPreviewDisplay(artifact.display_data);
   const review = readAgentTeamReviewRequest(artifact.display_data);
-  const runDisplay = readAgentTeamRunDisplay(artifact.display_data);
-  // 待确认态用方案里的 TeamRun；已启动/恢复态用展示数据里的 TeamRun。两者共用同一套状态查询。
-  const trackedRunId = preview?.teamRunId ?? runDisplay?.teamRunId;
   const [state, setState] = useState<"idle" | "confirming" | "rejecting" | "confirmed" | "rejected" | "failed">("idle");
   const [message, setMessage] = useState("");
-  const [teamRun, setTeamRun] = useState<AgentTeamRun | null>(null);
   const [goal, setGoal] = useState(preview?.goal ?? "");
   const [nodeGoals, setNodeGoals] = useState<Record<string, string>>(preview?.nodeGoals ?? {});
   const [feedback, setFeedback] = useState("");
-  // 「还在等用户作答」只取决于两件事：载荷里带着待决请求（后端挂起前投影的唯一标记），
-  // 且本次会话内尚未提交决定。两者任一不成立就回到通用生命周期状态展示。
-  const awaitingReview = review !== null && state !== "confirmed" && state !== "rejected";
+  // 审批动作同时受两个后端事实约束：Run 正在等待用户输入，且 tool part 带有待决请求。
+  // tool part 自身的 completed/running 只描述调用执行阶段，不能单独授权或禁用审批。
+  const isWaitingForInput = runStatus === "waiting_for_input";
+  const awaitingReview = isWaitingForInput
+    && review !== null
+    && state !== "confirmed"
+    && state !== "rejected";
 
-  useEffect(() => {
-    if (!preview) return;
-    setGoal(preview.goal);
-    setNodeGoals(preview.nodeGoals);
-  }, [preview?.teamRunId]);
-
-  useEffect(() => {
-    if (trackedRunId === undefined) return undefined;
-    let disposed = false;
-    void getAgentTeamRun(trackedRunId)
-      .then((current) => {
-        if (disposed) return;
-        if (current.status === "pending") {
-          setTeamRun(null);
-          setState("idle");
-          setMessage("");
-          return;
-        }
-        setTeamRun(current);
-        if (current.status === "running") {
-          setState("confirmed");
-          setMessage(`已恢复，当前状态：${current.status}`);
-          return;
-        }
-        if (current.status === "completed") {
-          setState("confirmed");
-          setMessage("已恢复，Team 已完成");
-          return;
-        }
-        if (current.status === "failed" || current.status === "cancelled") {
-          setState("failed");
-          setMessage(current.status === "cancelled" ? "该 Agent Team 执行方案已取消" : "该 Agent Team 执行失败");
-        }
-      })
-      .catch(() => {
-        // TeamRun 不存在时保持原始方案展示，由确认动作暴露后端错误。
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [trackedRunId]);
-
-  useEffect(() => {
-    if (!teamRun || teamRun.status !== "running") return undefined;
-    let disposed = false;
-    let timer: number | undefined;
-    const poll = async () => {
-      try {
-        const current = await getAgentTeamRun(teamRun.id);
-        if (disposed) return;
-        setTeamRun(current);
-        if (current.status === "running") {
-          timer = window.setTimeout(() => void poll(), 1000);
-        }
-      } catch (error) {
-        if (!disposed) setMessage(error instanceof Error ? error.message : "读取 Team 状态失败");
-      }
-    };
-    timer = window.setTimeout(() => void poll(), 1000);
-    return () => {
-      disposed = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [teamRun]);
-
-  if (!preview || !review) {
-    // 没有可编辑方案时只剩运行态（用户已批准 / 恢复查看）：只展示 Team 进度。
-    if (!runDisplay) return null;
-    const currentStatus = teamRun?.status ?? runDisplay.status;
+  if (state === "confirmed" && preview) {
     return (
-      <div className="space-y-2 rounded-xl border border-border/70 bg-card p-3 shadow-sm">
+      <AgentTeamExecutionCard
+        {...props}
+        displayOverride={{
+          teamRunId: preview.teamRunId,
+          teamId: preview.teamId,
+          goal,
+        }}
+      />
+    );
+  }
+
+  if (!preview) return null;
+  if (isWaitingForInput && review === null) {
+    return (
+      <div
+        className="space-y-1 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3 shadow-sm"
+        role="status"
+        aria-label="Agent Team 审批信息未恢复"
+      >
+        <div className="font-medium text-sm">审批内容暂不可用</div>
+        <p className="text-muted-foreground text-xs">
+          运行仍在等待你的决定，但审批请求载荷缺失。刷新对话以从本地运行记录恢复。
+        </p>
+      </div>
+    );
+  }
+  if (!review || !isWaitingForInput) {
+    const displayData = asRecord(artifact.display_data);
+    if (displayData.user_decision !== "reject") {
+      // 审批决定已消费后，后端会移除待决请求；是否拒绝只由后端投影的决定记录判定。
+      // 同意后从历史消息恢复时也走 canonical TeamRun 查询，避免把旧审批预览误显示为拒绝。
+      return (
+        <AgentTeamExecutionCard
+          {...props}
+          displayOverride={{ teamRunId: preview.teamRunId, teamId: preview.teamId, goal: "" }}
+        />
+      );
+    }
+    return (
+      <div className="space-y-2 rounded-xl border border-border/70 bg-card p-3 shadow-sm" aria-label="已驳回的 Agent Team 方案">
         <div className="flex items-center gap-2">
           <UsersIcon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
-          <span className="font-medium text-sm">{runDisplay.teamId}</span>
-          <ToolStatus status={artifact.backendStatus} className="text-muted-foreground" />
+          <span className="font-medium text-sm">{preview.name}</span>
+          <span className="text-xs text-muted-foreground">已驳回</span>
         </div>
-        {runDisplay.goal && <p className="text-muted-foreground text-xs">目标：{runDisplay.goal}</p>}
-        <div className="text-xs">
-          Team 状态：{currentStatus}
-          {teamRun?.active_node ? ` · 当前节点：${teamRun.active_node.node_id}` : ""}
-        </div>
-        {teamRun && readNodeResults(teamRun.state).length > 0 && (
-          <div className="space-y-1.5 border-t border-border/50 pt-2 text-xs">
-            {readNodeResults(teamRun.state).map((result, index) => (
-              <div key={`${result.node_id}-${index}`} className="rounded-md bg-muted/40 px-2 py-1.5">
-                <div className="font-medium">{result.node_id} · {result.status}</div>
-                <div className="text-muted-foreground line-clamp-3">{result.output || "（无输出）"}</div>
-              </div>
-            ))}
-          </div>
-        )}
-        {teamRun?.end_reason && (
-          <div className="text-destructive text-xs">{endReasonLabel(teamRun.end_reason)}</div>
-        )}
-        <p className="text-muted-foreground text-xs">该执行方案已提交用户决定，不再接受重复确认。</p>
+        <p className="text-muted-foreground text-xs">主 Agent 正在根据审阅意见重新生成方案。</p>
       </div>
     );
   }
@@ -238,6 +175,11 @@ export function AgentTeamTool({ artifact: rawArtifact, runId, taskId }: AgentTea
           ? "已提交确认，Agent Team 正在启动"
           : "已提交审阅后的目标和驳回意见，主 Agent 正在重新生成方案",
       );
+      if (onAttachTransport) {
+        void onAttachTransport().catch(() => {
+          setMessage("决定已提交，但实时连接中断，请刷新对话查看最新结果");
+        });
+      }
     } catch (error) {
       setState("failed");
       setMessage(error instanceof Error ? error.message : "提交失败，请重试");
@@ -298,20 +240,33 @@ export function AgentTeamTool({ artifact: rawArtifact, runId, taskId }: AgentTea
       </div>
       <div className="space-y-1.5 text-xs">
         {preview.nodes.map((node, index) => (
-          <div key={node.nodeId} className="rounded-md bg-muted/40 px-2 py-1.5">
-            <span className="font-medium">{index + 1}. {node.name}</span>
-            <span className="text-muted-foreground"> · {node.nodeType}</span>
-            <span className="text-muted-foreground"> · {node.agentId} · {node.role}</span>
-            <div className="text-muted-foreground mt-0.5">模型：{node.effectiveModelName}</div>
-            <div className="text-muted-foreground mt-0.5">工具：{node.effectiveTools.join("、") || "无"}</div>
-            <div className="text-muted-foreground mt-0.5">
-              状态：{node.statuses.join("、")}
+          <section key={node.nodeId} className="space-y-2.5 rounded-lg border border-border/70 bg-muted/15 p-3">
+            <div className="flex items-start gap-2.5">
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+                {index + 1}
+              </span>
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{node.name}</span>
+                  <span className="rounded-full border border-border/70 bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
+                    {node.role}
+                  </span>
+                </div>
+              </div>
             </div>
-            <label className="text-muted-foreground mt-2 block">
-              节点子目标（必填）
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md bg-background/70 px-2.5 py-2">
+              <span className="shrink-0 text-[11px] font-medium text-muted-foreground">状态：</span>
+              <div className="flex flex-wrap gap-1.5" aria-label={`${node.name} 的可返回状态`}>
+                {node.statuses.map((status) => (
+                  <NodeStatusBadge key={status} status={status} />
+                ))}
+              </div>
+            </div>
+            <label className="block text-muted-foreground">
+              <span>节点子目标 <span className="text-destructive">*</span></span>
               <Textarea
                 aria-label={`${node.name} 的节点子目标`}
-                className="mt-1 min-h-14 resize-y bg-background text-xs"
+                className="mt-1 min-h-16 resize-y bg-background text-xs"
                 value={nodeGoals[node.nodeId] ?? ""}
                 disabled={state === "confirming" || state === "rejecting" || state === "confirmed" || state === "rejected"}
                 onChange={(event) => setNodeGoals((current) => ({
@@ -320,36 +275,13 @@ export function AgentTeamTool({ artifact: rawArtifact, runId, taskId }: AgentTea
                 }))}
               />
             </label>
-          </div>
+          </section>
         ))}
       </div>
       <div className="text-muted-foreground text-xs">
         {preview.nodes.length} 个节点 · {preview.edges.length} 条转移
       </div>
-      {state === "confirmed" ? (
-        <div className="space-y-1 text-xs">
-          <div className="flex items-center gap-1.5 text-emerald-600"><CheckCircle2 className="size-3.5" />{message}</div>
-          {teamRun && <div className="text-muted-foreground">
-            Team 状态：{teamRun.status} · 当前节点：{teamRun.active_node?.node_id ?? "无"}
-          </div>}
-          {teamRun && readNodeResults(teamRun.state).length > 0 && (
-            <div className="space-y-1.5 border-t border-border/50 pt-2">
-              <div className="font-medium text-foreground">节点结果</div>
-              {readNodeResults(teamRun.state).map((result, index) => (
-                <div key={`${result.node_id}-${index}`} className="rounded-md bg-muted/40 px-2 py-1.5">
-                  <div className="font-medium">{result.node_id} · {result.status}</div>
-                  <div className="text-muted-foreground line-clamp-3">{result.output || "（无输出）"}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          {teamRun?.end_reason && (
-            <div className="text-destructive">{endReasonLabel(teamRun.end_reason)}</div>
-          )}
-          {teamRun?.status === "completed" && <div className="font-medium text-emerald-600">Team 已完成。</div>}
-          {teamRun?.status === "cancelled" && <div className="font-medium text-muted-foreground">Team 已取消。</div>}
-        </div>
-      ) : state === "rejected" ? (
+      {state === "rejected" ? (
         <p className="text-muted-foreground text-xs">{message}</p>
       ) : (
         <div className="space-y-2">

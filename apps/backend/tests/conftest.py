@@ -19,6 +19,9 @@ from pathlib import Path
 import pytest
 
 from app.agent_team import configuration_scope_source
+from app.agent_team import registry as agent_team_registry_module
+from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.agent_team.registry import AgentTeamConfigurationRegistry
 from app.config import configuration
 from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_config, agent_profile_source
@@ -225,6 +228,12 @@ def install_process_singletons(monkeypatch: pytest.MonkeyPatch) -> Callable[[], 
 
     def install() -> None:
         monkeypatch.setattr(configuration, "_AGENT_REGISTRY", build_agent_registry())
+        # 工具系统会构造 Agent Team 工具，先按生产装配顺序提供注册表。
+        monkeypatch.setattr(
+            agent_team_registry_module,
+            "_REGISTRY",
+            AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource()),
+        )
         monkeypatch.setattr(configuration, "_TOOL_SYSTEM", ToolSystem.build_tool_system())
         # 运行时构造期会取工具系统 / agent 目录 / 存储单例，必须在上面三者就绪之后构建。
         monkeypatch.setattr(depends_module, "_RUNTIME", AgentRuntime())

@@ -4,17 +4,13 @@ import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
 export type AgentTeamNodePreview = {
   nodeId: string;
   name: string;
-  agentId: string;
-  nodeType: "start" | "middle" | "end";
   role: string;
-  effectiveModelName: string;
-  effectiveTools: string[];
   statuses: string[];
   maxSteps: number;
 };
 
 export type AgentTeamPreviewDisplay = {
-  kind: "agent-team-preview";
+  kind: "agent-team-approval";
   teamRunId: number;
   teamId: string;
   name: string;
@@ -38,7 +34,6 @@ export type AgentTeamReviewRequest = {
 
 /** 已批准后的运行态展示（同一张卡从「待确认」翻到「运行中」，没有可编辑草稿）。 */
 export type AgentTeamRunDisplay = {
-  status: string;
   teamRunId: number;
   teamId: string;
   goal: string;
@@ -94,7 +89,7 @@ function recordList(value: unknown): Record<string, unknown>[] | undefined {
 /** 严格读取 Team 预览；不信任工具结果中的任意正文作为执行参数。 */
 export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDisplay | null {
   const data = asRecord(value);
-  if (data.kind !== "agent-team-preview") return null;
+  if (data.kind !== "agent-team-approval") return null;
   const teamRunId = positiveId(data.team_run_id);
   const teamId = text(data.team_id);
   const name = text(data.name);
@@ -117,34 +112,21 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
     const node = asRecord(raw);
     const nodeId = text(node.node_id);
     const nodeName = text(node.name);
-    const agentId = text(node.agent_id);
-    const nodeType = node.node_type === "start" || node.node_type === "middle" || node.node_type === "end"
-      ? node.node_type
-      : undefined;
     const role = text(node.role);
-    // 后端预览节点使用 `model_name` / `tools`（见 agent_team_preparation_service）：
-    // 这两个键曾与前端读取的 `effective_model_name` / `effective_tools` 不一致，导致整张卡
-    // 解析失败（返回 null，用户看不到方案也无法作答）。以实际下发的契约为准。
-    const effectiveModelName = text(node.model_name);
-    if (!nodeId || !nodeName || !agentId || !nodeType || !role || !effectiveModelName) return null;
-    const effectiveTools = stringList(node.tools);
+    if (!nodeId || !nodeName || !role) return null;
     const statuses = stringList(node.statuses);
     const maxSteps = positiveInteger(node.max_steps);
-    if (!effectiveTools || !statuses || maxSteps === undefined) return null;
+    if (!statuses || maxSteps === undefined) return null;
     nodes.push({
       nodeId,
       name: nodeName,
-      agentId,
-      nodeType,
       role,
-      effectiveModelName,
-      effectiveTools,
       statuses,
       maxSteps,
     });
   }
   return {
-    kind: "agent-team-preview",
+    kind: "agent-team-approval",
     teamRunId,
     teamId,
     name,
@@ -181,13 +163,12 @@ export function readAgentTeamReviewRequest(value: unknown): AgentTeamReviewReque
 /** 读取「用户已批准、Team 已启动」的运行态展示。 */
 export function readAgentTeamRunDisplay(value: unknown): AgentTeamRunDisplay | null {
   const data = asRecord(value);
-  if (data.kind !== "agent-team-preview") return null;
+  if (data.kind !== "agent-team-execution") return null;
   if (hasReviewRequest(data)) return null;
   const teamRunId = positiveId(data.team_run_id);
   const teamId = text(data.team_id);
-  const status = text(data.status);
-  if (teamRunId === undefined || !teamId || !status) return null;
-  return { status, teamRunId, teamId, goal: text(data.goal) ?? "" };
+  if (teamRunId === undefined || !teamId) return null;
+  return { teamRunId, teamId, goal: text(data.goal) ?? "" };
 }
 
 /** 严格读取 Team 配置候选展示数据。 */

@@ -32,7 +32,7 @@ _TOOL_CALL = {
 }
 
 _CARD_PAYLOAD: dict[str, Any] = {
-    "kind": "agent-team-preview",
+    "kind": "agent-team-approval",
     "status": "pending",
     "team_run_id": 17,
     "team_id": "code-quality",
@@ -108,7 +108,7 @@ def test_waiting_row_rebuilds_approval_card_with_form() -> None:
 
     part = parts["call-a"]
     assert part["status"] == "running"
-    assert part["display_data"]["kind"] == "agent-team-preview"
+    assert part["display_data"]["kind"] == "agent-team-approval"
     assert part["display_data"]["user_input_request"] == _REQUEST_PAYLOAD
 
 

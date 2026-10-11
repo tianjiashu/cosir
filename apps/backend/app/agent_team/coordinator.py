@@ -152,6 +152,7 @@ class AgentTeamCoordinator:
                                                             (AgentTeamRunStatus.RUNNING.value,), state=state,
                                                             end_reason="next_node_id 为空", ended=True)
                     break
+                state.add_transition(state.current_node_id, status, next_node_id)
                 if next_node_id == "END":
                     log.info(
                         "agent_team_start_completed",
@@ -169,7 +170,6 @@ class AgentTeamCoordinator:
                                                             (AgentTeamRunStatus.RUNNING.value,), state=state,
                                                             end_reason=final_node_output, ended=True)
                     break
-                state.add_transition(state.current_node_id, status, next_node_id)
                 state.current_node_id = next_node_id
         except Exception as exc:
             log.exception(
@@ -239,7 +239,7 @@ class AgentTeamCoordinator:
             task = self._task_service.get_or_create_task(
                 workspace_id=row.workspace_id,
                 title=node.name,
-                task_type=f"agent_team_node",
+                task_type="agent_team_node",
                 parent_task_id=row.parent_task_id,
                 parent_run_id=row.parent_run_id,
                 extra={
@@ -389,11 +389,27 @@ class AgentTeamCoordinator:
         state = AgentTeamRunState.model_validate(row.state_json)
 
         row = self._team_run_crud.update_status_if_in(row.id, AgentTeamRunStatus.CANCELLED.value,
-                                                      (AgentTeamRunStatus.RUNNING.value,))
+                                                      (
+                                                          AgentTeamRunStatus.RUNNING.value,
+                                                          AgentTeamRunStatus.PENDING.value,
+                                                      ),
+                                                      end_reason=AgentTeamRunEndReason.CANCELLED.value,
+                                                      ended=True)
         if row is None:
             return row
 
         state.cancel()
+        log.info(
+            "agent_team_run_cancelled",
+            extra={
+                "msg": "Agent Team 运行已取消",
+                "data": {
+                    "team_run_id": row.id,
+                    "parent_run_id": row.parent_run_id,
+                    "end_reason": AgentTeamRunEndReason.CANCELLED.value,
+                },
+            },
+        )
         return row
 
     def cancel_for_task_ids(self, task_ids: set[int]) -> int:

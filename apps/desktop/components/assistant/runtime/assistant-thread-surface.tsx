@@ -125,6 +125,7 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
           performanceProbe={performanceProbe}
           configurationProposalMode={configurationProposalMode}
           onConfigurationProposalModeChange={onConfigurationProposalModeChange}
+          attachTransportRef={attachTransportRef}
         />
       </div>
       <InitialMessageBridge

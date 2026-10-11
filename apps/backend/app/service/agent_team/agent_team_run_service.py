@@ -6,7 +6,6 @@ Coordinator 启动，不负责节点调度细节，也不维护进程内待确�
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -16,19 +15,20 @@ from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
-from app.core.agents.model_settings import ModelSettings
+from app.core.tools.schemas import UserDecision, UserInputRequest
+from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationResult,
     AgentTeamPreparationService,
 )
-from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.depends import (
     get_conversation_run_service,
-    get_model_config_service,
     get_workspace_service,
 )
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
+from app.storage.crud.conversation_run_crud import ConversationRunCrud
+from app.storage.crud.task_crud import TaskCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
@@ -131,6 +131,133 @@ class AgentTeamRunService:
         with self._session_factory() as session:
             return self._team_run_crud.get_by_id(run_id, session=session)
 
+    def get_view(self, run_id: int) -> dict[str, Any]:
+        """从 TeamRun、节点 Task 与 ConversationRun 事实组装前端有限读模型。"""
+
+        row = self.get(run_id)
+        state = AgentTeamRunState.model_validate(row.state_json)
+        configuration = row.configuration_snapshot_json
+        tasks = TaskCrud()
+        runs = ConversationRunCrud()
+        executions = state.node_executions
+        task_ids = [execution.task_id for execution in executions.values()]
+        child_tasks_by_parent = tasks.list_by_parent_task_ids(task_ids)
+        run_ids = [
+            run_id
+            for execution in executions.values()
+            for run_id in execution.conversation_run_ids
+        ]
+        run_ids.extend(
+            task.current_run_id
+            for children in child_tasks_by_parent.values()
+            for task in children
+            if task.current_run_id is not None
+        )
+        run_records = runs.get_many(list(dict.fromkeys(run_ids)))
+        node_views: list[dict[str, Any]] = []
+        for node in configuration["nodes"]:
+            node_id = node["node_id"]
+            execution = executions.get(node_id)
+            node_runs = (
+                [run_records[item] for item in execution.conversation_run_ids]
+                if execution
+                else []
+            )
+            current_run = node_runs[-1] if node_runs else None
+            children = child_tasks_by_parent.get(execution.task_id, []) if execution else []
+            child_views = []
+            for child in children:
+                child_run = (
+                    run_records.get(child.current_run_id)
+                    if child.current_run_id is not None
+                    else None
+                )
+                child_views.append({
+                    "task_id": child.id,
+                    "title": child.title,
+                    "status": child_run.status if child_run else "pending",
+                })
+            if current_run is not None:
+                node_status = current_run.status
+            elif row.status == AgentTeamRunStatus.COMPLETED.value and execution is not None:
+                node_status = "completed"
+            elif execution is not None and row.status in {
+                AgentTeamRunStatus.FAILED.value,
+                AgentTeamRunStatus.CANCELLED.value,
+            }:
+                node_status = row.status
+            elif row.status in {
+                AgentTeamRunStatus.COMPLETED.value,
+                AgentTeamRunStatus.FAILED.value,
+                AgentTeamRunStatus.CANCELLED.value,
+            }:
+                node_status = "skipped"
+            else:
+                node_status = "queued"
+            node_views.append({
+                "node_id": node_id,
+                "name": node["name"],
+                "agent_id": node["agent_id"],
+                "goal": state.node_runtime[node_id].node_goal,
+                "task_id": execution.task_id if execution else None,
+                "status": node_status,
+                "conversation_run_count": len(execution.conversation_run_ids) if execution else 0,
+                "agent_count": 1 + len(child_views) if execution else 1,
+                "child_agents": child_views,
+            })
+        return {
+            "id": row.id,
+            "team_id": row.team_id,
+            "workspace_id": row.workspace_id,
+            "parent_task_id": row.parent_task_id,
+            "parent_run_id": row.parent_run_id,
+            "goal": row.goal_input,
+            "status": row.status,
+            "start_node_id": configuration["start_node_id"],
+            "nodes": node_views,
+            "transitions": configuration["transitions"],
+            "transition_history": [
+                item.model_dump(mode="json") for item in state.transition_history
+            ],
+            "current_node_id": (
+                state.current_node_id
+                if row.status == AgentTeamRunStatus.RUNNING.value
+                else None
+            ),
+            "end_reason": row.end_reason,
+            "started_at": row.started_at,
+            "ended_at": row.ended_at,
+        }
+
+    def reject_pending_confirmation(self, team_run_id: int) -> AgentTeamRunModel:
+        """按用户驳回决定结束待确认 TeamRun，并使重复决定保持幂等。"""
+
+        with begin_immediate(self._session_factory) as session:
+            rejected = self._team_run_crud.update_status_if_in(
+                team_run_id,
+                AgentTeamRunStatus.CANCELLED.value,
+                (AgentTeamRunStatus.PENDING.value,),
+                end_reason=AgentTeamRunEndReason.USER_REJECTED.value,
+                ended=True,
+                session=session,
+            )
+            if rejected is not None:
+                return rejected
+            current = self._team_run_crud.get_by_id(team_run_id, session=session)
+            if (
+                current.status == AgentTeamRunStatus.CANCELLED.value
+                and current.end_reason == AgentTeamRunEndReason.USER_REJECTED.value
+            ):
+                return current
+            log.info(
+                "agent_team_rejection_already_resolved",
+                extra={
+                    "msg": "驳回到达时 TeamRun 已由其他路径处理",
+                    "data": {"team_run_id": team_run_id, "status": current.status},
+                },
+            )
+            return current
+
     def confirm_and_start(
         self,
         team_run_id: int,
@@ -167,7 +294,9 @@ class AgentTeamRunService:
         existing = self.get(team_run_id)
         self._validate_parent_run(existing.parent_task_id, existing.parent_run_id)
         final_goal = goal.strip()
-        configuration:AgentTeamConfiguration = AgentTeamConfiguration.model_validate(configuration_document)
+        configuration: AgentTeamConfiguration = AgentTeamConfiguration.model_validate(
+            configuration_document
+        )
         final_node_goals = {
             key: value.strip()
             for key, value in node_goals.items()
@@ -184,7 +313,9 @@ class AgentTeamRunService:
         with begin_immediate(self._session_factory) as session:
             if existing.team_id != configuration.team_id:
                 raise ValueError("确认配置的 team_id 与待确认 Team 不一致")
-            state = AgentTeamRunState.initial(agent_team_preparation.node_runtime_snapshots,configuration)
+            state = AgentTeamRunState.initial(
+                agent_team_preparation.node_runtime_snapshots, configuration
+            )
             updated = self._team_run_crud.update_status_if_in(
                 existing.id,
                 AgentTeamRunStatus.RUNNING.value,
@@ -261,3 +392,14 @@ class AgentTeamRunService:
             raise ValueError("TeamRun 不属于指定主 Agent Task")
         if parent_run.status in _TERMINAL_PARENT_STATUSES:
             raise ValueError("主 Agent Run 已结束，不能确认 TeamRun")
+
+
+def reject_agent_team_confirmation(request: UserInputRequest, decision: UserDecision) -> None:
+    """把通用 HIL 驳回决定映射到对应 TeamRun 的领域终态。"""
+
+    if decision.kind.value != "reject":
+        raise ValueError("Agent Team 处理器只接收驳回决定")
+    team_run_id = int(request.request_id)
+    if team_run_id <= 0:
+        raise ValueError("Agent Team 确认请求标识无效")
+    AgentTeamRunService().reject_pending_confirmation(team_run_id)
