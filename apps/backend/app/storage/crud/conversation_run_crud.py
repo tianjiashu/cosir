@@ -89,6 +89,7 @@ class ConversationRunCrud:
         usage: ConversationRunUsage | None = None,
         error: ConversationRunError | None = None,
         session: Session | None = None,
+        agent_role: str | None = None,
     ) -> ConversationRunRecord:
         """新建一条 run 记录并落库。
 
@@ -99,6 +100,7 @@ class ConversationRunCrud:
             input_text: 本次运行的输入文本；不能为空白。
             status: 初始状态，默认 ``pending``。
             agent_id: 可选，本次运行绑定的 agent 标识。
+            agent_role: 可选，本次运行绑定的角色快照。
             model_config_id: 可选，模型连接配置标识；None 表示未指定。
             image_paths: 可选，本次输入的图片路径列表（供多模态通道）。
             extra: 可选，运行期附加结构化数据。
@@ -127,6 +129,7 @@ class ConversationRunCrud:
                 input_text=input_text,
                 status=status,
                 agent_id=agent_id,
+                agent_role=agent_role,
                 model_config_id=model_config_id,
                 image_paths=image_paths,
                 extra=extra,
@@ -140,6 +143,7 @@ class ConversationRunCrud:
                 input_text=input_text,
                 status=status,
                 agent_id=agent_id,
+                agent_role=agent_role,
                 model_config_id=model_config_id,
                 image_paths=image_paths,
                 extra=extra,
@@ -155,6 +159,7 @@ class ConversationRunCrud:
         input_text: str,
         status: str,
         agent_id: str | None,
+        agent_role: str | None,
         model_config_id: int | None,
         image_paths: list[str] | None,
         extra: ConversationRunExtra | None,
@@ -173,6 +178,7 @@ class ConversationRunCrud:
             input_text: 输入文本（调用方已校验非空）。
             status: 初始状态字符串；空值回退 ``pending``。
             agent_id: agent 标识或 None。
+            agent_role: 运行时冻结的角色或 None。
             model_config_id: 厂商标识或 None。
             image_paths: 图片路径列表或 None。
             extra: 附加结构化数据或 None。
@@ -196,6 +202,7 @@ class ConversationRunCrud:
             # 每条新 Run 必须拿到全新的 checkpoint 身份，不能复用任何已读到的历史身份。
             checkpoint_thread_id=str(uuid4()),
             agent_id=agent_id,
+            agent_role=agent_role,
             model_config_id=model_config_id,
             image_paths=image_paths,
             extra=extra.to_dict() if extra is not None else None,
@@ -279,6 +286,7 @@ class ConversationRunCrud:
             task_id=target_task_id,
             input_text=source.input_text,
             agent_id=source.agent_id,
+            agent_role=source.agent_role,
             model_config_id=source.model_config_id,
             image_paths=copy.deepcopy(source.image_paths),
             end_reason=source.end_reason,

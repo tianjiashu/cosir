@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BotIcon, UsersIcon } from "lucide-react";
+import { UsersIcon } from "lucide-react";
 
 import { getAgentTeamRun, type AgentTeamRun } from "@/lib/api/agent-teams";
 import { useWorkbenchActions } from "@/lib/workbench/context";
@@ -77,10 +77,7 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
   const openAgent = (taskId: number, title: string, role: string) => {
     actions?.openAgent({ taskId, title, role });
   };
-  const visitedAgents = run?.execution_steps.reduce(
-    (count, step) => count + 1 + step.child_agents.length,
-    0,
-  ) ?? 0;
+  const endReasonLabel = run?.end_reason ? END_REASON_LABELS[run.end_reason] : undefined;
 
   return (
     <section className="space-y-3 rounded-xl border border-border/70 bg-card p-3 shadow-sm" aria-label="Agent Team 执行进度">
@@ -101,18 +98,19 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
       </header>
 
       {run && (
-        <>
-          <AgentTeamExecutionPipeline run={run} onOpenAgent={openAgent} />
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <BotIcon className="size-3.5" aria-hidden="true" />
-            {run.nodes.length} 个配置节点 · {run.execution_steps.length} 次节点访问 · {visitedAgents} 次 Agent 执行
-          </div>
-        </>
+        <AgentTeamExecutionPipeline run={run} onOpenAgent={openAgent} />
       )}
 
       {error && <p className="text-xs text-destructive">{error}</p>}
       {run?.end_reason && (
-        <p className="text-xs text-muted-foreground">{END_REASON_LABELS[run.end_reason] ?? run.end_reason}</p>
+        endReasonLabel ? (
+          <p className="text-xs text-muted-foreground">{endReasonLabel}</p>
+        ) : (
+          <div className="rounded-lg border border-border/60 bg-muted/10 px-2.5 py-2">
+            <p className="mb-1 text-[10px] font-medium text-muted-foreground">最终结果</p>
+            <p className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed">{run.end_reason}</p>
+          </div>
+        )
       )}
     </section>
   );

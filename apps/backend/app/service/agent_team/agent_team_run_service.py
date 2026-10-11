@@ -20,7 +20,7 @@ from app.core.tools.schemas import UserDecision, UserInputRequest
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_execution_timeline import (
-    project_execution_timeline,
+    project_node_visits,
 )
 from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationResult,
@@ -158,38 +158,26 @@ class AgentTeamRunService:
             if task.current_run_id is not None
         )
         run_records = runs.get_many(list(dict.fromkeys(run_ids)))
+        visits_by_node = project_node_visits(
+            state=state,
+            configuration=configuration,
+            team_status=row.status,
+            run_records=run_records,
+            child_tasks_by_parent=child_tasks_by_parent,
+        )
         node_views: list[dict[str, Any]] = []
         for node in configuration["nodes"]:
             node_id = node["node_id"]
             execution = executions.get(node_id)
-            node_runs = (
-                [run_records[item] for item in execution.conversation_run_ids]
-                if execution
-                else []
-            )
-            current_run = node_runs[-1] if node_runs else None
-            children = child_tasks_by_parent.get(execution.task_id, []) if execution else []
-            child_views = []
-            for child in children:
-                child_run = (
-                    run_records.get(child.current_run_id)
-                    if child.current_run_id is not None
-                    else None
-                )
-                child_views.append({
-                    "task_id": child.id,
-                    "title": child.title,
-                    "status": child_run.status if child_run else "pending",
-                })
-            if current_run is not None:
-                node_status = current_run.status
-            elif row.status == AgentTeamRunStatus.COMPLETED.value and execution is not None:
-                node_status = "completed"
-            elif execution is not None and row.status in {
-                AgentTeamRunStatus.FAILED.value,
-                AgentTeamRunStatus.CANCELLED.value,
-            }:
-                node_status = row.status
+            visits = visits_by_node[node_id]
+            if (
+                state.current_node_id == node_id
+                and row.status == AgentTeamRunStatus.RUNNING.value
+                and (not visits or visits[-1]["conversation_run_id"] is None)
+            ):
+                node_status = "running"
+            elif visits:
+                node_status = visits[-1]["status"]
             elif row.status in {
                 AgentTeamRunStatus.COMPLETED.value,
                 AgentTeamRunStatus.FAILED.value,
@@ -202,22 +190,14 @@ class AgentTeamRunService:
                 "node_id": node_id,
                 "name": node["name"],
                 "agent_id": node["agent_id"],
+                "role": state.node_runtime[node_id].role or node["agent_id"],
                 "statuses": node["statuses"],
                 "goal": state.node_runtime[node_id].node_goal,
                 "goal_summary": state.node_runtime[node_id].node_goal_summary,
                 "task_id": execution.task_id if execution else None,
                 "status": node_status,
-                "conversation_run_count": len(execution.conversation_run_ids) if execution else 0,
-                "agent_count": 1 + len(child_views) if execution else 1,
-                "child_agents": child_views,
+                "visits": visits,
             })
-        execution_steps = project_execution_timeline(
-            state=state,
-            configuration=configuration,
-            team_status=row.status,
-            run_records=run_records,
-            child_tasks_by_parent=child_tasks_by_parent,
-        )
         return {
             "id": row.id,
             "team_id": row.team_id,
@@ -228,11 +208,6 @@ class AgentTeamRunService:
             "status": row.status,
             "start_node_id": configuration["start_node_id"],
             "nodes": node_views,
-            "execution_steps": execution_steps,
-            "transitions": configuration["transitions"],
-            "transition_history": [
-                item.model_dump(mode="json") for item in state.transition_history
-            ],
             "current_node_id": (
                 state.current_node_id
                 if row.status == AgentTeamRunStatus.RUNNING.value

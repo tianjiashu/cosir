@@ -208,6 +208,7 @@ class ConversationRunService:
         reasoning_effort: str | None = None,
         session: Session | None = None,
         run_command: ConversationRunCommand | None = None,
+        agent_role: str | None = None,
     ) -> ConversationRunRecord:
         """创建 Conversation Run 并初始化 canonical context。
 
@@ -219,6 +220,7 @@ class ConversationRunService:
             status: 初始状态，默认 ``"pending"``。
             agent_id: 可选，本轮回绑定的 agent 标识；为 None 时回退到默认 ``"main_agent"``
                 （与 Assistant Transport 主入口的默认值一致，非 ``"developer"``）。
+            agent_role: 可选，本次执行时冻结的 Agent 角色快照；用于历史执行记录稳定展示。
             model_config_id: 必填，模型连接配置标识；模型名称由该配置派生，不单独入参。
             reasoning_effort: 可选，统一推理强度（low/high/max）；None 表示用户未指定。
             session: 可选，由上层跨表事务传入的数据库会话。传入时本方法不提交事务，
@@ -283,6 +285,7 @@ class ConversationRunService:
                 input_text,
                 status,
                 agent_id=agent_id,
+                agent_role=agent_role,
                 model_config_id=model_config_id,
                 image_paths=image_paths,
                 extra=extra,

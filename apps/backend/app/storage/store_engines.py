@@ -2,7 +2,8 @@
 
 本模块负责主业务库的 SQLAlchemy 引擎生命周期与业务 schema 初始化：引擎由
 ``engine_cache`` 提供，业务表由 ``initialize_app_schema`` 基于当前 ORM metadata
-一次性建好。日志是固定格式的本地文件，不再创建独立日志数据库或日志 session factory。
+创建，并应用必要的 SQLite 加列变更。日志是固定格式的本地文件，不再创建独立日志数据库
+或日志 session factory。
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from pathlib import Path
 from threading import RLock
 from typing import cast
 
-from sqlalchemy import Engine, Table
+from sqlalchemy import Engine, Table, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.storage.engine_cache import _engine_cache, create_session_factory
@@ -36,7 +37,7 @@ APP_MODELS = (
 
 
 def initialize_app_schema(engine: Engine) -> None:
-    """创建当前应用 metadata 声明的全部业务表。
+    """创建当前业务表，并应用 Agent 角色快照所需的 SQLite 加列变更。
 
     参数:
         engine: 已初始化的主库 SQLAlchemy 引擎。
@@ -48,12 +49,20 @@ def initialize_app_schema(engine: Engine) -> None:
         sqlalchemy.exc.SQLAlchemyError: 建表失败。
 
     副作用:
-        在当前数据库创建缺失的应用表。本函数不修改已存在的表，也不执行任何旧
-        schema 迁移；遗留旧结构应通过删除本地库重建。
+        在当前数据库创建缺失的应用表；为已有 conversation_runs 表添加缺失的
+        ``agent_role`` 列，以保留本机已有运行记录。
     """
 
     tables = [cast(Table, model.__table__) for model in APP_MODELS]
     StorageBase.metadata.create_all(engine, tables=tables)
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("conversation_runs")
+    }
+    if "agent_role" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text("ALTER TABLE conversation_runs ADD COLUMN agent_role TEXT")
+            )
 
 _INIT_LOCK = RLock()
 

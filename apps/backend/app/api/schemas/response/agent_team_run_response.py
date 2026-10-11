@@ -1,14 +1,17 @@
-"""Agent Team 执行卡的安全只读响应契约。"""
+"""Agent Team 固定节点流水线的只读响应契约。"""
 
 from pydantic import BaseModel, ConfigDict
 
 
-class AgentTeamChildAgentResponse(BaseModel):
+class AgentTeamAgentResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    task_id: int
+    task_id: int | None
     title: str
+    agent_id: str | None
+    role: str
     status: str
+    is_primary: bool
 
 
 class AgentTeamBusinessStatusResponse(BaseModel):
@@ -18,55 +21,30 @@ class AgentTeamBusinessStatusResponse(BaseModel):
     color: str
 
 
+class AgentTeamNodeVisitResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    visit_number: int
+    conversation_run_id: int | None
+    status: str
+    business_status: str | None
+    business_status_color: str | None
+    agents: list[AgentTeamAgentResponse]
+
+
 class AgentTeamNodeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_id: str
     name: str
     agent_id: str
+    role: str
     statuses: list[AgentTeamBusinessStatusResponse]
     goal: str
     goal_summary: str
     task_id: int | None
     status: str
-    conversation_run_count: int
-    agent_count: int
-    child_agents: list[AgentTeamChildAgentResponse]
-
-
-class AgentTeamTransitionResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    from_node_id: str
-    status: str
-    target_node_id: str
-
-
-class AgentTeamTransitionHistoryResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    from_node_id: str
-    status: str
-    target_node_id: str | None
-
-
-class AgentTeamExecutionStepResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    step_number: int
-    node_visit: int
-    node_id: str
-    name: str
-    agent_id: str
-    goal: str
-    goal_summary: str
-    task_id: int | None
-    conversation_run_id: int | None
-    status: str
-    business_status: str | None
-    business_status_color: str | None
-    transition_target_node_id: str | None
-    child_agents: list[AgentTeamChildAgentResponse]
+    visits: list[AgentTeamNodeVisitResponse]
 
 
 class AgentTeamRunResponse(BaseModel):
@@ -83,9 +61,6 @@ class AgentTeamRunResponse(BaseModel):
     status: str
     start_node_id: str
     nodes: list[AgentTeamNodeResponse]
-    execution_steps: list[AgentTeamExecutionStepResponse]
-    transitions: list[AgentTeamTransitionResponse]
-    transition_history: list[AgentTeamTransitionHistoryResponse]
     current_node_id: str | None
     end_reason: str | None
     started_at: str | None

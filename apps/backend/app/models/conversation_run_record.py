@@ -36,7 +36,7 @@ class ConversationRunError(TypedDict):
 
 @dataclass
 class ConversationRunRecord:
-    """表示一次用户与 Agent 的轮次。"""
+    """表示一次 Agent 轮次；Agent 角色作为运行快照保存，避免历史展示随配置漂移。"""
 
     id: int
     task_id: int
@@ -49,6 +49,7 @@ class ConversationRunRecord:
     end_reason: str | None = None
     final_output: str | None = None
     agent_id: str | None = None
+    agent_role: str | None = None
     model_config_id: int | None = None
     image_paths: list[str] | None = None
     extra: ConversationRunExtra | None = None
@@ -80,6 +81,7 @@ class ConversationRunRecord:
             "final_output": self.final_output,
             "image_paths": self.image_paths,
             "agent_id": self.agent_id,
+            "agent_role": self.agent_role,
             "model_config_id": self.model_config_id,
             "extra": self.extra.to_dict() if self.extra is not None else None,
             "usage": self.usage,
@@ -117,6 +119,7 @@ class ConversationRunRecord:
             end_reason=row.end_reason,
             final_output=row.final_output,
             agent_id=row.agent_id,
+            agent_role=row.agent_role,
             image_paths=row.image_paths,
             model_config_id=row.model_config_id,
             extra=ConversationRunExtra.from_dict(row.extra),
@@ -145,6 +148,7 @@ class ConversationRunRecord:
             "end_reason": self.end_reason,
             "final_output": self.final_output,
             "agent_id": self.agent_id,
+            "agent_role": self.agent_role,
             "model_config_id": self.model_config_id,
             "image_paths": self.image_paths,
             "extra": self.extra.to_dict() if self.extra is not None else None,
