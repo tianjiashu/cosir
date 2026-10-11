@@ -141,6 +141,9 @@ class ConversationTaskStateRebuilder:
                 if metadata_status is not None:
                     tool_part["status"] = metadata_status
                 display_data = row.transport_metadata.get("display_data")
+                team_run_id = row.transport_metadata.get("team_run_id")
+                if team_run_id is not None:
+                    tool_part["team_run_id"] = team_run_id
                 if display_data is not None:
                     tool_part["display_data"] = display_data
                 elif "display_data" not in tool_part:

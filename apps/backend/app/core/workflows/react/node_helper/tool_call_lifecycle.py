@@ -213,6 +213,7 @@ def _summary_to_observation(summary: dict[str, Any]) -> ToolObservation:
         retryable=summary["retryable"],
         tool_call_id=summary["tool_call_id"],
         display_data=copy.deepcopy(_ui_data(summary)),
+        team_run_id=summary.get("team_run_id"),
     )
 
 
@@ -488,6 +489,7 @@ class ToolCallLifecycleManager(BaseModel):
             args: dict[str, object] | None = None,
             error: str | None = None,
             display_data: dict[str, object] | None = None,
+            team_run_id: int | None = None,
     ) -> None:
         """发射一条工具调用状态迁移事件。
 
@@ -499,6 +501,7 @@ class ToolCallLifecycleManager(BaseModel):
             args: 可选，完整参数（仅调用迁移到 ``running`` 时携带）；发出前深拷贝。
             error: 可选，面向前端的短错误提示。
             display_data: 可选，终态展示数据（调用方负责拷贝）。
+            team_run_id: 可选的 TeamRun 定位信息，错误提示覆盖展示数据时仍需保留。
 
         返回:
             无。
@@ -524,6 +527,7 @@ class ToolCallLifecycleManager(BaseModel):
                 args=copy.deepcopy(args) if args is not None else None,
                 error=error,
                 display_data=display_data,
+                team_run_id=team_run_id,
             )
         )
 
@@ -833,6 +837,12 @@ class ToolCallLifecycleManager(BaseModel):
             # ``tool_call_id``
             # 命中既有行即原地覆盖（``RuntimeContextManager.add_message`` 的既有机制），因此不会
             # 留下第二行；尚未写过行的调用补一条 cancelled 占位，与启动期补占位同口径。
+            #
+            # ``include_in_context`` 必须跟随父 AIMessage：本方法仅在 model_node 流式循环内的取消
+            # 分支被调用，那一刻承载 ``tool_calls`` 的助手草稿**尚未收敛**（``flush_message_chunk``
+            # 已按 ``mode="cancel"`` 写回 ``include_in_context=False / is_streaming=True``）。若把
+            # 闭合占位写成 in-context，会留下一条无父 AIMessage 的悬空 ToolMessage，污染后续 Run 的
+            # 模型请求上下文。故占位与未收敛草稿同口径，恒为 ``include_in_context=False``。
             runtime_context.add_message(
                 build_placeholder_tool_message(record.tool_call_id, record.tool_name),
                 transport_metadata=TransportMetadata(
@@ -841,6 +851,7 @@ class ToolCallLifecycleManager(BaseModel):
                     error=None,
                 ),
                 run_id=run_id,
+                include_in_context=False,
             )
         return updated
 
@@ -931,6 +942,8 @@ class ToolCallLifecycleManager(BaseModel):
             display_data=result_display_data,
             error=status_hint,
         )
+        if observation.team_run_id is not None:
+            transport_metadata["team_run_id"] = observation.team_run_id
         if not record.part_projected:
             # 隐藏闭合标记：本调用前端没有 part，冷重建必须据此跳过建 part，否则刷新页面会
             # 凭空多出一个工具气泡（冷/热两份快照不一致）。
@@ -970,6 +983,7 @@ class ToolCallLifecycleManager(BaseModel):
             to_status=event_status,
             error=status_hint,
             display_data=copy.deepcopy(result_display_data),
+            team_run_id=observation.team_run_id,
         )
         return updated, event_status
 

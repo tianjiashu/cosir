@@ -155,6 +155,7 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
         args: 已完成解析的工具入参；通常随 ``running`` 一起发送，为 ``None`` 时保留已有参数。
         error: 面向展示的短错误提示；仅失败时非空，不能承载完整诊断。
         display_data: 面向 UI 的结构化展示结果；不进入模型上下文。
+        team_run_id: 可选的 TeamRun 定位信息；不承载运行状态或错误正文。
 
     异常:
         pydantic.ValidationError: 标识为空、``status`` 取值非法，或出现未声明字段时抛出。
@@ -169,6 +170,7 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
     args: dict[str, object] | None = None
     error: str | None = None
     display_data: dict[str, object] | None = None
+    team_run_id: int | None = Field(default=None, gt=0)
 
     def plan(
         self,
@@ -249,6 +251,10 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
             mutations.insert(
                 1,
                 ConversationStateMutation("set", (*base, "args"), copy.deepcopy(self.args)),
+            )
+        if self.team_run_id is not None:
+            mutations.append(
+                ConversationStateMutation("set", (*base, "team_run_id"), self.team_run_id)
             )
         if self.display_data is not None:
             display_data = copy.deepcopy(self.display_data)

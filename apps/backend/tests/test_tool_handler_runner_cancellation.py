@@ -31,7 +31,9 @@ from app.core.runtime.conversation_run_cancellation_registry import cancellation
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext
 from app.core.tools.schemas.tool_output import (
     ProcessToolOutputChannel,
+    ProcessToolOutputChannelFactory,
 )
+from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
 
 
@@ -236,7 +238,19 @@ def test_process_mode_flushes_terminal_output_before_return() -> None:
         def finish(self) -> None:
             finished.append(True)
 
-    channel = Channel()
+    class Factory(ProcessToolOutputChannelFactory):
+        def create(
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            tool_call_id: str,
+            tool_name: str,
+            loop: asyncio.AbstractEventLoop,
+        ) -> ProcessToolOutputChannel | None:
+            return Channel()
+
+    loop = asyncio.new_event_loop()
     tool = _make_tool(
         _handler_emits_output,
         name="proc_output",
@@ -247,14 +261,20 @@ def test_process_mode_flushes_terminal_output_before_return() -> None:
     context = replace(
         _make_context(0),
         tool_call_id="call-output",
+        runtime_dependencies=ToolRuntimeDependencies(
+            runtime_event_loop=loop,
+            process_tool_output_channel_factory=Factory(),
+        ),
     )
-    observation = ToolHandlerRunner().execute(
-        tool,
-        {},
-        context,
-        tool_call_id="call-output",
-        process_output_channel=channel,
-    )
+    try:
+        observation = ToolHandlerRunner().execute(
+            tool,
+            {},
+            context,
+            tool_call_id="call-output",
+        )
+    finally:
+        loop.close()
 
     assert observation.status == "success"
     assert observation.content == "done"
@@ -854,7 +874,17 @@ def test_execute_in_process_uses_runtime_output_channel_factory(monkeypatch) -> 
         def finish(self) -> None:
             finished.set()
 
-    channel = Channel()
+    class Factory(ProcessToolOutputChannelFactory):
+        def create(
+            self,
+            *,
+            task_id: int,
+            run_id: int,
+            tool_call_id: str,
+            tool_name: str,
+            loop: asyncio.AbstractEventLoop,
+        ) -> ProcessToolOutputChannel | None:
+            return Channel()
 
     def _handler_emits(execution_context=None, output_sink=None, **_kwargs):
         # 子进程入口会把 output_sink 注入 handler（本 fake 在同线程运行）。
@@ -865,16 +895,21 @@ def test_execute_in_process_uses_runtime_output_channel_factory(monkeypatch) -> 
     tool = _make_tool(
         _handler_emits, name="sink_tool", execution_mode="process", timeout_seconds=5.0
     )
+    loop = asyncio.new_event_loop()
     context = replace(
         _make_context(0),
         tool_call_id="call-output",
+        runtime_dependencies=ToolRuntimeDependencies(
+            runtime_event_loop=loop,
+            process_tool_output_channel_factory=Factory(),
+        ),
     )
     observation = ToolHandlerRunner().execute(
         tool,
         {},
         context,
-        process_output_channel=channel,
     )
+    loop.close()
 
     assert observation.status == "success"
     assert observation.content == "done"

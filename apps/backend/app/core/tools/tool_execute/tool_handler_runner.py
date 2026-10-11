@@ -164,8 +164,8 @@ class ToolHandlerRunner:
                 观察（不派生进程），**等待结果期间**每轮轮询命中则抛出内部取消信号，
                 由本方法强杀子进程后返回取消观察。
             实时输出通道：从 ``execution_context.runtime_dependencies`` 按工具和调用
-                身份创建。支持的进程工具自动建立跨进程输出队列；workflow / ToolExecutor
-                不再层层传递逐调用 sink。
+                身份创建（见 :meth:`_create_process_output_channel`）。支持的进程工具
+                自动建立跨进程输出队列，并在进程收尾后 flush 该通道。
 
         返回:
             归一化后的 :class:`ToolObservation`：成功为 status="success"，
@@ -384,10 +384,18 @@ class ToolHandlerRunner:
         execution_context: ToolExecutionContext | None,
         tool_call_id: str,
     ) -> ProcessToolOutputChannel | None:
-        """Ask the run-scoped factory for an optional live output channel.
+        """按运行期依赖里的工厂建逐调用实时输出通道（唯一的通道来源）。
 
-        Factory failures disable only the live output side channel; the process tool
-        still runs and its ordinary ``ToolObservation`` remains authoritative.
+        ``loop`` 只能取自 ``runtime_dependencies.runtime_event_loop``：本方法在
+        ``asyncio.to_thread`` 的工具执行线程里运行，该线程内没有运行中的事件循环，
+        工厂因此要求显式传入目标循环（见 ``ProcessToolOutputChannelFactory.create``）；
+        缺失工厂或循环时返回 ``None``，本次调用退化为只有最终 observation。
+
+        不向上层层传参：调用方只负责在运行期依赖里登记工厂与事件循环，通道的创建、
+        使用与 flush 全部收敛在本方法所属的进程执行路径内。
+
+        工厂失败只让本次调用失去实时输出：子进程照常运行、最终 ``ToolObservation``
+        仍是权威结果，失败仅记 ERROR 日志。
         """
         if execution_context is None:
             return None

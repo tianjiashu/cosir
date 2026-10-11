@@ -212,7 +212,7 @@ function validatePart(value: unknown, path: string): void {
     return;
   }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
-  const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "presentation", "display_data", "isError", "approvalRequestId", "child_task_id", "child_run_id", "agent_role", "terminal_output_seq"];
+  const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "presentation", "display_data", "team_run_id", "isError", "approvalRequestId", "child_task_id", "child_run_id", "agent_role", "terminal_output_seq"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   requireString(part.toolCallId, `${path}.toolCallId`);
   requireString(part.toolName, `${path}.toolName`);
@@ -227,6 +227,7 @@ function validatePart(value: unknown, path: string): void {
   if (hasOwn(part, "display_data")) validateDisplayData(part.display_data, `${path}.display_data`);
   if (hasOwn(part, "isError") && part.isError !== null && typeof part.isError !== "boolean") throw new TransportSnapshotValidationError(`${path}.isError`, "布尔值或 null");
   if (hasOwn(part, "child_task_id") && (!Number.isInteger(part.child_task_id) || (part.child_task_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_task_id`, "正整数");
+  if (hasOwn(part, "team_run_id") && (!Number.isInteger(part.team_run_id) || (part.team_run_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.team_run_id`, "正整数");
   if (hasOwn(part, "child_run_id") && (!Number.isInteger(part.child_run_id) || (part.child_run_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_run_id`, "正整数");
   if (hasOwn(part, "agent_role") && (typeof part.agent_role !== "string" || !part.agent_role.trim())) throw new TransportSnapshotValidationError(`${path}.agent_role`, "非空字符串");
   if (hasOwn(part, "terminal_output_seq") && (!Number.isInteger(part.terminal_output_seq) || (part.terminal_output_seq as number) < 0)) throw new TransportSnapshotValidationError(`${path}.terminal_output_seq`, "非负整数");

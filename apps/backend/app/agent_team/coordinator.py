@@ -8,7 +8,6 @@ import json
 from collections import defaultdict
 from dataclasses import replace
 from threading import RLock
-from typing import Any
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState, AgentTeamNodeExecution, AgentTeamRunRuntime
@@ -122,6 +121,11 @@ class AgentTeamCoordinator:
                     next_node_input,
                 )
                 if node_run.status != ConversationRunStatus.COMPLETED.value:
+                    failure_reason = (
+                        AgentTeamRunEndReason.NODE_RUN_CANCELLED.value
+                        if node_run.status == ConversationRunStatus.CANCELLED.value
+                        else AgentTeamRunEndReason.NODE_RUN_FAILED.value
+                    )
                     log.info(
                         "agent_team_start_failed",
                         extra={
@@ -129,33 +133,58 @@ class AgentTeamCoordinator:
                             "data": {
                                 "run_id": team_run.id,
                                 "node_id": state.current_node_id,
-                                "output": node_run.final_output,
+                                "node_run_id": node_run.id,
+                                "node_status": node_run.status,
+                                "failure_code": failure_reason,
                             },
                         },
                     )
-                    self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.FAILED.value,
-                                                            (AgentTeamRunStatus.RUNNING.value,), state=state,
-                                                            end_reason=f"节点 {state.current_node_id} 执行失败", ended=True)
+                    self._team_run_crud.update_status_if_in(
+                        team_run.id, AgentTeamRunStatus.FAILED.value,
+                        (AgentTeamRunStatus.RUNNING.value,), state=state,
+                        end_reason=failure_reason, ended=True,
+                    )
                     break
 
                 final_output = node_run.final_output
-                status, next_node_input = self.struct_out_put(final_output)
+                parsed_output = self.struct_out_put(final_output)
+                if parsed_output is None:
+                    log.error(
+                        "agent_team_node_output_invalid",
+                        extra={"msg": "节点未返回有效的 Team 状态与输出", "data": {
+                            "run_id": team_run.id,
+                            "node_id": state.current_node_id,
+                            "node_run_id": node_run.id,
+                        }},
+                    )
+                    self._team_run_crud.update_status_if_in(
+                        team_run.id, AgentTeamRunStatus.FAILED.value,
+                        (AgentTeamRunStatus.RUNNING.value,), state=state,
+                        end_reason=AgentTeamRunEndReason.NODE_OUTPUT_INVALID.value, ended=True,
+                    )
+                    break
+                status, next_node_input = parsed_output
                 next_node_id = state.has_next_node(status)
                 if next_node_id is None:
                     log.error(
                         "agent_team_start_failed",
                         extra={
-                            "msg": "next_node_id 为空",
+                            "msg": "节点业务状态没有匹配的转移",
                             "data": {
                                 "run_id": team_run.id,
                                 "node_id": state.current_node_id,
-                                "output": final_output,
+                                "node_run_id": node_run.id,
+                                "business_status": status,
+                                "failure_code": AgentTeamRunEndReason.TRANSITION_NOT_FOUND.value,
                             },
                         },
                     )
-                    self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.FAILED.value,
-                                                            (AgentTeamRunStatus.RUNNING.value,), state=state,
-                                                            end_reason="next_node_id 为空", ended=True)
+                    self._team_run_crud.update_status_if_in(
+                        team_run.id, AgentTeamRunStatus.FAILED.value,
+                        (AgentTeamRunStatus.RUNNING.value,), state=state,
+                        end_reason=AgentTeamRunEndReason.TRANSITION_NOT_FOUND.value,
+                        ended=True,
+                    )
                     break
                 state.add_transition(state.current_node_id, status, next_node_id)
                 if next_node_id == "END":
@@ -177,37 +206,46 @@ class AgentTeamCoordinator:
                     break
                 state.current_node_id = next_node_id
         except Exception as exc:
+            failure_reason = (
+                AgentTeamRunEndReason.NEXT_NODE_START_FAILED.value
+                if state is not None and state.current_node_id is not None
+                else AgentTeamRunEndReason.TEAM_START_FAILED.value
+            )
             log.exception(
                 "agent_team_start_failed",
                 extra={
-                    "msg": "Agent Team 入口节点启动失败",
+                    "msg": "Agent Team 节点调度异常",
                     "data": {
                         "run_id": team_run.id,
+                        "node_id": state.current_node_id if state is not None else None,
+                        "failure_code": failure_reason,
                         "error_type": type(exc).__name__,
                     },
                 },
             )
-            # ``end_reason`` 必须是本次真实失败原因：写死节点路由文案（曾经的 "next_node_id 为空"）
-            # 会让 API 投影与用户看到的收敛原因与日志里的实际异常南辕北辙。
-            self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.FAILED.value,
-                                                    (AgentTeamRunStatus.RUNNING.value,), state=state,
-                                                    end_reason=(
-                                                        f"节点执行异常: {type(exc).__name__}: {exc}"
-                                                    )[:500],
-                                                    ended=True)
+            # 原始异常保留在结构化日志，持久化只写稳定原因码供 UI 安全分类。
+            self._team_run_crud.update_status_if_in(
+                team_run.id, AgentTeamRunStatus.FAILED.value,
+                (AgentTeamRunStatus.RUNNING.value,), state=state,
+                end_reason=failure_reason, ended=True,
+            )
             raise
         return self._team_run_crud.get_by_id(team_run.id)
 
-    def struct_out_put(self, output: str) -> tuple[str, str] | None:
+    def struct_out_put(self, output: str | None) -> tuple[str, str] | None:
+        """读取节点交接结果；格式错误由调用方记为稳定的节点输出失败。"""
+
         try:
-            json_output: dict[str, Any] = json.loads(output)
-            status = json_output.get("status")
-            output = json_output.get("output")
-            if status is not None and output is not None:
-                return status, output
-            raise ValueError("Invalid output")
-        except Exception:
+            json_output = json.loads(output) if output is not None else None
+        except json.JSONDecodeError:
             return None
+        if not isinstance(json_output, dict):
+            return None
+        status = json_output.get("status")
+        node_output = json_output.get("output")
+        if isinstance(status, str) and status and isinstance(node_output, str):
+            return status, node_output
+        return None
 
     def _start_node(
             self,
@@ -223,8 +261,9 @@ class AgentTeamCoordinator:
         自身事务中加载并校验——``start`` 在入口统一校验 Team 存在、处于 running 且无活动节点；
         驱动循环在结算时按锁定后的快照校验。本方法不再读取或重新校验 Team 身份与生命周期
         状态，只负责按节点快照派生 Task/Run、合成执行用 per-run profile、**同步执行**该节点
-        Run（``asyncio.run``，返回时已是终态）并落定执行记录。``state.start_node`` 仍持有
-        活动节点游标的领域守卫。
+        Run（``asyncio.run``，返回时已是终态）并落定执行记录。节点 Run 先以
+        ``pending`` 创建，再通过状态服务认领为 ``running``，使数据库迁移与 Transport 投影共用
+        同一事件链路。``state.start_node`` 仍持有活动节点游标的领域守卫。
 
         同一 TeamRun 中的节点按 ``node_id`` 绑定独立 Task；再次访问该节点时读取原 Task，
         由 Task 级 context 保留它自己的历史。
@@ -246,12 +285,14 @@ class AgentTeamCoordinator:
         异常:
             KeyError: 本次 Run 引用的模型配置已被删除（物化时由配置服务抛出）。
             pydantic.ValidationError: 快照中的结构化输出契约非法。
+            RuntimeError: 新创建的节点 Run 未能从 ``pending`` 状态认领。
             其余异常（工具 schema 解析失败、注册表未命中、Run 执行异常等）直接上浮，由
-            :meth:`start` 统一收敛为 TeamRun ``failed``。前两类发生在节点 Run 落库之后，抛出前
-            会先把它收敛为 ``failed``，避免留下无人认领的 ``running`` 节点 Run。
+            :meth:`start` 统一收敛为 TeamRun ``failed``。模型配置缺失或结构化输出契约非法时，
+            会先把节点 Run 收敛为 ``failed``，避免留下无人认领的 ``running`` 节点 Run。
 
         副作用:
-            可能新建节点 Task（首次执行该节点时）；创建一条 ``running`` 节点 Run 并执行到终态；
+            可能新建节点 Task（首次执行该节点时）；创建一条 ``pending`` 节点 Run 并原子认领为
+            ``running``，再执行到终态；
             profile 合成失败时收敛该 Run 并记 ``agent_team_node_profile_failed`` error 日志；
             条件更新 TeamRun 快照与 ``updated_at``。
         """
@@ -296,12 +337,16 @@ class AgentTeamCoordinator:
         node_run = self._run_service.create_run(
             task_id=node_execution.task_id,
             agent_id=agent_id,
-            status=ConversationRunStatus.RUNNING.value,
+            status=ConversationRunStatus.PENDING.value,
             model_config_id=node_runtime.model_config_id,
             reasoning_effort=reasoning_effort,
             run_command=ConversationRunCommand(display_text=input_text)
         )
         node_execution.conversation_run_ids.append(node_run.id)
+        claimed_run = self._run_state_service.claim_pending_run(node_run.id)
+        if claimed_run is None:
+            raise RuntimeError(f"新创建的节点 Run {node_run.id} 未能从 pending 状态认领")
+        node_run = claimed_run
         try:
             run_profile = self._build_node_run_profile(agent_profile, node_runtime, node_run)
         except Exception as exc:

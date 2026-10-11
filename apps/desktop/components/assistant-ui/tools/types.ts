@@ -4,6 +4,7 @@ export type ToolArtifact = {
   backendStatus: TransportToolStatus;
   presentation: TransportToolPresentation;
   display_data: TransportToolDisplayData | null;
+  team_run_id?: number;
   error: string | null;
   errorCode: string | null;
   child_task_id?: number;
@@ -27,6 +28,7 @@ export function readToolArtifact(value: unknown): ToolArtifact {
     backendStatus,
     presentation: candidate.presentation ?? {},
     display_data,
+    team_run_id: typeof candidate.team_run_id === "number" && Number.isInteger(candidate.team_run_id) && candidate.team_run_id > 0 ? candidate.team_run_id : undefined,
     error: backendStatus === "cancelled"
       ? "已取消"
       : backendStatus === "failed"

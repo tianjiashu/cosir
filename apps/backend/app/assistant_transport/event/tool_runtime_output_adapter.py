@@ -31,6 +31,7 @@ class ToolRuntimeOutputChannelFactory(ProcessToolOutputChannelFactory):
         run_id: int,
         tool_call_id: str,
         tool_name: str,
+        loop: asyncio.AbstractEventLoop,
     ) -> ProcessToolOutputChannel | None:
         """仅为有效的终端工具调用创建输出通道。"""
         if (
@@ -59,7 +60,7 @@ class ToolRuntimeOutputChannelFactory(ProcessToolOutputChannelFactory):
             task_id=task_id,
             run_id=run_id,
             tool_call_id=tool_call_id,
-            loop=asyncio.get_running_loop(),
+            loop=loop,
             publish=publish,
             max_chunk_chars=_EVENT_TEXT_LIMIT,
         )

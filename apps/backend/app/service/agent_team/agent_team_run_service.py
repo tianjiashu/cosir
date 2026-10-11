@@ -167,12 +167,28 @@ class AgentTeamRunService:
             child_tasks_by_parent=child_tasks_by_parent,
             workspace=workspace_root,
         )
+        node_failure_reasons = {
+            AgentTeamRunEndReason.NODE_RUN_FAILED.value,
+            AgentTeamRunEndReason.NODE_RUN_CANCELLED.value,
+            AgentTeamRunEndReason.NODE_OUTPUT_INVALID.value,
+            AgentTeamRunEndReason.TRANSITION_NOT_FOUND.value,
+            AgentTeamRunEndReason.NEXT_NODE_START_FAILED.value,
+            AgentTeamRunEndReason.IMPLICIT_COMPLETION_MISSING.value,
+        }
+        failure_node_id = (
+            state.current_node_id
+            if row.status == AgentTeamRunStatus.FAILED.value
+            and row.end_reason in node_failure_reasons
+            else None
+        )
         node_views: list[dict[str, Any]] = []
         for node in configuration["nodes"]:
             node_id = node["node_id"]
             execution = executions.get(node_id)
             visits = visits_by_node[node_id]
-            if (
+            if failure_node_id == node_id:
+                node_status = "failed"
+            elif (
                 state.current_node_id == node_id
                 and row.status == AgentTeamRunStatus.RUNNING.value
                 and (not visits or visits[-1]["conversation_run_id"] is None)
@@ -216,6 +232,7 @@ class AgentTeamRunService:
                 else None
             ),
             "end_reason": row.end_reason,
+            "failure_node_id": failure_node_id,
             "started_at": row.started_at,
             "ended_at": row.ended_at,
         }

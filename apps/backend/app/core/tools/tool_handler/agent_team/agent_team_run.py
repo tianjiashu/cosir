@@ -300,9 +300,24 @@ class AgentTeamRunTool(HandlerBase):
                 parent_agent_profile=parent_agent_profile,
             )
         except KeyError:
-            return self._confirmation_error(f"The pending TeamRun does not exist: {team_run_id}")
+            return self._confirmation_error(
+                f"The pending TeamRun does not exist: {team_run_id}",
+                team_run_id=self._terminal_team_run_id(team_run_id),
+            )
         except ValueError as exc:
-            return self._confirmation_error(str(exc))
+            return self._confirmation_error(
+                str(exc), team_run_id=self._terminal_team_run_id(team_run_id)
+            )
+        except Exception as exc:
+            # Coordinator 已把启动期异常收敛到 TeamRun；工具边界仍需返回该运行的定位信息。
+            log.exception(
+                "agent_team_confirmation_start_exception",
+                extra={"msg": "Agent Team 启动异常", "data": {"team_run_id": team_run_id}},
+            )
+            return self._confirmation_error(
+                f"Team execution failed during startup: {type(exc).__name__}",
+                team_run_id=self._terminal_team_run_id(team_run_id),
+            )
         if row.status in {
             AgentTeamRunStatus.CANCELLED.value,
             AgentTeamRunStatus.FAILED.value,
@@ -311,9 +326,10 @@ class AgentTeamRunTool(HandlerBase):
             # 本次调用内就失败并收敛。此时不能报告成功，否则模型会继续等一个永远不会运行的 Team；
             # ``end_reason`` 必须一起回传，否则模型只能把「节点已失败」误读成「运行时状态问题」。
             return self._confirmation_error(
-                f"This Team run has already ended ({row.status}): {row.end_reason}"
+                f"This Team run has already ended ({row.status}): {row.end_reason}",
+                team_run_id=row.id,
             )
-        return tool_success(
+        observation = tool_success(
             tool_name=self.name,
             content=json.dumps(
                 {
@@ -331,8 +347,24 @@ class AgentTeamRunTool(HandlerBase):
                 node_goals=inputs.node_goals,
             ),
         )
+        observation.team_run_id = row.id
+        return observation
 
-    def _confirmation_error(self, reason: str) -> ToolObservation:
+    def _terminal_team_run_id(self, team_run_id: int) -> int | None:
+        """仅在 TeamRun 已终结时暴露定位信息，避免把确认参数错误误显示为执行失败。"""
+
+        try:
+            row = self.agent_team_run_service.get(team_run_id)
+        except KeyError:
+            return None
+        return team_run_id if row.status in {
+            AgentTeamRunStatus.FAILED.value,
+            AgentTeamRunStatus.CANCELLED.value,
+        } else None
+
+    def _confirmation_error(
+        self, reason: str, *, team_run_id: int | None = None
+    ) -> ToolObservation:
         """把确认阶段的失败归一化为不重试的错误观察，并留下可排查日志。"""
 
         log.warning(
@@ -342,12 +374,14 @@ class AgentTeamRunTool(HandlerBase):
                 "data": {"tool": self.name, "reason": reason},
             },
         )
-        return tool_error(
+        observation = tool_error(
             self.name,
             "agent_team_confirmation_invalid",
             reason=f"Failed to start the Team execution plan: {reason}",
             retryable=False,
         )
+        observation.team_run_id = team_run_id
+        return observation
 
     def to_definition(self) -> ToolDefinition:
         """构造 Team 执行工具定义。"""

@@ -35,6 +35,7 @@ _TOOL_PART_KEYS = {
     "errorCode",
     "presentation",
     "display_data",
+    "team_run_id",
     "isError",
     "approvalRequestId",
     "child_task_id",
@@ -264,6 +265,12 @@ def _validate_part(part: object) -> None:
             raise ValueError("snapshot tool presentation must be an object")
         if part.get("display_data") is not None and not isinstance(part.get("display_data"), dict):
             raise ValueError("snapshot tool display_data must be an object or null")
+        if part.get("team_run_id") is not None and (
+            not isinstance(part["team_run_id"], int)
+            or isinstance(part["team_run_id"], bool)
+            or part["team_run_id"] < 1
+        ):
+            raise ValueError("snapshot team_run_id must be a positive integer")
         if part.get("child_task_id") is not None and (
             not isinstance(part.get("child_task_id"), int)
             or isinstance(part.get("child_task_id"), bool)

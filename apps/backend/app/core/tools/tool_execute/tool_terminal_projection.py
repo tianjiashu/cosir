@@ -175,6 +175,7 @@ def _project(
     event_status: ToolTerminalStatus,
     error: str | None,
     display_data: dict[str, object] | None,
+    team_run_id: int | None = None,
 ) -> bool:
     """把已定型的终态字段直投进进程内快照；全部守卫与降级集中在此。
 
@@ -228,6 +229,7 @@ def _project(
                 status=event_status,
                 error=error,
                 display_data=display_data,
+                team_run_id=team_run_id,
             )
         )
     except Exception:
@@ -312,6 +314,7 @@ def project_tool_terminal_state(
             run_id=run_id,
             tool_call_id=tool_call_id,
         ),
+        team_run_id=observation.team_run_id,
     )
 
 

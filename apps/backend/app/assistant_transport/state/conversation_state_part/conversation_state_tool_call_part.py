@@ -26,6 +26,8 @@ class ConversationStateToolCallPart(TypedDict):
     error: NotRequired[str | None]
     presentation: NotRequired[dict[str, object]]
     display_data: NotRequired[dict[str, object] | None]
+    # 指向持久化 TeamRun，失败态也能读取节点进度与诊断。
+    team_run_id: NotRequired[int]
     isError: NotRequired[bool]
     approvalRequestId: NotRequired[None]
     # Runtime delegation locator. It is not rendered as text by the frontend.

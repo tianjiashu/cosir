@@ -106,7 +106,7 @@ function NodeMarker({ node, isCurrent }: { node: TeamNode; isCurrent: boolean })
   return (
     <span
       className={`size-3 shrink-0 cursor-help rounded-full border-2 ${tone}`}
-      style={lastVisit?.business_status_color
+      style={node.status === "completed" && lastVisit?.business_status_color
         ? { borderColor: lastVisit.business_status_color, backgroundColor: lastVisit.business_status_color }
         : undefined}
       title={label}
@@ -148,6 +148,7 @@ function HistoricalVisits({
               第 {visit.visit_number} 次 · {statusLabel(visit.status)}
               {visit.business_status ? ` · ${visit.business_status}` : ""}
             </p>
+            {visit.failure_message && <p className="max-h-20 overflow-y-auto break-words text-[10px] leading-relaxed text-destructive">{visit.failure_message}</p>}
             {visit.agents.map((agent) => (
               <AgentChip key={agent.task_id} agent={agent} onOpenAgent={onOpenAgent} />
             ))}
@@ -184,6 +185,9 @@ function PipelineNode({
       <div className={`${HEADER_ROW_CLASS} items-start`}>
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <p className="truncate text-xs font-semibold" title={title}>{title}</p>
+          <span className={`shrink-0 text-[10px] ${node.status === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+            {statusLabel(node.status)}
+          </span>
           {latestVisit && latestVisit.visit_number > 1 && (
             <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground">
               第 {latestVisit.visit_number} 次
@@ -199,6 +203,11 @@ function PipelineNode({
         {(latestVisit?.agents ?? [configuredAgent]).map((agent) => (
           <AgentChip key={agent.task_id ?? `configured-${node.node_id}`} agent={agent} onOpenAgent={onOpenAgent} />
         ))}
+        {node.status === "failed" && (
+          <p className="max-h-20 overflow-y-auto break-words text-[10px] font-medium text-destructive">
+            {latestVisit?.failure_message || "节点未完成，查看上方失败原因"}
+          </p>
+        )}
         <HistoricalVisits visits={previousVisits} onOpenAgent={onOpenAgent} />
       </div>
     </div>
@@ -221,26 +230,21 @@ function StartMarker() {
 
 function EndMarker({ run }: { run: AgentTeamRun }) {
   const completed = run.status === "completed";
-  const failed = run.status === "failed" || run.status === "cancelled";
-  const label = completed ? "流程完成" : failed ? (run.status === "failed" ? "执行失败" : "已取消") : "待到达";
-  const tone = completed ? "text-emerald-700 dark:text-emerald-400" : failed ? "text-destructive" : "text-muted-foreground";
+  const label = completed ? "流程完成" : "未到达";
+  const tone = completed ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground";
   return (
     <li className="min-w-0" aria-label={label}>
       <div className={`${HEADER_ROW_CLASS} items-center gap-1`}>
         {completed
           ? <CheckIcon className={`size-3.5 shrink-0 ${tone}`} aria-hidden="true" />
-          : failed
-            ? <XIcon className={`size-3.5 shrink-0 ${tone}`} aria-hidden="true" />
-            : null}
+          : null}
         <span className={`text-[10px] font-medium ${tone}`}>END</span>
       </div>
       <div className={RAIL_ROW_CLASS}>
         <span
           className={`size-3 shrink-0 rounded-full border-2 ${completed
             ? "border-emerald-600 bg-emerald-500 dark:border-emerald-400"
-            : failed
-              ? "border-destructive bg-destructive"
-              : "border-muted-foreground/50 bg-background"}`}
+            : "border-muted-foreground/50 bg-background"}`}
           title={label}
           aria-hidden="true"
         />
@@ -256,10 +260,14 @@ export function AgentTeamExecutionPipeline({ run, onOpenAgent }: AgentTeamExecut
   ).join(" ");
 
   return (
-    <section aria-label="Agent Team 流水线" className="rounded-lg border border-border/60 bg-muted/10 p-3">
+    <section
+      aria-label="Agent Team 流水线，可横向滚动查看全部节点"
+      tabIndex={0}
+      className="overflow-x-auto rounded-lg border border-border/60 bg-muted/10 p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
       <ol
         className="grid w-full min-w-0 items-start"
-        style={{ gridTemplateColumns: columns }}
+        style={{ gridTemplateColumns: columns, minWidth: `${stages * 150}px` }}
         aria-label="按配置顺序排列的节点"
       >
         <StartMarker />

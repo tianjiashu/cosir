@@ -39,7 +39,6 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tools.schemas.tool_output import ProcessToolOutputChannel
 from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner

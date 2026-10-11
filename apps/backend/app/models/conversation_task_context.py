@@ -23,11 +23,13 @@ class TransportMetadata(TypedDict):
     孤儿调用）。它由 ``ToolCallLifecycleManager.settle`` 按 ``part_projected`` 写入，冷重建
     （``ConversationTaskStateRebuilder.build_pair_tool_part``）据此跳过建 part，使刷新页面后的
     快照与实时快照一致——实时链路从未为这些调用发过 ``ToolCallCreatedEvent``。
+    ``team_run_id`` 独立于错误态 ``display_data`` 持久化，供失败卡片冷重建后继续查询 TeamRun。
     """
 
     status: ToolCallStatus
     error: NotRequired[str | None]
     display_data: NotRequired[dict[str, object] | None]
+    team_run_id: NotRequired[int]
     approvalRequestId: NotRequired[None]
     hidden: NotRequired[bool]
 

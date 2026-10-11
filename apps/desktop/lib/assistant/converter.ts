@@ -304,6 +304,7 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     backendStatus,
     presentation: part.presentation ?? {},
     display_data: displayData,
+    team_run_id: part.team_run_id,
     error: backendStatus === "cancelled"
       ? "已取消"
       : backendStatus === "failed" ? statusHint : null,

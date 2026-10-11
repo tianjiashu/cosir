@@ -46,6 +46,15 @@ describe("tool renderer routing", () => {
     })).toBe("delegation");
   });
 
+  it("keeps a failed TeamRun on the execution card after its display data becomes a short hint", () => {
+    expect(routeToolPart("agent_team", {
+      backendStatus: "failed",
+      presentation: { expand_layout: "details" },
+      display_data: { status_hint: "执行失败" },
+      team_run_id: 17,
+    })).toBe("agent-team-execution");
+  });
+
   it("routes child_agent_wait results by stable display kind", () => {
     expect(routeToolPart("child_agent_wait", {
       backendStatus: "completed",

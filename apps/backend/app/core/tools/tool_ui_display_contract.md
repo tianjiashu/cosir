@@ -125,6 +125,7 @@ Transport tool-call status
 
 - 必须从 `ToolObservation.status` 得到状态；`display_data` 不得定义或覆盖状态。
 - `tool_error` 的 `display_data` 只能是 `{"status_hint": "..."}`，提示建议约 5 个字，最多 8 个字符。
+- Agent Team 的持久化运行 ID 走工具调用 part 的独立 `team_run_id` 定位字段，成功与失败均可携带；它不是错误文案或第二份运行状态，冷重建从 ToolMessage 的 Transport metadata 恢复。
 - `status_hint` 必须来自后端明确的分类映射，不得直接复制 `error`、`reason`、异常字符串或 provider 原始响应。
 - 没有安全且有价值的分类时使用通用提示"执行失败"；客户端仍只显示"失败 + 短提示"。
 - 取消态显示"已取消"，不显示为失败；部分成功可以使用"部分成功"等受控提示。

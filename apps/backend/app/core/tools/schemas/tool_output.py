@@ -1,5 +1,6 @@
 """进程隔离工具与运行期输出消费者之间的接口契约。"""
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 
@@ -34,8 +35,15 @@ class ProcessToolOutputChannelFactory(ABC):
         run_id: int,
         tool_call_id: str,
         tool_name: str,
+        loop: asyncio.AbstractEventLoop,
     ) -> ProcessToolOutputChannel | None:
-        """在调用方事件循环线程创建输出通道；工具无运行期输出视图时返回 ``None``。"""
+        """返回输出通道；工具无运行期输出视图时返回 ``None``。
+
+        ``loop`` 是本次 Run 的事件循环，必须由调用方显式给出：进程工具的通道在
+        ``asyncio.to_thread`` 的工具执行线程里创建，该线程内没有运行中的事件循环，
+        实现不得改用 ``asyncio.get_running_loop()``——那会抛 ``RuntimeError``，让通道
+        创建失败并使工具永久失去实时输出（只剩最终 observation）。
+        """
 
 
 __all__ = ["OutputSink", "ProcessToolOutputChannel", "ProcessToolOutputChannelFactory"]

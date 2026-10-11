@@ -8,6 +8,7 @@ from typing import Any
 
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.config.configuration import get_agent_registry as get_agent_profile_registry
+from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.task_record import TaskRecord
 
@@ -92,6 +93,11 @@ def project_node_visits(
                     "status": run.status,
                     "business_status": business_status,
                     "business_status_color": business_status_color,
+                    "failure_code": run.end_reason if run.status == "failed" else None,
+                    "failure_message": (
+                        (run.error or {}).get("message") or run_failure_message(run.end_reason)
+                        if run.status == "failed" else None
+                    ),
                     "agents": agents,
                 }
             )
@@ -106,6 +112,8 @@ def project_node_visits(
                     "status": "running",
                     "business_status": None,
                     "business_status_color": None,
+                    "failure_code": None,
+                    "failure_message": None,
                     "agents": [
                         {
                             "task_id": execution.task_id if execution is not None else None,

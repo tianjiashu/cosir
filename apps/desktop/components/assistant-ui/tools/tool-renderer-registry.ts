@@ -102,7 +102,7 @@ const TOOL_RENDERER_DEFINITIONS: readonly ToolRendererDefinition[] = [
   {
     route: "agent-team-execution",
     renderer: AgentTeamExecutionCard,
-    matches: ({ kind }) => kind === "agent-team-execution",
+    matches: ({ kind, artifact }) => kind === "agent-team-execution" || artifact.team_run_id !== undefined,
   },
   {
     route: "agent-configuration-draft",

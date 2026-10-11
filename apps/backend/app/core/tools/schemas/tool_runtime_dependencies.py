@@ -17,9 +17,10 @@ class ToolRuntimeDependencies:
     """承载由 runtime 注入到工具执行上下文的可选能力。
 
     ``terminal_session_service`` 只服务同进程工具，类型上仅由 ``TYPE_CHECKING`` 引用以
-    避免 tools → service 的运行期导入。输出通道工厂由 WorkflowOperations 在事件循环线程
-    调用并创建逐调用通道，ToolHandlerRunner 使用该通道将子进程队列中的输出增量接入运行期事件。
-    所有 runtime dependency 都会
+    避免 tools → service 的运行期导入。输出通道工厂是进程工具实时输出的唯一来源：
+    ToolHandlerRunner 在工具执行线程用它建逐调用通道（该线程内取不到运行中循环，
+    目标循环取自本依赖的 ``runtime_event_loop``），再把子进程队列中的输出增量接入
+    运行期事件；通道不沿执行链层层传参。所有 runtime dependency 都会
     在 ``ToolExecutionContext.for_process_execution`` 中剔除，不进入工具子进程；隔离工具需要的
     配置由该工具在执行边界自行读取，避免把父进程 service 或依赖对象跨进程传递。
     """

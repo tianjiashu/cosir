@@ -99,10 +99,10 @@ class AgentTeamRunState(BaseModel):
             node_transitions=node_transitions,
         )
 
-    def has_next_node(self,status: str) -> str:
-        """返回是否有下一个节点需要执行。"""
+    def has_next_node(self, status: str) -> str | None:
+        """按当前节点与业务状态查找转移；缺少边由 Coordinator 收敛为可诊断失败。"""
 
-        return self.node_transitions[self.current_node_id].get(status)
+        return self.node_transitions.get(self.current_node_id, {}).get(status)
 
     def node_execution_for_node(self, node_id: str) -> AgentTeamNodeExecution | None:
         """返回节点已绑定的稳定 Task 标识；首次执行的节点返回 ``None``。"""

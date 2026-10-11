@@ -108,6 +108,8 @@ export type TransportToolCallPart = {
   presentation?: TransportToolPresentation;
   /** 后端治理后的 UI 展示数据，前端不得从 args 推导展示内容。 */
   display_data?: TransportToolDisplayData | null;
+  /** 持久化 TeamRun 的定位字段，工具失败后仍可查询流水线。 */
+  team_run_id?: number;
   /** 后端显式标记的错误结果。 */
   isError?: boolean | null;
   /** Runtime-only child task locator for Workbench; never rendered as text. */

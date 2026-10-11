@@ -49,6 +49,7 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
 )
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
+from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute import tool_handler_runner as runner_module
 from app.core.tools.tool_execute import tool_terminal_projection as projection_module
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
@@ -235,6 +236,7 @@ class _LoopBackedChannelFactory(ProcessToolOutputChannelFactory):
         run_id: int,
         tool_call_id: str,
         tool_name: str,
+        loop: asyncio.AbstractEventLoop,
     ) -> BufferedProcessToolOutputChannel | None:
         self.task_id, self.run_id, self.tool_call_id = task_id, run_id, tool_call_id
 
@@ -248,7 +250,7 @@ class _LoopBackedChannelFactory(ProcessToolOutputChannelFactory):
             task_id=task_id,
             run_id=run_id,
             tool_call_id=tool_call_id,
-            loop=asyncio.get_running_loop(),
+            loop=loop,
             publish=publish,
             max_chunk_chars=4096,
         )
@@ -351,12 +353,10 @@ async def test_projection_ordering_kill_then_drain_then_project(
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=_RUN_ID,
-    )
-    output_channel = channel_factory.create(
-        task_id=_TASK_ID,
-        run_id=_RUN_ID,
-        tool_call_id="call-cancel",
-        tool_name=_STREAMING_TOOL_NAME,
+        runtime_dependencies=ToolRuntimeDependencies(
+            runtime_event_loop=asyncio.get_running_loop(),
+            process_tool_output_channel_factory=channel_factory,
+        ),
     )
 
     # 定时器在子进程运行途中标记工具级取消（真实跨线程信号）。
@@ -378,7 +378,6 @@ async def test_projection_ordering_kill_then_drain_then_project(
                 call_id="call-cancel",
             ),
             execution_context=context,
-            process_output_channel=output_channel,
         )
     finally:
         timer.cancel()
@@ -509,7 +508,6 @@ async def test_cancel_path_never_touches_shared_projection(
             {"marker_path": str(tmp_path / "m.txt")},
             context,
             "call-cancel",
-            process_output_channel=None,
         )
     finally:
         timer.cancel()

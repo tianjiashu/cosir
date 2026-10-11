@@ -63,6 +63,8 @@ export type AgentTeamRun = {
       status: string;
       business_status: string | null;
       business_status_color: string | null;
+      failure_code: string | null;
+      failure_message: string | null;
       agents: Array<{
         task_id: number | null;
         title: string;
@@ -75,6 +77,7 @@ export type AgentTeamRun = {
   }>;
   current_node_id: string | null;
   end_reason: string | null;
+  failure_node_id: string | null;
   started_at: string | null;
   ended_at: string | null;
 };

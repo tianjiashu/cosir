@@ -302,6 +302,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence(
         run_id=9,
         tool_call_id="call-1",
         tool_name="execute_terminal",
+        loop=loop,
     )
     assert isinstance(channel, BufferedProcessToolOutputChannel)
     expected = "x" * (Constant.Tools.MAX_OUTPUT_CHARS + 1)
@@ -328,18 +329,23 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence(
 
 
 @pytest.mark.asyncio
-async def test_workflow_creates_process_output_channel_on_event_loop(
+async def test_workflow_binds_running_loop_for_process_output_channel(
     tmp_path: Path,
 ) -> None:
+    """workflow 把当前事件循环登记进运行期依赖，runner 才能在工具执行线程建输出通道。
+
+    通道本身由 ``ToolHandlerRunner`` 在工具执行线程按该登记创建（不沿执行链传参）；
+    本用例守住 workflow 这一侧的义务：登记的是当前运行中循环，且工具执行发生在循环线程之外。
+    """
+    loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
-    channel_factory = ToolRuntimeOutputChannelFactory()
     context = ToolExecutionContext(
         task_id=7,
         workspace_id=2,
         workspace_root=tmp_path,
         run_id=9,
         runtime_dependencies=ToolRuntimeDependencies(
-            process_tool_output_channel_factory=channel_factory,
+            process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(),
         ),
     )
     operations = WorkflowOperations.__new__(WorkflowOperations)
@@ -348,17 +354,20 @@ async def test_workflow_creates_process_output_channel_on_event_loop(
     operations._allowed_tool_names = frozenset({"execute_terminal"})
     operations._parallel_mode_by_name = {"execute_terminal": "serial"}
 
+    bound_loops: list[object] = []
+
     class Executor:
         def execute(
             self,
             call: Any,
             execution_context: Any = None,
             allowed_tool_names: Any = None,
-            process_output_channel: Any = None,
         ) -> ToolObservation:
-            assert isinstance(process_output_channel, BufferedProcessToolOutputChannel)
             assert threading.get_ident() != loop_thread
             assert allowed_tool_names == {"execute_terminal"}
+            bound_loops.append(
+                execution_context.runtime_dependencies.runtime_event_loop
+            )
             return ToolObservation(
                 tool_name=call.tool_name,
                 tool_call_id=call.call_id,
@@ -375,6 +384,42 @@ async def test_workflow_creates_process_output_channel_on_event_loop(
     )
 
     assert len(result.observations) == 1
+    assert bound_loops == [loop]
+
+
+@pytest.mark.asyncio
+async def test_process_output_channel_is_built_from_worker_thread(tmp_path: Path) -> None:
+    """工具执行线程里必须能按 ``runtime_event_loop`` 建出逐调用通道。
+
+    回归：工厂一度不再接收 ``loop``（改从 ``asyncio.get_running_loop()`` 取），而
+    ``ToolHandlerRunner._create_process_output_channel`` 在 ``asyncio.to_thread`` 的
+    工作线程里调用它——工作线程内没有运行中循环，于是每次 ``execute_terminal`` 都抛
+    ``TypeError``、只记一条 ERROR 日志，实时输出静默消失。
+    """
+
+    loop = asyncio.get_running_loop()
+    context = ToolExecutionContext(
+        task_id=7,
+        workspace_id=2,
+        workspace_root=tmp_path,
+        run_id=9,
+        runtime_dependencies=ToolRuntimeDependencies(
+            runtime_event_loop=loop,
+            process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(),
+        ),
+    )
+
+    def build_channel() -> Any:
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
+        return ToolHandlerRunner._create_process_output_channel(
+            cast(Any, SimpleNamespace(name="execute_terminal")),
+            context,
+            "call-1",
+        )
+
+    channel = await asyncio.to_thread(build_channel)
+    assert isinstance(channel, BufferedProcessToolOutputChannel)
 
 
 def test_output_queue_completion_waits_for_tail_without_dropping_chunks() -> None:
