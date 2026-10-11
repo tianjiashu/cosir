@@ -93,6 +93,15 @@ class AgentWorkflow(ABC):
 
         ...
 
+    async def finalize_run(self, run_id: int) -> None:
+        """在执行器完成 Run 状态收敛后执行工作流资源收尾。
+
+        该边界位于 ``run`` 返回之后，届时 canonical Run 状态已落定；有额外运行资源的具体工作流
+        可在此按终态清理，默认工作流没有额外收尾动作。
+        """
+
+        return None
+
 
 @asynccontextmanager
 async def build_checkpointer() -> AsyncIterator[AsyncSqliteSaver]:

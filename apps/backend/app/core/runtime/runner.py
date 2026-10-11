@@ -148,6 +148,11 @@ class AgentRuntime:
             )
         return agent_profile.derive_for_run(run, model_settings=runtime_model_settings)
 
+    async def finalize_run(self, agent: AgentProfile, run_id: int) -> None:
+        """在执行器完成兜底状态收敛后调用工作流资源收尾契约。"""
+
+        await agent.workflow.finalize_run(run_id)
+
     async def run_agent(
             self,
             agent: AgentProfile,

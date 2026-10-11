@@ -44,8 +44,8 @@ class ConversationRunExecutor:
     无驱动者的 active run；条件更新使其对 workflow 已落定的 run 是 no-op，终态唯一写入
     者仍是 workflow。
 
-    取消入口同属本类：``cancel`` 标记 run 级取消并立即强制关闭该 Run 的 terminal（整个
-    run 停止），``cancel_tool_call`` 标记工具级取消（只中止一次工具调用，run 继续）。
+    取消入口同属本类：``cancel`` 标记 run 级取消并驱动工作流收敛，终态收尾再按 checkpoint
+    清理 terminal；``cancel_tool_call`` 标记工具级取消（只中止一次工具调用，run 继续）。
     Run 业务终态仍由 workflow 落定；信号本身不跨进程、不跨重启。
     """
 
@@ -164,7 +164,7 @@ class ConversationRunExecutor:
         self._executions.clear()
 
     async def cancel(self, run_id: int, end_reason: str = "user_cancelled") -> bool:
-        """标记 run 级取消信号并立即关闭其 terminal（整个 run 停止）。
+        """标记 run 级取消信号并驱动其进入 cancelled 终态。
 
         只发进程内信号、不落库、不直接取消 asyncio task——runner 观测到信号后自行收束，
         终态仍由 workflow 落定。存在性预检：标记后才确认 run 存在，不存在则回滚信号再抛
@@ -189,7 +189,6 @@ class ConversationRunExecutor:
         except KeyError:
             self._signal.clear(run_id)
             raise
-        waiting = run.status == ConversationRunStatus.WAITING_FOR_INPUT
         # 主 Agent 被用户或其它业务入口显式取消时，不能留下仍在运行的 Team。等待用户
         # 确认是 Agent Team 自己使用的内部暂停语义，此时 Team 尚未创建，不能反向取消。
         try:
@@ -207,15 +206,7 @@ class ConversationRunExecutor:
                     "data": {"parent_run_id": run_id, "end_reason": end_reason},
                 },
             )
-        # 取消请求必须立即关闭本 Run 的 PTY；workflow 之后仍会协作收束，
-        # ``_execute`` 的 finally 还会再次幂等兜底。``reason`` 是关键字段（服务签名为
-        # keyword-only），必须按关键字传，否则取消路径会以 TypeError 中断。
-        await asyncio.to_thread(
-            self._terminal_session_service.close_run_terminals,
-            run_id,
-            reason=end_reason,
-        )
-        if waiting:
+        if run.status == ConversationRunStatus.WAITING_FOR_INPUT:
             await self._drive_waiting_run_into_cancellation(run_id)
         return True
 
@@ -293,13 +284,16 @@ class ConversationRunExecutor:
         """驱动一次 run 执行；执行器不拥有 run 终态（由 workflow 落定），只负责收尾兜底。
 
         读取 run → 解析本次 run 独占的 agent profile → 交给 ``run_agent`` 驱动 workflow；
-        退出时关闭 terminal 并注销进程内登记。用户输入等待节点直接迁移 Run 状态，本方法在
+        退出时先兜底收敛 Run 状态，再调用 workflow 的终态收尾并注销进程内登记。用户输入等待节点
+        直接迁移 Run 状态，本方法在
         资源清理完成前保留该等待态；取消信号不在此清理（由 ``AgentRuntime`` 收尾负责）。
 
         驱动期异常**不外抛**：``Exception`` 由 workflow 或 ``_converge_unfinished_run`` 兜底；
         ``CancelledError`` 仅置内部标志。等待态在收尾完成前不可由 coordinator 恢复。
         """
         runner_started = False
+        runtime = None
+        agent_profile = None
         try:
             # canonical 读取一律走线程池：事件循环线程上不做数据库 IO（与 start / cancel 同口径）。
             run = await asyncio.to_thread(self._run_service.get_run, run_id)
@@ -321,24 +315,19 @@ class ConversationRunExecutor:
                 },
             )
         finally:
-            # 收尾三步（关 terminal → 兜底收敛 → 注销执行登记）是「不遗留无驱动者 active run」
-            # 的保证，任一步失败都不得跳过后续步骤：关闭 terminal 失败只记日志。
-            # ``reason`` 是 keyword-only：位置传参会抛 TypeError，同样会打断后面的兜底收敛。
-            try:
-                await asyncio.to_thread(
-                    self._terminal_session_service.close_run_terminals,
-                    run_id,
-                    reason="run_execution_finished",
-                )
-            except Exception:
-                log.exception(
-                    "conversation_run_terminal_close_failed",
-                    extra={
-                        "msg": "Run 收尾关闭 terminal 失败，继续兜底收敛",
-                        "data": {"run_id": run_id},
-                    },
-                )
+            # 先收敛 canonical Run 状态，再让工作流按终态与 checkpoint 决定是否清理资源。
             await self._converge_unfinished_run(run_id)
+            if runtime is not None and agent_profile is not None:
+                try:
+                    await runtime.finalize_run(agent_profile, run_id)
+                except Exception:
+                    log.exception(
+                        "conversation_run_workflow_finalize_failed",
+                        extra={
+                            "msg": "工作流资源收尾失败，Run 状态已独立收敛",
+                            "data": {"run_id": run_id},
+                        },
+                    )
             current = self._executions.get(run_id)
             current_task = asyncio.current_task()
             if current is not None and current.thread_task is current_task:

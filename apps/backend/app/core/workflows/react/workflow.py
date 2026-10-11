@@ -7,8 +7,9 @@ graph 编译时挂既有 checkpointer，由 LangGraph 负责控制流状态持�
 
 协作取消与用户输入等待通过 LangGraph ``interrupt`` 保留图断点；其中 human-in-the-loop 根据工具观察
 从 ``tools`` 条件路由到 ``wait_user``，批准后回 ``tools`` 真执行，驳回 / 放弃后交给 ``observe``；
-用户的单个结构化决定由续跑入口经 ``run(..., user_decision=...)`` 传入并被 ``wait_user`` 消费；待决请求
-投影给前端与挂起图都发生在 ``wait_user``；terminal checkpoint 在 ``run`` 的 ``finally`` 中收敛。
+用户的单个结构化决定经续跑入口传入并被 ``wait_user`` 消费；待决请求
+投影给前端与挂起图都发生在 ``wait_user``；执行器落定 Run 状态后，本工作流才检查终态与 checkpoint
+并决定是否关闭 terminal，避免等待输入时释放资源或覆盖待恢复的 interrupt。
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
@@ -32,7 +33,8 @@ from app.core.tools.schemas import UserDecision, build_resume_payload
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.workflow_operations import WorkflowOperations
-from app.service.depends import get_terminal_session_service
+from app.models import ConversationRunStatus
+from app.service.depends import get_conversation_run_service, get_terminal_session_service
 
 from ..agent_workflow import AgentWorkflow, WorkflowRunFailure, build_checkpointer
 from .edges import _route_target
@@ -67,6 +69,34 @@ def _reject_resume_without_decisions(parked_at_interrupt: bool, run_id: int) -> 
     if not parked_at_interrupt:
         return False
     return not cancellation_registry.is_cancelled(run_id)
+
+
+def _closed_terminal_sessions(raw: object, *, reason: str) -> dict[str, dict[str, Any]] | None:
+    """生成仅包含必要变化的 terminal checkpoint 更新。
+
+    踩坑记录：LangGraph 的 ``aupdate_state`` 不是普通字段赋值；它会把更新模拟成某个节点写入，
+    创建新 checkpoint 并重新计算后续任务。若图已因 ``interrupt`` 挂起，单独调用它可能改变挂起任务
+    与恢复位置，使后续 ``Command(resume=...)`` 无法恢复原 interrupt。因此挂起时不能单独写 checkpoint，
+    应把本更新合并到后续的 ``Command(resume=..., update=...)``；无 interrupt 时才可单独收敛。
+
+    terminal 进程在 Run 终态收尾时已关闭；本函数只将 checkpoint 中仍标记为活跃的会话投影为 closed，
+    没有活跃会话则返回 None，让调用方完全跳过 checkpoint 写入。
+    """
+
+    if not isinstance(raw, dict):
+        return None
+    projected = {
+        session_id: dict(metadata)
+        for session_id, metadata in raw.items()
+        if isinstance(session_id, str) and isinstance(metadata, dict)
+    }
+    changed = False
+    for metadata in projected.values():
+        if metadata.get("status") in {"starting", "running"}:
+            metadata["status"] = "closed"
+            metadata["end_reason"] = reason
+            changed = True
+    return projected if changed else None
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -169,7 +199,8 @@ class ReactLikeWorkflow(AgentWorkflow):
         """驱动 ReAct graph 执行一次任务，直到完成、挂起或异常终止。
 
         以 LangGraph 状态流驱动已编译 graph：模型解析与工具绑定、运行期配置注入、上下文基线
-        补写、graph 启动与流式消费、terminal checkpoint 收敛都在本方法内完成。本工作流不生产或
+        补写、graph 启动与流式消费都在本方法内完成；终态 terminal checkpoint 收敛由执行器在
+        Run 状态落定后调用 ``finalize_run``。本工作流不生产或
         透传通用 runtime event——Run 状态迁移与工具执行经 ``WorkflowOperations`` 提交，canonical
         消息由本方法装配的 ``RuntimeContextManager`` 写入，模型流式增量由 graph custom stream 经
         ``operations.process_event`` 转发到 snapshot。协作取消与通用用户输入等待都通过 LangGraph
@@ -200,15 +231,16 @@ class ReactLikeWorkflow(AgentWorkflow):
             无。图正常收束或在等待节点处挂起后返回，interrupt 与 checkpoint 由 LangGraph 持久化。
 
         异常:
-            WorkflowRunFailure: 运行期模型解析失败，或续跑时 checkpoint 已走到 END 无法续跑。
+            WorkflowRunFailure: 运行期模型解析失败、checkpoint 已结束，或带用户决定续跑时找不到
+                对应的 ``wait_user`` interrupt。
             Exception: 上下文写入失败、graph 构建 / 执行失败时原样传播，由
                 ``AgentRuntime.run_agent`` 的异常边界落定 Run failed 终态。
             asyncio.CancelledError: 不被捕获，保留取消语义向上传播。
 
         副作用:
             解析并绑定模型；构造运行期配置与 task 级上下文管理器并补写本 Run 的 user 基线
-            消息；开启 checkpointer 编译 graph 并流式驱动；退出前在 ``finally`` 中关闭本 Run
-            的 terminal 并把 checkpoint 里的活跃会话投影收敛为 closed。
+            消息；开启 checkpointer 编译 graph 并流式驱动。终端进程收尾由执行器在 Run 状态收敛后
+            调用 ``finalize_run``，因此等待输入返回不会触发终态清理。
         """
 
         run = operations.get_current_run()
@@ -292,76 +324,139 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         async with (build_checkpointer() as checkpointer):
             graph = self._build_graph(checkpointer)
-            try:
-                # 初始 state 只填控制流字段：模型消息与 runtime context 都不进 state（前者归
-                # RuntimeContextManager，后者经 config 注入）。
-                input_state = ReactGraphState(
-                    step_count=0,
-                    tool_error_count=0,
-                    next_node=ReactRoute.MODEL,
-                    instruction="",
-                    max_steps=agent_profile.max_steps,
-                    final_text="",
-                    last_tool_results={},
-                    terminal_sessions={},
+            # 初始 state 只填控制流字段：模型消息与 runtime context 都不进 state（前者归
+            # RuntimeContextManager，后者经 config 注入）。
+            input_state = ReactGraphState(
+                step_count=0,
+                tool_error_count=0,
+                next_node=ReactRoute.MODEL,
+                instruction="",
+                max_steps=agent_profile.max_steps,
+                final_text="",
+                last_tool_results={},
+                terminal_sessions={},
+            )
+            if execution_mode == "resume" or execution_mode == "resume_with_input":
+                # 续跑准入：必须先判图状态。图已走到 END 时 ``astream`` 既不产出事件也不
+                # 返回（协程永久挂起），因此必须先拒绝续跑；失败码随异常交给运行时收敛。
+                snapshot = await graph.aget_state(config)
+                if not snapshot.next:
+                    raise WorkflowRunFailure(
+                        Constant.Run.RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED,
+                        "该 Run 的 checkpoint 已结束，无法续跑",
+                    )
+                # 决定只能恢复 wait_user 自己建立的 interrupt；其它节点的 interrupt 不得误收决定。
+                parked_at_interrupt = any(task.interrupts for task in snapshot.tasks)
+                parked_at_wait_user = any(
+                    task.name == "wait_user" and task.interrupts
+                    for task in snapshot.tasks
                 )
-                if execution_mode == "resume" or execution_mode == "resume_with_input":
-                    # 续跑准入：必须先判图状态。图已走到 END 时 ``astream`` 既不产出事件也不
-                    # 返回（协程永久挂起），因此必须先拒绝续跑；失败码随异常交给运行时收敛。
-                    snapshot = await graph.aget_state(config)
-                    if not snapshot.next:
+                log.info(
+                    "workflow_resume_checkpoint_inspected",
+                    extra={
+                        "msg": "已检查续跑 checkpoint 的待执行节点与 interrupt",
+                        "data": {
+                            "run_id": run_id,
+                            "execution_mode": execution_mode,
+                            "next_nodes": list(snapshot.next),
+                            "interrupt_nodes": [
+                                task.name for task in snapshot.tasks if task.interrupts
+                            ],
+                            "user_decision_present": user_decision is not None,
+                        },
+                    },
+                )
+                if execution_mode == "resume_with_input":
+                    runtime_config.resuming_wait_user = parked_at_wait_user
+                    if user_decision is not None and not parked_at_wait_user:
+                        log.error(
+                            "workflow_resume_decision_interrupt_missing",
+                            extra={
+                                "msg": "收到用户决定，但 checkpoint 中没有 wait_user interrupt",
+                                "data": {
+                                    "run_id": run_id,
+                                    "next_nodes": list(snapshot.next),
+                                    "interrupt_nodes": [
+                                        task.name for task in snapshot.tasks if task.interrupts
+                                    ],
+                                },
+                            },
+                        )
                         raise WorkflowRunFailure(
-                            Constant.Run.RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED,
-                            "该 Run 的 checkpoint 已结束，无法续跑",
+                            Constant.Run.RUN_FAILURE_CODE_WAITING_FOR_INPUT,
+                            "用户决定无法应用：工作流已不在等待用户决定的节点",
                         )
-                    # 图是否停在 human-in-the-loop 的挂起点上（``wait_user`` 的 interrupt）。
-                    parked_at_interrupt = any(task.interrupts for task in snapshot.tasks)
-                    if execution_mode == "resume_with_input":
-                        runtime_config.resuming_wait_user = parked_at_interrupt
-                        input_state = (
-                            Command(resume=build_resume_payload(user_decision))
-                            if runtime_config.resuming_wait_user
-                            else None
+                    input_state = None
+                    if parked_at_wait_user:
+                        input_state = Command(resume=build_resume_payload(user_decision))
+                else:
+                    # 图停在待用户决定的断点上，却用不带决定的 ``resume`` 续跑：``goto model``
+                    # 会绕开该断点，把待决请求静默丢掉，并让模型读到「等待确认」的占位结果行。
+                    # 因此显式失败，由调用方改用带决定的续跑。
+                    #
+                    # 唯一例外是「用户取消等待中的 Run」：``ConversationRunExecutor.cancel``
+                    # 已先标记取消信号，再以本模式重新驱动，目的正是让被绕开的请求作废、由
+                    # ``model_node`` 检出信号落 cancelled。此时丢弃断点是预期行为。
+                    if _reject_resume_without_decisions(
+                        parked_at_interrupt, runtime_config.run.id
+                    ):
+                        raise WorkflowRunFailure(
+                            Constant.Run.RUN_FAILURE_CODE_WAITING_FOR_INPUT,
+                            "该 Run 正在等待用户决定，请提交决定后续跑",
                         )
-                    else:
-                        # 图停在待用户决定的断点上，却用不带决定的 ``resume`` 续跑：``goto model``
-                        # 会绕开该断点，把待决请求静默丢掉，并让模型读到「等待确认」的占位结果行。
-                        # 因此显式失败，由调用方改用带决定的续跑。
-                        #
-                        # 唯一例外是「用户取消等待中的 Run」：``ConversationRunExecutor.cancel``
-                        # 已先标记取消信号，再以本模式重新驱动，目的正是让被绕开的请求作废、由
-                        # ``model_node`` 检出信号落 cancelled。此时丢弃断点是预期行为。
-                        if _reject_resume_without_decisions(
-                            parked_at_interrupt, runtime_config.run.id
-                        ):
-                            raise WorkflowRunFailure(
-                                Constant.Run.RUN_FAILURE_CODE_WAITING_FOR_INPUT,
-                                "该 Run 正在等待用户决定，请提交决定后续跑",
-                            )
-                        # 无用户决定的续跑一律回退到 model 节点重跑：模型侧断点（协作取消、
-                        # 输出待续写）没有可恢复的输入，只能让模型看到当前上下文后重新决策；
-                        # 图仍从既有 checkpoint 上继续，不新建线程。
-                        input_state = Command(goto=ReactRoute.MODEL.value)
+                    # 无用户决定的续跑一律回退到 model 节点重跑：模型侧断点（协作取消、
+                    # 输出待续写）没有可恢复的输入，只能让模型看到当前上下文后重新决策；
+                    # 图仍从既有 checkpoint 上继续，不新建线程。
+                    terminal_sessions_update = _closed_terminal_sessions(
+                        snapshot.values.get("terminal_sessions"),
+                        reason="run_execution_finished",
+                    )
+                    input_state = (
+                        Command(
+                            goto=ReactRoute.MODEL.value,
+                            update=terminal_sessions_update,
+                        )
+                        if terminal_sessions_update is not None
+                        else Command(goto=ReactRoute.MODEL.value)
+                    )
 
-                async for mode, value in graph.astream(
-                    input_state,
-                    config,
-                    stream_mode=["values", "custom"],
-                ):
-                    # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
-                    # 统一写入 snapshot。两者都不是 Agent context 的来源。
-                    if mode != "custom":
-                        continue
-                    operations.process_event(value)
-            finally:
-                await self._finalize_terminal_checkpoint(
-                    graph,
-                    config,
-                    run_id,
-                    reason="run_execution_finished",
-                )
+            async for mode, value in graph.astream(
+                input_state,
+                config,
+                stream_mode=["values", "custom"],
+            ):
+                # values 只推进图；custom 携带模型 chunk 的中性增量，由本工作流
+                # 统一写入 snapshot。两者都不是 Agent context 的来源。
+                if mode != "custom":
+                    continue
+                operations.process_event(value)
 
-    async def _finalize_terminal_checkpoint(
+    @staticmethod
+    async def _close_run_terminals(run_id: int, *, reason: str) -> bool:
+        """关闭 Run 持有的 terminal 进程，但不改写 LangGraph checkpoint。
+
+        调用方已先确认 Run 终态与 checkpoint 活跃 session；这里仅关闭本机资源，不改写 checkpoint。
+        终态 checkpoint 若仍有 interrupt，调用方会延后元数据更新，避免改变 interrupt 的恢复位置。
+        """
+
+        try:
+            await asyncio.to_thread(
+                get_terminal_session_service().close_run_terminals,
+                run_id,
+                reason=reason,
+            )
+            return True
+        except Exception:
+            log.exception(
+                "workflow_terminal_close_failed",
+                extra={
+                    "msg": "工作流收尾关闭 terminal 失败",
+                    "data": {"run_id": run_id, "reason": reason},
+                },
+            )
+            return False
+
+    async def _recover_terminal_checkpoint(
         self,
         graph: Any,
         config: dict[str, Any],
@@ -369,12 +464,11 @@ class ReactLikeWorkflow(AgentWorkflow):
         *,
         reason: str,
     ) -> bool:
-        """关闭 Run 的 terminal，并把 checkpoint 中的活跃终端元数据收敛为终态。
+        """在进程启动恢复边界关闭 Run 的 terminal，并收敛 checkpoint 元数据。
 
-        terminal worker 的真实生命周期由进程内 registry 管理；本方法在 graph 执行的 ``finally``
-        中通过仍打开的 checkpointer，把 checkpoint 里 ``running`` / ``starting`` 的终端投影标记为
-        ``closed``，避免后续 resume 看到已经不存在的 PTY。失败只记日志并返回 False，不覆盖 Run
-        已落定的业务终态；executor 仍会在更外层再次强制关闭 worker。
+        该方法只用于后端启动恢复：重启后旧 Run 已收敛为 cancelled，不会恢复旧 Agent 执行，因此可以
+        安全更新旧 checkpoint。正常执行收尾只关闭 terminal 进程，不调用本方法，以免覆盖
+        ``interrupt`` 保存的待恢复任务。失败只记日志并返回 False，不覆盖 Run 已落定的业务终态。
 
         参数:
             graph: 已编译、与本 ``config`` 匹配的 graph（复用同一 checkpointer）。
@@ -388,25 +482,23 @@ class ReactLikeWorkflow(AgentWorkflow):
         """
 
         try:
-            await asyncio.to_thread(
-                get_terminal_session_service().close_run_terminals,
-                run_id,
-                reason=reason,
-            )
             snapshot = await graph.aget_state(config)
             terminal_sessions = snapshot.values.get("terminal_sessions")
-            if not isinstance(terminal_sessions, dict):
+            update = _closed_terminal_sessions(terminal_sessions, reason=reason)
+            if update is None:
                 return True
-            projected = {
-                session_id: dict(metadata)
-                for session_id, metadata in terminal_sessions.items()
-                if isinstance(session_id, str) and isinstance(metadata, dict)
-            }
-            for metadata in projected.values():
-                if metadata.get("status") in {"starting", "running"}:
-                    metadata["status"] = "closed"
-                    metadata["end_reason"] = reason
-            await graph.aupdate_state(config, {"terminal_sessions": projected})
+            if not await self._close_run_terminals(run_id, reason=reason):
+                return False
+            if any(task.interrupts for task in snapshot.tasks):
+                log.info(
+                    "terminal_checkpoint_update_deferred_for_interrupt",
+                    extra={
+                        "msg": "终端已关闭，但保留 checkpoint interrupt，元数据待续跑时收敛",
+                        "data": {"run_id": run_id, "reason": reason},
+                    },
+                )
+                return True
+            await graph.aupdate_state(config, {"terminal_sessions": update})
             return True
         except Exception:
             log.exception(
@@ -417,6 +509,51 @@ class ReactLikeWorkflow(AgentWorkflow):
                 },
             )
             return False
+
+    async def finalize_run(self, run_id: int) -> None:
+        """仅在 Run 已进入终态且 checkpoint 有活跃 terminal 时关闭资源并投影关闭状态。
+
+        ``run`` 返回既可能是终态，也可能是 ``waiting_for_input``。执行器在兜底收敛后调用本方法，
+        所以这里以 ConversationRun 状态为准；checkpoint 是活跃 session 的判据。没有活跃元数据时
+        不调用关闭服务，也不写 checkpoint。若终态 checkpoint 仍有 interrupt，只关闭实际资源并
+        保留断点，元数据留到下次显式 resume 或进程启动恢复时合并。
+        """
+
+        run = await asyncio.to_thread(get_conversation_run_service().get_run, run_id)
+        terminal_statuses = {
+            ConversationRunStatus.COMPLETED,
+            ConversationRunStatus.FAILED,
+            ConversationRunStatus.CANCELLED,
+        }
+        status = ConversationRunStatus(run.status)
+        if status not in terminal_statuses:
+            return
+        reason = run.end_reason or status.value
+        config = {"configurable": {"thread_id": run.checkpoint_thread_id}}
+        async with build_checkpointer() as checkpointer:
+            graph = self._build_graph(checkpointer)
+            snapshot = await graph.aget_state(config)
+            terminal_sessions_update = _closed_terminal_sessions(
+                snapshot.values.get("terminal_sessions"),
+                reason=reason,
+            )
+            if terminal_sessions_update is None:
+                return
+            if not await self._close_run_terminals(run_id, reason=reason):
+                return
+            if any(task.interrupts for task in snapshot.tasks):
+                log.info(
+                    "terminal_checkpoint_update_deferred_for_interrupt",
+                    extra={
+                        "msg": "终态 Run 的 terminal 已关闭，保留 checkpoint interrupt",
+                        "data": {"run_id": run_id, "status": status.value},
+                    },
+                )
+                return
+            await graph.aupdate_state(
+                config,
+                {"terminal_sessions": terminal_sessions_update},
+            )
 
     async def recover_orphaned_terminal_checkpoints(
         self,
@@ -458,6 +595,13 @@ class ReactLikeWorkflow(AgentWorkflow):
                 if not isinstance(run_id, int) or not isinstance(thread_id, str) or not thread_id:
                     continue
                 try:
+                    status = ConversationRunStatus(run.status)
+                    if status not in {
+                        ConversationRunStatus.COMPLETED,
+                        ConversationRunStatus.FAILED,
+                        ConversationRunStatus.CANCELLED,
+                    }:
+                        continue
                     snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
                     terminal_sessions = snapshot.values.get("terminal_sessions")
                     active_count = sum(
@@ -472,7 +616,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                     )
                     if active_count == 0:
                         continue
-                    finalized = await self._finalize_terminal_checkpoint(
+                    finalized = await self._recover_terminal_checkpoint(
                         graph,
                         {"configurable": {"thread_id": thread_id}},
                         run_id,
