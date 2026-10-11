@@ -99,7 +99,7 @@ def build_agent_team_configuration_display_data(
                 "node_type": (
                     "start" if node.node_id == configuration.start_node_id else "middle"
                 ),
-                "statuses": node.statuses,
+                "statuses": [status.model_dump(mode="json") for status in node.statuses],
             }
             for node in configuration.nodes
         ],

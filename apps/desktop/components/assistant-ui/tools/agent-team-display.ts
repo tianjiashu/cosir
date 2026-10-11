@@ -1,11 +1,11 @@
 import { asRecord } from "./types";
-import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
+import type { AgentTeamConfiguration, AgentTeamStatusConfiguration } from "@/lib/api/agent-teams";
 
 export type AgentTeamNodePreview = {
   nodeId: string;
   name: string;
   role: string;
-  statuses: string[];
+  statuses: AgentTeamStatusConfiguration[];
   maxSteps: number;
 };
 
@@ -78,6 +78,21 @@ function stringList(value: unknown): string[] | undefined {
     : undefined;
 }
 
+function statusList(value: unknown): AgentTeamStatusConfiguration[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const statuses = value.map((item) => {
+    const status = asRecord(item);
+    const name = text(status.name);
+    const color = text(status.color);
+    return name && color && /^#[0-9A-Fa-f]{6}$/.test(color)
+      ? { name, color: color.toUpperCase() }
+      : null;
+  });
+  return statuses.every((status) => status !== null)
+    ? statuses as AgentTeamStatusConfiguration[]
+    : undefined;
+}
+
 function recordList(value: unknown): Record<string, unknown>[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const records = value.filter((item): item is Record<string, unknown> => {
@@ -114,7 +129,7 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
     const nodeName = text(node.name);
     const role = text(node.role);
     if (!nodeId || !nodeName || !role) return null;
-    const statuses = stringList(node.statuses);
+    const statuses = statusList(node.statuses);
     const maxSteps = positiveInteger(node.max_steps);
     if (!statuses || maxSteps === undefined) return null;
     nodes.push({
@@ -199,7 +214,7 @@ export function readAgentTeamConfigurationDraftDisplay(
     const nodeId = text(node.node_id);
     const nodeName = text(node.name);
     const agentId = text(node.agent_id);
-    const statuses = stringList(node.statuses);
+    const statuses = statusList(node.statuses);
     return nodeId && nodeName && agentId && statuses
       ? { node_id: nodeId, name: nodeName, agent_id: agentId, statuses }
       : null;

@@ -181,16 +181,16 @@ def build_node_structured_output(
     }
     route_descriptions = []
     for status in node.statuses:
-        target_node_id = routes.get(status)
+        target_node_id = routes.get(status.name)
         if target_node_id is None:
             raise TeamToolError(
-                f"Team 节点状态缺少转移目标: {node.node_id}/{status}"
+                f"Team 节点状态缺少转移目标: {node.node_id}/{status.name}"
             )
         if target_node_id == END_TARGET_NODE_ID:
             destination = "End the Team"
         else:
             destination = f"{node_names[target_node_id]} ({target_node_id})"
-        route_descriptions.append(f"{status} -> {destination}")
+        route_descriptions.append(f"{status.name} -> {destination}")
 
     schema = {
         "type": "object",
@@ -201,7 +201,7 @@ def build_node_structured_output(
         "properties": {
             "status": {
                 "type": "string",
-                "enum": node.statuses,
+                "enum": [status.name for status in node.statuses],
                 "description": (
                         "Choose one allowed business outcome. It determines the next node or ends the Team; "
                         "it is not a Run lifecycle status. Allowed routes: "
@@ -415,7 +415,7 @@ class AgentTeamPreparationService:
                     # 确认后冻结执行的那一份，否则用户看到的与真正执行的不一致。
                     "tools": list(allowed_tools),
                     "max_steps": profile.max_steps,
-                    "statuses": node.statuses,
+                    "statuses": [status.model_dump(mode="json") for status in node.statuses],
                 }
             )
 

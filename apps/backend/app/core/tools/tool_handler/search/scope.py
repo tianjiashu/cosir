@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import fnmatch
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from app.core.tools.tool_handler.search.errors import SearchPathNotFound, SearchPathUnreadable
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.tools.tool_handler.search.errors import SearchPathNotFound, SearchPathUnreadable, SearchCancelled, \
+    SearchTimedOut
 from app.core.tools.tool_handler.search.file_walker import iter_files
 from app.core.tools.tool_handler.search.ignore_rules import load_search_ignore_rules
 
@@ -26,19 +29,30 @@ class SearchScope:
     workspace_root: Path
     path: Path
     kind: ScopeKind
+    run_id: int | None = None
+    deadline: float | None = None
 
     @classmethod
-    def from_path(cls, workspace_root: Path, path: Path) -> SearchScope:
+    def from_path(cls, workspace_root: Path, path: Path, run_id: int, deadline: float) -> SearchScope:
         """从已解析路径创建 scope，并拒绝不存在或不可搜索的目录项。"""
 
         try:
             if path.is_file():
-                return cls(workspace_root, path, "file")
+                return cls(workspace_root, path, "file", run_id, deadline)
             if path.is_dir():
-                return cls(workspace_root, path, "directory")
+                return cls(workspace_root, path, "directory", run_id, deadline)
         except OSError as exc:
             raise SearchPathUnreadable(str(path)) from exc
         raise SearchPathNotFound(str(path))
+
+    def check_cancel_and_timeout(self) -> None:
+        """检查 scope 是否已被取消或超时。"""
+
+        if cancellation_registry.is_cancelled(self.run_id):
+            raise SearchCancelled("search cancelled")
+        if time.monotonic() >= self.deadline:
+            raise SearchTimedOut("search timeout cancelled")
+        return
 
     def iter_files(self, file_glob: str | None = None) -> Iterator[Path]:
         """产生 scope 内候选文件，不做内容读取。

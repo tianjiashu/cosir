@@ -19,3 +19,6 @@ class InvalidSearchPattern(SearchError):
 
 class SearchTimedOut(SearchError):
     """搜索超过 handler 的线程内协作式时间预算。"""
+
+class SearchCancelled(SearchError):
+    """搜索被取消。"""

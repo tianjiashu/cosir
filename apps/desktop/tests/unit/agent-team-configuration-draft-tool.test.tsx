@@ -27,7 +27,7 @@ describe("AgentTeamConfigurationTool", () => {
               name: "Review Team",
               description: "Review changes",
               scope: "workspace",
-              nodes: [{ node_id: "review", name: "Review", agent_id: "reviewer", node_type: "start", statuses: ["done"] }],
+              nodes: [{ node_id: "review", name: "Review", agent_id: "reviewer", node_type: "start", statuses: [{ name: "done", color: "#16A34A" }] }],
               edges: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
               configuration: {
                 team_id: "review-team",
@@ -35,7 +35,7 @@ describe("AgentTeamConfigurationTool", () => {
                 description: "Review changes",
                 max_runs: 8,
                 start_node_id: "review",
-                nodes: [{ node_id: "review", name: "Review", agent_id: "reviewer", statuses: ["done"] }],
+                nodes: [{ node_id: "review", name: "Review", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] }],
                 transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
                 scope: "workspace",
               },

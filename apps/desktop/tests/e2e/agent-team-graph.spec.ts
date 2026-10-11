@@ -218,8 +218,8 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
     team_id: "review_flow",
     start_node_id: "node_1",
     nodes: [
-    { node_id: "node_1", name: "代码审查", agent_id: "reviewer", statuses: ["done", "needs_review"] },
-      { node_id: "node_2", name: "reviewer", agent_id: "reviewer", statuses: ["done"] },
+    { node_id: "node_1", name: "代码审查", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }, { name: "needs_review", color: "#F59E0B" }] },
+      { node_id: "node_2", name: "reviewer", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] },
     ],
   });
   expect(persistedConfiguration.transitions).toEqual(expect.arrayContaining([

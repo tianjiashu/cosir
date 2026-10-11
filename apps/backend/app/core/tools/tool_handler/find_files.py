@@ -12,13 +12,14 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import blocked_device_reason, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_SEARCH
 from app.core.tools.tool_handler.search.errors import (
     SearchPathNotFound,
     SearchPathUnreadable,
-    SearchTimedOut,
+    SearchTimedOut, SearchCancelled,
 )
 from app.core.tools.tool_handler.search.filename_engine import find_files
 from app.core.tools.tool_handler.search.scope import SearchScope
@@ -70,7 +71,9 @@ class FindFilesTool(HandlerBase):
                 retryable=True,
             )
         try:
-            scope = SearchScope.from_path(execution_context.workspace_root, resolved_path)
+            scope = SearchScope.from_path(
+                execution_context.workspace_root, resolved_path, execution_context.run_id, time.monotonic() + self.timeout_seconds
+            )
             device_error = resolver.blocked_recursive_search_reason(path, resolved_path)
             if device_error:
                 return tool_error(
@@ -83,7 +86,11 @@ class FindFilesTool(HandlerBase):
                 pattern,
                 limit=limit,
                 offset=offset,
-                deadline=time.monotonic() + self.timeout_seconds,
+            )
+        except SearchCancelled:
+            return tool_cancelled(
+                self.name,
+                reason="user cancelled the search",
             )
         except SearchTimedOut:
             return tool_error(

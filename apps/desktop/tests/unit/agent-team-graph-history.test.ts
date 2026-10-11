@@ -16,14 +16,14 @@ const configuration: AgentTeamConfiguration = {
   max_runs: 3,
   start_node_id: "reviewer",
   scope: "workspace",
-  nodes: [{ node_id: "reviewer", name: "Review", agent_id: "reviewer", statuses: ["done"] }],
+  nodes: [{ node_id: "reviewer", name: "Review", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] }],
   transitions: [{ from_node_id: "reviewer", status: "done", target_node_id: "END" }],
 };
 
 function snapshot(name: string): AgentTeamGraphSnapshot {
   return {
     configuration: { ...configuration, name },
-    layout: { positions: { reviewer: { x: name.length, y: 0 } }, endNodeIds: ["@@canvas-end-1"], endTargets: {} },
+    layout: { positions: { reviewer: { x: name.length, y: 0 } }, endNodeIds: ["@@canvas-end-1"], endTargets: {}, edgeRoutes: {} },
   };
 }
 

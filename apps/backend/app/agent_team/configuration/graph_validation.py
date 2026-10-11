@@ -20,7 +20,13 @@ class TeamGraphNode(Protocol):
     """图校验所需的节点最小属性协议。"""
 
     node_id: str
-    statuses: Sequence[str]
+    statuses: Sequence[TeamGraphStatus]
+
+
+class TeamGraphStatus(Protocol):
+    """图校验所需的状态名称属性。"""
+
+    name: str
 
 
 class TeamGraphTransition(Protocol):
@@ -88,7 +94,8 @@ def validate_team_graph(
         source = node_map.get(transition.from_node_id)
         if source is None:
             raise TeamGraphValidationError("transition references an unknown source node")
-        if transition.status not in source.statuses:
+        status_names = {_status_name(status) for status in source.statuses}
+        if transition.status not in status_names:
             raise TeamGraphValidationError(
                 "status "
                 f"'{transition.status}' is not allowed by node '{transition.from_node_id}'"
@@ -110,7 +117,9 @@ def validate_team_graph(
 
     for node in nodes:
         missing_statuses = [
-            status for status in node.statuses if (node.node_id, status) not in edge_keys
+            status_name
+            for status in node.statuses
+            if (node.node_id, status_name := _status_name(status)) not in edge_keys
         ]
         if missing_statuses:
             raise TeamGraphValidationError(
@@ -139,6 +148,12 @@ def validate_team_graph(
         raise TeamGraphValidationError(
             "nodes cannot reach the terminal END target: " + ", ".join(dead_end_nodes)
         )
+
+
+def _status_name(status: TeamGraphStatus) -> str:
+    """读取参与路由的状态名称，颜色只属于展示配置。"""
+
+    return status.name
 
 
 def _walk_graph(start_node_id: str, adjacency: dict[str, set[str]]) -> set[str]:

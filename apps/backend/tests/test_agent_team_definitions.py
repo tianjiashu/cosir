@@ -50,13 +50,13 @@ def _configuration(**overrides: object) -> dict[str, object]:
                 "node_id": "develop",
                 "name": "开发",
                 "agent_id": "general-assistant",
-                "statuses": ["done", "blocked"],
+                "statuses": [{"name": "done", "color": "#16A34A"}, {"name": "blocked", "color": "#DC2626"}],
             },
             {
                 "node_id": "review",
                 "name": "审查",
                 "agent_id": "general-assistant",
-                "statuses": ["passed", "needs_changes"],
+                "statuses": [{"name": "passed", "color": "#16A34A"}, {"name": "needs_changes", "color": "#F59E0B"}],
             },
         ],
         "transitions": [
@@ -101,7 +101,7 @@ def test_proposal_uses_start_node_id_without_scope_or_extra_fields() -> None:
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    (("node_id", "review node"), ("statuses", ["PASS", "fail"])),
+    (("node_id", "review node"), ("statuses", [{"name": "PASS", "color": "#16A34A"}, {"name": "fail", "color": "#DC2626"}])),
 )
 def test_configuration_rejects_invalid_identifier_and_status_formats(
     field: str, value: object
@@ -260,7 +260,7 @@ def test_configuration_rejects_reserved_end_node_id() -> None:
             "node_id": "END",
             "name": "保留标识",
             "agent_id": "general-assistant",
-            "statuses": ["passed"],
+            "statuses": [{"name": "passed", "color": "#16A34A"}],
         }
     )
 
@@ -275,7 +275,7 @@ def test_configuration_rejects_unreachable_node() -> None:
             "node_id": "orphan",
             "name": "孤立节点",
             "agent_id": "general-assistant",
-            "statuses": ["loop"],
+            "statuses": [{"name": "loop", "color": "#16A34A"}],
         }
     )
     transitions = list(_configuration()["transitions"])
@@ -292,7 +292,7 @@ def test_configuration_rejects_branch_that_cannot_reach_end() -> None:
             "node_id": "dead-end",
             "name": "无法结束",
             "agent_id": "general-assistant",
-            "statuses": ["loop"],
+            "statuses": [{"name": "loop", "color": "#16A34A"}],
         }
     )
     transitions = list(_configuration()["transitions"])
@@ -380,14 +380,14 @@ def test_configuration_rejects_removed_join_fields() -> None:
                         "node_id": "develop",
                         "name": "开发",
                         "agent_id": "general-assistant",
-                        "statuses": ["done", "join"],
+                        "statuses": [{"name": "done", "color": "#16A34A"}, {"name": "join", "color": "#3B82F6"}],
                         "join_policy": "all",
                     },
                     {
                         "node_id": "review",
                         "name": "审查",
                         "agent_id": "general-assistant",
-                        "statuses": ["passed", "needs_changes"],
+                        "statuses": [{"name": "passed", "color": "#16A34A"}, {"name": "needs_changes", "color": "#F59E0B"}],
                     },
                 ]
             )

@@ -2,8 +2,9 @@
 
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Handle, NodeToolbar, Position, useInternalNode, useUpdateNodeInternals, useViewport, type Align, type NodeProps } from "@xyflow/react";
-import { CheckCircle2Icon, CircleIcon, FlagIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
+import { CheckCircle2Icon, CircleIcon, FlagIcon, Trash2Icon, XIcon } from "lucide-react";
 
+import { AgentTeamStatusEditor } from "@/components/agent-team-status-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { statusHandleId, type TeamGraphNode } from "@/components/agent-team-graph-model";
@@ -81,7 +82,6 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
   const orphanStatuses = data.kind === "agent" ? data.orphanStatuses : [];
   const nodeId = data.kind === "agent" ? data.node.node_id : "";
   const [nodeIdDraft, setNodeIdDraft] = useState(nodeId);
-  const [newStatus, setNewStatus] = useState("");
   const activeFieldTraceRef = useRef<{ field: string; traceId: string; changed: boolean } | null>(null);
 
   const onFieldFocus = (field: string) => {
@@ -122,11 +122,6 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
 
   const isSelected = editor.selectedNodeId === id;
   const updateNode = (changes: Partial<AgentTeamNodeConfiguration>) => editor.onUpdateNode(data.nodeIndex, changes);
-  const addStatus = () => {
-    const status = newStatus;
-    updateNode({ statuses: [...data.node.statuses, status] });
-    setNewStatus("");
-  };
   const commitNodeId = () => {
     if (nodeIdDraft === data.node.node_id) return;
     updateNode({ node_id: nodeIdDraft });
@@ -148,16 +143,16 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
         <div className="space-y-2 px-3 py-2.5">
           <div className="space-y-1.5">
             {statuses.map((status, statusIndex) => {
-              const duplicateIndex = statuses.slice(0, statusIndex).filter((item) => item === status).length;
+              const duplicateIndex = statuses.slice(0, statusIndex).filter((item) => item.name === status.name).length;
               return (
-                <div key={`${status}:${statusIndex}`} className="relative flex min-h-6 items-center justify-between gap-2 rounded-md bg-muted/40 px-2">
-                  <span className="truncate font-mono text-[11px]">{status}</span>
-                  <Handle type="source" position={Position.Right} id={statusHandleId(status, duplicateIndex)} className="!size-3 !border-2 !border-background !bg-emerald-600" aria-label={`${status} 状态出口，拖出以创建连线`} title={`${status}：拖出连线`} />
+                <div key={`${status.name}:${statusIndex}`} className="relative flex min-h-6 items-center justify-between gap-2 rounded-md bg-muted/40 px-2">
+                  <span className="truncate font-mono text-[11px]">{status.name}</span>
+                  <Handle type="source" position={Position.Right} id={statusHandleId(status.name, duplicateIndex)} style={{ backgroundColor: status.color }} className="!size-3 !border-2 !border-background" aria-label={`${status.name} 状态出口，拖出以创建连线`} title={`${status.name}：拖出连线`} />
                 </div>
               );
             })}
             {orphanStatuses.map((status, orphanIndex) => {
-              const duplicateIndex = statuses.filter((item) => item === status).length
+              const duplicateIndex = statuses.filter((item) => item.name === status).length
                 + orphanStatuses.slice(0, orphanIndex).filter((item) => item === status).length;
               return (
                 <div key={`orphan:${status}:${orphanIndex}`} className="relative flex min-h-6 items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2">
@@ -184,10 +179,12 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
             <label className="block space-y-1 text-xs"><span className="text-muted-foreground">节点 ID</span><Input className="nodrag" value={nodeIdDraft} onFocus={() => onFieldFocus("node_id")} onChange={(event) => { onFieldChange("node_id", event.target.value.length); setNodeIdDraft(event.target.value); }} onBlur={() => { onFieldBlur("node_id"); commitNodeId(); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
             <div className="space-y-2">
               <div className="flex items-center justify-between"><h4 className="text-xs font-medium">业务状态</h4></div>
-              {data.node.statuses.map((status, statusIndex) => <div key={`${status}:${statusIndex}`} className="flex items-center justify-between rounded-lg bg-muted/60 px-2.5 py-1.5"><code className="text-xs">{status}</code><Button type="button" variant="ghost" size="icon-xs" aria-label={`删除状态 ${status} ${statusIndex + 1}`} onClick={() => updateNode({ statuses: data.node.statuses.filter((_, index) => index !== statusIndex) })}><Trash2Icon /></Button></div>)}
-              <div>
-                <div className="flex gap-2"><Input className="nodrag" aria-label="新增业务状态" value={newStatus} onFocus={() => onFieldFocus("new_status")} onChange={(event) => { onFieldChange("new_status", event.target.value.length); setNewStatus(event.target.value); }} onBlur={() => onFieldBlur("new_status")} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addStatus(); } }} placeholder="例如 needs_changes" /><Button type="button" variant="outline" size="icon" aria-label="添加业务状态" onClick={addStatus}><PlusIcon /></Button></div>
-              </div>
+              <AgentTeamStatusEditor
+                statuses={data.node.statuses}
+                onAdd={(statuses) => updateNode({ statuses: [...data.node.statuses, ...statuses] })}
+                onRemove={(statusIndex) => updateNode({ statuses: data.node.statuses.filter((_, index) => index !== statusIndex) })}
+                onColorChange={(statusIndex, color) => updateNode({ statuses: data.node.statuses.map((status, index) => index === statusIndex ? { ...status, color } : status) })}
+              />
             </div>
             <div className="flex justify-between border-t pt-3"><Button type="button" variant="outline" size="sm" onClick={() => editor.onSetStartNode(data.node.node_id)} disabled={data.isStart}>{data.isStart ? "当前为开始节点" : "设为开始节点"}</Button><span className="text-muted-foreground self-center text-[10px]">唯一入口</span></div>
           </div>

@@ -325,7 +325,8 @@ class AgentTeamConfigurationRegistry:
                 "  nodes:",
             ]
             lines.extend(
-                f"    - node_id: {node.node_id} | name: {node.name} | agent_id: {node.agent_id} | statuses: {node.statuses}"
+                f"    - node_id: {node.node_id} | name: {node.name} | "
+                f"agent_id: {node.agent_id} | statuses: {[status.name for status in node.statuses]}"
                 for node in configuration.nodes
             )
             lines.append("  transitions:")

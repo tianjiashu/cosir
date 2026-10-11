@@ -8,7 +8,15 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 TeamNodeIdentifier = Annotated[
     StrictStr,
@@ -26,6 +34,24 @@ TeamStatusName = Annotated[
         pattern=r"^[a-z][a-z0-9_]*$",
     ),
 ]
+TeamStatusColor = Annotated[
+    StrictStr,
+    StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$"),
+]
+
+
+class TeamStatusDefinition(BaseModel):
+    """描述一个业务状态及其供画布和状态标签使用的颜色。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: TeamStatusName = Field(description="节点返回的业务状态名称。")
+    color: TeamStatusColor = Field(description="状态颜色，使用 #RRGGBB 十六进制格式。")
+
+    @field_validator("color", mode="before")
+    @classmethod
+    def normalize_color(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
 
 
 class TeamNodeDefinition(BaseModel):
@@ -36,8 +62,8 @@ class TeamNodeDefinition(BaseModel):
         name: 面向用户展示的节点名称。
         agent_id: 节点执行时使用的 child Agent profile 标识；profile 是否存在由运行时
             注册表和预览构建层校验。
-        statuses: 节点允许提交的业务状态名称集合；它们不是 ConversationRun 的技术
-            生命周期状态。
+        statuses: 节点允许提交的业务状态及其展示颜色；状态名称不是 ConversationRun
+            的技术生命周期状态。
 
     节点定义是不可变配置对象。它不会创建数据库记录或启动执行；字段非法时由
     Pydantic 抛出 ``ValidationError``。
@@ -56,10 +82,10 @@ class TeamNodeDefinition(BaseModel):
     agent_id: TeamNodeIdentifier = Field(
         description="节点使用的 child Agent profile 标识。",
     )
-    statuses: list[TeamStatusName] = Field(
+    statuses: list[TeamStatusDefinition] = Field(
         min_length=1,
         max_length=32,
-        description="节点允许提交的小写 snake_case 业务状态名称集合。",
+        description="节点允许提交的小写 snake_case 业务状态及其十六进制颜色。",
     )
 
     @model_validator(mode="after")
@@ -73,8 +99,6 @@ class TeamNodeDefinition(BaseModel):
             ValueError: 状态名称为空白或重复时抛出，由 Pydantic 包装为校验错误。
         """
 
-        if any(not status.strip() for status in self.statuses):
-            raise ValueError("node statuses must not be blank")
-        if len(set(self.statuses)) != len(self.statuses):
+        if len({status.name for status in self.statuses}) != len(self.statuses):
             raise ValueError("node statuses must not contain duplicates")
         return self

@@ -27,7 +27,7 @@ const PREVIEW: Record<string, unknown> = {
       role: "Developer",
       model_name: "deepseek-chat",
       tools: ["read_file"],
-      statuses: ["pending"],
+      statuses: [{ name: "pending", color: "#3B82F6" }],
       max_steps: 5,
     },
   ],

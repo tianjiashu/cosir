@@ -198,6 +198,7 @@ class AgentTeamRunService:
                 "node_id": node_id,
                 "name": node["name"],
                 "agent_id": node["agent_id"],
+                "statuses": node["statuses"],
                 "goal": state.node_runtime[node_id].node_goal,
                 "task_id": execution.task_id if execution else None,
                 "status": node_status,

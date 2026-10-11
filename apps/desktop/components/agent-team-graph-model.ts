@@ -1,9 +1,10 @@
-import type { Edge, Node, XYPosition } from "@xyflow/react";
+import { MarkerType, type Edge, type Node, type XYPosition } from "@xyflow/react";
 
 import type {
   AgentTeamConfigurationDraft,
   AgentTeamNodeConfiguration,
 } from "@/lib/api/agent-teams";
+import { findAgentTeamStatus } from "@/lib/agent-team-status";
 
 export type TeamGraphNodeData = {
   kind: "agent";
@@ -24,11 +25,21 @@ export type TeamGraphNodeData = {
 };
 
 export type TeamGraphNode = Node<TeamGraphNodeData>;
-export type TeamGraphEdge = Edge<{ status: string; transitionIndex: number }>;
+export type AgentTeamEdgeRoute = {
+  axis: "x" | "y";
+  offset: number;
+};
+export type TeamGraphEdge = Edge<{
+  status: string;
+  transitionIndex: number;
+  routeKey: string;
+  route: AgentTeamEdgeRoute | null;
+}>;
 export type AgentTeamGraphLayout = {
   positions: Record<string, XYPosition>;
   endNodeIds: string[];
   endTargets: Record<string, string>;
+  edgeRoutes: Record<string, AgentTeamEdgeRoute>;
 };
 
 export const END_NODE_ID = "END";
@@ -41,6 +52,21 @@ export function isEndViewId(nodeId: string | null | undefined): nodeId is string
 
 export function transitionKey(fromNodeId: string, status: string): string {
   return `${fromNodeId}::${status}`;
+}
+
+export function edgeRouteKey(fromNodeId: string, status: string, targetNodeId: string): string {
+  return JSON.stringify([fromNodeId, status, targetNodeId]);
+}
+
+export function retainValidEdgeRoutes(
+  configuration: AgentTeamConfigurationDraft,
+  edgeRoutes: Record<string, AgentTeamEdgeRoute>,
+): Record<string, AgentTeamEdgeRoute> {
+  const validKeys = new Set(configuration.transitions.map((transition) => (
+    edgeRouteKey(transition.from_node_id, transition.status, transition.target_node_id)
+  )));
+  const retainedRoutes = Object.fromEntries(Object.entries(edgeRoutes).filter(([key]) => validKeys.has(key)));
+  return Object.keys(retainedRoutes).length === Object.keys(edgeRoutes).length ? edgeRoutes : retainedRoutes;
 }
 
 export function agentNodeViewId(nodeIndex: number): string {
@@ -70,6 +96,7 @@ export function createGraphEdges(
   configuration: AgentTeamConfigurationDraft,
   endTargets: Record<string, string>,
   endNodeIds: string[],
+  edgeRoutes: Record<string, AgentTeamEdgeRoute> = {},
 ): TeamGraphEdge[] {
   return configuration.transitions.flatMap((transition, transitionIndex) => {
     const sourceIndices = configuration.nodes
@@ -84,7 +111,7 @@ export function createGraphEdges(
     const duplicateIndex = configuration.transitions
       .slice(0, transitionIndex)
       .filter((item) => item.from_node_id === transition.from_node_id && item.status === transition.status).length;
-    const matchingStatusCount = source?.statuses.filter((item) => item === transition.status).length ?? 0;
+    const matchingStatusCount = source?.statuses.filter((item) => item.name === transition.status).length ?? 0;
     const statusDuplicateIndex = matchingStatusCount > 0
       ? Math.min(duplicateIndex, matchingStatusCount - 1)
       : source ? duplicateIndex : 0;
@@ -96,6 +123,13 @@ export function createGraphEdges(
       : targetExists
         ? agentNodeViewId(configuration.nodes.findIndex((node) => node.node_id === transition.target_node_id))
         : unresolvedEndpointViewId("target", transitionIndex);
+    const statusColor = findAgentTeamStatus(source?.statuses ?? [], transition.status)?.color
+      ?? "hsl(var(--muted-foreground) / 0.45)";
+    const routeKey = edgeRouteKey(
+      transition.from_node_id,
+      transition.status,
+      transition.target_node_id,
+    );
     return [{
       id: `transition-${transitionIndex}`,
       source: sourceViewId,
@@ -103,9 +137,16 @@ export function createGraphEdges(
       target: targetViewId,
       targetHandle: "input",
       label: transition.status,
-      data: { status: transition.status, transitionIndex },
+      data: {
+        status: transition.status,
+        transitionIndex,
+        routeKey,
+        route: edgeRoutes[routeKey] ?? null,
+      },
+      style: { stroke: statusColor },
+      markerEnd: { type: MarkerType.ArrowClosed, color: statusColor },
       animated: transition.target_node_id !== END_NODE_ID,
-      type: "smoothstep",
+      type: "teamRouted",
       interactionWidth: 24,
     }];
   });
@@ -128,7 +169,7 @@ export function createGraphNodes(
       node,
       isStart: node.node_id === configuration.start_node_id,
       orphanStatuses: configuration.transitions
-        .filter((transition) => transition.from_node_id === node.node_id && !node.statuses.includes(transition.status))
+        .filter((transition) => transition.from_node_id === node.node_id && !node.statuses.some((status) => status.name === transition.status))
         .filter(() => configuration.nodes.filter((item) => item.node_id === node.node_id).length === 1)
         .map((transition) => transition.status),
     },
@@ -309,7 +350,13 @@ export function removeGraphSelection(
 
   return {
     configuration: nextConfiguration,
-    layout: { ...layout, endNodeIds: remainingEndNodeIds, positions, endTargets },
+    layout: {
+      ...layout,
+      endNodeIds: remainingEndNodeIds,
+      positions,
+      endTargets,
+      edgeRoutes: retainValidEdgeRoutes(nextConfiguration, layout.edgeRoutes),
+    },
   };
 }
 

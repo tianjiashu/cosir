@@ -34,6 +34,25 @@ AgentTeamStatusName = Annotated[
 ]
 
 
+class AgentTeamStatusArgs(BaseModel):
+    """Agent Team 草稿中的业务状态及用户选择的十六进制颜色。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: AgentTeamStatusName = Field(
+        description="Lowercase snake_case business status."
+    )
+    color: Annotated[StrictStr, StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$")] = Field(
+        description="Hexadecimal color in #RRGGBB format.",
+        examples=["#16A34A"],
+    )
+
+    @model_validator(mode="after")
+    def normalize_color(self) -> AgentTeamStatusArgs:
+        self.color = self.color.upper()
+        return self
+
+
 class ProposeAgentTeamNodeArgs(BaseModel):
     """配置提案中的节点参数。"""
 
@@ -56,15 +75,20 @@ class ProposeAgentTeamNodeArgs(BaseModel):
         description="ID of the registered child Agent profile that executes this node. Same agent_id can be used in different nodes.",
         examples=["developer_agent"],
     )
-    statuses: list[AgentTeamStatusName] = Field(
+    statuses: list[AgentTeamStatusArgs] = Field(
         min_length=1,
         max_length=32,
         description=(
-            "Business statuses this node may report. Lowercase snake_case (e.g. pass, fail, "
-            "needs_changes); not runtime lifecycle states. Each status needs exactly one "
-            "outgoing transition."
+            "Business statuses this node may report, each with a #RRGGBB color selected for "
+            "clear visual distinction. Names use lowercase snake_case and are not runtime "
+            "lifecycle states. Each status needs one outgoing transition."
         ),
-        examples=[["pass", "fail"]],
+        examples=[
+            [
+                {"name": "pass", "color": "#16A34A"},
+                {"name": "fail", "color": "#DC2626"},
+            ]
+        ],
     )
 
 class ProposeAgentTeamTransitionArgs(BaseModel):
@@ -174,7 +198,10 @@ class ProposeAgentTeamConfigurationArgs(BaseModel):
                     "node_id": "develop",
                     "name": "Development",
                     "agent_id": "developer_agent",
-                    "statuses": ["done", "blocked"],
+                    "statuses": [
+                        {"name": "done", "color": "#16A34A"},
+                        {"name": "blocked", "color": "#DC2626"},
+                    ],
                 }
             ]
         ],

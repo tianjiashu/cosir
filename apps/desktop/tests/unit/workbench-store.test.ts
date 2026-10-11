@@ -100,7 +100,7 @@ describe("workbench store", () => {
       description: "审查代码",
       max_runs: 8,
       start_node_id: "review",
-      nodes: [{ node_id: "review", name: "审查", agent_id: "reviewer", statuses: ["done"] }],
+      nodes: [{ node_id: "review", name: "审查", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] }],
       transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
       scope: "workspace" as const,
     };

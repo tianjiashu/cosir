@@ -24,8 +24,8 @@ const configuration: AgentTeamConfiguration = {
   start_node_id: "reviewer",
   scope: "workspace",
   nodes: [
-    { node_id: "reviewer", name: "Review", agent_id: "reviewer_agent", statuses: ["done", "needs_changes"] },
-    { node_id: "fixer", name: "Fix", agent_id: "fixer_agent", statuses: ["done"] },
+    { node_id: "reviewer", name: "Review", agent_id: "reviewer_agent", statuses: [{ name: "done", color: "#16A34A" }, { name: "needs_changes", color: "#F59E0B" }] },
+    { node_id: "fixer", name: "Fix", agent_id: "fixer_agent", statuses: [{ name: "done", color: "#16A34A" }] },
   ],
   transitions: [
     { from_node_id: "reviewer", status: "done", target_node_id: "END" },
@@ -40,6 +40,7 @@ describe("Agent Team graph model", () => {
       positions: { reviewer: { x: 10, y: 20 }, fixer: { x: 30, y: 40 }, "@@canvas-end-1": { x: 50, y: 60 } },
       endNodeIds: ["@@canvas-end-1"],
       endTargets: { "reviewer::done": "@@canvas-end-1" },
+      edgeRoutes: {},
     };
     const result = removeGraphSelection(configuration, layout, {
       nodeIndices: new Set([0]),
@@ -59,6 +60,7 @@ describe("Agent Team graph model", () => {
       positions: { "@@canvas-end-1": { x: 10, y: 20 }, "@@canvas-end-2": { x: 30, y: 40 } },
       endNodeIds: ["@@canvas-end-1", "@@canvas-end-2"],
       endTargets: { "reviewer::done": "@@canvas-end-2" },
+      edgeRoutes: {},
     };
     const result = removeGraphSelection(configuration, layout, {
       nodeIndices: new Set(),
@@ -73,7 +75,7 @@ describe("Agent Team graph model", () => {
   });
 
   it("does not delete the last END", () => {
-    const layout = { positions: { "@@canvas-end-1": { x: 10, y: 20 } }, endNodeIds: ["@@canvas-end-1"], endTargets: {} };
+    const layout = { positions: { "@@canvas-end-1": { x: 10, y: 20 } }, endNodeIds: ["@@canvas-end-1"], endTargets: {}, edgeRoutes: {} };
     const result = removeGraphSelection(configuration, layout, {
       nodeIndices: new Set(),
       endNodeIds: ["@@canvas-end-1"],
@@ -89,6 +91,7 @@ describe("Agent Team graph model", () => {
       positions: {},
       endNodeIds: ["@@canvas-end-1"],
       endTargets: { "reviewer::done": "@@canvas-end-1" },
+      edgeRoutes: {},
     };
     const result = removeGraphSelection(configuration, layout, {
       nodeIndices: new Set(),
@@ -119,7 +122,7 @@ describe("Agent Team graph model", () => {
   it("assigns unique canvas identities to duplicate status drafts and transition drafts", () => {
     const draft: AgentTeamConfiguration = {
       ...configuration,
-      nodes: [{ ...configuration.nodes[0], statuses: ["done", "done"] }, configuration.nodes[1]],
+      nodes: [{ ...configuration.nodes[0], statuses: [{ name: "done", color: "#16A34A" }, { name: "done", color: "#16A34A" }] }, configuration.nodes[1]],
       transitions: [
         { from_node_id: "reviewer", status: "done", target_node_id: "END" },
         { from_node_id: "reviewer", status: "done", target_node_id: "fixer" },
@@ -131,13 +134,13 @@ describe("Agent Team graph model", () => {
 
     expect(edges.map((edge) => edge.id)).toEqual(["transition-0", "transition-1"]);
     expect(edges.map((edge) => edge.sourceHandle)).toEqual([statusHandleId("done"), statusHandleId("done", 1)]);
-    expect(reviewer?.data.kind === "agent" && reviewer.data.node.statuses).toEqual(["done", "done"]);
+    expect(reviewer?.data.kind === "agent" && reviewer.data.node.statuses.map((status) => status.name)).toEqual(["done", "done"]);
   });
 
   it("renders transitions whose status was removed so the draft remains visible", () => {
     const draft: AgentTeamConfiguration = {
       ...configuration,
-      nodes: [{ ...configuration.nodes[0], statuses: ["done"] }, configuration.nodes[1]],
+      nodes: [{ ...configuration.nodes[0], statuses: [{ name: "done", color: "#16A34A" }] }, configuration.nodes[1]],
       transitions: [{ from_node_id: "reviewer", status: "needs_changes", target_node_id: "fixer" }],
     };
     const edges = createGraphEdges(draft, {}, ["@@canvas-end-1"]);
@@ -246,7 +249,7 @@ describe("Agent Team graph model", () => {
   it("keeps node references in sync and retains transitions for removed statuses as a draft", () => {
     const renamed = updateNodeInConfiguration(configuration, 0, {
       node_id: "review_agent",
-      statuses: ["done"],
+      statuses: [{ name: "done", color: "#16A34A" }],
     });
 
     expect(renamed.start_node_id).toBe("review_agent");

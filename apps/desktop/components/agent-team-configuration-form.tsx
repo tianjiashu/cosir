@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { removeNodesFromConfiguration, updateNodeInConfiguration } from "@/components/agent-team-graph-model";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamConfigurationDraft, AgentTeamNodeConfiguration, AgentTeamTransitionConfiguration } from "@/lib/api/agent-teams";
+import { DEFAULT_AGENT_TEAM_STATUS_COLOR } from "@/lib/agent-team-status";
 
 function nextNodeId(nodes: AgentTeamNodeConfiguration[]): string {
   let suffix = nodes.length + 1;
@@ -69,7 +70,7 @@ export function AgentTeamConfigurationForm({
 
   const updateNode = (index: number, changes: Partial<AgentTeamNodeConfiguration>) => onChange(updateNodeInConfiguration(configuration, index, changes));
 
-  const addNodeStatuses = (index: number, additions: string[]) => {
+  const addNodeStatuses = (index: number, additions: AgentTeamNodeConfiguration["statuses"]) => {
     const node = configuration.nodes[index];
     updateNode(index, { statuses: [...node.statuses, ...additions] });
   };
@@ -80,13 +81,21 @@ export function AgentTeamConfigurationForm({
     updateNode(nodeIndex, { statuses: node.statuses.filter((_, index) => index !== statusIndex) });
   };
 
+  const updateNodeStatusColor = (nodeIndex: number, statusIndex: number, color: string) => {
+    const node = configuration.nodes[nodeIndex];
+    if (!node) return;
+    updateNode(nodeIndex, {
+      statuses: node.statuses.map((status, index) => index === statusIndex ? { ...status, color } : status),
+    });
+  };
+
   const addNode = () => {
     const nodeId = nextNodeId(configuration.nodes);
     const node: AgentTeamNodeConfiguration = {
       node_id: nodeId,
       name: `节点 ${configuration.nodes.length + 1}`,
       agent_id: profiles[0]?.agent_id ?? "",
-      statuses: ["done"],
+      statuses: [{ name: "done", color: DEFAULT_AGENT_TEAM_STATUS_COLOR }],
     };
     update({
       nodes: [...configuration.nodes, node],
@@ -144,6 +153,7 @@ export function AgentTeamConfigurationForm({
               statuses={node.statuses}
               onAdd={(statuses) => addNodeStatuses(index, statuses)}
               onRemove={(statusIndex) => removeNodeStatus(index, statusIndex)}
+              onColorChange={(statusIndex, color) => updateNodeStatusColor(index, statusIndex, color)}
             />
           </div>
         </article>)}
@@ -153,9 +163,9 @@ export function AgentTeamConfigurationForm({
         <div className="flex items-center justify-between"><h3 className="text-sm font-medium">状态转移</h3><Button type="button" variant="outline" size="sm" onClick={addTransition}><PlusIcon />添加转移</Button></div>
         {configuration.transitions.length === 0 && <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-sm">尚无状态转移。可以在画布中拖动状态出口创建连线，或在这里添加转移草稿。</p>}
         {configuration.transitions.map((edge, index) => <div key={`transition-draft-${index}`} data-team-entry-card className={`grid items-end gap-2 rounded-xl border p-3 sm:grid-cols-[1fr_1fr_1fr_auto] ${index === 0 && newlyAddedEntry?.kind === "transition" ? "agent-team-entry-highlight" : ""}`}>
-          <label className="space-y-1 text-xs"><span className="text-muted-foreground">来源节点</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={edge.from_node_id} onChange={(event) => updateTransition(index, { from_node_id: event.target.value })}><option value="">选择节点</option>{configuration.nodes.map((node, nodeIndex) => <option key={`source-${nodeIndex}`} value={node.node_id}>{node.name || node.node_id} · {node.node_id} · {nodeIndex + 1}</option>)}</select></label>
+          <label className="space-y-1 text-xs"><span className="text-muted-foreground">来源节点</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={edge.from_node_id} onChange={(event) => updateTransition(index, { from_node_id: event.target.value })}><option value="">选择节点</option>{configuration.nodes.map((node, nodeIndex) => <option key={`source-${nodeIndex}`} value={node.node_id}>{node.name}</option>)}</select></label>
           <label className="space-y-1 text-xs"><span className="text-muted-foreground">触发状态</span><Input value={edge.status} onChange={(event) => updateTransition(index, { status: event.target.value })} /></label>
-          <label className="space-y-1 text-xs"><span className="text-muted-foreground">目标节点</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={edge.target_node_id} onChange={(event) => updateTransition(index, { target_node_id: event.target.value })}><option value="">选择节点或 END</option><option value="END">END（结束 Team）</option>{configuration.nodes.map((node, nodeIndex) => <option key={`target-${nodeIndex}`} value={node.node_id}>{node.name || node.node_id} · {node.node_id} · {nodeIndex + 1}</option>)}</select></label>
+          <label className="space-y-1 text-xs"><span className="text-muted-foreground">目标节点</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={edge.target_node_id} onChange={(event) => updateTransition(index, { target_node_id: event.target.value })}><option value="">选择节点或 END</option><option value="END">END（结束 Team）</option>{configuration.nodes.map((node, nodeIndex) => <option key={`target-${nodeIndex}`} value={node.node_id}>{node.name}</option>)}</select></label>
           <Button type="button" variant="ghost" size="icon-sm" className="text-destructive" aria-label="删除转移" onClick={() => update({ transitions: configuration.transitions.filter((_, edgeIndex) => edgeIndex !== index) })}><Trash2Icon /></Button>
         </div>)}
       </section>

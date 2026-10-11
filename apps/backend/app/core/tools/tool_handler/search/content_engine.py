@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import re
-import time
 from pathlib import Path
-
 from app.core.tools.tool_handler.search.errors import (
     InvalidSearchPattern,
-    SearchTimedOut,
 )
 from app.core.tools.tool_handler.search.result import ContentSearchPage, SearchMatch
 from app.core.tools.tool_handler.search.scope import SearchScope
@@ -24,7 +21,6 @@ def search_content(
     context: int = 0,
     limit: int = 50,
     offset: int = 0,
-    deadline: float | None = None,
 ) -> ContentSearchPage:
     """在文件或目录 scope 中搜索正则，并返回结构化分页结果。
 
@@ -43,9 +39,9 @@ def search_content(
     skipped_files = 0
 
     for file_path in scope.iter_files(file_glob):
-        _check_deadline(deadline)
+        scope.check_cancel_and_timeout()
         try:
-            lines = _read_lines(file_path, deadline)
+            lines = _read_lines(file_path,scope)
         except (OSError, UnicodeDecodeError):
             skipped_files += 1
             continue
@@ -56,7 +52,7 @@ def search_content(
         scanned_files += 1
         hits: list[int] = []
         for index, line in enumerate(lines, start=1):
-            _check_deadline(deadline)
+            scope.check_cancel_and_timeout()
             if regex.search(line):
                 hits.append(index)
         if not hits:
@@ -88,7 +84,7 @@ def search_content(
 
 def _read_lines(
     file_path: Path,
-    deadline: float | None,
+    scope: SearchScope,
 ) -> list[str] | None:
     """按行读取 UTF-8 文本；二进制或超长单行返回 None。"""
 
@@ -99,7 +95,7 @@ def _read_lines(
         file.seek(0)
         lines: list[str] = []
         for raw_line in file:
-            _check_deadline(deadline)
+            scope.check_cancel_and_timeout()
             if len(raw_line) > MAX_SEARCH_LINE_BYTES:
                 return None
             line = raw_line.decode("utf-8", errors="strict")
@@ -109,12 +105,3 @@ def _read_lines(
                 line = line[:-1]
             lines.append(line)
         return lines
-
-
-def _check_deadline(
-    deadline: float | None,
-) -> None:
-    """在文件边界执行线程内超时检查。"""
-
-    if deadline is not None and time.monotonic() >= deadline:
-        raise SearchTimedOut()

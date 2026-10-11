@@ -46,14 +46,23 @@ class AgentTeamRunTool(HandlerBase):
     # 描述刻意只讲「运行一个已存在的 Team」：曾经的措辞「Prepare a configured Agent Team
     # execution plan」与「配置 Team 草稿」语义重叠，实测让模型在用户说「帮我配置个 team」时
     # 反复选中本工具（而它只运行已存在配置），因此显式声明它不能创建或修改 Team 配置。
+    # 节点间语义（串行、上下文隔离、单跳交接、status 只决定路由、共享文件系统）必须写进
+    # 描述：模型据此才知道 node_goals 要写成「不依赖队友上下文也能独立执行」的子目标，并把
+    # 下游所需信息显式写进本节点输出，否则会假定队友能看到自己的过程而漏写交接内容。
     description = (
         "Run an existing Agent Team configuration. Provide a non-empty overall goal and exactly "
         "one non-empty node_goals entry for every configured node_id; do not add or omit node IDs. "
-        "The configuration has one start node and one logical terminal target named END. Nodes "
-        "execute serially according to their status transitions; END finishes the Team. This tool "
-        "prepares the plan for user review and starts it only after approval. It cannot create or "
-        "edit Team configurations. If the Team does not exist, ask the user to create it first. "
-        "Invoke this tool serially, not in parallel with other tools."
+        "The configuration has one start node and one logical terminal target named END. Nodes run "
+        "serially and the whole Team shares one execution budget. Each node runs in its own task "
+        "with its own context: it cannot see other nodes' conversations or work in progress, it "
+        "receives only the handoff output of the node that ran immediately before it, and it does "
+        "not inherit earlier nodes' history. The node ends by reporting one of its allowed "
+        "statuses, which alone selects the next node, hands off to END, or fails the Team; the "
+        "node's output is free text used solely as the handoff payload for downstream nodes. All "
+        "nodes share the workspace file system, so changes they make are visible to each other. "
+        "This tool prepares the plan for user review and starts it only after approval. It cannot "
+        "create or edit Team configurations. If the Team does not exist, ask the user to create it "
+        "first. Invoke this tool serially, not in parallel with other tools."
     )
     args_model = AgentTeamArgs
     timeout_seconds: ClassVar[float] = 30.0
@@ -65,11 +74,11 @@ class AgentTeamRunTool(HandlerBase):
         self.team_register = get_agent_team_registry()
 
     def execute(
-        self,
-        team_id: str,
-        goal: str,
-        node_goals: dict[str, str],
-        execution_context: ToolExecutionContext | None = None,
+            self,
+            team_id: str,
+            goal: str,
+            node_goals: dict[str, str],
+            execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """准备待确认方案，或在用户批准后真正启动该 TeamRun。
 
@@ -120,12 +129,12 @@ class AgentTeamRunTool(HandlerBase):
         )
 
     def _prepare_pending_run(
-        self,
-        team_id: str,
-        goal: str,
-        node_goals: dict[str, str],
-        execution_context: ToolExecutionContext,
-        parent_agent_profile: AgentProfile,
+            self,
+            team_id: str,
+            goal: str,
+            node_goals: dict[str, str],
+            execution_context: ToolExecutionContext,
+            parent_agent_profile: AgentProfile,
     ) -> ToolObservation:
         """第一遍：准备并保存待确认 TeamRun（不启动执行）。
 
@@ -240,9 +249,9 @@ class AgentTeamRunTool(HandlerBase):
             )
 
     def _start_confirmed_run(
-        self,
-        decision: UserDecision,
-        parent_agent_profile: AgentProfile,
+            self,
+            decision: UserDecision,
+            parent_agent_profile: AgentProfile,
     ) -> ToolObservation:
         """第二遍：用户批准后启动 TeamRun 并返回启动结果。
 
@@ -301,8 +310,10 @@ class AgentTeamRunTool(HandlerBase):
             tool_name=self.name,
             content=json.dumps(
                 {
+                    "hint": "The team run has completed; please perform a final review against the goal." if row.status == AgentTeamRunStatus.COMPLETED.value else "Do not retry.",
                     "status": row.status,
                     "team_id": row.team_id,
+                    "reason": row.end_reason,
                 },
                 ensure_ascii=False,
             ),

@@ -6,6 +6,7 @@ import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decis
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { statusColorStyle } from "@/lib/agent-team-status";
 import { ToolStatus } from "./tool-status";
 import { AgentTeamExecutionCard } from "./agent-team-execution-card";
 import { asRecord, readToolArtifact } from "./types";
@@ -39,26 +40,16 @@ function validateReviewedInputs(
 /** 待确认态的卡片状态文案：它不是工具生命周期状态，只是「这张卡在等用户」的展示提示。 */
 const AWAITING_REVIEW_LABEL = "等待确认";
 
-const NODE_STATUS_TONES: Record<string, string> = {
-  planned: "border-sky-500/20 bg-sky-500/5 text-sky-700 dark:text-sky-300",
-  completed: "border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300",
-  passed: "border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300",
-  accepted: "border-emerald-500/20 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300",
-  blocked: "border-amber-500/20 bg-amber-500/5 text-amber-700 dark:text-amber-300",
-  needs_rework: "border-amber-500/20 bg-amber-500/5 text-amber-700 dark:text-amber-300",
-  changes_requested: "border-amber-500/20 bg-amber-500/5 text-amber-700 dark:text-amber-300",
-  failed: "border-destructive/20 bg-destructive/5 text-destructive",
-};
-
-function NodeStatusBadge({ status }: { status: string }) {
+function NodeStatusBadge({ status }: { status: AgentTeamPreviewDisplay["nodes"][number]["statuses"][number] }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium leading-none",
-        NODE_STATUS_TONES[status] ?? "border-border bg-background text-muted-foreground",
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium leading-none",
       )}
+      style={statusColorStyle(status.color)}
     >
-      {status}
+      <span className="size-1.5 rounded-full" style={{ backgroundColor: status.color }} aria-hidden="true" />
+      {status.name}
     </span>
   );
 }
@@ -258,7 +249,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
               <span className="shrink-0 text-[11px] font-medium text-muted-foreground">状态：</span>
               <div className="flex flex-wrap gap-1.5" aria-label={`${node.name} 的可返回状态`}>
                 {node.statuses.map((status) => (
-                  <NodeStatusBadge key={status} status={status} />
+                  <NodeStatusBadge key={status.name} status={status} />
                 ))}
               </div>
             </div>

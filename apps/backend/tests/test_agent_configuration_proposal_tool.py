@@ -90,7 +90,7 @@ def test_team_proposal_tool_returns_only_an_unsaved_configuration_draft(monkeypa
                 "node_id": "review",
                 "name": "Review",
                 "agent_id": "reviewer",
-                "statuses": ["done"],
+                "statuses": [{"name": "done", "color": "#16A34A"}],
             }
         ],
         "transitions": [{"from_node_id": "review", "status": "done", "target_node_id": "END"}],
@@ -128,7 +128,7 @@ def test_team_proposal_reports_unavailable_agent_reference(monkeypatch) -> None:
                 "node_id": "review",
                 "name": "Review",
                 "agent_id": "reviewer",
-                "statuses": ["done"],
+                "statuses": [{"name": "done", "color": "#16A34A"}],
             }
         ],
         transitions=[{"from_node_id": "review", "status": "done", "target_node_id": "END"}],

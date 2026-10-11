@@ -13,6 +13,7 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import blocked_device_reason, tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_SEARCH
@@ -21,7 +22,7 @@ from app.core.tools.tool_handler.search.errors import (
     InvalidSearchPattern,
     SearchPathNotFound,
     SearchPathUnreadable,
-    SearchTimedOut,
+    SearchTimedOut, SearchCancelled,
 )
 from app.core.tools.tool_handler.search.scope import SearchScope
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
@@ -75,7 +76,9 @@ class SearchContentTool(HandlerBase):
         if resolved_path is None:
             return _path_error(self.name, path_error or path)
         try:
-            scope = SearchScope.from_path(workspace_root, resolved_path)
+            scope = SearchScope.from_path(
+                workspace_root, resolved_path, execution_context.run_id, time.monotonic() + self.timeout_seconds
+            )
             device_error = resolver.blocked_recursive_search_reason(path, resolved_path)
             if device_error:
                 return tool_error(
@@ -90,7 +93,6 @@ class SearchContentTool(HandlerBase):
                 context=context,
                 limit=limit,
                 offset=offset,
-                deadline=time.monotonic() + self.timeout_seconds,
             )
         except SearchTimedOut:
             return tool_error(
@@ -99,6 +101,11 @@ class SearchContentTool(HandlerBase):
                 reason="narrow the path or file_glob and call search_content again.",
                 retryable=True,
                 status_hint="搜索超时",
+            )
+        except SearchCancelled:
+            return tool_cancelled(
+                self.name,
+                reason="user cancelled search",
             )
         except InvalidSearchPattern as exc:
             return tool_error(

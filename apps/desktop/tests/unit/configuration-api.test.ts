@@ -30,7 +30,7 @@ describe("configuration API", () => {
       description: "Review changes",
       max_runs: 8,
       start_node_id: "review",
-      nodes: [{ node_id: "review", name: "Review", agent_id: "reviewer", statuses: ["done"] }],
+      nodes: [{ node_id: "review", name: "Review", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] }],
       transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
       scope: "workspace" as const,
     };

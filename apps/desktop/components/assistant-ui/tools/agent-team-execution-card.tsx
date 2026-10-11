@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Node, Edge } from "@xyflow/react";
+import { MarkerType, type Node, type Edge } from "@xyflow/react";
 import { ReactFlow } from "@xyflow/react";
 import { BotIcon, UsersIcon } from "lucide-react";
 
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { readToolArtifact } from "./types";
 import { readAgentTeamRunDisplay } from "./agent-team-display";
 import { ToolStatus } from "./tool-status";
+import { findAgentTeamStatus } from "@/lib/agent-team-status";
 import type { ToolPartRendererProps } from "./tool-renderer-registry";
 import type { AgentTeamRunDisplay } from "./agent-team-display";
 
@@ -121,13 +122,22 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
       edgeCounts.set(key, occurrence + 1);
       const visited = run.transition_history.some((item) => item.from_node_id === transition.from_node_id
         && item.status === transition.status && item.target_node_id === transition.target_node_id);
+      const sourceNode = run.nodes.find((node) => node.node_id === transition.from_node_id);
+      const statusColor = (sourceNode
+        ? findAgentTeamStatus(sourceNode.statuses, transition.status)?.color
+        : undefined) ?? "hsl(var(--muted-foreground) / 0.45)";
       return {
         id: `transition-${index}`,
         source: transition.from_node_id,
         target: transition.target_node_id,
         label: transition.target_node_id === "END" ? `${transition.status} → END` : transition.status,
         animated: run.current_node_id === transition.from_node_id,
-        style: { stroke: visited ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.45)" },
+        style: {
+          stroke: statusColor,
+          strokeWidth: visited ? 2 : 1,
+          opacity: visited ? 1 : 0.55,
+        },
+        markerEnd: { type: MarkerType.ArrowClosed, color: statusColor },
         labelStyle: { fontSize: 10, fill: "hsl(var(--muted-foreground))" },
         type: "smoothstep",
       };

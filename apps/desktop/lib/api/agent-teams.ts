@@ -5,11 +5,16 @@ export type AgentTeamConfigurationInput = {
   configuration: AgentTeamConfigurationDraft;
 };
 
+export type AgentTeamStatusConfiguration = {
+  name: string;
+  color: string;
+};
+
 export type AgentTeamNodeConfiguration = {
   node_id: string;
   name: string;
   agent_id: string;
-  statuses: string[];
+  statuses: AgentTeamStatusConfiguration[];
 };
 
 export type AgentTeamTransitionConfiguration = {
@@ -46,6 +51,7 @@ export type AgentTeamRun = {
     node_id: string;
     name: string;
     agent_id: string;
+    statuses: AgentTeamStatusConfiguration[];
     goal: string;
     task_id: number | null;
     status: string;

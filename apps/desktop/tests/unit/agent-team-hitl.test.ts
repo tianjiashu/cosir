@@ -31,7 +31,7 @@ function previewDisplayData(overrides: Record<string, unknown> = {}): Record<str
         model_name: "deepseek-chat",
         tools: ["read_file"],
         max_steps: 5,
-        statuses: ["done"],
+        statuses: [{ name: "done", color: "#16A34A" }],
       },
     ],
     edges: [],

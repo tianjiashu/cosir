@@ -11,12 +11,20 @@ class AgentTeamChildAgentResponse(BaseModel):
     status: str
 
 
+class AgentTeamBusinessStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    color: str
+
+
 class AgentTeamNodeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_id: str
     name: str
     agent_id: str
+    statuses: list[AgentTeamBusinessStatusResponse]
     goal: str
     task_id: int | None
     status: str

@@ -26,6 +26,7 @@ import { BotIcon, CheckCircle2Icon, Maximize2Icon, Redo2Icon, SaveIcon, Settings
 import { AgentTeamConfigurationFields } from "@/components/agent-team-configuration-fields";
 import { AgentTeamGraphNode, AgentTeamGraphTerminalNode, AgentTeamGraphUnresolvedEndpoint, GraphNodeEditorContext } from "@/components/agent-team-graph-nodes";
 import { AgentTeamGraphPalette } from "@/components/agent-team-graph-palette";
+import { AgentTeamEdgeRouteContext, AgentTeamRoutedEdge } from "@/components/agent-team-routed-edge";
 import {
   commitGraphEdit,
   createGraphEditHistory,
@@ -43,6 +44,7 @@ import {
   END_NODE_ID,
   findAvailableNodePosition,
   isEndViewId,
+  retainValidEdgeRoutes,
   removeNodesFromConfiguration,
   removeGraphSelection,
   reconcileGraphNodes,
@@ -52,15 +54,18 @@ import {
   updateNodeInConfiguration,
   type TeamGraphNode,
   type AgentTeamGraphLayout,
+  type AgentTeamEdgeRoute,
 } from "@/components/agent-team-graph-model";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamConfigurationDraft, AgentTeamNodeConfiguration } from "@/lib/api/agent-teams";
+import { DEFAULT_AGENT_TEAM_STATUS_COLOR } from "@/lib/agent-team-status";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
 
 const nodeTypes = { team: AgentTeamGraphNode, terminal: AgentTeamGraphTerminalNode, unresolved: AgentTeamGraphUnresolvedEndpoint };
+const edgeTypes = { teamRouted: AgentTeamRoutedEdge };
 
 type PaletteDrag = {
   pointerId: number;
@@ -79,17 +84,17 @@ function isPosition(value: unknown): value is XYPosition {
 }
 
 function readLayout(storageKey: string): AgentTeamGraphLayout {
-  if (typeof window === "undefined") return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {} };
+  if (typeof window === "undefined") return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {}, edgeRoutes: {} };
   const serialized = window.localStorage.getItem(storageKey);
-  if (!serialized) return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {} };
+  if (!serialized) return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {}, edgeRoutes: {} };
   let parsed: unknown;
   try {
     parsed = JSON.parse(serialized);
   } catch {
-    return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {} };
+    return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {}, edgeRoutes: {} };
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {} };
+    return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {}, edgeRoutes: {} };
   }
 
   const stored = parsed as Record<string, unknown>;
@@ -103,8 +108,16 @@ function readLayout(storageKey: string): AgentTeamGraphLayout {
   const endTargets = typeof stored.endTargets === "object" && stored.endTargets !== null && !Array.isArray(stored.endTargets)
     ? Object.fromEntries(Object.entries(stored.endTargets).filter((entry): entry is [string, string] => typeof entry[1] === "string" && isEndViewId(entry[1]) && endNodeIds.includes(entry[1])))
     : {};
+  const edgeRoutes = typeof stored.edgeRoutes === "object" && stored.edgeRoutes !== null && !Array.isArray(stored.edgeRoutes)
+    ? Object.fromEntries(Object.entries(stored.edgeRoutes).flatMap(([key, value]) => {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+      const route = value as Record<string, unknown>;
+      if ((route.axis !== "x" && route.axis !== "y") || typeof route.offset !== "number" || !Number.isFinite(route.offset)) return [];
+      return [[key, { axis: route.axis, offset: Math.max(-10000, Math.min(10000, route.offset)) } satisfies AgentTeamEdgeRoute]];
+    }))
+    : {};
 
-  return { positions, endNodeIds: endNodeIds.length ? endNodeIds : [DEFAULT_END_VIEW_ID], endTargets };
+  return { positions, endNodeIds: endNodeIds.length ? endNodeIds : [DEFAULT_END_VIEW_ID], endTargets, edgeRoutes };
 }
 
 function renderedNodeSnapshot(container: HTMLDivElement | null) {
@@ -200,6 +213,7 @@ function GraphCanvas({
   const [history, setHistory] = useState(historyRef.current);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedTransition, setSelectedTransition] = useState<string | null>(null);
+  const [edgeRoutePreview, setEdgeRoutePreview] = useState<{ routeKey: string; route: AgentTeamEdgeRoute } | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dragGhost, setDragGhost] = useState<({ kind: "agent"; agentId: string } | { kind: "end" }) & { x: number; y: number } | null>(null);
@@ -213,10 +227,13 @@ function GraphCanvas({
   );
   const [nodes, setNodes] = useState(graphNodes);
   const graphNodesRef = useRef(graphNodes);
+  const visibleEdgeRoutes = useMemo(() => edgeRoutePreview
+    ? { ...layout.edgeRoutes, [edgeRoutePreview.routeKey]: edgeRoutePreview.route }
+    : layout.edgeRoutes, [edgeRoutePreview, layout.edgeRoutes]);
   const edges = useMemo(
-    () => createGraphEdges(configuration, layout.endTargets, layout.endNodeIds)
+    () => createGraphEdges(configuration, layout.endTargets, layout.endNodeIds, visibleEdgeRoutes)
       .map((edge) => edge.id === selectedTransition ? { ...edge, selected: true } : edge),
-    [configuration, layout.endTargets, layout.endNodeIds, selectedTransition],
+    [configuration, layout.endTargets, layout.endNodeIds, selectedTransition, visibleEdgeRoutes],
   );
 
   useEffect(() => {
@@ -230,11 +247,14 @@ function GraphCanvas({
           : previousConfiguration.nodes.length === configuration.nodes.length && configuration.nodes[selectedIndex] ? selectedIndex : -1;
         setSelectedNodeId(replacementIndex >= 0 ? agentNodeViewId(replacementIndex) : null);
       }
-      documentRef.current = { configuration, layout };
+      const retainedRoutes = retainValidEdgeRoutes(configuration, layout.edgeRoutes);
+      const nextLayout = retainedRoutes === layout.edgeRoutes ? layout : { ...layout, edgeRoutes: retainedRoutes };
+      documentRef.current = { configuration, layout: nextLayout };
+      if (nextLayout !== layout) replaceLayout(nextLayout);
       historyRef.current = createGraphEditHistory();
       setHistory(historyRef.current);
     }
-  }, [configuration, layout, selectedNodeId]);
+  }, [configuration, layout, replaceLayout, selectedNodeId]);
 
   useEffect(() => {
     if (graphNodesRef.current === graphNodes) return;
@@ -289,6 +309,50 @@ function GraphCanvas({
     applySnapshot(snapshot);
   };
 
+  const previewEdgeRoute = useCallback((routeKey: string, route: AgentTeamEdgeRoute) => {
+    setEdgeRoutePreview({ routeKey, route });
+  }, []);
+
+  const commitEdgeRoute = useCallback((routeKey: string, route: AgentTeamEdgeRoute, coalesceKey?: string) => {
+    setEdgeRoutePreview(null);
+    const current = documentRef.current;
+    const edgeRoutes = { ...current.layout.edgeRoutes, [routeKey]: route };
+    commitEdit({
+      configuration: current.configuration,
+      layout: { ...current.layout, edgeRoutes },
+    }, coalesceKey);
+    void frontendLog("INFO", "agent_team_graph_edge_route_changed", "已调整 Agent Team 连线路径", {
+      traceId: newTraceId(),
+      data: { teamId: current.configuration.team_id, routeKey, axis: route.axis, offset: route.offset },
+    });
+  }, [commitEdit]);
+
+  const cancelEdgeRoutePreview = useCallback(() => {
+    setEdgeRoutePreview(null);
+  }, []);
+
+  const resetEdgeRoute = useCallback((routeKey: string) => {
+    const current = documentRef.current;
+    if (!current.layout.edgeRoutes[routeKey]) return;
+    const edgeRoutes = { ...current.layout.edgeRoutes };
+    delete edgeRoutes[routeKey];
+    commitEdit({
+      configuration: current.configuration,
+      layout: { ...current.layout, edgeRoutes },
+    });
+    void frontendLog("INFO", "agent_team_graph_edge_route_reset", "已恢复 Agent Team 连线自动路径", {
+      traceId: newTraceId(),
+      data: { teamId: current.configuration.team_id, routeKey },
+    });
+  }, [commitEdit]);
+
+  const edgeRouteActions = useMemo(() => ({
+    preview: previewEdgeRoute,
+    commit: commitEdgeRoute,
+    cancel: cancelEdgeRoutePreview,
+    reset: resetEdgeRoute,
+  }), [cancelEdgeRoutePreview, commitEdgeRoute, previewEdgeRoute, resetEdgeRoute]);
+
   const undo = () => {
     const result = undoGraphEdit(historyRef.current, documentRef.current);
     if (!result) return;
@@ -331,7 +395,12 @@ function GraphCanvas({
     current.configuration.nodes.forEach((_, oldIndex) => {
       if (!retainedOldIndices.has(oldIndex)) delete positions[agentNodeViewId(oldIndex)];
     });
-    let nextLayout = { ...current.layout, positions, endTargets: requestedEndTargets ?? current.layout.endTargets };
+    let nextLayout = {
+      ...current.layout,
+      positions,
+      endTargets: requestedEndTargets ?? current.layout.endTargets,
+      edgeRoutes: retainValidEdgeRoutes(next, current.layout.edgeRoutes),
+    };
     // 结束口落点属于画布偏好；删除或改名业务转移时同步清理对应的视觉映射。
     const validEndTransitions = new Set(next.transitions.filter((item) => item.target_node_id === END_NODE_ID).map((item) => transitionKey(item.from_node_id, item.status)));
     nextLayout = {
@@ -374,7 +443,10 @@ function GraphCanvas({
     });
     const validEndTransitions = new Set(nextConfiguration.transitions.filter((item) => item.target_node_id === END_NODE_ID).map((item) => transitionKey(item.from_node_id, item.status)));
     const endTargets = Object.fromEntries(Object.entries(current.layout.endTargets).filter(([key, endId]) => validEndTransitions.has(key) && current.layout.endNodeIds.includes(endId)));
-    commitEdit({ configuration: nextConfiguration, layout: { ...current.layout, positions, endTargets } });
+    commitEdit({
+      configuration: nextConfiguration,
+      layout: { ...current.layout, positions, endTargets, edgeRoutes: retainValidEdgeRoutes(nextConfiguration, current.layout.edgeRoutes) },
+    });
     logHistoryAction("agent_team_graph_node_deleted", "已删除 Agent Team 画布节点", { nodeIndex, remainingNodeCount: nextConfiguration.nodes.length });
     clearSelection();
   };
@@ -420,7 +492,7 @@ function GraphCanvas({
       node_id: nodeId,
       name: profile.agent_id,
       agent_id: profile.agent_id,
-      statuses: ["done"],
+      statuses: [{ name: "done", color: DEFAULT_AGENT_TEAM_STATUS_COLOR }],
     };
     const preferredPosition = position ?? { x: 100 + current.configuration.nodes.length * 300, y: 100 };
     const nodePosition = findAvailableNodePosition(preferredPosition, nodes.map((item) => item.position));
@@ -487,7 +559,11 @@ function GraphCanvas({
     else delete endTargets[nextKey];
     commitEdit({
       configuration: { ...current.configuration, transitions },
-      layout: { ...current.layout, endTargets },
+      layout: {
+        ...current.layout,
+        endTargets,
+        edgeRoutes: retainValidEdgeRoutes({ ...current.configuration, transitions }, current.layout.edgeRoutes),
+      },
     });
     setSelectedNodeId(null);
     setSelectedTransition(`transition-${oldTransition ? oldIndex : transitions.length - 1}`);
@@ -827,7 +903,7 @@ function GraphCanvas({
           data-agent-drop-zone
           className="relative min-w-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40"
           tabIndex={0}
-          aria-label="Agent Team 画布。使用 Tab 浏览节点和连线，方向键移动选中节点。"
+          aria-label="Agent Team 画布。使用 Tab 浏览节点和连线，方向键移动选中节点或微调选中连线。"
           onKeyDown={handleCanvasKeyDown}
         >
           <GraphNodeEditorContext.Provider value={{
@@ -840,10 +916,12 @@ function GraphCanvas({
             onDeleteNode: deleteNode,
             onDeleteEndNode: deleteEndNode,
           }}>
-            <ReactFlow
+            <AgentTeamEdgeRouteContext.Provider value={edgeRouteActions}>
+              <ReactFlow
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               onNodesChange={onNodesChange}
               onConnect={onConnect}
               onConnectStart={(_, params) => {
@@ -911,7 +989,7 @@ function GraphCanvas({
               panActivationKeyCode="Space"
               ariaLabelConfig={{
                 "node.a11yDescription.default": "按 Enter 或空格选择节点，使用方向键移动节点。",
-                "edge.a11yDescription.default": "按 Enter 或空格选择转移；拖动连线端点可更换目标，按 Delete 可删除转移。",
+                "edge.a11yDescription.default": "按 Enter 或空格选择转移；拖动线上控制点调整路径，拖动连线端点可更换目标，按 Delete 可删除转移。",
               }}
               onNodeDragStart={onNodeDragStart}
               onNodeDragStop={onNodeDragStop}
@@ -928,9 +1006,10 @@ function GraphCanvas({
                 </div>
               </Panel>
               <Panel position="top-right" className="pointer-events-none !right-4 !top-4">
-                <div className="bg-card/90 text-muted-foreground rounded-full border px-3 py-1.5 text-[10px] shadow-sm backdrop-blur">拖 Agent / 连线 · F 适配 · +/- 缩放 · Space 平移 · Delete 删除 · Ctrl/⌘Z 撤销</div>
+                <div className="bg-card/90 text-muted-foreground rounded-full border px-3 py-1.5 text-[10px] shadow-sm backdrop-blur">拖 Agent · 选中连线后拖控制点改路径 · F 适配 · +/- 缩放 · Space 平移 · Delete 删除 · Ctrl/⌘Z 撤销</div>
               </Panel>
-            </ReactFlow>
+              </ReactFlow>
+            </AgentTeamEdgeRouteContext.Provider>
           </GraphNodeEditorContext.Provider>
           {!configuration.nodes.length && <div className="pointer-events-none absolute inset-0 flex items-center justify-center"><div className="bg-background/90 rounded-2xl border border-dashed px-7 py-6 text-center shadow-sm backdrop-blur"><BotIcon className="text-primary mx-auto size-7" /><h3 className="mt-3 text-sm font-semibold">从左侧添加第一个 Agent</h3><p className="text-muted-foreground mt-1 text-xs">拖拽 Agent 或 END 到画布，或点击 Agent 卡片上的 +</p></div></div>}
         </div>

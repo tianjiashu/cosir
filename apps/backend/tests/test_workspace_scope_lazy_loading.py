@@ -83,13 +83,13 @@ def _team_document(team_id: str, scope: str) -> dict[str, object]:
                 "node_id": "develop",
                 "name": "开发",
                 "agent_id": "general-assistant",
-                "statuses": ["done", "blocked"],
+                "statuses": [{"name": "done", "color": "#16A34A"}, {"name": "blocked", "color": "#DC2626"}],
             },
             {
                 "node_id": "review",
                 "name": "审查",
                 "agent_id": "general-assistant",
-                "statuses": ["passed", "needs_changes"],
+                "statuses": [{"name": "passed", "color": "#16A34A"}, {"name": "needs_changes", "color": "#F59E0B"}],
             },
         ],
         "transitions": [
