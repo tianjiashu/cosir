@@ -74,7 +74,6 @@ class WorkflowOperations:
         allows_tools: Collection[str] | None = None,
         runtime_dependencies: ToolRuntimeDependencies | None = None,
         tool_trace_recorder: ToolTraceRecorder | None = None,
-        must_tool: str | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -119,8 +118,6 @@ class WorkflowOperations:
             if execution_context is not None and runtime_dependencies is not None
             else execution_context
         )
-        self.must_tool = must_tool
-
         # 运行时动态变化的工具白名单
         self._allowed_tool_names = frozenset(allows_tools)
         self._parallel_mode_by_name = {

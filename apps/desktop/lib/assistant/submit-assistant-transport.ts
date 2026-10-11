@@ -1,7 +1,6 @@
 import { requestRaw } from "@/lib/http/client";
 import { uploadAttachment, type UploadedAttachment } from "@/lib/assistant/attachments/attachment-upload";
 import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
-import type { ConfigurationProposalMode } from "@/lib/assistant/configuration-proposal-mode";
 
 export type NewConversationImageAttachment = {
   file: File;
@@ -17,7 +16,6 @@ export type SubmitAssistantTransportInput = {
   banTools: readonly string[];
   modelConfigId: number;
   reasoningEffort: string | null;
-  configurationProposalMode?: ConfigurationProposalMode;
 };
 
 export class AssistantTransportProtocolError extends Error {
@@ -75,16 +73,6 @@ export async function submitAssistantTransport(
           commandId: `${input.commandId}-ban-tools`,
           payload: { ban_tools: [...input.banTools] },
         },
-        ...(input.configurationProposalMode === "agent" ? [{
-          type: "custom",
-          name: "propose-agent-configuration",
-          commandId: `${input.commandId}-agent-configuration-proposal`,
-        }] : []),
-        ...(input.configurationProposalMode === "agent-team" ? [{
-          type: "custom",
-          name: "propose-agent-team-configuration",
-          commandId: `${input.commandId}-agent-team-configuration-proposal`,
-        }] : []),
       ],
     }),
   });

@@ -49,8 +49,6 @@ type AssistantThreadSurfaceProps = Pick<
   onCancelResult: (runId: number, accepted: boolean) => void;
   cancellingRunId: number | null;
   performanceProbe: AssistantPerformanceProbe | null;
-  configurationProposalMode: "agent" | "agent-team" | null;
-  onConfigurationProposalModeChange: (mode: "agent" | "agent-team" | null) => void;
 };
 
 /**
@@ -90,8 +88,6 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
   onCancelResult,
   cancellingRunId,
   performanceProbe,
-  configurationProposalMode,
-  onConfigurationProposalModeChange,
 }: AssistantThreadSurfaceProps) {
   return (
     <>
@@ -123,8 +119,6 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
           onCancelResult={onCancelResult}
           cancellingRunId={cancellingRunId}
           performanceProbe={performanceProbe}
-          configurationProposalMode={configurationProposalMode}
-          onConfigurationProposalModeChange={onConfigurationProposalModeChange}
           attachTransportRef={attachTransportRef}
         />
       </div>

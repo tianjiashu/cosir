@@ -19,7 +19,6 @@ import { StopButton } from "@/components/assistant/stop-button";
 import { RunIdentityDisplay } from "@/components/assistant/run-identity-display";
 import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-display";
 import { ComposerControls } from "@/components/composer/composer-controls";
-import { ConfigurationProposalModeSelector } from "@/components/composer/configuration-proposal-mode-selector";
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
 import { ToolGroupSelector as ToolGroupSelectorControl } from "@/components/composer/tool-group-selector";
 import { MarkdownText } from "@/components/markdown-text";
@@ -110,15 +109,13 @@ export type ThreadProps = {
   onCancelResult?: (runId: number, accepted: boolean) => void;
   cancellingRunId?: number | null;
   performanceProbe?: AssistantPerformanceProbe | null;
-  configurationProposalMode?: "agent" | "agent-team" | null;
-  onConfigurationProposalModeChange?: (mode: "agent" | "agent-team" | null) => void;
   attachTransportRef?: MutableRefObject<(() => Promise<void>) | null>;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "configurationProposalMode" | "onConfigurationProposalModeChange" | "attachTransportRef"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "attachTransportRef"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
@@ -167,12 +164,12 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null, configurationProposalMode = null, onConfigurationProposalModeChange, attachTransportRef }) {
+export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null, attachTransportRef }) {
   const isEmpty = useAuiState(isNewChatView);
   const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly, configurationProposalMode, onConfigurationProposalModeChange, attachTransportRef }}>
+    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly, attachTransportRef }}>
     <ThreadComponentsContext.Provider value={components}>
       <AttachmentWorkspaceContext.Provider value={workspaceId ?? undefined}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -279,16 +276,10 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
 
 const ComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = false }) => {
   const composer = unstable_useComposerInput();
-  const { configurationProposalMode = null, onConfigurationProposalModeChange } = useContext(ThreadContext);
   return (
     <div className="flex min-w-0 items-center gap-3">
       <FavoritePromptToolbar disabled={disabled || composer.isDisabled} />
       <ToolGroupSelector disabled={disabled || composer.isDisabled} />
-      <ConfigurationProposalModeSelector
-        value={configurationProposalMode}
-        onChange={(mode) => onConfigurationProposalModeChange?.(mode)}
-        disabled={disabled || composer.isDisabled}
-      />
     </div>
   );
 };

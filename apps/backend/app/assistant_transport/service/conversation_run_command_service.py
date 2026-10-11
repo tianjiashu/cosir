@@ -10,12 +10,6 @@ from sqlalchemy.orm import Session
 from app.assistant_transport.event import RunInitializedEvent
 from app.assistant_transport.request import AddMessageCommand, AssistantTransportRequest
 from app.assistant_transport.request.command.ban_tools_command import BanToolsCommand
-from app.assistant_transport.request.command.propose_agent_configuration_command import (
-    ProposeAgentConfigurationCommand,
-)
-from app.assistant_transport.request.command.propose_agent_team_configuration_command import (
-    ProposeAgentTeamConfigurationCommand,
-)
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
@@ -154,28 +148,11 @@ class ConversationRunCommandService:
         """把 Transport 请求归一化为领域 Run 输入命令。
 
         ``display_text`` 复用既有 extra 文本编码，保持文字与图片的原始顺序，不新增数据库
-        字段；``ban_tools`` 与 ``propose_agent_configuration`` 取自同一请求中的兄弟命令
-        （``BanToolsCommand`` / ``ProposeAgentConfigurationCommand``）。
+        字段；``ban_tools`` 取自同一请求中的 ``BanToolsCommand``。
         """
 
         ban_command = next(
             (item for item in request.commands if isinstance(item, BanToolsCommand)),
-            None,
-        )
-        proposal_command = next(
-            (
-                item
-                for item in request.commands
-                if isinstance(item, ProposeAgentConfigurationCommand)
-            ),
-            None,
-        )
-        team_proposal_command = next(
-            (
-                item
-                for item in request.commands
-                if isinstance(item, ProposeAgentTeamConfigurationCommand)
-            ),
             None,
         )
         display_text = _build_ordered_display_text(command.message.parts)
@@ -190,8 +167,6 @@ class ConversationRunCommandService:
             display_text=display_text,
             image_asset_ids=image_asset_ids,
             ban_tools=list(ban_command.payload.ban_tools) if ban_command is not None else [],
-            propose_agent_configuration=proposal_command is not None,
-            propose_agent_team_configuration=team_proposal_command is not None,
             attachments=[
                 ConversationRunAttachmentInput(
                     id=attachment.id,

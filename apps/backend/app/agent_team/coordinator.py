@@ -12,12 +12,14 @@ from typing import Any
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState, AgentTeamNodeExecution, AgentTeamRunRuntime
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.models import ConversationRunRecord
 from app.models.conversation_run_command import ConversationRunCommand
+from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
@@ -242,13 +244,15 @@ class AgentTeamCoordinator:
             该节点的执行记录（含绑定 Task 与本次 Run ID）与执行后的 Run 记录。
 
         异常:
-            KeyError: 节点快照引用的模型配置已被删除（物化时由配置服务抛出）。
+            KeyError: 本次 Run 引用的模型配置已被删除（物化时由配置服务抛出）。
             pydantic.ValidationError: 快照中的结构化输出契约非法。
             其余异常（工具 schema 解析失败、注册表未命中、Run 执行异常等）直接上浮，由
-            :meth:`start` 统一收敛为 TeamRun ``failed``。
+            :meth:`start` 统一收敛为 TeamRun ``failed``。前两类发生在节点 Run 落库之后，抛出前
+            会先把它收敛为 ``failed``，避免留下无人认领的 ``running`` 节点 Run。
 
         副作用:
             可能新建节点 Task（首次执行该节点时）；创建一条 ``running`` 节点 Run 并执行到终态；
+            profile 合成失败时收敛该 Run 并记 ``agent_team_node_profile_failed`` error 日志；
             条件更新 TeamRun 快照与 ``updated_at``。
         """
         node_id = state.current_node_id
@@ -268,14 +272,8 @@ class AgentTeamCoordinator:
         )
         model_settings = node_runtime.model_settings
         reasoning_effort = model_settings.get("reasoning_effort")
-        # 合成与物化刻意排在「建 Run」之前：这两步会读模型配置、校验快照契约，失败必须发生在
-        # 节点 Run 落库之前，否则会留下一条无人认领、永不收敛的 running 节点 Run。
         workspace_root = self._workspace_root(row.workspace_id)
         agent_profile: AgentProfile = self._agent_registry.resolve(workspace_root, agent_id)
-        node_profile = self._compose_node_profile(agent_profile, node_runtime)
-        runtime_model_settings = self._runner.materialize_run_model_settings(
-            node_runtime.model_config_id
-        )
 
         if node_execution is None:
             task = self._task_service.get_or_create_task(
@@ -304,9 +302,29 @@ class AgentTeamCoordinator:
             run_command=ConversationRunCommand(display_text=input_text)
         )
         node_execution.conversation_run_ids.append(node_run.id)
-        run_profile = node_profile.derive_for_run(
-            node_run, model_settings=runtime_model_settings
-        )
+        try:
+            run_profile = self._build_node_run_profile(agent_profile, node_runtime, node_run)
+        except Exception as exc:
+            # 合成失败发生在节点 Run 已落库之后：必须先把这条 running 记录收敛为失败，否则它会成为
+            # 无人认领的孤儿（TeamRun 已 failed，节点 Run 永远停在 running、UI 一直转圈）。
+            log.exception(
+                "agent_team_node_profile_failed",
+                extra={
+                    "msg": "节点执行 profile 合成失败，已把该节点 Run 收敛为失败",
+                    "data": {
+                        "run_id": team_run_id,
+                        "node_id": node_id,
+                        "node_run_id": node_run.id,
+                        "error_type": type(exc).__name__,
+                    },
+                },
+            )
+            self._run_state_service.fail_run_if_running(
+                node_run.id,
+                end_reason=Constant.Run.RUN_FAILURE_CODE_UNKNOWN,
+                final_output=run_failure_message(Constant.Run.RUN_FAILURE_CODE_UNKNOWN),
+            )
+            raise
 
         row = self._team_run_crud.update_status_if_in(team_run_id, AgentTeamRunStatus.RUNNING.value,
                                                 (AgentTeamRunStatus.RUNNING.value,), state=state)
@@ -326,36 +344,38 @@ class AgentTeamCoordinator:
 
         return node_execution, node_run
 
-    def _compose_node_profile(
+    def _build_node_run_profile(
             self,
             agent_profile: AgentProfile,
             node_runtime: AgentTeamRunRuntime,
+            node_run: ConversationRunRecord,
     ) -> AgentProfile:
-        """把「注册表节点身份」与「确认时冻结的节点快照」合成节点执行 profile（尚未绑定 Run）。
+        """把「注册表节点身份」「确认时冻结的节点快照」与「本次节点 Run」合成执行用 per-run profile。
 
-        分工是刻意的：身份类字段（``agent_id`` / ``agent_type`` / ``max_steps``）来自注册表
-        profile；执行资源（提示词、工具名、结构化输出契约、用户模型偏好）来自节点快照，保证
-        节点行为与用户确认时预览的完全一致。连接与能力字段刻意**不在这里**取：``api_key``
-        按契约不落盘，注册表单例（内置子 Agent）也只有偏好项，直接拿来执行会让模型解析以
-        「运行配置未物化」失败；调用方须另行用
-        :meth:`AgentRuntime.materialize_run_model_settings` 物化，并在 Run 落库后经
-        ``derive_for_run`` 绑定。
+        字段来源刻意分三路，不要归并：
+        - 身份类（``agent_id`` / ``agent_type`` / ``max_steps``）来自注册表 profile；
+        - 执行资源（提示词、工具名、结构化输出契约、用户模型偏好）来自节点快照，保证节点行为与
+          用户确认时预览的完全一致；
+        - 连接与能力字段**只**由本 Run 的 ``model_config_id`` 物化而来：``api_key`` 按契约不落盘，
+          快照里若残留连接字段一律经 ``ModelSettings.from_dict`` 忽略，注册表单例（内置子 Agent）
+          也只有偏好项——任一者被当作连接来源，模型解析都会以「运行配置未物化」失败。
 
         参数:
             agent_profile: 注册表解析出的节点 child profile（共享单例，本方法不修改它）。
-            node_runtime: 该节点的冻结运行快照。
+            node_runtime: 该节点的冻结运行快照（``agent_team_runs.state_json`` 内形态）。
+            node_run: 本次节点 Run 记录；其 ``model_config_id`` 是连接字段的唯一来源。
 
         返回:
-            绑定节点提示词 / 工具 / 结构化输出 / 模型偏好的新 profile；``run`` 仍为空，
-            待调用方 ``derive_for_run`` 注入。
+            绑定本次 Run 的独立 profile 副本；共享注册表单例与快照都不被修改。
 
         异常:
+            KeyError: ``node_run.model_config_id`` 指向的模型配置已不存在（物化时由配置服务抛出）。
             pydantic.ValidationError: 快照的 ``structured_output`` 不是合法的输出契约。
 
         副作用:
-            无（纯值构造；``allowed_tools`` 另复制一份列表，避免下游改动回写共享单例）。
+            只读模型配置；不写状态。``allowed_tools`` 另复制一份列表，避免下游改动回写共享单例。
         """
-        return replace(
+        node_profile = replace(
             agent_profile,
             role=node_runtime.role or agent_profile.role,
             system_prompt=node_runtime.system_prompt,
@@ -366,6 +386,10 @@ class AgentTeamCoordinator:
                 if node_runtime.structured_output
                 else None
             ),
+        )
+        return node_profile.derive_for_run(
+            node_run,
+            model_settings=self._runner.materialize_run_model_settings(node_run.model_config_id),
         )
 
     def _resolve_node_tool_schemas(self, allowed_tools: list[str]) -> list[dict[str, object]]:

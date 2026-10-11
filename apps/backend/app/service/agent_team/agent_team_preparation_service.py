@@ -19,7 +19,6 @@ from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.core.tools.schemas.tool_names import *
 from app.service.depends import get_model_config_service
 
 
@@ -69,27 +68,32 @@ def resolve_node_profile(
 def materialize_node_tools(profile: AgentProfile) -> list[str]:
     """按节点 Agent Profile 固化本次运行的节点工具名清单。
 
-    节点工具 = Profile 允许的工具 ∪ 子 Agent 协作工具（``delegate_task`` / ``child_agent_*``，
-    节点需要把子工作再委派下去），再减去 :attr:`Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS`
-    （Team 禁止节点递归建 Team、提案配置或占用可交互终端）。返回值是新列表：Profile 是注册表
-    共享单例，**不得**就地 ``extend``，否则本次 Team 的工具集会污染同一进程后续所有 Agent。
+    节点工具 = Profile 允许的工具 **减去** :attr:`Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS`
+    （禁止节点递归建 Team、提案配置或占用可交互终端）。本清单只做剥离、**不代为追加**：委派与
+    父子通信工具不在禁用清单内，Profile 声明了它们就照样保留——Team 节点需要把子工作再拆给子
+    Agent 并汇总；而 ``delegate_task`` 产生的子 Agent 会被
+    :attr:`Constant.Tools.CHILD_DISALLOWED_TOOLS` 剥掉这些工具，避免无限套娃。两条清单的差别
+    就只有这一点，不要为「统一清单」而互相移植。
+
+    返回值是新列表：Profile 是注册表共享单例，**不得**就地修改，否则本次 Team 的工具集会污染
+    同一进程后续所有 Agent。
 
     参数:
         profile: 已解析的节点 Agent Profile（由 :func:`resolve_node_profile` 解析）。
 
     返回:
-        本次运行冻结的节点工具名列表，顺序为 Profile 原顺序 + 追加的协作工具。
+        本次运行冻结的节点工具名列表，顺序沿用 Profile 的 ``allowed_tools``。
 
     异常:
         无（节点工具可用性由本函数归一化；工具名合法性已由 Profile 加载期校验）。
     """
 
-    allowed_tools = [
+    return [
         name
         for name in profile.allowed_tools
         if name not in Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS
     ]
-    return allowed_tools
+
 
 def require_model_settings(model_settings: ModelSettings) -> ModelSettings | None:
     """断言模型设置已具备模型构建所需的物化字段。"""

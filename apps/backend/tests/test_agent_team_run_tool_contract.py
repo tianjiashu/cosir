@@ -752,13 +752,9 @@ def test_preparation_service_builds_preview_nodes_and_runtime_snapshots(monkeypa
 
     assert set(result.node_runtime_snapshots) == {"develop", "review"}
     assert [node["node_id"] for node in result.preview_fields["nodes"]] == ["develop", "review"]
-    assert result.preview_fields["nodes"][0]["tools"] == [
-        "read_file",
-        "delegate_task",
-        "child_agent_send",
-        "child_agent_status",
-        "child_agent_wait",
-    ]
+    # 节点工具 = Profile 声明的工具减去禁用清单：这里刻意**不**补足委派 / 父子通信工具——它们属于
+    # 节点 Agent Profile 自身的能力声明，Team 层只做剥离、不代为追加（见 materialize_node_tools）。
+    assert result.preview_fields["nodes"][0]["tools"] == ["read_file"]
     assert result.preview_fields["goal"] == "交付报告"
     assert result.preview_fields["team_id"] == "code-quality"
 

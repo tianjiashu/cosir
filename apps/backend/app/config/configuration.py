@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from app.core.agents.agent_profile_registry import (
     AgentProfileRegistry,
 )
+from app.core.agents.define_agents import only_read_child_agent
 from app.core.tools.tool_registry import ToolRegistry
 
 if TYPE_CHECKING:
@@ -117,6 +118,7 @@ def build_agent_registry(
     registry = AgentProfileRegistry(AgentProfileScopeSource())
     for profile in (
         general_child_agent(),
+        only_read_child_agent(),
         main_agent(system_prompt=main_agent_system_prompt, max_steps=main_agent_max_steps),
     ):
         registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, profile)

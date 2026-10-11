@@ -10,7 +10,6 @@
 
 import asyncio
 from langchain_core.messages import SystemMessage
-from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.constant import Constant
@@ -35,11 +34,7 @@ from app.core.runtime.execution_mode import ExecutionMode
 from app.core.runtime.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
-from app.core.tools.schemas import ToolDefinition, ToolExecutionContext, UserDecision
-from app.core.tools.schemas.tool_names import (
-    TOOL_PROPOSE_AGENT_CONFIGURATION,
-    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
-)
+from app.core.tools.schemas import ToolExecutionContext, UserDecision
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.workflows.agent_workflow import WorkflowRunFailure
@@ -403,16 +398,13 @@ class AgentRuntime:
             trace_recorder 的 WorkflowOperations 实例。
 
         副作用:
-            向本 Task 的延迟系统消息队列投递本轮工具准入说明（禁用集合或「全部放行」，
-            配置草稿提案打开时追加对应工具的 schema 说明），由下一次 model
-            节点入口消费并写入上下文；这些消息在队列中等待，模型节点不消费则本轮不会进入模型请求。
+            向本 Task 的延迟系统消息队列投递本轮工具准入说明（禁用集合或「全部放行」），
+            由下一次 model 节点入口消费并写入上下文；这些消息在队列中等待，模型节点不消费则本轮不会进入模型请求。
         """
         task_space = task_runtime_spaces.get_or_create(task.id)
         allows_tools = {tool.get("name") for tool in task_space.task_tool_schemas}
 
         ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
-
-        must_tool = None
 
         if run.extra is not None and len(run.extra.ban_tools) > 0:
             allows_tools = allows_tools - ban_tools
@@ -427,29 +419,6 @@ class AgentRuntime:
         else:
             task_space.defer_system_message(
                 SystemMessage(content="All tools are allowed for this round.")
-            )
-
-        if run.extra is not None and run.extra.propose_agent_configuration:
-            must_tool = TOOL_PROPOSE_AGENT_CONFIGURATION
-        if run.extra is not None and run.extra.propose_agent_team_configuration:
-            must_tool = TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION
-
-
-        if must_tool is not None:
-            allows_tools.add(must_tool)
-            definition: ToolDefinition = self._tool_register.get_tool_definition(
-                must_tool
-            )
-            tool_schema = convert_to_openai_tool(definition.to_model_tool_definition(), strict=True)
-            task_space.defer_system_message(
-                SystemMessage(
-                    content=(
-                        "Please follow the user's instructions to call this tool to carry out "
-                        "This tool is newly added to your tool registry, but it is allowed only "
-                        "for this round by the user's intent; you must invoke this tool during "
-                        f"this round's tool calls: {tool_schema}. Do not generate JSON; invoke the tool instead."
-                    )
-                )
             )
 
         execution_context = self._resolve_execution_context(task, run_id=run.id)
@@ -472,5 +441,4 @@ class AgentRuntime:
             execution_context=execution_context,
             runtime_dependencies=runtime_dependencies,
             tool_trace_recorder=tool_trace_recorder,
-            must_tool=must_tool,
         )

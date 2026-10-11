@@ -17,7 +17,7 @@ class ConversationRunExtra:
 
     字段承载 Assistant 用户可见文本、普通本机文件附件引用、本次 Run 禁用的工具名和
     用户显式指定的推理强度，以及 Langfuse 根 Trace ID 等运行期附加观测事实。最终
-    ``allows_tools`` 只在运行时根据 Task 固化工具目录、``ban_tools`` 和配置草稿开关计算，
+    ``allows_tools`` 只在运行时根据 Task 固化工具目录和 ``ban_tools`` 计算，
     不作为持久化字段保存。
     该类是内存中的领域值对象；写入 ``conversation_runs.extra`` 时由 ``to_dict`` 转成
     JSON 对象，从数据库读取时由 ``from_dict`` 恢复。它不保存附件二进制，也不负责检查
@@ -29,8 +29,6 @@ class ConversationRunExtra:
     attachments: list[ConversationRunFileAttachment]
     reasoning_effort: ReasoningEffort | None = None
     ban_tools: list[str] = field(default_factory=list)
-    propose_agent_configuration: bool = False
-    propose_agent_team_configuration: bool = False
     langfuse_trace_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -45,10 +43,6 @@ class ConversationRunExtra:
         if len(self.ban_tools) != len(set(self.ban_tools)):
             raise ValueError("ban_tools must not contain duplicates")
         object.__setattr__(self, "ban_tools", list(self.ban_tools))
-        if not isinstance(self.propose_agent_configuration, bool):
-            raise TypeError("propose_agent_configuration must be a boolean")
-        if not isinstance(self.propose_agent_team_configuration, bool):
-            raise TypeError("propose_agent_team_configuration must be a boolean")
         if self.langfuse_trace_id is not None and (
             not isinstance(self.langfuse_trace_id, str) or not self.langfuse_trace_id.strip()
         ):
@@ -101,10 +95,6 @@ class ConversationRunExtra:
             "ban_tools": list(self.ban_tools),
             "reasoning_effort": self.reasoning_effort,
         }
-        if self.propose_agent_configuration:
-            value["propose_agent_configuration"] = True
-        if self.propose_agent_team_configuration:
-            value["propose_agent_team_configuration"] = True
         if self.langfuse_trace_id is not None:
             value["langfuse_trace_id"] = self.langfuse_trace_id
         return value
@@ -124,16 +114,12 @@ class ConversationRunExtra:
             "attachments",
             "ban_tools",
             "reasoning_effort",
-            "propose_agent_configuration",
-            "propose_agent_team_configuration",
             "langfuse_trace_id",
         }
         unknown = set(value) - expected
         missing = (
             expected
             - {
-                "propose_agent_configuration",
-                "propose_agent_team_configuration",
                 "langfuse_trace_id",
             }
         ) - set(value)
@@ -149,8 +135,6 @@ class ConversationRunExtra:
             attachments=attachments,
             ban_tools=ban_tools,
             reasoning_effort=value["reasoning_effort"],
-            propose_agent_configuration=value.get("propose_agent_configuration", False),
-            propose_agent_team_configuration=value.get("propose_agent_team_configuration", False),
             langfuse_trace_id=value.get("langfuse_trace_id"),
         )
 

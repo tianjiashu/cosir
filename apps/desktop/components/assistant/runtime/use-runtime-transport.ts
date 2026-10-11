@@ -45,8 +45,6 @@ export function useRuntimeTransport(
   recovery: RuntimeRecovery,
   onStateCommit: (state: TransportState) => void,
   selectedBanTools: readonly string[],
-  configurationProposalMode: "agent" | "agent-team" | null,
-  onProposalModeConsumed: () => void,
 ): RuntimeTransport {
   const attachmentAdapter = useMemo(
     () => context.workspaceId == null ? null : createAttachmentAdapter(context.workspaceId),
@@ -289,20 +287,6 @@ export function useRuntimeTransport(
           commandId: `${addMessage.commandId}-ban-tools`,
           payload: { ban_tools: [...selectedBanTools] },
         });
-        if (configurationProposalMode === "agent") {
-          commands.push({
-            type: "custom",
-            name: "propose-agent-configuration",
-            commandId: `${addMessage.commandId}-agent-configuration-proposal`,
-          });
-        }
-        if (configurationProposalMode === "agent-team") {
-          commands.push({
-            type: "custom",
-            name: "propose-agent-team-configuration",
-            commandId: `${addMessage.commandId}-agent-team-configuration-proposal`,
-          });
-        }
       }
       // 新用户命令开始新的 Transport recovery 预算；空 command batch 属于 attach/resume，
       // 不能重置有界 EOF 保护。
@@ -340,7 +324,6 @@ export function useRuntimeTransport(
       };
     },
     onResponse: (response) => {
-      if (configurationProposalMode !== null) onProposalModeConsumed();
       void frontendLog("INFO", "assistant_transport_response_received", "Assistant Transport 已收到响应头", {
         traceId: context.traceId,
         data: {
