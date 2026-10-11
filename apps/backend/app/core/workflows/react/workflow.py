@@ -41,30 +41,6 @@ from .runtime_config import RuntimeConfig
 from .worflow_state.route import ReactRoute
 
 
-def _reject_resume_without_decisions(parked_at_wait_user: bool) -> bool:
-    """不带决定的续跑是否应被拒绝：图停在 human-in-the-loop 断点（``wait_user``）上。
-
-    ``goto model`` 会绕开 ``wait_user`` 的图断点，把待决请求静默丢掉，并让模型读到「等待确认」的
-    占位结果行，所以默认拒绝。取消等待中的 Run 不走这条判定：取消入口会构造系统合成的
-    ``FORCE_REJECT`` 决定并以 ``resume_with_input`` 驱动，由 ``wait_user`` 正常消费断点。
-
-    判据只认 ``wait_user`` 的断点，不能退化成「任意 interrupt 都拒绝」：模型侧断点（协作取消、
-    输出待续写）没有可恢复的输入，正确处理是回退 ``model`` 重跑，而不是拒绝续跑。
-
-    参数:
-        parked_at_wait_user: 图是否停在 ``wait_user`` 的 interrupt 上。
-
-    返回:
-        ``True`` 表示应拒绝本次续跑；``False`` 表示放行（回退 ``model`` 重跑）。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    return parked_at_wait_user
 def _closed_terminal_sessions(raw: object, *, reason: str) -> dict[str, dict[str, Any]] | None:
     """生成仅包含必要变化的 terminal checkpoint 更新。
 
@@ -390,7 +366,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                     # ``wait_user`` 把待决请求静默丢掉，并让模型读到「等待确认」的占位结果行。
                     # 因此显式失败，由调用方改用带决定的续跑——取消等待中的 Run 由取消入口构造
                     # 强行拒绝决定，同样走带决定的入口，不经过这条判定。
-                    if _reject_resume_without_decisions(parked_at_wait_user):
+                    if parked_at_wait_user:
                         raise WorkflowRunFailure(
                             Constant.Run.RUN_FAILURE_CODE_WAITING_FOR_INPUT,
                             "该 Run 正在等待用户决定，请提交决定后续跑",
