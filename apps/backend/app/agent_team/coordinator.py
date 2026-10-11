@@ -296,7 +296,6 @@ class AgentTeamCoordinator:
         node_run = self._run_service.create_run(
             task_id=node_execution.task_id,
             agent_id=agent_id,
-            agent_role=node_runtime.role or agent_profile.role,
             status=ConversationRunStatus.RUNNING.value,
             model_config_id=node_runtime.model_config_id,
             reasoning_effort=reasoning_effort,

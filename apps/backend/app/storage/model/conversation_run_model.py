@@ -12,7 +12,7 @@ from app.storage.model.base import StorageBase
 class ConversationRunModel(StorageBase):
     """``conversation_runs`` 表模型：一次 Agent 运行的持久化事实。
 
-    Run 是「一次 Agent 执行」的独立实体：承载输入文本、Agent 身份与角色快照、模型连接配置、
+    Run 是「一次 Agent 执行」的独立实体：承载输入文本、Agent 身份、模型连接配置、
     图片输入、终态原因、回复正文与运行附加事实。运行标识即本行 ``id``，由 ``StorageBase``
     提供自增主键。
 
@@ -47,7 +47,6 @@ class ConversationRunModel(StorageBase):
     )
     input_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     agent_id: Mapped[str | None] = mapped_column(Text)
-    agent_role: Mapped[str | None] = mapped_column(Text)
     model_config_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("model_configs.id", ondelete="SET NULL")
     )

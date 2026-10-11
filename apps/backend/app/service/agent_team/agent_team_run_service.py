@@ -158,12 +158,14 @@ class AgentTeamRunService:
             if task.current_run_id is not None
         )
         run_records = runs.get_many(list(dict.fromkeys(run_ids)))
+        workspace_root = get_workspace_service().get_workspace(row.workspace_id).root_path
         visits_by_node = project_node_visits(
             state=state,
             configuration=configuration,
             team_status=row.status,
             run_records=run_records,
             child_tasks_by_parent=child_tasks_by_parent,
+            workspace=workspace_root,
         )
         node_views: list[dict[str, Any]] = []
         for node in configuration["nodes"]:

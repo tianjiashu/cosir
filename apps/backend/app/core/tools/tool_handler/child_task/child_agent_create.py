@@ -217,7 +217,6 @@ class DelegateTaskTool(HandlerBase):
             child_run = self.run_setvice.create_run(
                 task_id=child_task.id,
                 agent_id=child_agent_id,
-                agent_role=child_agent_profile.role,
                 model_config_id=model_config_id,
                 reasoning_effort=reasoning_effort,
                 run_command=ConversationRunCommand(display_text=message),
