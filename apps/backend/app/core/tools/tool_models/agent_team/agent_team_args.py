@@ -30,8 +30,11 @@ class AgentTeamArgs(BaseModel):
     )
     goal: StrictStr = Field(
         min_length=1,
-        max_length=50_000,
-        description="Overall goal of this run: every node works toward it.",
+        max_length=50_00,
+        description=(
+            "Overall goal of this team: every node works toward it. Node agents start with a "
+            "clean context, so state the task background in the goal when necessary."
+        ),
     )
     node_goals: dict[TeamNodeIdentifier, AgentTeamNodeGoal] = Field(
         min_length=1,
