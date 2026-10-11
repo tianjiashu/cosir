@@ -162,7 +162,7 @@ npm run tauri:dev
 `scripts/start-desktop.cmd`）。统一开发入口会构建 workspace 中的 Terminal
 Worker，注入其绝对路径，并在启动 Tauri 前确认产物存在。
 
-开发启动时，Tauri 会启动 Vite 前端并在 debug 模式下通过 `uv run` 拉起本机 FastAPI 后端；后端依赖由 `uv` 根据 `apps/backend/uv.lock` 管理。首次启动后，在界面中打开**模型设置**，配置 Provider 和模型，再选择一个本地文件夹创建工作区。
+开发启动时，Tauri 会启动 Vite 前端，并在 debug 模式下先用 `uv` 按 `apps/backend/uv.lock` 同步后端依赖、解析出解释器，再由宿主**直接托管该解释器**（`python -m app`）——`uv` 只参与环境解析，不作为被监督的进程。首次启动后，在界面中打开**模型设置**，配置 Provider 和模型，再选择一个本地文件夹创建工作区。
 
 > `tauri.conf.json` 的 `bundle.resources` 仍由开发入口自动创建占位目录；开发后端实际使用 workspace 构建出的 `target/debug/terminal-worker`，不会读取 release staging 资源。正式打包时，`npm run build:bundle` 会生成真实的后端与 release 版 Terminal Worker 资源。
 

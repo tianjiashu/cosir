@@ -179,7 +179,6 @@ impl BackendSupervisor {
                 port,
                 bootstate_file: &bootstate,
                 launch_mode: backend_runtime.launch_mode(),
-                uv_cache_dir: backend_runtime.uv_cache_dir(),
                 data_dir: Some(data_root.as_path()),
                 terminal_worker: backend_runtime.terminal_worker(),
                 log_file: &log_file,
