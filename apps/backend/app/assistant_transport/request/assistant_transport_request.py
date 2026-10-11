@@ -13,7 +13,7 @@ from app.assistant_transport.request.command.user_input_decision_command import 
     UserInputDecisionCommand,
 )
 from app.config.logging.logger import log
-from app.core.tools.schemas import UserDecision
+from app.core.tools.schemas import UserDecision, UserDecisionKind
 
 # custom 命令共用 wire ``type`` discriminator，因此每种受支持的项目命令都按明确 schema
 # 定义，并通过字面量 ``name`` 区分。
@@ -153,6 +153,19 @@ class AssistantTransportRequest(BaseModel):
                 status_code=400,
                 code="USER_DECISION_COMMAND_INVALID",
                 message="用户决定必须单独提交，不能与新消息同批",
+                retryable=False,
+            )
+        # ``FORCE_REJECT`` 是系统在取消等待中的 Run 时于进程内合成的决定，不是用户在卡片上的选择：
+        # 它不核对 request_id 就能作废当前待决请求，因此不允许经由 wire 边界进入。
+        if any(
+            isinstance(command, UserInputDecisionCommand)
+            and command.payload.decision.decision is UserDecisionKind.FORCE_REJECT
+            for command in self.commands
+        ):
+            raise TransportRequestError(
+                status_code=400,
+                code="FORCE_REJECT_NOT_CLIENT_SUBMITTABLE",
+                message="强行拒绝由系统在取消等待中的运行时合成，不接受客户端提交",
                 retryable=False,
             )
         if not has_message and self.runId is None:

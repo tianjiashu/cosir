@@ -28,6 +28,7 @@ from app.task_runtime.workspace_operation_registry import workspace_operations
 from app.utils.path.workspace_cosir import (
     workspace_agent_config_dir,
     workspace_agent_team_config_dir,
+    workspace_agent_team_run_dir,
     workspace_attachment_dir,
     workspace_cosir_dir,
 )
@@ -138,8 +139,8 @@ class WorkspaceService:
             无；目录创建失败仅记 error 日志，不向上抛出。
 
         副作用:
-            在 ``<root_path>/.cosir`` 及 ``Attachment`` / ``agents`` / ``agent-teams`` 子目录
-            创建目录（已存在则幂等跳过）。
+            在 ``<root_path>/.cosir`` 及 ``Attachment`` / ``agents`` / ``agent-teams`` /
+            ``agent-team-runs`` 子目录创建目录（已存在则幂等跳过）。
         """
         cosir_dir = workspace_cosir_dir(normalized_path)
         # agents / agent-teams 是用户放置自定义子 Agent 与 Team 配置的位置：装载路径只在目录
@@ -148,6 +149,7 @@ class WorkspaceService:
             workspace_attachment_dir(normalized_path),
             workspace_agent_config_dir(normalized_path),
             workspace_agent_team_config_dir(normalized_path),
+            workspace_agent_team_run_dir(normalized_path),
         )
         try:
             cosir_dir.mkdir(parents=True, exist_ok=True)

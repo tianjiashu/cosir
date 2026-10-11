@@ -1,7 +1,8 @@
 """用户决定命令（wire 契约）与续跑源判定的测试。
 
-覆盖：命令的结构约束（必须单独提交、携带 runId、requestId 唯一）、wire → 领域映射，
-以及 ``resume_run`` 允许的续跑源状态判定。
+覆盖：命令的结构约束（必须单独提交、携带 runId、payload 恰好一个决定、拒绝系统专用决定种类）、
+wire → 领域映射、workflow 产出的恢复载荷与节点解析器的往返一致，以及 ``resume_run`` 允许的续跑源
+状态判定。
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from app.core.tools.schemas.user_decision import (
     UserDecisionKind,
     build_resume_payload,
 )
-from app.core.workflows.react.node_helper.user_input_projection import parse_resume_decisions
+from app.core.workflows.react.node_helper.user_input_projection import parse_resume_decision
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
 
@@ -37,16 +38,18 @@ def _request(commands: list[dict[str, object]], **overrides: object) -> dict[str
 
 
 def _decision_command(*, request_id: str = "12", decision: str = "approve") -> dict[str, object]:
-    """构造一条用户决定命令。"""
+    """构造一条用户决定命令（一次提交恰好一个决定）。"""
 
     return {
         "type": "custom",
         "commandId": "cmd-1",
         "name": "user-input-decision",
         "payload": {
-            "decisions": [
-                {"request_id": request_id, "decision": decision, "data": {"goal": "交付报告"}},
-            ]
+            "decision": {
+                "request_id": request_id,
+                "decision": decision,
+                "data": {"goal": "交付报告"},
+            }
         },
     }
 
@@ -60,7 +63,7 @@ def test_decision_command_parses_and_maps_to_domain() -> None:
 
     (command,) = request.commands
     assert isinstance(command, UserInputDecisionCommand)
-    (decision,) = command.to_user_decisions()
+    decision = command.to_user_decision()
     assert decision.request_id == "12"
     assert decision.kind is UserDecisionKind.APPROVE
     assert decision.data == {"goal": "交付报告"}
@@ -111,19 +114,13 @@ def test_multiple_decision_commands_are_rejected() -> None:
     assert raised.value.code == "MULTIPLE_USER_DECISION_COMMANDS"
 
 
-def test_duplicate_request_id_in_one_payload_is_rejected() -> None:
-    """同一请求在一次提交里给两个决定会让「谁生效」不确定，直接在 wire 层拒绝。"""
+def test_second_decision_in_one_payload_is_rejected() -> None:
+    """一次提交只承载一个决定：payload 里再塞一条决定字段由 wire schema 拒绝。"""
 
-    duplicated = {
-        "type": "custom",
-        "commandId": "cmd-1",
-        "name": "user-input-decision",
-        "payload": {
-            "decisions": [
-                {"request_id": "12", "decision": "approve"},
-                {"request_id": "12", "decision": "reject"},
-            ]
-        },
+    duplicated = _decision_command()
+    duplicated["payload"] = {
+        "decision": {"request_id": "12", "decision": "approve"},
+        "decisions": [{"request_id": "12", "decision": "reject"}],
     }
 
     with pytest.raises(ValidationError):
@@ -139,29 +136,40 @@ def test_unknown_decision_kind_is_rejected_by_wire_schema() -> None:
         )
 
 
+def test_force_reject_is_not_client_submittable() -> None:
+    """强行拒绝由系统在取消等待中的 Run 时合成。
+
+    它不核对 ``request_id`` 就能作废当前待决请求，因此这是进程内信号，不接受客户端提交。
+    """
+
+    with pytest.raises(TransportRequestError) as raised:
+        AssistantTransportRequest.model_validate(
+            _request([_decision_command(decision="force_reject")], runId=31)
+        )
+
+    assert raised.value.code == "FORCE_REJECT_NOT_CLIENT_SUBMITTABLE"
+
+
 def test_resume_payload_round_trips_through_node_parser() -> None:
     """workflow 产出的恢复载荷必须能被等待节点解析。
 
-    这是真实批准链路的唯一联结点：``workflow`` 用 ``build_resume_payload`` 造载荷、
-    ``wait_user`` 用 ``parse_resume_decisions`` 解析。两处各维护一份键名（``kind`` vs
-    ``decision``）时，测试可以各自自洽而线上 100% 失败，因此必须锁死往返一致。
+    这是真实决定链路的唯一联结点：``workflow`` 用 ``build_resume_payload`` 造载荷、``wait_user``
+    用 ``parse_resume_decision`` 解析。两处各维护一份键名（``kind`` vs ``decision``）时，测试可以
+    各自自洽而线上 100% 失败，因此必须锁死往返一致。
     """
 
-    decisions = (
-        UserDecision(request_id="12", kind=UserDecisionKind.APPROVE, data={"goal": "交付报告"}),
-        UserDecision(request_id="13", kind=UserDecisionKind.REJECT),
+    decision = UserDecision(
+        request_id="12", kind=UserDecisionKind.APPROVE, data={"goal": "交付报告"}
     )
 
-    payload = build_resume_payload(decisions)
+    payload = build_resume_payload(decision)
 
     assert payload == {
-        "decisions": [
-            {"request_id": "12", "decision": "approve", "data": {"goal": "交付报告"}},
-            {"request_id": "13", "decision": "reject", "data": {}},
-        ]
+        "decision": {"request_id": "12", "decision": "approve", "data": {"goal": "交付报告"}}
     }
-    assert parse_resume_decisions(payload) == list(decisions)
-    assert build_resume_payload(()) == {"decisions": []}
+    assert parse_resume_decision(payload) == decision
+    # 无决定时注入空决定：``wait_user`` 据此重新挂起同一请求，而不是把空值当批准。
+    assert build_resume_payload(None) == {"decision": None}
 
 
 def test_resumable_status_maps_waiting_and_cancelled_only() -> None:

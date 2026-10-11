@@ -146,6 +146,7 @@ class _Harness:
         self.runtime_config = SimpleNamespace(
             resuming_wait_user=False,
             run=SimpleNamespace(id=99),
+            usage_stats=SimpleNamespace(),
             user_input_decision_handlers=SimpleNamespace(
                 handle_rejection=lambda request, decision: self.rejections.append(
                     (request.request_id, decision.kind.value)
@@ -164,7 +165,7 @@ class _Harness:
         self.config = {"configurable": {"thread_id": f"wait-user-{id(self)}"}}
         self.graph = self._build()
 
-    def _mark_waiting(self) -> SimpleNamespace:
+    def _mark_waiting(self, _usage_stats: object = None) -> SimpleNamespace:
         """按真实契约返回迁移后的 Run 记录（返回 None 表示条件更新未命中）。"""
 
         self.migrations.append("mark")
@@ -331,6 +332,38 @@ def test_wait_user_node_consumes_decision_without_reprojecting(
     # 占位行只写一次：重放若再写一遍，会把它覆盖成同内容（幂等），但那是无意义的数据库往返。
     assert set(harness.waiting_rows()) == {"call-a"}
     assert len(harness.context_writes) == 1
+
+
+def test_cancelled_waiting_run_force_reject_consumes_the_breakpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """取消等待中的 Run：强行拒绝恢复后断点必须被消费，不留 HIL 断点。
+
+    取消入口构造的决定没有 ``request_id``（它不定位请求），本用例因此同时钉住两件事：归一发生在
+    ``wait_user`` 内，以及它落到与用户驳回相同的收尾路径。若取消路径改回 ``Command(goto=...)``
+    绕过断点，LangGraph 会从 ``wait_user`` 重放并再次挂起，本用例会看到 ``wait`` 仍带 interrupt。
+    """
+
+    harness = _Harness(monkeypatch)
+    decision = UserDecision(kind=UserDecisionKind.FORCE_REJECT)
+
+    async def _run() -> None:
+        await harness.start([_observation()])
+        await harness.resume(build_resume_payload(decision))
+        snapshot = await harness.snapshot()
+        assert snapshot.next == ()
+        assert not any(
+            task.name == "wait" and task.interrupts for task in snapshot.tasks
+        )
+        observation = snapshot.values["last_tool_results"]["observations"][0]
+        assert observation["status"] == "cancelled"
+        assert observation["user_input_request"] is None
+
+    asyncio.run(_run())
+    assert harness.calls == ["observe"]
+    # 归一后的决定走到与用户驳回同一收尾钩子（Agent Team 场景据此收敛待确认 TeamRun）。
+    assert harness.rejections == [("12", "reject")]
+    assert len(harness.display_events()) == 1
 
 
 def test_wait_user_node_approval_reopens_gate_and_clears_declaration(

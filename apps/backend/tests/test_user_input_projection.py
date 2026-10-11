@@ -89,6 +89,25 @@ def test_parse_resume_decision_rejects_invalid_shape(value: object) -> None:
         parse_resume_decision(value)
 
 
+def test_parse_resume_decision_accepts_force_reject_without_request_id() -> None:
+    """系统合成的强行拒绝没有定位信息：解析层不得因缺 ``request_id`` 拒绝它。"""
+
+    decision = parse_resume_decision(
+        {"decision": {"request_id": "", "decision": "force_reject", "data": {}}}
+    )
+
+    assert decision is not None
+    assert decision.kind is UserDecisionKind.FORCE_REJECT
+    assert decision.request_id == ""
+
+
+def test_parse_resume_decision_still_requires_request_id_for_client_kinds() -> None:
+    """除强行拒绝外的决定仍必须定位请求：缺 ``request_id`` 是外部输入契约分叉。"""
+
+    with pytest.raises(ValueError, match="非空 request_id"):
+        parse_resume_decision({"decision": {"decision": "reject", "data": {}}})
+
+
 def test_approval_clears_request_without_rewriting_tool_result() -> None:
     observations = [_observation()]
 

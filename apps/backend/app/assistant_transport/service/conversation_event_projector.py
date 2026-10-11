@@ -180,6 +180,28 @@ class ConversationEventProjector:
                 )
                 return None
             change = self._state_service.apply_planned(event)
+            if event.type == "tool_call_status_changed" and isinstance(event.display_data, dict):
+                request = event.display_data.get("user_input_request")
+                if isinstance(request, dict):
+                    log.info(
+                        "user_input_request_transport_projected",
+                        extra={
+                            "msg": "待决用户输入载荷已投影到 Assistant Transport snapshot",
+                            "data": {
+                                "task_id": event.task_id,
+                                "run_id": event.run_id,
+                                "tool_call_id": event.tool_call_id,
+                                "request_id": request.get("request_id"),
+                                "request_kind": request.get("request_kind"),
+                                "draft_schema": request.get("draft_schema"),
+                                "display_data_keys": sorted(event.display_data),
+                                "display_data_mutation_applied": any(
+                                    mutation.path[-1:] == ("display_data",)
+                                    for mutation in change.mutations
+                                ),
+                            },
+                        },
+                    )
             if event.type == "run_status_changed":
                 try:
                     self._state_service.refresh_parent_delegation(

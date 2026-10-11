@@ -1,6 +1,6 @@
 """Workspace 级 ``.cosir`` 目录路径计算（leaf 层纯路径工具）。
 
-单一职责：给出 workspace 内 ``.cosir`` 目录及其子目录（附件、工具产物、子 Agent 配置等）
+单一职责：给出 workspace 内 ``.cosir`` 目录及其子目录（附件、工具产物、Agent 配置和 Team 运行档案等）
 的路径。只做路径运算，**不创建目录、不读写文件、不依赖业务模型**。
 
 为什么集中：``.cosir`` 基名与子目录规则此前在 ``workspace_service``、``attachment_service``、
@@ -20,6 +20,7 @@ COSIR_ATTACHMENT_STAGING_DIR_NAME: str = ".uploading"
 COSIR_TOOL_ARTIFACT_DIR_NAME: str = "tool-artifacts"
 COSIR_AGENT_CONFIG_DIR_NAME: str = "agents"
 COSIR_AGENT_TEAM_CONFIG_DIR_NAME: str = "agent-teams"
+COSIR_AGENT_TEAM_RUNS_DIR_NAME: str = "agent-team-runs"
 COSIR_INSTRUCTION_FILE_NAME: str = "AGENTS.md"
 COSIR_MAIN_AGENT_PROMPT_FILE_NAME: str = "main_agent_system_prompt.md"
 COSIR_ENV_FILE_NAME: str = ".env"
@@ -74,9 +75,16 @@ def workspace_agent_team_config_dir(workspace_root: str | Path) -> Path:
     return workspace_cosir_dir(workspace_root) / COSIR_AGENT_TEAM_CONFIG_DIR_NAME
 
 
+def workspace_agent_team_run_dir(workspace_root: str | Path) -> Path:
+    """返回 workspace Agent Team 运行档案目录路径。"""
+
+    return workspace_cosir_dir(workspace_root) / COSIR_AGENT_TEAM_RUNS_DIR_NAME
+
+
 __all__ = [
     "COSIR_AGENT_CONFIG_DIR_NAME",
     "COSIR_AGENT_TEAM_CONFIG_DIR_NAME",
+    "COSIR_AGENT_TEAM_RUNS_DIR_NAME",
     "COSIR_ATTACHMENT_DIR_NAME",
     "COSIR_ATTACHMENT_STAGING_DIR_NAME",
     "COSIR_DIR_NAME",
@@ -86,6 +94,7 @@ __all__ = [
     "COSIR_TOOL_ARTIFACT_DIR_NAME",
     "workspace_agent_config_dir",
     "workspace_agent_team_config_dir",
+    "workspace_agent_team_run_dir",
     "workspace_attachment_dir",
     "workspace_attachment_staging_dir",
     "workspace_cosir_dir",

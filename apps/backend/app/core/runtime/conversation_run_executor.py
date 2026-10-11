@@ -12,7 +12,7 @@ from app.config.logging.logger import log
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
-from app.core.tools.schemas.user_decision import UserDecision
+from app.core.tools.schemas.user_decision import UserDecision, UserDecisionKind
 from app.models import ConversationRunRecord, ConversationRunStatus
 from app.service.depends import (
     get_conversation_run_service,
@@ -172,7 +172,8 @@ class ConversationRunExecutor:
         内部暂停语义不反向取消）。
 
         唯一例外是**等待用户决定的 Run**：图挂起时没有节点会去读取消信号，因此本方法额外把它
-        迁回 ``running`` 并以续跑模式重新驱动，让 ``model_node`` 检出信号并落 cancelled（详见
+        迁回 ``running``，并以带「强行拒绝」决定的续跑模式重新驱动——``wait_user`` 据此消费掉待决
+        断点、``model_node`` 随后检出信号并落 cancelled（详见
         :meth:`_drive_waiting_run_into_cancellation`）。这是本类唯一会启动驱动的路径。
 
         返回: 新标记取消请求返回 ``True``；已标记则返回 ``False``。
@@ -218,10 +219,13 @@ class ConversationRunExecutor:
         信号无人消费。不改的话用户点了停止却毫无反应，还要等他先作答才生效（表现为「点停止 → 又
         点确认 → 整轮才取消」的反直觉结果）。
 
-        因此这里先把 Run 条件迁回 ``running``（``resume_waiting_run``），再以 ``resume`` 模式驱动：
-        workflow 的续跑回退是 ``Command(goto=model)``，而 ``model_node`` 的第一件事就是检出取消
-        信号、落 cancelled 终态并 ``interrupt`` ——「停止」于是立即生效。这条路径会丢弃尚未消费的
-        human-in-the-loop 断点，因此 ``workflow`` 的续跑守卫只对「未标记取消」的 Run 拦截。
+        因此这里先把 Run 条件迁回 ``running``（``resume_waiting_run``），再以 ``resume_with_input``
+        模式驱动并注入系统合成的「强行拒绝」决定（见 :func:`_force_reject_decision`）。**不能**改用
+        ``resume`` + ``Command(goto=model)`` 绕过断点：LangGraph 恢复 pending interrupt 会从
+        ``wait_user`` 节点开头重放，重放会再次挂起同一请求，断点最终仍落回 ``wait_user``，之后任何
+        不带决定的续跑都会被守卫拒绝。以强行拒绝恢复时 ``wait_user`` 消费断点、把观察改写为取消终态
+        并路由 ``observe``，图推进到 ``model``，由它检出取消信号、落 cancelled 终态并 ``interrupt``
+        ——「停止」于是立即生效，且断点留在模型侧，后续续跑仍走正常的 ``goto model`` 回退。
 
         参数:
             run_id: 处于 ``waiting_for_input`` 的 Run 标识。
@@ -249,7 +253,7 @@ class ConversationRunExecutor:
                 },
             )
             return
-        await self.start(run_id, "resume")
+        await self.start(run_id, "resume_with_input", UserDecision(request_id="", kind=UserDecisionKind.FORCE_REJECT, data={}))
 
     async def cancel_tool_call(self, run_id: int, tool_call_id: str) -> bool:
         """标记工具级取消信号（只中止一次工具调用，run 继续）。

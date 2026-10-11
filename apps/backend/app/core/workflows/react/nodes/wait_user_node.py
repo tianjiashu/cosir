@@ -11,7 +11,8 @@
    「需要用户决定什么」作为结构化载荷交给外部驱动方；
 3. 恢复时消费唯一请求的结构化决定并**立即物化**：批准把调用重置回「未起跑」并附上用户决定
    （交由 ``tools`` 真正执行），驳回 / 放弃把观察改写为模型可见的取消终态；决定会清掉观察上的
-   待决声明（「尚未作答」的唯一标记），随后路由到 ``tools`` 或 ``observe``。
+   待决声明（「尚未作答」的唯一标记），随后路由到 ``tools`` 或 ``observe``。系统合成的
+   ``FORCE_REJECT``（取消等待中的 Run）先被归一为对当前请求的驳回，再走同一条物化路径。
 
 链路契约（不明显但关键）：本节点仅在 ``tools`` 观察带单个待决请求时到达。请求的对外可见性只来自
 tool part 的展示载荷，而这次投影由本节点在挂起前完成；若将来在 ``tools`` 与本节点之间插入节点或
@@ -171,6 +172,9 @@ def _apply_decision(
     空恢复值自环 ``wait_user``，让 LangGraph 在新的节点执行中重新挂起；有决定时，只要快照中存在
     「已批准但尚未执行」的调用就回 ``tools``，否则交给 ``observe`` 收口。
 
+    系统合成的 ``FORCE_REJECT``（取消一个进入等待的 Run）在这里先被归一为对当前唯一待决请求的
+    ``REJECT``：它不携带可核对的请求标识，归一后与真实驳回走完全相同的校验、观察改写与收尾。
+
     参数:
         state: 当前 graph state；取本批观察用于建立「请求 ↔ 调用」关联并改写驳回观察。
         runtime_config: 运行时配置；提供 Run 身份供日志定位。
@@ -192,6 +196,16 @@ def _apply_decision(
     副作用:
         写 ``wait_user_node_resolved`` 结构化日志。
     """
+
+    if decision is not None and decision.kind is UserDecisionKind.FORCE_REJECT:
+        # 强行拒绝由系统合成（取消停在 ``wait_user`` 断点上的 Run），不定位请求：先把它归一为对
+        # 当前唯一待决请求的驳回，使下面的 ``request_id`` / ``accepts`` 校验、观察改写与领域收尾
+        # 钩子与真实驳回完全同构。归一收口在此，避免把「不核对 request_id」扩散到其它决定种类。
+        decision = UserDecision(
+            request_id=request.request_id,
+            kind=UserDecisionKind.REJECT,
+            data=decision.data,
+        )
 
     if decision is not None:
         if decision.request_id != request.request_id:

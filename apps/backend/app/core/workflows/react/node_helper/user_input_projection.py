@@ -123,7 +123,8 @@ def parse_resume_decision(resume_value: object) -> UserDecision | None:
         已校验的领域决定；无决定时返回 ``None``（调用方据此重新挂起）。
 
     异常:
-        ValueError: 恢复值不是预期结构，或决定缺少 ``request_id`` / 合法 ``decision``。
+        ValueError: 恢复值不是预期结构，或决定缺少合法 ``decision``（``FORCE_REJECT`` 之外的
+            决定还须携带非空 ``request_id``）。
 
     副作用:
         无（纯函数）。
@@ -140,16 +141,20 @@ def parse_resume_decision(resume_value: object) -> UserDecision | None:
         raise ValueError("恢复值的 decision 必须是对象")
     request_id = raw.get("request_id")
     kind = raw.get("decision")
-    if not isinstance(request_id, str) or not request_id:
-        raise ValueError("决定必须携带非空 request_id")
     if not isinstance(kind, str):
         raise ValueError("决定必须携带 decision")
     try:
         resolved_kind = UserDecisionKind(kind)
     except ValueError as exc:
         raise ValueError(f"未知的决定种类：{kind}") from exc
+    # 强行拒绝（系统取消等待中的 Run 时合成）不定位请求，允许空 request_id；其余决定必须携带，
+    # 否则调用方无从知道它指向哪条待决请求。
+    if resolved_kind is not UserDecisionKind.FORCE_REJECT and (
+        not isinstance(request_id, str) or not request_id
+    ):
+        raise ValueError("决定必须携带非空 request_id")
     return UserDecision(
-        request_id=request_id,
+        request_id=request_id if isinstance(request_id, str) else "",
         kind=resolved_kind,
         data=_mapping(raw.get("data")),
     )

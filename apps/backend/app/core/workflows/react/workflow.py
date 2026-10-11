@@ -27,7 +27,6 @@ from app.config.configuration import get_tool_system
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.model_factory import resolve_chat_model
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.tools.schemas import UserDecision, build_resume_payload
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
@@ -42,35 +41,30 @@ from .runtime_config import RuntimeConfig
 from .worflow_state.route import ReactRoute
 
 
-def _reject_resume_without_decisions(parked_at_interrupt: bool, run_id: int) -> bool:
-    """不带决定的续跑是否应被拒绝：图停在 human-in-the-loop 断点上且该 Run 未标记取消。
+def _reject_resume_without_decisions(parked_at_wait_user: bool) -> bool:
+    """不带决定的续跑是否应被拒绝：图停在 human-in-the-loop 断点（``wait_user``）上。
 
     ``goto model`` 会绕开 ``wait_user`` 的图断点，把待决请求静默丢掉，并让模型读到「等待确认」的
-    占位结果行，所以默认拒绝。
+    占位结果行，所以默认拒绝。取消等待中的 Run 不走这条判定：取消入口会构造系统合成的
+    ``FORCE_REJECT`` 决定并以 ``resume_with_input`` 驱动，由 ``wait_user`` 正常消费断点。
 
-    唯一例外是**用户取消等待中的 Run**：``ConversationRunExecutor.cancel`` 先标记取消信号、再以
-    ``resume`` 模式重新驱动（否则挂起的图里没有任何节点会去读信号）。那条路径丢弃断点是预期行为
-    ——取消本来就表示「这个请求不要了」，终态由 ``model_node`` 检出信号后落定。
+    判据只认 ``wait_user`` 的断点，不能退化成「任意 interrupt 都拒绝」：模型侧断点（协作取消、
+    输出待续写）没有可恢复的输入，正确处理是回退 ``model`` 重跑，而不是拒绝续跑。
 
     参数:
-        parked_at_interrupt: 图是否停在某个 interrupt 上。
-        run_id: 本次续跑的 Run 标识；用于查询进程内取消信号。
+        parked_at_wait_user: 图是否停在 ``wait_user`` 的 interrupt 上。
 
     返回:
-        ``True`` 表示应拒绝本次续跑；``False`` 表示允许。
+        ``True`` 表示应拒绝本次续跑；``False`` 表示放行（回退 ``model`` 重跑）。
 
     异常:
         无。
 
     副作用:
-        无（只读进程内取消集合）。
+        无。
     """
 
-    if not parked_at_interrupt:
-        return False
-    return not cancellation_registry.is_cancelled(run_id)
-
-
+    return parked_at_wait_user
 def _closed_terminal_sessions(raw: object, *, reason: str) -> dict[str, dict[str, Any]] | None:
     """生成仅包含必要变化的 terminal checkpoint 更新。
 
@@ -221,11 +215,14 @@ class ReactLikeWorkflow(AgentWorkflow):
                 决定注入 graph 的输入（``fresh`` 传初始 state；``resume`` 传
                 ``Command(goto="model")`` 回退到 model 节点重跑，``resume_with_input`` 在
                 ``wait_user`` 处于 interrupt 时传 ``Command(resume=...)``）以及上下文是否
-                清空该 run 的旧条目（见 ``RuntimeContextManager.begin_run``）。
+                清空该 run 的旧条目（见 ``RuntimeContextManager.begin_run``）。取消一个停在
+                ``wait_user`` 断点上的 Run 走 ``resume_with_input``：取消入口构造强行拒绝决定，
+                让断点被消费而不是被绕过。
             user_decision: 本次续跑携带的用户结构化决定；``resume_with_input`` 下若恢复现场的
                 图状态里存在处于 interrupt 的任务，就把它作为 ``Command(resume=...)`` 的载荷注入
                 （当前只有 ``wait_user`` 会把 Run 置为等待用户输入）。为空时注入空决定，由
-                ``wait_user`` 重新挂起等待用户输入。
+                ``wait_user`` 重新挂起等待用户输入。取消等待中的 Run 由 ``ConversationRunExecutor``
+                注入系统合成的强行拒绝决定（``FORCE_REJECT``），由 ``wait_user`` 归一为驳回。
 
         返回:
             无。图正常收束或在等待节点处挂起后返回，interrupt 与 checkpoint 由 LangGraph 持久化。
@@ -346,7 +343,6 @@ class ReactLikeWorkflow(AgentWorkflow):
                         "该 Run 的 checkpoint 已结束，无法续跑",
                     )
                 # 决定只能恢复 wait_user 自己建立的 interrupt；其它节点的 interrupt 不得误收决定。
-                parked_at_interrupt = any(task.interrupts for task in snapshot.tasks)
                 parked_at_wait_user = any(
                     task.name == "wait_user" and task.interrupts
                     for task in snapshot.tasks
@@ -390,27 +386,24 @@ class ReactLikeWorkflow(AgentWorkflow):
                     if parked_at_wait_user:
                         input_state = Command(resume=build_resume_payload(user_decision))
                 else:
-                    # 图停在待用户决定的断点上，却用不带决定的 ``resume`` 续跑：``goto model``
-                    # 会绕开该断点，把待决请求静默丢掉，并让模型读到「等待确认」的占位结果行。
-                    # 因此显式失败，由调用方改用带决定的续跑。
-                    #
-                    # 唯一例外是「用户取消等待中的 Run」：``ConversationRunExecutor.cancel``
-                    # 已先标记取消信号，再以本模式重新驱动，目的正是让被绕开的请求作废、由
-                    # ``model_node`` 检出信号落 cancelled。此时丢弃断点是预期行为。
-                    if _reject_resume_without_decisions(
-                        parked_at_interrupt, runtime_config.run.id
-                    ):
+                    # 图停在 human-in-the-loop 断点上却没有任何决定：``goto model`` 会绕开
+                    # ``wait_user`` 把待决请求静默丢掉，并让模型读到「等待确认」的占位结果行。
+                    # 因此显式失败，由调用方改用带决定的续跑——取消等待中的 Run 由取消入口构造
+                    # 强行拒绝决定，同样走带决定的入口，不经过这条判定。
+                    if _reject_resume_without_decisions(parked_at_wait_user):
                         raise WorkflowRunFailure(
                             Constant.Run.RUN_FAILURE_CODE_WAITING_FOR_INPUT,
                             "该 Run 正在等待用户决定，请提交决定后续跑",
                         )
-                    # 无用户决定的续跑一律回退到 model 节点重跑：模型侧断点（协作取消、
-                    # 输出待续写）没有可恢复的输入，只能让模型看到当前上下文后重新决策；
-                    # 图仍从既有 checkpoint 上继续，不新建线程。
+                    # 图仍有 interrupt 时 checkpoint 更新必须合并进恢复命令，不能单独
+                    # ``aupdate_state``（见 ``_closed_terminal_sessions``）。
                     terminal_sessions_update = _closed_terminal_sessions(
                         snapshot.values.get("terminal_sessions"),
                         reason="run_execution_finished",
                     )
+                    # 无用户决定的续跑一律回退到 model 节点重跑：模型侧断点（协作取消、输出待续写）
+                    # 没有可恢复的输入，只能让模型看到当前上下文后重新决策；图仍从既有 checkpoint
+                    # 上继续，不新建线程。
                     input_state = (
                         Command(
                             goto=ReactRoute.MODEL.value,

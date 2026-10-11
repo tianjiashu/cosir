@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 from langgraph.types import Command
 
+from app.core.tools.schemas import UserDecision, UserDecisionKind
 from app.core.workflows.agent_workflow import WorkflowRunFailure
 from app.core.workflows.react import workflow as workflow_module
 from app.core.workflows.react.workflow import ReactLikeWorkflow
@@ -124,6 +125,12 @@ def patched(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         "get_terminal_session_service",
         lambda: SimpleNamespace(close_run_terminals=lambda *a, **k: None),
     )
+    # 运行期配置要经 ``get_tool_system`` 取 HIL 决定处理器；本测试不连接工具系统，注入空集合。
+    monkeypatch.setattr(
+        workflow_module,
+        "get_tool_system",
+        lambda: SimpleNamespace(user_input_decision_handlers=SimpleNamespace()),
+    )
     monkeypatch.setattr(
         "app.task_runtime.task_runtime_space_registry.task_runtime_spaces",
         space,
@@ -138,11 +145,11 @@ async def _run_with(
     tasks: list[object] | None = None,
     expect_failure: bool = False,
     execution_mode: str = "resume",
-    user_decisions: tuple[object, ...] = (),
+    user_decision: object | None = None,
 ) -> _FakeGraph:
     """装配图（停在 ``next_nodes``）并驱动一次续跑，返回捕获了输入的假图。
 
-    ``execution_mode`` 决定输入构造分支：``resume``（无用户决定）一律回退 model，
+    ``execution_mode`` 决定输入构造分支：``resume``（无用户决定）一般回退 model，
     ``resume_with_input``（携带用户决定）才会注入 ``Command(resume=...)``。
     ``expect_failure`` 为真时要求 ``run`` 抛出 ``WorkflowRunFailure``（续跑准入被拒路径）；
     此时异常不再由工作流吞掉，而是交给运行时落定 failed 终态。
@@ -155,7 +162,7 @@ async def _run_with(
         drive = ReactLikeWorkflow().run(
             operations=_make_operations(),
             execution_mode=execution_mode,  # type: ignore[arg-type]
-            user_decisions=user_decisions,  # type: ignore[arg-type]
+            user_decision=user_decision,  # type: ignore[arg-type]
             callbacks=[],
         )
         if expect_failure:
@@ -204,8 +211,8 @@ async def test_resume_with_input_waits_user_keeps_command_resume(
         execution_mode="resume_with_input",
     )
     assert _goto_target(graph.captured_input) is None
-    # 无决定时注入空决定集合：``wait_user`` 据此重新挂起同一请求，而不是把空值当批准。
-    assert _resume_target(graph.captured_input) == {"decisions": []}
+    # 无决定时注入空决定：``wait_user`` 据此重新挂起同一请求，而不是把空值当批准。
+    assert _resume_target(graph.captured_input) == {"decision": None}
     assert patched._deferred == []
 
 
@@ -231,4 +238,40 @@ async def test_resume_finished_graph_is_rejected(patched: SimpleNamespace) -> No
     """图已走到 END（无 next）：拒绝续跑，抛带失败码的异常，不向 astream 注入任何输入。"""
 
     graph = await _run_with(patched, next_nodes=(), expect_failure=True)
+    assert graph.captured_input is None
+
+
+async def test_resume_with_input_force_reject_carries_no_request_id(
+    patched: SimpleNamespace,
+) -> None:
+    """取消等待中的 Run：取消入口注入的强行拒绝决定原样进入 resume 载荷。
+
+    该决定不核对 ``request_id``（载荷里为空串），因此取消链路无需读 checkpoint 定位待决请求；
+    具体请求由 ``wait_user`` 归一时补上。
+    """
+
+    graph = await _run_with(
+        patched,
+        next_nodes=("wait_user",),
+        tasks=[SimpleNamespace(name="wait_user", interrupts=[object()])],
+        execution_mode="resume_with_input",
+        user_decision=UserDecision(kind=UserDecisionKind.FORCE_REJECT),
+    )
+
+    assert _goto_target(graph.captured_input) is None
+    assert _resume_target(graph.captured_input) == {
+        "decision": {"request_id": "", "decision": "force_reject", "data": {}}
+    }
+
+
+async def test_resume_without_decision_is_rejected_while_waiting(patched: SimpleNamespace) -> None:
+    """无决定续跑时若图停在 ``wait_user`` 断点：拒绝续跑，不绕开断点把待决请求丢掉。"""
+
+    graph = await _run_with(
+        patched,
+        next_nodes=("wait_user",),
+        tasks=[SimpleNamespace(name="wait_user", interrupts=[object()])],
+        expect_failure=True,
+    )
+
     assert graph.captured_input is None

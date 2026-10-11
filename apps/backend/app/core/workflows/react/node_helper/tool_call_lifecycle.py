@@ -657,7 +657,7 @@ class ToolCallLifecycleManager(BaseModel):
                 to_status="running",
                 display_data=display_data,
             )
-            runtime_context.add_message(
+            canonical_write = runtime_context.add_message(
                 build_waiting_input_tool_message(call_id, record.tool_name),
                 transport_metadata=TransportMetadata(
                     status="running",
@@ -665,6 +665,24 @@ class ToolCallLifecycleManager(BaseModel):
                     error=None,
                 ),
                 run_id=run_id,
+            )
+            log.info(
+                "user_input_request_transport_persisted",
+                extra={
+                    "msg": "待决用户输入载荷已写入工具卡片 Transport 元数据",
+                    "data": {
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "step_id": step_id,
+                        "tool_call_id": call_id,
+                        "request_id": request.request_id,
+                        "request_kind": request.kind,
+                        "draft_schema": request.draft_schema,
+                        "display_data_kind": display_data.get("kind"),
+                        "display_data_keys": sorted(display_data),
+                        "canonical_write": canonical_write,
+                    },
+                },
             )
 
     def reopen_for_approved_replay(
