@@ -15,7 +15,7 @@ from app.core.tools.schemas import (
 from app.core.tools.schemas.tool_names import TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
-from app.core.tools.tool_grouping import TOOL_GROUP_AGENT_TEAM
+from app.core.tools.tool_grouping import TOOL_GROUP_AGENT_TEAM, TOOL_GROUP_CONFIGURATION
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import ProposeAgentTeamConfigurationArgs
 
@@ -33,7 +33,7 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
     )
     args_model = ProposeAgentTeamConfigurationArgs
     timeout_seconds: ClassVar[float] = 20.0
-    group = TOOL_GROUP_AGENT_TEAM
+    group = TOOL_GROUP_CONFIGURATION
 
     def execute(
         self,

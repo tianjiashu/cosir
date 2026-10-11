@@ -59,6 +59,21 @@ export type AgentTeamRun = {
     agent_count: number;
     child_agents: Array<{ task_id: number; title: string; status: string }>;
   }>;
+  execution_steps: Array<{
+    step_number: number;
+    node_visit: number;
+    node_id: string;
+    name: string;
+    agent_id: string;
+    goal: string;
+    task_id: number | null;
+    conversation_run_id: number | null;
+    status: string;
+    business_status: string | null;
+    business_status_color: string | null;
+    transition_target_node_id: string | null;
+    child_agents: Array<{ task_id: number; title: string; status: string }>;
+  }>;
   transitions: Array<{ from_node_id: string; status: string; target_node_id: string }>;
   transition_history: Array<{ from_node_id: string; status: string; target_node_id: string | null }>;
   current_node_id: string | null;

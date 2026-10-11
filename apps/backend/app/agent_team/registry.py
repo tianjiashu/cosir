@@ -305,7 +305,8 @@ class AgentTeamConfigurationRegistry:
 
         返回:
             以 ``team_id | name | description`` 加节点/转移明细列出的 Team 目录；没有可见 Team 时
-            返回 ``""``（整层不出现），避免向模型下发不存在的契约。
+            返回固定的英文提示（声明当前无可用 Team，并引导主 Agent 用
+            ``propose_agent_team_configuration`` 先生成配置草稿），避免模型自行在工作区里翻找配置。
 
         异常:
             ValueError: workspace 根路径为空时由 :meth:`normalize_scope` 抛出。
@@ -317,7 +318,12 @@ class AgentTeamConfigurationRegistry:
 
         teams = self.list_visible(workspace_root)
         if not teams:
-            return "no agent teams available"
+            # 只回一句「没有 Team」会让模型自己到工作区里翻配置文件（实测发生过），因此这里
+            # 直接给出下一步动作，并指向唯一能创建 Team 配置的工具。
+            return (
+                "no agent teams available; if the user asks to use an agent team, call "
+                "propose_agent_team_configuration to draft a configuration first"
+            )
         blocks = []
         for configuration in teams:
             lines = [

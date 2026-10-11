@@ -12,6 +12,7 @@ import copy
 import json
 from typing import ClassVar
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import (
     AgentProfile,
@@ -20,17 +21,7 @@ from app.core.agents.agent_profile import (
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.core.tools.schemas import (
-    TOOL_AGENT_TEAM,
-    TOOL_CHILD_AGENT_SEND,
-    TOOL_CHILD_AGENT_STATUS,
-    TOOL_CHILD_AGENT_WAIT,
     TOOL_DELEGATE_TASK,
-    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
-    TOOL_TERMINAL_CLOSE,
-    TOOL_TERMINAL_READ,
-    TOOL_TERMINAL_SIGNAL,
-    TOOL_TERMINAL_START,
-    TOOL_TERMINAL_WRITE,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -48,26 +39,6 @@ from app.service.depends import (
     get_conversation_run_service,
     get_conversation_run_state_service,
     get_task_service,
-)
-
-# 子 Agent 不得使用的工具：**委派与父子通信**（``tool_handler/child_task/`` 全部工具）与
-# **可交互终端**（``tool_handler/terminal_session/`` 全部工具）。清单与这两个目录一一对应，
-# 新增同目录工具时必须同步登记。它们仍可被 Task schema 固化，但会进入 child Run 的
-# ``ban_tools``，从而保持 bind_tools 结构和实际执行权限分离。
-CHILD_DISALLOWED_TOOLS: tuple[str, ...] = (
-    # child_task/：委派与父子通信
-    TOOL_DELEGATE_TASK,
-    TOOL_CHILD_AGENT_STATUS,
-    TOOL_CHILD_AGENT_SEND,
-    TOOL_CHILD_AGENT_WAIT,
-    TOOL_AGENT_TEAM,
-    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
-    # terminal_session/：可交互终端
-    TOOL_TERMINAL_START,
-    TOOL_TERMINAL_WRITE,
-    TOOL_TERMINAL_READ,
-    TOOL_TERMINAL_SIGNAL,
-    TOOL_TERMINAL_CLOSE,
 )
 
 # 只等 executor 完成「登记 + 建后台 task」这一段，不等子 Agent 跑完。
@@ -220,7 +191,9 @@ class DelegateTaskTool(HandlerBase):
                 get_tool_system().executor.list_tools()
             )
             child_final_task_tools = [
-                tool for tool in child_task_tools if tool.name not in CHILD_DISALLOWED_TOOLS
+                tool
+                for tool in child_task_tools
+                if tool.name not in Constant.Tools.CHILD_DISALLOWED_TOOLS
             ]
 
 

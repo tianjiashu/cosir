@@ -627,12 +627,19 @@ def test_confirmed_start_surfaces_domain_value_error() -> None:
     [AgentTeamRunStatus.CANCELLED.value, AgentTeamRunStatus.FAILED.value],
 )
 def test_confirmed_start_does_not_report_success_for_terminal_runs(terminal_status: str) -> None:
-    """(对抗) 条件迁移未生效且行已终态时不得报告成功。
+    """(对抗) 条件迁移未生效且行已终态时不得报告成功，且必须透出终结原因。
 
-    潜在缺陷：把 cancelled/failed 的 TeamRun 当成功返回，模型会等一个永远不会运行的 Team。
+    潜在缺陷：把 cancelled/failed 的 TeamRun 当成功返回，模型会等一个永远不会运行的 Team；
+    只回「已终结」而不带 ``end_reason`` 时，模型会把「节点执行失败」误读成「运行时状态问题」，
+    转而向用户输出猜测性解释而不是真实原因。
     """
 
-    row = SimpleNamespace(id=7, status=terminal_status, team_id="code-quality")
+    row = SimpleNamespace(
+        id=7,
+        status=terminal_status,
+        team_id="code-quality",
+        end_reason="节点 draft 执行失败",
+    )
     observation = _start_branch_tool(lambda *a, **k: row)._start_confirmed_run(
         _approve_decision(), _parent_run_profile()
     )
@@ -640,6 +647,7 @@ def test_confirmed_start_does_not_report_success_for_terminal_runs(terminal_stat
     assert observation.status == "error"
     assert observation.error == "agent_team_confirmation_invalid"
     assert terminal_status in (observation.reason or "")
+    assert "节点 draft 执行失败" in (observation.reason or "")
 
 
 # --------------------------------------------------------------------------- #

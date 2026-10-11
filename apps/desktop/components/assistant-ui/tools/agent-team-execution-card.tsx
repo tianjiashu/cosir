@@ -1,30 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
-import { MarkerType, type Node, type Edge } from "@xyflow/react";
-import { ReactFlow } from "@xyflow/react";
+import { useEffect, useState } from "react";
 import { BotIcon, UsersIcon } from "lucide-react";
 
 import { getAgentTeamRun, type AgentTeamRun } from "@/lib/api/agent-teams";
 import { useWorkbenchActions } from "@/lib/workbench/context";
-import { Button } from "@/components/ui/button";
 import { readToolArtifact } from "./types";
 import { readAgentTeamRunDisplay } from "./agent-team-display";
 import { ToolStatus } from "./tool-status";
-import { findAgentTeamStatus } from "@/lib/agent-team-status";
 import type { ToolPartRendererProps } from "./tool-renderer-registry";
 import type { AgentTeamRunDisplay } from "./agent-team-display";
+import { AgentTeamExecutionPipeline } from "./agent-team-execution-pipeline";
 
 type AgentTeamExecutionCardProps = ToolPartRendererProps & {
   displayOverride?: AgentTeamRunDisplay;
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  queued: "等待中",
-  pending: "等待中",
-  running: "执行中",
-  completed: "已完成",
-  failed: "失败",
-  cancelled: "已取消",
-  skipped: "未经过",
 };
 
 const END_REASON_LABELS: Record<string, string> = {
@@ -43,12 +30,13 @@ const END_REASON_LABELS: Record<string, string> = {
   max_runs_exceeded: "达到最大节点执行次数",
 };
 
-function statusStyle(status: string): { borderColor: string; background: string } {
-  if (status === "running") return { borderColor: "hsl(var(--primary))", background: "hsl(var(--primary) / 0.08)" };
-  if (status === "completed") return { borderColor: "hsl(142 60% 40%)", background: "hsl(142 60% 40% / 0.08)" };
-  if (status === "failed" || status === "cancelled") return { borderColor: "hsl(var(--destructive))", background: "hsl(var(--destructive) / 0.06)" };
-  return { borderColor: "hsl(var(--border))", background: "hsl(var(--card))" };
-}
+const RUN_STATUS_LABELS: Record<string, string> = {
+  pending: "等待确认",
+  running: "执行中",
+  completed: "已完成",
+  failed: "执行失败",
+  cancelled: "已取消",
+};
 
 export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
   const artifact = readToolArtifact(props.artifact);
@@ -84,73 +72,15 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
     };
   }, [display?.teamRunId]);
 
-  const graph = useMemo(() => {
-    if (!run) return { nodes: [] as Node[], edges: [] as Edge[] };
-    const nodes: Node[] = run.nodes.map((node, index) => ({
-      id: node.node_id,
-      position: { x: (index % 3) * 230, y: Math.floor(index / 3) * 125 },
-      data: {
-        label: `${node.name}\n${STATUS_LABELS[node.status] ?? node.status} · ${node.agent_id}`,
-      },
-      style: {
-        ...statusStyle(node.status),
-        borderWidth: run.current_node_id === node.node_id ? 2 : 1,
-        borderRadius: 12,
-        width: 190,
-        minHeight: 66,
-        fontSize: 12,
-        whiteSpace: "pre-line",
-        cursor: node.task_id === null ? "default" : "pointer",
-      },
-    }));
-    nodes.push({
-      id: "END",
-      position: { x: (run.nodes.length % 3) * 230, y: Math.floor(run.nodes.length / 3) * 125 },
-      data: { label: "完成" },
-      style: {
-        border: "1px dashed hsl(var(--border))",
-        borderRadius: 999,
-        width: 100,
-        textAlign: "center",
-        fontSize: 12,
-      },
-    });
-    const edgeCounts = new Map<string, number>();
-    const edges: Edge[] = run.transitions.map((transition, index) => {
-      const key = `${transition.from_node_id}:${transition.target_node_id}`;
-      const occurrence = edgeCounts.get(key) ?? 0;
-      edgeCounts.set(key, occurrence + 1);
-      const visited = run.transition_history.some((item) => item.from_node_id === transition.from_node_id
-        && item.status === transition.status && item.target_node_id === transition.target_node_id);
-      const sourceNode = run.nodes.find((node) => node.node_id === transition.from_node_id);
-      const statusColor = (sourceNode
-        ? findAgentTeamStatus(sourceNode.statuses, transition.status)?.color
-        : undefined) ?? "hsl(var(--muted-foreground) / 0.45)";
-      return {
-        id: `transition-${index}`,
-        source: transition.from_node_id,
-        target: transition.target_node_id,
-        label: transition.target_node_id === "END" ? `${transition.status} → END` : transition.status,
-        animated: run.current_node_id === transition.from_node_id,
-        style: {
-          stroke: statusColor,
-          strokeWidth: visited ? 2 : 1,
-          opacity: visited ? 1 : 0.55,
-        },
-        markerEnd: { type: MarkerType.ArrowClosed, color: statusColor },
-        labelStyle: { fontSize: 10, fill: "hsl(var(--muted-foreground))" },
-        type: "smoothstep",
-      };
-    });
-    return { nodes, edges };
-  }, [run]);
-
   if (!display) return null;
-  const currentStatus = run ? STATUS_LABELS[run.status] ?? run.status : "读取进度中";
+  const currentStatus = run ? RUN_STATUS_LABELS[run.status] ?? run.status : "读取进度中";
   const openAgent = (taskId: number, title: string, role: string) => {
     actions?.openAgent({ taskId, title, role });
   };
-  const totalAgents = run?.nodes.reduce((count, node) => count + node.agent_count, 0) ?? 0;
+  const visitedAgents = run?.execution_steps.reduce(
+    (count, step) => count + 1 + step.child_agents.length,
+    0,
+  ) ?? 0;
 
   return (
     <section className="space-y-3 rounded-xl border border-border/70 bg-card p-3 shadow-sm" aria-label="Agent Team 执行进度">
@@ -168,86 +98,20 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
         </div>
       </header>
 
-      {run && graph.nodes.length > 0 && (
-        <div className="h-56 overflow-hidden rounded-lg border border-border/60 bg-muted/15" aria-label="Team 节点流水线">
-          <ReactFlow
-            nodes={graph.nodes}
-            edges={graph.edges}
-            fitView
-            fitViewOptions={{ padding: 0.2 }}
-            nodesDraggable={false}
-            nodesConnectable={false}
-            elementsSelectable={false}
-            proOptions={{ hideAttribution: true }}
-            onNodeClick={(_, node) => {
-              const taskId = run.nodes.find((item) => item.node_id === node.id)?.task_id;
-              if (taskId !== null && taskId !== undefined) {
-                const item = run.nodes.find((candidate) => candidate.node_id === node.id);
-                openAgent(taskId, item?.name ?? node.id, item?.agent_id ?? "Team 节点 Agent");
-              }
-            }}
-          />
-        </div>
-      )}
-
       {run && (
-        <div className="space-y-2">
+        <>
+          <AgentTeamExecutionPipeline run={run} onOpenAgent={openAgent} />
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <BotIcon className="size-3.5" aria-hidden="true" />
-            {run.nodes.length} 个执行节点 · {totalAgents} 个 Agent
+            {run.nodes.length} 个配置节点 · {run.execution_steps.length} 次节点访问 · {visitedAgents} 次 Agent 执行
           </div>
-          <div className="space-y-2">
-            {run.nodes.map((node) => (
-              <article key={node.node_id} className="space-y-2 rounded-lg border border-border/70 bg-muted/15 p-2.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-1.5 font-medium"
-                    disabled={node.task_id === null}
-                    onClick={() => node.task_id !== null && openAgent(node.task_id, node.name, node.agent_id)}
-                  >
-                    {node.name}
-                  </Button>
-                  <span className="rounded-full bg-background px-2 py-0.5 text-[11px] text-muted-foreground">
-                    {STATUS_LABELS[node.status] ?? node.status}
-                  </span>
-                  <span className="text-[11px] text-muted-foreground">{node.conversation_run_count} 次运行</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <span className="font-medium text-foreground/80">负责 Agent</span>
-                  <code className="rounded bg-background px-1.5 py-0.5">{node.agent_id}</code>
-                </div>
-                {node.goal && (
-                  <p className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{node.goal}</p>
-                )}
-                {node.child_agents.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2">
-                    <span className="text-[11px] text-muted-foreground">委派子 Agent</span>
-                    {node.child_agents.map((agent) => (
-                      <Button
-                        key={agent.task_id}
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-6 gap-1.5 px-2 text-[11px]"
-                        onClick={() => openAgent(agent.task_id, agent.title, "子 Agent")}
-                      >
-                        {agent.title}
-                        <span className="text-muted-foreground">{STATUS_LABELS[agent.status] ?? agent.status}</span>
-                      </Button>
-                    ))}
-                  </div>
-                )}
-              </article>
-            ))}
-          </div>
-        </div>
+        </>
       )}
 
       {error && <p className="text-xs text-destructive">{error}</p>}
-      {run?.end_reason && <p className="text-xs text-muted-foreground">{END_REASON_LABELS[run.end_reason] ?? run.end_reason}</p>}
+      {run?.end_reason && (
+        <p className="text-xs text-muted-foreground">{END_REASON_LABELS[run.end_reason] ?? run.end_reason}</p>
+      )}
     </section>
   );
 }

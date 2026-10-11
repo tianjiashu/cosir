@@ -13,7 +13,11 @@ from app.agent_team.configuration.agent_team_configuration import AgentTeamConfi
 from app.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
 from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
 from app.agent_team.registry import AgentTeamConfigurationRegistry
-from app.agent_team.state.agent_team_run_state import AgentTeamNodeExecution, AgentTeamRunState
+from app.agent_team.state.agent_team_run_state import (
+    AgentTeamNodeExecution,
+    AgentTeamRunRuntime,
+    AgentTeamRunState,
+)
 from app.core.tools.tool_handler.agent_team.propose_agent_team_configuration import (
     ProposeAgentTeamConfigurationTool,
 )
@@ -797,15 +801,17 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
         session.add(node_task)
         session.flush()
         node_run = ConversationRunModel(task_id=node_task.id, status="running")
+        session.add(node_run)
+        session.flush()
         child_task = TaskModel(
             workspace_id=workspace.id,
             title="搜索资料",
             task_type="delegate_task",
             parent_task_id=node_task.id,
-            parent_run_id=parent_run.id,
+            parent_run_id=node_run.id,
             tool_schemas=[],
         )
-        session.add_all([node_run, child_task])
+        session.add(child_task)
         session.flush()
         child_run = ConversationRunModel(task_id=child_task.id, status="completed")
         session.add(child_run)
@@ -828,6 +834,16 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
                     )
                 },
                 current_node_id="develop",
+                node_runtime={
+                    "develop": AgentTeamRunRuntime(
+                        agent_id="general-assistant",
+                        node_goal="实现与验证功能",
+                    ),
+                    "review": AgentTeamRunRuntime(
+                        agent_id="general-assistant",
+                        node_goal="独立审查结果",
+                    ),
+                },
             ).to_json(),
         )
         session.add(team_run)
@@ -849,5 +865,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
         "title": "搜索资料",
         "status": "completed",
     }]
+    assert view["execution_steps"][0]["child_agents"] == develop["child_agents"]
+    assert view["execution_steps"][0]["goal"] == "实现与验证功能"
     assert "state" not in view
     assert "node_runtime" not in view

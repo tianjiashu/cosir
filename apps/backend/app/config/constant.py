@@ -379,3 +379,46 @@ class Constant:
         MAX_OUTPUT_CHARS: int = 20_000
         # 同一回复内工具调用的并行 worker 上限（并行批次按此收敛，超出的调用排队执行）。
         MAX_PARALLEL_CALLS: int = 8
+
+        # 「子 Agent 不得使用」的工具名集合：委派与父子通信（``tool_handler/child_task/`` 全部
+        # 工具）加可交互终端（``tool_handler/terminal_session/`` 全部工具）。子 Agent 仍能在 Task
+        # schema 里看到它们，但会被写进 child Run 的 ``ban_tools``，使 bind_tools 结构与实际执行
+        # 权限分离；这两个目录新增工具时必须同步登记。
+        # 名字取自 ``app.core.tools.schemas.tool_names``；本模块是叶子模块、不得 import 任何 ``app``
+        # 子模块，故按字面量展开（与 Run 状态等枚举值同一处理），漂移由 tests/ 下「child 工具下线
+        # 契约」用例的不变式守住（非空、无重复、全为规范名、且每个名字在活注册表中真实存在）。
+        # 该用例会扫描 app/ 源码里的旧工具名文本，本注释刻意不写出那个已下线工具的名字。
+        # 类型沿用迁移前的元组：该用例以「元组内无重复项」作为契约断言，改成 set 会让断言退化为
+        # 恒真。
+        CHILD_DISALLOWED_TOOLS: tuple[str, ...] = (
+            # child_task/：委派与父子通信
+            "delegate_task",
+            "child_agent_status",
+            "child_agent_send",
+            "child_agent_wait",
+            "agent_team",
+            "propose_agent_team_configuration",
+            "propose_agent_configuration",
+            # terminal_session/：可交互终端
+            "terminal_start",
+            "terminal_write",
+            "terminal_read",
+            "terminal_signal",
+            "terminal_close",
+        )
+        # 「Team 节点不得使用」的工具名集合。与 ``CHILD_DISALLOWED_TOOLS`` 的差别只有一处：
+        # Team 节点要把子工作继续委派给子 Agent，因此**保留**委派与父子通信工具，只禁 Team 自身
+        # 递归建 Team、配置提案与可交互终端（本集合 = ``CHILD_DISALLOWED_TOOLS`` 去掉
+        # child_task/ 的四个委派类工具）。理由同前：节点仍能看到这些 schema，但执行权限被收走。
+        TEAM_NODE_DISALLOWED_TOOLS: frozenset[str] = frozenset(
+            {
+                "agent_team",
+                "propose_agent_team_configuration",
+                "propose_agent_configuration",
+                "terminal_start",
+                "terminal_read",
+                "terminal_write",
+                "terminal_signal",
+                "terminal_close",
+            }
+        )

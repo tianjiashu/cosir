@@ -16,11 +16,11 @@ from app.core.tools.tool_handler.agent_team.review_request import (
     build_team_review_request,
 )
 from app.core.workflows.react.node_helper.user_input_projection import extract_request
+from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
+from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_preparation_service import (
     resolve_effective_model_settings,
 )
-from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
-from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 
 
 def _preview_fields() -> dict[str, object]:
@@ -166,9 +166,12 @@ def test_team_run_view_is_typed_and_does_not_accept_runtime_state() -> None:
         "start_node_id": "review",
         "nodes": [{
             "node_id": "review", "name": "Review", "agent_id": "reviewer",
+            "goal": "review goal",
+            "statuses": [],
             "task_id": 9, "status": "running", "conversation_run_count": 1,
             "agent_count": 1, "child_agents": [],
         }],
+        "execution_steps": [],
         "transitions": [],
         "transition_history": [],
         "current_node_id": "review",

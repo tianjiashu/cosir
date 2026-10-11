@@ -18,6 +18,9 @@ from app.core.agents.agent_profile import AgentProfile
 from app.core.tools.schemas import UserDecision, UserInputRequest
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
+from app.service.agent_team.agent_team_execution_timeline import (
+    project_execution_timeline,
+)
 from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationResult,
     AgentTeamPreparationService,
@@ -206,6 +209,13 @@ class AgentTeamRunService:
                 "agent_count": 1 + len(child_views) if execution else 1,
                 "child_agents": child_views,
             })
+        execution_steps = project_execution_timeline(
+            state=state,
+            configuration=configuration,
+            team_status=row.status,
+            run_records=run_records,
+            child_tasks_by_parent=child_tasks_by_parent,
+        )
         return {
             "id": row.id,
             "team_id": row.team_id,
@@ -216,6 +226,7 @@ class AgentTeamRunService:
             "status": row.status,
             "start_node_id": configuration["start_node_id"],
             "nodes": node_views,
+            "execution_steps": execution_steps,
             "transitions": configuration["transitions"],
             "transition_history": [
                 item.model_dump(mode="json") for item in state.transition_history

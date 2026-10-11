@@ -68,6 +68,8 @@ def main_agent(*, system_prompt: str = "", max_steps: int = 300) -> AgentProfile
             TOOL_CHILD_AGENT_SEND,
             TOOL_CHILD_AGENT_STATUS,
             TOOL_CHILD_AGENT_WAIT,
+            TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
+            TOOL_PROPOSE_AGENT_CONFIGURATION,
             TOOL_AGENT_TEAM,
         ],
         agent_type=AgentProfileType.MAIN,
@@ -99,7 +101,7 @@ def general_child_agent() -> AgentProfile:
 
     return AgentProfile(
         agent_id="general-assistant",
-        role="general-assistant",
+        role="通用Agent",
         description=(
             "General-purpose child agent for a focused task that does not fit a more specialized "
             "agent. Choose this for bounded implementation, investigation, or analysis work."

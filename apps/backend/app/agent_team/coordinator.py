@@ -6,6 +6,7 @@ import asyncio
 import copy
 import json
 from collections import defaultdict
+from dataclasses import replace
 from threading import RLock
 from typing import Any
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
@@ -13,6 +14,8 @@ from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState, AgentTeamNodeExecution, AgentTeamRunRuntime
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.model_settings import ModelSettings
+from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.models import ConversationRunRecord
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
@@ -182,9 +185,14 @@ class AgentTeamCoordinator:
                     },
                 },
             )
+            # ``end_reason`` 必须是本次真实失败原因：写死节点路由文案（曾经的 "next_node_id 为空"）
+            # 会让 API 投影与用户看到的收敛原因与日志里的实际异常南辕北辙。
             self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.FAILED.value,
                                                     (AgentTeamRunStatus.RUNNING.value,), state=state,
-                                                    end_reason="next_node_id 为空", ended=True)
+                                                    end_reason=(
+                                                        f"节点执行异常: {type(exc).__name__}: {exc}"
+                                                    )[:500],
+                                                    ended=True)
             raise
         return self._team_run_crud.get_by_id(team_run.id)
 
@@ -207,19 +215,45 @@ class AgentTeamCoordinator:
             remaining_rounds: int,
             node_input: str | None = None,
     ) -> tuple[AgentTeamNodeExecution, ConversationRunRecord]:
-        """在调用方事务中复用或创建节点 Task，并创建本次节点 Run（只写执行事实）。
+        """复用或创建节点 Task，跑完本次节点 Run，并返回它落定的执行记录。
 
         本方法是「可信调用方」的写助手：``row`` / ``state`` / ``configuration`` 由调用方在
         自身事务中加载并校验——``start`` 在入口统一校验 Team 存在、处于 running 且无活动节点；
         驱动循环在结算时按锁定后的快照校验。本方法不再读取或重新校验 Team 身份与生命周期
-        状态，只负责按节点快照派生 Task/Run 并落定执行记录。``state.start_node`` 仍持有活动
-        节点游标的领域守卫。
+        状态，只负责按节点快照派生 Task/Run、合成执行用 per-run profile、**同步执行**该节点
+        Run（``asyncio.run``，返回时已是终态）并落定执行记录。``state.start_node`` 仍持有
+        活动节点游标的领域守卫。
 
         同一 TeamRun 中的节点按 ``node_id`` 绑定独立 Task；再次访问该节点时读取原 Task，
-        由 Task 级 context 保留它自己的历史。节点事件发布和 Run 启动由 Coordinator 驱动循环
-        在事务提交后执行。
+        由 Task 级 context 保留它自己的历史。
+
+        前置契约（缺失即异常上浮，由 :meth:`start` 的兜底分支收敛）：``state.node_runtime``
+        必然为该 ``node_id`` 备好快照，注册表也必然解析得出该节点的 child profile——两者都在
+        确认阶段校验过；这里不重复校验，也不为「取不到」写死降级分支。
+
+        参数:
+            row: 已确认的 TeamRun 记录（非 ``pending``）；其 ``id`` 在本方法内被固化使用。
+            state: TeamRun 执行快照；``current_node_id`` 指明本次要跑的节点。
+            configuration: 本次运行冻结的 Team 配置。
+            remaining_rounds: 含本次在内的共享剩余执行预算，用于给节点追加收敛提醒。
+            node_input: 上一节点的交接输出；入口节点为 ``None``。
+
+        返回:
+            该节点的执行记录（含绑定 Task 与本次 Run ID）与执行后的 Run 记录。
+
+        异常:
+            KeyError: 节点快照引用的模型配置已被删除（物化时由配置服务抛出）。
+            pydantic.ValidationError: 快照中的结构化输出契约非法。
+            其余异常（工具 schema 解析失败、注册表未命中、Run 执行异常等）直接上浮，由
+            :meth:`start` 统一收敛为 TeamRun ``failed``。
+
+        副作用:
+            可能新建节点 Task（首次执行该节点时）；创建一条 ``running`` 节点 Run 并执行到终态；
+            条件更新 TeamRun 快照与 ``updated_at``。
         """
         node_id = state.current_node_id
+        # ``row`` 在下方被条件更新的返回值覆盖；取消分支需要原始 TeamRun 标识，故先固化。
+        team_run_id = row.id
         node: TeamNodeDefinition = configuration.node(node_id)
         node_runtime: AgentTeamRunRuntime = state.node_runtime.get(node_id)
         agent_id = node.agent_id
@@ -234,6 +268,14 @@ class AgentTeamCoordinator:
         )
         model_settings = node_runtime.model_settings
         reasoning_effort = model_settings.get("reasoning_effort")
+        # 合成与物化刻意排在「建 Run」之前：这两步会读模型配置、校验快照契约，失败必须发生在
+        # 节点 Run 落库之前，否则会留下一条无人认领、永不收敛的 running 节点 Run。
+        workspace_root = self._workspace_root(row.workspace_id)
+        agent_profile: AgentProfile = self._agent_registry.resolve(workspace_root, agent_id)
+        node_profile = self._compose_node_profile(agent_profile, node_runtime)
+        runtime_model_settings = self._runner.materialize_run_model_settings(
+            node_runtime.model_config_id
+        )
 
         if node_execution is None:
             task = self._task_service.get_or_create_task(
@@ -262,37 +304,69 @@ class AgentTeamCoordinator:
             run_command=ConversationRunCommand(display_text=input_text)
         )
         node_execution.conversation_run_ids.append(node_run.id)
-        workspace_root = self._workspace_root(row.workspace_id)
-        agent_profile: AgentProfile = self._agent_registry.resolve(workspace_root, agent_id)
+        run_profile = node_profile.derive_for_run(
+            node_run, model_settings=runtime_model_settings
+        )
 
-        row = self._team_run_crud.update_status_if_in(row.id, AgentTeamRunStatus.RUNNING.value,
+        row = self._team_run_crud.update_status_if_in(team_run_id, AgentTeamRunStatus.RUNNING.value,
                                                 (AgentTeamRunStatus.RUNNING.value,), state=state)
         if row is None:
             log.info(
                 "agent_team_start_failed",
                 extra={
                     "msg": "Agent Team 已被取消",
-                    "data": {"run_id": row.id},
+                    "data": {"run_id": team_run_id, "node_id": node_id},
                 },
             )
             return node_execution, node_run
 
 
-        asyncio.run(self._runner.run_agent(AgentProfile(
-            agent_id=agent_id,
-            role=agent_profile.role,
-            system_prompt=node_runtime.system_prompt,
-            allowed_tools=node_runtime.allowed_tools,
-            agent_type=agent_profile.agent_type,
-            model_config_id=agent_profile.model_config_id,
-            model_settings=agent_profile.model_settings,
-            structured_output=agent_profile.structured_output,
-            max_steps=agent_profile.max_steps,
-            run=node_run
-        )))
+        asyncio.run(self._runner.run_agent(run_profile))
         node_run = self._run_service.get_run(node_run.id)
 
         return node_execution, node_run
+
+    def _compose_node_profile(
+            self,
+            agent_profile: AgentProfile,
+            node_runtime: AgentTeamRunRuntime,
+    ) -> AgentProfile:
+        """把「注册表节点身份」与「确认时冻结的节点快照」合成节点执行 profile（尚未绑定 Run）。
+
+        分工是刻意的：身份类字段（``agent_id`` / ``agent_type`` / ``max_steps``）来自注册表
+        profile；执行资源（提示词、工具名、结构化输出契约、用户模型偏好）来自节点快照，保证
+        节点行为与用户确认时预览的完全一致。连接与能力字段刻意**不在这里**取：``api_key``
+        按契约不落盘，注册表单例（内置子 Agent）也只有偏好项，直接拿来执行会让模型解析以
+        「运行配置未物化」失败；调用方须另行用
+        :meth:`AgentRuntime.materialize_run_model_settings` 物化，并在 Run 落库后经
+        ``derive_for_run`` 绑定。
+
+        参数:
+            agent_profile: 注册表解析出的节点 child profile（共享单例，本方法不修改它）。
+            node_runtime: 该节点的冻结运行快照。
+
+        返回:
+            绑定节点提示词 / 工具 / 结构化输出 / 模型偏好的新 profile；``run`` 仍为空，
+            待调用方 ``derive_for_run`` 注入。
+
+        异常:
+            pydantic.ValidationError: 快照的 ``structured_output`` 不是合法的输出契约。
+
+        副作用:
+            无（纯值构造；``allowed_tools`` 另复制一份列表，避免下游改动回写共享单例）。
+        """
+        return replace(
+            agent_profile,
+            role=node_runtime.role or agent_profile.role,
+            system_prompt=node_runtime.system_prompt,
+            allowed_tools=list(node_runtime.allowed_tools),
+            model_settings=ModelSettings.from_dict(node_runtime.model_settings),
+            structured_output=(
+                StructuredOutputSpec.model_validate(node_runtime.structured_output)
+                if node_runtime.structured_output
+                else None
+            ),
+        )
 
     def _resolve_node_tool_schemas(self, allowed_tools: list[str]) -> list[dict[str, object]]:
         """按节点快照声明的 ``allowed_tools`` 名字，从当前工具注册表解析冻结 schema。

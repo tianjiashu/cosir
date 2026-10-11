@@ -305,9 +305,12 @@ class AgentTeamRunTool(HandlerBase):
             AgentTeamRunStatus.CANCELLED.value,
             AgentTeamRunStatus.FAILED.value,
         }:
-            # 条件迁移未生效且行已终态：多为后端重启把 pending 收敛为 cancelled。此时不能报告
-            # 成功，否则模型会继续等一个永远不会运行的 Team。
-            return self._confirmation_error(f"This Team run has already ended ({row.status})")
+            # 条件迁移未生效且行已终态：多为后端重启把 pending 收敛为 cancelled，或节点执行在
+            # 本次调用内就失败并收敛。此时不能报告成功，否则模型会继续等一个永远不会运行的 Team；
+            # ``end_reason`` 必须一起回传，否则模型只能把「节点已失败」误读成「运行时状态问题」。
+            return self._confirmation_error(
+                f"This Team run has already ended ({row.status}): {row.end_reason}"
+            )
         return tool_success(
             tool_name=self.name,
             content=json.dumps(

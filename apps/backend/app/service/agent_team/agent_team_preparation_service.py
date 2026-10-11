@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,24 +15,12 @@ from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_agent_registry
+from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.tools.schemas.tool_names import *
 from app.service.depends import get_model_config_service
-
-TEAM_NODE_DISALLOWED_TOOLS = frozenset(
-    {
-        TOOL_AGENT_TEAM,
-        TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
-        TOOL_PROPOSE_AGENT_CONFIGURATION,
-        TOOL_TERMINAL_START,
-        TOOL_TERMINAL_READ,
-        TOOL_TERMINAL_WRITE,
-        TOOL_TERMINAL_CLOSE,
-        TOOL_TERMINAL_SIGNAL,
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -83,9 +70,9 @@ def materialize_node_tools(profile: AgentProfile) -> list[str]:
     """按节点 Agent Profile 固化本次运行的节点工具名清单。
 
     节点工具 = Profile 允许的工具 ∪ 子 Agent 协作工具（``delegate_task`` / ``child_agent_*``，
-    节点需要把子工作再委派下去），再减去 :data:`TEAM_NODE_DISALLOWED_TOOLS`（Team 禁止节点
-    递归建 Team、提案配置或占用可交互终端）。返回值是新列表：Profile 是注册表共享单例，
-    **不得**就地 ``extend``，否则本次 Team 的工具集会污染同一进程后续所有 Agent。
+    节点需要把子工作再委派下去），再减去 :attr:`Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS`
+    （Team 禁止节点递归建 Team、提案配置或占用可交互终端）。返回值是新列表：Profile 是注册表
+    共享单例，**不得**就地 ``extend``，否则本次 Team 的工具集会污染同一进程后续所有 Agent。
 
     参数:
         profile: 已解析的节点 Agent Profile（由 :func:`resolve_node_profile` 解析）。
@@ -98,16 +85,10 @@ def materialize_node_tools(profile: AgentProfile) -> list[str]:
     """
 
     allowed_tools = [
-        name for name in profile.allowed_tools if name not in TEAM_NODE_DISALLOWED_TOOLS
+        name
+        for name in profile.allowed_tools
+        if name not in Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS
     ]
-    for name in (
-        TOOL_DELEGATE_TASK,
-        TOOL_CHILD_AGENT_SEND,
-        TOOL_CHILD_AGENT_STATUS,
-        TOOL_CHILD_AGENT_WAIT,
-    ):
-        if name not in allowed_tools:
-            allowed_tools.append(name)
     return allowed_tools
 
 def require_model_settings(model_settings: ModelSettings) -> ModelSettings | None:
@@ -397,7 +378,10 @@ class AgentTeamPreparationService:
                 "allowed_tools": allowed_tools,
                 "structured_output": structured_output.to_document(),
                 "model_config_id": profile.model_config_id or parent_agent_profile.model_config_id,
-                "model_settings": dataclasses.asdict(model_settings),
+                # 快照只冻结可持久化的用户偏好项：运行期连接与能力字段（尤其 ``api_key``）按
+                # ``ModelSettings`` 契约只在进程内存在，不得随快照落库；节点执行时由
+                # ``run.model_config_id`` 经 ``AgentRuntime.materialize_run_model_settings`` 现取。
+                "model_settings": model_settings.to_dict(),
             }
             resolved_nodes.append(
                 {

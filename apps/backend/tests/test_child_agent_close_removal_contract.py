@@ -28,10 +28,10 @@ from pydantic import ValidationError
 
 # 打破在途重构中的循环导入：先 import 包本体，再导入其子模块。
 import app.core.tools as _tools_pkg
+from app.config.constant import Constant
 from app.core.tools.schemas import ALL_TOOL_NAMES, ToolDefinition, ToolName
 from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
-from app.core.tools.tool_handler.child_task.child_agent_create import CHILD_DISALLOWED_TOOLS
 from app.core.tools.tool_handler.child_task.child_agent_send import (
     ChildAgentSendTool,
     build_child_agent_send_definition,
@@ -498,21 +498,21 @@ def test_child_wait_timeout_ceiling_vs_tool_level_timeout_documented_gap() -> No
 
 
 def test_child_banned_tools_invariants() -> None:
-    """目的：CHILD_DISALLOWED_TOOLS 非空、无重复、全为 str、是规范名子集且不含已删工具名。
+    """目的：``Constant.Tools.CHILD_DISALLOWED_TOOLS`` 非空、无重复、全为 str、是规范名子集
+    且不含已删工具名。
 
     潜在缺陷类型：删除 close 后禁用清单残留旧名字（禁用已不存在的工具，或命名失效），
     或误删其它禁用项削弱子 Agent 隔离。
     """
 
-    assert isinstance(CHILD_DISALLOWED_TOOLS, tuple)
-    assert CHILD_DISALLOWED_TOOLS, "CHILD_DISALLOWED_TOOLS 不得为空"
-    assert len(CHILD_DISALLOWED_TOOLS) == len(set(CHILD_DISALLOWED_TOOLS)), "存在重复项"
-    assert all(isinstance(name, str) and name for name in CHILD_DISALLOWED_TOOLS)
-    assert _REMOVED_TOOL_NAME not in CHILD_DISALLOWED_TOOLS
-    assert set(CHILD_DISALLOWED_TOOLS) <= set(ALL_TOOL_NAMES), (
-        "禁用清单含非规范（幽灵/已删）工具名"
-    )
-    assert set(CHILD_DISALLOWED_TOOLS) == _EXPECTED_BANNED_TOOLS
+    banned = Constant.Tools.CHILD_DISALLOWED_TOOLS
+    assert isinstance(banned, tuple)
+    assert banned, "CHILD_DISALLOWED_TOOLS 不得为空"
+    assert len(banned) == len(set(banned)), "存在重复项"
+    assert all(isinstance(name, str) and name for name in banned)
+    assert _REMOVED_TOOL_NAME not in banned
+    assert set(banned) <= set(ALL_TOOL_NAMES), "禁用清单含非规范（幽灵/已删）工具名"
+    assert set(banned) == _EXPECTED_BANNED_TOOLS
 
 
 def test_banned_tools_all_exist_in_live_registry(storage: None) -> None:
@@ -522,7 +522,7 @@ def test_banned_tools_all_exist_in_live_registry(storage: None) -> None:
     """
 
     registered = set(ToolSystem.build_tool_system().registry.get_all_tool_names())
-    unbacked = set(CHILD_DISALLOWED_TOOLS) - registered
+    unbacked = set(Constant.Tools.CHILD_DISALLOWED_TOOLS) - registered
     assert unbacked <= _CONDITIONALLY_SKIPPED_TOOLS, f"禁用清单指向不存在的工具: {unbacked}"
 
 

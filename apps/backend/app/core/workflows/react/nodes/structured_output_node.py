@@ -153,9 +153,11 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
     )
     # 复用 ReAct 的工具绑定模型并请求供应商严格 JSON Schema 输出；本地校验仍负责
     # 防御供应商不遵守契约的情况，同时保持请求中的工具 schema 不变。
+    #DeepSeek（base_url=https://api.deepseek.com，model deepseek-flash）
+    # 只支持 response_format={"type":"json_object"}，不接受 json_schema
     model = runtime.model.bind(
         response_format={
-            "type": "json_schema",
+            "type": "json_object",
             "json_schema": {
                 "name": spec.name,
                 "strict": True,

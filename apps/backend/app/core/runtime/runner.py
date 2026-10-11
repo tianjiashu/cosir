@@ -107,6 +107,33 @@ class AgentRuntime:
         self._process_tool_output_channel_factory = process_tool_output_channel_factory
         self._conversation_run_state_service = get_conversation_run_state_service()
 
+    def materialize_run_model_settings(self, model_config_id: int | None) -> ModelSettings | None:
+        """按模型配置标识物化完整运行设置；未指定配置时返回 ``None``。
+
+        参数取标识而非 Run 记录：本方法也是执行期唯一的连接字段来源，Team 节点等自建 profile
+        的调用方需要在 Run 落库之前先拿到物化设置（``api_key`` 按契约只在进程内存在，不随任何
+        持久化快照传递，不能依赖 profile 或节点快照里已带的模型字段）。
+
+        参数:
+            model_config_id: 本次执行选定的模型配置标识；``None`` 表示未绑定。
+
+        返回:
+            含连接与能力字段的 :class:`ModelSettings`；未绑定配置时为 ``None``（调用方沿用
+            profile 自身设置，未物化时后续 ``require_runtime_config`` 会失败）。
+
+        异常:
+            KeyError: 该标识指向的配置已不存在时由配置服务抛出。
+
+        副作用:
+            只读数据库中的模型配置；不写状态、不缓存密钥。
+        """
+
+        if model_config_id is None:
+            return None
+        return ModelSettings.from_model_config_record(
+            get_model_config_service().get_config(model_config_id)
+        )
+
     def resolve_agent_profile_for_run(self, run: ConversationRunRecord) -> "AgentProfile":
         """解析并派生单次 run 独占的 agent profile。
 
@@ -141,11 +168,7 @@ class AgentRuntime:
         agent_profile = self._agent_registry.resolve(workspace_scope, agent_id)
         if agent_profile is None:
             raise RuntimeError(f"agent profile unavailable for run {run_id}")
-        runtime_model_settings = None
-        if run.model_config_id is not None:
-            runtime_model_settings = ModelSettings.from_model_config_record(
-                get_model_config_service().get_config(run.model_config_id)
-            )
+        runtime_model_settings = self.materialize_run_model_settings(run.model_config_id)
         return agent_profile.derive_for_run(run, model_settings=runtime_model_settings)
 
     async def finalize_run(self, agent: AgentProfile, run_id: int) -> None:
