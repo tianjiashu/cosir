@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { ClockIcon, UsersIcon } from "lucide-react";
 
 import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decision";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -97,6 +98,54 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     && review !== null
     && state !== "confirmed"
     && state !== "rejected";
+  const displayData = asRecord(artifact.display_data);
+  const rawReviewRequest = asRecord(displayData.user_input_request);
+  const displayDataKeys = Object.keys(displayData).sort().join(",");
+  const reviewRequestKeys = Object.keys(rawReviewRequest).sort().join(",");
+  const requestId = typeof rawReviewRequest.request_id === "string" ? rawReviewRequest.request_id : null;
+  const requestKind = typeof rawReviewRequest.request_kind === "string" ? rawReviewRequest.request_kind : null;
+  const draftSchema = typeof rawReviewRequest.draft_schema === "string" ? rawReviewRequest.draft_schema : null;
+  const parserAcceptedRequest = review !== null;
+
+  useEffect(() => {
+    if (!isWaitingForInput) return;
+    void frontendLog(
+      parserAcceptedRequest ? "INFO" : "WARNING",
+      "agent_team_approval_payload_observed",
+      parserAcceptedRequest ? "等待审批时前端已读到请求载荷" : "等待审批时前端未读到有效请求载荷",
+      {
+        data: {
+          taskId,
+          runId,
+          runStatus,
+          teamRunId: preview?.teamRunId ?? null,
+          backendStatus: artifact.backendStatus,
+          displayDataPresent: artifact.display_data !== null,
+          displayDataKeys: displayDataKeys ? displayDataKeys.split(",") : [],
+          requestObjectPresent: typeof displayData.user_input_request === "object"
+            && displayData.user_input_request !== null,
+          requestKeys: reviewRequestKeys ? reviewRequestKeys.split(",") : [],
+          requestId,
+          requestKind,
+          draftSchema,
+          parserAcceptedRequest,
+        },
+      },
+    );
+  }, [
+    artifact.backendStatus,
+    displayDataKeys,
+    draftSchema,
+    isWaitingForInput,
+    preview?.teamRunId,
+    requestId,
+    requestKind,
+    parserAcceptedRequest,
+    reviewRequestKeys,
+    runId,
+    runStatus,
+    taskId,
+  ]);
 
   if (state === "confirmed" && preview) {
     return (
@@ -127,7 +176,6 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     );
   }
   if (!review || !isWaitingForInput) {
-    const displayData = asRecord(artifact.display_data);
     if (displayData.user_decision !== "reject") {
       // 审批决定已消费后，后端会移除待决请求；是否拒绝只由后端投影的决定记录判定。
       // 同意后从历史消息恢复时也走 canonical TeamRun 查询，避免把旧审批预览误显示为拒绝。

@@ -197,8 +197,8 @@ def build_node_structured_output(
             "output": {
                 "type": "string",
                 "description": (
-                    "Summarize this node's conclusion and the essential information "
-                    "downstream nodes need."
+                    "This is your handoff channel to the next node: summarize your "
+                    "conclusion and the essential information downstream nodes need."
                 ),
                 "maxLength": 100_000,
             },

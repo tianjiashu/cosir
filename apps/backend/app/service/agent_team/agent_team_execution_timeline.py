@@ -78,7 +78,6 @@ def project_node_visits(
                     or state.node_runtime[node_id].role
                     or node["agent_id"],
                     "status": run.status,
-                    "is_primary": True,
                 }
             ]
             agents.extend(
@@ -93,7 +92,6 @@ def project_node_visits(
                     "status": run.status,
                     "business_status": business_status,
                     "business_status_color": business_status_color,
-                    "failure_code": run.end_reason if run.status == "failed" else None,
                     "failure_message": (
                         (run.error or {}).get("message") or run_failure_message(run.end_reason)
                         if run.status == "failed" else None
@@ -112,7 +110,6 @@ def project_node_visits(
                     "status": "running",
                     "business_status": None,
                     "business_status_color": None,
-                    "failure_code": None,
                     "failure_message": None,
                     "agents": [
                         {
@@ -123,7 +120,6 @@ def project_node_visits(
                             or state.node_runtime[node_id].role
                             or node["agent_id"],
                             "status": "running",
-                            "is_primary": True,
                         }
                     ],
                 }
@@ -147,7 +143,6 @@ def _project_child_agent(
         "agent_id": child_run.agent_id if child_run else None,
         "role": _resolve_agent_role(workspace, child_run.agent_id) if child_run else "子 Agent",
         "status": child_run.status if child_run else "pending",
-        "is_primary": False,
     }
 
 

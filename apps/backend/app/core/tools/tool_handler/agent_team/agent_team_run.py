@@ -33,6 +33,7 @@ from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import AgentTeamApproveInput, AgentTeamArgs
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_preparation_service import AgentTeamPreparationService
+from app.service.agent_team.agent_team_run_archive_service import AgentTeamRunArchiveService
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 
 
@@ -71,6 +72,7 @@ class AgentTeamRunTool(HandlerBase):
     def __init__(self):
         self.agent_team_run_service = AgentTeamRunService()
         self.agent_team_preparation_service = AgentTeamPreparationService()
+        self.agent_team_run_archive_service = AgentTeamRunArchiveService()
         self.team_register = get_agent_team_registry()
 
     def execute(
@@ -326,17 +328,19 @@ class AgentTeamRunTool(HandlerBase):
             # 本次调用内就失败并收敛。此时不能报告成功，否则模型会继续等一个永远不会运行的 Team；
             # ``end_reason`` 必须一起回传，否则模型只能把「节点已失败」误读成「运行时状态问题」。
             return self._confirmation_error(
-                f"This Team run has already ended ({row.status}): {row.end_reason}",
+                f"The Team run ended with status {row.status}.",
                 team_run_id=row.id,
             )
+        archive_path = self.agent_team_run_archive_service.existing_archive_path(row.id)
         observation = tool_success(
             tool_name=self.name,
             content=json.dumps(
                 {
-                    "hint": "The team run has completed; please perform a final review against the goal." if row.status == AgentTeamRunStatus.COMPLETED.value else "Do not retry.",
+                    "hint": "Review the node outputs in the saved run history against the goal." if row.status == AgentTeamRunStatus.COMPLETED.value else "The Team run is still active.",
                     "status": row.status,
-                    "team_id": row.team_id,
-                    "reason": row.end_reason,
+                    "team": inputs.configuration["name"],
+                    "trace_file": archive_path,
+                    "read_instructions": self._archive_read_instructions(archive_path),
                 },
                 ensure_ascii=False,
             ),
@@ -349,6 +353,22 @@ class AgentTeamRunTool(HandlerBase):
         )
         observation.team_run_id = row.id
         return observation
+
+    @staticmethod
+    def _archive_read_instructions(archive_path: str | None) -> str:
+        """给 Agent 返回现有 read_file 的分段读取方法，不要求整份档案一次装入上下文。"""
+
+        if archive_path is None:
+            return "The run history file is not available."
+        return (
+            f'Read with read_file(path="{archive_path}", offset=1, limit=200). '
+            "Inspect the top-level status and failure first, then read history in pages; "
+            "when the result says to continue with a later offset, use that offset rather "
+            "than loading the whole file. Each history entry contains one node's status, "
+            "output, decision, and next node. If the file exceeds read_file's size limit or "
+            "an output line is truncated, use execute_terminal with Python's json module to "
+            "load the document and print only the needed history entry or a small output slice."
+        )
 
     def _terminal_team_run_id(self, team_run_id: int) -> int | None:
         """仅在 TeamRun 已终结时暴露定位信息，避免把确认参数错误误显示为执行失败。"""
@@ -367,6 +387,20 @@ class AgentTeamRunTool(HandlerBase):
     ) -> ToolObservation:
         """把确认阶段的失败归一化为不重试的错误观察，并留下可排查日志。"""
 
+        archive_path = (
+            self.agent_team_run_archive_service.existing_archive_path(team_run_id)
+            if team_run_id is not None
+            else None
+        )
+        if archive_path is not None:
+            reason = (
+                f'{reason} Read the saved Team history with read_file(path="{archive_path}", '
+                "offset=1, limit=200); if the result asks to continue at a later offset, "
+                "read that page to inspect the remaining node history and failure explanation. "
+                "If the file exceeds read_file's size limit or an output line is truncated, "
+                "use execute_terminal with Python's json module to read only the needed entry."
+            )
+
         log.warning(
             "agent_team_confirmation_failed",
             extra={
@@ -377,7 +411,7 @@ class AgentTeamRunTool(HandlerBase):
         observation = tool_error(
             self.name,
             "agent_team_confirmation_invalid",
-            reason=f"Failed to start the Team execution plan: {reason}",
+            reason=reason,
             retryable=False,
         )
         observation.team_run_id = team_run_id

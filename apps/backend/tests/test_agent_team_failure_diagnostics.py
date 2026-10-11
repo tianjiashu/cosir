@@ -90,7 +90,6 @@ def test_failed_node_visit_exposes_run_error_without_runtime_snapshot(monkeypatc
         team_status="failed", run_records={11: run}, child_tasks_by_parent={}, workspace="test",
     )
 
-    assert visits["implement"][0]["failure_code"] == "model_resolve_failed"
     assert visits["implement"][0]["failure_message"] == "模型配置不可用，请检查模型设置"
     assert "node_runtime" not in visits["implement"][0]
 
@@ -155,7 +154,7 @@ def test_team_view_marks_output_failure_on_completed_node(monkeypatch) -> None:
         "review": [{
             "visit_number": 1, "conversation_run_id": 11, "status": "completed",
             "business_status": None, "business_status_color": None,
-            "failure_code": None, "failure_message": None, "agents": [],
+            "failure_message": None, "agents": [],
         }],
     })
     service = AgentTeamRunService.__new__(AgentTeamRunService)

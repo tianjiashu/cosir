@@ -184,7 +184,6 @@ class AgentTeamRunService:
         node_views: list[dict[str, Any]] = []
         for node in configuration["nodes"]:
             node_id = node["node_id"]
-            execution = executions.get(node_id)
             visits = visits_by_node[node_id]
             if failure_node_id == node_id:
                 node_status = "failed"
@@ -209,22 +208,15 @@ class AgentTeamRunService:
                 "name": node["name"],
                 "agent_id": node["agent_id"],
                 "role": state.node_runtime[node_id].role or node["agent_id"],
-                "statuses": node["statuses"],
-                "goal": state.node_runtime[node_id].node_goal,
                 "goal_summary": state.node_runtime[node_id].node_goal_summary,
-                "task_id": execution.task_id if execution else None,
                 "status": node_status,
                 "visits": visits,
             })
         return {
             "id": row.id,
             "team_id": row.team_id,
-            "workspace_id": row.workspace_id,
-            "parent_task_id": row.parent_task_id,
-            "parent_run_id": row.parent_run_id,
             "goal": row.goal_input,
             "status": row.status,
-            "start_node_id": configuration["start_node_id"],
             "nodes": node_views,
             "current_node_id": (
                 state.current_node_id
@@ -233,8 +225,6 @@ class AgentTeamRunService:
             ),
             "end_reason": row.end_reason,
             "failure_node_id": failure_node_id,
-            "started_at": row.started_at,
-            "ended_at": row.ended_at,
         }
 
     def reject_pending_confirmation(self, team_run_id: int) -> AgentTeamRunModel:

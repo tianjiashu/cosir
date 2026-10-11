@@ -41,21 +41,14 @@ export type AgentTeamConfigurationDraft = Omit<AgentTeamConfiguration, "max_runs
 export type AgentTeamRun = {
   id: number;
   team_id: string;
-  workspace_id: number;
-  parent_task_id: number;
-  parent_run_id: number;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
   goal: string;
-  start_node_id: string;
   nodes: Array<{
     node_id: string;
     name: string;
     agent_id: string;
     role: string;
-    statuses: AgentTeamStatusConfiguration[];
-    goal: string;
     goal_summary: string;
-    task_id: number | null;
     status: string;
     visits: Array<{
       visit_number: number;
@@ -63,7 +56,6 @@ export type AgentTeamRun = {
       status: string;
       business_status: string | null;
       business_status_color: string | null;
-      failure_code: string | null;
       failure_message: string | null;
       agents: Array<{
         task_id: number | null;
@@ -71,15 +63,12 @@ export type AgentTeamRun = {
         agent_id: string | null;
         role: string;
         status: string;
-        is_primary: boolean;
       }>;
     }>;
   }>;
   current_node_id: string | null;
   end_reason: string | null;
   failure_node_id: string | null;
-  started_at: string | null;
-  ended_at: string | null;
 };
 
 function teamConfigurationPath(scope: "system" | "workspace", workspaceId?: number, teamId?: string) {

@@ -177,7 +177,6 @@ function PipelineNode({
     agent_id: node.agent_id,
     role: node.role,
     status: node.status,
-    is_primary: true,
   } as const;
 
   return (

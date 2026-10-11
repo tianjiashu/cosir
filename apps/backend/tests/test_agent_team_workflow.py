@@ -158,29 +158,27 @@ def test_team_run_view_is_typed_and_does_not_accept_runtime_state() -> None:
     payload = {
         "id": 1,
         "team_id": "quality",
-        "workspace_id": 1,
-        "parent_task_id": 2,
-        "parent_run_id": 3,
         "goal": "goal",
         "status": "running",
-        "start_node_id": "review",
         "nodes": [{
             "node_id": "review", "name": "Review", "agent_id": "reviewer",
-            "goal": "review goal",
-            "statuses": [],
-            "task_id": 9, "status": "running", "conversation_run_count": 1,
-            "agent_count": 1, "child_agents": [],
+            "role": "审查", "goal_summary": "检查改动", "status": "running",
+            "visits": [{
+                "visit_number": 1, "conversation_run_id": 10, "status": "completed",
+                "business_status": "needs_tests", "business_status_color": "#123456",
+                "failure_message": None,
+                "agents": [{
+                    "task_id": 9, "title": "Review", "agent_id": "reviewer",
+                    "role": "审查", "status": "completed",
+                }],
+            }],
         }],
-        "execution_steps": [],
-        "transitions": [],
-        "transition_history": [],
         "current_node_id": "review",
         "end_reason": None,
-        "started_at": None,
-        "ended_at": None,
+        "failure_node_id": None,
     }
     view = AgentTeamRunResponse.model_validate(payload)
-    assert view.nodes[0].task_id == 9
+    assert view.nodes[0].visits[0].agents[0].task_id == 9
     assert "state" not in view.model_dump()
 
 

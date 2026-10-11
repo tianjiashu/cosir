@@ -24,6 +24,7 @@ from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service.depends import get_runtime, get_task_service, get_conversation_run_service, \
     get_conversation_run_state_service, get_workspace_service
+from app.service.agent_team.agent_team_run_archive_service import AgentTeamRunArchiveService
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
@@ -54,6 +55,7 @@ class AgentTeamCoordinator:
         self._runner = get_runtime()
         self._workspace_service = get_workspace_service()
         self._agent_registry = get_agent_registry()
+        self._run_archive_service = AgentTeamRunArchiveService()
 
     def start(
             self,
@@ -230,6 +232,10 @@ class AgentTeamCoordinator:
                 end_reason=failure_reason, ended=True,
             )
             raise
+        finally:
+            # 所有正常终态分支与调度异常共用同一档案出口；写入失败由档案 service 记录，
+            # 不覆盖已经收敛的 TeamRun 结果。
+            self._run_archive_service.write_terminal_archive(team_run.id)
         return self._team_run_crud.get_by_id(team_run.id)
 
     def struct_out_put(self, output: str | None) -> tuple[str, str] | None:
@@ -347,6 +353,24 @@ class AgentTeamCoordinator:
         if claimed_run is None:
             raise RuntimeError(f"新创建的节点 Run {node_run.id} 未能从 pending 状态认领")
         node_run = claimed_run
+        # 先把刚创建的节点 Run 引用提交进 Team 快照，再合成执行 profile；profile 构建失败时，
+        # 终态档案也能沿 TeamRun 快照找到这条已失败的节点 Run 并说明原因。
+        row = self._team_run_crud.update_status_if_in(
+            team_run_id,
+            AgentTeamRunStatus.RUNNING.value,
+            (AgentTeamRunStatus.RUNNING.value,),
+            state=state,
+        )
+        if row is None:
+            log.info(
+                "agent_team_start_failed",
+                extra={
+                    "msg": "Agent Team 已被取消",
+                    "data": {"run_id": team_run_id, "node_id": node_id},
+                },
+            )
+            return node_execution, node_run
+
         try:
             run_profile = self._build_node_run_profile(agent_profile, node_runtime, node_run)
         except Exception as exc:
@@ -370,19 +394,6 @@ class AgentTeamCoordinator:
                 final_output=run_failure_message(Constant.Run.RUN_FAILURE_CODE_UNKNOWN),
             )
             raise
-
-        row = self._team_run_crud.update_status_if_in(team_run_id, AgentTeamRunStatus.RUNNING.value,
-                                                (AgentTeamRunStatus.RUNNING.value,), state=state)
-        if row is None:
-            log.info(
-                "agent_team_start_failed",
-                extra={
-                    "msg": "Agent Team 已被取消",
-                    "data": {"run_id": team_run_id, "node_id": node_id},
-                },
-            )
-            return node_execution, node_run
-
 
         asyncio.run(self._runner.run_agent(run_profile))
         node_run = self._run_service.get_run(node_run.id)
@@ -542,6 +553,7 @@ class AgentTeamCoordinator:
             return row
 
         state.cancel()
+        self._run_archive_service.write_terminal_archive(row.id)
         log.info(
             "agent_team_run_cancelled",
             extra={
@@ -632,6 +644,7 @@ class AgentTeamCoordinator:
             if updated is None:
                 continue
             recovered += 1
+            self._run_archive_service.write_terminal_archive(updated.id)
         return recovered
 
     def get(self, team_run_id: int) -> AgentTeamRunModel:
