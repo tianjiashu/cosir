@@ -46,7 +46,7 @@ class SearchContentTool(HandlerBase):
     name = TOOL_SEARCH_CONTENT
     description = SEARCH_CONTENT_DESCRIPTION
     args_model = SearchContentArgs
-    timeout_seconds = 30.0
+    timeout_seconds = 5.0
     group = TOOL_GROUP_SEARCH
 
 

@@ -40,7 +40,7 @@ class FindFilesTool(HandlerBase):
     name = TOOL_FIND_FILES
     description = FIND_FILES_DESCRIPTION
     args_model = FindFilesArgs
-    timeout_seconds = 30.0
+    timeout_seconds = 5.0
     group = TOOL_GROUP_SEARCH
 
 
