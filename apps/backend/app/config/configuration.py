@@ -89,7 +89,7 @@ def build_agent_registry(
     构造器，故在此处导入即可打破循环且不改变任何职责边界）。
 
 
-    通用子 Agent 和主 Agent 由代码构造并注册到 `system` 作用域；主 Agent prompt 由系统配置
+    代码内置 Agent 由代码构造并注册到 `system` 作用域；主 Agent prompt 由系统配置
     service 从用户文件读取后注入，用户尚未配置时传空串（主 Agent 不生成 ``<agent_layer>``）。
     主 Agent 的 ``max_steps`` 由装配层传入，默认值与 ``Settings`` 的默认配置一致。
     用户 JSON（系统级与 workspace 级）不在此处读取：Registry 在某个作用域首次被读取时经注入的
@@ -121,7 +121,7 @@ def build_agent_registry(
         only_read_child_agent(),
         main_agent(system_prompt=main_agent_system_prompt, max_steps=main_agent_max_steps),
     ):
-        registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, profile)
+        registry.register_builtin(profile)
     return registry
 
 

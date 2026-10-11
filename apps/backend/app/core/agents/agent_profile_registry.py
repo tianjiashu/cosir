@@ -99,6 +99,7 @@ class AgentProfileRegistry:
         # 装载锁与索引锁分离：装载要做磁盘 IO，绝不能在持有索引锁时进行。
         self._load_lock = threading.Lock()
         self._profiles: dict[tuple[str, str], AgentProfile] = {}
+        self._builtin_system_agent_ids: set[str] = set()
         self._loaded_scopes: set[str] = set()
 
     @property
@@ -207,6 +208,39 @@ class AgentProfileRegistry:
         """
 
         scope = self.normalize_workspace(workspace)
+        return self._register(scope, profile)
+
+    def register_builtin(self, profile: AgentProfile) -> bool:
+        """将代码内置 profile 注册到 system，并原子记录其来源。
+
+        普通用户配置通过 :meth:`register` 装载；只有启动装配显式调用本方法的 profile
+        才会被配置中心判定为内置。来源与索引更新共用同一把锁，避免列表读取看到 profile
+        却读不到来源标记。
+
+        参数:
+            profile: 启动期由代码构造的 Agent profile。
+
+        返回:
+            profile 成功进入 system 索引时为 ``True``；重复或跨作用域冲突时为 ``False``。
+
+        异常:
+            无；重复与冲突由统一注册规则记录日志并跳过。
+
+        副作用:
+            写入进程内 system profile 索引和内置来源索引，不读写配置文件。
+        """
+
+        return self._register(self.SYSTEM_WORKSPACE, profile, builtin=True)
+
+    def _register(
+        self,
+        scope: str,
+        profile: AgentProfile,
+        *,
+        builtin: bool = False,
+    ) -> bool:
+        """执行统一注册裁决；仅由显式内置入口写入内置来源索引。"""
+
         if scope != self.SYSTEM_WORKSPACE:
             # （1）system 基线先入索引，跨作用域同名 id 由 system 胜出；
             # （2）目标作用域先装载，否则「先写入、后首次读取」时刚注册的 profile 会被目录内容
@@ -219,6 +253,8 @@ class AgentProfileRegistry:
             accepted, conflict = self._decide_registration(self._profiles, scope, profile)
             if accepted and conflict is None:
                 self._profiles[(scope, profile.agent_id)] = profile
+                if builtin:
+                    self._builtin_system_agent_ids.add(profile.agent_id)
         if not accepted:
             log.warning(
                 "agent_profile_duplicate_skipped",
@@ -242,6 +278,25 @@ class AgentProfileRegistry:
             )
             return False
         return True
+
+    def is_builtin_system_agent(self, agent_id: str) -> bool:
+        """查询 Agent 是否由启动装配显式注册为代码内置项。
+
+        参数:
+            agent_id: Agent 标识。
+
+        返回:
+            仅在该 ID 通过 :meth:`register_builtin` 成功进入 system 索引时返回 ``True``。
+
+        异常:
+            无。
+
+        副作用:
+            只在注册表锁内读取内存来源索引，不触发配置文件装载。
+        """
+
+        with self._lock:
+            return agent_id in self._builtin_system_agent_ids
 
     def replace(self, workspace: str | Path, profile: AgentProfile) -> AgentProfile:
         """替换指定作用域中已注册的 profile。
@@ -292,6 +347,8 @@ class AgentProfileRegistry:
                 removed = self._profiles.pop((scope, agent_id))
             except KeyError as exc:
                 raise KeyError(agent_id) from exc
+            if scope == self.SYSTEM_WORKSPACE:
+                self._builtin_system_agent_ids.discard(agent_id)
         return removed
 
     def drop_scope(self, workspace: str | Path) -> None:
@@ -323,6 +380,8 @@ class AgentProfileRegistry:
                     for key, profile in self._profiles.items()
                     if key[0] != scope
                 }
+                if scope == self.SYSTEM_WORKSPACE:
+                    self._builtin_system_agent_ids.clear()
             self._loaded_scopes.discard(scope)
 
     def ensure_scope_loaded(self, workspace: str | Path) -> None:
@@ -420,8 +479,8 @@ class AgentProfileRegistry:
     ) -> tuple[list[str], list[tuple[str, str]]]:
         """把读到的 profile 合并进该作用域索引，已存在的同 id 一律保留先注册者。
 
-        为什么是合并而不是整批替换：同一作用域里既有装配期由代码注册的内置 profile
-        （system 作用域的 ``main_agent`` / ``general-assistant``），也有目录里的用户配置；
+        为什么是合并而不是整批替换：同一作用域里既有装配期通过 ``register_builtin`` 注册的
+        代码内置 profile，也有目录里的用户配置；
         整批替换会把内置 profile 一并清掉。合并配合 :meth:`_decide_registration` 的
         「先注册者优先」规则，正好保证内置 profile 不被用户文件覆盖。
 

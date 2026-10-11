@@ -23,7 +23,6 @@ from app.core.agents.agent_profile import (
     parse_agent_profile_document,
 )
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.agents.define_agents import general_child_agent, main_agent
 from app.service.configuration.file_store import (
     ConfigurationFileStore,
 )
@@ -252,7 +251,10 @@ class AgentConfigurationService:
         投影选择 ID，避免重新读取配置文件。
         """
 
-        is_builtin = self.workspace_root is None and self._is_builtin(profile.agent_id)
+        is_builtin = (
+            self.workspace_root is None
+            and self.registry.is_builtin_system_agent(profile.agent_id)
+        )
         if path is None and not is_builtin:
             candidate = self._path_for(profile.agent_id)
             path = candidate if candidate.exists() else None
@@ -296,14 +298,8 @@ class AgentConfigurationService:
     def _ensure_not_builtin(self, agent_id: str) -> None:
         """拒绝用系统内置 Agent ID 创建或操作用户文件。"""
 
-        if self.workspace_root is None and self._is_builtin(agent_id):
+        if self.workspace_root is None and self.registry.is_builtin_system_agent(agent_id):
             raise AgentConfigurationError(f"Agent ID 属于内置 Agent，不允许写入: {agent_id}")
-
-    @staticmethod
-    def _is_builtin(agent_id: str) -> bool:
-        """判断 Agent ID 是否属于代码内置的主 Agent 或通用子 Agent。"""
-
-        return agent_id in {main_agent().agent_id, general_child_agent().agent_id}
 
     @staticmethod
     def _validate_agent_id(agent_id: str) -> None:

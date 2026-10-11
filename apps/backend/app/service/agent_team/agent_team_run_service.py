@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.logging.logger import log
@@ -203,6 +204,7 @@ class AgentTeamRunService:
                 "agent_id": node["agent_id"],
                 "statuses": node["statuses"],
                 "goal": state.node_runtime[node_id].node_goal,
+                "goal_summary": state.node_runtime[node_id].node_goal_summary,
                 "task_id": execution.task_id if execution else None,
                 "status": node_status,
                 "conversation_run_count": len(execution.conversation_run_ids) if execution else 0,
@@ -276,7 +278,7 @@ class AgentTeamRunService:
         configuration_document: dict[str, Any],
         *,
         goal: str,
-        node_goals: dict[str, str],
+        node_goals: dict[str, AgentTeamNodeGoal],
         parent_agent_profile: AgentProfile,
     ) -> AgentTeamRunModel:
         """使用用户最终配置确认 TeamRun，并在提交后交给 Coordinator 启动。
@@ -309,16 +311,11 @@ class AgentTeamRunService:
         configuration: AgentTeamConfiguration = AgentTeamConfiguration.model_validate(
             configuration_document
         )
-        final_node_goals = {
-            key: value.strip()
-            for key, value in node_goals.items()
-            if isinstance(key, str) and isinstance(value, str) and value.strip()
-        }
-        agent_team_preparation:AgentTeamPreparationResult = self._prepare_final_plan(
+        agent_team_preparation: AgentTeamPreparationResult = self._prepare_final_plan(
             existing,
             configuration,
             goal=final_goal,
-            node_goals=final_node_goals,
+            node_goals=node_goals,
             parent_agent_profile=parent_agent_profile,
         )
 
@@ -365,7 +362,7 @@ class AgentTeamRunService:
         configuration: AgentTeamConfiguration,
         *,
         goal: str,
-        node_goals: dict[str, str],
+        node_goals: dict[str, AgentTeamNodeGoal],
         parent_agent_profile: AgentProfile,
     ) -> AgentTeamPreparationResult:
         """基于确认时的最终配置重新生成执行快照。

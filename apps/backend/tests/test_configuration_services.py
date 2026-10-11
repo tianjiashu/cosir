@@ -36,8 +36,8 @@ def _configuration_registry() -> AgentProfileRegistry:
     """构造包含系统内置 profile 的配置中心测试注册表。"""
 
     registry = AgentProfileRegistry(AgentProfileScopeSource())
-    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, general_child_agent())
-    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, main_agent())
+    registry.register_builtin(general_child_agent())
+    registry.register_builtin(main_agent())
     return registry
 
 
@@ -618,7 +618,7 @@ def test_agent_configuration_lists_only_registered_profiles(
     listed_ids = {item.agent_id for item in service.list_documents()}
     assert listed_ids == {"general-assistant"}
     built_in = _document(service, "general-assistant")
-    # 代码内置 Agent 只能改默认值，不能改名或删除：``_is_builtin`` 判定后两者均为 False。
+    # 注册表内置来源决定配置投影；内置 profile 不显示为可编辑或可删除。
     assert built_in.editable is False
     assert built_in.deletable is False
     assert built_in.source == "builtin"

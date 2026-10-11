@@ -298,7 +298,8 @@ class AgentTeamConfigurationRegistry:
 
         与 :meth:`AgentProfileRegistry.child_agent_summary` 同构，但 Team 摘要更完整：除标识、
         名称与用途外，还列出 Team 的节点清单与状态转移，供主 Agent 在调用 ``agent_team`` 工具前
-        知悉可选 Team，并据此构造 ``node_goals``（键为各 ``node_id``）、理解节点流转。不暴露运行态。
+        知悉可选 Team，并据此为各 ``node_id`` 构造包含完整子目标与短摘要的 ``node_goals``、
+        理解节点流转。不暴露运行态。
 
         参数:
             workspace_root: 当前 workspace 根路径。

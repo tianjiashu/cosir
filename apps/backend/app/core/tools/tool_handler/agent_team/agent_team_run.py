@@ -8,6 +8,7 @@ from typing import ClassVar
 from pydantic import ValidationError
 
 from app.agent_team.registry import get_agent_team_registry
+from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
@@ -43,28 +44,25 @@ class AgentTeamRunTool(HandlerBase):
     """
 
     name = TOOL_AGENT_TEAM
-    # 描述刻意只讲「运行一个已存在的 Team」：曾经的措辞「Prepare a configured Agent Team
-    # execution plan」与「配置 Team 草稿」语义重叠，实测让模型在用户说「帮我配置个 team」时
-    # 反复选中本工具（而它只运行已存在配置），因此显式声明它不能创建或修改 Team 配置。
-    # 节点间语义（串行、上下文隔离、单跳交接、status 只决定路由、共享文件系统）必须写进
-    # 描述：模型据此才知道 node_goals 要写成「不依赖队友上下文也能独立执行」的子目标，并把
-    # 下游所需信息显式写进本节点输出，否则会假定队友能看到自己的过程而漏写交接内容。
+    # 分工：描述只讲「这个工具做什么」与「它运行的 Team 如何执行」；字段级契约（要哪些 id、每个
+    # id 给什么）写在 ``AgentTeamArgs`` 的 Field description 里，此处不复述——参数 schema 是模型
+    # 填参时逐字段读到的文本，两处都写等于重复占 token。
+    # 曾经的措辞「Prepare a configured Agent Team execution plan」与「配置 Team 草稿」语义重叠，
+    # 实测让模型在用户说「帮我配置个 team」时反复选中本工具（它只运行已存在配置），因此显式声明
+    # 它不能创建或修改配置。节点执行语义必须留在描述里：模型据此才知道子目标要写成不依赖队友
+    # 上下文的形式，并把下游所需信息显式写进输出。
     description = (
-        "Run an existing Agent Team configuration. Provide a non-empty overall goal and exactly "
-        "one non-empty node_goals entry for every configured node_id; do not add or omit node IDs. "
-        "The configuration has one start node and one logical terminal target named END. Nodes run "
-        "serially and the whole Team shares one execution budget. Each node runs in its own task "
-        "with its own context: it cannot see other nodes' conversations or work in progress, and "
-        "it does not inherit earlier nodes' history. A node's input contains its own subgoal and, "
-        "except for the start node, the handoff output of the node that ran immediately before it. "
-        "Every node must finish by returning a JSON object with a status field (one of that node's "
-        "allowed statuses) and an output field (free-text conclusion and handoff for later nodes); "
-        "any other final output fails the Team. The status alone selects the next node or ends the "
-        "Team, and the output of the node that ends the Team becomes the Team's final result. All "
-        "nodes share the workspace file system, so changes they make are visible to each other. "
-        "This tool prepares the plan for user review and starts it only after approval. It cannot "
-        "create or edit Team configurations. If the Team does not exist, ask the user to create it "
-        "first. Invoke this tool serially, not in parallel with other tools."
+        "Run an existing Agent Team configuration for one goal. Its nodes run serially on one "
+        "shared execution budget, each in its own task and context: they share only the workspace "
+        "file system and the previous node's handoff output, never other nodes' conversations or "
+        "earlier history. Every node must end by returning a JSON object with a status field (one "
+        "of that node's allowed statuses) and an output field: the status alone selects the next "
+        "node or ends the Team, any other final output fails the Team, and the ending node's "
+        "output is the Team's final result. This tool first returns a plan for the user to review "
+        "and edit, starts the Team only after the user approves, then runs it to the end and "
+        "reports the final status. It cannot create or edit Team configurations; if the Team "
+        "does not exist, ask the user to create it first. Call it alone in its own reply: a "
+        "batch containing any other tool is rejected."
     )
     args_model = AgentTeamArgs
     timeout_seconds: ClassVar[float] = 30.0
@@ -79,7 +77,7 @@ class AgentTeamRunTool(HandlerBase):
             self,
             team_id: str,
             goal: str,
-            node_goals: dict[str, str],
+            node_goals: dict[str, dict[str, str]],
             execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """准备待确认方案，或在用户批准后真正启动该 TeamRun。
@@ -123,6 +121,10 @@ class AgentTeamRunTool(HandlerBase):
                 ),
                 retryable=False,
             )
+        node_goals = {
+            node_id: AgentTeamNodeGoal.model_validate(node_goal)
+            for node_id, node_goal in node_goals.items()
+        }
         decision = execution_context.user_decision
         if decision is not None and decision.kind in EXECUTING_DECISION_KINDS:
             return self._start_confirmed_run(decision, parent_agent_profile)
@@ -134,7 +136,7 @@ class AgentTeamRunTool(HandlerBase):
             self,
             team_id: str,
             goal: str,
-            node_goals: dict[str, str],
+            node_goals: dict[str, AgentTeamNodeGoal],
             execution_context: ToolExecutionContext,
             parent_agent_profile: AgentProfile,
     ) -> ToolObservation:

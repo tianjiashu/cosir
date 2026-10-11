@@ -93,7 +93,9 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
             <span className="text-xs text-muted-foreground">{currentStatus}</span>
           </div>
           {(display.goal || run?.goal) && (
-            <p className="mt-1 text-xs text-muted-foreground">{display.goal || run?.goal}</p>
+            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground" title={display.goal || run?.goal || undefined}>
+              {display.goal || run?.goal}
+            </p>
           )}
         </div>
       </header>

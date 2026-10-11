@@ -2,7 +2,7 @@
 
 专用 CHILD profile（code-developer / code-explorer / delegate_reviewer /
 unit-test-engineer）原由 ``app/core/agents/defaults/*.json`` 随包分发，该目录已移除：
-当前系统作用域只由代码内置的 ``general-assistant`` 与 ``main_agent`` 播种，用户自定义
+当前系统作用域由代码内置的 ``general-assistant``、``only_read_child_agent`` 与 ``main_agent`` 播种，用户自定义
 CHILD 通过配置中心写入运行时的 ``system_agent_config_dir``。本模块因此以「process 作用域
 能解析出哪些内置 profile」为断言对象，并用配置中心目录作为 JSON 装载路径。
 """
@@ -63,25 +63,33 @@ def test_generic_child_profile_keeps_code_prompt(monkeypatch) -> None:
     assert "You handle exactly one focused task delegated by the parent agent." in prompt
 
 
-def test_builtin_child_profiles_are_general_assistant_only(
+def test_builtin_child_profiles_are_code_defined_and_complete(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """系统作用域只播种唯一代码内置 CHILD，且其提示词与工具能力完整。"""
+    """系统作用域播种代码内置 CHILD，且通用与只读 profile 均具有对应工具能力。"""
 
     profiles = _code_defined_profiles(monkeypatch, tmp_path)
 
-    assert {profile.agent_id for profile in profiles} == {"general-assistant", "main_agent"}
+    assert {profile.agent_id for profile in profiles} == {
+        "general-assistant",
+        "only_read_child_agent",
+        "main_agent",
+    }
     children = [profile for profile in profiles if profile.agent_type is AgentProfileType.CHILD]
-    assert [profile.agent_id for profile in children] == ["general-assistant"]
-    assert children[0].system_prompt.strip()
+    assert {profile.agent_id for profile in children} == {
+        "general-assistant",
+        "only_read_child_agent",
+    }
+    assert all(profile.system_prompt.strip() for profile in children)
+    general = next(profile for profile in children if profile.agent_id == "general-assistant")
     assert {
         "write_file",
         "apply_patch",
         "delete_file",
         "move_file",
         "read_file",
-    } <= set(children[0].allowed_tools)
+    } <= set(general.allowed_tools)
 
 
 def test_system_registry_contains_only_code_defined_children(
@@ -97,8 +105,9 @@ def test_system_registry_contains_only_code_defined_children(
     )
     registry = build_agent_registry()
 
-    assert registry.child_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {"general-assistant"}
-    assert registry.child_agent_ids(tmp_path / "workspace") == {"general-assistant"}
+    builtins = {"general-assistant", "only_read_child_agent"}
+    assert registry.child_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == builtins
+    assert registry.child_agent_ids(tmp_path / "workspace") == builtins
 
 
 def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools(

@@ -9,13 +9,18 @@ export type AgentTeamNodePreview = {
   maxSteps: number;
 };
 
+export type AgentTeamNodeGoal = {
+  goal: string;
+  summary: string;
+};
+
 export type AgentTeamPreviewDisplay = {
   kind: "agent-team-approval";
   teamRunId: number;
   teamId: string;
   name: string;
   goal: string;
-  nodeGoals: Record<string, string>;
+  nodeGoals: Record<string, AgentTeamNodeGoal>;
   startNode: string;
   parentTaskId: number;
   parentRunId: number;
@@ -116,11 +121,13 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
   const configuration = asRecord(data.configuration);
   if (teamRunId === undefined || !teamId || !name || !goal || !startNode || parentTaskId === undefined || parentRunId === undefined || workspaceId === undefined || Object.keys(configuration).length === 0) return null;
   const edges = recordList(data.edges);
-  const nodeGoals = data.node_goals === undefined
-    ? {}
-    : Object.fromEntries(
-      Object.entries(asRecord(data.node_goals)).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-    );
+  if (data.node_goals === null || typeof data.node_goals !== "object" || Array.isArray(data.node_goals)) return null;
+  const nodeGoals: Record<string, AgentTeamNodeGoal> = {};
+  for (const [nodeId, rawGoal] of Object.entries(asRecord(data.node_goals))) {
+    const nodeGoal = asRecord(rawGoal);
+    if (typeof nodeGoal.goal !== "string" || typeof nodeGoal.summary !== "string") return null;
+    nodeGoals[nodeId] = { goal: nodeGoal.goal, summary: nodeGoal.summary };
+  }
   if (!Array.isArray(data.nodes) || !edges) return null;
   const nodes: AgentTeamNodePreview[] = [];
   for (const raw of data.nodes) {
@@ -140,6 +147,7 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
       maxSteps,
     });
   }
+  if (nodes.length !== Object.keys(nodeGoals).length || nodes.some((node) => !nodeGoals[node.nodeId])) return null;
   return {
     kind: "agent-team-approval",
     teamRunId,

@@ -53,6 +53,7 @@ export type AgentTeamRun = {
     agent_id: string;
     statuses: AgentTeamStatusConfiguration[];
     goal: string;
+    goal_summary: string;
     task_id: number | null;
     status: string;
     conversation_run_count: number;
@@ -66,6 +67,7 @@ export type AgentTeamRun = {
     name: string;
     agent_id: string;
     goal: string;
+    goal_summary: string;
     task_id: number | null;
     conversation_run_id: number | null;
     status: string;

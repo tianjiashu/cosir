@@ -26,6 +26,7 @@ class AgentTeamNodeResponse(BaseModel):
     agent_id: str
     statuses: list[AgentTeamBusinessStatusResponse]
     goal: str
+    goal_summary: str
     task_id: int | None
     status: str
     conversation_run_count: int
@@ -58,6 +59,7 @@ class AgentTeamExecutionStepResponse(BaseModel):
     name: str
     agent_id: str
     goal: str
+    goal_summary: str
     task_id: int | None
     conversation_run_id: int | None
     status: str

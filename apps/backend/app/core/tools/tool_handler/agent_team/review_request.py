@@ -18,7 +18,7 @@ AGENT_TEAM_REVIEW_KIND = "agent_team_review"
 
 # 前端按本标识选择「可编辑运行输入」的渲染器；修改草稿形状时必须同步升版本，
 # 避免旧前端把新草稿按旧结构渲染。
-AGENT_TEAM_REVIEW_DRAFT_SCHEMA = "agent-team-review-v1"
+AGENT_TEAM_REVIEW_DRAFT_SCHEMA = "agent-team-review-v2"
 
 _ACCEPTED_DECISIONS = (UserDecisionKind.APPROVE, UserDecisionKind.REJECT)
 
@@ -32,7 +32,7 @@ def build_team_review_request(
 
     参数:
         preview_fields: preparation 服务产出的预览字段（含 ``goal`` / ``node_goals`` /
-            ``configuration``）。
+            ``configuration``）；每个 ``node_goals`` 值包含完整 ``goal`` 和短 ``summary``。
         team_run_id: 待确认的 TeamRun 主键，直接作为 ``request_id``（同一 Run 内由自增主键保证
             唯一；工具未来换内部标识时必须保持本字段对前端稳定）。
 

@@ -4,6 +4,7 @@ import { ClockIcon, UsersIcon } from "lucide-react";
 
 import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decision";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { statusColorStyle } from "@/lib/agent-team-status";
@@ -27,12 +28,20 @@ type AgentTeamToolProps = ToolCallMessagePartProps & {
 function validateReviewedInputs(
   goal: string,
   nodes: AgentTeamPreviewDisplay["nodes"],
-  nodeGoals: Record<string, string>,
+  nodeGoals: AgentTeamPreviewDisplay["nodeGoals"],
 ): string | null {
   if (!goal.trim()) return "请填写 Agent Team 目标";
-  const missingNodeGoals = nodes.filter((node) => !nodeGoals[node.nodeId]?.trim());
+  const missingNodeGoals = nodes.filter((node) => !nodeGoals[node.nodeId]?.goal.trim());
   if (missingNodeGoals.length > 0) {
     return `请填写所有节点的子目标：${missingNodeGoals.map((node) => node.name).join("、")}`;
+  }
+  const missingSummaries = nodes.filter((node) => !nodeGoals[node.nodeId]?.summary.trim());
+  if (missingSummaries.length > 0) {
+    return `请填写所有节点的摘要：${missingSummaries.map((node) => node.name).join("、")}`;
+  }
+  const longSummaries = nodes.filter((node) => Array.from(nodeGoals[node.nodeId]?.summary.trim() ?? "").length > 10);
+  if (longSummaries.length > 0) {
+    return `节点摘要不能超过 10 个字：${longSummaries.map((node) => node.name).join("、")}`;
   }
   return null;
 }
@@ -79,7 +88,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
   const [state, setState] = useState<"idle" | "confirming" | "rejecting" | "confirmed" | "rejected" | "failed">("idle");
   const [message, setMessage] = useState("");
   const [goal, setGoal] = useState(preview?.goal ?? "");
-  const [nodeGoals, setNodeGoals] = useState<Record<string, string>>(preview?.nodeGoals ?? {});
+  const [nodeGoals, setNodeGoals] = useState<AgentTeamPreviewDisplay["nodeGoals"]>(preview?.nodeGoals ?? {});
   const [feedback, setFeedback] = useState("");
   // 审批动作同时受两个后端事实约束：Run 正在等待用户输入，且 tool part 带有待决请求。
   // tool part 自身的 completed/running 只描述调用执行阶段，不能单独授权或禁用审批。
@@ -254,15 +263,36 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
               </div>
             </div>
             <label className="block text-muted-foreground">
+              <span>节点摘要 <span className="text-destructive">*</span><span className="ml-1 text-[10px]">最多 10 字</span></span>
+              <Input
+                aria-label={`${node.name} 的节点摘要`}
+                className="mt-1 bg-background text-xs"
+                maxLength={10}
+                placeholder="例如：撰写与修订总规划"
+                value={nodeGoals[node.nodeId]?.summary ?? ""}
+                disabled={state === "confirming" || state === "rejecting" || state === "confirmed" || state === "rejected"}
+                onChange={(event) => setNodeGoals((current) => ({
+                  ...current,
+                  [node.nodeId]: {
+                    goal: current[node.nodeId]?.goal ?? "",
+                    summary: event.target.value,
+                  },
+                }))}
+              />
+            </label>
+            <label className="block text-muted-foreground">
               <span>节点子目标 <span className="text-destructive">*</span></span>
               <Textarea
                 aria-label={`${node.name} 的节点子目标`}
                 className="mt-1 min-h-16 resize-y bg-background text-xs"
-                value={nodeGoals[node.nodeId] ?? ""}
+                value={nodeGoals[node.nodeId]?.goal ?? ""}
                 disabled={state === "confirming" || state === "rejecting" || state === "confirmed" || state === "rejected"}
                 onChange={(event) => setNodeGoals((current) => ({
                   ...current,
-                  [node.nodeId]: event.target.value,
+                  [node.nodeId]: {
+                    goal: event.target.value,
+                    summary: current[node.nodeId]?.summary ?? "",
+                  },
                 }))}
               />
             </label>

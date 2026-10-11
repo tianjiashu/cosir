@@ -129,9 +129,9 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await expect(page.getByRole("button", { name: "返回 Agent 列表" })).toHaveText("返回 Agent 列表");
   await expect(page.getByText("允许的工具组", { exact: true })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: "文件" })).toBeChecked();
-  // 子 Agent 不可授予的分组保留展示但禁用，其它分组仍可勾选。
+  // 交互终端仍不可授予；子 Agent 工具与其它可配置分组一样可以勾选。
   await expect(page.getByRole("checkbox", { name: "交互终端工具" })).toBeDisabled();
-  await expect(page.getByRole("checkbox", { name: "子Agent工具" })).toBeDisabled();
+  await expect(page.getByRole("checkbox", { name: "子Agent工具" })).toBeEnabled();
   await expect(page.getByRole("checkbox", { name: "文件" })).toBeEnabled();
   await expect(page.getByText("1 个工具", { exact: true })).toHaveCount(0);
   // 设置页是覆盖在 workspace 之上的浮层，composer 的「选择模型」同样在 DOM 中，故限定到编辑器表单内。

@@ -13,6 +13,7 @@ from typing import Any
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
+from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_agent_registry
 from app.config.constant import Constant
@@ -292,7 +293,7 @@ class AgentTeamPreparationService:
             configuration: AgentTeamConfiguration,
             *,
             goal: str,
-            node_goals: dict[str, str],
+            node_goals: dict[str, AgentTeamNodeGoal],
             workspace_root: str,
             parent_task_id: int,
             parent_run_id: int,
@@ -304,7 +305,8 @@ class AgentTeamPreparationService:
         参数:
             configuration: 已通过 Team 配置领域校验的配置对象。
             goal: 本次 Team 执行目标，不能为空白。
-            node_goals: 按 ``node_id`` 提供且完整覆盖所有节点的子目标，作为对应节点的 user input。
+            node_goals: 按 ``node_id`` 提供且完整覆盖所有节点的子目标与展示摘要；只有完整子目标
+                作为对应节点的 user input。
             workspace_root: 节点 Agent 和工具解析使用的 workspace 根路径。
             parent_task_id: 主 Agent Task 标识，写入展示预览。
             parent_run_id: 主 Agent Run 标识，写入展示预览。
@@ -324,7 +326,13 @@ class AgentTeamPreparationService:
             raise TeamToolError(message="Team goal must not be blank", retryable=True)
         node_ids = {node.node_id for node in configuration.nodes}
         node_goals = {
-            key: value.strip() for key, value in node_goals.items()
+            key: value.model_copy(
+                update={
+                    "goal": value.goal.strip(),
+                    "summary": value.summary.strip(),
+                }
+            )
+            for key, value in node_goals.items()
         }
         unknown_node_goals = set(node_goals) - node_ids
         if unknown_node_goals:
@@ -340,15 +348,6 @@ class AgentTeamPreparationService:
                 + ", ".join(sorted(missing_node_goals)),
                 retryable=True
             )
-        blank_node_goals = sorted(
-            node_id for node_id, value in node_goals.items() if not value
-        )
-        if blank_node_goals:
-            raise TeamToolError(
-                message="node_goals must not be blank: " + ", ".join(blank_node_goals),
-                retryable=True
-            )
-
         node_profiles: dict[str, AgentProfile] = {}
         for node in configuration.nodes:
             _, profile = resolve_node_profile(
@@ -371,7 +370,8 @@ class AgentTeamPreparationService:
             node_runtime_snapshots[node.node_id] = {
                 "agent_id": profile.agent_id,
                 "role": profile.role,
-                "node_goal": node_goals[node.node_id],
+                "node_goal": node_goals[node.node_id].goal,
+                "node_goal_summary": node_goals[node.node_id].summary,
                 "system_prompt": build_node_system_prompt(
                     profile,
                     configuration,
@@ -411,7 +411,10 @@ class AgentTeamPreparationService:
             "team_id": configuration.team_id,
             "name": configuration.name,
             "goal": goal,
-            "node_goals": node_goals,
+            "node_goals": {
+                node_id: node_goal.model_dump(mode="json")
+                for node_id, node_goal in node_goals.items()
+            },
             "start_node": configuration.start_node_id,
             "nodes": resolved_nodes,
             "edges": [

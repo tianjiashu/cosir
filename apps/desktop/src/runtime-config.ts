@@ -57,6 +57,11 @@ function isTauriRuntime(): boolean {
   return Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
 }
 
+/** 仅允许开发期的桌面宿主展示后端重启入口。 */
+export function canRestartBackendRuntime(): boolean {
+  return import.meta.env.DEV && typeof window !== "undefined" && isTauriRuntime();
+}
+
 function beginOperation(): number {
   operationEpoch += 1;
   return operationEpoch;

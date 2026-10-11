@@ -23,6 +23,7 @@ import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { ResourceActionMenu } from "@/components/resource-action-menu";
 import { TaskTree } from "@/components/task-tree/task-tree";
 import { BackendStatusBanner } from "@/components/backend-status-banner";
+import { BackendRestartButton } from "@/components/backend-restart-button";
 import { Workbench } from "@/components/workbench";
 import { WorkbenchProvider } from "@/lib/workbench/context";
 import { SystemConfigurationPage } from "@/components/system-configuration-page";
@@ -413,7 +414,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
         </div>
       </aside>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex h-14 shrink-0 items-center justify-between border-b px-5"><div className="min-w-0"><p className="flex items-center gap-2 text-sm font-medium">{activeTaskId ? "对话" : "新对话"}{activeTask?.task_type === "fork" && <GitForkIcon className="text-muted-foreground size-3.5" aria-label="Fork Task" />}</p><p className="text-muted-foreground truncate text-xs">{forkError ?? (activeTaskId ? "已存在任务" : "选择工作区后开始创建对话")}</p></div>{selectedWorkspace && <div className="text-muted-foreground flex items-center gap-2 text-xs"><FolderIcon className="size-3.5" />{selectedWorkspace.name}</div>}</div>
+        <div className="flex h-14 shrink-0 items-center justify-between border-b px-5"><div className="min-w-0"><p className="flex items-center gap-2 text-sm font-medium">{activeTaskId ? "对话" : "新对话"}{activeTask?.task_type === "fork" && <GitForkIcon className="text-muted-foreground size-3.5" aria-label="Fork Task" />}</p><p className="text-muted-foreground truncate text-xs">{forkError ?? (activeTaskId ? "已存在任务" : "选择工作区后开始创建对话")}</p></div><div className="flex items-center gap-3"><BackendRestartButton />{selectedWorkspace && <div className="text-muted-foreground flex items-center gap-2 text-xs"><FolderIcon className="size-3.5" />{selectedWorkspace.name}</div>}</div></div>
         <div className="min-h-0 flex-1 overflow-hidden">
           {activeTaskId ? <TaskPage
             key={activeTaskId}

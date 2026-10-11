@@ -32,10 +32,11 @@ class AgentTeamTransitionRecord(BaseModel):
 
 
 class AgentTeamRunRuntime(BaseModel):
-    """保存单个节点恢复执行所需的运行快照。
+    """保存单个节点执行所需配置及其展示快照。
 
     该模型把原先松散存放在 ``node_snapshots`` 内层字典里的节点运行资源固化为显式字段，
-    只供后端恢复节点执行，API 投影时必须过滤。除 ``agent_id`` 外字段允许缺省，便于局部
+    其中完整 ``node_goal`` 是节点输入，``node_goal_summary`` 只用于执行态展示。运行时资源
+    只供后端恢复执行，API 投影时必须过滤。除 ``agent_id`` 和摘要外字段允许缺省，便于局部
     快照构造；``extra="forbid"`` 仍拦截未声明字段的漂移。
     """
 
@@ -44,6 +45,7 @@ class AgentTeamRunRuntime(BaseModel):
     agent_id: StrictStr
     role: StrictStr = ""
     node_goal: StrictStr = ""
+    node_goal_summary: StrictStr = Field(min_length=1, max_length=10)
     system_prompt: StrictStr = ""
     allowed_tools: list[str] = Field(default_factory=list)
     structured_output: dict[str, Any] = Field(default_factory=dict)
@@ -57,7 +59,7 @@ class AgentTeamRunState(BaseModel):
     本模型保存 Team 的执行聚合状态，但不承载 Team 生命周期状态；生命周期状态由
     ``AgentTeamRunModel.status`` 及其条件状态迁移负责。``node_executions`` 按节点固定 Task
     身份并保存该节点创建的 ConversationRun ID；``current_node_id`` 是协调器的节点游标。
-    ``node_runtime`` 保存节点执行配置，只供后端恢复执行，API 投影时必须过滤。
+    ``node_runtime`` 保存节点执行配置和短摘要；执行配置只供后端恢复执行，API 投影时必须过滤。
 
     该模型使用严格字段和禁止额外字段的契约。状态结构发生变化时直接要求新数据库状态，
     不对旧 JSON 做兼容转换，避免同一进程同时维护多套状态格式。

@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from typing import Any, Literal
 
+from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.core.tools.tool_models import ProposeAgentTeamConfigurationArgs
 
 
@@ -46,7 +47,7 @@ def build_agent_team_run_display_data(
     team_run_id: int,
     team_id: str,
     goal: str,
-    node_goals: Mapping[str, str],
+    node_goals: Mapping[str, AgentTeamNodeGoal],
 ) -> dict[str, Any]:
     """投影「用户已批准、Team 已启动」的展示数据。
 
@@ -58,7 +59,10 @@ def build_agent_team_run_display_data(
         "team_id": team_id,
         "team_run_id": team_run_id,
         "goal": goal,
-        "node_goals": dict(node_goals),
+        "node_goals": {
+            node_id: node_goal.model_dump(mode="json")
+            for node_id, node_goal in node_goals.items()
+        },
     }
 
 

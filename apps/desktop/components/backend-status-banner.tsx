@@ -15,8 +15,6 @@ export function BackendStatusBanner() {
   );
   const [retrying, setRetrying] = useState(false);
 
-  if (!status || status.state === "ready") return null;
-
   const retry = useCallback(async () => {
     setRetrying(true);
     try {
@@ -27,6 +25,8 @@ export function BackendStatusBanner() {
       setRetrying(false);
     }
   }, []);
+
+  if (!status || status.state === "ready") return null;
 
   return (
     <div className="bg-destructive text-destructive-foreground fixed inset-x-0 top-0 z-50 flex items-center justify-center gap-3 px-4 py-2 text-sm shadow-md">
