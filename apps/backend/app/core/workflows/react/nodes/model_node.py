@@ -37,6 +37,9 @@ from app.core.workflows.react.node_helper.common import (
 )
 from app.core.workflows.react.node_helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflows.react.node_helper.model_chunk import ModelChunkProcessor
+from app.core.workflows.react.node_helper.request_fingerprint import (
+    log_messages_fingerprint,
+)
 from app.core.workflows.react.node_helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
@@ -185,6 +188,17 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "message_count": len(messages),
             },
         },
+    )
+    # 请求指纹：这是本步真正发给模型的载荷（已 resolve 图片、已并入延迟系统消息），
+    # 记录后可跨 Run 对比「前缀是否变化、第一处分叉在哪条消息」，用于定位缓存未命中的归因。
+    # 工具 schema 指纹不在此处取：``operations.task_tool_schemas`` 会经 task space 触发 Task 加载，
+    # 本节点此前不依赖它，为观测引入该依赖会改变节点副作用。工具段由 workflow 在 bind_tools 处记录。
+    log_messages_fingerprint(
+        messages,
+        task_id=task_id,
+        run_id=run_id,
+        step_id=step_id,
+        step_count=step_count,
     )
     # part 生命周期收口：把交错的 text/reasoning 流转换为顺序括号化的 part 事件流。
     parts = StreamingPartStateMachine(

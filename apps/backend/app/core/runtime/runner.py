@@ -57,6 +57,14 @@ from app.service.depends import (
 )
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
+# 「本轮工具准入」通知的归属说明：通知写入 canonical context 后会作为历史长期存在，后续 Run 的
+# 模型请求都会读到它。只写「this round」而不锚定归属时，模型会把历史某轮的禁用集合当成当前约束，
+# 因此统一附带该句，并要求以最新一条为准。
+_AVAILABILITY_NOTICE_SCOPE = (
+    " This notice is scoped to the round that emitted it; when several notices appear in the "
+    "history, the most recent one is the binding one."
+)
+
 
 class AgentRuntime:
     """执行与生命周期引擎：驱动 workflow，并把执行边界收口在这一层。
@@ -400,25 +408,40 @@ class AgentRuntime:
         副作用:
             向本 Task 的延迟系统消息队列投递本轮工具准入说明（禁用集合或「全部放行」），
             由下一次 model 节点入口消费并写入上下文；这些消息在队列中等待，模型节点不消费则本轮不会进入模型请求。
+            通知带 ``run_id`` 归属标记，只由本 Run 消费（本 Run 未消费则由下一 Run 取队列丢弃）；正文用
+            ``sorted`` 后的工具名列表，避免同一集合跨进程产生不同文本。该通知一旦消费即成为
+            canonical 历史的固定行，落库策略本身不得改动：它是后续 Run 请求前缀的一部分，
+            改为「仅本次请求注入、不落库」会让下一个 Run 从本轮用户消息处起前缀分叉，丢掉整段缓存复用。
         """
         task_space = task_runtime_spaces.get_or_create(task.id)
         allows_tools = {tool.get("name") for tool in task_space.task_tool_schemas}
 
         ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
 
-        if run.extra is not None and len(run.extra.ban_tools) > 0:
+        if ban_tools:
             allows_tools = allows_tools - ban_tools
             task_space.defer_system_message(
                 SystemMessage(
                     content=(
-                        f"Tools banned for this round: {ban_tools}. These tools cannot be "
-                        "executed in this round; please do not use them."
-                    )
+                        "Tool availability notice: the following tools are disabled for this "
+                        f"round and calls to them will be rejected: {', '.join(sorted(ban_tools))}. "
+                        "All other tools remain available."
+                        f"{_AVAILABILITY_NOTICE_SCOPE}"
+                    ),
+                    # 归属标记：``take_deferred_system_messages`` 只放行本 Run 的消息，本 Run 未消费
+                    # （取消 / 崩溃）时由下一 Run 取队列丢弃，过期的准入集合不会被补写进历史。
+                    additional_kwargs={"run_id": run.id},
                 )
             )
         else:
             task_space.defer_system_message(
-                SystemMessage(content="All tools are allowed for this round.")
+                SystemMessage(
+                    content=(
+                        "Tool availability notice: all tools are available for this round."
+                        f"{_AVAILABILITY_NOTICE_SCOPE}"
+                    ),
+                    additional_kwargs={"run_id": run.id},
+                )
             )
 
         execution_context = self._resolve_execution_context(task, run_id=run.id)

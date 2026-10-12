@@ -37,6 +37,7 @@ from app.service.depends import get_conversation_run_service, get_terminal_sessi
 
 from ..agent_workflow import AgentWorkflow, WorkflowRunFailure, build_checkpointer
 from .edges import _route_target
+from .node_helper.request_fingerprint import log_tools_fingerprint
 from .runtime_config import RuntimeConfig
 from .worflow_state.route import ReactRoute
 
@@ -233,6 +234,9 @@ class ReactLikeWorkflow(AgentWorkflow):
         # ToolCallLifecycleManager 按本 Run 的 allows_tools 拦截，不能据此过滤 bind_tools；
         # 否则同一 Task 的模型工具定义会随 Run 改变，破坏前缀缓存复用。
         tool_schemas = operations.task_tool_schemas
+        # 工具 schema 按 Run 记录指纹：它是本 Run 的常量，跨 Run 变化即说明工具定义被改动，
+        # 缓存会从工具段起失效。取自身下 bind_tools 的同一份 schema，保证指纹与实际下发一致。
+        log_tools_fingerprint(tool_schemas, task_id=current_task.id, run_id=run_id)
         if len(tool_schemas) > 0:
             bound_model = base_model.bind_tools(
                 tool_schemas,
