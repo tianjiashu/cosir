@@ -1,0 +1,201 @@
+{
+  "team_id": "backend_wiki_team",
+  "name": "后端 Wiki 撰写团队",
+  "description": "为 apps/backend 撰写面向 Agent 与人类的实现导览 wiki（根目录 wiki/）。采用「契约冻结 → 分层撰写 → 紧邻只读复核 → 全库终检」的串行流水线：架构师先冻结模板、术语表、文档清单与机械校验脚本；撰写者按批次产出「契约 + 文件指针」型文档（不抄代码、必带 mermaid 链路图）；复核者对每个批次先跑机械校验再做语义抽查，不合格则带回问题清单打回同一写作节点返工；最后由架构师全库终检，问题交返工节点修复后复检。本配置为第一期（A 档：总览、事实源地图与核心链路），后续模块卡与横切主题另开一期。",
+  "max_runs": 30,
+  "start_node_id": "freeze_contract",
+  "nodes": [
+    {
+      "node_id": "freeze_contract",
+      "name": "契约冻结",
+      "agent_id": "wiki-architect",
+      "statuses": [
+        {
+          "name": "frozen",
+          "color": "#16A34A"
+        },
+        {
+          "name": "blocked",
+          "color": "#DC2626"
+        }
+      ]
+    },
+    {
+      "node_id": "write_overview",
+      "name": "撰写总览与事实源地图",
+      "agent_id": "wiki-writer",
+      "statuses": [
+        {
+          "name": "written",
+          "color": "#2563EB"
+        }
+      ]
+    },
+    {
+      "node_id": "review_overview",
+      "name": "复核总览批次",
+      "agent_id": "wiki-reviewer",
+      "statuses": [
+        {
+          "name": "pass",
+          "color": "#16A34A"
+        },
+        {
+          "name": "needs_changes",
+          "color": "#D97706"
+        }
+      ]
+    },
+    {
+      "node_id": "write_flows_a",
+      "name": "撰写核心链路 A",
+      "agent_id": "wiki-writer",
+      "statuses": [
+        {
+          "name": "written",
+          "color": "#2563EB"
+        }
+      ]
+    },
+    {
+      "node_id": "review_flows_a",
+      "name": "复核链路 A 批次",
+      "agent_id": "wiki-reviewer",
+      "statuses": [
+        {
+          "name": "pass",
+          "color": "#16A34A"
+        },
+        {
+          "name": "needs_changes",
+          "color": "#D97706"
+        }
+      ]
+    },
+    {
+      "node_id": "write_flows_b",
+      "name": "撰写核心链路 B",
+      "agent_id": "wiki-writer",
+      "statuses": [
+        {
+          "name": "written",
+          "color": "#2563EB"
+        }
+      ]
+    },
+    {
+      "node_id": "review_flows_b",
+      "name": "复核链路 B 批次",
+      "agent_id": "wiki-reviewer",
+      "statuses": [
+        {
+          "name": "pass",
+          "color": "#16A34A"
+        },
+        {
+          "name": "needs_changes",
+          "color": "#D97706"
+        }
+      ]
+    },
+    {
+      "node_id": "final_check",
+      "name": "全库终检",
+      "agent_id": "wiki-architect",
+      "statuses": [
+        {
+          "name": "pass",
+          "color": "#16A34A"
+        },
+        {
+          "name": "needs_changes",
+          "color": "#D97706"
+        }
+      ]
+    },
+    {
+      "node_id": "final_fix",
+      "name": "终检返工",
+      "agent_id": "wiki-writer",
+      "statuses": [
+        {
+          "name": "fixed",
+          "color": "#2563EB"
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "from_node_id": "freeze_contract",
+      "status": "frozen",
+      "target_node_id": "write_overview"
+    },
+    {
+      "from_node_id": "freeze_contract",
+      "status": "blocked",
+      "target_node_id": "END"
+    },
+    {
+      "from_node_id": "write_overview",
+      "status": "written",
+      "target_node_id": "review_overview"
+    },
+    {
+      "from_node_id": "review_overview",
+      "status": "pass",
+      "target_node_id": "write_flows_a"
+    },
+    {
+      "from_node_id": "review_overview",
+      "status": "needs_changes",
+      "target_node_id": "write_overview"
+    },
+    {
+      "from_node_id": "write_flows_a",
+      "status": "written",
+      "target_node_id": "review_flows_a"
+    },
+    {
+      "from_node_id": "review_flows_a",
+      "status": "pass",
+      "target_node_id": "write_flows_b"
+    },
+    {
+      "from_node_id": "review_flows_a",
+      "status": "needs_changes",
+      "target_node_id": "write_flows_a"
+    },
+    {
+      "from_node_id": "write_flows_b",
+      "status": "written",
+      "target_node_id": "review_flows_b"
+    },
+    {
+      "from_node_id": "review_flows_b",
+      "status": "pass",
+      "target_node_id": "final_check"
+    },
+    {
+      "from_node_id": "review_flows_b",
+      "status": "needs_changes",
+      "target_node_id": "write_flows_b"
+    },
+    {
+      "from_node_id": "final_check",
+      "status": "pass",
+      "target_node_id": "END"
+    },
+    {
+      "from_node_id": "final_check",
+      "status": "needs_changes",
+      "target_node_id": "final_fix"
+    },
+    {
+      "from_node_id": "final_fix",
+      "status": "fixed",
+      "target_node_id": "final_check"
+    }
+  ],
+  "scope": "workspace"
+}
