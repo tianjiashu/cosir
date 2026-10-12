@@ -9,8 +9,10 @@
   ``resolve_file_resource_paths``），并做重复只读调用检测；命中重复时直接产出一个
   ``early_observation`` 提前返回，不再真正执行 handler。
 - ``lock``：对写路径持进程内锁（``FilePathLockRegistry``），串行化同一 task/path 的写。
-- ``check_stale``：在持锁后、执行 handler 前，检测待写文件是否自上次观察以来已被外部
-  改动（stale revision），是则产出 stale_file/stale_patch 错误，避免基于过期内容写入。
+- ``check_stale``：在持锁后、执行 handler 前，只对 ``write_file``、``patch_write`` 与
+  ``apply_patch`` 检查目标内容是否自上次观察以来发生变化，避免覆盖未观察到的新内容。
+  ``delete_file`` 与 ``move_file`` 的安全性由各自 handler 的路径及目标校验负责，不因内容
+  revision 变化而在此处拦截。
 - ``complete``：handler 成功后，把本次观察到的文件快照和写路径记入 revision registry，
   并把重复调用签名标记为可用基线，供下一次 ``prepare`` 复用。
 
@@ -48,12 +50,14 @@ from app.core.tools.schemas.tool_names import (
     TOOL_READ_FILE,
     TOOL_REPLACE,
     TOOL_SEARCH_CONTENT,
+    TOOL_WRITE_FILE,
 )
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_handler.search.file_walker import iter_files
 from app.core.tools.tool_handler.search.ignore_rules import load_search_ignore_rules
 
 _REPEATED_TOOLS = frozenset({TOOL_READ_FILE, TOOL_SEARCH_CONTENT, TOOL_FIND_FILES})
+_STALE_CONTENT_TOOLS = frozenset({TOOL_WRITE_FILE, TOOL_REPLACE, TOOL_APPLY_PATCH})
 
 
 def _canonical_path(root: Path, value: Any) -> Any:
@@ -282,7 +286,7 @@ class FileToolStateCoordinator:
         *,
         tool_call_id: str,
     ) -> ToolObservation | None:
-        """在持有写路径锁后检查 stale revision。
+        """在持有写路径锁后检查依赖旧内容的写入是否已 stale。
 
         参数:
             plan: 本次文件工具执行计划。
@@ -291,7 +295,9 @@ class FileToolStateCoordinator:
             tool_call_id: 当前模型工具调用 id。
 
         返回:
-            未 stale 时返回 None；否则返回 ``stale_file`` / ``stale_patch`` 错误。
+            对 ``write_file``、``patch_write``、``apply_patch``，未 stale 时返回 None；
+            内容已变化时返回 ``stale_patch`` 错误。``delete_file`` 与 ``move_file`` 不在此处
+            比较内容 revision，交由各自 handler 校验路径及目标状态。
 
         异常:
             无。
@@ -300,26 +306,33 @@ class FileToolStateCoordinator:
             仅读取 revision registry 和当前文件元数据。
         """
 
-        # 无执行上下文，或本次没有待写路径（只读工具）时无需 stale 检查。
-        if execution_context is None or not plan.resources.write_paths:
+        # 只有依赖已观察内容的写工具才受 revision 保护；删除和移动由 handler 校验目标状态。
+        if (
+            execution_context is None
+            or tool.name not in _STALE_CONTENT_TOOLS
+            or not plan.resources.write_paths
+        ):
             return None
-        # 把「写路径当前 fingerprint」与 revision registry 里上次观察到的基线比对，
-        # 找出被外部改动过的路径（从未记录过的路径不算 stale）。
+        # 把「内容写路径当前 fingerprint」与 revision registry 里上次观察到的基线比对；
+        # 从未记录过的路径不算 stale。
         stale_paths = self._revisions.stale_paths(
             str(execution_context.task_id),
             plan.resources.write_paths,
         )
         if not stale_paths:
             return None
-        # patch_write / apply_patch 对文本敏感用 stale_patch 语义；Delete/Move 按文件状态
-        # 使用 stale_file。
-        reason = "stale_patch" if tool.name in (TOOL_REPLACE, TOOL_APPLY_PATCH) else "stale_file"
         path_text = ", ".join(str(path) for path in stale_paths)
         return tool_error(
             tool.name,
-            f"file changed since it was last observed: {path_text}",
-            reason=reason,
+            f"target content changed since it was last observed: {path_text}; no changes were made.",
+            reason=(
+                "Re-read the current target and verify the requested edit still applies. Then make "
+                "a new call based on the current content; for write_file provide the complete "
+                "updated content, and for patch_write or apply_patch regenerate the edit. Do not "
+                "replay the unchanged call."
+            ),
             tool_call_id=tool_call_id,
+            retryable=True,
         )
 
     @contextmanager

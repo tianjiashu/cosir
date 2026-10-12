@@ -129,10 +129,8 @@ class ApplyPatchTool(HandlerBase):
                 tool_name=self.name,
                 error=f"invalid Git unified diff: {outcome.error}",
                 reason=(
-                    "provide a valid Git unified diff with 'diff --git', '---', '+++', and '@@' "
-                    "sections, and make every hunk header count exactly the context, '-' and '+' "
-                    "lines its own body contains; remove any '*** Begin Patch'/'*** End Patch' "
-                    "markers. Use write_file, delete_file, or move_file for whole-file operations."
+                    "Correct the issue reported in error and submit only the raw diff; choose the "
+                    "matching file tool if the requested operation is unsupported."
                 ),
                 retryable=True,
             )
@@ -166,7 +164,6 @@ class ApplyPatchTool(HandlerBase):
                         "inspect the changed files and generate a new unified diff from their "
                         "current contents; do not replay this diff unchanged."
                     ),
-                    retryable=False,
                 )
             return tool_error(
                 tool_name=self.name,
