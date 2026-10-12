@@ -1,6 +1,9 @@
 import { asRecord } from "./types";
 import type { AgentTeamConfiguration, AgentTeamStatusConfiguration } from "@/lib/api/agent-teams";
 
+const AGENT_TEAM_REVIEW_KIND = "agent_team_review";
+const AGENT_TEAM_REVIEW_DRAFT_SCHEMA = "agent-team-review-v2";
+
 export type AgentTeamNodePreview = {
   nodeId: string;
   name: string;
@@ -30,10 +33,13 @@ export type AgentTeamPreviewDisplay = {
   configuration: Record<string, unknown>;
 };
 
+/** Team 审批请求允许的用户决定。 */
+export type AgentTeamReviewDecision = "approve" | "reject";
+
 /** 后端对一次「待用户决定」请求的声明（工具展示契约的 human-in-the-loop 部分）。 */
 export type AgentTeamReviewRequest = {
   requestId: string;
-  decisions: string[];
+  decisions: AgentTeamReviewDecision[];
   draftSchema: string;
 };
 
@@ -64,9 +70,9 @@ function positiveId(value: unknown): number | undefined {
  * `user_input_request` 的存在本身就是「这张卡等待用户作答」的标记：后端的展示投影只在该调用
  * 待作答时把它并进载荷，因此这里不再需要第二个布尔字段（两个表示会各自漂移）。
  */
-function hasReviewRequest(data: Record<string, unknown>): boolean {
-  const request = data.user_input_request;
-  return typeof request === "object" && request !== null;
+export function hasAgentTeamReviewRequest(value: unknown): boolean {
+  const data = asRecord(value);
+  return Object.prototype.hasOwnProperty.call(data, "user_input_request");
 }
 
 function text(value: unknown): string | undefined {
@@ -173,21 +179,29 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
  */
 export function readAgentTeamReviewRequest(value: unknown): AgentTeamReviewRequest | null {
   const data = asRecord(value);
-  if (!hasReviewRequest(data)) return null;
+  if (!hasAgentTeamReviewRequest(data)) return null;
   const request = asRecord(data.user_input_request);
   const requestId = text(request.request_id);
   const draftSchema = text(request.draft_schema);
-  if (!requestId || !draftSchema) return null;
+  if (
+    !requestId
+    || request.kind !== AGENT_TEAM_REVIEW_KIND
+    || draftSchema !== AGENT_TEAM_REVIEW_DRAFT_SCHEMA
+  ) return null;
   const decisions = stringList(request.decisions);
-  if (!decisions) return null;
-  return { requestId, decisions, draftSchema };
+  if (
+    !decisions
+    || decisions.length === 0
+    || decisions.some((decision) => decision !== "approve" && decision !== "reject")
+  ) return null;
+  return { requestId, decisions: decisions as AgentTeamReviewDecision[], draftSchema };
 }
 
 /** 读取「用户已批准、Team 已启动」的运行态展示。 */
 export function readAgentTeamRunDisplay(value: unknown): AgentTeamRunDisplay | null {
   const data = asRecord(value);
   if (data.kind !== "agent-team-execution") return null;
-  if (hasReviewRequest(data)) return null;
+  if (hasAgentTeamReviewRequest(data)) return null;
   const teamRunId = positiveId(data.team_run_id);
   const teamId = text(data.team_id);
   if (teamRunId === undefined || !teamId) return null;

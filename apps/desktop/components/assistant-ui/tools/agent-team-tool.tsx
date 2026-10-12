@@ -9,10 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { statusColorStyle } from "@/lib/agent-team-status";
-import { ToolStatus } from "./tool-status";
 import { AgentTeamExecutionCard } from "./agent-team-execution-card";
 import { asRecord, readToolArtifact } from "./types";
 import {
+  hasAgentTeamReviewRequest,
   readAgentTeamPreviewDisplay,
   readAgentTeamReviewRequest,
   type AgentTeamPreviewDisplay,
@@ -71,11 +71,11 @@ function NodeStatusBadge({ status }: { status: AgentTeamPreviewDisplay["nodes"][
  * 调用尚未结算），而用户此刻看到的是「等我确认」。两者不是同一维度，因此这里显式给一个展示提示，
  * 不改动状态语义（后端状态机里没有、也不需要 ``waiting``）。
  */
-function AwaitingReviewStatus({ className }: { className?: string }) {
+function AwaitingReviewStatus({ label = AWAITING_REVIEW_LABEL, className }: { label?: string; className?: string }) {
   return (
     <span className={cn("inline-flex items-center gap-1.5 text-xs text-amber-600", className)}>
       <ClockIcon className="size-3.5" aria-hidden="true" />
-      {AWAITING_REVIEW_LABEL}
+      {label}
     </span>
   );
 }
@@ -91,28 +91,41 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
   const [goal, setGoal] = useState(preview?.goal ?? "");
   const [nodeGoals, setNodeGoals] = useState<AgentTeamPreviewDisplay["nodeGoals"]>(preview?.nodeGoals ?? {});
   const [feedback, setFeedback] = useState("");
-  // 审批动作同时受两个后端事实约束：Run 正在等待用户输入，且 tool part 带有待决请求。
-  // tool part 自身的 completed/running 只描述调用执行阶段，不能单独授权或禁用审批。
+  // 请求存在决定审批卡是否展示；Run 状态只决定何时允许把决定提交给后端。
   const isWaitingForInput = runStatus === "waiting_for_input";
-  const awaitingReview = isWaitingForInput
-    && review !== null
-    && state !== "confirmed"
-    && state !== "rejected";
   const displayData = asRecord(artifact.display_data);
   const rawReviewRequest = asRecord(displayData.user_input_request);
+  const reviewRequestPresent = hasAgentTeamReviewRequest(displayData);
   const displayDataKeys = Object.keys(displayData).sort().join(",");
   const reviewRequestKeys = Object.keys(rawReviewRequest).sort().join(",");
   const requestId = typeof rawReviewRequest.request_id === "string" ? rawReviewRequest.request_id : null;
-  const requestKind = typeof rawReviewRequest.request_kind === "string" ? rawReviewRequest.request_kind : null;
+  const requestKind = typeof rawReviewRequest.kind === "string" ? rawReviewRequest.kind : null;
   const draftSchema = typeof rawReviewRequest.draft_schema === "string" ? rawReviewRequest.draft_schema : null;
   const parserAcceptedRequest = review !== null;
+  const formDisabled = !isWaitingForInput
+    || state === "confirming"
+    || state === "rejecting"
+    || state === "confirmed"
+    || state === "rejected";
+  const reviewStatusLabel = isWaitingForInput
+    ? AWAITING_REVIEW_LABEL
+    : runStatus === "running" || runStatus === "pending"
+      ? "正在准备确认"
+      : runStatus === "completed" || runStatus === "failed" || runStatus === "cancelled"
+        ? "运行已结束，审批不可提交"
+        : "正在同步运行状态";
 
   useEffect(() => {
-    if (!isWaitingForInput) return;
+    if (!reviewRequestPresent && !isWaitingForInput) return;
+    const logMessage = parserAcceptedRequest
+      ? "前端已读到有效 Team 审批请求"
+      : reviewRequestPresent
+        ? "前端收到无法识别的 Team 审批请求"
+        : "Run 等待审批时未收到请求载荷";
     void frontendLog(
       parserAcceptedRequest ? "INFO" : "WARNING",
       "agent_team_approval_payload_observed",
-      parserAcceptedRequest ? "等待审批时前端已读到请求载荷" : "等待审批时前端未读到有效请求载荷",
+      logMessage,
       {
         data: {
           taskId,
@@ -122,8 +135,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
           backendStatus: artifact.backendStatus,
           displayDataPresent: artifact.display_data !== null,
           displayDataKeys: displayDataKeys ? displayDataKeys.split(",") : [],
-          requestObjectPresent: typeof displayData.user_input_request === "object"
-            && displayData.user_input_request !== null,
+          requestObjectPresent: reviewRequestPresent,
           requestKeys: reviewRequestKeys ? reviewRequestKeys.split(",") : [],
           requestId,
           requestKind,
@@ -138,6 +150,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     draftSchema,
     isWaitingForInput,
     preview?.teamRunId,
+    reviewRequestPresent,
     requestId,
     requestKind,
     parserAcceptedRequest,
@@ -161,6 +174,20 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
   }
 
   if (!preview) return null;
+  if (reviewRequestPresent && review === null) {
+    return (
+      <div
+        className="space-y-1 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3 shadow-sm"
+        role="status"
+        aria-label="Agent Team 审批请求无法识别"
+      >
+        <div className="font-medium text-sm">审批请求格式不兼容</div>
+        <p className="text-muted-foreground text-xs">
+          当前客户端无法识别这份 Team 审批请求，请刷新对话后重试。
+        </p>
+      </div>
+    );
+  }
   if (isWaitingForInput && review === null) {
     return (
       <div
@@ -170,12 +197,12 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
       >
         <div className="font-medium text-sm">审批内容暂不可用</div>
         <p className="text-muted-foreground text-xs">
-          运行仍在等待你的决定，但审批请求载荷缺失。刷新对话以从本地运行记录恢复。
+          运行正在等待你的决定，但审批请求载荷缺失。刷新对话以从本地运行记录恢复。
         </p>
       </div>
     );
   }
-  if (!review || !isWaitingForInput) {
+  if (!review) {
     if (displayData.user_decision !== "reject") {
       // 审批决定已消费后，后端会移除待决请求；是否拒绝只由后端投影的决定记录判定。
       // 同意后从历史消息恢复时也走 canonical TeamRun 查询，避免把旧审批预览误显示为拒绝。
@@ -204,6 +231,10 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     data: Record<string, unknown>,
     phase: "confirming" | "rejecting",
   ) => {
+    if (!isWaitingForInput) {
+      setMessage("运行状态尚未就绪，请稍后重试");
+      return;
+    }
     if (runId === undefined || runId === null || taskId === undefined) {
       setState("failed");
       setMessage("无法定位该执行方案所属的运行，请刷新页面后重试");
@@ -272,16 +303,14 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">{preview.name}</span>
-            {awaitingReview
-              ? <AwaitingReviewStatus />
-              : <ToolStatus status={artifact.backendStatus} className="text-muted-foreground" />}
+            <AwaitingReviewStatus label={reviewStatusLabel} />
           </div>
           <p className="text-muted-foreground mt-1 text-xs">目标</p>
           <Textarea
             aria-label="Agent Team 目标"
             className="mt-1 min-h-16 resize-y text-xs"
             value={goal}
-            disabled={state === "confirming" || state === "rejecting" || state === "confirmed" || state === "rejected"}
+            disabled={formDisabled}
             onChange={(event) => setGoal(event.target.value)}
           />
         </div>
@@ -318,7 +347,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
                 maxLength={10}
                 placeholder="例如：撰写与修订总规划"
                 value={nodeGoals[node.nodeId]?.summary ?? ""}
-                disabled={state === "confirming" || state === "rejecting" || state === "confirmed" || state === "rejected"}
+                disabled={formDisabled}
                 onChange={(event) => setNodeGoals((current) => ({
                   ...current,
                   [node.nodeId]: {
@@ -334,7 +363,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
                 aria-label={`${node.name} 的节点子目标`}
                 className="mt-1 min-h-16 resize-y bg-background text-xs"
                 value={nodeGoals[node.nodeId]?.goal ?? ""}
-                disabled={state === "confirming" || state === "rejecting" || state === "confirmed" || state === "rejected"}
+                disabled={formDisabled}
                 onChange={(event) => setNodeGoals((current) => ({
                   ...current,
                   [node.nodeId]: {
@@ -361,17 +390,21 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
               className="mt-1 min-h-16 resize-y bg-background"
               placeholder="说明需要调整的目标、分工或执行方式…"
               value={feedback}
-              disabled={state === "confirming" || state === "rejecting"}
+              disabled={formDisabled}
               onChange={(event) => setFeedback(event.target.value)}
             />
           </label>
           <div className="flex justify-end gap-2">
-            <Button type="button" size="sm" variant="outline" disabled={state === "confirming" || state === "rejecting"} onClick={() => void reject()}>
-              {state === "rejecting" ? "正在驳回…" : "驳回并重新生成"}
-            </Button>
-            <Button type="button" size="sm" disabled={state === "confirming" || state === "rejecting"} onClick={() => void confirm()}>
-              {state === "confirming" ? "确认中…" : "确认执行"}
-            </Button>
+            {review.decisions.includes("reject") && (
+              <Button type="button" size="sm" variant="outline" disabled={formDisabled} onClick={() => void reject()}>
+                {state === "rejecting" ? "正在驳回…" : "驳回并重新生成"}
+              </Button>
+            )}
+            {review.decisions.includes("approve") && (
+              <Button type="button" size="sm" disabled={formDisabled} onClick={() => void confirm()}>
+                {state === "confirming" ? "确认中…" : "确认执行"}
+              </Button>
+            )}
           </div>
         </div>
       )}

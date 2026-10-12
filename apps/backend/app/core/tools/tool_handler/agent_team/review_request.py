@@ -17,7 +17,7 @@ from app.core.tools.schemas import UserDecisionKind, UserInputRequest
 AGENT_TEAM_REVIEW_KIND = "agent_team_review"
 
 # 前端按本标识选择「可编辑运行输入」的渲染器；修改草稿形状时必须同步升版本，
-# 避免旧前端把新草稿按旧结构渲染。
+# 避免旧前端把新草稿按旧结构渲染。TODO：需要删除
 AGENT_TEAM_REVIEW_DRAFT_SCHEMA = "agent-team-review-v2"
 
 _ACCEPTED_DECISIONS = (UserDecisionKind.APPROVE, UserDecisionKind.REJECT)
