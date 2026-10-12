@@ -36,38 +36,18 @@ _BLOCKED_DEVICE_REASON = (
 
 
 class ReadFileTool(HandlerBase):
-    """读取项目内文本文件的工具类。
+    """读取文本文件并构造模型工具定义的处理器。
 
-    这个类是 read_file 的唯一实现载体。它把工具元信息、执行入口、路径安全、
-    文本分页和输出格式化放在同一个类中，便于后续按“一个工具一个类”的方式
-    继续扩展其它工具。
-
-    参数:
-        project_root: 相对路径的解析基准目录（workspace 根）。作为只读工具，
-            read_file 不强制 containment：相对路径以该目录为基准解析，绝对/越界
-            路径也允许读取（仅设备/伪文件路径被拦截）。
-
-    返回:
-        ``ReadFileTool`` 实例。注册阶段会通过 ``to_definition`` 转成
-        ``ToolDefinition``。
-
-    异常:
-        初始化阶段不主动抛出业务异常。执行阶段会把路径错误、文件错误和读取错误
-        转换成结构化 ``ToolObservation``。
-
-    副作用:
-        仅保存项目根目录路径；不读取、不写入文件。
+    开发者说明：相对路径基于执行上下文的 ``workspace_root``；只读读取允许访问
+    workspace 外的绝对路径。路径解析与文本读取的失败会转换为 ``ToolObservation``。
+    模型可见的用途和限制单独写在 ``description``，参数用法写在参数 schema。
     """
 
     name = TOOL_READ_FILE
     description = (
-        "Read a text file with line numbers and pagination. Use this instead of "
-        "cat/head/tail in terminal. Output format: 'LINE_NUM| CONTENT'. Use offset "
-        "and limit for large files. Reads exceeding about 100K characters are "
-        "truncated on a line boundary and return a next_offset; continue with "
-        "offset to read the rest. Files larger than 5 MB cannot be read by "
-        "read_file at all (use search_files to find specific content). NOTE: "
-        "Cannot read images or other binary files."
+        "Read a text file and return numbered lines ('LINE_NUM| CONTENT'). Output is "
+        "capped at about 100K characters and truncated at a line boundary when needed. "
+        "Files larger than 5 MB, images, and other binary files cannot be read."
     )
     args_model = ReadFileArgs
     timeout_seconds = 10.0
@@ -312,7 +292,8 @@ class ReadFileTool(HandlerBase):
                 ),
                 reason=(
                     "read_file cannot open files larger than 5 MB, even with "
-                    "pagination. Use search_files to locate specific content, or "
+                    "pagination. Use search_content with a known text pattern to "
+                    "locate matching lines, or "
                     "read a smaller exported or sampled copy of the file."
                 ),
                 retryable=False,
