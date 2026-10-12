@@ -1,9 +1,8 @@
-"""Parse Git unified diffs into existing-file update hunks.
+"""将 Git 统一 diff 解析为「修改已有文件」的差异块。
 
-This module accepts only one-file-per-section Git unified diffs. It rejects file
-creation, deletion, rename, copy, binary, and mode-change metadata before callers
-resolve paths or touch the workspace, and it rewrites hunk headers whose declared line
-counts disagree with their own body -- reporting each rewrite instead of failing the call.
+本模块只接受每个文件段仅含单个文件的 Git 统一 diff。在调用方解析路径或触碰工作区之前，
+它先拒绝文件创建、删除、重命名、复制、二进制以及模式变更等元数据；对于声明行数与自身
+正文不符的 hunk 头，它会重写行数并把每次重写作为备注回报，而不是让整个调用失败。
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from unidiff.errors import UnidiffParseError
 
 @dataclass(frozen=True)
 class HunkLine:
-    """One context, removed, or added line from a unified-diff hunk."""
+    """统一 diff 差异块中的一行：上下文、删除或新增。"""
 
     prefix: str
     content: str
@@ -27,7 +26,7 @@ class HunkLine:
 
 @dataclass(frozen=True)
 class Hunk:
-    """A parsed text hunk, with the original lines used for content matching."""
+    """一个已解析的文本差异块，保留原始行用于内容匹配。"""
 
     context_hint: str | None = None
     lines: list[HunkLine] = field(default_factory=list)
@@ -40,16 +39,19 @@ class Hunk:
 
 @dataclass(frozen=True)
 class PatchOperation:
-    """One content-only update to an existing workspace-relative file."""
+    """对某个工作区相对路径的已有文件的一次纯内容更新。"""
 
     file_path: str
     hunks: list[Hunk]
 
 
 def _split_sections(patch: str) -> tuple[list[str], str | None]:
-    """Split a patch at Git file headers and reject ambiguous preambles."""
+    """按 Git 文件头切分补丁，并拒绝含糊的前导内容。"""
 
     lines = patch.splitlines(keepends=True)
+    for marker in ("*** Begin Patch", "*** End Patch"):
+        if any(line.strip() == marker for line in lines):
+            return [], f"patch contains unsupported wrapper marker {marker!r}"
     starts = [index for index, line in enumerate(lines) if line.startswith("diff --git ")]
     if not starts or starts[0] != 0:
         return [], "expected a Git 'diff --git' header at the start of the patch"
@@ -66,7 +68,7 @@ def _split_sections(patch: str) -> tuple[list[str], str | None]:
 
 
 def _decode_git_path(value: str, prefix: str) -> str:
-    """Decode a Git C-quoted path and return its workspace-relative path."""
+    """解码 Git 的 C 引号转义路径，返回其工作区相对路径。"""
 
     value = value.strip()
     if value.startswith('"'):
@@ -93,7 +95,7 @@ def _decode_git_path(value: str, prefix: str) -> str:
 
 
 def _diff_header_paths(section: str, section_index: int) -> tuple[str, str, str | None]:
-    """Read two Git header paths, including C-quoted names with spaces."""
+    """读取 Git 头部的两条路径，支持含空格的 C 引号文件名。"""
 
     header = section.splitlines()[0]
     tokens = re.findall(r'"(?:\\.|[^"\\])*"|[^ \t]+', header[len("diff --git ") :])
@@ -110,7 +112,7 @@ def _diff_header_paths(section: str, section_index: int) -> tuple[str, str, str 
 
 
 def _validate_section_headers(section: str) -> str | None:
-    """Validate the Git metadata and required unified-diff file headers."""
+    """校验 Git 元数据以及必需的统一 diff 文件头。"""
 
     lines = section.splitlines()
     if not lines or not lines[0].startswith("diff --git "):
@@ -139,6 +141,20 @@ def _validate_section_headers(section: str) -> str | None:
     if any(line.startswith("diff --") and not line.startswith("diff --git ") for line in lines):
         return "only Git file diffs are supported; combined diffs are not supported"
 
+    malformed_hunk = next(
+        (
+            line.strip()
+            for line in lines
+            if line.startswith("@@") and RE_HUNK_HEADER.match(line) is None
+        ),
+        None,
+    )
+    if malformed_hunk is not None:
+        return (
+            f"malformed hunk header {malformed_hunk[:80]!r}; expected "
+            "'@@ -start[,count] +start[,count] @@'"
+        )
+
     hunks = [index for index, line in enumerate(lines) if line.startswith("@@ ")]
     first_hunk = hunks[0] if hunks else len(lines)
     old_headers = [
@@ -155,8 +171,8 @@ def _validate_section_headers(section: str) -> str | None:
     if not (1 <= old_headers[0] < new_headers[0] < hunks[0]):
         return "unified-diff file headers must appear before the hunks"
 
-    # Git's index line is the only extended metadata accepted. Reject unknown metadata
-    # instead of allowing the parser to silently ignore file operations.
+    # Git 的 index 行是唯一被接受的扩展元数据。拒绝未知元数据，
+    # 而不是放任解析器静默忽略文件操作。
     for line in lines[1 : old_headers[0]]:
         if line and not line.startswith("index "):
             return f"unsupported Git diff metadata: {line}"
@@ -167,37 +183,32 @@ def _validate_section_headers(section: str) -> str | None:
 
 
 def _recompute_hunk_counts(section: str, section_index: int) -> tuple[str, list[str]]:
-    """Rewrite every ``@@`` header whose declared counts disagree with the body it introduces.
+    """重写每个声明行数与所引正文不符的 ``@@`` 头。
 
-    The body of a hunk is every line between its ``@@`` header and the next ``@@`` header
-    or the end of the section, because that is the text the caller wrote as this hunk.
-    Trailing empty lines are dropped rather than counted: they only separate file sections,
-    separate hunks, or terminate the patch, and belong to no hunk. Counting rules otherwise
-    match ``unidiff``: an empty body line counts as context on both sides, an omitted count
-    means one line, and ``\\ No newline at end of file`` markers count on neither side.
+    一个 hunk 的正文，是其 ``@@`` 头与下一个 ``@@`` 头（或段末）之间的所有行，因为那正是调用方
+    作为本块写下的文本。尾部空行会被丢弃而不计入：它们只用于分隔文件段、分隔 hunk 或终止补丁，
+    不属于任何 hunk。其余计数规则与 ``unidiff`` 一致：空正文行在两侧都计为上下文，省略的计数
+    表示一行，``\\ No newline at end of file`` 标记两侧都不计入。
 
-    Repairing instead of rejecting is deliberate. The apply layer matches hunks by context
-    text through ``fuzzy_match`` and never reads the counts, so a miscounted header is
-    harmless once the numbers are consistent; ``unidiff``, however, consumes a hunk by its
-    declared counts, so a mismatch desynchronises the file section and surfaces as an
-    unrelated "unexpected hunk" / "hunk is shorter than expected" error. Rewriting the
-    header keeps the patch applicable and lets the caller report one honest note instead.
+    「修复」而非「拒绝」是刻意为之。应用层通过 ``fuzzy_match`` 按上下文文本匹配 hunk，从不读取
+    计数，因此一个计错的数头在数值一致后是无害的；而 ``unidiff`` 会按声明计数消费 hunk，计数不符
+    会让文件段错位，表现为毫不相干的「意外的 hunk」/「hunk 短于预期」错误。重写数头使补丁保持
+    可应用，并让调用方回报一条诚实的备注，而不是泛起不相关的解析失败。
 
-    Args:
-        section: One Git file section, starting at its ``diff --git`` header.
-        section_index: Zero-based section position, used to locate the hunk in the notes.
+    参数:
+        section: 一个 Git 文件段，以其 ``diff --git`` 头起始。
+        section_index: 从零开始的段序号，用于在备注中定位 hunk。
 
-    Returns:
-        ``(section_text, notes)``: the section with every mismatching ``@@`` header rewritten
-        (start lines and any section text preserved), plus one model-facing note per rewrite
-        naming the positions, the header as written, and the old and new counts. A section
-        whose headers already agree is returned unchanged with no notes.
+    返回:
+        ``(section_text, notes)``：所有不匹配的 ``@@`` 头都被重写（起始行与段文本保留），
+        外加每次重写对应的一条面向模型的备注，标注位置、原样写入的头部，以及新旧计数。
+        头部本来一致的段原样返回且不含备注。
 
-    Raises:
-        Nothing.
+    异常:
+        无。
 
-    Side effects:
-        None (pure string analysis; no filesystem access).
+    副作用:
+        无（纯字符串分析，不访问文件系统）。
     """
 
     lines = section.splitlines(keepends=True)
@@ -236,21 +247,20 @@ def _recompute_hunk_counts(section: str, section_index: int) -> tuple[str, list[
 
 
 def _repair_hunk_counts(patch: str) -> tuple[str, list[str]]:
-    """Normalise every file section of ``patch`` before parsing.
+    """解析前对 ``patch`` 的每个文件段做归一化。
 
-    Args:
-        patch: Git unified diff text as submitted by the caller.
+    参数:
+        patch: 调用方提交的 Git 统一 diff 文本。
 
-    Returns:
-        ``(patch_text, notes)``. The text is returned unchanged with no notes when the diff
-        has no recognisable Git file sections (the parser reports that shape itself), when no
-        hunk header needed a rewrite, or when the repair would change nothing.
+    返回:
+        ``(patch_text, notes)``。当 diff 没有可识别的 Git 文件段（解析器会自行报告该形态）、
+        没有 hunk 头需要重写，或重写不会改变任何内容时，文本原样返回且不含备注。
 
-    Raises:
-        Nothing.
+    异常:
+        无。
 
-    Side effects:
-        None (pure string analysis; no filesystem access).
+    副作用:
+        无（纯字符串分析，不访问文件系统）。
     """
 
     if not isinstance(patch, str) or not patch.strip():
@@ -273,7 +283,7 @@ def _repair_hunk_counts(patch: str) -> tuple[str, list[str]]:
 def _normalize_parser_paths(
     sections: list[str],
 ) -> tuple[list[str], list[str], str | None]:
-    """Replace variable Git paths with safe parser labels after validating headers."""
+    """在校验头部之后，把可变的 Git 路径替换为安全的解析器标签。"""
 
     normalized: list[str] = []
     paths: list[str] = []
@@ -305,14 +315,13 @@ def _normalize_parser_paths(
 
 @dataclass(frozen=True)
 class PatchParseOutcome:
-    """Outcome of one Git unified diff parse, including any hunk-header count repairs.
+    """一次 Git 统一 diff 解析的结果，包含任何 hunk 头计数修复。
 
-    Attributes:
-        operations: UPDATE operations of the accepted patch; empty when ``error`` is set.
-        error: Model-facing rejection message, or None when the diff was accepted.
-        count_repairs: One note per hunk whose declared counts were recomputed from its body.
-            Notes are reported only for accepted patches, and a repaired header still means
-            the patch applies exactly what its body says.
+    属性:
+        operations: 被接受补丁的 UPDATE 操作；``error`` 有值时为空。
+        error: 面向模型的拒绝消息；diff 被接受时为 None。
+        count_repairs: 每条「声明计数被按正文重算」的 hunk 对应一条备注。
+            仅对接受的补丁回报；被修复的头部仍表示补丁应用其正文所写的全部内容。
     """
 
     operations: list[PatchOperation]
@@ -321,26 +330,24 @@ class PatchParseOutcome:
 
 
 def parse_git_unified_diff(patch: str) -> tuple[list[PatchOperation], str | None]:
-    """Parse a Git unified diff without performing filesystem access.
+    """解析 Git 统一 diff，不进行文件系统访问。
 
-    Convenience entry for callers that need only the operations or the rejection message;
-    use :func:`parse_git_unified_diff_detailed` to also receive the hunk-count repair notes.
-    Hunk headers that disagree with their own body are repaired by both entries, never
-    rejected (see :func:`_recompute_hunk_counts`).
+    面向「只需操作列表或拒绝消息」的调用方的便捷入口；若还需 hunk 计数修复备注，请用
+    :func:`parse_git_unified_diff_detailed`。两个入口都会修复（而非拒绝）与自身正文不符的
+    hunk 头（见 :func:`_recompute_hunk_counts`）。
 
-    Args:
-        patch: Git unified diff text.
+    参数:
+        patch: Git 统一 diff 文本。
 
-    Returns:
-        ``(operations, None)`` when the diff is accepted; otherwise ``([], message)`` with a
-        model-facing diagnosis. It returns only UPDATE operations; callers remain responsible
-        for workspace containment and file checks.
+    返回:
+        diff 被接受时返回 ``(operations, None)``；否则返回 ``([], message)``，附带面向模型的诊断。
+        只返回 UPDATE 操作；工作区边界检查与文件校验仍由调用方负责。
 
-    Raises:
-        Nothing.
+    异常:
+        无。
 
-    Side effects:
-        None.
+    副作用:
+        无。
     """
 
     outcome = parse_git_unified_diff_detailed(patch)
@@ -348,24 +355,22 @@ def parse_git_unified_diff(patch: str) -> tuple[list[PatchOperation], str | None
 
 
 def parse_git_unified_diff_detailed(patch: str) -> PatchParseOutcome:
-    """Parse a Git unified diff, reporting every hunk header whose counts had to be repaired.
+    """解析 Git 统一 diff，回报每条「计数被修复」的 hunk 头。
 
-    The patch is normalised by :func:`_repair_hunk_counts` first, so a header that disagrees
-    with the body it introduces no longer fails the call: the counts are rewritten from the
-    body and the rewrite is reported to the caller instead.
+    补丁先经 :func:`_repair_hunk_counts` 归一化，因此与所引正文不符的头部不再导致调用失败：
+    计数按正文重写，并把重写结果回报给调用方。
 
-    Args:
-        patch: Git unified diff text.
+    参数:
+        patch: Git 统一 diff 文本。
 
-    Returns:
-        A :class:`PatchParseOutcome`. ``count_repairs`` is empty for a rejected patch and for
-        a patch whose headers already agreed with their bodies.
+    返回:
+        :class:`PatchParseOutcome`。被拒绝的补丁、以及头部本就与正文一致的补丁，其 ``count_repairs`` 为空。
 
-    Raises:
-        Nothing.
+    异常:
+        无。
 
-    Side effects:
-        None.
+    副作用:
+        无。
     """
 
     repaired_patch, count_repairs = _repair_hunk_counts(patch)
@@ -374,21 +379,20 @@ def parse_git_unified_diff_detailed(patch: str) -> PatchParseOutcome:
 
 
 def _parse_sections(patch: str) -> tuple[list[PatchOperation], str | None]:
-    """Validate file headers and convert an already count-normalised Git unified diff.
+    """校验文件头，并把一个「计数已归一化」的 Git 统一 diff 转换为操作列表。
 
-    Args:
-        patch: Git unified diff text whose ``@@`` headers already match their bodies.
+    参数:
+        patch: ``@@`` 头已与正文一致的 Git 统一 diff 文本。
 
-    Returns:
-        ``(operations, None)`` when the diff is accepted; otherwise ``([], message)`` with a
-        model-facing diagnosis. Section and file-header errors take precedence over every
-        later stage, so a patch that is wrong in several ways reports the earliest problem.
+    返回:
+        diff 被接受时返回 ``(operations, None)``；否则返回 ``([], message)``，附带面向模型的诊断。
+        段与文件头的错误优先于后续所有阶段，因此一个在多处出错的补丁会报告最早的问题。
 
-    Raises:
-        Nothing.
+    异常:
+        无。
 
-    Side effects:
-        None.
+    副作用:
+        无。
     """
 
     if not isinstance(patch, str) or not patch.strip():
