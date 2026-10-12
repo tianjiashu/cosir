@@ -9,6 +9,7 @@ from typing import Any
 
 from app.config.constant import Constant
 
+
 # LangChain UsageMetadata 契约中缓存/推理细节的键名（以 provider 返回的
 # _create_usage_metadata：usage_metadata["input_token_details"]["cache_read"]、
 # usage_metadata["output_token_details"]["reasoning"]）。旧 OpenAI 兼容扁平键
@@ -68,7 +69,7 @@ class ConversationRunUsageStats:
         if isinstance(value, bool) or value is None:
             return 0
         if isinstance(value, float) and (
-            not math.isfinite(value) or not value.is_integer() or value < 0
+                not math.isfinite(value) or not value.is_integer() or value < 0
         ):
             return 0
         try:

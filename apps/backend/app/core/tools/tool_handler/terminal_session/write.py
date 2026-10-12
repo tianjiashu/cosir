@@ -70,8 +70,9 @@ class TerminalWriteTool(HandlerBase):
     description = (
         "Write raw UTF-8 input to an existing hidden local terminal session and optionally "
         "wait for output. Set submit=true to append one real Enter key (CR); do not encode "
-        "Enter as literal \\r/\\n or HTML entities. When the process inside the terminal has "
-        "exited, use this tool to write again and reuse the same session for the next task."
+        "Enter as literal \\r/\\n or HTML entities. The session must be alive; once the "
+        "process inside it has exited the session can no longer receive input, so start a "
+        "new session with terminal_start for the next task."
     )
     args_model = TerminalWriteArgs
     timeout_seconds: ClassVar[float] = 30.0

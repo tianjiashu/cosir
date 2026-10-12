@@ -57,14 +57,6 @@ from app.service.depends import (
 )
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-# 「本轮工具准入」通知的归属说明：通知写入 canonical context 后会作为历史长期存在，后续 Run 的
-# 模型请求都会读到它。只写「this round」而不锚定归属时，模型会把历史某轮的禁用集合当成当前约束，
-# 因此统一附带该句，并要求以最新一条为准。
-_AVAILABILITY_NOTICE_SCOPE = (
-    " This notice is scoped to the round that emitted it; when several notices appear in the "
-    "history, the most recent one is the binding one."
-)
-
 
 class AgentRuntime:
     """执行与生命周期引擎：驱动 workflow，并把执行边界收口在这一层。
@@ -417,28 +409,33 @@ class AgentRuntime:
         allows_tools = {tool.get("name") for tool in task_space.task_tool_schemas}
 
         ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
+        allows_tools = allows_tools - ban_tools if allows_tools else set()
 
-        if ban_tools:
-            allows_tools = allows_tools - ban_tools
+        if not ban_tools:
+            task_space.defer_system_message(
+                SystemMessage(
+                    content=(
+                        "Tool availability notice: all tools are available for this round."
+                    ),
+                    additional_kwargs={"run_id": run.id},
+                )
+            )
+        if not allows_tools:
+            task_space.defer_system_message(
+                SystemMessage(
+                    content=(
+                        "Tool availability notice: all tools are not available for this round."
+                    ),
+                    additional_kwargs={"run_id": run.id},
+                )
+            )
+        if not allows_tools and not ban_tools:
             task_space.defer_system_message(
                 SystemMessage(
                     content=(
                         "Tool availability notice: the following tools are disabled for this "
                         f"round and calls to them will be rejected: {', '.join(sorted(ban_tools))}. "
-                        "All other tools remain available."
-                        f"{_AVAILABILITY_NOTICE_SCOPE}"
-                    ),
-                    # 归属标记：``take_deferred_system_messages`` 只放行本 Run 的消息，本 Run 未消费
-                    # （取消 / 崩溃）时由下一 Run 取队列丢弃，过期的准入集合不会被补写进历史。
-                    additional_kwargs={"run_id": run.id},
-                )
-            )
-        else:
-            task_space.defer_system_message(
-                SystemMessage(
-                    content=(
-                        "Tool availability notice: all tools are available for this round."
-                        f"{_AVAILABILITY_NOTICE_SCOPE}"
+                        f"{', '.join(sorted(allows_tools))} tools available."
                     ),
                     additional_kwargs={"run_id": run.id},
                 )

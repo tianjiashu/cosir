@@ -110,6 +110,10 @@ async def _model_node(state: ReactGraphState) -> dict:
           不新增行），使下一模型步能读到本轮输出；
         - 流式投影：文本与 reasoning 增量经 LangGraph custom stream 写给 workflow，由 workflow
           统一交给 ``WorkflowOperations.process_event`` 更新 snapshot；
+        - 用量记录：本步流式输出结束、经 ``flush_message_chunk(mode="finalize")`` 收口之前，先经
+          ``ConversationRunUsageStats.add_usage_metadata`` 覆盖更新 run 级用量，并写一条
+          ``model_usage_recorded``（附 provider 原始 ``usage_metadata`` 与 run 级快照；provider 未给
+          用量时以 ``usage_metadata_present=false`` 标明），供跨步 / 跨 run 对比缓存命中变化；
         - 协作取消：检测点只有两处——「进入模型请求前」与「流式循环内每个 chunk 处理前」，两处的
           收口动作不同：请求前命中时本步还没有草稿、``tool_call_lifecycle`` 也尚未重建，只做
           ``WorkflowOperations.cancel_run_if_running`` 落定取消终态后 ``interrupt``；流式循环内命中时
@@ -272,6 +276,27 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     finish_reason = chunk_processor.extract_finish_reason(ai_message)
     rc.usage_stats.add_usage_metadata(ai_message.usage_metadata)
+    # provider 只回报「缓存命中 / 未命中」两个数字，不说明为什么没命中；把每步的原始
+    # ``usage_metadata`` 连同 run 级快照落盘，才能跨步、跨 run 对比出命中是从哪一步开始掉的
+    # （前缀归因看 ``request_fingerprint`` 的逐条消息指纹）。
+    # provider 未给用量时 ``add_usage_metadata`` 不更新任何字段，``run_usage`` 仍是上一轮快照，
+    # 因此用 ``usage_metadata_present`` 显式区分「本步没有用量」与「本步用量等于 run_usage」；
+    # 判据是非空 dict（全零用量同样算 present），event 名保持稳定、不随语义调整改名。
+    log.info(
+        "model_usage_recorded",
+        extra={
+            "msg": f"本步模型用量已观测，step_id={step_id}",
+            "data": {
+                "task_id": task_id,
+                "run_id": run_id,
+                "step_id": step_id,
+                "step_count": step_count,
+                "usage_metadata_present": bool(ai_message.usage_metadata),
+                "usage_metadata": ai_message.usage_metadata,
+                "run_usage": rc.usage_stats.to_dict(),
+            },
+        },
+    )
 
     tool_call_lifecycle = tool_call_lifecycle.classify(
         tool_calls=ai_message.tool_calls,
