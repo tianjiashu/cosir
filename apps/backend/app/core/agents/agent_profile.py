@@ -223,7 +223,8 @@ def _require_tool_names(document: Mapping[str, Any], source: Path) -> list[str]:
 
 @dataclass
 class AgentProfile:
-    """描述某个任务的 Agent 执行主体（能力事实源）。
+    """
+    描述某个任务的 Agent 执行主体（能力事实源）。
     description 应该是"选择指南"，system_prompt 应该是"执行协议"，而本次
     delegate_task.message 才是"具体工作单"。
 
