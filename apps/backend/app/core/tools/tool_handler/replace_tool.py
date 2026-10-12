@@ -256,7 +256,7 @@ class ReplaceTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="替换文本",
                 icon="git-compare",
-                surface="trace",
+                surface="standalone",
                 expandable=True,
                 expand_layout="diff",
                 show_result=False,

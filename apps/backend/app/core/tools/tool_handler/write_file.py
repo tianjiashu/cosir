@@ -219,7 +219,7 @@ class WriteFileTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="写入文件",
                 icon="git-compare",
-                surface="trace",
+                surface="standalone",
                 expandable=True,
                 expand_layout="diff",
                 show_result=False,
