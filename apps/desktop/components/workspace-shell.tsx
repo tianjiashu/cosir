@@ -12,6 +12,7 @@ import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
   RefreshCwIcon,
+  SearchIcon,
   Settings2Icon,
 } from "lucide-react";
 
@@ -28,6 +29,7 @@ import { Workbench } from "@/components/workbench";
 import { WorkbenchProvider } from "@/lib/workbench/context";
 import { SystemConfigurationPage } from "@/components/system-configuration-page";
 import { WorkspaceConfigurationPage } from "@/components/workspace-configuration-page";
+import { ContextObserverPage } from "@/components/context-observer-page";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import {
   deleteTask,
@@ -50,13 +52,14 @@ type DeleteTarget =
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
 
-export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments, initialDisabledToolGroups, initialBanTools, settingsOpen = false, workspaceConfigurationId = null }: {
+export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments, initialDisabledToolGroups, initialBanTools, settingsOpen = false, contextObserverOpen = false, workspaceConfigurationId = null }: {
   routeTaskId: number | null;
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
   initialBanTools?: string[];
   settingsOpen?: boolean;
+  contextObserverOpen?: boolean;
   workspaceConfigurationId?: number | null;
 }) {
   const navigate = useNavigate();
@@ -402,6 +405,16 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
         )}
         <div className="mt-auto border-t p-3">
           <Button
+            variant={contextObserverOpen ? "secondary" : "ghost"}
+            className={`mb-1 w-full gap-2 ${collapsed ? "justify-center px-0" : "justify-start"}`}
+            onClick={() => navigate("/context-observer")}
+            aria-label="上下文观测"
+            title={collapsed ? "上下文观测" : undefined}
+          >
+            <SearchIcon className="size-4" />
+            {!collapsed && <span>上下文观测</span>}
+          </Button>
+          <Button
             variant="ghost"
             className={`w-full gap-2 ${collapsed ? "justify-center px-0" : "justify-start"}`}
             onClick={openSettings}
@@ -414,9 +427,9 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
         </div>
       </aside>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex h-14 shrink-0 items-center justify-between border-b px-5"><div className="min-w-0"><p className="flex items-center gap-2 text-sm font-medium">{activeTaskId ? "对话" : "新对话"}{activeTask?.task_type === "fork" && <GitForkIcon className="text-muted-foreground size-3.5" aria-label="Fork Task" />}</p><p className="text-muted-foreground truncate text-xs">{forkError ?? (activeTaskId ? "已存在任务" : "选择工作区后开始创建对话")}</p></div><div className="flex items-center gap-3"><BackendRestartButton />{selectedWorkspace && <div className="text-muted-foreground flex items-center gap-2 text-xs"><FolderIcon className="size-3.5" />{selectedWorkspace.name}</div>}</div></div>
+        <div className="flex h-14 shrink-0 items-center justify-between border-b px-5"><div className="min-w-0"><p className="flex items-center gap-2 text-sm font-medium">{contextObserverOpen ? "上下文观测" : activeTaskId ? "对话" : "新对话"}{!contextObserverOpen && activeTask?.task_type === "fork" && <GitForkIcon className="text-muted-foreground size-3.5" aria-label="Fork Task" />}</p><p className="text-muted-foreground truncate text-xs">{contextObserverOpen ? "按 sequence 检查持久化 Agent 消息" : forkError ?? (activeTaskId ? "已存在任务" : "选择工作区后开始创建对话")}</p></div><div className="flex items-center gap-3"><BackendRestartButton />{selectedWorkspace && <div className="text-muted-foreground flex items-center gap-2 text-xs"><FolderIcon className="size-3.5" />{selectedWorkspace.name}</div>}</div></div>
         <div className="min-h-0 flex-1 overflow-hidden">
-          {activeTaskId ? <TaskPage
+          {contextObserverOpen ? <ContextObserverPage /> : activeTaskId ? <TaskPage
             key={activeTaskId}
             taskId={activeTaskId}
             initialTask={activeTask}

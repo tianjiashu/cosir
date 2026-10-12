@@ -12,6 +12,7 @@ import asyncio
 from fastapi import Depends, HTTPException, Query
 
 from app.api.schemas import (
+    ContextMessageResponse,
     DeleteRunResponse,
     DeleteTaskResponse,
     ForkTaskRequest,
@@ -24,8 +25,33 @@ from app.models.errors.deletion_errors import (
     RunDeletionConflictError,
 )
 from app.models.errors.task_fork_errors import TaskForkConflictError
-from app.service.depends import get_task_service
+from app.service.depends import (
+    get_conversation_task_context_service,
+    get_task_service,
+)
+from app.service.conversation_run.conversation_task_context_service import (
+    ConversationTaskContextService,
+)
 from app.task_runtime.service.task_service import TaskService
+
+
+@app.get("/context-messages", response_model=list[ContextMessageResponse])
+async def list_context_messages(
+    task_id: int | None = Query(default=None, gt=0),
+    run_id: int | None = Query(default=None, gt=0),
+    context_service: ConversationTaskContextService = Depends(
+        get_conversation_task_context_service
+    ),
+) -> list[ContextMessageResponse]:
+    """按 Task 或 Run 读取全部 Agent 上下文消息及其时间戳。"""
+
+    if task_id is None and run_id is None:
+        raise HTTPException(status_code=422, detail="task_id or run_id is required")
+    try:
+        records = context_service.list_observable_messages(task_id=task_id, run_id=run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task or run not found") from exc
+    return [ContextMessageResponse.from_record(record) for record in records]
 
 
 @app.get("/tasks/{task_id}")

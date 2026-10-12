@@ -23,6 +23,7 @@ from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurati
 from app.api.schemas.response.DeleteRunResponse import DeleteRunResponse
 from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse
+from app.api.schemas.response.ContextMessageResponse import ContextMessageResponse
 from app.api.schemas.response.EnvironmentResponse import (
     EnvironmentFieldResponse,
     EnvironmentGroupResponse,
@@ -44,6 +45,7 @@ __all__ = [
     "AgentConfigurationResponse",
     "CreateTaskRequest",
     "CreateWorkspaceRequest",
+    "ContextMessageResponse",
     "DeleteRunResponse",
     "DeleteTaskResponse",
     "DeleteWorkspaceResponse",

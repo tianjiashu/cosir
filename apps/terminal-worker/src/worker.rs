@@ -59,7 +59,9 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
         runtime.clone(),
         output.clone(),
         events_tx.clone(),
-        TerminalQueryResponder::new(matches!(shell_kind.as_str(), "cmd" | "powershell" | "pwsh")),
+        TerminalQueryResponder::new(
+            cfg!(windows) || matches!(shell_kind.as_str(), "cmd" | "powershell" | "pwsh"),
+        ),
     );
     spawn_child_watcher(runtime.clone(), events_tx.clone());
 
@@ -331,7 +333,7 @@ fn capabilities() -> Vec<&'static str> {
     }
     #[cfg(windows)]
     {
-        vec!["pty_io", "terminal_query_dsr"]
+        vec!["pty_io", "terminal_query_dsr", "signal_interrupt"]
     }
     #[cfg(not(any(unix, windows)))]
     {

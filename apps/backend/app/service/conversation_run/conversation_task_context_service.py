@@ -15,6 +15,8 @@ from app.core.context.tool_call_closure import (
 )
 from app.models.conversation_task_context import ConversationTaskContextRecord, TransportMetadata
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
+from app.storage.crud.conversation_run_crud import ConversationRunCrud
+from app.storage.crud.task_crud import TaskCrud
 
 TASK_SYSTEM_PROMPT_SEQUENCE = 0
 
@@ -36,6 +38,28 @@ class ConversationTaskContextService:
         """绑定 context CRUD。"""
 
         self._crud = ConversationTaskContextCrud()
+        self._task_crud = TaskCrud()
+        self._run_crud = ConversationRunCrud()
+
+    def list_observable_messages(
+        self,
+        *,
+        task_id: int | None = None,
+        run_id: int | None = None,
+    ) -> list[ConversationTaskContextRecord]:
+        """读取观测页消息；Task 或 Run 至少提供一个，并保留全部存储标记状态。"""
+
+        if run_id is not None:
+            run = self._run_crud.get(run_id)
+            if task_id is not None and run.task_id != task_id:
+                raise KeyError(run_id)
+            resolved_task_id = run.task_id
+        elif task_id is not None:
+            self._task_crud.get(task_id)
+            resolved_task_id = task_id
+        else:
+            raise ValueError("task_id or run_id is required")
+        return self._crud.get_for_observation(resolved_task_id, run_id)
 
     def append(
         self,

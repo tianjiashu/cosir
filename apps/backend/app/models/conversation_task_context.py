@@ -46,6 +46,8 @@ class ConversationTaskContextRecord:
     transport_metadata: TransportMetadata | None = None
     is_streaming: bool = False
     id: int | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
     @classmethod
     def _from_model(cls, model: ConversationTaskContextModel) -> ConversationTaskContextRecord:
@@ -55,7 +57,7 @@ class ConversationTaskContextRecord:
             model: ``conversation_task_contexts`` 行实例，列已含单条消息的全部字段。
 
         返回:
-            含 row id、task_id、run_id、反序列化消息、Transport metadata、纳入标记与排序的记录。
+            含 row id、task_id、run_id、消息、Transport metadata、纳入标记、排序和创建/更新时间的记录。
 
         异常:
             json.JSONDecodeError: ``message_json`` 不是合法 JSON。
@@ -77,13 +79,15 @@ class ConversationTaskContextRecord:
             sequence=model.sequence,
             transport_metadata=json.loads(model.transport_metadata_json),
             is_streaming=model.is_streaming,
+            created_at=model.created_at,
+            updated_at=model.updated_at,
         )
 
     def _to_model(self) -> ConversationTaskContextModel:
         """将记录映射为持久化模型实例。
 
         本方法只负责字段映射，不生成主键或唯一约束相关派生值；``sequence`` 由调用方在落盘前按
-        任务维度统一分配以保证唯一性。
+        任务维度统一分配以保证唯一性。创建和更新时间是持久化层管理的只读字段，不从值对象写回。
 
         返回:
             含 task_id、run_id、消息 JSON、纳入标记与排序的模型实例。

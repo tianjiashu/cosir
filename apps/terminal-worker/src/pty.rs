@@ -103,7 +103,18 @@ impl PtyRuntime {
         Ok(TerminalControlResult::Applied)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    fn send_foreground_signal(&self, signal: &str) -> anyhow::Result<TerminalControlResult> {
+        if signal == "interrupt" {
+            self.write(&[0x03])?;
+            return Ok(TerminalControlResult::Applied);
+        }
+        Ok(TerminalControlResult::Unsupported(
+            "windows_signal_not_supported",
+        ))
+    }
+
+    #[cfg(not(any(unix, windows)))]
     fn send_foreground_signal(&self, _signal: &str) -> anyhow::Result<TerminalControlResult> {
         Ok(TerminalControlResult::Unsupported(
             "platform_signal_unavailable",

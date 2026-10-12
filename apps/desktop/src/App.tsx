@@ -22,6 +22,9 @@ type TaskRouteState = {
 function TaskRoute() {
   const { pathname, state } = useLocation();
   const routeState = state as TaskRouteState | null;
+  if (pathname === "/context-observer") {
+    return <WorkspaceShell routeTaskId={null} contextObserverOpen />;
+  }
   if (pathname === "/settings") {
     const returnTaskId = routeState?.returnTaskId;
     return <WorkspaceShell routeTaskId={returnTaskId && returnTaskId > 0 ? returnTaskId : null} settingsOpen />;

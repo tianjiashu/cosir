@@ -50,6 +50,20 @@ def _powershell_command_spec() -> ShellSpec:
     )
 
 
+def _windows_interactive_shell_spec(name: str) -> ShellSpec:
+    if name in {"cmd", "custom_cmd"}:
+        executable = shutil.which("cmd.exe") or os.environ.get("COMSPEC")
+        if not executable:
+            pytest.skip("cmd.exe is not available")
+        kind = "cmd" if name == "cmd" else "custom"
+        return ShellSpec(kind, executable, (executable, "/Q", "/D"))
+    executable_name = "powershell.exe" if name == "powershell" else "pwsh.exe"
+    executable = shutil.which(executable_name)
+    if not executable:
+        pytest.skip(f"{executable_name} is not available")
+    return ShellSpec(name, executable, (executable, "-NoLogo", "-NoProfile"))
+
+
 @pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
 def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
     events: list[dict[str, object]] = []
@@ -164,6 +178,115 @@ def test_real_worker_signal_failure_is_reported_to_caller(tmp_path: Path) -> Non
             worker.signal("unknown-signal")
     finally:
         worker.close()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ConPTY interrupt test")
+@pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
+@pytest.mark.parametrize("shell_name", ["cmd", "powershell", "pwsh", "custom_cmd"])
+def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
+    tmp_path: Path,
+    shell_name: str,
+) -> None:
+    first_events: list[dict[str, object]] = []
+    second_events: list[dict[str, object]] = []
+    first = ProcessTerminalWorker(str(_worker_path()), f"interrupt-{shell_name}-first")
+    second = ProcessTerminalWorker(str(_worker_path()), f"interrupt-{shell_name}-second")
+
+    def output_bytes(events: list[dict[str, object]]) -> bytes:
+        return b"".join(
+            base64.b64decode(event["data_base64"])
+            for event in events
+            if event.get("type") == "output" and isinstance(event.get("data_base64"), str)
+        )
+
+    def output_contains(events: list[dict[str, object]], marker: bytes) -> bool:
+        return marker in output_bytes(events)
+
+    def wait_for_output(events: list[dict[str, object]], marker: bytes, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if output_contains(events, marker):
+                return True
+            time.sleep(0.05)
+        return output_contains(events, marker)
+
+    def wait_for_prompt_after(
+        events: list[dict[str, object]],
+        offset: int,
+        prompt: bytes,
+        timeout: float,
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if prompt in output_bytes(events)[offset:]:
+                return True
+            time.sleep(0.05)
+        return prompt in output_bytes(events)[offset:]
+
+    try:
+        shell = _windows_interactive_shell_spec(shell_name)
+        enter = b"\r"
+        first.start(shell, str(tmp_path), first_events.append)
+        second.start(shell, str(tmp_path), second_events.append)
+
+        ready_marker = f"{shell_name}_READY".encode()
+        first.write(
+            b"Write-Output " + ready_marker + enter
+            if shell.kind in {"powershell", "pwsh"}
+            else b"echo " + ready_marker + enter
+        )
+        second.write(
+            b"Write-Output " + ready_marker + enter
+            if shell.kind in {"powershell", "pwsh"}
+            else b"echo " + ready_marker + enter
+        )
+        assert wait_for_output(first_events, ready_marker, 5), "first shell did not become ready"
+        assert wait_for_output(second_events, ready_marker, 5), "second shell did not become ready"
+
+        if shell.kind in {"powershell", "pwsh"}:
+            first.write(b"Start-Sleep -Seconds 90" + enter)
+            second.write(b"Start-Sleep -Seconds 90" + enter)
+            first_recovered = b"Write-Output FIRST_SESSION_RECOVERED" + enter
+            second_recovered = b"Write-Output SECOND_SESSION_RECOVERED" + enter
+            first_recovered_marker = b"FIRST_SESSION_RECOVERED"
+            second_recovered_marker = b"SECOND_SESSION_RECOVERED"
+        else:
+            first.write(b"ping -n 90 127.0.0.1 >nul" + enter)
+            second.write(b"ping -n 90 127.0.0.1 >nul" + enter)
+            first_recovered = b"echo FIRST_SESSION_RECOVERED" + enter
+            second_recovered = b"echo SECOND_SESSION_RECOVERED" + enter
+            first_recovered_marker = b"FIRST_SESSION_RECOVERED"
+            second_recovered_marker = b"SECOND_SESSION_RECOVERED"
+
+        time.sleep(1)
+
+        prompt = b"PS " if shell.kind in {"powershell", "pwsh"} else b">"
+        first_output_offset = len(output_bytes(first_events))
+        second_output_offset = len(output_bytes(second_events))
+        first.signal("interrupt")
+        assert wait_for_prompt_after(
+            first_events, first_output_offset, prompt, 5
+        ), "Ctrl+C did not return the first shell to its prompt"
+        first.write(first_recovered)
+        assert wait_for_output(first_events, first_recovered_marker, 5), (
+            "Ctrl+C did not return the first shell to a usable prompt: "
+            f"{output_bytes(first_events)[-2000:]!r}"
+        )
+        assert not wait_for_prompt_after(
+            second_events, second_output_offset, prompt, 0.5
+        ), "interrupting the first ConPTY session also interrupted the second session"
+
+        second.signal("interrupt")
+        assert wait_for_prompt_after(
+            second_events, second_output_offset, prompt, 5
+        ), "Ctrl+C did not return the second shell to its prompt"
+        second.write(second_recovered)
+        assert wait_for_output(
+            second_events, second_recovered_marker, 5
+        ), "the second shell did not recover when its own Ctrl+C was sent"
+    finally:
+        first.close()
+        second.close()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Unix PTY suspend semantics")

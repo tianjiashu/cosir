@@ -52,6 +52,35 @@ class ConversationTaskContextCrud:
                 rows = session.scalars(stmt).all()
         return [ConversationTaskContextRecord._from_model(row) for row in rows]
 
+    def get_for_observation(
+        self,
+        task_id: int,
+        run_id: int | None = None,
+    ) -> list[ConversationTaskContextRecord]:
+        """读取观测页所需的全量消息，不按上下文或流式标记过滤。
+
+        指定 Run 时同时返回 Task 固定 system prompt（sequence 0），使 Run 视图保留
+        任务级提示词；其它 Run 的消息不混入结果。时间戳由完整持久化记录映射保留。
+        """
+
+        statement = select(ConversationTaskContextModel).where(
+            ConversationTaskContextModel.task_id == task_id
+        )
+        if run_id is not None:
+            statement = statement.where(
+                or_(
+                    ConversationTaskContextModel.run_id == run_id,
+                    and_(
+                        ConversationTaskContextModel.run_id.is_(None),
+                        ConversationTaskContextModel.sequence == 0,
+                    ),
+                )
+            )
+        statement = statement.order_by(ConversationTaskContextModel.sequence.asc())
+        with self._session_factory.begin() as session:
+            rows = session.scalars(statement).all()
+        return [ConversationTaskContextRecord._from_model(row) for row in rows]
+
     def get_by_task_sequence(
         self,
         task_id: int,

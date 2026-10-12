@@ -9,9 +9,11 @@ from app.api.schemas.response.EnvironmentResponse import (
     EnvironmentOptionResponse,
     EnvironmentResponse,
 )
+from app.api.schemas.response.ContextMessageResponse import ContextMessageResponse
 
 __all__ = [
     "EnvironmentFieldResponse",
+    "ContextMessageResponse",
     "EnvironmentGroupResponse",
     "EnvironmentOptionResponse",
     "EnvironmentResponse",
