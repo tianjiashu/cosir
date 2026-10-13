@@ -9,10 +9,12 @@ import {
   FileTextIcon,
   KeyRoundIcon,
   Loader2Icon,
+  NetworkIcon,
   PlusIcon,
   SaveIcon,
   Settings2Icon,
   ShieldCheckIcon,
+  SparklesIcon,
   SlidersHorizontalIcon,
   Trash2Icon,
   UsersIcon,
@@ -22,6 +24,8 @@ import { EnvironmentConfigurationForm, type EnvironmentFieldValue } from "@/comp
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
 import { AgentTeamConfigurationPanel } from "@/components/agent-team-configuration-panel";
 import { TerminalDenylistConfigurationPanel } from "@/components/terminal-denylist-configuration-panel";
+import { MCPConfigurationPanel } from "@/components/configuration/mcp-configuration-panel";
+import { SkillConfigurationPanel } from "@/components/configuration/skill-configuration-panel";
 import { MarkdownSourcePreviewEditor } from "@/components/configuration/markdown-source-preview-editor";
 import {
   ModelSelectorContent,
@@ -58,7 +62,7 @@ import {
   updateMainAgentPromptConfiguration,
 } from "@/lib/api/configuration";
 
-type ConfigurationTab = "agents" | "agent-teams" | "main-agent" | "instructions" | "environment" | "terminal-denylist";
+type ConfigurationTab = "agents" | "agent-teams" | "main-agent" | "instructions" | "environment" | "terminal-denylist" | "mcp" | "skills";
 
 export type AgentConfigurationApi = {
   list: () => Promise<AgentConfiguration[]>;
@@ -93,6 +97,8 @@ const tabItems: { id: ConfigurationTab; label: string; description: string; icon
   { id: "instructions", label: "全局AGENTS.md配置", description: "", icon: FileTextIcon },
   { id: "environment", label: "环境变量", description: "", icon: KeyRoundIcon },
   { id: "terminal-denylist", label: "终端命令规则", description: "", icon: ShieldCheckIcon },
+  { id: "mcp", label: "MCP 服务", description: "", icon: NetworkIcon },
+  { id: "skills", label: "Skills", description: "", icon: SparklesIcon },
 ];
 
 /** 子 Agent 仍不可授予交互终端会话和配置生成能力。 */
@@ -501,5 +507,48 @@ function EnvironmentPanel() {
 
 export function SystemConfigurationPage({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<ConfigurationTab>("agents");
-  return <div className="bg-background/95 absolute inset-0 z-30 overflow-y-auto backdrop-blur-sm"><div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-5 py-6 lg:px-10"><header className="mb-8 flex flex-wrap items-start justify-between gap-4"><div><div className="text-muted-foreground mb-3 flex items-center gap-2 text-xs"><Settings2Icon className="size-3.5" />系统配置中心</div><h1 className="text-2xl font-semibold tracking-tight">让本机 Agent 按你的方式工作</h1></div><Button variant="outline" onClick={onClose}><ChevronLeftIcon />返回工作区</Button></header><div className="grid min-h-0 flex-1 gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]"><nav className="flex gap-2 overflow-x-auto lg:block lg:space-y-2" aria-label="系统配置分类">{tabItems.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`flex min-w-44 items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors lg:w-full ${tab === item.id ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}><Icon className="size-4 shrink-0" /><span className="min-w-0"><span className="block text-sm font-medium">{item.label}</span><span className={`mt-0.5 block truncate text-[11px] ${tab === item.id ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{item.description}</span></span></button>; })}</nav><main className="min-w-0">{tab === "agents" && <AgentConfigurationPanel />}{tab === "agent-teams" && <AgentTeamConfigurationPanel scope="system" />}{tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent prompt" initialMode="split" />}{tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="在这里写入系统级工作约束…" saveLabel="保存指令" initialMode="split" />}{tab === "environment" && <EnvironmentPanel />}{tab === "terminal-denylist" && <TerminalDenylistConfigurationPanel />}</main></div></div></div>;
+  return (
+    <div className="bg-background/95 absolute inset-0 z-30 overflow-y-auto backdrop-blur-sm">
+      <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-5 py-6 lg:px-10">
+        <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="text-muted-foreground mb-3 flex items-center gap-2 text-xs"><Settings2Icon className="size-3.5" />系统配置中心</div>
+            <h1 className="text-2xl font-semibold tracking-tight">让本机 Agent 按你的方式工作</h1>
+          </div>
+          <Button variant="outline" onClick={onClose}><ChevronLeftIcon />返回工作区</Button>
+        </header>
+        <div className="grid min-h-0 flex-1 gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]">
+          <nav className="flex gap-2 overflow-x-auto lg:block lg:space-y-2" aria-label="系统配置分类">
+            {tabItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setTab(item.id)}
+                  className={`flex min-w-44 items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors lg:w-full ${tab === item.id ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                >
+                  <Icon className="size-4 shrink-0" />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">{item.label}</span>
+                    <span className={`mt-0.5 block truncate text-[11px] ${tab === item.id ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{item.description}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+          <main className="min-w-0">
+            {tab === "agents" && <AgentConfigurationPanel />}
+            {tab === "agent-teams" && <AgentTeamConfigurationPanel scope="system" />}
+            {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent prompt" initialMode="split" />}
+            {tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="在这里写入系统级工作约束…" saveLabel="保存指令" initialMode="split" />}
+            {tab === "environment" && <EnvironmentPanel />}
+            {tab === "terminal-denylist" && <TerminalDenylistConfigurationPanel />}
+            {tab === "mcp" && <MCPConfigurationPanel />}
+            {tab === "skills" && <SkillConfigurationPanel />}
+          </main>
+        </div>
+      </div>
+    </div>
+  );
 }

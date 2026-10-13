@@ -311,7 +311,6 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
           <details
             key={node.nodeId}
             className="group border-b border-border/60 last:border-b-0"
-            defaultOpen={index === 0}
           >
             <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2.5 py-2 outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
               {nodeGoals[node.nodeId]?.summary.trim() && nodeGoals[node.nodeId]?.goal.trim()

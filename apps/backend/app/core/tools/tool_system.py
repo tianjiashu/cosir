@@ -30,10 +30,12 @@ from app.core.tools.tool_handler.delete_tool import build_delete_file_definition
 from app.core.tools.tool_handler.execute_terminal import build_execute_terminal_definition
 from app.core.tools.tool_handler.find_files import build_find_files_definition
 from app.core.tools.tool_handler.list_directory import build_list_directory_definition
+from app.core.tools.tool_handler.mcp import build_mcp_definition
 from app.core.tools.tool_handler.move_tool import build_move_file_definition
 from app.core.tools.tool_handler.read_file import build_read_file_definition
 from app.core.tools.tool_handler.replace_tool import build_replace_definition
 from app.core.tools.tool_handler.search_content import build_search_content_definition
+from app.core.tools.tool_handler.skill import build_skill_definition
 from app.core.tools.tool_handler.terminal_session import (
     build_terminal_close_definition,
     build_terminal_read_definition,
@@ -132,6 +134,8 @@ class ToolSystem:
         # Team 配置生成只按本 Run 请求临时开放；Team 执行工具保持未注册。
         registry.register(build_propose_agent_team_configuration_definition())
         registry.register(build_agent_team_run_definition())
+        registry.register(build_mcp_definition())
+        registry.register(build_skill_definition())
         decision_handlers.register(
             AGENT_TEAM_REVIEW_KIND,
             reject_agent_team_confirmation,

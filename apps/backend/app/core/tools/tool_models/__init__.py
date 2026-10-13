@@ -18,6 +18,7 @@ from app.core.tools.tool_models.execute_terminal_args import (
 )
 from app.core.tools.tool_models.find_files_args import FindFilesArgs
 from app.core.tools.tool_models.list_directory_args import ListDirectoryArgs
+from app.core.tools.tool_models.mcp_args import MCPArgs
 from app.core.tools.tool_models.move_file_args import MoveFileArgs
 from app.core.tools.tool_models.propose_agent_configuration_args import (
     ProposeAgentConfigurationArgs,
@@ -25,6 +26,7 @@ from app.core.tools.tool_models.propose_agent_configuration_args import (
 from app.core.tools.tool_models.read_file_args import ReadFileArgs
 from app.core.tools.tool_models.replace_args import ReplaceArgs
 from app.core.tools.tool_models.search_content_args import SearchContentArgs
+from app.core.tools.tool_models.skill_args import SkillArgs
 from app.core.tools.tool_models.terminal_session_args import (
     TerminalCloseArgs,
     TerminalReadArgs,
@@ -43,6 +45,7 @@ __all__ = [
     "ExecuteTerminalShell",
     "FindFilesArgs",
     "ListDirectoryArgs",
+    "MCPArgs",
     "MacExecuteTerminalArgs",
     "MoveFileArgs",
     "ProposeAgentConfigurationArgs",
@@ -50,6 +53,7 @@ __all__ = [
     "ReadFileArgs",
     "ReplaceArgs",
     "SearchContentArgs",
+    "SkillArgs",
     "TerminalCloseArgs",
     "TerminalReadArgs",
     "TerminalSignalArgs",

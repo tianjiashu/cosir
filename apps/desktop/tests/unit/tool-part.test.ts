@@ -35,6 +35,17 @@ describe("tool renderer routing", () => {
     })).toBe("details");
   });
 
+  it("routes MCP and Skill results through the details renderer", () => {
+    expect(routeToolPart("mcp", {
+      presentation: { expand_layout: "details" },
+      display_data: { kind: "mcp-tool-result", action: "list", servers: [] },
+    })).toBe("details");
+    expect(routeToolPart("skill", {
+      presentation: { expand_layout: "details" },
+      display_data: { kind: "skill-content", action: "list", skills: [] },
+    })).toBe("details");
+  });
+
   it("routes delegation refs to the dedicated activity row", () => {
     expect(routeToolPart("delegate_task", {
       backendStatus: "running",

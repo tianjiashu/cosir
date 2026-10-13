@@ -15,7 +15,7 @@ function previewDisplayData(overrides: Record<string, unknown> = {}): Record<str
     team_id: "code-quality",
     name: "代码质量 Team",
     goal: "交付报告",
-    node_goals: { develop: "实现" },
+    node_goals: { develop: { goal: "实现", summary: "实现" } },
     start_node: "develop",
     parent_task_id: 2,
     parent_run_id: 3,
@@ -41,7 +41,7 @@ function previewDisplayData(overrides: Record<string, unknown> = {}): Record<str
       request_kind: "agent_team_review",
       prompt: "确认执行方案",
       decisions: ["approve", "reject"],
-      draft_schema: "agent-team-review-v1",
+      draft_schema: "agent-team-review-v2",
       draft: { goal: "交付报告" },
     },
     ...overrides,
@@ -49,12 +49,16 @@ function previewDisplayData(overrides: Record<string, unknown> = {}): Record<str
 }
 
 describe("agent team human-in-the-loop 展示解析", () => {
-  it("按后端实际字段名解析预览（model_name / tools）", () => {
+  it("按后端实际字段名解析预览", () => {
     const preview = readAgentTeamPreviewDisplay(previewDisplayData());
 
     expect(preview).not.toBeNull();
-    expect(preview?.nodes[0].effectiveModelName).toBe("deepseek-chat");
-    expect(preview?.nodes[0].effectiveTools).toEqual(["read_file"]);
+    expect(preview?.nodes[0]).toMatchObject({
+      nodeId: "develop",
+      name: "开发",
+      role: "开发者",
+      maxSteps: 5,
+    });
   });
 
   it("读取待决请求标识与允许的决定集合", () => {
@@ -63,7 +67,7 @@ describe("agent team human-in-the-loop 展示解析", () => {
     expect(review).toEqual({
       requestId: "17",
       decisions: ["approve", "reject"],
-      draftSchema: "agent-team-review-v1",
+      draftSchema: "agent-team-review-v2",
     });
   });
 

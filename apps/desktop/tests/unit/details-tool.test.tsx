@@ -105,6 +105,24 @@ describe("DetailsTool", () => {
     expect(directoryHtml).toContain("src · 7 个条目");
   });
 
+  it("renders MCP tools and available Skills from extension display data", () => {
+    const mcpHtml = renderDetails({
+      kind: "mcp-tool-result",
+      action: "list",
+      servers: [{ server_name: "local-search", tools: [{ name: "search", description: "Search files" }] }],
+    }, { toolName: "mcp", presentation: { verb: "发现 MCP 工具", expand_layout: "details", default_open: true } });
+    const skillHtml = renderDetails({
+      kind: "skill-content",
+      action: "list",
+      skills: [{ name: "research", description: "Research sources" }],
+    }, { toolName: "skill", presentation: { verb: "列出 Skill", expand_layout: "details", default_open: true } });
+
+    expect(mcpHtml).toContain("local-search");
+    expect(mcpHtml).toContain("search");
+    expect(skillHtml).toContain("research");
+    expect(skillHtml).toContain("Research sources");
+  });
+
   it("renders web search links and web extract status without extracted body", () => {
     const searchHtml = renderDetails({
       kind: "web-search-results",

@@ -71,6 +71,8 @@ const KNOWN_DISPLAY_KINDS = new Set([
   "agent-team-approval",
   "agent-team-execution",
   "agent-team-configuration-draft",
+  "mcp-tool-result",
+  "skill-content",
 ]);
 
 /**
@@ -140,6 +142,8 @@ const TOOL_RENDERER_DEFINITIONS: readonly ToolRendererDefinition[] = [
       || kind === "directory-list"
       || kind === "file-list"
       || kind === "content-search-results"
+      || kind === "mcp-tool-result"
+      || kind === "skill-content"
       || artifact.presentation.expand_layout === "details"
       || artifact.presentation.expand_layout === "list"
       || artifact.presentation.expand_layout === "write"

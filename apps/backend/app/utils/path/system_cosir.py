@@ -12,6 +12,9 @@
 ``<DATA_DIR>/.cosir/storage/langgraph_checkpoints.sqlite``
 ``<DATA_DIR>/.cosir/runtime/``
 ``<DATA_DIR>/.cosir/config/terminal_denylist.json``
+``<DATA_DIR>/.cosir/config/mcp_servers.json``
+``<DATA_DIR>/.cosir/config/skills.json``
+``<DATA_DIR>/.cosir/skills/``
 
 本模块只做路径推导，不创建目录、不读写文件。目录创建由 Tauri 宿主、日志配置和存储初始化
 各自负责；``Settings.load`` 在加载系统 ``.env`` 后调用 ``reset``，使环境变量与固定路径重新对齐。
@@ -41,6 +44,9 @@ _LOG_DIR_NAME: Final[str] = "logs"
 _RUNTIME_DIR_NAME: Final[str] = "runtime"
 _CONFIG_DIR_NAME: Final[str] = "config"
 _TERMINAL_DENYLIST_FILE_NAME: Final[str] = "terminal_denylist.json"
+_MCP_SERVERS_FILE_NAME: Final[str] = "mcp_servers.json"
+_SKILLS_CONFIG_FILE_NAME: Final[str] = "skills.json"
+_SKILLS_DIR_NAME: Final[str] = "skills"
 _DATABASE_FILE_NAME: Final[str] = "app.sqlite3"
 _CHECKPOINT_FILE_NAME: Final[str] = "langgraph_checkpoints.sqlite"
 LOG_FILE_NAME: Final[str] = "backend.log"
@@ -182,6 +188,24 @@ def system_terminal_denylist_file() -> Path:
     return system_cosir_dir() / _CONFIG_DIR_NAME / _TERMINAL_DENYLIST_FILE_NAME
 
 
+def system_mcp_servers_file() -> Path:
+    """返回系统级 MCP stdio 服务配置文件路径。"""
+
+    return system_cosir_dir() / _CONFIG_DIR_NAME / _MCP_SERVERS_FILE_NAME
+
+
+def system_skills_dir() -> Path:
+    """返回系统级 Skill 目录路径。"""
+
+    return system_cosir_dir() / _SKILLS_DIR_NAME
+
+
+def system_skills_config_file() -> Path:
+    """返回系统级 Skill 启用状态配置文件路径。"""
+
+    return system_cosir_dir() / _CONFIG_DIR_NAME / _SKILLS_CONFIG_FILE_NAME
+
+
 def env_file() -> Path:
     """返回系统级运行配置文件路径（``<数据根>/.cosir/.env``）。"""
 
@@ -222,6 +246,9 @@ __all__ = [
     "system_cosir_dir",
     "system_instruction_file",
     "system_main_agent_prompt_file",
+    "system_mcp_servers_file",
+    "system_skills_dir",
+    "system_skills_config_file",
     "system_agent_config_dir",
     "system_agent_team_config_dir",
     "system_env_file",

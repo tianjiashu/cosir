@@ -107,6 +107,17 @@ function displaySummary(data: Record<string, unknown>, backendStatus: string): s
       const agent = typeof data.agent_name === "string" ? data.agent_name : "子 Agent";
       return `${agent} · 子 Agent：${formatToolStatus(status)}`;
     }
+    case "mcp-tool-result": {
+      if (data.action === "call") {
+        return `${String(data.server_name ?? "MCP 服务")} · ${String(data.tool_name ?? "工具")}`;
+      }
+      const count = Array.isArray(data.servers) ? data.servers.length : 0;
+      return `发现 ${count} 个 MCP 服务`;
+    }
+    case "skill-content":
+      return data.action === "list"
+        ? `发现 ${Array.isArray(data.skills) ? data.skills.length : 0} 个 Skill`
+        : `${String(data.skill_name ?? "Skill")} · ${String(data.resource_path ?? "SKILL.md")}`;
     default:
       return typeof data.path === "string" ? data.path : typeof data.pattern === "string" ? data.pattern : "";
   }
@@ -246,6 +257,45 @@ function ChildAgentResult({ data }: { data: Record<string, unknown> }) {
   );
 }
 
+function ExtensionToolDetails({ data }: { data: Record<string, unknown> }) {
+  if (data.kind === "skill-content" && data.action === "list") {
+    const skills = Array.isArray(data.skills) ? data.skills : [];
+    return skills.length > 0 ? (
+      <ul className="space-y-1 text-xs">
+        {skills.map((entry, index) => {
+          const skill = asRecord(entry);
+          return <li key={`${String(skill.name ?? "skill")}-${index}`}><span className="font-medium">{String(skill.name ?? "未命名 Skill")}</span>{typeof skill.description === "string" && skill.description && <span className="text-muted-foreground ml-2">{skill.description}</span>}</li>;
+        })}
+      </ul>
+    ) : <p className="text-muted-foreground text-xs">没有可用 Skill</p>;
+  }
+
+  if (data.kind === "mcp-tool-result" && data.action === "list") {
+    const servers = Array.isArray(data.servers) ? data.servers : [];
+    return servers.length > 0 ? (
+      <ul className="space-y-3 text-xs">
+        {servers.map((entry, index) => {
+          const server = asRecord(entry);
+          const tools = Array.isArray(server.tools) ? server.tools : [];
+          return (
+            <li key={`${String(server.server_name ?? "server")}-${index}`}>
+              <p className="font-medium">{String(server.server_name ?? "MCP 服务")}</p>
+              {typeof server.error === "string" && <p className="text-muted-foreground mt-1">{server.error}</p>}
+              {tools.length > 0 && <ul className="mt-1 space-y-1 pl-3">{tools.map((toolEntry, toolIndex) => {
+                const tool = asRecord(toolEntry);
+                return <li key={`${String(tool.name ?? "tool")}-${toolIndex}`}><span className="font-mono">{String(tool.name ?? "未命名工具")}</span>{typeof tool.description === "string" && tool.description && <span className="text-muted-foreground ml-2">{tool.description}</span>}</li>;
+              })}</ul>}
+              {tools.length === 0 && typeof server.error !== "string" && <p className="text-muted-foreground mt-1">没有发现工具</p>}
+            </li>
+          );
+        })}
+      </ul>
+    ) : <p className="text-muted-foreground text-xs">没有已启用的 MCP 服务</p>;
+  }
+
+  return <p className="text-muted-foreground text-xs">结果已提供给 Agent。</p>;
+}
+
 export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessagePartProps) {
   const artifact = readToolArtifact(rawArtifact);
   const data = artifact.display_data ?? {};
@@ -276,6 +326,8 @@ export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessage
         <ChildAgentWaitResult data={data} />
       ) : data.kind === "child-agent-result" ? (
         <ChildAgentResult data={data} />
+      ) : data.kind === "mcp-tool-result" || data.kind === "skill-content" ? (
+        <ExtensionToolDetails data={data} />
       ) : (
         <>
           {presentation.show_result !== false && <p className="text-muted-foreground text-xs">暂无展示数据</p>}

@@ -10,14 +10,19 @@ from pathlib import Path
 import pytest
 
 from app.utils.path import system_cosir as paths
-from app.utils.path.system_cosir import COSIR_DIR_NAME, system_cosir_dir
+from app.utils.path.system_cosir import (
+    COSIR_DIR_NAME,
+    system_cosir_dir,
+    system_skills_config_file,
+    system_skills_dir,
+)
+from app.utils.path.validation import is_within_cosir
 from app.utils.path.workspace_cosir import (
     workspace_attachment_dir,
     workspace_attachment_staging_dir,
     workspace_cosir_dir,
     workspace_tool_artifact_dir,
 )
-from app.utils.path.validation import is_within_cosir
 
 
 def test_workspace_paths_are_nested_under_cosir(tmp_path: Path) -> None:
@@ -26,10 +31,7 @@ def test_workspace_paths_are_nested_under_cosir(tmp_path: Path) -> None:
     root = tmp_path / "ws"
     assert workspace_cosir_dir(root) == root / ".cosir"
     assert workspace_attachment_dir(root) == root / ".cosir" / "Attachment"
-    assert (
-        workspace_attachment_staging_dir(root)
-        == root / ".cosir" / "Attachment" / ".uploading"
-    )
+    assert workspace_attachment_staging_dir(root) == root / ".cosir" / "Attachment" / ".uploading"
     assert workspace_tool_artifact_dir(root) == root / ".cosir" / "tool-artifacts"
 
 
@@ -79,6 +81,17 @@ def test_system_cosir_dir_combines_data_dir_with_fixed_name(tmp_path: Path) -> N
     paths.override(DATA_DIR=tmp_path / "sys")
     try:
         assert system_cosir_dir() == tmp_path / "sys" / COSIR_DIR_NAME
+    finally:
+        paths.reset()
+
+
+def test_system_skill_paths_are_nested_under_system_cosir(tmp_path: Path) -> None:
+    """Skill 文件与目录统一位于系统级 ``.cosir`` 下。"""
+
+    paths.override(DATA_DIR=tmp_path / "sys")
+    try:
+        assert system_skills_dir() == system_cosir_dir() / "skills"
+        assert system_skills_config_file() == system_cosir_dir() / "config" / "skills.json"
     finally:
         paths.reset()
 

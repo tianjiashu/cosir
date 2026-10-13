@@ -111,6 +111,8 @@ def main_agent(*, system_prompt: str = "", max_steps: int = 300) -> AgentProfile
             TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
             TOOL_PROPOSE_AGENT_CONFIGURATION,
             TOOL_AGENT_TEAM,
+            TOOL_MCP,
+            TOOL_SKILL,
         ],
         agent_type=AgentProfileType.MAIN,
         system_prompt=system_prompt,

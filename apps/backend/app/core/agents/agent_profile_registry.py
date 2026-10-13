@@ -376,9 +376,7 @@ class AgentProfileRegistry:
         with self._load_lock:
             with self._lock:
                 self._profiles = {
-                    key: profile
-                    for key, profile in self._profiles.items()
-                    if key[0] != scope
+                    key: profile for key, profile in self._profiles.items() if key[0] != scope
                 }
                 if scope == self.SYSTEM_WORKSPACE:
                     self._builtin_system_agent_ids.clear()
@@ -642,12 +640,19 @@ class AgentProfileRegistry:
         """
 
         blocks = [
-            f"agent_id: {profile.agent_id} | description: {profile.description or ''} | allowed_tools: {profile.allowed_tools}"
+            (
+                "agent_id: {agent_id} | description: {description} | "
+                "allowed_tools: {allowed_tools}"
+            ).format(
+                agent_id=profile.agent_id,
+                description=profile.description or "",
+                allowed_tools=profile.allowed_tools,
+            )
             for profile in self.list(workspace)
             if profile.agent_type is AgentProfileType.CHILD
         ]
         if not blocks:
-            return "no child agents available"
+            return ""
         return "Available child agents:\n" + "\n".join(blocks)
 
     def child_agent_ids(self, workspace: str | Path) -> set[str]:

@@ -21,5 +21,7 @@ TOOL_GROUP_WEB: Final[str] = "联网工具"
 TOOL_GROUP_CHILD_AGENT: Final[str] = "子Agent工具"
 TOOL_GROUP_CONFIGURATION: Final[str] = "配置生成工具"
 TOOL_GROUP_AGENT_TEAM: Final[str] = "Agent Team 工具"
+TOOL_GROUP_MCP: Final[str] = "MCP 工具"
+TOOL_GROUP_SKILL: Final[str] = "Skill 工具"
 
 DEFAULT_TOOL_GROUP = "其他工具"
