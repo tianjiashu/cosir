@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   CheckCircle2Icon,
@@ -8,10 +8,13 @@ import {
   CircleXIcon,
   ClipboardIcon,
   Clock3Icon,
+  ArrowLeftIcon,
   GaugeIcon,
   LoaderCircleIcon,
+  ListTreeIcon,
   RefreshCwIcon,
   SearchIcon,
+  Undo2Icon,
   ArrowDownIcon,
   ArrowUpIcon,
 } from "lucide-react";
@@ -115,7 +118,11 @@ function roleBadgeStyle(role: string): string {
 
 type RoleFilter = "all" | "assistant" | "system" | "human" | "tool";
 type SortKey = "sequence" | "created_at" | "updated_at";
+type ContextNavigation = { queryKey: string; sequence: number };
+type FilteredViewSnapshot = { scrollTop: number; selectedSequence: number | null };
+type PendingListScroll = { kind: "sequence"; sequence: number } | { kind: "offset"; offset: number };
 const cacheDeclineAlertThreshold = 5;
+const cacheDeclineWarningThreshold = 2;
 
 function Field({ name, value }: { name: string; value: unknown }) {
   return (
@@ -127,6 +134,8 @@ function Field({ name, value }: { name: string; value: unknown }) {
 }
 
 export function ContextObserverPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [taskInput, setTaskInput] = useState(searchParams.get("task_id") ?? "");
   const [runInput, setRunInput] = useState(searchParams.get("run_id") ?? "");
@@ -140,16 +149,32 @@ export function ContextObserverPage() {
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("sequence");
   const [sortAscending, setSortAscending] = useState(true);
+  const [contextNavigation, setContextNavigation] = useState<ContextNavigation | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const filteredViewSnapshotRef = useRef<FilteredViewSnapshot | null>(null);
+  const pendingListScrollRef = useRef<PendingListScroll | null>(null);
 
   const taskId = Number(searchParams.get("task_id"));
   const runId = Number(searchParams.get("run_id"));
+  const returnToCandidate = (location.state as { returnTo?: unknown } | null)?.returnTo;
+  const returnTo = typeof returnToCandidate === "string"
+    && returnToCandidate.startsWith("/")
+    && !returnToCandidate.startsWith("//")
+    ? returnToCandidate
+    : null;
   const queryKey = `${Number.isInteger(taskId) && taskId > 0 ? taskId : ""}:${Number.isInteger(runId) && runId > 0 ? runId : ""}`;
 
   useEffect(() => {
     setTaskInput(searchParams.get("task_id") ?? "");
     setRunInput(searchParams.get("run_id") ?? "");
   }, [searchParams]);
+
+  useEffect(() => {
+    if (!contextNavigation || contextNavigation.queryKey === queryKey) return;
+    setContextNavigation(null);
+    filteredViewSnapshotRef.current = null;
+    pendingListScrollRef.current = { kind: "offset", offset: 0 };
+  }, [contextNavigation, queryKey]);
 
   useEffect(() => {
     if (!taskId && !runId) {
@@ -216,6 +241,14 @@ export function ContextObserverPage() {
         : comparison * direction;
     });
   }, [messages, roleFilter, sortAscending, sortKey]);
+  const isRoleFilterNarrowingResults = visibleMessages.length < messages.length;
+  const canOpenFullContext = !loading && !error && isRoleFilterNarrowingResults && visibleMessages.length > 0;
+  const contextMessages = useMemo(
+    () => [...messages].sort((left, right) => left.sequence - right.sequence),
+    [messages],
+  );
+  const activeContextNavigation = contextNavigation?.queryKey === queryKey ? contextNavigation : null;
+  const renderedMessages = activeContextNavigation ? contextMessages : visibleMessages;
   const sequenceRange = useMemo(() => messages.reduce<{ min: number; max: number } | null>(
     (range, message) => range
       ? { min: Math.min(range.min, message.sequence), max: Math.max(range.max, message.sequence) }
@@ -223,19 +256,72 @@ export function ContextObserverPage() {
     null,
   ), [messages]);
   const selected = useMemo(
-    () => visibleMessages.find((message) => message.sequence === selectedSequence) ?? null,
-    [visibleMessages, selectedSequence],
+    () => renderedMessages.find((message) => message.sequence === selectedSequence) ?? null,
+    [renderedMessages, selectedSequence],
   );
   useEffect(() => {
-    if (visibleMessages.some((message) => message.sequence === selectedSequence)) return;
-    setSelectedSequence(visibleMessages[0]?.sequence ?? null);
-  }, [visibleMessages, selectedSequence]);
+    if (renderedMessages.some((message) => message.sequence === selectedSequence)) return;
+    setSelectedSequence(renderedMessages[0]?.sequence ?? null);
+  }, [renderedMessages, selectedSequence]);
   const virtualizer = useVirtualizer({
-    count: visibleMessages.length,
+    count: renderedMessages.length,
     getScrollElement: () => listRef.current,
     estimateSize: () => 128,
     overscan: 8,
+    getItemKey: (index) => {
+      const message = renderedMessages[index];
+      return message ? `${message.task_id}-${message.sequence}` : index;
+    },
   });
+
+  useEffect(() => {
+    const pendingScroll = pendingListScrollRef.current;
+    if (!pendingScroll) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (pendingListScrollRef.current !== pendingScroll) return;
+      if (pendingScroll.kind === "sequence") {
+        const index = renderedMessages.findIndex((message) => message.sequence === pendingScroll.sequence);
+        if (index >= 0) virtualizer.scrollToIndex(index, { align: "center" });
+      } else {
+        virtualizer.scrollToOffset(pendingScroll.offset);
+      }
+      pendingListScrollRef.current = null;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeContextNavigation?.sequence, renderedMessages, virtualizer]);
+
+  const openFullContext = () => {
+    if (activeContextNavigation || !canOpenFullContext) return;
+    const targetSequence = visibleMessages.some((message) => message.sequence === selectedSequence)
+      ? selectedSequence
+      : visibleMessages[0]?.sequence;
+    if (targetSequence === null || targetSequence === undefined) return;
+    filteredViewSnapshotRef.current = {
+      scrollTop: listRef.current?.scrollTop ?? 0,
+      selectedSequence,
+    };
+    pendingListScrollRef.current = { kind: "sequence", sequence: targetSequence };
+    setContextNavigation({ queryKey, sequence: targetSequence });
+    setSelectedSequence(targetSequence);
+  };
+
+  const returnToFilteredMessages = () => {
+    const snapshot = filteredViewSnapshotRef.current;
+    filteredViewSnapshotRef.current = null;
+    setContextNavigation(null);
+    if (!snapshot) {
+      pendingListScrollRef.current = { kind: "offset", offset: 0 };
+      return;
+    }
+    setSelectedSequence(snapshot.selectedSequence);
+    pendingListScrollRef.current = { kind: "offset", offset: snapshot.scrollTop };
+  };
+
+  const resetContextNavigation = () => {
+    setContextNavigation(null);
+    filteredViewSnapshotRef.current = null;
+    pendingListScrollRef.current = { kind: "offset", offset: 0 };
+  };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -260,6 +346,7 @@ export function ContextObserverPage() {
     const params = new URLSearchParams();
     if (nextTaskId !== null) params.set("task_id", String(nextTaskId));
     if (nextRunId !== null) params.set("run_id", String(nextRunId));
+    resetContextNavigation();
     setSearchParams(params);
     setRefreshGeneration((current) => current + 1);
   };
@@ -275,11 +362,15 @@ export function ContextObserverPage() {
     }
   };
 
-  const refresh = () => setRefreshGeneration((current) => current + 1);
+  const refresh = () => {
+    resetContextNavigation();
+    setRefreshGeneration((current) => current + 1);
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <form onSubmit={submit} className="flex shrink-0 flex-wrap items-end gap-3 border-b px-5 py-4">
+        {returnTo && <Button type="button" variant="ghost" size="sm" className="h-10 shrink-0 gap-1.5 px-2" onClick={() => navigate(returnTo)} aria-label="返回之前的对话" data-testid="context-observer-back"><ArrowLeftIcon aria-hidden="true" />返回对话</Button>}
         <div className="min-w-40 flex-1 basis-48">
           <label htmlFor="context-task-id" className="mb-1.5 block text-xs font-medium text-muted-foreground">Task ID</label>
           <Input id="context-task-id" inputMode="numeric" value={taskInput} onChange={(event) => setTaskInput(event.target.value)} placeholder="例如 42" />
@@ -299,11 +390,16 @@ export function ContextObserverPage() {
             <div className="flex items-baseline justify-between gap-3">
               <h2 className="text-sm font-semibold">消息序列</h2>
               <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-                {loading ? "正在读取…" : roleFilter === "all" ? `${messages.length} 条` : `${visibleMessages.length} / ${messages.length} 条`}
+                {loading ? "正在读取…" : activeContextNavigation ? `${messages.length} 条完整序列` : roleFilter === "all" ? `${messages.length} 条` : `${visibleMessages.length} / ${messages.length} 条`}
                 {sequenceRange && ` · #${sequenceRange.min}–${sequenceRange.max}`}
               </span>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+            {activeContextNavigation ? (
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">当前查询范围内的全部角色消息 · 定位 #{activeContextNavigation.sequence}</p>
+                <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 px-2 text-xs text-primary hover:bg-accent" onClick={returnToFilteredMessages}><Undo2Icon aria-hidden="true" />返回筛选结果</Button>
+              </div>
+            ) : <div className="flex flex-wrap items-center gap-2">
               <label htmlFor="context-role-filter" className="sr-only">按角色筛选</label>
               <select id="context-role-filter" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as RoleFilter)} className="h-8 rounded-md border bg-background px-2 text-xs text-foreground">
                 <option value="all">全部角色</option>
@@ -321,7 +417,8 @@ export function ContextObserverPage() {
               <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 px-2 text-xs" onClick={() => setSortAscending((ascending) => !ascending)} aria-label={sortAscending ? "切换为降序" : "切换为升序"}>
                 {sortAscending ? <ArrowUpIcon /> : <ArrowDownIcon />}{sortAscending ? "升序" : "降序"}
               </Button>
-            </div>
+              {canOpenFullContext && <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 gap-1.5 px-2 text-xs text-primary hover:bg-accent" onClick={openFullContext}><ListTreeIcon aria-hidden="true" />查看完整上下文</Button>}
+            </div>}
           </div>
           <div ref={listRef} className="min-h-0 flex-1 overflow-auto">
             {error && <div role="alert" className="m-5 border-l-2 border-destructive px-3 py-2 text-sm text-destructive">{error}</div>}
@@ -331,12 +428,13 @@ export function ContextObserverPage() {
                 <p className="mt-2 text-xs leading-5 text-muted-foreground">结果包含流式草稿和未纳入模型上下文的记录，时间按消息创建和更新时刻展示。</p>
               </div>
             )}
-            {!loading && !error && messages.length > 0 && visibleMessages.length === 0 && <p className="px-5 py-8 text-center text-sm text-muted-foreground">当前角色筛选下没有消息。</p>}
-            {visibleMessages.length > 0 && (
+            {!loading && !error && messages.length > 0 && renderedMessages.length === 0 && <p className="px-5 py-8 text-center text-sm text-muted-foreground">当前角色筛选下没有消息。</p>}
+            {renderedMessages.length > 0 && (
               <div className="relative" style={{ height: `${virtualizer.getTotalSize()}px` }}>
                 {virtualizer.getVirtualItems().map((virtualRow) => {
-                  const message = visibleMessages[virtualRow.index];
+                  const message = renderedMessages[virtualRow.index];
                   const active = message.sequence === selectedSequence;
+                  const isFocusTarget = message.sequence === activeContextNavigation?.sequence;
                   const cache = message.role === "assistant" ? cacheUsage(message) : null;
                   const cacheDecline = cacheDeclines.get(message.sequence);
                   const callNames = message.role === "assistant" ? toolNames(message) : [];
@@ -350,7 +448,8 @@ export function ContextObserverPage() {
                       type="button"
                       onClick={() => setSelectedSequence(message.sequence)}
                       aria-pressed={active}
-                      className={`absolute left-0 top-0 flex min-h-24 w-full flex-col gap-1 border-b border-l-2 px-4 py-2.5 text-left transition-colors ${roleStyle(message.role)} ${active ? "bg-accent/80 ring-1 ring-inset ring-foreground/10" : message.include_in_context ? "hover:bg-muted/60" : "bg-muted/40 hover:bg-muted/60"}`}
+                      aria-current={isFocusTarget ? "location" : undefined}
+                      className={`absolute left-0 top-0 flex min-h-24 w-full flex-col gap-1 border-b border-l-2 px-4 py-2.5 text-left transition-colors ${roleStyle(message.role)} ${isFocusTarget ? "bg-primary/10 ring-2 ring-inset ring-primary/35" : active ? "bg-accent/80 ring-1 ring-inset ring-foreground/10" : message.include_in_context ? "hover:bg-muted/60" : "bg-muted/40 hover:bg-muted/60"}`}
                       style={{ transform: `translateY(${virtualRow.start}px)` }}
                     >
                       <div className="flex min-w-0 items-center gap-2">
@@ -358,13 +457,13 @@ export function ContextObserverPage() {
                         <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${roleBadgeStyle(message.role)}`}>{roleLabel(message.role)}</span>
                         <span className="truncate font-mono text-[10px] text-muted-foreground">Run {message.run_id ?? "—"}</span>
                         {!message.include_in_context && <span className="inline-flex shrink-0 items-center rounded-sm border border-border/80 bg-background/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">未纳入上下文</span>}
-                        {message.role === "assistant" && <span title={cache ? `缓存命中 ${formatTokens(cache.hit)} / 输入 ${formatTokens(cache.input)} tokens${cacheDecline === undefined ? "" : `；较上一条可计算记录下降 ${cacheDecline.toFixed(1)} 个百分点`}` : "供应商未提供可计算缓存率的输入明细"} className={`ml-auto inline-flex shrink-0 items-center gap-1 rounded-sm border px-2 py-1 text-[11px] font-semibold tabular-nums ${cache ? cacheDecline !== undefined && cacheDecline > cacheDeclineAlertThreshold ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-sky-700/20 bg-sky-500/10 text-sky-800 dark:text-sky-300" : "border-border bg-muted text-muted-foreground"}`}><GaugeIcon className="size-3.5" aria-hidden="true" />缓存 {cache ? `${cache.rate.toFixed(1)}%` : "—"}{cacheDecline !== undefined && cacheDecline > cacheDeclineAlertThreshold && <span className="ml-0.5">↓{cacheDecline.toFixed(1)} 个百分点</span>}</span>}
-                        {toolStatus && StatusIcon && <span title={message.status ?? undefined} className={`ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-sm border px-2 py-1 text-[11px] font-semibold ${toolStatus.className}`}><StatusIcon className={`size-3.5 ${message.status === "running" ? "animate-spin" : ""}`} aria-hidden="true" />{toolStatus.label}</span>}
                       </div>
                       <p className={`line-clamp-2 pl-12 text-xs leading-4 ${message.include_in_context ? "text-muted-foreground" : "text-muted-foreground/75"}`}>{preview(message.content) || "（空内容）"}</p>
                       {callNames.length > 0 && <div className="flex min-w-0 flex-wrap items-center gap-1 pl-12 text-[10px]"><span className="shrink-0 text-muted-foreground">调用工具</span>{callNames.map((name, index) => <span key={`${name}-${index}`} className="max-w-full truncate rounded-sm border border-sky-700/15 bg-sky-500/5 px-1.5 py-0.5 font-mono text-sky-800 dark:text-sky-300">{name}</span>)}</div>}
                       <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-0.5 pl-12 text-[11px] font-medium tabular-nums text-foreground/75">
                         <span className="inline-flex min-w-0 items-center gap-1 truncate" title={message.created_at}><Clock3Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" /><span className="text-muted-foreground">创建</span><time dateTime={message.created_at}>{formatTimestamp(message.created_at, true)}</time></span><span className="inline-flex min-w-0 items-center gap-1 truncate" title={message.updated_at}><span className="text-muted-foreground">更新</span><time dateTime={message.updated_at}>{formatTimestamp(message.updated_at, true)}</time></span>
+                        {message.role === "assistant" && <span title={cache ? `缓存命中 ${formatTokens(cache.hit)} / 输入 ${formatTokens(cache.input)} tokens${cacheDecline === undefined ? "" : `；较上一条可计算记录下降 ${cacheDecline.toFixed(1)} 个百分点`}` : "供应商未提供可计算缓存率的输入明细"} className={`inline-flex shrink-0 items-center gap-1 rounded-sm border px-2 py-1 text-[11px] font-semibold tabular-nums ${cache ? cacheDecline !== undefined && cacheDecline >= cacheDeclineAlertThreshold ? "border-destructive/30 bg-destructive/10 text-destructive" : cacheDecline !== undefined && cacheDecline > cacheDeclineWarningThreshold ? "border-amber-700/25 bg-amber-500/10 text-amber-800 dark:text-amber-300" : "border-sky-700/20 bg-sky-500/10 text-sky-800 dark:text-sky-300" : "border-border bg-muted text-muted-foreground"}`}><GaugeIcon className="size-3.5" aria-hidden="true" />缓存 {cache ? `${cache.rate.toFixed(1)}%` : "—"}{cacheDecline !== undefined && cacheDecline > cacheDeclineWarningThreshold && <span className="ml-0.5">↓{cacheDecline.toFixed(1)} 个百分点</span>}</span>}
+                        {toolStatus && StatusIcon && <span title={message.status ?? undefined} className={`inline-flex shrink-0 items-center gap-1.5 rounded-sm border px-2 py-1 text-[11px] font-semibold ${toolStatus.className}`}><StatusIcon className={`size-3.5 ${message.status === "running" ? "animate-spin" : ""}`} aria-hidden="true" />{toolStatus.label}</span>}
                       </div>
                     </button>
                   );

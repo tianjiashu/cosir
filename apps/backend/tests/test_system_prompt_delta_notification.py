@@ -6,7 +6,7 @@ import weakref
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage
 
 from app.core.agents.agent_profile import AgentProfileType
 from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
@@ -79,7 +79,7 @@ def test_task_space_returns_delta_as_a_context_message() -> None:
 
     messages = space.take_deferred_system_messages()
     assert len(messages) == 1
-    assert isinstance(messages[0], SystemMessage)
+    assert isinstance(messages[0], AIMessage)
     assert "-旧规则" in messages[0].content
     assert "+新规则" in messages[0].content
     assert messages[0].additional_kwargs["notice_type"] == "system_prompt_delta"

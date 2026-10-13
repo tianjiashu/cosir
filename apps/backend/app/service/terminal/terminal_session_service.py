@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -814,7 +814,7 @@ class TerminalSessionService:
             self._backpressure_notified_runs.add(run_key)
         try:
             task_runtime_spaces.get_or_create(runtime.record.task_id).defer_system_message(
-                SystemMessage(
+                AIMessage(
                     content=(
                         "The terminal input queue is temporarily full. Wait briefly for "
                         "the terminal worker to drain, then retry terminal_write."

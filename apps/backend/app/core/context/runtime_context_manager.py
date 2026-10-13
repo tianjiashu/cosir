@@ -77,6 +77,7 @@ class RuntimeContextManager:
     context_service: ConversationTaskContextService | None = field(default=None, init=False)
     # 固定持久化的 Task system prompt，不参与压缩；每次模型调用均位于消息前缀。
     _system_entry: ContextEntry | None = field(default=None, init=False)
+    _user_entry: ContextEntry | None = field(default=None, init=False)
     _entries: list[ContextEntry] = field(default_factory=list, init=False)
     # 序号由 RuntimeContextManager 独自分配，context service 只负责持久化：构造时
     # （__post_init__）从持久化 context 恢复下一个可用序号；此后每条新消息（含流式草稿首 chunk）
@@ -532,7 +533,10 @@ class RuntimeContextManager:
         else:
             # 纯文本输入保持字符串 content：provider 兼容性最好，也是历史形状。
             content = text
-        self.add_message(HumanMessage(content=cast(Any, content)))
+        self._user_entry = ContextEntry(
+            message=HumanMessage(content=cast(Any, content)),
+            run_id=self.current_run_id,
+        )
         get_conversation_event_projector().process(
             UserInputAppendedEvent(
                 task_id=self.current_task_id,
@@ -553,12 +557,9 @@ class RuntimeContextManager:
         ``self._entries``：后者只覆盖当前进程写入过的消息，后端重启后为空，会把「已有」
         误判成「没有」而重复写入。
         """
-
-        entries = self._require_context_service().entries_in_context(self.current_task_id)
-        return any(
-            entry.run_id == self.current_run_id and isinstance(entry.message, HumanMessage)
-            for entry in entries
-        )
+        if self._user_entry is None:
+            return False
+        return self._user_entry.run_id == self.current_run_id
 
     def _close_unclosed_tool_calls(self) -> None:
         """闭合最后一条工具调用消息上未配对的结果，并把结果归位到该消息之后。
@@ -568,7 +569,7 @@ class RuntimeContextManager:
         导致）。链路里这**只可能出现在最后一条携带 tool_calls 的 ``AIMessage`` 上**：
 
         - 该消息必然是它所属 Run 的最后一条消息：``model_node`` 落库后只会再有同批
-          ``ToolMessage``、本 Run 的延迟修复 ``SystemMessage``（写在占位之后），或下一
+          ``ToolMessage``、本 Run 的延迟修复提示（``AIMessage``，写在占位之后），或下一
           Run 的 ``HumanMessage``；
         - 每个 model 步入场都会取数一次，未闭合不跨 model 步，因此历史里不会留下更早
           的未闭合调用。
@@ -578,9 +579,9 @@ class RuntimeContextManager:
         错误暴露），不存在需要修复的「历史未闭合」状态。
 
         一个 assistant 消息的多个 tool call 必须按 ``tool_calls`` 顺序紧随其后。结果即使
-        已经落库，也可能被后续消息（下一 Run 的 ``HumanMessage``、延迟修复 ``SystemMessage``）
-        隔开，或因为占位的全局序号更大而排在它们之后；此时把匹配结果搬回该消息之后，并
-        保留其他消息的相对顺序。
+        已经落库，也可能被后续消息（下一 Run 的 ``HumanMessage``、延迟修复提示
+        ``AIMessage``）隔开，或因为占位的全局序号更大而排在它们之后；此时把匹配结果搬回该
+        消息之后，并保留其他消息的相对顺序。
 
         占位与其闭合的调用归属**同一个 Run**（取该 ``AIMessage`` 的 ``run_id``）：快照重建
         按 Run 分组配对，若把占位记到当前 Run，重建会在新 Run 分组里看到一条没有对应 AI
@@ -704,6 +705,10 @@ class RuntimeContextManager:
                     tool_calls=source_ai_message.tool_calls,
                     additional_kwargs=source_ai_message.additional_kwargs,
                 )
+        if self._user_entry is not None:
+            self.add_message(self._user_entry.message)
+            self._user_entry = None
+
         return [entry.message for entry in copy.deepcopy(self._effective_entries())]
 
     def _effective_entries(self) -> list[ContextEntry]:

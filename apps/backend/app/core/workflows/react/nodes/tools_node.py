@@ -33,7 +33,7 @@ import asyncio
 import dataclasses
 from typing import Any
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage
 
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolCall
@@ -273,7 +273,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
         from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
         task_runtime_spaces.get_or_create(task_id).defer_system_message(
-            SystemMessage(
+            AIMessage(
                 content=(
                     f"The tool(s) {', '.join(hil_tool_names)} require human approval and can "
                     "only be called alone in a tool batch. The previous batch was blocked and "

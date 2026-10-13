@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage
 
 from app.core.agents.agent_profile import AgentProfileType
 from app.task_runtime.agent_catalog_change import AgentCatalogChange
@@ -28,15 +28,15 @@ class _FakeRuntimeSpace:
 
     def __init__(self, manager: _FakeContextManager) -> None:
         self._manager = manager
-        self.messages: list[SystemMessage] = []
+        self.messages: list[AIMessage] = []
 
     def get_context_manager(self) -> _FakeContextManager:
         return self._manager
 
-    def defer_system_message(self, message: SystemMessage) -> None:
+    def defer_system_message(self, message: AIMessage) -> None:
         self.messages.append(message)
 
-    def take_deferred_system_messages(self) -> list[SystemMessage]:
+    def take_deferred_system_messages(self) -> list[AIMessage]:
         messages = self.messages
         self.messages = []
         return messages
@@ -94,7 +94,7 @@ def test_agent_catalog_change_reaches_only_delegating_agents_in_scope() -> None:
     ]
     assert all(len(messages) == 1 for messages in matching_messages)
     message = matching_messages[0][0]
-    assert isinstance(message, SystemMessage)
+    assert isinstance(message, AIMessage)
     assert message.additional_kwargs["notice_type"] == "agent_catalog_change"
     assert "旧描述" in message.content
     assert "新描述" in message.content

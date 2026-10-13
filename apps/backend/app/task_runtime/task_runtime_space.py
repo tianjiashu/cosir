@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from queue import Empty, SimpleQueue
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage
 
 from app.service.depends import get_task_service, get_workspace_service
 from app.task_runtime.system_prompt_delta import SystemPromptDelta
@@ -74,7 +74,8 @@ class TaskRuntimeSpace:
 
     并发边界见模块 docstring：``lock`` 是唯一 Task 操作闸门；snapshot working copy **不**持有
     内部锁（由 ``ConversationTaskStateService._lock`` 统一串行化）；``_context_manager`` 槽位
-    由 ``_context_guard`` 保护；``system_queue`` 延迟系统消息队列由标准库 ``SimpleQueue`` 提供
+    由 ``_context_guard`` 保护；``system_queue`` 延迟提示队列（元素恒为 ``AIMessage``，见
+    ``defer_system_message``）由标准库 ``SimpleQueue`` 提供
     并发安全（内部已加锁，本类不再额外加锁），跨同 task 内 run 共享、run 间串行由
     Task 操作闸门保证。
     """
@@ -89,9 +90,9 @@ class TaskRuntimeSpace:
     # 该字段刻意不配内部锁：所有访问经 ``ConversationTaskStateService._lock`` 串行化。
     _snapshot: ConversationStateSnapshot | None = field(default=None, init=False)
     _context_guard: threading.Lock = field(init=False)
-    # 延迟系统消息队列（FIFO）：既承载原有修复类提示，也承载系统提示词增量通知。队列由
-    # 标准库 SimpleQueue 提供并发安全；通知消费后由模型节点统一写入 Task context。
-    system_queue: SimpleQueue[SystemMessage] = field(
+    # 延迟提示队列（FIFO，元素恒为 AIMessage）：既承载原有修复类提示，也承载系统提示词增量
+    # 通知。队列由标准库 SimpleQueue 提供并发安全；通知消费后由模型节点统一写入 Task context。
+    system_queue: SimpleQueue[AIMessage] = field(
         default_factory=SimpleQueue, init=False, repr=False, compare=False
     )
     agent_profile: AgentProfile = None
@@ -322,10 +323,8 @@ class TaskRuntimeSpace:
             if manager is None:
                 from app.core.context.runtime_context_manager import RuntimeContextManager
 
-
                 if agent_profile is not None:
                     self.agent_profile = agent_profile
-
 
                 manager = RuntimeContextManager(
                     current_task_id=self.current_task.id,
@@ -351,12 +350,18 @@ class TaskRuntimeSpace:
                 return
             self._context_manager = _weak_ref(manager)
 
-    def defer_system_message(self, message: SystemMessage) -> None:
-        """将一条修复类系统消息延后到本 task 下一次 model 节点入口注入。
+    def defer_system_message(self, message: AIMessage) -> None:
+        """将一条修复类延迟提示延后到本 task 下一次 model 节点入口注入。
+
+        踩坑记录：
+        上下文穿插 SystemMessage，会破坏缓存前缀。因此延迟提示统一以 ``AIMessage`` 注入，
+        并用 ``system_hint:`` 前缀标明它不是模型自己的输出。
 
         参数:
-            message: 待注入的系统消息（通常为非法工具调用修复提示）。
+            message: 待注入的延迟提示（通常为非法工具调用修复提示）。**内容被就地加上**
+                ``system_hint:`` 前缀，调用方应传入一次性构造的消息，不要复用该对象。
         """
+        message.content = "system_hint:" + message.content
 
         self.system_queue.put(message)
 
@@ -379,22 +384,23 @@ class TaskRuntimeSpace:
 
         self.system_queue.put(delta.to_message())
 
-    def take_deferred_system_messages(self, *, run_id: int | None = None) -> list[SystemMessage]:
-        """取出当前 Run 可消费的延迟系统消息，并清理旧 Run 的消息（FIFO）。
+    def take_deferred_system_messages(self, *, run_id: int | None = None) -> list[AIMessage]:
+        """取出当前 Run 可消费的延迟提示消息，并清理旧 Run 的消息（FIFO）。
 
-        系统提示词增量通知与普通 task 级系统消息一样返回，由模型节点写入 Task context，
-        因此后续 Run 会随历史 context 一起读取。没有 ``run_id`` 标记的消息属于既有 task 级
-        提示，任何 Run 都可消费；带有 ``run_id`` 标记的消息只允许对应 Run 消费，旧 Run 的
-        消息会在本次取队列时丢弃，避免取消或异常后的终端背压提示污染后续 Run。
+        返回的消息恒为 ``AIMessage``（原因见 ``defer_system_message`` 的踩坑记录）。系统提示词
+        增量通知与普通 task 级修复提示一样返回，由模型节点写入 Task context，因此后续 Run 会随
+        历史 context 一起读取。没有 ``run_id`` 标记的消息属于既有 task 级提示，任何 Run 都可
+        消费；带有 ``run_id`` 标记的消息只允许对应 Run 消费，旧 Run 的消息会在本次取队列时丢弃，
+        避免取消或异常后的终端背压提示污染后续 Run。
 
         参数:
             run_id: 当前模型节点所属 Run；省略时保留无条件取队列行为。
 
         返回:
-            按入队顺序排列且属于当前 Run 的系统消息列表；无排队时返回空列表。
+            按入队顺序排列且属于当前 Run 的延迟提示列表；无排队时返回空列表。
         """
 
-        messages: list[SystemMessage] = []
+        messages: list[AIMessage] = []
         while True:
             try:
                 message = self.system_queue.get_nowait()
@@ -406,6 +412,6 @@ class TaskRuntimeSpace:
         return messages
 
     def has_deferred_system_messages(self) -> bool:
-        """本 task 是否仍排队有未注入的延迟系统消息。"""
+        """本 task 是否仍排队有未注入的延迟提示消息。"""
 
         return not self.system_queue.empty()

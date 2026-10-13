@@ -3,9 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  ChevronDownIcon,
-  ChevronRightIcon,
-  FolderIcon,
   Loader2Icon,
   MessageSquarePlusIcon,
   PanelLeftCloseIcon,
@@ -23,7 +20,8 @@ import { NewConversation } from "@/components/new-conversation";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { ResourceActionMenu } from "@/components/resource-action-menu";
-import { TaskTree } from "@/components/task-tree/task-tree";
+import { WorkspaceTree } from "@/components/task-tree/workspace-tree";
+import type { WorkspaceTreeSource } from "@/components/task-tree/workspace-tree-model";
 import { BackendStatusBanner } from "@/components/backend-status-banner";
 import { BackendRestartButton } from "@/components/backend-restart-button";
 import { Workbench } from "@/components/workbench";
@@ -38,14 +36,13 @@ import {
   forkTask,
   getWorkspaceTasks,
   getWorkspaces,
-  type Workspace,
   type WorkspaceTask,
 } from "@/lib/api/workspaces";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { readLastWorkspaceId, writeLastWorkspaceId } from "@/lib/workspace-preferences";
 
-type WorkspaceWithTasks = Workspace & { tasks: WorkspaceTask[]; taskLoadError?: string };
+type WorkspaceWithTasks = WorkspaceTreeSource;
 type DeleteTarget =
   | { kind: "workspace"; id: number; label: string; taskCount: number }
   | { kind: "task"; id: number; label: string; taskCount: number }
@@ -72,7 +69,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
     typeof window !== "undefined" && window.matchMedia(NARROW_VIEWPORT_QUERY).matches
   ));
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<number | null>(null);
-  const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<number[]>([]);
+  const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<number[] | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceWithTasks[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
@@ -83,6 +80,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
   const [forkError, setForkError] = useState<string | null>(null);
   const loadGenerationRef = useRef(0);
   const loadControllerRef = useRef<AbortController | null>(null);
+  const knownWorkspaceIdsRef = useRef(new Set<number>());
   const catalogLoadingRef = useRef(false);
   const taskRefreshGenerationRef = useRef(new Map<number, number>());
   const taskRefreshControllerRef = useRef(new Map<number, AbortController>());
@@ -140,6 +138,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
         return;
       }
       setWorkspaces(withTasks);
+      const receivedWorkspaceIds = new Set(withTasks.map((workspace) => workspace.workspace_id));
       setSelectedWorkspaceId((current) => {
         if (current && withTasks.some((workspace) => workspace.workspace_id === current)) return current;
         const lastWorkspaceId = readLastWorkspaceId();
@@ -147,7 +146,15 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
           ? lastWorkspaceId
           : null;
       });
-      setExpandedWorkspaceIds((current) => current.length > 0 ? current.filter((id) => withTasks.some((workspace) => workspace.workspace_id === id)) : withTasks.map((workspace) => workspace.workspace_id));
+      setExpandedWorkspaceIds((current) => {
+        if (current === null) return withTasks.map((workspace) => workspace.workspace_id);
+        const next = current.filter((id) => receivedWorkspaceIds.has(id));
+        for (const workspace of withTasks) {
+          if (!knownWorkspaceIdsRef.current.has(workspace.workspace_id)) next.push(workspace.workspace_id);
+        }
+        return next;
+      });
+      knownWorkspaceIdsRef.current = receivedWorkspaceIds;
       setStatus("ready");
       void frontendLog("DEBUG", "workspace_catalog_loaded", "Workspace catalog 加载完成", {
         data: { generation, workspaceCount: withTasks.length, taskCount: withTasks.reduce((count, workspace) => count + workspace.tasks.length, 0) },
@@ -288,7 +295,13 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
     setSelectedWorkspaceId(task.workspace_id);
     writeLastWorkspaceId(task.workspace_id);
   }, [routeTaskId]);
-  const toggleWorkspace = (workspaceId: number) => setExpandedWorkspaceIds((current) => current.includes(workspaceId) ? current.filter((id) => id !== workspaceId) : [...current, workspaceId]);
+  const updateWorkspaceExpansion = (workspaceId: number, expanded: boolean) => {
+    setExpandedWorkspaceIds((current) => {
+      const ids = current ?? [];
+      if (expanded) return ids.includes(workspaceId) ? ids : [...ids, workspaceId];
+      return ids.filter((id) => id !== workspaceId);
+    });
+  };
   const selectWorkspace = (workspaceId: number) => { setSelectedWorkspaceId(workspaceId); writeLastWorkspaceId(workspaceId); };
   const startNewConversation = (workspaceId = selectedWorkspaceId) => {
     if (workspaceId) writeLastWorkspaceId(workspaceId);
@@ -387,38 +400,27 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
           <>
             <div className="flex gap-2 p-3">
               <Button className="flex-1 justify-start gap-2" onClick={() => startNewConversation()}><MessageSquarePlusIcon className="size-4" />新对话</Button>
-              <Button variant="outline" size="icon" onClick={() => void load()} disabled={status === "loading"} aria-label="刷新工作区"><RefreshCwIcon className={status === "loading" ? "animate-spin" : ""} /></Button>
+              <Button variant="ghost" size="icon" onClick={() => void load()} disabled={status === "loading"} aria-label="刷新工作区"><RefreshCwIcon className={status === "loading" ? "animate-spin" : ""} /></Button>
             </div>
-            <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4" aria-label="工作区任务列表">
-              <p className="text-muted-foreground px-2 pb-2 text-xs font-medium">我的工作区</p>
+            <nav className="flex min-h-0 flex-1 flex-col px-2 pb-4" aria-label="工作区任务列表">
+              <p className="shrink-0 px-2 pb-2 text-xs font-medium text-muted-foreground">我的工作区</p>
               {status === "loading" && <Loader2Icon className="text-muted-foreground mx-2 size-4 animate-spin" />}
               {status === "error" && <div className="px-2 text-xs"><p className="text-destructive mb-2">{error}</p><Button variant="outline" size="sm" onClick={() => void load()}>重试</Button></div>}
               {status === "ready" && workspaces.length === 0 && <p className="text-muted-foreground px-2 text-xs">暂无工作区</p>}
-              <div className="space-y-1">
-                {workspaces.map((workspace) => {
-                  const expanded = expandedWorkspaceIds.includes(workspace.workspace_id);
-                  return (
-                    <section key={workspace.workspace_id}>
-                      <div className={`group flex items-center rounded-md ${selectedWorkspaceId === workspace.workspace_id && !activeTaskId ? "bg-muted" : "hover:bg-muted"}`}>
-                          <button type="button" className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-sm" onClick={() => { selectWorkspace(workspace.workspace_id); toggleWorkspace(workspace.workspace_id); }}>
-                          {expanded ? <ChevronDownIcon className="size-3.5 shrink-0" /> : <ChevronRightIcon className="size-3.5 shrink-0" />}
-                          <FolderIcon className="text-muted-foreground size-4 shrink-0" /><span className="truncate">{workspace.name}</span>{workspace.taskLoadError ? <span className="text-destructive ml-auto text-xs" title={workspace.taskLoadError}>加载失败</span> : <span className="text-muted-foreground ml-auto text-xs">{workspace.tasks.length}</span>}
-                        </button>
-                        <Button variant="ghost" size="icon-sm" className="text-muted-foreground shrink-0" onClick={() => openWorkspaceSettings(workspace.workspace_id)} aria-label={`工作区配置：${workspace.name}`} title={`配置 ${workspace.name}`}><Settings2Icon className="size-4" /></Button>
-                        <ResourceActionMenu label={workspace.name} onDelete={() => requestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })} />
-                      </div>
-                      {expanded && <div className="ml-5 border-l pl-2">
-                        <TaskTree
-                          tasks={workspace.tasks}
-                          activeTaskId={activeTaskId}
-                          onSelectTask={(task) => { setForkError(null); writeLastWorkspaceId(workspace.workspace_id); setSelectedWorkspaceId(workspace.workspace_id); navigate(`/tasks/${task.task_id}`); }}
-                          renderActions={(task) => <ResourceActionMenu label={task.full_title} onDelete={() => requestDelete({ kind: "task", id: task.task_id, label: task.full_title, taskCount: 0 })} />}
-                        />
-                      </div>}
-                    </section>
-                  );
-                })}
-              </div>
+              {workspaces.length > 0 && <div className="min-h-0 flex-1">
+                <WorkspaceTree
+                  workspaces={workspaces}
+                  activeTaskId={activeTaskId}
+                  selectedWorkspaceId={selectedWorkspaceId}
+                  expandedWorkspaceIds={expandedWorkspaceIds}
+                  onWorkspaceExpansionChange={updateWorkspaceExpansion}
+                  onSelectWorkspace={selectWorkspace}
+                  onOpenWorkspaceSettings={openWorkspaceSettings}
+                  onSelectTask={(task, workspaceId) => { setForkError(null); writeLastWorkspaceId(workspaceId); setSelectedWorkspaceId(workspaceId); navigate(`/tasks/${task.task_id}`); }}
+                  renderWorkspaceActions={(workspace) => <ResourceActionMenu label={workspace.name} onDelete={() => requestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })} />}
+                  renderTaskActions={(task) => <ResourceActionMenu label={task.full_title} onDelete={() => requestDelete({ kind: "task", id: task.task_id, label: task.full_title, taskCount: 0 })} />}
+                />
+              </div>}
             </nav>
           </>
         )}

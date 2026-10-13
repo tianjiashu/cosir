@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage
 
 from app.config.constant import Constant
 from app.service.terminal.errors import (
@@ -249,10 +249,10 @@ def test_deferred_system_messages_drop_stale_run_scoped_messages() -> None:
     task_space = task_runtime_spaces.get_or_create(987655)
     task_space.take_deferred_system_messages()
     task_space.defer_system_message(
-        SystemMessage(content="old", additional_kwargs={"run_id": 1})
+        AIMessage(content="old", additional_kwargs={"run_id": 1})
     )
     task_space.defer_system_message(
-        SystemMessage(content="current", additional_kwargs={"run_id": 2})
+        AIMessage(content="current", additional_kwargs={"run_id": 2})
     )
 
     messages = task_space.take_deferred_system_messages(run_id=2)
@@ -273,11 +273,11 @@ def test_take_only_discards_stale_run_scoped_messages_keeps_task_and_other_run()
     task_space = task_runtime_spaces.get_or_create(987656)
     task_space.take_deferred_system_messages()
     task_space.defer_system_message(
-        SystemMessage(content="previous run feedback", additional_kwargs={"run_id": 2})
+        AIMessage(content="previous run feedback", additional_kwargs={"run_id": 2})
     )
-    task_space.defer_system_message(SystemMessage(content="task scoped"))
+    task_space.defer_system_message(AIMessage(content="task scoped"))
     task_space.defer_system_message(
-        SystemMessage(content="other run", additional_kwargs={"run_id": 3})
+        AIMessage(content="other run", additional_kwargs={"run_id": 3})
     )
 
     remaining = task_space.take_deferred_system_messages(run_id=3)

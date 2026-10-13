@@ -30,7 +30,7 @@ export function getForkSourceTaskId(task: WorkspaceTask): number | null {
 }
 
 /** 侧栏任务标题的展示字符上限；超出部分以 “…” 结尾，完整文本仍在 tooltip 中可见。 */
-export const TASK_TITLE_DISPLAY_LIMIT = 10;
+export const TASK_TITLE_DISPLAY_LIMIT = 64;
 
 /** 标题完全由内部 token 组成时的展示回退文案。 */
 const EMPTY_TITLE_FALLBACK = "新对话";

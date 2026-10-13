@@ -1,7 +1,7 @@
-"""进程内延迟系统消息的通用广播能力。
+"""进程内延迟提示消息的通用广播能力。
 
 本模块只负责遍历已经物化的 ``TaskRuntimeSpace``、按调用方提供的匹配函数筛选目标并把
-``SystemMessage`` 放入各自的延迟队列。不负责构造消息内容、读取配置文件或修改 Agent
+``AIMessage`` 放入各自的延迟队列。不负责构造消息内容、读取配置文件或修改 Agent
 Registry；具体通知类型由各自的 configuration service 构造。
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage
 
 from app.config.logging.logger import log
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
@@ -20,16 +20,17 @@ DeferredSystemMessageMatcher = Callable[[TaskRuntimeSpace], bool]
 
 def broadcast_deferred_system_message(
     *,
-    message: SystemMessage,
+    message: AIMessage,
     should_notify: DeferredSystemMessageMatcher,
     event: str,
     log_message: str,
     data: Mapping[str, object],
 ) -> int:
-    """将一条延迟系统消息投递给符合条件的已有 Task runtime space。
+    """将一条延迟提示消息投递给符合条件的已有 Task runtime space。
 
     参数:
-        message: 下一次模型节点消费的系统消息；本函数不解析或修改其内容。
+        message: 下一次模型节点消费的延迟提示（``AIMessage``，见
+            ``TaskRuntimeSpace.defer_system_message``）；本函数不解析或修改其内容。
         should_notify: 按单个 runtime space 判断是否应接收消息的显式匹配函数。
         event: 结构化日志事件名。
         log_message: 结构化日志的人类可读说明。

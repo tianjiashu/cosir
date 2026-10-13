@@ -22,4 +22,4 @@ class ContextEntry:
 
     message: BaseMessage
     run_id: int | None
-    sequence: int
+    sequence: int | None = None

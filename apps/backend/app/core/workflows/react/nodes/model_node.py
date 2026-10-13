@@ -22,7 +22,6 @@ import asyncio
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
-    SystemMessage,
 )
 from langchain_core.messages.tool import ToolCall
 from langgraph.config import get_stream_writer
@@ -64,8 +63,8 @@ def _build_continuation_prompt(finish_reason: str | None) -> str | None:
         finish_reason: 已归一化的 Provider 完成原因，可为 ``None``。
 
     返回:
-        追加到 canonical context 的 ``SystemMessage`` 文本；``length`` 类截断返回 ``None``，
-        表示本轮无需注入提示、直接由调用方路由回模型节点。
+        作为延迟提示（``AIMessage``）写入 canonical context 的续写指令文本；``length`` 类截断
+        返回 ``None``，表示本轮无需注入提示、直接由调用方路由回模型节点。
     """
 
     if finish_reason in Constant.Workflow.CONTINUATION_FINISH_REASONS:
@@ -166,15 +165,14 @@ async def _model_node(state: ReactGraphState) -> dict:
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
     task_space = task_runtime_spaces.get_or_create(task_id)
-    # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
-    messages: list[BaseMessage] = _runtime_context().load_message()
-
     # 延迟系统消息由其它层（tools / observe / 配置变更）在本 Run 期间投递，统一在这里写入上下文。
     # 归属过滤由 ``take_deferred_system_messages(run_id=...)`` 在取队列时完成（属于其它 Run 的消息
     # 在此被丢弃），此处不再重复判定；本地 messages 必须同步追加，否则本次模型请求看不到它。
     for system_message in task_space.take_deferred_system_messages(run_id=run_id):
         _runtime_context().add_message(system_message)
-        messages.append(system_message)
+
+    # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
+    messages: list[BaseMessage] = _runtime_context().load_message()
 
     messages = await asyncio.to_thread(
         resolve_messages_for_model,
@@ -378,11 +376,11 @@ async def _model_node(state: ReactGraphState) -> dict:
     if finish_reason not in Constant.Workflow.NORMAL_FINISH_REASONS:
         # 已有文本不代表模型完成：例如 finish_reason=length 只说明本轮达到输出上限。
         # length 类截断不注入提示，直接回到模型节点由模型自行延续；缺失/未知完成原因才把
-        # AIMessage 之后的 SystemMessage 作为下一模型步的显式续写指令。
+        # 续写指令作为下一模型步的延迟提示（``AIMessage``）注入。
         continuation_prompt = _build_continuation_prompt(finish_reason)
         if continuation_prompt is not None:
             task_space.defer_system_message(
-                SystemMessage(content=continuation_prompt, additional_kwargs={"run_id": run_id})
+                AIMessage(content=continuation_prompt, additional_kwargs={"run_id": run_id})
             )
         log.warning(
             "model_node_output_requires_continuation",

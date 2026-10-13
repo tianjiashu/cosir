@@ -9,7 +9,7 @@
 """
 
 import asyncio
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage
 
 from app.config.configuration import get_agent_registry, get_tool_system
 from app.config.constant import Constant
@@ -398,7 +398,8 @@ class AgentRuntime:
             trace_recorder 的 WorkflowOperations 实例。
 
         副作用:
-            向本 Task 的延迟系统消息队列投递本轮工具准入说明（禁用集合或「全部放行」），
+            向本 Task 的延迟提示队列投递本轮工具准入说明（禁用集合或「全部放行」，均为
+            ``AIMessage``），
             由下一次 model 节点入口消费并写入上下文；这些消息在队列中等待，模型节点不消费则本轮不会进入模型请求。
             通知带 ``run_id`` 归属标记，只由本 Run 消费（本 Run 未消费则由下一 Run 取队列丢弃）；正文用
             ``sorted`` 后的工具名列表，避免同一集合跨进程产生不同文本。该通知一旦消费即成为
@@ -413,7 +414,7 @@ class AgentRuntime:
 
         if not ban_tools:
             task_space.defer_system_message(
-                SystemMessage(
+                AIMessage(
                     content=(
                         "Tool availability notice: all tools are available for this round."
                     ),
@@ -422,7 +423,7 @@ class AgentRuntime:
             )
         elif not allows_tools:
             task_space.defer_system_message(
-                SystemMessage(
+                AIMessage(
                     content=(
                         "Tool availability notice: all tools are not available for this round."
                     ),
@@ -431,7 +432,7 @@ class AgentRuntime:
             )
         else:
             task_space.defer_system_message(
-                SystemMessage(
+                AIMessage(
                     content=(
                         "Tool availability notice: the following tools are disabled for this "
                         f"round and calls to them will be rejected: {', '.join(sorted(ban_tools))}. "

@@ -29,7 +29,7 @@ export function BackendRestartButton() {
   return (
     <Button
       type="button"
-      variant="outline"
+      variant="ghost"
       size="sm"
       onClick={() => void restart()}
       disabled={restarting}

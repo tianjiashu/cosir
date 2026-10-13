@@ -2,14 +2,14 @@
 
 本模块只定义系统提示词变更在进程内传播时使用的值对象与 LangChain 消息映射，不负责读取
 配置文件、计算配置作用域，也不负责把通知写入 Conversation context。通知的唯一运行时
-副作用是作为模型请求的临时 system message 使用；持久化由后续的 context 方案负责。
+副作用是作为模型请求的延迟提示使用；持久化由后续的 context 方案负责。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage
 
 from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 
@@ -28,7 +28,7 @@ class SystemPromptDelta:
         scope: 可选的作用域标识，例如 workspace 根目录；仅用于广播过滤和诊断。
 
     返回:
-        :meth:`to_message` 返回供模型请求使用的临时 ``SystemMessage``。
+        :meth:`to_message` 返回供模型请求使用的延迟提示 ``AIMessage``。
 
     异常:
         无。调用方应在构造前保证 ``diff`` 非空且来源已通过配置校验。
@@ -41,11 +41,11 @@ class SystemPromptDelta:
     diff: str
     scope: str | None = None
 
-    def to_message(self) -> SystemMessage:
-        """把增量通知转换为模型可见的临时系统消息。
+    def to_message(self) -> AIMessage:
+        """把增量通知转换为模型可见的延迟提示消息。
 
         返回:
-            包含简短覆盖规则与 diff 的 ``SystemMessage``。消息通过
+            包含简短覆盖规则与 diff 的 ``AIMessage``。消息通过
             ``additional_kwargs.notice_type`` 与普通工具修复提示区分。
 
         异常:
@@ -70,7 +70,7 @@ class SystemPromptDelta:
             "</diff>\n"
             "</system_prompt_update>"
         )
-        return SystemMessage(
+        return AIMessage(
             content=content,
             additional_kwargs={
                 "notice_type": SYSTEM_PROMPT_DELTA_NOTICE_TYPE,
