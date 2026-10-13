@@ -223,8 +223,6 @@ class AgentTeamRunService:
                 if row.status == AgentTeamRunStatus.RUNNING.value
                 else None
             ),
-            "end_reason": row.end_reason,
-            "failure_node_id": failure_node_id,
         }
 
     def reject_pending_confirmation(self, team_run_id: int) -> AgentTeamRunModel:

@@ -54,9 +54,6 @@ export type AgentTeamRun = {
       visit_number: number;
       conversation_run_id: number | null;
       status: string;
-      business_status: string | null;
-      business_status_color: string | null;
-      failure_message: string | null;
       agents: Array<{
         task_id: number | null;
         title: string;
@@ -67,8 +64,6 @@ export type AgentTeamRun = {
     }>;
   }>;
   current_node_id: string | null;
-  end_reason: string | null;
-  failure_node_id: string | null;
 };
 
 function teamConfigurationPath(scope: "system" | "workspace", workspaceId?: number, teamId?: string) {

@@ -19,9 +19,6 @@ class AgentTeamNodeVisitResponse(BaseModel):
     visit_number: int
     conversation_run_id: int | None
     status: str
-    business_status: str | None
-    business_status_color: str | None
-    failure_message: str | None
     agents: list[AgentTeamAgentResponse]
 
 
@@ -48,5 +45,3 @@ class AgentTeamRunResponse(BaseModel):
     status: str
     nodes: list[AgentTeamNodeResponse]
     current_node_id: str | None
-    end_reason: str | None
-    failure_node_id: str | None

@@ -133,3 +133,4 @@ temp_gen_out.txt
 .pytest*
 /.jez/
 /macos-release/
+/.cosir/tool-artifacts/

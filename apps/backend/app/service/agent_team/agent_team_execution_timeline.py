@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from typing import Any
 
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.config.configuration import get_agent_registry as get_agent_profile_registry
-from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.task_record import TaskRecord
 
@@ -37,38 +35,25 @@ def project_node_visits(
 ) -> dict[str, list[dict[str, Any]]]:
     """按配置节点聚合访问记录，保持执行历史与固定节点布局分离。
 
-    节点 Run ID 按节点自己的访问顺序保存；转移历史只用于给已经结算的访问关联业务状态。
+    节点 Run ID 按节点自己的访问顺序保存；节点访问只投影生命周期状态，不返回业务结果或错误正文。
     未到达节点不会被伪造成访问记录；当前节点若尚未创建 Run，则投影一个无 Run ID 的进行中占位，
     让前端能在首次请求时标出入口节点。Agent 角色按 ``workspace`` + ``agent_id`` 从 profile
     注册表解析（配置派生，不读 Run 上的冻结字段）。
     """
 
-    transitions_by_node: dict[str, list[str]] = defaultdict(list)
+    settled_visit_counts: dict[str, int] = defaultdict(int)
     for transition in state.transition_history:
-        transitions_by_node[transition.from_node_id].append(transition.status)
+        settled_visit_counts[transition.from_node_id] += 1
 
     visits_by_node: dict[str, list[dict[str, Any]]] = {}
     for node in configuration["nodes"]:
         node_id = node["node_id"]
         execution = state.node_executions.get(node_id)
         visits: list[dict[str, Any]] = []
-        settled_statuses = transitions_by_node[node_id]
+        settled_visit_count = settled_visit_counts[node_id]
         run_ids = execution.conversation_run_ids if execution is not None else []
         for index, run_id in enumerate(run_ids):
             run = run_records[run_id]
-            business_status = (
-                settled_statuses[index]
-                if index < len(settled_statuses)
-                else _read_business_status(run.final_output)
-            )
-            business_status_color = next(
-                (
-                    item["color"]
-                    for item in node["statuses"]
-                    if item["name"] == business_status
-                ),
-                None,
-            )
             agents = [
                 {
                     "task_id": execution.task_id,
@@ -90,27 +75,18 @@ def project_node_visits(
                     "visit_number": index + 1,
                     "conversation_run_id": run_id,
                     "status": run.status,
-                    "business_status": business_status,
-                    "business_status_color": business_status_color,
-                    "failure_message": (
-                        (run.error or {}).get("message") or run_failure_message(run.end_reason)
-                        if run.status == "failed" else None
-                    ),
                     "agents": agents,
                 }
             )
 
         is_current = state.current_node_id == node_id
-        has_unsettled_run = len(run_ids) > len(settled_statuses)
+        has_unsettled_run = len(run_ids) > settled_visit_count
         if is_current and team_status == "running" and not has_unsettled_run:
             visits.append(
                 {
                     "visit_number": len(run_ids) + 1,
                     "conversation_run_id": None,
                     "status": "running",
-                    "business_status": None,
-                    "business_status_color": None,
-                    "failure_message": None,
                     "agents": [
                         {
                             "task_id": execution.task_id if execution is not None else None,
@@ -144,16 +120,3 @@ def _project_child_agent(
         "role": _resolve_agent_role(workspace, child_run.agent_id) if child_run else "子 Agent",
         "status": child_run.status if child_run else "pending",
     }
-
-
-def _read_business_status(final_output: str | None) -> str | None:
-    """从节点输出读取可选业务状态；未提交有效 JSON 时保留为空。"""
-
-    if not final_output:
-        return None
-    try:
-        output = json.loads(final_output)
-    except json.JSONDecodeError:
-        return None
-    status = output.get("status") if isinstance(output, dict) else None
-    return status if isinstance(status, str) else None

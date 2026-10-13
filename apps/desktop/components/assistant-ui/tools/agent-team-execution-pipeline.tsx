@@ -93,8 +93,7 @@ function AgentChip({
 }
 
 function NodeMarker({ node, isCurrent }: { node: TeamNode; isCurrent: boolean }) {
-  const lastVisit = node.visits.at(-1);
-  const label = [statusLabel(node.status), lastVisit?.business_status].filter(Boolean).join(" · ");
+  const label = statusLabel(node.status);
   const tone = isCurrent
     ? "border-primary bg-primary ring-4 ring-primary/15"
     : node.status === "completed"
@@ -106,9 +105,6 @@ function NodeMarker({ node, isCurrent }: { node: TeamNode; isCurrent: boolean })
   return (
     <span
       className={`size-3 shrink-0 cursor-help rounded-full border-2 ${tone}`}
-      style={node.status === "completed" && lastVisit?.business_status_color
-        ? { borderColor: lastVisit.business_status_color, backgroundColor: lastVisit.business_status_color }
-        : undefined}
       title={label}
       aria-label={label}
       role="img"
@@ -146,9 +142,7 @@ function HistoricalVisits({
           <div key={visit.conversation_run_id ?? visit.visit_number} className="space-y-1 border-l border-border/70 pl-2">
             <p className="text-[10px] text-muted-foreground">
               第 {visit.visit_number} 次 · {statusLabel(visit.status)}
-              {visit.business_status ? ` · ${visit.business_status}` : ""}
             </p>
-            {visit.failure_message && <p className="max-h-20 overflow-y-auto break-words text-[10px] leading-relaxed text-destructive">{visit.failure_message}</p>}
             {visit.agents.map((agent) => (
               <AgentChip key={agent.task_id} agent={agent} onOpenAgent={onOpenAgent} />
             ))}
@@ -202,11 +196,6 @@ function PipelineNode({
         {(latestVisit?.agents ?? [configuredAgent]).map((agent) => (
           <AgentChip key={agent.task_id ?? `configured-${node.node_id}`} agent={agent} onOpenAgent={onOpenAgent} />
         ))}
-        {node.status === "failed" && (
-          <p className="max-h-20 overflow-y-auto break-words text-[10px] font-medium text-destructive">
-            {latestVisit?.failure_message || "节点未完成，查看上方失败原因"}
-          </p>
-        )}
         <HistoricalVisits visits={previousVisits} onOpenAgent={onOpenAgent} />
       </div>
     </div>

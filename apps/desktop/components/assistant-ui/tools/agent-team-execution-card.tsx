@@ -14,22 +14,6 @@ type AgentTeamExecutionCardProps = ToolPartRendererProps & {
   displayOverride?: AgentTeamRunDisplay;
 };
 
-const END_REASON_LABELS: Record<string, string> = {
-  user_rejected: "方案已驳回",
-  superseded_by_new_preview: "方案已被新方案替代",
-  team_start_failed: "Team 启动失败",
-  transition_not_found: "没有匹配的节点转移",
-  runtime_unavailable: "本地运行时不可用",
-  next_node_start_failed: "下一节点启动失败",
-  node_run_failed: "节点执行失败",
-  node_run_cancelled: "节点执行已取消",
-  node_output_invalid: "节点结果无效",
-  implicit_completion_missing: "节点未提交 Team 状态",
-  cancelled: "Team 已取消",
-  runtime_restarted: "后端重启后已取消",
-  max_runs_exceeded: "达到最大节点执行次数",
-};
-
 const RUN_STATUS_LABELS: Record<string, string> = {
   pending: "等待确认",
   running: "执行中",
@@ -46,7 +30,6 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
       : null);
   const actions = useWorkbenchActions();
   const [run, setRun] = useState<AgentTeamRun | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!display) return undefined;
@@ -57,13 +40,11 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
         const current = await getAgentTeamRun(display.teamRunId);
         if (disposed) return;
         setRun(current);
-        setError(null);
         if (current.status === "pending" || current.status === "running") {
           timer = window.setTimeout(() => void poll(), 1000);
         }
-      } catch (cause) {
+      } catch {
         if (!disposed) {
-          setError(cause instanceof Error ? cause.message : "读取 Team 进度失败");
           timer = window.setTimeout(() => void poll(), 2000);
         }
       }
@@ -80,7 +61,6 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
     <AgentTeamExecutionContent
       display={display}
       run={run}
-      error={error}
       backendStatus={artifact.backendStatus}
       onOpenAgent={(taskId, title, role) => actions?.openAgent({ taskId, title, role })}
     />
@@ -90,20 +70,15 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
 type AgentTeamExecutionContentProps = {
   display: AgentTeamRunDisplay;
   run: AgentTeamRun | null;
-  error: string | null;
   backendStatus: ToolArtifact["backendStatus"];
   onOpenAgent: (taskId: number, title: string, role: string) => void;
 };
 
 /** 只渲染 TeamRun 查询投影；轮询与卡片状态不参与节点事实判断。 */
 export function AgentTeamExecutionContent({
-  display, run, error, backendStatus, onOpenAgent,
+  display, run, backendStatus, onOpenAgent,
 }: AgentTeamExecutionContentProps) {
   const currentStatus = run ? RUN_STATUS_LABELS[run.status] ?? run.status : "读取进度中";
-  const endReasonLabel = run?.end_reason ? END_REASON_LABELS[run.end_reason] : undefined;
-  const failedNode = run?.nodes.find((node) => node.node_id === run.failure_node_id);
-  const nodeFailure = failedNode?.visits.at(-1)?.failure_message;
-  const failureDescription = nodeFailure || endReasonLabel || "具体原因未记录，可打开节点任务查看执行记录";
 
   return (
     <section className="space-y-3 rounded-xl border border-border/70 bg-card p-3 shadow-sm" aria-label="Agent Team 执行进度">
@@ -123,30 +98,8 @@ export function AgentTeamExecutionContent({
         </div>
       </header>
 
-      {run?.status === "failed" && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2" role="status">
-          <p className="text-sm font-medium text-destructive">
-            {failedNode ? `节点「${failedNode.name}」失败` : "Agent Team 执行失败"}
-          </p>
-          <p className="mt-1 max-h-28 overflow-y-auto break-words text-xs leading-relaxed">{failureDescription}</p>
-          <p className="mt-1 text-[10px] text-muted-foreground">TeamRun #{run.id}{failedNode?.visits.at(-1)?.conversation_run_id ? ` · 节点 Run #${failedNode.visits.at(-1)?.conversation_run_id}` : ""}</p>
-        </div>
-      )}
-
       {run && (
         <AgentTeamExecutionPipeline run={run} onOpenAgent={onOpenAgent} />
-      )}
-
-      {error && <p className="text-xs text-destructive">{error}</p>}
-      {run?.end_reason && run.status !== "failed" && (
-        endReasonLabel ? (
-          <p className="text-xs text-muted-foreground">{endReasonLabel}</p>
-        ) : (
-          <div className="rounded-lg border border-border/60 bg-muted/10 px-2.5 py-2">
-            <p className="mb-1 text-[10px] font-medium text-muted-foreground">最终结果</p>
-            <p className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed">{run.end_reason}</p>
-          </div>
-        )
       )}
     </section>
   );
