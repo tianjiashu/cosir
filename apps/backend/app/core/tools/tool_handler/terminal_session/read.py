@@ -43,9 +43,12 @@ class TerminalReadTool(HandlerBase):
 
     name = TOOL_TERMINAL_READ
     description = (
-        "Read new output from a local terminal session using an output sequence cursor. "
-        "When the command is expected to run for a long time, pass a suitable wait_ms to "
-        "wait for its output instead of polling with frequent reads."
+        "Read new text output from a local terminal session using an output sequence cursor. "
+        "ANSI/OSC control sequences are removed from this Agent-facing text; the terminal "
+        "preview keeps the original PTY stream. Frames are arbitrary output chunks, not command "
+        "boundaries, and a read or wait timeout does not signal command completion. Pass the "
+        "largest processed frame seq as after_seq; if no new frame was returned, keep the same "
+        "cursor. For a finite command with an exit code, use execute_terminal."
     )
     args_model = TerminalReadArgs
     timeout_seconds: ClassVar[float] = 30.0

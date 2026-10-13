@@ -15,6 +15,7 @@ class ContextMessageResponse(BaseModel):
     task_id: int
     run_id: int | None
     sequence: int
+    include_in_context: bool
     created_at: str
     updated_at: str
     role: str
@@ -35,6 +36,7 @@ class ContextMessageResponse(BaseModel):
             "task_id": record.task_id,
             "run_id": record.run_id,
             "sequence": record.sequence,
+            "include_in_context": record.include_in_context,
             "created_at": record.created_at,
             "updated_at": record.updated_at,
             "content": message.content,

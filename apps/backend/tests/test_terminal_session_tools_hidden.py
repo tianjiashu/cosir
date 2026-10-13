@@ -94,11 +94,12 @@ def test_terminal_session_schema_describes_agent_operational_semantics() -> None
     assert "submit=true" in write["data"]["description"]
     assert "real Enter" in write["submit"]["description"]
     assert "shell to exit" in write["wait_ms"]["description"]
-    assert "next_seq minus 1" in write["after_seq"]["description"]
+    assert "largest seq you have already processed" in write["after_seq"]["description"]
+    assert "next_seq" not in write["after_seq"]["description"]
 
     read = TerminalReadArgs.model_json_schema()["properties"]
-    assert "next_seq minus 1" in read["after_seq"]["description"]
-    assert "skips one output frame" in read["after_seq"]["description"]
+    assert "largest seq you have already processed" in read["after_seq"]["description"]
+    assert "next_seq" not in read["after_seq"]["description"]
     assert "new output" in read["wait_ms"]["description"]
 
     signal = TerminalSignalArgs.model_json_schema()["properties"]
@@ -220,7 +221,6 @@ def test_session_display_payload_allowlists_ui_metadata() -> None:
         "status": "running",
         "generation": "gen_demo",
         "first_available_seq": 1,
-        "next_seq": 3,
         "initial_cwd": "H:/coding-agent",
         "shell_kind": "powershell",
     }

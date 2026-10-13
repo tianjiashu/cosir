@@ -185,7 +185,7 @@ export function readAgentTeamReviewRequest(value: unknown): AgentTeamReviewReque
   const draftSchema = text(request.draft_schema);
   if (
     !requestId
-    || request.kind !== AGENT_TEAM_REVIEW_KIND
+    || request.request_kind !== AGENT_TEAM_REVIEW_KIND
     || draftSchema !== AGENT_TEAM_REVIEW_DRAFT_SCHEMA
   ) return null;
   const decisions = stringList(request.decisions);

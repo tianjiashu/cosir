@@ -1,0 +1,62 @@
+{
+  "team_id": "demo_loop_team",
+  "name": "极简 Demo Team（写一个文件 + 只读复核 + 返工回路）",
+  "description": "用于验证 Agent Team 运行时机制的最小配置：两节点串行、共享执行预算、通过 handoff 输出传递信息，并含一条 needs_changes 返工回路。draft 节点在工作区写一个 demo 说明文件并回报路径与要点；review 节点以只读方式核对文件是否存在、内容是否满足契约，不合格则打回同一 draft 节点返工。不涉及任何真实业务代码，跑完可直接删除产物。",
+  "max_runs": 10,
+  "start_node_id": "draft",
+  "nodes": [
+    {
+      "node_id": "draft",
+      "name": "撰写 Demo 文件",
+      "agent_id": "general-assistant",
+      "statuses": [
+        {
+          "name": "done",
+          "color": "#16A34A"
+        },
+        {
+          "name": "blocked",
+          "color": "#DC2626"
+        }
+      ]
+    },
+    {
+      "node_id": "review",
+      "name": "只读复核 Demo 文件",
+      "agent_id": "only_read_child_agent",
+      "statuses": [
+        {
+          "name": "pass",
+          "color": "#0EA5E9"
+        },
+        {
+          "name": "needs_changes",
+          "color": "#F59E0B"
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "from_node_id": "draft",
+      "status": "done",
+      "target_node_id": "review"
+    },
+    {
+      "from_node_id": "draft",
+      "status": "blocked",
+      "target_node_id": "END"
+    },
+    {
+      "from_node_id": "review",
+      "status": "pass",
+      "target_node_id": "END"
+    },
+    {
+      "from_node_id": "review",
+      "status": "needs_changes",
+      "target_node_id": "draft"
+    }
+  ],
+  "scope": "workspace"
+}

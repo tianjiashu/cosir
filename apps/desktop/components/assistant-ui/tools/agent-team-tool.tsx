@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { ClockIcon, UsersIcon } from "lucide-react";
+import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon, UsersIcon } from "lucide-react";
 
 import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decision";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -99,7 +99,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
   const displayDataKeys = Object.keys(displayData).sort().join(",");
   const reviewRequestKeys = Object.keys(rawReviewRequest).sort().join(",");
   const requestId = typeof rawReviewRequest.request_id === "string" ? rawReviewRequest.request_id : null;
-  const requestKind = typeof rawReviewRequest.kind === "string" ? rawReviewRequest.kind : null;
+  const requestKind = typeof rawReviewRequest.request_kind === "string" ? rawReviewRequest.request_kind : null;
   const draftSchema = typeof rawReviewRequest.draft_schema === "string" ? rawReviewRequest.draft_schema : null;
   const parserAcceptedRequest = review !== null;
   const formDisabled = !isWaitingForInput
@@ -316,64 +316,73 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
         </div>
       </div>
       <div className="space-y-1.5 text-xs">
+        <div className="flex items-center justify-between gap-3">
+          <span className="font-medium">节点分工</span>
+          <span className="text-muted-foreground">
+            {preview.nodes.filter((node) => nodeGoals[node.nodeId]?.summary.trim() && nodeGoals[node.nodeId]?.goal.trim()).length}/{preview.nodes.length} 已完善
+          </span>
+        </div>
         {preview.nodes.map((node, index) => (
-          <section key={node.nodeId} className="space-y-2.5 rounded-lg border border-border/70 bg-muted/15 p-3">
-            <div className="flex items-start gap-2.5">
-              <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+          <details
+            key={node.nodeId}
+            className="group border-b border-border/60 last:border-b-0"
+            defaultOpen={index === 0}
+          >
+            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2.5 py-2 outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+              {nodeGoals[node.nodeId]?.summary.trim() && nodeGoals[node.nodeId]?.goal.trim()
+                ? <CheckCircle2Icon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label="已完善" />
+                : <CircleIcon className="size-4 shrink-0 text-muted-foreground" aria-label="待完善" />}
+              <span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-semibold text-muted-foreground">
                 {index + 1}
               </span>
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{node.name}</span>
-                  <span className="rounded-full border border-border/70 bg-background px-2 py-0.5 text-[10px] text-muted-foreground">
-                    {node.role}
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md bg-background/70 px-2.5 py-2">
-              <span className="shrink-0 text-[11px] font-medium text-muted-foreground">状态：</span>
-              <div className="flex flex-wrap gap-1.5" aria-label={`${node.name} 的可返回状态`}>
+              <span className="min-w-0 flex-1 truncate font-medium" title={node.name}>{node.name}</span>
+              <span className="hidden max-w-40 truncate text-[10px] text-muted-foreground sm:inline" title={node.role}>{node.role}</span>
+              <span className="shrink-0 text-[10px] text-muted-foreground">{node.statuses.length} 个状态</span>
+              <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
+            </summary>
+            <div className="space-y-3 pb-3 pl-7 pt-1">
+              <div className="flex flex-wrap items-center gap-1.5" aria-label={`${node.name} 的可返回状态`}>
+                <span className="mr-1 text-[11px] font-medium text-muted-foreground">可返回状态</span>
                 {node.statuses.map((status) => (
                   <NodeStatusBadge key={status.name} status={status} />
                 ))}
               </div>
+              <label className="block text-muted-foreground">
+                <span>节点摘要 <span className="text-destructive">*</span><span className="ml-1 text-[10px]">最多 10 字</span></span>
+                <Input
+                  aria-label={`${node.name} 的节点摘要`}
+                  className="mt-1 bg-background text-xs"
+                  maxLength={10}
+                  placeholder="例如：撰写与修订总规划"
+                  value={nodeGoals[node.nodeId]?.summary ?? ""}
+                  disabled={formDisabled}
+                  onChange={(event) => setNodeGoals((current) => ({
+                    ...current,
+                    [node.nodeId]: {
+                      goal: current[node.nodeId]?.goal ?? "",
+                      summary: event.target.value,
+                    },
+                  }))}
+                />
+              </label>
+              <label className="block text-muted-foreground">
+                <span>节点子目标 <span className="text-destructive">*</span></span>
+                <Textarea
+                  aria-label={`${node.name} 的节点子目标`}
+                  className="mt-1 min-h-16 resize-y bg-background text-xs"
+                  value={nodeGoals[node.nodeId]?.goal ?? ""}
+                  disabled={formDisabled}
+                  onChange={(event) => setNodeGoals((current) => ({
+                    ...current,
+                    [node.nodeId]: {
+                      goal: event.target.value,
+                      summary: current[node.nodeId]?.summary ?? "",
+                    },
+                  }))}
+                />
+              </label>
             </div>
-            <label className="block text-muted-foreground">
-              <span>节点摘要 <span className="text-destructive">*</span><span className="ml-1 text-[10px]">最多 10 字</span></span>
-              <Input
-                aria-label={`${node.name} 的节点摘要`}
-                className="mt-1 bg-background text-xs"
-                maxLength={10}
-                placeholder="例如：撰写与修订总规划"
-                value={nodeGoals[node.nodeId]?.summary ?? ""}
-                disabled={formDisabled}
-                onChange={(event) => setNodeGoals((current) => ({
-                  ...current,
-                  [node.nodeId]: {
-                    goal: current[node.nodeId]?.goal ?? "",
-                    summary: event.target.value,
-                  },
-                }))}
-              />
-            </label>
-            <label className="block text-muted-foreground">
-              <span>节点子目标 <span className="text-destructive">*</span></span>
-              <Textarea
-                aria-label={`${node.name} 的节点子目标`}
-                className="mt-1 min-h-16 resize-y bg-background text-xs"
-                value={nodeGoals[node.nodeId]?.goal ?? ""}
-                disabled={formDisabled}
-                onChange={(event) => setNodeGoals((current) => ({
-                  ...current,
-                  [node.nodeId]: {
-                    goal: event.target.value,
-                    summary: current[node.nodeId]?.summary ?? "",
-                  },
-                }))}
-              />
-            </label>
-          </section>
+          </details>
         ))}
       </div>
       <div className="text-muted-foreground text-xs">

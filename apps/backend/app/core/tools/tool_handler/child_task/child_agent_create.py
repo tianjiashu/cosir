@@ -321,7 +321,7 @@ class DelegateTaskTool(HandlerBase):
                 verb="委派任务",
                 icon="users",
                 surface="standalone",
-                expandable=True,
+                expandable=False,
                 expand_layout="details",
                 show_result=False,
             ),

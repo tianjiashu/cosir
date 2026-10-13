@@ -1,0 +1,19 @@
+{
+  "team": "极简 Demo Team（写一个文件 + 只读复核 + 返工回路）",
+  "goal": "验证 Agent Team 运行时机制。产物：工作区内 agent-team-demo/ 下一个临时 Markdown 文件，跑完即可删除。禁止改动 apps/ 下任何真实代码，禁止写 .cosir/ 区域。",
+  "status": "failed",
+  "history": [
+    {
+      "node": "撰写 Demo 文件",
+      "status": "failed",
+      "node_status": null,
+      "output": null,
+      "decision": null,
+      "next_node": null
+    }
+  ],
+  "failure": {
+    "node": "撰写 Demo 文件",
+    "reason": "<400> ***.***.InvalidParameter: Unknown parameter: 'response_format.json_schema'. 'response_format.json_schema' cannot be provided when 'response_format.type' is 'json_object'. (request id: 01M4SQPARTRTSRQGYKMJ0ES3DV)"
+  }
+}

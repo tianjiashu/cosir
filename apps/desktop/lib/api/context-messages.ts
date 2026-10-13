@@ -5,6 +5,7 @@ export type ContextMessage = {
   task_id: number;
   run_id: number | null;
   sequence: number;
+  include_in_context: boolean;
   created_at: string;
   updated_at: string;
   role: string;

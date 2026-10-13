@@ -136,7 +136,8 @@ def success_observation(
 
     参数:
         tool_name: 工具名，写入观察的工具标识。
-        payload: 结构化结果，会以紧凑 JSON 追加到 ``content`` 供模型读取。
+        payload: service 结构化结果；以紧凑 JSON 追加到 ``content`` 供模型读取，内部输出水位
+        ``next_seq`` 不属于 Agent 工具契约，会在此边界剔除。
         summary: 一行英文摘要，作为 ``content`` 首行。
         display_payload: 已按 allowlist 投影的展示数据，写入 ``display_data``。
 
@@ -151,9 +152,10 @@ def success_observation(
         无；只构造观察对象。
     """
 
+    agent_payload = {key: value for key, value in payload.items() if key != "next_seq"}
     return tool_success(
         tool_name=tool_name,
-        content=f"{summary}\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}",
+        content=f"{summary}\n{json.dumps(agent_payload, ensure_ascii=False, separators=(',', ':'))}",
         display_data=display_payload,
     )
 

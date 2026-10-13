@@ -45,7 +45,6 @@ def build_session_display_payload(
         "status",
         "generation",
         "first_available_seq",
-        "next_seq",
         "exit_code",
         "end_reason",
     )

@@ -6,11 +6,12 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   FolderIcon,
-  GitForkIcon,
   Loader2Icon,
   MessageSquarePlusIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
+  PanelRightCloseIcon,
+  PanelRightOpenIcon,
   RefreshCwIcon,
   SearchIcon,
   Settings2Icon,
@@ -64,6 +65,9 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
 }) {
   const navigate = useNavigate();
   const closeWorkspaceTabs = useWorkbenchStore((state) => state.closeWorkspace);
+  const workbenchTabs = useWorkbenchStore((state) => state.tabs);
+  const workbenchPanelOpen = useWorkbenchStore((state) => state.panelOpen);
+  const setWorkbenchPanelOpen = useWorkbenchStore((state) => state.setPanelOpen);
   const [collapsed, setCollapsed] = useState(() => (
     typeof window !== "undefined" && window.matchMedia(NARROW_VIEWPORT_QUERY).matches
   ));
@@ -84,6 +88,21 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
   const taskRefreshControllerRef = useRef(new Map<number, AbortController>());
   const pendingTaskRefreshRef = useRef(new Set<number>());
   const [routeTask, setRouteTask] = useState<WorkspaceTask | null>(null);
+
+  const hasUnsavedWorkbenchDraft = workbenchTabs.some(
+    (tab) => tab.kind === "agent-configuration-draft" && tab.dirty,
+  );
+  const requestWorkbenchPanelClose = useCallback(() => {
+    if (hasUnsavedWorkbenchDraft && !window.confirm("有未保存的配置草稿，确定收起工作台吗？")) return;
+    setWorkbenchPanelOpen(false);
+  }, [hasUnsavedWorkbenchDraft, setWorkbenchPanelOpen]);
+  const toggleWorkbenchPanel = useCallback(() => {
+    if (workbenchPanelOpen) {
+      requestWorkbenchPanelClose();
+      return;
+    }
+    setWorkbenchPanelOpen(true);
+  }, [requestWorkbenchPanelClose, setWorkbenchPanelOpen, workbenchPanelOpen]);
 
   const load = useCallback(async () => {
     const generation = ++loadGenerationRef.current;
@@ -427,7 +446,27 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
         </div>
       </aside>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex h-14 shrink-0 items-center justify-between border-b px-5"><div className="min-w-0"><p className="flex items-center gap-2 text-sm font-medium">{contextObserverOpen ? "上下文观测" : activeTaskId ? "对话" : "新对话"}{!contextObserverOpen && activeTask?.task_type === "fork" && <GitForkIcon className="text-muted-foreground size-3.5" aria-label="Fork Task" />}</p><p className="text-muted-foreground truncate text-xs">{contextObserverOpen ? "按 sequence 检查持久化 Agent 消息" : forkError ?? (activeTaskId ? "已存在任务" : "选择工作区后开始创建对话")}</p></div><div className="flex items-center gap-3"><BackendRestartButton />{selectedWorkspace && <div className="text-muted-foreground flex items-center gap-2 text-xs"><FolderIcon className="size-3.5" />{selectedWorkspace.name}</div>}</div></div>
+        <div className="flex h-14 shrink-0 items-center justify-between border-b px-5">
+          <div className="min-w-0">{forkError && <p className="text-muted-foreground truncate text-xs">{forkError}</p>}</div>
+          <div className="flex shrink-0 items-center gap-2">
+            {workbenchTabs.length > 0 && (
+              <Button
+                type="button"
+                variant={workbenchPanelOpen ? "secondary" : "outline"}
+                size="sm"
+                aria-label={`工作台，${workbenchTabs.length} 个标签，${workbenchPanelOpen ? "点击收起" : "点击打开"}`}
+                aria-pressed={workbenchPanelOpen}
+                title={workbenchPanelOpen ? "收起工作台" : "打开工作台"}
+                onClick={toggleWorkbenchPanel}
+              >
+                {workbenchPanelOpen ? <PanelRightCloseIcon aria-hidden="true" /> : <PanelRightOpenIcon aria-hidden="true" />}
+                <span className="max-[640px]:sr-only">工作台</span>
+                <span className="text-muted-foreground min-w-4 text-center text-xs tabular-nums">{workbenchTabs.length}</span>
+              </Button>
+            )}
+            <BackendRestartButton />
+          </div>
+        </div>
         <div className="min-h-0 flex-1 overflow-hidden">
           {contextObserverOpen ? <ContextObserverPage /> : activeTaskId ? <TaskPage
             key={activeTaskId}
@@ -447,7 +486,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
           /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation) => { navigate(`/tasks/${conversation.task_id}`); void load(); }} />}
         </div>
       </main>
-      <Workbench workspaceId={activeTaskWorkspaceId} />
+      <Workbench workspaceId={activeTaskWorkspaceId} onRequestClose={requestWorkbenchPanelClose} />
       {deleteTarget && <DeleteConfirmDialog open title={deleteTarget.kind === "workspace" ? `删除工作区“${deleteTarget.label}”？` : `删除任务“${deleteTarget.label}”？`} description={deleteTarget.kind === "workspace" ? `此操作将永久删除该工作区及其下的 ${deleteTarget.taskCount} 个任务和全部对话数据。` : "此操作将永久删除该任务及其全部对话数据，不影响所属工作区和其他任务。"} warning="删除后无法撤销。" error={deleteError} busy={deleting} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteError(null); } }} onConfirm={() => void confirmDelete()} />}
       {settingsOpen && <SystemConfigurationPage onClose={closeSettings} />}
       {workspaceConfigurationId !== null && <WorkspaceConfigurationPage workspaceId={workspaceConfigurationId} workspaceName={selectedWorkspace?.name ?? "当前工作区"} onClose={closeWorkspaceSettings} />}

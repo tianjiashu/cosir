@@ -151,13 +151,13 @@ def test_session_agent_operations_and_readers_are_cursor_based(tmp_path: Path) -
 
     assert factory.workers[0].writes == ["你好\n".encode()]
     assert result.output[0]["seq"] == 1
-    assert result.next_seq == 2
+    assert "next_seq" not in result.to_dict()
     assert attachment.subscription.get(0.1) == result.output[0]
     assert service.read(session_id, task_id=7, after_seq=0, wait_ms=0).output == result.output
 
 
-def test_cursor_must_be_the_last_applied_seq_not_next_seq(tmp_path: Path) -> None:
-    """续读必须回传「已应用的最后一个 seq」；回传 next_seq 会静默跳掉一帧。"""
+def test_cursor_continues_from_the_last_returned_frame(tmp_path: Path) -> None:
+    """续读使用最后一帧的 seq，工具结果无需暴露内部输出水位。"""
 
     service, factory = make_service()
     snapshot = service.start(
@@ -176,21 +176,20 @@ def test_cursor_must_be_the_last_applied_seq_not_next_seq(tmp_path: Path) -> Non
 
     first = service.read(session_id, task_id=7, after_seq=None, wait_ms=0)
     assert output_texts(first) == ["line-1", "\r\n"]
-    assert first.next_seq == 3
+    first_cursor = first.output[-1]["seq"]
 
     worker.emit_output(b"line-2")
     worker.emit_output(b"\r\n")
 
-    applied = service.read(session_id, task_id=7, after_seq=first.next_seq - 1, wait_ms=0)
+    applied = service.read(session_id, task_id=7, after_seq=first_cursor, wait_ms=0)
     assert output_texts(applied) == ["line-2", "\r\n"]
-    assert applied.next_seq == 5
+    applied_cursor = applied.output[-1]["seq"]
 
     worker.emit_output(b"line-3")
     worker.emit_output(b"\r\n")
 
-    # 回传 next_seq 把 seq == after_seq 的内容帧过滤掉，只留下换行帧。
-    skipped = service.read(session_id, task_id=7, after_seq=applied.next_seq, wait_ms=0)
-    assert output_texts(skipped) == ["\r\n"]
+    continued = service.read(session_id, task_id=7, after_seq=applied_cursor, wait_ms=0)
+    assert output_texts(continued) == ["line-3", "\r\n"]
 
 
 def test_agent_read_does_not_apply_a_second_output_byte_budget(tmp_path: Path) -> None:

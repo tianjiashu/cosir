@@ -42,7 +42,7 @@ class Constant:
         MAX_ACTIVE_SESSIONS: int = 32
         # 终态 session 只保留有限的查询历史，避免 registry/幂等状态随运行时间增长。
         MAX_TERMINAL_HISTORY_SESSIONS: int = 256
-        # 单会话环形缓冲字节上限，超出后最旧输出被丢弃。
+        # 单会话原始 PTY 与 Agent 文本投影的合计环形缓冲字节上限，超出后最旧输出被丢弃。
         MAX_RING_BUFFER_BYTES: int = 1024 * 1024
         # 预览队列最大帧数（防止预览消费者堆积）。
         MAX_PREVIEW_QUEUE_FRAMES: int = 256

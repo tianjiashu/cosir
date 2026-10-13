@@ -420,7 +420,7 @@ class AgentRuntime:
                     additional_kwargs={"run_id": run.id},
                 )
             )
-        if not allows_tools:
+        elif not allows_tools:
             task_space.defer_system_message(
                 SystemMessage(
                     content=(
@@ -429,7 +429,7 @@ class AgentRuntime:
                     additional_kwargs={"run_id": run.id},
                 )
             )
-        if not allows_tools and not ban_tools:
+        else:
             task_space.defer_system_message(
                 SystemMessage(
                     content=(

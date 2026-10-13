@@ -2,7 +2,8 @@
 
 该服务拥有 session registry、PTY worker client、输出 seq/ring buffer 和只读预览订阅。
 它不注册 Agent tool、不承载 Assistant UI 类型，也不把 PTY 输出写入 conversation snapshot。
-ring buffer 只负责进程内 cursor 连续性；模型可见输出预算由统一的 ToolOutputBudget 负责。
+预览订阅保留原始 PTY 字节；Agent 读取使用同一帧的 ANSI/OSC 清理文本投影。ring buffer
+只负责进程内 cursor 连续性；模型可见输出预算由统一的 ToolOutputBudget 负责。
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from app.service.terminal.errors import (
     TerminalWorkerBackpressureError,
     TerminalWorkerUnavailableError,
 )
+from app.service.terminal.output_sanitizer import TerminalOutputSanitizer
 from app.service.terminal.session_status import (
     TerminalSessionStatusChange,
     TerminalSessionStatusObserverLike,
@@ -56,7 +58,6 @@ class TerminalReadResult:
     """按 cursor 返回的非破坏性输出读取结果，不在此层施加模型输出预算。"""
 
     output: tuple[dict[str, object], ...]
-    next_seq: int
     first_available_seq: int
     status: str
 
@@ -64,13 +65,12 @@ class TerminalReadResult:
         """转换为工具/API 可序列化的 UTF-8 文本视图。
 
         session 内部和 WebSocket 仍保留 ``data_base64`` 原始 bytes；Agent tool
-        返回 ``data`` 文本并以 replacement character 处理非 UTF-8 字节，避免把
-        transport 编码细节暴露给模型。
+        返回跨帧解码并清理 ANSI/OSC 后的 ``data`` 文本，非 UTF-8 字节由 replacement
+        character 代替。帧仍是任意 PTY 输出块，不代表命令边界。
         """
 
         return {
             "output": [_agent_output_frame(frame) for frame in self.output],
-            "next_seq": self.next_seq,
             "first_available_seq": self.first_available_seq,
             "status": self.status,
         }
@@ -210,6 +210,7 @@ class _SessionRuntime:
         self.frames: deque[dict[str, object]] = deque()
         self.buffer_bytes = 0
         self.next_seq = 1
+        self.output_sanitizer = TerminalOutputSanitizer()
         self.subscribers: set[TerminalPreviewSubscription] = set()
         self.last_touch_monotonic = 0.0
 
@@ -499,6 +500,7 @@ class TerminalSessionService:
             if runtime.status in {"closed", "exited", "interrupted", "failed"}:
                 return self.snapshot(session_id, task_id=task_id, workspace_id=workspace_id)
             worker = runtime.worker
+            self._flush_agent_output_locked(runtime)
             self._update_runtime(
                 runtime,
                 status="closed",
@@ -583,7 +585,7 @@ class TerminalSessionService:
             self._validate_cursor(runtime, after_seq)
             first_available = _first_available_seq(runtime)
             replay = tuple(
-                frame
+                _preview_output_frame(frame)
                 for frame in runtime.frames
                 if after_seq is None or _frame_seq(frame) > after_seq
             )
@@ -736,6 +738,7 @@ class TerminalSessionService:
             worker: TerminalWorker | None
             with runtime.lock:
                 if runtime.status in {"starting", "running"}:
+                    self._flush_agent_output_locked(runtime)
                     self._update_runtime(
                         runtime,
                         status="closed",
@@ -854,6 +857,7 @@ class TerminalSessionService:
         with runtime.condition:
             if runtime.status not in {"starting", "running"}:
                 return
+            agent_data = runtime.output_sanitizer.feed(data)
             frame = {
                 "protocol": "terminal-preview-v1",
                 "type": "output",
@@ -861,15 +865,16 @@ class TerminalSessionService:
                 "generation": runtime.generation,
                 "seq": runtime.next_seq,
                 "data_base64": base64.b64encode(data).decode("ascii"),
+                "agent_data": agent_data,
             }
             runtime.next_seq += 1
             runtime.frames.append(frame)
-            runtime.buffer_bytes += len(data)
+            runtime.buffer_bytes += len(data) + len(agent_data.encode("utf-8"))
             while runtime.buffer_bytes > self._ring_buffer_bytes and runtime.frames:
                 removed = runtime.frames.popleft()
-                runtime.buffer_bytes -= _frame_bytes(removed)
+                runtime.buffer_bytes -= _stored_frame_bytes(removed)
             for subscriber in tuple(runtime.subscribers):
-                subscriber.publish(frame)
+                subscriber.publish(_preview_output_frame(frame))
             runtime.condition.notify_all()
         self._touch(runtime)
 
@@ -881,6 +886,7 @@ class TerminalSessionService:
         with runtime.condition:
             if runtime.status in {"closed", "failed", "interrupted", "exited"}:
                 return
+            self._flush_agent_output_locked(runtime)
             self._update_runtime(
                 runtime,
                 status="exited",
@@ -938,6 +944,7 @@ class TerminalSessionService:
         with runtime.condition:
             if runtime.status in {"closed", "exited", "interrupted", "failed"}:
                 return
+            self._flush_agent_output_locked(runtime)
             self._update_runtime(
                 runtime,
                 status="failed",
@@ -967,6 +974,22 @@ class TerminalSessionService:
             end_reason=record.end_reason,
             exit_code=record.exit_code,
         )
+
+    def _flush_agent_output_locked(self, runtime: _SessionRuntime) -> None:
+        """在会话结束前把增量 UTF-8 解码器的尾部结果并入最后一帧。"""
+
+        tail = runtime.output_sanitizer.finish()
+        if not tail or not runtime.frames:
+            return
+        frame = runtime.frames[-1]
+        current = frame.get("agent_data")
+        if not isinstance(current, str):
+            return
+        frame["agent_data"] = current + tail
+        runtime.buffer_bytes += len(tail.encode("utf-8"))
+        while runtime.buffer_bytes > self._ring_buffer_bytes and runtime.frames:
+            removed = runtime.frames.popleft()
+            runtime.buffer_bytes -= _stored_frame_bytes(removed)
 
     def _notify_status_changed(self, runtime: _SessionRuntime) -> None:
         """把已确认的 session 状态交给 Transport 观察者。
@@ -1116,7 +1139,6 @@ class TerminalSessionService:
             selected.append(frame)
         return TerminalReadResult(
             output=tuple(selected),
-            next_seq=runtime.next_seq,
             first_available_seq=_first_available_seq(runtime),
             status=runtime.status,
         )
@@ -1220,6 +1242,20 @@ def _frame_bytes(frame: dict[str, object]) -> int:
         return 0
 
 
+def _stored_frame_bytes(frame: dict[str, object]) -> int:
+    """估算 ring buffer 同时保留的原始与 Agent 文本 payload 字节数。"""
+
+    agent_data = frame.get("agent_data")
+    agent_bytes = len(agent_data.encode("utf-8")) if isinstance(agent_data, str) else 0
+    return _frame_bytes(frame) + agent_bytes
+
+
+def _preview_output_frame(frame: dict[str, object]) -> dict[str, object]:
+    """向 xterm 预览通道投影原始帧，隔离 Agent 专用文本字段。"""
+
+    return {key: value for key, value in frame.items() if key != "agent_data"}
+
+
 def _event_size(event: dict[str, object]) -> int:
     """返回 subscriber 队列的保守事件大小估算。"""
 
@@ -1227,18 +1263,12 @@ def _event_size(event: dict[str, object]) -> int:
 
 
 def _agent_output_frame(frame: dict[str, object]) -> dict[str, object]:
-    """将内部 raw output frame 投影为 Agent 可读的 UTF-8 文本 frame。"""
+    """投影为经过控制序列过滤的 Agent 文本 frame。"""
 
-    encoded = frame.get("data_base64")
-    if not isinstance(encoded, str):
-        return {"seq": frame.get("seq"), "data": ""}
-    try:
-        data = base64.b64decode(encoded, validate=True)
-    except (ValueError, TypeError):
-        data = b""
+    agent_data = frame.get("agent_data")
     return {
         "seq": frame.get("seq"),
-        "data": data.decode("utf-8", errors="replace"),
+        "data": agent_data if isinstance(agent_data, str) else "",
     }
 
 

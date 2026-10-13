@@ -24,10 +24,10 @@ from app.utils.message_content import content_to_text
 
 
 def _request_instruction(
-    schema_name: str,
-    schema: dict[str, Any],
-    *,
-    retry_feedback: str | None,
+        schema_name: str,
+        schema: dict[str, Any],
+        *,
+        retry_feedback: str | None,
 ) -> str:
     """构造本次请求末尾的临时指令，不改写或重排 canonical context。
 
@@ -92,10 +92,10 @@ def _validate_response(message: BaseMessage, schema: dict[str, Any]) -> tuple[st
     if not isinstance(message, AIMessage):
         return None, "The model response is not an assistant message."
     if (
-        message.tool_calls
-        or message.invalid_tool_calls
-        or message.additional_kwargs.get("tool_calls")
-        or message.additional_kwargs.get("function_call")
+            message.tool_calls
+            or message.invalid_tool_calls
+            or message.additional_kwargs.get("tool_calls")
+            or message.additional_kwargs.get("function_call")
     ):
         return None, "The response contains a tool call, which is not allowed at this stage."
     text = content_to_text(message.content).strip()
@@ -153,17 +153,10 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
     )
     # 复用 ReAct 的工具绑定模型并请求供应商严格 JSON Schema 输出；本地校验仍负责
     # 防御供应商不遵守契约的情况，同时保持请求中的工具 schema 不变。
-    #DeepSeek（base_url=https://api.deepseek.com，model deepseek-flash）
+    # DeepSeek（base_url=https://api.deepseek.com，model deepseek-flash）
     # 只支持 response_format={"type":"json_object"}，不接受 json_schema
     model = runtime.model.bind(
-        response_format={
-            "type": "json_object",
-            "json_schema": {
-                "name": spec.name,
-                "strict": True,
-                "schema": spec.json_schema,
-            },
-        }
+        response_format={"type": "json_object"}
     )
     retry_feedback: str | None = None
     for attempt in range(1, Constant.Workflow.STRUCTURED_OUTPUT_MAX_ATTEMPTS + 1):
