@@ -82,7 +82,7 @@ function AwaitingReviewStatus({ label = AWAITING_REVIEW_LABEL, className }: { la
 
 /** Agent Team 方案预览卡；确认时把用户决定交回等待中的 Run，由后端在确认边界重新校验。 */
 export function AgentTeamTool(props: AgentTeamToolProps) {
-  const { artifact: rawArtifact, runId, runStatus, taskId, onAttachTransport } = props;
+  const { artifact: rawArtifact, runId, runStatus, taskId, toolCallId, onAttachTransport } = props;
   const artifact = readToolArtifact(rawArtifact);
   const preview = readAgentTeamPreviewDisplay(artifact.display_data);
   const review = readAgentTeamReviewRequest(artifact.display_data);
@@ -116,12 +116,10 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
         : "正在同步运行状态";
 
   useEffect(() => {
-    if (!reviewRequestPresent && !isWaitingForInput) return;
+    if (!reviewRequestPresent) return;
     const logMessage = parserAcceptedRequest
       ? "前端已读到有效 Team 审批请求"
-      : reviewRequestPresent
-        ? "前端收到无法识别的 Team 审批请求"
-        : "Run 等待审批时未收到请求载荷";
+      : "前端收到无法识别的 Team 审批请求";
     void frontendLog(
       parserAcceptedRequest ? "INFO" : "WARNING",
       "agent_team_approval_payload_observed",
@@ -130,6 +128,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
         data: {
           taskId,
           runId,
+          toolCallId,
           runStatus,
           teamRunId: preview?.teamRunId ?? null,
           backendStatus: artifact.backendStatus,
@@ -148,7 +147,6 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     artifact.backendStatus,
     displayDataKeys,
     draftSchema,
-    isWaitingForInput,
     preview?.teamRunId,
     reviewRequestPresent,
     requestId,
@@ -156,6 +154,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     parserAcceptedRequest,
     reviewRequestKeys,
     runId,
+    toolCallId,
     runStatus,
     taskId,
   ]);
@@ -184,20 +183,6 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
         <div className="font-medium text-sm">审批请求格式不兼容</div>
         <p className="text-muted-foreground text-xs">
           当前客户端无法识别这份 Team 审批请求，请刷新对话后重试。
-        </p>
-      </div>
-    );
-  }
-  if (isWaitingForInput && review === null) {
-    return (
-      <div
-        className="space-y-1 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3 shadow-sm"
-        role="status"
-        aria-label="Agent Team 审批信息未恢复"
-      >
-        <div className="font-medium text-sm">审批内容暂不可用</div>
-        <p className="text-muted-foreground text-xs">
-          运行正在等待你的决定，但审批请求载荷缺失。刷新对话以从本地运行记录恢复。
         </p>
       </div>
     );

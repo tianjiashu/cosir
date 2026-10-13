@@ -1,0 +1,23 @@
+{
+  "team": "极简 Demo Team（写一个文件 + 只读复核 + 返工回路）",
+  "goal": "验证 Agent Team 运行时机制。产物：工作区内 agent-team-demo/ 下一个临时 Markdown 文件，跑完即可删除。禁止改动 apps/ 下任何真实代码，禁止写 .cosir/ 区域。",
+  "status": "completed",
+  "history": [
+    {
+      "node": "撰写 Demo 文件",
+      "status": "completed",
+      "node_status": "done",
+      "output": "文件路径（工作区相对）：agent-team-demo/demo.md（绝对路径 H:/coding-agent/agent-team-demo/demo.md）。标记串原文：DEMO_MARKER_v1，位于文件第 1 行，独占一行、无引号无前后缀。清单实测条目数：5 条无序列表项（第 5-9 行，均以 '- ' 开头），依次为：1) 节点串行执行；2) 上下文不共享；3) status 决定路由（node_transitions[node_id][status]，命中 END 则 Team 结束）；4) handoff 是唯一跨节点通道（Coordinator 读取节点 Run 持久化的 final_output）；5) max_runs 限制回路（超限或找不到转移边时 TeamRun 条件更新收敛为 FAILED 并写入 end_reason）。文件共 9 行，第 3 行为一句说明该文件是 Agent Team 运行时机制验证产物、跑完即可删除。已用 read_file 读回逐行核对，标记串与条目数与上述一致。未改动 apps/ 下任何代码，未写入 .cosir/。",
+      "decision": "done",
+      "next_node": "只读复核 Demo 文件"
+    },
+    {
+      "node": "只读复核 Demo 文件",
+      "status": "completed",
+      "node_status": "pass",
+      "output": "只读复核结论：三项检查全部实测成立，未发现需返工问题。\n\n文件路径：agent-team-demo/demo.md（绝对路径 H:/coding-agent/agent-team-demo/demo.md）。\n\n逐项实测：\n1) 文件存在 —— list_directory 在 agent-team-demo/ 下仅返回该单一文件 demo.md，read_file 成功读回 9 行，成立。\n2) 含标记串 DEMO_MARKER_v1 —— 锚定正则 ^DEMO_MARKER_v1$ 仅命中第 1 行 1 次，独占一行、无引号无前后缀，成立。\n3) 清单条目数 —— 实测 5 条，位于第 5-9 行，均以 '- ' 开头（search_content 逐行命中，与 find /c /v 交叉计数一致），不少于 3，且与上一节点 handoff 声称的 5 条完全一致；条目主题依次为 节点串行执行 / 上下文不共享 / status 决定路由 / handoff 是唯一跨节点通道 / max_runs 限制回路，与 handoff 列举的顺序和要点逐条对应，成立。\n\n附加核对：文件共 9 行（find /c /v \"\" 返回 9），与声称一致；第 3 行确为「Agent Team 运行时机制验证产物、跑完即可删除」说明句；git status --porcelain -- apps 无输出，证实未改动 apps/ 下任何代码；本节点全程只读，未创建、修改或删除任何文件，未写入 .cosir/。\n\n实测条目数：5。\n\n边界说明（供下游参考，非阻塞项）：本节点按子目标只校验存在性、标记串、条目数与 handoff 一致性，未对 5 条清单内容对照 apps/backend/app/agent_team/ 源码做事实性验证，该项不在本节点检查范围内。\n\n后续动作提示：Team 已跑完，agent-team-demo/demo.md 是临时产物，可由具备写权限的一方按需删除（本只读节点不执行删除）。",
+      "decision": "pass",
+      "next_node": null
+    }
+  ]
+}
