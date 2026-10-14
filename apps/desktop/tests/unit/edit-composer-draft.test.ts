@@ -3,12 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyEditDraftToComposer,
   beginEditComposerOperation,
+  consumePendingEditComposerStart,
   currentEditComposerOperation,
   discardPendingEditComposerDraft,
   editableDraftAttachments,
   endEditComposerOperation,
+  hasPendingEditComposerStart,
   isCurrentEditComposerOperation,
   isEditComposerOperationActive,
+  queuePendingEditComposerStart,
   setPendingEditComposerDraft,
   subscribeEditComposerOperations,
   takePendingEditComposerDraft,
@@ -24,6 +27,16 @@ describe("edit composer coordination", () => {
     expect(takePendingEditComposerDraft(messageId)).toEqual(draft);
     expect(takePendingEditComposerDraft(messageId)).toBeUndefined();
     discardPendingEditComposerDraft(messageId);
+  });
+
+  it("queues the message-scoped edit action as a one-shot request", () => {
+    const messageId = `edit-start-${crypto.randomUUID()}`;
+    queuePendingEditComposerStart(messageId);
+
+    expect(hasPendingEditComposerStart(messageId)).toBe(true);
+    expect(consumePendingEditComposerStart(messageId)).toBe(true);
+    expect(consumePendingEditComposerStart(messageId)).toBe(false);
+    expect(hasPendingEditComposerStart(messageId)).toBe(false);
   });
 
   it("keeps a newer recovery generation active when an older one finishes", () => {

@@ -20,6 +20,7 @@ import { RunIdentityDisplay } from "@/components/assistant/run-identity-display"
 import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-display";
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
+import { SkillsSelector } from "@/components/composer/skills-selector";
 import { ToolGroupSelector as ToolGroupSelectorControl } from "@/components/composer/tool-group-selector";
 import { MarkdownText } from "@/components/markdown-text";
 import { PartRenderBoundary } from "@/components/assistant-ui/elements/part-render-boundary";
@@ -56,9 +57,12 @@ import { editableDocumentAttachments } from "@/lib/assistant/editable-user-docum
 import {
   applyEditDraftToComposer,
   beginEditComposerOperation,
+  consumePendingEditComposerStart,
   currentEditComposerOperation,
+  discardPendingEditComposerDraft,
   editableDraftAttachments,
   endEditComposerOperation,
+  hasPendingEditComposerStart,
   isCurrentEditComposerOperation,
   isEditComposerOperationActive,
   subscribeEditComposerOperations,
@@ -78,10 +82,8 @@ import {
   ComposerAttachments,
   InlineComposerInput,
 } from "@/components/assistant-ui/elements/attachment.aui";
-import {
-  INLINE_ATTACHMENT_INPUT_CLASS_NAME,
-  InlineComposerInsertionProvider,
-} from "@/components/composer/inline-attachment-input";
+import { COMPOSER_EDITOR_CLASS_NAME } from "@/components/composer/composer-editor";
+import { ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
 
 export type ThreadComponents = {
   AssistantMessage?: ComponentType;
@@ -242,7 +244,7 @@ const ComposerBoundary = memo(function ComposerBoundary({
 
 const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { autoFocus: boolean; taskId?: number; workspaceRoot?: string }) {
   return (
-  <InlineComposerInsertionProvider>
+  <ComposerInsertionProvider>
     <ComposerPrimitive.Root className="border-border/60 bg-card focus-within:ring-ring/20 focus-within:ring-2 flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
       <div className="flex min-w-0 items-center px-1">
         <ComposerPromptToolbar />
@@ -251,7 +253,7 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
         <ComposerAttachments />
         <InlineComposerInput
           placeholder="输入任务，例如：帮我查找登录相关代码…"
-          className={INLINE_ATTACHMENT_INPUT_CLASS_NAME}
+          className={COMPOSER_EDITOR_CLASS_NAME}
           autoFocus={autoFocus}
           aria-label="消息输入"
         />
@@ -270,7 +272,7 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
         <ComposerAction taskId={taskId ?? null} />
       </div>
     </ComposerPrimitive.Root>
-  </InlineComposerInsertionProvider>
+  </ComposerInsertionProvider>
   );
 });
 
@@ -279,6 +281,7 @@ const ComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = false })
   return (
     <div className="flex min-w-0 items-center gap-3">
       <FavoritePromptToolbar disabled={disabled || composer.isDisabled} />
+      <SkillsSelector disabled={disabled || composer.isDisabled} />
       <ToolGroupSelector disabled={disabled || composer.isDisabled} />
     </div>
   );
@@ -395,8 +398,29 @@ const ThreadMessage: FC = () => {
 };
 
 const UserMessage: FC = () => {
+  const aui = useAui();
+  const messageId = useAuiState((state) => state.message.id);
   const isEditing = useAuiState((state) => state.composer.isEditing);
+  const pendingEditStart = useSyncExternalStore(
+    subscribeEditComposerOperations,
+    () => hasPendingEditComposerStart(messageId),
+    () => false,
+  );
   const readonly = useContext(ThreadContext).readonly === true;
+  useEffect(() => {
+    if (!pendingEditStart || isEditing || !consumePendingEditComposerStart(messageId)) return;
+    try {
+      aui.composer.beginEdit();
+    } catch (error) {
+      discardPendingEditComposerDraft(messageId);
+      const generation = currentEditComposerOperation(messageId);
+      if (generation !== undefined) endEditComposerOperation(messageId, generation);
+      void frontendLog("WARNING", "assistant_edit_composer_restore_rejected", "消息行未能重新进入编辑态", {
+        data: { messageId },
+        error,
+      });
+    }
+  }, [aui, isEditing, messageId, pendingEditStart]);
   if (isEditing && !readonly) return <UserEditMessage />;
   return <UserMessageView />;
 };
@@ -557,6 +581,10 @@ const UserEditMessage: FC = () => {
     // 唯一写入实现：先补齐附件、再写文本、最后清理草稿之外的附件。任何中断点都只会
     // 「多留附件」，不会留下「文本含 token 而附件缺失」的空窗。
     void (async () => {
+      if (draft.source === "recovery_override") {
+        // 编辑 composer 初次挂载时会先从 canonical message 初始化；等该同步提交后再覆盖失败请求草稿。
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      }
       const result = await applyEditDraftToComposer({
         composer,
         text: draft.text,
@@ -598,6 +626,11 @@ const UserEditMessage: FC = () => {
         });
       }
       endEditComposerOperation(message.id, generation);
+      if (draft.source === "recovery_override" && !result.error && !result.superseded) {
+        // 释放恢复锁会触发 AUI 同步提交；最后一帧再写入，避免该提交把草稿重置为原消息文本。
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+        composer.setText(draft.text);
+      }
       setIsHydrating(false);
     })();
 
@@ -645,7 +678,7 @@ const UserEditMessage: FC = () => {
         });
       }}
     >
-      <InlineComposerInsertionProvider>
+      <ComposerInsertionProvider>
         <ComposerPrimitive.Root className="border-border/60 bg-card focus-within:ring-ring/20 focus-within:ring-2 flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
           <div className="flex min-w-0 items-center px-1">
             <ComposerPromptToolbar disabled={isHydrating || isRecoveryActive} />
@@ -653,7 +686,7 @@ const UserEditMessage: FC = () => {
           <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
             <ComposerAttachments />
             <InlineComposerInput
-              className={INLINE_ATTACHMENT_INPUT_CLASS_NAME}
+              className={COMPOSER_EDITOR_CLASS_NAME}
               autoFocus
               suspendAttachmentReconciliation={isHydrating || isRecoveryActive}
               aria-label="编辑消息"
@@ -676,7 +709,7 @@ const UserEditMessage: FC = () => {
             </div>
           </div>
         </ComposerPrimitive.Root>
-      </InlineComposerInsertionProvider>
+      </ComposerInsertionProvider>
     </MessagePrimitive.Root>
   );
 };

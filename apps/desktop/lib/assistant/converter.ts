@@ -19,6 +19,7 @@ import type {
 } from "@/lib/assistant/contract";
 import { getLocalAttachmentById, LOCAL_FILE_DATA_PREFIX } from "@/lib/assistant/attachments/local-attachment-registry";
 import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
+import { restoreSkillMentionTokens } from "@/lib/assistant/skill-mention-token";
 import {
   createEditableUserDocument,
   editableDocumentAttachments,
@@ -211,7 +212,7 @@ export function toEditableUserMessageDraft(message: ThreadUserMessage): Editable
 
   message.content.forEach((part, index) => {
     if (part.type === "text") {
-      textParts.push(`${pendingTokens}${revealEditableFileTokens(part.text)}`);
+      textParts.push(`${pendingTokens}${restoreSkillMentionTokens(revealEditableFileTokens(part.text))}`);
       pendingTokens = "";
       previousWasText = true;
       return;

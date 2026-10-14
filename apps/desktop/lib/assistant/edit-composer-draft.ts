@@ -19,6 +19,7 @@ export type EditComposerDraftOverride = {
 // for the same composer.
 const pendingOverrides = new Map<string, EditComposerDraftOverride>();
 const activeGenerations = new Map<string, number>();
+const pendingEditStarts = new Set<string>();
 const activeListeners = new Set<() => void>();
 
 function notifyActiveListeners(): void {
@@ -42,6 +43,24 @@ export function takePendingEditComposerDraft(
 
 export function discardPendingEditComposerDraft(messageId: string): void {
   pendingOverrides.delete(messageId);
+  pendingEditStarts.delete(messageId);
+  notifyActiveListeners();
+}
+
+/** 请求消息行在自身 AUI 上下文中开始编辑，避免从 Thread 上下文创建另一份 composer。 */
+export function queuePendingEditComposerStart(messageId: string): void {
+  pendingEditStarts.add(messageId);
+  notifyActiveListeners();
+}
+
+export function hasPendingEditComposerStart(messageId: string): boolean {
+  return pendingEditStarts.has(messageId);
+}
+
+export function consumePendingEditComposerStart(messageId: string): boolean {
+  const consumed = pendingEditStarts.delete(messageId);
+  if (consumed) notifyActiveListeners();
+  return consumed;
 }
 
 export function beginEditComposerOperation(messageId: string): number {

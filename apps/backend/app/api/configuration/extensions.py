@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import File, Form, UploadFile
-
 from app.api.configuration.errors import raise_configuration_error
 from app.api.schemas.request.MCPServersUpdateRequest import MCPServersUpdateRequest
 from app.api.schemas.request.MCPServerTestRequest import MCPServerTestRequest
 from app.api.schemas.request.SkillsEnabledUpdateRequest import SkillsEnabledUpdateRequest
+from app.api.schemas.request.SkillsImportRequest import SkillsImportRequest
 from app.api.schemas.response.MCPServersResponse import (
     MCPServerConfigResponse,
     MCPServersResponse,
@@ -133,24 +132,15 @@ def _mcp_servers_response(configuration: MCPConfiguration) -> MCPServersResponse
 
 
 @app.post("/configuration/skills/import", response_model=SkillInfoResponse, status_code=201)
-async def import_system_skill(
-    archive: UploadFile | None = File(None),
-    files: list[UploadFile] | None = File(None),
-    paths: list[str] | None = Form(None),
-) -> SkillInfoResponse:
-    """接收单个目录上传或 ZIP，并复制到系统 Skill 目录。"""
+def import_system_skill(payload: SkillsImportRequest) -> SkillInfoResponse:
+    """从桌面原生选择器选中的本机路径导入 Skill。"""
 
     try:
         service = SkillConfigurationService()
-        if archive is not None:
-            if files or paths:
-                raise ValueError("一次只能导入 Skill 文件夹或 ZIP")
-            skill = service.import_archive(await archive.read())
+        if payload.source_type == "directory":
+            skill = service.import_directory(payload.source_path)
         else:
-            if not files or not paths:
-                raise ValueError("请选择 Skill 文件夹或 ZIP 文件")
-            contents = [await file.read() for file in files]
-            skill = service.import_files(paths, contents)
+            skill = service.import_archive(payload.source_path)
         return SkillInfoResponse(
             name=skill.name,
             description=skill.description,

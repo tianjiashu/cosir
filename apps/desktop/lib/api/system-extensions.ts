@@ -81,19 +81,14 @@ export function saveEnabledSkills(enabled_skills: string[]): Promise<SystemSkill
   );
 }
 
-export function importSystemSkill(files: File[]): Promise<SystemSkill> {
-  const body = new FormData();
-  for (const file of files) {
-    body.append("files", file);
-    body.append("paths", file.webkitRelativePath);
-  }
-  return requestJson("/configuration/skills/import", { method: "POST", body });
-}
-
-export function importSystemSkillArchive(file: File): Promise<SystemSkill> {
-  const body = new FormData();
-  body.append("archive", file);
-  return requestJson("/configuration/skills/import", { method: "POST", body });
+export function importSystemSkill(
+  source_path: string,
+  source_type: "directory" | "archive",
+): Promise<SystemSkill> {
+  return requestJson(
+    "/configuration/skills/import",
+    jsonRequestInit({ source_path, source_type }, { method: "POST" }),
+  );
 }
 
 export function deleteSystemSkill(name: string): Promise<{ name: string; deleted: boolean }> {

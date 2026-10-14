@@ -13,7 +13,6 @@ import {
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -22,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { formatMcpServerJson, parseMcpServerJson } from "@/components/configuration/mcp-config-json";
+import { formatMcpServerJson, parseMcpServerJson, validateMcpServerConfiguration } from "@/components/configuration/mcp-config-json";
 import {
   getMCPServers,
   saveMCPServers,
@@ -155,6 +154,7 @@ export function MCPConfigurationPanel() {
     event.preventDefault();
     try {
       const server = editorMode === "json" ? parseMcpServerJson(jsonDraft) : fromDraft(draft);
+      validateMcpServerConfiguration(server);
       const next = editingName
         ? servers.map((item) => item.name === editingName ? server : item)
         : [...servers, server];
@@ -206,16 +206,19 @@ export function MCPConfigurationPanel() {
       setFormError(error instanceof Error ? error.message : "MCP 配置无效");
       return;
     }
-    if (!server.name || (server.transport === "stdio" ? !server.command : !server.url)) {
-      setFormError(server.transport === "stdio" ? "请填写服务名称和启动命令" : "请填写服务名称和 HTTP endpoint");
+    try {
+      validateMcpServerConfiguration(server);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "MCP 配置不完整");
       return;
     }
     await runTest(server);
   }
 
-  function toggleEditorMode() {
+  function selectEditorMode(nextMode: "form" | "json") {
+    if (nextMode === editorMode) return;
     setFormError(null);
-    if (editorMode === "form") {
+    if (nextMode === "json") {
       setJsonDraft(formatMcpServerJson(fromDraft(draft)));
       setEditorMode("json");
       return;
@@ -302,13 +305,27 @@ export function MCPConfigurationPanel() {
         <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingName ? "编辑 MCP 服务" : "添加 MCP 服务"}</DialogTitle>
-            <DialogDescription>表单和 JSON 使用同一份服务配置。JSON 采用常见的 mcpServers 结构；enabled 是本应用的启停扩展字段，其他客户端配置项可能不受支持。</DialogDescription>
           </DialogHeader>
           <form onSubmit={(event) => void saveDraft(event)} onChange={() => setTestResult(null)} onClick={() => setTestResult(null)} className="space-y-4">
             <div className="flex justify-end">
-              <Button type="button" variant="outline" size="sm" onClick={toggleEditorMode}>
-                切换到{editorMode === "form" ? "JSON" : "表单"}
-              </Button>
+              <div className="bg-muted relative isolate grid h-9 w-36 grid-cols-2 rounded-lg p-1" role="group" aria-label="配置编辑模式">
+                <span
+                  aria-hidden="true"
+                  className={`absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-md bg-blue-600 shadow-sm transition-transform duration-200 ${editorMode === "json" ? "translate-x-full" : "translate-x-0"}`}
+                />
+                <button
+                  type="button"
+                  aria-pressed={editorMode === "form"}
+                  className={`relative z-10 rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${editorMode === "form" ? "text-white" : "text-muted-foreground hover:text-foreground"}`}
+                  onClick={() => selectEditorMode("form")}
+                >表单</button>
+                <button
+                  type="button"
+                  aria-pressed={editorMode === "json"}
+                  className={`relative z-10 rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${editorMode === "json" ? "text-white" : "text-muted-foreground hover:text-foreground"}`}
+                  onClick={() => selectEditorMode("json")}
+                >JSON</button>
+              </div>
             </div>
             {editorMode === "json" ? (
               <div className="space-y-2">
@@ -319,7 +336,6 @@ export function MCPConfigurationPanel() {
                   className="min-h-72 font-mono text-xs"
                   spellCheck={false}
                 />
-                <p className="text-muted-foreground text-xs">每次编辑一个服务。JSON 中的密钥会以明文显示。</p>
               </div>
             ) : <>
             <label className="block space-y-1.5 text-sm"><span>服务名称</span><Input required value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>

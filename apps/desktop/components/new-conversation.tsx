@@ -4,15 +4,12 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { FileTextIcon, Loader2Icon, SendIcon, XIcon } from "lucide-react";
 
 import { ComposerControls } from "@/components/composer/composer-controls";
+import { ComposerEditor, COMPOSER_EDITOR_CLASS_NAME } from "@/components/composer/composer-editor";
+import { insertAttachments, useComposerInsertion, ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
+import type { InlineComposerAttachment } from "@/components/composer/composer-document";
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
+import { SkillsSelector } from "@/components/composer/skills-selector";
 import { ToolGroupSelector } from "@/components/composer/tool-group-selector";
-import {
-  INLINE_ATTACHMENT_INPUT_CLASS_NAME,
-  InlineAttachmentInput,
-  InlineComposerInsertionProvider,
-  useInlineComposerInsertion,
-  type InlineFileAttachment,
-} from "@/components/composer/inline-attachment-input";
 import { ComposerSurface } from "@/components/composer/composer-surface";
 import { WorkspacePicker } from "@/components/composer/workspace-picker";
 import { CosirMark } from "@/components/cosir-mark";
@@ -20,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { createWorkspaceTask, deleteTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
+import { removeStoredToolGroupSelection, writeStoredToolGroupSelection } from "@/lib/tool-group-selection-storage";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
@@ -121,7 +119,7 @@ function NewConversationAttachmentPicker({
   onPicked: (attachments: PickedComposerAttachment[]) => void | Promise<void>;
   onError: (message: string) => void;
 }) {
-  const insertion = useInlineComposerInsertion();
+  const insertion = useComposerInsertion();
   return (
     <AttachmentPicker
       workspaceRoot={workspaceRoot}
@@ -129,7 +127,7 @@ function NewConversationAttachmentPicker({
         const accepted = picked.filter((attachment) => !existingPaths.has(attachment.path.toLowerCase()));
         if (accepted.length === 0) return;
         await onPicked(accepted);
-        insertion.insert(accepted
+        insertAttachments(insertion.dispatch, accepted
           .filter((attachment) => attachment.kind === "file")
           .map((attachment) => ({ id: attachment.id, name: attachment.name, kind: "file" as const })));
       }}
@@ -145,6 +143,7 @@ type NewConversationProps = {
   onWorkspaceCreated: () => Promise<void>;
   onStarted: (
     conversation: StartedConversation,
+    disabledToolGroups: string[],
   ) => void;
 };
 
@@ -166,7 +165,7 @@ export function NewConversation({
   const [toolGroupsLoading, setToolGroupsLoading] = useState(true);
   const [toolGroupsError, setToolGroupsError] = useState<string | null>(null);
   const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
-  const fileAttachments: InlineFileAttachment[] = attachments
+  const fileAttachments: InlineComposerAttachment[] = attachments
     .filter((attachment) => attachment.kind === "file")
     .map((attachment) => ({
       id: attachment.id,
@@ -207,6 +206,7 @@ export function NewConversation({
         creationCommandId,
       });
       provisionalTask = task;
+      writeStoredToolGroupSelection(task.task_id, selectedToolGroups);
       await submitAssistantTransport({
         taskId: task.task_id,
         workspaceId: selectedWorkspaceId,
@@ -225,13 +225,12 @@ export function NewConversation({
         modelConfigId: selection.modelConfigId,
         reasoningEffort: selection.reasoningEffort ?? null,
       });
-      onStarted(
-        task,
-      );
+      onStarted(task, selectedToolGroups);
     } catch (cause) {
       if (provisionalTask && !(cause instanceof AssistantTransportProtocolError)) {
         try {
           await deleteTask(provisionalTask.task_id, creationCommandId);
+          removeStoredToolGroupSelection(provisionalTask.task_id);
         } catch (cleanupError) {
           void frontendLog("ERROR", "provisional_task_cleanup_failed", "provisional Task 清理失败", {
             data: { taskId: provisionalTask.task_id, creationCommandId },
@@ -253,7 +252,7 @@ export function NewConversation({
 
   return (
     <div className="mx-auto flex h-full w-full max-w-5xl items-center justify-center px-6">
-      <InlineComposerInsertionProvider>
+      <ComposerInsertionProvider>
       <form ref={formRef} onSubmit={submit} className="w-full">
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
           <CosirMark className="text-foreground size-16" />
@@ -277,6 +276,7 @@ export function NewConversation({
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-2 px-2">
             <FavoritePromptToolbar disabled={submitting} />
+            <SkillsSelector disabled={submitting} />
             <ToolGroupSelector
               toolGroups={toolGroups}
               selectedToolGroups={selectedToolGroups}
@@ -297,7 +297,7 @@ export function NewConversation({
               ))}
             </div>
           )}
-          <InlineAttachmentInput
+          <ComposerEditor
             value={text}
             onChange={setText}
             onSubmit={() => {
@@ -325,7 +325,7 @@ export function NewConversation({
               setAttachments((current) => current.filter((attachment) => attachment.id !== fileId));
             }}
             placeholder="你想让我们在这个工作区中构建什么？"
-            className={INLINE_ATTACHMENT_INPUT_CLASS_NAME}
+            className={COMPOSER_EDITOR_CLASS_NAME}
             disabled={submitting}
             aria-label="新对话内容"
             autoFocus
@@ -362,7 +362,7 @@ export function NewConversation({
           </DialogContent>
         </Dialog>
       </form>
-      </InlineComposerInsertionProvider>
+      </ComposerInsertionProvider>
     </div>
   );
 }

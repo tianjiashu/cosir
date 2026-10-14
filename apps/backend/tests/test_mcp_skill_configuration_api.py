@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import zipfile
 
 from fastapi.testclient import TestClient
@@ -166,20 +165,17 @@ def test_skills_can_be_listed_previewed_toggled_imported_and_deleted(tmp_path, m
     assert disabled_document.json()["enabled"] is False
     assert client.get("/configuration/skills/missing").status_code == 404
 
+    source_root = tmp_path / "import-source"
+    _write_skill(source_root, "new-skill")
+    (source_root / "new-skill" / "SKILL.md").write_text(
+        "---\nname: new-skill\ndescription: imported\n---\n\n# Imported",
+        encoding="utf-8",
+    )
+    (source_root / "new-skill" / "references").mkdir()
+    (source_root / "new-skill" / "references" / "guide.md").write_text("Guide", encoding="utf-8")
     response = client.post(
         "/configuration/skills/import",
-        data={"paths": ["new-skill/SKILL.md", "new-skill/references/guide.md"]},
-        files=[
-            (
-                "files",
-                (
-                    "SKILL.md",
-                    b"---\nname: new-skill\ndescription: imported\n---\n\n# Imported",
-                    "text/markdown",
-                ),
-            ),
-            ("files", ("guide.md", b"Guide", "text/markdown")),
-        ],
+        json={"source_path": str(source_root / "new-skill"), "source_type": "directory"},
     )
     assert response.status_code == 201, response.text
     assert response.json() == {"name": "new-skill", "description": "imported", "enabled": True}
@@ -203,17 +199,15 @@ def test_skill_import_reports_name_conflict_without_replacing_existing_skill(
     config_path = tmp_path / "skills.json"
     _patch_skill_paths(monkeypatch, skills_root, config_path, tmp_path)
     _write_skill(skills_root, "duplicate")
+    source_root = tmp_path / "import-source"
+    _write_skill(source_root, "duplicate")
+    (source_root / "duplicate" / "SKILL.md").write_text(
+        "---\nname: duplicate\ndescription: replacement\n---", encoding="utf-8"
+    )
 
     response = TestClient(app).post(
         "/configuration/skills/import",
-        data={"paths": ["duplicate/SKILL.md"]},
-        files={
-            "files": (
-                "SKILL.md",
-                b"---\nname: duplicate\ndescription: replacement\n---",
-                "text/markdown",
-            )
-        },
+        json={"source_path": str(source_root / "duplicate"), "source_type": "directory"},
     )
 
     assert response.status_code == 409
@@ -227,8 +221,8 @@ def test_skill_zip_import_copies_archive_contents_into_system_directory(
     skills_root.mkdir()
     config_path = tmp_path / "skills.json"
     _patch_skill_paths(monkeypatch, skills_root, config_path, tmp_path)
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w") as bundle:
+    archive_path = tmp_path / "new-skill.zip"
+    with zipfile.ZipFile(archive_path, "w") as bundle:
         bundle.writestr("new-skill/SKILL.md", b"---\nname: new-skill\ndescription: zipped\n---\n")
         bundle.writestr("new-skill/references/guide.md", b"Guide")
         bundle.writestr("new-skill/.DS_Store", b"metadata")
@@ -236,7 +230,7 @@ def test_skill_zip_import_copies_archive_contents_into_system_directory(
 
     response = TestClient(app).post(
         "/configuration/skills/import",
-        files={"archive": ("new-skill.zip", archive.getvalue(), "application/zip")},
+        json={"source_path": str(archive_path), "source_type": "archive"},
     )
 
     assert response.status_code == 201
@@ -248,14 +242,14 @@ def test_skill_zip_import_rejects_archive_path_escape(tmp_path, monkeypatch) -> 
     skills_root = tmp_path / "skills"
     skills_root.mkdir()
     _patch_skill_paths(monkeypatch, skills_root, tmp_path / "skills.json", tmp_path)
-    archive = io.BytesIO()
-    with zipfile.ZipFile(archive, "w") as bundle:
+    archive_path = tmp_path / "skill.zip"
+    with zipfile.ZipFile(archive_path, "w") as bundle:
         bundle.writestr("new-skill/SKILL.md", b"---\nname: new-skill\ndescription: zipped\n---\n")
         bundle.writestr("../outside.txt", b"outside")
 
     response = TestClient(app).post(
         "/configuration/skills/import",
-        files={"archive": ("skill.zip", archive.getvalue(), "application/zip")},
+        json={"source_path": str(archive_path), "source_type": "archive"},
     )
 
     assert response.status_code == 400
@@ -267,9 +261,11 @@ def test_skill_zip_import_reports_invalid_archive(tmp_path, monkeypatch) -> None
     skills_root.mkdir()
     _patch_skill_paths(monkeypatch, skills_root, tmp_path / "skills.json", tmp_path)
 
+    archive_path = tmp_path / "broken.zip"
+    archive_path.write_bytes(b"not a zip")
     response = TestClient(app).post(
         "/configuration/skills/import",
-        files={"archive": ("broken.zip", b"not a zip", "application/zip")},
+        json={"source_path": str(archive_path), "source_type": "archive"},
     )
 
     assert response.status_code == 400
@@ -290,16 +286,11 @@ def test_skill_import_rolls_back_when_enabled_configuration_cannot_be_written(
     monkeypatch.setattr(
         skill_configuration_service.SkillConfigurationService, "_write_configuration", fail_write
     )
+    source_root = tmp_path / "import-source"
+    _write_skill(source_root, "new-skill")
     response = TestClient(app).post(
         "/configuration/skills/import",
-        data={"paths": ["new-skill/SKILL.md"]},
-        files={
-            "files": (
-                "SKILL.md",
-                b"---\nname: new-skill\ndescription: imported\n---\n# New",
-                "text/markdown",
-            )
-        },
+        json={"source_path": str(source_root / "new-skill"), "source_type": "directory"},
     )
 
     assert response.status_code == 500
@@ -332,11 +323,14 @@ def test_skill_delete_restores_directory_when_enabled_configuration_cannot_be_wr
 def test_skill_import_rejects_paths_that_escape_the_selected_folder(tmp_path, monkeypatch) -> None:
     skills_root = tmp_path / "skills"
     _patch_skill_paths(monkeypatch, skills_root, tmp_path / "skills.json", tmp_path)
+    archive_path = tmp_path / "escape.zip"
+    with zipfile.ZipFile(archive_path, "w") as bundle:
+        bundle.writestr("new-skill/SKILL.md", b"---\nname: new-skill\ndescription: imported\n---")
+        bundle.writestr("new-skill/../outside.txt", b"outside")
 
     response = TestClient(app).post(
         "/configuration/skills/import",
-        data={"paths": ["new-skill/../outside.txt"]},
-        files={"files": ("outside.txt", b"outside", "text/plain")},
+        json={"source_path": str(archive_path), "source_type": "archive"},
     )
 
     assert response.status_code == 400

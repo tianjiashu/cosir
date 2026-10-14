@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import io
 import json
+import os
 import shutil
+import stat
 import tempfile
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import BinaryIO
 
 from app.config.logging.logger import log
 from app.service.configuration.file_store import ConfigurationFileStore
@@ -18,6 +20,17 @@ from app.utils.path.system_cosir import (
     system_cosir_dir,
     system_skills_config_file,
     system_skills_dir,
+)
+
+MAX_SKILL_IMPORT_FILES = 512
+MAX_SKILL_IMPORT_ENTRIES = 1024
+MAX_SKILL_IMPORT_FILE_BYTES = 16 * 1024 * 1024
+MAX_SKILL_IMPORT_TOTAL_BYTES = 128 * 1024 * 1024
+MAX_SKILL_ARCHIVE_BYTES = 128 * 1024 * 1024
+WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{number}" for number in range(1, 10)}
+    | {f"LPT{number}" for number in range(1, 10)}
 )
 
 
@@ -67,53 +80,139 @@ class SkillConfigurationService:
         )
         return self.list()
 
-    def import_files(self, paths: list[str], contents: list[bytes]) -> SkillInfo:
-        """校验并导入用户选择的本机 Skill 文件夹，目标固定为系统 Skill 目录。"""
+    def import_directory(self, source_path: str) -> SkillInfo:
+        """从原生选择器选中的目录复制并安装；拒绝目录内部链接，根目录链接按用户选择解析。"""
 
-        if not paths or len(paths) != len(contents):
-            raise ValueError("导入文件列表无效")
-        relative_paths = [self._relative_import_path(path) for path in paths]
-        if len(relative_paths) != len(set(relative_paths)):
-            raise ValueError("导入文件路径重复")
-        root_names = {path.parts[0] for path in relative_paths}
-        if len(root_names) != 1:
-            raise ValueError("请选择单个 Skill 文件夹")
+        source = self._resolve_selected_path(source_path)
+        if not source.is_dir():
+            raise ValueError("请选择 Skill 文件夹")
 
-        selected_name = relative_paths[0].parts[0]
         self.root.mkdir(parents=True, exist_ok=True)
+        total_bytes = 0
+        file_count = 0
+        entry_count = 0
         with tempfile.TemporaryDirectory(prefix="skill-import-", dir=self.root) as temporary:
-            staging = Path(temporary) / selected_name
+            staging = Path(temporary) / source.name
             staging.mkdir()
-            for relative_path, content in zip(relative_paths, contents, strict=True):
-                target = staging.joinpath(*relative_path.parts[1:])
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(content)
+            for current, directory_names, file_names in os.walk(
+                source,
+                followlinks=False,
+                onerror=self._raise_directory_walk_error,
+            ):
+                directory_names.sort()
+                file_names.sort()
+                current_path = Path(current)
+                entry_count += len(directory_names) + len(file_names)
+                if entry_count > MAX_SKILL_IMPORT_ENTRIES:
+                    raise ValueError("Skill 文件夹条目超过 1024 个")
+                for directory_name in directory_names:
+                    if (current_path / directory_name).is_symlink():
+                        raise ValueError("Skill 文件夹不能包含符号链接")
+                for file_name in file_names:
+                    source_file = current_path / file_name
+                    relative_path = source_file.relative_to(source)
+                    import_path = PurePosixPath(source.name, *relative_path.parts)
+                    if self._is_ignored_import_path(import_path):
+                        continue
+                    if source_file.is_symlink():
+                        raise ValueError("Skill 文件夹不能包含符号链接")
+                    file_count += 1
+                    file_size = source_file.stat().st_size
+                    checked_total_bytes = self._check_import_size(file_count, file_size, total_bytes)
+                    target = staging.joinpath(*relative_path.parts)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    copied_bytes = self._copy_import_file(source_file, target, total_bytes)
+                    if copied_bytes != file_size:
+                        raise ValueError("Skill 文件大小在导入过程中发生变化，请重新选择")
+                    total_bytes = checked_total_bytes
+            if file_count == 0:
+                raise ValueError("所选文件夹中没有可导入的 Skill 文件")
+            return self._install_staged_skill(staging)
 
-            info = read_skill_metadata(staging)
-            destination = self.root / info.name
-            if destination.exists():
-                raise FileExistsError(f"已存在同名 Skill：{info.name}")
-            staging.rename(destination)
+    def import_archive(self, source_path: str) -> SkillInfo:
+        """从原生文件选择器选中的 ZIP 中限量解压并安装 Skill。"""
 
-        configuration = read_skill_configuration()
-        if configuration.enabled_skills is not None:
-            enabled_names = list(configuration.enabled_skills)
-            if info.name not in enabled_names:
-                enabled_names.append(info.name)
-            try:
+        source = self._resolve_selected_path(source_path)
+        if not source.is_file():
+            raise ValueError("请选择 Skill ZIP 文件")
+        if source.suffix.lower() != ".zip":
+            raise ValueError("请选择 .zip 格式的 Skill 文件")
+        if source.stat().st_size > MAX_SKILL_ARCHIVE_BYTES:
+            raise ValueError("Skill ZIP 文件超过 128 MiB 上限")
+
+        self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            with zipfile.ZipFile(source) as archive:
+                entries = archive.infolist()
+                if len(entries) > MAX_SKILL_IMPORT_ENTRIES:
+                    raise ValueError("Skill ZIP 文件条目超过 1024 个")
+                files = [entry for entry in entries if not entry.is_dir()]
+                relative_paths = [self._relative_import_path(entry.filename) for entry in files]
+                import_paths = [
+                    path for path in relative_paths if not self._is_ignored_import_path(path)
+                ]
+                if not import_paths:
+                    raise ValueError("Skill ZIP 中没有可导入的文件")
+                if len(import_paths) > MAX_SKILL_IMPORT_FILES:
+                    raise ValueError("Skill 文件数量超过 512 个")
+                if len({path.as_posix().casefold() for path in import_paths}) != len(import_paths):
+                    raise ValueError("Skill ZIP 中存在重复文件路径")
+                root_names = {path.parts[0] for path in import_paths}
+                if len(root_names) != 1 or any(len(path.parts) < 2 for path in import_paths):
+                    raise ValueError("ZIP 中必须包含单个 Skill 文件夹")
+
+                selected_name = next(iter(root_names))
+                with tempfile.TemporaryDirectory(prefix="skill-import-", dir=self.root) as temporary:
+                    staging = Path(temporary) / selected_name
+                    staging.mkdir()
+                    total_bytes = 0
+                    file_count = 0
+                    for entry, relative_path in zip(files, relative_paths, strict=True):
+                        if self._is_ignored_import_path(relative_path):
+                            continue
+                        if stat.S_ISLNK(entry.external_attr >> 16):
+                            raise ValueError("Skill ZIP 不能包含符号链接")
+                        file_count += 1
+                        previous_total_bytes = total_bytes
+                        total_bytes = self._check_import_size(file_count, entry.file_size, total_bytes)
+                        target = staging.joinpath(*relative_path.parts[1:])
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with archive.open(entry) as source_file:
+                            copied = self._copy_import_stream(source_file, target, previous_total_bytes)
+                        if copied != entry.file_size:
+                            raise ValueError("Skill ZIP 文件大小在导入过程中发生变化")
+                    return self._install_staged_skill(staging)
+        except zipfile.BadZipFile as exc:
+            raise ValueError("无法读取 Skill ZIP 文件") from exc
+
+    def _install_staged_skill(self, staging: Path) -> SkillInfo:
+        """校验暂存目录并原子安装，配置写入失败时回滚目录。"""
+
+        info = read_skill_metadata(staging)
+        destination = self.root / info.name
+        if destination.exists():
+            raise FileExistsError(f"已存在同名 Skill：{info.name}")
+        staging.rename(destination)
+
+        try:
+            configuration = read_skill_configuration()
+            if configuration.enabled_skills is not None:
+                enabled_names = list(configuration.enabled_skills)
+                if info.name not in enabled_names:
+                    enabled_names.append(info.name)
                 self._write_configuration(SkillConfiguration(enabled_skills=enabled_names))
-            except Exception:
-                try:
-                    shutil.rmtree(destination)
-                except OSError:
-                    log.exception(
-                        "configuration_skill_import_rollback_failed",
-                        extra={
-                            "msg": "Skill 导入配置写入失败，且未能清理已复制目录",
-                            "data": {"skill_name": info.name},
-                        },
-                    )
-                raise
+        except Exception:
+            try:
+                shutil.rmtree(destination)
+            except OSError:
+                log.exception(
+                    "configuration_skill_import_rollback_failed",
+                    extra={
+                        "msg": "Skill 导入配置读取或写入失败，且未能清理已复制目录",
+                        "data": {"skill_name": info.name},
+                    },
+                )
+            raise
 
         imported = SkillInfo(info.name, info.description, destination, True)
         log.info(
@@ -122,26 +221,54 @@ class SkillConfigurationService:
         )
         return imported
 
-    def import_archive(self, content: bytes) -> SkillInfo:
-        """读取 ZIP 内的单个 Skill 目录，再复用文件夹导入的校验和安装流程。"""
+    @staticmethod
+    def _is_ignored_import_path(path: PurePosixPath) -> bool:
+        return "__MACOSX" in path.parts or path.name == ".DS_Store" or path.name.startswith("._")
 
+    @staticmethod
+    def _resolve_selected_path(source_path: str) -> Path:
+        source = Path(source_path)
+        if not source.is_absolute():
+            raise ValueError("Skill 导入路径必须是本机绝对路径")
         try:
-            with zipfile.ZipFile(io.BytesIO(content)) as archive:
-                paths: list[str] = []
-                contents: list[bytes] = []
-                for item in archive.infolist():
-                    if item.is_dir():
-                        continue
-                    relative_path = self._relative_import_path(item.filename)
-                    if "__MACOSX" in relative_path.parts or relative_path.name == ".DS_Store":
-                        continue
-                    if relative_path.name.startswith("._"):
-                        continue
-                    paths.append(item.filename)
-                    contents.append(archive.read(item))
-        except zipfile.BadZipFile as exc:
-            raise ValueError("无法读取 Skill ZIP 文件") from exc
-        return self.import_files(paths, contents)
+            return source.resolve(strict=True)
+        except FileNotFoundError as error:
+            raise ValueError("所选 Skill 路径已不可用，请重新选择") from error
+
+    @staticmethod
+    def _raise_directory_walk_error(error: OSError) -> None:
+        raise error
+
+    @staticmethod
+    def _check_import_size(file_count: int, file_size: int, total_bytes: int) -> int:
+        if file_count > MAX_SKILL_IMPORT_FILES:
+            raise ValueError("Skill 文件数量超过 512 个")
+        if file_size > MAX_SKILL_IMPORT_FILE_BYTES:
+            raise ValueError("Skill 单个文件超过 16 MiB 上限")
+        total_bytes += file_size
+        if total_bytes > MAX_SKILL_IMPORT_TOTAL_BYTES:
+            raise ValueError("Skill 文件总大小超过 128 MiB 上限")
+        return total_bytes
+
+    @classmethod
+    def _copy_import_file(cls, source: Path, target: Path, previous_total_bytes: int) -> int:
+        with source.open("rb") as source_file:
+            return cls._copy_import_stream(source_file, target, previous_total_bytes)
+
+    @staticmethod
+    def _copy_import_stream(source: BinaryIO, target: Path, previous_total_bytes: int) -> int:
+        """分块写入暂存目录，按实际读取字节数阻止超限内容落盘。"""
+
+        copied_bytes = 0
+        with target.open("wb") as target_file:
+            while chunk := source.read(1024 * 1024):
+                copied_bytes += len(chunk)
+                if copied_bytes > MAX_SKILL_IMPORT_FILE_BYTES:
+                    raise ValueError("Skill 单个文件超过 16 MiB 上限")
+                if previous_total_bytes + copied_bytes > MAX_SKILL_IMPORT_TOTAL_BYTES:
+                    raise ValueError("Skill 文件总大小超过 128 MiB 上限")
+                target_file.write(chunk)
+        return copied_bytes
 
     def delete(self, name: str) -> None:
         """删除已发现 Skill，并从显式启用名单中移除其名称。"""
@@ -177,9 +304,23 @@ class SkillConfigurationService:
 
     @staticmethod
     def _relative_import_path(value: str) -> PurePosixPath:
-        """只接受浏览器目录选择器生成的相对路径，防止上传文件逃出导入目录。"""
+        """只接受 ZIP 内位于单个 Skill 根目录下的相对路径。"""
 
         path = PurePosixPath(value)
-        if path.is_absolute() or not path.parts or ".." in path.parts or "\\" in value:
+        windows_path = PureWindowsPath(value)
+        if (
+            path.is_absolute()
+            or windows_path.is_absolute()
+            or windows_path.drive
+            or not path.parts
+            or ".." in path.parts
+            or "\\" in value
+            or any(
+                part.endswith((" ", "."))
+                or any(ord(character) < 32 or character in '<>:"|?*' for character in part)
+                or part.split(".", maxsplit=1)[0].upper() in WINDOWS_RESERVED_NAMES
+                for part in path.parts
+            )
+        ):
             raise ValueError("导入文件路径必须位于所选 Skill 文件夹内")
         return path

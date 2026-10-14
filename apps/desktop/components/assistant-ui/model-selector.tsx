@@ -68,6 +68,7 @@ function toOfficialModel(model: ModelCatalogModel): ModelOption {
   return {
     id: model.optionId,
     name: model.label,
+    triggerName: model.modelName,
     keywords: [model.configName, model.modelName],
     efforts: model.supportsReasoningEffort
       ? BACKEND_REASONING_EFFORTS

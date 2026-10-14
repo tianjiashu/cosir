@@ -36,6 +36,7 @@ import {
   forkTask,
   getWorkspaceTasks,
   getWorkspaces,
+  type StartedConversation,
   type WorkspaceTask,
 } from "@/lib/api/workspaces";
 import { HttpError } from "@/lib/http/errors";
@@ -78,6 +79,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
   const [deleting, setDeleting] = useState(false);
   const [forkingRunId, setForkingRunId] = useState<number | null>(null);
   const [forkError, setForkError] = useState<string | null>(null);
+
   const loadGenerationRef = useRef(0);
   const loadControllerRef = useRef<AbortController | null>(null);
   const knownWorkspaceIdsRef = useRef(new Set<number>());
@@ -171,6 +173,11 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
       if (generation === loadGenerationRef.current) catalogLoadingRef.current = false;
     }
   }, []);
+
+  const startConversation = useCallback((conversation: StartedConversation, disabledToolGroups: string[]) => {
+    navigate(`/tasks/${conversation.task_id}`, { state: { initialDisabledToolGroups: disabledToolGroups } });
+    void load();
+  }, [load, navigate]);
 
   useEffect(() => {
     void load();
@@ -485,7 +492,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
             onTaskLoaded={handleTaskLoaded}
             onTaskStateChanged={refreshTaskState}
             onRunStateChange={handleRunStateChange}
-          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={(conversation) => { navigate(`/tasks/${conversation.task_id}`); void load(); }} />}
+          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={startConversation} />}
         </div>
       </main>
       <Workbench workspaceId={activeTaskWorkspaceId} onRequestClose={requestWorkbenchPanelClose} />

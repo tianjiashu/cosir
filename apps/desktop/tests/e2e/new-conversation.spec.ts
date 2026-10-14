@@ -116,8 +116,11 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
     payload: { ban_tools: ["read_file"] },
   });
   await expect(page.getByText("禁用工具组（1）")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("cosir:tool-group-selection:task:42"))).toBe(
+    JSON.stringify(["文件"]),
+  );
   await expect(page.getByRole("main").getByText("你好", { exact: true })).toBeVisible();
-  await expect(page.getByText("stream", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("streaming response", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Reasoning", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "发送" })).toBeVisible();
 
@@ -129,7 +132,6 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   });
   await messageInput.fill("请继续");
   await page.getByRole("button", { name: "发送" }).click();
-  await expect(page.getByText("stream", { exact: true })).toBeVisible();
   await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
   await secondResponsePromise;
   const streamLogUrl = "http://127.0.0.1:8000/__test__/last-stream";
@@ -139,6 +141,11 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(assistantRequests[1]?.status).toBe(200);
   expect(assistantRequests[1]?.body.taskId).toBe(42);
   expect(assistantRequests[1]?.body.state).toBeUndefined();
+  expect(assistantRequests[1]?.body.commands).toContainEqual(expect.objectContaining({
+    type: "custom",
+    name: "ban-tools",
+    payload: { ban_tools: ["read_file"] },
+  }));
   expect(streamBody).toContain('"kind":"mutation"');
   expect(streamBody).toContain('"kind":"append-text"');
   expect(streamBody).toContain("streaming response");
@@ -148,13 +155,19 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(logs.filter((entry) => entry.event === "assistant_runtime_unmounted")).toHaveLength(0);
   expect(logs.filter((entry) => entry.event === "assistant_transport_stream_cancelled")).toHaveLength(0);
   const finishes = logs.filter((entry) => entry.event === "assistant_transport_stream_finished");
-  expect(logs.filter((entry) => entry.event === "assistant_transport_response_received")).toHaveLength(2);
-  expect(finishes).toHaveLength(2);
+  // 新会话首条请求由一次性提交器发出；运行时日志只覆盖导航后的后续请求。
+  expect(logs.filter((entry) => entry.event === "assistant_transport_response_received")).toHaveLength(1);
+  expect(finishes).toHaveLength(1);
   expect(finishes.at(-1)?.data?.pendingCommandCount).toBe(0);
+  const restoredPage = await page.context().newPage();
+  await restoredPage.goto("/tasks/42");
+  await expect(restoredPage.getByText("禁用工具组（1）")).toBeVisible();
+  await restoredPage.close();
   const telemetry = await (await request.get("http://127.0.0.1:8000/__test__/telemetry")).json() as {
     clientCancelCount: number;
   };
-  expect(telemetry.clientCancelCount).toBe(0);
+  // 新会话首条命令在 accepted barrier 后主动关闭订阅；测试服务统计连接关闭次数，不代表 Run 被取消。
+  expect(telemetry.clientCancelCount).toBe(1);
 });
 
 test("任务页面重挂载时自动恢复未结束的 run", async ({ page, request }) => {
@@ -425,13 +438,23 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   await latestUser.getByRole("button", { name: "编辑并重跑" }).click();
   const editInput = page.getByRole("textbox", { name: "编辑消息" });
   await editInput.fill("edit-failure");
+  const failureRequest = page.waitForRequest((request) => (
+    request.url().endsWith("/assistant") && request.method() === "POST"
+  ));
   const failureResponse = page.waitForResponse((response) => (
     response.url().endsWith("/assistant") && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "重跑" }).click();
+  const failedRequestBody = (await failureRequest).postDataJSON() as {
+    commands: Array<{ sourceId?: string; message?: { parts?: Array<{ type?: string; text?: string }> } }>;
+  };
+  const failedEditCommand = failedRequestBody.commands[0];
+  expect(failedEditCommand?.sourceId).toBe("user-2");
+  expect(failedEditCommand?.message?.parts?.find((part) => part.type === "text")?.text).toBe("edit-failure");
   await expect((await failureResponse).status()).toBe(409);
 
   await expect(page.getByRole("dialog")).toContainText("编辑重跑被测试后端拒绝");
+  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveText("edit-failure");
   await expect(topComposer).toHaveText("keep draft");
 });

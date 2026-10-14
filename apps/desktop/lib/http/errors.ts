@@ -50,6 +50,16 @@ export async function parseHttpError(response: Response): Promise<HttpError> {
       });
     }
 
+    if (isRecord(parsed.detail) && typeof parsed.detail.message === "string") {
+      return new HttpError(parsed.detail.message, {
+        status: response.status,
+        code: typeof parsed.detail.code === "string" ? parsed.detail.code : undefined,
+        retryable: typeof parsed.detail.retryable === "boolean"
+          ? parsed.detail.retryable
+          : undefined,
+      });
+    }
+
     if (typeof parsed.detail === "string") {
       return new HttpError(parsed.detail, { status: response.status });
     }

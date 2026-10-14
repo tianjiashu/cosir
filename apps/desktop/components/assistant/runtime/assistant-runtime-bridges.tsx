@@ -18,10 +18,9 @@ import {
 import {
   applyEditDraftToComposer,
   beginEditComposerOperation,
-  discardPendingEditComposerDraft,
   editableDraftAttachments,
-  endEditComposerOperation,
   isCurrentEditComposerOperation,
+  queuePendingEditComposerStart,
   setPendingEditComposerDraft,
 } from "@/lib/assistant/edit-composer-draft";
 
@@ -250,21 +249,9 @@ export function ComposerRestoreBridge({
       },
       restoreEditMessage: (sourceId, text, attachments = []) => {
         try {
-          const composer = aui.thread.message({ id: sourceId }).composer();
-          const generation = beginEditComposerOperation(sourceId);
-          if (!composer.getState().isEditing) {
-            setPendingEditComposerDraft(sourceId, { text, attachments });
-            try {
-              composer.beginEdit();
-            } catch (error) {
-              discardPendingEditComposerDraft(sourceId);
-              endEditComposerOperation(sourceId, generation);
-              throw error;
-            }
-          } else {
-            void restoreIntoComposer(composer, text, attachments, sourceId, generation)
-              .finally(() => endEditComposerOperation(sourceId, generation));
-          }
+          beginEditComposerOperation(sourceId);
+          setPendingEditComposerDraft(sourceId, { text, attachments });
+          queuePendingEditComposerStart(sourceId);
           return true;
         } catch (error) {
           void frontendLog("WARNING", "assistant_edit_composer_restore_rejected", "编辑草稿恢复未能交给输入框", {

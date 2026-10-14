@@ -18,7 +18,7 @@ import {
   writeFavoritePrompts,
   type FavoritePrompt,
 } from "@/lib/favorite-prompt-storage";
-import { useInlineComposerInsertion } from "@/components/composer/inline-attachment-input";
+import { insertText, useComposerInsertion } from "@/components/composer/composer-insertion-context";
 
 type FavoritePromptToolbarProps = {
   disabled?: boolean;
@@ -31,7 +31,7 @@ type FavoritePromptToolbarProps = {
  * @sideEffects Reads and writes the local prompt preference store; inserts text into the nearest composer.
  */
 export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolbarProps) {
-  const insertion = useInlineComposerInsertion();
+  const insertion = useComposerInsertion();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
   const prompts = useSyncExternalStore(subscribeFavoritePrompts, readFavoritePrompts, readFavoritePrompts);
@@ -123,7 +123,7 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
             prompts={prompts}
             onSelect={(prompt) => {
               if (disabled) return;
-              insertion.insertText(prompt.content);
+              insertText(insertion.dispatch, prompt.content);
               setPickerOpen(false);
             }}
             disabled={disabled}

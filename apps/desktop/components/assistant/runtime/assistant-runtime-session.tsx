@@ -15,6 +15,7 @@ import type {
 } from "@/components/assistant/runtime/runtime-types";
 import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { readStoredToolGroupSelection, writeStoredToolGroupSelection } from "@/lib/tool-group-selection-storage";
 import { newTraceId } from "@/lib/trace";
 import { getToolGroups, toolNamesForGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import {
@@ -67,7 +68,9 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     });
   }, [taskId, traceId]);
   const [toolGroups, setToolGroups] = useState<ToolGroupCatalog[]>([]);
-  const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>(() => initialDisabledToolGroups ?? []);
+  const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>(() => (
+    readStoredToolGroupSelection(taskId) ?? initialDisabledToolGroups ?? []
+  ));
   const [toolGroupsLoading, setToolGroupsLoading] = useState(true);
   const [toolGroupsError, setToolGroupsError] = useState<string | null>(null);
   const initialStateRef = useRef(initialState);
@@ -110,6 +113,10 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const registerRuntimeControls = useCallback((controls: RuntimeControls | null) => {
     runtimeControlsRef.current = controls;
   }, []);
+  const handleSelectedToolGroupsChange = useCallback((groups: string[]) => {
+    setSelectedToolGroups(groups);
+    writeStoredToolGroupSelection(taskId, groups);
+  }, [taskId]);
   const registerComposerRestore = useCallback((restore: ComposerRestore) => {
     composerRestoreRef.current = restore;
   }, []);
@@ -179,7 +186,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       initialMessageSentRef={initialMessageSentRef}
       toolGroups={toolGroups}
       selectedToolGroups={selectedToolGroups}
-      onSelectedToolGroupsChange={setSelectedToolGroups}
+      onSelectedToolGroupsChange={handleSelectedToolGroupsChange}
       toolGroupsLoading={toolGroupsLoading}
       toolGroupsError={toolGroupsError}
       initialMessage={initialMessage}

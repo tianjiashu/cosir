@@ -30,7 +30,7 @@ export function formatMcpServerJson(server: MCPServerConfiguration): string {
   );
 }
 
-/** 解析单服务 mcpServers 配置，并映射为本项目保存接口使用的结构。 */
+/** 解析单服务 mcpServers 草稿；必填项留给保存或测试边界校验，保证未完成草稿可切换编辑方式。 */
 export function parseMcpServerJson(text: string): MCPServerConfiguration {
   let parsed: unknown;
   try {
@@ -51,9 +51,7 @@ export function parseMcpServerJson(text: string): MCPServerConfiguration {
   }
 
   const [name, rawConfig] = entries[0];
-  if (!name.trim() || !isRecord(rawConfig)) {
-    throw new Error("mcpServers 中的服务名称不能为空，服务配置必须是对象");
-  }
+  if (!isRecord(rawConfig)) throw new Error("服务配置必须是对象");
 
   const allowedFields = new Set(["command", "args", "env", "type", "url", "headers", "enabled"]);
   const unsupportedField = Object.keys(rawConfig).find((field) => !allowedFields.has(field));
@@ -86,13 +84,20 @@ export function parseMcpServerJson(text: string): MCPServerConfiguration {
     if (rawConfig.type !== "http" && rawConfig.type !== "sse") {
       throw new Error("HTTP 服务的 type 必须是 http 或 sse");
     }
-    if (typeof rawConfig.url !== "string" || !rawConfig.url.trim()) {
-      throw new Error("HTTP 服务需要填写 url");
+    if (rawConfig.url !== undefined && typeof rawConfig.url !== "string") {
+      throw new Error("HTTP 服务的 url 必须是字符串");
     }
     transport = rawConfig.type === "sse" ? "sse" : "streamable_http";
-    url = rawConfig.url;
+    url = (rawConfig.url as string | undefined) ?? "";
     headers = readStringMap(rawConfig.headers, "headers");
   }
 
   return { name: name.trim(), transport, command, args, env, url, headers, enabled };
+}
+
+/** 在保存或连接测试边界校验草稿的必填连接参数。 */
+export function validateMcpServerConfiguration(server: MCPServerConfiguration): void {
+  if (!server.name.trim() || (server.transport === "stdio" ? !server.command.trim() : !server.url.trim())) {
+    throw new Error(server.transport === "stdio" ? "请填写服务名称和启动命令" : "请填写服务名称和 HTTP endpoint");
+  }
 }

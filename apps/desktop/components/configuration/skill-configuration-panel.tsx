@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Loader2Icon, PlusIcon, PuzzleIcon, Trash2Icon } from "lucide-react";
 import { Streamdown } from "streamdown";
 
@@ -19,7 +20,6 @@ import {
   getSystemSkill,
   getSystemSkills,
   importSystemSkill,
-  importSystemSkillArchive,
   saveEnabledSkills,
   type SystemSkill,
   type SystemSkillDocument,
@@ -31,9 +31,8 @@ function ErrorMessage({ children }: { children: string }) {
 
 /** 系统目录 Skill 的导入、启停与只读详情管理。 */
 export function SkillConfigurationPanel() {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const archiveInputRef = useRef<HTMLInputElement>(null);
   const detailRequestId = useRef(0);
+  const importInFlight = useRef(false);
   const [skills, setSkills] = useState<SystemSkill[]>([]);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -58,8 +57,6 @@ export function SkillConfigurationPanel() {
   }
 
   useEffect(() => {
-    inputRef.current?.setAttribute("webkitdirectory", "");
-    inputRef.current?.setAttribute("directory", "");
     void load();
   }, []);
 
@@ -80,44 +77,32 @@ export function SkillConfigurationPanel() {
     }
   }
 
-  async function importSelectedFolder(event: React.ChangeEvent<HTMLInputElement>) {
-    const selectedFiles = Array.from(event.currentTarget.files ?? []);
-    event.currentTarget.value = "";
-    if (selectedFiles.length === 0) return;
-    if (selectedFiles.some((file) => !file.webkitRelativePath)) {
-      setLoadError("无法读取所选目录结构，请重新选择 Skill 文件夹。");
-      return;
-    }
-
+  async function selectAndImport(sourceType: "directory" | "archive") {
+    if (importInFlight.current) return;
+    importInFlight.current = true;
     setImporting(true);
     setLoadError(null);
     setNotice(null);
     try {
-      const skill = await importSystemSkill(selectedFiles);
-      setSkills((current) => [...current.filter((item) => item.name !== skill.name), skill].sort((a, b) => a.name.localeCompare(b.name)));
+      const sourcePath = sourceType === "directory"
+        ? await open({ directory: true, multiple: false, title: "选择要导入的 Skill 文件夹" })
+        : await open({
+            multiple: false,
+            title: "选择要导入的 Skill ZIP",
+            filters: [{ name: "Skill ZIP", extensions: ["zip"] }],
+          });
+      if (typeof sourcePath !== "string") return;
+      const skill = await importSystemSkill(sourcePath, sourceType);
+      setSkills((current) =>
+        [...current.filter((item) => item.name !== skill.name), skill].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        ),
+      );
       setNotice(`已导入 ${skill.name}，文件已复制到系统 Skill 目录。`);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "导入 Skill 失败");
     } finally {
-      setImporting(false);
-    }
-  }
-
-  async function importSelectedArchive(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = "";
-    if (!file) return;
-
-    setImporting(true);
-    setLoadError(null);
-    setNotice(null);
-    try {
-      const skill = await importSystemSkillArchive(file);
-      setSkills((current) => [...current.filter((item) => item.name !== skill.name), skill].sort((a, b) => a.name.localeCompare(b.name)));
-      setNotice(`已导入 ${skill.name}，文件已复制到系统 Skill 目录。`);
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "导入 Skill ZIP 失败");
-    } finally {
+      importInFlight.current = false;
       setImporting(false);
     }
   }
@@ -164,13 +149,11 @@ export function SkillConfigurationPanel() {
           <h2 id="skill-configuration-heading" className="text-lg font-semibold">Skills</h2>
         </div>
         <div className="flex gap-2">
-          <input ref={inputRef} type="file" multiple className="hidden" aria-label="选择要导入的 Skill 文件夹" onChange={(event) => void importSelectedFolder(event)} />
-          <input ref={archiveInputRef} type="file" accept=".zip,application/zip" className="hidden" aria-label="选择要导入的 Skill ZIP" onChange={(event) => void importSelectedArchive(event)} />
-          <Button onClick={() => inputRef.current?.click()} disabled={loadState !== "ready" || importing}>
+          <Button onClick={() => void selectAndImport("directory")} disabled={loadState !== "ready" || importing}>
             {importing ? <Loader2Icon className="animate-spin" /> : <PlusIcon />}
             导入 Skill 文件夹
           </Button>
-          <Button variant="outline" onClick={() => archiveInputRef.current?.click()} disabled={loadState !== "ready" || importing}>
+          <Button variant="outline" onClick={() => void selectAndImport("archive")} disabled={loadState !== "ready" || importing}>
             {importing ? <Loader2Icon className="animate-spin" /> : <PlusIcon />}
             导入 ZIP
           </Button>

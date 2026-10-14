@@ -45,6 +45,7 @@ export const DEFAULT_EFFORT_OPTIONS: readonly ModelSelectorEffortOption[] = REAS
 export type ModelOption = {
   id: string;
   name: string;
+  triggerName?: string;
   description?: string;
   icon?: ReactNode;
   disabled?: boolean;
@@ -357,7 +358,7 @@ function ModelSelectorValue({
       className={cn("flex min-w-0 items-center gap-2", className)}
     >
       {selectedModel.icon && <ModelIcon>{selectedModel.icon}</ModelIcon>}
-      <span className="truncate font-medium">{selectedModel.name}</span>
+      <span className="truncate font-medium">{selectedModel.triggerName ?? selectedModel.name}</span>
       {effortName && (
         <span className="text-muted-foreground min-w-7.5 truncate text-center">
           {effortName}

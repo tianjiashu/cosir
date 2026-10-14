@@ -41,11 +41,14 @@ import { ImageAttachmentCard } from "@/components/composer/image-attachment-card
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { isUnsupportedImageFile } from "@/lib/assistant/attachments/attachment-upload";
 import {
-  InlineAttachmentInput,
-  useInlineComposerInsertion,
-  type InlineFileAttachment,
-} from "@/components/composer/inline-attachment-input";
+  useComposerInsertion,
+  insertAttachments,
+} from "@/components/composer/composer-insertion-context";
+import { ComposerEditor } from "@/components/composer/composer-editor";
+import type { InlineComposerAttachment } from "@/components/composer/composer-document";
 import { inlineAttachmentTokenId } from "@/lib/assistant/attachments/local-file-token";
+
+type InlineFileAttachment = InlineComposerAttachment;
 
 type AttachmentPreviewProps = {
   src: string;
@@ -334,7 +337,7 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
 
   const addExternalFiles = async (files: readonly File[]): Promise<InlineFileAttachment[]> => {
     const existingIds = new Set(aui.composer.getState().attachments.map((attachment) => attachment.id));
-    const insertedFiles: InlineFileAttachment[] = [];
+    const insertedFiles: InlineComposerAttachment[] = [];
     for (const file of files) {
       if (isUnsupportedImageFile(file)) {
         void frontendLog(
@@ -364,7 +367,7 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
   };
 
   return (
-    <InlineAttachmentInput
+    <ComposerEditor
       value={composer.value}
       onChange={composer.setText}
       onSubmit={() => {
@@ -385,11 +388,11 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
 
 export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: boolean }> = ({ workspaceRoot, disabled = false }) => {
   const aui = useAui();
-  const insertion = useInlineComposerInsertion();
+  const insertion = useComposerInsertion();
 
   const addPicked = async (picked: PickedComposerAttachment[]) => {
     const existingIds = new Set(aui.composer.getState().attachments.map((attachment) => attachment.id));
-    const insertedFiles: InlineFileAttachment[] = [];
+    const insertedFiles: InlineComposerAttachment[] = [];
     for (const attachment of picked) {
       if (existingIds.has(attachment.id)) continue;
       await aui.composer.addAttachment(attachment.file);
@@ -412,7 +415,7 @@ export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: b
         });
       }
     }
-    insertion.insert(insertedFiles);
+    insertAttachments(insertion.dispatch, insertedFiles);
   };
 
   return (
