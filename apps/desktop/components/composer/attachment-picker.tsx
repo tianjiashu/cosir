@@ -61,12 +61,13 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
       if (paths.length === 0) return;
 
       const picked: PickedComposerAttachment[] = [];
+      let unsupportedImageCount = 0;
       for (const selectedPath of paths) {
         const path = await invoke<string>("resolve_selected_attachment_path", { path: selectedPath });
         const name = fileName(path);
         const contentType = contentTypeFor(path);
         if (isUnsupportedImagePath(path, contentType)) {
-          onError?.("图片附件仅支持 JPEG 和 PNG 格式");
+          unsupportedImageCount += 1;
           continue;
         }
         if (isImagePath(path, contentType)) {
@@ -84,6 +85,9 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
         }) });
       }
       if (picked.length > 0) await onPicked(picked);
+      if (unsupportedImageCount > 0) {
+        onError?.(`图片附件仅支持 JPEG 和 PNG，已跳过 ${unsupportedImageCount} 个文件。`);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "选择附件失败";
       onError?.(message);

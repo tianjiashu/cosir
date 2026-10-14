@@ -164,15 +164,18 @@ async def _model_node(state: ReactGraphState) -> dict:
     workspace_id = operations.get_current_workspace().id
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
+    # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
+    messages: list[BaseMessage] = _runtime_context().load_message()
+
     task_space = task_runtime_spaces.get_or_create(task_id)
     # 延迟系统消息由其它层（tools / observe / 配置变更）在本 Run 期间投递，统一在这里写入上下文。
     # 归属过滤由 ``take_deferred_system_messages(run_id=...)`` 在取队列时完成（属于其它 Run 的消息
     # 在此被丢弃），此处不再重复判定；本地 messages 必须同步追加，否则本次模型请求看不到它。
     for system_message in task_space.take_deferred_system_messages(run_id=run_id):
-        _runtime_context().add_message(system_message)
-
-    # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
-    messages: list[BaseMessage] = _runtime_context().load_message()
+        # 消息需要进入模型历史，但不是 assistant 面向用户的发言；投影策略单独持久化，
+        # 不污染 LangChain 消息及 provider 请求载荷。
+        _runtime_context().add_message(system_message, project_to_transport=False)
+        messages.append(system_message)
 
     messages = await asyncio.to_thread(
         resolve_messages_for_model,

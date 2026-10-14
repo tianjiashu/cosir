@@ -70,6 +70,7 @@ class ConversationTaskContextService:
         include_in_context: bool = True,
         transport_metadata: TransportMetadata | None = None,
         is_streaming: bool = False,
+        project_to_transport: bool = True,
         session: Session | None = None,
     ) -> None:
         """以独立事务追加一条完整 LangChain 消息。
@@ -84,6 +85,7 @@ class ConversationTaskContextService:
             seq: 该行在 Task 内的序号（必填，非负）；由调用方按 ``(task_id, sequence)`` 唯一约束
                 自行分配，本方法不做自增也不做去重。
             include_in_context: 该消息是否纳入上下文视图，默认 ``True``。
+            project_to_transport: 是否将消息投影到 Assistant Transport；与模型上下文纳入标记独立。
             is_streaming: 是否为仅供 Transport 冷重建的 assistant 流式草稿。草稿必须同时
                 使用 ``include_in_context=False``，避免半截消息进入下一次模型请求。
             transport_metadata: 该消息对应的 Transport 元数据；无则为 ``None``。
@@ -108,6 +110,7 @@ class ConversationTaskContextService:
             include_in_context=include_in_context,
             sequence=seq,
             transport_metadata=transport_metadata,
+            project_to_transport=project_to_transport,
             is_streaming=is_streaming,
         )
         if is_streaming and include_in_context:
@@ -289,6 +292,7 @@ class ConversationTaskContextService:
                         message=copy.deepcopy(source_entry.message),
                         include_in_context=True,
                         sequence=TASK_SYSTEM_PROMPT_SEQUENCE,
+                        project_to_transport=source_entry.project_to_transport,
                         transport_metadata=copy.deepcopy(source_entry.transport_metadata),
                         is_streaming=False,
                     ),
@@ -306,6 +310,7 @@ class ConversationTaskContextService:
                     message=copy.deepcopy(source_entry.message),
                     include_in_context=source_entry.include_in_context,
                     sequence=next_sequence,
+                    project_to_transport=source_entry.project_to_transport,
                     transport_metadata=copy.deepcopy(source_entry.transport_metadata),
                     is_streaming=source_entry.is_streaming,
                 ),

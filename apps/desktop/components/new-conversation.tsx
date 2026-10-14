@@ -5,11 +5,11 @@ import { FileTextIcon, Loader2Icon, SendIcon, XIcon } from "lucide-react";
 
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { ComposerEditor, COMPOSER_EDITOR_CLASS_NAME } from "@/components/composer/composer-editor";
+import { ComposerFeedback, ComposerFeedbackProvider, useComposerFeedback } from "@/components/composer/composer-feedback";
+import { classifyComposerExternalFiles, type ComposerExternalFileResult } from "@/components/composer/composer-external-files";
 import { insertAttachments, useComposerInsertion, ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
 import type { InlineComposerAttachment } from "@/components/composer/composer-document";
-import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
-import { SkillsSelector } from "@/components/composer/skills-selector";
-import { ToolGroupSelector } from "@/components/composer/tool-group-selector";
+import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
 import { ComposerSurface } from "@/components/composer/composer-surface";
 import { WorkspacePicker } from "@/components/composer/workspace-picker";
 import { CosirMark } from "@/components/cosir-mark";
@@ -22,10 +22,7 @@ import { AttachmentPicker, type PickedComposerAttachment } from "@/components/co
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import { submitAssistantTransport, AssistantTransportProtocolError } from "@/lib/assistant/submit-assistant-transport";
-import {
-  isSupportedImageFile,
-  isUnsupportedImageFile,
-} from "@/lib/assistant/attachments/attachment-upload";
+import { isSupportedImageFile } from "@/lib/assistant/attachments/attachment-upload";
 import { parseTransportError } from "@/lib/assistant/transport-error";
 import { safeFrontendErrorMessage, frontendLog } from "@/lib/logging/frontend-log";
 import {
@@ -112,14 +109,13 @@ function NewConversationAttachmentPicker({
   workspaceRoot,
   existingPaths,
   onPicked,
-  onError,
 }: {
   workspaceRoot?: string;
   existingPaths: ReadonlySet<string>;
   onPicked: (attachments: PickedComposerAttachment[]) => void | Promise<void>;
-  onError: (message: string) => void;
 }) {
   const insertion = useComposerInsertion();
+  const feedback = useComposerFeedback();
   return (
     <AttachmentPicker
       workspaceRoot={workspaceRoot}
@@ -131,7 +127,7 @@ function NewConversationAttachmentPicker({
           .filter((attachment) => attachment.kind === "file")
           .map((attachment) => ({ id: attachment.id, name: attachment.name, kind: "file" as const })));
       }}
-      onError={onError}
+      onError={feedback.show}
     />
   );
 }
@@ -258,14 +254,8 @@ export function NewConversation({
           <CosirMark className="text-foreground size-16" />
           <h1 className="text-5xl font-semibold tracking-[0.12em]">COSIR</h1>
         </div>
-        <ComposerSurface
-          className="bg-card focus-within:ring-ring/20 shadow-sm focus-within:ring-2"
-          style={{
-            ["--composer-radius" as string]: "1.5rem",
-            ["--composer-padding" as string]: "8px",
-            ["--composer-bg" as string]: "var(--color-card)",
-          }}
-        >
+        <ComposerSurface>
+          <ComposerFeedbackProvider>
           <div className="border-border/50 mb-1 flex min-w-0 items-center gap-2 border-b px-2 pb-2">
             <WorkspacePicker
               workspaces={workspaces}
@@ -274,15 +264,13 @@ export function NewConversation({
               onWorkspaceCreated={async () => onWorkspaceCreated()}
             />
           </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-2 px-2">
-            <FavoritePromptToolbar disabled={submitting} />
-            <SkillsSelector disabled={submitting} />
-            <ToolGroupSelector
+          <div className="min-w-0 px-2">
+            <ComposerPromptToolbar
               toolGroups={toolGroups}
               selectedToolGroups={selectedToolGroups}
               onSelectedToolGroupsChange={setSelectedToolGroups}
-              loading={toolGroupsLoading}
-              error={toolGroupsError}
+              toolGroupsLoading={toolGroupsLoading}
+              toolGroupsError={toolGroupsError}
               disabled={submitting}
             />
           </div>
@@ -305,21 +293,19 @@ export function NewConversation({
               formRef.current?.requestSubmit();
             }}
             attachments={fileAttachments}
-            onExternalFiles={(files) => {
-              const picked = files
-                .filter((file) => {
-                  if (!isUnsupportedImageFile(file)) return true;
-                  setError("图片附件仅支持 JPEG 和 PNG 格式");
-                  return false;
-                })
-                .map(clipboardAttachment);
+            onExternalFiles={(files): ComposerExternalFileResult<InlineComposerAttachment> => {
+              const { accepted, problems } = classifyComposerExternalFiles(files);
+              const picked = accepted.map(clipboardAttachment);
               setAttachments((current) => {
                 const existing = new Set(current.map((attachment) => attachment.path.toLowerCase()));
                 return [...current, ...picked.filter((attachment) => !existing.has(attachment.path.toLowerCase()))];
               });
-              return picked
-                .filter((attachment) => attachment.kind === "file")
-                .map((attachment) => ({ id: attachment.id, name: attachment.name, kind: "file" as const }));
+              return {
+                attachments: picked
+                  .filter((attachment) => attachment.kind === "file")
+                  .map((attachment) => ({ id: attachment.id, name: attachment.name, kind: "file" as const })),
+                problems,
+              };
             }}
             onRemoveAttachment={(fileId) => {
               setAttachments((current) => current.filter((attachment) => attachment.id !== fileId));
@@ -347,13 +333,14 @@ export function NewConversation({
                     return [...current, ...picked.filter((attachment) => !existing.has(attachment.path.toLowerCase()))];
                   });
                 }}
-                onError={setError}
               />
               <Button type="submit" className="shrink-0 rounded-full" disabled={!selectedWorkspaceId || !modelReady || !hasDraft || submitting}>
               {submitting ? <Loader2Icon className="animate-spin" /> : <SendIcon />}开始对话
               </Button>
             </div>
           </div>
+          <ComposerFeedback />
+          </ComposerFeedbackProvider>
         </ComposerSurface>
         <Dialog open={Boolean(error)} onOpenChange={(open) => { if (!open) setError(null); }}>
           <DialogContent>

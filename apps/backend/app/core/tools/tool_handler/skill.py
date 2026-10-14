@@ -49,7 +49,7 @@ class SkillTool(HandlerBase):
             return tool_error(
                 self.name,
                 str(exc),
-                reason="修正系统 Skill 配置文件后重新调用。",
+                reason="Fix the Skill config file, then retry.",
                 retryable=False,
             )
         if action == "list":
@@ -63,8 +63,8 @@ class SkillTool(HandlerBase):
         if skill_name is None:
             return tool_error(
                 self.name,
-                "加载 Skill 需要 skill_name。",
-                reason="先用 action='list' 查看可用名称，再指定 skill_name。",
+                "skill_name is required to load a Skill.",
+                reason="Use action='list' to see available names, then set skill_name.",
                 retryable=False,
             )
         try:
@@ -73,14 +73,14 @@ class SkillTool(HandlerBase):
             return tool_error(
                 self.name,
                 str(exc),
-                reason="检查 Skill 名称、SKILL.md 和资源路径后重试。",
+                reason="Check the Skill name, SKILL.md, and resource path, then retry.",
                 retryable=False,
             )
         except FileNotFoundError:
             return tool_error(
                 self.name,
-                "Skill 文件不存在。",
-                reason="重新列出 Skill 或检查其配套资源路径。",
+                "Skill file not found.",
+                reason="Re-list Skills or check the resource path.",
                 retryable=False,
             )
 
@@ -109,7 +109,7 @@ class SkillTool(HandlerBase):
             display=ToolDisplayHints(
                 verb="加载 Skill",
                 icon="info",
-                expandable=True,
+                expandable=False,
                 expand_layout="details",
                 default_open=False,
             ),

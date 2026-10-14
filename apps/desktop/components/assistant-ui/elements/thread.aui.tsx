@@ -19,9 +19,8 @@ import { StopButton } from "@/components/assistant/stop-button";
 import { RunIdentityDisplay } from "@/components/assistant/run-identity-display";
 import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-display";
 import { ComposerControls } from "@/components/composer/composer-controls";
-import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
-import { SkillsSelector } from "@/components/composer/skills-selector";
-import { ToolGroupSelector as ToolGroupSelectorControl } from "@/components/composer/tool-group-selector";
+import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
+import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
 import { MarkdownText } from "@/components/markdown-text";
 import { PartRenderBoundary } from "@/components/assistant-ui/elements/part-render-boundary";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
@@ -83,6 +82,7 @@ import {
   InlineComposerInput,
 } from "@/components/assistant-ui/elements/attachment.aui";
 import { COMPOSER_EDITOR_CLASS_NAME } from "@/components/composer/composer-editor";
+import { COMPOSER_SURFACE_CLASS_NAME } from "@/components/composer/composer-surface";
 import { ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
 
 export type ThreadComponents = {
@@ -244,65 +244,52 @@ const ComposerBoundary = memo(function ComposerBoundary({
 
 const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { autoFocus: boolean; taskId?: number; workspaceRoot?: string }) {
   return (
-  <ComposerInsertionProvider>
-    <ComposerPrimitive.Root className="border-border/60 bg-card focus-within:ring-ring/20 focus-within:ring-2 flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
-      <div className="flex min-w-0 items-center px-1">
-        <ComposerPromptToolbar />
-      </div>
-      <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
-        <ComposerAttachments />
-        <InlineComposerInput
-          placeholder="输入任务，例如：帮我查找登录相关代码…"
-          className={COMPOSER_EDITOR_CLASS_NAME}
-          autoFocus={autoFocus}
-          aria-label="消息输入"
-        />
-      </ComposerPrimitive.AttachmentDropzone>
-      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-          <TaskContextUsage />
-          <div className="min-w-0 flex-1">
-            <ComposerControls
-              scope={taskId == null ? undefined : { kind: "task", id: taskId }}
-              runtimeModelContext
-            />
+    <ComposerInsertionProvider>
+      <ComposerFeedbackProvider>
+        <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
+          <div className="flex min-w-0 items-center px-1">
+            <ThreadComposerPromptToolbar />
           </div>
-        </div>
-        <ComposerAttachmentButton workspaceRoot={workspaceRoot} />
-        <ComposerAction taskId={taskId ?? null} />
-      </div>
-    </ComposerPrimitive.Root>
-  </ComposerInsertionProvider>
+          <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
+            <ComposerAttachments />
+            <InlineComposerInput
+              placeholder="输入任务，例如：帮我查找登录相关代码…"
+              className={COMPOSER_EDITOR_CLASS_NAME}
+              autoFocus={autoFocus}
+              aria-label="消息输入"
+            />
+          </ComposerPrimitive.AttachmentDropzone>
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+              <TaskContextUsage />
+              <div className="min-w-0 flex-1">
+                <ComposerControls
+                  scope={taskId == null ? undefined : { kind: "task", id: taskId }}
+                  runtimeModelContext
+                />
+              </div>
+            </div>
+            <ComposerAttachmentButton workspaceRoot={workspaceRoot} />
+            <ComposerAction taskId={taskId ?? null} />
+          </div>
+          <ComposerFeedback />
+        </ComposerPrimitive.Root>
+      </ComposerFeedbackProvider>
+    </ComposerInsertionProvider>
   );
 });
 
-const ComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = false }) => {
+const ThreadComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = false }) => {
   const composer = unstable_useComposerInput();
+  const context = useContext(ThreadContext);
   return (
-    <div className="flex min-w-0 items-center gap-3">
-      <FavoritePromptToolbar disabled={disabled || composer.isDisabled} />
-      <SkillsSelector disabled={disabled || composer.isDisabled} />
-      <ToolGroupSelector disabled={disabled || composer.isDisabled} />
-    </div>
-  );
-};
-
-const ToolGroupSelector: FC<{ disabled: boolean }> = ({ disabled }) => {
-  const {
-    toolGroups = [],
-    selectedToolGroups = [],
-    onSelectedToolGroupsChange,
-    toolGroupsLoading = false,
-    toolGroupsError,
-  } = useContext(ThreadContext);
-  return (
-    <ToolGroupSelectorControl
-      toolGroups={toolGroups}
-      selectedToolGroups={selectedToolGroups}
-      onSelectedToolGroupsChange={onSelectedToolGroupsChange}
-      loading={toolGroupsLoading}
-      error={toolGroupsError}
-      disabled={disabled}
+    <ComposerPromptToolbar
+      toolGroups={context.toolGroups ?? []}
+      selectedToolGroups={context.selectedToolGroups ?? []}
+      onSelectedToolGroupsChange={context.onSelectedToolGroupsChange}
+      toolGroupsLoading={context.toolGroupsLoading}
+      toolGroupsError={context.toolGroupsError}
+      disabled={disabled || composer.isDisabled}
     />
   );
 };
@@ -679,36 +666,39 @@ const UserEditMessage: FC = () => {
       }}
     >
       <ComposerInsertionProvider>
-        <ComposerPrimitive.Root className="border-border/60 bg-card focus-within:ring-ring/20 focus-within:ring-2 flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm">
-          <div className="flex min-w-0 items-center px-1">
-            <ComposerPromptToolbar disabled={isHydrating || isRecoveryActive} />
-          </div>
-          <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
-            <ComposerAttachments />
-            <InlineComposerInput
-              className={COMPOSER_EDITOR_CLASS_NAME}
-              autoFocus
-              suspendAttachmentReconciliation={isHydrating || isRecoveryActive}
-              aria-label="编辑消息"
-            />
-          </ComposerPrimitive.AttachmentDropzone>
-          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-            <div className="min-w-0 flex-1">
-              <ComposerControls
-                scope={taskId == null ? undefined : { kind: "task", id: taskId }}
+        <ComposerFeedbackProvider>
+          <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
+            <div className="flex min-w-0 items-center px-1">
+              <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} />
+            </div>
+            <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
+              <ComposerAttachments />
+              <InlineComposerInput
+                className={COMPOSER_EDITOR_CLASS_NAME}
+                autoFocus
+                suspendAttachmentReconciliation={isHydrating || isRecoveryActive}
+                aria-label="编辑消息"
               />
+            </ComposerPrimitive.AttachmentDropzone>
+            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+              <div className="min-w-0 flex-1">
+                <ComposerControls
+                  scope={taskId == null ? undefined : { kind: "task", id: taskId }}
+                />
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <ComposerAttachmentButton workspaceRoot={workspaceRoot} disabled={isHydrating || isRecoveryActive} />
+                <ComposerPrimitive.Cancel render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
+                  <XIcon />
+                </ComposerPrimitive.Cancel>
+                <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label="重跑" disabled={isHydrating || isRecoveryActive} />}>
+                  <ArrowUpIcon className="size-4" />
+                </ComposerPrimitive.Send>
+              </div>
             </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <ComposerAttachmentButton workspaceRoot={workspaceRoot} disabled={isHydrating || isRecoveryActive} />
-              <ComposerPrimitive.Cancel render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
-                <XIcon />
-              </ComposerPrimitive.Cancel>
-              <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label="重跑" disabled={isHydrating || isRecoveryActive} />}>
-                <ArrowUpIcon className="size-4" />
-              </ComposerPrimitive.Send>
-            </div>
-          </div>
-        </ComposerPrimitive.Root>
+            <ComposerFeedback />
+          </ComposerPrimitive.Root>
+        </ComposerFeedbackProvider>
       </ComposerInsertionProvider>
     </MessagePrimitive.Root>
   );

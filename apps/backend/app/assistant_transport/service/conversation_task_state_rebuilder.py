@@ -299,6 +299,8 @@ class ConversationTaskStateRebuilder:
             )
             has_user_message = False
             for row in rows:
+                if not row.project_to_transport:
+                    continue
                 message = row.message
                 if isinstance(message, HumanMessage):
                     has_user_message = True

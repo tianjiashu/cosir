@@ -8,12 +8,13 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import cast
 
-from sqlalchemy import Engine, Table
+from sqlalchemy import Engine, Table, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.storage.engine_cache import _engine_cache, create_session_factory
@@ -37,7 +38,7 @@ APP_MODELS = (
 
 
 def initialize_app_schema(engine: Engine) -> None:
-    """创建当前业务表。
+    """创建当前业务表并升级上下文投影标记列。
 
     参数:
         engine: 已初始化的主库 SQLAlchemy 引擎。
@@ -49,11 +50,55 @@ def initialize_app_schema(engine: Engine) -> None:
         sqlalchemy.exc.SQLAlchemyError: 建表失败。
 
     副作用:
-        在当前数据库创建缺失的应用表。
+        在当前数据库创建缺失的应用表；旧 context 表缺少投影列时追加该列，并迁移旧消息内的
+        临时 ``additional_kwargs.project_to_transport`` 标记。
     """
 
     tables = [cast(Table, model.__table__) for model in APP_MODELS]
     StorageBase.metadata.create_all(engine, tables=tables)
+    # ``create_all`` 不会为已有 SQLite 表补列；显式增加该列，避免升级后查询模型记录时缺列。
+    context_columns = {
+        column["name"]
+        for column in inspect(engine).get_columns(ConversationTaskContextModel.__tablename__)
+    }
+    if "project_to_transport" not in context_columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE conversation_task_contexts "
+                    "ADD COLUMN project_to_transport BOOLEAN NOT NULL DEFAULT 1"
+                )
+            )
+            # 前一版试改把标记放进 LangChain additional_kwargs；迁移时转入独立列并从消息 JSON 删除，
+            # 防止历史控制字段继续进入 provider 请求。仅在补列这次启动执行，不扫描后续全部消息。
+            rows = connection.execute(
+                text(
+                    "SELECT id, message_json FROM conversation_task_contexts "
+                    "WHERE message_json LIKE :marker"
+                ),
+                {"marker": '%"project_to_transport"%'},
+            ).all()
+            for row_id, message_json in rows:
+                message_doc = json.loads(message_json)
+                message_data = message_doc.get("data", {})
+                additional_kwargs = message_data.get("additional_kwargs", {})
+                if "project_to_transport" not in additional_kwargs:
+                    continue
+                project_to_transport = additional_kwargs.pop("project_to_transport")
+                if not isinstance(project_to_transport, bool):
+                    raise ValueError("legacy project_to_transport marker must be boolean")
+                connection.execute(
+                    text(
+                        "UPDATE conversation_task_contexts "
+                        "SET project_to_transport = :project_to_transport, message_json = :message_json "
+                        "WHERE id = :row_id"
+                    ),
+                    {
+                        "project_to_transport": project_to_transport,
+                        "message_json": json.dumps(message_doc, ensure_ascii=False),
+                        "row_id": row_id,
+                    },
+                )
 
 _INIT_LOCK = RLock()
 

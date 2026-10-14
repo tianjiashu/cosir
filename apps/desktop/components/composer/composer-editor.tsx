@@ -15,8 +15,10 @@ import {
   shouldPreservePendingEditorValue,
   type InlineComposerAttachment,
 } from "@/components/composer/composer-document";
+import { useComposerFeedback } from "@/components/composer/composer-feedback";
+import { summarizeComposerFileProblems, type ComposerExternalFileResult } from "@/components/composer/composer-external-files";
 import { useComposerInsertion } from "@/components/composer/composer-insertion-context";
-import { frontendLog } from "@/lib/logging/frontend-log";
+import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 
 export const COMPOSER_EDITOR_CLASS_NAME =
@@ -27,7 +29,7 @@ type ComposerEditorProps = {
   onChange: (value: string) => void;
   onSubmit: () => void;
   attachments: readonly InlineComposerAttachment[];
-  onExternalFiles?: (files: readonly File[]) => readonly InlineComposerAttachment[] | Promise<readonly InlineComposerAttachment[]>;
+  onExternalFiles?: (files: readonly File[]) => ComposerExternalFileResult<InlineComposerAttachment> | Promise<ComposerExternalFileResult<InlineComposerAttachment>>;
   onRemoveAttachment?: (id: string) => void;
   placeholder?: string;
   autoFocus?: boolean;
@@ -80,6 +82,7 @@ export function ComposerEditor({
   "aria-label": ariaLabel,
 }: ComposerEditorProps) {
   const insertion = useComposerInsertion();
+  const feedback = useComposerFeedback();
   const isComposingRef = useRef(false);
   const hasCapturedSelectionRef = useRef(false);
   const lastPropValueRef = useRef(value);
@@ -126,6 +129,11 @@ export function ComposerEditor({
         const files = [...(event.clipboardData?.files ?? [])];
         if (files.length === 0) return false;
         event.preventDefault();
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        if (text) {
+          editor?.chain().focus().insertContent(insertionCommandContent({ type: "insert-text", text })).run();
+          hasCapturedSelectionRef.current = true;
+        }
         void handleExternalFiles(files);
         return true;
       },
@@ -133,6 +141,11 @@ export function ComposerEditor({
         const files = [...(event.dataTransfer?.files ?? [])];
         if (files.length === 0) return false;
         event.preventDefault();
+        const text = event.dataTransfer?.getData("text/plain") ?? "";
+        if (text) {
+          editor?.chain().focus().insertContent(insertionCommandContent({ type: "insert-text", text })).run();
+          hasCapturedSelectionRef.current = true;
+        }
         void handleExternalFiles(files);
         return true;
       },
@@ -171,6 +184,8 @@ export function ComposerEditor({
     dom.setAttribute("aria-disabled", String(disabled));
     dom.setAttribute("data-disabled", String(disabled));
     dom.setAttribute("data-empty", currentValue.trim().length === 0 ? "true" : "false");
+    if (placeholder) dom.setAttribute("aria-placeholder", placeholder);
+    else dom.removeAttribute("aria-placeholder");
     if (ariaLabel) dom.setAttribute("aria-label", ariaLabel);
     else dom.removeAttribute("aria-label");
     if (placeholder) dom.setAttribute("data-placeholder", placeholder);
@@ -219,20 +234,32 @@ export function ComposerEditor({
       void frontendLog("INFO", "inline_attachment_external_files_ignored", "输入框未装配外部附件处理器，已忽略文件输入", {
         data: { fileCount: files.length },
       });
+      feedback.show("此输入框暂不支持添加附件。");
       return;
     }
     try {
-      const inlineAttachments = await current.onExternalFiles(files);
-      if (!propsRef.current.disabled && inlineAttachments.length > 0) {
-        insertion.dispatch({ type: "insert-attachments", attachments: inlineAttachments });
+      const result = await current.onExternalFiles(files);
+      if (propsRef.current.disabled) return;
+      if (result.attachments.length > 0) {
+        insertion.dispatch({ type: "insert-attachments", attachments: result.attachments });
       }
+      const rejectedFiles = result.problems.filter((problem) => problem.reason === "unsupported-image");
+      if (rejectedFiles.length > 0) {
+        void frontendLog("WARNING", "composer_external_image_rejected", "已跳过不支持的图片附件", {
+          data: { count: rejectedFiles.length, names: rejectedFiles.map((problem) => problem.name) },
+        });
+      }
+      const problemMessage = summarizeComposerFileProblems(result.problems);
+      if (problemMessage) feedback.show(problemMessage);
+      else feedback.clear();
     } catch (error) {
+      feedback.show(safeFrontendErrorMessage(error, "添加附件失败，请重试"));
       void frontendLog("ERROR", "inline_attachment_external_files_failed", "处理粘贴或拖拽附件失败", {
         data: { fileCount: files.length },
         error,
       });
     }
-  }, [insertion]);
+  }, [feedback, insertion]);
 
   const captureUserSelection = (target: EventTarget | null) => {
     if (!editor || !(target instanceof Node) || !editor.view.dom.contains(target)) return;

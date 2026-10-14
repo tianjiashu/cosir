@@ -146,7 +146,7 @@ class ConversationTaskContextCrud:
         """写入一条上下文消息行。
 
         参数:
-            record: 待持久化的记录（含 task_id、run_id、message、include_in_context、sequence）。
+            record: 待持久化的记录（含消息事实、模型上下文标记、Transport 投影标记与 sequence）。
             session: 外部事务 Session；为 ``None`` 时自建事务并提交。
 
         返回:
@@ -199,8 +199,8 @@ class ConversationTaskContextCrud:
 
         副作用:
             就地更新该行的 ``run_id`` / ``message_json`` / ``include_in_context`` /
-            ``is_streaming``（``record.transport_metadata`` 非 ``None`` 时一并更新
-            ``transport_metadata_json``）并 flush；不新增、不删除行。
+            ``project_to_transport`` / ``is_streaming``；``record.transport_metadata`` 非 ``None`` 时
+            一并更新 ``transport_metadata_json``；不新增、不删除行。
         """
 
         if record.task_id != task_id or record.sequence != sequence:
@@ -220,6 +220,7 @@ class ConversationTaskContextCrud:
         model.run_id = replacement.run_id
         model.message_json = replacement.message_json
         model.include_in_context = replacement.include_in_context
+        model.project_to_transport = replacement.project_to_transport
         model.is_streaming = replacement.is_streaming
         if record.transport_metadata is not None:
             model.transport_metadata_json = replacement.transport_metadata_json

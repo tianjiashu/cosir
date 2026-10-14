@@ -41,6 +41,8 @@ class ConversationTaskContextRecord:
     message: BaseMessage
     include_in_context: bool
     sequence: int
+    # 与 ``include_in_context`` 独立：消息可供模型使用但不对前端投影。
+    project_to_transport: bool = True
     # None 是合法取值：无 Transport 语义的消息（如 assistant 正文）不携带 metadata；写入侧
     # 「None 表示不改写」只作用于原地替换路径，追加路径照实落 ``null``。
     transport_metadata: TransportMetadata | None = None
@@ -57,7 +59,8 @@ class ConversationTaskContextRecord:
             model: ``conversation_task_contexts`` 行实例，列已含单条消息的全部字段。
 
         返回:
-            含 row id、task_id、run_id、消息、Transport metadata、纳入标记、排序和创建/更新时间的记录。
+            含 row id、task_id、run_id、消息、Transport metadata、模型纳入标记、Transport 投影标记、
+            排序和创建/更新时间的记录。
 
         异常:
             json.JSONDecodeError: ``message_json`` 不是合法 JSON。
@@ -76,6 +79,7 @@ class ConversationTaskContextRecord:
             run_id=model.run_id,
             message=_message_from_dict(message_doc),
             include_in_context=model.include_in_context,
+            project_to_transport=model.project_to_transport,
             sequence=model.sequence,
             transport_metadata=json.loads(model.transport_metadata_json),
             is_streaming=model.is_streaming,
@@ -90,7 +94,7 @@ class ConversationTaskContextRecord:
         任务维度统一分配以保证唯一性。创建和更新时间是持久化层管理的只读字段，不从值对象写回。
 
         返回:
-            含 task_id、run_id、消息 JSON、纳入标记与排序的模型实例。
+            含 task_id、run_id、消息 JSON、模型纳入标记、Transport 投影标记与排序的模型实例。
 
         异常:
             TypeError: ``message`` 无法被 ``message_to_dict`` 序列化。
@@ -112,6 +116,7 @@ class ConversationTaskContextRecord:
                 allow_nan=False,
             ),
             include_in_context=self.include_in_context,
+            project_to_transport=self.project_to_transport,
             is_streaming=self.is_streaming,
             sequence=self.sequence,
         )

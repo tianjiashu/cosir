@@ -117,7 +117,7 @@ function displaySummary(data: Record<string, unknown>, backendStatus: string): s
     case "skill-content":
       return data.action === "list"
         ? `发现 ${Array.isArray(data.skills) ? data.skills.length : 0} 个 Skill`
-        : `${String(data.skill_name ?? "Skill")} · ${String(data.resource_path ?? "SKILL.md")}`;
+        : String(data.skill_name ?? "Skill");
     default:
       return typeof data.path === "string" ? data.path : typeof data.pattern === "string" ? data.pattern : "";
   }
@@ -293,7 +293,7 @@ function ExtensionToolDetails({ data }: { data: Record<string, unknown> }) {
     ) : <p className="text-muted-foreground text-xs">没有已启用的 MCP 服务</p>;
   }
 
-  return <p className="text-muted-foreground text-xs">结果已提供给 Agent。</p>;
+  return null;
 }
 
 export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessagePartProps) {
@@ -303,7 +303,8 @@ export function DetailsTool({ toolName, artifact: rawArtifact }: ToolCallMessage
   const title = toolTitle(toolName, presentation.verb);
   const summary = displaySummary(data, artifact.backendStatus);
   const hasDisplayData = typeof data.kind === "string";
-  const expandable = presentation.expandable !== false && hasDisplayData;
+  const isSkillLoad = data.kind === "skill-content" && data.action === "load";
+  const expandable = presentation.expandable !== false && hasDisplayData && !isSkillLoad;
   const defaultOpen = hasDisplayData && presentation.default_open === true;
   const isList = presentation.expand_layout === "list" || data.kind === "directory-list" || data.kind === "file-list" || data.kind === "content-search-results" || data.kind === "web-search-results" || data.kind === "web-extract-urls" || Array.isArray(data.entries);
   const isTerminalState = artifact.backendStatus === "failed" || artifact.backendStatus === "cancelled";

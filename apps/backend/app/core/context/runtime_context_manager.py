@@ -192,6 +192,7 @@ class RuntimeContextManager:
             *,
             include_in_context: bool = True,
             transport_metadata: TransportMetadata | None = None,
+            project_to_transport: bool = True,
             run_id: int | None = None,
     ) -> Literal["appended", "replaced"]:
         """把一条完整 LangChain 消息写入 canonical context（工具结果可覆盖既有行）。
@@ -215,6 +216,8 @@ class RuntimeContextManager:
             transport_metadata: 该消息对应的 Transport 元数据；无则为 None。覆盖时 ``None`` 表示
                 **保留既有行的 metadata**（见 ``ConversationTaskContextCrud.replace_message``），
                 因此覆盖真实结果必须给出终态，否则会保留占位携带的 ``cancelled``。
+            project_to_transport: 是否把该消息投影到前端 snapshot；默认投影。它与
+                ``include_in_context`` 独立，允许内部提示进入模型上下文而不显示给用户。
             run_id: 该消息归属的 Conversation Run；为 None 时归属当前 Run。协议占位需要写回
                 **产生该工具调用的 Run**，避免把历史调用的闭合结果记到新 Run 上；匹配既有行时也要求
                 归属相同。
@@ -261,6 +264,7 @@ class RuntimeContextManager:
                     message=message,
                     include_in_context=True,
                     sequence=existing.sequence,
+                    project_to_transport=project_to_transport,
                     transport_metadata=transport_metadata,
                     is_streaming=False,
                 )
@@ -287,6 +291,7 @@ class RuntimeContextManager:
             sequence,
             include_in_context,
             transport_metadata,
+            project_to_transport=project_to_transport,
         )
         self._message_sequence += 1
         if not include_in_context:
@@ -691,7 +696,7 @@ class RuntimeContextManager:
         副作用:
             检测到未配对调用时经 ``_close_unclosed_tool_calls`` 补占位（写库并更新 working copy）；
             无论是否有未配对调用，都把 working copy 中的 assistant 消息重建为只保留
-            ``id`` / ``content`` / ``tool_calls`` / ``additional_kwargs`` 的形态——
+            ``id`` / ``content`` / ``tool_calls`` / ``additional_kwargs`` 的形态，
             ``invalid_tool_calls`` 等字段不得进入 provider 请求。
         """
 

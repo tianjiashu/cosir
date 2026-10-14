@@ -39,7 +39,12 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
-import { isUnsupportedImageFile } from "@/lib/assistant/attachments/attachment-upload";
+import {
+  classifyComposerExternalFiles,
+  summarizeComposerFileProblems,
+} from "@/components/composer/composer-external-files";
+import { addFilesToAssistantComposer } from "@/components/composer/assistant-composer-attachments";
+import { useComposerFeedback } from "@/components/composer/composer-feedback";
 import {
   useComposerInsertion,
   insertAttachments,
@@ -335,35 +340,30 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
     });
   };
 
-  const addExternalFiles = async (files: readonly File[]): Promise<InlineFileAttachment[]> => {
-    const existingIds = new Set(aui.composer.getState().attachments.map((attachment) => attachment.id));
-    const insertedFiles: InlineComposerAttachment[] = [];
-    for (const file of files) {
-      if (isUnsupportedImageFile(file)) {
+  const addExternalFiles = async (files: readonly File[]) => {
+    const { accepted, problems: rejected } = classifyComposerExternalFiles(files);
+    const result = await addFilesToAssistantComposer(
+      accepted.map((file) => ({ file, name: file.name })),
+      {
+        getAttachments: () => aui.composer.getState().attachments,
+        addAttachment: (file) => aui.composer.addAttachment(file),
+      },
+      ({ file, stage, error }) => {
         void frontendLog(
-          "WARNING",
-          "attachment_external_file_rejected",
-          "图片附件仅支持 JPEG 和 PNG 格式",
-          { data: { name: file.name, contentType: file.type } },
+          stage === "add" ? "ERROR" : "WARNING",
+          "composer_attachment_intake_failed",
+          stage === "add" ? "添加输入框附件失败" : "添加附件后未找到其运行时身份",
+          {
+            data: { source: "external", stage, name: file.name, contentType: file.file.type },
+            error,
+          },
         );
-        continue;
-      }
-      await aui.composer.addAttachment(file);
-      const added = aui.composer.getState().attachments.find(
-        (attachment) => attachment.file === file && !existingIds.has(attachment.id),
-      );
-      if (!added) continue;
-      existingIds.add(added.id);
-      if (added.type !== "image") {
-        insertedFiles.push({
-          id: added.id,
-          name: added.name,
-          kind: "file",
-          tokenId: inlineAttachmentTokenId(added),
-        });
-      }
-    }
-    return insertedFiles;
+      },
+    );
+    return {
+      attachments: result.attachments,
+      problems: [...rejected, ...result.problems],
+    };
   };
 
   return (
@@ -389,33 +389,35 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
 export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: boolean }> = ({ workspaceRoot, disabled = false }) => {
   const aui = useAui();
   const insertion = useComposerInsertion();
+  const feedback = useComposerFeedback();
 
   const addPicked = async (picked: PickedComposerAttachment[]) => {
-    const existingIds = new Set(aui.composer.getState().attachments.map((attachment) => attachment.id));
-    const insertedFiles: InlineComposerAttachment[] = [];
-    for (const attachment of picked) {
-      if (existingIds.has(attachment.id)) continue;
-      await aui.composer.addAttachment(attachment.file);
-      const added = aui.composer.getState().attachments.find(
-        (candidate) => candidate.file === attachment.file && !existingIds.has(candidate.id),
-      );
-      if (!added) {
-        void frontendLog("WARNING", "composer_picker_attachment_identity_missing", "附件已加入 composer，但未找到实际附件身份", {
-          data: { pickedId: attachment.id, name: attachment.name },
-        });
-        continue;
-      }
-      existingIds.add(added.id);
-      if (added.type !== "image") {
-        insertedFiles.push({
-          id: added.id,
-          name: added.name,
-          kind: "file",
-          tokenId: inlineAttachmentTokenId(added),
-        });
-      }
-    }
-    insertAttachments(insertion.dispatch, insertedFiles);
+    const result = await addFilesToAssistantComposer(
+      picked.map((attachment) => ({
+        file: attachment.file,
+        name: attachment.name,
+        skipIfAttachmentIdExists: attachment.id,
+      })),
+      {
+        getAttachments: () => aui.composer.getState().attachments,
+        addAttachment: (file) => aui.composer.addAttachment(file),
+      },
+      ({ file, stage, error }) => {
+        void frontendLog(
+          stage === "add" ? "ERROR" : "WARNING",
+          "composer_attachment_intake_failed",
+          stage === "add" ? "添加输入框附件失败" : "添加附件后未找到其运行时身份",
+          {
+            data: { source: "picker", stage, name: file.name, contentType: file.file.type },
+            error,
+          },
+        );
+      },
+    );
+    insertAttachments(insertion.dispatch, result.attachments);
+    const message = summarizeComposerFileProblems(result.problems);
+    if (message) feedback.show(message);
+    else feedback.clear();
   };
 
   return (
@@ -423,7 +425,10 @@ export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: b
       workspaceRoot={workspaceRoot}
       disabled={disabled}
       onPicked={addPicked}
-      onError={(message) => void frontendLog("WARNING", "attachment_picker_rejected", message, { data: {} })}
+      onError={(message) => {
+        feedback.show(message);
+        void frontendLog("WARNING", "attachment_picker_rejected", message, { data: {} });
+      }}
     />
   );
 };
