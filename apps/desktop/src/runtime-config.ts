@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
 declare global {
@@ -232,7 +233,7 @@ async function initializeBackendRuntimeInternal(epoch: number): Promise<string> 
         const configError = getBackendStatusError(config.status);
         if (configError) throw configError;
         if (!commitSupervisorConfig(config)) {
-          throw new Error("收到无法应用的后端运行时配置");
+          throw new UserFacingError("收到无法应用的后端运行时配置");
         }
         return normalizeBackendBaseUrl(config.backendBaseUrl);
     } catch (error) {
@@ -246,7 +247,8 @@ async function initializeBackendRuntimeInternal(epoch: number): Promise<string> 
 
     await waitForNextStartupPoll();
   }
-  throw new Error(lastError);
+  // lastError 只来自本模块的中文文案或 UserFacingError（Tauri invoke 以字符串拒绝，不会进入这里）。
+  throw new UserFacingError(lastError);
 }
 
 /** 返回当前后端实例快照，供 React runtime 外部 store 订阅使用。 */
@@ -293,10 +295,10 @@ export function subscribeBackendStatus(listener: () => void): () => void {
 export function getBackendStatusError(status: BackendStatus): Error | null {
   if (status.state === "failed") {
     const message = status.message.trim() || "本地 Agent 后端启动失败，请点击重试";
-    return new Error(message);
+    return new UserFacingError(message);
   }
   if (status.state === "stopped") {
-    return new Error("本地 Agent 后端未运行，请点击重试");
+    return new UserFacingError("本地 Agent 后端未运行，请点击重试");
   }
   return null;
 }
@@ -402,7 +404,7 @@ export function restartBackendRuntime(): Promise<BackendRuntimeConfig> {
       const configError = getBackendStatusError(config.status);
       if (configError) throw configError;
       if (!commitSupervisorConfig(config)) {
-        throw new Error("收到无法应用的后端运行时配置");
+        throw new UserFacingError("收到无法应用的后端运行时配置");
       }
       return config;
     })

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { TransportState } from "@/lib/assistant/contract";
 import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
-import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 const INITIAL_STATE_TIMEOUT_MS = 30_000;
 
@@ -70,7 +71,7 @@ export function useAssistantInitialState(
           data: { taskId },
           error: cause,
         });
-        setLoadError({ taskId, message: safeFrontendErrorMessage(cause, "对话历史加载失败，请重试") });
+        setLoadError({ taskId, message: userErrorMessage(cause, "对话历史加载失败，请重试") });
       });
   }, [taskId]);
 

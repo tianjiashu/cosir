@@ -5,10 +5,11 @@ import {
   currentTransportRun,
   transportMessageCount,
 } from "@/lib/assistant/transport-state-operations";
-import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import type { TransportState } from "@/lib/assistant/contract";
 import type { TransportIssue } from "@/components/assistant/transport-status";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 export type RecoveryReason = "transport_finished" | "retry_after_failure" | "user_resync" | "backend_restored";
 
@@ -200,7 +201,7 @@ export function useRuntimeRecovery(
         || generation !== recoveryGenerationRef.current
       ) return;
       context.setIssue({
-        message: safeFrontendErrorMessage(error, "无法读取本机后端的最新对话状态"),
+        message: userErrorMessage(error, "无法读取本机后端的最新对话状态"),
         canResync: true,
       });
       if (reconnectAttemptRef.current < MAX_RECONNECT_ATTEMPTS) {

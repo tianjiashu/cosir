@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 
-import { classifyBackendTransition } from "@/components/assistant/runtime/use-backend-transitions";
+import { classifyBackendTransition } from "@/lib/backend/backend-transition";
 
 const backend = (generation: number, available: boolean) => ({
   backendBaseUrl: available ? `http://127.0.0.1:${4000 + generation}` : "http://127.0.0.1:0",

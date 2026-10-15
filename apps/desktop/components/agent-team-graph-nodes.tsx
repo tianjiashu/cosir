@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { statusHandleId, type TeamGraphNode } from "@/components/agent-team-graph-model";
 import type { AgentTeamNodeConfiguration } from "@/lib/api/agent-teams";
+import { isImeComposing } from "@/lib/keyboard/ime";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
 
@@ -177,7 +178,7 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
           </header>
           <div className="space-y-3 p-4">
             <label className="block space-y-1 text-xs"><span className="text-muted-foreground">节点名称</span><Input className="nodrag" value={data.node.name} onFocus={() => onFieldFocus("name")} onChange={(event) => { onFieldChange("name", event.target.value.length); updateNode({ name: event.target.value }); }} onBlur={() => onFieldBlur("name")} /></label>
-            <label className="block space-y-1 text-xs"><span className="text-muted-foreground">节点 ID</span><Input className="nodrag" value={nodeIdDraft} onFocus={() => onFieldFocus("node_id")} onChange={(event) => { onFieldChange("node_id", event.target.value.length); setNodeIdDraft(event.target.value); }} onBlur={() => { onFieldBlur("node_id"); commitNodeId(); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>
+            <label className="block space-y-1 text-xs"><span className="text-muted-foreground">节点 ID</span><Input className="nodrag" value={nodeIdDraft} onFocus={() => onFieldFocus("node_id")} onChange={(event) => { onFieldChange("node_id", event.target.value.length); setNodeIdDraft(event.target.value); }} onBlur={() => { onFieldBlur("node_id"); commitNodeId(); }} onKeyDown={(event) => { if (event.key === "Enter" && !isImeComposing(event)) event.currentTarget.blur(); }} /></label>
             <div className="space-y-2">
               <div className="flex items-center justify-between"><h4 className="text-xs font-medium">业务状态</h4></div>
               <AgentTeamStatusEditor

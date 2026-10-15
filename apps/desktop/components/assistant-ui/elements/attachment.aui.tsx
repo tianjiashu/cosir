@@ -371,6 +371,8 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
       value={composer.value}
       onChange={composer.setText}
       onSubmit={() => {
+        // assistant-ui 的 send 不返回 Promise，无法在此 await：附件失败由附件适配器
+        // （image-attachment-adapter）记录并提示，assistant-ui 自行恢复草稿与发送状态。
         if (composer.canSend) composer.send();
       }}
       attachments={fileAttachments}

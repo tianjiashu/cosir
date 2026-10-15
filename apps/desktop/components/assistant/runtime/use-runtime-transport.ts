@@ -8,10 +8,10 @@ import {
 } from "@/lib/assistant/converter";
 import { modelContextToTransportFields, selectionToTransportFields } from "@/lib/assistant/model-request-adapter";
 import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
-import { parseTransportError } from "@/lib/assistant/transport-error";
+import { HttpError } from "@/lib/http/errors";
 import { getModelCatalogSnapshot } from "@/lib/model-catalog";
 import { readStoredSelection } from "@/lib/model-selection-storage";
-import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import type { TransportState } from "@/lib/assistant/contract";
 import { currentTransportRun, transportMessageCount } from "@/lib/assistant/transport-state-operations";
 import type { TransportIssue } from "@/components/assistant/transport-status";
@@ -20,6 +20,7 @@ import type { RuntimeSessionContext } from "@/components/assistant/runtime/runti
 import { useTaskAssistantTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
 import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
 import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 type RuntimeTransport = ReturnType<typeof useTaskAssistantTransportRuntime>;
 const RECOVERY_FEEDBACK_DELAY_MS = 350;
@@ -133,11 +134,10 @@ export function useRuntimeTransport(
     // 订阅没建立起来，必须回到 canonical snapshot 对账；只有提交命令被拒才需要弹窗并恢复输入。
     const attachOnly = params.commands.length === 0;
     const commandRejected = params.phase === "request-rejected" && !attachOnly;
-    const transportError = parseTransportError(error);
     const nextIssue: TransportIssue = {
-      message: transportError?.message ?? safeFrontendErrorMessage(error, "网络异常，请检查本机后端是否正在运行"),
+      message: userErrorMessage(error, "网络异常，请检查本机后端是否正在运行"),
       // HTTP 错误体的 retryable 表示“修正条件后能否重试”，这里映射为能否重新同步。
-      canResync: transportError?.retryable ?? true,
+      canResync: error instanceof HttpError ? error.retryable ?? true : true,
       presentation: commandRejected ? "dialog" : "status",
     };
     context.lastTransportErrorRef.current = nextIssue;
@@ -412,7 +412,7 @@ export function useRuntimeTransport(
         const currentRunId = context.latestStateRef.current.current_run_id;
         if (context.cancelRequestedRunIdRef.current === currentRunId && currentRunId !== null) return;
         context.setIssue({
-          message: safeFrontendErrorMessage(error, "发送已取消，后端仍在确认运行状态"),
+          message: userErrorMessage(error, "发送已取消，后端仍在确认运行状态"),
           canResync: true,
         });
       }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   CheckCircle2Icon,
@@ -19,13 +20,19 @@ import {
   ArrowUpIcon,
 } from "lucide-react";
 
-import { Alert } from "@/components/ui/alert";
 import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { EmptyState } from "@/components/ui/state-panel";
-import { getContextMessages, type ContextMessage } from "@/lib/api/context-messages";
+import { EmptyState, ErrorState } from "@/components/ui/state-panel";
+import { getContextMessages, type ContextMessage, type ContextMessageQuery } from "@/lib/api/context-messages";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
+import { frontendLog } from "@/lib/logging/frontend-log";
+import { notify } from "@/lib/notify";
+import { queryKeys } from "@/lib/query/query-keys";
+
+const NO_MESSAGES: ContextMessage[] = [];
 
 function jsonText(value: unknown): string {
   if (typeof value === "string") return value;
@@ -150,13 +157,9 @@ export function ContextObserverPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [taskInput, setTaskInput] = useState(searchParams.get("task_id") ?? "");
   const [runInput, setRunInput] = useState(searchParams.get("run_id") ?? "");
-  const [messages, setMessages] = useState<ContextMessage[]>([]);
   const [selectedSequence, setSelectedSequence] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("sequence");
   const [sortAscending, setSortAscending] = useState(true);
@@ -174,6 +177,22 @@ export function ContextObserverPage() {
     ? returnToCandidate
     : null;
   const queryKey = `${Number.isInteger(taskId) && taskId > 0 ? taskId : ""}:${Number.isInteger(runId) && runId > 0 ? runId : ""}`;
+  const messageQuery = useMemo<ContextMessageQuery>(() => ({
+    ...(Number.isInteger(taskId) && taskId > 0 ? { taskId } : {}),
+    ...(Number.isInteger(runId) && runId > 0 ? { runId } : {}),
+  }), [taskId, runId]);
+  const hasQuery = messageQuery.taskId !== undefined || messageQuery.runId !== undefined;
+  const contextQuery = useQuery({
+    queryKey: queryKeys.contextMessages(messageQuery),
+    queryFn: ({ signal }) => getContextMessages(messageQuery, { signal }),
+    enabled: hasQuery,
+    // 上下文在 Run 执行期间持续变化，观测页每次查询都应读取最新序列，不复用缓存。
+    staleTime: 0,
+  });
+  // 失败时清空列表（与旧行为一致），避免把上一轮结果当作本次查询结果展示。
+  const messages = contextQuery.isError ? NO_MESSAGES : contextQuery.data ?? NO_MESSAGES;
+  const loading = contextQuery.isFetching;
+  const error = contextQuery.isError ? userErrorMessage(contextQuery.error, "上下文读取失败") : null;
 
   useEffect(() => {
     setTaskInput(searchParams.get("task_id") ?? "");
@@ -186,39 +205,6 @@ export function ContextObserverPage() {
     filteredViewSnapshotRef.current = null;
     pendingListScrollRef.current = { kind: "offset", offset: 0 };
   }, [contextNavigation, queryKey]);
-
-  useEffect(() => {
-    if (!taskId && !runId) {
-      setMessages([]);
-      setSelectedSequence(null);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-    const controller = new AbortController();
-    setLoading(true);
-    setError(null);
-    void getContextMessages({
-      ...(Number.isInteger(taskId) && taskId > 0 ? { taskId } : {}),
-      ...(Number.isInteger(runId) && runId > 0 ? { runId } : {}),
-    }, { signal: controller.signal })
-      .then((result) => {
-        setMessages(result);
-        setSelectedSequence((current) => result.some((message) => message.sequence === current)
-          ? current
-          : result[0]?.sequence ?? null);
-      })
-      .catch((cause: unknown) => {
-        if (controller.signal.aborted) return;
-        setMessages([]);
-        setSelectedSequence(null);
-        setError(cause instanceof Error ? cause.message : "上下文读取失败");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [queryKey, taskId, runId, refreshGeneration]);
 
   const cacheDeclines = useMemo(() => {
     const aiMessages = messages
@@ -358,8 +344,9 @@ export function ContextObserverPage() {
     if (nextTaskId !== null) params.set("task_id", String(nextTaskId));
     if (nextRunId !== null) params.set("run_id", String(nextRunId));
     resetContextNavigation();
-    setSearchParams(params);
-    setRefreshGeneration((current) => current + 1);
+    // 参数未变时 URL 不变、查询键不变，需要显式重新读取；参数变化由新查询键触发读取。
+    if (params.toString() === new URLSearchParams(searchParams).toString()) void contextQuery.refetch();
+    else setSearchParams(params);
   };
 
   const copySelected = async () => {
@@ -368,14 +355,18 @@ export function ContextObserverPage() {
       await navigator.clipboard.writeText(JSON.stringify(selected, null, 2));
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1400);
-    } catch {
-      setError("复制失败，请检查桌面应用的剪贴板权限。");
+    } catch (cause) {
+      notify.error("复制失败", { error: new UserFacingError("请检查桌面应用的剪贴板权限。") });
+      void frontendLog("WARNING", "context_message_copy_failed", "复制上下文消息 JSON 失败", {
+        data: { taskId: selected.task_id, sequence: selected.sequence },
+        error: cause,
+      });
     }
   };
 
   const refresh = () => {
     resetContextNavigation();
-    setRefreshGeneration((current) => current + 1);
+    void contextQuery.refetch();
   };
 
   return (
@@ -391,7 +382,7 @@ export function ContextObserverPage() {
           <Input id="context-run-id" inputMode="numeric" value={runInput} onChange={(event) => setRunInput(event.target.value)} placeholder="例如 21" />
         </div>
         <Button type="submit" className="gap-2"><SearchIcon />查询</Button>
-        <Button type="button" variant="outline" size="icon" onClick={refresh} disabled={loading || (!taskId && !runId)} aria-label="刷新上下文"><RefreshCwIcon className={loading ? "animate-spin" : ""} /></Button>
+        <Button type="button" variant="outline" size="icon" onClick={refresh} disabled={loading || !hasQuery} aria-label="刷新上下文"><RefreshCwIcon className={loading ? "animate-spin" : ""} /></Button>
         {validationError && <p role="alert" className="basis-full text-xs text-destructive">{validationError}</p>}
       </form>
 
@@ -432,7 +423,7 @@ export function ContextObserverPage() {
             </div>}
           </div>
           <div ref={listRef} className="min-h-0 flex-1 overflow-auto">
-            {error && <Alert tone="destructive" className="m-5">{error}</Alert>}
+            {error && <ErrorState className="m-5" message={error} onRetry={refresh} />}
             {!loading && !error && messages.length === 0 && (
               <EmptyState
                 className="m-5"

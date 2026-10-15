@@ -7,6 +7,8 @@ import { CheckIcon, ChevronDownIcon, FolderIcon, FolderPlusIcon, Loader2Icon } f
 import { Alert } from "@/components/ui/alert";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { createWorkspace, type Workspace } from "@/lib/api/workspaces";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { writeLastWorkspaceId } from "@/lib/workspace-preferences";
 
 type WorkspacePickerProps = {
@@ -41,7 +43,8 @@ export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceCh
       await onWorkspaceCreated(workspace);
       chooseWorkspace(workspace.workspace_id);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "创建工作区失败，请重试");
+      setError(userErrorMessage(cause, "创建工作区失败，请重试"));
+      void frontendLog("ERROR", "workspace_create_from_folder_failed", "从文件夹创建工作区失败", { error: cause });
     } finally {
       setCreating(false);
     }

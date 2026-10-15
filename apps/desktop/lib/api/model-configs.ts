@@ -1,4 +1,7 @@
-import { postJson, requestJson, sendJson } from "@/lib/http/client";
+import { postJson, requestJson, sendJson, type RequestOptions } from "@/lib/http/client";
+
+/** 连接测试会真实请求模型接口（含首 token 等待），明显长于默认 JSON 超时。 */
+const CONNECTION_TEST_TIMEOUT_MS = 120_000;
 
 export type ModelConfig = {
   config_id: number;
@@ -53,8 +56,8 @@ export type ModelConfigDiscoveryResponse = {
   models: string[];
 };
 
-export const getModelConfigs = (init?: RequestInit) =>
-  requestJson<ModelConfig[]>("/model-configs", init);
+export const getModelConfigs = (options?: RequestOptions) =>
+  requestJson<ModelConfig[]>("/model-configs", options);
 
 export const createModelConfig = (input: ModelConfigCreateInput) =>
   postJson<ModelConfig>("/model-configs", input);
@@ -68,9 +71,9 @@ export const deleteModelConfig = (configId: number) =>
   });
 
 export const testDraftModelConfig = (input: ModelConfigTestInput) =>
-  postJson<ModelConfigTestResult>("/model-configs/test", input);
+  postJson<ModelConfigTestResult>("/model-configs/test", input, { timeoutMs: CONNECTION_TEST_TIMEOUT_MS });
 
 export const discoverModelConfigs = (
   input: ModelConfigDiscoveryInput,
-  init?: RequestInit,
-) => postJson<ModelConfigDiscoveryResponse>("/model-configs/discover", input, init);
+  options?: RequestOptions,
+) => postJson<ModelConfigDiscoveryResponse>("/model-configs/discover", input, options);

@@ -1,7 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { UsersIcon } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { getAgentTeamRun, type AgentTeamRun } from "@/lib/api/agent-teams";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { HttpError } from "@/lib/http/errors";
+import { frontendLog } from "@/lib/logging/frontend-log";
+import { queryKeys } from "@/lib/query/query-keys";
 import { useWorkbenchActions } from "@/lib/workbench/context";
 import { readToolArtifact, type ToolArtifact } from "./types";
 import { readAgentTeamRunDisplay } from "./agent-team-display";
@@ -22,6 +28,51 @@ const RUN_STATUS_LABELS: Record<string, string> = {
   cancelled: "已取消",
 };
 
+const POLL_INTERVAL_MS = 1_000;
+const MAX_POLL_RETRIES = 4;
+const MAX_RETRY_DELAY_MS = 16_000;
+
+function isActiveRun(status: AgentTeamRun["status"] | undefined): boolean {
+  return status === "pending" || status === "running";
+}
+
+/**
+ * 轮询 TeamRun 投影，直到它进入终态。
+ *
+ * 失败策略：单次读取失败按指数退避重试有限次；4xx（含 404：TeamRun 已不存在）是确定性结果，
+ * 不重试。重试耗尽后查询进入 error 态，refetchInterval 随之停止——不能只看缓存里的旧
+ * status，否则仍是 running 的旧数据会让失败查询每秒重拉、永不停止。用户可从卡片手动重试。
+ */
+function useAgentTeamRunPolling(teamRunId: number | undefined) {
+  const query = useQuery({
+    queryKey: queryKeys.agentTeamRun(teamRunId ?? 0),
+    queryFn: ({ signal }) => getAgentTeamRun(teamRunId as number, { signal }),
+    enabled: teamRunId !== undefined,
+    refetchInterval: (current) => (
+      current.state.status !== "error" && isActiveRun(current.state.data?.status) ? POLL_INTERVAL_MS : false
+    ),
+    retry: (failureCount, error) => {
+      if (error instanceof HttpError && error.status >= 400 && error.status < 500) return false;
+      return failureCount < MAX_POLL_RETRIES;
+    },
+    retryDelay: (attempt) => Math.min(1_000 * 2 ** attempt, MAX_RETRY_DELAY_MS),
+  });
+
+  const { error } = query;
+  useEffect(() => {
+    if (!error) return;
+    void frontendLog("WARNING", "agent_team_run_poll_failed", "读取 Agent Team 执行进度失败，已停止轮询", {
+      data: {
+        teamRunId,
+        status: error instanceof HttpError ? error.status : null,
+      },
+      error,
+    });
+  }, [error, teamRunId]);
+
+  return query;
+}
+
 export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
   const artifact = readToolArtifact(props.artifact);
   const display = props.displayOverride ?? readAgentTeamRunDisplay(artifact.display_data)
@@ -29,39 +80,16 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
       ? { teamRunId: artifact.team_run_id, teamId: "", goal: "" }
       : null);
   const actions = useWorkbenchActions();
-  const [run, setRun] = useState<AgentTeamRun | null>(null);
-
-  useEffect(() => {
-    if (!display) return undefined;
-    let disposed = false;
-    let timer: number | undefined;
-    const poll = async () => {
-      try {
-        const current = await getAgentTeamRun(display.teamRunId);
-        if (disposed) return;
-        setRun(current);
-        if (current.status === "pending" || current.status === "running") {
-          timer = window.setTimeout(() => void poll(), 1000);
-        }
-      } catch {
-        if (!disposed) {
-          timer = window.setTimeout(() => void poll(), 2000);
-        }
-      }
-    };
-    void poll();
-    return () => {
-      disposed = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [display?.teamRunId]);
+  const runQuery = useAgentTeamRunPolling(display?.teamRunId);
 
   if (!display) return null;
   return (
     <AgentTeamExecutionContent
       display={display}
-      run={run}
+      run={runQuery.data ?? null}
       backendStatus={artifact.backendStatus}
+      pollError={runQuery.isError ? userErrorMessage(runQuery.error, "请稍后重试") : null}
+      onRetryPoll={() => void runQuery.refetch()}
       onOpenAgent={(taskId, title, role) => actions?.openAgent({ taskId, title, role })}
     />
   );
@@ -71,14 +99,19 @@ type AgentTeamExecutionContentProps = {
   display: AgentTeamRunDisplay;
   run: AgentTeamRun | null;
   backendStatus: ToolArtifact["backendStatus"];
+  /** 轮询已放弃时的可读原因；为 null 表示仍在轮询或已正常结束。 */
+  pollError?: string | null;
+  onRetryPoll?: () => void;
   onOpenAgent: (taskId: number, title: string, role: string) => void;
 };
 
 /** 只渲染 TeamRun 查询投影；轮询与卡片状态不参与节点事实判断。 */
 export function AgentTeamExecutionContent({
-  display, run, backendStatus, onOpenAgent,
+  display, run, backendStatus, pollError = null, onRetryPoll, onOpenAgent,
 }: AgentTeamExecutionContentProps) {
-  const currentStatus = run ? RUN_STATUS_LABELS[run.status] ?? run.status : "读取进度中";
+  const currentStatus = run
+    ? RUN_STATUS_LABELS[run.status] ?? run.status
+    : pollError ? "进度不可用" : "读取进度中";
 
   return (
     <section className="space-y-3 rounded-xl border border-border/70 bg-card p-3 shadow-sm" aria-label="Agent Team 执行进度">
@@ -97,6 +130,15 @@ export function AgentTeamExecutionContent({
           )}
         </div>
       </header>
+
+      {pollError && (
+        <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground" role="status">
+          <span className="min-w-0">执行进度读取失败：{pollError}</span>
+          {onRetryPoll && (
+            <Button type="button" variant="ghost" size="sm" onClick={onRetryPoll}>重试</Button>
+          )}
+        </div>
+      )}
 
       {run && (
         <AgentTeamExecutionPipeline run={run} onOpenAgent={onOpenAgent} />

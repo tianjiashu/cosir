@@ -14,12 +14,10 @@ import {
 } from "lucide-react";
 
 import { TaskPage } from "@/components/task-page";
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { NewConversation } from "@/components/new-conversation";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
-import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
 import { ResourceActionMenu } from "@/components/resource-action-menu";
 import { WorkspaceTree } from "@/components/task-tree/workspace-tree";
 import type { WorkspaceTreeSource } from "@/components/task-tree/workspace-tree-model";
@@ -30,6 +28,7 @@ import { WorkbenchProvider } from "@/lib/workbench/context";
 import { SystemConfigurationPage } from "@/components/system-configuration-page";
 import { WorkspaceConfigurationPage } from "@/components/workspace-configuration-page";
 import { ContextObserverPage } from "@/components/context-observer-page";
+import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import {
   deleteTask,
@@ -40,15 +39,19 @@ import {
   type StartedConversation,
   type WorkspaceTask,
 } from "@/lib/api/workspaces";
+import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { notify } from "@/lib/notify";
+import { confirmDiscardUnsaved } from "@/lib/unsaved-changes";
 import { readLastWorkspaceId, writeLastWorkspaceId } from "@/lib/workspace-preferences";
 
 type WorkspaceWithTasks = WorkspaceTreeSource;
 type DeleteTarget =
   | { kind: "workspace"; id: number; label: string; taskCount: number }
-  | { kind: "task"; id: number; label: string; taskCount: number }
-  | null;
+  | { kind: "task"; id: number; label: string };
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
 
@@ -75,11 +78,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
   const [workspaces, setWorkspaces] = useState<WorkspaceWithTasks[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState(false);
   const [forkingRunId, setForkingRunId] = useState<number | null>(null);
-  const [forkError, setForkError] = useState<string | null>(null);
 
   const loadGenerationRef = useRef(0);
   const loadControllerRef = useRef<AbortController | null>(null);
@@ -90,16 +89,15 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
   const pendingTaskRefreshRef = useRef(new Set<number>());
   const [routeTask, setRouteTask] = useState<WorkspaceTask | null>(null);
 
-  const hasUnsavedWorkbenchDraft = workbenchTabs.some(
-    (tab) => tab.kind === "agent-configuration-draft" && tab.dirty,
-  );
-  const requestWorkbenchPanelClose = useCallback(() => {
-    if (hasUnsavedWorkbenchDraft && !window.confirm("有未保存的配置草稿，确定收起工作台吗？")) return;
+  // 收起只卸载当前激活的草稿编辑器；未激活标签页的草稿保存在 workbench store 中、收起后仍在，
+  // 因此只需询问已登记的（已挂载）编辑器，不再按 store 中全部 dirty 标签拦截。
+  const requestWorkbenchPanelClose = useCallback(async () => {
+    if (!(await confirmDiscardUnsaved("workbench"))) return;
     setWorkbenchPanelOpen(false);
-  }, [hasUnsavedWorkbenchDraft, setWorkbenchPanelOpen]);
+  }, [setWorkbenchPanelOpen]);
   const toggleWorkbenchPanel = useCallback(() => {
     if (workbenchPanelOpen) {
-      requestWorkbenchPanelClose();
+      void requestWorkbenchPanelClose();
       return;
     }
     setWorkbenchPanelOpen(true);
@@ -130,7 +128,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
           return {
             ...workspace,
             tasks: [],
-            taskLoadError: cause instanceof Error ? cause.message : "任务列表加载失败",
+            taskLoadError: userErrorMessage(cause, "任务列表加载失败"),
           };
         }
       }));
@@ -165,7 +163,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
     } catch (cause) {
       if (generation !== loadGenerationRef.current || controller.signal.aborted) return;
       setStatus("error");
-      setError(cause instanceof Error ? cause.message : "工作区加载失败，请重试");
+      setError(userErrorMessage(cause, "工作区加载失败，请重试"));
       void frontendLog("WARNING", "workspace_catalog_load_failed", "Workspace catalog 加载失败", {
         data: { generation },
         error: cause,
@@ -279,7 +277,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
       if (controller.signal.aborted) return;
       if (catalogGeneration !== loadGenerationRef.current || nextGeneration !== taskRefreshGenerationRef.current.get(workspaceId)) return;
       setWorkspaces((current) => current.map((workspace) => workspace.workspace_id === workspaceId
-        ? { ...workspace, taskLoadError: cause instanceof Error ? cause.message : "任务列表加载失败" }
+        ? { ...workspace, taskLoadError: userErrorMessage(cause, "任务列表加载失败") }
         : workspace));
       void frontendLog("WARNING", "workspace_task_refresh_failed", "Workspace task 列表定向刷新失败", {
         data: { workspaceId, requestGeneration: nextGeneration },
@@ -328,7 +326,6 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
   const closeWorkspaceSettings = () => {
     navigate(activeTaskId ? `/tasks/${activeTaskId}` : "/");
   };
-  const requestDelete = (target: NonNullable<DeleteTarget>) => { setDeleteError(null); setDeleteTarget(target); };
   const refreshTaskState = useCallback(() => {
     const workspaceId = activeTaskWorkspaceId;
     if (workspaceId !== null) void refreshWorkspaceTasks(workspaceId);
@@ -344,53 +341,81 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
   }, [activeTaskId]);
   const handleForkRun = useCallback(async (runId: number) => {
     if (activeTaskId === null || forkingRunId !== null) return;
-    setForkError(null);
     setForkingRunId(runId);
     try {
       const target = await forkTask(activeTaskId, runId);
       await load();
       navigate(`/tasks/${target.task_id}`);
     } catch (cause) {
+      void frontendLog("ERROR", "task_fork_failed", "Fork 任务失败", {
+        data: { taskId: activeTaskId, runId, status: cause instanceof HttpError ? cause.status : null },
+        error: cause,
+      });
       if (cause instanceof HttpError && cause.status === 409) {
-        setForkError(cause.code === "SNAPSHOT_NOT_READY"
-          ? "对话快照仍在准备中，请稍后重试。"
-          : "当前 Task 仍有运行中的 Run，暂时不能 Fork。"
-        );
+        // 409 是状态冲突：快照未就绪或仍有运行中的 Run，刷新侧栏让 fork 可用性回到后端事实。
+        notify.error("Fork 失败", {
+          error: new UserFacingError(cause.code === "SNAPSHOT_NOT_READY"
+            ? "对话快照仍在准备中，请稍后重试。"
+            : "当前 Task 仍有运行中的 Run，暂时不能 Fork。"),
+        });
         await load();
       } else {
-        setForkError(cause instanceof Error ? cause.message : "Fork 失败，请重试");
+        notify.error("Fork 失败", {
+          error: cause,
+          fallback: "Fork 失败，请重试",
+          action: { label: "重试", onClick: () => void handleForkRun(runId) },
+        });
       }
     } finally {
       setForkingRunId(null);
     }
   }, [activeTaskId, forkingRunId, load, navigate]);
 
-  const confirmDelete = async () => {
-    if (!deleteTarget || deleting) return;
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      if (deleteTarget.kind === "workspace") {
-        const deletingCurrentWorkspace = selectedWorkspaceId === deleteTarget.id || workspaces.some((workspace) => workspace.workspace_id === deleteTarget.id && workspace.tasks.some((task) => task.task_id === activeTaskId));
-        await deleteWorkspace(deleteTarget.id);
-        closeWorkspaceTabs(deleteTarget.id);
-        if (deletingCurrentWorkspace) {
-          setSelectedWorkspaceId(null);
-          navigate("/");
+  /**
+   * 删除工作区或任务：确认框托管 busy 与失败提示（失败时保持打开可重试）。
+   * 删除成功后才关闭工作台标签、离开已删除的当前页并刷新侧栏。
+   */
+  const requestDelete = async (target: DeleteTarget) => {
+    const deletingCurrentWorkspace = target.kind === "workspace" && (
+      selectedWorkspaceId === target.id
+      || workspaces.some((workspace) => workspace.workspace_id === target.id && workspace.tasks.some((task) => task.task_id === activeTaskId))
+    );
+    const confirmed = await requestConfirmation({
+      title: target.kind === "workspace" ? `删除工作区“${target.label}”？` : `删除任务“${target.label}”？`,
+      description: target.kind === "workspace"
+        ? `此操作将永久删除该工作区及其下的 ${target.taskCount} 个任务和全部对话数据。`
+        : "此操作将永久删除该任务及其全部对话数据，不影响所属工作区和其他任务。",
+      warning: "删除后无法撤销。",
+      confirmLabel: "确认删除",
+      busyLabel: "删除中…",
+      tone: "destructive",
+      icon: "delete",
+      failureFallback: "删除失败，请重试",
+      action: async () => {
+        try {
+          if (target.kind === "workspace") await deleteWorkspace(target.id);
+          else await deleteTask(target.id);
+        } catch (cause) {
+          void frontendLog("ERROR", "workspace_resource_delete_failed", "删除工作区资源失败", {
+            data: { kind: target.kind, id: target.id },
+            error: cause,
+          });
+          throw cause;
         }
-      } else {
-        await deleteTask(deleteTarget.id);
-        if (activeTaskId === deleteTarget.id) {
-          navigate("/");
-        }
+      },
+    });
+    if (!confirmed) return;
+    if (target.kind === "workspace") {
+      closeWorkspaceTabs(target.id);
+      if (deletingCurrentWorkspace) {
+        setSelectedWorkspaceId(null);
+        navigate("/");
       }
-      setDeleteTarget(null);
-      await load();
-    } catch (cause) {
-      setDeleteError(cause instanceof Error ? cause.message : "删除失败，请重试");
-    } finally {
-      setDeleting(false);
+    } else if (activeTaskId === target.id) {
+      navigate("/");
     }
+    notify.success(target.kind === "workspace" ? "工作区已删除" : "任务已删除");
+    await load();
   };
 
   return (
@@ -424,9 +449,9 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
                   onWorkspaceExpansionChange={updateWorkspaceExpansion}
                   onSelectWorkspace={selectWorkspace}
                   onOpenWorkspaceSettings={openWorkspaceSettings}
-                  onSelectTask={(task, workspaceId) => { setForkError(null); writeLastWorkspaceId(workspaceId); setSelectedWorkspaceId(workspaceId); navigate(`/tasks/${task.task_id}`); }}
-                  renderWorkspaceActions={(workspace) => <ResourceActionMenu label={workspace.name} onDelete={() => requestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })} />}
-                  renderTaskActions={(task) => <ResourceActionMenu label={task.full_title} onDelete={() => requestDelete({ kind: "task", id: task.task_id, label: task.full_title, taskCount: 0 })} />}
+                  onSelectTask={(task, workspaceId) => { writeLastWorkspaceId(workspaceId); setSelectedWorkspaceId(workspaceId); navigate(`/tasks/${task.task_id}`); }}
+                  renderWorkspaceActions={(workspace) => <ResourceActionMenu label={workspace.name} onDelete={() => void requestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })} />}
+                  renderTaskActions={(task) => <ResourceActionMenu label={task.full_title} onDelete={() => void requestDelete({ kind: "task", id: task.task_id, label: task.full_title })} />}
                 />
               </div>}
             </nav>
@@ -456,8 +481,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
         </div>
       </aside>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex h-14 shrink-0 items-center justify-between border-b px-5">
-          <div className="min-w-0">{forkError && <Alert tone="destructive" className="py-1 text-xs"><span className="block truncate">{forkError}</span></Alert>}</div>
+        <div className="flex h-14 shrink-0 items-center justify-end border-b px-5">
           <div className="flex shrink-0 items-center gap-2">
             {workbenchTabs.length > 0 && (
               <Button
@@ -478,7 +502,11 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
-          {contextObserverOpen ? <ContextObserverPage /> : activeTaskId ? <TaskPage
+          {contextObserverOpen ? (
+            <IsolatedRegion region="context-observer" label="上下文观测" resetKey="context-observer" fallbackClassName="p-6">
+              <ContextObserverPage />
+            </IsolatedRegion>
+          ) : activeTaskId ? <TaskPage
             key={activeTaskId}
             taskId={activeTaskId}
             initialTask={activeTask}
@@ -493,14 +521,33 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
             onTaskLoaded={handleTaskLoaded}
             onTaskStateChanged={refreshTaskState}
             onRunStateChange={handleRunStateChange}
-          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={startConversation} />}
+          /> : <NewConversation workspaces={workspaces} selectedWorkspaceId={selectedWorkspaceId} onWorkspaceChange={(id) => { setSelectedWorkspaceId(id); writeLastWorkspaceId(id); }} onWorkspaceCreated={load} onStarted={startConversation} onTaskListChanged={() => void load()} />}
         </div>
       </main>
-      <Workbench workspaceId={activeTaskWorkspaceId} onRequestClose={requestWorkbenchPanelClose} />
-      {deleteTarget && <DeleteConfirmDialog open title={deleteTarget.kind === "workspace" ? `删除工作区“${deleteTarget.label}”？` : `删除任务“${deleteTarget.label}”？`} description={deleteTarget.kind === "workspace" ? `此操作将永久删除该工作区及其下的 ${deleteTarget.taskCount} 个任务和全部对话数据。` : "此操作将永久删除该任务及其全部对话数据，不影响所属工作区和其他任务。"} warning="删除后无法撤销。" error={deleteError} busy={deleting} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); setDeleteError(null); } }} onConfirm={() => void confirmDelete()} />}
-      {settingsOpen && <SystemConfigurationPage onClose={closeSettings} />}
-      {workspaceConfigurationId !== null && <WorkspaceConfigurationPage workspaceId={workspaceConfigurationId} workspaceName={selectedWorkspace?.name ?? "当前工作区"} onClose={closeWorkspaceSettings} />}
+      <IsolatedRegion
+        region="workbench"
+        label="工作台"
+        // 收起会改变 resetKey，从而清除崩溃状态；下次打开重新挂载。
+        resetKey={`workbench:${activeTaskWorkspaceId ?? "none"}:${workbenchPanelOpen ? "open" : "closed"}`}
+        fallbackClassName="w-80 shrink-0 border-l p-3"
+        escape={{ label: "收起工作台", onClick: () => setWorkbenchPanelOpen(false) }}
+      >
+        <Workbench workspaceId={activeTaskWorkspaceId} onRequestClose={() => void requestWorkbenchPanelClose()} />
+      </IsolatedRegion>
+      {settingsOpen && (
+        <IsolatedRegion region="system-settings" label="系统配置" resetKey="system-settings" fallbackClassName={OVERLAY_FALLBACK_CLASS} escape={{ label: "返回工作区", onClick: () => closeSettings() }}>
+          <SystemConfigurationPage onClose={closeSettings} />
+        </IsolatedRegion>
+      )}
+      {workspaceConfigurationId !== null && (
+        <IsolatedRegion region="workspace-settings" label="工作区配置" resetKey={`workspace-settings:${workspaceConfigurationId}`} fallbackClassName={OVERLAY_FALLBACK_CLASS} escape={{ label: "返回工作区", onClick: () => closeWorkspaceSettings() }}>
+          <WorkspaceConfigurationPage workspaceId={workspaceConfigurationId} workspaceName={selectedWorkspace?.name ?? "当前工作区"} onClose={closeWorkspaceSettings} />
+        </IsolatedRegion>
+      )}
     </div>
     </WorkbenchProvider>
   );
 }
+
+const OVERLAY_FALLBACK_CLASS = "bg-background/95 absolute inset-0 z-30 flex items-center justify-center p-6";
+

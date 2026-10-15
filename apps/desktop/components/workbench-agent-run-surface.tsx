@@ -11,9 +11,10 @@ import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import { useTaskAssistantReadonlyTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
 import type { TransportState } from "@/lib/assistant/contract";
 import { HttpError } from "@/lib/http/errors";
-import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { getActiveTraceId, newTraceId } from "@/lib/trace";
 import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 const MAX_AUTOMATIC_RESYNCS = 2;
 const RESYNC_DELAYS_MS = [300, 900];
@@ -153,7 +154,7 @@ export function WorkbenchAgentRunSurface({ taskId, onClose }: { taskId: number; 
           scheduleResync();
           return;
         }
-        setError(safeFrontendErrorMessage(cause, "无法读取子 Agent 状态"));
+        setError(userErrorMessage(cause, "无法读取子 Agent 状态"));
       });
     return () => controller.abort();
   }, [backendRuntime.available, backendRuntime.generation, scheduleResync, syncToken, taskId]);

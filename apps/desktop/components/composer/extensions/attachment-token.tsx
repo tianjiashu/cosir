@@ -3,7 +3,7 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { FileTextIcon, ImageIcon, XIcon } from "lucide-react";
-import { reconcileComposerAttachments, serializeComposerDocument, type InlineComposerAttachment } from "@/components/composer/composer-document";
+import { reconcileComposerAttachments, serializeComposerDocument } from "@/components/composer/composer-document";
 import { useComposerEditorView } from "@/components/composer/composer-editor-context";
 import { frontendLog } from "@/lib/logging/frontend-log";
 

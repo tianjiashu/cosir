@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createTimeoutAbort, isCancelledAbort, isTimeoutAbort } from "@/lib/async/abort-timeout";
-import { safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 describe("createTimeoutAbort", () => {
   afterEach(() => vi.useRealTimers());
@@ -14,7 +14,7 @@ describe("createTimeoutAbort", () => {
     expect(signal.aborted).toBe(true);
     expect(isTimeoutAbort(signal)).toBe(true);
     expect(isCancelledAbort(signal)).toBe(false);
-    expect(safeFrontendErrorMessage(signal.reason, "fallback")).toContain("超时");
+    expect(userErrorMessage(signal.reason, "fallback")).toContain("超时");
   });
 
   it("treats an owner abort as cancellation, not timeout", () => {
@@ -24,7 +24,7 @@ describe("createTimeoutAbort", () => {
 
     expect(isTimeoutAbort(signal)).toBe(false);
     expect(isCancelledAbort(signal)).toBe(true);
-    expect(safeFrontendErrorMessage(signal.reason, "fallback")).toBe("请求已取消");
+    expect(userErrorMessage(signal.reason, "fallback")).toBe("请求已取消");
   });
 
   it("does not abort after clear", () => {

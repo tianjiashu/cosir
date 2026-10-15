@@ -9,7 +9,7 @@ import { AssistantRuntimeSession } from "@/components/assistant/runtime/assistan
 import type { AssistantRuntimeProps } from "@/components/assistant/runtime/runtime-types";
 import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import type { TransportState } from "@/lib/assistant/contract";
-import { safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 const RENDER_RECOVERY_SNAPSHOT_TIMEOUT_MS = 15_000;
 
@@ -60,7 +60,7 @@ export function AssistantRuntime(props: AssistantRuntimeProps) {
       })
       .catch((error: unknown) => {
         setIssue({
-          message: safeFrontendErrorMessage(error, "无法读取本机后端的最新对话状态"),
+          message: userErrorMessage(error, "无法读取本机后端的最新对话状态"),
           canResync: true,
         });
       })

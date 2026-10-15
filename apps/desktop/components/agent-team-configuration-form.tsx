@@ -37,7 +37,7 @@ export function AgentTeamConfigurationForm({
   teamIdEditable: boolean;
   saving: boolean;
   onChange: (configuration: AgentTeamConfigurationDraft) => void;
-  onSave: () => Promise<void>;
+  onSave: () => void;
   onCancel: () => void;
 }) {
   const [newlyAddedEntry, setNewlyAddedEntry] = useState<{
@@ -63,6 +63,7 @@ export function AgentTeamConfigurationForm({
     return () => window.clearTimeout(timeout);
   }, [newlyAddedEntry]);
 
+  // 新节点追加在末尾、新转移插在开头：高亮与滚动定位必须分别取末项 / 首项。
   const highlightNewEntry = (kind: "node" | "transition") => {
     additionSequence.current += 1;
     setNewlyAddedEntry({ kind, sequence: additionSequence.current });
@@ -142,7 +143,7 @@ export function AgentTeamConfigurationForm({
       <section ref={nodeListRef} className="space-y-3">
         <div className="flex items-center justify-between"><h3 className="text-sm font-medium">Team 节点</h3><Button type="button" variant="outline" size="sm" onClick={addNode}><PlusIcon />添加节点</Button></div>
         {configuration.nodes.length === 0 && <EmptyState className="py-4" title="添加至少一个节点，再设置入口与转移。" />}
-        {configuration.nodes.map((node, index) => <article key={`node-${index}`} data-team-entry-card className={`border-border/70 space-y-3 rounded-xl border p-3 ${index === 0 && newlyAddedEntry?.kind === "node" ? "agent-team-entry-highlight" : ""}`}>
+        {configuration.nodes.map((node, index) => <article key={`node-${index}`} data-team-entry-card className={`border-border/70 space-y-3 rounded-xl border p-3 ${index === configuration.nodes.length - 1 && newlyAddedEntry?.kind === "node" ? "agent-team-entry-highlight" : ""}`}>
           <div className="flex items-start gap-2"><label className="min-w-0 flex-1 space-y-1 text-xs"><span className="text-muted-foreground">节点 ID</span><Input value={node.node_id} onChange={(event) => updateNode(index, { node_id: event.target.value })} /></label><Button type="button" variant="ghost" size="icon-sm" className="mt-5 text-destructive" aria-label={`删除节点 ${node.name} ${index + 1}`} onClick={() => removeNode(index)}><Trash2Icon /></Button></div>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-xs"><span className="text-muted-foreground">节点名称</span><Input value={node.name} onChange={(event) => updateNode(index, { name: event.target.value })} /></label>
@@ -173,7 +174,7 @@ export function AgentTeamConfigurationForm({
       </section>
 
       {profiles.length === 0 && <EmptyState size="compact" title="当前作用域暂无子 Agent 配置，可先添加节点草稿并稍后选择 Agent。" />}
-      <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="outline" onClick={onCancel}>取消</Button><Button type="button" onClick={() => void onSave()} disabled={saving}>{saving ? "保存中…" : "保存配置"}</Button></div>
+      <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="outline" onClick={onCancel}>取消</Button><Button type="button" onClick={onSave} disabled={saving}>{saving ? "保存中…" : "保存配置"}</Button></div>
     </div>
   );
 }

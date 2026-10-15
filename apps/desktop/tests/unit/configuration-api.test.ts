@@ -108,7 +108,7 @@ describe("configuration API", () => {
     } = await import("@/lib/api/configuration");
 
     await getTerminalDenylistConfiguration();
-    expect(requestJson).toHaveBeenCalledWith("/configuration/terminal-denylist");
+    expect(requestJson).toHaveBeenCalledWith("/configuration/terminal-denylist", undefined);
 
     await updateTerminalDenylistConfiguration(["\\bmkfs\\b"]);
     expect(requestJson).toHaveBeenCalledWith(

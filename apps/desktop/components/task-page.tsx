@@ -7,6 +7,9 @@ import type { InitialConversationAttachment } from "@/components/new-conversatio
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalPanelHost } from "@/components/terminal/terminal-panel";
+import { useTerminalPanelStore } from "@/components/terminal/terminal-panel-store";
+import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { TaskWorkspaceLayout } from "@/components/task-workspace-layout";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 
@@ -100,7 +103,7 @@ export function TaskPage({
           });
           return;
         }
-        setError(cause instanceof Error ? cause.message : "任务加载失败，请重试");
+        setError(userErrorMessage(cause, "任务加载失败，请重试"));
         void frontendLog("WARNING", "task_session_load_failed", "Task session 任务加载失败", {
           data: { taskId, requestGeneration },
           error: cause,
@@ -124,7 +127,21 @@ export function TaskPage({
   if (!loadedTask || loadedTask.task_id !== taskId) return <LoadingState label="正在加载任务工作区…" className="h-full" />;
 
   return (
-    <TaskWorkspaceLayout bottomPanel={<TerminalPanelHost taskId={taskId} />}>
+    <TaskWorkspaceLayout bottomPanel={(
+      // 终端面板崩溃只降级面板本身，不能连带卸载正在运行的 Assistant 会话。
+      <IsolatedRegion
+        region="terminal-panel"
+        label="终端面板"
+        resetKey={`terminal:${taskId}`}
+        metadata={{ taskId }}
+        fallbackClassName="shrink-0 border-t p-3"
+        layout="row"
+        // 先关闭再重置边界：重新挂载的 Host 因面板已关闭而不渲染，不会再次触发同一崩溃。
+        escape={{ label: "关闭终端", onClick: (reset) => { useTerminalPanelStore.getState().close(); reset(); } }}
+      >
+        <TerminalPanelHost taskId={taskId} />
+      </IsolatedRegion>
+    )}>
       <div className="h-full min-h-0 min-w-0 w-full">
         <Assistant
           taskId={taskId}

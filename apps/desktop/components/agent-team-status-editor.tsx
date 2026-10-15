@@ -6,6 +6,7 @@ import { PlusIcon, XIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { AgentTeamStatusConfiguration } from "@/lib/api/agent-teams";
 import { DEFAULT_AGENT_TEAM_STATUS_COLOR } from "@/lib/agent-team-status";
+import { isImeComposing } from "@/lib/keyboard/ime";
 
 export function splitStatusValues(value: string): string[] {
   return value.split(/[,，\r\n]/);
@@ -56,7 +57,7 @@ export function AgentTeamStatusEditor({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    if (isImeComposing(event)) return;
     if (event.key === "Enter") {
       event.preventDefault();
       commitDraft();

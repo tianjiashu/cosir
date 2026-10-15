@@ -1,4 +1,4 @@
-import { createTimeoutAbort, isCancelledAbort, isTimeoutAbort } from "@/lib/async/abort-timeout";
+import { isCancelledAbort, isTimeoutAbort, withTimeout } from "@/lib/async/abort-timeout";
 import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
 import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -43,13 +43,14 @@ export async function fetchCanonicalSnapshot(
     return current.available && current.generation === backend.generation;
   };
 
-  const { controller, signal, clear } = createTimeoutAbort(options.timeoutMs);
-  const forwardOwnerAbort = () => controller.abort(options.signal?.reason);
-  if (options.signal?.aborted) forwardOwnerAbort();
-  else options.signal?.addEventListener("abort", forwardOwnerAbort, { once: true });
+  const { signal, clear } = withTimeout(options.signal, options.timeoutMs);
 
   try {
-    const snapshot = await requestAssistantSnapshot(taskId, { signal, traceId: options.traceId });
+    const snapshot = await requestAssistantSnapshot(taskId, {
+      signal,
+      traceId: options.traceId,
+      timeoutMs: options.timeoutMs,
+    });
     if (isCancelledAbort(signal) || !isSameBackend()) return { kind: "superseded" };
     return { kind: "fresh", snapshot };
   } catch (error) {
@@ -62,6 +63,5 @@ export async function fetchCanonicalSnapshot(
     throw error;
   } finally {
     clear();
-    options.signal?.removeEventListener("abort", forwardOwnerAbort);
   }
 }

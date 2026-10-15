@@ -113,4 +113,25 @@ describe("markdown editor shortcuts", () => {
     expect(currentState.doc.toString()).toBe("- one");
     expect(event.preventDefault).toHaveBeenCalledOnce();
   });
+  it("leaves Enter to the IME while a candidate is being confirmed", () => {
+    const state = createState("- item", 6);
+    const dispatch = vi.fn();
+    const view = { state, dispatch, composing: false } as never;
+    // WKWebView 在 compositionend 之后送出 isComposing=false、keyCode=229 的 Enter。
+    const event = {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 229,
+      isComposing: false,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      preventDefault: vi.fn(),
+    } as unknown as KeyboardEvent;
+
+    expect(handleMarkdownKeydown(view, event)).toBe(false);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
 });

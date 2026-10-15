@@ -47,4 +47,20 @@ describe("Agent Team 失败流水线", () => {
     expect(card).toContain("执行失败");
     expect(card).toContain("quality");
   });
+
+  it("轮询放弃后在卡片内显示可重试的读取失败提示", () => {
+    const card = renderToStaticMarkup(
+      <AgentTeamExecutionContent
+        display={{ teamRunId: 17, teamId: "quality", goal: "" }}
+        run={null}
+        backendStatus="running"
+        pollError="请求的内容不存在或已被删除"
+        onRetryPoll={() => undefined}
+        onOpenAgent={() => undefined}
+      />,
+    );
+    expect(card).toContain("进度不可用");
+    expect(card).toContain("执行进度读取失败：请求的内容不存在或已被删除");
+    expect(card).toContain("重试");
+  });
 });

@@ -11,7 +11,7 @@ import type { TransportState } from "@/lib/assistant/contract";
  */
 export async function requestAssistantSnapshot(
   taskId: number,
-  init: Pick<HttpRequestInit, "signal" | "traceId"> = {},
+  init: Pick<HttpRequestInit, "signal" | "traceId" | "timeoutMs"> = {},
 ): Promise<TransportState> {
   const value = await requestJson<unknown>(`/tasks/${taskId}/assistant/state`, init);
   return parseTransportState(value);

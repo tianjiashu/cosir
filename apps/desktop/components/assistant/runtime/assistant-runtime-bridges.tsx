@@ -3,7 +3,7 @@ import type { CreateAttachment } from "@assistant-ui/core";
 import { useEffect, useRef, type MutableRefObject } from "react";
 
 import type { TransportState } from "@/lib/assistant/contract";
-import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { currentTransportRun, transportMessageCount } from "@/lib/assistant/transport-state-operations";
 import type {
   AssistantRuntimeProps,
@@ -24,6 +24,7 @@ import {
   queuePendingEditComposerStart,
   setPendingEditComposerDraft,
 } from "@/lib/assistant/edit-composer-draft";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 export function TaskStateBridge({
   onRunStateChange,
@@ -159,7 +160,7 @@ export function InitialMessageBridge({
     let cancelled = false;
     const reportError = (error: unknown, stage: "add_attachment" | "send") => {
       if (cancelled) return;
-      const message = safeFrontendErrorMessage(error, "初始消息发送失败，请重试");
+      const message = userErrorMessage(error, "初始消息发送失败，请重试");
       void frontendLog("ERROR", "assistant_initial_message_failed", "初始消息发送失败", {
         traceId,
         data: { taskId, attachmentCount: attachments.length, stage },

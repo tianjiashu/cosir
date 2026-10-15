@@ -233,10 +233,9 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   ]));
   await expect.poll(() => page.evaluate(() => Object.keys(window.localStorage).some((key) => key.includes("agent-team-graph") && key.endsWith(":review_flow")))).toBe(true);
   expect(await page.evaluate(() => Object.keys(window.localStorage).some((key) => key.includes("agent-team-graph") && key.endsWith(":new")))).toBe(false);
-  const saveSuccess = page.getByRole("dialog");
-  await expect(saveSuccess.getByText("保存成功")).toBeVisible();
-  await expect(saveSuccess.getByText("Agent Team 配置已保存。")).toBeVisible();
-  await saveSuccess.getByRole("button", { name: "继续编辑" }).click();
+  // 保存成功是一次性结果，走 toast，不再弹出需要关闭的对话框。
+  await expect(page.getByText("Agent Team 配置已保存", { exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByLabel("Team ID")).toHaveValue("review_flow");
   await expect(page.getByLabel("Team ID")).toBeDisabled();
   await page.getByRole("button", { name: "返回 Team 列表" }).click();

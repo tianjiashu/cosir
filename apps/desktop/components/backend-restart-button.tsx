@@ -3,9 +3,9 @@
 import { useCallback, useState } from "react";
 import { RotateCwIcon } from "lucide-react";
 
-import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { canRestartBackendRuntime, restartBackendRuntime } from "@/src/runtime-config";
 
@@ -41,37 +41,33 @@ export function useBackendRestart(source: "header" | "status_banner") {
  */
 export function BackendRestartButton() {
   const { restarting, restart } = useBackendRestart("header");
-  const [confirmOpen, setConfirmOpen] = useState(false);
 
   if (!canRestartBackendRuntime()) return null;
 
+  const confirmAndRestart = () => {
+    void requestConfirmation({
+      title: "重启本地后端？",
+      description: "后端会停止并重新启动，期间无法发送消息。",
+      warning: "所有正在运行的任务都会被中断；重启后可在对话中继续运行。",
+      confirmLabel: "重启后端",
+      busyLabel: "重启中…",
+      icon: "restart",
+      // restart 自行记录失败日志，横幅呈现失败状态，因此对话框总是关闭。
+      action: restart,
+    });
+  };
+
   return (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        onClick={() => setConfirmOpen(true)}
-        disabled={restarting}
-        aria-label={restarting ? "正在重启后端" : "重启后端"}
-      >
-        {restarting ? <Spinner label={null} /> : <RotateCwIcon />}
-        {restarting ? "重启中…" : "重启后端"}
-      </Button>
-      <ConfirmDialog
-        open={confirmOpen}
-        title="重启本地后端？"
-        description="后端会停止并重新启动，期间无法发送消息。"
-        warning="所有正在运行的任务都会被中断；重启后可在对话中继续运行。"
-        busy={restarting}
-        confirmLabel="重启后端"
-        busyLabel="重启中…"
-        confirmIcon={<RotateCwIcon />}
-        onOpenChange={setConfirmOpen}
-        onConfirm={() => {
-          void restart().finally(() => setConfirmOpen(false));
-        }}
-      />
-    </>
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      onClick={confirmAndRestart}
+      disabled={restarting}
+      aria-label={restarting ? "正在重启后端" : "重启后端"}
+    >
+      {restarting ? <Spinner label={null} /> : <RotateCwIcon />}
+      {restarting ? "重启中…" : "重启后端"}
+    </Button>
   );
 }

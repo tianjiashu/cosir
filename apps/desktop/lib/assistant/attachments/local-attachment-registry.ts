@@ -1,3 +1,5 @@
+import { UserFacingError } from "@/lib/errors/user-facing-error";
+
 export type LocalAttachmentMetadata = {
   id: string;
   path: string;
@@ -7,7 +9,7 @@ export type LocalAttachmentMetadata = {
 };
 
 /** A safe, user-actionable error for a local attachment that can no longer be resolved. */
-export class LocalAttachmentUnavailableError extends Error {
+export class LocalAttachmentUnavailableError extends UserFacingError {
   constructor() {
     super("附件已失效，请重新选择附件");
     this.name = "LocalAttachmentUnavailableError";

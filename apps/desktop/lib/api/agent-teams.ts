@@ -1,4 +1,4 @@
-import { jsonRequestInit, requestJson } from "@/lib/http/client";
+import { jsonRequestInit, requestJson, type RequestOptions } from "@/lib/http/client";
 
 export type AgentTeamConfigurationInput = {
   scope: "system" | "workspace";
@@ -106,18 +106,22 @@ export function deleteAgentTeamConfiguration(
   return requestJson(teamConfigurationPath(scope, workspaceId, teamId), { method: "DELETE" }).then(() => undefined);
 }
 
-export function getSystemAgentTeamConfigurations(): Promise<AgentTeamConfiguration[]> {
-  return requestJson<AgentTeamConfiguration[]>("/configuration/agent-teams");
+export function getSystemAgentTeamConfigurations(options?: RequestOptions): Promise<AgentTeamConfiguration[]> {
+  return requestJson<AgentTeamConfiguration[]>("/configuration/agent-teams", options);
 }
 
-export function getWorkspaceAgentTeamConfigurations(workspaceId: number): Promise<AgentTeamConfiguration[]> {
+export function getWorkspaceAgentTeamConfigurations(
+  workspaceId: number,
+  options?: RequestOptions,
+): Promise<AgentTeamConfiguration[]> {
   return requestJson<AgentTeamConfiguration[]>(
     `/workspaces/${encodeURIComponent(workspaceId)}/configuration/agent-teams`,
+    options,
   );
 }
 
-export function getAgentTeamRun(runId: number): Promise<AgentTeamRun> {
-  return requestJson<AgentTeamRun>(`/agent-team/runs/${encodeURIComponent(runId)}`);
+export function getAgentTeamRun(runId: number, options?: RequestOptions): Promise<AgentTeamRun> {
+  return requestJson<AgentTeamRun>(`/agent-team/runs/${encodeURIComponent(runId)}`, options);
 }
 
 export function cancelAgentTeamRun(runId: number): Promise<AgentTeamRun> {

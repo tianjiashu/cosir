@@ -22,6 +22,7 @@ import {
   type FavoritePrompt,
 } from "@/lib/favorite-prompt-storage";
 import { insertText, useComposerInsertion } from "@/components/composer/composer-insertion-context";
+import { requestConfirmation } from "@/lib/confirm/confirm-store";
 
 type FavoritePromptToolbarProps = {
   disabled?: boolean;
@@ -90,9 +91,20 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
     if (persist(nextPrompts)) openNewPrompt();
   };
 
-  const deletePrompt = (promptId: string) => {
-    persist(prompts.filter((prompt) => prompt.id !== promptId));
-    if (editingId === promptId) openNewPrompt();
+  const deletePrompt = async (target: FavoritePrompt) => {
+    const confirmed = await requestConfirmation({
+      title: `删除提示词“${target.title}”？`,
+      description: "删除后该提示词将从常用提示词列表中移除。",
+      warning: "删除后无法撤销。",
+      confirmLabel: "确认删除",
+      busyLabel: "删除中…",
+      tone: "destructive",
+      icon: "delete",
+    });
+    if (!confirmed) return;
+    // 以确认后的最新列表为准：确认框打开期间其它 composer 可能已修改提示词库。
+    persist(readFavoritePrompts().filter((prompt) => prompt.id !== target.id));
+    if (editingId === target.id) openNewPrompt();
   };
 
   return (
@@ -155,7 +167,7 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
                     <Button type="button" variant="ghost" size="icon-xs" aria-label={`编辑 ${prompt.title}`} onClick={() => editPrompt(prompt)}>
                       <PencilIcon />
                     </Button>
-                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`删除 ${prompt.title}`} onClick={() => deletePrompt(prompt.id)}>
+                    <Button type="button" variant="ghost" size="icon-xs" aria-label={`删除 ${prompt.title}`} onClick={() => void deletePrompt(prompt)}>
                       <Trash2Icon />
                     </Button>
                   </div>

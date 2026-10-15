@@ -1,4 +1,7 @@
-import { jsonRequestInit, requestJson } from "@/lib/http/client";
+import { jsonRequestInit, requestJson, type RequestOptions } from "@/lib/http/client";
+
+/** MCP 连接测试需要启动服务进程并握手，Skill 导入需要复制 / 解压目录，均明显长于默认 JSON 超时。 */
+const LONG_OPERATION_TIMEOUT_MS = 120_000;
 
 export type MCPTransport = "stdio" | "sse" | "streamable_http";
 
@@ -35,8 +38,8 @@ export type SystemSkill = {
 
 export type SystemSkillDocument = SystemSkill & { content: string };
 
-export function getMCPServers(): Promise<{ servers: MCPServerConfiguration[] }> {
-  return requestJson("/configuration/mcp-servers");
+export function getMCPServers(options?: RequestOptions): Promise<{ servers: MCPServerConfiguration[] }> {
+  return requestJson("/configuration/mcp-servers", options);
 }
 
 function mcpServerPayload(server: MCPServerConfiguration) {
@@ -62,16 +65,16 @@ export function saveMCPServers(servers: MCPServerConfiguration[]): Promise<{ ser
 export function testMCPServer(server: MCPServerConfiguration): Promise<MCPServerTestResult> {
   return requestJson(
     "/configuration/mcp-servers/test",
-    jsonRequestInit(mcpServerPayload(server), { method: "POST" }),
+    jsonRequestInit(mcpServerPayload(server), { method: "POST", timeoutMs: LONG_OPERATION_TIMEOUT_MS }),
   );
 }
 
-export function getSystemSkills(): Promise<SystemSkill[]> {
-  return requestJson("/configuration/skills");
+export function getSystemSkills(options?: RequestOptions): Promise<SystemSkill[]> {
+  return requestJson("/configuration/skills", options);
 }
 
-export function getSystemSkill(name: string): Promise<SystemSkillDocument> {
-  return requestJson(`/configuration/skills/${encodeURIComponent(name)}`);
+export function getSystemSkill(name: string, options?: RequestOptions): Promise<SystemSkillDocument> {
+  return requestJson(`/configuration/skills/${encodeURIComponent(name)}`, options);
 }
 
 export function saveEnabledSkills(enabled_skills: string[]): Promise<SystemSkill[]> {
@@ -87,7 +90,7 @@ export function importSystemSkill(
 ): Promise<SystemSkill> {
   return requestJson(
     "/configuration/skills/import",
-    jsonRequestInit({ source_path, source_type }, { method: "POST" }),
+    jsonRequestInit({ source_path, source_type }, { method: "POST", timeoutMs: LONG_OPERATION_TIMEOUT_MS }),
   );
 }
 

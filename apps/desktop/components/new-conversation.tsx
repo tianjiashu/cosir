@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useLocation } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { FileTextIcon, Loader2Icon, SendIcon, XIcon } from "lucide-react";
 
 import { ComposerControls } from "@/components/composer/composer-controls";
@@ -22,15 +24,19 @@ import { removeStoredToolGroupSelection, writeStoredToolGroupSelection } from "@
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
-import { submitAssistantTransport, AssistantTransportProtocolError } from "@/lib/assistant/submit-assistant-transport";
+import { submitAssistantTransport, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-assistant-transport";
 import { isSupportedImageFile } from "@/lib/assistant/attachments/attachment-upload";
-import { parseTransportError } from "@/lib/assistant/transport-error";
-import { safeFrontendErrorMessage, frontendLog } from "@/lib/logging/frontend-log";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import {
   Dialog,
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
+import { notify } from "@/lib/notify";
+import { queryKeys } from "@/lib/query/query-keys";
+import { newTraceId } from "@/lib/trace";
 
 export type InitialConversationAttachment = PickedComposerAttachment;
 
@@ -138,11 +144,16 @@ type NewConversationProps = {
   selectedWorkspaceId: number | null;
   onWorkspaceChange: (workspaceId: number) => void;
   onWorkspaceCreated: () => Promise<void>;
+  /** 首条命令已被后端受理且用户仍停留在本页：由宿主导航到新 Task。 */
   onStarted: (
     conversation: StartedConversation,
     disabledToolGroups: string[],
   ) => void;
+  /** 新 Task 被保留但不导航（用户已离开本页，或受理结果未知）：宿主只需刷新侧栏。 */
+  onTaskListChanged: () => void;
 };
+
+const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
 
 export function NewConversation({
   workspaces,
@@ -150,17 +161,28 @@ export function NewConversation({
   onWorkspaceChange,
   onWorkspaceCreated,
   onStarted,
+  onTaskListChanged,
 }: NewConversationProps) {
   const formRef = useRef<HTMLFormElement>(null);
+  const location = useLocation();
+  // 提交跨越多个 await：完成时用 ref 判断用户是否仍在本页，避免把已离开的用户拽回新 Task。
+  const pathnameRef = useRef(location.pathname);
+  pathnameRef.current = location.pathname;
+  const mountedRef = useRef(true);
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [modelReady, setModelReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<PickedComposerAttachment[]>([]);
-  const [toolGroups, setToolGroups] = useState<ToolGroupCatalog[]>([]);
   const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>([]);
-  const [toolGroupsLoading, setToolGroupsLoading] = useState(true);
-  const [toolGroupsError, setToolGroupsError] = useState<string | null>(null);
+  const toolGroupsQuery = useQuery({
+    queryKey: queryKeys.toolGroups(),
+    queryFn: ({ signal }) => getToolGroups({ signal }),
+  });
+  const toolGroups = toolGroupsQuery.data?.groups ?? EMPTY_TOOL_GROUPS;
+  const toolGroupsError = toolGroupsQuery.isError
+    ? userErrorMessage(toolGroupsQuery.error, "工具组加载失败")
+    : null;
   const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
   const fileAttachments: InlineComposerAttachment[] = attachments
     .filter((attachment) => attachment.kind === "file")
@@ -171,21 +193,19 @@ export function NewConversation({
   const hasDraft = Boolean(text.trim() || attachments.length > 0);
 
   useEffect(() => {
-    const controller = new AbortController();
-    setToolGroupsLoading(true);
-    setToolGroupsError(null);
-    void getToolGroups({ signal: controller.signal })
-      .then(({ groups }) => setToolGroups(groups))
-      .catch((cause: unknown) => {
-        if (controller.signal.aborted) return;
-        setToolGroupsError(cause instanceof Error ? cause.message : "工具组加载失败");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setToolGroupsLoading(false);
-      });
-    return () => controller.abort();
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
   }, []);
 
+  /**
+   * 创建 provisional Task 并提交首条命令。
+   *
+   * 生命周期约束：
+   * - 只在用户仍停留在本页时导航；用户中途离开（切到其它 Task、组件卸载）只刷新侧栏并 toast，
+   *   不能把用户拽回新 Task。
+   * - 只有确定命令未被受理（请求未发出或 HTTP 明确拒绝）才删除 provisional Task；网络层结果未知
+   *   或已越过 accepted barrier 时删除会丢掉可能正在运行的对话，见 wasCommandPossiblyAccepted。
+   */
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedText = text.trim();
@@ -194,10 +214,13 @@ export function NewConversation({
     setError(null);
     const sendAttachments = [...attachments];
     const creationCommandId = crypto.randomUUID();
+    const traceId = newTraceId();
+    const submittedPathname = pathnameRef.current;
+    const stillHere = () => mountedRef.current && pathnameRef.current === submittedPathname;
     let provisionalTask: StartedConversation | null = null;
     try {
       const selection = readStoredSelection({ kind: "workspace", id: selectedWorkspaceId });
-      if (!selection?.modelConfigId) throw new Error("请先选择模型");
+      if (!selection?.modelConfigId) throw new UserFacingError("请先选择模型");
       const task = await createWorkspaceTask(selectedWorkspaceId, {
         text: trimmedText,
         creationCommandId,
@@ -217,33 +240,46 @@ export function NewConversation({
           .flatMap(({ tools }) => tools.map(({ name }) => name)),
         modelConfigId: selection.modelConfigId,
         reasoningEffort: selection.reasoningEffort ?? null,
+        traceId,
       });
       writeStoredSelection({ kind: "task", id: task.task_id }, {
         modelConfigId: selection.modelConfigId,
         reasoningEffort: selection.reasoningEffort ?? null,
       });
-      onStarted(task, selectedToolGroups);
+      if (stillHere()) {
+        onStarted(task, selectedToolGroups);
+      } else {
+        void frontendLog("INFO", "new_conversation_started_after_leave", "用户已离开新对话页，首条消息受理后不再导航", {
+          traceId,
+          data: { taskId: task.task_id, creationCommandId },
+        });
+        onTaskListChanged();
+        notify.success("新对话已开始运行", { description: "可在侧栏中打开查看" });
+      }
     } catch (cause) {
-      if (provisionalTask && !(cause instanceof AssistantTransportProtocolError)) {
+      const possiblyAccepted = wasCommandPossiblyAccepted(cause);
+      if (provisionalTask && !possiblyAccepted) {
         try {
           await deleteTask(provisionalTask.task_id, creationCommandId);
           removeStoredToolGroupSelection(provisionalTask.task_id);
         } catch (cleanupError) {
           void frontendLog("ERROR", "provisional_task_cleanup_failed", "provisional Task 清理失败", {
+            traceId,
             data: { taskId: provisionalTask.task_id, creationCommandId },
             error: cleanupError,
           });
         }
       }
-      const structured = parseTransportError(cause);
-      const message = structured?.message ?? safeFrontendErrorMessage(cause, "创建对话失败，请重试");
+      if (provisionalTask && possiblyAccepted) onTaskListChanged();
       void frontendLog("ERROR", "new_conversation_submit_failed", "新对话首条消息发送失败", {
-        data: { taskId: provisionalTask?.task_id ?? null, creationCommandId },
+        traceId,
+        data: { taskId: provisionalTask?.task_id ?? null, creationCommandId, possiblyAccepted },
         error: cause,
       });
-      setError(message);
+      if (stillHere()) setError(userErrorMessage(cause, "创建对话失败，请重试"));
+      else notify.error("创建对话失败", { error: cause, fallback: "创建对话失败，请重试" });
     } finally {
-      setSubmitting(false);
+      if (mountedRef.current) setSubmitting(false);
     }
   };
 
@@ -270,7 +306,7 @@ export function NewConversation({
               toolGroups={toolGroups}
               selectedToolGroups={selectedToolGroups}
               onSelectedToolGroupsChange={setSelectedToolGroups}
-              toolGroupsLoading={toolGroupsLoading}
+              toolGroupsLoading={toolGroupsQuery.isPending}
               toolGroupsError={toolGroupsError}
               disabled={submitting}
             />

@@ -39,6 +39,27 @@ export function createTimeoutAbort(ms: number): TimeoutAbort {
   };
 }
 
+/**
+ * 在调用方的取消信号之上叠加超时：任一触发都会中止返回的 signal。
+ *
+ * 调用方取消时沿用其 reason（通常为 AbortError），超时则为 TimeoutError，
+ * 下游可用 isTimeoutAbort / isCancelledAbort 区分。
+ */
+export function withTimeout(ownerSignal: AbortSignal | null | undefined, ms: number): TimeoutAbort {
+  const timeout = createTimeoutAbort(ms);
+  if (!ownerSignal) return timeout;
+  const forward = () => timeout.controller.abort(ownerSignal.reason);
+  if (ownerSignal.aborted) forward();
+  else ownerSignal.addEventListener("abort", forward, { once: true });
+  return {
+    ...timeout,
+    clear: () => {
+      timeout.clear();
+      ownerSignal.removeEventListener("abort", forward);
+    },
+  };
+}
+
 /** signal 是否因超时而中止。 */
 export function isTimeoutAbort(signal: AbortSignal): boolean {
   return signal.aborted && signal.reason instanceof DOMException && signal.reason.name === "TimeoutError";

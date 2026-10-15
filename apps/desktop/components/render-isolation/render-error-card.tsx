@@ -10,6 +10,7 @@ type RenderErrorCardProps = {
 };
 
 const SCOPE_LABELS: Record<RenderIsolationScope, string> = {
+  region: "页面区域",
   message: "消息",
   part: "内容片段",
   markdown: "Markdown 内容",

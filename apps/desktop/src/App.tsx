@@ -3,7 +3,13 @@ import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import { BackendStartupScreen } from "@/components/backend-startup-screen";
 import { WorkspaceShell } from "@/components/workspace-shell";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { ConfirmHost } from "@/components/confirm/confirm-host";
 import { Button } from "@/components/ui/button";
+import { Toaster } from "@/components/ui/sonner";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { createQueryClient } from "@/lib/query/query-client";
+import { useBackendQuerySync } from "@/lib/query/use-backend-query-sync";
 import {
   initializeBackendRuntime,
   restartBackendRuntime,
@@ -97,7 +103,7 @@ function DesktopApp() {
       })
       .catch((cause: unknown) => {
         if (!active) return;
-        setError(cause instanceof Error ? cause.message : "本地 Agent 后端启动失败");
+        setError(userErrorMessage(cause, "本地 Agent 后端启动失败"));
         setBoot("failed");
       });
     return () => {
@@ -127,6 +133,23 @@ function DesktopApp() {
   );
 }
 
+function BackendQuerySync() {
+  useBackendQuerySync();
+  return null;
+}
+
+/**
+ * 应用根：全局只挂载一次的宿主——页面级查询缓存、toast、确认框。
+ * 它们在启动门禁之外，启动失败页与主界面共用同一套通知与确认通道。
+ */
 export function App() {
-  return <DesktopApp />;
+  const [queryClient] = useState(createQueryClient);
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BackendQuerySync />
+      <DesktopApp />
+      <ConfirmHost />
+      <Toaster />
+    </QueryClientProvider>
+  );
 }

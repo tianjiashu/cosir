@@ -6,6 +6,7 @@ import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
 
 const BUSINESS_RESUME_TIMEOUT_MS = 15_000;
 
@@ -73,7 +74,7 @@ export function useBusinessResume(
 
   const reconcileUncertainResume = useCallback(async (runId: number): Promise<boolean> => {
     if (uncertainResumeRef.current?.runId !== runId) return false;
-    if (!backendRef.current.available) throw new Error("本机后端当前不可用，无法确认继续运行结果");
+    if (!backendRef.current.available) throw new UserFacingError("本机后端当前不可用，无法确认继续运行结果");
 
     const generation = ++generationRef.current;
     const controller = new AbortController();
@@ -92,7 +93,7 @@ export function useBusinessResume(
         signal: controller.signal,
       });
       if (outcome.kind === "superseded" || !isCurrent()) {
-        throw new Error("本机后端实例已变化，暂不能确认继续运行结果");
+        throw new UserFacingError("本机后端实例已变化，暂不能确认继续运行结果");
       }
       const snapshot = outcome.snapshot;
 
@@ -109,7 +110,7 @@ export function useBusinessResume(
 
       uncertainResumeRef.current = null;
       phaseRef.current = "idle";
-      throw new Error("当前运行已不处于可恢复状态，请重新同步");
+      throw new UserFacingError("当前运行已不处于可恢复状态，请重新同步");
     } finally {
       if (abortControllerRef.current === controller) abortControllerRef.current = null;
       if (activeRequestRunIdRef.current === runId) activeRequestRunIdRef.current = null;
@@ -191,7 +192,7 @@ export function useBusinessResume(
         }));
         if (!response.ok) {
           requestDefinitivelyRejected = true;
-          throw new Error(`继续运行失败（HTTP ${response.status}）`);
+          throw new UserFacingError(`继续运行失败（HTTP ${response.status}）`);
         }
         try {
           await response.body?.cancel();

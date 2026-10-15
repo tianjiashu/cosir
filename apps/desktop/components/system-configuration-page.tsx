@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BotIcon,
-  CheckIcon,
   ChevronLeftIcon,
   Code2Icon,
   FileTextIcon,
@@ -61,36 +61,58 @@ import {
   getMainAgentPromptConfiguration,
   type AgentConfiguration,
   type AgentConfigurationInput,
+  type EnvironmentField,
   type EnvironmentGroup,
+  type GlobalInstructionConfiguration,
+  type MainAgentPromptConfiguration,
   updateAgentConfiguration,
   updateEnvironmentConfiguration,
   updateGlobalInstructionConfiguration,
   updateMainAgentPromptConfiguration,
 } from "@/lib/api/configuration";
+import type { MarkdownConfigurationAdapter } from "@/hooks/use-markdown-configuration-document";
+import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
+import type { RequestOptions } from "@/lib/http/client";
+import { frontendLog } from "@/lib/logging/frontend-log";
+import { notify } from "@/lib/notify";
+import { queryKeys } from "@/lib/query/query-keys";
+import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
 
 type ConfigurationTab = "agents" | "agent-teams" | "main-agent" | "instructions" | "environment" | "terminal-denylist" | "mcp" | "skills";
 
+/**
+ * 子 Agent 配置的作用域适配：系统级与工作区级共用同一套列表 / 编辑界面。
+ * `workspaceId` 决定查询键（null 为系统级），保存与删除后按它失效对应列表。
+ */
 export type AgentConfigurationApi = {
-  list: () => Promise<AgentConfiguration[]>;
+  workspaceId: number | null;
+  list: (options?: RequestOptions) => Promise<AgentConfiguration[]>;
   create: (input: AgentConfigurationInput) => Promise<AgentConfiguration>;
   update: (agentId: string, input: AgentConfigurationInput) => Promise<AgentConfiguration>;
   remove: (agentId: string) => Promise<void>;
 };
 
 const systemAgentConfigurationApi: AgentConfigurationApi = {
+  workspaceId: null,
   list: getAgentConfigurations,
   create: createAgentConfiguration,
   update: updateAgentConfiguration,
   remove: deleteAgentConfiguration,
 };
 
-const globalInstructionConfigurationAdapter = {
+const globalInstructionConfigurationAdapter: MarkdownConfigurationAdapter<GlobalInstructionConfiguration> = {
+  queryKey: queryKeys.instruction("global"),
+  label: "全局 AGENTS.md",
   load: getGlobalInstructionConfiguration,
   save: updateGlobalInstructionConfiguration,
   allowEmpty: true,
 };
 
-const mainAgentPromptConfigurationAdapter = {
+const mainAgentPromptConfigurationAdapter: MarkdownConfigurationAdapter<MainAgentPromptConfiguration> = {
+  queryKey: queryKeys.instruction("main-agent-prompt"),
+  label: "主 Agent prompt",
   load: getMainAgentPromptConfiguration,
   save: updateMainAgentPromptConfiguration,
   allowEmpty: false,
@@ -221,68 +243,87 @@ export function ModelSettingsEditor({
   );
 }
 
-function AgentEditor({
-  initial,
-  toolGroups,
-  api,
-  onCancel,
-  onSaved,
-}: {
-  initial: AgentConfiguration | null;
-  toolGroups: ToolGroupCatalog[];
-  api: AgentConfigurationApi;
-  onCancel: () => void;
-  onSaved: (agent: AgentConfiguration) => void;
-}) {
-  const [form, setForm] = useState<AgentConfigurationInput>(() => ({
+/** 编辑器的表单值：数字与模型参数保持输入框原文，保存时再统一校验转换。 */
+type AgentEditorForm = Omit<AgentConfigurationInput, "max_steps" | "model_settings"> & {
+  max_steps: string;
+  model_settings: ModelSettingsForm;
+};
+
+function agentEditorForm(initial: AgentConfiguration | null): AgentEditorForm {
+  return {
     agent_id: initial?.agent_id ?? "",
     role: initial?.role ?? "",
     description: initial?.description ?? "",
     system_prompt: initial?.system_prompt ?? "",
     allowed_tool_groups: initial?.allowed_tool_groups ?? [],
-    max_steps: initial?.max_steps ?? 100,
+    max_steps: String(initial?.max_steps ?? 100),
     model_config_id: initial?.model_config_id ?? null,
-    model_settings: initial?.model_settings ?? {},
-  }));
-  const [selectedToolGroups, setSelectedToolGroups] = useState(initial?.allowed_tool_groups ?? []);
-  const [modelSettings, setModelSettings] = useState(() => modelSettingsToForm(initial?.model_settings));
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const setField = <K extends keyof AgentConfigurationInput>(key: K, value: AgentConfigurationInput[K]) => {
-    setForm((current) => ({ ...current, [key]: value }));
+    model_settings: modelSettingsToForm(initial?.model_settings),
   };
+}
 
-  const save = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      const input = {
-        ...form,
-        allowed_tool_groups: selectedToolGroups,
-        model_settings: modelSettingsFromForm(modelSettings),
-        model_config_id: form.model_config_id === null ? null : Number(form.model_config_id),
-      };
-      if (input.model_config_id !== null && (!Number.isInteger(input.model_config_id) || input.model_config_id <= 0)) throw new Error("模型配置 ID 必须是正整数");
-      const saved = initial
-        ? await api.update(initial.agent_id, input)
-        : await api.create(input);
-      onSaved(saved);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "保存失败，请重试");
-    } finally {
-      setSaving(false);
-    }
+function agentInputFromForm(form: AgentEditorForm): AgentConfigurationInput {
+  // 空输入框不能按 Number("") 变成 0 静默提交；后端只要求正整数。
+  const maxSteps = Number(form.max_steps.trim());
+  if (!form.max_steps.trim() || !Number.isInteger(maxSteps) || maxSteps <= 0) {
+    throw new UserFacingError("最大步数必须是正整数");
+  }
+  return { ...form, max_steps: maxSteps, model_settings: modelSettingsFromForm(form.model_settings) };
+}
+
+/** 离开编辑器会丢弃表单，先经统一的未保存守卫确认。 */
+async function leaveEditor(onClose: () => void) {
+  if (await confirmDiscardUnsaved("settings")) onClose();
+}
+
+function AgentEditor({
+  initial,
+  toolGroups,
+  api,
+  onClose,
+}: {
+  initial: AgentConfiguration | null;
+  toolGroups: ToolGroupCatalog[];
+  api: AgentConfigurationApi;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [initialForm] = useState(() => agentEditorForm(initial));
+  const [form, setForm] = useState(initialForm);
+  const dirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(initialForm), [form, initialForm]);
+  useUnsavedChanges("settings", initial ? `子 Agent「${initial.agent_id}」` : "新建子 Agent", dirty);
+
+  const mutation = useMutation({
+    mutationFn: async (value: AgentEditorForm) => {
+      const input = agentInputFromForm(value);
+      return initial ? api.update(initial.agent_id, input) : api.create(input);
+    },
+    onSuccess: async () => {
+      // 等列表刷新后再关闭编辑器，避免返回时短暂显示旧列表。
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agents(api.workspaceId) });
+      notify.success("配置更改成功");
+      onClose();
+    },
+    onError: (error) => {
+      void frontendLog("ERROR", "agent_configuration_save_failed", "保存子 Agent 配置失败", {
+        data: { agentId: initial?.agent_id ?? form.agent_id, workspaceId: api.workspaceId, isNew: !initial },
+        error,
+      });
+    },
+  });
+
+  const setField = <K extends keyof AgentEditorForm>(key: K, value: AgentEditorForm[K]) => {
+    setForm((current) => ({ ...current, [key]: value }));
   };
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>{initial ? "编辑子 Agent" : "新建子 Agent"}</CardTitle>
-        <CardAction><Button variant="outline" onClick={onCancel}><ChevronLeftIcon />返回 Agent 列表</Button></CardAction>
+        <CardAction><Button variant="outline" onClick={() => void leaveEditor(onClose)}><ChevronLeftIcon />返回 Agent 列表</Button></CardAction>
       </CardHeader>
       <CardContent className="space-y-5">
-        {error && <Alert tone="destructive">{error}</Alert>}
+        {mutation.isError && <Alert tone="destructive">{userErrorMessage(mutation.error, "保存失败，请重试")}</Alert>}
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Agent ID</span><Input value={form.agent_id} disabled={Boolean(initial)} onChange={(event) => setField("agent_id", event.target.value)} placeholder="面向主Agent使用的Agent ID" /></label>
           <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">角色</span><Input value={form.role} onChange={(event) => setField("role", event.target.value)} placeholder="给子Agent定义的身份" /></label>
@@ -300,8 +341,8 @@ function AgentEditor({
           />
         </div>
         <div className="grid gap-4 sm:grid-cols-3">
-          <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">最大步数</span><Input type="number" min={1} max={10000} value={form.max_steps} onChange={(event) => setField("max_steps", Number(event.target.value))} /></label>
-          <div className="space-y-1.5 text-sm sm:col-span-2"><span className="text-muted-foreground">模型 <span className="text-muted-foreground/60">（可选）</span></span><AgentModelSelector modelConfigId={form.model_config_id} onChange={(modelConfigId) => setForm((current) => ({ ...current, model_config_id: modelConfigId }))} /></div>
+          <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">最大步数</span><Input type="number" min={1} max={10000} value={form.max_steps} onChange={(event) => setField("max_steps", event.target.value)} /></label>
+          <div className="space-y-1.5 text-sm sm:col-span-2"><span className="text-muted-foreground">模型 <span className="text-muted-foreground/60">（可选）</span></span><AgentModelSelector modelConfigId={form.model_config_id} onChange={(modelConfigId) => setField("model_config_id", modelConfigId)} /></div>
         </div>
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-1.5 text-sm">
@@ -317,12 +358,16 @@ function AgentEditor({
                   >
                     <Checkbox
                       aria-label={group}
-                      checked={selectedToolGroups.includes(group)}
+                      checked={form.allowed_tool_groups.includes(group)}
                       disabled={locked}
                       onChange={(event) => {
-                        setSelectedToolGroups((current) => event.target.checked
-                          ? [...current, group]
-                          : current.filter((item) => item !== group));
+                        const checked = event.target.checked;
+                        setForm((current) => ({
+                          ...current,
+                          allowed_tool_groups: checked
+                            ? [...current.allowed_tool_groups, group]
+                            : current.allowed_tool_groups.filter((item) => item !== group),
+                        }));
                       }}
                     />
                     <span className="min-w-0 flex-1 truncate">{group}</span>
@@ -331,38 +376,62 @@ function AgentEditor({
               })}
             </div>
           </div>
-          <ModelSettingsEditor value={modelSettings} onChange={setModelSettings} />
+          <ModelSettingsEditor value={form.model_settings} onChange={(value) => setField("model_settings", value)} />
         </div>
-        <div className="flex justify-end gap-2 border-t pt-4"><Button variant="outline" onClick={onCancel}>取消</Button><Button onClick={() => void save()} disabled={saving}>{saving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}保存配置</Button></div>
+        <div className="flex justify-end gap-2 border-t pt-4"><Button variant="outline" onClick={() => void leaveEditor(onClose)}>取消</Button><Button onClick={() => mutation.mutate(form)} disabled={mutation.isPending}>{mutation.isPending ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}保存配置</Button></div>
       </CardContent>
     </Card>
   );
 }
 
 export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: { api?: AgentConfigurationApi }) {
-  const [agents, setAgents] = useState<AgentConfiguration[] | null>(null);
-  const [toolGroups, setToolGroups] = useState<ToolGroupCatalog[] | null>(null);
+  const queryClient = useQueryClient();
+  const agentsQuery = useQuery({
+    queryKey: queryKeys.agents(api.workspaceId),
+    queryFn: ({ signal }) => api.list({ signal }),
+  });
+  const toolGroupsQuery = useQuery({
+    queryKey: queryKeys.toolGroups(),
+    queryFn: ({ signal }) => getToolGroups({ signal }),
+  });
   const [editing, setEditing] = useState<AgentConfiguration | null | undefined>(undefined);
-  const [error, setError] = useState<string | null>(null);
-  const [configurationSaved, setConfigurationSaved] = useState(false);
+  const agents = agentsQuery.data;
+  const toolGroups = toolGroupsQuery.data?.groups;
 
-  const load = async () => {
-    try {
-      setError(null);
-      const [nextAgents, { groups }] = await Promise.all([api.list(), getToolGroups()]);
-      setAgents(nextAgents);
-      setToolGroups(groups);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "读取 Agent 配置失败");
-    }
+  const removeAgent = async (agent: AgentConfiguration) => {
+    const removed = await requestConfirmation({
+      title: `删除 Agent “${agent.agent_id}”？`,
+      description: "将删除该子 Agent 的配置文件，此操作无法撤销。",
+      confirmLabel: "删除",
+      busyLabel: "正在删除…",
+      tone: "destructive",
+      icon: "delete",
+      failureFallback: "删除失败，请重试",
+      action: async () => {
+        try {
+          await api.remove(agent.agent_id);
+        } catch (error) {
+          void frontendLog("ERROR", "agent_configuration_delete_failed", "删除子 Agent 配置失败", {
+            data: { agentId: agent.agent_id, workspaceId: api.workspaceId },
+            error,
+          });
+          throw error;
+        }
+        await queryClient.invalidateQueries({ queryKey: queryKeys.agents(api.workspaceId) });
+      },
+    });
+    if (removed) notify.success(`已删除 Agent “${agent.agent_id}”`);
   };
-  useEffect(() => { void load(); }, [api]);
-  if (editing !== undefined && toolGroups) return <AgentEditor api={api} toolGroups={toolGroups} initial={editing} onCancel={() => setEditing(undefined)} onSaved={(agent) => { setConfigurationSaved(true); setEditing(undefined); setAgents((current) => current ? (current.some((item) => item.agent_id === agent.agent_id) ? current.map((item) => item.agent_id === agent.agent_id ? agent : item) : [...current, agent]) : [agent]); }} />;
-  if (!agents || !toolGroups) return error ? <ErrorState className="my-10" message={error} onRetry={() => void load()} retryLabel="重新读取" /> : <LoadingState label="正在读取系统配置…" />;
+
+  if (editing !== undefined && toolGroups) return <AgentEditor api={api} toolGroups={toolGroups} initial={editing} onClose={() => setEditing(undefined)} />;
+  if (!agents || !toolGroups) {
+    const loadError = agentsQuery.error ?? toolGroupsQuery.error;
+    return loadError
+      ? <ErrorState className="my-10" message={userErrorMessage(loadError, "读取 Agent 配置失败")} onRetry={() => { void agentsQuery.refetch(); void toolGroupsQuery.refetch(); }} retryLabel="重新读取" />
+      : <LoadingState label="正在读取系统配置…" />;
+  }
   return (
     <div className="space-y-4">
-      {error && <Alert tone="destructive">{error}</Alert>}
-      {configurationSaved && <Alert tone="success">配置更改成功</Alert>}
       <div className="flex items-center justify-end"><Button onClick={() => setEditing(null)}><PlusIcon />新建 Agent</Button></div>
       <div className="grid gap-3 xl:grid-cols-2">
         {agents.map((agent) => (
@@ -382,7 +451,7 @@ export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: {
               {agent.editable || agent.deletable ? (
                 <div className="flex gap-1">
                   {agent.editable && <Button variant="ghost" size="icon-sm" onClick={() => setEditing(agent)} aria-label={`编辑 ${agent.agent_id}`}><Settings2Icon /></Button>}
-                  {agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => { if (window.confirm(`删除 Agent “${agent.agent_id}”？`)) void api.remove(agent.agent_id).then(() => { setConfigurationSaved(true); setAgents((current) => current?.filter((item) => item.agent_id !== agent.agent_id) ?? null); }).catch((cause) => setError(cause instanceof Error ? cause.message : "删除失败")); }} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}
+                  {agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => void removeAgent(agent)} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}
                 </div>
               ) : (
                 <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置 Agent，不可编辑或删除" title="内置 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>
@@ -400,62 +469,80 @@ export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: {
   );
 }
 
+type EnvironmentChanges = Parameters<typeof updateEnvironmentConfiguration>[0];
+
+/** 服务端字段值到表单值：密钥永不回显（留空表示不变）。 */
+function environmentFormValues(groups: EnvironmentGroup[]): Record<string, string | boolean> {
+  return Object.fromEntries(groups.flatMap((group) => group.fields).map((field) => [
+    field.name,
+    field.secret ? "" : field.type === "boolean" ? Boolean(field.value) : String(field.value ?? ""),
+  ]));
+}
+
+function environmentChange(field: EnvironmentField, value: string | boolean, clearSecret: boolean): EnvironmentChanges[string] {
+  const operation = field.secret
+    ? clearSecret && field.clearable ? "clear" : value === "" ? "unchanged" : "replace"
+    : field.type === "boolean" ? "replace" : value === "" && field.clearable ? "clear" : "replace";
+  return { operation, value: field.type === "boolean" ? value === true || value === "true" : value };
+}
+
 function EnvironmentPanel() {
-  const [groups, setGroups] = useState<EnvironmentGroup[] | null>(null);
-  const [values, setValues] = useState<Record<string, string | boolean>>({});
-  const [clearSecrets, setClearSecrets] = useState<Set<string>>(new Set());
-  const [dirty, setDirty] = useState<Set<string>>(new Set());
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const load = async () => {
-    try {
-      setError(null);
-      const result = await getEnvironmentConfiguration();
-      setGroups(result.groups);
-      const fields = result.groups.flatMap((group) => group.fields);
-      setValues(Object.fromEntries(fields.map((field) => [
-        field.name,
-        field.secret ? "" : field.type === "boolean" ? Boolean(field.value) : String(field.value ?? ""),
-      ])));
-      setDirty(new Set());
+  const query = useQuery({
+    queryKey: queryKeys.environment(),
+    queryFn: ({ signal }) => getEnvironmentConfiguration({ signal }),
+  });
+  if (!query.data) {
+    return query.isError
+      ? <ErrorState className="my-10" message={userErrorMessage(query.error, "读取环境变量失败")} onRetry={() => void query.refetch()} retryLabel="重新读取" />
+      : <LoadingState label="正在读取系统配置…" />;
+  }
+  return <EnvironmentEditor groups={query.data.groups} />;
+}
+
+/**
+ * 环境变量编辑副本：只记录用户改动过的字段（edits），其余字段跟随服务端，
+ * 因此后台重新读取不会覆盖未保存的改动；保存时只提交改动字段。
+ */
+function EnvironmentEditor({ groups }: { groups: EnvironmentGroup[] }) {
+  const queryClient = useQueryClient();
+  const [edits, setEdits] = useState<Record<string, string | boolean>>({});
+  const [clearSecrets, setClearSecrets] = useState<Set<string>>(() => new Set());
+  const serverValues = useMemo(() => environmentFormValues(groups), [groups]);
+  const values = { ...serverValues, ...edits };
+  const dirtyCount = Object.keys(edits).length;
+  useUnsavedChanges("settings", "环境变量", dirtyCount > 0);
+
+  const mutation = useMutation({
+    mutationFn: updateEnvironmentConfiguration,
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKeys.environment(), result);
+      setEdits({});
       setClearSecrets(new Set());
-      setSaved(false);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "读取环境变量失败");
-    }
+      notify.success("环境变量已保存");
+    },
+    onError: (error, changes) => {
+      void frontendLog("ERROR", "environment_configuration_save_failed", "保存环境变量失败", {
+        data: { fields: Object.keys(changes) },
+        error,
+      });
+    },
+  });
+
+  const save = () => {
+    const fields = new Map(groups.flatMap((group) => group.fields).map((field) => [field.name, field]));
+    const changes: EnvironmentChanges = Object.fromEntries(Object.entries(edits).map(([name, value]) => {
+      const field = fields.get(name);
+      // 后端换代后字段可能已下线：不提交未知字段的值。
+      return [name, field ? environmentChange(field, value, clearSecrets.has(name)) : { operation: "unchanged" }];
+    }));
+    mutation.mutate(changes);
   };
-  useEffect(() => { void load(); }, []);
-  const save = async () => {
-    setSaving(true);
-    setError(null);
-    try {
-      const changes: Record<string, { operation: "replace" | "clear" | "unchanged"; value?: unknown }> = Object.fromEntries([...dirty].map((name) => {
-        const field = groups?.flatMap((group) => group.fields).find((item) => item.name === name);
-        const value = values[name];
-        if (!field) return [name, { operation: "unchanged" }];
-        const operation = field.secret
-          ? clearSecrets.has(name) && field.clearable ? "clear" : value === "" ? "unchanged" : "replace"
-          : field.type === "boolean" ? "replace" : value === "" && field.clearable ? "clear" : "replace";
-        return [name, { operation, value: field.type === "boolean" ? value === true || value === "true" : value }];
-      }));
-      const result = await updateEnvironmentConfiguration(changes);
-      setGroups(result.groups);
-      setDirty(new Set());
-      setClearSecrets(new Set());
-      setSaved(true);
-      const fields = result.groups.flatMap((group) => group.fields);
-      setValues(Object.fromEntries(fields.map((field) => [
-        field.name,
-        field.secret ? "" : field.type === "boolean" ? Boolean(field.value) : String(field.value ?? ""),
-      ])));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "保存环境变量失败");
-    } finally {
-      setSaving(false);
-    }
+
+  const edit = (field: EnvironmentField, value: string | boolean) => {
+    setEdits((current) => ({ ...current, [field.name]: value }));
+    if (mutation.isError) mutation.reset();
   };
-  if (!groups) return error ? <ErrorState className="my-10" message={error} onRetry={() => void load()} retryLabel="重新读取" /> : <LoadingState label="正在读取系统配置…" />;
+
   return (
     <div className="space-y-4">
       <div className="bg-background/95 border-border/70 sticky top-0 z-10 -mx-2 flex flex-wrap items-center justify-between gap-3 border-b px-2 py-3 backdrop-blur-sm">
@@ -463,42 +550,45 @@ function EnvironmentPanel() {
           <h2 className="font-medium">环境变量</h2>
           <p className="text-muted-foreground mt-1 text-xs">管理本机 Agent 的运行环境配置。</p>
         </div>
-        <Button onClick={() => void save()} disabled={saving || dirty.size === 0}>
-          {saving ? <Loader2Icon className="animate-spin" /> : saved ? <CheckIcon /> : <SaveIcon />}{saved ? "已保存" : "保存变量"}{dirty.size > 0 ? `（${dirty.size}）` : ""}
+        <Button onClick={save} disabled={mutation.isPending || dirtyCount === 0}>
+          {mutation.isPending ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}保存变量{dirtyCount > 0 ? `（${dirtyCount}）` : ""}
         </Button>
       </div>
-      {error && <Alert tone="destructive">{error}</Alert>}
-      <EnvironmentConfigurationForm
-        groups={groups}
-        values={values as Record<string, EnvironmentFieldValue>}
-        onChange={(field, value) => {
-          setValues((current) => ({ ...current, [field.name]: value }));
-          setSaved(false);
-          setClearSecrets((current) => {
-            const next = new Set(current);
-            next.delete(field.name);
-            return next;
-          });
-          setDirty((current) => new Set(current).add(field.name));
-        }}
-        onToggle={(field) => {
-          setValues((current) => ({ ...current, [field.name]: !(current[field.name] === true || current[field.name] === "true") }));
-          setSaved(false);
-          setDirty((current) => new Set(current).add(field.name));
-        }}
-        onClear={(field) => {
-          setClearSecrets((current) => new Set(current).add(field.name));
-          setValues((current) => ({ ...current, [field.name]: "" }));
-          setSaved(false);
-          setDirty((current) => new Set(current).add(field.name));
-        }}
-      />
+      {mutation.isError && <Alert tone="destructive">{userErrorMessage(mutation.error, "保存环境变量失败")}</Alert>}
+      {/* 保存期间锁定表单，避免请求进行中的改动在成功后被一并清空。 */}
+      <fieldset disabled={mutation.isPending} className="m-0 min-w-0 border-0 p-0">
+        <EnvironmentConfigurationForm
+          groups={groups}
+          values={values as Record<string, EnvironmentFieldValue>}
+          onChange={(field, value) => {
+            edit(field, value);
+            setClearSecrets((current) => {
+              const next = new Set(current);
+              next.delete(field.name);
+              return next;
+            });
+          }}
+          onToggle={(field) => edit(field, !(values[field.name] === true || values[field.name] === "true"))}
+          onClear={(field) => {
+            edit(field, "");
+            setClearSecrets((current) => new Set(current).add(field.name));
+          }}
+        />
+      </fieldset>
     </div>
   );
 }
 
 export function SystemConfigurationPage({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<ConfigurationTab>("agents");
+  // 切换标签与返回都会卸载当前编辑器，先确认是否放弃未保存的修改。
+  const selectTab = async (next: ConfigurationTab) => {
+    if (next === tab || !(await confirmDiscardUnsaved("settings"))) return;
+    setTab(next);
+  };
+  const close = async () => {
+    if (await confirmDiscardUnsaved("settings")) onClose();
+  };
   return (
     <div className="bg-background/95 absolute inset-0 z-30 overflow-y-auto backdrop-blur-sm">
       <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-5 py-6 lg:px-10">
@@ -507,7 +597,7 @@ export function SystemConfigurationPage({ onClose }: { onClose: () => void }) {
             <div className="text-muted-foreground mb-3 flex items-center gap-2 text-xs"><Settings2Icon className="size-3.5" />系统配置中心</div>
             <h1 className="text-2xl font-semibold tracking-tight">让本机 Agent 按你的方式工作</h1>
           </div>
-          <Button variant="outline" onClick={onClose}><ChevronLeftIcon />返回工作区</Button>
+          <Button variant="outline" onClick={() => void close()}><ChevronLeftIcon />返回工作区</Button>
         </header>
         <div className="grid min-h-0 flex-1 gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]">
           <nav className="flex gap-2 overflow-x-auto lg:block lg:space-y-2" aria-label="系统配置分类">
@@ -517,7 +607,7 @@ export function SystemConfigurationPage({ onClose }: { onClose: () => void }) {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setTab(item.id)}
+                  onClick={() => void selectTab(item.id)}
                   className={`flex min-w-44 items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors lg:w-full ${tab === item.id ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
                 >
                   <Icon className="size-4 shrink-0" />

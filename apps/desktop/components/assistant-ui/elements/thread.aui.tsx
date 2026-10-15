@@ -69,7 +69,7 @@ import {
   type EditDraftAttachment,
 } from "@/lib/assistant/edit-composer-draft";
 import type { TransportRun, TransportToolStatus } from "@/lib/assistant/contract";
-import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
 import { AttachmentWorkspaceContext } from "@/components/assistant-ui/elements/attachment-context";
@@ -84,6 +84,9 @@ import {
 import { COMPOSER_EDITOR_CLASS_NAME } from "@/components/composer/composer-editor";
 import { COMPOSER_SURFACE_CLASS_NAME } from "@/components/composer/composer-surface";
 import { ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
+import { notify } from "@/lib/notify";
 
 export type ThreadComponents = {
   AssistantMessage?: ComponentType;
@@ -308,6 +311,10 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  // toast「重试」持有旧闭包：用 ref 读取当下是否仍可继续、是否已有请求在途，避免重复 business resume。
+  const resumingRef = useRef(false);
+  const actionRef = useRef(action);
+  actionRef.current = action;
 
   useEffect(() => {
     void frontendLog("DEBUG", "composer_action_derived", "Composer action 状态发生变化", {
@@ -317,6 +324,7 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
 
   useEffect(() => {
     if (isRunning || !canResume) {
+      resumingRef.current = false;
       setResuming(false);
       setResumeError(null);
     }
@@ -325,11 +333,17 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   useEffect(() => {
     if (!resuming) return;
     const timeout = window.setTimeout(() => {
+      const message = "继续运行请求未建立连接，请重试";
+      resumingRef.current = false;
       setResuming(false);
-      setResumeError("继续运行请求未建立连接，请重试");
+      setResumeError(message);
+      notify.error("继续运行失败", { error: new UserFacingError(message) });
+      void frontendLog("WARNING", "composer_resume_feedback_timeout", "继续运行请求超时未建立连接", {
+        data: { taskId, runId, timeoutMs: RESUME_FEEDBACK_TIMEOUT_MS },
+      });
     }, RESUME_FEEDBACK_TIMEOUT_MS);
     return () => window.clearTimeout(timeout);
-  }, [resuming]);
+  }, [resuming, runId, taskId]);
 
   if (action === "stop") {
     return <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} onCancelRequested={onCancelRequested} onCancelResult={onCancelResult} />} />;
@@ -341,7 +355,8 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
 
   if (action === "resume") {
     const resume = async () => {
-      if (resuming) return;
+      if (resumingRef.current || actionRef.current !== "resume") return;
+      resumingRef.current = true;
       setResuming(true);
       setResumeError(null);
       try {
@@ -351,8 +366,15 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
           await Promise.resolve(aui.thread.resumeRun({ parentId: null }));
         }
       } catch (error) {
+        resumingRef.current = false;
         setResuming(false);
-        setResumeError(safeFrontendErrorMessage(error, "继续运行失败，请检查本机后端状态"));
+        const fallback = "继续运行失败，请检查本机后端状态";
+        setResumeError(userErrorMessage(error, fallback));
+        notify.error("继续运行失败", { error, fallback, action: { label: "重试", onClick: () => void resume() } });
+        void frontendLog("ERROR", "composer_resume_failed", "继续运行请求失败", {
+          data: { taskId, runId },
+          error,
+        });
       }
     };
 

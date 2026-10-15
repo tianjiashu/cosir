@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { type TransportIssue } from "@/components/assistant/transport-status";
 import { AssistantRuntimeTransportHost } from "@/components/assistant/runtime/assistant-runtime-transport-host";
@@ -19,10 +20,14 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { readStoredToolGroupSelection, writeStoredToolGroupSelection } from "@/lib/tool-group-selection-storage";
 import { newTraceId } from "@/lib/trace";
 import { getToolGroups, toolNamesForGroups, type ToolGroupCatalog } from "@/lib/api/tools";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { queryKeys } from "@/lib/query/query-keys";
 import {
   getBackendRuntimeSnapshot,
   subscribeBackendRuntime,
 } from "@/src/runtime-config";
+
+const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
 
 type RuntimeSessionProps = AssistantRuntimeProps & {
   setIssue: (issue: TransportIssue | null) => void;
@@ -55,7 +60,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   );
   const {
     backendBaseUrl,
-    generation: backendRuntimeGeneration,
     available: backendRuntimeAvailable,
   } = backendRuntime;
   const backendRef = useRef(backendRuntime);
@@ -73,12 +77,20 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       },
     });
   }, [taskId, traceId]);
-  const [toolGroups, setToolGroups] = useState<ToolGroupCatalog[]>([]);
   const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>(() => (
     readStoredToolGroupSelection(taskId) ?? initialDisabledToolGroups ?? []
   ));
-  const [toolGroupsLoading, setToolGroupsLoading] = useState(true);
-  const [toolGroupsError, setToolGroupsError] = useState<string | null>(null);
+  // 后端不可用时不发请求；后端恢复 / 重启后的重新拉取由全局 query 同步统一失效。
+  const toolGroupsQuery = useQuery({
+    queryKey: queryKeys.toolGroups(),
+    queryFn: ({ signal }) => getToolGroups({ signal }),
+    enabled: backendRuntimeAvailable,
+  });
+  const toolGroups = toolGroupsQuery.data?.groups ?? EMPTY_TOOL_GROUPS;
+  const toolGroupsLoading = toolGroupsQuery.isPending;
+  const toolGroupsError = toolGroupsQuery.isError
+    ? userErrorMessage(toolGroupsQuery.error, "工具分组加载失败")
+    : null;
   const initialStateRef = useRef(initialState);
   const sessionInitialState = initialStateRef.current;
   const latestStateRef = useRef(sessionInitialState);
@@ -90,26 +102,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const initialMessageSentRef = useRef(false);
   const onTaskStateChangedRef = useRef(onTaskStateChanged);
   onTaskStateChangedRef.current = onTaskStateChanged;
-
-  useEffect(() => {
-    if (!backendRuntimeAvailable) {
-      setToolGroupsLoading(true);
-      return;
-    }
-    const controller = new AbortController();
-    setToolGroupsLoading(true);
-    setToolGroupsError(null);
-    void getToolGroups({ signal: controller.signal })
-      .then(({ groups }) => setToolGroups(groups))
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setToolGroupsError(error instanceof Error ? error.message : "工具分组加载失败");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setToolGroupsLoading(false);
-      });
-    return () => controller.abort();
-  }, [backendRuntimeAvailable, backendRuntimeGeneration]);
 
   const selectedBanTools = useMemo(() => {
     if (toolGroupsLoading || toolGroupsError) return initialBanTools ?? [];

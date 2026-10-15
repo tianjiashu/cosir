@@ -1,4 +1,5 @@
 import { requestRaw } from "@/lib/http/client";
+import { parseHttpError } from "@/lib/http/errors";
 
 /** 用户对一次等待请求作出的决定（与后端 `UserDecisionKind` 对齐）。 */
 export type UserInputDecisionKind = "approve" | "reject" | "abort";
@@ -26,6 +27,9 @@ export type SubmitUserInputDecisionInput = {
  *
  * 只负责请求序列化与 accepted barrier 校验，不消费 POST 返回流。等待输入时原订阅已经结束，
  * 调用方在决定被接受后必须重新 attach 当前 Run，才能接收后续模型输出。
+ *
+ * 后端拒绝时抛 HttpError（经 parseHttpError 解析，不携带响应体原文），调用方用
+ * userErrorMessage 转为界面文案。
  */
 export async function submitUserInputDecision(
   input: SubmitUserInputDecisionInput,
@@ -51,10 +55,7 @@ export async function submitUserInputDecision(
     }),
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Status ${response.status}: ${body}`);
-  }
+  if (!response.ok) throw await parseHttpError(response);
   try {
     await response.body?.cancel();
   } catch {

@@ -40,15 +40,17 @@ describe("prepare user command", () => {
     });
   });
 
-  it("leaves an unresolved token for backend edit recovery", () => {
+  it("leaves an unresolved token in an edit for backend recovery", () => {
     expect(prepareUserCommand({
       type: "add-message",
+      sourceId: "user-1",
       message: {
         role: "user",
         parts: [{ type: "text", text: "读取 [[cosir-file:missing]]" }],
       },
     })).toEqual({
       type: "add-message",
+      sourceId: "user-1",
       message: {
         role: "user",
         parts: [{ type: "text", text: "读取 [[cosir-file:missing]]" }],
@@ -56,9 +58,20 @@ describe("prepare user command", () => {
     });
   });
 
-  it("keeps canonical hidden token wrappers out of the new request path", () => {
+  it("rejects a new message whose file token is no longer registered", () => {
+    expect(() => prepareUserCommand({
+      type: "add-message",
+      message: {
+        role: "user",
+        parts: [{ type: "text", text: "读取 [[cosir-file:missing]]" }],
+      },
+    })).toThrow("附件已失效，请重新选择附件");
+  });
+
+  it("keeps canonical hidden token wrappers in an edit request", () => {
     expect(prepareUserCommand({
       type: "add-message",
+      sourceId: "user-1",
       message: {
         role: "user",
         parts: [{ type: "text", text: "请查看 <!-- [[cosir-file:missing]] -->" }],

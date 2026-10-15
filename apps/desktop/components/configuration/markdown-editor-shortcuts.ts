@@ -1,6 +1,8 @@
 import { EditorSelection, type EditorState, type TransactionSpec } from "@codemirror/state";
 import { EditorView } from "codemirror";
 
+import { isImeComposing } from "@/lib/keyboard/ime";
+
 type InlineMarkdownMarker = "**" | "*" | "~~" | "`";
 type BlockMarkdownKind = "bullet" | "ordered" | "quote";
 
@@ -229,9 +231,10 @@ export function indentMarkdownList(state: EditorState, outdent = false): Transac
  *
  * 返回 `true` 表示事件已被编辑器消费，调用方无需再次执行浏览器默认行为；返回
  * `false` 表示交给 CodeMirror 其余 keymap 处理。只读状态下不修改文档。
+ * 输入法组字期间的按键（包括确认候选词的 Enter）一律交还 CodeMirror，否则会误续列表前缀。
  */
 export function handleMarkdownKeydown(view: EditorView, event: KeyboardEvent): boolean {
-  if (view.state.readOnly) return false;
+  if (view.state.readOnly || isImeComposing(event, view.composing)) return false;
 
   const modifier = event.metaKey || event.ctrlKey;
   const key = event.key.toLowerCase();

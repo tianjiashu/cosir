@@ -2,6 +2,7 @@
 
 /** 需要独立捕获异常的前端展示范围。 */
 export type RenderIsolationScope =
+  | "region"
   | "message"
   | "part"
   | "markdown"

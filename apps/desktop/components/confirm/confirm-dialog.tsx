@@ -25,15 +25,18 @@ export type ConfirmDialogProps = {
   confirmLabel: string;
   busyLabel: string;
   confirmIcon?: ReactNode;
+  /** destructive：删除、中断等不可逆操作；default：普通确认。 */
+  tone?: "destructive" | "default";
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 };
 
 /**
- * 需要用户二次确认的破坏性 / 中断性操作对话框。
+ * 需要用户二次确认的操作对话框（纯呈现）。
  *
- * 只负责呈现与按钮状态；操作本身、busy 与 error 由调用方持有。
- * 删除、重启后端等确认都应复用它，而不是使用 `window.confirm` 或各写一个对话框。
+ * 业务代码优先使用 `requestConfirmation()`（lib/confirm/confirm-store.ts），由全局
+ * ConfirmHost 渲染本组件并托管 busy / error；只有确认框需要嵌在特定布局中时才直接使用。
+ * 不要再使用 `window.confirm`：它在 WebView 中会阻塞且无法呈现忙碌与失败状态。
  */
 export function ConfirmDialog({
   open,
@@ -45,6 +48,7 @@ export function ConfirmDialog({
   confirmLabel,
   busyLabel,
   confirmIcon,
+  tone = "destructive",
   onOpenChange,
   onConfirm,
 }: ConfirmDialogProps) {
@@ -57,7 +61,7 @@ export function ConfirmDialog({
         {error && <Alert tone="destructive">{error}</Alert>}
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>取消</Button>
-          <Button type="button" variant="destructive" onClick={onConfirm} disabled={busy}>
+          <Button type="button" variant={tone === "destructive" ? "destructive" : "default"} onClick={onConfirm} disabled={busy}>
             {busy ? <Spinner label={null} /> : confirmIcon}
             {busy ? busyLabel : confirmLabel}
           </Button>

@@ -35,8 +35,19 @@ const eslintConfig = defineConfig([
       "no-restricted-syntax": [
         "error",
         ...rawStyleSelectors(),
+        {
+          // 界面错误文案只能经 lib/errors/user-error-message.ts 的 userErrorMessage 产生；
+          // 直接取 error.message 会把库与网络层的英文原文、甚至响应体透给用户。
+          selector: "ConditionalExpression[test.operator='instanceof'][test.right.name='Error'][consequent.property.name='message']",
+          message: "不要把 error.message 直接用作界面文案，改用 userErrorMessage(error, 兜底文案)。",
+        },
       ],
     },
+  },
+  {
+    // 日志与错误映射模块本身需要读取原始 message（写入诊断日志 / 判定错误类别）。
+    files: ["lib/logging/**", "lib/errors/**"],
+    rules: { "no-restricted-syntax": ["error", ...rawStyleSelectors()] },
   },
   globalIgnores([
     // Ignore stale build output from the pre-Vite toolchain.

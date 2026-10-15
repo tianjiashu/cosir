@@ -1,12 +1,16 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { HammerIcon, LoaderCircleIcon, SearchIcon } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
 import { getSystemSkills, type SystemSkill } from "@/lib/api/system-extensions";
 import { insertSkill, useComposerInsertion } from "@/components/composer/composer-insertion-context";
+import { queryKeys } from "@/lib/query/query-keys";
+
+const EMPTY_SKILLS: SystemSkill[] = [];
 
 type SkillsSelectorProps = {
   disabled?: boolean;
@@ -16,26 +20,16 @@ type SkillsSelectorProps = {
 export function SkillsSelector({ disabled = false }: SkillsSelectorProps) {
   const insertion = useComposerInsertion();
   const [open, setOpen] = useState(false);
-  const [skills, setSkills] = useState<SystemSkill[]>([]);
-  const [loading, setLoading] = useState(false);
-  const loadingRef = useRef(false);
-  const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-
-  const loadSkills = useCallback(async () => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-    setLoading(true);
-    setError(null);
-    try {
-      setSkills(await getSystemSkills());
-    } catch {
-      setError("Skills 加载失败，请重试");
-    } finally {
-      loadingRef.current = false;
-      setLoading(false);
-    }
-  }, []);
+  // 与配置中心的 Skill 列表共用缓存：启用 / 禁用后由配置侧失效 skills()，这里无需自行刷新。
+  const skillsQuery = useQuery({
+    queryKey: queryKeys.skills(),
+    queryFn: ({ signal }) => getSystemSkills({ signal }),
+    enabled: open,
+  });
+  const skills = skillsQuery.data ?? EMPTY_SKILLS;
+  const loading = skillsQuery.isFetching && !skillsQuery.data;
+  const error = skillsQuery.isError && !skillsQuery.isFetching ? "Skills 加载失败，请重试" : null;
 
   const enabledSkills = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -51,7 +45,6 @@ export function SkillsSelector({ disabled = false }: SkillsSelectorProps) {
     <Popover open={open} onOpenChange={(nextOpen) => {
       setOpen(nextOpen);
       if (!nextOpen) setQuery("");
-      if (nextOpen) void loadSkills();
     }}>
       <PopoverTrigger
         type="button"
@@ -81,7 +74,7 @@ export function SkillsSelector({ disabled = false }: SkillsSelectorProps) {
         {!loading && error && (
           <div className="flex items-center justify-between gap-2 px-2 py-3">
             <p className="text-destructive text-xs" role="alert">{error}</p>
-            <button type="button" onClick={() => void loadSkills()} className="text-xs font-medium underline underline-offset-2">重试</button>
+            <button type="button" onClick={() => void skillsQuery.refetch()} className="text-xs font-medium underline underline-offset-2">重试</button>
           </div>
         )}
         {!loading && !error && enabledSkills.length === 0 && (

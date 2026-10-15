@@ -3,6 +3,7 @@ import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon, UsersIcon } from "lucide-react";
 
 import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decision";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -236,13 +237,21 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
           : "已提交审阅后的目标和驳回意见，主 Agent 正在重新生成方案",
       );
       if (onAttachTransport) {
-        void onAttachTransport().catch(() => {
+        void onAttachTransport().catch((error: unknown) => {
+          void frontendLog("WARNING", "agent_team_decision_attach_failed", "Team 审批决定已提交，但重新订阅 Run 失败", {
+            data: { taskId, runId, requestId: review.requestId, decision },
+            error,
+          });
           setMessage("决定已提交，但实时连接中断，请刷新对话查看最新结果");
         });
       }
     } catch (error) {
+      void frontendLog("ERROR", "agent_team_decision_submit_failed", "提交 Team 审批决定失败", {
+        data: { taskId, runId, requestId: review.requestId, decision },
+        error,
+      });
       setState("failed");
-      setMessage(error instanceof Error ? error.message : "提交失败，请重试");
+      setMessage(userErrorMessage(error, "提交失败，请重试"));
     }
   };
   const confirm = async () => {

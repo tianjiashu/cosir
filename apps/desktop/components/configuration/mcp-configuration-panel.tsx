@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2Icon,
   PencilIcon,
@@ -36,6 +37,11 @@ import {
   type MCPServerTestResult,
   type MCPTransport,
 } from "@/lib/api/system-extensions";
+import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { notify } from "@/lib/notify";
+import { queryKeys } from "@/lib/query/query-keys";
+import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
 
 type ServerDraft = Omit<MCPServerConfiguration, "args" | "env"> & {
   argsText: string;
@@ -94,132 +100,140 @@ const EDITOR_MODE_OPTIONS = [
 
 /** 系统 MCP 服务的连接配置、工具发现与启停管理。 */
 export function MCPConfigurationPanel() {
-  const [servers, setServers] = useState<MCPServerConfiguration[]>([]);
-  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [draft, setDraft] = useState<ServerDraft>(emptyDraft);
   const [editorMode, setEditorMode] = useState<"form" | "json">("form");
   const [jsonDraft, setJsonDraft] = useState("");
-  const [testing, setTesting] = useState(false);
+  // 打开编辑器时的规范化 JSON；与当前草稿比较得到未保存状态，两种编辑方式用同一口径。
+  const [initialJson, setInitialJson] = useState("");
   const [testResult, setTestResult] = useState<MCPServerTestResult | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [lastTests, setLastTests] = useState<Record<string, MCPServerTestResult>>({});
 
-  async function load() {
-    setLoadState("loading");
-    setLoadError(null);
-    try {
-      const configuration = await getMCPServers();
-      setServers(configuration.servers);
-      setLoadState("ready");
-    } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "读取 MCP 配置失败");
-      setLoadState("error");
-    }
-  }
+  const serversQuery = useQuery({
+    queryKey: queryKeys.mcpServers(),
+    queryFn: ({ signal }) => getMCPServers({ signal }),
+  });
+  const servers = serversQuery.data?.servers;
 
-  useEffect(() => {
-    void load();
-  }, []);
+  // 整表 PUT：保存、启停、删除都提交完整列表，因此同一时刻只允许一次写入，避免基于旧列表互相覆盖。
+  const saveMutation = useMutation({
+    mutationFn: saveMCPServers,
+    onSuccess: (saved) => {
+      queryClient.setQueryData(queryKeys.mcpServers(), saved);
+      // 「本次测试」结果只对应保存前的配置，保存后服务会按新配置重建，旧结果不再可信。
+      setLastTests({});
+    },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: testMCPServer,
+    onSuccess: (result, server) => {
+      setLastTests((current) => ({ ...current, [server.name]: result }));
+      // 已保存服务测试通过后后端会把它标记为可供 Agent 使用，需要重读 tested 状态。
+      if (result.agent_available) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpServers() });
+    },
+  });
+
+  const currentJson = editorMode === "json" ? jsonDraft : formatMcpServerJson(fromDraft(draft));
+  useUnsavedChanges("settings", "MCP 服务编辑", dialogOpen && currentJson !== initialJson);
+
+  const busy = saveMutation.isPending;
 
   function openEditor(server?: MCPServerConfiguration) {
     setEditingName(server?.name ?? null);
     const nextDraft = server ? toDraft(server) : emptyDraft();
+    const nextJson = formatMcpServerJson(fromDraft(nextDraft));
     setDraft(nextDraft);
-    setJsonDraft(formatMcpServerJson(server ?? fromDraft(nextDraft)));
+    setJsonDraft(nextJson);
+    setInitialJson(nextJson);
     setEditorMode("form");
     setTestResult(null);
     setFormError(null);
     setDialogOpen(true);
   }
 
-  async function persist(next: MCPServerConfiguration[]) {
-    setSaving(true);
-    setNotice(null);
-    setLoadError(null);
-    try {
-      const saved = await saveMCPServers(next);
-      setServers(saved.servers);
-      setLastTests({});
-      setNotice("MCP 配置已保存");
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "保存 MCP 配置失败";
-      if (dialogOpen) setFormError(message);
-      else setLoadError(message);
-      return false;
-    } finally {
-      setSaving(false);
-    }
+  async function closeEditor() {
+    if (!(await confirmDiscardUnsaved("settings"))) return;
+    setDialogOpen(false);
   }
 
-  async function saveDraft(event: React.FormEvent<HTMLFormElement>) {
+  function readDraft(): MCPServerConfiguration {
+    const server = editorMode === "json" ? parseMcpServerJson(jsonDraft) : fromDraft(draft);
+    validateMcpServerConfiguration(server);
+    return server;
+  }
+
+  function saveDraft(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!servers || busy) return;
+    let server: MCPServerConfiguration;
     try {
-      const server = editorMode === "json" ? parseMcpServerJson(jsonDraft) : fromDraft(draft);
-      validateMcpServerConfiguration(server);
-      const next = editingName
-        ? servers.map((item) => item.name === editingName ? server : item)
-        : [...servers, server];
-      if (await persist(next)) setDialogOpen(false);
+      server = readDraft();
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : "MCP 配置无效");
+      setFormError(userErrorMessage(error, "MCP 配置无效"));
+      return;
     }
-  }
-
-  async function toggleServer(server: MCPServerConfiguration) {
-    const next = servers.map((item) => item.name === server.name ? { ...item, enabled: !item.enabled } : item);
-    await persist(next);
-  }
-
-  async function deleteServer(server: MCPServerConfiguration) {
-    if (!window.confirm(`删除 MCP 服务“${server.name}”？`)) return;
-    if (!(await persist(servers.filter((item) => item.name !== server.name)))) return;
-    setLastTests((current) => {
-      const next = { ...current };
-      delete next[server.name];
-      return next;
+    setFormError(null);
+    const next = editingName
+      ? servers.map((item) => item.name === editingName ? server : item)
+      : [...servers, server];
+    saveMutation.mutate(next, {
+      onSuccess: () => {
+        setDialogOpen(false);
+        notify.success("MCP 配置已保存");
+      },
+      onError: (error) => setFormError(userErrorMessage(error, "保存 MCP 配置失败")),
     });
   }
 
-  async function runTest(server: MCPServerConfiguration) {
-    setTesting(true);
-    setTestResult(null);
-    setFormError(null);
-    try {
-      const result = await testMCPServer(server);
-      setTestResult(result);
-      setLastTests((current) => ({ ...current, [server.name]: result }));
-      if (result.agent_available) {
-        const configuration = await getMCPServers();
-        setServers(configuration.servers);
-      }
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : "MCP 连接测试失败");
-    } finally {
-      setTesting(false);
-    }
+  function toggleServer(server: MCPServerConfiguration) {
+    if (!servers || busy) return;
+    const next = servers.map((item) => item.name === server.name ? { ...item, enabled: !item.enabled } : item);
+    saveMutation.mutate(next, {
+      onSuccess: () => notify.success(`已${server.enabled ? "停用" : "启用"} ${server.name}`),
+      onError: (error) => notify.error(`${server.enabled ? "停用" : "启用"} ${server.name} 失败`, { error, fallback: "保存 MCP 配置失败" }),
+    });
   }
 
-  async function testDraft() {
+  async function deleteServer(server: MCPServerConfiguration) {
+    if (!servers) return;
+    const next = servers.filter((item) => item.name !== server.name);
+    const deleted = await requestConfirmation({
+      title: "删除 MCP 服务？",
+      description: `删除 MCP 服务“${server.name}”后，Agent 将无法再调用它提供的工具。`,
+      confirmLabel: "删除",
+      busyLabel: "正在删除…",
+      tone: "destructive",
+      icon: "delete",
+      action: () => saveMutation.mutateAsync(next),
+      failureFallback: "删除 MCP 服务失败",
+    });
+    if (deleted) notify.success(`已删除 MCP 服务 ${server.name}`);
+  }
+
+  function testSavedServer(server: MCPServerConfiguration) {
+    testMutation.mutate(server, {
+      onError: (error) => notify.error(`测试 ${server.name} 失败`, { error, fallback: "MCP 连接测试失败" }),
+    });
+  }
+
+  function testDraft() {
     let server: MCPServerConfiguration;
     try {
-      server = editorMode === "json" ? parseMcpServerJson(jsonDraft) : fromDraft(draft);
+      server = readDraft();
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : "MCP 配置无效");
+      setFormError(userErrorMessage(error, "MCP 配置无效"));
       return;
     }
-    try {
-      validateMcpServerConfiguration(server);
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : "MCP 配置不完整");
-      return;
-    }
-    await runTest(server);
+    setTestResult(null);
+    setFormError(null);
+    testMutation.mutate(server, {
+      onSuccess: setTestResult,
+      onError: (error) => setFormError(userErrorMessage(error, "MCP 连接测试失败")),
+    });
   }
 
   function selectEditorMode(nextMode: "form" | "json") {
@@ -234,7 +248,7 @@ export function MCPConfigurationPanel() {
       setDraft(toDraft(parseMcpServerJson(jsonDraft)));
       setEditorMode("form");
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : "MCP 配置无效");
+      setFormError(userErrorMessage(error, "MCP 配置无效"));
     }
   }
 
@@ -245,16 +259,18 @@ export function MCPConfigurationPanel() {
           <h2 id="mcp-configuration-heading" className="text-lg font-semibold">MCP 服务</h2>
           <p className="text-muted-foreground text-sm">配置本机 MCP 服务。测试时会启动服务并读取它提供的工具。</p>
         </div>
-        <Button onClick={() => openEditor()} disabled={loadState !== "ready" || saving}><PlusIcon />添加服务</Button>
+        <Button onClick={() => openEditor()} disabled={!servers || busy}><PlusIcon />添加服务</Button>
       </header>
 
-      {notice && <Alert tone="success">{notice}</Alert>}
-      {loadError && loadState !== "error" && <Alert tone="destructive">{loadError}</Alert>}
-      {loadState === "loading" ? (
+      {serversQuery.isPending ? (
         <LoadingState label="正在读取 MCP 服务…" />
-      ) : loadState === "error" ? (
-        <ErrorState message={loadError ?? "读取 MCP 配置失败"} onRetry={() => void load()} retryLabel="重新读取" />
-      ) : servers.length === 0 ? (
+      ) : serversQuery.isError ? (
+        <ErrorState
+          message={userErrorMessage(serversQuery.error, "读取 MCP 配置失败")}
+          onRetry={() => void serversQuery.refetch()}
+          retryLabel="重新读取"
+        />
+      ) : serversQuery.data.servers.length === 0 ? (
         <EmptyState
           icon={<ServerIcon />}
           title="还没有 MCP 服务"
@@ -262,7 +278,7 @@ export function MCPConfigurationPanel() {
         />
       ) : (
         <div className="space-y-3">
-          {servers.map((server) => {
+          {serversQuery.data.servers.map((server) => {
             const result = lastTests[server.name];
             return (
               <Card key={server.name} className="p-4">
@@ -295,12 +311,12 @@ export function MCPConfigurationPanel() {
                       </details>
                     )}
                   </div>
-                  <Switch checked={server.enabled} aria-label={`${server.enabled ? "停用" : "启用"} ${server.name}`} disabled={loadState !== "ready" || saving || !server.tested} onClick={() => void toggleServer(server)} />
+                  <Switch checked={server.enabled} aria-label={`${server.enabled ? "停用" : "启用"} ${server.name}`} disabled={busy || !server.tested} onClick={() => toggleServer(server)} />
                 </div>
                 <div className="mt-4 flex flex-wrap justify-end gap-2">
-                  <Button variant="outline" size="sm" onClick={() => openEditor(server)} disabled={loadState !== "ready" || saving}><PencilIcon />编辑</Button>
-                  <Button variant="outline" size="sm" onClick={() => void runTest(server)} disabled={loadState !== "ready" || testing}><WrenchIcon />测试连接</Button>
-                  <Button variant="ghost" size="sm" onClick={() => void deleteServer(server)} disabled={loadState !== "ready" || saving} aria-label={`删除 ${server.name}`}><Trash2Icon /></Button>
+                  <Button variant="outline" size="sm" onClick={() => openEditor(server)} disabled={busy}><PencilIcon />编辑</Button>
+                  <Button variant="outline" size="sm" onClick={() => testSavedServer(server)} disabled={testMutation.isPending}><WrenchIcon />测试连接</Button>
+                  <Button variant="ghost" size="sm" onClick={() => void deleteServer(server)} disabled={busy} aria-label={`删除 ${server.name}`}><Trash2Icon /></Button>
                 </div>
               </Card>
             );
@@ -308,12 +324,12 @@ export function MCPConfigurationPanel() {
         </div>
       )}
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) void closeEditor(); }}>
         <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingName ? "编辑 MCP 服务" : "添加 MCP 服务"}</DialogTitle>
           </DialogHeader>
-          <form onSubmit={(event) => void saveDraft(event)} onChange={() => setTestResult(null)} onClick={() => setTestResult(null)} className="space-y-4">
+          <form onSubmit={saveDraft} onChange={() => setTestResult(null)} onClick={() => setTestResult(null)} className="space-y-4">
             <div className="flex justify-end">
               <SegmentedControl
                 aria-label="配置编辑模式"
@@ -358,8 +374,8 @@ export function MCPConfigurationPanel() {
             </Alert>}
             {testResult?.success && testResult.tools.length > 0 && <ul className="max-h-40 space-y-1 overflow-y-auto rounded-lg bg-muted/40 p-3 text-xs">{testResult.tools.map((tool) => <li key={tool.name}><span className="font-mono font-medium">{tool.name}</span>{tool.description && <span className="text-muted-foreground ml-2">{tool.description}</span>}</li>)}</ul>}
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => void testDraft()} disabled={testing || saving}>{testing ? <Loader2Icon className="animate-spin" /> : <WrenchIcon />}测试连接</Button>
-              <Button type="submit" disabled={saving || testing}>{saving ? <Loader2Icon className="animate-spin" /> : null}保存服务</Button>
+              <Button type="button" variant="outline" onClick={testDraft} disabled={testMutation.isPending || busy}>{testMutation.isPending ? <Loader2Icon className="animate-spin" /> : <WrenchIcon />}测试连接</Button>
+              <Button type="submit" disabled={busy || testMutation.isPending}>{busy ? <Loader2Icon className="animate-spin" /> : null}保存服务</Button>
             </DialogFooter>
           </form>
         </DialogContent>

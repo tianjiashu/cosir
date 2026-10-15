@@ -1,3 +1,5 @@
+import { UserFacingError } from "@/lib/errors/user-facing-error";
+
 export type TriStateValue = "" | "true" | "false";
 
 /**
@@ -56,7 +58,7 @@ function parseNumber(value: string, field: string): number | undefined {
   const normalized = value.trim();
   if (!normalized) return undefined;
   const parsed = Number(normalized);
-  if (!Number.isFinite(parsed)) throw new Error(`${field} 必须是有限数字`);
+  if (!Number.isFinite(parsed)) throw new UserFacingError(`${field} 必须是有限数字`);
   return parsed;
 }
 
@@ -75,10 +77,10 @@ export function modelSettingsFromForm(form: ModelSettingsForm): Record<string, u
   const temperature = parseNumber(form.temperature, "temperature");
   const topP = parseNumber(form.top_p, "top_p");
   const maxTokens = parseNumber(form.max_tokens, "max_tokens");
-  if (temperature !== undefined && temperature < 0) throw new Error("temperature 不能小于 0");
-  if (topP !== undefined && (topP < 0 || topP > 1)) throw new Error("top_p 必须介于 0 和 1 之间");
+  if (temperature !== undefined && temperature < 0) throw new UserFacingError("temperature 不能小于 0");
+  if (topP !== undefined && (topP < 0 || topP > 1)) throw new UserFacingError("top_p 必须介于 0 和 1 之间");
   if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens <= 0)) {
-    throw new Error("max_tokens 必须是正整数");
+    throw new UserFacingError("max_tokens 必须是正整数");
   }
 
   const settings: Record<string, unknown> = {};

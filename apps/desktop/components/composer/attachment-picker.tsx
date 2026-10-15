@@ -7,6 +7,7 @@ import { FilePlusIcon, FolderOpenIcon, PaperclipIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import {
   contentTypeFor,
@@ -89,8 +90,7 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
         onError?.(`图片附件仅支持 JPEG 和 PNG，已跳过 ${unsupportedImageCount} 个文件。`);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "选择附件失败";
-      onError?.(message);
+      onError?.(userErrorMessage(error, "选择附件失败，请重试"));
       await frontendLog("ERROR", "attachment_picker_failed", "统一附件选择失败", {
         data: { selectedCount: 0 },
         error,
@@ -130,8 +130,7 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
         }),
       }]);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "选择文件夹失败";
-      onError?.(message);
+      onError?.(userErrorMessage(error, "选择文件夹失败，请重试"));
       await frontendLog("ERROR", "attachment_directory_picker_failed", "文件夹附件选择失败", {
         data: { selectedCount: 0 },
         error,

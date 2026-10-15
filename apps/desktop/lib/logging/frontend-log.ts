@@ -67,17 +67,6 @@ export async function frontendLog(
   }
 }
 
-/** 返回不会复述服务端响应体的固定 UI 错误文案。 */
-export function safeFrontendErrorMessage(error: unknown, fallback: string): string {
-  // 超时以 TimeoutError 为 abort reason（见 lib/async/abort-timeout.ts），与主动取消区分。
-  if (error instanceof Error && error.name === "TimeoutError") return "请求超时，请检查本机后端是否仍在运行";
-  if (error instanceof Error && error.name === "AbortError") return "请求已取消";
-  if (error instanceof Error && error.name === "LocalAttachmentUnavailableError") {
-    return "附件已失效，请重新选择附件";
-  }
-  return fallback;
-}
-
 const MAX_ERROR_MESSAGE_LENGTH = 512;
 const MAX_ERROR_STACK_LENGTH = 4096;
 

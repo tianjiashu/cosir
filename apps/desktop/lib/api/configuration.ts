@@ -1,4 +1,4 @@
-import { jsonRequestInit, requestJson } from "@/lib/http/client";
+import { jsonRequestInit, requestJson, type RequestOptions } from "@/lib/http/client";
 
 export type AgentConfiguration = {
   agent_id: string;
@@ -96,8 +96,8 @@ export type EnvironmentGroup = {
   fields: EnvironmentField[];
 };
 
-export async function getAgentConfigurations(): Promise<AgentConfiguration[]> {
-  return requestJson<AgentConfiguration[]>("/configuration/agents");
+export async function getAgentConfigurations(options?: RequestOptions): Promise<AgentConfiguration[]> {
+  return requestJson<AgentConfiguration[]>("/configuration/agents", options);
 }
 
 export async function createAgentConfiguration(input: AgentConfigurationInput): Promise<AgentConfiguration> {
@@ -112,32 +112,32 @@ export async function deleteAgentConfiguration(agentId: string): Promise<void> {
   await requestJson(`/configuration/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" });
 }
 
-export function getGlobalInstructionConfiguration(): Promise<GlobalInstructionConfiguration> {
-  return requestJson<GlobalInstructionConfiguration>("/configuration/global-instructions");
+export function getGlobalInstructionConfiguration(options?: RequestOptions): Promise<GlobalInstructionConfiguration> {
+  return requestJson<GlobalInstructionConfiguration>("/configuration/global-instructions", options);
 }
 
 export function updateGlobalInstructionConfiguration(content: string): Promise<GlobalInstructionConfiguration> {
   return requestJson<GlobalInstructionConfiguration>("/configuration/global-instructions", jsonRequestInit({ content }, { method: "PUT" }));
 }
 
-export function getMainAgentPromptConfiguration(): Promise<MainAgentPromptConfiguration> {
-  return requestJson<MainAgentPromptConfiguration>("/configuration/main-agent-prompt");
+export function getMainAgentPromptConfiguration(options?: RequestOptions): Promise<MainAgentPromptConfiguration> {
+  return requestJson<MainAgentPromptConfiguration>("/configuration/main-agent-prompt", options);
 }
 
 export function updateMainAgentPromptConfiguration(content: string): Promise<MainAgentPromptConfiguration> {
   return requestJson<MainAgentPromptConfiguration>("/configuration/main-agent-prompt", jsonRequestInit({ content }, { method: "PUT" }));
 }
 
-export function getEnvironmentConfiguration(): Promise<{ groups: EnvironmentGroup[] }> {
-  return requestJson("/configuration/environment");
+export function getEnvironmentConfiguration(options?: RequestOptions): Promise<{ groups: EnvironmentGroup[] }> {
+  return requestJson("/configuration/environment", options);
 }
 
 export function updateEnvironmentConfiguration(changes: Record<string, { operation: "replace" | "clear" | "unchanged"; value?: unknown }>): Promise<{ groups: EnvironmentGroup[] }> {
   return requestJson("/configuration/environment", jsonRequestInit({ changes }, { method: "PUT" }));
 }
 
-export function getTerminalDenylistConfiguration(): Promise<TerminalDenylistConfiguration> {
-  return requestJson<TerminalDenylistConfiguration>("/configuration/terminal-denylist");
+export function getTerminalDenylistConfiguration(options?: RequestOptions): Promise<TerminalDenylistConfiguration> {
+  return requestJson<TerminalDenylistConfiguration>("/configuration/terminal-denylist", options);
 }
 
 export function updateTerminalDenylistConfiguration(patterns: string[]): Promise<TerminalDenylistConfiguration> {
@@ -147,8 +147,8 @@ export function updateTerminalDenylistConfiguration(patterns: string[]): Promise
   );
 }
 
-export function getWorkspaceAgentConfigurations(workspaceId: number): Promise<AgentConfiguration[]> {
-  return requestJson<AgentConfiguration[]>(`/workspaces/${workspaceId}/configuration/agents`);
+export function getWorkspaceAgentConfigurations(workspaceId: number, options?: RequestOptions): Promise<AgentConfiguration[]> {
+  return requestJson<AgentConfiguration[]>(`/workspaces/${workspaceId}/configuration/agents`, options);
 }
 
 export function createWorkspaceAgentConfiguration(workspaceId: number, input: AgentConfigurationInput): Promise<AgentConfiguration> {
@@ -163,16 +163,16 @@ export function deleteWorkspaceAgentConfiguration(workspaceId: number, agentId: 
   return requestJson(`/workspaces/${workspaceId}/configuration/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" }).then(() => undefined);
 }
 
-export function getWorkspaceInstructionConfiguration(workspaceId: number): Promise<WorkspaceInstructionConfiguration> {
-  return requestJson<WorkspaceInstructionConfiguration>(`/workspaces/${workspaceId}/configuration/instructions`);
+export function getWorkspaceInstructionConfiguration(workspaceId: number, options?: RequestOptions): Promise<WorkspaceInstructionConfiguration> {
+  return requestJson<WorkspaceInstructionConfiguration>(`/workspaces/${workspaceId}/configuration/instructions`, options);
 }
 
 export function updateWorkspaceInstructionConfiguration(workspaceId: number, content: string): Promise<WorkspaceInstructionConfiguration> {
   return requestJson<WorkspaceInstructionConfiguration>(`/workspaces/${workspaceId}/configuration/instructions`, jsonRequestInit({ content }, { method: "PUT" }));
 }
 
-export function getWorkspaceFileIgnoreConfiguration(workspaceId: number): Promise<WorkspaceFileIgnoreConfiguration> {
-  return requestJson<WorkspaceFileIgnoreConfiguration>(`/workspaces/${workspaceId}/configuration/fileignore`);
+export function getWorkspaceFileIgnoreConfiguration(workspaceId: number, options?: RequestOptions): Promise<WorkspaceFileIgnoreConfiguration> {
+  return requestJson<WorkspaceFileIgnoreConfiguration>(`/workspaces/${workspaceId}/configuration/fileignore`, options);
 }
 
 export function updateWorkspaceFileIgnoreConfiguration(workspaceId: number, content: string): Promise<WorkspaceFileIgnoreConfiguration> {

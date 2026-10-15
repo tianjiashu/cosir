@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { WorkbenchSurface } from "@/components/workbench-surface";
 import { useWorkbenchStore } from "@/lib/workbench/store";
+import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
 export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number | null; onRequestClose: () => void }) {
@@ -18,12 +19,29 @@ export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number
   const setPanelWidth = useWorkbenchStore((state) => state.setPanelWidth);
   const draggingRef = useRef(false);
 
-  const handleCloseTab = useCallback((tabId: string) => {
-    const tab = tabs.find((candidate) => candidate.id === tabId);
-    if (tab?.kind === "agent-configuration-draft" && tab.dirty && !window.confirm("配置草稿尚未保存，确定关闭吗？")) return;
+  const closeTabNow = useCallback((tabId: string) => {
     void frontendLog("INFO", "workbench_tab_closed", "Workbench 标签页关闭", { data: { tabId } });
     closeTab(tabId);
-  }, [closeTab, tabs]);
+  }, [closeTab]);
+
+  /**
+   * 标签栏上的关闭：会连同 store 中的草稿一起丢弃（含未激活标签），未保存时先确认。
+   * 草稿 surface 自带的关闭按钮已自行确认，走 closeTabNow，避免重复询问。
+   */
+  const requestCloseTab = useCallback(async (tabId: string) => {
+    const tab = tabs.find((candidate) => candidate.id === tabId);
+    if (tab && tab.kind !== "agent" && tab.dirty) {
+      const discard = await requestConfirmation({
+        title: "关闭配置草稿？",
+        description: `「${tab.title}」尚未保存，关闭后修改会丢失。`,
+        confirmLabel: "放弃并关闭",
+        tone: "destructive",
+        icon: "discard",
+      });
+      if (!discard) return;
+    }
+    closeTabNow(tabId);
+  }, [closeTabNow, tabs]);
 
   useEffect(() => {
     if (workspaceId === null && panelOpen) setPanelOpen(false);
@@ -81,7 +99,7 @@ export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number
                 type="button"
                 className="ml-1 rounded p-0.5 opacity-60 hover:bg-muted hover:opacity-100"
                 aria-label={`关闭 ${tab.title}`}
-                onClick={() => handleCloseTab(tab.id)}
+                onClick={() => void requestCloseTab(tab.id)}
               ><XIcon className="size-3" aria-hidden="true" /></button>
             </div>
           ))}
@@ -89,7 +107,7 @@ export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number
         <Button variant="ghost" size="icon-sm" aria-label="收起工作台" onClick={onRequestClose}><PanelRightCloseIcon /></Button>
       </div>
       <div className="min-h-0 flex-1 overflow-hidden" role="tabpanel">
-        <WorkbenchSurface tab={activeTab} onClose={() => handleCloseTab(activeTab.id)} />
+        <WorkbenchSurface tab={activeTab} onClose={() => closeTabNow(activeTab.id)} />
       </div>
     </aside>
   );

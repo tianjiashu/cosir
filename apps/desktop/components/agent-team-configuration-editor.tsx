@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { AgentTeamConfigurationForm } from "@/components/agent-team-configuration-form";
 
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,9 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { AgentTeamGraphEditor } from "@/components/agent-team-graph-editor";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamConfiguration, AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { notify } from "@/lib/notify";
 import { newTraceId } from "@/lib/trace";
 import { cn } from "@/lib/utils";
 
@@ -38,7 +41,13 @@ const emptyConfiguration = (scope: AgentTeamConfiguration["scope"]): AgentTeamCo
   scope,
 });
 
-/** 统一协调表单与画布编辑，并把保存结果作为后端校验反馈呈现给用户。 */
+/**
+ * 统一协调表单与画布编辑，并把保存结果作为后端校验反馈呈现给用户。
+ *
+ * 保存成功走 toast；保存失败用对话框而非原位 Alert：画布模式全屏覆盖表单，原位提示看不到，
+ * 且失败文案多为后端校验的多行说明，需要用户读完再「返回修改」。
+ * 持久化与缓存失效由调用方的 `onSave` 负责，本组件只托管保存中状态与反馈。
+ */
 export function AgentTeamConfigurationEditor({
   initial,
   profilesByScope,
@@ -59,8 +68,7 @@ export function AgentTeamConfigurationEditor({
   onSave: (configuration: AgentTeamConfigurationDraft) => Promise<void>;
 }) {
   const [configuration, setConfiguration] = useState<AgentTeamConfigurationDraft>(() => initial ? { ...initial } : emptyConfiguration(defaultScope));
-  const [saving, setSaving] = useState(false);
-  const [saveFeedback, setSaveFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<"form" | "canvas">("form");
   const [canvasVisited, setCanvasVisited] = useState(false);
   const graphLayoutKeyFor = graphLayoutKey ?? ((value: AgentTeamConfigurationDraft) => `cosir:agent-team-graph:${value.scope}:${value.team_id || "new"}`);
@@ -72,38 +80,50 @@ export function AgentTeamConfigurationEditor({
     onChange?.(next);
   };
 
-  const save = async () => {
-    setSaving(true);
-    setSaveFeedback(null);
-    const savedConfiguration = { ...configuration };
+  /** 新建 Team 保存后 team_id 才确定，把以 "new" 为键暂存的画布布局迁到正式键下。 */
+  const migrateGraphLayout = (savedConfiguration: AgentTeamConfigurationDraft) => {
+    const savedGraphLayoutKey = graphLayoutKeyFor(savedConfiguration);
+    if (savedGraphLayoutKey === resolvedGraphLayoutKey) return;
     try {
-      await onSave(savedConfiguration);
-      const savedGraphLayoutKey = graphLayoutKeyFor(savedConfiguration);
-      if (savedGraphLayoutKey !== resolvedGraphLayoutKey) {
-        try {
-          const layout = window.localStorage.getItem(resolvedGraphLayoutKey);
-          if (layout !== null) {
-            window.localStorage.setItem(savedGraphLayoutKey, layout);
-            window.localStorage.removeItem(resolvedGraphLayoutKey);
-          }
-          setResolvedGraphLayoutKey(savedGraphLayoutKey);
-        } catch (cause) {
-          void frontendLog("WARNING", "agent_team_graph_layout_migration_failed", "保存 Team 后迁移画布布局失败", {
-            traceId: newTraceId(),
-            data: { teamId: savedConfiguration.team_id },
-            error: cause,
-          });
-        }
+      const layout = window.localStorage.getItem(resolvedGraphLayoutKey);
+      if (layout !== null) {
+        window.localStorage.setItem(savedGraphLayoutKey, layout);
+        window.localStorage.removeItem(resolvedGraphLayoutKey);
       }
-      setSaveFeedback({ kind: "success", message: "Agent Team 配置已保存。" });
+      setResolvedGraphLayoutKey(savedGraphLayoutKey);
     } catch (cause) {
-      setSaveFeedback({
-        kind: "error",
-        message: cause instanceof Error && cause.message ? cause.message : "保存失败，请检查配置后重试。",
+      void frontendLog("WARNING", "agent_team_graph_layout_migration_failed", "保存 Team 后迁移画布布局失败", {
+        traceId: newTraceId(),
+        data: { teamId: savedConfiguration.team_id },
+        error: cause,
       });
-    } finally {
-      setSaving(false);
     }
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: async (savedConfiguration: AgentTeamConfigurationDraft) => {
+      await onSave(savedConfiguration);
+      return savedConfiguration;
+    },
+    onSuccess: (savedConfiguration) => {
+      migrateGraphLayout(savedConfiguration);
+      notify.success("Agent Team 配置已保存");
+    },
+    onError: (cause, savedConfiguration) => {
+      void frontendLog("WARNING", "agent_team_configuration_save_failed", "保存 Agent Team 配置失败", {
+        traceId: newTraceId(),
+        data: { teamId: savedConfiguration.team_id, scope: savedConfiguration.scope },
+        error: cause,
+      });
+      setSaveError(userErrorMessage(cause, "保存失败，请检查配置后重试。"));
+    },
+  });
+  const saving = saveMutation.isPending;
+
+  const save = () => {
+    if (saveMutation.isPending) return;
+    setSaveError(null);
+    saveMutation.mutate({ ...configuration });
   };
 
   return (
@@ -142,7 +162,7 @@ export function AgentTeamConfigurationEditor({
           configuration={configuration}
           profiles={profiles}
           storageKey={resolvedGraphLayoutKey}
-          onSave={() => void save()}
+          onSave={save}
           onExit={() => setEditorMode("form")}
           saving={saving}
           scopeEditable={scopeEditable}
@@ -150,16 +170,14 @@ export function AgentTeamConfigurationEditor({
           onChange={applyConfiguration}
         />
       </div>}
-      <Dialog open={saveFeedback !== null} onOpenChange={(open) => { if (!open) setSaveFeedback(null); }}>
+      <Dialog open={saveError !== null} onOpenChange={(open) => { if (!open) setSaveError(null); }}>
         <DialogContent showCloseButton={false}>
-          <DialogTitle>{saveFeedback?.kind === "success" ? "保存成功" : "保存失败"}</DialogTitle>
-          <DialogDescription className={saveFeedback?.kind === "error" ? "whitespace-pre-wrap text-destructive" : undefined}>
-            {saveFeedback?.message}
+          <DialogTitle>保存失败</DialogTitle>
+          <DialogDescription className="whitespace-pre-wrap text-destructive">
+            {saveError}
           </DialogDescription>
           <DialogFooter>
-            <Button type="button" onClick={() => setSaveFeedback(null)}>
-              {saveFeedback?.kind === "success" ? "继续编辑" : "返回修改"}
-            </Button>
+            <Button type="button" onClick={() => setSaveError(null)}>返回修改</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,8 +1,10 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { AgentTeamTool } from "@/components/assistant-ui/tools/agent-team-tool";
+import { createQueryClient } from "@/lib/query/query-client";
 
 /** 方案预览的完整载荷（字段要求见 readAgentTeamPreviewDisplay 的严格解析）。 */
 const PREVIEW: Record<string, unknown> = {
@@ -62,7 +64,12 @@ function renderAgentTeamTool(
     },
   } as unknown as ToolCallMessagePartProps;
 
-  return renderToStaticMarkup(<AgentTeamTool {...part} runId={2} runStatus={runStatus} taskId={3} />);
+  // 执行卡用 TanStack Query 轮询 TeamRun；静态渲染不会发起请求，只需提供 QueryClient。
+  return renderToStaticMarkup(
+    <QueryClientProvider client={createQueryClient()}>
+      <AgentTeamTool {...part} runId={2} runStatus={runStatus} taskId={3} />
+    </QueryClientProvider>,
+  );
 }
 
 describe("AgentTeamTool 待确认态", () => {

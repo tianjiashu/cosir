@@ -18,8 +18,10 @@ import {
 import { useComposerFeedback } from "@/components/composer/composer-feedback";
 import { summarizeComposerFileProblems, type ComposerExternalFileResult } from "@/components/composer/composer-external-files";
 import { useComposerInsertion } from "@/components/composer/composer-insertion-context";
-import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { notify } from "@/lib/notify";
 
 export const COMPOSER_EDITOR_CLASS_NAME =
   "text-foreground min-h-20 w-full bg-transparent px-2.5 py-2 text-base leading-6 outline-none focus-visible:outline-none data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-60";
@@ -129,6 +131,7 @@ export function ComposerEditor({
         const files = [...(event.clipboardData?.files ?? [])];
         if (files.length === 0) return false;
         event.preventDefault();
+        if (rejectFilesWhileDisabled("paste", files.length)) return true;
         const text = event.clipboardData?.getData("text/plain") ?? "";
         if (text) {
           editor?.chain().focus().insertContent(insertionCommandContent({ type: "insert-text", text })).run();
@@ -141,6 +144,7 @@ export function ComposerEditor({
         const files = [...(event.dataTransfer?.files ?? [])];
         if (files.length === 0) return false;
         event.preventDefault();
+        if (rejectFilesWhileDisabled("drop", files.length)) return true;
         const text = event.dataTransfer?.getData("text/plain") ?? "";
         if (text) {
           editor?.chain().focus().insertContent(insertionCommandContent({ type: "insert-text", text })).run();
@@ -227,9 +231,24 @@ export function ComposerEditor({
 
   useEffect(() => insertion.register(insertCommand), [insertion, insertCommand]);
 
+  /**
+   * 禁用期间（运行中、草稿同步中等）的粘贴 / 拖放文件。
+   *
+   * ProseMirror 对不可编辑的编辑器仍会调用 handlePaste / handleDrop；文件输入已被 preventDefault，
+   * 若不提示，用户看到的就是文件「凭空消失」。返回 true 表示已拒收。
+   */
+  const rejectFilesWhileDisabled = (source: "paste" | "drop", fileCount: number): boolean => {
+    if (!propsRef.current.disabled) return false;
+    notify.info("当前无法添加附件：输入框暂不可编辑，请稍后再试");
+    void frontendLog("INFO", "inline_attachment_rejected_while_disabled", "输入框禁用期间拒收粘贴或拖放的文件", {
+      data: { source, fileCount },
+    });
+    return true;
+  };
+
   const handleExternalFiles = useCallback(async (files: readonly File[]) => {
     const current = propsRef.current;
-    if (current.disabled || files.length === 0) return;
+    if (files.length === 0) return;
     if (!current.onExternalFiles) {
       void frontendLog("INFO", "inline_attachment_external_files_ignored", "输入框未装配外部附件处理器，已忽略文件输入", {
         data: { fileCount: files.length },
@@ -253,7 +272,7 @@ export function ComposerEditor({
       if (problemMessage) feedback.show(problemMessage);
       else feedback.clear();
     } catch (error) {
-      feedback.show(safeFrontendErrorMessage(error, "添加附件失败，请重试"));
+      feedback.show(userErrorMessage(error, "添加附件失败，请重试"));
       void frontendLog("ERROR", "inline_attachment_external_files_failed", "处理粘贴或拖拽附件失败", {
         data: { fileCount: files.length },
         error,

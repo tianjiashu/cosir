@@ -1,4 +1,4 @@
-import { requestJson } from "@/lib/http/client";
+import { requestJson, type RequestOptions } from "@/lib/http/client";
 
 export type ContextMessage = {
   id: number | null;
@@ -22,7 +22,7 @@ export type ContextMessageQuery = {
   runId?: number;
 };
 
-export function getContextMessages(query: ContextMessageQuery, options?: Pick<RequestInit, "signal">) {
+export function getContextMessages(query: ContextMessageQuery, options?: RequestOptions) {
   const params = new URLSearchParams();
   if (query.taskId !== undefined) params.set("task_id", String(query.taskId));
   if (query.runId !== undefined) params.set("run_id", String(query.runId));

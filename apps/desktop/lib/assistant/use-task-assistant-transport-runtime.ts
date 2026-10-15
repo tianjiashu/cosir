@@ -15,6 +15,7 @@ import {
   type FrameStoreItem,
 } from "@/lib/assistant/transport-frame-store";
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import { parseHttpError } from "@/lib/http/errors";
 
 export type TaskAssistantTransportOptions = {
   initialState: TransportState;
@@ -135,10 +136,9 @@ function useTaskAssistantTransportAdapter(
         signal: controller.signal,
       });
       if (!response.ok) {
-        const body = await response.text();
-        // 保持 runtime recovery 使用的结构化 HTTP 错误边界；响应体由 parseTransportError
-        // 解析，只有白名单消息可以进入界面。
-        throw new Error(`Status ${response.status}: ${body}`);
+        // 结构化错误（code / message / retryable）由 parseHttpError 解析为 HttpError；
+        // 响应体原文不进入错误消息，界面经 userErrorMessage 只展示后端给出的可读原因。
+        throw await parseHttpError(response);
       }
       if (activeStreamRef.current !== callbacks) return;
       accepted = true;
@@ -181,14 +181,27 @@ function useTaskAssistantTransportAdapter(
   }, [closeActiveStream, readSse, store]);
 
   const sendCommands = useCallback(async (commands: readonly unknown[]) => {
-    const body = await optionsRef.current.body();
-    const requestBody = optionsRef.current.prepareSendCommandsRequest
-      ? await optionsRef.current.prepareSendCommandsRequest({
-          ...body,
-          commands,
-          state: store.getSnapshot().state,
-        })
-      : { ...body, commands };
+    let requestBody: Record<string, unknown>;
+    try {
+      const body = await optionsRef.current.body();
+      requestBody = optionsRef.current.prepareSendCommandsRequest
+        ? await optionsRef.current.prepareSendCommandsRequest({
+            ...body,
+            commands,
+            state: store.getSnapshot().state,
+          })
+        : { ...body, commands };
+    } catch (error) {
+      // 请求尚未发出（如附件已失效）：与后端拒绝同属 request-rejected，交给同一个 onError
+      // 恢复草稿并提示；否则这里的异常会脱离错误通道，变成无人处理的 rejection。
+      await optionsRef.current.onError?.(error instanceof Error ? error : new Error(String(error)), {
+        commands,
+        phase: "request-rejected",
+        updateState: (updater) => store.importState(updater(store.getSnapshot().state)),
+        clearPendingCommands: () => store.clearPendingCommands(commands.filter(isAddMessageCommand) as UserAddMessageCommand[]),
+      });
+      return;
+    }
     const addCommands = commands.filter(isAddMessageCommand) as UserAddMessageCommand[];
     if (addCommands.length > 0) store.setPendingCommands(addCommands);
     await openStream(optionsRef.current.api, requestBody, commands);
