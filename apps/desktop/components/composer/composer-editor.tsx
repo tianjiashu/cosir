@@ -23,6 +23,9 @@ import { cn } from "@/lib/utils";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { notify } from "@/lib/notify";
 
+/** 新对话页与任务内输入框共用的占位文案：同一种语气（描述要做的事 + 一个具体例子）。 */
+export const COMPOSER_PLACEHOLDER = "描述要做的事，例如：帮我查找登录相关代码…";
+
 export const COMPOSER_EDITOR_CLASS_NAME =
   "text-foreground min-h-20 w-full bg-transparent px-2.5 py-2 text-base leading-6 outline-none focus-visible:outline-none data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-60";
 

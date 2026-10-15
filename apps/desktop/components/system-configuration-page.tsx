@@ -1,25 +1,21 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BotIcon,
   ChevronLeftIcon,
   Code2Icon,
-  FileTextIcon,
-  KeyRoundIcon,
   Loader2Icon,
-  NetworkIcon,
   PlusIcon,
   SaveIcon,
   Settings2Icon,
   ShieldCheckIcon,
-  SparklesIcon,
-  SlidersHorizontalIcon,
   Trash2Icon,
-  UsersIcon,
 } from "lucide-react";
 
+import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
+import { SYSTEM_SETTINGS_TABS, type SystemSettingsTabId } from "@/components/settings/settings-tabs";
 import { EnvironmentConfigurationForm, type EnvironmentFieldValue } from "@/components/environment-configuration-form";
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
 import { AgentTeamConfigurationPanel } from "@/components/agent-team-configuration-panel";
@@ -27,7 +23,10 @@ import { TerminalDenylistConfigurationPanel } from "@/components/terminal-denyli
 import { MCPConfigurationPanel } from "@/components/configuration/mcp-configuration-panel";
 import { SkillConfigurationPanel } from "@/components/configuration/skill-configuration-panel";
 import { MarkdownSourcePreviewEditor } from "@/components/configuration/markdown-source-preview-editor";
+import { ModelAvailability } from "@/components/model/model-availability";
+import { ModelConfigManager } from "@/components/model/model-config-manager";
 import {
+  DEFAULT_EFFORT_OPTIONS,
   ModelSelectorContent,
   ModelSelectorList,
   ModelSelectorRoot,
@@ -38,7 +37,7 @@ import {
 } from "@/components/model-selector";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -46,7 +45,13 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Textarea } from "@/components/ui/textarea";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
-import { modelOptionId, useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
+import {
+  loadModelCatalog,
+  modelOptionId,
+  useModelCatalog,
+  type ModelCatalog,
+  type ModelCatalogModel,
+} from "@/lib/model-catalog";
 import {
   modelSettingsFromForm,
   modelSettingsToForm,
@@ -80,7 +85,6 @@ import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
 
-type ConfigurationTab = "agents" | "agent-teams" | "main-agent" | "instructions" | "environment" | "terminal-denylist" | "mcp" | "skills";
 
 /**
  * 子 Agent 配置的作用域适配：系统级与工作区级共用同一套列表 / 编辑界面。
@@ -112,27 +116,28 @@ const globalInstructionConfigurationAdapter: MarkdownConfigurationAdapter<Global
 
 const mainAgentPromptConfigurationAdapter: MarkdownConfigurationAdapter<MainAgentPromptConfiguration> = {
   queryKey: queryKeys.instruction("main-agent-prompt"),
-  label: "主 Agent prompt",
+  label: "主 Agent 提示词",
   load: getMainAgentPromptConfiguration,
   save: updateMainAgentPromptConfiguration,
   allowEmpty: false,
 };
 
-const tabItems: { id: ConfigurationTab; label: string; description: string; icon: typeof Settings2Icon }[] = [
-  { id: "agents", label: "子 Agent配置", description: "", icon: SlidersHorizontalIcon },
-  { id: "agent-teams", label: "Agent Team 配置", description: "", icon: UsersIcon },
-  { id: "main-agent", label: "主 Agent prompt配置", description: "", icon: BotIcon },
-  { id: "instructions", label: "全局AGENTS.md配置", description: "", icon: FileTextIcon },
-  { id: "environment", label: "环境变量", description: "", icon: KeyRoundIcon },
-  { id: "terminal-denylist", label: "终端命令规则", description: "", icon: ShieldCheckIcon },
-  { id: "mcp", label: "MCP 服务", description: "", icon: NetworkIcon },
-  { id: "skills", label: "Skills", description: "", icon: SparklesIcon },
-];
 
 /** 子 Agent 仍不可授予交互终端会话和配置生成能力。 */
 export const NON_ASSIGNABLE_TOOL_GROUPS = new Set(["交互终端工具", "配置生成工具"]);
 
 const NO_AGENT_MODEL = "__agent_model_default__";
+
+function unknownModelName(modelConfigId: number): string {
+  return `未知模型（#${modelConfigId}）`;
+}
+
+/** 子 Agent 卡片上的模型名：目录就绪后找不到即视为已删除的配置；目录未就绪时只给编号，避免误报「未知」。 */
+function agentModelLabel(modelConfigId: number, catalog: ModelCatalog | null): string {
+  const model = catalog?.byOptionId.get(modelOptionId(modelConfigId));
+  if (model) return model.label;
+  return catalog ? unknownModelName(modelConfigId) : `模型 #${modelConfigId}`;
+}
 
 function toAgentModelOption(model: ModelCatalogModel): ModelOption {
   return {
@@ -152,7 +157,7 @@ export function AgentModelSelector({
   const { catalog, status, retry } = useModelCatalog();
   const modelOptions = useMemo(() => {
     const options: ModelOption[] = [
-      { id: NO_AGENT_MODEL, name: "默认", description: "继承主Agent" },
+      { id: NO_AGENT_MODEL, name: "默认", description: "继承主 Agent" },
       ...(catalog?.models.map(toAgentModelOption) ?? []),
     ];
     if (modelConfigId === null) return options;
@@ -160,42 +165,40 @@ export function AgentModelSelector({
     if (options.some((option) => option.id === currentModelId)) return options;
     return [
       ...options,
-      { id: currentModelId, name: String(modelConfigId), description: "当前配置（目录中不可用）" },
+      { id: currentModelId, name: unknownModelName(modelConfigId), description: "当前配置（目录中不可用）" },
     ];
   }, [catalog?.models, modelConfigId]);
 
-  if (status === "loading" || status === "idle") {
-    return <div className="border-input text-muted-foreground flex h-9 items-center rounded-lg border px-3 text-sm">加载模型…</div>;
-  }
-  if (status === "error") {
-    return <button type="button" className="border-destructive/40 text-destructive hover:bg-destructive/10 flex h-9 w-full items-center rounded-lg border px-3 text-left text-sm" onClick={() => void retry()}>模型加载失败，点击重试</button>;
-  }
-  if (!catalog || catalog.models.length === 0) {
-    return <div className="border-input text-muted-foreground flex h-9 items-center rounded-lg border px-3 text-sm">暂无可用模型</div>;
-  }
-
   const selectedId = modelConfigId !== null ? modelOptionId(modelConfigId) : NO_AGENT_MODEL;
   return (
-    <ModelSelectorRoot
-      models={modelOptions}
-      value={selectedId}
-      onValueChange={(nextId) => {
-        if (nextId === NO_AGENT_MODEL) {
-          onChange(null);
-          return;
-        }
-        const selected = catalog.models.find((model) => model.optionId === nextId);
-        if (selected) onChange(selected.modelConfigId);
-      }}
+    <ModelAvailability
+      variant="field"
+      status={status}
+      modelCount={catalog?.models.length ?? 0}
+      onRetry={() => void retry()}
+      configure={<Link to="/settings/models" className={buttonVariants({ variant: "link", size: "sm" })}>配置模型</Link>}
     >
-      <ModelSelectorTrigger variant="outline" className="w-full max-w-none justify-between" aria-label="选择模型">
-        <ModelSelectorValue placeholder="不覆盖" showEffort={false} />
-      </ModelSelectorTrigger>
-      <ModelSelectorContent searchable className="w-80">
-        <ModelSelectorSearch placeholder="搜索模型…" />
-        <ModelSelectorList />
-      </ModelSelectorContent>
-    </ModelSelectorRoot>
+      <ModelSelectorRoot
+        models={modelOptions}
+        value={selectedId}
+        onValueChange={(nextId) => {
+          if (nextId === NO_AGENT_MODEL) {
+            onChange(null);
+            return;
+          }
+          const selected = catalog?.models.find((model) => model.optionId === nextId);
+          if (selected) onChange(selected.modelConfigId);
+        }}
+      >
+        <ModelSelectorTrigger variant="outline" className="w-full max-w-none justify-between" aria-label="选择模型">
+          <ModelSelectorValue placeholder="不覆盖" showEffort={false} />
+        </ModelSelectorTrigger>
+        <ModelSelectorContent searchable className="w-80">
+          <ModelSelectorSearch placeholder="搜索模型…" />
+          <ModelSelectorList />
+        </ModelSelectorContent>
+      </ModelSelectorRoot>
+    </ModelAvailability>
   );
 }
 
@@ -233,9 +236,7 @@ export function ModelSettingsEditor({
           <span className="text-muted-foreground">推理强度</span>
           <NativeSelect value={value.reasoning_effort} onChange={(event) => setField("reasoning_effort", event.target.value)}>
             <option value="">跟随默认</option>
-            <option value="low">low</option>
-            <option value="high">high</option>
-            <option value="max">max</option>
+            {DEFAULT_EFFORT_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
           </NativeSelect>
         </label>
       </div>
@@ -320,15 +321,15 @@ function AgentEditor({
     <Card>
       <CardHeader>
         <CardTitle>{initial ? "编辑子 Agent" : "新建子 Agent"}</CardTitle>
-        <CardAction><Button variant="outline" onClick={() => void leaveEditor(onClose)}><ChevronLeftIcon />返回 Agent 列表</Button></CardAction>
+        <CardAction><Button variant="outline" onClick={() => void leaveEditor(onClose)}><ChevronLeftIcon />返回子 Agent 列表</Button></CardAction>
       </CardHeader>
       <CardContent className="space-y-5">
         {mutation.isError && <Alert tone="destructive">{userErrorMessage(mutation.error, "保存失败，请重试")}</Alert>}
         <div className="grid gap-4 sm:grid-cols-2">
-          <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Agent ID</span><Input value={form.agent_id} disabled={Boolean(initial)} onChange={(event) => setField("agent_id", event.target.value)} placeholder="面向主Agent使用的Agent ID" /></label>
-          <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">角色</span><Input value={form.role} onChange={(event) => setField("role", event.target.value)} placeholder="给子Agent定义的身份" /></label>
+          <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Agent ID</span><Input value={form.agent_id} disabled={Boolean(initial)} onChange={(event) => setField("agent_id", event.target.value)} placeholder="主 Agent 调用时使用的 Agent ID" /></label>
+          <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">角色</span><Input value={form.role} onChange={(event) => setField("role", event.target.value)} placeholder="子 Agent 的身份定义" /></label>
         </div>
-        <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">描述</span><Textarea className="h-24 min-h-24 max-h-24 resize-none overflow-y-auto" value={form.description} onChange={(event) => setField("description", event.target.value)} placeholder="面向主Agent描述这个 Agent 负责什么？" /></label>
+        <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">描述</span><Textarea className="h-24 min-h-24 max-h-24 resize-none overflow-y-auto" value={form.description} onChange={(event) => setField("description", event.target.value)} placeholder="向主 Agent 说明这个子 Agent 负责什么" /></label>
         <div className="space-y-1.5 text-sm">
           <span className="text-muted-foreground">系统提示词</span>
           <MarkdownSourcePreviewEditor
@@ -394,13 +395,14 @@ export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: {
     queryKey: queryKeys.toolGroups(),
     queryFn: ({ signal }) => getToolGroups({ signal }),
   });
+  const { catalog } = useModelCatalog();
   const [editing, setEditing] = useState<AgentConfiguration | null | undefined>(undefined);
   const agents = agentsQuery.data;
   const toolGroups = toolGroupsQuery.data?.groups;
 
   const removeAgent = async (agent: AgentConfiguration) => {
     const removed = await requestConfirmation({
-      title: `删除 Agent “${agent.agent_id}”？`,
+      title: `删除子 Agent「${agent.agent_id}」？`,
       description: "将删除该子 Agent 的配置文件，此操作无法撤销。",
       confirmLabel: "删除",
       busyLabel: "正在删除…",
@@ -420,19 +422,19 @@ export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: {
         await queryClient.invalidateQueries({ queryKey: queryKeys.agents(api.workspaceId) });
       },
     });
-    if (removed) notify.success(`已删除 Agent “${agent.agent_id}”`);
+    if (removed) notify.success(`已删除子 Agent「${agent.agent_id}」`);
   };
 
   if (editing !== undefined && toolGroups) return <AgentEditor api={api} toolGroups={toolGroups} initial={editing} onClose={() => setEditing(undefined)} />;
   if (!agents || !toolGroups) {
     const loadError = agentsQuery.error ?? toolGroupsQuery.error;
     return loadError
-      ? <ErrorState className="my-10" message={userErrorMessage(loadError, "读取 Agent 配置失败")} onRetry={() => { void agentsQuery.refetch(); void toolGroupsQuery.refetch(); }} retryLabel="重新读取" />
+      ? <ErrorState className="my-10" message={userErrorMessage(loadError, "读取子 Agent 配置失败")} onRetry={() => { void agentsQuery.refetch(); void toolGroupsQuery.refetch(); }} retryLabel="重新读取" />
       : <LoadingState label="正在读取系统配置…" />;
   }
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-end"><Button onClick={() => setEditing(null)}><PlusIcon />新建 Agent</Button></div>
+      <div className="flex items-center justify-end"><Button onClick={() => setEditing(null)}><PlusIcon />新建子 Agent</Button></div>
       <div className="grid gap-3 xl:grid-cols-2">
         {agents.map((agent) => (
           <Card key={`${agent.source}:${agent.agent_id}`} className="p-4 transition-shadow hover:shadow-md">
@@ -454,12 +456,14 @@ export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: {
                   {agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => void removeAgent(agent)} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}
                 </div>
               ) : (
-                <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置 Agent，不可编辑或删除" title="内置 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>
+                <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置子 Agent，不可编辑或删除" title="内置子 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>
               )}
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               <Badge shape="tag">{agent.allowed_tool_groups.length} 个工具组</Badge>
-              <Badge shape="tag">{agent.model_config_id ? `配置 ${agent.model_config_id}` : "跟随默认模型"}</Badge>
+              <Badge shape="tag" className="max-w-full">
+                <span className="truncate">{agent.model_config_id !== null ? agentModelLabel(agent.model_config_id, catalog) : "跟随默认模型"}</span>
+              </Badge>
             </div>
             {agent.validation_status !== "valid" && <p className="text-destructive mt-3 text-xs">{agent.validation_error ?? "配置无效"}</p>}
           </Card>
@@ -573,64 +577,57 @@ function EnvironmentEditor({ groups }: { groups: EnvironmentGroup[] }) {
             edit(field, "");
             setClearSecrets((current) => new Set(current).add(field.name));
           }}
+          pendingClears={clearSecrets}
+          onUndoClear={(field) => {
+            // 撤销即回到「未改动」：从改动集合中移除，保存时不再提交该字段。
+            setEdits((current) => {
+              const next = { ...current };
+              delete next[field.name];
+              return next;
+            });
+            setClearSecrets((current) => {
+              const next = new Set(current);
+              next.delete(field.name);
+              return next;
+            });
+          }}
         />
       </fieldset>
     </div>
   );
 }
 
-export function SystemConfigurationPage({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<ConfigurationTab>("agents");
-  // 切换标签与返回都会卸载当前编辑器，先确认是否放弃未保存的修改。
-  const selectTab = async (next: ConfigurationTab) => {
-    if (next === tab || !(await confirmDiscardUnsaved("settings"))) return;
-    setTab(next);
-  };
-  const close = async () => {
-    if (await confirmDiscardUnsaved("settings")) onClose();
-  };
+/**
+ * 配置中心的「模型」标签：与 composer 模型设置对话框共用 ModelConfigManager。
+ * 这里不在下拉之内，保存 / 删除后立即强制刷新模型选择目录，让各处选择器（含保活的任务页）及时看到变化。
+ */
+function ModelsPanel() {
   return (
-    <div className="bg-background/95 absolute inset-0 z-30 overflow-y-auto backdrop-blur-sm">
-      <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col px-5 py-6 lg:px-10">
-        <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="text-muted-foreground mb-3 flex items-center gap-2 text-xs"><Settings2Icon className="size-3.5" />系统配置中心</div>
-            <h1 className="text-2xl font-semibold tracking-tight">让本机 Agent 按你的方式工作</h1>
-          </div>
-          <Button variant="outline" onClick={() => void close()}><ChevronLeftIcon />返回工作区</Button>
-        </header>
-        <div className="grid min-h-0 flex-1 gap-8 lg:grid-cols-[13rem_minmax(0,1fr)]">
-          <nav className="flex gap-2 overflow-x-auto lg:block lg:space-y-2" aria-label="系统配置分类">
-            {tabItems.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => void selectTab(item.id)}
-                  className={`flex min-w-44 items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors lg:w-full ${tab === item.id ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
-                >
-                  <Icon className="size-4 shrink-0" />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium">{item.label}</span>
-                    <span className={`mt-0.5 block truncate text-2xs ${tab === item.id ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{item.description}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </nav>
-          <main className="min-w-0">
-            {tab === "agents" && <AgentConfigurationPanel />}
-            {tab === "agent-teams" && <AgentTeamConfigurationPanel scope="system" />}
-            {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent prompt" initialMode="split" />}
-            {tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="在这里写入系统级工作约束…" saveLabel="保存指令" initialMode="split" />}
-            {tab === "environment" && <EnvironmentPanel />}
-            {tab === "terminal-denylist" && <TerminalDenylistConfigurationPanel />}
-            {tab === "mcp" && <MCPConfigurationPanel />}
-            {tab === "skills" && <SkillConfigurationPanel />}
-          </main>
-        </div>
+    <div className="space-y-4">
+      <div>
+        <h2 className="font-medium">模型</h2>
+        <p className="text-muted-foreground mt-1 text-xs">管理 OpenAI 兼容接口的连接配置，测试连接通过后才能保存。</p>
       </div>
+      <ModelConfigManager unsavedScope="settings" variant="page" onChanged={() => void loadModelCatalog({ force: true })} />
     </div>
+  );
+}
+
+/**
+ * 系统配置中心（/settings/:tab）。标签来自路由，布局与导航由 SettingsPageLayout 统一提供。
+ */
+export function SystemConfigurationPage({ tab }: { tab: SystemSettingsTabId }) {
+  return (
+    <SettingsPageLayout tabs={SYSTEM_SETTINGS_TABS} basePath="/settings" navLabel="系统配置分类">
+      {tab === "agents" && <AgentConfigurationPanel />}
+      {tab === "models" && <ModelsPanel />}
+      {tab === "agent-teams" && <AgentTeamConfigurationPanel scope="system" />}
+      {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent 提示词" initialMode="split" />}
+      {tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="在这里写入系统级工作约束…" saveLabel="保存全局 AGENTS.md" initialMode="split" />}
+      {tab === "environment" && <EnvironmentPanel />}
+      {tab === "terminal-denylist" && <TerminalDenylistConfigurationPanel />}
+      {tab === "mcp" && <MCPConfigurationPanel />}
+      {tab === "skills" && <SkillConfigurationPanel />}
+    </SettingsPageLayout>
   );
 }

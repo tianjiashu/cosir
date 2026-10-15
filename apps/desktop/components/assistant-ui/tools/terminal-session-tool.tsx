@@ -16,6 +16,8 @@ import { useTerminalPanelStore } from "@/components/terminal/terminal-panel-stor
 import { asRecord, readToolArtifact } from "./types";
 import { ToolStatus } from "./tool-status";
 import { DisclosureRowStatic } from "../elements/disclosure-row.aui";
+import { terminalSessionStatusPresentation } from "@/components/terminal/terminal-session-status";
+import type { BadgeTone } from "@/components/ui/badge";
 
 type TerminalSessionVariant = "start" | "read" | "write" | "signal" | "close" | "unknown";
 
@@ -25,23 +27,28 @@ function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function sessionStatusLabel(value: unknown): string | null {
-  switch (value) {
-    case "starting": return "启动中";
-    case "running": return "运行中";
-    case "exited": return "已退出";
-    case "interrupted": return "已中断";
-    case "failed": return "会话失败";
-    case "closed": return "已关闭";
-    default: return null;
-  }
+/** 会话状态的文案与色调统一取自 terminal-session-status（终端面板共用同一张表）。 */
+function sessionStatusPresentation(value: unknown) {
+  return typeof value === "string" ? terminalSessionStatusPresentation(value) : null;
 }
 
+function sessionStatusLabel(value: unknown): string | null {
+  return sessionStatusPresentation(value)?.label ?? null;
+}
+
+const TONE_TEXT_CLASS: Record<BadgeTone, string> = {
+  neutral: "text-muted-foreground",
+  primary: "text-primary",
+  info: "text-info",
+  success: "text-success",
+  warning: "text-warning",
+  destructive: "text-destructive",
+  skill: "text-(--skill-foreground)",
+};
+
 function sessionStatusClass(value: unknown): string {
-  if (value === "running" || value === "starting") return "text-success";
-  if (value === "failed") return "text-destructive";
-  if (value === "interrupted") return "text-warning";
-  return "text-muted-foreground";
+  const presentation = sessionStatusPresentation(value);
+  return presentation ? TONE_TEXT_CLASS[presentation.tone] : "text-muted-foreground";
 }
 
 function sessionVariant(value: unknown): TerminalSessionVariant {

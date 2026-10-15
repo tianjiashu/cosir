@@ -11,7 +11,7 @@ import { requestConfirmation } from "@/lib/confirm/confirm-store";
  * 编辑器卸载即自动注销，因此「放弃」后无需手动清理。
  * scope 只用于区分互不影响的区域：离开配置中心不应询问工作台里的草稿。
  */
-export type UnsavedScope = "settings" | "workbench";
+export type UnsavedScope = "settings" | "workbench" | "dialog";
 
 type Source = { scope: UnsavedScope; label: string };
 

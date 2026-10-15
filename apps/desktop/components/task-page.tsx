@@ -11,7 +11,8 @@ import { useTerminalPanelStore } from "@/components/terminal/terminal-panel-stor
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { TaskWorkspaceLayout } from "@/components/task-workspace-layout";
-import { ErrorState, LoadingState } from "@/components/ui/state-panel";
+import { ErrorState } from "@/components/ui/state-panel";
+import { ThreadSkeleton } from "@/components/assistant/thread-skeleton";
 
 type TaskSessionProps = {
   taskId: number;
@@ -32,7 +33,7 @@ type TaskSessionProps = {
 /**
  * 任务作用域的 UI session。
  *
- * WorkspaceShell 由路由稳定持有，TaskSession 才随 taskId 变化。这样任务历史
+ * AppLayout 由路由稳定持有，TaskSession 才随 taskId 变化。这样任务历史
  * 和 Assistant Transport 可以按任务重新挂载，而 workspace/task 侧栏不会被卸载。
  */
 export function TaskPage({
@@ -124,7 +125,8 @@ export function TaskPage({
       <ErrorState className="w-full max-w-md" message={error} onRetry={() => setRetryToken((value) => value + 1)} />
     </div>
   );
-  if (!loadedTask || loadedTask.task_id !== taskId) return <LoadingState label="正在加载任务工作区…" className="h-full" />;
+  // 与 Assistant 拉取首屏快照阶段共用同一骨架，两段加载在视觉上连续。
+  if (!loadedTask || loadedTask.task_id !== taskId) return <ThreadSkeleton />;
 
   return (
     <TaskWorkspaceLayout bottomPanel={(

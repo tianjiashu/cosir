@@ -4,9 +4,11 @@ import { getTreeLinePrefix, Tree, type NodeApi, type NodeRendererProps, type Tre
 
 import type { WorkspaceTask } from "@/lib/api/workspaces";
 import { Button } from "@/components/ui/button";
+import { formatRelativeTime } from "@/lib/format/relative-time";
 import { cn } from "@/lib/utils";
 import { buildWorkspaceTreeModel, taskTreeNodeId, workspaceTreeNodeId, type WorkspaceSidebarNode, type WorkspaceTreeSource } from "./workspace-tree-model";
 import type { TaskTreeNode } from "./task-tree-model";
+import { TaskRunStatusDot } from "./task-run-status";
 
 type WorkspaceTreeProps = {
   workspaces: WorkspaceTreeSource[];
@@ -51,22 +53,32 @@ function WorkspaceTreeRow({
       <div
         style={style}
         className={cn(
-          "group flex min-w-0 items-center rounded-md pr-1 text-sm transition-colors",
+          "group flex min-w-0 items-center gap-0.5 rounded-md pr-1 text-sm transition-colors",
           isSelected ? "bg-muted" : "hover:bg-muted",
           node.isFocused && !isSelected && "ring-1 ring-primary/15",
         )}
       >
+        {/* 展开 / 收起与选中分开：点箭头只折叠，点名称只选中（并在收起时展开），避免选中时意外收起。 */}
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
-          onClick={(event) => {
-            toggle(event);
-            onSelectWorkspace(workspace.workspace_id);
-          }}
+          className="text-muted-foreground hover:text-foreground focus-ring flex size-7 shrink-0 items-center justify-center rounded-md"
+          onClick={toggle}
           aria-expanded={node.isOpen}
           aria-label={`${node.isOpen ? "收起" : "展开"}工作区 ${workspace.name}`}
         >
-          {node.isOpen ? <ChevronDownIcon className="size-3.5 shrink-0" /> : <ChevronRightIcon className="size-3.5 shrink-0" />}
+          {node.isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
+        </button>
+        <button
+          type="button"
+          className="focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 pr-2 text-left"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (!node.isOpen) node.open();
+            onSelectWorkspace(workspace.workspace_id);
+          }}
+          aria-label={`工作区 ${workspace.name}`}
+          aria-current={isSelected ? "true" : undefined}
+        >
           <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 truncate">{workspace.name}</span>
           {workspace.taskLoadError
@@ -121,12 +133,19 @@ function WorkspaceTreeRow({
         {getTreeLinePrefix(node, { last: "└─ ", middle: "├─ ", pipe: "│  ", blank: "   " })}
       </span>
       <div className="flex min-w-0 flex-1 items-center gap-2" title={task.full_title}>
-        {task.task_type === "fork"
-          ? <GitForkIcon className="size-3.5 shrink-0 text-info" aria-hidden="true" />
-          : <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}
+        <span className="relative shrink-0">
+          {task.task_type === "fork"
+            ? <GitForkIcon className="size-3.5 text-info" aria-hidden="true" />
+            : <MessageSquareIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />}
+          <TaskRunStatusDot status={task.execution_status} className="ring-background absolute -top-0.5 -right-0.5 size-1.5 ring-2" />
+        </span>
         <span className="min-w-0 flex-1 line-clamp-2 break-words font-medium leading-4">{task.display_title}</span>
       </div>
-      <div className="flex size-7 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" onClick={(event) => event.stopPropagation()}>
+      {/* 时间与操作按钮占同一位置：悬停 / 聚焦时让位给操作按钮。 */}
+      <span className="text-muted-foreground pointer-events-none shrink-0 pr-1 text-2xs tabular-nums transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" title={task.updated_at}>
+        {formatRelativeTime(task.updated_at)}
+      </span>
+      <div className="absolute right-1 flex size-7 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" onClick={(event) => event.stopPropagation()}>
         {renderTaskActions(task)}
       </div>
     </div>

@@ -173,7 +173,7 @@ function ReasoningTrigger({
   active?: boolean;
   duration?: number;
 }) {
-  const durationText = duration ? ` (${duration}s)` : "";
+  const durationText = duration ? `（${duration} 秒）` : "";
 
   return (
     <DisclosureRow
@@ -192,7 +192,7 @@ function ReasoningTrigger({
             active && "shimmer motion-reduce:animate-none",
           )}
         >
-          Reasoning{durationText}
+          思考过程{durationText}
         </span>
       }
       className={cn(

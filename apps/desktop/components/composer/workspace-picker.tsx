@@ -19,35 +19,61 @@ type WorkspacePickerProps = {
   showCreateLabel?: boolean;
 };
 
-export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceChange, onWorkspaceCreated, showCreateLabel = false }: WorkspacePickerProps) {
-  const [openMenu, setOpenMenu] = useState(false);
+/** 选中工作区并记为最近使用：新对话页的所有选择入口都走这里，下次打开时才能恢复同一工作区。 */
+function selectAndRemember(workspaceId: number, onWorkspaceChange: (workspaceId: number) => void) {
+  writeLastWorkspaceId(workspaceId);
+  onWorkspaceChange(workspaceId);
+}
+
+/**
+ * 「从文件夹添加工作区」流程：系统目录选择 → 创建 → 等宿主刷新目录 → 选中新工作区。
+ *
+ * 工作区选择器与首次使用引导共用这一个入口，避免两处各写一份创建与选中逻辑。
+ * 用户取消目录选择时返回 false 且不报错；失败写入 error 供调用方就地展示。
+ */
+export function useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceChange }: {
+  onWorkspaceCreated: (workspace: Workspace) => Promise<void>;
+  onWorkspaceChange: (workspaceId: number) => void;
+}) {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const selected = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
 
-  const chooseWorkspace = (workspaceId: number) => {
-    writeLastWorkspaceId(workspaceId);
-    onWorkspaceChange(workspaceId);
-    setOpenMenu(false);
-  };
-
-  const createFromFolder = async () => {
-    if (creating) return;
+  const create = async (): Promise<boolean> => {
+    if (creating) return false;
     setCreating(true);
     setError(null);
     try {
       const picked = await open({ directory: true, multiple: false, title: "选择工作区文件夹" });
-      if (typeof picked !== "string") return;
+      if (typeof picked !== "string") return false;
       const name = picked.split(/[\\/]/).filter(Boolean).at(-1) ?? "新工作区";
       const workspace = await createWorkspace({ name, root_path: picked });
       await onWorkspaceCreated(workspace);
-      chooseWorkspace(workspace.workspace_id);
+      selectAndRemember(workspace.workspace_id, onWorkspaceChange);
+      return true;
     } catch (cause) {
       setError(userErrorMessage(cause, "创建工作区失败，请重试"));
       void frontendLog("ERROR", "workspace_create_from_folder_failed", "从文件夹创建工作区失败", { error: cause });
+      return false;
     } finally {
       setCreating(false);
     }
+  };
+
+  return { create, creating, error };
+}
+
+export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceChange, onWorkspaceCreated, showCreateLabel = false }: WorkspacePickerProps) {
+  const [openMenu, setOpenMenu] = useState(false);
+  const { create, creating, error } = useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceChange });
+  const selected = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
+
+  const chooseWorkspace = (workspaceId: number) => {
+    selectAndRemember(workspaceId, onWorkspaceChange);
+    setOpenMenu(false);
+  };
+
+  const createFromFolder = async () => {
+    if (await create()) setOpenMenu(false);
   };
 
   return (

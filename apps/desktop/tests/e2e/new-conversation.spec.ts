@@ -91,17 +91,20 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
     JSON.stringify({ modelConfigId: 1, reasoningEffort: null }),
   );
   expect(await page.evaluate(() => window.localStorage.getItem("cosir:model-config-selection:default"))).toBeNull();
-  await page.getByText("禁用工具组").click();
-  const fileToolGroup = page.locator("label").filter({ hasText: "文件" }).getByRole("checkbox");
-  await expect(fileToolGroup).toBeVisible();
-  await fileToolGroup.check();
+  await page.getByRole("button", { name: "工具", exact: true }).click();
+  const fileToolGroup = page.getByRole("switch", { name: "文件", exact: true });
+  await expect(fileToolGroup).toBeChecked();
+  await fileToolGroup.click();
+  await expect(fileToolGroup).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
+  await page.keyboard.press("Escape");
   await page.getByLabel("新对话内容").fill("你好");
   await expect(page.getByRole("button", { name: "开始对话" })).toBeEnabled();
   await page.getByRole("button", { name: "开始对话" }).click();
 
   await expect(page).toHaveURL(/\/tasks\/42$/);
   await expect.poll(() => assistantRequests.length).toBe(1);
-  // WorkspaceShell refresh is a normal parent re-render and must not replace
+  // AppLayout refresh is a normal parent re-render and must not replace
   // the active Assistant Transport session or abort its response body.
   await page.getByRole("button", { name: "刷新工作区" }).click();
   expect(assistantRequests[0]?.status).toBe(200);
@@ -115,13 +118,13 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
     name: "ban-tools",
     payload: { ban_tools: ["read_file"] },
   });
-  await expect(page.getByText("禁用工具组（1）")).toBeVisible();
+  await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("cosir:tool-group-selection:task:42"))).toBe(
     JSON.stringify(["文件"]),
   );
-  await expect(page.getByRole("main").getByText("你好", { exact: true })).toBeVisible();
+  await expect(page.locator('[data-role="user"]').getByText("你好", { exact: true })).toBeVisible();
   await expect(page.getByText("streaming response", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Reasoning", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("思考过程", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "发送", exact: true })).toBeVisible();
 
   const messageInput = page.getByLabel("消息输入");
@@ -161,7 +164,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(finishes.at(-1)?.data?.pendingCommandCount).toBe(0);
   const restoredPage = await page.context().newPage();
   await restoredPage.goto("/tasks/42");
-  await expect(restoredPage.getByText("禁用工具组（1）")).toBeVisible();
+  await expect(restoredPage.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
   await restoredPage.close();
   const telemetry = await (await request.get("http://127.0.0.1:8000/__test__/telemetry")).json() as {
     clientCancelCount: number;
@@ -187,7 +190,7 @@ test("任务页面重挂载时自动恢复未结束的 run", async ({ page, requ
     response.url().endsWith("/tasks/42/assistant/attach") && response.request().method() === "POST"
   ));
   await page.goto("/tasks/42");
-  await expect(page.getByRole("main").getByText("恢复测试", { exact: true })).toBeVisible();
+  await expect(page.locator('[data-role="user"]').getByText("恢复测试", { exact: true })).toBeVisible();
   await expect(page.getByTestId("run-usage-display")).toHaveText("用量统计中…");
   await resumeResponse;
   await expect(page.getByText("resumed", { exact: true })).toBeVisible();
@@ -456,7 +459,7 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   await expect((await failureResponse).status()).toBe(409);
 
   await expect(page.getByRole("dialog")).toContainText("编辑重跑被测试后端拒绝");
-  await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "关闭" }).click();
   await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveText("edit-failure");
   await expect(topComposer).toHaveText("keep draft");
 });

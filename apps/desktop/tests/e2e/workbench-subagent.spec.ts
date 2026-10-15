@@ -34,21 +34,21 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   const openReviewer = page.getByRole("button", { name: "打开子 Agent工作台：审查代码" });
   await openReviewer.click();
 
-  await expect(page.getByRole("complementary", { name: "Workbench" })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "工作台" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /审查代码/ })).toBeVisible();
   await expect.poll(() => attachRequests.length).toBe(1);
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
   expect((await frontendLogs(page)).filter((entry) => entry.event === "react_recoverable_render_error")).toEqual([]);
-  const workbench = page.getByRole("complementary", { name: "Workbench" });
+  const workbench = page.getByRole("complementary", { name: "工作台" });
   await expect(workbench.getByRole("button", { name: "发送", exact: true })).toHaveCount(0);
   await expect(workbench.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
   await expect(workbench.getByRole("button", { name: "从此处 Fork 新任务" })).toHaveCount(0);
   await expect(workbench.getByRole("button", { name: "关闭 审查代码" })).toBeVisible();
   expect(businessWrites).toEqual([]);
   await workbench.getByRole("button", { name: "关闭 审查代码" }).click();
-  await expect(page.getByRole("complementary", { name: "Workbench" })).toHaveCount(0);
+  await expect(page.getByRole("complementary", { name: "工作台" })).toHaveCount(0);
   await openReviewer.click();
-  await expect(page.getByRole("complementary", { name: "Workbench" })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "工作台" })).toBeVisible();
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
   expect(attachRequests).toHaveLength(1);
   expect(businessWrites).toEqual([]);

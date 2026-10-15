@@ -109,6 +109,23 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
             placeholder: "请输入 Secret Key",
             clearable: true,
           },
+          {
+            name: "LANGFUSE_PUBLIC_KEY",
+            type: "string",
+            component: "password",
+            label: "Public Key",
+            secret: true,
+            default: null,
+            value: null,
+            disk_value: null,
+            configured: true,
+            masked: true,
+            source: "file",
+            process_override: false,
+            options: [],
+            placeholder: null,
+            clearable: true,
+          },
         ],
       }],
     },
@@ -116,17 +133,19 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
 
   await page.goto("/settings");
 
-  await expect(page.getByText("系统配置中心", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "让本机 Agent 按你的方式工作" })).toBeVisible();
+  // /settings 重定向到第一个分类；页面标题由统一的页面头部面包屑承担。
+  await expect(page).toHaveURL(/\/settings\/agents$/);
+  await expect(page.getByRole("navigation", { name: "当前位置" })).toContainText("系统配置");
+  const settingsNav = page.getByRole("navigation", { name: "系统配置分类" });
   await expect(page.getByText("集中管理子 Agent、全局指令与运行环境。敏感值只在本机配置文件中保存，不会进入对话或日志。", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /子 Agent/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /全局AGENTS\.md配置/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /环境变量/ })).toBeVisible();
+  await expect(settingsNav.getByRole("link", { name: "子 Agent" })).toBeVisible();
+  await expect(settingsNav.getByRole("link", { name: "全局 AGENTS.md" })).toBeVisible();
+  await expect(settingsNav.getByRole("link", { name: "环境变量" })).toBeVisible();
   await expect(page.getByText("reviewer", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "编辑 reviewer" }).click();
   await expect(page.getByText("保存后从下一次 Run 开始生效，当前运行中的 Run 不会被改写。", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "返回 Agent 列表" })).toHaveText("返回 Agent 列表");
+  await expect(page.getByRole("button", { name: "返回子 Agent 列表" })).toHaveText("返回子 Agent 列表");
   await expect(page.getByText("允许的工具组", { exact: true })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: "文件" })).toBeChecked();
   // 交互终端仍不可授予；子 Agent 工具与其它可配置分组一样可以勾选。
@@ -134,7 +153,7 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await expect(page.getByRole("checkbox", { name: "子Agent工具" })).toBeEnabled();
   await expect(page.getByRole("checkbox", { name: "文件" })).toBeEnabled();
   await expect(page.getByText("1 个工具", { exact: true })).toHaveCount(0);
-  // 设置页是覆盖在 workspace 之上的浮层，composer 的「选择模型」同样在 DOM 中，故限定到编辑器表单内。
+  // 从对话进入配置时任务页保活在内容层之下，composer 的「选择模型」可能同样在 DOM 中，故限定到编辑器表单内。
   const editorModelSelector = page
     .locator("section")
     .filter({ hasText: "允许的工具组" })
@@ -152,19 +171,25 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   // 保存结果走 toast（sonner 的 aria-live 区域），不再是内联 status Alert。
   await expect(page.getByText("配置更改成功", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: /全局AGENTS\.md配置/ }).click();
+  // 模型配置不再只能从 composer 下拉进入，配置中心有独立的「模型」标签。
+  await settingsNav.getByRole("link", { name: "模型", exact: true }).click();
+  await expect(page).toHaveURL(/\/settings\/models$/);
+  await expect(page.getByRole("heading", { name: "添加模型配置" })).toBeVisible();
+
+  await settingsNav.getByRole("link", { name: "全局 AGENTS.md" }).click();
+  await expect(page).toHaveURL(/\/settings\/instructions$/);
   await expect(page.getByText("保存后实时生效，不影响前缀缓存。", { exact: true })).toBeVisible();
   // 字节计数已移除，只保留 Token 估算。
   await expect(page.getByText("字节", { exact: true })).toHaveCount(0);
   await expect(page.getByText("估算 Token", { exact: true })).toBeVisible();
   await expect(page.getByText("下一次 Run 生效", { exact: true })).toHaveCount(0);
 
-  await page.getByRole("button", { name: /主 Agent/ }).click();
-  await expect(page.getByRole("button", { name: "保存主 Agent prompt" })).toBeVisible();
+  await settingsNav.getByRole("link", { name: "主 Agent 提示词" }).click();
+  await expect(page.getByRole("button", { name: "保存主 Agent 提示词" })).toBeVisible();
   await expect(page.getByText("保存后实时生效，不影响前缀缓存。", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Markdown 源码编辑器" })).toHaveText("# 主 Agent 协议");
 
-  await page.getByRole("button", { name: /环境变量/ }).click();
+  await settingsNav.getByRole("link", { name: "环境变量" }).click();
   await expect(page.getByRole("heading", { name: "Langfuse 可观测性" })).toBeVisible();
   await expect(page.getByText("Secret Key", { exact: true })).toBeVisible();
   await expect(page.getByRole("switch", { name: "启用 Langfuse" })).toBeVisible();
@@ -175,12 +200,23 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await expect(page.getByPlaceholder("请输入 Secret Key", { exact: true })).toBeVisible();
   await expect(page.getByText("输入新值将覆盖当前密钥；留空表示不变，点击清除按钮可删除已保存值。", { exact: true })).toHaveCount(0);
 
+  // 清除已保存的密钥后显示「将清除」并可撤销，而不是继续提示「留空保持不变」。
+  const publicKey = page.getByLabel("Public Key", { exact: true });
+  await expect(publicKey).toHaveAttribute("placeholder", "已配置（留空保持不变）");
+  await page.getByRole("button", { name: "清除 Public Key" }).click();
+  await expect(page.getByText("将清除", { exact: true })).toBeVisible();
+  await expect(publicKey).toHaveAttribute("placeholder", "保存后将清除已保存值");
+  await page.getByRole("button", { name: "撤销清除 Public Key" }).click();
+  await expect(page.getByText("将清除", { exact: true })).toHaveCount(0);
+  await expect(publicKey).toHaveAttribute("placeholder", "已配置（留空保持不变）");
+  await expect(page.getByRole("button", { name: "保存变量" })).toBeDisabled();
+
   await page.getByPlaceholder("请输入 Secret Key", { exact: true }).fill("new-secret");
   await page.getByRole("button", { name: /保存变量/ }).click();
   await expect(page.getByText("环境变量已保存", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "保存变量" })).toBeDisabled();
 
-  await page.getByRole("button", { name: /终端命令规则/ }).click();
+  await settingsNav.getByRole("link", { name: "终端命令规则" }).click();
   const denylistEditor = page.getByRole("textbox", { name: "终端 deny-list 正则列表" });
   await expect(denylistEditor).toHaveValue("\\brm\\b");
   await denylistEditor.fill("\\bmkfs\\b");

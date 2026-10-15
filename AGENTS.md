@@ -119,7 +119,7 @@ Tauri 桌面应用
 
 - React 负责页面、用户交互、HTTP/SSE 客户端和渲染状态；Rust/Tauri 负责窗口与本地进程控制。前端不得直接访问 SQLite、Agent Runtime 或工作区文件来绕过后端业务边界。
 - 后端 snapshot 是对话、Run、usage 和 tool parts 的权威读取来源。Assistant UI runtime state 只用于当前渲染和传输控制，不得原样写回后端作为事实。
-- `WorkspaceShell` 是 workspace/task 导航的稳定容器；`TaskPage`、初始 snapshot 和 Assistant runtime 按 `taskId` 建立。普通 workspace 数据刷新不应无故卸载正在执行的 Assistant runtime。
+- `AppLayout`（react-router 布局路由，路由表见 `src/router.tsx`）是 workspace/task 导航的稳定容器；`TaskPage`、初始 snapshot 和 Assistant runtime 按 `taskId` 建立，并由布局直接渲染：切到配置或上下文观测时最近的任务页保活，只有进入其他任务或新对话才替换。普通 workspace 数据刷新不应无故卸载正在执行的 Assistant runtime。
 - transport resume/attach 只重新订阅已有 Run；business resume 才继续后端执行。前端实现和命名必须保持两种语义可辨认。
 - 前端测试分层：Vitest 验证模块行为；Playwright E2E 用 Vite + 内存测试服务，WDIO 经 `desktop-e2e` 驱动真实 Tauri 窗口；都不覆盖后端崩溃恢复，不得视为完整集成测试。
 

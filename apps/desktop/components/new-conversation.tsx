@@ -1,24 +1,27 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { FileTextIcon, Loader2Icon, SendIcon, XIcon } from "lucide-react";
 
 import { ComposerControls } from "@/components/composer/composer-controls";
-import { ComposerEditor, COMPOSER_EDITOR_CLASS_NAME } from "@/components/composer/composer-editor";
+import { ComposerEditor, COMPOSER_EDITOR_CLASS_NAME, COMPOSER_PLACEHOLDER } from "@/components/composer/composer-editor";
 import { ComposerFeedback, ComposerFeedbackProvider, useComposerFeedback } from "@/components/composer/composer-feedback";
 import { classifyComposerExternalFiles, type ComposerExternalFileResult } from "@/components/composer/composer-external-files";
 import { insertAttachments, useComposerInsertion, ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
 import type { InlineComposerAttachment } from "@/components/composer/composer-document";
 import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
 import { ComposerSurface } from "@/components/composer/composer-surface";
-import { WorkspacePicker } from "@/components/composer/workspace-picker";
+import { useCreateWorkspaceFromFolder, WorkspacePicker } from "@/components/composer/workspace-picker";
 import { CosirMark } from "@/components/cosir-mark";
+import { FirstRunChecklist } from "@/components/onboarding/first-run-checklist";
+import { modelSetupState, shouldShowFirstRunChecklist, startBlockedReason } from "@/components/onboarding/start-readiness";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { createWorkspaceTask, deleteTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
+import { useModelCatalog } from "@/lib/model-catalog";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
 import { removeStoredToolGroupSelection, writeStoredToolGroupSelection } from "@/lib/tool-group-selection-storage";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
@@ -141,6 +144,11 @@ function NewConversationAttachmentPicker({
 
 type NewConversationProps = {
   workspaces: Workspace[];
+  /**
+   * 工作区目录是否仍在首次加载：加载完成前 workspaces 为空并不代表用户没有工作区，
+   * 据此避免首帧闪出「添加工作区」引导。
+   */
+  workspacesLoading: boolean;
   selectedWorkspaceId: number | null;
   onWorkspaceChange: (workspaceId: number) => void;
   onWorkspaceCreated: () => Promise<void>;
@@ -157,6 +165,7 @@ const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
 
 export function NewConversation({
   workspaces,
+  workspacesLoading,
   selectedWorkspaceId,
   onWorkspaceChange,
   onWorkspaceCreated,
@@ -191,6 +200,13 @@ export function NewConversation({
       name: attachment.name,
     }));
   const hasDraft = Boolean(text.trim() || attachments.length > 0);
+  const modelState = modelSetupState(useModelCatalog());
+  const workspaceCreation = useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceChange });
+  const hasWorkspaces = workspaces.length > 0;
+  const showChecklist = shouldShowFirstRunChecklist({ workspacesLoading, hasWorkspaces, modelState });
+  const canStart = Boolean(selectedWorkspaceId) && modelReady && hasDraft && !submitting;
+  const blockedReasonId = useId();
+  const blockedReason = startBlockedReason({ hasWorkspaces, selectedWorkspaceId, modelState, modelReady });
 
   useEffect(() => {
     mountedRef.current = true;
@@ -209,7 +225,7 @@ export function NewConversation({
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedText = text.trim();
-    if (!selectedWorkspaceId || !modelReady || !hasDraft || submitting) return;
+    if (!canStart || !selectedWorkspaceId) return;
     setSubmitting(true);
     setError(null);
     const sendAttachments = [...attachments];
@@ -291,6 +307,15 @@ export function NewConversation({
           <CosirMark className="text-foreground size-16" />
           <h1 className="text-5xl font-semibold tracking-[0.12em]">COSIR</h1>
         </div>
+        {showChecklist && (
+          <FirstRunChecklist
+            hasWorkspace={hasWorkspaces}
+            modelState={modelState}
+            onAddWorkspace={() => void workspaceCreation.create()}
+            addingWorkspace={workspaceCreation.creating}
+            addWorkspaceError={workspaceCreation.error}
+          />
+        )}
         <ComposerSurface>
           <ComposerFeedbackProvider>
           <div className="border-border/50 mb-1 flex min-w-0 items-center gap-2 border-b px-2 pb-2">
@@ -326,8 +351,7 @@ export function NewConversation({
             value={text}
             onChange={setText}
             onSubmit={() => {
-              if (!selectedWorkspaceId || !modelReady || !hasDraft || submitting) return;
-              formRef.current?.requestSubmit();
+              if (canStart) formRef.current?.requestSubmit();
             }}
             attachments={fileAttachments}
             onExternalFiles={(files): ComposerExternalFileResult<InlineComposerAttachment> => {
@@ -347,7 +371,7 @@ export function NewConversation({
             onRemoveAttachment={(fileId) => {
               setAttachments((current) => current.filter((attachment) => attachment.id !== fileId));
             }}
-            placeholder="你想让我们在这个工作区中构建什么？"
+            placeholder={COMPOSER_PLACEHOLDER}
             className={COMPOSER_EDITOR_CLASS_NAME}
             disabled={submitting}
             aria-label="新对话内容"
@@ -371,7 +395,15 @@ export function NewConversation({
                   });
                 }}
               />
-              <Button type="submit" className="shrink-0 rounded-full" disabled={!selectedWorkspaceId || !modelReady || !hasDraft || submitting}>
+              {blockedReason && (
+                <span id={blockedReasonId} className="text-muted-foreground px-1 text-xs">{blockedReason}</span>
+              )}
+              <Button
+                type="submit"
+                className="shrink-0 rounded-full"
+                disabled={!canStart}
+                aria-describedby={blockedReason ? blockedReasonId : undefined}
+              >
               {submitting ? <Loader2Icon className="animate-spin" /> : <SendIcon />}开始对话
               </Button>
             </div>

@@ -1,6 +1,8 @@
 "use client";
 
-import { Trash2Icon } from "lucide-react";
+import { Trash2Icon, Undo2Icon } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -17,6 +19,9 @@ type EnvironmentFieldControlProps = {
   onChange: (value: string) => void;
   onToggle: () => void;
   onClear: () => void;
+  /** 已点清除、尚未保存：输入框为空但语义是「将清除」，不能再提示「留空保持不变」。 */
+  pendingClear: boolean;
+  onUndoClear: () => void;
 };
 
 /**
@@ -31,6 +36,8 @@ export function EnvironmentFieldControl({
   onChange,
   onToggle,
   onClear,
+  pendingClear,
+  onUndoClear,
 }: EnvironmentFieldControlProps) {
   const inputId = `environment-${field.name}`;
   const enabled = value === true || value === "true";
@@ -85,12 +92,30 @@ export function EnvironmentFieldControl({
               min={field.minimum ?? undefined}
               max={field.maximum ?? undefined}
               value={String(value ?? "")}
-              placeholder={field.secret && field.masked ? "已配置（留空保持不变）" : field.placeholder ?? "未配置"}
+              placeholder={
+                pendingClear
+                  ? "保存后将清除已保存值"
+                  : field.secret && field.masked ? "已配置（留空保持不变）" : field.placeholder ?? "未配置"
+              }
               onChange={(event) => onChange(event.target.value)}
               aria-label={field.label}
             />
           )}
-          {field.secret && field.masked && field.clearable && (
+          {pendingClear ? (
+            <>
+              <Badge tone="warning" className="shrink-0">将清除</Badge>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="shrink-0"
+                onClick={onUndoClear}
+                aria-label={`撤销清除 ${field.label}`}
+              >
+                <Undo2Icon />撤销
+              </Button>
+            </>
+          ) : field.secret && field.masked && field.clearable && (
             <Button
               type="button"
               variant="ghost"
@@ -115,6 +140,9 @@ type EnvironmentConfigurationFormProps = {
   onChange: (field: EnvironmentField, value: string) => void;
   onToggle: (field: EnvironmentField) => void;
   onClear: (field: EnvironmentField) => void;
+  /** 已标记「将清除」但尚未保存的字段名。 */
+  pendingClears: ReadonlySet<string>;
+  onUndoClear: (field: EnvironmentField) => void;
 };
 
 /**
@@ -129,6 +157,8 @@ export function EnvironmentConfigurationForm({
   onChange,
   onToggle,
   onClear,
+  pendingClears,
+  onUndoClear,
 }: EnvironmentConfigurationFormProps) {
   return (
     <div className="space-y-5">
@@ -153,6 +183,8 @@ export function EnvironmentConfigurationForm({
                 onChange={(value) => onChange(field, value)}
                 onToggle={() => onToggle(field)}
                 onClear={() => onClear(field)}
+                pendingClear={pendingClears.has(field.name)}
+                onUndoClear={() => onUndoClear(field)}
               />
             ))}
           </div>

@@ -16,7 +16,7 @@ import {
 } from "@assistant-ui/react";
 
 import { StopButton } from "@/components/assistant/stop-button";
-import { RunIdentityDisplay } from "@/components/assistant/run-identity-display";
+import { RunDiagnosticsActions } from "@/components/assistant/run-diagnostics-actions";
 import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-display";
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
@@ -81,7 +81,7 @@ import {
   ComposerAttachments,
   InlineComposerInput,
 } from "@/components/assistant-ui/elements/attachment.aui";
-import { COMPOSER_EDITOR_CLASS_NAME } from "@/components/composer/composer-editor";
+import { COMPOSER_EDITOR_CLASS_NAME, COMPOSER_PLACEHOLDER } from "@/components/composer/composer-editor";
 import { COMPOSER_SURFACE_CLASS_NAME } from "@/components/composer/composer-surface";
 import { ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
@@ -90,7 +90,6 @@ import { notify } from "@/lib/notify";
 
 export type ThreadComponents = {
   AssistantMessage?: ComponentType;
-  Welcome?: ComponentType;
 };
 
 export type ThreadProps = {
@@ -183,8 +182,10 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY
           钉回底部。这里显式关闭 autoScroll，因为该模式默认值为 false；中途追踪底部会
           换取稳定视口。消息根节点另外通过 content-visibility 工具跳过屏幕外布局和绘制，
           当前尚未校准 intrinsic size。
+          视口不能加 CSS scroll-smooth：虚拟列表重新测量行高时会程序化修正 scrollTop，
+          平滑滚动会把这些修正变成可见的漂移；只有用户点击「回到底部」才使用平滑滚动。
         */}
-        <ThreadPrimitive.Viewport ref={viewportRef} turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth">
+        <ThreadPrimitive.Viewport ref={viewportRef} turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto">
             <div className={cn("mx-auto flex min-w-0 w-full max-w-3xl flex-1 flex-col px-4 pt-4", isEmpty && "justify-center")}>
               <VirtualizedThreadMessages
                 scrollElementRef={viewportRef}
@@ -195,11 +196,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY
               />
               {!readonly && (
                 <ThreadPrimitive.ViewportFooter className={cn("bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6", !isEmpty && "rounded-t-3xl")}>
-                  <ThreadPrimitive.ScrollToBottom
-                    render={<TooltipIconButton tooltip="回到底部" variant="outline" className="absolute -top-12 self-center rounded-full p-3 disabled:invisible" />}
-                  >
-                    <ArrowDownIcon />
-                  </ThreadPrimitive.ScrollToBottom>
+                  <ScrollToBottomButton />
                   <ComposerBoundary
                     autoFocus={autoFocus}
                     taskId={taskId}
@@ -216,6 +213,30 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY
     </ThreadContext.Provider>
   );
 });
+
+/**
+ * 「回到底部」按钮：仅在视口未贴底时可见（primitive 在贴底时禁用，样式上隐藏）。
+ * Run 流式输出期间叠加一个新输出提示点，提醒用户下方仍在产生内容。
+ */
+const ScrollToBottomButton: FC = () => {
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  const label = isRunning ? "有新输出，回到底部" : "回到底部";
+  return (
+    <ThreadPrimitive.ScrollToBottom
+      behavior="smooth"
+      render={<TooltipIconButton tooltip={label} aria-label={label} variant="outline" className="absolute -top-12 self-center rounded-full p-3 disabled:invisible" />}
+    >
+      <ArrowDownIcon />
+      {isRunning && (
+        <span
+          data-testid="scroll-to-bottom-new-output"
+          aria-hidden="true"
+          className="bg-primary ring-background absolute -top-0.5 -right-0.5 size-2.5 rounded-full ring-2 animate-pulse motion-reduce:animate-none"
+        />
+      )}
+    </ThreadPrimitive.ScrollToBottom>
+  );
+};
 
 const ComposerBoundary = memo(function ComposerBoundary({
   autoFocus,
@@ -256,7 +277,7 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
           <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
             <ComposerAttachments />
             <InlineComposerInput
-              placeholder="输入任务，例如：帮我查找登录相关代码…"
+              placeholder={COMPOSER_PLACEHOLDER}
               className={COMPOSER_EDITOR_CLASS_NAME}
               autoFocus={autoFocus}
               aria-label="消息输入"
@@ -860,12 +881,6 @@ const AssistantMessageDefault: FC = () => {
         </MessagePrimitive.GroupedParts>
         <MessageError />
       </div>
-      <RunIdentityDisplay
-        taskId={taskId}
-        runId={runId}
-        status={runStatus}
-        visible={isLastRunMessage}
-      />
       {!readonly && <RunUsageDisplay runId={runId} visible={isLastRunMessage} />}
       <ActionBarPrimitive.Root hideWhenRunning className="mt-1 flex gap-1">
         <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>
@@ -883,6 +898,12 @@ const AssistantMessageDefault: FC = () => {
             {isForking ? <Loader2Icon className="animate-spin" /> : <GitForkIcon />}
           </TooltipIconButton>
         )}
+        <RunDiagnosticsActions
+          taskId={taskId}
+          runId={runId}
+          status={runStatus}
+          visible={isLastRunMessage}
+        />
       </ActionBarPrimitive.Root>
     </MessagePrimitive.Root>
   );

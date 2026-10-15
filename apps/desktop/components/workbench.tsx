@@ -1,12 +1,20 @@
 "use client";
 
-import { XIcon, PanelRightCloseIcon, GripVerticalIcon, BotIcon } from "lucide-react";
+import { XIcon, PanelRightCloseIcon, GripVerticalIcon, BotIcon, UserCogIcon, NetworkIcon, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { WorkbenchSurface } from "@/components/workbench-surface";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import type { WorkbenchTab } from "@/lib/workbench/types";
+
+/** 标签图标按 tab 种类区分：子 Agent 运行与两类配置草稿一眼可辨。新增 kind 时此表强制补齐。 */
+const TAB_KIND_ICONS: Record<WorkbenchTab["kind"], LucideIcon> = {
+  agent: BotIcon,
+  "agent-configuration-draft": UserCogIcon,
+  "agent-team-configuration-draft": NetworkIcon,
+};
 
 export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number | null; onRequestClose: () => void }) {
   const tabs = useWorkbenchStore((state) => state.tabs);
@@ -67,7 +75,7 @@ export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number
   if (workspaceId === null || !panelOpen || tabs.length === 0) return null;
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   return (
-    <aside className="relative flex min-h-0 shrink-0 flex-col border-l bg-background" style={{ width: panelWidth }} aria-label="Workbench">
+    <aside className="relative flex min-h-0 shrink-0 flex-col border-l bg-background" style={{ width: panelWidth }} aria-label="工作台">
       <div
         className="absolute inset-y-0 -left-1 z-10 flex w-2 cursor-col-resize items-center justify-center hover:bg-primary/20"
         role="separator"
@@ -83,8 +91,10 @@ export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number
         }}
       ><GripVerticalIcon className="text-muted-foreground size-3" aria-hidden="true" /></div>
       <div className="flex min-h-12 shrink-0 items-end gap-1 border-b px-2 pt-2">
-        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto" role="tablist" aria-label="Workbench 标签页">
-          {tabs.map((tab) => (
+        <div className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto" role="tablist" aria-label="工作台标签页">
+          {tabs.map((tab) => {
+            const TabIcon = TAB_KIND_ICONS[tab.kind];
+            return (
             <div
               key={tab.id}
               className={`group flex h-9 max-w-56 min-w-0 items-center gap-1.5 rounded-t-md border border-b-0 px-2 text-xs ${tab.id === activeTab.id ? "bg-background text-foreground" : "bg-muted/40 text-muted-foreground hover:bg-muted"}`}
@@ -92,7 +102,7 @@ export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number
               role="tab"
             >
               <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => activateTab(tab.id)}>
-                <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                <TabIcon className="size-3.5 shrink-0" aria-hidden="true" />
                 <span className="truncate">{tab.title}</span>
               </button>
               <button
@@ -102,7 +112,8 @@ export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number
                 onClick={() => void requestCloseTab(tab.id)}
               ><XIcon className="size-3" aria-hidden="true" /></button>
             </div>
-          ))}
+            );
+          })}
         </div>
         <Button variant="ghost" size="icon-sm" aria-label="收起工作台" onClick={onRequestClose}><PanelRightCloseIcon /></Button>
       </div>

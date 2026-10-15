@@ -1,7 +1,8 @@
 import { Maximize2Icon, Minimize2Icon, TerminalIcon, XIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import {
   TerminalStreamConnection,
@@ -9,6 +10,20 @@ import {
 } from "./terminal-stream-connection";
 import { TerminalStreamSession } from "./terminal-stream-session";
 import { useTerminalPanelStore } from "./terminal-panel-store";
+import { terminalSessionStatusPresentation } from "./terminal-session-status";
+
+type ConnectionState = "connecting" | "connected" | "closed" | "error";
+
+/** WebSocket 连接状态的展示映射；会话自身生命周期见 terminal-session-status。 */
+const CONNECTION_STATE_PRESENTATION: Record<ConnectionState, { label: string; tone: BadgeTone; dot: string }> = {
+  connecting: { label: "连接中", tone: "warning", dot: "bg-warning" },
+  connected: { label: "已连接", tone: "success", dot: "bg-success" },
+  closed: { label: "已断开", tone: "neutral", dot: "bg-muted-foreground" },
+  error: { label: "连接异常", tone: "destructive", dot: "bg-destructive" },
+};
+
+/** 流内的临时提示（重新同步、协议错误），与会话生命周期状态分开呈现。 */
+type StreamNotice = { text: string; tone: "muted" | "destructive" };
 
 const MIN_PANEL_HEIGHT = 192;
 const DEFAULT_PANEL_HEIGHT = 320;
@@ -23,8 +38,10 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
   const sessionRef = useRef<TerminalStreamSession | null>(null);
   const resizeStartRef = useRef<{ pointerId: number; y: number; height: number } | null>(null);
   const restoreHeightRef = useRef(DEFAULT_PANEL_HEIGHT);
-  const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "closed" | "error">("connecting");
-  const [status, setStatus] = useState("connecting");
+  const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
+  // attached 之前后端尚未告知会话状态，null 表示「未知」而不是某个已知状态。
+  const [sessionStatus, setSessionStatus] = useState<string | null>(null);
+  const [notice, setNotice] = useState<StreamNotice | null>(null);
   const [exitCode, setExitCode] = useState<number | null | undefined>();
   const [panelHeight, setPanelHeight] = useState(DEFAULT_PANEL_HEIGHT);
   const [maxPanelHeight, setMaxPanelHeight] = useState(720);
@@ -53,7 +70,8 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
 
   useEffect(() => {
     setConnectionState("connecting");
-    setStatus("connecting");
+    setSessionStatus(null);
+    setNotice(null);
     setExitCode(undefined);
     const connection = new TerminalStreamConnection({
       taskId,
@@ -64,14 +82,15 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
           sessionRef.current?.write(TerminalStreamConnection.decodeOutput(event));
         } else if (event.type === "resync_required") {
           sessionRef.current?.clear();
-          setStatus("重新同步输出");
+          setNotice({ text: "正在重新同步输出", tone: "muted" });
         } else if (event.type === "attached" || event.type === "status") {
-          if (event.status) setStatus(event.status);
+          if (event.status) setSessionStatus(event.status);
+          setNotice(null);
         } else if (event.type === "exit") {
-          setStatus(event.status ?? "exited");
+          setSessionStatus(event.status ?? "exited");
           setExitCode(event.exit_code);
         } else if (event.type === "protocol_error") {
-          setStatus(text(event.message) || "协议错误");
+          setNotice({ text: text(event.message) || "协议错误", tone: "destructive" });
         }
       },
     });
@@ -79,14 +98,17 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
     return () => connection.dispose();
   }, [sessionId, taskId]);
 
-  const connectionLabel = connectionState === "connected" ? "已连接" : connectionState === "error" ? "连接异常" : connectionState === "closed" ? "已断开" : "连接中";
-  const connectionTone = connectionState === "connected"
-    ? "bg-success"
-    : connectionState === "error"
-      ? "bg-destructive"
-      : connectionState === "connecting"
-        ? "bg-warning"
-        : "bg-muted-foreground";
+  useEffect(() => {
+    if (sessionStatus === null || terminalSessionStatusPresentation(sessionStatus)) return;
+    void frontendLog("WARNING", "terminal_panel_unknown_status", "终端会话返回未登记的状态值", {
+      data: { taskId, sessionId, status: sessionStatus },
+    });
+  }, [sessionId, sessionStatus, taskId]);
+
+  const connection = CONNECTION_STATE_PRESENTATION[connectionState];
+  const session = sessionStatus === null
+    ? null
+    : terminalSessionStatusPresentation(sessionStatus) ?? { label: "未知状态", tone: "neutral" as const };
   const clampPanelHeight = (height: number) => Math.min(
     Math.max(height, MIN_PANEL_HEIGHT),
     maxPanelHeight,
@@ -154,15 +176,24 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
         <TerminalIcon className="text-muted-foreground size-4" aria-hidden="true" />
         <span className="text-foreground text-sm font-medium">终端会话</span>
         <div className="ml-auto flex min-w-0 items-center gap-2">
-          <Badge variant="outline" size="sm" className="text-foreground/80 h-5 gap-1.5 px-2">
-            <span className={cn("size-1.5 rounded-full", connectionTone)} aria-hidden="true" />
-            {connectionLabel}
-          </Badge>
-          {(status !== "running" && status !== "starting") || exitCode !== undefined ? (
-            <span className="text-muted-foreground truncate font-mono text-2xs">
-              {status !== "running" && status !== "starting" ? status : ""}
-              {exitCode !== undefined ? ` · 退出码 ${exitCode ?? "?"}` : ""}
+          {notice ? (
+            <span className={cn("truncate text-2xs", notice.tone === "destructive" ? "text-destructive" : "text-muted-foreground")}>
+              {notice.text}
             </span>
+          ) : null}
+          <Badge variant="outline" tone={connection.tone} size="sm" className="gap-1.5" data-testid="terminal-panel-connection">
+            <span className={cn("size-1.5 rounded-full", connection.dot)} aria-hidden="true" />
+            {connection.label}
+          </Badge>
+          {session ? (
+            <Badge variant="soft" tone={session.tone} size="sm" data-testid="terminal-panel-session-status">
+              {session.label}
+            </Badge>
+          ) : null}
+          {exitCode !== undefined ? (
+            <Badge variant="tint" shape="tag" size="sm" className="font-mono">
+              退出码 {exitCode ?? "?"}
+            </Badge>
           ) : null}
         </div>
         <button

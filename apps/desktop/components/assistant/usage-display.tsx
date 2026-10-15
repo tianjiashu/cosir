@@ -143,6 +143,37 @@ function toneClass(tone: UsageTone): string {
   return "bg-muted-foreground/40";
 }
 
+/** 触发器文字色：只有需要用户留意的占用才着色，正常态保持安静的次要色。 */
+function triggerToneClass(tone: UsageTone): string {
+  if (tone === "critical") return "text-destructive hover:text-destructive";
+  if (tone === "warning") return "text-warning hover:text-warning";
+  return "text-muted-foreground hover:text-foreground";
+}
+
+const RING_RADIUS = 6;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+/** 触发器内的紧凑占用环；仅作视觉提示，可访问的数值由弹层内的 progressbar 提供。 */
+function UsageRing({ percent, tone }: { percent: number; tone: UsageTone }): ReactElement {
+  return (
+    <svg viewBox="0 0 16 16" className="size-3.5 -rotate-90" aria-hidden="true" data-testid="task-context-usage-ring">
+      <circle cx="8" cy="8" r={RING_RADIUS} fill="none" strokeWidth="2.5" className="stroke-muted-foreground/25" />
+      <circle
+        cx="8"
+        cy="8"
+        r={RING_RADIUS}
+        fill="none"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        stroke="currentColor"
+        strokeDasharray={RING_CIRCUMFERENCE}
+        strokeDashoffset={RING_CIRCUMFERENCE * (1 - percent / 100)}
+        className={cn("transition-[stroke-dashoffset]", tone === "normal" && "text-primary")}
+      />
+    </svg>
+  );
+}
+
 function statusLabel(status: ContextUsagePresentation["status"]): string {
   if (status === "normal") return "正常";
   if (status === "warning") return "接近上限";
@@ -166,12 +197,21 @@ export function TaskContextUsage(): ReactElement {
           <button
             type="button"
             data-testid="task-context-usage"
-            aria-label={presentation.label}
-            className="text-muted-foreground hover:text-foreground inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs transition-colors"
+            aria-label={presentation.status === "normal" || presentation.status === "unknown"
+              ? presentation.label
+              : `${presentation.label}，${statusLabel(presentation.status)}`}
+            data-tone={presentation.tone}
+            className={cn(
+              "inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs transition-colors",
+              triggerToneClass(presentation.tone),
+              presentation.tone === "critical" || presentation.tone === "warning" ? "font-medium" : null,
+            )}
           />
         }
       >
-        <GaugeIcon className="size-3.5" aria-hidden="true" />
+        {presentation.status === "unknown"
+          ? <GaugeIcon className="size-3.5" aria-hidden="true" />
+          : <UsageRing percent={percent} tone={presentation.tone} />}
         <span className="hidden sm:inline">{presentation.label}</span>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 max-w-[calc(100vw-1rem)]">

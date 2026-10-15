@@ -1,0 +1,152 @@
+"use client";
+
+import type { ReactNode } from "react";
+import {
+  MessageSquarePlusIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  Settings2Icon,
+} from "lucide-react";
+
+import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
+import type { DeleteTarget } from "@/components/layout/use-workspace-actions";
+import { ResourceActionMenu } from "@/components/resource-action-menu";
+import { WorkspaceTree } from "@/components/task-tree/workspace-tree";
+import { Button } from "@/components/ui/button";
+import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
+import type { WorkspaceTask } from "@/lib/api/workspaces";
+import { withShortcut, type AppShortcutId } from "@/lib/shortcuts";
+import { cn } from "@/lib/utils";
+
+export type SidebarSection = "conversation" | "settings" | "workspace-settings" | "observer";
+
+type AppSidebarProps = {
+  catalog: WorkspaceCatalog;
+  focusedTaskId: number | null;
+  section: SidebarSection;
+  /** rail：仅图标；expanded：完整侧栏（宽屏停靠或窄屏抽屉）。 */
+  variant: "rail" | "expanded";
+  onToggle: () => void;
+  onNewConversation: () => void;
+  onSelectTask: (task: WorkspaceTask, workspaceId: number) => void;
+  onOpenSettings: () => void;
+  onOpenWorkspaceSettings: (workspaceId: number) => void;
+  onOpenObserver: () => void;
+  onRequestDelete: (target: DeleteTarget) => void;
+};
+
+/**
+ * 应用侧栏：新对话、工作区 / 任务树、底部的配置与开发者入口。
+ *
+ * 只负责呈现与转发用户意图；停靠 / 抽屉 / 图标栏的切换由 AppLayout 根据视口与偏好决定。
+ * 所有文字都不换行并截断——侧栏宽度在动画中变化时，换行会把中文逐字竖排。
+ */
+export function AppSidebar({
+  catalog,
+  focusedTaskId,
+  section,
+  variant,
+  onToggle,
+  onNewConversation,
+  onSelectTask,
+  onOpenSettings,
+  onOpenWorkspaceSettings,
+  onOpenObserver,
+  onRequestDelete,
+}: AppSidebarProps) {
+  const rail = variant === "rail";
+  const { workspaces, status, error, load } = catalog;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-hidden whitespace-nowrap">
+      <div className={cn("flex h-14 shrink-0 items-center border-b px-3", rail ? "justify-center" : "justify-between")}>
+        {!rail && <span className="truncate text-sm font-semibold">工作区</span>}
+        <Button variant="ghost" size="icon-sm" onClick={onToggle} aria-label={rail ? "展开侧栏" : "收起侧栏"} title={withShortcut(rail ? "展开侧栏" : "收起侧栏", "toggleSidebar")}>
+          {rail ? <PanelLeftOpenIcon /> : <PanelLeftCloseIcon />}
+        </Button>
+      </div>
+
+      {rail ? (
+        <div className="flex flex-col items-center gap-1 p-2">
+          <Button variant="ghost" size="icon" onClick={onNewConversation} aria-label="新对话" title={withShortcut("新对话", "newConversation")}>
+            <MessageSquarePlusIcon />
+          </Button>
+        </div>
+      ) : (
+        <>
+          <div className="flex shrink-0 gap-2 p-3">
+            <Button className="min-w-0 flex-1 justify-start gap-2" onClick={onNewConversation} title={withShortcut("新对话", "newConversation")}>
+              <MessageSquarePlusIcon className="size-4" />
+              <span className="truncate">新对话</span>
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => void load()} disabled={status === "loading"} aria-label="刷新工作区">
+              <RefreshCwIcon className={status === "loading" ? "animate-spin" : ""} />
+            </Button>
+          </div>
+          <nav className="flex min-h-0 flex-1 flex-col px-2 pb-4" aria-label="工作区任务列表">
+            <p className="text-muted-foreground shrink-0 truncate px-2 pb-2 text-xs font-medium">我的工作区</p>
+            {status === "loading" && <LoadingState size="compact" label="正在加载工作区…" className="px-2" />}
+            {status === "error" && <ErrorState className="mx-2 text-xs" message={error} onRetry={() => void load()} />}
+            {status === "ready" && workspaces.length === 0 && <EmptyState size="compact" title="暂无工作区" description="在新对话页添加一个本机目录作为工作区。" className="px-2" />}
+            {workspaces.length > 0 && (
+              <div className="min-h-0 flex-1">
+                <WorkspaceTree
+                  workspaces={workspaces}
+                  activeTaskId={section === "conversation" ? focusedTaskId : null}
+                  selectedWorkspaceId={catalog.selectedWorkspaceId}
+                  expandedWorkspaceIds={catalog.expandedWorkspaceIds}
+                  onWorkspaceExpansionChange={catalog.updateWorkspaceExpansion}
+                  onSelectWorkspace={catalog.selectWorkspace}
+                  onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+                  onSelectTask={onSelectTask}
+                  renderWorkspaceActions={(workspace) => (
+                    <ResourceActionMenu
+                      label={workspace.name}
+                      onDelete={() => onRequestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })}
+                    />
+                  )}
+                  renderTaskActions={(task) => (
+                    <ResourceActionMenu label={task.full_title} onDelete={() => onRequestDelete({ kind: "task", id: task.task_id, label: task.full_title })} />
+                  )}
+                />
+              </div>
+            )}
+          </nav>
+        </>
+      )}
+
+      <div className={cn("mt-auto shrink-0 border-t", rail ? "flex flex-col items-center gap-1 p-2" : "p-3")}>
+        <SidebarLink rail={rail} active={section === "settings"} icon={<Settings2Icon className="size-4" />} label="系统配置" shortcut="openSettings" onClick={onOpenSettings} />
+        {!rail && <p className="text-muted-foreground mt-3 mb-1 px-3 text-2xs font-medium">开发者</p>}
+        <SidebarLink rail={rail} active={section === "observer"} icon={<SearchIcon className="size-4" />} label="上下文观测" onClick={onOpenObserver} />
+      </div>
+    </div>
+  );
+}
+
+function SidebarLink({ rail, active, icon, label, shortcut, onClick }: {
+  rail: boolean;
+  active: boolean;
+  icon: ReactNode;
+  label: string;
+  shortcut?: AppShortcutId;
+  onClick: () => void;
+}) {
+  const title = shortcut ? withShortcut(label, shortcut) : label;
+  return (
+    <Button
+      variant={active ? "secondary" : "ghost"}
+      size={rail ? "icon" : "default"}
+      className={cn(!rail && "w-full justify-start gap-2")}
+      onClick={onClick}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      title={rail ? title : shortcut ? title : undefined}
+    >
+      {icon}
+      {!rail && <span className="truncate">{label}</span>}
+    </Button>
+  );
+}

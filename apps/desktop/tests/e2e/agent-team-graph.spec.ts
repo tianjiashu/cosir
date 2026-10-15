@@ -40,7 +40,7 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
 
   await page.addInitScript(() => window.localStorage.clear());
   await page.goto("/settings");
-  await page.getByRole("button", { name: "Agent Team 配置", exact: true }).click();
+  await page.getByRole("navigation", { name: "系统配置分类" }).getByRole("link", { name: "Agent Team", exact: true }).click();
   await page.getByRole("button", { name: "新建 Team" }).click();
   await page.getByRole("button", { name: "画布" }).click();
   await expect(page.getByLabel("Team ID")).toBeHidden();
@@ -274,7 +274,7 @@ test("Agent Team 保存把校验交给后端并在失败时弹窗保留草稿", 
 
   await page.addInitScript(() => window.localStorage.clear());
   await page.goto("/settings");
-  await page.getByRole("button", { name: "Agent Team 配置", exact: true }).click();
+  await page.getByRole("navigation", { name: "系统配置分类" }).getByRole("link", { name: "Agent Team", exact: true }).click();
   await page.getByRole("button", { name: "新建 Team" }).click();
   await page.getByLabel("Team ID").fill("invalid id");
   await page.getByLabel("Team 名称").fill("Validation test");
@@ -322,7 +322,7 @@ test("添加转移不再弹出前端校验提示，未完成草稿提交给后�
 
   await page.addInitScript(() => window.localStorage.clear());
   await page.goto("/settings");
-  await page.getByRole("button", { name: "Agent Team 配置", exact: true }).click();
+  await page.getByRole("navigation", { name: "系统配置分类" }).getByRole("link", { name: "Agent Team", exact: true }).click();
   await page.getByRole("button", { name: "新建 Team" }).click();
   await page.getByRole("button", { name: "添加转移" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);

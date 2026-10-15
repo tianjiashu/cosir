@@ -36,7 +36,8 @@ export type ModelSelectorEffortOption = {
   name: string;
 };
 
-const EFFORT_OPTION_LABELS: Record<string, string> = { low: "Low", high: "High", max: "Max" };
+/** 推理强度的展示名；取值仍是 REASONING_EFFORT_VALUES，系统配置的推理强度下拉也复用这份标签。 */
+const EFFORT_OPTION_LABELS: Record<(typeof REASONING_EFFORT_VALUES)[number], string> = { low: "低", high: "高", max: "最高" };
 
 export const DEFAULT_EFFORT_OPTIONS: readonly ModelSelectorEffortOption[] = REASONING_EFFORT_VALUES.map(
   (id) => ({ id, name: EFFORT_OPTION_LABELS[id] }),
@@ -330,7 +331,7 @@ function ModelIcon({
 }
 
 function ModelSelectorValue({
-  placeholder = "Select model",
+  placeholder = "选择模型",
   showEffort = true,
   className,
 }: ModelSelectorValueProps) {
@@ -421,7 +422,7 @@ function useLazyFlipSide(): {
 function ModelSelectorFocusAnchor() {
   return (
     <div className="sr-only">
-      <CommandInput readOnly aria-label="Model" />
+      <CommandInput readOnly aria-label="模型" />
     </div>
   );
 }
@@ -476,7 +477,7 @@ export type ModelSelectorSearchProps = ComponentPropsWithoutRef<
 >;
 
 function ModelSelectorSearch({
-  placeholder = "Search models...",
+  placeholder = "搜索模型…",
   ...props
 }: ModelSelectorSearchProps) {
   return (
@@ -529,7 +530,7 @@ export type ModelSelectorEmptyProps = ComponentPropsWithoutRef<
 function ModelSelectorEmpty({ children, ...props }: ModelSelectorEmptyProps) {
   return (
     <CommandEmpty data-slot="model-selector-empty" {...props}>
-      {children ?? "No models found."}
+      {children ?? "没有匹配的模型"}
     </CommandEmpty>
   );
 }
@@ -613,7 +614,7 @@ export type ModelSelectorEffortProps = ComponentPropsWithoutRef<"div"> & {
 };
 
 function ModelSelectorEffort({
-  label = "Thinking",
+  label = "思考",
   className,
   onKeyDown,
   ...props
@@ -653,7 +654,7 @@ function ModelSelectorEffort({
         value={effort ?? ""}
         onValueChange={setEffort}
         orientation="horizontal"
-        aria-label={typeof label === "string" ? label : "Reasoning effort"}
+        aria-label={typeof label === "string" ? label : "推理强度"}
         className="flex items-center gap-0.5"
       >
         {efforts.map((option) => (

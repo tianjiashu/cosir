@@ -16,7 +16,7 @@ test("直接打开不存在的 Task 会显示错误而不是永久等待", async
   await page.goto("/tasks/9999");
 
   await expect(page.getByText("task not found", { exact: true })).toBeVisible();
-  await expect(page.getByText("正在加载任务工作区…", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("task-thread-skeleton")).toHaveCount(0);
 });
 
 test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输入", async ({ page, request }) => {
@@ -51,7 +51,7 @@ test("工具追踪视觉回归：Reasoning 和工具组都有图标且完成后�
   await page.goto("/tasks/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
-  await expect(assistant.getByText("Reasoning", { exact: true })).toBeVisible();
+  await expect(assistant.getByText("思考过程", { exact: true })).toBeVisible();
   await expect(assistant.getByText("2 个工具调用 · 全部成功", { exact: true })).toBeVisible();
   await expect(assistant.locator('[data-slot="reasoning-trigger-icon"]')).toHaveCount(1);
   await expect(assistant.locator('[data-slot="tool-group-trigger-icon"]')).toHaveCount(1);
@@ -110,7 +110,7 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
   const assistant = page.locator('[data-role="assistant"]').last();
-  await expect(assistant.getByText("Reasoning", { exact: true })).toBeVisible();
+  await expect(assistant.getByText("思考过程", { exact: true })).toBeVisible();
   await expect(assistant.getByText(/正在推理/)).toBeVisible();
   await expect(assistant.locator('[data-slot="reasoning-content"]')).toBeVisible();
 
@@ -122,7 +122,7 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
   }).toBeGreaterThan(0);
   await expect(assistant.getByText("推理完成", { exact: true })).toHaveCount(0);
 
-  await assistant.getByRole("button", { name: "Reasoning" }).click();
+  await assistant.getByRole("button", { name: "思考过程" }).click();
   await expect(assistant.getByText("推理完成", { exact: true })).toBeVisible();
 });
 

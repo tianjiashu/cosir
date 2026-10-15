@@ -15,9 +15,9 @@ type TaskWorkspaceLayoutProps = {
 export function TaskWorkspaceLayout({ children, bottomPanel }: TaskWorkspaceLayoutProps) {
   return (
     <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {children}
-      </main>
+      </div>
       {bottomPanel}
     </div>
   );

@@ -1,9 +1,9 @@
 "use client";
 
-import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorState } from "@/components/ui/state-panel";
 import { useAssistantInitialState } from "@/hooks/use-assistant-initial-state";
 import { AssistantRuntime } from "@/components/assistant/assistant-runtime";
+import { ThreadSkeleton } from "@/components/assistant/thread-skeleton";
 import { useState } from "react";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
 
@@ -20,7 +20,7 @@ import type { InitialConversationAttachment } from "@/components/new-conversatio
  * 消息投递、runtime 装配等子职责（已拆至 components/assistant/ 下）。
  *
  * @param taskId - 当前任务 id。
- * @returns 加载中显示骨架屏；出错显示错误提示与「重试」按钮；就绪后挂载对话 runtime。
+ * @returns 加载中显示与 TaskPage 共用的 ThreadSkeleton；出错显示错误提示与「重试」按钮；就绪后挂载对话 runtime。
  */
 export const Assistant = ({
   taskId,
@@ -49,7 +49,7 @@ export const Assistant = ({
   onTaskStateChanged?: () => void;
   onRunStateChange?: (isRunning: boolean) => void;
 }) => {
-  // WorkspaceShell may finish its task-list refresh after the snapshot request.
+  // AppLayout may finish its task-list refresh after the snapshot request.
   // Freeze the workspace identity for this task session so that a late parent
   // refresh cannot replace the Assistant UI transport while a run is active.
   const [sessionWorkspaceId] = useState(workspaceId);
@@ -63,15 +63,7 @@ export const Assistant = ({
     );
   }
 
-  if (!initialState) {
-    return (
-      <div className="flex h-full min-h-0 flex-col gap-3 p-5">
-        <Skeleton className="h-16 w-2/3" />
-        <Skeleton className="h-16 w-3/4" />
-        <Skeleton className="h-16 w-1/2" />
-      </div>
-    );
-  }
+  if (!initialState) return <ThreadSkeleton />;
 
   return (
     <AssistantRuntime

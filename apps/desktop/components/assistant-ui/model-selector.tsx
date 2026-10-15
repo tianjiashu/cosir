@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { RefreshCwIcon, SparklesIcon } from "lucide-react";
+import { SparklesIcon } from "lucide-react";
 import { useAui } from "@assistant-ui/react";
 
 import {
@@ -15,6 +15,7 @@ import {
   DEFAULT_EFFORT_OPTIONS as BACKEND_REASONING_EFFORTS,
   type ModelOption,
 } from "@/components/model-selector";
+import { ModelAvailability } from "@/components/model/model-availability";
 import { ModelConfigPanel } from "@/components/assistant-ui/model-config-panel";
 import { useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
 import {
@@ -204,17 +205,14 @@ function StandaloneModelSelector(props: Omit<ModelSelectorProps, "runtimeModelCo
     props.onReadyChange?.(status === "ready" && selection !== null);
   }, [props.onReadyChange, selection, status]);
 
-  if (status === "loading" || status === "idle") {
-    return <span className="text-muted-foreground inline-flex h-8 items-center gap-1.5 px-2 text-xs"><SparklesIcon className="size-3.5 animate-pulse" />加载模型…</span>;
-  }
-  if (status === "error") {
-    return <div className="flex items-center gap-1"><button type="button" onClick={() => void retry()} className="text-destructive hover:bg-destructive/10 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs"><RefreshCwIcon className="size-3.5" />模型加载失败，重试</button><ModelConfigPanel onChanged={() => void retry()} /></div>;
-  }
-  if (!catalog || !selection) {
-    return <div className="flex items-center gap-1"><span className="text-muted-foreground inline-flex h-8 items-center px-2 text-xs">暂无可用模型</span><ModelConfigPanel onChanged={() => void retry()} /></div>;
-  }
-
-  return <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />;
+  const configure = <ModelConfigPanel onChanged={() => void retry()} />;
+  return (
+    <ModelAvailability status={status} modelCount={catalog?.models.length ?? 0} onRetry={() => void retry()} configure={configure}>
+      {selection && catalog && (
+        <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />
+      )}
+    </ModelAvailability>
+  );
 }
 
 function RuntimeModelSelector(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
@@ -240,14 +238,14 @@ function RuntimeModelSelector(props: Omit<ModelSelectorProps, "runtimeModelConte
     props.onReadyChange?.(status === "ready" && selection !== null);
   }, [props.onReadyChange, selection, status]);
 
-  if (status === "error") {
-    return <div className="flex items-center gap-1"><button type="button" onClick={() => void retry()} className="text-destructive hover:bg-destructive/10 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs"><RefreshCwIcon className="size-3.5" />模型加载失败，重试</button><ModelConfigPanel onChanged={() => void retry()} /></div>;
-  }
-  if (status !== "ready" || !catalog || !selection) {
-    return <span className="text-muted-foreground inline-flex h-8 items-center gap-1.5 px-2 text-xs"><SparklesIcon className="size-3.5 animate-pulse" />加载模型…</span>;
-  }
-
-  return <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />;
+  const configure = <ModelConfigPanel onChanged={() => void retry()} />;
+  return (
+    <ModelAvailability status={status} modelCount={catalog?.models.length ?? 0} onRetry={() => void retry()} configure={configure}>
+      {selection && catalog && (
+        <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />
+      )}
+    </ModelAvailability>
+  );
 }
 
 export function ModelSelector(props: ModelSelectorProps) {

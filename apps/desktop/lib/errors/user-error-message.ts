@@ -27,25 +27,26 @@ export function userErrorMessage(error: unknown, fallback: string): string {
   }
 }
 
+/** 框架默认的状态短语（小写比较：不同框架 / 代理的大小写不一致）。 */
 const FRAMEWORK_STATUS_PHRASES = new Set([
-  "Bad Request",
-  "Unauthorized",
-  "Forbidden",
-  "Not Found",
-  "Method Not Allowed",
-  "Conflict",
-  "Unprocessable Entity",
-  "Unprocessable Content",
-  "Too Many Requests",
-  "Internal Server Error",
-  "Bad Gateway",
-  "Service Unavailable",
+  "bad request",
+  "unauthorized",
+  "forbidden",
+  "not found",
+  "method not allowed",
+  "conflict",
+  "unprocessable entity",
+  "unprocessable content",
+  "too many requests",
+  "internal server error",
+  "bad gateway",
+  "service unavailable",
 ]);
 
 function httpMessage(error: HttpError): string | null {
   const message = error.message.trim();
   const generic = !message
-    || FRAMEWORK_STATUS_PHRASES.has(message)
+    || FRAMEWORK_STATUS_PHRASES.has(message.toLowerCase())
     || message.startsWith("HTTP request failed with status");
   if (!generic) return message;
   if (error.status === 404) return "请求的内容不存在或已被删除";
