@@ -228,10 +228,6 @@ test("不同 task 的 Assistant Transport 会话与消息互相隔离", async ({
 });
 
 test("停止按钮通过后端取消当前 run，且不会复用后续命令", async ({ page, request }) => {
-  // 已知产品回归（87159f0d 起）：attach-only 请求返回非 2xx 时被归为 request-rejected，
-  // use-runtime-transport 的 handleSendError 弹「发送失败」后直接 return，走不到 attach 失败后
-  // 读取 canonical snapshot 的恢复分支，「resumed response」永远不出现。修复后删除本行。
-  test.fail(true, "attach 非 2xx 失败未回到 snapshot recovery（产品回归，见上方注释）");
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 102, title: "任务102" } });
   await page.addInitScript(() => {
     window.localStorage.clear();

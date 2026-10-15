@@ -1,20 +1,34 @@
 import { useCallback, useEffect, useRef } from "react";
 
-import { createTimeoutAbort } from "@/lib/async/abort-timeout";
-import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
+import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import {
   currentTransportRun,
   transportMessageCount,
 } from "@/lib/assistant/transport-state-operations";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 import type { TransportState } from "@/lib/assistant/contract";
+import type { TransportIssue } from "@/components/assistant/transport-status";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
+
+export type RecoveryReason = "transport_finished" | "retry_after_failure" | "user_resync" | "backend_restored";
 
 export type RuntimeRecovery = {
   reconcileAfterTransportFinish: (target?: { runId: number | null; status: string | null }) => Promise<void>;
+  /** 连接已建立或新命令开始：连续失败计数清零，取消待执行的恢复。 */
   resetTransportRecoveryBudget: () => void;
+  /**
+   * 显式原地重新对齐（「重新同步」按钮、后端恢复）：清零预算后立即读取 canonical
+   * snapshot；运行中则继续订阅，已结束则导入快照。会话、草稿与附件都不卸载。
+   */
+  resync: (reason: "user_resync" | "backend_restored", issue?: TransportIssue | null) => void;
+  /** 后端不可用：停止计时器与在途读取，等待 resync("backend_restored")。 */
+  suspend: () => void;
 };
 
+/**
+ * 有界恢复只统计「连续」失败：每次成功建立连接都会经 resetTransportRecoveryBudget
+ * 清零，长 Run 中偶发的断流（如 backpressure 触发的 resync_required EOF）不会累积耗尽预算。
+ */
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAYS_MS = [0, 250, 500, 1_000, 2_000] as const;
 const RECONCILE_TIMEOUT_MS = 15_000;
@@ -23,17 +37,15 @@ function findRun(state: TransportState, runId: number | null) {
   return runId === null ? undefined : state.runs.find((run) => run.runId === runId);
 }
 
-/** Own backend changes and bounded Transport snapshot recovery orchestration. */
+function isActiveStatus(status: string | null | undefined): boolean {
+  return status === "pending" || status === "running";
+}
+
+/** 会话内唯一的 Transport snapshot 对账编排：断流恢复、手动重新同步与后端恢复都走这里。 */
 export function useRuntimeRecovery(
   context: RuntimeSessionContext,
   hasActiveCancellation?: () => boolean,
 ): RuntimeRecovery {
-  const previousBackendRuntimeGenerationRef = useRef(context.backendRuntimeGeneration);
-  const previousBackendRuntimeAvailableRef = useRef(context.backendRuntimeAvailable);
-  const backendRuntimeAvailableRef = useRef(context.backendRuntimeAvailable);
-  const backendRuntimeGenerationRef = useRef(context.backendRuntimeGeneration);
-  backendRuntimeAvailableRef.current = context.backendRuntimeAvailable;
-  backendRuntimeGenerationRef.current = context.backendRuntimeGeneration;
   const reconnectAttemptRef = useRef(0);
   const reconcileInFlightRef = useRef(false);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -66,123 +78,114 @@ export function useRuntimeRecovery(
     };
   }, []);
 
-  const reconcileAfterTransportFinish = useCallback(async (
+  /** 计时器触发时仍属于同一轮恢复、同一后端实例才继续。 */
+  const scheduleOnSameBackend = useCallback((delay: number, action: () => void) => {
+    const scheduledGeneration = recoveryGenerationRef.current;
+    const scheduledBackendGeneration = context.backendRef.current.generation;
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      if (
+        disposedRef.current
+        || !context.backendRef.current.available
+        || scheduledGeneration !== recoveryGenerationRef.current
+        || scheduledBackendGeneration !== context.backendRef.current.generation
+      ) return;
+      action();
+    }, delay);
+  }, [context.backendRef]);
+
+  const reconcile = useCallback(async function reconcile(
+    reason: RecoveryReason,
     target?: { runId: number | null; status: string | null },
-  ) => {
+  ): Promise<void> {
     if (hasActiveCancellation?.()) return;
     if (
       disposedRef.current
-      || !backendRuntimeAvailableRef.current
+      || !context.backendRef.current.available
       || reconcileInFlightRef.current
       || reconnectTimerRef.current !== null
     ) return;
     if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
-      context.setIssue({ message: "本机后端连接多次中断，请重试恢复对话。", canResync: true });
+      context.setIssue({ message: "本机后端连接多次中断，请重新同步恢复对话。", canResync: true });
       return;
     }
 
     const attempt = reconnectAttemptRef.current;
     const generation = recoveryGenerationRef.current;
+    const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 2_000;
     reconnectAttemptRef.current += 1;
+
+    const knownRun = target?.runId === null || target?.runId === undefined
+      ? currentTransportRun(context.latestStateRef.current)
+      : findRun(context.latestStateRef.current, target.runId);
+    const knownStatus = target?.status ?? knownRun?.status ?? null;
+    void frontendLog("INFO", "assistant_transport_reconcile_started", "Assistant Transport 开始有界恢复", {
+      traceId: context.traceId,
+      data: {
+        taskId: context.taskId,
+        reason,
+        lastRunId: context.latestStateRef.current.current_run_id,
+        lastRunStatus: knownStatus,
+        attempt: attempt + 1,
+      },
+    });
+
+    // 流结束时已知 Run 仍在运行：直接重新 attach，不必先读快照。
+    if (reason === "transport_finished" && knownRun && isActiveStatus(knownStatus)) {
+      const scheduledRunId = target?.runId ?? knownRun.runId;
+      scheduleOnSameBackend(delay, () => {
+        if (context.cancelRequestedRunIdRef.current === scheduledRunId) return;
+        const latestRun = findRun(context.latestStateRef.current, scheduledRunId);
+        if (!latestRun || !isActiveStatus(latestRun.status)) return;
+        void context.attachTransportRef.current?.();
+      });
+      void frontendLog("INFO", "assistant_transport_reconcile_attach_scheduled", "已安排原子 attach 恢复流", {
+        traceId: context.traceId,
+        data: { taskId: context.taskId, runId: scheduledRunId, delay, attempt: attempt + 1 },
+      });
+      return;
+    }
+
     reconcileInFlightRef.current = true;
-    const { controller, signal, clear } = createTimeoutAbort(RECONCILE_TIMEOUT_MS);
+    const controller = new AbortController();
     reconcileAbortControllerRef.current = controller;
     try {
-      void frontendLog("INFO", "assistant_transport_reconcile_started", "Assistant Transport 流结束后开始有界恢复", {
+      const outcome = await fetchCanonicalSnapshot(context.taskId, {
+        reason,
+        timeoutMs: RECONCILE_TIMEOUT_MS,
         traceId: context.traceId,
-        data: {
-          taskId: context.taskId,
-          lastRunId: context.latestStateRef.current.current_run_id,
-          lastRunStatus: currentTransportRun(context.latestStateRef.current)?.status ?? null,
-          attempt: attempt + 1,
-        },
+        signal: controller.signal,
       });
-
-      const knownRun = target?.runId === null || target?.runId === undefined
-        ? currentTransportRun(context.latestStateRef.current)
-        : findRun(context.latestStateRef.current, target.runId);
-      const knownStatus = target?.status ?? knownRun?.status ?? null;
-      if (knownRun && (knownStatus === "pending" || knownStatus === "running")) {
-        const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 2_000;
-        const scheduledRunId = target?.runId ?? knownRun.runId;
-        const scheduledGeneration = recoveryGenerationRef.current;
-        const scheduledBackendGeneration = backendRuntimeGenerationRef.current;
-        reconnectTimerRef.current = window.setTimeout(() => {
-          reconnectTimerRef.current = null;
-          if (
-            disposedRef.current
-            || !backendRuntimeAvailableRef.current
-            || scheduledGeneration !== recoveryGenerationRef.current
-            || scheduledBackendGeneration !== backendRuntimeGenerationRef.current
-            || context.cancelRequestedRunIdRef.current === scheduledRunId
-          ) return;
-          const latestRun = findRun(context.latestStateRef.current, scheduledRunId);
-          if (
-            !latestRun
-            || latestRun.runId !== scheduledRunId
-            || (latestRun.status !== "pending" && latestRun.status !== "running")
-          ) return;
-          void context.attachTransportRef.current?.();
-        }, delay);
-        void frontendLog("INFO", "assistant_transport_reconcile_attach_scheduled", "已安排原子 attach 恢复流", {
-          traceId: context.traceId,
-          data: { taskId: context.taskId, runId: scheduledRunId, delay, attempt: attempt + 1 },
-        });
-        return;
-      }
-
-      const snapshot = await requestAssistantSnapshot(context.taskId, {
-        signal,
-        traceId: context.traceId,
-      });
+      // superseded：后端已变化或本轮被取代，由后端恢复入口 / 新一轮恢复负责对齐。
       if (
-        disposedRef.current
-        || !backendRuntimeAvailableRef.current
+        outcome.kind === "superseded"
+        || disposedRef.current
         || hasActiveCancellation?.()
-        || controller.signal.aborted
         || generation !== recoveryGenerationRef.current
       ) return;
+      const snapshot = outcome.snapshot;
       context.latestStateRef.current = snapshot;
-
+      const current = currentTransportRun(snapshot);
       void frontendLog("INFO", "assistant_transport_reconcile_completed", "Assistant Transport 最新快照已读取", {
         traceId: context.traceId,
         data: {
           taskId: context.taskId,
+          reason,
           runId: snapshot.current_run_id,
-          runStatus: currentTransportRun(snapshot)?.status ?? null,
+          runStatus: current?.status ?? null,
           messageCount: transportMessageCount(snapshot),
         },
       });
 
-      if (
-        disposedRef.current
-        || !backendRuntimeAvailableRef.current
-        || hasActiveCancellation?.()
-        || generation !== recoveryGenerationRef.current
-      ) return;
-      const status = currentTransportRun(snapshot)?.status;
-      if (status === "pending" || status === "running") {
-        const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 2_000;
+      // 运行中的 Run 由 resume 重新订阅，订阅流会带回完整状态；只有终态才直接导入快照。
+      if (isActiveStatus(current?.status)) {
         const scheduledRunId = snapshot.current_run_id;
-        const scheduledGeneration = recoveryGenerationRef.current;
-        const scheduledBackendGeneration = backendRuntimeGenerationRef.current;
-        reconnectTimerRef.current = window.setTimeout(() => {
-          reconnectTimerRef.current = null;
-          if (
-            disposedRef.current
-            || !backendRuntimeAvailableRef.current
-            || scheduledGeneration !== recoveryGenerationRef.current
-            || scheduledBackendGeneration !== backendRuntimeGenerationRef.current
-            || (scheduledRunId !== null && context.cancelRequestedRunIdRef.current === scheduledRunId)
-          ) return;
+        scheduleOnSameBackend(delay, () => {
+          if (scheduledRunId !== null && context.cancelRequestedRunIdRef.current === scheduledRunId) return;
           const latestRun = currentTransportRun(context.latestStateRef.current);
-          if (
-            !latestRun
-            || latestRun.runId !== scheduledRunId
-            || (latestRun.status !== "pending" && latestRun.status !== "running")
-          ) return;
+          if (!latestRun || latestRun.runId !== scheduledRunId || !isActiveStatus(latestRun.status)) return;
           context.runtimeControlsRef.current?.resume();
-        }, delay);
+        });
         return;
       }
 
@@ -190,11 +193,10 @@ export function useRuntimeRecovery(
       context.runtimeControlsRef.current?.importState(snapshot);
       context.setIssue(null);
     } catch (error) {
+      // fetchCanonicalSnapshot 已把取消与后端变化收敛为 superseded；到这里的都是真实失败（含超时）。
       if (
         disposedRef.current
-        || !backendRuntimeAvailableRef.current
         || hasActiveCancellation?.()
-        || controller.signal.aborted
         || generation !== recoveryGenerationRef.current
       ) return;
       context.setIssue({
@@ -202,57 +204,38 @@ export function useRuntimeRecovery(
         canResync: true,
       });
       if (reconnectAttemptRef.current < MAX_RECONNECT_ATTEMPTS) {
-        const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 2_000;
-        const scheduledGeneration = recoveryGenerationRef.current;
-        reconnectTimerRef.current = window.setTimeout(() => {
-          reconnectTimerRef.current = null;
-          if (
-            disposedRef.current
-            || !backendRuntimeAvailableRef.current
-            || scheduledGeneration !== recoveryGenerationRef.current
-            || hasActiveCancellation?.()
-          ) return;
-          void reconcileAfterTransportFinish();
-        }, delay);
+        scheduleOnSameBackend(delay, () => {
+          if (hasActiveCancellation?.()) return;
+          void reconcile("retry_after_failure");
+        });
       }
     } finally {
-      clear();
       if (reconcileAbortControllerRef.current === controller) {
         reconcileAbortControllerRef.current = null;
       }
       if (generation === recoveryGenerationRef.current) reconcileInFlightRef.current = false;
     }
-  }, [context, hasActiveCancellation, resetTransportRecoveryBudget]);
+  }, [context, hasActiveCancellation, resetTransportRecoveryBudget, scheduleOnSameBackend]);
 
-  useEffect(() => {
-    const previousGeneration = previousBackendRuntimeGenerationRef.current;
-    const previousAvailable = previousBackendRuntimeAvailableRef.current;
-    previousBackendRuntimeGenerationRef.current = context.backendRuntimeGeneration;
-    previousBackendRuntimeAvailableRef.current = context.backendRuntimeAvailable;
-    const generationChanged = previousGeneration !== context.backendRuntimeGeneration;
-    const runtimeRecovered = !previousAvailable && context.backendRuntimeAvailable;
-    if (!generationChanged && !runtimeRecovered) return;
+  const reconcileAfterTransportFinish = useCallback(
+    (target?: { runId: number | null; status: string | null }) => reconcile("transport_finished", target),
+    [reconcile],
+  );
 
-    void frontendLog("INFO", "assistant_backend_runtime_changed", "Assistant 后端实例已变化", {
-      traceId: context.traceId,
-      data: {
-        taskId: context.taskId,
-        previousGeneration,
-        generation: context.backendRuntimeGeneration,
-        runtimeRecovered,
-        backendBaseUrl: context.backendBaseUrl,
-      },
-    });
-
-    // 后端实例变化后，无论前端旧缓存是 active 还是 terminal，都必须以 canonical
-    // snapshot 重新对齐。active Run 会继续 attach，cancelled Run 则只恢复按钮资格。
+  const resync = useCallback((reason: "user_resync" | "backend_restored", issue?: TransportIssue | null) => {
     resetTransportRecoveryBudget();
-    context.setIssue({ message: "本机后端已重启，正在同步当前对话…", canResync: true });
-    void reconcileAfterTransportFinish();
-  }, [context, reconcileAfterTransportFinish, resetTransportRecoveryBudget]);
+    if (issue !== undefined) context.setIssue(issue);
+    void reconcile(reason);
+  }, [context, reconcile, resetTransportRecoveryBudget]);
+
+  const suspend = useCallback(() => {
+    resetTransportRecoveryBudget();
+  }, [resetTransportRecoveryBudget]);
 
   return {
     reconcileAfterTransportFinish,
     resetTransportRecoveryBudget,
+    resync,
+    suspend,
   };
 }

@@ -16,6 +16,7 @@ import type {
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportState } from "@/lib/assistant/contract";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
+import type { BackendRuntimeSnapshot } from "@/src/runtime-config";
 
 type AssistantThreadSurfaceProps = Pick<
   AssistantRuntimeProps,
@@ -30,8 +31,7 @@ type AssistantThreadSurfaceProps = Pick<
   | "onRunStateChange"
 > & {
   initialState: TransportState;
-  backendAvailable: boolean;
-  backendGeneration: number;
+  backendRef: MutableRefObject<BackendRuntimeSnapshot>;
   resumeOnMount: boolean;
   attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;
   registerRuntimeControls: (controls: RuntimeControls | null) => void;
@@ -69,8 +69,7 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
   onForkRun,
   onRunStateChange,
   initialState,
-  backendAvailable,
-  backendGeneration,
+  backendRef,
   resumeOnMount,
   attachTransportRef,
   registerRuntimeControls,
@@ -93,8 +92,7 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
     <>
       <RuntimeControlBridge
         register={registerRuntimeControls}
-        backendAvailable={backendAvailable}
-        backendGeneration={backendGeneration}
+        backendRef={backendRef}
         resumeOnMount={resumeOnMount}
         attachTransportRef={attachTransportRef}
       />

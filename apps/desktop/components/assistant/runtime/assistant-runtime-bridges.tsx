@@ -11,6 +11,7 @@ import type {
   RuntimeControls,
 } from "@/components/assistant/runtime/runtime-types";
 import type { PickedComposerAttachment } from "@/components/composer/attachment-picker";
+import type { BackendRuntimeSnapshot } from "@/src/runtime-config";
 import {
   getLocalAttachment,
   registerLocalAttachment,
@@ -74,45 +75,45 @@ function readRuntimeRun(value: unknown): RuntimeRunDiagnostic | undefined {
   return typeof run === "object" && run !== null ? run as RuntimeRunDiagnostic : undefined;
 }
 
+/**
+ * 向会话注册 runtime 控制（resume / importState），并在挂载时为仍在运行的 Run 发起一次 attach。
+ *
+ * 挂载时后端不可用则不发起：后端恢复后由会话的后端变化入口（recovery.resync）统一对账并续订，
+ * 避免这里与恢复入口各自 attach 一次。
+ */
 export function RuntimeControlBridge({
   register,
-  backendAvailable,
-  backendGeneration,
+  backendRef,
   resumeOnMount,
   attachTransportRef,
 }: {
   register: (controls: RuntimeControls | null) => void;
-  backendAvailable: boolean;
-  backendGeneration: number;
+  backendRef: MutableRefObject<BackendRuntimeSnapshot>;
   resumeOnMount: boolean;
   attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;
 }) {
   const aui = useAui();
   const initialResumeIssuedRef = useRef(false);
-  const backendAvailableRef = useRef(backendAvailable);
-  const backendGenerationRef = useRef(backendGeneration);
-  backendAvailableRef.current = backendAvailable;
-  backendGenerationRef.current = backendGeneration;
 
   useEffect(() => {
     register({
       resume: () => {
-        if (backendAvailableRef.current) void attachTransportRef.current?.();
+        if (backendRef.current.available) void attachTransportRef.current?.();
       },
       importState: (state) => aui.thread.importExternalState(state),
     });
     return () => register(null);
-  }, [attachTransportRef, aui, register]);
+  }, [attachTransportRef, aui, backendRef, register]);
 
   useEffect(() => {
-    if (!backendAvailable || !resumeOnMount || initialResumeIssuedRef.current) return;
+    if (!backendRef.current.available || !resumeOnMount || initialResumeIssuedRef.current) return;
     let cancelled = false;
-    const scheduledBackendGeneration = backendGeneration;
+    const scheduledBackendGeneration = backendRef.current.generation;
     const timer = window.setTimeout(() => {
       if (
         cancelled
-        || !backendAvailableRef.current
-        || backendGenerationRef.current !== scheduledBackendGeneration
+        || !backendRef.current.available
+        || backendRef.current.generation !== scheduledBackendGeneration
         || initialResumeIssuedRef.current
       ) return;
       initialResumeIssuedRef.current = true;
@@ -122,7 +123,7 @@ export function RuntimeControlBridge({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [attachTransportRef, backendAvailable, backendGeneration, resumeOnMount]);
+  }, [attachTransportRef, backendRef, resumeOnMount]);
 
   return null;
 }

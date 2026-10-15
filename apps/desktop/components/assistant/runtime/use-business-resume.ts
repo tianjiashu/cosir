@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import { jsonRequestInit, requestRaw } from "@/lib/http/client";
-import { createTimeoutAbort } from "@/lib/async/abort-timeout";
-import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
+import { createTimeoutAbort, isCancelledAbort } from "@/lib/async/abort-timeout";
+import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
@@ -38,15 +38,11 @@ export function useBusinessResume(
   const generationRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const disposedRef = useRef(false);
-  const backendAvailableRef = useRef(context.backendRuntimeAvailable);
-  const backendGenerationRef = useRef(context.backendRuntimeGeneration);
-  const previousBackendGenerationRef = useRef(context.backendRuntimeGeneration);
+  const backendRef = context.backendRef;
   const uncertainResumeRef = useRef<UncertainBusinessResume | null>(null);
   const acceptedBusinessRunIdRef = useRef<number | null>(null);
   const activeRequestRunIdRef = useRef<number | null>(null);
   const phaseRef = useRef<"idle" | "business-starting" | "attach-pending">("idle");
-  backendAvailableRef.current = context.backendRuntimeAvailable;
-  backendGenerationRef.current = context.backendRuntimeGeneration;
 
   const cancelBusinessResume = useCallback(() => {
     const runId = activeRequestRunIdRef.current;
@@ -69,16 +65,6 @@ export function useBusinessResume(
     };
   }, [cancelBusinessResume]);
 
-  useEffect(() => {
-    if (!context.backendRuntimeAvailable) cancelBusinessResume();
-  }, [cancelBusinessResume, context.backendRuntimeAvailable]);
-
-  useEffect(() => {
-    const previousGeneration = previousBackendGenerationRef.current;
-    previousBackendGenerationRef.current = context.backendRuntimeGeneration;
-    if (previousGeneration !== context.backendRuntimeGeneration) cancelBusinessResume();
-  }, [cancelBusinessResume, context.backendRuntimeGeneration]);
-
   const markBusinessResumeAccepted = useCallback((runId: number, stage: BusinessResumeAcceptedStage) => {
     acceptedBusinessRunIdRef.current = runId;
     phaseRef.current = "attach-pending";
@@ -87,27 +73,28 @@ export function useBusinessResume(
 
   const reconcileUncertainResume = useCallback(async (runId: number): Promise<boolean> => {
     if (uncertainResumeRef.current?.runId !== runId) return false;
-    if (!backendAvailableRef.current) throw new Error("本机后端当前不可用，无法确认继续运行结果");
+    if (!backendRef.current.available) throw new Error("本机后端当前不可用，无法确认继续运行结果");
 
     const generation = ++generationRef.current;
-    const { controller, signal, clear } = createTimeoutAbort(BUSINESS_RESUME_TIMEOUT_MS);
-    const requestBackendGeneration = backendGenerationRef.current;
+    const controller = new AbortController();
     activeRequestRunIdRef.current = runId;
     phaseRef.current = "business-starting";
     abortControllerRef.current = controller;
     const isCurrent = () => !disposedRef.current
-      && !signal.aborted
       && generation === generationRef.current
-      && backendAvailableRef.current
-      && requestBackendGeneration === backendGenerationRef.current
       && context.latestStateRef.current.current_run_id === runId
       && context.cancelRequestedRunIdRef.current !== runId;
     try {
-      const snapshot = await requestAssistantSnapshot(context.taskId, {
-        signal,
+      const outcome = await fetchCanonicalSnapshot(context.taskId, {
+        reason: "business_resume_uncertain",
+        timeoutMs: BUSINESS_RESUME_TIMEOUT_MS,
         traceId: context.traceId,
+        signal: controller.signal,
       });
-      if (!isCurrent()) throw new Error("本机后端实例已变化，暂不能确认继续运行结果");
+      if (outcome.kind === "superseded" || !isCurrent()) {
+        throw new Error("本机后端实例已变化，暂不能确认继续运行结果");
+      }
+      const snapshot = outcome.snapshot;
 
       context.latestStateRef.current = snapshot;
       const currentRun = currentTransportRun(snapshot);
@@ -124,7 +111,6 @@ export function useBusinessResume(
       phaseRef.current = "idle";
       throw new Error("当前运行已不处于可恢复状态，请重新同步");
     } finally {
-      clear();
       if (abortControllerRef.current === controller) abortControllerRef.current = null;
       if (activeRequestRunIdRef.current === runId) activeRequestRunIdRef.current = null;
     }
@@ -133,7 +119,7 @@ export function useBusinessResume(
   const resumeBusinessRun = useCallback(() => {
     if (inFlightRef.current) return inFlightRef.current;
     if (disposedRef.current) return Promise.resolve();
-    if (!backendAvailableRef.current) {
+    if (!backendRef.current.available) {
       return Promise.reject(new Error("本机后端当前不可用，无法继续运行"));
     }
 
@@ -174,7 +160,7 @@ export function useBusinessResume(
     }
 
     const generation = ++generationRef.current;
-    const runtimeGeneration = context.backendRuntimeGeneration;
+    const runtimeGeneration = backendRef.current.generation;
     activeRequestRunIdRef.current = runId;
     phaseRef.current = "business-starting";
     const { controller, signal, clear } = createTimeoutAbort(BUSINESS_RESUME_TIMEOUT_MS);
@@ -183,8 +169,8 @@ export function useBusinessResume(
     const isCurrent = () => !disposedRef.current
       && !controller.signal.aborted
       && generation === generationRef.current
-      && backendAvailableRef.current
-      && runtimeGeneration === backendGenerationRef.current
+      && backendRef.current.available
+      && runtimeGeneration === backendRef.current.generation
       && context.latestStateRef.current.current_run_id === runId
       && context.cancelRequestedRunIdRef.current !== runId;
 
@@ -234,7 +220,7 @@ export function useBusinessResume(
           };
           phaseRef.current = "business-starting";
         }
-        if (controller.signal.aborted || generation !== generationRef.current || disposedRef.current) {
+        if (isCancelledAbort(controller.signal) || generation !== generationRef.current || disposedRef.current) {
           return;
         }
         throw error;

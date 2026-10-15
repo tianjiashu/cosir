@@ -5,8 +5,9 @@ import type { TransportState } from "@/lib/assistant/contract";
 /**
  * 读取并校验任务的 canonical Assistant Transport snapshot。
  *
- * 该模块只拥有 snapshot endpoint 的地址拼接和 wire-schema 校验；重试、
- * 取消、generation 以及结果如何投影到 runtime，仍由各自的生命周期用例负责。
+ * 该模块只拥有 snapshot endpoint 的地址拼接和 wire-schema 校验。会话内的读取
+ * 统一经 `canonical-snapshot.ts` 的 `fetchCanonicalSnapshot`（超时、取消、后端代守卫），
+ * 不要直接调用本函数；重试与结果如何投影到 runtime 仍由各自的恢复用例负责。
  */
 export async function requestAssistantSnapshot(
   taskId: number,

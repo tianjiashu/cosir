@@ -1,52 +1,19 @@
 "use client";
 
-import { Loader2Icon, Trash2Icon } from "lucide-react";
+import { Trash2Icon } from "lucide-react";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+import { ConfirmDialog, type ConfirmDialogProps } from "@/components/confirm-dialog";
 
-type DeleteConfirmDialogProps = {
-  open: boolean;
-  title: string;
-  description: string;
-  warning?: string;
-  error?: string | null;
-  busy?: boolean;
-  onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
-};
+type DeleteConfirmDialogProps = Omit<ConfirmDialogProps, "confirmLabel" | "busyLabel" | "confirmIcon">;
 
-export function DeleteConfirmDialog({
-  open,
-  title,
-  description,
-  warning,
-  error,
-  busy = false,
-  onOpenChange,
-  onConfirm,
-}: DeleteConfirmDialogProps) {
+/** 删除类确认：固定「确认删除 / 删除中…」文案与图标。 */
+export function DeleteConfirmDialog(props: DeleteConfirmDialogProps) {
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => { if (!busy) onOpenChange(nextOpen); }}>
-      <DialogContent>
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-        {warning && <p className="text-destructive rounded-md bg-destructive/10 px-3 py-2 text-sm">{warning}</p>}
-        {error && <p className="text-destructive text-sm">{error}</p>}
-        <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>取消</Button>
-          <Button type="button" variant="destructive" onClick={onConfirm} disabled={busy}>
-            {busy ? <Loader2Icon className="animate-spin" /> : <Trash2Icon />}
-            {busy ? "删除中…" : "确认删除"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmDialog
+      {...props}
+      confirmLabel="确认删除"
+      busyLabel="删除中…"
+      confirmIcon={<Trash2Icon />}
+    />
   );
 }

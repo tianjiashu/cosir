@@ -1,45 +1,77 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2Icon, RotateCwIcon } from "lucide-react";
+import { useCallback, useState } from "react";
+import { RotateCwIcon } from "lucide-react";
 
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
-import { canRestartBackendRuntime, restartBackendRuntime } from "@/src/runtime-config";
+import { Spinner } from "@/components/ui/spinner";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { canRestartBackendRuntime, restartBackendRuntime } from "@/src/runtime-config";
 
-export function BackendRestartButton() {
+/**
+ * 用户显式「重启后端」的唯一入口：顶栏开发期按钮与后端状态横幅共用。
+ *
+ * 重启由 Tauri supervisor 执行并重置其崩溃恢复预算；失败状态由
+ * runtime-config 发布给横幅，这里只负责 busy 态与结构化日志，不另行展示错误。
+ * `source` 只用于区分日志来源。
+ */
+export function useBackendRestart(source: "header" | "status_banner") {
   const [restarting, setRestarting] = useState(false);
 
-  if (!canRestartBackendRuntime()) return null;
-
-  const restart = async () => {
-    if (restarting) return;
+  const restart = useCallback(async () => {
     setRestarting(true);
-    void frontendLog("INFO", "backend_restart_requested", "用户请求重启本地后端");
+    void frontendLog("INFO", "backend_restart_requested", "用户请求重启本地后端", { data: { source } });
     try {
       await restartBackendRuntime();
-      void frontendLog("INFO", "backend_restart_completed", "本地后端重启完成");
+      void frontendLog("INFO", "backend_restart_completed", "本地后端重启完成", { data: { source } });
     } catch (error) {
-      void frontendLog("ERROR", "backend_restart_failed", "本地后端重启失败", { error });
+      void frontendLog("ERROR", "backend_restart_failed", "本地后端重启失败", { data: { source }, error });
     } finally {
       setRestarting(false);
     }
-  };
+  }, [source]);
+
+  return { restarting, restart };
+}
+
+/**
+ * 开发期顶栏的重启按钮。后端就绪时重启会中断所有运行中的任务，因此必须二次确认；
+ * 中断的 Run 由后端收敛为 cancelled，用户可在对话中继续。
+ */
+export function BackendRestartButton() {
+  const { restarting, restart } = useBackendRestart("header");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  if (!canRestartBackendRuntime()) return null;
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      onClick={() => void restart()}
-      disabled={restarting}
-      aria-label={restarting ? "正在重启后端" : "重启后端"}
-      title="重启本地后端；运行中的任务会中断，可在对话中恢复"
-    >
-      {restarting
-        ? <Loader2Icon className="animate-spin" />
-        : <RotateCwIcon />}
-      {restarting ? "重启中…" : "重启后端"}
-    </Button>
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setConfirmOpen(true)}
+        disabled={restarting}
+        aria-label={restarting ? "正在重启后端" : "重启后端"}
+      >
+        {restarting ? <Spinner label={null} /> : <RotateCwIcon />}
+        {restarting ? "重启中…" : "重启后端"}
+      </Button>
+      <ConfirmDialog
+        open={confirmOpen}
+        title="重启本地后端？"
+        description="后端会停止并重新启动，期间无法发送消息。"
+        warning="所有正在运行的任务都会被中断；重启后可在对话中继续运行。"
+        busy={restarting}
+        confirmLabel="重启后端"
+        busyLabel="重启中…"
+        confirmIcon={<RotateCwIcon />}
+        onOpenChange={setConfirmOpen}
+        onConfirm={() => {
+          void restart().finally(() => setConfirmOpen(false));
+        }}
+      />
+    </>
   );
 }

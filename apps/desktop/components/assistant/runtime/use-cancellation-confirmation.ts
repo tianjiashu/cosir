@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 
-import { createTimeoutAbort } from "@/lib/async/abort-timeout";
+import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
-import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 
@@ -15,6 +14,10 @@ export type CancellationConfirmation = {
   confirmCancellation: (runId: number, onConfirmationEnded?: () => void) => void;
   cancellationSettled: (runId: number) => void;
   hasActiveConfirmation: () => boolean;
+  /** 后端不可用：暂停确认轮询，保留待确认的 runId 与总时限。 */
+  suspendForBackend: () => void;
+  /** 后端恢复：对仍待确认的取消重新读取权威状态。 */
+  resumeAfterBackendRestored: () => void;
 };
 
 /**
@@ -25,13 +28,7 @@ export type CancellationConfirmation = {
 export function useCancellationConfirmation(
   context: RuntimeSessionContext,
 ): CancellationConfirmation {
-  const previousBackendAvailableRef = useRef(context.backendRuntimeAvailable);
-  const previousBackendGenerationRef = useRef(context.backendRuntimeGeneration);
-  const backendAvailableRef = useRef(context.backendRuntimeAvailable);
-  const backendGenerationRef = useRef(context.backendRuntimeGeneration);
-  backendAvailableRef.current = context.backendRuntimeAvailable;
-  backendGenerationRef.current = context.backendRuntimeGeneration;
-
+  const backendRef = context.backendRef;
   const cancellationGenerationRef = useRef(0);
   const cancellationAttemptRef = useRef(0);
   const cancellationRunIdRef = useRef<number | null>(null);
@@ -108,7 +105,7 @@ export function useCancellationConfirmation(
     const remainingMs = Math.max(0, deadlineAt - Date.now());
     cancellationDeadlineRef.current = window.setTimeout(() => {
       cancellationDeadlineRef.current = null;
-      if (!backendAvailableRef.current || disposedRef.current) return;
+      if (!backendRef.current.available || disposedRef.current) return;
       finishCancellationUnconfirmed(runId);
       void frontendLog("WARNING", "assistant_cancel_reconcile_deadline_reached", "停止请求状态确认超过总时限", {
         traceId: context.traceId,
@@ -131,7 +128,7 @@ export function useCancellationConfirmation(
   ): Promise<void> {
     if (
       disposedRef.current
-      || !backendAvailableRef.current
+      || !backendRef.current.available
       || generation !== cancellationGenerationRef.current
       || cancellationRunIdRef.current !== runId
       || cancellationInFlightRef.current
@@ -143,13 +140,9 @@ export function useCancellationConfirmation(
     }
 
     const attempt = cancellationAttemptRef.current;
-    const backendGeneration = backendGenerationRef.current;
     cancellationAttemptRef.current += 1;
     cancellationInFlightRef.current = true;
-    let timedOut = false;
-    const { controller, signal, clear } = createTimeoutAbort(RECONCILE_TIMEOUT_MS, () => {
-      timedOut = true;
-    });
+    const controller = new AbortController();
     cancellationAbortControllerRef.current = controller;
 
     const scheduleNextCheck = () => {
@@ -171,15 +164,19 @@ export function useCancellationConfirmation(
         traceId: context.traceId,
         data: { taskId: context.taskId, runId, attempt: attempt + 1 },
       });
-      const snapshot = await requestAssistantSnapshot(context.taskId, { signal, traceId: context.traceId });
+      const outcome = await fetchCanonicalSnapshot(context.taskId, {
+        reason: "cancellation_confirmation",
+        timeoutMs: RECONCILE_TIMEOUT_MS,
+        traceId: context.traceId,
+        signal: controller.signal,
+      });
       if (
-        disposedRef.current
-        || !backendAvailableRef.current
-        || backendGeneration !== backendGenerationRef.current
+        outcome.kind === "superseded"
+        || disposedRef.current
         || generation !== cancellationGenerationRef.current
-        || controller.signal.aborted
         || cancellationRunIdRef.current !== runId
       ) return;
+      const snapshot = outcome.snapshot;
 
       const requestedRun = snapshot.runs.find((run) => run.runId === runId);
       const status = requestedRun?.status;
@@ -211,14 +208,14 @@ export function useCancellationConfirmation(
       ) {
         clearNewerRunAttachTimer();
         const settledGeneration = cancellationGenerationRef.current;
-        const settledBackendGeneration = backendGenerationRef.current;
+        const settledBackendGeneration = backendRef.current.generation;
         newerRunAttachTimerRef.current = window.setTimeout(() => {
           newerRunAttachTimerRef.current = null;
           if (
             disposedRef.current
-            || !backendAvailableRef.current
+            || !backendRef.current.available
             || settledGeneration !== cancellationGenerationRef.current
-            || settledBackendGeneration !== backendGenerationRef.current
+            || settledBackendGeneration !== backendRef.current.generation
             || context.cancelRequestedRunIdRef.current === currentRun.runId
           ) return;
           const latestRun = currentTransportRun(context.latestStateRef.current);
@@ -229,13 +226,12 @@ export function useCancellationConfirmation(
         }, 0);
       }
     } catch (error) {
+      // 取消与后端变化已收敛为 superseded；到这里的都是真实失败（含超时），按预算重试。
       if (
         disposedRef.current
-        || !backendAvailableRef.current
         || generation !== cancellationGenerationRef.current
         || cancellationRunIdRef.current !== runId
       ) return;
-      if (!timedOut && controller.signal.aborted) return;
       if (cancellationAttemptRef.current < MAX_CANCELLATION_CHECKS) {
         scheduleNextCheck();
       } else {
@@ -247,7 +243,6 @@ export function useCancellationConfirmation(
         });
       }
     } finally {
-      clear();
       if (cancellationAbortControllerRef.current === controller) {
         cancellationAbortControllerRef.current = null;
       }
@@ -257,47 +252,35 @@ export function useCancellationConfirmation(
     }
   }, [clearNewerRunAttachTimer, context, finishCancellationUnconfirmed, stopCancellationConfirmation]);
 
-  useEffect(() => {
-    const previousAvailable = previousBackendAvailableRef.current;
-    const previousGeneration = previousBackendGenerationRef.current;
-    const generationChanged = previousGeneration !== context.backendRuntimeGeneration;
-    const becameUnavailable = previousAvailable && !context.backendRuntimeAvailable;
-    const becameAvailable = !previousAvailable && context.backendRuntimeAvailable;
-    previousBackendAvailableRef.current = context.backendRuntimeAvailable;
-    previousBackendGenerationRef.current = context.backendRuntimeGeneration;
-
-    if (generationChanged || becameUnavailable) {
-      cancellationGenerationRef.current += 1;
-      cancellationAttemptRef.current = 0;
-      cancellationAbortControllerRef.current?.abort();
-      cancellationAbortControllerRef.current = null;
-      cancellationInFlightRef.current = false;
-      if (cancellationTimerRef.current !== null) {
-        window.clearTimeout(cancellationTimerRef.current);
-        cancellationTimerRef.current = null;
-      }
-      if (cancellationDeadlineRef.current !== null) {
-        window.clearTimeout(cancellationDeadlineRef.current);
-        cancellationDeadlineRef.current = null;
-      }
-      clearNewerRunAttachTimer();
+  const suspendForBackend = useCallback(() => {
+    cancellationGenerationRef.current += 1;
+    cancellationAttemptRef.current = 0;
+    cancellationAbortControllerRef.current?.abort();
+    cancellationAbortControllerRef.current = null;
+    cancellationInFlightRef.current = false;
+    if (cancellationTimerRef.current !== null) {
+      window.clearTimeout(cancellationTimerRef.current);
+      cancellationTimerRef.current = null;
     }
-
-    if (context.backendRuntimeAvailable) {
-      if ((becameAvailable || generationChanged) && cancellationRunIdRef.current !== null) {
-        scheduleCancellationDeadline(cancellationRunIdRef.current);
-        void reconcileCancellation(
-          cancellationRunIdRef.current,
-          cancellationGenerationRef.current,
-        );
-      }
-      return;
+    if (cancellationDeadlineRef.current !== null) {
+      window.clearTimeout(cancellationDeadlineRef.current);
+      cancellationDeadlineRef.current = null;
     }
-  }, [context.backendRuntimeAvailable, context.backendRuntimeGeneration, reconcileCancellation, scheduleCancellationDeadline]);
+    clearNewerRunAttachTimer();
+  }, [clearNewerRunAttachTimer]);
+
+  const resumeAfterBackendRestored = useCallback(() => {
+    // 换代时先作废旧实例上的轮询，再在新实例上重新确认；总时限沿用最初的截止时间。
+    suspendForBackend();
+    const runId = cancellationRunIdRef.current;
+    if (runId === null) return;
+    scheduleCancellationDeadline(runId);
+    void reconcileCancellation(runId, cancellationGenerationRef.current);
+  }, [reconcileCancellation, scheduleCancellationDeadline, suspendForBackend]);
 
   const confirmCancellation = useCallback((runId: number, onConfirmationEnded?: () => void) => {
     stopCancellationConfirmation();
-    if (disposedRef.current || !backendAvailableRef.current) return;
+    if (disposedRef.current || !backendRef.current.available) return;
     cancellationRunIdRef.current = runId;
     cancellationOnEndedRef.current = onConfirmationEnded;
     const generation = cancellationGenerationRef.current;
@@ -313,5 +296,11 @@ export function useCancellationConfirmation(
 
   const hasActiveConfirmation = useCallback(() => cancellationRunIdRef.current !== null, []);
 
-  return { confirmCancellation, cancellationSettled, hasActiveConfirmation };
+  return {
+    confirmCancellation,
+    cancellationSettled,
+    hasActiveConfirmation,
+    suspendForBackend,
+    resumeAfterBackendRestored,
+  };
 }

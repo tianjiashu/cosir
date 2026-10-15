@@ -1,5 +1,5 @@
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { memo, useCallback, useState } from "react";
+import { memo } from "react";
 
 import { AssistantThreadSurface } from "@/components/assistant/runtime/assistant-thread-surface";
 import { useRuntimeTransport } from "@/components/assistant/runtime/use-runtime-transport";
@@ -93,8 +93,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
         onForkRun={onForkRun}
         onRunStateChange={onRunStateChange}
         initialState={context.initialState}
-        backendAvailable={context.backendRuntimeAvailable}
-        backendGeneration={context.backendRuntimeGeneration}
+        backendRef={context.backendRef}
         resumeOnMount={resumeOnMount}
         attachTransportRef={context.attachTransportRef}
         registerRuntimeControls={registerRuntimeControls}

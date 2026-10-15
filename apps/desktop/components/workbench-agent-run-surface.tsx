@@ -7,7 +7,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { AssistantAttachController } from "@/lib/assistant/assistant-attach-controller";
-import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
+import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import { useTaskAssistantReadonlyTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
 import type { TransportState } from "@/lib/assistant/contract";
 import { HttpError } from "@/lib/http/errors";
@@ -17,6 +17,7 @@ import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtim
 
 const MAX_AUTOMATIC_RESYNCS = 2;
 const RESYNC_DELAYS_MS = [300, 900];
+const SNAPSHOT_TIMEOUT_MS = 15_000;
 
 function AttachBridge({ runId, backendAvailable, controller }: { runId: number | null; backendAvailable: boolean; controller: AssistantAttachController }) {
   useEffect(() => {
@@ -126,20 +127,19 @@ export function WorkbenchAgentRunSurface({ taskId, onClose }: { taskId: number; 
       setError("本机后端暂不可用，正在等待恢复…");
       return;
     }
-    const requestBackendGeneration = backendRuntime.generation;
-    const isCurrentBackend = () => {
-      const latestBackendRuntime = getBackendRuntimeSnapshot();
-      return latestBackendRuntime.available && latestBackendRuntime.generation === requestBackendGeneration;
-    };
-    void requestAssistantSnapshot(taskId, { signal: controller.signal })
-      .then((snapshot) => {
-        if (controller.signal.aborted || !isCurrentBackend()) return;
+    void fetchCanonicalSnapshot(taskId, {
+      reason: "workbench_child_run",
+      timeoutMs: SNAPSHOT_TIMEOUT_MS,
+      signal: controller.signal,
+    })
+      .then((outcome) => {
+        // superseded：卸载 / 切换 task，或后端在请求期间变化（本 effect 会随后端快照重新发起）。
+        if (outcome.kind === "superseded") return;
         setStale(false);
         setError(null);
-        setState(snapshot);
+        setState(outcome.snapshot);
       })
       .catch((cause: unknown) => {
-        if (controller.signal.aborted || !isCurrentBackend()) return;
         if (cause instanceof HttpError && cause.status === 404) {
           void frontendLog("WARNING", "workbench_agent_stale", "Workbench 子 Agent 进入 stale 状态", {
             data: { taskId, status: cause.status },

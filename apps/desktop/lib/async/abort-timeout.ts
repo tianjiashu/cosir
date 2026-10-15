@@ -2,6 +2,11 @@
  * 超时中止工具：统一替换散落各处的
  * `new AbortController()` + `setTimeout(() => controller.abort())` + `finally clearTimeout`
  * 样板，并统一使用全局 `setTimeout`/`clearTimeout`（避免 globalThis/window 混用）。
+ *
+ * 超时以 `TimeoutError` 作为 abort reason，与调用方主动取消（无 reason 的
+ * `controller.abort()`，reason 为 `AbortError`）区分：超时是一次失败，必须进入
+ * 调用方的错误 / 重试分支；主动取消才是「结果已不需要」，可以静默丢弃。
+ * 只看 `signal.aborted` 会把两者混为一谈，曾导致恢复请求超时后静默退出、界面卡在运行中。
  */
 
 export type TimeoutAbort = {
@@ -13,22 +18,37 @@ export type TimeoutAbort = {
   clear: () => void;
 };
 
+/** 创建超时 abort reason；fetch 会以它作为拒绝原因抛出，`error.name === "TimeoutError"`。 */
+function timeoutReason(ms: number): DOMException {
+  return new DOMException(`请求在 ${ms}ms 内未完成`, "TimeoutError");
+}
+
 /**
- * 创建一个在 `ms` 毫秒后自动 abort 的 AbortController。
+ * 创建一个在 `ms` 毫秒后以 `TimeoutError` 自动 abort 的 AbortController。
  *
  * @param ms - 超时毫秒数。
- * @param onTimeout - 超时时额外执行的回调（如置位超时标志），可选。
  * @returns 含 controller、signal 与 clear 清理函数。
  */
-export function createTimeoutAbort(ms: number, onTimeout?: () => void): TimeoutAbort {
+export function createTimeoutAbort(ms: number): TimeoutAbort {
   const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-    onTimeout?.();
-  }, ms);
+  const timer = setTimeout(() => controller.abort(timeoutReason(ms)), ms);
   return {
     controller,
     signal: controller.signal,
     clear: () => clearTimeout(timer),
   };
+}
+
+/** signal 是否因超时而中止。 */
+export function isTimeoutAbort(signal: AbortSignal): boolean {
+  return signal.aborted && signal.reason instanceof DOMException && signal.reason.name === "TimeoutError";
+}
+
+/**
+ * signal 是否被调用方主动取消（卸载、被新请求取代等）。
+ *
+ * 只有这种情况允许静默丢弃结果；超时必须按失败处理。
+ */
+export function isCancelledAbort(signal: AbortSignal): boolean {
+  return signal.aborted && !isTimeoutAbort(signal);
 }

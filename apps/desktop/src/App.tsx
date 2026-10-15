@@ -1,13 +1,12 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import { BackendStartupScreen } from "@/components/backend-startup-screen";
 import { WorkspaceShell } from "@/components/workspace-shell";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
+import { Button } from "@/components/ui/button";
 import {
   initializeBackendRuntime,
   restartBackendRuntime,
-  getBackendStatusSnapshot,
-  subscribeBackendStatus,
   startBackendRuntimeMonitor,
 } from "@/src/runtime-config";
 
@@ -67,22 +66,25 @@ function BootFailure({ error, onRetry }: { error: string; onRetry: () => void })
           <h1 id="backend-boot-failure-title" className="text-lg font-semibold">Cosir 后端未能启动</h1>
           <p id="backend-boot-failure-message" className="text-muted-foreground text-sm">{error}</p>
         </div>
-        <button type="button" className="underline" onClick={onRetry}>重试</button>
+        <Button type="button" variant="outline" onClick={onRetry}>重试</Button>
       </section>
     </main>
   );
 }
 
+/**
+ * 启动门禁：只负责首次就绪之前（启动页 → 就绪 / BootFailure）。
+ *
+ * 首次就绪后界面树始终保持挂载；运行期的 starting / failed / stopped 由
+ * WorkspaceShell 内的 BackendStatusBanner 呈现，任务页、草稿和 Assistant 会话
+ * 不随后端状态卸载，后端恢复后由会话原地对账。BootFailure 的重试即重启后端：
+ * 此时 supervisor 已放弃启动，不存在可被中断的运行。
+ */
 function DesktopApp() {
   const [retryToken, setRetryToken] = useState(0);
   const [boot, setBoot] = useState<"starting" | "ready" | "failed">("starting");
   const [showApp, setShowApp] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const runtimeStatus = useSyncExternalStore(
-    subscribeBackendStatus,
-    getBackendStatusSnapshot,
-    getBackendStatusSnapshot,
-  );
 
   useEffect(() => {
     let active = true;
@@ -115,9 +117,6 @@ function DesktopApp() {
   }, [boot]);
 
   if (boot === "failed") return <BootFailure key={retryToken} error={error ?? "启动失败"} onRetry={() => { setBoot("starting"); setError(null); setRetryToken((value) => value + 1); }} />;
-  if (boot === "ready" && runtimeStatus?.state === "failed") {
-    return <BootFailure key={retryToken} error={runtimeStatus.message} onRetry={() => { setBoot("starting"); setError(null); setRetryToken((value) => value + 1); }} />;
-  }
   if (boot !== "ready") return <BackendStartupScreen />;
 
   return (

@@ -5,6 +5,7 @@ import type { InitialConversationAttachment } from "@/components/new-conversatio
 import type { TransportState } from "@/lib/assistant/contract";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportIssue } from "@/components/assistant/transport-status";
+import type { BackendRuntimeSnapshot } from "@/src/runtime-config";
 
 export type AssistantRuntimeProps = {
   taskId: number;
@@ -38,8 +39,11 @@ export type RuntimeSessionContext = {
   workspaceRoot?: string;
   initialState: TransportState;
   backendBaseUrl: string;
-  backendRuntimeGeneration: number;
-  backendRuntimeAvailable: boolean;
+  /**
+   * 当前后端实例的最新快照，由会话在每次渲染时写入。计时器与异步回调读取它判断
+   * 后端是否仍可用；后端变化的边沿只由 useBackendTransitions 检测一次。
+   */
+  backendRef: MutableRefObject<BackendRuntimeSnapshot>;
   traceId: string;
   performanceProbe: AssistantPerformanceProbe | null;
   setIssue: (issue: TransportIssue | null) => void;

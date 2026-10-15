@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
-import { createTimeoutAbort } from "@/lib/async/abort-timeout";
 import {
   extractUserAddMessageAttachments,
   extractUserAddMessageText,
@@ -8,7 +7,7 @@ import {
   getUserAddMessageSourceId,
 } from "@/lib/assistant/converter";
 import { modelContextToTransportFields, selectionToTransportFields } from "@/lib/assistant/model-request-adapter";
-import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
+import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import { parseTransportError } from "@/lib/assistant/transport-error";
 import { getModelCatalogSnapshot } from "@/lib/model-catalog";
 import { readStoredSelection } from "@/lib/model-selection-storage";
@@ -54,10 +53,6 @@ export function useRuntimeTransport(
   const recoveryIssueTimerRef = useRef<number | null>(null);
   const errorSnapshotAbortControllerRef = useRef<AbortController | null>(null);
   const errorSnapshotGenerationRef = useRef(0);
-  const backendRuntimeGenerationRef = useRef(context.backendRuntimeGeneration);
-  const backendRuntimeAvailableRef = useRef(context.backendRuntimeAvailable);
-  backendRuntimeGenerationRef.current = context.backendRuntimeGeneration;
-  backendRuntimeAvailableRef.current = context.backendRuntimeAvailable;
   const onAttachReady = useCallback((attach: (() => Promise<void>) | null) => {
     context.attachTransportRef.current = attach;
   }, [context.attachTransportRef]);
@@ -134,43 +129,50 @@ export function useRuntimeTransport(
       context.composerRestoreRef.current?.restoreNewMessage(failedText, failedAttachments);
     }
 
+    // 按意图而不是按 HTTP 阶段分流：没有命令的请求是 attach / 续订已有 Run，它失败只说明
+    // 订阅没建立起来，必须回到 canonical snapshot 对账；只有提交命令被拒才需要弹窗并恢复输入。
+    const attachOnly = params.commands.length === 0;
+    const commandRejected = params.phase === "request-rejected" && !attachOnly;
     const transportError = parseTransportError(error);
     const nextIssue: TransportIssue = {
       message: transportError?.message ?? safeFrontendErrorMessage(error, "网络异常，请检查本机后端是否正在运行"),
       // HTTP 错误体的 retryable 表示“修正条件后能否重试”，这里映射为能否重新同步。
       canResync: transportError?.retryable ?? true,
-      presentation: params.phase === "request-rejected" ? "dialog" : "status",
+      presentation: commandRejected ? "dialog" : "status",
     };
     context.lastTransportErrorRef.current = nextIssue;
     context.setIssue(nextIssue);
 
-    if (params.phase === "request-rejected") return;
+    if (commandRejected) return;
 
     errorSnapshotAbortControllerRef.current?.abort();
     const generation = ++errorSnapshotGenerationRef.current;
-    const backendGeneration = backendRuntimeGenerationRef.current;
-    const { controller, signal, clear } = createTimeoutAbort(ERROR_SNAPSHOT_TIMEOUT_MS);
+    const controller = new AbortController();
     errorSnapshotAbortControllerRef.current = controller;
     try {
-      const snapshot = await requestAssistantSnapshot(context.taskId, {
-        signal,
+      const outcome = await fetchCanonicalSnapshot(context.taskId, {
+        reason: attachOnly ? "transport_attach_failed" : "transport_stream_error",
+        timeoutMs: ERROR_SNAPSHOT_TIMEOUT_MS,
         traceId: context.traceId,
+        signal: controller.signal,
       });
-      if (
-        controller.signal.aborted
-        || generation !== errorSnapshotGenerationRef.current
-        || !backendRuntimeAvailableRef.current
-        || backendGeneration !== backendRuntimeGenerationRef.current
-      ) return;
+      if (outcome.kind === "superseded" || generation !== errorSnapshotGenerationRef.current) return;
+      const snapshot = outcome.snapshot;
       context.latestStateRef.current = snapshot;
       params.updateState(() => snapshot);
-      // attach-only resume 失败必须回到已有的有界 Transport recovery 路径，不能重新进入
-      // business-resume 的 POST /assistant 请求。
-      if (params.commands.length === 0) void recovery.reconcileAfterTransportFinish();
+      if (!attachOnly) return;
+      // attach 失败后：Run 已结束则快照即最终结果；仍在运行则回到有界 recovery 重新订阅，
+      // 不能重新进入 business-resume 的 POST /assistant 请求。
+      const run = currentTransportRun(snapshot);
+      if (run && !isTerminalRunStatus(run.status)) {
+        void recovery.reconcileAfterTransportFinish({ runId: run.runId, status: run.status });
+      } else {
+        context.lastTransportErrorRef.current = null;
+        context.setIssue(null);
+      }
     } catch {
-      // recovery 也失败时保留原始 Transport issue。
+      // 读取失败已由 fetchCanonicalSnapshot 记录；保留原始 Transport issue 供用户重新同步。
     } finally {
-      clear();
       if (errorSnapshotAbortControllerRef.current === controller) {
         errorSnapshotAbortControllerRef.current = null;
       }
@@ -185,20 +187,18 @@ export function useRuntimeTransport(
       || context.cancelRequestedRunIdRef.current === expectedRunId
     ) return false;
 
-    const { signal, clear } = createTimeoutAbort(TERMINAL_SNAPSHOT_TIMEOUT_MS);
-    const backendGeneration = backendRuntimeGenerationRef.current;
     try {
-      const snapshot = await requestAssistantSnapshot(context.taskId, {
-        signal,
+      const outcome = await fetchCanonicalSnapshot(context.taskId, {
+        reason: "transport_terminal_check",
+        timeoutMs: TERMINAL_SNAPSHOT_TIMEOUT_MS,
         traceId: context.traceId,
       });
+      if (outcome.kind === "superseded") return false;
+      const snapshot = outcome.snapshot;
       const snapshotRun = findTransportRun(snapshot, expectedRunId);
       const latestRun = findTransportRun(context.latestStateRef.current, expectedRunId);
       if (
-        signal.aborted
-        || !backendRuntimeAvailableRef.current
-        || backendGeneration !== backendRuntimeGenerationRef.current
-        || snapshotRun?.runId !== expectedRunId
+        snapshotRun?.runId !== expectedRunId
         || latestRun?.runId !== expectedRunId
         || context.cancelRequestedRunIdRef.current === expectedRunId
         || !isTerminalRunStatus(snapshotRun.status)
@@ -216,9 +216,8 @@ export function useRuntimeTransport(
       });
       return true;
     } catch {
+      // 终态补偿只是快路径；失败时交给 onFinish 后续的有界恢复。
       return false;
-    } finally {
-      clear();
     }
   }, [context]);
 
@@ -338,6 +337,8 @@ export function useRuntimeTransport(
       context.lastTransportErrorRef.current = null;
       clearRecoveryIssueTimer();
       context.setIssue(null);
+      // 只在 2xx 时回调：连接已建立，恢复预算按「连续失败」重新计数。
+      recovery.resetTransportRecoveryBudget();
     },
     onFinish: ({ targetRunId, targetRunStatus }) => {
       void (async () => {

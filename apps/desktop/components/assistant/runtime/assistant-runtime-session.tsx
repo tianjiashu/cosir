@@ -7,6 +7,7 @@ import { useRuntimeDiagnostics } from "@/components/assistant/runtime/use-runtim
 import { useBusinessResume } from "@/components/assistant/runtime/use-business-resume";
 import { useCancellationConfirmation } from "@/components/assistant/runtime/use-cancellation-confirmation";
 import { useRuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
+import { useBackendTransitions } from "@/components/assistant/runtime/use-backend-transitions";
 import type {
   AssistantRuntimeProps,
   ComposerRestore,
@@ -25,6 +26,8 @@ import {
 
 type RuntimeSessionProps = AssistantRuntimeProps & {
   setIssue: (issue: TransportIssue | null) => void;
+  /** 向外层注册「重新同步」：外层的 TransportStatus 按钮经此触发会话内原地对账。 */
+  registerResync: (resync: (() => void) | null) => void;
 };
 
 /** 组装后端 Transport runtime、生命周期协调器和独立的对话渲染宿主。 */
@@ -34,6 +37,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   workspaceRoot,
   initialState,
   setIssue,
+  registerResync,
   initialMessage,
   initialAttachments,
   initialDisabledToolGroups,
@@ -54,6 +58,8 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     generation: backendRuntimeGeneration,
     available: backendRuntimeAvailable,
   } = backendRuntime;
+  const backendRef = useRef(backendRuntime);
+  backendRef.current = backendRuntime;
   const [traceId] = useState(() => newTraceId());
   const performanceProbe = useMemo(() => {
     if (!import.meta.env.DEV) return null;
@@ -133,8 +139,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     workspaceRoot,
     initialState: sessionInitialState,
     backendBaseUrl,
-    backendRuntimeGeneration,
-    backendRuntimeAvailable,
+    backendRef,
     traceId,
     performanceProbe,
     setIssue,
@@ -147,8 +152,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     composerRestoreRef,
   }), [
     backendBaseUrl,
-    backendRuntimeGeneration,
-    backendRuntimeAvailable,
     notifyTaskStateChanged,
     performanceProbe,
     sessionInitialState,
@@ -171,6 +174,26 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     ...cancellationConfirmation,
     reconcileAfterTransportFinish: recovery.reconcileAfterTransportFinish,
   });
+  // 后端变化的唯一处理点，顺序即语义：先放弃依赖旧实例的业务续跑与取消轮询，
+  // 再由 recovery 以 canonical snapshot 原地对账（运行中则续订，已被收敛则导入终态）。
+  useBackendTransitions(backendRuntime, {
+    onUnavailable: () => {
+      businessResume.cancelBusinessResume();
+      cancellationConfirmation.suspendForBackend();
+      recovery.suspend();
+    },
+    onRestored: () => {
+      businessResume.cancelBusinessResume();
+      cancellationConfirmation.resumeAfterBackendRestored();
+      recovery.resync("backend_restored", { message: "本机后端已恢复，正在同步当前对话…", canResync: true });
+    },
+  }, { taskId, traceId });
+
+  useEffect(() => {
+    registerResync(() => recovery.resync("user_resync", null));
+    return () => registerResync(null);
+  }, [recovery.resync, registerResync]);
+
   const commitTransportState = useCallback((state: typeof sessionInitialState) => {
     latestStateRef.current = state;
     cancellation.onStateCommitted(state);

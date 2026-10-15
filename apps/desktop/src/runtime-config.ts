@@ -14,7 +14,7 @@ const statusListeners = new Set<() => void>();
 const STARTUP_TIMEOUT_MS = 95_000;
 const RUNTIME_MONITOR_INTERVAL_MS = 2_000;
 const UNAVAILABLE_BACKEND_BASE_URL = "http://127.0.0.1:0";
-const BACKEND_UNAVAILABLE_MESSAGE = "本地 Agent 后端状态不可用，请点击重试";
+const BACKEND_UNAVAILABLE_MESSAGE = "暂时无法读取本地 Agent 后端状态，正在重新检查…";
 
 export type BackendRuntimeSnapshot = {
   backendBaseUrl: string;

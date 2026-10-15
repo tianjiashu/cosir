@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { TransportState } from "@/lib/assistant/contract";
-import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
+import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import { frontendLog, safeFrontendErrorMessage } from "@/lib/logging/frontend-log";
 import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
+
+const INITIAL_STATE_TIMEOUT_MS = 30_000;
 
 /** hook 返回的首屏历史加载结果。 */
 export type AssistantInitialStateResult = {
@@ -10,30 +12,20 @@ export type AssistantInitialStateResult = {
   initialState: TransportState | null;
   /** 加载失败时的错误信息；无错误时为 null。 */
   error: string | null;
-  /**
-   * 手动重试：清空当前错误与历史，重新向服务端拉取首屏 state。
-   * 入口的错误态「重试」按钮调用它，行为与初次加载完全一致。
-   */
+  /** 手动重试：清空错误后重新拉取，路径与初次加载一致。 */
   retry: () => void;
 };
 
 /**
- * 拉取指定任务的首屏对话历史，并管理加载/错误状态。
+ * 拉取指定任务的首屏对话历史。
  *
- * 关键约束（任务书 §3.5）：`useAssistantTransportRuntime` 只在 runtime 首次
- * 创建时捕获一次 `initialState`，之后变化不再生效。因此首屏历史必须「先取后挂」，
- * 在挂载后就绪后才由入口渲染内层 runtime。本 hook 负责这一段拉取与状态管理，
- * 渲染分支（骨架屏/错误提示）留在入口组件。
+ * `useAssistantTransportRuntime` 只在 runtime 首次创建时捕获一次 `initialState`，
+ * 因此首屏历史必须「先取后挂」：本 hook 取到快照后入口才挂载会话。
  *
- * 行为说明：
- * - 挂载及 `taskId` 变化时立即拉取；同时重置上一次的错误与历史，避免旧 task 残留。
- * - 拉取成功：严格校验并写入服务端返回的完整 `initialState`，不补造字段。
- * - 拉取失败：写 `error`（优先取 Error.message，否则固定文案），并保留错误态供「重试」。
- * - 卸载或 `taskId` 变化导致的新一轮拉取发起后，旧请求的结果不再写入（cancelledRef 守卫）。
- * - 初次加载与 `retry` 共用同一个 `load()`，请求逻辑与错误文案只写一处，消除重复。
- *
- * @param taskId - 当前任务 id；变化即触发重新拉取。
- * @returns 含 `initialState` / `error` / `retry` 的对象，供入口渲染与重试使用。
+ * 每个 task 只成功加载一次。会话挂载后，后端不可用、重启或换实例都**不会**清空
+ * 这里的结果——那会卸载会话、丢掉草稿与附件；后端恢复后由会话内的
+ * useBackendTransitions → recovery.resync 原地对账。只有尚未加载成功时，后端恢复
+ * 或换代才会自动重新拉取。
  */
 export function useAssistantInitialState(
   taskId: number,
@@ -43,60 +35,23 @@ export function useAssistantInitialState(
     getBackendRuntimeSnapshot,
     getBackendRuntimeSnapshot,
   );
-  const [loadedState, setLoadedState] = useState<{
-    taskId: number;
-    state: TransportState;
-  } | null>(null);
-  const [loadError, setLoadError] = useState<{
-    taskId: number;
-    message: string;
-  } | null>(null);
-  // cancelledRef 守卫：task 切换或卸载后，旧请求的结果不再写入 state/error，
-  // 避免旧 task 的加载结果污染新 task 的界面。
-  const cancelledRef = useRef(false);
-  const requestGenerationRef = useRef(0);
-  const controllerRef = useRef<AbortController | null>(null);
+  const [loadedState, setLoadedState] = useState<{ taskId: number; state: TransportState } | null>(null);
+  const [loadError, setLoadError] = useState<{ taskId: number; message: string } | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
+  const loaded = loadedState?.taskId === taskId;
+  const loadedRef = useRef(loaded);
+  loadedRef.current = loaded;
 
-  useEffect(() => {
-    // 切换 task 时重置状态，并复位守卫，避免旧 task 的历史/错误态残留到新 task。
-    cancelledRef.current = false;
-    setLoadedState(null);
-    setLoadError(null);
-    if (backendRuntime.available) load();
-    return () => {
-      // 卸载或 task 变化：标记本轮拉取作废，后续回调不再写状态。
-      cancelledRef.current = true;
-      controllerRef.current?.abort();
-    };
-    // 仅在 taskId 变化时重新拉取；load 以最新 taskId 闭包捕获，见下方定义。
-  }, [backendRuntime.available, backendRuntime.generation, taskId]);
-
-  /**
-   * 向服务端拉取首屏 state 并写入状态。
-   *
-   * 初次加载与 `retry` 共用本函数：成功写 `initialState`，失败写 `error`
-   * （优先取 Error.message，否则固定文案）。`cancelledRef` 守卫确保作废的
-   * 旧请求不会覆盖新状态。
-   */
-  function load() {
-    const backendSnapshot = getBackendRuntimeSnapshot();
-    if (!backendSnapshot.available) return;
-    const requestBackendGeneration = backendSnapshot.generation;
-    const requestGeneration = ++requestGenerationRef.current;
-    controllerRef.current?.abort();
-    const controller = new AbortController();
-    controllerRef.current = controller;
-    void requestAssistantSnapshot(taskId, { signal: controller.signal })
-      .then((state) => {
-        if (
-          controller.signal.aborted ||
-          cancelledRef.current ||
-          requestGeneration !== requestGenerationRef.current
-          || !getBackendRuntimeSnapshot().available
-          || requestBackendGeneration !== getBackendRuntimeSnapshot().generation
-        ) {
-          return;
-        }
+  const load = useCallback((signal: AbortSignal) => {
+    void fetchCanonicalSnapshot(taskId, {
+      reason: "initial_state",
+      timeoutMs: INITIAL_STATE_TIMEOUT_MS,
+      signal,
+    })
+      .then((outcome) => {
+        // superseded：task 已切换、组件卸载或后端在请求期间变化；后两者由 effect 重新发起。
+        if (outcome.kind === "superseded") return;
+        const state = outcome.snapshot;
         void frontendLog("INFO", "assistant_initial_state_loaded", "加载对话历史成功", {
           data: {
             taskId,
@@ -106,43 +61,31 @@ export function useAssistantInitialState(
             runStatus: state.current_run_id === null ? null : state.runs.find((run) => run.runId === state.current_run_id)?.status ?? null,
           },
         });
-        setLoadedState({
-          taskId,
-          state,
-        });
+        setLoadedState({ taskId, state });
         setLoadError(null);
       })
       .catch(async (cause: unknown) => {
-        if (
-          controller.signal.aborted ||
-          cancelledRef.current ||
-          requestGeneration !== requestGenerationRef.current
-          || !getBackendRuntimeSnapshot().available
-          || requestBackendGeneration !== getBackendRuntimeSnapshot().generation
-        ) {
-          return;
-        }
+        if (signal.aborted) return;
         await frontendLog("ERROR", "assistant_initial_state_failed", "加载对话历史失败", {
           data: { taskId },
           error: cause,
         });
-        setLoadError({
-          taskId,
-          message: safeFrontendErrorMessage(cause, "对话历史加载失败，请重试"),
-        });
+        setLoadError({ taskId, message: safeFrontendErrorMessage(cause, "对话历史加载失败，请重试") });
       });
-  }
+  }, [taskId]);
 
-  const retry = () => {
-    // 清空错误与历史后重新拉取，路径与初次加载的 load() 完全一致。
+  useEffect(() => {
+    if (loadedRef.current || !backendRuntime.available) return;
+    const controller = new AbortController();
     setLoadError(null);
-    setLoadedState(null);
-    load();
-  };
+    load(controller.signal);
+    return () => controller.abort();
+  }, [backendRuntime.available, backendRuntime.generation, load, retryToken]);
+
+  const retry = useCallback(() => setRetryToken((token) => token + 1), []);
 
   return {
-    initialState:
-      loadedState?.taskId === taskId ? loadedState.state : null,
+    initialState: loaded ? loadedState.state : null,
     error: loadError?.taskId === taskId ? loadError.message : null,
     retry,
   };
