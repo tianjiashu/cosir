@@ -17,7 +17,11 @@ import { currentTransportRun, transportMessageCount } from "@/lib/assistant/tran
 import type { TransportIssue } from "@/components/assistant/transport-status";
 import type { RuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
-import { useTaskAssistantTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
+import { resolveTransportFailurePolicy } from "@/components/assistant/runtime/transport-failure-policy";
+import {
+  useTaskAssistantTransportRuntime,
+  type TransportFailure,
+} from "@/lib/assistant/use-task-assistant-transport-runtime";
 import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
 import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
@@ -80,11 +84,17 @@ export function useRuntimeTransport(
     errorSnapshotAbortControllerRef.current?.abort();
   }, [clearRecoveryIssueTimer]);
 
-  const handleSendError = useCallback(async (
+  /**
+   * 统一处理提交命令与 attach 的 Transport 失败，处置规则由 resolveTransportFailurePolicy 决定。
+   *
+   * 用户主动停止的 Run 不报错：中止 SSE 引起的失败属于预期路径，由取消确认负责收敛。
+   * 读取快照有代号与 AbortController 保护，新请求准备发送或组件卸载时作废进行中的读取。
+   */
+  const handleTransportError = useCallback(async (
     error: Error,
     params: {
       commands: readonly unknown[];
-      phase: "request-rejected" | "accepted-stream-failed";
+      failure: TransportFailure;
       updateState: (updater: (state: TransportState) => TransportState) => void;
       clearPendingCommands: () => void;
     },
@@ -96,54 +106,54 @@ export function useRuntimeTransport(
       return;
     }
 
+    const policy = resolveTransportFailurePolicy(params.failure);
     void frontendLog("ERROR", "assistant_transport_stream_error", "Assistant Transport 流发生错误", {
       traceId: context.traceId,
       data: {
         taskId: context.taskId,
+        request: params.failure.request,
+        phase: params.failure.phase,
         commandCount: params.commands.length,
-        lastRunId: context.latestStateRef.current.current_run_id,
+        lastRunId: currentRunId,
         lastRunStatus: currentTransportRun(context.latestStateRef.current)?.status ?? null,
+        presentation: policy.presentation,
+        snapshot: policy.snapshot,
       },
       error,
     });
 
-    if (params.phase === "request-rejected") {
+    if (policy.restoreComposer) {
       params.clearPendingCommands();
-    }
-
-    const failedCommands = [...params.commands].reverse();
-    const failedEditCommand = failedCommands.find((command) => getUserAddMessageSourceId(command) !== null);
-    const failedCommand = failedEditCommand ?? failedCommands.find((command) => {
-      return extractUserAddMessageText(command).trim().length > 0
-        || extractUserAddMessageAttachments(command).length > 0;
-    });
-    const failedText = failedCommand ? extractUserAddMessageText(failedCommand) : "";
-    const failedAttachments = failedCommand ? extractUserAddMessageAttachments(failedCommand) : [];
-    if (params.phase === "request-rejected" && failedCommand && failedEditCommand && (failedText.trim() || failedAttachments.length > 0)) {
-      const sourceId = getUserAddMessageSourceId(failedEditCommand);
-      const restored = sourceId !== null
-        && context.composerRestoreRef.current?.restoreEditMessage(sourceId, failedText, failedAttachments) === true;
-      if (!restored) {
-        context.setIssue({ message: "编辑重跑失败，原消息仍保留，请重新点击编辑重试。", canResync: true });
+      const failedCommands = [...params.commands].reverse();
+      const failedEditCommand = failedCommands.find((command) => getUserAddMessageSourceId(command) !== null);
+      const failedCommand = failedEditCommand ?? failedCommands.find((command) => {
+        return extractUserAddMessageText(command).trim().length > 0
+          || extractUserAddMessageAttachments(command).length > 0;
+      });
+      const failedText = failedCommand ? extractUserAddMessageText(failedCommand) : "";
+      const failedAttachments = failedCommand ? extractUserAddMessageAttachments(failedCommand) : [];
+      if (failedCommand && failedEditCommand && (failedText.trim() || failedAttachments.length > 0)) {
+        const sourceId = getUserAddMessageSourceId(failedEditCommand);
+        const restored = sourceId !== null
+          && context.composerRestoreRef.current?.restoreEditMessage(sourceId, failedText, failedAttachments) === true;
+        if (!restored) {
+          context.setIssue({ message: "编辑重跑失败，原消息仍保留，请重新点击编辑重试。", canResync: true });
+        }
+      } else if (failedCommand && (failedText.trim() || failedAttachments.length > 0)) {
+        context.composerRestoreRef.current?.restoreNewMessage(failedText, failedAttachments);
       }
-    } else if (params.phase === "request-rejected" && failedCommand && (failedText.trim() || failedAttachments.length > 0)) {
-      context.composerRestoreRef.current?.restoreNewMessage(failedText, failedAttachments);
     }
 
-    // 按意图而不是按 HTTP 阶段分流：没有命令的请求是 attach / 续订已有 Run，它失败只说明
-    // 订阅没建立起来，必须回到 canonical snapshot 对账；只有提交命令被拒才需要弹窗并恢复输入。
-    const attachOnly = params.commands.length === 0;
-    const commandRejected = params.phase === "request-rejected" && !attachOnly;
     const nextIssue: TransportIssue = {
       message: userErrorMessage(error, "网络异常，请检查本机后端是否正在运行"),
       // HTTP 错误体的 retryable 表示“修正条件后能否重试”，这里映射为能否重新同步。
       canResync: error instanceof HttpError ? error.retryable ?? true : true,
-      presentation: commandRejected ? "dialog" : "status",
+      presentation: policy.presentation,
     };
     context.lastTransportErrorRef.current = nextIssue;
     context.setIssue(nextIssue);
 
-    if (commandRejected) return;
+    if (policy.snapshot === "none") return;
 
     errorSnapshotAbortControllerRef.current?.abort();
     const generation = ++errorSnapshotGenerationRef.current;
@@ -151,7 +161,7 @@ export function useRuntimeTransport(
     errorSnapshotAbortControllerRef.current = controller;
     try {
       const outcome = await fetchCanonicalSnapshot(context.taskId, {
-        reason: attachOnly ? "transport_attach_failed" : "transport_stream_error",
+        reason: params.failure.request === "attach" ? "transport_attach_failed" : "transport_stream_error",
         timeoutMs: ERROR_SNAPSHOT_TIMEOUT_MS,
         traceId: context.traceId,
         signal: controller.signal,
@@ -160,10 +170,19 @@ export function useRuntimeTransport(
       const snapshot = outcome.snapshot;
       context.latestStateRef.current = snapshot;
       params.updateState(() => snapshot);
-      if (!attachOnly) return;
+      if (policy.snapshot !== "import-then-recover") return;
       // attach 失败后：Run 已结束则快照即最终结果；仍在运行则回到有界 recovery 重新订阅，
       // 不能重新进入 business-resume 的 POST /assistant 请求。
       const run = currentTransportRun(snapshot);
+      void frontendLog("INFO", "assistant_transport_attach_failure_reconciled", "attach 失败后已导入 canonical snapshot", {
+        traceId: context.traceId,
+        data: {
+          taskId: context.taskId,
+          runId: run?.runId ?? null,
+          runStatus: run?.status ?? null,
+          recovering: run !== undefined && !isTerminalRunStatus(run.status),
+        },
+      });
       if (run && !isTerminalRunStatus(run.status)) {
         void recovery.reconcileAfterTransportFinish({ runId: run.runId, status: run.status });
       } else {
@@ -263,10 +282,6 @@ export function useRuntimeTransport(
         Object.assign(backendRequest, contextModel);
       }
 
-      if (body.commands.length === 0 && context.latestStateRef.current.current_run_id !== null) {
-        backendRequest.runId = context.latestStateRef.current.current_run_id;
-      }
-
       const commands = body.commands.map((command) => {
         const key = command as object;
         const commandId = getOrCreateTransportCommandId(key);
@@ -287,13 +302,11 @@ export function useRuntimeTransport(
           payload: { ban_tools: [...selectedBanTools] },
         });
       }
-      // 新用户命令开始新的 Transport recovery 预算；空 command batch 属于 attach/resume，
-      // 不能重置有界 EOF 保护。
-      if (commands.length > 0) recovery.resetTransportRecoveryBudget();
+      // 本回调只服务提交用户命令（attach 走 resumeApi，不经过这里），新命令开始新的
+      // Transport recovery 预算；编辑重跑需要指明被编辑的 Run，新消息由后端创建 Run。
+      recovery.resetTransportRecoveryBudget();
       const hasEditCommand = commands.some((command) => getUserAddMessageSourceId(command) !== null);
-      const requestRunId = commands.length === 0 || hasEditCommand
-        ? context.latestStateRef.current.current_run_id
-        : null;
+      const requestRunId = hasEditCommand ? context.latestStateRef.current.current_run_id : null;
 
       context.lastTransportErrorRef.current = null;
       void frontendLog("INFO", "assistant_transport_request_prepared", "Assistant Transport 请求已准备发送", {
@@ -396,7 +409,7 @@ export function useRuntimeTransport(
         }
       })();
     },
-    onError: handleSendError,
+    onError: handleTransportError,
     onCancel: ({ error, commands }) => {
       void frontendLog("WARNING", "assistant_transport_stream_cancelled", "Assistant Transport 请求被取消", {
         traceId: context.traceId,

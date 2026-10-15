@@ -17,6 +17,18 @@ import {
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
 import { parseHttpError } from "@/lib/http/errors";
 
+/**
+ * Transport 请求失败的分类，由发起请求的一方显式标注，供上层按意图分流。
+ *
+ * `request` 区分提交用户命令（POST /assistant）与只订阅既有 Run 的 attach；
+ * 不能用「命令列表为空」反推 attach，二者语义与恢复路径完全不同。`phase` 区分请求未被
+ * 接受（非 2xx、网络失败或请求体准备失败）与已接受后 SSE 读取中断。
+ */
+export type TransportFailure = {
+  request: "commands" | "attach";
+  phase: "request-rejected" | "accepted-stream-failed";
+};
+
 export type TaskAssistantTransportOptions = {
   initialState: TransportState;
   adapters?: ExternalStoreAdapter<FrameStoreItem>["adapters"];
@@ -36,7 +48,7 @@ export type TaskAssistantTransportOptions = {
     error: Error,
     params: {
       commands: readonly unknown[];
-      phase: "request-rejected" | "accepted-stream-failed";
+      failure: TransportFailure;
       updateState: (updater: (state: TransportState) => TransportState) => void;
       clearPendingCommands: () => void;
     },
@@ -119,6 +131,7 @@ function useTaskAssistantTransportAdapter(
   }, [store]);
 
   const openStream = useCallback(async (
+    request: TransportFailure["request"],
     url: string,
     requestBody: Record<string, unknown>,
     commands: readonly unknown[],
@@ -173,7 +186,7 @@ function useTaskAssistantTransportAdapter(
       }
       await optionsRef.current.onError?.(normalized, {
         commands,
-        phase: accepted ? "accepted-stream-failed" : "request-rejected",
+        failure: { request, phase: accepted ? "accepted-stream-failed" : "request-rejected" },
         updateState: (updater) => store.importState(updater(store.getSnapshot().state)),
         clearPendingCommands: () => store.clearPendingCommands(commands as UserAddMessageCommand[]),
       });
@@ -196,7 +209,7 @@ function useTaskAssistantTransportAdapter(
       // 恢复草稿并提示；否则这里的异常会脱离错误通道，变成无人处理的 rejection。
       await optionsRef.current.onError?.(error instanceof Error ? error : new Error(String(error)), {
         commands,
-        phase: "request-rejected",
+        failure: { request: "commands", phase: "request-rejected" },
         updateState: (updater) => store.importState(updater(store.getSnapshot().state)),
         clearPendingCommands: () => store.clearPendingCommands(commands.filter(isAddMessageCommand) as UserAddMessageCommand[]),
       });
@@ -204,7 +217,7 @@ function useTaskAssistantTransportAdapter(
     }
     const addCommands = commands.filter(isAddMessageCommand) as UserAddMessageCommand[];
     if (addCommands.length > 0) store.setPendingCommands(addCommands);
-    await openStream(optionsRef.current.api, requestBody, commands);
+    await openStream("commands", optionsRef.current.api, requestBody, commands);
   }, [openStream, store]);
 
   const attach = useCallback(async () => {
@@ -213,6 +226,7 @@ function useTaskAssistantTransportAdapter(
     const runId = state.targetRunId ?? state.state.current_run_id;
     if (runId === null) return;
     await openStream(
+      "attach",
       optionsRef.current.resumeApi,
       { ...body, commands: [], runId, taskId, threadId: `conversation_run-${taskId}` },
       [],
