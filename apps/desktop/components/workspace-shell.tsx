@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Loader2Icon,
   MessageSquarePlusIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
@@ -15,7 +14,9 @@ import {
 } from "lucide-react";
 
 import { TaskPage } from "@/components/task-page";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { NewConversation } from "@/components/new-conversation";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
 import { DeleteConfirmDialog } from "@/components/delete-confirm-dialog";
@@ -411,9 +412,9 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
             </div>
             <nav className="flex min-h-0 flex-1 flex-col px-2 pb-4" aria-label="工作区任务列表">
               <p className="shrink-0 px-2 pb-2 text-xs font-medium text-muted-foreground">我的工作区</p>
-              {status === "loading" && <Loader2Icon className="text-muted-foreground mx-2 size-4 animate-spin" />}
-              {status === "error" && <div className="px-2 text-xs"><p className="text-destructive mb-2">{error}</p><Button variant="outline" size="sm" onClick={() => void load()}>重试</Button></div>}
-              {status === "ready" && workspaces.length === 0 && <p className="text-muted-foreground px-2 text-xs">暂无工作区</p>}
+              {status === "loading" && <LoadingState size="compact" label="正在加载工作区…" className="px-2" />}
+              {status === "error" && <ErrorState className="mx-2 text-xs" message={error} onRetry={() => void load()} />}
+              {status === "ready" && workspaces.length === 0 && <EmptyState size="compact" title="暂无工作区" className="px-2" />}
               {workspaces.length > 0 && <div className="min-h-0 flex-1">
                 <WorkspaceTree
                   workspaces={workspaces}
@@ -456,7 +457,7 @@ export function WorkspaceShell({ routeTaskId, initialMessage, initialAttachments
       </aside>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex h-14 shrink-0 items-center justify-between border-b px-5">
-          <div className="min-w-0">{forkError && <p className="text-muted-foreground truncate text-xs">{forkError}</p>}</div>
+          <div className="min-w-0">{forkError && <Alert tone="destructive" className="py-1 text-xs"><span className="block truncate">{forkError}</span></Alert>}</div>
           <div className="flex shrink-0 items-center gap-2">
             {workbenchTabs.length > 0 && (
               <Button

@@ -12,7 +12,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Switch } from "@/components/ui/switch";
 import { markdownPlugins } from "@/components/markdown-rendering-config";
 import {
@@ -24,10 +28,6 @@ import {
   type SystemSkill,
   type SystemSkillDocument,
 } from "@/lib/api/system-extensions";
-
-function ErrorMessage({ children }: { children: string }) {
-  return <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{children}</div>;
-}
 
 /** 系统目录 Skill 的导入、启停与只读详情管理。 */
 export function SkillConfigurationPanel() {
@@ -160,36 +160,36 @@ export function SkillConfigurationPanel() {
         </div>
       </header>
 
-      {notice && <div role="status" className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</div>}
-      {loadError && <ErrorMessage>{loadError}</ErrorMessage>}
+      {notice && <Alert tone="success">{notice}</Alert>}
+      {loadError && loadState !== "error" && <Alert tone="destructive">{loadError}</Alert>}
       {loadState === "loading" ? (
-        <div className="text-muted-foreground flex items-center gap-2 py-10 text-sm"><Loader2Icon className="size-4 animate-spin" />正在读取 Skills…</div>
+        <LoadingState label="正在读取 Skills…" />
       ) : loadState === "error" ? (
-        <Button variant="outline" onClick={() => void load()}>重新读取</Button>
+        <ErrorState message={loadError ?? "读取 Skill 列表失败"} onRetry={() => void load()} retryLabel="重新读取" />
       ) : skills.length === 0 ? (
-        <div className="border-border/70 bg-muted/20 rounded-xl border border-dashed px-5 py-10 text-center">
-          <PuzzleIcon className="text-muted-foreground mx-auto mb-3 size-6" />
-          <p className="text-sm font-medium">还没有 Skill</p>
-          <p className="text-muted-foreground mt-1 text-xs">导入本机 Skill 文件夹后，可以在这里启用、停用或查看内容。</p>
-        </div>
+        <EmptyState
+          icon={<PuzzleIcon />}
+          title="还没有 Skill"
+          description="导入本机 Skill 文件夹后，可以在这里启用、停用或查看内容。"
+        />
       ) : (
         <div className="space-y-3">
           {skills.map((skill) => (
-            <article key={skill.name} className="border-border/70 bg-card/70 flex flex-wrap items-start gap-3 rounded-xl border p-4">
+            <Card key={skill.name} className="flex flex-wrap items-start gap-3 p-4">
               <PuzzleIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <button type="button" className="truncate text-left text-sm font-medium hover:underline" onClick={() => void showDetails(skill)}>{skill.name}</button>
-                  <span className={`rounded-full px-2 py-0.5 text-[11px] ${skill.enabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                  <Badge size="sm" tone={skill.enabled ? "primary" : "neutral"}>
                     {skill.enabled ? "已启用" : "已停用"}
-                  </span>
+                  </Badge>
                 </div>
                 <p className="text-muted-foreground mt-1 line-clamp-2 text-xs">{skill.description}</p>
                 <Button variant="link" size="sm" className="mt-1 h-auto px-0 py-0 text-xs" onClick={() => void showDetails(skill)}>查看说明</Button>
               </div>
               <Switch checked={skill.enabled} aria-label={`${skill.enabled ? "停用" : "启用"} Skill ${skill.name}`} disabled={loadState !== "ready" || busySkill === skill.name || importing} onClick={() => void toggleSkill(skill)} />
               <Button variant="ghost" size="icon" aria-label={`删除 Skill ${skill.name}`} disabled={loadState !== "ready" || busySkill === skill.name || importing} onClick={() => void removeSkill(skill)}><Trash2Icon /></Button>
-            </article>
+            </Card>
           ))}
         </div>
       )}
@@ -204,9 +204,9 @@ export function SkillConfigurationPanel() {
             <DialogDescription>{detail?.description ?? "只读预览 Skill.md 内容。"}</DialogDescription>
           </DialogHeader>
           {detailLoading ? (
-            <div className="text-muted-foreground flex items-center gap-2 py-8 text-sm"><Loader2Icon className="size-4 animate-spin" />正在读取说明…</div>
+            <LoadingState label="正在读取说明…" className="py-8" />
           ) : detailError ? (
-            <ErrorMessage>{detailError}</ErrorMessage>
+            <Alert tone="destructive">{detailError}</Alert>
           ) : detail ? (
             <div className="aui-md max-h-[60vh] overflow-y-auto rounded-lg border bg-muted/20 p-4 leading-6">
               <Streamdown mode="static" plugins={markdownPlugins} shikiTheme={["github-light", "github-dark"]} linkSafety={{ enabled: true }} mermaid={{ config: { securityLevel: "strict" } }} className="!space-y-3">

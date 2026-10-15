@@ -10,8 +10,7 @@ import { DisclosureRow, DisclosureRowStatic } from "../elements/disclosure-row.a
 import { useToolDisclosure } from "./tool-disclosure";
 import {
   FileOperationCard,
-  fileChangeStatusBadgeClass,
-  fileChangeStatusLabel,
+  FileChangeStatusBadge,
   type FileChange,
 } from "./file-operation-card";
 
@@ -127,7 +126,7 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
       ) : hasDisplayData ? (
         <>
           <span className="text-muted-foreground">{totalFiles} 个文件</span>
-          {showInsertions && <span className="ml-2 text-emerald-600">+{insertions}</span>}
+          {showInsertions && <span className="text-success ml-2">+{insertions}</span>}
           {showDeletions && <span className="ml-2 text-destructive">−{deletions}</span>}
         </>
       ) : undefined,
@@ -168,7 +167,7 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
           <section key={`${change.path}:${change.new_path ?? ""}`} className="overflow-hidden">
             <header className="flex items-center justify-between gap-2 bg-muted/30 px-2.5 py-1.5 text-xs">
               <span className="flex min-w-0 items-center gap-2">
-                <span className={fileChangeStatusBadgeClass(change.status)}>{fileChangeStatusLabel(change.status)}</span>
+                <FileChangeStatusBadge status={change.status} />
                 {change.status === "moved" ? (
                   <span className="truncate font-medium" title={`${change.path} → ${change.new_path ?? ""}`}>
                     {change.path}<span className="mx-1 text-muted-foreground" aria-hidden="true">→</span>{change.new_path ?? "目标路径不可用"}
@@ -179,7 +178,7 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
               </span>
               {change.status !== "deleted" && (Boolean(change.insertions) || Boolean(change.deletions)) && (
                 <span className="shrink-0">
-                  {Boolean(change.insertions) && <span className="text-emerald-600">+{change.insertions}</span>}
+                  {Boolean(change.insertions) && <span className="text-success">+{change.insertions}</span>}
                   {Boolean(change.insertions) && Boolean(change.deletions) && " "}
                   {Boolean(change.deletions) && <span className="text-destructive">−{change.deletions}</span>}
                 </span>

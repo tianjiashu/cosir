@@ -138,7 +138,7 @@ export function shouldDisplayRunUsage(
 
 function toneClass(tone: UsageTone): string {
   if (tone === "critical") return "bg-destructive";
-  if (tone === "warning") return "bg-amber-500";
+  if (tone === "warning") return "bg-warning";
   if (tone === "normal") return "bg-primary";
   return "bg-muted-foreground/40";
 }
@@ -174,7 +174,7 @@ export function TaskContextUsage(): ReactElement {
         <GaugeIcon className="size-3.5" aria-hidden="true" />
         <span className="hidden sm:inline">{presentation.label}</span>
       </PopoverTrigger>
-       <PopoverContent align="start" className="w-64 max-w-[calc(100vw-1rem)]">
+      <PopoverContent align="start" className="w-64 max-w-[calc(100vw-1rem)]">
         <PopoverHeader>
           <PopoverTitle>上下文窗口</PopoverTitle>
           <PopoverDescription>{presentation.detail}</PopoverDescription>
@@ -183,7 +183,7 @@ export function TaskContextUsage(): ReactElement {
           <span className={cn(
             presentation.status === "overage" && "text-destructive",
             presentation.status === "critical" && "text-destructive",
-            presentation.status === "warning" && "text-amber-600 dark:text-amber-400",
+            presentation.status === "warning" && "text-warning",
             presentation.status === "normal" && "text-primary",
             "font-medium",
           )}>{statusLabel(presentation.status)}</span>
@@ -258,10 +258,10 @@ export function RunUsageDisplay({ runId, visible }: { runId: number | null; visi
         <div className="mt-3 border-t pt-3">
           <div className="flex items-center justify-between text-xs">
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-              <ZapIcon className="size-3.5 text-amber-500" aria-hidden="true" />
+              <ZapIcon className="size-3.5 text-warning" aria-hidden="true" />
               缓存命中率
             </span>
-            <span className={cn("font-semibold", cacheHitRate === null ? "text-muted-foreground" : "text-emerald-500")}>
+            <span className={cn("font-semibold", cacheHitRate === null ? "text-muted-foreground" : "text-success")}>
               {cacheHitRate === null ? "—" : `${cacheHitRate.toFixed(1)}%`}
             </span>
           </div>
@@ -275,17 +275,17 @@ export function RunUsageDisplay({ runId, visible }: { runId: number | null; visi
             className="bg-muted mt-2 h-2 overflow-hidden rounded-full"
           >
             <div
-              className="h-full rounded-full bg-emerald-400 transition-[width]"
+              className="h-full rounded-full bg-success transition-[width]"
               style={{ width: `${cacheHitRate ?? 0}%` }}
             />
           </div>
-          <div className="text-muted-foreground mt-2 flex items-center gap-3 text-[11px]">
+          <div className="text-muted-foreground mt-2 flex items-center gap-3 text-2xs">
             <span className="inline-flex items-center gap-1">
-              <span className="size-2 rounded-sm bg-emerald-400" aria-hidden="true" />
+              <span className="size-2 rounded-sm bg-success" aria-hidden="true" />
               命中
             </span>
             <span className="inline-flex items-center gap-1">
-              <span className="size-2 rounded-sm bg-rose-400" aria-hidden="true" />
+              <span className="size-2 rounded-sm bg-destructive" aria-hidden="true" />
               未命中
             </span>
           </div>

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import type { AgentTeamRun } from "@/lib/api/agent-teams";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 type TeamNode = AgentTeamRun["nodes"][number];
@@ -47,7 +48,7 @@ function AgentStatusIcon({ status }: { status: string }) {
     return <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-primary motion-reduce:animate-none" aria-label={label} />;
   }
   if (status === "completed") {
-    return <CheckIcon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label={label} />;
+    return <CheckIcon className="size-4 shrink-0 text-success" aria-label={label} />;
   }
   if (status === "failed") {
     return <XIcon className="size-4 shrink-0 text-destructive" aria-label={label} />;
@@ -56,7 +57,7 @@ function AgentStatusIcon({ status }: { status: string }) {
     return <BanIcon className="size-4 shrink-0 text-muted-foreground" aria-label={label} />;
   }
   if (status === "waiting_for_input") {
-    return <PauseCircleIcon className="size-4 shrink-0 animate-pulse text-amber-600 motion-reduce:animate-none dark:text-amber-400" aria-label={label} />;
+    return <PauseCircleIcon className="size-4 shrink-0 animate-pulse text-warning motion-reduce:animate-none" aria-label={label} />;
   }
   if (status === "pending" || status === "queued") {
     return <Clock3Icon className="size-4 shrink-0 text-muted-foreground" aria-label={label} />;
@@ -76,7 +77,7 @@ function AgentChip({
       type="button"
       variant="secondary"
       size="sm"
-      className="h-7 w-full min-w-0 justify-start gap-1.5 rounded-full border-transparent bg-secondary/60 px-2 text-[10px] hover:bg-secondary"
+      className="h-7 w-full min-w-0 justify-start gap-1.5 rounded-full border-transparent bg-secondary/60 px-2 text-2xs hover:bg-secondary"
       disabled={agent.task_id === null}
       title={[agent.role, agent.agent_id, statusLabel(agent.status), agent.title].filter(Boolean).join(" · ")}
       aria-label={`${agent.role}，${statusLabel(agent.status)}`}
@@ -97,7 +98,7 @@ function NodeMarker({ node, isCurrent }: { node: TeamNode; isCurrent: boolean })
   const tone = isCurrent
     ? "border-primary bg-primary ring-4 ring-primary/15"
     : node.status === "completed"
-      ? "border-emerald-600 bg-emerald-500 dark:border-emerald-400"
+      ? "border-success bg-success"
       : node.status === "failed" || node.status === "cancelled"
         ? "border-destructive bg-destructive"
         : "border-muted-foreground/50 bg-background";
@@ -134,13 +135,13 @@ function HistoricalVisits({
   if (visits.length === 0) return null;
   return (
     <details className="group pt-0.5">
-      <summary className="cursor-pointer text-[10px] text-muted-foreground outline-none hover:text-foreground focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring">
+      <summary className="focus-ring cursor-pointer rounded text-2xs text-muted-foreground hover:text-foreground">
         历史访问（{visits.length}）
       </summary>
       <div className="mt-1.5 space-y-2">
         {visits.map((visit) => (
           <div key={visit.conversation_run_id ?? visit.visit_number} className="space-y-1 border-l border-border/70 pl-2">
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-2xs text-muted-foreground">
               第 {visit.visit_number} 次 · {statusLabel(visit.status)}
             </p>
             {visit.agents.map((agent) => (
@@ -178,13 +179,13 @@ function PipelineNode({
       <div className={`${HEADER_ROW_CLASS} items-start`}>
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <p className="truncate text-xs font-semibold" title={title}>{title}</p>
-          <span className={`shrink-0 text-[10px] ${node.status === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+          <span className={`shrink-0 text-2xs ${node.status === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
             {statusLabel(node.status)}
           </span>
           {latestVisit && latestVisit.visit_number > 1 && (
-            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground">
+            <Badge shape="tag" size="sm">
               第 {latestVisit.visit_number} 次
-            </span>
+            </Badge>
           )}
         </div>
       </div>
@@ -206,7 +207,7 @@ function StartMarker() {
   return (
     <li className="min-w-0" aria-label="流程开始">
       <div className={`${HEADER_ROW_CLASS} items-center`}>
-        <span className="text-[10px] font-semibold text-muted-foreground">START</span>
+        <span className="text-2xs font-semibold text-muted-foreground">START</span>
       </div>
       <div className={RAIL_ROW_CLASS}>
         <span className="size-3 shrink-0 rounded-full border-2 border-muted-foreground/50 bg-background" aria-hidden="true" />
@@ -219,19 +220,19 @@ function StartMarker() {
 function EndMarker({ run }: { run: AgentTeamRun }) {
   const completed = run.status === "completed";
   const label = completed ? "流程完成" : "未到达";
-  const tone = completed ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground";
+  const tone = completed ? "text-success" : "text-muted-foreground";
   return (
     <li className="min-w-0" aria-label={label}>
       <div className={`${HEADER_ROW_CLASS} items-center gap-1`}>
         {completed
           ? <CheckIcon className={`size-3.5 shrink-0 ${tone}`} aria-hidden="true" />
           : null}
-        <span className={`text-[10px] font-medium ${tone}`}>END</span>
+        <span className={`text-2xs font-medium ${tone}`}>END</span>
       </div>
       <div className={RAIL_ROW_CLASS}>
         <span
           className={`size-3 shrink-0 rounded-full border-2 ${completed
-            ? "border-emerald-600 bg-emerald-500 dark:border-emerald-400"
+            ? "border-success bg-success"
             : "border-muted-foreground/50 bg-background"}`}
           title={label}
           aria-hidden="true"
@@ -251,7 +252,7 @@ export function AgentTeamExecutionPipeline({ run, onOpenAgent }: AgentTeamExecut
     <section
       aria-label="Agent Team 流水线，可横向滚动查看全部节点"
       tabIndex={0}
-      className="overflow-x-auto rounded-lg border border-border/60 bg-muted/10 p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="focus-ring overflow-x-auto rounded-lg border border-border/60 bg-muted/10 p-3"
     >
       <ol
         className="grid w-full min-w-0 items-start"

@@ -3,6 +3,9 @@
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ReadonlyThread } from "@/components/assistant-ui/elements/readonly-thread.aui";
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { AssistantAttachController } from "@/lib/assistant/assistant-attach-controller";
 import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
 import { useTaskAssistantReadonlyTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
@@ -170,20 +173,26 @@ export function WorkbenchAgentRunSurface({ taskId, onClose }: { taskId: number; 
   };
 
   if (stale) return (
-    <div className="m-4 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
-      <p className="text-foreground">子 Agent 任务已不存在</p>
-      <div className="mt-3 flex gap-2">
-        <button type="button" className="text-muted-foreground underline" onClick={retryNow}>重新同步</button>
-        <button type="button" className="text-muted-foreground underline" onClick={onClose}>关闭标签页</button>
-      </div>
-    </div>
+    <Alert
+      tone="warning"
+      className="m-4"
+      title="子 Agent 任务已不存在"
+      action={(
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={retryNow}>重新同步</Button>
+          <Button type="button" variant="ghost" size="sm" onClick={onClose}>关闭标签页</Button>
+        </div>
+      )}
+    />
   );
   if (error && !state) return (
-    <div className="text-destructive m-4 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm">
-      <p>{error}</p>
-      {retryCount >= MAX_AUTOMATIC_RESYNCS && <button type="button" className="mt-3 underline" onClick={retryNow}>重新同步</button>}
-    </div>
+    <ErrorState
+      className="m-4"
+      message={error}
+      onRetry={retryCount >= MAX_AUTOMATIC_RESYNCS ? retryNow : undefined}
+      retryLabel="重新同步"
+    />
   );
-  if (!state) return <div className="text-muted-foreground flex h-full items-center justify-center text-sm">正在同步子 Agent…</div>;
+  if (!state) return <LoadingState label="正在同步子 Agent…" className="h-full" />;
   return <AgentRunTransport taskId={taskId} initialState={state} onError={scheduleResync} />;
 }

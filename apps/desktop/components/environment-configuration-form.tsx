@@ -3,7 +3,9 @@
 import { Trash2Icon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import type { EnvironmentField, EnvironmentGroup } from "@/lib/api/configuration";
 
@@ -46,7 +48,7 @@ export function EnvironmentFieldControl({
               {field.label}
             </label>
           )}
-          <span className="text-muted-foreground mt-1 block truncate font-mono text-[11px]">
+          <span className="text-muted-foreground mt-1 block truncate font-mono text-2xs">
             {field.name}
           </span>
         </div>
@@ -62,19 +64,19 @@ export function EnvironmentFieldControl({
               />
             </div>
           ) : field.component === "select" ? (
-            <select
+            <NativeSelect
               id={inputId}
               value={String(value ?? "")}
               onChange={(event) => onChange(event.target.value)}
               aria-label={field.label}
-              className="border-input bg-background text-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-9 w-full min-w-0 rounded-lg border px-2.5 text-sm outline-none focus-visible:ring-3"
+              className="h-9"
             >
               {field.options.map((option) => (
                 <option key={`${field.name}-${option.value}`} value={option.value}>
                   {option.label}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           ) : (
             <Input
               id={inputId}
@@ -131,18 +133,18 @@ export function EnvironmentConfigurationForm({
   return (
     <div className="space-y-5">
       {groups.map((group) => (
-        <section
+        <Card
           key={group.id}
           aria-labelledby={`environment-group-${group.id}`}
-          className="border-border/70 bg-card/60 overflow-hidden rounded-2xl border shadow-sm"
+          className="overflow-hidden"
         >
-          <header className="border-border/70 bg-muted/20 border-b px-4 py-3">
+          <header className="bg-muted/20 border-b px-4 py-3">
             <h3 id={`environment-group-${group.id}`} className="font-medium">
               {group.label}
             </h3>
             <p className="text-muted-foreground mt-1 text-xs">{group.description}</p>
           </header>
-          <div className="divide-border/70 divide-y">
+          <div className="divide-y">
             {group.fields.map((field) => (
               <EnvironmentFieldControl
                 key={field.name}
@@ -154,7 +156,7 @@ export function EnvironmentConfigurationForm({
               />
             ))}
           </div>
-        </section>
+        </Card>
       ))}
     </div>
   );

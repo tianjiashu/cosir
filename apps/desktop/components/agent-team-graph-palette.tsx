@@ -5,6 +5,7 @@ import { BotIcon, CheckCircle2Icon, GripVerticalIcon, PlusIcon, SearchIcon } fro
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { EmptyState } from "@/components/ui/state-panel";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 
 export function AgentTeamGraphPalette({
@@ -29,7 +30,7 @@ export function AgentTeamGraphPalette({
     <aside className="bg-card flex w-64 shrink-0 flex-col border-r" aria-label="子 Agent 工具栏">
       <header className="border-b px-4 py-4">
         <div className="flex items-center gap-2"><BotIcon className="size-4 text-primary" /><h2 className="text-sm font-semibold">子 Agent</h2></div>
-        <p className="text-muted-foreground mt-1 text-[11px]">拖到画布创建节点，也可以点 + 添加</p>
+        <p className="text-muted-foreground mt-1 text-2xs">拖到画布创建节点，也可以点 + 添加</p>
         <label className="relative mt-3 block"><SearchIcon className="text-muted-foreground absolute left-2.5 top-2.5 size-3.5" /><Input aria-label="搜索子 Agent" className="h-9 pl-8 text-xs" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或用途" /></label>
       </header>
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
@@ -41,20 +42,20 @@ export function AgentTeamGraphPalette({
         >
           <div className="flex items-start gap-2">
             <GripVerticalIcon className="text-muted-foreground mt-0.5 size-4 shrink-0 opacity-50 group-hover:opacity-100" />
-            <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{profile.agent_id}</p><p className="text-muted-foreground mt-0.5 truncate text-[10px]">{profile.role}</p></div>
+            <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{profile.agent_id}</p><p className="text-muted-foreground mt-0.5 truncate text-2xs">{profile.role}</p></div>
             <Button type="button" variant="ghost" size="icon-xs" aria-label={`添加 ${profile.agent_id}`} onClick={() => onAdd(profile)}><PlusIcon /></Button>
           </div>
-          {profile.description && <p className="text-muted-foreground mt-2 line-clamp-2 text-[10px] leading-relaxed">{profile.description}</p>}
+          {profile.description && <p className="text-muted-foreground mt-2 line-clamp-2 text-2xs">{profile.description}</p>}
         </article>)}
-        {filteredProfiles.length === 0 && <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-center text-xs">{profiles.length ? "没有匹配的子 Agent" : "当前作用域没有可用的子 Agent"}</p>}
+        {filteredProfiles.length === 0 && <EmptyState size="compact" className="text-center" title={profiles.length ? "没有匹配的子 Agent" : "当前作用域没有可用的子 Agent"} />}
         <article
           onPointerDown={onBeginEndDrag}
-          className="group flex cursor-grab touch-none items-center gap-2 rounded-xl border border-emerald-600/30 bg-emerald-500/10 p-3 text-emerald-700 shadow-sm transition hover:border-emerald-600/50 hover:shadow-md active:cursor-grabbing dark:text-emerald-300"
+          className="group flex cursor-grab touch-none items-center gap-2 rounded-xl border border-success/30 bg-success/10 p-3 text-success shadow-sm transition hover:border-success/50 hover:shadow-md active:cursor-grabbing"
           aria-label="可拖拽结束出口 END"
         >
           <GripVerticalIcon className="size-4 shrink-0 opacity-50 group-hover:opacity-100" />
           <CheckCircle2Icon className="size-4 shrink-0" />
-          <div className="min-w-0"><p className="text-xs font-semibold">END</p><p className="mt-0.5 text-[10px] opacity-80">拖入画布添加结束出口</p></div>
+          <div className="min-w-0"><p className="text-xs font-semibold">END</p><p className="mt-0.5 text-2xs opacity-80">拖入画布添加结束出口</p></div>
         </article>
       </div>
     </aside>

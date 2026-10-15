@@ -41,6 +41,11 @@ vi.mock("@xterm/addon-fit", () => ({
   },
 }));
 
+// 配色从 CSS token 读取，依赖真实 DOM；这里只验证快照回放逻辑。
+vi.mock("@/components/terminal/xterm-appearance", () => ({
+  xtermAppearance: () => ({}),
+}));
+
 import { TerminalSession } from "@/components/assistant-ui/tools/terminal-session";
 
 describe("TerminalSession", () => {

@@ -7,6 +7,8 @@ import { AgentTeamConfigurationFields } from "@/components/agent-team-configurat
 import { AgentTeamStatusEditor } from "@/components/agent-team-status-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { EmptyState } from "@/components/ui/state-panel";
 import { removeNodesFromConfiguration, updateNodeInConfiguration } from "@/components/agent-team-graph-model";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamConfigurationDraft, AgentTeamNodeConfiguration, AgentTeamTransitionConfiguration } from "@/lib/api/agent-teams";
@@ -131,20 +133,20 @@ export function AgentTeamConfigurationForm({
       />
       <label className="block space-y-1.5 text-sm">
         <span className="text-muted-foreground">入口节点</span>
-        <select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={configuration.start_node_id} onChange={(event) => update({ start_node_id: event.target.value })}>
+        <NativeSelect value={configuration.start_node_id} onChange={(event) => update({ start_node_id: event.target.value })}>
           <option value="">选择入口节点</option>
           {configuration.nodes.map((node, index) => <option key={`start-${index}`} value={node.node_id}>{node.name || node.node_id} · {node.node_id} · {index + 1}</option>)}
-        </select>
+        </NativeSelect>
       </label>
 
       <section ref={nodeListRef} className="space-y-3">
         <div className="flex items-center justify-between"><h3 className="text-sm font-medium">Team 节点</h3><Button type="button" variant="outline" size="sm" onClick={addNode}><PlusIcon />添加节点</Button></div>
-        {configuration.nodes.length === 0 && <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-sm">添加至少一个节点，再设置入口与转移。</p>}
+        {configuration.nodes.length === 0 && <EmptyState className="py-4" title="添加至少一个节点，再设置入口与转移。" />}
         {configuration.nodes.map((node, index) => <article key={`node-${index}`} data-team-entry-card className={`border-border/70 space-y-3 rounded-xl border p-3 ${index === 0 && newlyAddedEntry?.kind === "node" ? "agent-team-entry-highlight" : ""}`}>
           <div className="flex items-start gap-2"><label className="min-w-0 flex-1 space-y-1 text-xs"><span className="text-muted-foreground">节点 ID</span><Input value={node.node_id} onChange={(event) => updateNode(index, { node_id: event.target.value })} /></label><Button type="button" variant="ghost" size="icon-sm" className="mt-5 text-destructive" aria-label={`删除节点 ${node.name} ${index + 1}`} onClick={() => removeNode(index)}><Trash2Icon /></Button></div>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-xs"><span className="text-muted-foreground">节点名称</span><Input value={node.name} onChange={(event) => updateNode(index, { name: event.target.value })} /></label>
-            <label className="space-y-1 text-xs"><span className="text-muted-foreground">执行子 Agent</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={node.agent_id} onChange={(event) => updateNode(index, { agent_id: event.target.value })}><option value="">选择子 Agent</option>{profiles.map((profile) => <option key={profile.agent_id} value={profile.agent_id}>{profile.agent_id}</option>)}</select></label>
+            <label className="space-y-1 text-xs"><span className="text-muted-foreground">执行子 Agent</span><NativeSelect value={node.agent_id} onChange={(event) => updateNode(index, { agent_id: event.target.value })}><option value="">选择子 Agent</option>{profiles.map((profile) => <option key={profile.agent_id} value={profile.agent_id}>{profile.agent_id}</option>)}</NativeSelect></label>
           </div>
           <div className="space-y-1 text-xs">
             <span className="text-muted-foreground">业务状态</span>
@@ -161,16 +163,16 @@ export function AgentTeamConfigurationForm({
 
       <section ref={transitionListRef} className="space-y-3">
         <div className="flex items-center justify-between"><h3 className="text-sm font-medium">状态转移</h3><Button type="button" variant="outline" size="sm" onClick={addTransition}><PlusIcon />添加转移</Button></div>
-        {configuration.transitions.length === 0 && <p className="text-muted-foreground rounded-xl border border-dashed p-4 text-sm">尚无状态转移。可以在画布中拖动状态出口创建连线，或在这里添加转移草稿。</p>}
+        {configuration.transitions.length === 0 && <EmptyState className="py-4" title="尚无状态转移。可以在画布中拖动状态出口创建连线，或在这里添加转移草稿。" />}
         {configuration.transitions.map((edge, index) => <div key={`transition-draft-${index}`} data-team-entry-card className={`grid items-end gap-2 rounded-xl border p-3 sm:grid-cols-[1fr_1fr_1fr_auto] ${index === 0 && newlyAddedEntry?.kind === "transition" ? "agent-team-entry-highlight" : ""}`}>
-          <label className="space-y-1 text-xs"><span className="text-muted-foreground">来源节点</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={edge.from_node_id} onChange={(event) => updateTransition(index, { from_node_id: event.target.value })}><option value="">选择节点</option>{configuration.nodes.map((node, nodeIndex) => <option key={`source-${nodeIndex}`} value={node.node_id}>{node.name}</option>)}</select></label>
+          <label className="space-y-1 text-xs"><span className="text-muted-foreground">来源节点</span><NativeSelect value={edge.from_node_id} onChange={(event) => updateTransition(index, { from_node_id: event.target.value })}><option value="">选择节点</option>{configuration.nodes.map((node, nodeIndex) => <option key={`source-${nodeIndex}`} value={node.node_id}>{node.name}</option>)}</NativeSelect></label>
           <label className="space-y-1 text-xs"><span className="text-muted-foreground">触发状态</span><Input value={edge.status} onChange={(event) => updateTransition(index, { status: event.target.value })} /></label>
-          <label className="space-y-1 text-xs"><span className="text-muted-foreground">目标节点</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={edge.target_node_id} onChange={(event) => updateTransition(index, { target_node_id: event.target.value })}><option value="">选择节点或 END</option><option value="END">END（结束 Team）</option>{configuration.nodes.map((node, nodeIndex) => <option key={`target-${nodeIndex}`} value={node.node_id}>{node.name}</option>)}</select></label>
+          <label className="space-y-1 text-xs"><span className="text-muted-foreground">目标节点</span><NativeSelect value={edge.target_node_id} onChange={(event) => updateTransition(index, { target_node_id: event.target.value })}><option value="">选择节点或 END</option><option value="END">END（结束 Team）</option>{configuration.nodes.map((node, nodeIndex) => <option key={`target-${nodeIndex}`} value={node.node_id}>{node.name}</option>)}</NativeSelect></label>
           <Button type="button" variant="ghost" size="icon-sm" className="text-destructive" aria-label="删除转移" onClick={() => update({ transitions: configuration.transitions.filter((_, edgeIndex) => edgeIndex !== index) })}><Trash2Icon /></Button>
         </div>)}
       </section>
 
-      {profiles.length === 0 && <p className="text-muted-foreground text-sm">当前作用域暂无子 Agent 配置，可先添加节点草稿并稍后选择 Agent。</p>}
+      {profiles.length === 0 && <EmptyState size="compact" title="当前作用域暂无子 Agent 配置，可先添加节点草稿并稍后选择 Agent。" />}
       <div className="flex justify-end gap-2 border-t pt-4"><Button type="button" variant="outline" onClick={onCancel}>取消</Button><Button type="button" onClick={() => void onSave()} disabled={saving}>{saving ? "保存中…" : "保存配置"}</Button></div>
     </div>
   );

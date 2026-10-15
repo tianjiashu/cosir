@@ -1,6 +1,7 @@
 import { Maximize2Icon, Minimize2Icon, TerminalIcon, XIcon } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
   TerminalStreamConnection,
@@ -80,12 +81,12 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
 
   const connectionLabel = connectionState === "connected" ? "已连接" : connectionState === "error" ? "连接异常" : connectionState === "closed" ? "已断开" : "连接中";
   const connectionTone = connectionState === "connected"
-    ? "bg-emerald-400"
+    ? "bg-success"
     : connectionState === "error"
-      ? "bg-rose-400"
+      ? "bg-destructive"
       : connectionState === "connecting"
-        ? "bg-amber-400"
-        : "bg-zinc-500";
+        ? "bg-warning"
+        : "bg-muted-foreground";
   const clampPanelHeight = (height: number) => Math.min(
     Math.max(height, MIN_PANEL_HEIGHT),
     maxPanelHeight,
@@ -112,7 +113,7 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
     <section
       ref={panelRef}
       style={{ height: panelHeight }}
-      className="flex max-h-[80vh] min-h-48 w-full shrink-0 flex-col border-t border-border/70 bg-zinc-950 text-zinc-100"
+      className="terminal-surface bg-terminal-inset flex max-h-[80vh] min-h-48 w-full shrink-0 flex-col border-t"
       aria-label="终端会话面板"
     >
       <div
@@ -123,7 +124,7 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
         aria-valuenow={panelHeight}
         aria-valuemax={maxPanelHeight}
         tabIndex={0}
-        className="group flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center outline-none focus-visible:bg-white/5"
+        className="group flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center outline-none focus-visible:bg-muted"
         onPointerDown={(event) => {
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -147,18 +148,18 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
           if (resizeFromKeyboard(event.key)) event.preventDefault();
         }}
       >
-        <span className="h-0.5 w-10 rounded-full bg-zinc-700 transition-colors group-hover:bg-zinc-500 group-focus-visible:bg-zinc-400" />
+        <span className="bg-border group-hover:bg-muted-foreground/60 group-focus-visible:bg-muted-foreground h-0.5 w-10 rounded-full transition-colors" />
       </div>
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-white/10 px-3">
-        <TerminalIcon className="size-4 text-zinc-400" aria-hidden="true" />
-        <span className="text-sm font-medium text-zinc-200">终端会话</span>
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+        <TerminalIcon className="text-muted-foreground size-4" aria-hidden="true" />
+        <span className="text-foreground text-sm font-medium">终端会话</span>
         <div className="ml-auto flex min-w-0 items-center gap-2">
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 px-2 py-1 text-[11px] text-zinc-300">
+          <Badge variant="outline" size="sm" className="text-foreground/80 h-5 gap-1.5 px-2">
             <span className={cn("size-1.5 rounded-full", connectionTone)} aria-hidden="true" />
             {connectionLabel}
-          </span>
+          </Badge>
           {(status !== "running" && status !== "starting") || exitCode !== undefined ? (
-            <span className="truncate font-mono text-[11px] text-zinc-500">
+            <span className="text-muted-foreground truncate font-mono text-2xs">
               {status !== "running" && status !== "starting" ? status : ""}
               {exitCode !== undefined ? ` · 退出码 ${exitCode ?? "?"}` : ""}
             </span>
@@ -167,13 +168,13 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
         <button
           type="button"
           onClick={toggleExpanded}
-          className="rounded p-1 text-zinc-400 hover:bg-white/10 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30"
+          className="focus-ring text-muted-foreground hover:bg-accent hover:text-foreground rounded p-1"
           aria-label={expanded ? "还原终端面板高度" : "展开终端面板"}
           title={expanded ? "还原高度" : "展开终端"}
         >
           {expanded ? <Minimize2Icon className="size-4" aria-hidden="true" /> : <Maximize2Icon className="size-4" aria-hidden="true" />}
         </button>
-        <button type="button" onClick={onClose} className="rounded p-1 text-zinc-400 hover:bg-white/10 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30" aria-label="关闭终端面板" title="关闭面板">
+        <button type="button" onClick={onClose} className="focus-ring text-muted-foreground hover:bg-accent hover:text-foreground rounded p-1" aria-label="关闭终端面板" title="关闭面板">
           <XIcon className="size-4" aria-hidden="true" />
         </button>
       </header>

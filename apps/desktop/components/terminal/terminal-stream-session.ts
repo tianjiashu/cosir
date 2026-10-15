@@ -3,6 +3,7 @@ import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { TerminalResizeController } from "./terminal-resize-controller";
+import { xtermAppearance } from "./xterm-appearance";
 
 /**
  * 只读交互终端的 xterm 容器。
@@ -21,14 +22,7 @@ export class TerminalStreamSession {
       cursorBlink: false,
       disableStdin: true,
       scrollback: 10_000,
-      theme: {
-        background: "#09090b",
-        foreground: "#e4e4e7",
-        cursor: "#a1a1aa",
-      },
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-      fontSize: 12,
-      lineHeight: 1.35,
+      ...xtermAppearance(),
     });
     this.fitAddon = new FitAddon();
     this.terminal.loadAddon(this.fitAddon);

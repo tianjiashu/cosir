@@ -17,8 +17,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { SegmentedControl } from "@/components/ui/segmented-control";
+import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { formatMcpServerJson, parseMcpServerJson, validateMcpServerConfiguration } from "@/components/configuration/mcp-config-json";
@@ -81,9 +87,10 @@ function transportLabel(transport: MCPTransport): string {
   return transport === "sse" ? "SSE" : "stdio";
 }
 
-function ErrorMessage({ children }: { children: string }) {
-  return <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{children}</div>;
-}
+const EDITOR_MODE_OPTIONS = [
+  { value: "form", label: "表单" },
+  { value: "json", label: "JSON" },
+] as const;
 
 /** 系统 MCP 服务的连接配置、工具发现与启停管理。 */
 export function MCPConfigurationPanel() {
@@ -241,42 +248,42 @@ export function MCPConfigurationPanel() {
         <Button onClick={() => openEditor()} disabled={loadState !== "ready" || saving}><PlusIcon />添加服务</Button>
       </header>
 
-      {notice && <div role="status" className="text-sm text-emerald-700 dark:text-emerald-400">{notice}</div>}
-      {loadError && <ErrorMessage>{loadError}</ErrorMessage>}
+      {notice && <Alert tone="success">{notice}</Alert>}
+      {loadError && loadState !== "error" && <Alert tone="destructive">{loadError}</Alert>}
       {loadState === "loading" ? (
-        <div className="text-muted-foreground flex items-center gap-2 py-10 text-sm"><Loader2Icon className="size-4 animate-spin" />正在读取 MCP 服务…</div>
+        <LoadingState label="正在读取 MCP 服务…" />
       ) : loadState === "error" ? (
-        <Button variant="outline" onClick={() => void load()}>重新读取</Button>
+        <ErrorState message={loadError ?? "读取 MCP 配置失败"} onRetry={() => void load()} retryLabel="重新读取" />
       ) : servers.length === 0 ? (
-        <div className="border-border/70 bg-muted/20 rounded-xl border border-dashed px-5 py-10 text-center">
-          <ServerIcon className="text-muted-foreground mx-auto mb-3 size-6" />
-          <p className="text-sm font-medium">还没有 MCP 服务</p>
-          <p className="text-muted-foreground mt-1 text-xs">添加本机服务后，Agent 就可以发现并调用它提供的工具。</p>
-        </div>
+        <EmptyState
+          icon={<ServerIcon />}
+          title="还没有 MCP 服务"
+          description="添加本机服务后，Agent 就可以发现并调用它提供的工具。"
+        />
       ) : (
         <div className="space-y-3">
           {servers.map((server) => {
             const result = lastTests[server.name];
             return (
-              <article key={server.name} className="border-border/70 bg-card/70 rounded-xl border p-4">
+              <Card key={server.name} className="p-4">
                 <div className="flex flex-wrap items-start gap-3">
                   <ServerIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="truncate text-sm font-medium">{server.name}</h3>
-                      <span className={`rounded-full px-2 py-0.5 text-[11px] ${server.enabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                      <Badge size="sm" tone={server.enabled ? "primary" : "neutral"}>
                         {server.enabled ? "已启用" : "已停用"}
-                      </span>
-                      <span className={`rounded-full px-2 py-0.5 text-[11px] ${server.tested ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400" : "bg-muted text-muted-foreground"}`}>
+                      </Badge>
+                      <Badge size="sm" tone={server.tested ? "success" : "neutral"}>
                         {server.tested ? "测试通过" : "待测试"}
-                      </span>
+                      </Badge>
                     </div>
                     <p className="text-muted-foreground mt-1 truncate font-mono text-xs">
                       {server.transport === "stdio" ? `${server.command} ${server.args.join(" ")}` : server.url}
                       <span className="ml-2 font-sans">{transportLabel(server.transport)}</span>
                     </p>
                     {!server.tested && <p className="text-muted-foreground mt-2 text-xs">连接测试成功并获取工具列表后，Agent 才能使用此服务。</p>}
-                    {result && <p className={`mt-2 text-xs ${result.success ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"}`}>
+                    {result && <p className={`mt-2 text-xs ${result.success ? "text-success" : "text-destructive"}`}>
                       {result.success ? `本次测试成功 · 发现 ${result.tools.length} 个工具` : `本次测试失败 · ${result.error || "请检查服务配置"}`}
                     </p>}
                     {result?.success && result.tools.length > 0 && (
@@ -295,7 +302,7 @@ export function MCPConfigurationPanel() {
                   <Button variant="outline" size="sm" onClick={() => void runTest(server)} disabled={loadState !== "ready" || testing}><WrenchIcon />测试连接</Button>
                   <Button variant="ghost" size="sm" onClick={() => void deleteServer(server)} disabled={loadState !== "ready" || saving} aria-label={`删除 ${server.name}`}><Trash2Icon /></Button>
                 </div>
-              </article>
+              </Card>
             );
           })}
         </div>
@@ -308,24 +315,13 @@ export function MCPConfigurationPanel() {
           </DialogHeader>
           <form onSubmit={(event) => void saveDraft(event)} onChange={() => setTestResult(null)} onClick={() => setTestResult(null)} className="space-y-4">
             <div className="flex justify-end">
-              <div className="bg-muted relative isolate grid h-9 w-36 grid-cols-2 rounded-lg p-1" role="group" aria-label="配置编辑模式">
-                <span
-                  aria-hidden="true"
-                  className={`absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-md bg-blue-600 shadow-sm transition-transform duration-200 ${editorMode === "json" ? "translate-x-full" : "translate-x-0"}`}
-                />
-                <button
-                  type="button"
-                  aria-pressed={editorMode === "form"}
-                  className={`relative z-10 rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${editorMode === "form" ? "text-white" : "text-muted-foreground hover:text-foreground"}`}
-                  onClick={() => selectEditorMode("form")}
-                >表单</button>
-                <button
-                  type="button"
-                  aria-pressed={editorMode === "json"}
-                  className={`relative z-10 rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${editorMode === "json" ? "text-white" : "text-muted-foreground hover:text-foreground"}`}
-                  onClick={() => selectEditorMode("json")}
-                >JSON</button>
-              </div>
+              <SegmentedControl
+                aria-label="配置编辑模式"
+                value={editorMode}
+                options={EDITOR_MODE_OPTIONS}
+                onValueChange={selectEditorMode}
+                className="w-36"
+              />
             </div>
             {editorMode === "json" ? (
               <div className="space-y-2">
@@ -339,7 +335,7 @@ export function MCPConfigurationPanel() {
               </div>
             ) : <>
             <label className="block space-y-1.5 text-sm"><span>服务名称</span><Input required value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
-            <label className="block space-y-1.5 text-sm"><span>传输方式</span><select className="border-input bg-background h-10 w-full rounded-md border px-3 text-sm" value={draft.transport} onChange={(event) => setDraft((current) => ({ ...current, transport: event.target.value as MCPTransport }))}><option value="stdio">stdio（本机进程）</option><option value="sse">SSE</option><option value="streamable_http">Streamable HTTP</option></select></label>
+            <label className="block space-y-1.5 text-sm"><span>传输方式</span><NativeSelect value={draft.transport} onChange={(event) => setDraft((current) => ({ ...current, transport: event.target.value as MCPTransport }))}><option value="stdio">stdio（本机进程）</option><option value="sse">SSE</option><option value="streamable_http">Streamable HTTP</option></NativeSelect></label>
             {draft.transport === "stdio" ? <>
               <label className="block space-y-1.5 text-sm"><span>启动命令</span><Input required value={draft.command} onChange={(event) => setDraft((current) => ({ ...current, command: event.target.value }))} placeholder="例如：uvx" /></label>
               <label className="block space-y-1.5 text-sm"><span>命令参数</span><Textarea value={draft.argsText} onChange={(event) => setDraft((current) => ({ ...current, argsText: event.target.value }))} placeholder="每行一个参数" className="min-h-20 font-mono text-xs" /></label>
@@ -356,10 +352,10 @@ export function MCPConfigurationPanel() {
             </>}
             </>}
             {editorMode === "form" && <label className="flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm"><span>启用此服务</span><Switch checked={draft.enabled} aria-label="启用此服务" onClick={() => setDraft((current) => ({ ...current, enabled: !current.enabled }))} /></label>}
-            {formError && <ErrorMessage>{formError}</ErrorMessage>}
-            {testResult && <div role="status" className={`rounded-lg border px-3 py-2 text-sm ${testResult.success ? "border-emerald-500/30 bg-emerald-500/5" : "border-destructive/30 bg-destructive/10"}`}>
+            {formError && <Alert tone="destructive">{formError}</Alert>}
+            {testResult && <Alert role="status" tone={testResult.success ? "success" : "destructive"}>
               {testResult.success ? `测试成功，已获取 ${testResult.tools.length} 个工具。${testResult.agent_available ? "Agent 已可使用此服务。" : "保存配置后，还需对已保存服务测试一次才能供 Agent 使用。"}` : `测试失败：${testResult.error || "请检查服务配置"}`}
-            </div>}
+            </Alert>}
             {testResult?.success && testResult.tools.length > 0 && <ul className="max-h-40 space-y-1 overflow-y-auto rounded-lg bg-muted/40 p-3 text-xs">{testResult.tools.map((tool) => <li key={tool.name}><span className="font-mono font-medium">{tool.name}</span>{tool.description && <span className="text-muted-foreground ml-2">{tool.description}</span>}</li>)}</ul>}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => void testDraft()} disabled={testing || saving}>{testing ? <Loader2Icon className="animate-spin" /> : <WrenchIcon />}测试连接</Button>

@@ -8,8 +8,9 @@ export const ASSISTANT_PART_STACK_CLASS = "flex flex-col gap-1";
 
 export const TOOL_TRACE_CONTENT_CLASS = "mt-1 flex flex-col gap-1";
 
+/** 深色工具卡片（根节点带 `terminal-surface`）内部使用：语义 token 由主题岛重定义为深底值。 */
 export const DARK_TOOL_CARD_HEADER_CLASS =
-  "flex min-w-0 items-center gap-1 border-b border-white/5 bg-white/[0.02] pr-2";
+  "flex min-w-0 items-center gap-1 border-b border-border/60 bg-muted/40 pr-2";
 
 export const DARK_TOOL_CARD_CONTENT_CLASS = "ml-6 pb-2 pl-2 pr-2";
 

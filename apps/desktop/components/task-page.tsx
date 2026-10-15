@@ -8,6 +8,7 @@ import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalPanelHost } from "@/components/terminal/terminal-panel";
 import { TaskWorkspaceLayout } from "@/components/task-workspace-layout";
+import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 
 type TaskSessionProps = {
   taskId: number;
@@ -116,12 +117,11 @@ export function TaskPage({
   }, [initialTaskId, onTaskLoaded, retryToken, taskId]);
 
   if (error) return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 text-sm">
-      <p className="text-destructive">{error}</p>
-      <button type="button" className="text-muted-foreground underline underline-offset-4" onClick={() => setRetryToken((value) => value + 1)}>重试</button>
+    <div className="flex h-full items-center justify-center p-6">
+      <ErrorState className="w-full max-w-md" message={error} onRetry={() => setRetryToken((value) => value + 1)} />
     </div>
   );
-  if (!loadedTask || loadedTask.task_id !== taskId) return <div className="flex h-full items-center justify-center text-sm">正在加载任务工作区…</div>;
+  if (!loadedTask || loadedTask.task_id !== taskId) return <LoadingState label="正在加载任务工作区…" className="h-full" />;
 
   return (
     <TaskWorkspaceLayout bottomPanel={<TerminalPanelHost taskId={taskId} />}>

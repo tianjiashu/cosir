@@ -69,7 +69,7 @@ export function ImageAttachmentCard({
       {remove ?? (onRemove && (
         <button
           type="button"
-          className="absolute right-1 top-1 rounded-full bg-black/65 p-0.5 text-white hover:bg-black/80"
+          className="bg-foreground/65 text-background hover:bg-foreground/80 focus-ring absolute top-1 right-1 rounded-full p-0.5"
           aria-label={`移除附件 ${name}`}
           onClick={onRemove}
         >

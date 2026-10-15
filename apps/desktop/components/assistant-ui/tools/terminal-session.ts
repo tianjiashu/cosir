@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalResizeController } from "@/components/terminal/terminal-resize-controller";
+import { xtermAppearance } from "@/components/terminal/xterm-appearance";
 
 import { reconcileTerminalOutput } from "./terminal-output-reconciler";
 import { TerminalWriteScheduler } from "./terminal-write-scheduler";
@@ -39,16 +40,8 @@ export class TerminalSession {
       convertEol: true,
       cursorBlink: false,
       disableStdin: true,
-      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-      fontSize: 12,
-      lineHeight: 1.35,
       scrollback: 5000,
-      theme: {
-        background: "#09090b",
-        foreground: "#d4d4d8",
-        cursor: "#a1a1aa",
-        selectionBackground: "#3f3f46",
-      },
+      ...xtermAppearance(),
     });
 
     this.terminal.loadAddon(this.fitAddon);

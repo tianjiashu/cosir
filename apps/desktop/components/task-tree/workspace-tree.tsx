@@ -4,7 +4,7 @@ import { getTreeLinePrefix, Tree, type NodeApi, type NodeRendererProps, type Tre
 
 import type { WorkspaceTask } from "@/lib/api/workspaces";
 import { Button } from "@/components/ui/button";
-import { cn } from "cn";
+import { cn } from "@/lib/utils";
 import { buildWorkspaceTreeModel, taskTreeNodeId, workspaceTreeNodeId, type WorkspaceSidebarNode, type WorkspaceTreeSource } from "./workspace-tree-model";
 import type { TaskTreeNode } from "./task-tree-model";
 
@@ -37,7 +37,7 @@ function WorkspaceTreeRow({
 >) {
   const item = node.data;
   if (item.kind === "placeholder") {
-    return <div style={style} className="flex items-center pl-16 text-xs text-muted-foreground">{item.label}</div>;
+    return <div style={style} className={cn("flex items-center pl-16 text-xs", item.isError ? "text-destructive" : "text-muted-foreground")}>{item.label}</div>;
   }
 
   if (item.kind === "workspace") {
@@ -117,12 +117,12 @@ function WorkspaceTreeRow({
       >
         {node.isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
       </button>}
-      <span className="w-auto shrink-0 whitespace-pre font-mono text-[11px] text-muted-foreground/50" aria-hidden="true">
+      <span className="w-auto shrink-0 whitespace-pre font-mono text-2xs text-muted-foreground/50" aria-hidden="true">
         {getTreeLinePrefix(node, { last: "└─ ", middle: "├─ ", pipe: "│  ", blank: "   " })}
       </span>
       <div className="flex min-w-0 flex-1 items-center gap-2" title={task.full_title}>
         {task.task_type === "fork"
-          ? <GitForkIcon className="size-3.5 shrink-0 text-sky-600 dark:text-sky-400" aria-hidden="true" />
+          ? <GitForkIcon className="size-3.5 shrink-0 text-info" aria-hidden="true" />
           : <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}
         <span className="min-w-0 flex-1 line-clamp-2 break-words font-medium leading-4">{task.display_title}</span>
       </div>

@@ -9,8 +9,11 @@ import {
   NON_ASSIGNABLE_TOOL_GROUPS,
 } from "@/components/system-configuration-page";
 import { MarkdownSourcePreviewEditor } from "@/components/configuration/markdown-source-preview-editor";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import {
@@ -27,11 +30,6 @@ import { useWorkbenchStore } from "@/lib/workbench/store";
 import type { WorkbenchAgentConfigurationDraftTab } from "@/lib/workbench/types";
 
 type ConfigurationScope = "workspace" | "system";
-
-function ErrorNotice({ message }: { message: string | null }) {
-  if (!message) return null;
-  return <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{message}</div>;
-}
 
 /**
  * 在 Workbench 中编辑一次工具生成的临时草稿。
@@ -124,9 +122,9 @@ export function AgentConfigurationDraftSurface({
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="space-y-4">
-          <ErrorNotice message={error} />
-          {saved && <div role="status" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">配置已保存</div>}
-          <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">保存范围</span><select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={scope} onChange={(event) => { const next = event.target.value as ConfigurationScope; setScope(next); setDraftScope(tab.id, next); setDraftDirty(tab.id, true); }}><option value="workspace">当前工作区</option><option value="system">系统级</option></select></label>
+          {error && <Alert tone="destructive">{error}</Alert>}
+          {saved && <Alert tone="success">配置已保存</Alert>}
+          <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">保存范围</span><NativeSelect value={scope} onChange={(event) => { const next = event.target.value as ConfigurationScope; setScope(next); setDraftScope(tab.id, next); setDraftDirty(tab.id, true); }}><option value="workspace">当前工作区</option><option value="system">系统级</option></NativeSelect></label>
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Agent ID</span><Input value={form.agent_id} onChange={(event) => setField("agent_id", event.target.value)} /></label>
             <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">角色</span><Input value={form.role} onChange={(event) => setField("role", event.target.value)} /></label>
@@ -137,7 +135,7 @@ export function AgentConfigurationDraftSurface({
             <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">最大步数</span><Input type="number" min={1} max={10000} value={form.max_steps} onChange={(event) => setField("max_steps", Number(event.target.value))} /></label>
             <div className="space-y-1.5 text-sm"><span className="text-muted-foreground">模型（可选）</span><AgentModelSelector modelConfigId={form.model_config_id} onChange={(value) => setField("model_config_id", value)} /></div>
           </div>
-          <div className="space-y-1.5 text-sm"><span className="text-muted-foreground">允许的工具组</span><div className="border-border/70 bg-muted/20 grid gap-2 rounded-xl border p-3">{toolGroups.map(({ group }) => { const locked = NON_ASSIGNABLE_TOOL_GROUPS.has(group); return <label key={group} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${locked ? "bg-muted/40 text-muted-foreground cursor-not-allowed" : "bg-background hover:bg-muted/50 cursor-pointer"}`}><input type="checkbox" checked={selectedToolGroups.includes(group)} disabled={locked} onChange={(event) => setField("allowed_tool_groups", event.target.checked ? [...selectedToolGroups, group] : selectedToolGroups.filter((item) => item !== group))} /><span>{group}</span></label>; })}</div></div>
+          <div className="space-y-1.5 text-sm"><span className="text-muted-foreground">允许的工具组</span><div className="border-border/70 bg-muted/20 grid gap-2 rounded-xl border p-3">{toolGroups.map(({ group }) => { const locked = NON_ASSIGNABLE_TOOL_GROUPS.has(group); return <label key={group} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${locked ? "bg-muted/40 text-muted-foreground cursor-not-allowed" : "bg-background hover:bg-muted/50 cursor-pointer"}`}><Checkbox checked={selectedToolGroups.includes(group)} disabled={locked} onChange={(event) => setField("allowed_tool_groups", event.target.checked ? [...selectedToolGroups, group] : selectedToolGroups.filter((item) => item !== group))} /><span>{group}</span></label>; })}</div></div>
           <ModelSettingsEditor value={modelSettings} onChange={(value) => {
             const nextModelSettings = modelSettingsFromForm(value);
             setModelSettings(value);

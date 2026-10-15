@@ -4,6 +4,7 @@ import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { CheckIcon, ChevronDownIcon, FolderIcon, FolderPlusIcon, Loader2Icon } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { createWorkspace, type Workspace } from "@/lib/api/workspaces";
 import { writeLastWorkspaceId } from "@/lib/workspace-preferences";
@@ -48,7 +49,7 @@ export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceCh
 
   return (
     <Popover open={openMenu} onOpenChange={setOpenMenu}>
-      <PopoverTrigger type="button" className={`border-border bg-background hover:bg-muted inline-flex min-w-0 max-w-64 items-center justify-start gap-1.5 rounded-lg border font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 ${showCreateLabel ? "h-7 px-2.5 text-xs" : "h-8 px-2.5 text-sm"}`}>
+      <PopoverTrigger type="button" className={`border-border bg-background hover:bg-muted inline-flex min-w-0 max-w-64 items-center justify-start gap-1.5 rounded-lg border font-medium focus-ring ${showCreateLabel ? "h-7 px-2.5 text-xs" : "h-8 px-2.5 text-sm"}`}>
           <FolderIcon className="size-4 shrink-0" />
           <span className="truncate">{selected?.name ?? "选择工作区"}</span>
           <ChevronDownIcon className="text-muted-foreground ml-auto size-3.5 shrink-0" />
@@ -58,11 +59,11 @@ export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceCh
         <div role="listbox" aria-label="工作区列表" className="max-h-64 overflow-y-auto">
           {workspaces.map((workspace) => {
             const active = workspace.workspace_id === selectedWorkspaceId;
-            return <button key={workspace.workspace_id} type="button" role="option" aria-selected={active} onClick={() => chooseWorkspace(workspace.workspace_id)} className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"><FolderIcon className="text-muted-foreground size-4 shrink-0" /><span className="min-w-0 flex-1"><span className="block truncate text-sm">{workspace.name}</span><span className="text-muted-foreground block truncate text-[11px]">{workspace.root_path}</span></span>{active && <CheckIcon className="text-primary size-4 shrink-0" />}</button>;
+            return <button key={workspace.workspace_id} type="button" role="option" aria-selected={active} onClick={() => chooseWorkspace(workspace.workspace_id)} className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left focus-ring"><FolderIcon className="text-muted-foreground size-4 shrink-0" /><span className="min-w-0 flex-1"><span className="block truncate text-sm">{workspace.name}</span><span className="text-muted-foreground block truncate text-2xs">{workspace.root_path}</span></span>{active && <CheckIcon className="text-primary size-4 shrink-0" />}</button>;
           })}
         </div>
-        <div className="border-border/60 mt-1 border-t pt-1"><button type="button" onClick={() => void createFromFolder()} disabled={creating} className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50">{creating ? <Loader2Icon className="size-4 animate-spin" /> : <FolderPlusIcon className="size-4" />}新建工作区</button></div>
-        {error && <p className="text-destructive px-2 pt-2 text-xs">{error}</p>}
+        <div className="border-border/60 mt-1 border-t pt-1"><button type="button" onClick={() => void createFromFolder()} disabled={creating} className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm focus-ring">{creating ? <Loader2Icon className="size-4 animate-spin" /> : <FolderPlusIcon className="size-4" />}新建工作区</button></div>
+        {error && <Alert tone="destructive" className="mt-2 text-xs">{error}</Alert>}
       </PopoverContent>
     </Popover>
   );

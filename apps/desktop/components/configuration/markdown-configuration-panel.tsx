@@ -4,14 +4,11 @@ import { useEffect } from "react";
 import { CheckIcon, Loader2Icon, SaveIcon } from "lucide-react";
 
 import { MarkdownSourcePreviewEditor } from "@/components/configuration/markdown-source-preview-editor";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { useMarkdownConfigurationDocument, type MarkdownConfigurationAdapter } from "@/hooks/use-markdown-configuration-document";
 import { estimateMarkdownTokens, type MarkdownDocumentContract } from "@/lib/markdown-document";
-
-function ErrorNotice({ message }: { message: string | null }) {
-  if (!message) return null;
-  return <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{message}</div>;
-}
 
 type MarkdownConfigurationPanelProps<TDocument extends MarkdownDocumentContract> = {
   adapter: MarkdownConfigurationAdapter<TDocument>;
@@ -46,10 +43,10 @@ export function MarkdownConfigurationPanel<TDocument extends MarkdownDocumentCon
     return () => window.removeEventListener("keydown", handleSaveShortcut);
   }, [state.save]);
   if (state.loading && !state.document) {
-    return <div className="text-muted-foreground flex items-center gap-2 py-12 text-sm"><Loader2Icon className="size-4 animate-spin" />正在读取 Markdown 配置…</div>;
+    return <LoadingState label="正在读取 Markdown 配置…" />;
   }
   if (!state.document) {
-    return <div className="space-y-3 py-12"><ErrorNotice message={state.error ?? "读取 Markdown 配置失败"} /><Button variant="outline" onClick={() => void state.load()}>重新读取</Button></div>;
+    return <ErrorState className="my-10" message={state.error ?? "读取 Markdown 配置失败"} onRetry={() => void state.load()} retryLabel="重新读取" />;
   }
 
   const document = state.document;
@@ -59,7 +56,7 @@ export function MarkdownConfigurationPanel<TDocument extends MarkdownDocumentCon
 
   return (
     <div className="space-y-4">
-      <ErrorNotice message={state.error} />
+      {state.error && <Alert tone="destructive">{state.error}</Alert>}
       {description && (
         <p className="text-destructive text-xs font-semibold">
           {description}

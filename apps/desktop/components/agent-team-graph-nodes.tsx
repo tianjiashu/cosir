@@ -5,6 +5,7 @@ import { Handle, NodeToolbar, Position, useInternalNode, useUpdateNodeInternals,
 import { CheckCircle2Icon, CircleIcon, FlagIcon, Trash2Icon, XIcon } from "lucide-react";
 
 import { AgentTeamStatusEditor } from "@/components/agent-team-status-editor";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { statusHandleId, type TeamGraphNode } from "@/components/agent-team-graph-model";
@@ -129,8 +130,8 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
 
   return (
     <>
-      <article className={`relative w-64 overflow-visible rounded-2xl border bg-card shadow-lg transition-shadow ${isSelected ? "border-primary ring-2 ring-primary/25" : data.isStart ? "border-primary/60 ring-2 ring-primary/15" : "border-border"}`}>
-        <Handle type="target" position={Position.Left} id="input" aria-label="接收连线的输入端口" title="输入端口：接收其他节点的连线" className="!size-3 !border-2 !border-background !bg-sky-600" />
+      <article className={`relative w-64 overflow-visible rounded-2xl border bg-card shadow-lg transition-shadow ${isSelected ? "border-info ring-2 ring-info/25" : data.isStart ? "border-primary/60 ring-2 ring-primary/15" : "border-border"}`}>
+        <Handle type="target" position={Position.Left} id="input" aria-label="接收连线的输入端口" title="输入端口：接收其他节点的连线" className="!size-3 !border-2 !border-background !bg-info" />
         <header className="flex items-center gap-2 rounded-t-2xl border-b px-3 py-2.5">
           {data.isStart
             ? <FlagIcon aria-label="开始节点" className="size-4 shrink-0 text-primary" />
@@ -138,7 +139,7 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
           <div className="min-w-0 flex-1">
             <h3 className="truncate text-sm font-semibold">{data.node.name || data.node.node_id}</h3>
           </div>
-          {data.isStart && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">开始</span>}
+          {data.isStart && <Badge tone="primary" size="sm">开始</Badge>}
         </header>
         <div className="space-y-2 px-3 py-2.5">
           <div className="space-y-1.5">
@@ -146,7 +147,7 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
               const duplicateIndex = statuses.slice(0, statusIndex).filter((item) => item.name === status.name).length;
               return (
                 <div key={`${status.name}:${statusIndex}`} className="relative flex min-h-6 items-center justify-between gap-2 rounded-md bg-muted/40 px-2">
-                  <span className="truncate font-mono text-[11px]">{status.name}</span>
+                  <span className="truncate font-mono text-2xs">{status.name}</span>
                   <Handle type="source" position={Position.Right} id={statusHandleId(status.name, duplicateIndex)} style={{ backgroundColor: status.color }} className="!size-3 !border-2 !border-background" aria-label={`${status.name} 状态出口，拖出以创建连线`} title={`${status.name}：拖出连线`} />
                 </div>
               );
@@ -155,9 +156,9 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
               const duplicateIndex = statuses.filter((item) => item.name === status).length
                 + orphanStatuses.slice(0, orphanIndex).filter((item) => item === status).length;
               return (
-                <div key={`orphan:${status}:${orphanIndex}`} className="relative flex min-h-6 items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2">
-                  <span className="truncate font-mono text-[11px]">{status || "（空状态）"}</span>
-                  <Handle type="source" position={Position.Right} id={statusHandleId(status, duplicateIndex)} className="!size-3 !border-2 !border-background !bg-amber-600" aria-label={`${status || "空状态"} 转移草稿出口`} title={`${status || "空状态"}：现有转移草稿`} />
+                <div key={`orphan:${status}:${orphanIndex}`} className="relative flex min-h-6 items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-2">
+                  <span className="truncate font-mono text-2xs">{status || "（空状态）"}</span>
+                  <Handle type="source" position={Position.Right} id={statusHandleId(status, duplicateIndex)} className="!size-3 !border-2 !border-background !bg-warning" aria-label={`${status || "空状态"} 转移草稿出口`} title={`${status || "空状态"}：现有转移草稿`} />
                 </div>
               );
             })}
@@ -168,7 +169,7 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
       {isSelected && <AgentTeamNodeToolbar id={id}>
         <section className="nodrag nopan bg-card w-80 max-h-[min(70vh,560px)] overflow-y-auto rounded-2xl border shadow-2xl" aria-label="节点属性编辑器" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
           <header className="flex items-center justify-between border-b px-4 py-3">
-            <div><h3 className="text-sm font-semibold">编辑节点</h3><p className="text-muted-foreground text-[11px]">属性直接跟随节点显示</p></div>
+            <div><h3 className="text-sm font-semibold">编辑节点</h3><p className="text-muted-foreground text-2xs">属性直接跟随节点显示</p></div>
             <div className="flex items-center gap-1">
               <Button type="button" variant="ghost" size="icon-sm" aria-label="关闭节点属性" onClick={(event) => { event.stopPropagation(); editor.onDismissNode(); }}><XIcon /></Button>
               <Button type="button" variant="ghost" size="icon-sm" className="text-destructive" aria-label={`删除节点 ${data.node.name}`} onClick={() => editor.onDeleteNode(data.nodeIndex)}><Trash2Icon /></Button>
@@ -186,7 +187,7 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
                 onColorChange={(statusIndex, color) => updateNode({ statuses: data.node.statuses.map((status, index) => index === statusIndex ? { ...status, color } : status) })}
               />
             </div>
-            <div className="flex justify-between border-t pt-3"><Button type="button" variant="outline" size="sm" onClick={() => editor.onSetStartNode(data.node.node_id)} disabled={data.isStart}>{data.isStart ? "当前为开始节点" : "设为开始节点"}</Button><span className="text-muted-foreground self-center text-[10px]">唯一入口</span></div>
+            <div className="flex justify-between border-t pt-3"><Button type="button" variant="outline" size="sm" onClick={() => editor.onSetStartNode(data.node.node_id)} disabled={data.isStart}>{data.isStart ? "当前为开始节点" : "设为开始节点"}</Button><span className="text-muted-foreground self-center text-2xs">唯一入口</span></div>
           </div>
         </section>
       </AgentTeamNodeToolbar>}
@@ -201,8 +202,8 @@ export function AgentTeamGraphTerminalNode({ id, data }: NodeProps<TeamGraphNode
 
   return (
     <>
-      <div className={`border-emerald-600/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 relative flex h-14 min-w-36 items-center justify-center rounded-full border px-5 text-sm font-bold shadow-md ${isSelected ? "ring-2 ring-emerald-500/30" : ""}`}>
-        <Handle type="target" position={Position.Left} id="input" aria-label="END 接收连线的输入端口" title="输入端口：接收其他节点的连线" className="!size-3 !border-2 !border-background !bg-sky-600" />
+      <div className={`relative flex h-14 min-w-36 items-center justify-center rounded-full border border-success/30 bg-success/10 px-5 text-sm font-bold text-success shadow-md ${isSelected ? "ring-2 ring-info/25" : ""}`}>
+        <Handle type="target" position={Position.Left} id="input" aria-label="END 接收连线的输入端口" title="输入端口：接收其他节点的连线" className="!size-3 !border-2 !border-background !bg-info" />
         <CheckCircle2Icon className="mr-2 size-4" />END
       </div>
       <NodeToolbar isVisible={editor.selectedNodeId === id} position={Position.Top} offset={12} className="!z-30">
@@ -219,10 +220,10 @@ export function AgentTeamGraphTerminalNode({ id, data }: NodeProps<TeamGraphNode
 export function AgentTeamGraphUnresolvedEndpoint({ data }: NodeProps<TeamGraphNode>) {
   if (data.kind !== "unresolved-transition-endpoint") return null;
   return (
-    <div className="border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-200 relative max-w-56 rounded-lg border border-dashed px-3 py-2 text-xs shadow-sm">
+    <div className="relative max-w-56 rounded-lg border border-dashed border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning shadow-sm">
       {data.side === "source"
-        ? <Handle type="source" position={Position.Right} id={statusHandleId(data.status)} aria-label={`未解析来源状态 ${data.status || "空状态"}`} className="!size-3 !border-2 !border-background !bg-amber-600" />
-        : <Handle type="target" position={Position.Left} id="input" aria-label="未解析目标输入端口" className="!size-3 !border-2 !border-background !bg-amber-600" />}
+        ? <Handle type="source" position={Position.Right} id={statusHandleId(data.status)} aria-label={`未解析来源状态 ${data.status || "空状态"}`} className="!size-3 !border-2 !border-background !bg-warning" />
+        : <Handle type="target" position={Position.Left} id="input" aria-label="未解析目标输入端口" className="!size-3 !border-2 !border-background !bg-warning" />}
       <span>{data.label}</span>
     </div>
   );

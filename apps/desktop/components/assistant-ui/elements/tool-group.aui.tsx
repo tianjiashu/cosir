@@ -111,11 +111,11 @@ function ToolGroupTrigger({
   const statusIcon = summary?.phase === "failed"
     ? <CircleAlertIcon className="aui-tool-group-trigger-status text-destructive size-3.5" aria-label={summary.failed === summary.total ? "全部工具执行失败" : "部分工具执行失败"} />
     : summary?.phase === "cancelled"
-      ? <XCircleIcon className="aui-tool-group-trigger-status text-amber-600 size-3.5" aria-label={summary.cancelled === summary.total ? "全部工具已取消" : "部分工具已取消"} />
+      ? <XCircleIcon className="aui-tool-group-trigger-status text-warning size-3.5" aria-label={summary.cancelled === summary.total ? "全部工具已取消" : "部分工具已取消"} />
       : summary?.phase === "unknown"
-        ? <CircleAlertIcon className="aui-tool-group-trigger-status text-amber-600 size-3.5" aria-label="工具状态待确认" />
+        ? <CircleAlertIcon className="aui-tool-group-trigger-status text-warning size-3.5" aria-label="工具状态待确认" />
         : summary?.phase === "completed"
-          ? <CheckIcon className="aui-tool-group-trigger-status text-emerald-600 size-3.5" aria-label="全部工具已完成" />
+          ? <CheckIcon className="aui-tool-group-trigger-status text-success size-3.5" aria-label="全部工具已完成" />
           : undefined;
 
   return (

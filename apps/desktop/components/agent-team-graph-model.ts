@@ -124,7 +124,7 @@ export function createGraphEdges(
         ? agentNodeViewId(configuration.nodes.findIndex((node) => node.node_id === transition.target_node_id))
         : unresolvedEndpointViewId("target", transitionIndex);
     const statusColor = findAgentTeamStatus(source?.statuses ?? [], transition.status)?.color
-      ?? "hsl(var(--muted-foreground) / 0.45)";
+      ?? "color-mix(in oklab, var(--muted-foreground) 45%, transparent)";
     const routeKey = edgeRouteKey(
       transition.from_node_id,
       transition.status,

@@ -1,6 +1,7 @@
 "use client";
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorState } from "@/components/ui/state-panel";
 import { useAssistantInitialState } from "@/hooks/use-assistant-initial-state";
 import { AssistantRuntime } from "@/components/assistant/assistant-runtime";
 import { useState } from "react";
@@ -56,15 +57,8 @@ export const Assistant = ({
 
   if (error) {
     return (
-      <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 text-sm">
-        <p className="text-destructive">{error}</p>
-        <button
-          type="button"
-          className="text-muted-foreground underline underline-offset-4"
-          onClick={retry}
-        >
-          重试
-        </button>
+      <div className="flex h-full min-h-0 items-center justify-center p-6">
+        <ErrorState className="w-full max-w-md" message={error} onRetry={retry} />
       </div>
     );
   }

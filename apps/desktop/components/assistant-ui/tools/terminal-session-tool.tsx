@@ -9,6 +9,7 @@ import {
 import type { ReactNode } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useTerminalPanelStore } from "@/components/terminal/terminal-panel-store";
@@ -37,10 +38,10 @@ function sessionStatusLabel(value: unknown): string | null {
 }
 
 function sessionStatusClass(value: unknown): string {
-  if (value === "running" || value === "starting") return "text-emerald-300";
-  if (value === "failed") return "text-red-300";
-  if (value === "interrupted") return "text-amber-300";
-  return "text-zinc-400";
+  if (value === "running" || value === "starting") return "text-success";
+  if (value === "failed") return "text-destructive";
+  if (value === "interrupted") return "text-warning";
+  return "text-muted-foreground";
 }
 
 function sessionVariant(value: unknown): TerminalSessionVariant {
@@ -94,10 +95,10 @@ function actionMeta(variant: Exclude<TerminalSessionVariant, "start" | "unknown"
 }
 
 function actionIcon(variant: Exclude<TerminalSessionVariant, "start" | "unknown">): ReactNode {
-  if (variant === "read") return <ArrowDownIcon className="size-4 text-sky-400" aria-hidden="true" />;
-  if (variant === "write") return <ArrowUpIcon className="size-4 text-violet-400" aria-hidden="true" />;
-  if (variant === "signal") return <CircleAlertIcon className="size-4 text-amber-400" aria-hidden="true" />;
-  return <XIcon className="size-4 text-zinc-400" aria-hidden="true" />;
+  if (variant === "read") return <ArrowDownIcon className="text-info size-4" aria-hidden="true" />;
+  if (variant === "write") return <ArrowUpIcon className="text-info size-4" aria-hidden="true" />;
+  if (variant === "signal") return <CircleAlertIcon className="text-warning size-4" aria-hidden="true" />;
+  return <XIcon className="text-muted-foreground size-4" aria-hidden="true" />;
 }
 
 function TerminalSessionStartCard({ artifact, taskId }: { artifact: ReturnType<typeof readToolArtifact>; taskId?: number }) {
@@ -108,17 +109,17 @@ function TerminalSessionStartCard({ artifact, taskId }: { artifact: ReturnType<t
   const status = sessionStatusLabel(data.status);
 
   return (
-    <div className="flex min-w-0 flex-col gap-2 rounded-xl border border-sky-400/20 bg-zinc-900 px-3 py-2 text-zinc-100 shadow-sm">
+    <div className="terminal-surface border-info/30 flex min-w-0 flex-col gap-2 rounded-xl border px-3 py-2 shadow-sm">
       <div className="flex min-w-0 items-center gap-2">
-        <TerminalIcon className="size-4 shrink-0 text-sky-300" aria-hidden="true" />
+        <TerminalIcon className="text-info size-4 shrink-0" aria-hidden="true" />
         <span className="font-medium">终端会话</span>
-        <span className="rounded border border-sky-300/20 bg-sky-300/10 px-1.5 py-px font-mono text-[10px] uppercase tracking-wide text-sky-200">
+        <Badge tone="info" variant="outline" shape="tag" size="sm" className="bg-info/10 font-mono tracking-wide uppercase">
           session
-        </span>
-        <ToolStatus status={artifact.backendStatus} className="ml-auto shrink-0 text-xs text-zinc-400" />
+        </Badge>
+        <ToolStatus status={artifact.backendStatus} className="ml-auto shrink-0" />
       </div>
-      <div className="flex min-w-0 items-center gap-2 pl-6 text-xs text-zinc-400">
-        <code className="shrink-0 text-zinc-300">{shellLabel(data)}</code>
+      <div className="text-muted-foreground flex min-w-0 items-center gap-2 pl-6 text-xs">
+        <code className="text-foreground/80 shrink-0">{shellLabel(data)}</code>
         <span aria-hidden="true">·</span>
         <code className="min-w-0 truncate" title={text(data.initial_cwd) ?? undefined}>{text(data.initial_cwd) ?? "工作目录未知"}</code>
         {status && <span className={cn("shrink-0", sessionStatusClass(data.status))}>· {status}</span>}
@@ -129,14 +130,14 @@ function TerminalSessionStartCard({ artifact, taskId }: { artifact: ReturnType<t
           variant="secondary"
           size="sm"
           disabled={!canOpen}
-          className="h-7 shrink-0 bg-sky-400/15 px-2.5 text-sky-100 hover:bg-sky-400/25"
+          className="bg-info/10 text-info hover:bg-info/20 h-7 shrink-0 px-2.5"
           onClick={() => { if (canOpen) openSession({ taskId, sessionId }); }}
         >
           打开终端
         </Button>
       </div>
-      {artifact.error && <div className="pl-6 text-xs text-red-300">{artifact.error}</div>}
-      {!sessionId && <span className="pl-6 text-xs text-zinc-500">等待 session</span>}
+      {artifact.error && <div className="text-destructive pl-6 text-xs">{artifact.error}</div>}
+      {!sessionId && <span className="text-muted-foreground pl-6 text-xs">等待 session</span>}
     </div>
   );
 }
@@ -173,7 +174,7 @@ export function TerminalSessionTool({ taskId, artifact: rawArtifact }: TerminalS
   return (
     <DisclosureRowStatic
       role="status"
-      leading={<SquareTerminalIcon className="size-4 text-zinc-400" aria-hidden="true" />}
+      leading={<SquareTerminalIcon className="text-muted-foreground size-4" aria-hidden="true" />}
       label={<span className="text-sm font-medium">终端会话操作</span>}
       meta={<span className="text-muted-foreground max-w-[55%] truncate">{artifact.error ?? "终端会话操作"}</span>}
       trailing={<ToolStatus status={artifact.backendStatus} />}

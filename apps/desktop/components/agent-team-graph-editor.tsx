@@ -58,6 +58,7 @@ import {
 } from "@/components/agent-team-graph-model";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/state-panel";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamConfigurationDraft, AgentTeamNodeConfiguration } from "@/lib/api/agent-teams";
 import { DEFAULT_AGENT_TEAM_STATUS_COLOR } from "@/lib/agent-team-status";
@@ -66,6 +67,14 @@ import { newTraceId } from "@/lib/trace";
 
 const nodeTypes = { team: AgentTeamGraphNode, terminal: AgentTeamGraphTerminalNode, unresolved: AgentTeamGraphUnresolvedEndpoint };
 const edgeTypes = { teamRouted: AgentTeamRoutedEdge };
+
+/*
+ * 画布深浅色：应用主题目前只「跟随系统」（lib/theme/system-theme.ts），因此直接用
+ * colorMode="system" 让 xyflow 内置 Controls、默认连线与背景点阵同步切换，无需再
+ * 观察 <html> 的 .dark 类。xyflow 会在自身根节点加 .dark，与全局 token 的 .dark
+ * 定义一致；日后加入手动主题偏好时，这里须改为由 <html> 类派生，否则画布内 token 会与外部不一致。
+ * xyflow 自带的底色、Controls 与连线标签配色统一在 app/globals.css 映射到 token。
+ */
 
 type PaletteDrag = {
   pointerId: number;
@@ -918,6 +927,7 @@ function GraphCanvas({
           }}>
             <AgentTeamEdgeRouteContext.Provider value={edgeRouteActions}>
               <ReactFlow
+              colorMode="system"
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
@@ -999,22 +1009,22 @@ function GraphCanvas({
               <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--border)" />
               <Controls position="bottom-left" showInteractive={false} />
               <Panel position="bottom-right" className="pointer-events-none !bottom-4 !right-4">
-                <div className="bg-card/90 text-muted-foreground flex items-center gap-3 rounded-xl border px-3 py-2 text-[10px] shadow-sm backdrop-blur">
+                <div className="bg-card/90 text-muted-foreground flex items-center gap-3 rounded-xl border px-3 py-2 text-2xs shadow-sm backdrop-blur">
                   <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-primary" />START</span>
                   <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-muted-foreground" />STEP</span>
-                  <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-emerald-600" />END</span>
+                  <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-success" />END</span>
                 </div>
               </Panel>
               <Panel position="top-right" className="pointer-events-none !right-4 !top-4">
-                <div className="bg-card/90 text-muted-foreground rounded-full border px-3 py-1.5 text-[10px] shadow-sm backdrop-blur">拖 Agent · 选中连线后拖控制点改路径 · F 适配 · +/- 缩放 · Space 平移 · Delete 删除 · Ctrl/⌘Z 撤销</div>
+                <div className="bg-card/90 text-muted-foreground rounded-full border px-3 py-1.5 text-2xs shadow-sm backdrop-blur">拖 Agent · 选中连线后拖控制点改路径 · F 适配 · +/- 缩放 · Space 平移 · Delete 删除 · Ctrl/⌘Z 撤销</div>
               </Panel>
               </ReactFlow>
             </AgentTeamEdgeRouteContext.Provider>
           </GraphNodeEditorContext.Provider>
-          {!configuration.nodes.length && <div className="pointer-events-none absolute inset-0 flex items-center justify-center"><div className="bg-background/90 rounded-2xl border border-dashed px-7 py-6 text-center shadow-sm backdrop-blur"><BotIcon className="text-primary mx-auto size-7" /><h3 className="mt-3 text-sm font-semibold">从左侧添加第一个 Agent</h3><p className="text-muted-foreground mt-1 text-xs">拖拽 Agent 或 END 到画布，或点击 Agent 卡片上的 +</p></div></div>}
+          {!configuration.nodes.length && <div className="pointer-events-none absolute inset-0 flex items-center justify-center"><EmptyState className="bg-background/90 py-6 shadow-sm backdrop-blur" icon={<BotIcon className="text-primary size-7" />} title="从左侧添加第一个 Agent" description="拖拽 Agent 或 END 到画布，或点击 Agent 卡片上的 +" /></div>}
         </div>
       </div>
-      {dragGhost && <div aria-hidden="true" className={`${dragGhost.kind === "end" ? "bg-emerald-600 text-white" : "bg-primary text-primary-foreground"} pointer-events-none fixed z-[200] rounded-lg px-3 py-2 text-xs font-medium shadow-xl`} style={{ left: dragGhost.x + 14, top: dragGhost.y + 14 }}>{dragGhost.kind === "end" ? <CheckCircle2Icon className="mr-2 inline size-3.5" /> : <BotIcon className="mr-2 inline size-3.5" />}{dragGhost.kind === "end" ? "END" : dragGhost.agentId}</div>}
+      {dragGhost && <div aria-hidden="true" className={`${dragGhost.kind === "end" ? "bg-success text-success-foreground" : "bg-primary text-primary-foreground"} pointer-events-none fixed z-[200] rounded-lg px-3 py-2 text-xs font-medium shadow-xl`} style={{ left: dragGhost.x + 14, top: dragGhost.y + 14 }}>{dragGhost.kind === "end" ? <CheckCircle2Icon className="mr-2 inline size-3.5" /> : <BotIcon className="mr-2 inline size-3.5" />}{dragGhost.kind === "end" ? "END" : dragGhost.agentId}</div>}
     </section>
   );
 }

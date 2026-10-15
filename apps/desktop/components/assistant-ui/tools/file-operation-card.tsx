@@ -1,5 +1,6 @@
 import { ArrowRightIcon } from "lucide-react";
 import type { TransportToolStatus } from "@/lib/assistant/contract";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { ToolIcon } from "./tool-icons";
 import { ToolStatus } from "./tool-status";
@@ -86,9 +87,7 @@ function FileOperationRow({ change }: { change: FileChange }) {
 
   return (
     <div className={cn("min-w-0", TOOL_CARD_ROW_CLASS)}>
-      <span className={fileChangeStatusBadgeClass(change.status)}>
-        {fileChangeStatusLabel(change.status)}
-      </span>
+      <FileChangeStatusBadge status={change.status} />
       {isMoved ? (
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs">
           <span className="min-w-0 truncate font-mono text-foreground" title={change.path}>
@@ -118,12 +117,19 @@ export function fileChangeStatusLabel(status: string | undefined): string {
   }
 }
 
-export function fileChangeStatusBadgeClass(status: string | undefined): string {
-  const base = "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium";
+function fileChangeStatusTone(status: string | undefined): BadgeTone {
   switch (status) {
-    case "deleted": return `${base} bg-destructive/10 text-destructive`;
-    case "moved": return `${base} bg-blue-500/10 text-blue-700 dark:text-blue-400`;
-    case "added": return `${base} bg-emerald-500/10 text-emerald-700 dark:text-emerald-400`;
-    default: return `${base} bg-muted text-muted-foreground`;
+    case "deleted": return "destructive";
+    case "moved": return "info";
+    case "added": return "success";
+    default: return "neutral";
   }
+}
+
+export function FileChangeStatusBadge({ status }: { status: string | undefined }) {
+  return (
+    <Badge tone={fileChangeStatusTone(status)} shape="tag" size="sm">
+      {fileChangeStatusLabel(status)}
+    </Badge>
+  );
 }

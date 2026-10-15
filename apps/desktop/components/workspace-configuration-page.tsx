@@ -6,7 +6,10 @@ import { ChevronLeftIcon, Code2Icon, FileTextIcon, FilterIcon, FolderIcon, SaveI
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
 import { AgentConfigurationPanel, type AgentConfigurationApi } from "@/components/system-configuration-page";
 import { AgentTeamConfigurationPanel } from "@/components/agent-team-configuration-panel";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Textarea } from "@/components/ui/textarea";
 import {
   createWorkspaceAgentConfiguration,
@@ -20,11 +23,6 @@ import {
   type AgentConfigurationInput,
   type WorkspaceFileIgnoreConfiguration,
 } from "@/lib/api/configuration";
-
-function ErrorNotice({ message }: { message: string | null }) {
-  if (!message) return null;
-  return <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{message}</div>;
-}
 
 function WorkspaceFileIgnorePanel({ workspaceId }: { workspaceId: number }) {
   const [document, setDocument] = useState<WorkspaceFileIgnoreConfiguration | null>(null);
@@ -61,8 +59,8 @@ function WorkspaceFileIgnorePanel({ workspaceId }: { workspaceId: number }) {
     }
   };
 
-  if (!document) return <div className="text-muted-foreground py-12 text-sm">{error ?? "正在读取 .fileignore…"}</div>;
-  return <div className="space-y-4"><ErrorNotice message={error} /><section className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm"><p className="text-muted-foreground mb-3 text-xs">控制工作区搜索时跳过哪些文件和目录。支持 gitignore 语法。</p><Textarea className="min-h-[28rem] resize-y border-0 bg-transparent p-2 font-mono text-sm shadow-none focus-visible:ring-0" value={content} onChange={(event) => { setContent(event.target.value); setSaved(false); }} /><div className="mt-4 flex items-center justify-end gap-2 border-t pt-4">{saved && <span className="text-muted-foreground text-xs">已保存</span>}<Button onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : <><SaveIcon />保存 .fileignore</>}</Button></div></section></div>;
+  if (!document) return error ? <ErrorState className="my-10" message={error} /> : <LoadingState label="正在读取 .fileignore…" />;
+  return <div className="space-y-4">{error && <Alert tone="destructive">{error}</Alert>}<Card className="p-4"><p className="text-muted-foreground mb-3 text-xs">控制工作区搜索时跳过哪些文件和目录。支持 gitignore 语法。</p><Textarea className="min-h-[28rem] resize-y border-0 bg-transparent p-2 font-mono text-sm shadow-none focus-visible:ring-0" value={content} onChange={(event) => { setContent(event.target.value); setSaved(false); }} /><div className="mt-4 flex items-center justify-end gap-2 border-t pt-4">{saved && <span className="text-muted-foreground text-xs">已保存</span>}<Button onClick={() => void save()} disabled={saving}>{saving ? "保存中…" : <><SaveIcon />保存 .fileignore</>}</Button></div></Card></div>;
 }
 
 export function WorkspaceConfigurationPage({ workspaceId, workspaceName, onClose }: { workspaceId: number; workspaceName: string; onClose: () => void }) {

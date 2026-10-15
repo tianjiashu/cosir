@@ -11,6 +11,12 @@ const STATUS_LABELS: Record<TransportToolStatus, string> = {
   unknown: "状态未知",
 };
 
+/** 失败与「状态未知」需要用户注意，其余生命周期状态保持低调；未知与工具组摘要统一用 warning。 */
+const STATUS_TONE_CLASS: Partial<Record<TransportToolStatus, string>> = {
+  failed: "text-destructive",
+  unknown: "text-warning",
+};
+
 export function ToolStatus({ status, className, prefix }: { status: TransportToolStatus; className?: string; prefix?: string }) {
   const Icon = status === "running" ? LoaderCircleIcon
     : status === "completed" ? CheckIcon
@@ -18,7 +24,7 @@ export function ToolStatus({ status, className, prefix }: { status: TransportToo
         : status === "cancelled" ? XCircleIcon
           : status === "unknown" ? CircleAlertIcon : CircleDashedIcon;
   return (
-    <span className={cn("inline-flex items-center gap-1.5 text-xs", (status === "failed" || status === "unknown") ? "text-destructive" : "text-muted-foreground", className)}>
+    <span className={cn("inline-flex items-center gap-1.5 text-xs", STATUS_TONE_CLASS[status] ?? "text-muted-foreground", className)}>
       <Icon className={cn("size-3.5", status === "running" && "animate-spin")} aria-hidden="true" />
       {prefix ? `${prefix} · ` : ""}{STATUS_LABELS[status]}
     </span>

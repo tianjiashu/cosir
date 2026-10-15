@@ -13,6 +13,7 @@ import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-too
 import { ComposerSurface } from "@/components/composer/composer-surface";
 import { WorkspacePicker } from "@/components/composer/workspace-picker";
 import { CosirMark } from "@/components/cosir-mark";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { createWorkspaceTask, deleteTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
@@ -345,7 +346,7 @@ export function NewConversation({
         <Dialog open={Boolean(error)} onOpenChange={(open) => { if (!open) setError(null); }}>
           <DialogContent>
             <DialogTitle>创建对话失败</DialogTitle>
-            <p className="text-muted-foreground text-sm">{error}</p>
+            <Alert tone="destructive">{error}</Alert>
           </DialogContent>
         </Dialog>
       </form>

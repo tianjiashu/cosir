@@ -19,8 +19,12 @@ import {
   ArrowUpIcon,
 } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { EmptyState } from "@/components/ui/state-panel";
 import { getContextMessages, type ContextMessage } from "@/lib/api/context-messages";
 
 function jsonText(value: unknown): string {
@@ -69,17 +73,17 @@ function toolNames(message: ContextMessage): string[] {
 
 function statusPresentation(status: string | null | undefined): {
   label: string;
-  className: string;
+  tone: BadgeTone;
   icon: typeof CheckCircle2Icon;
 } | null {
-  if (!status) return { label: "状态未记录", className: "border-border bg-muted text-muted-foreground", icon: Clock3Icon };
+  if (!status) return { label: "状态未记录", tone: "neutral", icon: Clock3Icon };
   switch (status) {
-    case "completed": return { label: "已完成", className: "border-emerald-700/20 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300", icon: CheckCircle2Icon };
-    case "failed": return { label: "失败", className: "border-destructive/25 bg-destructive/10 text-destructive", icon: CircleXIcon };
-    case "cancelled": return { label: "已取消", className: "border-amber-700/20 bg-amber-500/10 text-amber-800 dark:text-amber-300", icon: CirclePauseIcon };
-    case "running": return { label: "执行中", className: "border-sky-700/20 bg-sky-500/10 text-sky-800 dark:text-sky-300", icon: LoaderCircleIcon };
-    case "pending": return { label: "待执行", className: "border-border bg-muted text-muted-foreground", icon: Clock3Icon };
-    default: return { label: status, className: "border-border bg-muted text-muted-foreground", icon: Clock3Icon };
+    case "completed": return { label: "已完成", tone: "success", icon: CheckCircle2Icon };
+    case "failed": return { label: "失败", tone: "destructive", icon: CircleXIcon };
+    case "cancelled": return { label: "已取消", tone: "warning", icon: CirclePauseIcon };
+    case "running": return { label: "执行中", tone: "info", icon: LoaderCircleIcon };
+    case "pending": return { label: "待执行", tone: "neutral", icon: Clock3Icon };
+    default: return { label: status, tone: "neutral", icon: Clock3Icon };
   }
 }
 
@@ -96,24 +100,31 @@ function roleLabel(role: string): string {
 
 function roleStyle(role: string): string {
   switch (role) {
-    case "system": return "border-l-amber-500";
-    case "assistant": return "border-l-sky-600";
-    case "tool": return "border-l-emerald-600";
+    case "system": return "border-l-warning";
+    case "assistant": return "border-l-info";
+    case "tool": return "border-l-success";
     case "user":
-    case "human": return "border-l-violet-500";
+    case "human": return "border-l-(--skill-foreground)";
     default: return "border-l-muted-foreground";
   }
 }
 
-function roleBadgeStyle(role: string): string {
+function roleTone(role: string): BadgeTone {
   switch (role) {
-    case "system": return "bg-amber-500/10 text-amber-800 dark:text-amber-300";
-    case "assistant": return "bg-sky-500/10 text-sky-800 dark:text-sky-300";
-    case "tool": return "bg-emerald-500/10 text-emerald-800 dark:text-emerald-300";
+    case "system": return "warning";
+    case "assistant": return "info";
+    case "tool": return "success";
     case "user":
-    case "human": return "bg-violet-500/10 text-violet-800 dark:text-violet-300";
-    default: return "bg-muted text-muted-foreground";
+    case "human": return "skill";
+    default: return "neutral";
   }
+}
+
+function cacheTone(cache: ReturnType<typeof cacheUsage>, decline: number | undefined): BadgeTone {
+  if (!cache) return "neutral";
+  if (decline !== undefined && decline >= cacheDeclineAlertThreshold) return "destructive";
+  if (decline !== undefined && decline > cacheDeclineWarningThreshold) return "warning";
+  return "info";
 }
 
 type RoleFilter = "all" | "assistant" | "system" | "human" | "tool";
@@ -127,7 +138,7 @@ const cacheDeclineWarningThreshold = 2;
 function Field({ name, value }: { name: string; value: unknown }) {
   return (
     <section className="min-w-0 border-b last:border-b-0">
-      <h3 className="px-4 pt-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">{name}</h3>
+      <h3 className="px-4 pt-3 text-2xs font-semibold uppercase tracking-widest text-muted-foreground">{name}</h3>
       <pre className="max-h-[34vh] overflow-auto whitespace-pre-wrap break-words px-4 py-3 font-mono text-xs leading-5 text-foreground">{jsonText(value)}</pre>
     </section>
   );
@@ -389,7 +400,7 @@ export function ContextObserverPage() {
           <div className="shrink-0 space-y-3 border-b px-5 py-3">
             <div className="flex items-baseline justify-between gap-3">
               <h2 className="text-sm font-semibold">消息序列</h2>
-              <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+              <span className="shrink-0 font-mono text-2xs tabular-nums text-muted-foreground">
                 {loading ? "正在读取…" : activeContextNavigation ? `${messages.length} 条完整序列` : roleFilter === "all" ? `${messages.length} 条` : `${visibleMessages.length} / ${messages.length} 条`}
                 {sequenceRange && ` · #${sequenceRange.min}–${sequenceRange.max}`}
               </span>
@@ -401,19 +412,19 @@ export function ContextObserverPage() {
               </div>
             ) : <div className="flex flex-wrap items-center gap-2">
               <label htmlFor="context-role-filter" className="sr-only">按角色筛选</label>
-              <select id="context-role-filter" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as RoleFilter)} className="h-8 rounded-md border bg-background px-2 text-xs text-foreground">
+              <NativeSelect id="context-role-filter" size="sm" wrapperClassName="w-auto" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value as RoleFilter)}>
                 <option value="all">全部角色</option>
                 <option value="assistant">AI</option>
                 <option value="system">System</option>
                 <option value="human">Human</option>
                 <option value="tool">Tool</option>
-              </select>
+              </NativeSelect>
               <label htmlFor="context-sort-key" className="sr-only">排序依据</label>
-              <select id="context-sort-key" value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)} className="h-8 rounded-md border bg-background px-2 text-xs text-foreground">
+              <NativeSelect id="context-sort-key" size="sm" wrapperClassName="w-auto" value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}>
                 <option value="sequence">按序号</option>
                 <option value="created_at">按创建时间</option>
                 <option value="updated_at">按更新时间</option>
-              </select>
+              </NativeSelect>
               <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 px-2 text-xs" onClick={() => setSortAscending((ascending) => !ascending)} aria-label={sortAscending ? "切换为降序" : "切换为升序"}>
                 {sortAscending ? <ArrowUpIcon /> : <ArrowDownIcon />}{sortAscending ? "升序" : "降序"}
               </Button>
@@ -421,14 +432,15 @@ export function ContextObserverPage() {
             </div>}
           </div>
           <div ref={listRef} className="min-h-0 flex-1 overflow-auto">
-            {error && <div role="alert" className="m-5 border-l-2 border-destructive px-3 py-2 text-sm text-destructive">{error}</div>}
+            {error && <Alert tone="destructive" className="m-5">{error}</Alert>}
             {!loading && !error && messages.length === 0 && (
-              <div className="mx-auto max-w-md px-6 py-16 text-center">
-                <p className="text-sm font-medium">{taskId || runId ? "没有找到上下文消息" : "输入 Task ID 或 Run ID 开始查询"}</p>
-                <p className="mt-2 text-xs leading-5 text-muted-foreground">结果包含流式草稿和未纳入模型上下文的记录，时间按消息创建和更新时刻展示。</p>
-              </div>
+              <EmptyState
+                className="m-5"
+                title={taskId || runId ? "没有找到上下文消息" : "输入 Task ID 或 Run ID 开始查询"}
+                description="结果包含流式草稿和未纳入模型上下文的记录，时间按消息创建和更新时刻展示。"
+              />
             )}
-            {!loading && !error && messages.length > 0 && renderedMessages.length === 0 && <p className="px-5 py-8 text-center text-sm text-muted-foreground">当前角色筛选下没有消息。</p>}
+            {!loading && !error && messages.length > 0 && renderedMessages.length === 0 && <EmptyState className="m-5" title="当前角色筛选下没有消息。" />}
             {renderedMessages.length > 0 && (
               <div className="relative" style={{ height: `${virtualizer.getTotalSize()}px` }}>
                 {virtualizer.getVirtualItems().map((virtualRow) => {
@@ -454,16 +466,16 @@ export function ContextObserverPage() {
                     >
                       <div className="flex min-w-0 items-center gap-2">
                         <span className="w-12 shrink-0 font-mono text-xs text-muted-foreground">#{message.sequence}</span>
-                        <span className={`rounded-sm px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${roleBadgeStyle(message.role)}`}>{roleLabel(message.role)}</span>
-                        <span className="truncate font-mono text-[10px] text-muted-foreground">Run {message.run_id ?? "—"}</span>
-                        {!message.include_in_context && <span className="inline-flex shrink-0 items-center rounded-sm border border-border/80 bg-background/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">未纳入上下文</span>}
+                        <Badge tone={roleTone(message.role)} shape="tag" size="sm" className="font-semibold uppercase tracking-wide">{roleLabel(message.role)}</Badge>
+                        <span className="truncate font-mono text-2xs text-muted-foreground">Run {message.run_id ?? "—"}</span>
+                        {!message.include_in_context && <Badge variant="outline" shape="tag" size="sm" className="bg-background/70">未纳入上下文</Badge>}
                       </div>
                       <p className={`line-clamp-2 pl-12 text-xs leading-4 ${message.include_in_context ? "text-muted-foreground" : "text-muted-foreground/75"}`}>{preview(message.content) || "（空内容）"}</p>
-                      {callNames.length > 0 && <div className="flex min-w-0 flex-wrap items-center gap-1 pl-12 text-[10px]"><span className="shrink-0 text-muted-foreground">调用工具</span>{callNames.map((name, index) => <span key={`${name}-${index}`} className="max-w-full truncate rounded-sm border border-sky-700/15 bg-sky-500/5 px-1.5 py-0.5 font-mono text-sky-800 dark:text-sky-300">{name}</span>)}</div>}
-                      <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-0.5 pl-12 text-[11px] font-medium tabular-nums text-foreground/75">
+                      {callNames.length > 0 && <div className="flex min-w-0 flex-wrap items-center gap-1 pl-12 text-2xs"><span className="shrink-0 text-muted-foreground">调用工具</span>{callNames.map((name, index) => <Badge key={`${name}-${index}`} tone="info" variant="outline" shape="tag" size="sm" className="max-w-full font-mono font-normal"><span className="truncate">{name}</span></Badge>)}</div>}
+                      <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-0.5 pl-12 text-2xs font-medium tabular-nums text-foreground/75">
                         <span className="inline-flex min-w-0 items-center gap-1 truncate" title={message.created_at}><Clock3Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" /><span className="text-muted-foreground">创建</span><time dateTime={message.created_at}>{formatTimestamp(message.created_at, true)}</time></span><span className="inline-flex min-w-0 items-center gap-1 truncate" title={message.updated_at}><span className="text-muted-foreground">更新</span><time dateTime={message.updated_at}>{formatTimestamp(message.updated_at, true)}</time></span>
-                        {message.role === "assistant" && <span title={cache ? `缓存命中 ${formatTokens(cache.hit)} / 输入 ${formatTokens(cache.input)} tokens${cacheDecline === undefined ? "" : `；较上一条可计算记录下降 ${cacheDecline.toFixed(1)} 个百分点`}` : "供应商未提供可计算缓存率的输入明细"} className={`inline-flex shrink-0 items-center gap-1 rounded-sm border px-2 py-1 text-[11px] font-semibold tabular-nums ${cache ? cacheDecline !== undefined && cacheDecline >= cacheDeclineAlertThreshold ? "border-destructive/30 bg-destructive/10 text-destructive" : cacheDecline !== undefined && cacheDecline > cacheDeclineWarningThreshold ? "border-amber-700/25 bg-amber-500/10 text-amber-800 dark:text-amber-300" : "border-sky-700/20 bg-sky-500/10 text-sky-800 dark:text-sky-300" : "border-border bg-muted text-muted-foreground"}`}><GaugeIcon className="size-3.5" aria-hidden="true" />缓存 {cache ? `${cache.rate.toFixed(1)}%` : "—"}{cacheDecline !== undefined && cacheDecline > cacheDeclineWarningThreshold && <span className="ml-0.5">↓{cacheDecline.toFixed(1)} 个百分点</span>}</span>}
-                        {toolStatus && StatusIcon && <span title={message.status ?? undefined} className={`inline-flex shrink-0 items-center gap-1.5 rounded-sm border px-2 py-1 text-[11px] font-semibold ${toolStatus.className}`}><StatusIcon className={`size-3.5 ${message.status === "running" ? "animate-spin" : ""}`} aria-hidden="true" />{toolStatus.label}</span>}
+                        {message.role === "assistant" && <Badge tone={cacheTone(cache, cacheDecline)} variant="tint" shape="tag" className="font-semibold tabular-nums" title={cache ? `缓存命中 ${formatTokens(cache.hit)} / 输入 ${formatTokens(cache.input)} tokens${cacheDecline === undefined ? "" : `；较上一条可计算记录下降 ${cacheDecline.toFixed(1)} 个百分点`}` : "供应商未提供可计算缓存率的输入明细"}><GaugeIcon aria-hidden="true" />缓存 {cache ? `${cache.rate.toFixed(1)}%` : "—"}{cacheDecline !== undefined && cacheDecline > cacheDeclineWarningThreshold && <span className="ml-0.5">↓{cacheDecline.toFixed(1)} 个百分点</span>}</Badge>}
+                        {toolStatus && StatusIcon && <Badge tone={toolStatus.tone} variant="tint" shape="tag" className="gap-1.5 font-semibold" title={message.status ?? undefined}><StatusIcon className={message.status === "running" ? "animate-spin" : undefined} aria-hidden="true" />{toolStatus.label}</Badge>}
                       </div>
                     </button>
                   );
@@ -477,7 +489,7 @@ export function ContextObserverPage() {
           <div className="flex min-h-14 shrink-0 items-center justify-between border-b px-4 py-2">
             <div className="min-w-0">
               <h2 className="text-sm font-semibold">结构化详情</h2>
-              {selected && <p className="truncate font-mono text-[10px] text-muted-foreground">Task {selected.task_id} · Run {selected.run_id ?? "—"} · sequence {selected.sequence}</p>}
+              {selected && <p className="truncate font-mono text-2xs text-muted-foreground">Task {selected.task_id} · Run {selected.run_id ?? "—"} · sequence {selected.sequence}</p>}
             </div>
             <Button type="button" variant="ghost" size="sm" className="gap-1.5" onClick={() => void copySelected()} disabled={!selected}>
               {copied ? <CheckIcon /> : <ClipboardIcon />}{copied ? "已复制" : "复制 JSON"}

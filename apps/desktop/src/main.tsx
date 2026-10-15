@@ -4,9 +4,11 @@ import "@/app/globals.css";
 import { RootErrorBoundary } from "@/components/root-error-boundary";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { installGlobalFrontendErrorHandlers } from "@/lib/logging/global-error-handlers";
+import { installSystemThemeSync } from "@/lib/theme/system-theme";
 import { App } from "./App";
 
 installGlobalFrontendErrorHandlers();
+installSystemThemeSync();
 
 const root = ReactDOM.createRoot(document.getElementById("root")!, {
   onRecoverableError(error, errorInfo) {

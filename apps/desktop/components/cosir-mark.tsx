@@ -34,8 +34,8 @@ export function CosirMark({ className, animated = false }: CosirMarkProps) {
       />
       {animated ? (
         <>
-          <circle className="cosir-mark-animated__static-dot" cx="45" cy="32" r="4.5" fill="#22D3EE" />
-          <circle className="cosir-mark-animated__runner" cx="45" cy="32" r="4.5" fill="#22D3EE">
+          <circle className="cosir-mark-animated__static-dot fill-brand" cx="45" cy="32" r="4.5" />
+          <circle className="cosir-mark-animated__runner fill-brand" cx="45" cy="32" r="4.5">
             <animateMotion
               dur="2.8s"
               repeatCount="indefinite"
@@ -44,7 +44,7 @@ export function CosirMark({ className, animated = false }: CosirMarkProps) {
           </circle>
         </>
       ) : (
-        <circle cx="45" cy="32" r="4.5" fill="#22D3EE" />
+        <circle cx="45" cy="32" r="4.5" className="fill-brand" />
       )}
     </svg>
   );

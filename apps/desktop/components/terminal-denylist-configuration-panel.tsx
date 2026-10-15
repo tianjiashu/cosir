@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import { Loader2Icon, SaveIcon } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { LoadingState } from "@/components/ui/state-panel";
 import { Textarea } from "@/components/ui/textarea";
 import {
   getTerminalDenylistConfiguration,
@@ -70,13 +72,9 @@ export function TerminalDenylistConfigurationPanel() {
       </header>
 
       {loadState === "loading" ? (
-        <div className="text-muted-foreground flex items-center gap-2 py-8 text-sm">
-          <Loader2Icon className="size-4 animate-spin" />正在读取规则…
-        </div>
+        <LoadingState label="正在读取规则…" className="py-8" />
       ) : loadState === "error" ? (
-        <div role="alert" className="text-destructive rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm">
-          {error}
-        </div>
+        <Alert tone="destructive">{error}</Alert>
       ) : (
         <>
           <Textarea
@@ -92,8 +90,8 @@ export function TerminalDenylistConfigurationPanel() {
             }}
             placeholder="\\brm\\b"
           />
-          {error && <div role="alert" className="text-destructive text-sm">{error}</div>}
-          {message && <div role="status" className="text-sm text-emerald-700 dark:text-emerald-400">{message}</div>}
+          {error && <Alert tone="destructive">{error}</Alert>}
+          {message && <Alert tone="success">{message}</Alert>}
           <div className="flex justify-end">
             <Button onClick={() => void savePatterns()} disabled={isSaving}>
               {isSaving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}

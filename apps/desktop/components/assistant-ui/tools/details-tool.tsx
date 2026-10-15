@@ -221,17 +221,17 @@ function ChildAgentWaitResult({ data }: { data: Record<string, unknown> }) {
   if (!result) return <p className="text-muted-foreground text-xs">子 Agent 等待结果无效</p>;
   return (
     <div className="space-y-2 text-xs">
-      {result.interruptedBy && <p className="text-amber-300">{interruptionLabel(result.interruptedBy)}</p>}
-      {result.timedOut && <p className="text-amber-300">等待已超时，未完成的子 Agent 未被取消。</p>}
+      {result.interruptedBy && <p className="text-warning">{interruptionLabel(result.interruptedBy)}</p>}
+      {result.timedOut && <p className="text-warning">等待已超时，未完成的子 Agent 未被取消。</p>}
       {result.messages.map((message) => (
-        <div key={`${message.childTaskId}:${message.childRunId}`} className="rounded border border-white/10 px-2.5 py-2">
-          <div className="flex items-center gap-2 text-zinc-300">
+        <div key={`${message.childTaskId}:${message.childRunId}`} className="rounded border px-2.5 py-2">
+          <div className="text-foreground/80 flex items-center gap-2">
             <span>task {message.childTaskId}</span>
             <span aria-hidden="true">·</span>
             <span>run {message.childRunId}</span>
             <span className="ml-auto">{childAgentStatusLabel(message.status)}</span>
           </div>
-          {message.endReason && <p className="mt-1 text-amber-300">结束原因：{message.endReason}</p>}
+          {message.endReason && <p className="text-warning mt-1">结束原因：{message.endReason}</p>}
           {message.status === "completed" && message.finalOutput && <p className="mt-1 whitespace-pre-wrap break-words text-muted-foreground">{message.finalOutput}</p>}
         </div>
       ))}
@@ -251,7 +251,7 @@ function ChildAgentResult({ data }: { data: Record<string, unknown> }) {
       <p className="text-muted-foreground">
         {result.agentName ?? "子 Agent"} · task {result.childTaskId} · run {result.childRunId} · {childAgentStatusLabel(result.status)}
       </p>
-      {result.endReason && <p className="text-amber-300">{result.endReason}</p>}
+      {result.endReason && <p className="text-warning">{result.endReason}</p>}
       {result.finalOutput && <p className="whitespace-pre-wrap break-words text-muted-foreground">{result.finalOutput}</p>}
     </div>
   );

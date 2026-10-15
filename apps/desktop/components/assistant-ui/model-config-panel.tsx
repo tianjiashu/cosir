@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2Icon, EyeIcon, EyeOffIcon, Loader2Icon, Settings2Icon, Trash2Icon, XCircleIcon } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { EmptyState } from "@/components/ui/state-panel";
 import {
   Dialog,
   DialogContent,
@@ -238,14 +242,14 @@ export function ModelConfigPanel({
 
           <div className="max-h-[min(52vh,28rem)] space-y-2 overflow-y-auto">
             {configs.length === 0 && (
-              <p className="text-muted-foreground rounded-md border border-dashed p-3 text-sm">暂无已配置模型</p>
+              <EmptyState title="暂无已配置模型" className="py-4" />
             )}
             {configs.map((config) => (
               <div key={config.config_id} className="border-border/60 flex items-center justify-between rounded-md border p-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 text-sm font-medium">
                     {config.config_name}
-                    {config.enabled && config.api_key_configured ? <CheckCircle2Icon className="text-emerald-600 size-4" /> : <XCircleIcon className="text-muted-foreground size-4" />}
+                    {config.enabled && config.api_key_configured ? <CheckCircle2Icon className="text-success size-4" /> : <XCircleIcon className="text-muted-foreground size-4" />}
                   </div>
                   <p className="text-muted-foreground truncate text-xs">{config.model_name} · {config.context_window_k}K · {config.base_url}</p>
                 </div>
@@ -273,14 +277,13 @@ export function ModelConfigPanel({
               <label className="grid gap-1 text-xs">
                 模型名称
                 {discoveredModels ? (
-                  <select
-                    className="h-8 w-full min-w-0 rounded-md border px-2 text-sm"
+                  <NativeSelect
                     value={form.modelName}
                     onChange={(event) => setForm({ ...form, modelName: event.target.value })}
                   >
                     <option value="">请选择模型</option>
                     {discoveredModels.map((model) => <option key={model} value={model}>{model}</option>)}
-                  </select>
+                  </NativeSelect>
                 ) : (
                   <Input value={form.modelName} onChange={(event) => setForm({ ...form, modelName: event.target.value })} placeholder="例如：deepseek-chat" />
                 )}
@@ -288,9 +291,9 @@ export function ModelConfigPanel({
               <label className="grid min-w-0 gap-1 text-xs">上下文窗口（K）<Input type="number" min="1" step="1" value={form.contextWindowK} onChange={(event) => setForm({ ...form, contextWindowK: event.target.value })} placeholder="例如：128" /></label>
             </div>
             <div className="grid gap-2 sm:grid-cols-3">
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.supportsThinking} onChange={(event) => setForm({ ...form, supportsThinking: event.target.checked })} />支持思考</label>
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.supportsReasoningEffort} onChange={(event) => setForm({ ...form, supportsReasoningEffort: event.target.checked })} />支持推理强度</label>
-              <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={form.supportsImage} onChange={(event) => setForm({ ...form, supportsImage: event.target.checked })} />支持图片输入</label>
+              <label className="flex items-center gap-2 text-xs"><Checkbox checked={form.supportsThinking} onChange={(event) => setForm({ ...form, supportsThinking: event.target.checked })} />支持思考</label>
+              <label className="flex items-center gap-2 text-xs"><Checkbox checked={form.supportsReasoningEffort} onChange={(event) => setForm({ ...form, supportsReasoningEffort: event.target.checked })} />支持推理强度</label>
+              <label className="flex items-center gap-2 text-xs"><Checkbox checked={form.supportsImage} onChange={(event) => setForm({ ...form, supportsImage: event.target.checked })} />支持图片输入</label>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <Button variant="outline" disabled={busy || testingDraft || !formComplete} onClick={() => void testDraft()}>{testingDraft && <Loader2Icon className="animate-spin" />}测试连接</Button>
@@ -298,7 +301,7 @@ export function ModelConfigPanel({
             </div>
           </div>
 
-          {message && <p className={message.ok ? "text-emerald-600 text-sm" : "text-destructive text-sm"}>{message.text}</p>}
+          {message && <Alert tone={message.ok ? "success" : "destructive"}>{message.text}</Alert>}
         </DialogContent>
       </Dialog>
     </>

@@ -3,6 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { BookOpenTextIcon, MessageSquareQuoteIcon, PencilIcon, Trash2Icon } from "lucide-react";
 
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,6 +13,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { EmptyState } from "@/components/ui/state-panel";
+import { Textarea } from "@/components/ui/textarea";
 import {
   readFavoritePrompts,
   subscribeFavoritePrompts,
@@ -25,10 +28,10 @@ type FavoritePromptToolbarProps = {
 };
 
 /**
- * Rounded prompt picker and manager shared by the three composer surfaces.
+ * 三处 composer 共用的常用提示词选择与管理入口。
  *
- * @param disabled - Prevents snippet insertion while keeping library management available.
- * @sideEffects Reads and writes the local prompt preference store; inserts text into the nearest composer.
+ * `disabled` 只禁止插入片段，仍允许管理提示词库。副作用：读写本机提示词偏好存储，
+ * 并把文本插入最近的 composer。
  */
 export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolbarProps) {
   const insertion = useComposerInsertion();
@@ -97,7 +100,7 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
       <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
         <PopoverTrigger
           type="button"
-          className="border-border bg-background hover:bg-muted inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="border-border bg-background hover:bg-muted inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium focus-ring"
           aria-label="选择常用提示词"
         >
           <MessageSquareQuoteIcon className="size-3.5" />
@@ -109,7 +112,7 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
             <p className="text-sm font-medium">选择提示词</p>
             <button
               type="button"
-              className="text-muted-foreground hover:text-foreground rounded px-1.5 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="text-muted-foreground hover:text-foreground rounded px-1.5 py-1 text-xs focus-ring"
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 setPickerOpen(false);
@@ -143,7 +146,7 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
                   <div key={prompt.id} className="hover:bg-muted flex items-center gap-1 rounded-lg px-2 py-1.5">
                     <button
                       type="button"
-                      className="min-w-0 flex-1 truncate text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                      className="min-w-0 flex-1 truncate text-left text-sm focus-ring"
                       onClick={() => editPrompt(prompt)}
                       title={prompt.title}
                     >
@@ -157,7 +160,7 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
                     </Button>
                   </div>
                 ))}
-                {prompts.length === 0 && <p className="text-muted-foreground px-2 py-4 text-xs">还没有保存的提示词</p>}
+                {prompts.length === 0 && <EmptyState size="compact" title="还没有保存的提示词" className="px-2 py-4" />}
               </div>
             </div>
             <div className="flex flex-col gap-2">
@@ -167,15 +170,15 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
               </label>
               <label className="grid gap-1 text-xs font-medium">
                 提示词内容
-                <textarea
+                <Textarea
                   value={content}
                   onChange={(event) => setContent(event.target.value)}
                   placeholder="输入要复用的提示词"
                   rows={7}
-                  className="border-input bg-transparent placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 min-h-36 w-full resize-y rounded-lg border px-2.5 py-2 text-sm outline-none focus-visible:ring-2"
+                  className="min-h-36 resize-y font-normal"
                 />
               </label>
-              {error && <p role="alert" className="text-destructive text-xs">{error}</p>}
+              {error && <Alert tone="destructive" className="text-xs">{error}</Alert>}
               <div className="flex justify-end gap-2 pt-1">
                 <Button type="button" variant="ghost" size="sm" onClick={openNewPrompt}>新建</Button>
                 <Button type="button" size="sm" onClick={savePrompt}>保存</Button>
@@ -199,10 +202,11 @@ function PromptList({
 }) {
   if (prompts.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-2 px-3 py-6 text-center">
-        <BookOpenTextIcon className="text-muted-foreground size-5" />
-        <p className="text-muted-foreground text-xs">还没有常用提示词，点击“管理”添加。</p>
-      </div>
+      <EmptyState
+        icon={<BookOpenTextIcon className="size-5" />}
+        title="还没有常用提示词，点击“管理”添加。"
+        className="border-0 px-3 py-6"
+      />
     );
   }
 
@@ -215,7 +219,7 @@ function PromptList({
           disabled={disabled}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => onSelect(prompt)}
-          className="hover:bg-muted focus-visible:bg-muted flex w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+          className="hover:bg-muted focus-visible:bg-muted flex w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left focus-ring disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span className="text-sm font-medium">{prompt.title}</span>
           <span className="text-muted-foreground line-clamp-2 text-xs">{prompt.content}</span>

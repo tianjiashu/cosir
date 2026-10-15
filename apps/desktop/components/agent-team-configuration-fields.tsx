@@ -1,6 +1,7 @@
 "use client";
 
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
 
@@ -24,14 +25,13 @@ export function AgentTeamConfigurationFields({
     <div className={layout === "form" ? "space-y-4" : "space-y-3"}>
       {scopeEditable && <label className={`block ${layout === "form" ? "space-y-1.5 text-sm" : "space-y-1 text-xs"}`}>
         <span className={labelTextClassName}>保存范围</span>
-        <select
-          className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm"
+        <NativeSelect
           value={configuration.scope}
           onChange={(event) => onChange({ scope: event.target.value as AgentTeamConfigurationDraft["scope"] }, "team-scope")}
         >
           <option value="workspace">当前工作区</option>
           <option value="system">系统级</option>
-        </select>
+        </NativeSelect>
       </label>}
       <div className="grid gap-3 sm:grid-cols-2">
         <label className={labelClassName}>

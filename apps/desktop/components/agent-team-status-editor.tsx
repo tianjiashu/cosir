@@ -82,7 +82,7 @@ export function AgentTeamStatusEditor({
       <div className="flex min-h-8 flex-wrap items-center gap-1.5">
         {statuses.map((status, index) => (
           <span key={`${status.name}:${index}`} className="border-border bg-background text-foreground inline-flex h-7 items-center gap-1.5 rounded-full border px-2 text-xs">
-            <label className="relative inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1" title={`选择 ${status.name} 的颜色`}>
+            <label className="relative inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full focus-within:ring-3 focus-within:ring-ring/50" title={`选择 ${status.name} 的颜色`}>
               <span className="border-foreground/20 size-3 rounded-full border" style={{ backgroundColor: status.color }} />
               <input
                 type="color"
@@ -95,7 +95,7 @@ export function AgentTeamStatusEditor({
             <span>{status.name}</span>
             <button
               type="button"
-              className="text-muted-foreground hover:text-foreground inline-flex size-4 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="text-muted-foreground hover:text-foreground inline-flex size-4 items-center justify-center rounded-full transition-colors focus-ring"
               aria-label={`移除状态 ${status.name}`}
               onClick={() => onRemove(index)}
             >
@@ -105,7 +105,7 @@ export function AgentTeamStatusEditor({
         ))}
         {isAdding ? (
           <span className="border-input bg-background inline-flex h-8 items-center gap-2 rounded-full border px-2">
-            <label className="relative inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-1" title="选择新状态的颜色">
+            <label className="relative inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full focus-within:ring-3 focus-within:ring-ring/50" title="选择新状态的颜色">
               <span className="border-foreground/20 size-4 rounded-full border" style={{ backgroundColor: newStatusColor }} />
               <input
                 type="color"
@@ -127,7 +127,7 @@ export function AgentTeamStatusEditor({
                 setDraft("");
               }}
               onKeyDown={handleKeyDown}
-              className="h-7 w-28 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0"
+              className="h-7 w-28 border-0 bg-transparent px-1 text-xs shadow-none focus-visible:ring-0 dark:bg-transparent"
               placeholder="状态名 · Enter 保存"
               aria-label="添加业务状态"
             />
@@ -135,7 +135,7 @@ export function AgentTeamStatusEditor({
         ) : (
           <button
             type="button"
-            className="border-border bg-background text-muted-foreground hover:text-foreground inline-flex h-7 items-center gap-1 rounded-full border border-dashed px-2.5 text-xs transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="border-border bg-background text-muted-foreground hover:text-foreground inline-flex h-7 items-center gap-1 rounded-full border border-dashed px-2.5 text-xs transition-colors hover:bg-muted focus-ring"
             onClick={() => setIsAdding(true)}
           >
             <PlusIcon className="size-3.5" />

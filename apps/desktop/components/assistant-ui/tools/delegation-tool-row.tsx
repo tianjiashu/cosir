@@ -112,34 +112,34 @@ export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCanc
   // Locator and lifecycle fields stay in the transport artifact for opening,
   // cancellation, and child-run convergence. They are intentionally not
   // repeated in the compact row because ToolStatus is their single UI owner.
-  const meta = role ? <span className="max-w-[55%] truncate text-zinc-400">{role}</span> : undefined;
+  const meta = role ? <span className="text-muted-foreground max-w-[55%] truncate">{role}</span> : undefined;
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setOpen} className="group/tool-call overflow-hidden rounded-xl border border-white/10 bg-zinc-900 text-zinc-100 shadow-sm">
+    <Collapsible open={isOpen} onOpenChange={setOpen} className="group/tool-call terminal-surface overflow-hidden rounded-xl border shadow-sm">
       <div className={DARK_TOOL_CARD_HEADER_CLASS}>
         <DisclosureRow
-          leading={<UsersIcon className="size-3.5 text-zinc-400" aria-hidden="true" />}
+          leading={<UsersIcon className="text-muted-foreground size-3.5" aria-hidden="true" />}
           label={<span className="truncate text-sm font-medium" title={title}>{title}</span>}
           meta={meta}
-          trailing={<ToolStatus status={status} className="text-zinc-400" />}
+          trailing={<ToolStatus status={status} />}
           tone="terminal"
           className="w-auto min-w-0 flex-1 border-b-0 bg-transparent px-3"
           data-testid="tool-activity-row"
           aria-label={`展开子 Agent详情：${title}`}
         />
         {canOpen && (
-          <Button type="button" variant="ghost" size="sm" className="h-7 shrink-0 px-2 text-zinc-400 hover:bg-white/10 hover:text-zinc-100" aria-label={`打开子 Agent工作台：${title}`} onClick={open}>
+          <Button type="button" variant="ghost" size="sm" className="text-muted-foreground hover:bg-accent hover:text-foreground h-7 shrink-0 px-2" aria-label={`打开子 Agent工作台：${title}`} onClick={open}>
             打开
           </Button>
         )}
         {cancelAction}
       </div>
       <CollapsibleContent className={DARK_TOOL_CARD_CONTENT_CLASS}>
-        <div className="space-y-1.5 border-t border-white/5 px-3 py-2 font-mono text-xs text-zinc-300">
-          {status === "completed" && <p className="text-zinc-400">子 Agent 已完成；打开工作台查看完整结果。</p>}
-          {status === "failed" && <p className="text-red-300">子 Agent 执行失败。</p>}
-          {status === "cancelled" && <p className="text-zinc-400">子 Agent 已取消。</p>}
-          {cancellationError && <p className="text-amber-300" role="alert">{cancellationError}</p>}
+        <div className="text-foreground/80 border-border/60 space-y-1.5 border-t px-3 py-2 font-mono text-xs">
+          {status === "completed" && <p className="text-muted-foreground">子 Agent 已完成；打开工作台查看完整结果。</p>}
+          {status === "failed" && <p className="text-destructive">子 Agent 执行失败。</p>}
+          {status === "cancelled" && <p className="text-muted-foreground">子 Agent 已取消。</p>}
+          {cancellationError && <p className="text-warning" role="alert">{cancellationError}</p>}
         </div>
       </CollapsibleContent>
     </Collapsible>

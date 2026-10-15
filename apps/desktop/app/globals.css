@@ -11,57 +11,37 @@
 @source "../node_modules/@streamdown/mermaid/dist/*.js";
 @source "../node_modules/@streamdown/cjk/dist/*.js";
 
+/*
+ * 主题由 <html> 上的 .dark 类切换：index.html 的内联脚本在首帧前按系统外观
+ * 设置初值，lib/theme/system-theme.ts 随后接管并跟随系统变化。保留类切换
+ * 而不是纯 media 查询，是为了日后加入「浅色 / 深色 / 跟随系统」偏好时只改
+ * 控制器，不动 token 与组件。
+ */
 @custom-variant dark (&:is(.dark *));
-
-@keyframes agent-team-entry-highlight {
-  0%,
-  45% {
-    background-color: color-mix(in oklab, #3b82f6 8%, var(--card));
-    border-color: color-mix(in oklab, #3b82f6 38%, var(--border));
-    box-shadow: 0 0 0 2px color-mix(in oklab, #3b82f6 12%, transparent);
-  }
-  100% {
-    background-color: transparent;
-    border-color: var(--border);
-    box-shadow: 0 0 0 0 transparent;
-  }
-}
-
-.agent-team-entry-highlight {
-  animation: agent-team-entry-highlight 1.3s ease-out both;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .agent-team-entry-highlight {
-    animation: none;
-    outline: 2px solid color-mix(in oklab, #3b82f6 38%, var(--border));
-    outline-offset: 2px;
-  }
-}
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
+  --font-sans: var(--app-font-sans);
+  --font-mono: var(--app-font-mono);
+  --font-heading: var(--app-font-sans);
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-terminal: var(--terminal);
+  --color-terminal-inset: var(--terminal-inset);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -99,7 +79,18 @@
   }
 }
 
+/*
+ * 语义色约定：success / warning / info / destructive 既作文字色，也以
+ * `/10` 底色、`/30` 边框组成状态色块；浅色取 700 档保证白底文字对比度，
+ * 深色取 400 档。组件不得直接使用 emerald/amber/sky 等原始色板（见 eslint）。
+ *
+ * 字体栈与终端色板是唯一事实源：xterm 等无法消费 CSS 变量的库通过
+ * getComputedStyle 读取这里的值；终端色必须是 sRGB 十六进制，xterm 不解析 oklch。
+ */
 :root {
+  color-scheme: light;
+  --app-font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --app-font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, "Cascadia Mono", Consolas, "Liberation Mono", "PingFang SC", "Microsoft YaHei", monospace;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -115,29 +106,31 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.985 0 0);
+  --success: oklch(0.508 0.118 165.612);
+  --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.555 0.163 48.998);
+  --warning-foreground: oklch(0.985 0 0);
+  --info: oklch(0.5 0.134 242.749);
+  --info-foreground: oklch(0.985 0 0);
+  --brand: oklch(0.715 0.143 215.221);
+  --brand-foreground: oklch(0.205 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --terminal: #18181b;
+  --terminal-inset: #09090b;
+  --terminal-foreground: #e4e4e7;
+  --terminal-muted: #a1a1aa;
+  --terminal-selection: #3f3f46;
   --skill-foreground: oklch(0.38 0.13 295);
   --skill-background: oklch(0.95 0.035 295);
   --skill-border: oklch(0.82 0.07 295);
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -153,25 +146,92 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.258 0.092 26.042);
+  --success: oklch(0.765 0.177 163.223);
+  --success-foreground: oklch(0.262 0.051 172.552);
+  --warning: oklch(0.828 0.189 84.429);
+  --warning-foreground: oklch(0.279 0.077 45.635);
+  --info: oklch(0.746 0.16 232.661);
+  --info-foreground: oklch(0.293 0.066 243.157);
+  --brand: oklch(0.789 0.154 211.53);
+  --brand-foreground: oklch(0.205 0 0);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --terminal: #111113;
+  --terminal-inset: #09090b;
   --skill-foreground: oklch(0.84 0.08 295);
   --skill-background: oklch(0.29 0.04 295);
   --skill-border: oklch(0.46 0.07 295);
+}
+
+/*
+ * 终端岛：终端类卡片在两种主题下都保持深色。这里在容器上重定义语义 token，
+ * 子元素照常使用 text-foreground / text-muted-foreground / border-border /
+ * text-success 等类即可，无需为深底另写一套原始色板。
+ */
+@utility terminal-surface {
+  color-scheme: dark;
+  --foreground: var(--terminal-foreground);
+  --muted-foreground: var(--terminal-muted);
+  --muted: oklch(1 0 0 / 6%);
+  --accent: oklch(1 0 0 / 8%);
+  --accent-foreground: var(--terminal-foreground);
+  --border: oklch(1 0 0 / 10%);
+  --ring: oklch(0.556 0 0);
+  --success: oklch(0.845 0.143 164.978);
+  --warning: oklch(0.879 0.169 91.605);
+  --destructive: oklch(0.808 0.114 19.571);
+  --info: oklch(0.828 0.111 230.318);
+  background-color: var(--terminal);
+  color: var(--foreground);
+}
+
+/* 与 Button / Input 一致的键盘焦点环；自绘控件统一使用，避免各自发明 ring 样式。 */
+@utility focus-ring {
+  @apply outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50;
+}
+
+/*
+ * xyflow 画布：把库内置的底色、Controls、连线标签映射到 token，深浅色由
+ * ReactFlow 的 colorMode 在其根节点加 .dark 后随 token 一起切换。底色透明以透出
+ * 外层 bg-background（库的深色默认 #141414 与应用底色不符）。
+ */
+.react-flow {
+  --xy-background-color: transparent;
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--muted);
+  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-color-hover: var(--foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-edge-label-background-color: var(--card);
+  --xy-edge-label-color: var(--foreground);
+}
+
+@keyframes agent-team-entry-highlight {
+  0%,
+  45% {
+    background-color: color-mix(in oklab, var(--info) 8%, var(--card));
+    border-color: color-mix(in oklab, var(--info) 38%, var(--border));
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--info) 12%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    border-color: var(--border);
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.agent-team-entry-highlight {
+  animation: agent-team-entry-highlight 1.3s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-team-entry-highlight {
+    animation: none;
+    outline: 2px solid color-mix(in oklab, var(--info) 38%, var(--border));
+    outline-offset: 2px;
+  }
 }
 
 @layer base {
@@ -185,10 +245,6 @@
     @apply font-sans;
   }
 }
-
-@custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
-
-@custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));
 
 @layer components {
   /*
@@ -205,7 +261,7 @@
   /* 代码块：单层边框、无阴影，接近 GitHub 的代码阅读体验。 */
   .aui-md [data-streamdown="code-block"] {
     border-color: var(--markdown-block-border);
-    border-radius: 0.375rem;
+    border-radius: var(--radius-sm);
     background: var(--background);
     box-shadow: none;
     gap: 0;
@@ -235,7 +291,7 @@
   /* 表格：保留外层卡片，内部只保留必要的表格边界。 */
   .aui-md [data-streamdown="table-wrapper"] {
     border-color: var(--markdown-block-border);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-md);
     background: var(--background);
     box-shadow: none;
     gap: 0.375rem;
@@ -244,7 +300,7 @@
 
   .aui-md [data-streamdown="table-wrapper"] > div:last-child {
     border-color: var(--markdown-canvas-border);
-    border-radius: 0.375rem;
+    border-radius: var(--radius-sm);
     background: var(--background);
   }
 
@@ -263,7 +319,7 @@
   /* Mermaid：比代码块更像图表卡片，但不制造过重的双层边框。 */
   .aui-md [data-streamdown="mermaid-block"] {
     border-color: var(--markdown-block-border);
-    border-radius: 0.625rem;
+    border-radius: var(--radius-lg);
     background: var(--muted);
     box-shadow: none;
   }
@@ -282,14 +338,14 @@
 
   .aui-md [data-streamdown="mermaid-block"] > div:last-child {
     border-color: var(--markdown-canvas-border);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-md);
     background: var(--background);
   }
 
   .aui-md [data-streamdown="code-block-actions"],
   .aui-md [data-streamdown="mermaid-block-actions"] {
     border-color: transparent;
-    border-radius: 0.5rem;
+    border-radius: var(--radius-md);
     background: var(--markdown-action-background);
     box-shadow: none;
   }
@@ -298,7 +354,7 @@
   .aui-md [data-streamdown="mermaid-block-actions"] button {
     min-width: 2rem;
     min-height: 2rem;
-    border-radius: 0.375rem;
+    border-radius: var(--radius-sm);
   }
 
   .aui-md [data-streamdown="code-block-actions"] button:hover,
@@ -376,7 +432,7 @@
     margin: 0 0.15rem;
     padding: 0.2rem 0.35rem 0.2rem 0.55rem;
     border: 1px solid var(--border);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-md);
     background: var(--muted);
     color: var(--foreground);
     vertical-align: middle;
@@ -504,5 +560,21 @@
   .cosir-inline-file-token-remove:focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 1px;
+  }
+}
+
+/*
+ * 全局降低动效：加载类无限动画在用户开启「减少动态效果」时放慢或停止。
+ * 放在 @layer 之外，才能覆盖 utilities 层的 animate-* 类。
+ */
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin {
+    animation-duration: 2.4s;
+  }
+
+  .animate-pulse,
+  .animate-ping,
+  .animate-bounce {
+    animation: none;
   }
 }

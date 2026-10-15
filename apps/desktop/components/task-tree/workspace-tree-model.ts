@@ -24,6 +24,8 @@ export type WorkspaceSidebarNode =
       kind: "placeholder";
       id: string;
       label: string;
+      /** 任务列表读取失败时为 true，行渲染据此使用失败语气而非空状态语气。 */
+      isError: boolean;
       children: WorkspaceSidebarNode[];
     };
 
@@ -53,6 +55,7 @@ export function buildWorkspaceTreeModel(workspaces: WorkspaceTreeSource[]): Work
           kind: "placeholder" as const,
           id: `workspace-empty:${workspace.workspace_id}`,
           label: workspace.taskLoadError ? "任务列表加载失败" : "暂无任务",
+          isError: Boolean(workspace.taskLoadError),
           children: [],
         }];
     return {

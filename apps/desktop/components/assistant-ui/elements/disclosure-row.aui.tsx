@@ -17,9 +17,10 @@ type DisclosureRowLayoutProps = {
   className?: string;
 };
 
+/** `terminal` 行只用于 `terminal-surface` 卡片内部，语义 token 由主题岛解析为深底值。 */
 function rowToneClassName(tone: DisclosureRowTone): string {
   return tone === "terminal"
-    ? "text-zinc-100 hover:bg-white/5"
+    ? "text-foreground hover:bg-muted"
     : "text-muted-foreground hover:text-foreground";
 }
 
@@ -28,9 +29,8 @@ function DisclosureRowContents({
   label,
   meta,
   trailing,
-  tone,
   withChevron = false,
-}: DisclosureRowLayoutProps & { withChevron?: boolean }) {
+}: Omit<DisclosureRowLayoutProps, "tone"> & { withChevron?: boolean }) {
   return (
     <>
       <span className="flex size-4 shrink-0 items-center justify-center">
@@ -48,7 +48,7 @@ function DisclosureRowContents({
             "size-4 shrink-0 -rotate-90 transition-transform duration-(--animation-duration) ease-[cubic-bezier(0.32,0.72,0,1)]",
             "group-data-panel-open/disclosure-row-trigger:rotate-0",
             "motion-reduce:transition-none",
-            tone === "terminal" ? "text-zinc-400" : "text-muted-foreground",
+            "text-muted-foreground",
           )}
           aria-hidden="true"
         />
@@ -80,7 +80,6 @@ function DisclosureRowLayout({
         label={label}
         meta={meta}
         trailing={trailing}
-        tone={tone}
       />
     </div>
   );
@@ -122,7 +121,6 @@ export function DisclosureRow({
         label={label}
         meta={meta}
         trailing={trailing}
-        tone={tone}
         withChevron
       />
     </CollapsibleTrigger>

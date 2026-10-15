@@ -4,6 +4,8 @@ import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon, UsersIcon } f
 
 import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decision";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -52,15 +54,10 @@ const AWAITING_REVIEW_LABEL = "等待确认";
 
 function NodeStatusBadge({ status }: { status: AgentTeamPreviewDisplay["nodes"][number]["statuses"][number] }) {
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium leading-none",
-      )}
-      style={statusColorStyle(status.color)}
-    >
+    <Badge variant="outline" size="sm" className="text-foreground h-5 gap-1.5 px-2" style={statusColorStyle(status.color)}>
       <span className="size-1.5 rounded-full" style={{ backgroundColor: status.color }} aria-hidden="true" />
       {status.name}
-    </span>
+    </Badge>
   );
 }
 
@@ -73,7 +70,7 @@ function NodeStatusBadge({ status }: { status: AgentTeamPreviewDisplay["nodes"][
  */
 function AwaitingReviewStatus({ label = AWAITING_REVIEW_LABEL, className }: { label?: string; className?: string }) {
   return (
-    <span className={cn("inline-flex items-center gap-1.5 text-xs text-amber-600", className)}>
+    <span className={cn("text-warning inline-flex items-center gap-1.5 text-xs", className)}>
       <ClockIcon className="size-3.5" aria-hidden="true" />
       {label}
     </span>
@@ -175,16 +172,15 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
   if (!preview) return null;
   if (reviewRequestPresent && review === null) {
     return (
-      <div
-        className="space-y-1 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3 shadow-sm"
+      <Alert
+        tone="warning"
         role="status"
         aria-label="Agent Team 审批请求无法识别"
+        title="审批请求格式不兼容"
+        className="rounded-xl p-3 shadow-sm"
       >
-        <div className="font-medium text-sm">审批请求格式不兼容</div>
-        <p className="text-muted-foreground text-xs">
-          当前客户端无法识别这份 Team 审批请求，请刷新对话后重试。
-        </p>
-      </div>
+        <p className="text-xs">当前客户端无法识别这份 Team 审批请求，请刷新对话后重试。</p>
+      </Alert>
     );
   }
   if (!review) {
@@ -312,27 +308,27 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
             key={node.nodeId}
             className="group border-b border-border/60 last:border-b-0"
           >
-            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2.5 py-2 outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2.5 rounded py-2 focus-ring [&::-webkit-details-marker]:hidden">
               {nodeGoals[node.nodeId]?.summary.trim() && nodeGoals[node.nodeId]?.goal.trim()
-                ? <CheckCircle2Icon className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label="已完善" />
+                ? <CheckCircle2Icon className="size-4 shrink-0 text-success" aria-label="已完善" />
                 : <CircleIcon className="size-4 shrink-0 text-muted-foreground" aria-label="待完善" />}
-              <span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-semibold text-muted-foreground">
+              <span className="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-2xs font-semibold text-muted-foreground">
                 {index + 1}
               </span>
               <span className="min-w-0 flex-1 truncate font-medium" title={node.name}>{node.name}</span>
-              <span className="hidden max-w-40 truncate text-[10px] text-muted-foreground sm:inline" title={node.role}>{node.role}</span>
-              <span className="shrink-0 text-[10px] text-muted-foreground">{node.statuses.length} 个状态</span>
+              <span className="hidden max-w-40 truncate text-2xs text-muted-foreground sm:inline" title={node.role}>{node.role}</span>
+              <span className="shrink-0 text-2xs text-muted-foreground">{node.statuses.length} 个状态</span>
               <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
             </summary>
             <div className="space-y-3 pb-3 pl-7 pt-1">
               <div className="flex flex-wrap items-center gap-1.5" aria-label={`${node.name} 的可返回状态`}>
-                <span className="mr-1 text-[11px] font-medium text-muted-foreground">可返回状态</span>
+                <span className="mr-1 text-2xs font-medium text-muted-foreground">可返回状态</span>
                 {node.statuses.map((status) => (
                   <NodeStatusBadge key={status.name} status={status} />
                 ))}
               </div>
               <label className="block text-muted-foreground">
-                <span>节点摘要 <span className="text-destructive">*</span><span className="ml-1 text-[10px]">最多 10 字</span></span>
+                <span>节点摘要 <span className="text-destructive">*</span><span className="ml-1 text-2xs">最多 10 字</span></span>
                 <Input
                   aria-label={`${node.name} 的节点摘要`}
                   className="mt-1 bg-background text-xs"

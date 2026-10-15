@@ -36,8 +36,14 @@ import {
   ModelSelectorValue,
   type ModelOption,
 } from "@/components/model-selector";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Textarea } from "@/components/ui/textarea";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import { modelOptionId, useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
@@ -103,19 +109,6 @@ const tabItems: { id: ConfigurationTab; label: string; description: string; icon
 
 /** 子 Agent 仍不可授予交互终端会话和配置生成能力。 */
 export const NON_ASSIGNABLE_TOOL_GROUPS = new Set(["交互终端工具", "配置生成工具"]);
-
-function ErrorNotice({ message }: { message: string | null }) {
-  if (!message) return null;
-  return <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{message}</div>;
-}
-
-function LoadingState() {
-  return <div className="text-muted-foreground flex items-center gap-2 py-12 text-sm"><Loader2Icon className="size-4 animate-spin" />正在读取系统配置…</div>;
-}
-
-function LoadErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return <div className="space-y-3 py-12"><ErrorNotice message={message} /><Button variant="outline" onClick={onRetry}>重新读取</Button></div>;
-}
 
 const NO_AGENT_MODEL = "__agent_model_default__";
 
@@ -216,12 +209,12 @@ export function ModelSettingsEditor({
       <div className="grid gap-3 sm:grid-cols-1">
         <label className="space-y-1 text-xs">
           <span className="text-muted-foreground">推理强度</span>
-          <select className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm" value={value.reasoning_effort} onChange={(event) => setField("reasoning_effort", event.target.value)}>
+          <NativeSelect value={value.reasoning_effort} onChange={(event) => setField("reasoning_effort", event.target.value)}>
             <option value="">跟随默认</option>
             <option value="low">low</option>
             <option value="high">high</option>
             <option value="max">max</option>
-          </select>
+          </NativeSelect>
         </label>
       </div>
     </div>
@@ -283,13 +276,13 @@ function AgentEditor({
   };
 
   return (
-    <section className="border-border/70 bg-card/80 rounded-2xl border shadow-sm">
-      <div className="flex items-start justify-between border-b px-5 py-4">
-        <div><p className="font-medium">{initial ? "编辑子 Agent" : "新建子 Agent"}</p></div>
-        <Button variant="outline" onClick={onCancel}><ChevronLeftIcon />返回 Agent 列表</Button>
-      </div>
-      <div className="space-y-5 p-5">
-        <ErrorNotice message={error} />
+    <Card>
+      <CardHeader>
+        <CardTitle>{initial ? "编辑子 Agent" : "新建子 Agent"}</CardTitle>
+        <CardAction><Button variant="outline" onClick={onCancel}><ChevronLeftIcon />返回 Agent 列表</Button></CardAction>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {error && <Alert tone="destructive">{error}</Alert>}
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Agent ID</span><Input value={form.agent_id} disabled={Boolean(initial)} onChange={(event) => setField("agent_id", event.target.value)} placeholder="面向主Agent使用的Agent ID" /></label>
           <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">角色</span><Input value={form.role} onChange={(event) => setField("role", event.target.value)} placeholder="给子Agent定义的身份" /></label>
@@ -322,8 +315,7 @@ function AgentEditor({
                     title={locked ? "子 Agent 不可授予该工具组" : undefined}
                     className={`border-border/70 flex items-center gap-2 rounded-lg border px-3 py-2 transition-colors ${locked ? "bg-muted/40 text-muted-foreground cursor-not-allowed" : "bg-background hover:bg-muted/50 cursor-pointer"}`}
                   >
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       aria-label={group}
                       checked={selectedToolGroups.includes(group)}
                       disabled={locked}
@@ -342,8 +334,8 @@ function AgentEditor({
           <ModelSettingsEditor value={modelSettings} onChange={setModelSettings} />
         </div>
         <div className="flex justify-end gap-2 border-t pt-4"><Button variant="outline" onClick={onCancel}>取消</Button><Button onClick={() => void save()} disabled={saving}>{saving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}保存配置</Button></div>
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -366,24 +358,24 @@ export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: {
   };
   useEffect(() => { void load(); }, [api]);
   if (editing !== undefined && toolGroups) return <AgentEditor api={api} toolGroups={toolGroups} initial={editing} onCancel={() => setEditing(undefined)} onSaved={(agent) => { setConfigurationSaved(true); setEditing(undefined); setAgents((current) => current ? (current.some((item) => item.agent_id === agent.agent_id) ? current.map((item) => item.agent_id === agent.agent_id ? agent : item) : [...current, agent]) : [agent]); }} />;
-  if (!agents || !toolGroups) return error ? <LoadErrorState message={error} onRetry={() => void load()} /> : <LoadingState />;
+  if (!agents || !toolGroups) return error ? <ErrorState className="my-10" message={error} onRetry={() => void load()} retryLabel="重新读取" /> : <LoadingState label="正在读取系统配置…" />;
   return (
     <div className="space-y-4">
-      <ErrorNotice message={error} />
-      {configurationSaved && <div role="status" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">配置更改成功</div>}
+      {error && <Alert tone="destructive">{error}</Alert>}
+      {configurationSaved && <Alert tone="success">配置更改成功</Alert>}
       <div className="flex items-center justify-end"><Button onClick={() => setEditing(null)}><PlusIcon />新建 Agent</Button></div>
       <div className="grid gap-3 xl:grid-cols-2">
         {agents.map((agent) => (
-          <article key={`${agent.source}:${agent.agent_id}`} className="border-border/70 bg-card/70 rounded-2xl border p-4 shadow-sm transition-shadow hover:shadow-md">
+          <Card key={`${agent.source}:${agent.agent_id}`} className="p-4 transition-shadow hover:shadow-md">
             <div className="flex items-start justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
                 <div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-xl"><Code2Icon className="size-4" /></div>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <h3 className="min-w-0 truncate font-medium">{agent.agent_id}</h3>
-                    <span className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] ${agent.source === "builtin" ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary"}`}>
+                    <Badge size="sm" tone={agent.source === "builtin" ? "neutral" : "primary"}>
                       {agent.source === "builtin" ? "内置" : "自定义"}
-                    </span>
+                    </Badge>
                   </div>
                 </div>
               </div>
@@ -396,12 +388,12 @@ export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: {
                 <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置 Agent，不可编辑或删除" title="内置 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>
               )}
             </div>
-            <div className="text-muted-foreground mt-3 flex flex-wrap gap-2 text-xs">
-              <span className="bg-muted text-muted-foreground rounded-md px-2 py-1">{agent.allowed_tool_groups.length} 个工具组</span>
-              <span className="bg-muted rounded-md px-2 py-1">{agent.model_config_id ? `配置 ${agent.model_config_id}` : "跟随默认模型"}</span>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Badge shape="tag">{agent.allowed_tool_groups.length} 个工具组</Badge>
+              <Badge shape="tag">{agent.model_config_id ? `配置 ${agent.model_config_id}` : "跟随默认模型"}</Badge>
             </div>
             {agent.validation_status !== "valid" && <p className="text-destructive mt-3 text-xs">{agent.validation_error ?? "配置无效"}</p>}
-          </article>
+          </Card>
         ))}
       </div>
     </div>
@@ -463,7 +455,7 @@ function EnvironmentPanel() {
       setSaving(false);
     }
   };
-  if (!groups) return error ? <LoadErrorState message={error} onRetry={() => void load()} /> : <LoadingState />;
+  if (!groups) return error ? <ErrorState className="my-10" message={error} onRetry={() => void load()} retryLabel="重新读取" /> : <LoadingState label="正在读取系统配置…" />;
   return (
     <div className="space-y-4">
       <div className="bg-background/95 border-border/70 sticky top-0 z-10 -mx-2 flex flex-wrap items-center justify-between gap-3 border-b px-2 py-3 backdrop-blur-sm">
@@ -475,7 +467,7 @@ function EnvironmentPanel() {
           {saving ? <Loader2Icon className="animate-spin" /> : saved ? <CheckIcon /> : <SaveIcon />}{saved ? "已保存" : "保存变量"}{dirty.size > 0 ? `（${dirty.size}）` : ""}
         </Button>
       </div>
-      <ErrorNotice message={error} />
+      {error && <Alert tone="destructive">{error}</Alert>}
       <EnvironmentConfigurationForm
         groups={groups}
         values={values as Record<string, EnvironmentFieldValue>}
@@ -531,7 +523,7 @@ export function SystemConfigurationPage({ onClose }: { onClose: () => void }) {
                   <Icon className="size-4 shrink-0" />
                   <span className="min-w-0">
                     <span className="block text-sm font-medium">{item.label}</span>
-                    <span className={`mt-0.5 block truncate text-[11px] ${tab === item.id ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{item.description}</span>
+                    <span className={`mt-0.5 block truncate text-2xs ${tab === item.id ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{item.description}</span>
                   </span>
                 </button>
               );

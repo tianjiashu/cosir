@@ -1,5 +1,5 @@
 .backend-startup-screen {
-  --backend-startup-accent: #22d3ee;
+  --backend-startup-accent: var(--brand);
   --backend-startup-accent-soft: color-mix(in oklab, var(--backend-startup-accent) 14%, transparent);
   --backend-startup-accent-faint: color-mix(in oklab, var(--backend-startup-accent) 6%, transparent);
   position: fixed;
@@ -306,7 +306,7 @@
 
 @keyframes cosir-arrow-glow {
   0%, 100% { filter: drop-shadow(0 0 0 transparent); opacity: 0.78; }
-  45% { filter: drop-shadow(0 0 5px #22d3ee99); opacity: 1; }
+  45% { filter: drop-shadow(0 0 5px color-mix(in oklab, var(--brand) 60%, transparent)); opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

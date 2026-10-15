@@ -4,6 +4,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { Button } from "@/components/ui/button";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
 
@@ -49,9 +50,9 @@ export class RootErrorBoundary extends Component<
           <p className="text-muted-foreground text-sm">
             对话数据仍保存在本机，可以重新加载界面恢复。
           </p>
-          <button type="button" className="underline" onClick={this.handleReload}>
+          <Button type="button" variant="link" onClick={this.handleReload}>
             重新加载
-          </button>
+          </Button>
         </section>
       </main>
     );

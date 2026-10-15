@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { UsersIcon, XIcon } from "lucide-react";
 
 import { AgentTeamConfigurationEditor } from "@/components/agent-team-configuration-editor";
+import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { LoadingState } from "@/components/ui/state-panel";
 import {
   createAgentTeamConfiguration,
   updateAgentTeamConfiguration,
@@ -69,9 +71,9 @@ export function AgentTeamConfigurationDraftSurface({
         <Button type="button" variant="ghost" size="icon-sm" aria-label="关闭 Team 配置草稿" onClick={close}><XIcon /></Button>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {error && <div role="alert" className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}
-        {saved && <div role="status" className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">配置已保存</div>}
-        {!profiles ? <p className="text-muted-foreground py-12 text-sm">{error ?? "正在读取子 Agent 配置…"}</p> : <AgentTeamConfigurationEditor
+        {error && <Alert tone="destructive" className="mb-4">{error}</Alert>}
+        {saved && <Alert tone="success" className="mb-4">配置已保存</Alert>}
+        {!profiles ? (error ? null : <LoadingState label="正在读取子 Agent 配置…" />) : <AgentTeamConfigurationEditor
           key={tab.id}
           initial={tab.draft}
           profilesByScope={profiles}

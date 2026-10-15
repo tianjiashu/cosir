@@ -1,7 +1,7 @@
 import { LoaderCircleIcon, SquareIcon, TerminalIcon, TriangleAlertIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { DisclosureRow } from "../elements/disclosure-row.aui";
@@ -96,36 +96,31 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className="group/tool-call overflow-hidden rounded-xl border border-white/10 bg-zinc-900 text-zinc-100 shadow-sm"
+      className="group/tool-call terminal-surface overflow-hidden rounded-xl border shadow-sm"
     >
       <div className={DARK_TOOL_CARD_HEADER_CLASS}>
         <DisclosureRow
-          leading={<TerminalIcon className="size-3.5 text-zinc-400" aria-hidden="true" />}
+          leading={<TerminalIcon className="text-muted-foreground size-3.5" aria-hidden="true" />}
           label={
             <span className="flex min-w-0 items-center gap-2">
               {shell && (
-                <span className="shrink-0 rounded border border-white/10 bg-white/5 px-1.5 py-px font-mono text-[10px] uppercase tracking-wide text-zinc-400">
+                <Badge variant="outline" shape="tag" size="sm" className="bg-muted font-mono tracking-wide uppercase">
                   {shell}
-                </span>
+                </Badge>
               )}
-              <code className="truncate font-mono text-[13px] text-zinc-100" title={command}>
+              <code className="text-foreground truncate font-mono text-xs" title={command}>
                 $ {command}
               </code>
             </span>
           }
           meta={
             exitCode !== undefined ? (
-              <span
-                className={cn(
-                  "rounded px-1.5 py-px font-mono text-[11px]",
-                  exitCode === 0 ? "bg-emerald-500/10 text-emerald-300" : "bg-red-500/10 text-red-300",
-                )}
-              >
+              <Badge tone={exitCode === 0 ? "success" : "destructive"} shape="tag" size="sm" className="font-mono">
                 exit {exitCode}
-              </span>
+              </Badge>
             ) : null
           }
-          trailing={<ToolStatus status={status} className="text-zinc-400" />}
+          trailing={<ToolStatus status={status} />}
           tone="terminal"
           className="w-auto min-w-0 flex-1 border-b-0 bg-transparent px-3"
         />
@@ -138,7 +133,7 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
             title={cancellationPending ? "正在停止…" : "停止此命令"}
             disabled={cancellationPending}
             onClick={() => void requestCancellation()}
-            className="h-7 shrink-0 px-2 text-zinc-400 hover:bg-red-400/10 hover:text-red-300"
+            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive h-7 shrink-0 px-2"
           >
             {cancellationPending
               ? <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden="true" />
@@ -148,18 +143,18 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
         )}
       </div>
       <CollapsibleContent className={DARK_TOOL_CARD_CONTENT_CLASS}>
-        <div className="overflow-hidden rounded-lg border border-white/10 bg-zinc-950">
+        <div className="bg-terminal-inset overflow-hidden rounded-lg border">
           <div className="max-h-72 overflow-hidden px-3 py-2 font-mono text-xs leading-relaxed">
-            {workdir && <p className="mb-1 text-[11px] text-zinc-500">cwd {workdir}</p>}
-            {cancellationError && <p className="mb-1 text-amber-300" role="alert">{cancellationError}</p>}
+            {workdir && <p className="text-muted-foreground mb-1 text-2xs">cwd {workdir}</p>}
+            {cancellationError && <p className="text-warning mb-1" role="alert">{cancellationError}</p>}
             {artifact.error
-              ? <p className="mb-1 text-red-300">{artifact.error}</p>
+              ? <p className="text-destructive mb-1">{artifact.error}</p>
               : output
                 ? <TerminalViewport output={output} outputSeq={artifact.terminal_output_seq} />
-                : <p className="px-3 py-2 text-zinc-500">{isActive ? "等待输出…" : "无输出"}</p>}
+                : <p className="text-muted-foreground px-3 py-2">{isActive ? "等待输出…" : "无输出"}</p>}
           </div>
           {(truncated || timedOut || streamTruncated) && (
-            <p className="flex items-center gap-1.5 border-t border-amber-400/20 bg-amber-400/5 px-3 py-1.5 text-[11px] text-amber-300">
+            <p className="border-warning/30 bg-warning/10 text-warning flex items-center gap-1.5 border-t px-3 py-1.5 text-2xs">
               <TriangleAlertIcon className="size-3 shrink-0" aria-hidden="true" />
               {timedOut
                 ? "命令执行超时"

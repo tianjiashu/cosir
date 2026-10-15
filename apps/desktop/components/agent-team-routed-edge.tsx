@@ -215,7 +215,7 @@ export function AgentTeamRoutedEdge(props: EdgeProps<TeamGraphEdge>) {
               type="button"
               aria-label={"拖动 " + edgeData.status + " 连线调整路径；方向键可微调"}
               title="拖动调整路径 · 方向键微调"
-              className="border-background bg-primary focus-visible:ring-ring size-3 cursor-grab touch-none rounded-full border-2 shadow-sm focus-visible:outline-none focus-visible:ring-2 active:cursor-grabbing"
+              className="border-background bg-info size-3 cursor-grab touch-none rounded-full border-2 shadow-sm focus-ring active:cursor-grabbing"
               onPointerDown={onPointerDown}
               onPointerMove={updateFromPointer}
               onPointerUp={finishPointer}
@@ -229,7 +229,7 @@ export function AgentTeamRoutedEdge(props: EdgeProps<TeamGraphEdge>) {
                 type="button"
                 aria-label={"重置 " + edgeData.status + " 连线路径"}
                 title="恢复自动路径"
-                className="border-background bg-card text-muted-foreground hover:text-foreground absolute -right-5 -top-5 inline-flex size-5 items-center justify-center rounded-full border shadow-sm"
+                className="border-background bg-card text-muted-foreground hover:text-foreground absolute -right-5 -top-5 inline-flex size-5 items-center justify-center rounded-full border shadow-sm focus-ring"
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();

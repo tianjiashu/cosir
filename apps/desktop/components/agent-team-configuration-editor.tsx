@@ -4,6 +4,7 @@ import { useState } from "react";
 import { AgentTeamConfigurationForm } from "@/components/agent-team-configuration-form";
 
 import { Button } from "@/components/ui/button";
+import { Card, CardAction, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -11,13 +12,20 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { AgentTeamGraphEditor } from "@/components/agent-team-graph-editor";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamConfiguration, AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
+import { cn } from "@/lib/utils";
 
 type AgentProfilesByScope = Record<AgentTeamConfiguration["scope"], AgentConfiguration[]>;
+
+const EDITOR_MODE_OPTIONS = [
+  { value: "form", label: "表单" },
+  { value: "canvas", label: "画布" },
+] as const;
 
 const emptyConfiguration = (scope: AgentTeamConfiguration["scope"]): AgentTeamConfigurationDraft => ({
   team_id: "",
@@ -99,31 +107,24 @@ export function AgentTeamConfigurationEditor({
   };
 
   return (
-    <section className={editorMode === "canvas" ? "min-w-0" : "border-border/70 bg-card/80 rounded-2xl border shadow-sm"}>
-      <header className="flex items-start justify-between gap-3 border-b px-5 py-4">
-        <h2 className="font-medium">{initial ? "编辑 Agent Team" : "新建 Agent Team"}</h2>
-        <div className="flex shrink-0 items-center gap-2">
-          <div className="bg-muted relative isolate grid h-10 w-40 grid-cols-2 rounded-lg p-1" role="group" aria-label="编辑模式">
-            <span
-              aria-hidden="true"
-              className={`absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-md bg-blue-600 shadow-sm transition-transform duration-200 ${editorMode === "canvas" ? "translate-x-full" : "translate-x-0"}`}
-            />
-            <button
-              type="button"
-              aria-pressed={editorMode === "form"}
-              className={`relative z-10 rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${editorMode === "form" ? "text-white" : "text-muted-foreground hover:text-foreground"}`}
-              onClick={() => setEditorMode("form")}
-            >表单</button>
-            <button
-              type="button"
-              aria-pressed={editorMode === "canvas"}
-              className={`relative z-10 rounded-md px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${editorMode === "canvas" ? "text-white" : "text-muted-foreground hover:text-foreground"}`}
-              onClick={() => { setCanvasVisited(true); setEditorMode("canvas"); }}
-            >画布</button>
-          </div>
+    <Card className={cn(editorMode === "canvas" && "min-w-0 rounded-none border-0 bg-transparent shadow-none")}>
+      <CardHeader>
+        <CardTitle>{initial ? "编辑 Agent Team" : "新建 Agent Team"}</CardTitle>
+        <CardAction>
+          <SegmentedControl
+            aria-label="编辑模式"
+            className="w-40"
+            value={editorMode}
+            options={EDITOR_MODE_OPTIONS}
+            onValueChange={(mode) => {
+              // 画布首次进入时才挂载，之后保持挂载以保留视口与撤销历史。
+              if (mode === "canvas") setCanvasVisited(true);
+              setEditorMode(mode);
+            }}
+          />
           <Button type="button" variant="outline" onClick={onCancel}>返回 Team 列表</Button>
-        </div>
-      </header>
+        </CardAction>
+      </CardHeader>
       <div className={editorMode === "form" ? "block" : "hidden"}>
         <AgentTeamConfigurationForm
           configuration={configuration}
@@ -162,6 +163,6 @@ export function AgentTeamConfigurationEditor({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </Card>
   );
 }

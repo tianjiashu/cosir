@@ -4,7 +4,11 @@ import { useEffect, useState } from "react";
 import { BotIcon, PlusIcon, Settings2Icon, Trash2Icon, UsersIcon } from "lucide-react";
 
 import { AgentTeamConfigurationEditor } from "@/components/agent-team-configuration-editor";
+import { Alert } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import {
   createAgentTeamConfiguration,
   deleteAgentTeamConfiguration,
@@ -42,7 +46,7 @@ function TeamConfigurationCard({
   onDelete: () => void;
 }) {
   return (
-    <article className="border-border/70 bg-card/70 min-h-32 rounded-2xl border p-4 shadow-sm">
+    <Card className="min-h-32 p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <div className="bg-muted text-foreground flex size-10 shrink-0 items-center justify-center rounded-xl">
@@ -50,9 +54,7 @@ function TeamConfigurationCard({
           </div>
           <div className="flex min-w-0 items-center gap-2">
             <h3 className="truncate font-medium">{team.name}</h3>
-            <span className="bg-muted text-muted-foreground shrink-0 rounded-full px-2 py-0.5 text-[10px]">
-              {local ? "本地" : "系统继承"}
-            </span>
+            <Badge size="sm">{local ? "本地" : "系统继承"}</Badge>
           </div>
         </div>
         {local && (
@@ -77,7 +79,7 @@ function TeamConfigurationCard({
       <div className="border-border/70 mt-4 border-t pt-3">
         <div className="text-muted-foreground mb-2 flex items-center gap-2 text-xs">
           <span>成员节点</span>
-          <span className="bg-muted rounded-full px-2 py-0.5">{team.nodes.length}</span>
+          <Badge>{team.nodes.length}</Badge>
         </div>
         {team.nodes.length > 0 ? (
           <div className="flex flex-wrap gap-2">
@@ -91,7 +93,7 @@ function TeamConfigurationCard({
                 </div>
                 <div className="min-w-0">
                   <div className="truncate text-xs font-medium">{node.name || node.node_id}</div>
-                  <div className="text-muted-foreground truncate text-[10px]">
+                  <div className="text-muted-foreground truncate text-2xs">
                     {node.agent_id || "未分配 Agent"}
                   </div>
                 </div>
@@ -102,7 +104,7 @@ function TeamConfigurationCard({
           <p className="text-muted-foreground text-xs">尚未添加节点</p>
         )}
       </div>
-    </article>
+    </Card>
   );
 }
 
@@ -199,18 +201,20 @@ export function AgentTeamConfigurationPanel({
     />;
   }
   if (!teams || !profiles) {
-    return <div className="space-y-3 py-12">{error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}<p className="text-muted-foreground text-sm">{error ?? "正在读取 Agent Team 配置…"}</p><Button variant="outline" onClick={() => void load()}>重新读取</Button></div>;
+    if (error) return <ErrorState className="my-12" message={error} onRetry={() => void load()} retryLabel="重新读取" />;
+    // workspaceId 尚未就绪时 load 直接返回，保留手动重试入口避免卡在加载态。
+    return <div className="space-y-3 pb-10"><LoadingState label="正在读取 Agent Team 配置…" /><div className="flex justify-center"><Button variant="outline" onClick={() => void load()}>重新读取</Button></div></div>;
   }
 
   return (
     <div className="space-y-4">
-      {error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div>}
-      {saved && <div role="status" className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">配置更改成功</div>}
+      {error && <Alert tone="destructive">{error}</Alert>}
+      {saved && <Alert tone="success">配置更改成功</Alert>}
       <div className={`flex items-center gap-3 ${scope === "system" ? "justify-between" : "justify-end"}`}>
         {scope === "system" && <p className="text-muted-foreground text-sm">系统级 Team 配置</p>}
         <Button onClick={() => { setSaved(false); setEditing(null); }}><PlusIcon />新建 Team</Button>
       </div>
-      {teams.length === 0 ? <div className="text-muted-foreground rounded-2xl border border-dashed p-8 text-center text-sm">还没有 Agent Team 配置</div> : <div className="grid gap-3">
+      {teams.length === 0 ? <EmptyState title="还没有 Agent Team 配置" /> : <div className="grid gap-3">
         {teams.map((team) => {
           const local = team.scope === scope;
           return (

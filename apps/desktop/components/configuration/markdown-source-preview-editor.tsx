@@ -29,7 +29,7 @@ const editorTheme = EditorView.theme({
     height: "100%",
   },
   ".cm-scroller": {
-    fontFamily: "var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontFamily: "var(--app-font-mono)",
     lineHeight: "1.7",
     overflow: "auto",
   },
