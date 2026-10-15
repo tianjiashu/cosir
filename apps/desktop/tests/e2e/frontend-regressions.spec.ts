@@ -39,10 +39,10 @@ test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输�
   await page.goto("/tasks/42");
   const input = page.getByLabel("消息输入");
   await input.fill("这条消息不能进入对话");
-  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
 
   await expect(page.getByRole("dialog")).toContainText("测试拒绝普通发送");
-  await expect(input).toHaveValue("这条消息不能进入对话");
+  await expect(input).toHaveText("这条消息不能进入对话");
   await expect(page.locator('[data-role="user"]').getByText("这条消息不能进入对话", { exact: true })).toHaveCount(0);
 });
 
@@ -107,7 +107,7 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
   await expect(page.getByLabel("消息输入")).toBeVisible();
 
   await page.getByLabel("消息输入").fill("验证 reasoning 生命周期");
-  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
 
   const assistant = page.locator('[data-role="assistant"]').last();
   await expect(assistant.getByText("Reasoning", { exact: true })).toBeVisible();
@@ -126,25 +126,29 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
   await expect(assistant.getByText("推理完成", { exact: true })).toBeVisible();
 });
 
-test("工具详情从 pending 进入 running 时自动展开，并在完成后收起", async ({ page, request }) => {
+test("工具运行中保持静态状态行，完成拿到展示数据后才可展开且默认收起", async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "工具生命周期回归" } });
   await page.goto("/tasks/42");
   await page.getByLabel("消息输入").fill("tool-lifecycle");
-  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
 
   const assistant = page.locator('[data-role="assistant"]').last();
-  const tool = assistant.getByText("搜索文件", { exact: true });
-  await expect(tool).toBeVisible();
-  const details = assistant.getByText("未找到匹配", { exact: true });
-  await expect(details).toBeVisible({ timeout: 2_000 });
-  await expect(details).toBeHidden({ timeout: 3_000 });
+  await expect(assistant.getByText("搜索文件", { exact: true })).toBeVisible();
+  // 无 display_data 的执行期不展开空详情，也不渲染「未找到匹配」之类的伪结果。
+  await expect(assistant.getByText("未找到匹配", { exact: true })).toHaveCount(0);
+  const toolRow = assistant.getByRole("button", { name: /搜索文件/ });
+  await expect(toolRow).toBeVisible({ timeout: 3_000 });
+  const match = assistant.getByText("lifecycle.test.ts:1 lifecycle", { exact: true });
+  await expect(match).toBeHidden();
+  await toolRow.click();
+  await expect(match).toBeVisible();
 });
 
 test("失败的工具在流结束后显示失败而不是执行中", async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "失败工具生命周期回归" } });
   await page.goto("/tasks/42");
   await page.getByLabel("消息输入").fill("tool-lifecycle-failed");
-  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
 
   const assistant = page.locator('[data-role="assistant"]').last();
   await expect(assistant.getByText("搜索文件", { exact: true })).toBeVisible();
@@ -157,11 +161,11 @@ test("取消的工具在流结束后显示已取消而不是执行中", async ({
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "取消工具生命周期回归" } });
   await page.goto("/tasks/42");
   await page.getByLabel("消息输入").fill("tool-lifecycle-cancelled");
-  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
 
   const assistant = page.locator('[data-role="assistant"]').last();
   await expect(assistant.getByText("搜索文件", { exact: true })).toBeVisible();
-  await expect(assistant.getByRole("button", { name: /搜索文件 已取消/ })).toBeVisible({ timeout: 3_000 });
+  await expect(assistant.getByText("已取消", { exact: true }).first()).toBeVisible({ timeout: 3_000 });
   await expect(assistant.getByText("执行中", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "停止" })).toHaveCount(0);
 });
@@ -184,12 +188,15 @@ test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage foo
   await expect(unknownProgress).toBeHidden();
 
   await input.fill("usage-regression-first");
-  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(contextMeter).toContainText("上下文 1%");
   await expect(page.getByTestId("run-usage-display")).toContainText("本次用量 1.5k tokens");
-  await page.getByTestId("run-usage-display").hover();
   const cacheMissRow = page.locator("dt").filter({ hasText: "缓存未命中" }).locator("xpath=following-sibling::dd[1]");
-  await expect(cacheMissRow).toHaveText("—");
+  // 流结束后消息页脚仍会因 Reasoning 收起等布局收敛而位移，悬停可能落空，故重试直到浮层打开。
+  await expect(async () => {
+    await page.getByTestId("run-usage-display").hover();
+    await expect(cacheMissRow).toHaveText("—", { timeout: 1_000 });
+  }).toPass();
   await page.mouse.move(10, 10);
   await expect(contextMeter).toHaveAttribute("aria-label", "上下文 1%");
   await contextMeter.focus();
@@ -200,10 +207,11 @@ test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage foo
   await expect(contextProgress).toHaveAttribute("aria-valuetext", "上下文 1%");
   await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 360, height: 720 });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  // 视口收窄后侧栏等响应式布局需要一帧以上才完成重排，轮询最终状态而非瞬时状态。
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
   await input.fill("usage-regression-second");
-  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(contextMeter).toContainText("上下文 2%");
   await expect(page.getByTestId("run-usage-display").last()).toContainText("本次用量 2.5k tokens");
   await expect(page.getByTestId("run-usage-display")).toHaveCount(2);
@@ -229,7 +237,7 @@ test("侧栏点击 Task 会同步 Tauri WebView 内部路由", async ({ page, re
   await page.addInitScript(() => window.localStorage.clear());
 
   await page.goto("/");
-  await page.locator('nav[aria-label="工作区任务列表"] button').filter({ hasText: "路由回归任务" }).click();
+  await page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "路由回归任务" }).click();
 
   await expect(page).toHaveURL(/\/tasks\/42$/);
 });
@@ -257,12 +265,16 @@ test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", 
   });
 
   await page.goto("/");
-  await page.locator('nav[aria-label="工作区任务列表"] button').filter({ hasText: "任务 A" }).click();
+  await page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "任务 A" }).click();
   await expect(page.getByLabel("消息输入")).toBeVisible();
-  await page.locator('nav[aria-label="工作区任务列表"] button').filter({ hasText: "任务 B" }).click();
+  await page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "任务 B" }).click();
+  // 等 Task B 的 runtime 挂载后再输入：否则会写进即将卸载的 Task A composer。
+  await expect.poll(() => page.evaluate(() => (
+    (window as Window & { __cosirFrontendLogs?: { event: string; data?: { taskId?: number } }[] }).__cosirFrontendLogs ?? []
+  ).some((entry) => entry.event === "assistant_runtime_mounted" && entry.data?.taskId === 43))).toBe(true);
   await expect(page.getByLabel("消息输入")).toBeVisible();
   await page.getByLabel("消息输入").fill("跨工作区请求");
-  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
 
   await expect.poll(() => requestBodies.length).toBeGreaterThan(0);
   expect(requestBodies.every((body) => body.taskId === 43 && body.workspaceId === 8)).toBe(true);
@@ -294,7 +306,7 @@ test("同一侧栏内切换 Task 不会重新加载整个侧栏", async ({ page,
   const initialWorkspaceRequestCount = workspaceRequestCount;
   const initialWorkspaceTaskRequestCount = workspaceTaskRequestCount;
 
-  await page.locator('nav[aria-label="工作区任务列表"] button').filter({ hasText: "任务 B" }).click();
+  await page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "任务 B" }).click();
   await expect(page).toHaveURL(/\/tasks\/43$/);
   await expect(page.getByLabel("消息输入")).toBeVisible();
   expect(workspaceRequestCount).toBe(initialWorkspaceRequestCount);
@@ -316,12 +328,11 @@ test("Assistant Transport 会展示后端结构化错误", async ({ page, reques
   await page.goto("/tasks/103");
   await expect(page.getByLabel("消息输入")).toBeVisible();
   await page.getByLabel("消息输入").fill("触发结构化错误");
-  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
 
-  const status = page.getByRole("status");
-  await expect(status).toContainText("请先选择模型和模型提供商");
-  await expect(status).toHaveClass(/border-destructive/);
-  await expect(status).not.toHaveClass(/border-amber/);
+  // 后端未接受的请求以「发送失败」弹窗展示，而不是可重新同步的连接状态条。
+  await expect(page.getByRole("dialog", { name: "发送失败" })).toContainText("请先选择模型和模型提供商");
+  await expect(page.getByRole("button", { name: "重新同步" })).toHaveCount(0);
 });
 
 test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace 解析", async ({ page }) => {
@@ -354,9 +365,9 @@ test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace �
   await page.goto("/tasks/43");
   await page.goto("/tasks/42");
   await page.goto("/tasks/43");
-  await expect(page.locator('nav[aria-label="工作区任务列表"] button').filter({ hasText: "任务 B" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "任务 B" })).toBeVisible();
   await page.getByLabel("消息输入").fill("直接路由切换");
-  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
 
   await expect.poll(() => requestBodies.length).toBeGreaterThan(0);
   expect(requestBodies.every((body) => body.taskId === 43 && body.workspaceId === 8)).toBe(true);

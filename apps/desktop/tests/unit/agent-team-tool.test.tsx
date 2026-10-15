@@ -16,7 +16,7 @@ const PREVIEW: Record<string, unknown> = {
   parent_run_id: 2,
   workspace_id: 1,
   configuration: { team_id: "code-quality" },
-  node_goals: { develop: "实现" },
+  node_goals: { develop: { goal: "实现", summary: "实现" } },
   edges: [{ from: "develop", to: "review" }],
   nodes: [
     {
@@ -39,7 +39,7 @@ const REVIEW_REQUEST: Record<string, unknown> = {
   request_kind: "agent_team_review",
   prompt: "确认执行方案",
   decisions: ["approve", "reject"],
-  draft_schema: "agent-team-review-v1",
+  draft_schema: "agent-team-review-v2",
   draft: { goal: "交付报告" },
 };
 
@@ -76,23 +76,29 @@ describe("AgentTeamTool 待确认态", () => {
     expect(html).toContain("驳回并重新生成");
   });
 
-  it("Run 仍在等待但请求载荷缺失时显示可诊断状态，不回退成执行卡", () => {
-    const html = renderAgentTeamTool(PREVIEW, "completed");
+  it("请求载荷存在但无法识别时显示格式不兼容提示，不回退成执行卡", () => {
+    const html = renderAgentTeamTool(
+      { ...PREVIEW, user_input_request: { ...REVIEW_REQUEST, draft_schema: "agent-team-review-v0" } },
+      "completed",
+    );
 
-    expect(html).toContain("审批内容暂不可用");
+    expect(html).toContain("审批请求格式不兼容");
     expect(html).not.toContain("Agent Team 执行进度");
     expect(html).not.toContain("确认执行");
   });
 
-  it("Run 已离开等待状态时不再显示审批按钮", () => {
+  it("Run 未处于等待态时保留审批卡但禁止提交决定", () => {
+    // 请求存在决定是否展示审批卡；Run 状态只决定能否提交。
     const html = renderAgentTeamTool(
       { ...PREVIEW, user_input_request: REVIEW_REQUEST },
       "completed",
       "running",
     );
 
-    expect(html).toContain("Agent Team 执行进度");
-    expect(html).not.toContain("确认执行");
+    expect(html).toContain("正在准备确认");
+    expect(html).not.toContain("Agent Team 执行进度");
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>确认执行<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>驳回并重新生成<\/button>/);
   });
 
   it("执行态由独立执行卡渲染，不再挤进审批卡", () => {

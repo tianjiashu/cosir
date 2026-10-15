@@ -85,7 +85,7 @@ describe("task display title", () => {
   });
 
   it("exposes both display and full titles on tree nodes", () => {
-    const visibleTitle = "长标题".repeat(20);
+    const visibleTitle = "长标题".repeat(Math.ceil(TASK_TITLE_DISPLAY_LIMIT / 3) + 1);
     const model = buildTaskTreeModel([task(1, `[[cosir-file:abc]]${visibleTitle}`)]);
     const node = model.roots[0];
 

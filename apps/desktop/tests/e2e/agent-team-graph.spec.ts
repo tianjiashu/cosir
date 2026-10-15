@@ -65,7 +65,7 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await expect(nodeNameInput).toHaveValue("reviewer");
   await nodeNameInput.click();
   expect(await nodeNameInput.evaluate((element) => document.activeElement === element)).toBe(true);
-  await nodeNameInput.press("Control+A");
+  await nodeNameInput.press("ControlOrMeta+A");
   await nodeNameInput.pressSequentially("Code Review");
   await expect(nodeNameInput).toHaveValue("Code Review");
   const fieldLogEvents = await page.evaluate(() => (window as Window & { __cosirFrontendLogs?: { event: string; data?: { field?: string } }[] }).__cosirFrontendLogs?.filter((entry) => entry.event.startsWith("agent_team_graph_node_field_")).map((entry) => entry.event) ?? []);
@@ -76,7 +76,7 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await expect(page.locator(".react-flow__node")).toHaveCount(2);
   await nodeNameInput.click();
   expect(await nodeNameInput.evaluate((element) => document.activeElement === element)).toBe(true);
-  await nodeNameInput.press("Control+A");
+  await nodeNameInput.press("ControlOrMeta+A");
   await nodeNameInput.pressSequentially("代码审查");
   await expect(nodeNameInput).toHaveValue("代码审查");
 
@@ -108,8 +108,11 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   expect(endPaletteLogEvents).toContain("agent_team_graph_end_palette_drop_completed");
 
   await page.locator('.react-flow__node[data-id="@@agent-node-0"]').click();
-  await page.getByLabel("新增业务状态").fill("needs_review");
-  await page.getByRole("button", { name: "添加业务状态" }).click();
+  const nodeEditor = page.getByRole("region", { name: "节点属性编辑器" });
+  await nodeEditor.getByRole("button", { name: "添加状态" }).click();
+  await nodeEditor.getByLabel("添加业务状态").fill("needs_review");
+  await nodeEditor.getByLabel("添加业务状态").press("Enter");
+  await expect(nodeEditor.getByRole("button", { name: "移除状态 needs_review" })).toBeVisible();
   await page.getByRole("button", { name: "关闭节点属性" }).click();
   await expect(page.getByRole("region", { name: "节点属性编辑器" })).toHaveCount(0);
 
@@ -218,8 +221,9 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
     team_id: "review_flow",
     start_node_id: "node_1",
     nodes: [
-    { node_id: "node_1", name: "代码审查", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }, { name: "needs_review", color: "#F59E0B" }] },
-      { node_id: "node_2", name: "reviewer", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] },
+      // 画布新建节点与新增状态都使用 DEFAULT_AGENT_TEAM_STATUS_COLOR，未手动改色。
+      { node_id: "node_1", name: "代码审查", agent_id: "reviewer", statuses: [{ name: "done", color: "#3B82F6" }, { name: "needs_review", color: "#3B82F6" }] },
+      { node_id: "node_2", name: "reviewer", agent_id: "reviewer", statuses: [{ name: "done", color: "#3B82F6" }] },
     ],
   });
   expect(persistedConfiguration.transitions).toEqual(expect.arrayContaining([

@@ -99,8 +99,14 @@ function toolLifecycleState(previous, text, runId, status, toolStatus) {
       status: toolStatus,
       error: null,
       presentation: { verb: "搜索文件", icon: "search", surface: "standalone", expandable: true, expand_layout: "list" },
-      data: toolStatus === "completed"
-        ? { kind: "content-search-results", matches: [{ path: "lifecycle.test.ts", line: 1, content: "lifecycle", is_match: true }] }
+      display_data: toolStatus === "completed"
+        ? {
+            kind: "content-search-results",
+            pattern: "lifecycle",
+            path: ".",
+            match_count: 1,
+            matches: [{ path: "lifecycle.test.ts", line: 1, content: "lifecycle", is_match: true }],
+          }
         : null,
       isError: false,
     },
@@ -151,7 +157,7 @@ function toolTraceState() {
             status: "completed",
             error: null,
             presentation: { verb: "读取文件", icon: "eye", expandable: false, expand_layout: "none" },
-            data: null,
+            display_data: null,
             isError: false,
           },
           {
@@ -162,7 +168,7 @@ function toolTraceState() {
             status: "completed",
             error: null,
             presentation: { verb: "搜索文件", icon: "search", expandable: false, expand_layout: "none" },
-            data: null,
+            display_data: null,
             isError: false,
           },
           { type: "text", text: "检查完成", status: "completed" },
@@ -211,12 +217,10 @@ function webSearchState() {
               expand_layout: "list",
               default_open: true,
             },
-            data: {
-              entries: [{
-                name: "Assistant UI 官方文档",
-                type: "link",
-                path: "https://assistant-ui.com/docs",
-              }],
+            display_data: {
+              kind: "web-search-results",
+              query: "assistant-ui",
+              results: [{ title: "Assistant UI 官方文档", url: "https://assistant-ui.com/docs" }],
             },
             isError: false,
           },
@@ -359,7 +363,7 @@ function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function streamState(res, initialState, finalState, assistantIndex, chunks, runId, generation) {
+async function streamState(res, initialState, finalState, assistantIndex, chunks, runId, generation, taskId) {
   if (generation !== testGeneration) {
     res.end();
     return;
@@ -382,7 +386,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     if (generation === testGeneration && !res.writableEnded) telemetry.clientCancelCount += 1;
   });
 
-  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }], runId, "running"));
+  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }], runId, "running", taskId));
   await wait(120);
   if (generation !== testGeneration) {
     res.end();
@@ -398,7 +402,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     cancelledState.runs[runIndex].endReason = "user_cancelled";
     writeSse(res, assistantFrame([
       { type: "set", path: ["runs", runIndex], value: cancelledState.runs[runIndex] },
-    ], runId, "cancelled"));
+    ], runId, "cancelled", taskId));
     lastStreamBody += "data: [DONE]\n\n";
     res.write("data: [DONE]\n\n");
     res.end();
@@ -420,7 +424,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
       cancelledState.runs[runIndex].endReason = "user_cancelled";
       writeSse(res, assistantFrame([
         { type: "set", path: ["runs", runIndex], value: cancelledState.runs[runIndex] },
-      ], runId, "cancelled"));
+      ], runId, "cancelled", taskId));
       lastStreamBody += "data: [DONE]\n\n";
       res.write("data: [DONE]\n\n");
       res.end();
@@ -440,7 +444,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
           path: ["runs", runIndex, "messages", assistantIndex, "parts", 1, "text"],
           value: chunk,
         },
-      ], runId, "running"),
+      ], runId, "running", taskId),
     );
     await wait(420);
   }
@@ -453,7 +457,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     res,
     assistantFrame([
       { type: "set", path: ["runs", runIndex], value: finalState.runs[runIndex] },
-    ], runId, finalState.runs[runIndex].status),
+    ], runId, finalState.runs[runIndex].status, taskId),
   );
   lastStreamBody += "data: [DONE]\n\n";
   res.write("data: [DONE]\n\n");
@@ -461,7 +465,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
   telemetry.completedStreamCount += 1;
 }
 
-async function streamToolLifecycle(res, initialState, finalState, runId, generation) {
+async function streamToolLifecycle(res, initialState, finalState, runId, generation, taskId) {
   if (generation !== testGeneration) {
     res.end();
     return;
@@ -476,19 +480,19 @@ async function streamToolLifecycle(res, initialState, finalState, runId, generat
     Connection: "keep-alive",
     "Content-Type": "text/event-stream; charset=utf-8",
   });
-  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }], runId, "running"));
+  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }], runId, "running", taskId));
   await wait(250);
   if (generation !== testGeneration) {
     res.end();
     return;
   }
-  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0, "messages", 1, "parts", 0, "status"], value: "running" }], runId, "running"));
+  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0, "messages", 1, "parts", 0, "status"], value: "running" }], runId, "running", taskId));
   await wait(250);
   if (generation !== testGeneration) {
     res.end();
     return;
   }
-  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0], value: finalState.runs[0] }], runId, finalState.runs[0].status));
+  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0], value: finalState.runs[0] }], runId, finalState.runs[0].status, taskId));
   lastStreamBody += "data: [DONE]\n\n";
   res.write("data: [DONE]\n\n");
   res.end();
@@ -564,7 +568,7 @@ async function handleAssistant(req, res, body) {
     states.set(taskId, toolFinalState);
     res.setHeader("X-Cosir-Task-Id", String(taskId));
     res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
-    await streamToolLifecycle(res, toolInitialState, toolFinalState, runId, testGeneration);
+    await streamToolLifecycle(res, toolInitialState, toolFinalState, runId, testGeneration, taskId);
     return;
   }
 
@@ -580,7 +584,7 @@ async function handleAssistant(req, res, body) {
 
   res.setHeader("X-Cosir-Task-Id", String(taskId));
   res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
-  await streamState(res, initialState, finalState, assistantIndex, chunks, runId, testGeneration);
+  await streamState(res, initialState, finalState, assistantIndex, chunks, runId, testGeneration, taskId);
 }
 
 async function handleResume(req, res, body, threadIdPrefix = "task") {
@@ -601,6 +605,9 @@ async function handleResume(req, res, body, threadIdPrefix = "task") {
   cancelledRuns.delete(runId);
   const initialState = structuredClone(previous);
   const runIndex = initialState.runs.findIndex((run) => run.runId === runId);
+  // 业务 resume 在推流前已把 Run 迁回 running；初始快照须与 target_run_status 一致。
+  initialState.runs[runIndex].status = "running";
+  initialState.runs[runIndex].endReason = null;
   const assistantIndex = initialState.runs[runIndex].messages.length - 1;
   const finalState = structuredClone(previous);
   finalState.runs[runIndex].messages[assistantIndex] = textMessage(
@@ -614,7 +621,7 @@ async function handleResume(req, res, body, threadIdPrefix = "task") {
   states.set(taskId, finalState);
   res.setHeader("X-Cosir-Task-Id", String(taskId));
   res.setHeader("X-Cosir-Thread-Id", `${threadIdPrefix}-${taskId}`);
-  await streamState(res, initialState, finalState, assistantIndex, ["resumed", " response"], runId, testGeneration);
+  await streamState(res, initialState, finalState, assistantIndex, ["resumed", " response"], runId, testGeneration, taskId);
 }
 
 async function handleAttach(req, res, body) {
@@ -629,7 +636,7 @@ async function handleAttach(req, res, body) {
     const assistantIndex = previousRun.messages.length - 1;
     res.setHeader("X-Cosir-Task-Id", String(taskId));
     res.setHeader("X-Cosir-Thread-Id", `conversation_run-${taskId}`);
-    await streamState(res, previous, previous, assistantIndex, [], previousRun.runId, testGeneration);
+    await streamState(res, previous, previous, assistantIndex, [], previousRun.runId, testGeneration, taskId);
     return;
   }
   await handleResume(req, res, body, "conversation_run");

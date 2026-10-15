@@ -30,7 +30,9 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   await expect(page.getByText("子 Agent 已开始工作。", { exact: true })).toBeVisible();
   const row = page.getByTestId("tool-activity-row").filter({ hasText: "审查代码" });
   await expect(row).toContainText("Reviewer");
-  await row.click();
+  // 行本身只展开内联详情；打开工作台走独立按钮。
+  const openReviewer = page.getByRole("button", { name: "打开子 Agent工作台：审查代码" });
+  await openReviewer.click();
 
   await expect(page.getByRole("complementary", { name: "Workbench" })).toBeVisible();
   await expect(page.getByRole("tab", { name: /审查代码/ })).toBeVisible();
@@ -38,14 +40,14 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
   expect((await frontendLogs(page)).filter((entry) => entry.event === "react_recoverable_render_error")).toEqual([]);
   const workbench = page.getByRole("complementary", { name: "Workbench" });
-  await expect(workbench.getByRole("button", { name: "发送" })).toHaveCount(0);
+  await expect(workbench.getByRole("button", { name: "发送", exact: true })).toHaveCount(0);
   await expect(workbench.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
   await expect(workbench.getByRole("button", { name: "从此处 Fork 新任务" })).toHaveCount(0);
   await expect(workbench.getByRole("button", { name: "关闭 审查代码" })).toBeVisible();
   expect(businessWrites).toEqual([]);
   await workbench.getByRole("button", { name: "关闭 审查代码" }).click();
   await expect(page.getByRole("complementary", { name: "Workbench" })).toHaveCount(0);
-  await row.click();
+  await openReviewer.click();
   await expect(page.getByRole("complementary", { name: "Workbench" })).toBeVisible();
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
   expect(attachRequests).toHaveLength(1);
@@ -61,8 +63,8 @@ test("两个并行子 Agent 分别 attach 且切换标签页不丢失订阅", as
 
   await page.goto("/tasks/42");
   await expect(page.getByText("子 Agent 已开始工作。", { exact: true })).toBeVisible();
-  const reviewer = page.getByTestId("tool-activity-row").filter({ hasText: "审查代码" });
-  const tester = page.getByTestId("tool-activity-row").filter({ hasText: "检查测试" });
+  const reviewer = page.getByRole("button", { name: "打开子 Agent工作台：审查代码" });
+  const tester = page.getByRole("button", { name: "打开子 Agent工作台：检查测试" });
   await reviewer.click();
   await expect(page.getByRole("tab", { name: /审查代码/ })).toBeVisible();
   await expect.poll(() => attachRequests.filter((url) => url.includes("/tasks/501/")).length).toBe(1);

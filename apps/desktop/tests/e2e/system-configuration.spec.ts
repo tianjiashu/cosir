@@ -120,7 +120,7 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await expect(page.getByRole("heading", { name: "让本机 Agent 按你的方式工作" })).toBeVisible();
   await expect(page.getByText("集中管理子 Agent、全局指令与运行环境。敏感值只在本机配置文件中保存，不会进入对话或日志。", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /子 Agent/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /全局指令/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /全局AGENTS\.md配置/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /环境变量/ })).toBeVisible();
   await expect(page.getByText("reviewer", { exact: true })).toBeVisible();
 
@@ -144,14 +144,14 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await expect(page.getByText("模型设置 JSON", { exact: true })).toHaveCount(0);
   await expect(page.getByText("未填写的参数不覆盖运行时默认值，保存时仍写入 model_settings JSON。", { exact: true })).toHaveCount(0);
   await expect(page.getByText("按工具组配置，保存时会展开为对应的工具名称。", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "思考模式" })).toHaveValue("");
+  await expect(page.getByRole("combobox", { name: /推理强度/ })).toHaveValue("");
   await expect(page.getByRole("combobox", { name: "流式输出" })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "响应格式" })).toHaveCount(0);
   await expect(page.getByText("高级模型参数", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "保存配置" }).click();
   await expect(page.getByRole("status")).toHaveText("配置更改成功");
 
-  await page.getByRole("button", { name: /全局指令/ }).click();
+  await page.getByRole("button", { name: /全局AGENTS\.md配置/ }).click();
   await expect(page.getByText("保存后实时生效，不影响前缀缓存。", { exact: true })).toBeVisible();
   // 字节计数已移除，只保留 Token 估算。
   await expect(page.getByText("字节", { exact: true })).toHaveCount(0);
@@ -159,14 +159,14 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await expect(page.getByText("下一次 Run 生效", { exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: /主 Agent/ }).click();
-  await expect(page.getByText("主 Agent 系统提示词", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存主 Agent prompt" })).toBeVisible();
   await expect(page.getByText("保存后实时生效，不影响前缀缓存。", { exact: true })).toBeVisible();
-  await expect(page.locator("textarea").first()).toHaveValue("# 主 Agent 协议");
+  await expect(page.getByRole("textbox", { name: "Markdown 源码编辑器" })).toHaveText("# 主 Agent 协议");
 
   await page.getByRole("button", { name: /环境变量/ }).click();
   await expect(page.getByRole("heading", { name: "Langfuse 可观测性" })).toBeVisible();
   await expect(page.getByText("Secret Key", { exact: true })).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: "启用 Langfuse" })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "启用 Langfuse" })).toBeVisible();
   await expect(page.getByRole("button", { name: "重启后端" })).toHaveCount(0);
   await expect(page.getByText("当前进程", { exact: true })).toHaveCount(0);
   await expect(page.getByText("重启后预计（已保存文件）", { exact: true })).toHaveCount(0);
