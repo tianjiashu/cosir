@@ -52,6 +52,12 @@ Python 侧按事实所有权拆分，不另建会话状态机：
 
 service 在创建会话时直接构造 `ProcessTerminalWorker`，runtime 直接使用该具体类，不设置 Worker Protocol 或 Factory。可执行文件路径由 worker 构造时解析（显式配置优先，否则读取宿主环境变量）；未配置时保留诊断日志并失败，构造本身不启动进程。单元测试在具体构造调用处替换 worker，真实集成测试使用显式路径。
 
+会话状态直接由 runtime 持有，不再使用 `TerminalSessionRecord` 或其同义包装。身份和用途创建后不变；生命周期在会话锁内直接更新，snapshot 同锁读取并显式投影。`TerminalSessionStatusChange` 和 `SessionTermination` 仍冻结一次迁移的结果，锁外通知不持有可变 runtime 的状态引用。预览只接收生成事件所需的标量字段。
+
+start/list/signal/close 的会话快照保留 session_id、task_id、label、initial_cwd、shell_kind、status、end_reason、exit_code，以及 generation、预览水位、观察状态、集成能力和 next_cursor。workspace_id 与 created_by_run_id 仅用于内部归属检查和日志；不再返回 last_activity_at、ended_at、worker_instance_id、worker_pid 或 shell_executable，也不保留这些字段的会话副本。worker 实例身份仍用于握手；启动时的结构化日志关联 session_id、worker 实例、PID 和 shell 路径。没有空闲回收，不再逐帧维护活动时间。
+
+ShellResolver 接收 integration 并一次生成启动规格；Windows 启动标志在显式平台分支内直接读取，不用反射回退掩盖配置或能力缺失。
+
 read/write 直接返回观察字典，不再套内部结果包装。已接受的 write 在同一 runtime 上完成观察，即使期间 Task 删除也保留输入接受事实。状态通知按会话串行投递并丢弃过期 running，外部观察者不占用会话状态锁。
 
 Rust worker 随二进制嵌入脚本并释放到临时目录，正常退出时清理。zsh bootstrap 保留用户启动文件链路；PowerShell bootstrap 保留 profile，使用 NoExit 装配交互脚本，不修改永久配置或执行策略。

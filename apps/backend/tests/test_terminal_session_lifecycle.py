@@ -9,6 +9,73 @@ from test_terminal_session_service import FakeWorker, make_service
 pytestmark = pytest.mark.usefixtures("backend_env")
 
 
+@pytest.mark.parametrize(
+    "ending, status, reason, code",
+    [
+        ("exit", "exited", "shell_exited", 7),
+        ("close", "closed", "agent_closed", None),
+        ("error", "failed", "worker_heartbeat_timeout", None),
+    ],
+)
+def test_runtime_snapshots_notifications_and_preview_keep_consistent_values(
+    tmp_path, monkeypatch, ending, status, reason, code
+):
+    changes = []
+    service, workers = make_service(monkeypatch, status_observer=changes.append)
+    started = service.start(
+        task_id=1, workspace_id=2, workspace_root=str(tmp_path), run_id=3, label="server"
+    )
+    session_id = started["session_id"]
+    attachment = service.subscribe(session_id, task_id=1, after_seq=None)
+    attachment.subscription.activate()
+    signalled = service.signal(session_id, task_id=1, signal_name="interrupt")
+    running = changes[0]
+    worker = workers[0]
+    if ending == "exit":
+        worker.emit_exit(code)
+    elif ending == "error":
+        worker.emit_error("HEARTBEAT_TIMEOUT")
+    else:
+        service.close(session_id, task_id=1)
+    try:
+        ended = service.snapshot(session_id, task_id=1)
+        listed = service.list_sessions(task_id=1, workspace_id=2)[0]
+        replay = service.subscribe(session_id, task_id=1, after_seq=None)
+        event = attachment.subscription.get(0)
+        assert event == replay.terminal_event
+        for value in (ended, listed, event):
+            assert (value["status"], value["end_reason"], value["exit_code"]) == (
+                status,
+                reason,
+                code,
+            )
+        assert (changes[-1].status, changes[-1].end_reason, changes[-1].exit_code) == (
+            status,
+            reason,
+            code,
+        )
+        # 旧投影和已送出的值对象不能随 runtime 的直接赋值而变化。
+        assert started["status"] == signalled["status"] == running.status == "running"
+        assert started["end_reason"] is started["exit_code"] is None
+        assert running.end_reason is running.exit_code is None
+        assert ended["label"] == "server"
+        removed = {
+            "workspace_id",
+            "created_by_run_id",
+            "last_activity_at",
+            "ended_at",
+            "worker_instance_id",
+            "worker_pid",
+            "shell_executable",
+        }
+        for value in (started, signalled, ended, listed):
+            assert not removed.intersection(value)
+        service.unsubscribe(session_id, replay.subscription)
+    finally:
+        service.unsubscribe(session_id, attachment.subscription)
+        service.shutdown()
+
+
 def test_close_exit_and_retry_clean_worker_and_notify_only_once(tmp_path, monkeypatch):
     changes = []
     service, workers = make_service(monkeypatch, status_observer=changes.append)

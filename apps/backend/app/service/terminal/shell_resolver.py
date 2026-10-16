@@ -38,6 +38,7 @@ class ShellResolver:
     def resolve(
         requested: str = "auto",
         *,
+        integration: str = "auto",
         system: str | None = None,
         environ: dict[str, str] | None = None,
     ) -> ShellSpec:
@@ -54,29 +55,29 @@ class ShellResolver:
             raise ShellResolutionError("custom shell requires an executable path")
         if value not in {"auto", "cmd", "powershell", "pwsh", "bash", "zsh", "fish"}:
             path = ShellResolver._resolve_executable(requested)
-            return ShellSpec(kind="custom", executable=path, argv=(path,))
+            return ShellSpec(kind="custom", executable=path, argv=(path,), integration=integration)
 
         if current_system == "Windows":
             if value == "cmd":
                 executable = ShellResolver._resolve_executable("cmd.exe")
-                return ShellSpec("cmd", executable, (executable, "/Q", "/D"))
+                return ShellSpec("cmd", executable, (executable, "/Q", "/D"), integration)
             if value in {"auto", "powershell"}:
                 executable = ShellResolver._resolve_executable("powershell.exe")
-                return ShellSpec("powershell", executable, (executable, "-NoLogo"))
+                return ShellSpec("powershell", executable, (executable, "-NoLogo"), integration)
             if value == "pwsh":
                 executable = ShellResolver._resolve_executable("pwsh.exe")
-                return ShellSpec("pwsh", executable, (executable, "-NoLogo"))
+                return ShellSpec("pwsh", executable, (executable, "-NoLogo"), integration)
             raise ShellResolutionError(f"shell '{requested}' is not available on Windows")
 
         if value == "auto":
             configured = env.get("SHELL", "").strip()
             if configured:
                 executable = ShellResolver._resolve_executable(configured)
-                return ShellSpec(Path(executable).name, executable, (executable,))
+                return ShellSpec(Path(executable).name, executable, (executable,), integration)
             value = "zsh" if current_system == "Darwin" else "bash"
 
         executable = ShellResolver._resolve_executable(value)
-        return ShellSpec(value, executable, (executable,))
+        return ShellSpec(value, executable, (executable,), integration)
 
     @staticmethod
     def _resolve_executable(value: str) -> str:

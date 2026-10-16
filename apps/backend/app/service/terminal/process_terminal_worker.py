@@ -13,6 +13,7 @@ import platform
 import queue
 import struct
 import subprocess
+import sys
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -141,7 +142,10 @@ class ProcessTerminalWorker:
         if self._process is not None:
             raise TerminalWorkerUnavailableError("terminal worker has already started")
         try:
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NO_WINDOW
+            else:
+                creationflags = 0
             process = subprocess.Popen(  # noqa: S603 - executable is desktop-provided sidecar
                 [self._executable, "--stdio", "--instance-id", self.instance_id],
                 stdin=subprocess.PIPE,

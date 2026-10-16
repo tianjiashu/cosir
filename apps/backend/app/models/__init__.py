@@ -12,7 +12,6 @@ from app.models.conversation_run_record import ConversationRunError, Conversatio
 from app.models.conversation_run_usage import ConversationRunUsage
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.task_record import TaskRecord
-from app.models.terminal_session_record import TerminalSessionRecord
 from app.models.workspace_record import WorkspaceRecord
 
 __all__ = [
@@ -25,6 +24,5 @@ __all__ = [
     "ConversationRunStatus",
     "ConversationRunUsage",
     "TaskRecord",
-    "TerminalSessionRecord",
     "WorkspaceRecord",
 ]

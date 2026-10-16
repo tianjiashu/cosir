@@ -101,6 +101,7 @@ def make_service(
 
     def construct(executable, instance_id):
         worker = worker_type()
+        worker.instance_id = instance_id
         workers.append(worker)
         return worker
 
@@ -109,9 +110,7 @@ def make_service(
     )
     if ring_buffer_bytes is not None:
         monkeypatch.setattr(Constant.Terminal, "MAX_RING_BUFFER_BYTES", ring_buffer_bytes)
-    service = TerminalSessionService(
-        status_observer=status_observer or (lambda _change: None)
-    )
+    service = TerminalSessionService(status_observer=status_observer or (lambda _change: None))
     return service, workers
 
 
@@ -493,7 +492,7 @@ def test_session_status_observer_receives_async_exit_after_start(
     assert [change.status for change in changes] == ["running", "exited"]
     assert changes[-1].session_id == snapshot["session_id"]
     assert changes[-1].task_id == 1
-    assert snapshot["created_by_run_id"] == 10
+    assert "created_by_run_id" not in snapshot
     assert changes[-1].exit_code == 7
 
 
@@ -744,6 +743,27 @@ def test_shell_resolver_has_platform_specific_defaults(monkeypatch: pytest.Monke
     assert posix.kind == "bash"
 
 
+@pytest.mark.parametrize(
+    "requested, system",
+    [
+        ("auto", "Windows"),
+        ("cmd", "Windows"),
+        ("pwsh", "Windows"),
+        ("auto", "Darwin"),
+        ("zsh", "Darwin"),
+        ("/custom/shell", "Linux"),
+    ],
+)
+def test_shell_resolver_builds_disabled_integration_into_each_launch_spec(
+    monkeypatch, requested, system
+):
+    monkeypatch.setattr("app.service.terminal.shell_resolver.shutil.which", lambda value: value)
+    spec = ShellResolver.resolve(
+        requested, system=system, environ={"SHELL": "/bin/zsh"}, integration="off"
+    )
+    assert spec.integration == "off"
+
+
 @pytest.mark.asyncio
 async def test_preview_websocket_rejects_input_after_attach(monkeypatch, tmp_path: Path) -> None:
     from app.api.terminal_api import terminal_preview_stream
@@ -977,10 +997,10 @@ def test_list_sessions_is_task_scoped_and_keeps_recent_exits(monkeypatch, tmp_pa
     first = service.start(
         task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1, label="dev server"
     )
-    service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=2)
+    second = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=2)
     service.start(task_id=2, workspace_id=1, workspace_root=str(tmp_path), run_id=3)
     sessions = service.list_sessions(task_id=1, workspace_id=1)
-    assert [item["created_by_run_id"] for item in sessions] == [1, 2]
+    assert [item["session_id"] for item in sessions] == [first["session_id"], second["session_id"]]
     assert sessions[0]["label"] == "dev server"
     assert not {"worker_pid", "worker_instance_id", "shell_executable"} & sessions[0].keys()
     assert service.list_sessions(task_id=1, workspace_id=2) == []
@@ -1095,6 +1115,11 @@ def test_terminal_lifecycle_writes_structured_file_log(monkeypatch, tmp_path: Pa
     assert changes[-1]["data"]["task_id"] == 7
     assert changes[-1]["data"]["created_by_run_id"] == 9
     assert changes[-1]["data"]["reason"] == "task_deleted"
+    started = next(item for item in events if item.get("event") == "terminal_worker_started")
+    assert started["data"]["session_id"] == session["session_id"]
+    assert started["data"]["worker_pid"] == 4321
+    assert started["data"]["worker_instance_id"]
+    assert started["data"]["shell_executable"]
 
 
 def agent_cursor(service, session_id, task_id, value):

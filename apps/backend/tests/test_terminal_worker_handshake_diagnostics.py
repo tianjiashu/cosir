@@ -22,8 +22,8 @@ from app.service.terminal.errors import (
     TerminalWorkerProtocolError,
     TerminalWorkerUnavailableError,
 )
-from app.service.terminal.shell_resolver import ShellSpec
 from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
+from app.service.terminal.shell_resolver import ShellSpec
 
 _FAKE_WORKER_PID = 4242
 
@@ -133,7 +133,7 @@ def _patch_worker_process(monkeypatch: pytest.MonkeyPatch, process: _FakeProcess
         无。
 
     副作用:
-        仅替换 ``app.service.terminal.worker`` 模块内的 ``subprocess`` 引用，
+        仅替换 ``process_terminal_worker`` 模块内的 ``subprocess`` 引用，
         不改动全局 ``subprocess``，避免影响其它测试。
     """
 
@@ -144,7 +144,7 @@ def _patch_worker_process(monkeypatch: pytest.MonkeyPatch, process: _FakeProcess
             Popen=lambda *args, **kwargs: process,
             PIPE=subprocess.PIPE,
             TimeoutExpired=subprocess.TimeoutExpired,
-            CREATE_NO_WINDOW=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            CREATE_NO_WINDOW=0x08000000,
         ),
     )
 
@@ -267,3 +267,22 @@ def test_not_configured_worker_logs_before_raising(monkeypatch: pytest.MonkeyPat
         ProcessTerminalWorker(None, "unconfigured-instance")
 
     assert any(record.getMessage() == "terminal_worker_not_configured" for record in caplog.records)
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
+def test_spawn_flags_only_require_windows_constant_on_windows(monkeypatch, platform):
+    captured = {}
+
+    def spawn(*args, **kwargs):
+        captured.update(kwargs)
+        raise OSError("stop before process creation")
+
+    process_api = SimpleNamespace(Popen=spawn, PIPE=subprocess.PIPE)
+    if platform == "win32":
+        process_api.CREATE_NO_WINDOW = 0x08000000
+    monkeypatch.setattr(worker_module, "subprocess", process_api)
+    monkeypatch.setattr(worker_module, "sys", SimpleNamespace(platform=platform))
+    worker = ProcessTerminalWorker("unused", "platform-flags")
+    with pytest.raises(TerminalWorkerUnavailableError, match="failed to start"):
+        worker.start(_spec(), ".", lambda event: None)
+    assert captured["creationflags"] == (0x08000000 if platform == "win32" else 0)

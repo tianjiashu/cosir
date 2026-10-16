@@ -36,8 +36,8 @@ def build_session_display_payload(
 ) -> dict[str, object]:
     """从 session 快照中保留允许进入工具展示的元数据。
 
-    service 快照还含 worker、workspace、可执行文件和时间戳等诊断字段；它们属于后端事实，
-    不进入 Assistant Transport。``extra`` 仅接收调用方已校验的操作元数据，不承载终端输入或输出。
+    service 快照还含观察游标、集成能力和 shell 阶段等 Agent 信息，不进入展示投影。
+    ``extra`` 仅接收调用方已校验的操作元数据，不承载终端输入或输出。
     """
 
     fields = (

@@ -12,7 +12,6 @@ from collections import deque
 from dataclasses import dataclass
 
 from app.config.constant import Constant
-from app.models.terminal_session_record import TerminalSessionRecord
 from app.service.terminal.errors import TerminalSessionResyncRequiredError
 
 PreviewEvent = dict[str, object]
@@ -168,7 +167,13 @@ class PreviewBuffer:
             subscriber.publish(event, size)
 
     def attach(
-        self, record: TerminalSessionRecord, after_seq: int | None, *, ended: bool
+        self,
+        after_seq: int | None,
+        *,
+        task_id: int,
+        status: str,
+        exit_code: int | None,
+        end_reason: str | None,
     ) -> TerminalPreviewAttachment:
         """after_seq 类型由 API 校验；这里只判断本窗口是否仍能连续回放。"""
         if after_seq is not None and after_seq < self.first_available_seq - 1:
@@ -185,20 +190,24 @@ class PreviewBuffer:
             **self._identity,
             **self.snapshot(),
             "type": "attached",
-            "task_id": record.task_id,
-            "status": record.status,
+            "task_id": task_id,
+            "status": status,
         }
+        ended = status not in {"starting", "running"}
         if not ended:
             self._subscribers.add(subscription)
         return TerminalPreviewAttachment(
-            attached, replay, self._exit_event(record) if ended else None, subscription
+            attached,
+            replay,
+            self._exit_event(status, exit_code, end_reason) if ended else None,
+            subscription,
         )
 
     def detach(self, subscription: TerminalPreviewSubscription) -> None:
         self._subscribers.discard(subscription)
 
-    def finish(self, record: TerminalSessionRecord) -> None:
-        event = self._exit_event(record)
+    def finish(self, *, status: str, exit_code: int | None, end_reason: str | None) -> None:
+        event = self._exit_event(status, exit_code, end_reason)
         for subscriber in self._subscribers:
             subscriber.publish(event)
         self._subscribers.clear()
@@ -206,11 +215,13 @@ class PreviewBuffer:
     def _output_event(self, frame: _OutputFrame) -> PreviewEvent:
         return {**self._identity, "type": "output", "seq": frame.seq, "data_base64": frame.encoded}
 
-    def _exit_event(self, record: TerminalSessionRecord) -> PreviewEvent:
+    def _exit_event(
+        self, status: str, exit_code: int | None, end_reason: str | None
+    ) -> PreviewEvent:
         return {
             **self._identity,
             "type": "exit",
-            "status": record.status,
-            "exit_code": record.exit_code,
-            "end_reason": record.end_reason,
+            "status": status,
+            "exit_code": exit_code,
+            "end_reason": end_reason,
         }

@@ -13,13 +13,12 @@ import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.models.terminal_session_record import TerminalSessionRecord
 from app.service.terminal.errors import TerminalSessionError, TerminalSessionStateError
 from app.service.terminal.process_terminal_worker import ProcessTerminalWorker, WorkerEventCallback
 from app.service.terminal.shell_resolver import ShellSpec
@@ -31,7 +30,6 @@ from app.service.terminal.terminal_preview import (
     TerminalPreviewSubscription,
 )
 from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
-from app.utils.datetime_utils import utc_now
 
 RunCancellationCheck = Callable[[], bool]
 
@@ -50,13 +48,29 @@ class TerminalSessionRuntime:
 
     def __init__(
         self,
-        record: TerminalSessionRecord,
         worker: ProcessTerminalWorker,
         *,
+        session_id: str,
+        task_id: int,
+        workspace_id: int,
+        created_by_run_id: int,
+        initial_cwd: str,
+        shell_kind: str,
+        label: str | None,
         integration: str,
         buffer_limit: int,
     ) -> None:
-        self._record = record
+        # 身份和用途在会话创建后不变；生命周期字段只在会话锁内更新。
+        self.session_id: Final = session_id
+        self.task_id: Final = task_id
+        self.workspace_id: Final = workspace_id
+        self.created_by_run_id: Final = created_by_run_id
+        self.initial_cwd: Final = initial_cwd
+        self.shell_kind: Final = shell_kind
+        self.label: Final = label
+        self._status = "starting"
+        self._end_reason: str | None = None
+        self._exit_code: int | None = None
         self._worker: ProcessTerminalWorker | None = worker
         self.generation = f"gen_{uuid.uuid4().hex}"
         self._lock = threading.RLock()
@@ -64,19 +78,16 @@ class TerminalSessionRuntime:
         # service 用此锁串行投递状态通知；不在持有状态锁时等待外部观察者。
         self.status_delivery_lock = threading.RLock()
         self._disposal_finished = threading.Event()
-        self._preview = PreviewBuffer(record.session_id, self.generation, buffer_limit)
+        self._preview = PreviewBuffer(session_id, self.generation, buffer_limit)
         self._sanitizer = TerminalOutputSanitizer()
         self._observation = TerminalObservation(self.generation, buffer_limit, integration)
         self._capabilities: frozenset[str] = frozenset()
         self._accepted_writes: OrderedDict[str, bytes] = OrderedDict()
 
     @property
-    def record(self) -> TerminalSessionRecord:
-        return self._record
-
-    @property
     def status(self) -> str:
-        return self._record.status
+        """集合筛选只读取单一状态；完整生命周期快照必须在会话锁内读取。"""
+        return self._status
 
     def start(
         self, spec: ShellSpec, on_event: WorkerEventCallback
@@ -84,11 +95,24 @@ class TerminalSessionRuntime:
         """与 finish 串行化，保证慢启动与 Task 删除交错时句柄不会脱管。"""
         with self._lock:
             worker = self._mutable_worker()
-            worker.start(spec, self.record.initial_cwd, on_event)
+            worker.start(spec, self.initial_cwd, on_event)
             self._capabilities = worker.capabilities
             if self.status != "starting":
                 return None
-            self._record = replace(self.record, status="running", worker_pid=worker.pid)
+            self._status = "running"
+            log.info(
+                "terminal_worker_started",
+                extra={
+                    "msg": "终端 worker 已建立，会话与进程诊断信息已关联",
+                    "data": {
+                        "task_id": self.task_id,
+                        "session_id": self.session_id,
+                        "worker_instance_id": worker.instance_id,
+                        "worker_pid": worker.pid,
+                        "shell_executable": spec.executable,
+                    },
+                },
+            )
             return self.status_change()
 
     def wait_for_integration(self) -> None:
@@ -143,7 +167,6 @@ class TerminalSessionRuntime:
         self._accepted_writes[operation_id] = fingerprint
         while len(self._accepted_writes) > Constant.Terminal.MAX_WRITE_OPERATION_CACHE:
             self._accepted_writes.popitem(last=False)
-        self._touch()
         return False
 
     def read(
@@ -198,12 +221,12 @@ class TerminalSessionRuntime:
                 if is_cancelled is not None and is_cancelled():
                     reason = "cancelled"
                 envelope = {
-                    "session_id": self.record.session_id,
+                    "session_id": self.session_id,
                     "generation": self.generation,
                     "state": {
                         **observation.state(self.status),
-                        "session_exit_code": self.record.exit_code,
-                        "session_end_reason": self.record.end_reason,
+                        "session_exit_code": self._exit_code,
+                        "session_end_reason": self._end_reason,
                     },
                     "integration": observation.integration,
                     "capabilities": sorted(self._capabilities),
@@ -221,8 +244,8 @@ class TerminalSessionRuntime:
                         extra={
                             "msg": "Agent 观察窗口已淘汰部分内容",
                             "data": {
-                                "task_id": self.record.task_id,
-                                "session_id": self.record.session_id,
+                                "task_id": self.task_id,
+                                "session_id": self.session_id,
                                 "generation": self.generation,
                             },
                         },
@@ -251,14 +274,19 @@ class TerminalSessionRuntime:
                 )
         # signal 确认由同一 reader 接收；不能持锁阻止 reader 先处理输出或退出。
         worker.signal(signal_name)
-        with self._lock:
-            self._touch()
-            return self.snapshot()
+        return self.snapshot()
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
             return {
-                **self.record.to_dict(),
+                "session_id": self.session_id,
+                "task_id": self.task_id,
+                "label": self.label,
+                "initial_cwd": self.initial_cwd,
+                "shell_kind": self.shell_kind,
+                "status": self.status,
+                "end_reason": self._end_reason,
+                "exit_code": self._exit_code,
                 "generation": self.generation,
                 **self._preview.snapshot(),
                 "integration": self._observation.integration.copy(),
@@ -269,20 +297,23 @@ class TerminalSessionRuntime:
 
     def status_change(self) -> TerminalSessionStatusChange:
         with self._lock:
-            record = self.record
             return TerminalSessionStatusChange(
-                task_id=record.task_id,
-                session_id=record.session_id,
+                task_id=self.task_id,
+                session_id=self.session_id,
                 generation=self.generation,
-                status=record.status,
-                end_reason=record.end_reason,
-                exit_code=record.exit_code,
+                status=self.status,
+                end_reason=self._end_reason,
+                exit_code=self._exit_code,
             )
 
     def subscribe(self, after_seq: int | None) -> TerminalPreviewAttachment:
         with self._lock:
             return self._preview.attach(
-                self.record, after_seq, ended=self.status not in {"starting", "running"}
+                after_seq,
+                task_id=self.task_id,
+                status=self.status,
+                exit_code=self._exit_code,
+                end_reason=self._end_reason,
             )
 
     def unsubscribe(self, subscription: TerminalPreviewSubscription) -> None:
@@ -308,7 +339,7 @@ class TerminalSessionRuntime:
                     "terminal_session_worker_nonfatal_error",
                     extra={
                         "msg": "Terminal Worker 报告非致命错误",
-                        "data": {"session_id": self.record.session_id, "code": code},
+                        "data": {"session_id": self.session_id, "code": code},
                     },
                 )
             else:
@@ -329,8 +360,8 @@ class TerminalSessionRuntime:
                 extra={
                     "msg": "终端 shell 观察",
                     "data": {
-                        "task_id": self.record.task_id,
-                        "session_id": self.record.session_id,
+                        "task_id": self.task_id,
+                        "session_id": self.session_id,
                         "generation": self.generation,
                         "command_id": projected.get("command_id"),
                         "reason": projected.get("reason"),
@@ -352,7 +383,6 @@ class TerminalSessionRuntime:
             if self.status in {"starting", "running"}:
                 self._observation.output(self._sanitizer.feed(data))
                 self._preview.append(encoded, len(data))
-                self._touch()
                 self._condition.notify_all()
         return None
 
@@ -375,23 +405,21 @@ class TerminalSessionRuntime:
                     extra={
                         "msg": "会话结束，未收到 shell 返回结果",
                         "data": {
-                            "task_id": self.record.task_id,
-                            "session_id": self.record.session_id,
+                            "task_id": self.task_id,
+                            "session_id": self.session_id,
                             "generation": self.generation,
                             "command_id": active,
                         },
                     },
                 )
-            now = utc_now()
-            self._record = replace(
-                self.record,
-                status=status,
-                end_reason=reason,
-                exit_code=exit_code,
-                ended_at=now,
-            )
+            self._end_reason = reason
+            self._exit_code = exit_code
+            # status 最后发布；锁外的集合筛选无需读取其他生命周期字段。
+            self._status = status
             worker, self._worker = self._worker, None
-            self._preview.finish(self.record)
+            self._preview.finish(
+                status=self.status, exit_code=self._exit_code, end_reason=self._end_reason
+            )
             self._condition.notify_all()
             return SessionTermination(self.status_change(), worker, self._disposal_finished)
 
@@ -405,9 +433,6 @@ class TerminalSessionRuntime:
         # worker 只在终态迁移时移交；活会话一定持有句柄。
         assert self._worker is not None
         return self._worker
-
-    def _touch(self) -> None:
-        self._record = replace(self.record, last_activity_at=utc_now())
 
 
 _FATAL_WORKER_ERROR_REASONS = {
