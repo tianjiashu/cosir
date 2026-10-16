@@ -52,13 +52,6 @@ class Constant:
         MAX_AGENT_INPUT_BYTES: int = 64 * 1024
         # Worker 单次回传输出块的最大字节数（超出分块）。
         MAX_WORKER_OUTPUT_CHUNK_BYTES: int = 16 * 1024
-        # 会话默认最长存活时长（秒），超时由 sweeper 回收。
-        DEFAULT_MAX_LIFETIME_SECONDS: int = 8 * 60 * 60
-        # 会话默认空闲超时（秒），无活动超过该值由 sweeper 回收。
-        DEFAULT_IDLE_TIMEOUT_SECONDS: int = 30 * 60
-        # sweeper 扫描闲置会话的周期间隔（秒）。
-        SWEEPER_INTERVAL_SECONDS: int = 30
-
         # --- Worker 子进程协议与约束 ---
         # 单帧最大字节数（Worker 与服务侧帧编解码的共同上限）。
         MAX_FRAME_BYTES: int = 4 * 1024 * 1024
@@ -66,7 +59,7 @@ class Constant:
         MAX_INPUT_QUEUE_FRAMES: int = 64
         # Worker 输入队列最大字节数。
         MAX_INPUT_QUEUE_BYTES: int = 64 * 1024
-        # 已完成 terminal_write 幂等结果的进程内上限；session 终态时会按 session 清理。
+        # 每个 session 保留的最近已接受输入摘要数；随终态历史淘汰或 Task 删除释放。
         MAX_WRITE_OPERATION_CACHE: int = 4096
         # 服务侧与 Worker 握手时约定的协议版本标识。
         WORKER_PROTOCOL: str = "terminal-worker-v2"
@@ -115,9 +108,7 @@ class Constant:
         # 视为「终态」的 Run 状态集合（用于识别 terminal 类 run 是否已结束，取值来自
         # ``ConversationRunStatus`` 的稳定字符串值）。**唯一事实源**：fork 校验、
         # child_task 工具与 SSE 终止判定一律引用本集合，禁止在各处另立副本。
-        TERMINAL_STATUSES: frozenset[str] = frozenset(
-            {"completed", "failed", "cancelled"}
-        )
+        TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
 
     class LLM:
         """模型请求的全局参数：所有模型统一，Agent 级 ``ModelSettings`` **无**对应覆盖字段。"""
@@ -212,9 +203,9 @@ class Constant:
         # 单张图片允许的最长边像素数。
         MAX_IMAGE_SIDE_PX: int = 8192
         # 资源 ID 格式：64 位小写十六进制。
-        ASSET_ID: "re.Pattern[str]" = re.compile(r"^[0-9a-f]{64}$")
+        ASSET_ID: re.Pattern[str] = re.compile(r"^[0-9a-f]{64}$")
         # 资源文件名格式：``<asset_id>.<extension>``。
-        ASSET_FILE: "re.Pattern[str]" = re.compile(
+        ASSET_FILE: re.Pattern[str] = re.compile(
             r"^(?P<asset_id>[0-9a-f]{64})\.(?P<extension>jpeg|png)$"
         )
         # 图片 MIME 类型映射（格式 -> content-type），以只读映射展示。
@@ -227,11 +218,11 @@ class Constant:
         """cosir 内部文件 / 图片占位 token 的正则（多处复用，单一事实源）。"""
 
         # 本地文件占位 token：``[[cosir-file:<id>]]``。
-        LOCAL_FILE_TOKEN: "re.Pattern[str]" = re.compile(r"\[\[cosir-file:([^\]]+)\]\]")
+        LOCAL_FILE_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-file:([^\]]+)\]\]")
         # 本地图片占位 token：``[[cosir-image:<id>]]``。
-        LOCAL_IMAGE_TOKEN: "re.Pattern[str]" = re.compile(r"\[\[cosir-image:([^\]]+)\]\]")
+        LOCAL_IMAGE_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-image:([^\]]+)\]\]")
         # 本地文件 ID 格式：1~128 位安全字符。
-        LOCAL_FILE_ID: "re.Pattern[str]" = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+        LOCAL_FILE_ID: re.Pattern[str] = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
     class LogRecord:
         """结构化日志记录的共享常量。"""
@@ -239,7 +230,7 @@ class Constant:
         # 单条映射日志文本的最大长度（超出截断，避免单条日志撑爆存储）。
         MAX_LOG_TEXT_LENGTH: int = 2000
         # 事件名合法格式：小写字母开头，后接小写字母 / 数字 / 下划线。
-        EVENT_NAME_PATTERN: "re.Pattern[str]" = re.compile(r"^[a-z][a-z0-9_]*$")
+        EVENT_NAME_PATTERN: re.Pattern[str] = re.compile(r"^[a-z][a-z0-9_]*$")
 
     class Logging:
         """日志文件落盘的轮转参数（记录级上限见 ``LogRecord``）。
@@ -267,7 +258,7 @@ class Constant:
         # web_extract 单次返回正文的字符上限（调用方未显式传 char_limit 时的默认值）。
         EXTRACT_CHAR_LIMIT: int = 15_000
         # Markdown 内联 base64 图片占位符提取正则（忽略大小写）。
-        BASE64_IMAGE_PATTERN: "re.Pattern[str]" = re.compile(
+        BASE64_IMAGE_PATTERN: re.Pattern[str] = re.compile(
             r"!\[([^\]]*)\]\(data:image/[A-Za-z0-9.+-]+;base64,[^)]*\)",
             re.IGNORECASE,
         )
@@ -276,7 +267,7 @@ class Constant:
         # 本地代理 fake-ip 占位网段（RFC2544 保留，永不公网路由），从内网拦截中豁免。
         PROXY_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
         # 响应 / URL 中疑似密钥的脱敏匹配正则。
-        SECRET_VALUE_RE: "re.Pattern[str]" = re.compile(
+        SECRET_VALUE_RE: re.Pattern[str] = re.compile(
             r"(?i)(sk-[a-z0-9_-]{8,}|xox[baprs]-[a-z0-9-]{8,}|gh[pousr]_[a-z0-9_]{12,}|"
             r"api[_-]?key[=:][^&\s]+|bearer\s+[a-z0-9._-]{12,})"
         )
@@ -324,13 +315,13 @@ class Constant:
         """Assistant Transport 层共享常量：cosir 资源定位符 / 隐藏 token 正则与事件去重窗口。"""
 
         # 图片资源定位符：``cosir-attachment://<64hex>``。
-        IMAGE_LOCATOR: "re.Pattern[str]" = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
+        IMAGE_LOCATOR: re.Pattern[str] = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
         # 本地文件资源定位符：``cosir-local-file:<id>``。
-        FILE_LOCATOR: "re.Pattern[str]" = re.compile(r"^cosir-local-file:[A-Za-z0-9._-]{1,128}$")
+        FILE_LOCATOR: re.Pattern[str] = re.compile(r"^cosir-local-file:[A-Za-z0-9._-]{1,128}$")
         # 用户输入中 cosir file/image token 统一匹配：``[[cosir-(file|image):<id>]]``。
-        INPUT_TOKEN: "re.Pattern[str]" = re.compile(r"\[\[cosir-(file|image):([^\]]+)\]\]")
+        INPUT_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-(file|image):([^\]]+)\]\]")
         # 被 HTML 注释包裹的隐藏 cosir token（保留编辑器顺序的同时从渲染文本隐藏）。
-        HIDDEN_LOCAL_FILE_TOKEN: "re.Pattern[str]" = re.compile(
+        HIDDEN_LOCAL_FILE_TOKEN: re.Pattern[str] = re.compile(
             r"<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->"
         )
         # Conversation event 去重窗口容量：projector 保留最近 N 条 event_id 用于抵御重复投递。
@@ -367,9 +358,9 @@ class Constant:
         """工具执行相关的共享正则与约束。"""
 
         # workdir 字符白名单：挡住命令注入式 workdir（含 ``;|&$()`` 等注入字符直接拒绝）。
-        WORKDIR_SAFE_RE: "re.Pattern[str]" = re.compile(r"^[A-Za-z0-9/\\:_\-.~ +=@,]+$")
+        WORKDIR_SAFE_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9/\\:_\-.~ +=@,]+$")
         # 解释器 ``-c/-e/-r/-Command`` 代码串提取正则（跨多行，引号内非贪婪捕获）。
-        INTERPRETER_CODE_RE: "re.Pattern[str]" = re.compile(
+        INTERPRETER_CODE_RE: re.Pattern[str] = re.compile(
             r"\b(?:python(?:[0-9.]*)?|node(?:js)?|ruby|perl|php|bash|sh|zsh|fish|pwsh|powershell)\s+"
             r"(?:-[cer]\b|-Command\b)\s*"
             r"(['\"])(.*?)(?<!\\)\1",

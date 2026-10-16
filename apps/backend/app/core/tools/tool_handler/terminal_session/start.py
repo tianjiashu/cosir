@@ -44,7 +44,9 @@ class TerminalStartTool(HandlerBase):
 
     name = TOOL_TERMINAL_START
     description = (
-        "Start a persistent local interactive shell session for agent-driven terminal work. "
+        "Start a task-owned interactive shell. Use terminal_list first to reuse existing sessions. "
+        "Sessions survive completed, failed, or cancelled runs until terminal_close, shell exit, "
+        "task deletion, or backend shutdown. There is no idle timeout. "
         "The frontend only previews its output; use terminal_write/read/signal/close "
         "to operate the session."
     )
@@ -52,11 +54,11 @@ class TerminalStartTool(HandlerBase):
     timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_TERMINAL_SESSION
 
-
     def execute(
         self,
         shell: str = "auto",
         cwd: str | None = None,
+        label: str | None = None,
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """创建交互终端 session 并返回其元数据。
@@ -64,6 +66,7 @@ class TerminalStartTool(HandlerBase):
         参数:
             shell: 目标 shell；``auto`` 由 ``ShellResolver`` 按宿主平台解析。
             cwd: 会话初始目录，相对工作区根；None 表示工作区根。
+            label: 可选用途标签，供后续 Run 通过 terminal_list 发现会话。
             execution_context: 执行上下文；为 None 时直接报错，因为缺少 workspace、
                 task/run 标识与取消查询边界。
 
@@ -92,6 +95,7 @@ class TerminalStartTool(HandlerBase):
                 workspace_root=str(execution_context.workspace_root),
                 shell=shell,
                 cwd=cwd,
+                label=label,
                 run_id=execution_context.run_id,
             )
             return success_observation(
@@ -127,9 +131,7 @@ class TerminalStartTool(HandlerBase):
             description=describe_terminal_tool(self.name, self.description),
             handler=self.execute,
             args_model=self.args_model,
-            parameters_schema=build_terminal_session_parameters_schema(
-                self.name, self.args_model
-            ),
+            parameters_schema=build_terminal_session_parameters_schema(self.name, self.args_model),
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",

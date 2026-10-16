@@ -184,7 +184,7 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 
 ## 3. 内置工具契约
 
-当前内置工具共 18 个，包括 `delegate_task` 与 5 个交互式 terminal 工具。
+交互式 terminal 工具包含会话发现、创建、读写、信号与关闭能力。
 
 | 工具 | 静态展示声明 | `kind` | 动态展示字段 |
 | --- | --- | --- | --- |
@@ -198,9 +198,10 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `find_files` | `trace`、可展开、`list`、`search` | `file-list` | `pattern`、`path`、`files`、`page`、`match_count` |
 | `list_directory` | `trace`、可展开、`list`、`eye` | `directory-list` | `path`、`entries`、`page`、`total_entries` |
 | `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out` |
-| `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、shell/cwd、status、generation 和有限 cursor 元数据；原始 PTY 输出只走 preview WebSocket |
-| `terminal_read` / `terminal_write` | `trace`、不可展开、`none` | `terminal-session` | session/status/cursor 元数据；write 额外提供 `submitted`；完整输出或输入只进入模型 content，不进入 display_data |
-| `terminal_signal` / `terminal_close` | `trace`、不可展开、`none` | `terminal-session` | session/status 元数据；signal 额外提供受控的 `signal` |
+| `terminal_list` | `standalone`、不可展开、`none` | `terminal-session` | 本次发现的 `session_count`，不复制可变的会话状态 |
+| `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、可选用途 `label`、shell/初始 cwd、status、generation 和有限 cursor 元数据；原始 PTY 输出只走 preview WebSocket |
+| `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | session/status/cursor 元数据；write 额外提供 `submitted`；完整输出或输入只进入模型 content，不进入 display_data |
+| `terminal_signal` / `terminal_close` | `standalone`、不可展开、`none` | `terminal-session` | session/status 元数据；signal 额外提供受控的 `signal` |
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
 | `delegate_task` | `trace`、可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、`child_run_id`、状态 |
@@ -210,11 +211,14 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `propose_agent_configuration` | `standalone`、只读草稿卡、`bot` | `agent-configuration-draft` | `status=draft`、`agent_id`、`role`、`description`、`system_prompt` |
 
 交互式 terminal handler 已注册到 Agent tool schema，并继续复用现有 renderer 路由；静态
-布局为 `terminal`，动态 `kind` 为 `terminal-session`。静态 `ToolDisplayHints.variant`
-区分 start/read/write/signal/close 五种 UI 语义。display_data 只传 session identity、
+创建卡片布局为 `terminal`，操作行布局为 `none`，动态 `kind` 为 `terminal-session`。
+静态 `ToolDisplayHints.variant` 区分 list/start/read/write/signal/close 六种 UI 语义。
+list 仅展示本次发现数量；其他 display_data 只传 session identity、
 状态和有限 cursor 元数据；完整 PTY 输出只走独立的只读 `terminal-preview-v1` WebSocket，
 不进入 Assistant Transport 的工具展示 payload。`terminal_write` 使用 session 内进程级
-`operation_id` 去重，不新增数据库表；`data` 保持原始 UTF-8 文本，`submit=true` 时由工具边界显式追加一个真实 CR（0x0D）提交输入，不对字面 `\\r`/`\\n` 或 HTML 实体做隐式解码。
+`operation_id` 去重，保留最近 4096 次已接受输入的摘要，不缓存输出结果。输入接受与输出读取
+独立：输出游标过期时模型收到 `output_gap=true` 和当前保留窗口；读取失败或 Run 取消不撤销
+已接受的输入。会话归 Task 所有，跨 Run 的卡片按 Task/session 统一投影，不新增数据库表；`data` 保持原始 UTF-8 文本，`submit=true` 时由工具边界显式追加一个真实 CR（0x0D）提交输入，不对字面 `\\r`/`\\n` 或 HTML 实体做隐式解码。
 
 ### 3.1 文件读取
 

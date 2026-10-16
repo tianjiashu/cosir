@@ -1,7 +1,6 @@
 """ConversationRunExecutor 的进程内取消信号与启动闸门测试。"""
 
 import asyncio
-import threading
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any
@@ -25,17 +24,7 @@ class _RunService:
         return self.run
 
 
-class _TerminalStub:
-    """terminal session service 替身：签名与真实服务一致（``reason`` 为 keyword-only）。"""
-
-    def begin_run(self, _run_id: int) -> None:
-        return None
-
-    def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
-        return None
-
-
-def _build_executor(service: object, terminal: object | None = None) -> ConversationRunExecutor:
+def _build_executor(service: object) -> ConversationRunExecutor:
     """绕过依赖装配构造执行器实例，显式注入它在 ``__init__`` 中捕获的协作者。
 
     ``get_runtime`` 是调用期解析（见 ``_patch_drivers``），不需要注入。
@@ -46,7 +35,6 @@ def _build_executor(service: object, terminal: object | None = None) -> Conversa
     executor._signal = cancellation_registry
     executor._event_projector = None
     executor._executions = {}
-    executor._terminal_session_service = terminal or _TerminalStub()
     return executor
 
 
@@ -66,14 +54,10 @@ class _StubRuntime:
 def _patch_drivers(
     monkeypatch: pytest.MonkeyPatch,
     behavior: Callable[[], Awaitable[None]],
-    *,
-    executor: ConversationRunExecutor,
-    terminal: object | None = None,
 ) -> None:
-    """把 ``get_runtime`` 替换为可控替身，并把 terminal service 替身注入执行器。"""
+    """把 ``get_runtime`` 替换为可控替身。"""
 
     monkeypatch.setattr(executor_module, "get_runtime", lambda: _StubRuntime(behavior))
-    executor._terminal_session_service = terminal or _TerminalStub()
 
 
 @pytest.fixture(autouse=True)
@@ -97,7 +81,7 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
     async def runner() -> None:
         await asyncio.Event().wait()
 
-    _patch_drivers(monkeypatch, runner, executor=executor)
+    _patch_drivers(monkeypatch, runner)
 
     execution = await executor.start(_RUN_ID, "fresh")
     try:
@@ -111,37 +95,19 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
 
 
 @pytest.mark.asyncio
-async def test_cancel_closes_terminals_off_event_loop() -> None:
-    service = _RunService(status="running")
-    entered = threading.Event()
-    release = threading.Event()
-    close_thread_id: list[int] = []
+async def test_cancel_preserves_task_terminal(tmp_path) -> None:
+    from test_terminal_session_service import make_service
 
-    class _BlockingTerminalService(_TerminalStub):
-        def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
-            close_thread_id.append(threading.get_ident())
-            entered.set()
-            release.wait()
-
-    executor = _build_executor(service, _BlockingTerminalService())
+    terminal, factory = make_service()
+    session = terminal.start(task_id=7, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
+    executor = _build_executor(_RunService(status="running"))
     try:
-        cancel_task = asyncio.create_task(executor.cancel(_RUN_ID))
-        await asyncio.wait_for(asyncio.to_thread(entered.wait), timeout=1)
-        heartbeat = asyncio.Event()
-
-        async def tick() -> None:
-            await asyncio.sleep(0)
-            heartbeat.set()
-
-        tick_task = asyncio.create_task(tick())
-        await asyncio.wait_for(heartbeat.wait(), timeout=0.5)
-        release.set()
-        assert await cancel_task is True
-        await tick_task
-        assert close_thread_id
-        assert close_thread_id[0] != threading.get_ident()
+        assert await executor.cancel(_RUN_ID) is True
+        assert not factory.workers[0].closed
+        terminal.write(str(session["session_id"]), task_id=7, data=b"next run", wait_ms=0)
+        assert factory.workers[0].writes == [b"next run"]
     finally:
-        release.set()
+        terminal.shutdown()
 
 
 @pytest.mark.asyncio

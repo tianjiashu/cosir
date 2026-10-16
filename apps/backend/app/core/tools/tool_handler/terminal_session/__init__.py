@@ -6,10 +6,17 @@ PTY，也不向它写入输入；会话输入只经 Agent 工具发生。
 
 from app.core.tools.schemas import ToolDefinition
 from app.core.tools.tool_handler.terminal_session.close import TerminalCloseTool
+from app.core.tools.tool_handler.terminal_session.list import TerminalListTool
 from app.core.tools.tool_handler.terminal_session.read import TerminalReadTool
 from app.core.tools.tool_handler.terminal_session.signal import TerminalSignalTool
 from app.core.tools.tool_handler.terminal_session.start import TerminalStartTool
 from app.core.tools.tool_handler.terminal_session.write import TerminalWriteTool
+
+
+def build_terminal_list_definition() -> ToolDefinition:
+    """注册 Task 会话发现工具。"""
+
+    return TerminalListTool().to_definition()
 
 
 def build_terminal_start_definition() -> ToolDefinition:
@@ -67,13 +74,16 @@ def build_terminal_close_definition() -> ToolDefinition:
 
     return TerminalCloseTool().to_definition_if_avaliable()
 
+
 __all__ = [
     "TerminalCloseTool",
+    "TerminalListTool",
     "TerminalReadTool",
     "TerminalSignalTool",
     "TerminalStartTool",
     "TerminalWriteTool",
     "build_terminal_close_definition",
+    "build_terminal_list_definition",
     "build_terminal_read_definition",
     "build_terminal_signal_definition",
     "build_terminal_start_definition",

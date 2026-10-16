@@ -1,4 +1,4 @@
-"""Terminal session lifecycle notifications shared by the local services."""
+"""本机服务共享的 Task 终端生命周期通知契约。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ class TerminalSessionStatusChange:
     """
 
     task_id: int
-    run_id: int
     session_id: str
     generation: str
     status: str
@@ -39,7 +38,6 @@ class TerminalSessionStatusSource(Protocol):
         session_id: str,
         *,
         task_id: int,
-        run_id: int,
     ) -> TerminalSessionStatusChange | None:
         """按精确 session locator 返回当前状态；未知 session 返回 ``None``。"""
 

@@ -17,6 +17,7 @@ TOOL_SEARCH_CONTENT: Final[str] = "search_content"
 TOOL_FIND_FILES: Final[str] = "find_files"
 TOOL_LIST_DIRECTORY: Final[str] = "list_directory"
 TOOL_EXECUTE_TERMINAL: Final[str] = "execute_terminal"
+TOOL_TERMINAL_LIST: Final[str] = "terminal_list"
 TOOL_TERMINAL_START: Final[str] = "terminal_start"
 TOOL_TERMINAL_READ: Final[str] = "terminal_read"
 TOOL_TERMINAL_WRITE: Final[str] = "terminal_write"
@@ -45,6 +46,7 @@ ToolName: TypeAlias = Literal[
     "find_files",
     "list_directory",
     "execute_terminal",
+    "terminal_list",
     "terminal_start",
     "terminal_read",
     "terminal_write",
@@ -74,6 +76,7 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_FIND_FILES,
     TOOL_LIST_DIRECTORY,
     TOOL_EXECUTE_TERMINAL,
+    TOOL_TERMINAL_LIST,
     TOOL_TERMINAL_START,
     TOOL_TERMINAL_READ,
     TOOL_TERMINAL_WRITE,

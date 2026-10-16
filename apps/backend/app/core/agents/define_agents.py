@@ -2,7 +2,35 @@
 
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings
-from app.core.tools.schemas.tool_names import *
+from app.core.tools.schemas.tool_names import (
+    TOOL_AGENT_TEAM,
+    TOOL_APPLY_PATCH,
+    TOOL_CHILD_AGENT_SEND,
+    TOOL_CHILD_AGENT_STATUS,
+    TOOL_CHILD_AGENT_WAIT,
+    TOOL_DELEGATE_TASK,
+    TOOL_DELETE_FILE,
+    TOOL_EXECUTE_TERMINAL,
+    TOOL_FIND_FILES,
+    TOOL_LIST_DIRECTORY,
+    TOOL_MCP,
+    TOOL_MOVE_FILE,
+    TOOL_PROPOSE_AGENT_CONFIGURATION,
+    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
+    TOOL_READ_FILE,
+    TOOL_REPLACE,
+    TOOL_SEARCH_CONTENT,
+    TOOL_SKILL,
+    TOOL_TERMINAL_CLOSE,
+    TOOL_TERMINAL_LIST,
+    TOOL_TERMINAL_READ,
+    TOOL_TERMINAL_SIGNAL,
+    TOOL_TERMINAL_START,
+    TOOL_TERMINAL_WRITE,
+    TOOL_WEB_EXTRACT,
+    TOOL_WEB_SEARCH,
+    TOOL_WRITE_FILE,
+)
 
 # 通用子 Agent 的系统预设正文（唯一事实源，装配时直接写入 profile）。
 #
@@ -97,6 +125,7 @@ def main_agent(*, system_prompt: str = "", max_steps: int = 300) -> AgentProfile
             TOOL_FIND_FILES,
             TOOL_LIST_DIRECTORY,
             TOOL_EXECUTE_TERMINAL,
+            TOOL_TERMINAL_LIST,
             TOOL_TERMINAL_START,
             TOOL_TERMINAL_READ,
             TOOL_TERMINAL_WRITE,
@@ -179,9 +208,8 @@ def general_child_agent() -> AgentProfile:
         agent_type=AgentProfileType.CHILD,
         system_prompt=_GENERAL_CHILD_AGENT_SYSTEM_PROMPT,
         max_steps=300,
-        model_settings=ModelSettings(stream=True, reasoning_effort="high")
+        model_settings=ModelSettings(stream=True, reasoning_effort="high"),
     )
-
 
 
 def only_read_child_agent() -> AgentProfile:
@@ -238,5 +266,5 @@ def only_read_child_agent() -> AgentProfile:
         agent_type=AgentProfileType.CHILD,
         system_prompt=_ONLY_READ_CHILD_AGENT_SYSTEM_PROMPT,
         max_steps=300,
-        model_settings=ModelSettings(stream=True, reasoning_effort="high")
+        model_settings=ModelSettings(stream=True, reasoning_effort="high"),
     )

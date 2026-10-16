@@ -103,7 +103,8 @@ class TaskService:
             parent_run_id: 委派子 Task 的父 Run 标识。
             session: 可选的外部数据库事务会话。
             extra: Task 扩展 JSON。
-            tool_schemas: 新建 Task 时固化的固定模型工具 schema；传入 ``None`` 会持久化为空列表（即该 Task 无可用工具），调用方须显式提供已筛选的 schema。
+            tool_schemas: 新建 Task 时固化的固定模型工具 schema；传入 ``None`` 会持久化
+                为空列表（即该 Task 无可用工具），调用方须显式提供已筛选的 schema。
 
         返回:
             新建或读取的 ``TaskRecord``。
@@ -121,11 +122,7 @@ class TaskService:
             raise ValueError("workspace_id is None")
 
         if task_id is None:
-            frozen_schemas = (
-                []
-                if tool_schemas is None
-                else tool_schemas
-            )
+            frozen_schemas = [] if tool_schemas is None else tool_schemas
             task = self._task.create(
                 workspace_id=workspace_id,
                 title=title,
@@ -309,9 +306,7 @@ class TaskService:
             if boundary_index is None:
                 raise KeyError(source_run_id)
             source_prefix = runs[: boundary_index + 1]
-            if any(
-                run.status not in Constant.Run.TERMINAL_STATUSES for run in source_prefix
-            ):
+            if any(run.status not in Constant.Run.TERMINAL_STATUSES for run in source_prefix):
                 raise TaskForkConflictError(
                     "RUN_NOT_READY",
                     "the selected run must be terminal before forking",
@@ -501,9 +496,13 @@ class TaskService:
         locked_ids = self._collect_task_ancestor_ids(task_id) | {task_id}
         with ExitStack() as stack:
             for current_id in sorted(locked_ids):
-                stack.enter_context(self._task_register.get_or_create(current_id).operation(timeout=10))
+                stack.enter_context(
+                    self._task_register.get_or_create(current_id).operation(timeout=10)
+                )
             for current_id in sorted(task_ids - locked_ids):
-                stack.enter_context(self._task_register.get_or_create(current_id).operation(timeout=10))
+                stack.enter_context(
+                    self._task_register.get_or_create(current_id).operation(timeout=10)
+                )
                 locked_ids.add(current_id)
             result = self._delete_task_after_operations(task_id)
         return result
@@ -521,7 +520,7 @@ class TaskService:
         return result
 
     def delete_run(self, task_id: int, run_id: int) -> None:
-        """删除单个 run 及其会话上下文与产物（checkpoint、终端元数据）。
+        """删除单个 run 及其会话上下文与产物（checkpoint）；Task 终端继续保留。
 
         允许删除 task 内任意位置的 run（含中间），不重排剩余 context 的 ``sequence``。
         先校验 run 属于该 task（否则 ``KeyError``）；再按 workspace → task 锁顺序取得结构性
@@ -598,10 +597,6 @@ class TaskService:
                 "TASK_HAS_ACTIVE_RUN",
                 f"task {task_id} has an active run; run deletion is rejected",
             )
-        service_depends.get_terminal_session_service().close_run_terminals(
-            run_id,
-            reason="run_deleted",
-        )
         log.info(
             "run_delete_start",
             extra={
@@ -762,9 +757,11 @@ class TaskService:
             无。checkpoint GC 本身失败安全；runtime 清理异常由调用方观察并记录。
 
         副作用:
-            标记并卸载已删除 task 的 runtime 投影，回收不再被主库引用的 checkpoint。
+            封闭已删除 Task 的终端入口并释放 worker，标记并卸载 runtime 投影，
+            回收不再被主库引用的 checkpoint。终端清理放在提交后，避免事务回滚留下关闭围栏。
         """
 
+        service_depends.get_terminal_session_service().delete_task_sessions(result.task_ids)
         cleanup_orphan_checkpoint_threads(set(result.orphan_checkpoint_threads))
         self._unload_deleted_task_spaces(set(result.task_ids))
 
@@ -828,7 +825,6 @@ class TaskService:
         run_ids = self._turn.collect_run_ids_by_task_ids(session, [task_id])
 
         self._task_context_crud.delete_by_task_ids([task_id], session)
-        service_depends.get_terminal_session_service().delete_task_sessions([task_id])
         self._turn.delete_by_ids(run_ids, session)
         self._task.delete_by_ids([task_id], session)
 

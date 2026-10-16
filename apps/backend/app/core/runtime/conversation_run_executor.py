@@ -18,7 +18,6 @@ from app.service.depends import (
     get_conversation_run_service,
     get_conversation_run_state_service,
     get_runtime,
-    get_terminal_session_service,
 )
 
 ConversationRunRunner = Callable[[ConversationRunRecord], Awaitable[None]]
@@ -44,13 +43,13 @@ class ConversationRunExecutor:
     无驱动者的 active run；条件更新使其对 workflow 已落定的 run 是 no-op，终态唯一写入
     者仍是 workflow。
 
-    取消入口同属本类：``cancel`` 标记 run 级取消并驱动工作流收敛，终态收尾再按 checkpoint
-    清理 terminal；``cancel_tool_call`` 标记工具级取消（只中止一次工具调用，run 继续）。
+    取消入口同属本类：``cancel`` 标记 run 级取消并驱动工作流收敛，保留 Task 终端；
+    ``cancel_tool_call`` 标记工具级取消（只中止一次工具调用，run 继续）。
     Run 业务终态仍由 workflow 落定；信号本身不跨进程、不跨重启。
     """
 
     def __init__(
-            self,
+        self,
     ) -> None:
         """装配 run/state service、事件投影器、进程内取消信号源，并初始化空运行注册表。"""
 
@@ -59,13 +58,12 @@ class ConversationRunExecutor:
         self._event_projector = ConversationEventProjector()
         self._signal = cancellation_registry
         self._executions: dict[int, _Execution] = {}
-        self._terminal_session_service = get_terminal_session_service()
 
     async def start(
-            self,
-            run_id: int,
-            start_mode: ExecutionMode,
-            user_decision: UserDecision | None = None,
+        self,
+        run_id: int,
+        start_mode: ExecutionMode,
+        user_decision: UserDecision | None = None,
     ) -> asyncio.Task[None]:
         """登记 run 并创建独立后台 task。
 
@@ -253,7 +251,11 @@ class ConversationRunExecutor:
                 },
             )
             return
-        await self.start(run_id, "resume_with_input", UserDecision(request_id="", kind=UserDecisionKind.FORCE_REJECT, data={}))
+        await self.start(
+            run_id,
+            "resume_with_input",
+            UserDecision(request_id="", kind=UserDecisionKind.FORCE_REJECT, data={}),
+        )
 
     async def cancel_tool_call(self, run_id: int, tool_call_id: str) -> bool:
         """标记工具级取消信号（只中止一次工具调用，run 继续）。
@@ -280,10 +282,10 @@ class ConversationRunExecutor:
         return True
 
     async def _execute(
-            self,
-            run_id: int,
-            start_mode: ExecutionMode,
-            user_decision: UserDecision | None = None,
+        self,
+        run_id: int,
+        start_mode: ExecutionMode,
+        user_decision: UserDecision | None = None,
     ) -> None:
         """驱动一次 run 执行；执行器不拥有 run 终态（由 workflow 落定），只负责收尾兜底。
 
@@ -301,7 +303,6 @@ class ConversationRunExecutor:
         try:
             # canonical 读取一律走线程池：事件循环线程上不做数据库 IO（与 start / cancel 同口径）。
             run = await asyncio.to_thread(self._run_service.get_run, run_id)
-            self._terminal_session_service.begin_run(run_id)
             runner_started = True
             runtime = get_runtime()
             agent_profile = runtime.resolve_agent_profile_for_run(run)
@@ -319,7 +320,7 @@ class ConversationRunExecutor:
                 },
             )
         finally:
-            # 先收敛 canonical Run 状态，再让工作流按终态与 checkpoint 决定是否清理资源。
+            # 先收敛 canonical Run 状态，再执行工作流自身的收尾；Task 终端不随 Run 清理。
             await self._converge_unfinished_run(run_id)
             if runtime is not None and agent_profile is not None:
                 try:
@@ -338,8 +339,8 @@ class ConversationRunExecutor:
                 self._executions.pop(run_id, None)
 
     async def _converge_unfinished_run(
-            self,
-            run_id: int,
+        self,
+        run_id: int,
     ) -> None:
         """驱动结束后 run 仍未落终态时的兜底收敛安全网：条件更新为 ``cancelled``。
 

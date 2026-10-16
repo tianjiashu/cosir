@@ -2,7 +2,8 @@
 
 按 T1..T4 四组钉死当前实现的真实行为：
 
-- T1 ``tools_node._tools_node`` 重入重放（终态记录是否仍被送去执行 + ``begin`` 返回值是否写回 patch）
+- T1 ``tools_node._tools_node`` 重入重放（终态记录是否仍被送去执行、
+  ``begin`` 返回值是否写回 patch）
 - T2 ``ToolAccessGate.evaluate`` 的检查顺序（本轮禁用 ∩ 参数非法 时返回哪种 denial）
 - T3 ``ToolCallLifecycleManager.settle`` 对「工具名未注册」记录是否发终态事件（对照 ``cancel``）
 - T4 冷重建 ``build_pair_tool_part`` 是否为「本轮被隐藏闭合」的调用也建 part
@@ -12,10 +13,10 @@
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
@@ -176,7 +177,6 @@ def _state(lifecycle: ToolCallLifecycleManager, **overrides: Any) -> ReactGraphS
         "max_steps": 10,
         "final_text": "",
         "last_tool_results": {},
-        "terminal_sessions": {},
         "tool_call_lifecycle": lifecycle,
     }
     values.update(overrides)
@@ -259,13 +259,13 @@ async def test_t1_terminal_records_are_not_sent_to_execution_on_reentry() -> Non
         captured["calls"] = list(calls)
         return ToolRunResult(
             observations=[
-                _observation(tool_name=call.tool_name, tool_call_id=call.call_id)
-                for call in calls
+                _observation(tool_name=call.tool_name, tool_call_id=call.call_id) for call in calls
             ]
         )
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
+            all_vaild_tools=[],
             get_current_task=lambda: SimpleNamespace(id=11),
             run_tool_calls=_fake_run_tool_calls,
         ),
@@ -275,8 +275,9 @@ async def test_t1_terminal_records_are_not_sent_to_execution_on_reentry() -> Non
     import unittest.mock as mock
 
     state = _state(harness.manager)
-    with harness.runtime(), mock.patch.object(
-        tools_node_module, "_runtime_config", lambda: runtime_config
+    with (
+        harness.runtime(),
+        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
     ):
         patch = await tools_node_module._tools_node(state)
 
@@ -321,13 +322,13 @@ async def test_t1_begin_snapshot_is_written_back_to_state_patch() -> None:
     async def _fake_run_tool_calls(task_id: int, calls: list[ToolCall], step_id: str, loop: Any):
         return ToolRunResult(
             observations=[
-                _observation(tool_name=call.tool_name, tool_call_id=call.call_id)
-                for call in calls
+                _observation(tool_name=call.tool_name, tool_call_id=call.call_id) for call in calls
             ]
         )
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
+            all_vaild_tools=[],
             get_current_task=lambda: SimpleNamespace(id=11),
             run_tool_calls=_fake_run_tool_calls,
         ),
@@ -337,8 +338,9 @@ async def test_t1_begin_snapshot_is_written_back_to_state_patch() -> None:
     import unittest.mock as mock
 
     state = _state(harness.manager)
-    with harness.runtime(), mock.patch.object(
-        tools_node_module, "_runtime_config", lambda: runtime_config
+    with (
+        harness.runtime(),
+        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
     ):
         # 先直接观测 begin 的返回值：pending → running，并发一条 running 事件。
         begin_result = harness.manager.begin(task_id=11, run_id=200, step_id="step-3")
@@ -360,8 +362,8 @@ async def test_t1_begin_snapshot_is_written_back_to_state_patch() -> None:
     # 因此 patch 里没有待决请求字段（请求由观察上的声明派生，见 wait_user_node）。
     assert set(patch) == {
         "last_tool_results",
-        "terminal_sessions",
         "tool_call_lifecycle",
+        "next_node",
     }, f"patch 键={sorted(patch)}"
     written_back = patch["tool_call_lifecycle"]
     assert written_back.valid_calls["fresh-pending"].status == "running"
@@ -381,6 +383,7 @@ async def test_t1_missing_lifecycle_raises_runtime_error() -> None:
     harness = _LifecycleHarness()
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
+            all_vaild_tools=[],
             get_current_task=lambda: SimpleNamespace(id=11),
             run_tool_calls=None,
         ),
@@ -389,21 +392,16 @@ async def test_t1_missing_lifecycle_raises_runtime_error() -> None:
 
     import unittest.mock as mock
 
-    with harness.runtime(), mock.patch.object(
-        tools_node_module, "_runtime_config", lambda: runtime_config
+    with (
+        harness.runtime(),
+        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
+        pytest.raises(RuntimeError, match="tool_call_lifecycle is required"),
     ):
-        with pytest.raises(RuntimeError, match="tool_call_lifecycle is required"):
-            await tools_node_module._tools_node(_state(None))
+        await tools_node_module._tools_node(_state(None))
 
 
-async def test_t1_terminal_session_display_data_is_projected_into_checkpoint() -> None:
-    """T1-d：终端会话展示元数据只按 allowlist 投影进 ``terminal_sessions``。
-
-    实际观测：``display_data.kind == "terminal-session"`` 的观察把 allowlisted 字段
-    （session_id / status / exit_code …）并入 checkpoint；``display_data`` 里的原始
-    output / 非 allowlist 字段被丢弃；非 terminal-session 的展示数据完全不投影。
-    是否符合预期：符合（投影只承载可序列化展示元数据，避免把进程对象落 checkpoint）。
-    """
+async def test_t1_terminal_sessions_do_not_enter_checkpoint() -> None:
+    """终端展示数据不再建立独立的 workflow 会话状态。"""
 
     harness = _LifecycleHarness(registered_tool_names=("read_file",))
     harness.manager = ToolCallLifecycleManager(
@@ -439,6 +437,7 @@ async def test_t1_terminal_session_display_data_is_projected_into_checkpoint() -
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
+            all_vaild_tools=[],
             get_current_task=lambda: SimpleNamespace(id=11),
             run_tool_calls=_fake_run_tool_calls,
         ),
@@ -447,18 +446,15 @@ async def test_t1_terminal_session_display_data_is_projected_into_checkpoint() -
 
     import unittest.mock as mock
 
-    state = _state(harness.manager, terminal_sessions={"sess-1": {"session_id": "sess-1"}})
-    with harness.runtime(), mock.patch.object(
-        tools_node_module, "_runtime_config", lambda: runtime_config
+    state = _state(harness.manager)
+    with (
+        harness.runtime(),
+        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
     ):
         patch = await tools_node_module._tools_node(state)
 
-    sessions = patch["terminal_sessions"]
-    assert set(sessions) == {"sess-1", "sess-9"}
-    assert sessions["sess-9"]["status"] == "exited"
-    assert sessions["sess-9"]["exit_code"] == 3
-    assert "output" not in sessions["sess-9"], f"落库字段={sorted(sessions['sess-9'])}"
-    assert "plain-1" not in sessions
+    assert "terminal_sessions" not in patch
+    assert "terminal_sessions" not in type(state).model_fields
 
 
 # ============================================================================
@@ -479,7 +475,9 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
     registry = ToolRegistry([ReadFileTool().to_definition()])
     gate = ToolAccessGate(registry)
     outcome = gate.evaluate(
-        ToolCall(tool_name="read_file", arguments={"nonexistent_field": 1}, call_id="call-disabled"),
+        ToolCall(
+            tool_name="read_file", arguments={"nonexistent_field": 1}, call_id="call-disabled"
+        ),
         execution_context=_execution_context(tmp_path),
         allowed_tool_names={"other_tool"},  # read_file 已注册但本轮被禁用
     )
@@ -519,7 +517,8 @@ def test_t2_disabled_with_valid_args_yields_disabled_denial(tmp_path: Any) -> No
 def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
     """T2-c：未注册工具名 = 最优先拒绝（unknown tool / retryable=False），不看 allowed 集合。
 
-    实际观测：error 以 ``"unknown tool: "`` 开头，retryable is False，reason 提示「同名字永远被拒」。
+    实际观测：error 以 ``"unknown tool: "`` 开头，retryable is False，
+    reason 提示「同名字永远被拒」。
     是否符合预期：符合（注册表命中是最前置检查，与 docstring 一致）。
     """
 
@@ -726,12 +725,8 @@ def test_t3_settle_is_idempotent_for_already_terminal_records() -> None:
             tool_calls=[{"id": "call-1", "name": "read_file", "args": {"path": "a.txt"}}],
             invalid_tool_calls=[],
         )
-        first, _ = classified.settle(
-            task_id=11, run_id=200, step_id="step-3", summary=_summary()
-        )
-        second, _ = first.settle(
-            task_id=11, run_id=200, step_id="step-3", summary=_summary()
-        )
+        first, _ = classified.settle(task_id=11, run_id=200, step_id="step-3", summary=_summary())
+        second, _ = first.settle(task_id=11, run_id=200, step_id="step-3", summary=_summary())
 
     assert len(harness.writer.status_events) == 1
     assert len(harness.messages) == 1
@@ -936,7 +931,8 @@ def test_t4_cold_rebuild_hidden_call_without_result_stays_cancelled(
 
     ``hidden`` 标记只由 ``settle`` 随 ToolMessage 行写入；进程在 ``settle`` 之前终止（例如工具
     执行期崩溃、或被取消）时该行不存在，冷重建无从得知调用是隐藏的，只能按默认规则建一个
-    ``cancelled`` part。此时 part 上**没有** ``isError`` / ``error`` 键（只在 ToolMessage 分支写入）。
+    ``cancelled`` part。此时 part 上**没有** ``isError`` / ``error`` 键
+    （只在 ToolMessage 分支写入）。
     """
 
     monkeypatch.setattr(
@@ -1135,9 +1131,7 @@ def test_t4_build_run_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
         SimpleNamespace(id=5, error={"code": "tool_error_limit", "message": "连续工具错误"})
     )
     assert ok == {"code": "tool_error_limit", "message": "连续工具错误"}
-    assert (
-        ConversationTaskStateRebuilder.build_run_error(SimpleNamespace(id=5, error=None)) is None
-    )
+    assert ConversationTaskStateRebuilder.build_run_error(SimpleNamespace(id=5, error=None)) is None
 
     for bad in (
         SimpleNamespace(id=5, error=["not", "a", "mapping"]),
@@ -1153,7 +1147,8 @@ def test_t4_get_tool_display_uses_declaration_when_present(
 ) -> None:
     """T4-g：``get_tool_display`` 命中带 ``display`` 的注册工具时返回其序列化声明。
 
-    实际观测：返回 ``{"verb": "读取文件", "icon": "eye"}``；空名 / 未注册 / 无 display 均返回 ``{}``。
+    实际观测：返回 ``{"verb": "读取文件", "icon": "eye"}``；
+    空名 / 未注册 / 无 display 均返回 ``{}``。
     是否符合预期：符合（保证 part.presentation 恒为合法对象）。
     """
 

@@ -14,7 +14,6 @@
 本节点登记的可序列化事实：
 - ``last_tool_results``：本批 ``ToolObservation`` 的 ``dataclasses.asdict`` 投影（键名与执行层
   字段一致，含 ``tool_call_id`` / ``display_data``），按 ``tool_call_id`` 合并进本模型步的批次；
-- ``terminal_sessions``：终端会话展示元数据 allowlist 投影；
 - ``tool_call_lifecycle``：``begin`` 迁移后的快照。
 
 不做的：终态事件分发（``completed`` / ``failed`` / ``cancelled``）、模型上下文写回、错误计数与
@@ -42,45 +41,6 @@ from app.core.workflows.react.node_helper.common import _runtime_config
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleRecord
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
-
-_TERMINAL_CHECKPOINT_FIELDS = frozenset(
-    {
-        "session_id",
-        "status",
-        "initial_cwd",
-        "shell_kind",
-        "first_available_seq",
-        "next_seq",
-        "exit_code",
-        "end_reason",
-    }
-)
-
-
-def _project_terminal_sessions(
-    previous: dict[str, dict[str, Any]], observations: list[dict[str, Any]]
-) -> dict[str, dict[str, Any]]:
-    """把终端工具展示元数据合并到当前 Run 的 checkpoint state。
-
-    只接受 ``display_data.kind == terminal-session`` 的 allowlisted 字段；工具结果中的
-    原始 output、诊断文本和进程对象不会进入 checkpoint。活终端清理由 runtime registry
-    负责，不依赖这个投影执行。
-    """
-
-    projected = {session_id: dict(value) for session_id, value in previous.items()}
-    for observation in observations:
-        display_data = observation.get("display_data")
-        if not isinstance(display_data, dict) or display_data.get("kind") != "terminal-session":
-            continue
-        session_id = display_data.get("session_id")
-        if not isinstance(session_id, str) or not session_id:
-            continue
-        current = projected.setdefault(session_id, {"session_id": session_id})
-        for field in _TERMINAL_CHECKPOINT_FIELDS:
-            value = display_data.get(field)
-            if value is not None:
-                current[field] = value
-    return projected
 
 
 def _merge_batch_results(
@@ -157,15 +117,15 @@ def _to_tool_call(record: ToolCallLifecycleRecord) -> ToolCall:
     """
 
     return ToolCall.from_dict(
-            {
-                # 直接取属性：record 是本仓的 ``ToolCallLifecycleRecord``，字段改名必须让
-                # AttributeError 暴露，不能靠 getattr 默认值静默吞成空工具名 / 空参数。
-                "tool_name": record.tool_name,
-                "call_id": record.tool_call_id,
-                "arguments": record.args,
-                "user_decision": record.user_decision,
-            }
-        )
+        {
+            # 直接取属性：record 是本仓的 ``ToolCallLifecycleRecord``，字段改名必须让
+            # AttributeError 暴露，不能靠 getattr 默认值静默吞成空工具名 / 空参数。
+            "tool_name": record.tool_name,
+            "call_id": record.tool_call_id,
+            "arguments": record.args,
+            "user_decision": record.user_decision,
+        }
+    )
 
 
 async def _tools_node(state: ReactGraphState) -> dict:
@@ -185,7 +145,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
 
     返回:
         需要合并回 graph state 的增量：``last_tool_results``（本批观察摘要，按 ``tool_call_id``
-        合并进本模型步批次，可落 checkpoint）、``terminal_sessions``（终端会话展示元数据投影）与
+        合并进本模型步批次，可落 checkpoint）与
         ``tool_call_lifecycle``（执行批次经 ``begin`` 迁移后的快照；拦截批次保留原快照）、
         ``next_node``（待决请求进入
         ``wait_user``，其它观察进入 ``observe``）。
@@ -342,10 +302,6 @@ async def _tools_node(state: ReactGraphState) -> dict:
             state.last_tool_results,
             observation_dicts,
             instruction=instruction or "",
-        ),
-        "terminal_sessions": _project_terminal_sessions(
-            state.terminal_sessions,
-            observation_dicts,
         ),
         "tool_call_lifecycle": lifecycle,
         "next_node": next_node,

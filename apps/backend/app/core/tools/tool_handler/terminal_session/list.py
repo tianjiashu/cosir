@@ -1,0 +1,81 @@
+"""Task 终端会话发现入口；不创建 worker，也不读取终端输出。"""
+
+from typing import ClassVar
+
+from app.core.tools.display.terminal_display import build_terminal_session_list_display_data
+from app.core.tools.schemas import (
+    TOOL_TERMINAL_LIST,
+    ToolDefinition,
+    ToolDisplayHints,
+    ToolExecutionContext,
+    ToolObservation,
+)
+from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
+from app.core.tools.tool_handler.terminal_session.common import (
+    cancelled,
+    cancelled_observation,
+    require_service,
+    success_observation,
+)
+from app.core.tools.tool_handler.tool_base import HandlerBase
+from app.core.tools.tool_models import TerminalListArgs
+
+
+class TerminalListTool(HandlerBase):
+    """从运行时服务发现本 Task 跨 Run 保留的会话，避免依赖历史消息猜测存活状态。"""
+
+    name = TOOL_TERMINAL_LIST
+    description = (
+        "List this task's live terminal sessions and recent ended sessions. Check this before "
+        "starting a new shell or when resuming work in another run. Reuse a live session_id "
+        "with terminal_read/write/signal/close. initial_cwd is the starting directory, not the "
+        "current directory; running means the shell is alive, not that a command is finished. "
+        "Sessions survive run completion and cancellation, but not backend restarts. "
+        "Close sessions explicitly when no longer needed. Output history is bounded; use "
+        "terminal_read with after_seq=null to read the retained output window."
+    )
+    args_model = TerminalListArgs
+    timeout_seconds: ClassVar[float] = 10.0
+    group = TOOL_GROUP_TERMINAL_SESSION
+
+    def execute(self, execution_context: ToolExecutionContext | None = None) -> ToolObservation:
+        """归属取自执行上下文；缺少上下文属于装配错误，取消时不读取服务。"""
+
+        if execution_context is None:
+            raise ValueError("terminal_list requires a workspace execution context")
+        if cancelled(execution_context):
+            return cancelled_observation(self.name)
+        sessions = require_service(execution_context).list_sessions(
+            task_id=execution_context.task_id,
+            workspace_id=execution_context.workspace_id,
+        )
+        return success_observation(
+            self.name,
+            {"sessions": sessions},
+            summary="Task terminal sessions.",
+            display_payload=build_terminal_session_list_display_data(len(sessions)),
+        )
+
+    def to_definition(self) -> ToolDefinition:
+        """复用交互终端工具组和 shell 权限，列表数量是本次调用的展示结果。"""
+
+        return ToolDefinition(
+            name=self.name,
+            group=self.group,
+            description=self.description,
+            handler=self.execute,
+            args_model=self.args_model,
+            parameters_schema=self.args_model.model_json_schema(),
+            timeout_seconds=self.timeout_seconds,
+            resource_keys=("shell",),
+            execution_mode="thread",
+            display=ToolDisplayHints(
+                verb="列出终端",
+                icon="terminal",
+                variant="terminal-session-list",
+                surface="standalone",
+                expandable=False,
+                expand_layout="none",
+                show_result=False,
+            ),
+        )

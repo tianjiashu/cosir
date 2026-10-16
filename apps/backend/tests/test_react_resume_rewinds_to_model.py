@@ -29,7 +29,7 @@ def _goto_target(cmd: Command | None) -> object | None:
     if cmd is None:
         return None
     goto = getattr(cmd, "goto", None)
-    if isinstance(goto, (tuple, list)):
+    if isinstance(goto, tuple | list):
         return goto[0] if goto else None
     return goto
 
@@ -49,12 +49,14 @@ class _FakeGraph:
         self.captured_input: object | None = None
 
     async def aget_state(self, _config: object) -> SimpleNamespace:
-        return SimpleNamespace(next=self._next, tasks=self._tasks, values={"terminal_sessions": {}})
+        return SimpleNamespace(next=self._next, tasks=self._tasks, values={})
 
     async def aupdate_state(self, _config: object, _values: object) -> None:
         return None
 
-    async def astream(self, input_state: object, _config: object, *, stream_mode: object = None) -> object:
+    async def astream(
+        self, input_state: object, _config: object, *, stream_mode: object = None
+    ) -> object:
         self.captured_input = input_state
         if False:  # 让函数成为 async generator，但不产出任何 chunk
             yield
@@ -89,13 +91,15 @@ def _make_task_space() -> SimpleNamespace:
     )
     deferred: list[object] = []
 
-    # 进程内 conversation_run 级运行时上下文（``task_runtime_spaces`` 经 ``get_or_create`` 返回的对象）：
+    # 进程内 conversation_run 级运行时上下文（``task_runtime_spaces`` 经 ``get_or_c
+    # reate`` 返回的对象）：
     # 提供 ``get_context_manager``（manager 桩）与 ``defer_system_message``（记录注入的提示）。
     space = SimpleNamespace(
         get_context_manager=lambda **k: manager,
         defer_system_message=lambda message: deferred.append(message),
     )
-    # 注册表 ``task_runtime_spaces`` 本身只暴露 ``get_or_create``，恒返回同一个 conversation_run space。
+    # 注册表 ``task_runtime_spaces`` 本身只暴露 ``get_or_create``，恒返回同一个 conver
+    # sation_run space。
     registry = SimpleNamespace(get_or_create=lambda _task_id: space)
     registry._deferred = deferred
     return registry
@@ -119,11 +123,6 @@ def patched(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         workflow_module,
         "resolve_chat_model",
         lambda **k: SimpleNamespace(model=object(), supports_thinking=False),
-    )
-    monkeypatch.setattr(
-        workflow_module,
-        "get_terminal_session_service",
-        lambda: SimpleNamespace(close_run_terminals=lambda *a, **k: None),
     )
     # 运行期配置要经 ``get_tool_system`` 取 HIL 决定处理器；本测试不连接工具系统，注入空集合。
     monkeypatch.setattr(

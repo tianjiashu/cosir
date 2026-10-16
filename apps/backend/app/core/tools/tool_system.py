@@ -2,8 +2,6 @@
 
 from dataclasses import dataclass
 
-from app.config.constant import Constant
-from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_handler.agent_team.agent_team_run import (
     build_agent_team_run_definition,
@@ -38,6 +36,7 @@ from app.core.tools.tool_handler.search_content import build_search_content_defi
 from app.core.tools.tool_handler.skill import build_skill_definition
 from app.core.tools.tool_handler.terminal_session import (
     build_terminal_close_definition,
+    build_terminal_list_definition,
     build_terminal_read_definition,
     build_terminal_signal_definition,
     build_terminal_start_definition,
@@ -119,6 +118,7 @@ class ToolSystem:
         registry.register(build_find_files_definition())
         registry.register(build_list_directory_definition())
         registry.register(build_execute_terminal_definition())
+        registry.register(build_terminal_list_definition())
         registry.register(build_terminal_start_definition())
         registry.register(build_terminal_read_definition())
         registry.register(build_terminal_write_definition())

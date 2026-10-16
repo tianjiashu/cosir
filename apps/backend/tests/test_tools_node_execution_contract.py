@@ -61,7 +61,7 @@ class _Harness:
         self.calls = calls
         self.observations = observations
         self.messages: list[Any] = []
-        self.model_tools = [SimpleNamespace(name=_TOOL_NAME, display=None)]
+        self.model_tools = [SimpleNamespace(name=_TOOL_NAME, display=None, need_HIL=False)]
         self.operations = SimpleNamespace(
             all_vaild_tools=self.model_tools,
             model_tools=self.model_tools,
@@ -99,13 +99,14 @@ class _Harness:
 
         import unittest.mock as mock
 
-        with mock.patch.multiple(
-            lifecycle_module,
-            _runtime_config=lambda: self.runtime_config,
-            _runtime_context=lambda: self.runtime_context,
-            get_stream_writer=lambda: self.writer,
-        ), mock.patch.object(
-            tools_node_module, "_runtime_config", lambda: self.runtime_config
+        with (
+            mock.patch.multiple(
+                lifecycle_module,
+                _runtime_config=lambda: self.runtime_config,
+                _runtime_context=lambda: self.runtime_context,
+                get_stream_writer=lambda: self.writer,
+            ),
+            mock.patch.object(tools_node_module, "_runtime_config", lambda: self.runtime_config),
         ):
             yield
 
@@ -161,7 +162,6 @@ def _state(
         max_steps=10,
         final_text="",
         last_tool_results=last_tool_results or {},
-        terminal_sessions={},
         tool_call_lifecycle=lifecycle,
     )
 
@@ -284,7 +284,7 @@ def test_tools_node_never_projects_or_registers_pending_requests() -> None:
         patch = asyncio.run(tools_node_module._tools_node(_state(lifecycle)))
 
     # 本节点只登记这三样事实：待决请求随观察原样进入本批摘要，没有额外的「待决列表」通道。
-    assert set(patch) == {"last_tool_results", "terminal_sessions", "tool_call_lifecycle"}
+    assert set(patch) == {"last_tool_results", "tool_call_lifecycle", "next_node"}
     # 本节点不发带 display_data 的状态事件：投影是 wait_user 在挂起前的职责。
     assert [event for event in harness.writer.status_events if event.display_data is not None] == []
     # 请求随观察原样进入本批摘要（由 wait_user 派生），本节点不解读它。

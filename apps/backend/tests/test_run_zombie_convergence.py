@@ -57,18 +57,16 @@ class _ExecutorRunService:
 
 def _build_executor(
     service: _ExecutorRunService,
-    terminal: "_StubTerminal | None" = None,
 ) -> ConversationRunExecutor:
     """绕过依赖装配构造执行器实例，显式注入它捕获的协作者（projector 置空跳过工具投影）。
 
-    执行器在 ``__init__`` 中捕获 run service / run 状态服务 / terminal service，因此这里必须
+    执行器在 ``__init__`` 中捕获 run service / run 状态服务，因此这里必须
     逐个注入；``get_runtime`` 是调用期解析（见 ``_patch_drivers``），不需要注入。
     """
 
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = service
     executor._run_state_service = service
-    executor._terminal_session_service = terminal or _StubTerminal([])
     executor._event_projector = None
     executor._executions = {}
     return executor
@@ -88,32 +86,18 @@ class _StubRuntime:
         self.calls.append(kwargs)
         await self._behavior()
 
-
-class _StubTerminal:
-    """替代 terminal session service：把 begin/close 调用记入共享列表。"""
-
-    def __init__(self, calls: list[str]) -> None:
-        self._calls = calls
-
-    def begin_run(self, _run_id: int) -> None:
-        self._calls.append("terminal_begin")
-
-    def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
-        self._calls.append(f"terminal_close:{reason}")
+    async def finalize_run(self, _agent: Any, _run_id: int) -> None:
+        """模拟无额外资源的工作流收尾。"""
 
 
 def _patch_drivers(
     monkeypatch: pytest.MonkeyPatch,
     behavior: Callable[[], Awaitable[None]],
-    *,
-    executor: ConversationRunExecutor,
-    terminal: "_StubTerminal | None" = None,
 ) -> _StubRuntime:
-    """把执行器依赖的 runtime 替换为可控替身，并注入 terminal service 替身。"""
+    """把执行器依赖的 runtime 替换为可控替身。"""
 
     runtime = _StubRuntime(behavior)
     monkeypatch.setattr(executor_module, "get_runtime", lambda: runtime)
-    executor._terminal_session_service = terminal or _StubTerminal([])
     return runtime
 
 
@@ -129,7 +113,7 @@ async def test_executor_converges_run_when_runner_raises_before_terminal(
     async def runner() -> None:
         raise RuntimeError("setup died before workflow")
 
-    _patch_drivers(monkeypatch, runner, executor=executor)
+    _patch_drivers(monkeypatch, runner)
 
     # ``_execute`` 在内部收口驱动期异常（不外抛），由兜底收敛把仍未落终态的 run 收敛。
     await executor._execute(_RUN_ID, "fresh")
@@ -149,7 +133,7 @@ async def test_executor_converges_run_when_task_cancelled(
     async def runner() -> None:
         await asyncio.Event().wait()
 
-    _patch_drivers(monkeypatch, runner, executor=executor)
+    _patch_drivers(monkeypatch, runner)
 
     execution = await executor.start(_RUN_ID, "fresh")
     # 先让后台 task 真正开始驱动，再取消：未调度就取消会让 _execute 整体不执行。
@@ -165,32 +149,29 @@ async def test_executor_converges_run_when_task_cancelled(
 async def test_executor_cleanup_failures_do_not_skip_later_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """驱动期异常被内部收口；terminal 清理失败也不能跳过 registry 移除与兜底收敛。"""
+    """驱动期异常被内部收口；工作流收尾失败也不能跳过 registry 移除与兜底收敛。"""
 
     service = _ExecutorRunService()
     calls: list[str] = []
     executor = _build_executor(service)
-
-    class _BrokenTerminal(_StubTerminal):
-        def close_run_terminals(self, _run_id: int, *, reason: str) -> None:
-            calls.append(f"terminal_close:{reason}")
-            raise RuntimeError("terminal cleanup failed")
 
     async def runner() -> None:
         executor._executions[_RUN_ID] = SimpleNamespace(thread_task=asyncio.current_task())
         calls.append("runner")
         raise RuntimeError("runner failed")
 
-    _patch_drivers(monkeypatch, runner, executor=executor, terminal=_BrokenTerminal(calls))
+    runtime = _patch_drivers(monkeypatch, runner)
+
+    async def fail_finalize(_agent, _run_id):
+        calls.append("workflow_finalize")
+        raise RuntimeError("workflow finalize failed")
+
+    monkeypatch.setattr(runtime, "finalize_run", fail_finalize)
 
     # 驱动期异常与清理失败都在执行器内收口为日志，收尾仍按序执行。
     await executor._execute(_RUN_ID, "fresh")
 
-    assert calls == [
-        "terminal_begin",
-        "runner",
-        "terminal_close:run_execution_finished",
-    ]
+    assert calls == ["runner", "workflow_finalize"]
     assert executor._executions == {}
     assert service.cancelled == [(_RUN_ID, "run_execution_cancelled")]
 

@@ -159,3 +159,31 @@ async def test_delete_run_endpoint_maps_errors() -> None:
         await delete_run_endpoint(1, 2, BusyRun())
     assert busy.value.status_code == 409
     assert busy.value.detail["code"] == "TASK_BUSY"
+
+
+def test_delete_creator_run_preserves_task_terminal(storage, tmp_path, monkeypatch) -> None:
+    from functools import lru_cache
+
+    from test_terminal_session_service import make_service
+
+    from app.service import depends
+
+    workspace = get_workspace_crud().create("terminal", str(tmp_path))
+    task = get_task_crud().create(workspace.id, "terminal owner")
+    run = get_conversation_run_crud().create(task.id, "start shell", status="completed")
+    terminal, factory = make_service()
+    session = terminal.start(
+        task_id=task.id, workspace_id=workspace.id, workspace_root=str(tmp_path), run_id=run.id
+    )
+    monkeypatch.setattr(depends, "get_terminal_session_service", lru_cache()(lambda: terminal))
+    try:
+        get_task_service().delete_run(task.id, run.id)
+        assert not factory.workers[0].closed
+        assert (
+            terminal.list_sessions(task_id=task.id, workspace_id=workspace.id)[0]["session_id"]
+            == session["session_id"]
+        )
+        terminal.write(str(session["session_id"]), task_id=task.id, data=b"still alive", wait_ms=0)
+        assert factory.workers[0].writes == [b"still alive"]
+    finally:
+        terminal.shutdown()

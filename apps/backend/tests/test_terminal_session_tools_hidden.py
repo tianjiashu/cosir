@@ -1,11 +1,12 @@
+from app.core.tools.display.terminal_display import build_session_display_payload
 from app.core.tools.tool_handler.terminal_session import (
     TerminalCloseTool,
+    TerminalListTool,
     TerminalReadTool,
     TerminalSignalTool,
     TerminalStartTool,
     TerminalWriteTool,
 )
-from app.core.tools.display.terminal_display import build_session_display_payload
 from app.core.tools.tool_handler.terminal_session.write import encode_terminal_input
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import (
@@ -22,6 +23,7 @@ from app.service.terminal.worker import ProcessTerminalWorker
 
 def test_terminal_handlers_implement_handler_base_and_are_registered(monkeypatch) -> None:
     handlers = (
+        TerminalListTool,
         TerminalStartTool,
         TerminalWriteTool,
         TerminalReadTool,
@@ -39,6 +41,7 @@ def test_terminal_handlers_implement_handler_base_and_are_registered(monkeypatch
         registry.register(handler().to_definition_if_avaliable())
     registered_names = registry.get_all_tool_names()
     assert {
+        "terminal_list",
         "terminal_start",
         "terminal_read",
         "terminal_write",
@@ -140,9 +143,10 @@ def test_terminal_signal_schema_warns_about_windows_capability(monkeypatch) -> N
         lambda: "Windows",
     )
     schema = TerminalSignalTool().to_definition().to_model_tool_definition()["parameters"]
-    assert "does not advertise terminal signal support" in schema["properties"]["signal"][
-        "description"
-    ]
+    assert (
+        "does not advertise terminal signal support"
+        in schema["properties"]["signal"]["description"]
+    )
 
 
 def test_terminal_definitions_snapshot_host_projection_at_construction(
@@ -151,6 +155,7 @@ def test_terminal_definitions_snapshot_host_projection_at_construction(
     """终端定义在构造时固化宿主投影，不依赖 ToolDefinition provider 热路径。"""
 
     handlers = (
+        TerminalListTool,
         TerminalStartTool,
         TerminalReadTool,
         TerminalWriteTool,
@@ -178,6 +183,7 @@ def test_terminal_session_display_variants_match_their_ui_roles() -> None:
     definitions = {
         handler.name: handler().to_definition()
         for handler in (
+            TerminalListTool,
             TerminalStartTool,
             TerminalReadTool,
             TerminalWriteTool,

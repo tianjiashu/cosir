@@ -58,9 +58,7 @@ def _rows(status: str = "running") -> list[ConversationTaskContextRecord]:
             run_id=10,
             message=AIMessage(
                 content="",
-                tool_calls=[
-                    {"id": "terminal-call", "name": "terminal_start", "args": {}}
-                ],
+                tool_calls=[{"id": "terminal-call", "name": "terminal_start", "args": {}}],
             ),
             include_in_context=True,
             sequence=1,
@@ -91,7 +89,6 @@ class _Sources:
         self.rows = rows
         self.status_change: TerminalSessionStatusChange | None = TerminalSessionStatusChange(
             task_id=1,
-            run_id=10,
             session_id="term-1",
             generation="gen-1",
             status="running",
@@ -117,9 +114,8 @@ class _Sources:
         session_id: str,
         *,
         task_id: int,
-        run_id: int,
     ) -> TerminalSessionStatusChange | None:
-        if task_id != 1 or run_id != 10 or session_id != "term-1":
+        if task_id != 1 or session_id != "term-1":
             return None
         return self.status_change
 
@@ -133,7 +129,7 @@ class _Sources:
         end_reason: str | None,
         exit_code: int | None,
     ) -> None:
-        assert (task_id, run_id, session_id) == (1, 10, "term-1")
+        assert task_id == 1 and run_id in {10, 11} and session_id == "term-1"
         self.updates.append((status, end_reason or "", exit_code))
         for index, row in enumerate(self.rows):
             if row.sequence != sequence:
@@ -189,7 +185,6 @@ def test_async_terminal_exit_updates_existing_snapshot_and_persists_metadata() -
     frame = service.refresh_terminal_session(
         TerminalSessionStatusChange(
             task_id=1,
-            run_id=10,
             session_id="term-1",
             generation="gen-1",
             status="exited",
@@ -232,7 +227,6 @@ def test_stale_active_terminal_event_cannot_reopen_closed_display() -> None:
     service.refresh_terminal_session(
         TerminalSessionStatusChange(
             task_id=1,
-            run_id=10,
             session_id="term-1",
             generation="gen-1",
             status="closed",
@@ -243,7 +237,6 @@ def test_stale_active_terminal_event_cannot_reopen_closed_display() -> None:
     service.refresh_terminal_session(
         TerminalSessionStatusChange(
             task_id=1,
-            run_id=10,
             session_id="term-1",
             generation="gen-old",
             status="running",
@@ -322,5 +315,64 @@ def test_terminal_metadata_update_is_atomic_and_preserves_other_transport_fields
     finally:
         engine.dispose()
 
+
 # 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
 pytestmark = pytest.mark.usefixtures("backend_env")
+
+
+def test_cross_run_references_reconcile_and_receive_async_exit(monkeypatch) -> None:
+    """同一 Task 两个 Run 引用一个 session，冷重建与异步通知均按 session 归属。"""
+    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+    sources = _Sources(_rows())
+    later = _rows()
+    later = [replace(row, run_id=11, sequence=row.sequence + 2) for row in later]
+    sources.rows.extend(later)
+    monkeypatch.setattr(sources, "list_by_task", lambda _: [_run(), replace(_run(), id=11)])
+    service = _service(sources)
+    state = service.get_state(1)
+    displays = [
+        part["display_data"]
+        for run in state["runs"]
+        for message in run["messages"]
+        for part in message["parts"]
+        if part.get("display_data", {}).get("session_id") == "term-1"
+    ]
+    assert len(displays) == 2
+    assert all(display["status"] == "running" for display in displays)
+    service.refresh_terminal_session(replace(sources.status_change, status="exited", exit_code=0))
+    current = task_runtime_spaces.get(1).existing_snapshot()
+    displays = [
+        part["display_data"]
+        for run in current["runs"]
+        for message in run["messages"]
+        for part in message["parts"]
+        if part.get("display_data", {}).get("session_id") == "term-1"
+    ]
+    assert all(display["status"] == "exited" for display in displays)
+    assert [
+        row.transport_metadata["display_data"]["status"]
+        for row in sources.rows
+        if "display_data" in row.transport_metadata
+    ] == ["exited", "exited"]
+
+
+@pytest.fixture(autouse=True)
+def _task_space_sources(monkeypatch):
+    """展示测试显式装配 Task 空间读取源，避免依赖真实主库。"""
+    from types import SimpleNamespace
+
+    from app.task_runtime import task_runtime_space as space_module
+    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+    task_runtime_spaces.close()
+    monkeypatch.setattr(
+        space_module, "get_task_service", lambda: SimpleNamespace(get_task=lambda _: _task())
+    )
+    monkeypatch.setattr(
+        space_module,
+        "get_workspace_service",
+        lambda: SimpleNamespace(get_workspace=lambda _: SimpleNamespace(id=1)),
+    )
+    yield
+    task_runtime_spaces.close()

@@ -72,10 +72,11 @@ class ConversationTaskStateService:
     _terminal_status_source: TerminalSessionStatusSource | None = None
 
     def __init__(
-            self,
+        self,
     ) -> None:
         """绑定冷读所需的 canonical 记录数据源。"""
         from app.service import depends
+
         self._task_source = depends.get_task_crud()
         self._run_source = depends.get_conversation_run_crud()
         self._context_source = depends.get_conversation_task_context_crud()
@@ -132,10 +133,7 @@ class ConversationTaskStateService:
             task_runtime_spaces.get_or_create(task_id).unload_snapshot()
             return self.get_state(task_id)
 
-    def apply_planned(
-            self,
-            event: ConversationEvent
-    ) -> TransportFrame:
+    def apply_planned(self, event: ConversationEvent) -> TransportFrame:
         """将实时 projector 计划应用到进程本地状态并通知 subscriber。
 
         若不存在工作副本，canonical 冷读边界提供初始状态。planner 与变更在同一把锁下执行
@@ -184,10 +182,10 @@ class ConversationTaskStateService:
             return change
 
     def publish_state(
-            self,
-            task_id: int,
-            state: ConversationStateSnapshot,
-            mutations: tuple[ConversationStateMutation, ...] | None = None,
+        self,
+        task_id: int,
+        state: ConversationStateSnapshot,
+        mutations: tuple[ConversationStateMutation, ...] | None = None,
     ) -> TransportFrame:
         """发布一个其 canonical 数据库事务已经提交的状态。"""
 
@@ -207,7 +205,7 @@ class ConversationTaskStateService:
         return change
 
     def subscribe_with_snapshot(
-            self, task_id: int
+        self, task_id: int
     ) -> tuple[Subscriber, Callable[[], None], TransportFrame]:
         """在 ``_lock`` 下原子地挂载并准备首个 full 帧。"""
 
@@ -268,9 +266,7 @@ class ConversationTaskStateService:
 
         with cls._lock:
             subscribers = [
-                subscriber
-                for group in cls._subscribers.values()
-                for subscriber in group
+                subscriber for group in cls._subscribers.values() for subscriber in group
             ]
             cls._subscribers.clear()
             cls._deleted_task_ids.clear()
@@ -513,8 +509,6 @@ class ConversationTaskStateService:
 
             mutations: list[ConversationStateMutation] = []
             for run_index, run in enumerate(state["runs"]):
-                if run["runId"] != change.run_id:
-                    continue
                 for message_index, message in enumerate(run["messages"]):
                     for part_index, part in enumerate(message["parts"]):
                         if not isinstance(part, dict):
@@ -566,7 +560,6 @@ class ConversationTaskStateService:
 
         mutations: list[ConversationStateMutation] = []
         for run_index, run in enumerate(state["runs"]):
-            run_id = run["runId"]
             for message_index, message in enumerate(run["messages"]):
                 for part_index, part in enumerate(message["parts"]):
                     if not isinstance(part, dict):
@@ -580,12 +573,10 @@ class ConversationTaskStateService:
                     change = source.get_status_change(
                         session_id,
                         task_id=parent_task_id or 0,
-                        run_id=run_id,
                     )
                     if change is None:
                         change = TerminalSessionStatusChange(
                             task_id=parent_task_id or 0,
-                            run_id=run_id,
                             session_id=session_id,
                             generation="",
                             status="closed",
@@ -635,14 +626,14 @@ class ConversationTaskStateService:
                 display = metadata.get("display_data")
                 if not _matches_terminal_session_display(display, change.session_id):
                     continue
-                if row.run_id != change.run_id:
-                    continue
                 if _updated_terminal_display(display, change) == display:
                     continue
+                # terminal display 只由带 Run 归属的工具观察写入；通用 context 记录类型
+                # 还覆盖无 Run 的系统消息，这里沿用已匹配工具行的实际归属作为更新定位符。
                 self._context_source.update_terminal_session_display(
                     target_task_id,
                     row.sequence,
-                    change.run_id,
+                    cast(int, row.run_id),
                     change.session_id,
                     change.status,
                     change.end_reason,
@@ -655,7 +646,6 @@ class ConversationTaskStateService:
                     "msg": "Terminal session 状态已投影到内存，但 display metadata 持久化失败",
                     "data": {
                         "task_id": target_task_id,
-                        "run_id": change.run_id,
                         "session_id": change.session_id,
                         "status": change.status,
                     },
@@ -707,14 +697,10 @@ class ConversationTaskStateService:
                         continue
                     display = part.get("display_data")
                     child_task_id = (
-                        display.get("child_task_id")
-                        if isinstance(display, dict)
-                        else None
+                        display.get("child_task_id") if isinstance(display, dict) else None
                     )
                     child_run_id = (
-                        display.get("child_run_id")
-                        if isinstance(display, dict)
-                        else None
+                        display.get("child_run_id") if isinstance(display, dict) else None
                     )
                     if not _is_dynamic_child_display(display):
                         continue
@@ -909,10 +895,7 @@ def _matches_dynamic_child_display(
 
     if not _is_dynamic_child_display(value) or not isinstance(value, dict):
         return False
-    return (
-        value.get("child_task_id") == child_task_id
-        and value.get("child_run_id") == child_run_id
-    )
+    return value.get("child_task_id") == child_task_id and value.get("child_run_id") == child_run_id
 
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:
@@ -957,7 +940,7 @@ def _current_run_status(state: ConversationStateSnapshot) -> str | None:
 
 
 def _requires_full_snapshot_validation(
-        mutations: tuple[ConversationStateMutation, ...],
+    mutations: tuple[ConversationStateMutation, ...],
 ) -> bool:
     """返回一批变更是否会改变快照结构或生命周期形状。"""
 

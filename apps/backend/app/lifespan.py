@@ -8,7 +8,7 @@
 职责边界：
 
 - 负责：日志管线安装（失败窗口先建最小管线，配置加载后按最终数据根重建）、``Settings``
-  加载、服务依赖初始化、遗留 Run 与最近 Run terminal checkpoint 收敛、Hook 注册表播种、
+  加载、服务依赖初始化、遗留 Run 收敛、Hook 注册表播种、
   工具系统与 Agent Runtime 装配、``SESSION_START`` / ``SESSION_END`` 触发、启动状态标记、
   系统级 ``.cosir`` 目录创建。
 - 不负责：HTTP 路由、中间件安装、FastAPI 实例的创建与导出。
@@ -54,7 +54,6 @@ from app.core.observability import flush_langfuse
 from app.core.observability.langfuse_runtime import reload_langfuse_from_settings
 from app.core.runtime.runner import AgentRuntime
 from app.core.tools import ToolSystem
-from app.core.workflows.react.workflow import ReactLikeWorkflow
 from app.service.configuration.agent_team_configuration_service import (
     AgentTeamConfigurationService,
     set_agent_team_configuration_service,
@@ -181,8 +180,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     副作用:
         按启动顺序安装日志管线、加载配置、初始化服务依赖、创建系统级 ``.cosir`` 目录、
         播种 Hook 与 Agent 注册表（注册表只播种代码内置 profile，用户 JSON 由注册表在作用域
-        首次被读取时按需装载）、装配工具系统和 Agent Runtime，再收敛遗留 Run 与最近 Run
-        的 terminal checkpoint，并在就绪后写入 ``ready`` 启动状态；关闭时触发 ``SESSION_END``、
+        首次被读取时按需装载）、装配工具系统和 Agent Runtime，再收敛遗留 Run，
+        并在就绪后写入 ``ready`` 启动状态；关闭时触发 ``SESSION_END``、
         关闭 Run executor 与终端会话、flush 观测数据、关闭服务依赖，最后写入 ``stopped``
         启动状态并卸载日志管线。日志管线共安装两次：先按当前 ``paths.LOG_DIR`` 建立最小
         管线，覆盖配置加载与依赖初始化的失败窗口；``Settings.load()`` 触发 ``paths.reset()``
@@ -235,7 +234,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         )
     )
 
-    # 恢复过程会创建 AgentTeamCoordinator / ReactLikeWorkflow；二者分别消费已装配的工具系统
+    # 恢复过程会创建 AgentTeamCoordinator，消费已装配的工具系统
     # 与 Agent Runtime，因此统一放在运行时依赖就绪之后，并确保在后端 ready 前完成。
     recovered_runs = get_conversation_run_service().recover_orphaned_runs()
     if recovered_runs:
@@ -256,27 +255,6 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
                 "msg": "后端启动时已将遗留 Agent Team 收敛为 cancelled",
                 "data": {"count": recovered_team_runs},
             },
-        )
-    latest_runs = get_conversation_run_service().list_latest_runs()
-    get_terminal_session_service().initialize()
-    try:
-        recovered_terminal_count = await ReactLikeWorkflow().recover_orphaned_terminal_checkpoints(
-            latest_runs
-        )
-        if recovered_terminal_count:
-            log.info(
-                "orphaned_terminal_sessions_recovered",
-                extra={
-                    "msg": "后端启动时已扫描并强制关闭最近 Run 的遗留 terminal",
-                    "data": {"session_count": recovered_terminal_count},
-                },
-            )
-    except Exception:
-        # terminal checkpoint 恢复只是启动期的清理旁路：主库与运行时仍可服务时，它不得阻止
-        # 后端进入 ready。
-        log.exception(
-            "orphaned_terminal_sessions_recovery_failed",
-            extra={"msg": "启动期 terminal checkpoint 恢复失败，继续启动 backend", "data": {}},
         )
     # 当前产品只启动新鲜 ConversationRun；旧 run 不在启动期隐式重放。
 

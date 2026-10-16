@@ -25,6 +25,7 @@ export type KnownTransportToolStatus =
 export type TransportToolStatus = KnownTransportToolStatus | "unknown";
 
 export type TerminalSessionPresentationVariant =
+  | "terminal-session-list"
   | "terminal-session-start"
   | "terminal-session-read"
   | "terminal-session-write"

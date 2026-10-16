@@ -15,6 +15,7 @@ from typing import Literal
 ToolDisplaySurface = Literal["trace", "standalone"]
 ToolDisplayLayout = Literal["none", "details", "list", "diff", "write", "terminal"]
 ToolDisplayVariant = Literal[
+    "terminal-session-list",
     "terminal-session-start",
     "terminal-session-read",
     "terminal-session-write",

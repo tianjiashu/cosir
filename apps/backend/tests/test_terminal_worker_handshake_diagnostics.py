@@ -186,7 +186,6 @@ def test_service_error_observation_marks_protocol_mismatch_as_not_retryable() ->
 
     observation = service_error_observation(
         "terminal_start",
-        "shell",
         TerminalWorkerProtocolError("handshake rejected"),
     )
 

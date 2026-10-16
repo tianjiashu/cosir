@@ -19,7 +19,7 @@ import { DisclosureRowStatic } from "../elements/disclosure-row.aui";
 import { terminalSessionStatusPresentation } from "@/components/terminal/terminal-session-status";
 import type { BadgeTone } from "@/components/ui/badge";
 
-type TerminalSessionVariant = "start" | "read" | "write" | "signal" | "close" | "unknown";
+type TerminalSessionVariant = "start" | "list" | "read" | "write" | "signal" | "close" | "unknown";
 
 type TerminalSessionToolProps = ToolCallMessagePartProps & { taskId?: number };
 
@@ -54,6 +54,7 @@ function sessionStatusClass(value: unknown): string {
 function sessionVariant(value: unknown): TerminalSessionVariant {
   switch (value) {
     case "terminal-session-start": return "start";
+    case "terminal-session-list": return "list";
     case "terminal-session-read": return "read";
     case "terminal-session-write": return "write";
     case "terminal-session-signal": return "signal";
@@ -74,6 +75,7 @@ function shellLabel(data: Record<string, unknown>): string {
 }
 
 function actionLabel(variant: Exclude<TerminalSessionVariant, "start" | "unknown">, data: Record<string, unknown>): string {
+  if (variant === "list") return "列出终端会话";
   if (variant === "read") return "读取终端输出";
   if (variant === "write") return data.submitted === true ? "提交终端输入" : "写入终端输入";
   if (variant === "close") return "关闭终端会话";
@@ -86,6 +88,7 @@ function actionLabel(variant: Exclude<TerminalSessionVariant, "start" | "unknown
 }
 
 function actionMeta(variant: Exclude<TerminalSessionVariant, "start" | "unknown">, data: Record<string, unknown>): string {
+  if (variant === "list") return typeof data.session_count === "number" ? `${data.session_count} 个会话` : "会话列表";
   if (variant === "read") {
     const nextSeq = typeof data.next_seq === "number" ? `next seq ${data.next_seq}` : "读取输出";
     return nextSeq;
@@ -102,6 +105,7 @@ function actionMeta(variant: Exclude<TerminalSessionVariant, "start" | "unknown"
 }
 
 function actionIcon(variant: Exclude<TerminalSessionVariant, "start" | "unknown">): ReactNode {
+  if (variant === "list") return <TerminalIcon className="text-info size-4" aria-hidden="true" />;
   if (variant === "read") return <ArrowDownIcon className="text-info size-4" aria-hidden="true" />;
   if (variant === "write") return <ArrowUpIcon className="text-info size-4" aria-hidden="true" />;
   if (variant === "signal") return <CircleAlertIcon className="text-warning size-4" aria-hidden="true" />;
@@ -119,7 +123,7 @@ function TerminalSessionStartCard({ artifact, taskId }: { artifact: ReturnType<t
     <div className="terminal-surface border-info/30 flex min-w-0 flex-col gap-2 rounded-xl border px-3 py-2 shadow-sm">
       <div className="flex min-w-0 items-center gap-2">
         <TerminalIcon className="text-info size-4 shrink-0" aria-hidden="true" />
-        <span className="font-medium">终端会话</span>
+        <span className="font-medium">{text(data.label) ?? "终端会话"}</span>
         <Badge tone="info" variant="outline" shape="tag" size="sm" className="bg-info/10 font-mono tracking-wide uppercase">
           session
         </Badge>

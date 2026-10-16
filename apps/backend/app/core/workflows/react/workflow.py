@@ -8,14 +8,12 @@ graph 编译时挂既有 checkpointer，由 LangGraph 负责控制流状态持�
 协作取消与用户输入等待通过 LangGraph ``interrupt`` 保留图断点；其中 human-in-the-loop 根据工具观察
 从 ``tools`` 条件路由到 ``wait_user``，批准后回 ``tools`` 真执行，驳回 / 放弃后交给 ``observe``；
 用户的单个结构化决定经续跑入口传入并被 ``wait_user`` 消费；待决请求
-投影给前端与挂起图都发生在 ``wait_user``；执行器落定 Run 状态后，本工作流才检查终态与 checkpoint
-并决定是否关闭 terminal，避免等待输入时释放资源或覆盖待恢复的 interrupt。
+投影给前端与挂起图都发生在 ``wait_user``。终端属于 Task，由终端服务独立管理，
+不进入 graph state，也不随 Run 完成或取消关闭。
 
 节点行为见 ``nodes`` 模块，路由逻辑见 ``edges`` 模块，graph state 契约见 ``state`` 模块。
 """
 
-import asyncio
-from collections.abc import Iterable
 from time import perf_counter
 from typing import Any, cast
 
@@ -32,42 +30,12 @@ from app.core.tools.schemas import UserDecision, build_resume_payload
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.workflow_operations import WorkflowOperations
-from app.models import ConversationRunStatus
-from app.service.depends import get_conversation_run_service, get_terminal_session_service
 
 from ..agent_workflow import AgentWorkflow, WorkflowRunFailure, build_checkpointer
 from .edges import _route_target
 from .node_helper.request_fingerprint import log_tools_fingerprint
 from .runtime_config import RuntimeConfig
 from .worflow_state.route import ReactRoute
-
-
-def _closed_terminal_sessions(raw: object, *, reason: str) -> dict[str, dict[str, Any]] | None:
-    """生成仅包含必要变化的 terminal checkpoint 更新。
-
-    踩坑记录：LangGraph 的 ``aupdate_state`` 不是普通字段赋值；它会把更新模拟成某个节点写入，
-    创建新 checkpoint 并重新计算后续任务。若图已因 ``interrupt`` 挂起，单独调用它可能改变挂起任务
-    与恢复位置，使后续 ``Command(resume=...)`` 无法恢复原 interrupt。因此挂起时不能单独写 checkpoint，
-    应把本更新合并到后续的 ``Command(resume=..., update=...)``；无 interrupt 时才可单独收敛。
-
-    terminal 进程在 Run 终态收尾时已关闭；本函数只将 checkpoint 中仍标记为活跃的会话投影为 closed，
-    没有活跃会话则返回 None，让调用方完全跳过 checkpoint 写入。
-    """
-
-    if not isinstance(raw, dict):
-        return None
-    projected = {
-        session_id: dict(metadata)
-        for session_id, metadata in raw.items()
-        if isinstance(session_id, str) and isinstance(metadata, dict)
-    }
-    changed = False
-    for metadata in projected.values():
-        if metadata.get("status") in {"starting", "running"}:
-            metadata["status"] = "closed"
-            metadata["end_reason"] = reason
-            changed = True
-    return projected if changed else None
 
 
 class ReactLikeWorkflow(AgentWorkflow):
@@ -170,9 +138,9 @@ class ReactLikeWorkflow(AgentWorkflow):
         """驱动 ReAct graph 执行一次任务，直到完成、挂起或异常终止。
 
         以 LangGraph 状态流驱动已编译 graph：模型解析与工具绑定、运行期配置注入、上下文基线
-        补写、graph 启动与流式消费都在本方法内完成；终态 terminal checkpoint 收敛由执行器在
-        Run 状态落定后调用 ``finalize_run``。本工作流不生产或
-        透传通用 runtime event——Run 状态迁移与工具执行经 ``WorkflowOperations`` 提交，canonical
+        补写、graph 启动与流式消费都在本方法内完成。Task 终端由独立服务管理，
+        不随图的退出释放。本工作流不生产或透传通用 runtime event；Run 状态迁移与工具执行
+        经 ``WorkflowOperations`` 提交，canonical
         消息由本方法装配的 ``RuntimeContextManager`` 写入，模型流式增量由 graph custom stream 经
         ``operations.process_event`` 转发到 snapshot。协作取消与通用用户输入等待都通过 LangGraph
         ``interrupt`` 保存 checkpoint。
@@ -299,7 +267,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             "callbacks": callbacks or [],
         }
 
-        async with (build_checkpointer() as checkpointer):
+        async with build_checkpointer() as checkpointer:
             graph = self._build_graph(checkpointer)
             # 初始 state 只填控制流字段：模型消息与 runtime context 都不进 state（前者归
             # RuntimeContextManager，后者经 config 注入）。
@@ -311,7 +279,6 @@ class ReactLikeWorkflow(AgentWorkflow):
                 max_steps=agent_profile.max_steps,
                 final_text="",
                 last_tool_results={},
-                terminal_sessions={},
             )
             if execution_mode == "resume" or execution_mode == "resume_with_input":
                 # 续跑准入：必须先判图状态。图已走到 END 时 ``astream`` 既不产出事件也不
@@ -324,8 +291,7 @@ class ReactLikeWorkflow(AgentWorkflow):
                     )
                 # 决定只能恢复 wait_user 自己建立的 interrupt；其它节点的 interrupt 不得误收决定。
                 parked_at_wait_user = any(
-                    task.name == "wait_user" and task.interrupts
-                    for task in snapshot.tasks
+                    task.name == "wait_user" and task.interrupts for task in snapshot.tasks
                 )
                 log.info(
                     "workflow_resume_checkpoint_inspected",
@@ -375,23 +341,8 @@ class ReactLikeWorkflow(AgentWorkflow):
                             Constant.Run.RUN_FAILURE_CODE_WAITING_FOR_INPUT,
                             "该 Run 正在等待用户决定，请提交决定后续跑",
                         )
-                    # 图仍有 interrupt 时 checkpoint 更新必须合并进恢复命令，不能单独
-                    # ``aupdate_state``（见 ``_closed_terminal_sessions``）。
-                    terminal_sessions_update = _closed_terminal_sessions(
-                        snapshot.values.get("terminal_sessions"),
-                        reason="run_execution_finished",
-                    )
-                    # 无用户决定的续跑一律回退到 model 节点重跑：模型侧断点（协作取消、输出待续写）
-                    # 没有可恢复的输入，只能让模型看到当前上下文后重新决策；图仍从既有 checkpoint
-                    # 上继续，不新建线程。
-                    input_state = (
-                        Command(
-                            goto=ReactRoute.MODEL.value,
-                            update=terminal_sessions_update,
-                        )
-                        if terminal_sessions_update is not None
-                        else Command(goto=ReactRoute.MODEL.value)
-                    )
+                    # 无用户决定的续跑回到 model；Task 终端独立存活，不改写图的恢复状态。
+                    input_state = Command(goto=ReactRoute.MODEL.value)
 
             async for mode, value in graph.astream(
                 input_state,
@@ -403,219 +354,3 @@ class ReactLikeWorkflow(AgentWorkflow):
                 if mode != "custom":
                     continue
                 operations.process_event(value)
-
-    @staticmethod
-    async def _close_run_terminals(run_id: int, *, reason: str) -> bool:
-        """关闭 Run 持有的 terminal 进程，但不改写 LangGraph checkpoint。
-
-        调用方已先确认 Run 终态与 checkpoint 活跃 session；这里仅关闭本机资源，不改写 checkpoint。
-        终态 checkpoint 若仍有 interrupt，调用方会延后元数据更新，避免改变 interrupt 的恢复位置。
-        """
-
-        try:
-            await asyncio.to_thread(
-                get_terminal_session_service().close_run_terminals,
-                run_id,
-                reason=reason,
-            )
-            return True
-        except Exception:
-            log.exception(
-                "workflow_terminal_close_failed",
-                extra={
-                    "msg": "工作流收尾关闭 terminal 失败",
-                    "data": {"run_id": run_id, "reason": reason},
-                },
-            )
-            return False
-
-    async def _recover_terminal_checkpoint(
-        self,
-        graph: Any,
-        config: dict[str, Any],
-        run_id: int,
-        *,
-        reason: str,
-    ) -> bool:
-        """在进程启动恢复边界关闭 Run 的 terminal，并收敛 checkpoint 元数据。
-
-        该方法只用于后端启动恢复：重启后旧 Run 已收敛为 cancelled，不会恢复旧 Agent 执行，因此可以
-        安全更新旧 checkpoint。正常执行收尾只关闭 terminal 进程，不调用本方法，以免覆盖
-        ``interrupt`` 保存的待恢复任务。失败只记日志并返回 False，不覆盖 Run 已落定的业务终态。
-
-        参数:
-            graph: 已编译、与本 ``config`` 匹配的 graph（复用同一 checkpointer）。
-            config: 含 ``thread_id`` 的 LangGraph 配置。
-            run_id: 当前 Run 标识，用于 Run 级 terminal 清理。
-            reason: 写入终端元数据的关闭原因。
-
-        返回:
-            ``True`` 表示 Run 级 terminal 清理成功、且 checkpoint 已收敛（没有终端元数据时视为
-            已收敛）；``False`` 表示其中任一步失败（已记日志），调用方据此跳过收敛统计。
-        """
-
-        try:
-            snapshot = await graph.aget_state(config)
-            terminal_sessions = snapshot.values.get("terminal_sessions")
-            update = _closed_terminal_sessions(terminal_sessions, reason=reason)
-            if update is None:
-                return True
-            if not await self._close_run_terminals(run_id, reason=reason):
-                return False
-            if any(task.interrupts for task in snapshot.tasks):
-                log.info(
-                    "terminal_checkpoint_update_deferred_for_interrupt",
-                    extra={
-                        "msg": "终端已关闭，但保留 checkpoint interrupt，元数据待续跑时收敛",
-                        "data": {"run_id": run_id, "reason": reason},
-                    },
-                )
-                return True
-            await graph.aupdate_state(config, {"terminal_sessions": update})
-            return True
-        except Exception:
-            log.exception(
-                "workflow_terminal_checkpoint_cleanup_failed",
-                extra={
-                    "msg": "terminal worker 或 checkpoint 终态收敛失败",
-                    "data": {"run_id": run_id, "reason": reason},
-                },
-            )
-            return False
-
-    async def finalize_run(self, run_id: int) -> None:
-        """仅在 Run 已进入终态且 checkpoint 有活跃 terminal 时关闭资源并投影关闭状态。
-
-        ``run`` 返回既可能是终态，也可能是 ``waiting_for_input``。执行器在兜底收敛后调用本方法，
-        所以这里以 ConversationRun 状态为准；checkpoint 是活跃 session 的判据。没有活跃元数据时
-        不调用关闭服务，也不写 checkpoint。若终态 checkpoint 仍有 interrupt，只关闭实际资源并
-        保留断点，元数据留到下次显式 resume 或进程启动恢复时合并。
-        """
-
-        run = await asyncio.to_thread(get_conversation_run_service().get_run, run_id)
-        terminal_statuses = {
-            ConversationRunStatus.COMPLETED,
-            ConversationRunStatus.FAILED,
-            ConversationRunStatus.CANCELLED,
-        }
-        status = ConversationRunStatus(run.status)
-        if status not in terminal_statuses:
-            return
-        reason = run.end_reason or status.value
-        config = {"configurable": {"thread_id": run.checkpoint_thread_id}}
-        async with build_checkpointer() as checkpointer:
-            graph = self._build_graph(checkpointer)
-            snapshot = await graph.aget_state(config)
-            terminal_sessions_update = _closed_terminal_sessions(
-                snapshot.values.get("terminal_sessions"),
-                reason=reason,
-            )
-            if terminal_sessions_update is None:
-                return
-            if not await self._close_run_terminals(run_id, reason=reason):
-                return
-            if any(task.interrupts for task in snapshot.tasks):
-                log.info(
-                    "terminal_checkpoint_update_deferred_for_interrupt",
-                    extra={
-                        "msg": "终态 Run 的 terminal 已关闭，保留 checkpoint interrupt",
-                        "data": {"run_id": run_id, "status": status.value},
-                    },
-                )
-                return
-            await graph.aupdate_state(
-                config,
-                {"terminal_sessions": terminal_sessions_update},
-            )
-
-    async def recover_orphaned_terminal_checkpoints(
-        self,
-        runs: Iterable[object],
-        *,
-        reason: str = "runtime_restarted",
-    ) -> int:
-        """扫描最近 Run 的 checkpoint 并关闭遗留的活跃 terminal 元数据。
-
-        启动恢复发生在新的 backend 进程中，旧 PTY worker 不属于当前 registry；本方法仍
-        通过统一 terminal cleanup 设置 Run closing fence，并在 checkpointer 生命周期内把
-        最近 Run 的 ``starting`` / ``running`` terminal 投影收敛为 ``closed``。后续 resume
-        会清除 fence 并创建新的 terminal，不会复用旧 PTY。
-
-        参数:
-            runs: 每个 task 最近一次 Run 的记录对象，需提供 ``id`` 与
-                ``checkpoint_thread_id`` 属性。
-            reason: 写入 terminal 元数据的关闭原因。
-
-        返回:
-            实际发现并收敛的 terminal session 数量。
-
-        异常:
-            checkpoint 读取或写入失败只记录日志并继续扫描其他 Run；主库恢复状态不受影响。
-
-        副作用:
-            读取并可能更新 LangGraph checkpoint；同步调用 terminal service 的 Run 级清理。
-        """
-
-        run_list = list(runs)
-        if not run_list:
-            return 0
-        recovered_count = 0
-        async with build_checkpointer() as checkpointer:
-            graph = self._build_graph(checkpointer)
-            for run in run_list:
-                run_id = getattr(run, "id", None)
-                thread_id = getattr(run, "checkpoint_thread_id", None)
-                if not isinstance(run_id, int) or not isinstance(thread_id, str) or not thread_id:
-                    continue
-                try:
-                    status = ConversationRunStatus(run.status)
-                    if status not in {
-                        ConversationRunStatus.COMPLETED,
-                        ConversationRunStatus.FAILED,
-                        ConversationRunStatus.CANCELLED,
-                    }:
-                        continue
-                    snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-                    terminal_sessions = snapshot.values.get("terminal_sessions")
-                    active_count = sum(
-                        1
-                        for metadata in (
-                            terminal_sessions.values()
-                            if isinstance(terminal_sessions, dict)
-                            else ()
-                        )
-                        if isinstance(metadata, dict)
-                        and metadata.get("status") in {"starting", "running"}
-                    )
-                    if active_count == 0:
-                        continue
-                    finalized = await self._recover_terminal_checkpoint(
-                        graph,
-                        {"configurable": {"thread_id": thread_id}},
-                        run_id,
-                        reason=reason,
-                    )
-                    if not finalized:
-                        continue
-                    recovered_count += active_count
-                    log.info(
-                        "orphaned_terminal_sessions_recovered",
-                        extra={
-                            "msg": "启动恢复已强制关闭最近 Run 的遗留 terminal",
-                            "data": {
-                                "run_id": run_id,
-                                "thread_id": thread_id,
-                                "session_count": active_count,
-                                "reason": reason,
-                            },
-                        },
-                    )
-                except Exception:
-                    log.exception(
-                        "orphaned_terminal_sessions_recovery_failed",
-                        extra={
-                            "msg": "启动恢复扫描 Run terminal checkpoint 失败",
-                            "data": {"run_id": run_id, "thread_id": thread_id},
-                        },
-                    )
-        return recovered_count

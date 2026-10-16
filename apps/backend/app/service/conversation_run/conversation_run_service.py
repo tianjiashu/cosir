@@ -11,10 +11,10 @@
   （委托给 ``ConversationRunCrud``/``TaskCrud``）；Run 创建期的 canonical 初始 user
   message 通过 Task context owner 写入。
 """
+
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
@@ -30,9 +30,11 @@ from app.models import (
     ConversationRunStatus,
 )
 from app.service import depends as service_depends
-from app.service.depends import get_model_config_service
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
-from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
+from app.service.conversation_run.conversation_task_context_service import (
+    ConversationTaskContextService,
+)
+from app.service.depends import get_model_config_service
 from app.storage.store_engines import main_session_factory
 
 
@@ -252,9 +254,7 @@ class ConversationRunService:
         extra = None
         if run_command is not None:
             workspace_id = (
-                self._task.get(task_id).workspace_id
-                if run_command.image_asset_ids
-                else None
+                self._task.get(task_id).workspace_id if run_command.image_asset_ids else None
             )
             prepared = self._prepare_command(
                 workspace_id,
@@ -410,15 +410,6 @@ class ConversationRunService:
                     },
                 )
         return recovered
-
-    def list_latest_runs(self) -> list[ConversationRunRecord]:
-        """返回每个 task 最近一次 Run，供启动期 checkpoint 旁路恢复扫描使用。
-
-        本方法只读取主库 Run 记录，不改变业务状态；调用方负责按需读取对应的 LangGraph
-        checkpoint，并处理进程内 terminal worker。返回结果按最近创建时间倒序。
-        """
-
-        return self._run.list_latest_by_tasks()
 
     def get_run(self, run_id: int) -> ConversationRunRecord:
         """按标识读取单个 Run 记录。

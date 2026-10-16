@@ -29,6 +29,7 @@ from app.core.tools.tool_models.search_content_args import SearchContentArgs
 from app.core.tools.tool_models.skill_args import SkillArgs
 from app.core.tools.tool_models.terminal_session_args import (
     TerminalCloseArgs,
+    TerminalListArgs,
     TerminalReadArgs,
     TerminalSignalArgs,
     TerminalStartArgs,
@@ -55,6 +56,7 @@ __all__ = [
     "SearchContentArgs",
     "SkillArgs",
     "TerminalCloseArgs",
+    "TerminalListArgs",
     "TerminalReadArgs",
     "TerminalSignalArgs",
     "TerminalStartArgs",

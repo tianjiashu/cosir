@@ -49,7 +49,7 @@ def build_session_display_payload(
         "end_reason",
     )
     if include_terminal_info:
-        fields += ("initial_cwd", "shell_kind")
+        fields += ("initial_cwd", "shell_kind", "label")
     result = {key: payload[key] for key in fields if key in payload}
     if extra:
         result.update(extra)
@@ -72,3 +72,9 @@ def build_terminal_session_display_data(
             extra=extra,
         ),
     }
+
+
+def build_terminal_session_list_display_data(session_count: int) -> dict[str, object]:
+    """只展示本次发现数量；会话实时状态从 service 获取，不复制到列表卡片。"""
+
+    return {"kind": "terminal-session", "session_count": session_count}

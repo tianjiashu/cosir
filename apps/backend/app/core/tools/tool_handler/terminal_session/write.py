@@ -71,8 +71,11 @@ class TerminalWriteTool(HandlerBase):
         "Write raw UTF-8 input to an existing hidden local terminal session and optionally "
         "wait for output. Set submit=true to append one real Enter key (CR); do not encode "
         "Enter as literal \\r/\\n or HTML entities. The session must be alive; once the "
-        "process inside it has exited the session can no longer receive input, so start a "
-        "new session with terminal_start for the next task."
+        "shell has exited the session can no longer receive input, so start a "
+        "new session with terminal_start. Reuse operation_id with identical input when retrying; "
+        "input acceptance is independent of output waiting. output_gap=true means older output "
+        "was discarded; returned frames contain the retained window. Cancelling a run leaves "
+        "accepted input and the session running."
     )
     args_model = TerminalWriteArgs
     timeout_seconds: ClassVar[float] = 30.0
@@ -149,11 +152,10 @@ class TerminalWriteTool(HandlerBase):
                 wait_ms=wait_ms,
                 is_cancelled=lambda: cancelled(execution_context),
             )
-            if cancelled(execution_context):
-                return cancelled_observation(self.name)
+            # 输入已接受；取消仅停止等输出，不能把已发生的写入伪装成未执行。
             return success_observation(
                 self.name,
-                {"session_id": session_id, **result.to_dict()},
+                {"session_id": session_id, "input_accepted": True, **result.to_dict()},
                 summary="Terminal input accepted.",
                 display_payload=build_terminal_session_display_data(
                     {"session_id": session_id, **result.to_dict()},
@@ -184,9 +186,7 @@ class TerminalWriteTool(HandlerBase):
             description=describe_terminal_tool(self.name, self.description),
             handler=self.execute,
             args_model=self.args_model,
-            parameters_schema=build_terminal_session_parameters_schema(
-                self.name, self.args_model
-            ),
+            parameters_schema=build_terminal_session_parameters_schema(self.name, self.args_model),
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",

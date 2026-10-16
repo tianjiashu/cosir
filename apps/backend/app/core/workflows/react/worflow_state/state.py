@@ -7,13 +7,10 @@
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
 from app.core.workflows.react.worflow_state.route import ReactRoute
-from app.core.workflows.react.worflow_state.terminal_session_checkpoint import (
-    TerminalSessionCheckpoint,
-)
 
 
 class ReactGraphState(BaseModel):
@@ -42,16 +39,11 @@ class ReactGraphState(BaseModel):
             ``tool_call_id`` / ``display_data``）。tools 节点按 ``tool_call_id`` 合并写入
             （同一模型步可分多遍执行），observe 节点做事件分发、错误计数与错误上限判定并在结算后
             清空（这就是批次边界），其中 ``display_data`` 不会进入模型消息。
-        terminal_sessions: 当前 Run 创建的 terminal 元数据，键为 session id，值为
-            ``TerminalSessionCheckpoint``。只保存由工具展示契约 allowlist 后的可序列化字段，
-            不保存 worker、PTY、输出 ring buffer 或 subscriber。活终端的真实性仍由 backend
-            进程内 ``TerminalSessionService`` registry 负责。
         tool_call_lifecycle: 当前 workflow 已创建工具调用的可序列化生命周期记录。model
             节点写入调用身份与归属桶，tools 节点经 ``begin`` 迁移起跑状态并回写同一快照，
             wait_user 节点在用户批准后把被批准的记录重置为未起跑并写入用户决定，observe 节点写入
             终态；不含 operations、stream writer 或 runtime context。
     """
-
 
     step_count: int
     tool_error_count: int
@@ -60,5 +52,4 @@ class ReactGraphState(BaseModel):
     max_steps: int
     final_text: str
     last_tool_results: dict[str, Any]
-    terminal_sessions: dict[str, TerminalSessionCheckpoint] = Field(default_factory=dict)
     tool_call_lifecycle: ToolCallLifecycleManager | None = None

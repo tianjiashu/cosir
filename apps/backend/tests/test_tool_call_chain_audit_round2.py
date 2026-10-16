@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import copy
 import unittest.mock as mock
+from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Any, Iterator
+from typing import Any
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
@@ -180,7 +181,6 @@ def _state(lifecycle: Any, **overrides: Any) -> ReactGraphState:
         "max_steps": 10,
         "final_text": "",
         "last_tool_results": {},
-        "terminal_sessions": {},
         "tool_call_lifecycle": lifecycle,
     }
     values.update(overrides)
@@ -227,7 +227,10 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))
     projector.process(
         ToolCallCreatedEvent(
-            task_id=_TASK_ID, run_id=_RUN_ID, tool_call_id=tool_call_id, tool_name="execute_terminal"
+            task_id=_TASK_ID,
+            run_id=_RUN_ID,
+            tool_call_id=tool_call_id,
+            tool_name="execute_terminal",
         )
     )
     projector.process(
@@ -300,14 +303,16 @@ async def test_p1_pending_records_are_replayed_on_reentry() -> None:
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
+            all_vaild_tools=[],
             get_current_task=lambda: SimpleNamespace(id=_TASK_ID),
             run_tool_calls=_fake_run_tool_calls,
         ),
         run=SimpleNamespace(id=_RUN_ID),
     )
 
-    with harness.runtime(), mock.patch.object(
-        tools_node_module, "_runtime_config", lambda: runtime_config
+    with (
+        harness.runtime(),
+        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
     ):
         await tools_node_module._tools_node(_state(harness.manager))
 
@@ -348,14 +353,16 @@ async def test_p1_running_records_are_not_replayed() -> None:
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
+            all_vaild_tools=[],
             get_current_task=lambda: SimpleNamespace(id=_TASK_ID),
             run_tool_calls=_fake_run_tool_calls,
         ),
         run=SimpleNamespace(id=_RUN_ID),
     )
 
-    with harness.runtime(), mock.patch.object(
-        tools_node_module, "_runtime_config", lambda: runtime_config
+    with (
+        harness.runtime(),
+        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
     ):
         await tools_node_module._tools_node(_state(harness.manager))
 
@@ -532,7 +539,7 @@ class _RecordingContextService:
         self.loaded: list[ContextEntry] = []
         self.deleted: list[Any] = []
 
-    def max_sequence(self, task_id: int) -> int:  # noqa: D102 - 测试替身
+    def max_sequence(self, task_id: int) -> int:
         return self.max_sequence_value
 
     def entries_in_context(self, task_id: int) -> list[ContextEntry]:
@@ -553,17 +560,20 @@ class _RecordingContextService:
         include_in_context: bool,
         transport_metadata: Any = None,
         is_streaming: bool = False,
+        project_to_transport: bool = True,
     ) -> None:
         self.appended.append((task_id, run_id, message, sequence, include_in_context))
 
-    def replace_message(self, record: Any) -> None:  # noqa: D102 - 测试替身
+    def replace_message(self, record: Any) -> None:
         self.replaced.append(record)
 
-    def delete_by_run_id(self, task_id: int, run_id: int) -> None:  # noqa: D102 - 测试替身
+    def delete_by_run_id(self, task_id: int, run_id: int) -> None:
         self.deleted.append(run_id)
 
 
-def _memory_manager(service: _RecordingContextService, next_sequence: int = 1) -> RuntimeContextManager:
+def _memory_manager(
+    service: _RecordingContextService, next_sequence: int = 1
+) -> RuntimeContextManager:
     """构造绕过真实持久化的 ``RuntimeContextManager``（与既有测试同口径）。"""
 
     manager = object.__new__(RuntimeContextManager)
@@ -612,9 +622,7 @@ def test_p4_memory_reorders_but_persisted_order_is_never_fixed() -> None:
     assert persisted_before == [None, "valid-1", "blocked-1"], f"落库顺序={persisted_before}"
 
     loaded = manager.load_message()
-    tool_messages = [
-        message.tool_call_id for message in loaded if isinstance(message, ToolMessage)
-    ]
+    tool_messages = [message.tool_call_id for message in loaded if isinstance(message, ToolMessage)]
     # 内存工作副本被重排为 tool_calls 顺序。
     assert tool_messages == ["blocked-1", "valid-1"], f"内存顺序={tool_messages}"
     # 数据库侧没有任何改写：append 记录不变，replace 为空。
@@ -667,7 +675,11 @@ def test_p5_placeholder_is_replaced_by_real_result_after_resume() -> None:
 
     assert outcome == "replaced", "占位必须被原地覆盖，而不是并排追加第二行"
     assert len(service.replaced) == 1
-    assert [entry.message.content for entry in manager._entries] == ["", "A result", "real B result"]
+    assert [entry.message.content for entry in manager._entries] == [
+        "",
+        "A result",
+        "real B result",
+    ]
     # 总行数没有增加：只有 AI / A / B 三行（B 那行被原地替换）。
     assert len(manager._entries) == 3
 
@@ -736,8 +748,11 @@ async def test_p6_observe_node_settles_even_when_run_is_cancelled() -> None:
         next_node=ReactRoute.MODEL,
     )
 
-    with harness.runtime(), mock.patch.object(
-        observation_node_module, "_runtime_config", lambda: harness.runtime_config
+    with (
+        harness.runtime(),
+        mock.patch.object(
+            observation_node_module, "_runtime_config", lambda: harness.runtime_config
+        ),
     ):
         patch = await observation_node_module._observe_node(state)
 

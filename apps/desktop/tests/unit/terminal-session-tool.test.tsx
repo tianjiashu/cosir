@@ -33,6 +33,13 @@ function renderSession({ variant, status = "completed", display_data = {}, taskI
 }
 
 describe("TerminalSessionTool", () => {
+  it("renders terminal_list as a discovery result", () => {
+    const html = renderSession({ variant: "terminal-session-list", display_data: { session_count: 2 } });
+    expect(html).toContain("列出终端会话");
+    expect(html).toContain("2 个会话");
+    expect(html).not.toContain("关闭终端会话");
+  });
+
   it("renders terminal_start as the session anchor with the only open action", () => {
     const html = renderSession({
       variant: "terminal-session-start",

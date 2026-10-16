@@ -145,8 +145,7 @@ def test_real_worker_close_kills_shell_descendants(tmp_path: Path) -> None:
             output = b"".join(
                 base64.b64decode(event["data_base64"])
                 for event in events
-                if event.get("type") == "output"
-                and isinstance(event.get("data_base64"), str)
+                if event.get("type") == "output" and isinstance(event.get("data_base64"), str)
             ).decode("utf-8", errors="replace")
             marker = "CHILD_PID:"
             if marker in output:
@@ -312,8 +311,7 @@ def test_real_worker_close_reaps_a_suspended_job(tmp_path: Path) -> None:
             output = b"".join(
                 base64.b64decode(event["data_base64"])
                 for event in events
-                if event.get("type") == "output"
-                and isinstance(event.get("data_base64"), str)
+                if event.get("type") == "output" and isinstance(event.get("data_base64"), str)
             ).decode("utf-8", errors="replace")
             marker = "STOPPED_CHILD_PID:"
             if marker in output:
@@ -335,3 +333,102 @@ def test_real_worker_close_reaps_a_suspended_job(tmp_path: Path) -> None:
         time.sleep(0.05)
     else:
         pytest.fail(f"suspended job {child_pid} survived worker close")
+
+
+@pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
+@pytest.mark.asyncio
+async def test_task_shell_state_survives_run_completion_and_cancellation(tmp_path: Path) -> None:
+    """真实 PTY 经工具创建后，下一 Run 发现并继续使用原 shell 环境。"""
+    import json
+
+    from app.core.tools.schemas import ToolExecutionContext
+    from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
+    from app.core.tools.tool_handler.terminal_session import (
+        TerminalListTool,
+        TerminalReadTool,
+        TerminalStartTool,
+        TerminalWriteTool,
+    )
+    from app.core.workflows.react.workflow import ReactLikeWorkflow
+    from app.service.terminal.terminal_session_service import TerminalSessionService
+    from app.service.terminal.worker import ProcessTerminalWorkerFactory
+
+    terminal = TerminalSessionService(
+        worker_factory=ProcessTerminalWorkerFactory(str(_worker_path()))
+    )
+    cancelled_runs: set[int] = set()
+    dependencies = ToolRuntimeDependencies(
+        terminal_session_service=terminal, is_run_cancelled=lambda run: run in cancelled_runs
+    )
+    first = ToolExecutionContext(
+        task_id=1,
+        workspace_id=1,
+        workspace_root=tmp_path,
+        run_id=1,
+        runtime_dependencies=dependencies,
+    )
+    second = ToolExecutionContext(
+        task_id=1,
+        workspace_id=1,
+        workspace_root=tmp_path,
+        run_id=2,
+        runtime_dependencies=dependencies,
+    )
+    try:
+        started = TerminalStartTool().execute(
+            shell="cmd" if os.name == "nt" else "bash",
+            label="persistent shell",
+            execution_context=first,
+        )
+        assert started.status == "success", started.content
+        session_id = str(started.display_data["session_id"])
+        set_command = (
+            "set COSIR_TERMINAL_STATE=kept"
+            if os.name == "nt"
+            else "export COSIR_TERMINAL_STATE=kept"
+        )
+        assert (
+            TerminalWriteTool()
+            .execute(
+                session_id=session_id,
+                operation_id="set-env",
+                data=set_command,
+                submit=True,
+                wait_ms=0,
+                execution_context=first,
+            )
+            .status
+            == "success"
+        )
+        await ReactLikeWorkflow().finalize_run(1)
+        cancelled_runs.add(1)
+        assert TerminalReadTool().execute(session_id, execution_context=first).status == "cancelled"
+        listed = TerminalListTool().execute(execution_context=second)
+        payload = json.loads(listed.content.split("\n", 1)[1])
+        assert payload["sessions"][0]["session_id"] == session_id
+        assert payload["sessions"][0]["status"] == "running"
+        command = (
+            "echo STATE:%COSIR_TERMINAL_STATE%"
+            if os.name == "nt"
+            else 'printf "STATE:%s\\n" "$COSIR_TERMINAL_STATE"'
+        )
+        TerminalWriteTool().execute(
+            session_id=session_id,
+            operation_id="check-env",
+            data=command,
+            submit=True,
+            wait_ms=0,
+            execution_context=second,
+        )
+        output = ""
+        cursor = 0
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and "STATE:kept" not in output:
+            result = terminal.read(session_id, task_id=1, after_seq=cursor, wait_ms=500)
+            for frame in result.to_dict()["output"]:
+                output += frame["data"]
+                cursor = frame["seq"]
+        assert "STATE:kept" in output
+    finally:
+        terminal.shutdown()
+    assert terminal.list_sessions(task_id=1, workspace_id=1) == []

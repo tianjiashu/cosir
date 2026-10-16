@@ -48,12 +48,13 @@ class TerminalReadTool(HandlerBase):
         "preview keeps the original PTY stream. Frames are arbitrary output chunks, not command "
         "boundaries, and a read or wait timeout does not signal command completion. Pass the "
         "largest processed frame seq as after_seq; if no new frame was returned, keep the same "
-        "cursor. For a finite command with an exit code, use execute_terminal."
+        "cursor. If the cursor expired, use after_seq=null to read the retained window; "
+        "discarded output cannot be recovered. For a finite command with an exit code, "
+        "use execute_terminal."
     )
     args_model = TerminalReadArgs
     timeout_seconds: ClassVar[float] = 30.0
     group = TOOL_GROUP_TERMINAL_SESSION
-
 
     def execute(
         self,
@@ -129,9 +130,7 @@ class TerminalReadTool(HandlerBase):
             description=describe_terminal_tool(self.name, self.description),
             handler=self.execute,
             args_model=self.args_model,
-            parameters_schema=build_terminal_session_parameters_schema(
-                self.name, self.args_model
-            ),
+            parameters_schema=build_terminal_session_parameters_schema(self.name, self.args_model),
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",
