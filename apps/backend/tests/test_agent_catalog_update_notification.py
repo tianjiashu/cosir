@@ -5,13 +5,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage
 
 from app.core.agents.agent_profile import AgentProfileType
 from app.task_runtime.agent_catalog_change import AgentCatalogChange
 from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
     broadcast_agent_catalog_change,
 )
+from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
@@ -28,15 +28,15 @@ class _FakeRuntimeSpace:
 
     def __init__(self, manager: _FakeContextManager) -> None:
         self._manager = manager
-        self.messages: list[AIMessage] = []
+        self.messages: list[RuntimeNotice] = []
 
     def get_context_manager(self) -> _FakeContextManager:
         return self._manager
 
-    def defer_system_message(self, message: AIMessage) -> None:
+    def defer_runtime_notice(self, message: RuntimeNotice) -> None:
         self.messages.append(message)
 
-    def take_deferred_system_messages(self) -> list[AIMessage]:
+    def take_runtime_notices(self) -> list[RuntimeNotice]:
         messages = self.messages
         self.messages = []
         return messages
@@ -89,17 +89,17 @@ def test_agent_catalog_change_reaches_only_delegating_agents_in_scope() -> None:
     assert broadcast_agent_catalog_change(change) == 2
 
     matching_messages = [
-        task_runtime_spaces.get(task_id).take_deferred_system_messages()
+        task_runtime_spaces.get(task_id).take_runtime_notices()
         for task_id in (1, 2)
     ]
     assert all(len(messages) == 1 for messages in matching_messages)
     message = matching_messages[0][0]
-    assert isinstance(message, AIMessage)
-    assert message.additional_kwargs["notice_type"] == "agent_catalog_change"
+    assert isinstance(message, RuntimeNotice)
+    assert message.kind == "agent_catalog_change"
     assert "旧描述" in message.content
     assert "新描述" in message.content
     for task_id in (3, 4, 5):
-        assert task_runtime_spaces.get(task_id).take_deferred_system_messages() == []
+        assert task_runtime_spaces.get(task_id).take_runtime_notices() == []
 
 
 def test_system_agent_catalog_change_reaches_all_delegating_agents() -> None:
@@ -119,5 +119,5 @@ def test_system_agent_catalog_change_reaches_all_delegating_agents() -> None:
     )
 
     assert broadcast_agent_catalog_change(change) == 2
-    assert len(task_runtime_spaces.get(10).take_deferred_system_messages()) == 1
-    assert len(task_runtime_spaces.get(11).take_deferred_system_messages()) == 1
+    assert len(task_runtime_spaces.get(10).take_runtime_notices()) == 1
+    assert len(task_runtime_spaces.get(11).take_runtime_notices()) == 1

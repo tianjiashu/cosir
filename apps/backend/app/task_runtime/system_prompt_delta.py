@@ -1,19 +1,18 @@
 """Task 级系统提示词运行时增量通知契约。
 
-本模块只定义系统提示词变更在进程内传播时使用的值对象与 LangChain 消息映射，不负责读取
-配置文件、计算配置作用域，也不负责把通知写入 Conversation context。通知的唯一运行时
-副作用是作为模型请求的延迟提示使用；持久化由后续的 context 方案负责。
+本模块只定义系统提示词变更在进程内传播时使用的值对象与运行时通知映射，不负责读取
+配置文件、计算配置作用域，也不负责把通知写入 Conversation context。
+通知进入 Task 队列后由模型节点转换为消息并写入 context。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from langchain_core.messages import AIMessage
-
+from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 
-__all__ = ["SystemPromptDelta", "SystemPromptDeltaSource", "SYSTEM_PROMPT_DELTA_NOTICE_TYPE"]
+__all__ = ["SYSTEM_PROMPT_DELTA_NOTICE_TYPE", "SystemPromptDelta", "SystemPromptDeltaSource"]
 
 SYSTEM_PROMPT_DELTA_NOTICE_TYPE = "system_prompt_delta"
 
@@ -28,7 +27,7 @@ class SystemPromptDelta:
         scope: 可选的作用域标识，例如 workspace 根目录；仅用于广播过滤和诊断。
 
     返回:
-        :meth:`to_message` 返回供模型请求使用的延迟提示 ``AIMessage``。
+        :meth:`to_notice` 返回供运行时队列使用的系统通知 ``RuntimeNotice``。
 
     异常:
         无。调用方应在构造前保证 ``diff`` 非空且来源已通过配置校验。
@@ -41,18 +40,18 @@ class SystemPromptDelta:
     diff: str
     scope: str | None = None
 
-    def to_message(self) -> AIMessage:
-        """把增量通知转换为模型可见的延迟提示消息。
+    def to_notice(self) -> RuntimeNotice:
+        """把增量转换为不绑定模型消息角色的运行时通知。
 
         返回:
-            包含简短覆盖规则与 diff 的 ``AIMessage``。消息通过
-            ``additional_kwargs.notice_type`` 与普通工具修复提示区分。
+            包含简短覆盖规则与 diff 的 ``RuntimeNotice``。通知通过
+            ``kind`` 与普通工具修复提示区分。
 
         异常:
             ValueError: ``diff`` 为空白，表示没有实际配置变化。
 
         副作用:
-            无；返回值由调用方决定是否加入单次模型请求。
+            无；返回值交给队列，模型节点消费时才构造消息并写入 context。
         """
 
         if not self.diff.strip():
@@ -70,10 +69,10 @@ class SystemPromptDelta:
             "</diff>\n"
             "</system_prompt_update>"
         )
-        return AIMessage(
+        return RuntimeNotice(
             content=content,
-            additional_kwargs={
-                "notice_type": SYSTEM_PROMPT_DELTA_NOTICE_TYPE,
+            kind=SYSTEM_PROMPT_DELTA_NOTICE_TYPE,
+            metadata={
                 "source": self.source.value,
                 "scope": self.scope,
             },

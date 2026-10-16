@@ -6,13 +6,13 @@ import weakref
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage
 
 from app.core.agents.agent_profile import AgentProfileType
 from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
     broadcast_system_prompt_delta,
     build_system_prompt_delta,
 )
+from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -26,9 +26,25 @@ class _FakeContextManager:
 
 
 @pytest.fixture(autouse=True)
-def clear_runtime_spaces():
-    """隔离每个用例的进程内 Task runtime space。"""
+def clear_runtime_spaces(monkeypatch):
+    """使用真实队列与广播，只替换无关的 Task/Workspace 存储读取。"""
 
+    import app.task_runtime.task_runtime_space as space_module
+
+    monkeypatch.setattr(
+        space_module,
+        "get_task_service",
+        lambda: SimpleNamespace(
+            get_task=lambda task_id: SimpleNamespace(id=task_id, workspace_id=1)
+        ),
+    )
+    monkeypatch.setattr(
+        space_module,
+        "get_workspace_service",
+        lambda: SimpleNamespace(
+            get_workspace=lambda workspace_id: SimpleNamespace(id=workspace_id)
+        ),
+    )
     task_runtime_spaces.close()
     yield
     task_runtime_spaces.close()
@@ -64,7 +80,7 @@ def test_build_system_prompt_delta_only_contains_changed_lines() -> None:
     )
 
 
-def test_task_space_returns_delta_as_a_context_message() -> None:
+def test_task_space_returns_delta_as_a_runtime_notice() -> None:
     """系统提示词通知只消费一次，并交给模型节点沿既有路径写入 Task context。"""
 
     space = task_runtime_spaces.get_or_create(1)
@@ -75,15 +91,15 @@ def test_task_space_returns_delta_as_a_context_message() -> None:
     )
     assert delta is not None
 
-    space.defer_system_prompt_delta(delta)
+    space.defer_runtime_notice(delta.to_notice())
 
-    messages = space.take_deferred_system_messages()
+    messages = space.take_runtime_notices()
     assert len(messages) == 1
-    assert isinstance(messages[0], AIMessage)
+    assert isinstance(messages[0], RuntimeNotice)
     assert "-旧规则" in messages[0].content
     assert "+新规则" in messages[0].content
-    assert messages[0].additional_kwargs["notice_type"] == "system_prompt_delta"
-    assert space.take_deferred_system_messages() == []
+    assert messages[0].kind == "system_prompt_delta"
+    assert space.take_runtime_notices() == []
 
 
 def test_main_agent_delta_only_reaches_main_agent_spaces() -> None:
@@ -104,8 +120,8 @@ def test_main_agent_delta_only_reaches_main_agent_spaces() -> None:
 
     assert broadcast_system_prompt_delta(delta) == 1
 
-    assert len(main_space.take_deferred_system_messages()) == 1
-    assert child_space.take_deferred_system_messages() == []
+    assert len(main_space.take_runtime_notices()) == 1
+    assert child_space.take_runtime_notices() == []
 
 
 def test_global_delta_reaches_all_materialized_context_spaces() -> None:
@@ -125,8 +141,34 @@ def test_global_delta_reaches_all_materialized_context_spaces() -> None:
     assert delta is not None
 
     assert broadcast_system_prompt_delta(delta) == 2
-    assert len(first.take_deferred_system_messages()) == 1
-    assert len(second.take_deferred_system_messages()) == 1
+    assert len(first.take_runtime_notices()) == 1
+    assert len(second.take_runtime_notices()) == 1
 
-# 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
-pytestmark = pytest.mark.usefixtures("backend_env")
+
+def test_broadcast_notice_is_unchanged_across_tasks_and_message_conversion() -> None:
+    """同一通知广播后，每个 Task 转换出的消息互不影响，也不累加前缀。"""
+    first = task_runtime_spaces.get_or_create(30)
+    second = task_runtime_spaces.get_or_create(31)
+    first_manager = _FakeContextManager(AgentProfileType.MAIN, "/workspace/one")
+    second_manager = _FakeContextManager(AgentProfileType.MAIN, "/workspace/two")
+    first._context_manager = weakref.ref(first_manager)
+    second._context_manager = weakref.ref(second_manager)
+    delta = build_system_prompt_delta(
+        source=SystemPromptDeltaSource.GLOBAL_INSTRUCTIONS,
+        previous="旧规则\n",
+        current="新规则\n",
+    )
+    assert delta is not None
+    assert broadcast_system_prompt_delta(delta) == 2
+    first_notice = first.take_runtime_notices()[0]
+    second_notice = second.take_runtime_notices()[0]
+    assert first_notice is second_notice
+    assert first_notice == delta.to_notice()
+    first_message = first_notice.build_runtime_notice_message()
+    second_message = second_notice.build_runtime_notice_message()
+    assert first_message.content == second_message.content == "system_hint:" + first_notice.content
+    first_message.content = "changed"
+    first_message.additional_kwargs["source"] = "changed"
+    assert second_message.content == "system_hint:" + first_notice.content
+    assert second_message.additional_kwargs["source"] == first_notice.metadata["source"]
+    assert first_notice == delta.to_notice()

@@ -32,8 +32,6 @@ import asyncio
 import dataclasses
 from typing import Any
 
-from langchain_core.messages import AIMessage
-
 from app.config.logging.logger import log
 from app.core.tools.schemas import ToolCall
 from app.core.tools.tool_execute.tool_error import tool_error
@@ -41,6 +39,7 @@ from app.core.workflows.react.node_helper.common import _runtime_config
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleRecord
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
+from app.models.runtime_notice import RuntimeNotice
 
 
 def _merge_batch_results(
@@ -232,14 +231,15 @@ async def _tools_node(state: ReactGraphState) -> dict:
         ]
         from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-        task_runtime_spaces.get_or_create(task_id).defer_system_message(
-            AIMessage(
+        task_runtime_spaces.get_or_create(task_id).defer_runtime_notice(
+            RuntimeNotice(
                 content=(
                     f"The tool(s) {', '.join(hil_tool_names)} require human approval and can "
                     "only be called alone in a tool batch. The previous batch was blocked and "
                     "none of its tools ran. Retry the human approval tool in a separate batch."
                 ),
-                additional_kwargs={"run_id": rc.run.id},
+                kind="tool_batch_blocked",
+                run_id=rc.run.id,
             )
         )
         next_node = ReactRoute.OBSERVE

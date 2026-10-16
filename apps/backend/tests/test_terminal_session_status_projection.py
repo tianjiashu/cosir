@@ -51,14 +51,16 @@ def _run() -> ConversationRunRecord:
     )
 
 
-def _rows(status: str = "running") -> list[ConversationTaskContextRecord]:
+def _rows(
+    status: str = "running", *, call_id: str = "terminal-call"
+) -> list[ConversationTaskContextRecord]:
     return [
         ConversationTaskContextRecord(
             task_id=1,
             run_id=10,
             message=AIMessage(
                 content="",
-                tool_calls=[{"id": "terminal-call", "name": "terminal_start", "args": {}}],
+                tool_calls=[{"id": call_id, "name": "terminal_start", "args": {}}],
             ),
             include_in_context=True,
             sequence=1,
@@ -67,7 +69,7 @@ def _rows(status: str = "running") -> list[ConversationTaskContextRecord]:
         ConversationTaskContextRecord(
             task_id=1,
             run_id=10,
-            message=ToolMessage(content="started", tool_call_id="terminal-call"),
+            message=ToolMessage(content="started", tool_call_id=call_id),
             include_in_context=True,
             sequence=2,
             transport_metadata={
@@ -355,6 +357,59 @@ def test_cross_run_references_reconcile_and_receive_async_exit(monkeypatch) -> N
         for row in sources.rows
         if "display_data" in row.transport_metadata
     ] == ["exited", "exited"]
+
+
+def test_cross_run_projection_persists_and_reconciles_late_rows_in_sqlite(monkeypatch) -> None:
+    """跨 Run 更新真实存储；退出后才落盘的工具结果在冷重建时补齐，其他 Task 不受影响。"""
+    sources = _Sources(_rows())
+    monkeypatch.setattr(sources, "list_by_task", lambda _: [_run(), replace(_run(), id=11)])
+    service = _service(sources)
+    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
+    StorageBase.metadata.create_all(engine)
+    crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
+    crud._session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    service._context_source = crud
+    try:
+        for row in _rows():
+            crud.create(row)
+            crud.create(replace(row, run_id=11, sequence=row.sequence + 2))
+            crud.create(replace(row, task_id=2))
+        service.get_state(1)
+        exited = replace(
+            sources.status_change, status="exited", end_reason="shell_exited", exit_code=7
+        )
+        sources.status_change = exited
+        service.refresh_terminal_session(exited)
+
+        def persisted_displays(task_id):
+            return [
+                row.transport_metadata["display_data"]
+                for row in crud.get(task_id, include_in_context=False)
+                if "display_data" in row.transport_metadata
+            ]
+
+        assert [item["exit_code"] for item in persisted_displays(1)] == [7, 7]
+        assert [item["status"] for item in persisted_displays(2)] == ["running"]
+        # 同一 Run 的另一次工具读取可能晚于退出通知持久化，保留当时的 running 快照。
+        for row in _rows(call_id="late-terminal-call"):
+            crud.create(replace(row, run_id=11, sequence=row.sequence + 4))
+        state = service.rebuild_state(1)
+        displays = [
+            part["display_data"]
+            for run in state["runs"]
+            for message in run["messages"]
+            for part in message["parts"]
+            if part.get("display_data", {}).get("session_id") == "term-1"
+        ]
+        assert len(displays) == 3
+        assert all(item["status"] == "exited" and item["exit_code"] == 7 for item in displays)
+        assert [item["exit_code"] for item in persisted_displays(1)] == [7, 7, 7]
+        service.refresh_terminal_session(
+            replace(exited, status="running", end_reason=None, exit_code=None)
+        )
+        assert all(item["status"] == "exited" for item in persisted_displays(1))
+    finally:
+        engine.dispose()
 
 
 @pytest.fixture(autouse=True)

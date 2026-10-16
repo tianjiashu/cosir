@@ -88,14 +88,14 @@ def _patch_task_space(monkeypatch: Any) -> Any:
         def __init__(self) -> None:
             self.messages: list[Any] = []
 
-        def take_deferred_system_messages(self, **_kwargs: Any) -> list[Any]:
+        def take_runtime_notices(self, **_kwargs: Any) -> list[Any]:
             messages, self.messages = self.messages, []
             return messages
 
-        def defer_system_message(self, message: Any) -> None:
+        def defer_runtime_notice(self, message: Any) -> None:
             self.messages.append(message)
 
-        def has_deferred_system_messages(self) -> bool:
+        def has_runtime_notices(self) -> bool:
             return bool(self.messages)
 
     task_space = TaskSpace()

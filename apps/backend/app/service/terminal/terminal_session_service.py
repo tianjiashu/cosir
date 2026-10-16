@@ -470,18 +470,22 @@ class TerminalSessionService:
             with runtime.lock:
                 self._ensure_accepting()
                 self._ensure_mutable(runtime)
-                if runtime.worker is None:
+                worker = runtime.worker
+                if worker is None:
                     raise TerminalSessionStateError("terminal session has no active worker")
                 required_capability = {
                     "interrupt": "signal_interrupt",
                     "eof": "signal_eof_canonical",
                     "suspend": "signal_suspend",
                 }[signal_name]
-                if required_capability not in runtime.worker.capabilities:
+                if required_capability not in worker.capabilities:
                     raise TerminalSessionStateError(
                         f"terminal signal is unsupported by worker: {signal_name}"
                     )
-                runtime.worker.signal(signal_name)
+            # signal 等待 reader 线程收到确认；该 reader 也同步投递需要 runtime.lock 的
+            # 输出/退出事件。等待期间必须释放状态锁，且允许关闭唤醒尚未确认的信号。
+            worker.signal(signal_name)
+            with runtime.lock:
                 self._touch(runtime)
                 return self._snapshot_locked(runtime)
         except TerminalWorkerUnavailableError:

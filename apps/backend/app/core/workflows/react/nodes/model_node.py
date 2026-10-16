@@ -46,6 +46,7 @@ from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLif
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.vision_input import resolve_messages_for_model
+from app.models.runtime_notice import RuntimeNotice
 from app.utils.message_content import content_to_text
 
 
@@ -168,10 +169,12 @@ async def _model_node(state: ReactGraphState) -> dict:
     messages: list[BaseMessage] = _runtime_context().load_message()
 
     task_space = task_runtime_spaces.get_or_create(task_id)
-    # 延迟系统消息由其它层（tools / observe / 配置变更）在本 Run 期间投递，统一在这里写入上下文。
-    # 归属过滤由 ``take_deferred_system_messages(run_id=...)`` 在取队列时完成（属于其它 Run 的消息
+    # 其它层投递领域通知，本节点通过集中映射构造 Message 后写入上下文。
+    # 归属过滤由 ``take_runtime_notices(run_id=...)`` 在取队列时完成（属于其它 Run 的消息
     # 在此被丢弃），此处不再重复判定；本地 messages 必须同步追加，否则本次模型请求看不到它。
-    for system_message in task_space.take_deferred_system_messages(run_id=run_id):
+    notices = task_space.take_runtime_notices(run_id=run_id)
+    for notice in notices:
+        system_message = notice.build_runtime_notice_message()
         # 消息需要进入模型历史，但不是 assistant 面向用户的发言；投影策略单独持久化，
         # 不污染 LangChain 消息及 provider 请求载荷。
         _runtime_context().add_message(system_message, project_to_transport=False)
@@ -191,6 +194,7 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "step_id": step_id,
                 "step_count": step_count,
                 "message_count": len(messages),
+                "runtime_notice_kinds": [notice.kind for notice in notices],
             },
         },
     )
@@ -379,11 +383,11 @@ async def _model_node(state: ReactGraphState) -> dict:
     if finish_reason not in Constant.Workflow.NORMAL_FINISH_REASONS:
         # 已有文本不代表模型完成：例如 finish_reason=length 只说明本轮达到输出上限。
         # length 类截断不注入提示，直接回到模型节点由模型自行延续；缺失/未知完成原因才把
-        # 续写指令作为下一模型步的延迟提示（``AIMessage``）注入。
+        # 续写指令作为 RuntimeNotice 延后到下一模型步转换并注入。
         continuation_prompt = _build_continuation_prompt(finish_reason)
         if continuation_prompt is not None:
-            task_space.defer_system_message(
-                AIMessage(content=continuation_prompt, additional_kwargs={"run_id": run_id})
+            task_space.defer_runtime_notice(
+                RuntimeNotice(content=continuation_prompt, kind="model_continuation", run_id=run_id)
             )
         log.warning(
             "model_node_output_requires_continuation",
@@ -404,7 +408,7 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     # 队列里仍有本 Task 的延迟系统消息（其它层投递的修复提示 / 提示词增量）：这些消息只在本节点
     # 入口被消费，直接判非法输出会把它们吞掉，因此先回流 model 再判。
-    if task_space.has_deferred_system_messages():
+    if task_space.has_runtime_notices():
         return {
             **route_state(step_count, ReactRoute.MODEL),
             "instruction": "",

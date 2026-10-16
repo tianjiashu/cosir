@@ -388,3 +388,35 @@ def _observation_dict(call_id: str, *, content: str = "观察") -> dict[str, Any
         "display_data": {},
         "user_input_request": None,
     }
+
+
+def test_hil_batch_block_enqueues_runtime_notice_without_executing(monkeypatch: Any) -> None:
+    """整批拦截保持零副作用，反馈以 Run 级通知交给下一模型步。"""
+    from app.models.runtime_notice import RuntimeNotice
+    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+    notices: list[RuntimeNotice] = []
+    monkeypatch.setattr(
+        task_runtime_spaces,
+        "get_or_create",
+        lambda _task_id: SimpleNamespace(defer_runtime_notice=notices.append),
+    )
+    calls: list[dict[str, Any]] = []
+    harness = _Harness(calls, observations=[])
+    harness.model_tools[0].need_HIL = True
+    lifecycle = ToolCallLifecycleManager(
+        allows_tools=(_TOOL_NAME,),
+        valid_calls={
+            "first": _record("first", status="pending"),
+            "second": _record("second", status="pending"),
+        },
+    )
+    with harness.runtime():
+        result = asyncio.run(tools_node_module._tools_node(_state(lifecycle)))
+    assert calls == []
+    assert result["next_node"] is ReactRoute.OBSERVE
+    assert len(notices) == 1
+    assert isinstance(notices[0], RuntimeNotice)
+    assert notices[0].kind == "tool_batch_blocked"
+    assert notices[0].run_id == 200
+    assert "none of its tools ran" in notices[0].content

@@ -93,10 +93,10 @@ def _make_task_space() -> SimpleNamespace:
 
     # 进程内 conversation_run 级运行时上下文（``task_runtime_spaces`` 经 ``get_or_c
     # reate`` 返回的对象）：
-    # 提供 ``get_context_manager``（manager 桩）与 ``defer_system_message``（记录注入的提示）。
+    # 提供 ``get_context_manager``（manager 桩）与 ``defer_runtime_notice``（记录注入的提示）。
     space = SimpleNamespace(
         get_context_manager=lambda **k: manager,
-        defer_system_message=lambda message: deferred.append(message),
+        defer_runtime_notice=lambda message: deferred.append(message),
     )
     # 注册表 ``task_runtime_spaces`` 本身只暴露 ``get_or_create``，恒返回同一个 conver
     # sation_run space。

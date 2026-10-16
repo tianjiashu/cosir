@@ -25,6 +25,7 @@ import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_mod
 from app.core.workflows.react.nodes import model_node as model_module
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
+from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
@@ -36,14 +37,14 @@ def _patch_task_space(monkeypatch: Any):
         def __init__(self) -> None:
             self.messages: list[Any] = []
 
-        def take_deferred_system_messages(self, **_kwargs: Any) -> list[Any]:
+        def take_runtime_notices(self, **_kwargs: Any) -> list[Any]:
             messages, self.messages = self.messages, []
             return messages
 
-        def defer_system_message(self, message: Any) -> None:
+        def defer_runtime_notice(self, message: Any) -> None:
             self.messages.append(message)
 
-        def has_deferred_system_messages(self) -> bool:
+        def has_runtime_notices(self) -> bool:
             return bool(self.messages)
 
     task_space = TaskSpace()
@@ -237,7 +238,7 @@ def test_truncated_model_output_continues_without_injected_prompt(monkeypatch: A
     # length 类截断只表示本轮达到输出上限，由模型自行从已有输出继续；既不就地写入
     # canonical context，也不进 task 级延迟队列。
     assert [type(item) for item in harness.messages] == [AIMessage]
-    assert task_runtime_spaces.get_or_create(1).take_deferred_system_messages() == []
+    assert task_runtime_spaces.get_or_create(1).take_runtime_notices() == []
 
 
 def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) -> None:
@@ -257,7 +258,7 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     # 续写提示不再就地写入 canonical context，而是经 task 级延迟队列在下一个 model 步注入；
     # 故本轮 harness.messages 只含 AIMessage，提示位于延迟队列。
     assert [type(item) for item in harness.messages] == [AIMessage]
-    deferred_system_messages = task_runtime_spaces.get_or_create(1).take_deferred_system_messages()
+    deferred_system_messages = task_runtime_spaces.get_or_create(1).take_runtime_notices()
     assert len(deferred_system_messages) == 1
     assert "finish_reason=missing" in deferred_system_messages[0].content
 
@@ -279,3 +280,39 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
 
     assert result["next_node"] is ReactRoute.END
     assert harness.completed is True
+
+
+def test_runtime_notice_is_converted_only_when_model_consumes_it(monkeypatch: Any) -> None:
+    """通知进入本步请求和持久化历史，但不投影为面向用户的 assistant 发言。"""
+    notice = RuntimeNotice(content="环境已更新", kind="test", run_id=2)
+    space = task_runtime_spaces.get_or_create(1)
+    space.defer_runtime_notice(notice)
+    harness = _ModelHarness(AIMessage(content="完成", response_metadata={"finish_reason": "stop"}))
+    persisted: list[tuple[Any, bool]] = []
+    requested: list[Any] = []
+
+    def add_message(message: Any, *, project_to_transport: bool) -> None:
+        persisted.append((message, project_to_transport))
+        harness.messages.append(message)
+
+    async def astream(messages: list[Any]) -> AsyncIterator[AIMessageChunk]:
+        requested.extend(messages)
+        async for chunk in harness._astream(messages):
+            yield chunk
+
+    harness.runtime_context.add_message = add_message
+    harness.runtime_config.model.astream = astream
+    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    _patch_lifecycle_runtime(monkeypatch, harness)
+    result = asyncio.run(model_module._model_node(_state()))
+    assert result["next_node"] is ReactRoute.END
+    assert len(persisted) == 1
+    message, project_to_transport = persisted[0]
+    assert isinstance(message, AIMessage)
+    assert message.content == "system_hint:环境已更新"
+    assert project_to_transport is False
+    assert requested == [message]
+    assert notice.content == "环境已更新"
+    assert not space.has_runtime_notices()

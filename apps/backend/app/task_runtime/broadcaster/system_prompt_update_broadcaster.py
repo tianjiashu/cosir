@@ -10,8 +10,8 @@ from __future__ import annotations
 import difflib
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.task_runtime.broadcaster.deferred_system_message_broadcaster import (
-    broadcast_deferred_system_message,
+from app.task_runtime.broadcaster.runtime_notice_broadcaster import (
+    broadcast_runtime_notice,
 )
 from app.task_runtime.system_prompt_delta import SystemPromptDelta
 from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
@@ -72,15 +72,15 @@ def broadcast_system_prompt_delta(delta: SystemPromptDelta) -> int:
         目标 Agent/作用域的 space 不计入返回值。
 
     异常:
-        ValueError: ``delta`` 的 diff 为空白时由 ``to_message`` 抛出。
+        ValueError: ``delta`` 的 diff 为空白时由 ``to_notice`` 抛出。
 
     副作用:
         读取当前 registry 的 space 快照，并向符合条件的 space 队列投递一条临时通知；不创建
         新 space，不写数据库，不修改 Registry，不阻塞正在进行的模型请求。
     """
 
-    return broadcast_deferred_system_message(
-        message=delta.to_message(),
+    return broadcast_runtime_notice(
+        notice=delta.to_notice(),
         should_notify=lambda space: _should_notify_space(space, delta),
         event="system_prompt_delta_broadcast",
         log_message="系统提示词变更已广播到进程内 Task runtime space",

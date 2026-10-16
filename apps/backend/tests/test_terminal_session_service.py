@@ -4,7 +4,6 @@ from queue import SimpleQueue
 from typing import cast
 
 import pytest
-from langchain_core.messages import AIMessage
 
 from app.config.constant import Constant
 from app.service.terminal.errors import (
@@ -23,6 +22,7 @@ from app.service.terminal.terminal_session_service import (
     TerminalSessionService,
 )
 from app.service.terminal.worker import ProcessTerminalWorker
+from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -219,7 +219,7 @@ def test_input_backpressure_does_not_notify_the_creator_run(tmp_path: Path, monk
     task_id = 987654
     task_space = _queue_space(task_id)
     monkeypatch.setattr(task_runtime_spaces, "get_or_create", lambda _task_id: task_space)
-    task_space.take_deferred_system_messages()
+    task_space.take_runtime_notices()
     factory = BackpressureWorkerFactory()
     service = TerminalSessionService(worker_factory=factory)
     first_snapshot = service.start(
@@ -241,10 +241,10 @@ def test_input_backpressure_does_not_notify_the_creator_run(tmp_path: Path, monk
         service.write(str(first_snapshot["session_id"]), task_id=task_id, data=b"echo\r")
     with pytest.raises(TerminalWorkerBackpressureError):
         service.write(str(second_snapshot["session_id"]), task_id=task_id, data=b"echo\r")
-    first_messages = task_space.take_deferred_system_messages(run_id=1)
+    first_messages = task_space.take_runtime_notices(run_id=1)
 
     assert first_messages == []
-    assert task_space.take_deferred_system_messages() == []
+    assert task_space.take_runtime_notices() == []
     service.shutdown()
 
 
@@ -265,16 +265,16 @@ def test_backpressure_does_not_consume_the_write_operation_id(tmp_path: Path, mo
         service.shutdown()
 
 
-def test_deferred_system_messages_drop_stale_run_scoped_messages() -> None:
+def test_runtime_notices_drop_stale_run_scoped_notices() -> None:
     task_space = _queue_space(987655)
-    task_space.take_deferred_system_messages()
-    task_space.defer_system_message(AIMessage(content="old", additional_kwargs={"run_id": 1}))
-    task_space.defer_system_message(AIMessage(content="current", additional_kwargs={"run_id": 2}))
+    task_space.take_runtime_notices()
+    task_space.defer_runtime_notice(RuntimeNotice(content="old", kind="test", run_id=1))
+    task_space.defer_runtime_notice(RuntimeNotice(content="current", kind="test", run_id=2))
 
-    messages = task_space.take_deferred_system_messages(run_id=2)
+    messages = task_space.take_runtime_notices(run_id=2)
 
-    assert [message.content for message in messages] == ["system_hint:current"]
-    assert task_space.take_deferred_system_messages() == []
+    assert [message.content for message in messages] == ["current"]
+    assert task_space.take_runtime_notices() == []
 
 
 def test_take_only_discards_stale_run_scoped_messages_keeps_task_and_other_run() -> None:
@@ -287,21 +287,21 @@ def test_take_only_discards_stale_run_scoped_messages_keeps_task_and_other_run()
     """
 
     task_space = _queue_space(987656)
-    task_space.take_deferred_system_messages()
-    task_space.defer_system_message(
-        AIMessage(content="previous run feedback", additional_kwargs={"run_id": 2})
+    task_space.take_runtime_notices()
+    task_space.defer_runtime_notice(
+        RuntimeNotice(content="previous run feedback", kind="test", run_id=2)
     )
-    task_space.defer_system_message(AIMessage(content="task scoped"))
-    task_space.defer_system_message(AIMessage(content="other run", additional_kwargs={"run_id": 3}))
+    task_space.defer_runtime_notice(RuntimeNotice(content="task scoped", kind="test"))
+    task_space.defer_runtime_notice(RuntimeNotice(content="other run", kind="test", run_id=3))
 
-    remaining = task_space.take_deferred_system_messages(run_id=3)
+    remaining = task_space.take_runtime_notices(run_id=3)
 
     assert [message.content for message in remaining] == [
-        "system_hint:task scoped",
-        "system_hint:other run",
+        "task scoped",
+        "other run",
     ]
     # 旧 run_id=2 的消息已在上面那次取队列时被丢弃，不会被任何后续 run 再消费。
-    assert task_space.take_deferred_system_messages(run_id=2) == []
+    assert task_space.take_runtime_notices(run_id=2) == []
 
 
 def test_write_operation_id_is_idempotent_and_payload_bound(tmp_path: Path) -> None:
@@ -506,6 +506,78 @@ def test_signal_delivery_failure_is_returned_without_false_success(tmp_path: Pat
     assert service.snapshot(str(snapshot["session_id"]), task_id=1)["status"] == "running"
 
 
+def test_signal_ack_can_follow_output_on_the_worker_reader(tmp_path: Path, monkeypatch) -> None:
+    """Worker 同一 reader 先投递输出再确认信号，service 不得持锁阻断确认。"""
+    import threading
+
+    service, factory = make_service()
+    session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
+    session_id = str(session["session_id"])
+    worker = factory.workers[0]
+    acknowledged = threading.Event()
+
+    def read_output_then_ack():
+        worker.emit_output(b"before signal acknowledgement")
+        acknowledged.set()
+
+    reader = threading.Thread(target=read_output_then_ack)
+
+    def signal(_name):
+        reader.start()
+        if not acknowledged.wait(2):
+            raise TerminalWorkerUnavailableError("signal acknowledgement blocked by output")
+
+    monkeypatch.setattr(worker, "signal", signal)
+    try:
+        result = service.signal(session_id, task_id=1, signal_name="interrupt")
+        assert result["status"] == "running"
+        assert not worker.closed
+        assert output_texts(service.read(session_id, task_id=1, wait_ms=0)) == [
+            "before signal acknowledgement"
+        ]
+    finally:
+        reader.join(timeout=3)
+        service.shutdown()
+
+
+def test_close_can_interrupt_an_inflight_signal(tmp_path: Path, monkeypatch) -> None:
+    """关闭唤醒未确认信号后，迟到的信号失败不能覆盖已确定的关闭原因。"""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    service, factory = make_service()
+    session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
+    session_id = str(session["session_id"])
+    worker = factory.workers[0]
+    entered = threading.Event()
+    closed = threading.Event()
+
+    def signal(_name):
+        entered.set()
+        assert closed.wait(2)
+        raise TerminalWorkerUnavailableError("worker closed while awaiting signal")
+
+    def close():
+        worker.closed = True
+        closed.set()
+
+    monkeypatch.setattr(worker, "signal", signal)
+    monkeypatch.setattr(worker, "close", close)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            pending = executor.submit(
+                service.signal, session_id, task_id=1, signal_name="interrupt"
+            )
+            assert entered.wait(2)
+            result = service.close(session_id, task_id=1)
+            with pytest.raises(TerminalWorkerUnavailableError):
+                pending.result(timeout=3)
+        assert result["status"] == "closed"
+        assert service.snapshot(session_id, task_id=1)["end_reason"] == "agent_closed"
+    finally:
+        service.shutdown()
+
+
 def test_terminal_history_and_write_idempotency_cache_are_bounded(tmp_path: Path) -> None:
     service, factory = make_service()
     session_ids: list[str] = []
@@ -696,6 +768,33 @@ def test_write_retry_after_read_failure_keeps_acceptance(tmp_path: Path, monkeyp
     service.shutdown()
 
 
+def test_write_retry_after_shell_exit_keeps_acceptance(tmp_path: Path, monkeypatch) -> None:
+    """接受输入后读取失败，期间 shell 已退出；重试仍返回原会话而不再次入队。"""
+    service, factory = make_service()
+    session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
+    session_id = str(session["session_id"])
+    worker = factory.workers[0]
+    read = service.read
+
+    def exit_then_fail(*args, **kwargs):
+        worker.emit_exit(7)
+        raise RuntimeError("output read failed")
+
+    try:
+        monkeypatch.setattr(service, "read", exit_then_fail)
+        with pytest.raises(RuntimeError, match="output read failed"):
+            service.write(session_id, task_id=1, operation_id="op", data=b"exit 7\r")
+        monkeypatch.setattr(service, "read", read)
+        result = service.write(session_id, task_id=1, operation_id="op", data=b"exit 7\r")
+        assert result.status == "exited"
+        assert worker.writes == [b"exit 7\r"]
+        with pytest.raises(TerminalSessionError, match="different input"):
+            service.write(session_id, task_id=1, operation_id="op", data=b"exit 0\r")
+        assert len(factory.workers) == 1
+    finally:
+        service.shutdown()
+
+
 def test_concurrent_write_retries_enqueue_once(tmp_path: Path) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
@@ -802,7 +901,7 @@ def _queue_space(task_id: int) -> TaskRuntimeSpace:
     """队列契约不依赖数据库，显式构造只包含队列的 Task 空间。"""
     space = TaskRuntimeSpace.__new__(TaskRuntimeSpace)
     space.task_id = task_id
-    space.system_queue = SimpleQueue()
+    space._notice_queue = SimpleQueue()
     return space
 
 
