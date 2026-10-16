@@ -28,8 +28,6 @@ class TerminalSessionRecord:
     status: str
     end_reason: str | None
     exit_code: int | None
-    created_at: datetime
-    updated_at: datetime
     last_activity_at: datetime
     ended_at: datetime | None
     label: str | None = None
@@ -51,8 +49,6 @@ class TerminalSessionRecord:
             "status": self.status,
             "end_reason": self.end_reason,
             "exit_code": self.exit_code,
-            "created_at": to_text(self.created_at),
-            "updated_at": to_text(self.updated_at),
             "last_activity_at": to_text(self.last_activity_at),
             "ended_at": to_text(self.ended_at) if self.ended_at else None,
         }

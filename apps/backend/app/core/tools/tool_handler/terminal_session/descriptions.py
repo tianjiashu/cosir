@@ -72,7 +72,7 @@ def _resolve_auto_shell_kind() -> str:
     """
 
     try:
-        return ShellResolver().resolve("auto").kind
+        return ShellResolver.resolve("auto").kind
     except Exception:
         return ""
 

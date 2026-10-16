@@ -1,4 +1,4 @@
-"""终端输入与等待的领域契约；输入操作不声明自己是 shell 命令。"""
+"""Agent 向终端投递输入的边界契约；输入操作不声明自己是 shell 命令。"""
 
 from typing import Annotated, Literal
 
@@ -38,25 +38,3 @@ TerminalInput = Annotated[InputLine | InputKey, Field(discriminator="type")]
 def control_keys_for_platform(system: str) -> tuple[str, ...]:
     """工具 schema 的宿主声明；实际投递以 worker 握手能力为准。"""
     return ("ctrl_c", "ctrl_z") if system == "Windows" else ("ctrl_c", "ctrl_d")
-
-
-class ActivityWait(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    until: Literal["activity"] = "activity"
-    timeout_ms: int = Field(default=3000, ge=0, le=30000)
-
-
-class CommandWait(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    until: Literal["command_returned"]
-    command_id: str = Field(min_length=1, max_length=128)
-    timeout_ms: int = Field(default=3000, ge=0, le=30000)
-
-
-class PromptWait(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    until: Literal["shell_prompt"]
-    timeout_ms: int = Field(default=3000, ge=0, le=30000)
-
-
-TerminalWait = Annotated[ActivityWait | CommandWait | PromptWait, Field(discriminator="until")]

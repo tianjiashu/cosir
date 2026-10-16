@@ -17,13 +17,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.tools.tool_handler.terminal_session.common import service_error_observation
-from app.service.terminal import worker as worker_module
+from app.service.terminal import process_terminal_worker as worker_module
 from app.service.terminal.errors import (
     TerminalWorkerProtocolError,
     TerminalWorkerUnavailableError,
 )
 from app.service.terminal.shell_resolver import ShellSpec
-from app.service.terminal.worker import ProcessTerminalWorker
+from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
 
 _FAKE_WORKER_PID = 4242
 
@@ -120,7 +120,7 @@ def _spec() -> ShellSpec:
 
 
 def _patch_worker_process(monkeypatch: pytest.MonkeyPatch, process: _FakeProcess) -> None:
-    """把 ``worker.py`` 使用的 subprocess 替换为受控替身。
+    """把 ``process_terminal_worker.py`` 使用的 subprocess 替换为受控替身。
 
     参数:
         monkeypatch: pytest 补丁夹具。

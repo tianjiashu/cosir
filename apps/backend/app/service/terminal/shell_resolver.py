@@ -29,16 +29,22 @@ class ShellResolver:
     """解析 Windows PowerShell 与 POSIX 用户 shell。
 
     本类只做可执行文件解析，不启动进程、不读取数据库，也不承载危险命令审批。
+
+    解析完全依赖入参与宿主环境，不持有任何实例状态，因此调用方直接用
+    ``ShellResolver.resolve(...)``，不需要构造实例、也不存在可注入的解析策略。
     """
 
+    @staticmethod
     def resolve(
-        self,
         requested: str = "auto",
         *,
         system: str | None = None,
         environ: dict[str, str] | None = None,
     ) -> ShellSpec:
-        """将 shell 选择转换为 worker 可执行的 argv。"""
+        """将 shell 选择转换为 worker 可执行的 argv。
+
+        ``system`` / ``environ`` 显式传入时优先于宿主实况，供工具描述与测试固定宿主行为。
+        """
 
         value = requested.strip().lower() if requested else "auto"
         current_system = system or platform.system()
@@ -47,29 +53,29 @@ class ShellResolver:
         if value == "custom":
             raise ShellResolutionError("custom shell requires an executable path")
         if value not in {"auto", "cmd", "powershell", "pwsh", "bash", "zsh", "fish"}:
-            path = self._resolve_executable(requested)
+            path = ShellResolver._resolve_executable(requested)
             return ShellSpec(kind="custom", executable=path, argv=(path,))
 
         if current_system == "Windows":
             if value == "cmd":
-                executable = self._resolve_executable("cmd.exe")
+                executable = ShellResolver._resolve_executable("cmd.exe")
                 return ShellSpec("cmd", executable, (executable, "/Q", "/D"))
             if value in {"auto", "powershell"}:
-                executable = self._resolve_executable("powershell.exe")
+                executable = ShellResolver._resolve_executable("powershell.exe")
                 return ShellSpec("powershell", executable, (executable, "-NoLogo"))
             if value == "pwsh":
-                executable = self._resolve_executable("pwsh.exe")
+                executable = ShellResolver._resolve_executable("pwsh.exe")
                 return ShellSpec("pwsh", executable, (executable, "-NoLogo"))
             raise ShellResolutionError(f"shell '{requested}' is not available on Windows")
 
         if value == "auto":
             configured = env.get("SHELL", "").strip()
             if configured:
-                executable = self._resolve_executable(configured)
+                executable = ShellResolver._resolve_executable(configured)
                 return ShellSpec(Path(executable).name, executable, (executable,))
             value = "zsh" if current_system == "Darwin" else "bash"
 
-        executable = self._resolve_executable(value)
+        executable = ShellResolver._resolve_executable(value)
         return ShellSpec(value, executable, (executable,))
 
     @staticmethod

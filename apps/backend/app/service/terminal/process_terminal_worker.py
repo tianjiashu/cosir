@@ -356,13 +356,13 @@ class ProcessTerminalWorker:
             return
         try:
             while not self._stop_event.is_set():
-                header = _read_exact(process.stdout, 4)
+                header = self._read_exact(process.stdout, 4)
                 if not header:
                     break
                 size = struct.unpack(">I", header)[0]
                 if size <= 0 or size > Constant.Terminal.MAX_FRAME_BYTES:
                     raise TerminalWorkerProtocolError(f"invalid terminal worker frame size: {size}")
-                payload = _read_exact(process.stdout, size)
+                payload = self._read_exact(process.stdout, size)
                 if len(payload) != size:
                     break
                 event = json.loads(payload.decode("utf-8"))
@@ -526,7 +526,7 @@ class ProcessTerminalWorker:
         if process is None or process.stderr is None:
             return
         for raw_line in process.stderr:
-            line = _sanitize_worker_stderr(raw_line)
+            line = self._sanitize_worker_stderr(raw_line)
             if line:
                 log.warning(
                     "terminal_worker_stderr",
@@ -551,31 +551,25 @@ class ProcessTerminalWorker:
             except TerminalWorkerUnavailableError:
                 return
 
+    def _read_exact(self, stream: object, size: int) -> bytes:
+        """从 binary stream 读取最多指定字节数，EOF 时返回已读取内容。"""
 
-def _read_exact(stream: object, size: int) -> bytes:
-    """从 binary stream 读取最多指定字节数，EOF 时返回已读取内容。"""
+        read = stream.read  # type: ignore[attr-defined]
+        chunks: list[bytes] = []
+        remaining = size
+        while remaining:
+            chunk = read(remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
 
-    read = stream.read  # type: ignore[attr-defined]
-    chunks: list[bytes] = []
-    remaining = size
-    while remaining:
-        chunk = read(remaining)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
+    def _sanitize_worker_stderr(self, raw_line: bytes, *, max_length: int = 4096) -> str:
+        """将 worker 诊断行转换为受限、可落盘的日志文本。"""
 
-
-def _sanitize_worker_stderr(raw_line: bytes, *, max_length: int = 4096) -> str:
-    """将 worker 诊断行转换为受限、可落盘的日志文本。"""
-
-    text = raw_line.decode("utf-8", errors="replace").strip()
-    sanitized = "".join(character for character in text if character >= " " or character == "\t")
-    return sanitized[:max_length]
-
-
-def new_worker_instance_id() -> str:
-    """生成不可复用的 worker instance id。"""
-
-    return uuid.uuid4().hex
+        text = raw_line.decode("utf-8", errors="replace").strip()
+        sanitized = "".join(
+            character for character in text if character >= " " or character == "\t"
+        )
+        return sanitized[:max_length]

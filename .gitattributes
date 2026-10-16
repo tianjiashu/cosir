@@ -1,0 +1,9 @@
+# 换行符策略：仓库内统一以 LF 存储并检出，避免跨平台协作出现「整文件换行符 diff」。
+# 说明：此前仓库无本文件、core.autocrlf 亦未设置，coding-agent-docs/ 等目录以 CRLF 入库，
+# 任何一行真实改动都会触发 IDE 的 CRLF 警告并入全文件级 diff。二进制文件由 text=auto
+# 自动识别，不参与转换，无需逐类声明。
+* text=auto eol=lf
+
+# Windows 批处理脚本必须保持 CRLF：cmd.exe 解析 LF 结尾的批处理在标签/goto 等场景会出错。
+*.cmd text eol=crlf
+*.bat text eol=crlf

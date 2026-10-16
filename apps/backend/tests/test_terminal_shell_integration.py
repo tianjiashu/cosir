@@ -6,11 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from app.config.constant import Constant
 from app.service.terminal.terminal_session_service import TerminalSessionService
 
 
 @pytest.fixture(params=["zsh", "powershell", "pwsh"])
-def terminal(request, tmp_path):
+def terminal(request, tmp_path, monkeypatch):
     shell = request.param
     if shell == "zsh" and os.name == "nt":
         pytest.skip("macOS/Unix zsh requires a Unix PTY")
@@ -27,7 +28,10 @@ def terminal(request, tmp_path):
     )
     if not binary.is_file():
         pytest.skip("terminal-worker must be built")
-    service = TerminalSessionService(worker_executable=str(binary))
+    # worker 路径只有宿主环境变量一个来源（生产由 Tauri spawn_backend 注入），
+    # 测试同样经由该边界配置，不再从 service 构造参数注入。
+    monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(binary))
+    service = TerminalSessionService()
     snapshot = service.start(
         task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1, shell=shell
     )
@@ -236,7 +240,8 @@ def test_zsh_keeps_user_configuration_and_can_disable_integration(tmp_path, monk
     binary = Path(__file__).resolve().parents[3] / "target/debug/terminal-worker"
     if not binary.is_file():
         pytest.skip("terminal-worker must be built")
-    service = TerminalSessionService(worker_executable=str(binary))
+    monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(binary))
+    service = TerminalSessionService()
     try:
         for index, integration in enumerate(["auto", "off"]):
             snapshot = service.start(  # noqa: S604 - 领域 shell 名称，不是 subprocess shell=True。

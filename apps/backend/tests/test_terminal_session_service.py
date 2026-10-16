@@ -20,7 +20,7 @@ from app.service.terminal.shell_resolver import ShellResolver
 from app.service.terminal.terminal_session_service import (
     TerminalSessionService,
 )
-from app.service.terminal.worker import ProcessTerminalWorker
+from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -87,8 +87,15 @@ class SignalFailureWorker(FakeWorker):
         raise TerminalWorkerSignalFailedError("terminal worker failed to deliver signal")
 
 
-def make_service(monkeypatch, *, worker_type=FakeWorker, **service_options):
-    """仅在测试中替换具体构造边界，收集每个会话独立创建的 worker。"""
+def make_service(
+    monkeypatch, *, worker_type=FakeWorker, status_observer=None, ring_buffer_bytes=None
+):
+    """仅在测试中替换具体构造边界，收集每个会话独立创建的 worker。
+
+    ``TerminalSessionService`` 构造不接收入参，因此这里按装配层同样的方式在构造后接线：
+    观察者赋给 ``_status_observer``；缓冲上限的事实源是 ``Constant.Terminal``，测试只在该
+    边界上收紧它（把窗口压到几字节以观察 gap），不重新引入构造参数。
+    """
     workers = []
 
     def construct(executable, instance_id):
@@ -99,7 +106,12 @@ def make_service(monkeypatch, *, worker_type=FakeWorker, **service_options):
     monkeypatch.setattr(
         "app.service.terminal.terminal_session_service.ProcessTerminalWorker", construct
     )
-    return TerminalSessionService(**service_options), workers
+    if ring_buffer_bytes is not None:
+        monkeypatch.setattr(Constant.Terminal, "MAX_RING_BUFFER_BYTES", ring_buffer_bytes)
+    service = TerminalSessionService()
+    if status_observer is not None:
+        service._status_observer = status_observer
+    return service, workers
 
 
 def output_texts(result: dict) -> list[str]:
@@ -715,13 +727,12 @@ def test_task_deletion_closes_all_runs_and_blocks_late_start(monkeypatch, tmp_pa
 
 
 def test_shell_resolver_has_platform_specific_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    resolver = ShellResolver()
     monkeypatch.setattr("app.service.terminal.shell_resolver.shutil.which", lambda value: value)
 
-    windows = resolver.resolve("auto", system="Windows")
-    cmd = resolver.resolve("cmd", system="Windows")
-    pwsh = resolver.resolve("pwsh", system="Windows")
-    posix = resolver.resolve("auto", system="Linux", environ={"SHELL": "/bin/bash"})
+    windows = ShellResolver.resolve("auto", system="Windows")
+    cmd = ShellResolver.resolve("cmd", system="Windows")
+    pwsh = ShellResolver.resolve("pwsh", system="Windows")
+    posix = ShellResolver.resolve("auto", system="Linux", environ={"SHELL": "/bin/bash"})
 
     assert windows.kind == "powershell"
     assert windows.argv[-1] == "-NoLogo"

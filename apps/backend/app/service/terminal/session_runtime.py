@@ -22,7 +22,7 @@ from app.config.logging.logger import log
 from app.models.terminal_session_record import TerminalSessionRecord
 from app.service.terminal.errors import TerminalSessionError, TerminalSessionStateError
 from app.service.terminal.observation import TerminalObservation
-from app.service.terminal.output_sanitizer import TerminalOutputSanitizer
+from app.service.terminal.terminal_output_sanitizer import TerminalOutputSanitizer
 from app.service.terminal.preview import (
     PreviewBuffer,
     TerminalPreviewAttachment,
@@ -30,7 +30,7 @@ from app.service.terminal.preview import (
 )
 from app.service.terminal.session_status import TerminalSessionStatusChange
 from app.service.terminal.shell_resolver import ShellSpec
-from app.service.terminal.worker import ProcessTerminalWorker, WorkerEventCallback
+from app.service.terminal.process_terminal_worker import ProcessTerminalWorker, WorkerEventCallback
 from app.utils.datetime_utils import utc_now
 
 RunCancellationCheck = Callable[[], bool]
@@ -88,9 +88,7 @@ class TerminalSessionRuntime:
             self._capabilities = worker.capabilities
             if self.status != "starting":
                 return None
-            self._record = replace(
-                self.record, status="running", worker_pid=worker.pid, updated_at=utc_now()
-            )
+            self._record = replace(self.record, status="running", worker_pid=worker.pid)
             return self.status_change()
 
     def wait_for_integration(self) -> None:
@@ -391,7 +389,6 @@ class TerminalSessionRuntime:
                 end_reason=reason,
                 exit_code=exit_code,
                 ended_at=now,
-                updated_at=now,
             )
             worker, self._worker = self._worker, None
             self._preview.finish(self.record)

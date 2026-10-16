@@ -19,7 +19,7 @@ from app.core.tools.tool_models import (
 )
 from app.core.tools.tool_registry import ToolRegistry
 from app.service.terminal.terminal_session_service import TerminalSessionService
-from app.service.terminal.worker import ProcessTerminalWorker
+from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
 
 
 def test_terminal_handlers_implement_handler_base_and_are_registered(monkeypatch) -> None:

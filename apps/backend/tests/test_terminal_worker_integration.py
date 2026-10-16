@@ -9,7 +9,7 @@ import pytest
 
 from app.service.terminal.errors import TerminalWorkerSignalFailedError
 from app.service.terminal.shell_resolver import ShellSpec
-from app.service.terminal.worker import ProcessTerminalWorker
+from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
 
 
 def _worker_path() -> Path:
@@ -331,10 +331,13 @@ def test_real_worker_close_reaps_a_suspended_job(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
 @pytest.mark.asyncio
-async def test_task_shell_state_survives_run_completion_and_cancellation(tmp_path: Path) -> None:
+async def test_task_shell_state_survives_run_completion_and_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """真实 PTY 经工具创建后，下一 Run 发现并继续使用原 shell 环境。"""
     import json
 
+    from app.config.constant import Constant
     from app.core.tools.schemas import ToolExecutionContext
     from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
     from app.core.tools.tool_handler.terminal_session import (
@@ -346,7 +349,9 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(tmp_pat
     from app.core.workflows.react.workflow import ReactLikeWorkflow
     from app.service.terminal.terminal_session_service import TerminalSessionService
 
-    terminal = TerminalSessionService(worker_executable=str(_worker_path()))
+    # worker 路径只有宿主环境变量一个来源，测试沿用同一配置边界。
+    monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(_worker_path()))
+    terminal = TerminalSessionService()
     cancelled_runs: set[int] = set()
     dependencies = ToolRuntimeDependencies(
         terminal_session_service=terminal, is_run_cancelled=lambda run: run in cancelled_runs

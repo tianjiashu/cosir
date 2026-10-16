@@ -48,7 +48,7 @@ Python 侧按事实所有权拆分，不另建会话状态机：
 - `terminal_session_service.py`：Task/工作区归属、会话集合与容量、批量生命周期、worker 资源释放和外部状态通知。
 - `session_runtime.py`：单会话锁、输入去重、观察等待、worker 事件应用和唯一终态迁移。迁移赢家交出 worker 句柄，service 在会话锁外清理；Task 删除和 shutdown 等待已开始的清理尝试结束。显式 close 报告清理异常，后台清理记录日志并继续。
 - `preview.py`：原始输出环形缓冲、重放到实时订阅的衔接和慢订阅者背压。字节预算按原始输出大小计费，元数据固定估算；并发出队和溢出清空时不保证瞬时精确计量，溢出后停止接受事件。它是队列容量控制，不是 WebSocket JSON 大小的硬上限。
-- `observation.py`：shell 语义状态、Agent 事件窗口与分页游标；`interaction.py`：工具输入和等待条件的边界契约。
+- `observation.py`：shell 语义状态、Agent 事件窗口与分页游标；`interaction/`：工具输入（`input.py`）和等待条件（`wait.py`）的边界契约，分别对应「往 PTY 投递什么」与「观察何时返回」。
 
 service 在创建会话时直接构造 `ProcessTerminalWorker`，runtime 直接使用该具体类，不设置 Worker Protocol 或 Factory。可执行文件路径由 worker 构造时解析（显式配置优先，否则读取宿主环境变量）；未配置时保留诊断日志并失败，构造本身不启动进程。单元测试在具体构造调用处替换 worker，真实集成测试使用显式路径。
 

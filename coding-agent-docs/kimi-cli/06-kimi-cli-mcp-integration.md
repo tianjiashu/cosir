@@ -559,7 +559,7 @@ Web 模式下，Kimi CLI 通过 `run_worker` 函数自动加载全局 MCP 配置
 #### 关键代码
 
 ```python
-# src/kimi_cli/web/runner/worker.py:36-58
+# src/kimi_cli/web/runner/process_terminal_worker.py:36-58
 # Load default MCP config file if it exists
 default_mcp_file = get_global_mcp_config_file()
 mcp_configs: list[dict[str, Any]] = []
