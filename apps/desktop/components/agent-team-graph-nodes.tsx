@@ -144,12 +144,11 @@ export function AgentTeamGraphNode({ id, data }: NodeProps<TeamGraphNode>) {
         </header>
         <div className="space-y-2 px-3 py-2.5">
           <div className="space-y-1.5">
-            {statuses.map((status, statusIndex) => {
-              const duplicateIndex = statuses.slice(0, statusIndex).filter((item) => item.name === status.name).length;
+            {statuses.map((status) => {
               return (
-                <div key={`${status.name}:${statusIndex}`} className="relative flex min-h-6 items-center justify-between gap-2 rounded-md bg-muted/40 px-2">
+                <div key={status.editorId} className="relative flex min-h-6 items-center justify-between gap-2 rounded-md bg-muted/40 px-2">
                   <span className="truncate font-mono text-2xs">{status.name}</span>
-                  <Handle type="source" position={Position.Right} id={statusHandleId(status.name, duplicateIndex)} style={{ backgroundColor: status.color }} className="!size-3 !border-2 !border-background" aria-label={`${status.name} 状态出口，拖出以创建连线`} title={`${status.name}：拖出连线`} />
+                  <Handle type="source" position={Position.Right} id={status.editorId} style={{ backgroundColor: status.color }} className="!size-3 !border-2 !border-background" aria-label={`${status.name} 状态出口，拖出以创建连线`} title={`${status.name}：拖出连线`} />
                 </div>
               );
             })}

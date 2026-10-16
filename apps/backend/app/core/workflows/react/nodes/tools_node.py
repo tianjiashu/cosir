@@ -162,7 +162,7 @@ async def _tools_node(state: ReactGraphState) -> dict:
         - 执行工具（文件、终端、搜索、委派等）并产出工具生命周期事实；状态写入 **run**；
         - ``running`` 状态事件由 ``begin`` 在本节点发出；终态事件不在本节点发出，也不在此
           收口取消（两者分别由执行层出口投影与 ``observe`` 节点的 ``settle`` 负责）；
-        - 多调用批次包含 HIL 工具时不运行 handler，写入可重试观察并向当前 Task 的延迟系统消息队列
+        - 多调用批次包含 HIL 工具时不运行 handler，写入可重试观察并向当前 Task 的运行期通知队列
           投递模型修正指令；
         - 模型协议层面的配对闭合统一由 ``RuntimeContextManager.load_message`` 在下次取数时
           自动补 ``ToolMessage`` 占位，本节点不构造/落库占位消息、亦不越界访问 service

@@ -1,5 +1,8 @@
 "use client";
 
+import { createTeamEditorSession, type TeamEditorSession, type PersistTeam } from "@/lib/agent-team-editor/session";
+import { TeamEditorUnsavedGuard } from "@/components/team-editor-unsaved-guard";
+import { confirmDiscardUnsaved } from "@/lib/unsaved-changes";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BotIcon, PlusIcon, Settings2Icon, Trash2Icon, UsersIcon } from "lucide-react";
@@ -16,7 +19,6 @@ import {
   getWorkspaceAgentTeamConfigurations,
   updateAgentTeamConfiguration,
   type AgentTeamConfiguration,
-  type AgentTeamConfigurationDraft,
 } from "@/lib/api/agent-teams";
 import {
   getAgentConfigurations,
@@ -128,7 +130,7 @@ export function AgentTeamConfigurationPanel({
   workspaceId?: number;
 }) {
   const queryClient = useQueryClient();
-  const [editing, setEditing] = useState<AgentTeamConfiguration | AgentTeamConfigurationDraft | null | undefined>(undefined);
+  const [editing, setEditing] = useState<TeamEditorSession | null>(null);
   const workspaceReady = scope === "system" || workspaceId !== undefined;
   const teamsKey = queryKeys.agentTeams(scope === "system" ? null : workspaceId ?? null);
 
@@ -162,25 +164,14 @@ export function AgentTeamConfigurationPanel({
     };
   }, [scope, systemAgents, workspaceAgents]);
 
-  const save = async (configuration: AgentTeamConfigurationDraft) => {
-    const input = {
-      scope,
-      configuration: { ...configuration, scope },
-    } as const;
-    if (editing) {
-      await updateAgentTeamConfiguration(
-        editing.team_id,
-        input,
-        scope === "workspace" ? requireWorkspaceId(workspaceId) : undefined,
-      );
-    } else {
-      await createAgentTeamConfiguration(
-        input,
-        scope === "workspace" ? requireWorkspaceId(workspaceId) : undefined,
-      );
-    }
-    await queryClient.invalidateQueries({ queryKey: teamsKey });
-    setEditing({ ...configuration, scope });
+  const save: PersistTeam = async (configuration, identity) => {
+    const input = { scope, configuration: { ...configuration, scope } } as const;
+    const workspace = scope === "workspace" ? requireWorkspaceId(workspaceId) : undefined;
+    const saved = identity
+      ? await updateAgentTeamConfiguration(identity.teamId, input, workspace)
+      : await createAgentTeamConfiguration(input, workspace);
+    void queryClient.invalidateQueries({ queryKey: teamsKey });
+    return saved;
   };
 
   const deleteMutation = useMutation({
@@ -214,16 +205,14 @@ export function AgentTeamConfigurationPanel({
     });
   };
 
-  if (editing !== undefined && profiles) {
-    return <AgentTeamConfigurationEditor
-      initial={editing}
+  if (editing && profiles) {
+    return <><TeamEditorUnsavedGuard session={editing} scope="settings" /><AgentTeamConfigurationEditor
+      session={editing}
       profilesByScope={profiles}
       scopeEditable={false}
-      defaultScope={scope}
-      graphLayoutKey={(configuration) => `cosir:agent-team-graph:${configuration.scope}:${workspaceId ?? "system"}:${configuration.team_id || "new"}`}
-      onCancel={() => setEditing(undefined)}
+      onCancel={() => { void confirmDiscardUnsaved("settings").then(discard => { if (discard) setEditing(null); }); }}
       onSave={save}
-    />;
+    /></>;
   }
   const failedQueries = [teamsQuery, systemAgentsQuery, workspaceAgentsQuery].filter((query) => query.isError);
   if (failedQueries.length > 0) {
@@ -241,7 +230,7 @@ export function AgentTeamConfigurationPanel({
     <div className="space-y-4">
       <div className={`flex items-center gap-3 ${scope === "system" ? "justify-between" : "justify-end"}`}>
         {scope === "system" && <p className="text-muted-foreground text-sm">系统级 Team 配置</p>}
-        <Button onClick={() => setEditing(null)}><PlusIcon />新建 Team</Button>
+        <Button onClick={() => setEditing(createTeamEditorSession({ saved: false, scope, workspaceId }))}><PlusIcon />新建 Team</Button>
       </div>
       {teams.length === 0 ? <EmptyState title="还没有 Agent Team 配置" /> : <div className="grid gap-3">
         {teams.map((team) => {
@@ -252,7 +241,7 @@ export function AgentTeamConfigurationPanel({
               team={team}
               local={local}
               busy={deleteMutation.isPending && deleteMutation.variables?.team_id === team.team_id}
-              onEdit={() => setEditing(team)}
+              onEdit={() => setEditing(createTeamEditorSession({ initial: team, saved: true, workspaceId }))}
               onDelete={() => remove(team)}
             />
           );

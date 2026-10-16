@@ -1,5 +1,9 @@
 "use client";
 
+import { useStore } from "zustand";
+import { TeamEditorUnsavedGuard } from "@/components/team-editor-unsaved-guard";
+import type { WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
+
 import { XIcon, PanelRightCloseIcon, GripVerticalIcon, BotIcon, UserCogIcon, NetworkIcon, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
@@ -15,6 +19,14 @@ const TAB_KIND_ICONS: Record<WorkbenchTab["kind"], LucideIcon> = {
   "agent-configuration-draft": UserCogIcon,
   "agent-team-configuration-draft": NetworkIcon,
 };
+
+/** 工具卡片的已保存标记是会话基线的投影，不再参与草稿状态判定。 */
+function TeamSessionGuard({ tab }: { tab: WorkbenchAgentTeamConfigurationDraftTab }) {
+  const saved = useStore(tab.session.store, state => state.baseline !== null && !state.dirty);
+  const setIndicator = useWorkbenchStore(state => state.setTeamDraftSavedIndicator);
+  useEffect(() => { setIndicator(tab.id, saved); }, [setIndicator, tab.id, saved]);
+  return <TeamEditorUnsavedGuard session={tab.session} scope="workbench" />;
+}
 
 export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number | null; onRequestClose: () => void }) {
   const tabs = useWorkbenchStore((state) => state.tabs);
@@ -38,7 +50,7 @@ export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number
    */
   const requestCloseTab = useCallback(async (tabId: string) => {
     const tab = tabs.find((candidate) => candidate.id === tabId);
-    if (tab && tab.kind !== "agent" && tab.dirty) {
+    if (tab && (tab.kind === "agent-team-configuration-draft" ? tab.session.store.getState().dirty : tab.kind === "agent-configuration-draft" && tab.dirty)) {
       const discard = await requestConfirmation({
         title: "关闭配置草稿？",
         description: `「${tab.title}」尚未保存，关闭后修改会丢失。`,
@@ -72,10 +84,11 @@ export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number
     window.addEventListener("pointerup", stop, { once: true });
   }, [setPanelWidth]);
 
-  if (workspaceId === null || !panelOpen || tabs.length === 0) return null;
+  const guards = tabs.map(tab => tab.kind === "agent-team-configuration-draft" ? <TeamSessionGuard key={tab.id} tab={tab} /> : null);
+  if (workspaceId === null || !panelOpen || tabs.length === 0) return <>{guards}</>;
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   return (
-    <aside className="relative flex min-h-0 shrink-0 flex-col border-l bg-background" style={{ width: panelWidth }} aria-label="工作台">
+    <>{guards}<aside className="relative flex min-h-0 shrink-0 flex-col border-l bg-background" style={{ width: panelWidth }} aria-label="工作台">
       <div
         className="absolute inset-y-0 -left-1 z-10 flex w-2 cursor-col-resize items-center justify-center hover:bg-primary/20"
         role="separator"
@@ -120,6 +133,6 @@ export function Workbench({ workspaceId, onRequestClose }: { workspaceId: number
       <div className="min-h-0 flex-1 overflow-hidden" role="tabpanel">
         <WorkbenchSurface tab={activeTab} onClose={() => closeTabNow(activeTab.id)} />
       </div>
-    </aside>
+    </aside></>
   );
 }

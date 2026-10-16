@@ -1,5 +1,7 @@
 "use client";
 
+import type { PersistTeam } from "@/lib/agent-team-editor/session";
+
 import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { UsersIcon, XIcon } from "lucide-react";
@@ -19,10 +21,7 @@ import {
 } from "@/lib/api/configuration";
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { queryKeys } from "@/lib/query/query-keys";
-import { useUnsavedChanges } from "@/lib/unsaved-changes";
-import { useWorkbenchStore } from "@/lib/workbench/store";
 import type { WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
 
 type ProfilesByScope = Record<AgentTeamConfigurationDraft["scope"], AgentConfiguration[]>;
@@ -34,7 +33,7 @@ function visibleWorkspaceProfiles(system: AgentConfiguration[], workspace: Agent
 /**
  * 在 Workbench 中编辑并显式保存一次工具生成的 Team 配置草稿。
  *
- * 草稿未保存时登记到 workbench 未保存守卫，收起工作台等离开动作会先询问；
+ * 会话和未保存守卫由工作台所有者持有，切换标签不会丢失编辑状态；
  * 保存成功的提示由编辑器统一给出，这里只负责持久化与 Team 列表缓存失效。
  */
 export function AgentTeamConfigurationDraftSurface({
@@ -45,11 +44,6 @@ export function AgentTeamConfigurationDraftSurface({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const updateDraft = useWorkbenchStore((state) => state.updateAgentTeamConfigurationDraft);
-  const setDirty = useWorkbenchStore((state) => state.setAgentTeamDraftDirty);
-  const markSaved = useWorkbenchStore((state) => state.markAgentTeamDraftSaved);
-  useUnsavedChanges("workbench", "Agent Team 配置草稿", tab.dirty);
-
   const systemAgentsQuery = useQuery({
     queryKey: queryKeys.agents(null),
     queryFn: ({ signal }) => getAgentConfigurations({ signal }),
@@ -68,7 +62,7 @@ export function AgentTeamConfigurationDraftSurface({
   const failedQuery = [systemAgentsQuery, workspaceAgentsQuery].find((query) => query.isError);
 
   const close = async () => {
-    if (tab.dirty) {
+    if (tab.session.store.getState().dirty) {
       const discard = await requestConfirmation({
         title: "关闭 Team 配置草稿？",
         description: "Agent Team 配置草稿尚未保存，关闭后修改会丢失。",
@@ -81,20 +75,14 @@ export function AgentTeamConfigurationDraftSurface({
     onClose();
   };
 
-  const save = async (configuration: AgentTeamConfigurationDraft) => {
+  const save: PersistTeam = async (configuration, identity) => {
     const input = { scope: configuration.scope, configuration } as const;
     const workspaceId = configuration.scope === "workspace" ? tab.workspaceId : undefined;
-    if (tab.savedScope === null) {
-      await createAgentTeamConfiguration(input, workspaceId);
-    } else {
-      if (configuration.scope !== tab.savedScope) {
-        throw new UserFacingError("已保存的草稿不能更改保存范围");
-      }
-      await updateAgentTeamConfiguration(configuration.team_id, input, workspaceId);
-    }
-    updateDraft(tab.id, configuration);
-    markSaved(tab.id, configuration.scope);
+    const saved = identity
+      ? await updateAgentTeamConfiguration(identity.teamId, input, workspaceId)
+      : await createAgentTeamConfiguration(input, workspaceId);
     void queryClient.invalidateQueries({ queryKey: queryKeys.agentTeams(workspaceId ?? null) });
+    return saved;
   };
 
   return (
@@ -106,14 +94,9 @@ export function AgentTeamConfigurationDraftSurface({
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {profiles ? <AgentTeamConfigurationEditor
           key={tab.id}
-          initial={tab.draft}
+          session={tab.session}
           profilesByScope={profiles}
-          scopeEditable={tab.savedScope === null}
-          graphLayoutKey={(configuration) => `cosir:agent-team-graph:draft:${tab.id}:${configuration.scope}:${configuration.team_id || "new"}`}
-          onChange={(configuration) => {
-            updateDraft(tab.id, configuration);
-            setDirty(tab.id, true);
-          }}
+          scopeEditable
           onCancel={() => void close()}
           onSave={save}
         /> : failedQuery ? <ErrorState

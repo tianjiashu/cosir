@@ -13,7 +13,7 @@ export function AgentTeamConfigurationFields({
   layout,
 }: {
   configuration: AgentTeamConfigurationDraft;
-  onChange: (changes: Partial<AgentTeamConfigurationDraft>, historyKey?: string) => void;
+  onChange: (changes: Partial<Omit<AgentTeamConfigurationDraft, "nodes" | "transitions">>, historyKey?: string) => void;
   teamIdEditable: boolean;
   scopeEditable: boolean;
   layout: "form" | "dialog";

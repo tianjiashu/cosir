@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, cast
 
 from jsonschema import Draft202012Validator
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -88,16 +88,9 @@ def _validate_response(message: BaseMessage, schema: dict[str, Any]) -> tuple[st
     副作用:
         无。
     """
-
-    if not isinstance(message, AIMessage):
-        return None, "The model response is not an assistant message."
-    if (
-            message.tool_calls
-            or message.invalid_tool_calls
-            or message.additional_kwargs.get("tool_calls")
-            or message.additional_kwargs.get("function_call")
-    ):
-        return None, "The response contains a tool call, which is not allowed at this stage."
+    ai_message = cast(AIMessage, message)
+    ai_message.tool_calls = []
+    ai_message.invalid_tool_calls = []
     text = content_to_text(message.content).strip()
     if not text:
         return None, "The response is empty."
@@ -117,24 +110,31 @@ def _validate_response(message: BaseMessage, schema: dict[str, Any]) -> tuple[st
 
 
 async def _structured_output_node(state: ReactGraphState) -> dict:
-    """以完整 context 生成并校验最终 JSON，只把成功结果写入 Run.final_output。
+    """以完整 context 生成并校验最终 JSON，成功时把结果改写进 Run.final_output。
 
     参数:
         state: 当前 graph state；只读取模型步骤号，不把结构化结果写入 state。
 
     返回:
-        指向 ``END`` 的 LangGraph state 增量。Run 的完成、失败或取消状态由
-        ``WorkflowOperations`` 写入；JSON 内容不进入 graph state、RuntimeContextManager
-        或对话消息。
+        指向 ``END`` 的 LangGraph state 增量。本节点**不迁移 Run 状态**：完成态已由 ``model``
+        节点落定，校验通过的结果只经 ``fix_final_if_complete`` 改写 ``final_output``；JSON 内容
+        不进入 graph state、RuntimeContextManager 或对话消息。
 
     异常:
-        模型调用、图片解析或持久化异常向上抛出，由工作流统一落定失败 Run。
+        模型调用、图片解析或持久化异常向上抛出，由 ``AgentRuntime.run_agent``
+        的异常边界记录。但此时 Run 已由 ``model`` 节点落为 ``completed``，
+        ``fail_run_if_running`` 的条件更新会落空：终态与已写入的自然语言
+        回复都不会被改写。
 
     副作用:
-        最多发起四次非流式模型请求（初次调用加三次重试）；用量写入 Run 级统计；成功时条件
-        更新 Run 为 completed，四次输出均无效时条件更新为 failed。请求使用 context 副本；每轮
-        将临时指令和模型响应追加到副本，使后续重试可以参考此前失败的尝试，不修改 canonical
-        context。
+        最多发起四次非流式模型请求（初次调用加三次重试）；用量写入 Run 级统计。
+        校验通过时调用 ``WorkflowOperations.fix_final_if_complete``：仅当 Run
+        仍为 ``completed`` 才把 ``final_output`` 改写为结构化 JSON，不改
+        状态、不发状态事件。四次输出均无效时不落定任何状态——Run 保持
+        ``completed`` 与 ``model`` 节点写入的自然语言回复，只记 error 日志；
+        检测到取消同样直接结束本节点。请求使用 context 副本；每轮把临时指令
+        和模型响应追加到副本，使后续重试可以参考此前失败的尝试，不修改
+        canonical context。
     """
 
     runtime = _runtime_config()
@@ -161,10 +161,6 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
     retry_feedback: str | None = None
     for attempt in range(1, Constant.Workflow.STRUCTURED_OUTPUT_MAX_ATTEMPTS + 1):
         if operations.is_current_run_cancelled():
-            operations.cancel_run_if_running(
-                usage_stats=runtime.usage_stats,
-                final_output="user_cancelled",
-            )
             return route_state(state.step_count, ReactRoute.END)
 
         instruction = _request_instruction(
@@ -175,45 +171,16 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
         # 在上下文副本末尾追加本轮指令；前序失败响应保留在副本中供模型修正。
         context_messages.append(HumanMessage(content=instruction))
         response = await model.ainvoke(context_messages)
-        context_messages.append(response)
         runtime.usage_stats.add_usage_metadata(response.usage_metadata)
-
-        if operations.is_current_run_cancelled():
-            operations.cancel_run_if_running(
-                usage_stats=runtime.usage_stats,
-                final_output="user_cancelled",
-            )
-            return route_state(state.step_count, ReactRoute.END)
 
         final_output, retry_feedback = _validate_response(response, spec.json_schema)
         if final_output is not None:
-            completed_run = operations.complete_run_if_running(
+            operations.fix_final_if_complete(
                 runtime.usage_stats,
                 final_output=final_output,
             )
-            if completed_run is None:
-                log.info(
-                    "structured_output_completion_race_lost",
-                    extra={
-                        "msg": "结构化输出完成时 Run 已不再运行，跳过重复终态写入",
-                        "data": {"run_id": runtime.run.id, "attempt": attempt},
-                    },
-                )
-                return route_state(state.step_count, ReactRoute.END)
-            log.info(
-                "structured_output_completed",
-                extra={
-                    "msg": "结构化输出通过 JSON Schema 校验并写入 Run 最终结果",
-                    "data": {
-                        "run_id": runtime.run.id,
-                        "schema_name": spec.name,
-                        "attempt": attempt,
-                        "output_length": len(final_output),
-                    },
-                },
-            )
             return route_state(state.step_count, ReactRoute.END)
-
+        context_messages.append(response)
         log.warning(
             "structured_output_validation_failed",
             extra={
@@ -227,30 +194,15 @@ async def _structured_output_node(state: ReactGraphState) -> dict:
             },
         )
 
-    end_reason = Constant.Run.RUN_FAILURE_CODE_MODEL_OUTPUT_INVALID
-    failed_run = operations.fail_run_if_running(
-        end_reason=end_reason,
-        usage_stats=runtime.usage_stats,
-        final_output=run_failure_message(end_reason),
+    log.error(
+        "structured_output_exhausted",
+        extra={
+            "msg": "结构化输出连续校验失败，保留自然语言最终回复，Run 状态不变",
+            "data": {
+                "run_id": runtime.run.id,
+                "schema_name": spec.name,
+                "attempts": Constant.Workflow.STRUCTURED_OUTPUT_MAX_ATTEMPTS,
+            },
+        },
     )
-    if failed_run is None:
-        log.info(
-            "structured_output_failure_race_lost",
-            extra={
-                "msg": "结构化输出重试耗尽时 Run 已不再运行，跳过重复失败迁移",
-                "data": {"run_id": runtime.run.id, "schema_name": spec.name},
-            },
-        )
-    else:
-        log.error(
-            "structured_output_exhausted",
-            extra={
-                "msg": "结构化输出连续校验失败，Run 已标记为失败",
-                "data": {
-                    "run_id": runtime.run.id,
-                    "schema_name": spec.name,
-                    "attempts": Constant.Workflow.STRUCTURED_OUTPUT_MAX_ATTEMPTS,
-                },
-            },
-        )
     return route_state(state.step_count, ReactRoute.END)

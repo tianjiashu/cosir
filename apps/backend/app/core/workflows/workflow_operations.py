@@ -64,16 +64,16 @@ class WorkflowOperations:
     """
 
     def __init__(
-        self,
-        tool_executor: ToolExecutor,
-        agent_profile: AgentProfile,
-        current_run: ConversationRunRecord,
-        current_task: TaskRecord,
-        current_workspace: WorkspaceRecord,
-        execution_context: ToolExecutionContext,
-        allows_tools: Collection[str] | None = None,
-        runtime_dependencies: ToolRuntimeDependencies | None = None,
-        tool_trace_recorder: ToolTraceRecorder | None = None,
+            self,
+            tool_executor: ToolExecutor,
+            agent_profile: AgentProfile,
+            current_run: ConversationRunRecord,
+            current_task: TaskRecord,
+            current_workspace: WorkspaceRecord,
+            execution_context: ToolExecutionContext,
+            allows_tools: Collection[str] | None = None,
+            runtime_dependencies: ToolRuntimeDependencies | None = None,
+            tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -264,10 +264,66 @@ class WorkflowOperations:
             return should_cancel(current_run.id)
         return cancellation_registry.is_cancelled(current_run.id)
 
+    def fix_final_if_complete(self, usage_stats: ConversationRunUsageStats | None = None,
+                              final_output: str | None = None,
+                              ) -> ConversationRunRecord | None:
+        """用结构化输出结果改写已 completed 的 Run 的最终回答。
+
+        结构化输出节点在 ReAct 收束之后运行：自然语言回复已经 ``complete_run_if_running``
+        落为 ``completed``，所以这里是**终态上的字段改写**而不是状态迁移——只替换
+        ``final_output``（与用量列），不改状态、不发状态事件，也就不会把并发取消 / 失败的
+        Run 重新标成成功。
+
+        参数:
+            usage_stats: 可选运行用量统计；结构化输出这一步的消耗已累加其中，透传给
+                ``ConversationRunStateService`` 以覆盖 Run 行的用量列。
+            final_output: 校验通过的结构化 JSON 文本；为 None 且未传用量时本次没有可改写
+                内容，直接返回 None。
+
+        返回:
+            改写成功时返回更新后的 ConversationRunRecord；Run 已非 ``completed``（并发取消 /
+            失败）或本次无可改写内容时返回 None。
+
+        异常:
+            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
+
+        副作用:
+            Run 处于 ``completed`` 时更新其 ``final_output`` 与用量列；状态变更事件不在此路径
+            发布（终态不重复迁移）。
+        """
+
+        run_id = self._current_run.id
+        log.info(
+            "run_final_output_fix_attempted",
+            extra={
+                "msg": f"尝试用结构化结果改写 completed run 的最终回答，run_id={run_id}",
+                "data": {
+                    "run_id": run_id,
+                    "final_output_provided": final_output is not None,
+                },
+            },
+        )
+        record = self._conversation_run_state_service.fix_final_output_if_completed(
+            run_id, final_output=final_output, usage_stats=usage_stats
+        )
+        if record is None:
+            # 调用方不消费返回值；跳过原因必须落日志，否则「结构化结果没写进去」只能靠猜。
+            log.warning(
+                "run_final_output_fix_skipped",
+                extra={
+                    "msg": f"跳过结构化改写：Run 已非 completed 或无可改写内容，run_id={run_id}",
+                    "data": {
+                        "run_id": run_id,
+                        "final_output_provided": final_output is not None,
+                    },
+                },
+            )
+        return record
+
     def complete_run_if_running(
-        self,
-        usage_stats: ConversationRunUsageStats | None = None,
-        final_output: str | None = None,
+            self,
+            usage_stats: ConversationRunUsageStats | None = None,
+            final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """仅当 run 仍处于 running 时把它落定为 completed。
 
@@ -300,7 +356,8 @@ class WorkflowOperations:
         )
         return record
 
-    def mark_waiting_for_input_if_running(self,usage_stats: ConversationRunUsageStats | None = None) -> ConversationRunRecord | None:
+    def mark_waiting_for_input_if_running(self,
+                                          usage_stats: ConversationRunUsageStats | None = None) -> ConversationRunRecord | None:
         """将当前 Run 迁移到等待用户输入状态并发布状态事件。
 
         用户输入等待节点在调用 LangGraph ``interrupt`` 前调用本方法。状态事实由
@@ -331,11 +388,11 @@ class WorkflowOperations:
         )
 
     def fail_run_if_running(
-        self,
-        end_reason: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
-        final_output: str | None = None,
-        error_message: str | None = None,
+            self,
+            end_reason: str | None = None,
+            usage_stats: ConversationRunUsageStats | None = None,
+            final_output: str | None = None,
+            error_message: str | None = None,
     ) -> ConversationRunRecord | None:
         """仅当 run 仍处于 running 时把它落定为 failed。
 
@@ -379,10 +436,10 @@ class WorkflowOperations:
         return record
 
     def cancel_run_if_running(
-        self,
-        end_reason: str = "runtime_cancelled",
-        usage_stats: ConversationRunUsageStats | None = None,
-        final_output: str | None = None,
+            self,
+            end_reason: str = "runtime_cancelled",
+            usage_stats: ConversationRunUsageStats | None = None,
+            final_output: str | None = None,
     ) -> ConversationRunRecord | None:
         """经 canonical writer 把仍处于 active 的 run 落定为 cancelled。
 
@@ -420,11 +477,11 @@ class WorkflowOperations:
         return record
 
     async def run_tool_calls(
-        self,
-        task_id: int,
-        calls: list[ToolCall],
-        step_id: str | None = None,
-        running_loop: asyncio.AbstractEventLoop | None = None,
+            self,
+            task_id: int,
+            calls: list[ToolCall],
+            step_id: str | None = None,
+            running_loop: asyncio.AbstractEventLoop | None = None,
     ) -> ToolRunResult:
         """经工具系统执行模型请求的工具调用。
 
@@ -499,10 +556,10 @@ class WorkflowOperations:
         return ToolRunResult(observations=executed_observations)
 
     async def _run_calls_with_parallel_modes(
-        self,
-        task_id: int,
-        calls: list[tuple[int, ToolCall]],
-        step_id: str | None,
+            self,
+            task_id: int,
+            calls: list[tuple[int, ToolCall]],
+            step_id: str | None,
     ) -> list[tuple[int, ToolObservation]]:
         """并发执行一批已声明为可并行调度的工具调用。
 
@@ -593,10 +650,10 @@ class WorkflowOperations:
         return completed
 
     def _execute_tool_call(
-        self,
-        task_id: int,
-        call: ToolCall,
-        step_id: str | None,
+            self,
+            task_id: int,
+            call: ToolCall,
+            step_id: str | None,
     ) -> ToolObservation:
         """执行单个工具调用，并把执行链路异常收口为工具观察。
 
@@ -638,11 +695,11 @@ class WorkflowOperations:
             return self._internal_error_observation(task_id, call, exc, step_id)
 
     def _internal_error_observation(
-        self,
-        task_id: int,
-        call: ToolCall,
-        exc: Exception,
-        step_id: str | None = None,
+            self,
+            task_id: int,
+            call: ToolCall,
+            exc: Exception,
+            step_id: str | None = None,
     ) -> ToolObservation:
         """把工具执行链路内部异常转换为稳定的 error 观察。
 

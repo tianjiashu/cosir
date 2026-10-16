@@ -1,3 +1,4 @@
+import { importDraft, createIdentityAllocator } from "@/lib/agent-team-editor/model";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,7 +7,7 @@ import {
   redoGraphEdit,
   undoGraphEdit,
   type AgentTeamGraphSnapshot,
-} from "@/components/agent-team-graph-history";
+} from "@/lib/agent-team-editor/history";
 import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
 
 const configuration: AgentTeamConfiguration = {
@@ -22,7 +23,7 @@ const configuration: AgentTeamConfiguration = {
 
 function snapshot(name: string): AgentTeamGraphSnapshot {
   return {
-    configuration: { ...configuration, name },
+    configuration: importDraft({ ...configuration, name }, createIdentityAllocator()),
     layout: { positions: { reviewer: { x: name.length, y: 0 } }, endNodeIds: ["@@canvas-end-1"], endTargets: {}, edgeRoutes: {} },
   };
 }

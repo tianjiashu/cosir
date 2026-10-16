@@ -1,3 +1,4 @@
+import { createTeamEditorSession } from "@/lib/agent-team-editor/session";
 import { create } from "zustand";
 import type { WorkbenchAgentConfigurationDraftTab, WorkbenchAgentTeamConfigurationDraftTab, WorkbenchAgentTab, WorkbenchTab } from "./types";
 import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
@@ -14,10 +15,8 @@ type WorkbenchState = {
   openAgentConfigurationDraftTab: (input: Omit<WorkbenchAgentConfigurationDraftTab, "id" | "kind" | "dirty">) => void;
   updateAgentConfigurationDraft: (tabId: string, draft: WorkbenchAgentConfigurationDraftTab["draft"]) => void;
   setAgentConfigurationDraftScope: (tabId: string, scope: WorkbenchAgentConfigurationDraftTab["scope"]) => void;
-  openAgentTeamConfigurationDraftTab: (input: Omit<WorkbenchAgentTeamConfigurationDraftTab, "id" | "kind" | "dirty" | "savedScope">) => void;
-  updateAgentTeamConfigurationDraft: (tabId: string, draft: AgentTeamConfigurationDraft) => void;
-  markAgentTeamDraftSaved: (tabId: string, scope: AgentTeamConfigurationDraft["scope"]) => void;
-  setAgentTeamDraftDirty: (tabId: string, dirty: boolean) => void;
+  openAgentTeamConfigurationDraftTab: (input: Omit<WorkbenchAgentTeamConfigurationDraftTab, "id" | "kind" | "session"> & { draft: AgentTeamConfigurationDraft }) => void;
+  setTeamDraftSavedIndicator: (tabId: string, saved: boolean) => void;
   setDraftDirty: (tabId: string, dirty: boolean) => void;
   activateTab: (tabId: string) => void;
   closeTab: (tabId: string) => void;
@@ -79,11 +78,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     const existing = state.tabs.find((tab) => tab.id === id);
     const existingDraft = existing?.kind === "agent-team-configuration-draft" ? existing : null;
     const nextTab: WorkbenchAgentTeamConfigurationDraftTab = {
-      ...input,
+      workspaceId: input.workspaceId,
+      taskId: input.taskId,
+      toolCallId: input.toolCallId,
+      title: input.title,
       id,
       kind: "agent-team-configuration-draft",
-      dirty: existingDraft?.dirty ?? true,
-      savedScope: existingDraft?.savedScope ?? null,
+      session: existingDraft?.session ?? createTeamEditorSession({ initial: input.draft, saved: false, workspaceId: input.workspaceId }),
     };
     return {
       ...state,
@@ -98,32 +99,13 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
       panelOpen: true,
     };
   }),
-  updateAgentTeamConfigurationDraft: (tabId, draft) => set((state) => ({
-    ...state,
-    tabs: state.tabs.map((tab) => tab.id === tabId && tab.kind === "agent-team-configuration-draft" ? { ...tab, draft } : tab),
-  })),
-  markAgentTeamDraftSaved: (tabId, scope) => set((state) => {
-    const tab = state.tabs.find((candidate) => candidate.id === tabId);
+  setTeamDraftSavedIndicator: (tabId, saved) => set((state) => {
+    const tab = state.tabs.find(candidate => candidate.id === tabId);
     if (tab?.kind !== "agent-team-configuration-draft") return state;
-    return {
-      ...state,
-      savedDraftToolCallIds: [...new Set([...state.savedDraftToolCallIds, tab.toolCallId])],
-      tabs: state.tabs.map((candidate) => candidate.id === tabId
-        ? { ...candidate, savedScope: scope, dirty: false }
-        : candidate),
-    };
-  }),
-  setAgentTeamDraftDirty: (tabId, dirty) => set((state) => {
-    const tab = state.tabs.find((candidate) => candidate.id === tabId);
-    if (tab?.kind !== "agent-team-configuration-draft") return state;
-    const savedDraftToolCallIds = new Set(state.savedDraftToolCallIds);
-    if (dirty) savedDraftToolCallIds.delete(tab.toolCallId);
-    else savedDraftToolCallIds.add(tab.toolCallId);
-    return {
-      ...state,
-      savedDraftToolCallIds: [...savedDraftToolCallIds],
-      tabs: state.tabs.map((candidate) => candidate.id === tabId ? { ...candidate, dirty } : candidate),
-    };
+    const ids = new Set(state.savedDraftToolCallIds);
+    if (saved) ids.add(tab.toolCallId);
+    else ids.delete(tab.toolCallId);
+    return { savedDraftToolCallIds: [...ids] };
   }),
   setDraftDirty: (tabId, dirty) => set((state) => {
     const tab = state.tabs.find((candidate) => candidate.id === tabId);

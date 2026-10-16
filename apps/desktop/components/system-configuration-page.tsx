@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
+import { AppearanceSettingsPanel } from "@/components/settings/appearance-settings-panel";
 import { SYSTEM_SETTINGS_TABS, type SystemSettingsTabId } from "@/components/settings/settings-tabs";
 import { EnvironmentConfigurationForm, type EnvironmentFieldValue } from "@/components/environment-configuration-form";
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
@@ -619,6 +620,7 @@ function ModelsPanel() {
 export function SystemConfigurationPage({ tab }: { tab: SystemSettingsTabId }) {
   return (
     <SettingsPageLayout tabs={SYSTEM_SETTINGS_TABS} basePath="/settings" navLabel="系统配置分类">
+      {tab === "appearance" && <AppearanceSettingsPanel />}
       {tab === "agents" && <AgentConfigurationPanel />}
       {tab === "models" && <ModelsPanel />}
       {tab === "agent-teams" && <AgentTeamConfigurationPanel scope="system" />}

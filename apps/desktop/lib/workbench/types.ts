@@ -1,5 +1,5 @@
 import type { AgentConfigurationInput } from "@/lib/api/configuration";
-import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
+import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
 
 export type WorkbenchAgentTab = {
   id: `agent-task:${number}`;
@@ -34,9 +34,7 @@ export type WorkbenchAgentTeamConfigurationDraftTab = {
   taskId: number;
   toolCallId: string;
   title: string;
-  draft: AgentTeamConfigurationDraft;
-  savedScope: AgentTeamConfigurationDraft["scope"] | null;
-  dirty: boolean;
+  session: TeamEditorSession;
 };
 
 export type WorkbenchTab = WorkbenchAgentTab | WorkbenchAgentConfigurationDraftTab | WorkbenchAgentTeamConfigurationDraftTab;

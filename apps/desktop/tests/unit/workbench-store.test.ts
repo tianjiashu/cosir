@@ -91,7 +91,7 @@ describe("workbench store", () => {
     store.ensureWorkspace(null);
   });
 
-  it("remembers the saved Team draft scope so later edits update the existing file", () => {
+  it("retains the same Team session and saved identity across tab switching", async () => {
     const store = useWorkbenchStore.getState();
     store.ensureWorkspace(11);
     const draft = {
@@ -111,7 +111,10 @@ describe("workbench store", () => {
       title: draft.name,
       draft,
     });
-    store.markAgentTeamDraftSaved("agent-team-config-draft:team-tool-call-801", "workspace");
+    const opened = useWorkbenchStore.getState().tabs.find(tab => tab.kind === "agent-team-configuration-draft");
+    if (opened?.kind !== "agent-team-configuration-draft") throw new Error("missing Team session");
+    await opened.session.save(async () => draft);
+    store.setTeamDraftSavedIndicator(opened.id, true);
     store.activateTab("agent-task:801");
     store.openAgentTeamConfigurationDraftTab({
       workspaceId: 11,
@@ -124,8 +127,9 @@ describe("workbench store", () => {
     const tab = useWorkbenchStore.getState().tabs.find(
       (candidate) => candidate.id === "agent-team-config-draft:team-tool-call-801",
     );
-    expect(tab?.kind === "agent-team-configuration-draft" && tab.savedScope).toBe("workspace");
-    expect(tab?.kind === "agent-team-configuration-draft" && tab.dirty).toBe(false);
+    expect(tab?.kind === "agent-team-configuration-draft" && tab.session).toBe(opened.session);
+    expect(tab?.kind === "agent-team-configuration-draft" && tab.session.store.getState().baseline?.scope).toBe("workspace");
+    expect(tab?.kind === "agent-team-configuration-draft" && tab.session.store.getState().dirty).toBe(false);
     expect(useWorkbenchStore.getState().savedDraftToolCallIds).toContain("team-tool-call-801");
     store.ensureWorkspace(null);
   });

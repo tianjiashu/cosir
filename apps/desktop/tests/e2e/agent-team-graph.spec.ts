@@ -116,11 +116,11 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await page.getByRole("button", { name: "关闭节点属性" }).click();
   await expect(page.getByRole("region", { name: "节点属性编辑器" })).toHaveCount(0);
 
-  const doneOutput = page.locator('.react-flow__node[data-id="@@agent-node-0"] .react-flow__handle[data-handleid="status:done"]');
+  const doneOutput = page.locator('.react-flow__node[data-id="@@agent-node-0"] .react-flow__handle[aria-label="done 状态出口，拖出以创建连线"]');
   const node2Input = page.locator('.react-flow__node[data-id="@@agent-node-1"] .react-flow__handle[data-handleid="input"]');
-  const node2Output = page.locator('.react-flow__node[data-id="@@agent-node-1"] .react-flow__handle[data-handleid="status:done"]');
+  const node2Output = page.locator('.react-flow__node[data-id="@@agent-node-1"] .react-flow__handle[aria-label="done 状态出口，拖出以创建连线"]');
   const firstEndInput = page.locator('.react-flow__node[data-id="@@canvas-end-1"] .react-flow__handle[data-handleid="input"]');
-  const reviewOutput = page.locator('.react-flow__node[data-id="@@agent-node-0"] .react-flow__handle[data-handleid="status:needs_review"]');
+  const reviewOutput = page.locator('.react-flow__node[data-id="@@agent-node-0"] .react-flow__handle[aria-label="needs_review 状态出口，拖出以创建连线"]');
   const secondEndInput = page.locator('.react-flow__node[data-id="@@canvas-end-2"] .react-flow__handle[data-handleid="input"]');
   await doneOutput.dragTo(node2Input, { steps: 12 });
   await node2Output.dragTo(firstEndInput, { steps: 12 });
@@ -148,11 +148,8 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   const reconnectionLogs = await page.evaluate(() => (window as Window & { __cosirFrontendLogs?: { event: string; data?: { oldEdgeId?: string; target?: string } }[] }).__cosirFrontendLogs?.filter((entry) => entry.event === "agent_team_graph_reconnect_committed") ?? []);
   expect(reconnectionLogs).toContainEqual(expect.objectContaining({ data: expect.objectContaining({ oldEdgeId: "transition-2", target: "@@agent-node-1" }) }));
   await page.locator(".react-flow__pane").click({ position: { x: 30, y: 30 } });
-  const nodePositionBeforeDrag = await page.evaluate(() => {
-    const entry = Object.entries(window.localStorage).find(([key]) => key.includes("agent-team-graph"));
-    return entry ? (JSON.parse(entry[1]) as { positions?: Record<string, { x: number; y: number }> }).positions?.["@@agent-node-1"] : undefined;
-  });
   const node2 = page.locator('.react-flow__node[data-id="@@agent-node-1"]');
+  const nodePositionBeforeDrag = await node2.evaluate(element => element.style.transform);
   const node2Bounds = await node2.boundingBox();
   expect(node2Bounds).not.toBeNull();
   await page.mouse.move(node2Bounds!.x + node2Bounds!.width / 2, node2Bounds!.y + node2Bounds!.height / 2);
@@ -162,15 +159,12 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await expect(page.locator('.react-flow__node[data-id="@@agent-node-1"]')).toBeVisible();
   await expect(page.locator(".react-flow__node")).toHaveCount(4);
   for (const node of await page.locator(".react-flow__node").all()) await expect(node).toBeVisible();
-  await expect.poll(() => page.evaluate(() => {
-    const entry = Object.entries(window.localStorage).find(([key]) => key.includes("agent-team-graph"));
-    return entry ? (JSON.parse(entry[1]) as { positions?: Record<string, { x: number; y: number }> }).positions?.["@@agent-node-1"] : undefined;
-  })).not.toEqual(nodePositionBeforeDrag);
-  const nodePositionAfterDrag = await page.evaluate(() => {
-    const entry = Object.entries(window.localStorage).find(([key]) => key.includes("agent-team-graph"));
-    return entry ? (JSON.parse(entry[1]) as { positions?: Record<string, { x: number; y: number }> }).positions?.["@@agent-node-1"] : undefined;
-  });
-  expect(nodePositionAfterDrag).toBeDefined();
+  await expect.poll(() => node2.evaluate(element => element.style.transform)).not.toBe(nodePositionBeforeDrag);
+  const nodePositionAfterDrag = await node2.evaluate(element => element.style.transform);
+  await page.getByRole("button", { name: "撤销", exact: true }).click();
+  await expect.poll(() => node2.evaluate(element => element.style.transform)).toBe(nodePositionBeforeDrag);
+  await page.getByRole("button", { name: "重做", exact: true }).click();
+  await expect.poll(() => node2.evaluate(element => element.style.transform)).toBe(nodePositionAfterDrag);
   const nodeDragLogEvents = await page.evaluate(() => (window as Window & { __cosirFrontendLogs?: { event: string }[] }).__cosirFrontendLogs?.map((entry) => entry.event) ?? []);
   expect(nodeDragLogEvents).toContain("agent_team_graph_node_drag_started");
   expect(nodeDragLogEvents).toContain("agent_team_graph_node_drag_completed");
@@ -207,12 +201,9 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await expect(page.locator('.react-flow__node[data-id="@@agent-node-1"]')).toHaveCount(0);
   await page.getByRole("button", { name: "撤销" }).click();
   await expect(page.locator('.react-flow__node[data-id="@@agent-node-1"]')).toBeVisible();
-  const canvasLayout = await page.evaluate(() => {
-    const stored = Object.entries(window.localStorage).find(([key]) => key.includes("agent-team-graph"));
-    return stored ? JSON.parse(stored[1]) as { endNodeIds: string[]; endTargets: Record<string, string> } : null;
-  });
-  expect(canvasLayout?.endNodeIds).toHaveLength(2);
-  expect(canvasLayout?.endTargets["node_2::done"]).toBe("@@canvas-end-1");
+  expect(await page.evaluate(() => Object.keys(localStorage).some(key => key.includes("agent-team-layout")))).toBe(false);
+  await page.getByRole("button", { name: "全屏画布", exact: true }).click();
+  const flowElement = await page.locator(".react-flow").elementHandle();
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
   await expect.poll(() => savedConfiguration).not.toBeNull();
@@ -231,11 +222,15 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
     { from_node_id: "node_2", status: "done", target_node_id: "END" },
     { from_node_id: "node_1", status: "needs_review", target_node_id: "node_2" },
   ]));
-  await expect.poll(() => page.evaluate(() => Object.keys(window.localStorage).some((key) => key.includes("agent-team-graph") && key.endsWith(":review_flow")))).toBe(true);
-  expect(await page.evaluate(() => Object.keys(window.localStorage).some((key) => key.includes("agent-team-graph") && key.endsWith(":new")))).toBe(false);
+  await expect.poll(() => page.evaluate(() => Object.keys(window.localStorage).some((key) => key.includes("agent-team-layout-v2") && key.endsWith(":review_flow")))).toBe(true);
+  expect(await page.evaluate(() => Object.keys(window.localStorage).some((key) => key.includes("agent-team-layout-v2") && key.endsWith(":new")))).toBe(false);
   // 保存成功是一次性结果，走 toast，不再弹出需要关闭的对话框。
   await expect(page.getByText("Agent Team 配置已保存", { exact: true })).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toHaveClass(/fixed/);
+  expect(await flowElement!.evaluate(element => element.isConnected)).toBe(true);
+  await expect(page.getByRole("button", { name: "撤销", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "返回 Team 编辑" }).click();
   await expect(page.getByLabel("Team ID")).toHaveValue("review_flow");
   await expect(page.getByLabel("Team ID")).toBeDisabled();
   await page.getByRole("button", { name: "返回 Team 列表" }).click();

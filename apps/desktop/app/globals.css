@@ -12,10 +12,9 @@
 @source "../node_modules/@streamdown/cjk/dist/*.js";
 
 /*
- * 主题由 <html> 上的 .dark 类切换：index.html 的内联脚本在首帧前按系统外观
- * 设置初值，lib/theme/system-theme.ts 随后接管并跟随系统变化。保留类切换
- * 而不是纯 media 查询，是为了日后加入「浅色 / 深色 / 跟随系统」偏好时只改
- * 控制器，不动 token 与组件。
+ * 主题由 <html> 上的 .dark 类切换：index.html 首帧前应用已保存的偏好，
+ * lib/theme/theme-preference.ts 随后接管用户选择和系统变化。保留类切换，
+ * 使 CSS token 与组件只依赖实际生效主题，不关心偏好如何解析。
  */
 @custom-variant dark (&:is(.dark *));
 

@@ -551,7 +551,7 @@ class RuntimeContextManager:
         导致）。链路里这**只可能出现在最后一条携带 tool_calls 的 ``AIMessage`` 上**：
 
         - 该消息必然是它所属 Run 的最后一条消息：``model_node`` 落库后只会再有同批
-          ``ToolMessage``、本 Run 的延迟修复提示（``AIMessage``，写在占位之后），或下一
+          ``ToolMessage``、本 Run 的运行期通知（``SystemMessage``，写在占位之后），或下一
           Run 的 ``HumanMessage``；
         - 每个 model 步入场都会取数一次，未闭合不跨 model 步，因此历史里不会留下更早
           的未闭合调用。
@@ -561,8 +561,8 @@ class RuntimeContextManager:
         错误暴露），不存在需要修复的「历史未闭合」状态。
 
         一个 assistant 消息的多个 tool call 必须按 ``tool_calls`` 顺序紧随其后。结果即使
-        已经落库，也可能被后续消息（下一 Run 的 ``HumanMessage``、延迟修复提示
-        ``AIMessage``）隔开，或因为占位的全局序号更大而排在它们之后；此时把匹配结果搬回该
+        已经落库，也可能被后续消息（下一 Run 的 ``HumanMessage``、运行期通知
+        ``SystemMessage``）隔开，或因为占位的全局序号更大而排在它们之后；此时把匹配结果搬回该
         消息之后，并保留其他消息的相对顺序。
 
         占位与其闭合的调用归属**同一个 Run**（取该 ``AIMessage`` 的 ``run_id``）：快照重建

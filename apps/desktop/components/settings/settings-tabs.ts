@@ -9,6 +9,7 @@ import {
   ShieldCheckIcon,
   SlidersHorizontalIcon,
   SparklesIcon,
+  SunMoonIcon,
   UsersIcon,
   type LucideIcon,
 } from "lucide-react";
@@ -20,6 +21,7 @@ import {
 export type SettingsTab<Id extends string> = { id: Id; label: string; icon: LucideIcon };
 
 export const SYSTEM_SETTINGS_TABS = [
+  { id: "appearance", label: "外观", icon: SunMoonIcon },
   { id: "agents", label: "子 Agent", icon: SlidersHorizontalIcon },
   { id: "models", label: "模型", icon: CpuIcon },
   { id: "agent-teams", label: "Agent Team", icon: UsersIcon },

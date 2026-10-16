@@ -65,8 +65,9 @@ def _build_continuation_prompt(finish_reason: str | None) -> str | None:
         finish_reason: 已归一化的 Provider 完成原因，可为 ``None``。
 
     返回:
-        作为延迟提示（``AIMessage``）写入 canonical context 的续写指令文本；``length`` 类截断
-        返回 ``None``，表示本轮无需注入提示、直接由调用方路由回模型节点。
+        续写指令文本；``length`` 类截断返回 ``None``，表示本轮无需注入提示、直接由调用方路由回
+        模型节点。调用方把它包装成 ``RuntimeNotice`` 投递到 Task 队列，由下一个模型步入口作为
+        ``SystemMessage`` 落库进 canonical context——本函数只产出文本，不触达 context 与队列。
     """
 
     if finish_reason in Constant.Workflow.CONTINUATION_FINISH_REASONS:
@@ -170,10 +171,11 @@ async def _model_node(state: ReactGraphState) -> dict:
     messages: list[BaseMessage] = _runtime_context().load_message()
 
     task_space = task_runtime_spaces.get_or_create(task_id)
-    # 运行期通知不构造独立消息（曾用 ToolMessage 承载，因缺必填 tool_call_id 在 langchain
-    # 校验器里直接 KeyError 崩溃）；改为拼接到本步请求最后一条消息的 content 末尾，仅作用于
-    # 本次模型请求、不新增持久化消息。归属过滤由 ``take_runtime_notices(run_id=...)`` 在取队列
-    # 时完成（属于其它 Run 的消息在此被丢弃），此处不再重复判定。
+    # 运行期通知（其它层经 tools / runner / 配置变更广播投递）统一在这里消费：归属过滤由
+    # ``take_runtime_notices(run_id=...)`` 在出队时完成（属于其它 Run 的通知在此被丢弃），此处不再
+    # 重复判定。取回的是压成一段的提示文本（队列为空时也含声明行），作为独立 ``SystemMessage``
+    # 落库进 canonical context——它成为历史固定行后，后续 Run 的请求前缀才不会在此分叉，因此必须
+    # 重新 ``load_message()`` 才能让本步请求带上它。
     notice = task_space.take_runtime_notices(run_id=run_id)
     _runtime_context().add_message(SystemMessage(content=notice))
     messages: list[BaseMessage] = _runtime_context().load_message()
@@ -196,7 +198,7 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         },
     )
-    # 请求指纹：这是本步真正发给模型的载荷（已 resolve 图片、已并入延迟系统消息），
+    # 请求指纹：这是本步真正发给模型的载荷（已 resolve 图片、已含本步落库的运行期通知消息），
     # 记录后可跨 Run 对比「前缀是否变化、第一处分叉在哪条消息」，用于定位缓存未命中的归因。
     # 工具 schema 指纹不在此处取：``operations.task_tool_schemas`` 会经 task space 触发 Task 加载，
     # 本节点此前不依赖它，为观测引入该依赖会改变节点副作用。工具段由 workflow 在 bind_tools 处记录。
@@ -345,15 +347,7 @@ async def _model_node(state: ReactGraphState) -> dict:
 
     if finish_reason in Constant.Workflow.NORMAL_FINISH_REASONS and ai_message.content:
         # 没有工具调用且 Provider 明确报告正常结束 → 普通最终文本，必要时继续走结构化收口。
-        final_answer = ai_message.content if isinstance(ai_message.content, str) else None
-        if rc.structured_output is not None and ai_message.content:
-            # 普通最终答复作为结构化节点的上下文候选；这里只交接控制流，不提前完成 Run。
-            return {
-                **route_state(step_count, ReactRoute.STRUCTURED_OUTPUT),
-                "instruction": "",
-                "final_text": content_to_text(ai_message.content),
-                "tool_call_lifecycle": tool_call_lifecycle,
-            }
+        final_answer = content_to_text(ai_message.content if isinstance(ai_message.content, str) else None)
         completed_run = operations.complete_run_if_running(
             rc.usage_stats, final_output=final_answer
         )
@@ -374,14 +368,16 @@ async def _model_node(state: ReactGraphState) -> dict:
             },
         )
         return {
-            **route_state(step_count, ReactRoute.END),
-            "final_text": ai_message.content,
+            **route_state(step_count, ReactRoute.STRUCTURED_OUTPUT if rc.structured_output is not None and final_answer else ReactRoute.END),
+            "instruction": "",
+            "final_text": final_answer,
+            "tool_call_lifecycle": tool_call_lifecycle,
         }
 
     if finish_reason not in Constant.Workflow.NORMAL_FINISH_REASONS:
         # 已有文本不代表模型完成：例如 finish_reason=length 只说明本轮达到输出上限。
         # length 类截断不注入提示，直接回到模型节点由模型自行延续；缺失/未知完成原因才把
-        # 续写指令作为 RuntimeNotice 延后到下一模型步转换并注入。
+        # 续写指令包装成 RuntimeNotice 延后投递，由下一个模型步作为 SystemMessage 落库。
         continuation_prompt = _build_continuation_prompt(finish_reason)
         if continuation_prompt is not None:
             task_space.defer_runtime_notice(
@@ -404,8 +400,8 @@ async def _model_node(state: ReactGraphState) -> dict:
             "instruction": "",
         }
 
-    # 队列里仍有本 Task 的延迟系统消息（其它层投递的修复提示 / 提示词增量）：这些消息只在本节点
-    # 入口被消费，直接判非法输出会把它们吞掉，因此先回流 model 再判。
+    # 本步入场那次取队列只清掉了当时已有的通知；本步执行期间仍可能有其它层投递新通知（修复提示 /
+    # 提示词增量），它们只会在下次进入本节点时被消费落库。直接判非法输出会把它们吞掉，故先回流。
     if task_space.has_runtime_notices():
         return {
             **route_state(step_count, ReactRoute.MODEL),

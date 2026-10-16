@@ -1,5 +1,7 @@
 "use client";
 
+import { useStore } from "zustand";
+import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
@@ -28,32 +30,15 @@ import { AgentTeamGraphNode, AgentTeamGraphTerminalNode, AgentTeamGraphUnresolve
 import { AgentTeamGraphPalette } from "@/components/agent-team-graph-palette";
 import { AgentTeamEdgeRouteContext, AgentTeamRoutedEdge } from "@/components/agent-team-routed-edge";
 import {
-  commitGraphEdit,
-  createGraphEditHistory,
-  redoGraphEdit,
-  undoGraphEdit,
-  type AgentTeamGraphSnapshot,
-} from "@/components/agent-team-graph-history";
-import {
-  agentNodeIndexFromViewId,
-  agentNodeViewId,
   createGraphEdges,
   createGraphNodes,
-  DEFAULT_END_VIEW_ID,
-  END_VIEW_ID_PREFIX,
   END_NODE_ID,
   findAvailableNodePosition,
   isEndViewId,
-  retainValidEdgeRoutes,
-  removeNodesFromConfiguration,
-  removeGraphSelection,
   reconcileGraphNodes,
   statusFromHandleId,
-  transitionKey,
   unresolvedEndpointViewId,
-  updateNodeInConfiguration,
   type TeamGraphNode,
-  type AgentTeamGraphLayout,
   type AgentTeamEdgeRoute,
 } from "@/components/agent-team-graph-model";
 import { Button } from "@/components/ui/button";
@@ -61,21 +46,14 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { EmptyState } from "@/components/ui/state-panel";
 import { FullscreenPortal } from "@/components/ui/fullscreen-portal";
 import type { AgentConfiguration } from "@/lib/api/configuration";
-import type { AgentTeamConfigurationDraft, AgentTeamNodeConfiguration } from "@/lib/api/agent-teams";
-import { DEFAULT_AGENT_TEAM_STATUS_COLOR } from "@/lib/agent-team-status";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { useThemeState } from "@/lib/theme/theme-preference";
 import { newTraceId } from "@/lib/trace";
 
 const nodeTypes = { team: AgentTeamGraphNode, terminal: AgentTeamGraphTerminalNode, unresolved: AgentTeamGraphUnresolvedEndpoint };
 const edgeTypes = { teamRouted: AgentTeamRoutedEdge };
 
-/*
- * 画布深浅色：应用主题目前只「跟随系统」（lib/theme/system-theme.ts），因此直接用
- * colorMode="system" 让 xyflow 内置 Controls、默认连线与背景点阵同步切换，无需再
- * 观察 <html> 的 .dark 类。xyflow 会在自身根节点加 .dark，与全局 token 的 .dark
- * 定义一致；日后加入手动主题偏好时，这里须改为由 <html> 类派生，否则画布内 token 会与外部不一致。
- * xyflow 自带的底色、Controls 与连线标签配色统一在 app/globals.css 映射到 token。
- */
+/* xyflow 内置控件和连线使用显式生效主题，避免绕过用户覆盖系统外观的选择。 */
 
 type PaletteDrag = {
   pointerId: number;
@@ -85,50 +63,6 @@ type PaletteDrag = {
   traceId: string;
   startedAt: number;
 } & ({ kind: "agent"; agentId: string } | { kind: "end" });
-
-function isPosition(value: unknown): value is XYPosition {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as XYPosition;
-  return typeof candidate.x === "number" && Number.isFinite(candidate.x)
-    && typeof candidate.y === "number" && Number.isFinite(candidate.y);
-}
-
-function readLayout(storageKey: string): AgentTeamGraphLayout {
-  if (typeof window === "undefined") return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {}, edgeRoutes: {} };
-  const serialized = window.localStorage.getItem(storageKey);
-  if (!serialized) return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {}, edgeRoutes: {} };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(serialized);
-  } catch {
-    return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {}, edgeRoutes: {} };
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return { positions: {}, endNodeIds: [DEFAULT_END_VIEW_ID], endTargets: {}, edgeRoutes: {} };
-  }
-
-  const stored = parsed as Record<string, unknown>;
-  const rawPositions = stored.positions && typeof stored.positions === "object" && !Array.isArray(stored.positions)
-    ? stored.positions as Record<string, unknown>
-    : stored;
-  const positions = Object.fromEntries(Object.entries(rawPositions).filter((entry): entry is [string, XYPosition] => isPosition(entry[1])));
-  const endNodeIds = Array.isArray(stored.endNodeIds)
-    ? [...new Set(stored.endNodeIds.filter((id): id is string => typeof id === "string" && isEndViewId(id)))]
-    : [DEFAULT_END_VIEW_ID];
-  const endTargets = typeof stored.endTargets === "object" && stored.endTargets !== null && !Array.isArray(stored.endTargets)
-    ? Object.fromEntries(Object.entries(stored.endTargets).filter((entry): entry is [string, string] => typeof entry[1] === "string" && isEndViewId(entry[1]) && endNodeIds.includes(entry[1])))
-    : {};
-  const edgeRoutes = typeof stored.edgeRoutes === "object" && stored.edgeRoutes !== null && !Array.isArray(stored.edgeRoutes)
-    ? Object.fromEntries(Object.entries(stored.edgeRoutes).flatMap(([key, value]) => {
-      if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
-      const route = value as Record<string, unknown>;
-      if ((route.axis !== "x" && route.axis !== "y") || typeof route.offset !== "number" || !Number.isFinite(route.offset)) return [];
-      return [[key, { axis: route.axis, offset: Math.max(-10000, Math.min(10000, route.offset)) } satisfies AgentTeamEdgeRoute]];
-    }))
-    : {};
-
-  return { positions, endNodeIds: endNodeIds.length ? endNodeIds : [DEFAULT_END_VIEW_ID], endTargets, edgeRoutes };
-}
 
 function renderedNodeSnapshot(container: HTMLDivElement | null) {
   return Array.from(container?.querySelectorAll<HTMLElement>(".react-flow__node") ?? [], (element) => {
@@ -149,54 +83,9 @@ function isEditableTarget(target: EventTarget | null): boolean {
     && (target.isContentEditable || target.matches("input, textarea, select, button, [role=\"textbox\"]"));
 }
 
-function nextNodeId(nodes: AgentTeamNodeConfiguration[]): string {
-  let suffix = nodes.length + 1;
-  while (nodes.some((node) => node.node_id === `node_${suffix}`)) suffix += 1;
-  return `node_${suffix}`;
-}
-
-function nextEndViewId(endNodeIds: string[]): string {
-  let suffix = 1;
-  while (endNodeIds.includes(`${END_VIEW_ID_PREFIX}${suffix}`)) suffix += 1;
-  return `${END_VIEW_ID_PREFIX}${suffix}`;
-}
-
-// 节点位置、结束口数量和线条落点只描述用户的本地画布布局，不进入 Team 配置。
-function useGraphLayout(storageKey: string) {
-  const [layout, setLayout] = useState(() => readLayout(storageKey));
-  const layoutRef = useRef(layout);
-  const storageKeyRef = useRef(storageKey);
-  layoutRef.current = layout;
-
-  useEffect(() => {
-    if (storageKeyRef.current === storageKey) return;
-    storageKeyRef.current = storageKey;
-    const next = readLayout(storageKey);
-    layoutRef.current = next;
-    setLayout(next);
-  }, [storageKey]);
-
-  const replaceLayout = useCallback((next: AgentTeamGraphLayout) => {
-    layoutRef.current = next;
-    try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
-    } catch (cause) {
-      void frontendLog("WARNING", "agent_team_graph_layout_persist_failed", "保存本地画布布局失败", {
-        traceId: newTraceId(),
-        error: cause,
-      });
-    }
-    setLayout(next);
-  }, [storageKey]);
-
-  return { layout, replaceLayout };
-}
-
 function GraphCanvas({
-  configuration,
+  session,
   profiles,
-  storageKey,
-  onChange,
   onSave,
   onExit,
   error,
@@ -204,10 +93,8 @@ function GraphCanvas({
   scopeEditable,
   teamIdEditable,
 }: {
-  configuration: AgentTeamConfigurationDraft;
+  session: TeamEditorSession;
   profiles: AgentConfiguration[];
-  storageKey: string;
-  onChange: (configuration: AgentTeamConfigurationDraft) => void;
   onSave?: () => void;
   onExit?: () => void;
   error?: string | null;
@@ -215,12 +102,11 @@ function GraphCanvas({
   scopeEditable?: boolean;
   teamIdEditable: boolean;
 }) {
+  const { resolvedTheme } = useThemeState();
   const flow = useReactFlow<TeamGraphNode>();
   const canvasRef = useRef<HTMLDivElement>(null);
-  const { layout, replaceLayout } = useGraphLayout(storageKey);
-  const documentRef = useRef<AgentTeamGraphSnapshot>({ configuration, layout });
-  const historyRef = useRef(createGraphEditHistory());
-  const [history, setHistory] = useState(historyRef.current);
+  const { snapshot: { configuration, layout }, history, viewport } = useStore(session.store);
+  const commitEdit = session.commit;
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedTransition, setSelectedTransition] = useState<string | null>(null);
   const [edgeRoutePreview, setEdgeRoutePreview] = useState<{ routeKey: string; route: AgentTeamEdgeRoute } | null>(null);
@@ -247,26 +133,6 @@ function GraphCanvas({
   );
 
   useEffect(() => {
-    if (configuration !== documentRef.current.configuration) {
-      const previousConfiguration = documentRef.current.configuration;
-      const selectedIndex = selectedNodeId ? agentNodeIndexFromViewId(selectedNodeId) : -1;
-      if (selectedIndex >= 0) {
-        const selectedNode = previousConfiguration.nodes[selectedIndex];
-        const nextIndex = selectedNode ? configuration.nodes.indexOf(selectedNode) : -1;
-        const replacementIndex = nextIndex >= 0 ? nextIndex
-          : previousConfiguration.nodes.length === configuration.nodes.length && configuration.nodes[selectedIndex] ? selectedIndex : -1;
-        setSelectedNodeId(replacementIndex >= 0 ? agentNodeViewId(replacementIndex) : null);
-      }
-      const retainedRoutes = retainValidEdgeRoutes(configuration, layout.edgeRoutes);
-      const nextLayout = retainedRoutes === layout.edgeRoutes ? layout : { ...layout, edgeRoutes: retainedRoutes };
-      documentRef.current = { configuration, layout: nextLayout };
-      if (nextLayout !== layout) replaceLayout(nextLayout);
-      historyRef.current = createGraphEditHistory();
-      setHistory(historyRef.current);
-    }
-  }, [configuration, layout, replaceLayout, selectedNodeId]);
-
-  useEffect(() => {
     if (graphNodesRef.current === graphNodes) return;
     graphNodesRef.current = graphNodes;
     setNodes((current) => reconcileGraphNodes(current, graphNodes));
@@ -289,34 +155,13 @@ function GraphCanvas({
   useEffect(() => {
     if (!selectedNodeId && !selectedTransition) return;
     if (selectedNodeId && !graphNodes.some((node) => node.id === selectedNodeId)) setSelectedNodeId(null);
-    const selectedTransitionIndex = selectedTransition?.startsWith("transition-")
-      ? Number(selectedTransition.slice("transition-".length))
-      : Number.NaN;
-    if (selectedTransition && (!Number.isInteger(selectedTransitionIndex) || !configuration.transitions[selectedTransitionIndex])) setSelectedTransition(null);
+    if (selectedTransition && !configuration.transitions.some(edge => edge.editorId === selectedTransition)) setSelectedTransition(null);
   }, [configuration.transitions, graphNodes, selectedNodeId, selectedTransition]);
-
-  const applySnapshot = (snapshot: AgentTeamGraphSnapshot) => {
-    documentRef.current = snapshot;
-    onChange(snapshot.configuration);
-    replaceLayout(snapshot.layout);
-  };
 
   const clearSelection = () => {
     setSelectedNodeId(null);
     setSelectedTransition(null);
     setNodes((current) => current.map((node) => node.selected ? { ...node, selected: false } : node));
-  };
-
-  const logHistoryAction = (event: string, message: string, data: Record<string, unknown>) => {
-    void frontendLog("INFO", event, message, { traceId: newTraceId(), data: { teamId: configuration.team_id, ...data } });
-  };
-
-  const commitEdit = (snapshot: AgentTeamGraphSnapshot, coalesceKey?: string) => {
-    const current = documentRef.current;
-    if (snapshot.configuration === current.configuration && snapshot.layout === current.layout) return;
-    historyRef.current = commitGraphEdit(historyRef.current, current, snapshot, { coalesceKey });
-    setHistory(historyRef.current);
-    applySnapshot(snapshot);
   };
 
   const previewEdgeRoute = useCallback((routeKey: string, route: AgentTeamEdgeRoute) => {
@@ -325,7 +170,7 @@ function GraphCanvas({
 
   const commitEdgeRoute = useCallback((routeKey: string, route: AgentTeamEdgeRoute, coalesceKey?: string) => {
     setEdgeRoutePreview(null);
-    const current = documentRef.current;
+    const current = session.store.getState().snapshot;
     const edgeRoutes = { ...current.layout.edgeRoutes, [routeKey]: route };
     commitEdit({
       configuration: current.configuration,
@@ -342,7 +187,7 @@ function GraphCanvas({
   }, []);
 
   const resetEdgeRoute = useCallback((routeKey: string) => {
-    const current = documentRef.current;
+    const current = session.store.getState().snapshot;
     if (!current.layout.edgeRoutes[routeKey]) return;
     const edgeRoutes = { ...current.layout.edgeRoutes };
     delete edgeRoutes[routeKey];
@@ -363,112 +208,18 @@ function GraphCanvas({
     reset: resetEdgeRoute,
   }), [cancelEdgeRoutePreview, commitEdgeRoute, previewEdgeRoute, resetEdgeRoute]);
 
-  const undo = () => {
-    const result = undoGraphEdit(historyRef.current, documentRef.current);
-    if (!result) return;
-    historyRef.current = result.history;
-    setHistory(result.history);
-    applySnapshot(result.snapshot);
-    clearSelection();
-    logHistoryAction("agent_team_graph_undo", "已撤销 Agent Team 画布编辑", { remainingUndoCount: result.history.past.length, remainingRedoCount: result.history.future.length });
-  };
-
-  const redo = () => {
-    const result = redoGraphEdit(historyRef.current, documentRef.current);
-    if (!result) return;
-    historyRef.current = result.history;
-    setHistory(result.history);
-    applySnapshot(result.snapshot);
-    clearSelection();
-    logHistoryAction("agent_team_graph_redo", "已重做 Agent Team 画布编辑", { remainingUndoCount: result.history.past.length, remainingRedoCount: result.history.future.length });
-  };
-
-  const updateConfiguration = (
-    next: AgentTeamConfigurationDraft,
-    coalesceKey?: string,
-    requestedEndTargets?: Record<string, string>,
-  ) => {
-    const current = documentRef.current;
-    const positions = { ...current.layout.positions };
-    const oldIndices = new Map(current.configuration.nodes.map((node, index) => [node, index]));
-    const retainedOldIndices = new Set<number>();
-    next.nodes.forEach((node, nextIndex) => {
-      const oldIndex = oldIndices.get(node)
-        ?? (current.configuration.nodes.length === next.nodes.length ? nextIndex : -1);
-      if (oldIndex < 0) return;
-      retainedOldIndices.add(oldIndex);
-      const oldViewId = agentNodeViewId(oldIndex);
-      const nextViewId = agentNodeViewId(nextIndex);
-      if (oldViewId !== nextViewId && positions[oldViewId]) positions[nextViewId] = positions[oldViewId];
-      if (oldViewId !== nextViewId) delete positions[oldViewId];
-    });
-    current.configuration.nodes.forEach((_, oldIndex) => {
-      if (!retainedOldIndices.has(oldIndex)) delete positions[agentNodeViewId(oldIndex)];
-    });
-    let nextLayout = {
-      ...current.layout,
-      positions,
-      endTargets: requestedEndTargets ?? current.layout.endTargets,
-      edgeRoutes: retainValidEdgeRoutes(next, current.layout.edgeRoutes),
-    };
-    // 结束口落点属于画布偏好；删除或改名业务转移时同步清理对应的视觉映射。
-    const validEndTransitions = new Set(next.transitions.filter((item) => item.target_node_id === END_NODE_ID).map((item) => transitionKey(item.from_node_id, item.status)));
-    nextLayout = {
-      ...nextLayout,
-      endTargets: Object.fromEntries(Object.entries(nextLayout.endTargets).filter(([key, endId]) => validEndTransitions.has(key) && nextLayout.endNodeIds.includes(endId))),
-    };
-    commitEdit({ configuration: next, layout: nextLayout }, coalesceKey);
-  };
-
-  const updateNode = (nodeIndex: number, changes: Partial<AgentTeamNodeConfiguration>) => {
-    const current = documentRef.current;
-    const nodeId = current.configuration.nodes[nodeIndex]?.node_id;
-    const coalesceKey = Object.keys(changes).length === 1 && "name" in changes ? `node-name:${nodeId}` : undefined;
-    const nextConfiguration = updateNodeInConfiguration(current.configuration, nodeIndex, changes);
-    const endTargets = { ...current.layout.endTargets };
-    current.configuration.transitions.forEach((transition, index) => {
-      const nextTransition = nextConfiguration.transitions[index];
-      if (!nextTransition || transition.target_node_id !== END_NODE_ID || nextTransition.target_node_id !== END_NODE_ID) return;
-      const oldKey = transitionKey(transition.from_node_id, transition.status);
-      const nextKey = transitionKey(nextTransition.from_node_id, nextTransition.status);
-      if (oldKey !== nextKey && endTargets[oldKey]) {
-        endTargets[nextKey] = endTargets[oldKey];
-        delete endTargets[oldKey];
-      }
-    });
-    updateConfiguration(nextConfiguration, coalesceKey, endTargets);
-  };
-
-  const deleteNode = (nodeIndex: number) => {
-    const current = documentRef.current;
-    const nextConfiguration = removeNodesFromConfiguration(current.configuration, new Set([nodeIndex]));
-    const positions = { ...current.layout.positions };
-    delete positions[agentNodeViewId(nodeIndex)];
-    current.configuration.nodes.forEach((_, previousIndex) => {
-      if (previousIndex <= nodeIndex) return;
-      const previousId = agentNodeViewId(previousIndex);
-      const nextId = agentNodeViewId(previousIndex - 1);
-      if (positions[previousId]) positions[nextId] = positions[previousId];
-      delete positions[previousId];
-    });
-    const validEndTransitions = new Set(nextConfiguration.transitions.filter((item) => item.target_node_id === END_NODE_ID).map((item) => transitionKey(item.from_node_id, item.status)));
-    const endTargets = Object.fromEntries(Object.entries(current.layout.endTargets).filter(([key, endId]) => validEndTransitions.has(key) && current.layout.endNodeIds.includes(endId)));
-    commitEdit({
-      configuration: nextConfiguration,
-      layout: { ...current.layout, positions, endTargets, edgeRoutes: retainValidEdgeRoutes(nextConfiguration, current.layout.edgeRoutes) },
-    });
-    logHistoryAction("agent_team_graph_node_deleted", "已删除 Agent Team 画布节点", { nodeIndex, remainingNodeCount: nextConfiguration.nodes.length });
+  const undo = () => { session.undo(); clearSelection(); };
+  const redo = () => { session.redo(); clearSelection(); };
+  const updateNode = session.updateNode;
+  const deleteNode = (index: number) => {
+    session.remove({ nodeIds: new Set([configuration.nodes[index].editorId]), endNodeIds: new Set(), transitionIds: new Set() });
     clearSelection();
   };
-
-  const setStartNode = (nodeId: string) => {
-    const current = documentRef.current;
-    updateConfiguration({ ...current.configuration, start_node_id: nodeId });
-  };
+  const setStartNode = (nodeId: string) => session.updateConfiguration({ start_node_id: nodeId });
 
   const addEndNode = (dropPosition?: XYPosition) => {
-    const current = documentRef.current;
-    const endNodeId = nextEndViewId(current.layout.endNodeIds);
+    const current = session.store.getState().snapshot;
+    const endNodeId = session.allocateEnd();
     const center = canvasRef.current?.getBoundingClientRect();
     const preferredPosition = dropPosition ?? (center
       ? flow.screenToFlowPosition({ x: center.left + center.width * 0.72, y: center.top + center.height * 0.55 })
@@ -483,42 +234,14 @@ function GraphCanvas({
   };
 
   const deleteEndNode = (endNodeId: string) => {
-    const current = documentRef.current;
-    if (current.layout.endNodeIds.length <= 1) return;
-    const remaining = current.layout.endNodeIds.filter((id) => id !== endNodeId);
-    const fallback = remaining[0];
-    const positions = { ...current.layout.positions };
-    delete positions[endNodeId];
-    const endTargets = Object.fromEntries(Object.entries(current.layout.endTargets).map(([key, id]) => [key, id === endNodeId ? fallback : id]));
-    commitEdit({ configuration: current.configuration, layout: { ...current.layout, endNodeIds: remaining, positions, endTargets } });
-    logHistoryAction("agent_team_graph_end_node_deleted", "已删除 Agent Team 结束节点", { endNodeId, remainingEndNodeCount: remaining.length });
+    session.remove({ nodeIds: new Set(), endNodeIds: new Set([endNodeId]), transitionIds: new Set() });
     clearSelection();
   };
 
   const addAgentNode = (profile: AgentConfiguration, position?: XYPosition) => {
-    const current = documentRef.current;
-    const nodeId = nextNodeId(current.configuration.nodes);
-    const node: AgentTeamNodeConfiguration = {
-      node_id: nodeId,
-      name: profile.agent_id,
-      agent_id: profile.agent_id,
-      statuses: [{ name: "done", color: DEFAULT_AGENT_TEAM_STATUS_COLOR }],
-    };
-    const preferredPosition = position ?? { x: 100 + current.configuration.nodes.length * 300, y: 100 };
-    const nodePosition = findAvailableNodePosition(preferredPosition, nodes.map((item) => item.position));
-    const nextConfiguration = {
-      ...current.configuration,
-      nodes: [...current.configuration.nodes, node],
-      start_node_id: current.configuration.start_node_id || nodeId,
-    };
-    commitEdit({
-      configuration: nextConfiguration,
-      layout: {
-        ...current.layout,
-        positions: { ...current.layout.positions, [agentNodeViewId(current.configuration.nodes.length)]: nodePosition },
-      },
-    });
-    setSelectedNodeId(agentNodeViewId(current.configuration.nodes.length));
+    const preferredPosition = position ?? { x: 100 + configuration.nodes.length * 300, y: 100 };
+    const nodePosition = findAvailableNodePosition(preferredPosition, nodes.map(item => item.position));
+    setSelectedNodeId(session.addNode(profile.agent_id, profile.agent_id, nodePosition));
     setSelectedTransition(null);
   };
 
@@ -540,43 +263,25 @@ function GraphCanvas({
   const getEndNodePositionAt = (clientX: number, clientY: number) => getNodePositionAt(clientX, clientY, 144, 56);
 
   const commitConnection = (connection: Connection, oldEdge?: Edge): void => {
-    const current = documentRef.current;
-    const sourceIndex = agentNodeIndexFromViewId(connection.source);
+    const current = session.store.getState().snapshot;
+    const sourceIndex = current.configuration.nodes.findIndex(node => node.editorId === connection.source);
     const sourceNode = current.configuration.nodes[sourceIndex];
-    const oldIndex = oldEdge?.id.startsWith("transition-")
-      ? Number(oldEdge.id.slice("transition-".length))
-      : -1;
+    const oldIndex = current.configuration.transitions.findIndex(edge => edge.editorId === oldEdge?.id);
     const oldTransition = oldIndex >= 0 ? current.configuration.transitions[oldIndex] : undefined;
-    const sourceIsUnresolved = connection.source === (oldTransition && unresolvedEndpointViewId("source", oldIndex));
+    const sourceIsUnresolved = connection.source === (oldTransition && unresolvedEndpointViewId("source", oldTransition.editorId));
     if (!sourceNode && (!sourceIsUnresolved || !oldTransition)) return;
     const source = sourceNode?.node_id ?? oldTransition!.from_node_id;
-    const status = sourceNode ? statusFromHandleId(connection.sourceHandle) ?? "" : oldTransition!.status;
+    const status = sourceNode ? sourceNode.statuses.find(status => status.editorId === connection.sourceHandle)?.name ?? statusFromHandleId(connection.sourceHandle) ?? "" : oldTransition!.status;
     const targetIsEnd = isEndViewId(connection.target);
-    const targetIndex = targetIsEnd ? -1 : agentNodeIndexFromViewId(connection.target);
-    const targetIsUnresolved = Boolean(oldTransition && connection.target === unresolvedEndpointViewId("target", oldIndex));
+    const targetIndex = targetIsEnd ? -1 : current.configuration.nodes.findIndex(node => node.editorId === connection.target);
+    const targetIsUnresolved = Boolean(oldTransition && connection.target === unresolvedEndpointViewId("target", oldTransition.editorId));
     if (!targetIsEnd && targetIndex < 0 && !targetIsUnresolved) return;
-    const oldKey = oldTransition ? transitionKey(oldTransition.from_node_id, oldTransition.status) : null;
-    const nextKey = transitionKey(source, status);
     const targetNodeId = targetIsEnd ? END_NODE_ID : targetIndex >= 0 ? current.configuration.nodes[targetIndex].node_id : oldTransition!.target_node_id;
     // 多个视觉 END 都序列化为同一业务目标；具体落点只保存在本地画布布局中。
     const nextTransition = { from_node_id: source, status, target_node_id: targetNodeId };
-    const transitions = oldTransition
-      ? current.configuration.transitions.map((item, index) => index === oldIndex ? nextTransition : item)
-      : [...current.configuration.transitions, nextTransition];
-    const endTargets = { ...current.layout.endTargets };
-    if (oldKey && oldKey !== nextKey) delete endTargets[oldKey];
-    if (targetIsEnd) endTargets[nextKey] = connection.target!;
-    else delete endTargets[nextKey];
-    commitEdit({
-      configuration: { ...current.configuration, transitions },
-      layout: {
-        ...current.layout,
-        endTargets,
-        edgeRoutes: retainValidEdgeRoutes({ ...current.configuration, transitions }, current.layout.edgeRoutes),
-      },
-    });
+    const id = session.editTransition(oldTransition ? oldIndex : null, nextTransition, targetIsEnd ? connection.target : undefined);
     setSelectedNodeId(null);
-    setSelectedTransition(`transition-${oldTransition ? oldIndex : transitions.length - 1}`);
+    setSelectedTransition(id);
   };
 
   const logConnectionOutcome = (kind: "connect" | "reconnect", connection: Connection, oldEdge?: Edge) => {
@@ -589,7 +294,7 @@ function GraphCanvas({
         target: connection.target,
         targetHandle: connection.targetHandle,
         oldEdgeId: oldEdge?.id,
-        transitionCount: documentRef.current.configuration.transitions.length,
+        transitionCount: session.store.getState().snapshot.configuration.transitions.length,
       },
     });
   };
@@ -610,7 +315,7 @@ function GraphCanvas({
       return [[change.id, change.position] as const];
     }));
     if (Object.keys(settledPositions).length) {
-      const current = documentRef.current;
+      const current = session.store.getState().snapshot;
       const positions = { ...current.layout.positions, ...settledPositions };
       const hasChanged = Object.entries(settledPositions).some(([id, position]) => {
         const previous = current.layout.positions[id];
@@ -663,7 +368,7 @@ function GraphCanvas({
         durationMs: started ? Date.now() - started.startedAt : null,
       },
     });
-    const current = documentRef.current;
+    const current = session.store.getState().snapshot;
     const finalNodes = new Map(canvasNodes.map((item) => [item.id, item]));
     for (const draggedNode of nodes) finalNodes.set(draggedNode.id, draggedNode);
     finalNodes.set(node.id, node);
@@ -676,28 +381,13 @@ function GraphCanvas({
   }, [commitEdit, configuration.nodes, configuration.team_id, flow, layout.endNodeIds]);
 
   const deleteSelection = () => {
-    const selectedNodes = flow.getNodes().filter((node) => node.selected);
-    const selectedAgentIndices = new Set(selectedNodes.flatMap((node) => node.data.kind === "agent" ? [node.data.nodeIndex] : []));
-    const selectedEndIds = selectedNodes.flatMap((node) => node.data.kind === "terminal" ? [node.id] : []);
-    const selectedTransitionIndices = new Set(flow.getEdges().filter((edge) => edge.selected)
-      .map((edge) => Number(edge.id.slice("transition-".length)))
-      .filter(Number.isInteger));
-    if (selectedTransition?.startsWith("transition-")) {
-      const index = Number(selectedTransition.slice("transition-".length));
-      if (Number.isInteger(index)) selectedTransitionIndices.add(index);
-    }
-    const current = documentRef.current;
-    const next = removeGraphSelection(current.configuration, current.layout, {
-      nodeIndices: selectedAgentIndices,
-      endNodeIds: selectedEndIds,
-      transitionIndices: selectedTransitionIndices,
-    });
-    if (next.configuration === current.configuration && next.layout === current.layout) return;
-    commitEdit(next);
-    logHistoryAction("agent_team_graph_selection_deleted", "已删除 Agent Team 画布选区", {
-      deletedAgentNodeCount: current.configuration.nodes.length - next.configuration.nodes.length,
-      deletedEndNodeCount: current.layout.endNodeIds.length - next.layout.endNodeIds.length,
-      deletedTransitionCount: current.configuration.transitions.length - next.configuration.transitions.length,
+    const selectedNodes = flow.getNodes().filter(node => node.selected);
+    const transitionIds = new Set(flow.getEdges().filter(edge => edge.selected).map(edge => edge.id));
+    if (selectedTransition) transitionIds.add(selectedTransition);
+    session.remove({
+      nodeIds: new Set(selectedNodes.filter(node => node.data.kind === "agent").map(node => node.id)),
+      endNodeIds: new Set(selectedNodes.filter(node => node.data.kind === "terminal").map(node => node.id)),
+      transitionIds,
     });
     clearSelection();
   };
@@ -748,6 +438,7 @@ function GraphCanvas({
   }, []);
 
   const onViewportMoveEnd = useCallback<OnMoveEnd>((_event, viewport) => {
+    session.setViewport(viewport);
     const canvasRect = canvasRef.current?.getBoundingClientRect();
     void frontendLog("INFO", "agent_team_graph_viewport_changed", "画布视口移动或缩放完成", {
       traceId: viewportTraceRef.current ?? newTraceId(),
@@ -892,7 +583,7 @@ function GraphCanvas({
                 teamIdEditable={teamIdEditable}
                 scopeEditable={scopeEditable ?? false}
                 layout="dialog"
-                onChange={(changes, historyKey) => updateConfiguration({ ...configuration, ...changes }, historyKey)}
+                onChange={session.updateConfiguration}
               />
             </DialogContent>
           </Dialog>
@@ -928,7 +619,7 @@ function GraphCanvas({
           }}>
             <AgentTeamEdgeRouteContext.Provider value={edgeRouteActions}>
               <ReactFlow
-              colorMode="system"
+              colorMode={resolvedTheme}
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
@@ -993,7 +684,8 @@ function GraphCanvas({
               edgesReconnectable
               reconnectRadius={24}
               deleteKeyCode={null}
-              fitView
+              defaultViewport={viewport}
+              fitView={!viewport}
               fitViewOptions={{ padding: 0.22, maxZoom: 1 }}
               minZoom={0.2}
               maxZoom={1.8}
@@ -1032,10 +724,8 @@ function GraphCanvas({
 }
 
 export function AgentTeamGraphEditor(props: {
-  configuration: AgentTeamConfigurationDraft;
+  session: TeamEditorSession;
   profiles: AgentConfiguration[];
-  storageKey: string;
-  onChange: (configuration: AgentTeamConfigurationDraft) => void;
   onSave?: () => void;
   onExit?: () => void;
   error?: string | null;
@@ -1043,5 +733,5 @@ export function AgentTeamGraphEditor(props: {
   scopeEditable?: boolean;
   teamIdEditable: boolean;
 }) {
-  return <ReactFlowProvider key={props.storageKey}><GraphCanvas {...props} /></ReactFlowProvider>;
+  return <ReactFlowProvider><GraphCanvas {...props} /></ReactFlowProvider>;
 }

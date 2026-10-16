@@ -1,10 +1,6 @@
-import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
-import type { AgentTeamGraphLayout } from "@/components/agent-team-graph-model";
+import type { EditorSnapshot } from "./model";
 
-export type AgentTeamGraphSnapshot = {
-  configuration: AgentTeamConfigurationDraft;
-  layout: AgentTeamGraphLayout;
-};
+export type AgentTeamGraphSnapshot = EditorSnapshot;
 
 export type AgentTeamGraphEditHistory = {
   past: AgentTeamGraphSnapshot[];

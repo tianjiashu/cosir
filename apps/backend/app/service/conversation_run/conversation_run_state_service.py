@@ -7,7 +7,7 @@
 
 职责边界：
 - 负责：``pending``、``running``、``waiting_for_input`` 与终态之间的条件迁移及其事件发布、
-  active run 判定查询。
+  active run 判定查询，以及已 ``completed`` Run 的结果字段改写（不迁移状态、不发事件）。
 - 不负责：Run 记录读取（见 ``ConversationRunService``）；命令输入解析与附件处理、Run 创建与
   编辑的用例编排（见 ``ConversationRunService``）；崩溃恢复中「Run 终态 + 未闭合工具调用」
   的多事实收口同样由 ``ConversationRunService`` 编排。
@@ -60,7 +60,11 @@ _RUN_STATUS_TRANSITIONS: dict[ConversationRunStatus, tuple[ConversationRunStatus
 
 
 class ConversationRunStateService:
-    """Conversation Run 状态机与状态迁移的唯一入口；Run 记录读取见 ``ConversationRunService``。"""
+    """Conversation Run 状态机与状态迁移的唯一入口；Run 记录读取见 ``ConversationRunService``。
+
+    另承载「终态已落定后仍要修正字段」的窄口子（见 :meth:`fix_final_output_if_completed`），
+    它刻意不构成状态迁移，也不发布状态事件。
+    """
 
     def __init__(self) -> None:
         """初始化状态 service：装配 run CRUD 与会话工厂。
@@ -401,6 +405,54 @@ class ConversationRunStateService:
             ),
         )
         return record
+
+    def fix_final_output_if_completed(
+            self,
+            run_id: int,
+            final_output: str | None = None,
+            usage_stats: ConversationRunUsageStats | None = None,
+    ) -> ConversationRunRecord | None:
+        """用后置产出的结构化结果原地改写已 ``completed`` Run 的最终回答。
+
+        结构化输出节点在 ReAct 收束之后运行：自然语言回复已随 ``running → completed`` 落库，
+        本方法只在这个终态上替换结果与用量字段。它**不是**状态迁移——``completed`` 在
+        ``_RUN_STATUS_TRANSITIONS`` 里是终态（无出边），同一状态重复发布也被契约禁止，故这里
+        刻意不发 ``RunStatusChangedEvent``，只改列。白名单只放 ``completed``，因此已
+        ``cancelled`` / ``failed`` 的 Run 不会被「修回」成成功结果（结构化输出与用户取消的
+        竞争走这条路径）。
+
+        参数:
+            run_id: 目标 Conversation Run 标识。
+            final_output: 校验通过的结构化 JSON 文本；为 None 时不修改该列。
+            usage_stats: 运行用量累加器（结构化输出这一步的消耗已累加其中）；为 None 时不
+                修改用量列。
+
+        返回:
+            改写成功时返回更新后的 ``ConversationRunRecord``；Run 不是 ``completed``、或两个
+            待写字段都为 None（无可改写内容）时返回 None。
+
+        异常:
+            TypeError: usage 不符合 typed JSON 契约。
+            sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
+
+        副作用:
+            命中时更新 run 行的 ``final_output`` / ``usage_json`` 与 ``updated_at``；不改
+            状态、不发事件。
+        """
+
+        values: dict[str, object] = {}
+        if final_output is not None:
+            values["final_output"] = final_output
+        usage = self.usage_payload(usage_stats)
+        if usage is not None:
+            values["usage_json"] = usage
+        if not values:
+            return None
+        return self._run.update_fields_if_in(
+            run_id,
+            values,
+            (ConversationRunStatus.COMPLETED.value,),
+        )
 
     def fail_run_if_running(
             self,

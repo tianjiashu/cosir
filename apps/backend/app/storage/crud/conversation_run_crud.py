@@ -14,6 +14,7 @@
 
 import copy
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from uuid import uuid4
 
@@ -51,6 +52,11 @@ def _serialize_typed_json(value: object | None) -> str | None:
     if value is None:
         return None
     return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
+
+
+# 需要按 typed JSON 口径序列化的列：调用方传领域字典，由本层统一转成列文本，避免 JSON 列的
+# 存储格式泄漏到 service 层。口径与 ``update_status_if_in_session`` 完全同源。
+_TYPED_JSON_COLUMNS = frozenset({"usage_json", "error_json"})
 
 
 class ConversationRunCrud:
@@ -706,6 +712,72 @@ class ConversationRunCrud:
             return None
         session.flush()
         return ConversationRunCrud.get_in_session(session, run_id)
+
+    def update_fields_if_in(
+        self,
+        run_id: int,
+        values: Mapping[str, object],
+        allowed_statuses: tuple[str, ...],
+        session: Session | None = None,
+    ) -> ConversationRunRecord | None:
+        """按状态白名单原子改写 run 的任意列，不迁移状态。
+
+        与 ``update_status_if_in`` 同属乐观锁更新，但本方法不解释终态字段语义、也不改
+        ``status``：``values`` 直接作为列值写入。用来表达「Run 已落定终态，但个别事实仍需
+        修正」——典型场景是结构化输出节点在 ``running → completed`` 之后改写 ``final_output``。
+        这类改写不构成状态迁移，事件由调用方（service 层）决定是否发布，本层一概不发。
+
+        ``_TYPED_JSON_COLUMNS`` 中的列收领域字典（如 ``usage_json`` 传六键用量 dict），
+        由本层按存储口径序列化，调用方不必接触列文本格式。
+
+        参数:
+            run_id: run 标识（整数 id）。
+            values: 列名到列值的映射（如 ``{"final_output": "..."}``）；typed JSON 列传领域
+                字典。空映射不是一次有效改写，会由 SQLAlchemy 直接报错。
+            allowed_statuses: 允许执行更新的前置状态白名单；当前状态不在此集合时不做任何
+                修改并返回 None。
+            session: 可选外部事务 session；传入时复用且不自行提交，None 时自行开启并提交
+                一次单表事务。
+
+        返回:
+            更新成功时返回更新后的 ``ConversationRunRecord``；当前状态不在允许集合内或 run
+            不存在（两者都表现为零行更新）时返回 None。
+
+        异常:
+            TypeError: typed JSON 列的值含 NaN 或不可 JSON 编码的对象。
+            sqlalchemy.exc.SQLAlchemyError: 如果更新失败（含 ``values`` 带不存在列名的情形）。
+
+        副作用:
+            条件满足时更新对应行的指定列与 ``updated_at``（由 ``StorageBase`` 的 ``onupdate``
+            刷新）；不改动 ``checkpoint_thread_id``，不发布事件。
+        """
+
+        def update_in_session(current_session: Session) -> ConversationRunRecord | None:
+            prepared = {
+                column: (
+                    _serialize_typed_json(value)
+                    if column in _TYPED_JSON_COLUMNS
+                    else value
+                )
+                for column, value in values.items()
+            }
+            result = current_session.execute(
+                update(ConversationRunModel)
+                .where(
+                    ConversationRunModel.id == run_id,
+                    ConversationRunModel.status.in_(allowed_statuses),
+                )
+                .values(**prepared)
+            )
+            if not result.rowcount:
+                return None
+            current_session.flush()
+            return self.get_in_session(current_session, run_id)
+
+        if session is not None:
+            return update_in_session(session)
+        with self._session_factory.begin() as managed_session:
+            return update_in_session(managed_session)
 
     def list_ids_by_task_ids(self, task_ids: list[int]) -> list[int]:
         """返回一批任务下全部 run 的标识列表。
