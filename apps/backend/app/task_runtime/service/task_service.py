@@ -209,30 +209,19 @@ class TaskService:
         """
         return self._task.get(task_id)
 
-    def is_fork_available(self, task_id: int) -> bool:
-        """返回任务的所有 Run 是否均处于已知终态。"""
-
-        return not any(
-            run.status not in Constant.Run.TERMINAL_STATUSES
-            for run in self._turn.list_by_task(task_id)
-        )
-
     async def fork_task(self, source_task_id: int, source_run_id: int) -> TaskRecord:
         """在指定历史 Run 处创建一个独立的 fork Task。"""
 
-        supervisor = asyncio.create_task(self._fork_task_with_lock(source_task_id, source_run_id))
+        supervisor = asyncio.create_task(
+            asyncio.to_thread(self._fork_task_in_workspace, source_task_id, source_run_id)
+        )
         try:
             return await asyncio.shield(supervisor)
         except asyncio.CancelledError:
             # 持锁与 SQLite worker 属于 supervisor，而不是 HTTP 请求协程；请求
-            # 被重复取消时仍由 supervisor 完成事务并负责释放 Task 操作闸门。
+            # 被重复取消时仍由 supervisor 完成事务并负责释放 workspace 操作闸门。
             supervisor.add_done_callback(self._consume_detached_fork_result)
             raise
-
-    async def _fork_task_with_lock(self, source_task_id: int, source_run_id: int) -> TaskRecord:
-        """在独立 supervisor 中运行带 workspace/task 锁的同步 Fork 事务。"""
-
-        return await asyncio.to_thread(self._fork_task_locked, source_task_id, source_run_id)
 
     @staticmethod
     def _consume_detached_fork_result(task: asyncio.Task[TaskRecord]) -> None:
@@ -253,10 +242,11 @@ class TaskService:
                 },
             )
 
-    def _fork_task_locked(self, source_task_id: int, source_run_id: int) -> TaskRecord:
+    def _fork_task_in_workspace(self, source_task_id: int, source_run_id: int) -> TaskRecord:
         """在指定历史 Run 处创建一个独立的 fork Task。
 
-        所有跨表写入使用同一个 SQLite 事务，并在源 Task runtime lock 内完成。Run 的
+        workspace 闸门协调结构性删除；源 Task 不加锁，也不访问运行时 context。
+        状态校验与全部历史复制在同一个 BEGIN IMMEDIATE 事务内完成。Run 的
         新主键通过 ``ConversationRunCrud.clone_for_task`` 生成，再用映射表改写 context；
         不触发普通 run 创建事件，也不复制 LangGraph checkpoint 内容。
 
@@ -269,7 +259,7 @@ class TaskService:
 
         异常:
             KeyError: 源 Task 或边界 Run 不存在/不属于源 Task。
-            TaskForkConflictError: 源 Task 存在活动 Run。
+            TaskForkConflictError: 复制前缀存在非终态 Run，或 workspace 操作忙碌。
         副作用:
             新增目标 Task、历史 cloned Runs 与 context entries；源 Task 不变。
         """
@@ -277,28 +267,26 @@ class TaskService:
         source = self._task.get(source_task_id)
         try:
             with workspace_operations.operation(source.workspace_id, timeout=10):
-                source_space = task_runtime_spaces.get_or_create(source_task_id)
-                with source_space.operation(timeout=10):
-                    return self._fork_task_locked_in_operation(source_task_id, source_run_id)
+                return self._copy_fork_history(source_task_id, source_run_id)
         except TimeoutError as exc:
-            raise DeletionBusyError("task", source_task_id) from exc
+            raise TaskForkConflictError(
+                "WORKSPACE_BUSY", "workspace has an active structural operation"
+            ) from exc
 
-    def _fork_task_locked_in_operation(
+    def _copy_fork_history(
         self,
         source_task_id: int,
         source_run_id: int,
     ) -> TaskRecord:
-        """在已持有 workspace/task 闸门时执行 Fork 数据库事务。"""
+        """持有 workspace 闸门时复制数据库历史；后续 Run 的状态不影响选定前缀。
+
+        BEGIN IMMEDIATE 在读取之前取得写锁，确保检查与复制之间不会插入 resume、
+        编辑或删除提交。提交后只记录汇总日志，不做数据库回读或运行时预加载。
+        """
 
         with begin_immediate(self._session_factory) as session:
             source = self._task.ensure_task(session, source_task_id)
             runs = self._turn.list_by_task_in_session(session, source_task_id)
-            if any(run.status not in Constant.Run.TERMINAL_STATUSES for run in runs):
-                raise TaskForkConflictError(
-                    "TASK_NOT_READY",
-                    "all runs must be terminal before forking",
-                )
-
             boundary_index = next(
                 (index for index, run in enumerate(runs) if run.id == source_run_id),
                 None,
@@ -309,7 +297,7 @@ class TaskService:
             if any(run.status not in Constant.Run.TERMINAL_STATUSES for run in source_prefix):
                 raise TaskForkConflictError(
                     "RUN_NOT_READY",
-                    "the selected run must be terminal before forking",
+                    "all runs in the selected history prefix must be terminal before forking",
                 )
 
             target = self._task.create(
@@ -337,36 +325,6 @@ class TaskService:
                 run_id_map,
                 session,
             )
-        for _ in range(cloned_context_count):
-            log.info(
-                "context_message_persisted",
-                extra={
-                    "msg": "fork context message 已提交",
-                    "data": {"task_id": target.id, "message_type": "cloned"},
-                },
-            )
-        source_space = task_runtime_spaces.get_or_create(source_task_id)
-        source_manager = source_space.get_context_manager()
-        if source_manager is not None:
-            try:
-                task_runtime_spaces.get_or_create(target.id).install_fork_context_manager(
-                    source_manager.fork_context_manager(target.id)
-                )
-            except Exception:
-                # DB 已提交后，持久化 context 仍是 canonical source；目标 space
-                # 下次访问时会按 fork Task 懒加载，不能把可恢复的内存优化失败
-                # 伪装成整个 fork 失败。
-                log.exception(
-                    "task_fork_runtime_hydration_failed",
-                    extra={
-                        "msg": "fork 目标运行时 hydrate 失败，将在后续访问时懒加载",
-                        "data": {
-                            "source_task_id": source_task_id,
-                            "source_run_id": source_run_id,
-                            "target_task_id": target.id,
-                        },
-                    },
-                )
         log.info(
             "task_forked",
             extra={
@@ -375,6 +333,8 @@ class TaskService:
                     "source_task_id": source_task_id,
                     "source_run_id": source_run_id,
                     "target_task_id": target.id,
+                    "cloned_run_count": len(run_id_map),
+                    "cloned_context_count": cloned_context_count,
                 },
             },
         )

@@ -25,10 +25,8 @@ type AssistantRuntimeTransportHostProps = {
   toolGroupsError: string | null;
   initialMessage?: string;
   initialAttachments?: AssistantRuntimeProps["initialAttachments"];
-  forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
-  onRunStateChange?: (isRunning: boolean) => void;
   onResumeBusiness: () => Promise<void>;
   onInitialMessageError: (message: string) => void;
   onCancelRequested: (runId: number) => void;
@@ -58,10 +56,8 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
   toolGroupsError,
   initialMessage,
   initialAttachments,
-  forkAvailable,
   forkingRunId,
   onForkRun,
-  onRunStateChange,
   onResumeBusiness,
   onInitialMessageError,
   onCancelRequested,
@@ -88,10 +84,8 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
         workspaceRoot={context.workspaceRoot}
         initialMessage={initialMessage}
         initialAttachments={initialAttachments}
-        forkAvailable={forkAvailable}
         forkingRunId={forkingRunId}
         onForkRun={onForkRun}
-        onRunStateChange={onRunStateChange}
         initialState={context.initialState}
         backendRef={context.backendRef}
         resumeOnMount={resumeOnMount}

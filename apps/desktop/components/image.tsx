@@ -328,7 +328,12 @@ function ImageZoom({ src, alt = "图片预览", children }: ImageZoomProps) {
       <div
         ref={triggerRef}
         onClick={handleOpen}
-        onKeyDown={(e) => e.key === "Enter" && handleOpen()}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          // 打开后焦点会转到关闭按钮；取消默认激活，避免同一次按键立即关闭弹层。
+          event.preventDefault();
+          handleOpen();
+        }}
         role="button"
         tabIndex={0}
         className="aui-image-zoom-trigger cursor-zoom-in"

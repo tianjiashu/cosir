@@ -176,6 +176,7 @@ Rust 桌面宿主、Terminal Worker 以及发布资源 staging 统一使用仓�
 cd apps/desktop
 npm run build
 npm run test:unit
+npx playwright install chromium webkit
 npm run test:e2e
 ```
 
@@ -187,6 +188,9 @@ uv run --project apps/backend pytest
 ```
 
 Playwright E2E 使用 Vite 和测试服务，不覆盖真实 Tauri IPC、动态后端端口或后端崩溃恢复。桌面端另有 `npm run test:e2e:tauri` 测试入口。
+
+全屏回归 `tests/e2e/fullscreen.spec.ts` 同时运行 Chromium 与 WebKit，覆盖 Windows/macOS
+渲染引擎的布局差异；其余浏览器用例默认只运行 Chromium。
 
 ## 技术栈
 

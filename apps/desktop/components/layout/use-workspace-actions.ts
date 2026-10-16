@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import { deleteTask, deleteWorkspace, forkTask, type StartedConversation } from "@/lib/api/workspaces";
@@ -24,6 +24,13 @@ export type DeleteTarget =
  */
 export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: number | null) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const currentLocationKey = useRef<string | null>(location.key);
+  const forkPending = useRef(false);
+  useLayoutEffect(() => {
+    currentLocationKey.current = location.key;
+    return () => { currentLocationKey.current = null; };
+  }, [location.key]);
   const closeWorkspaceTabs = useWorkbenchStore((state) => state.closeWorkspace);
   const [forkingRunId, setForkingRunId] = useState<number | null>(null);
   const { load, selectWorkspace, selectedWorkspaceId, workspaces } = catalog;
@@ -33,37 +40,52 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     void load();
   }, [load, navigate]);
 
-  const forkRun = useCallback(async (runId: number) => {
-    if (focusedTaskId === null || forkingRunId !== null) return;
+  // 请求绑定发起时的 Task 和路由；用户切页后迟到的响应只更新目录，不抢回页面。
+  const executeFork = useCallback(async function executeFork(
+    sourceTaskId: number, runId: number, originLocationKey: string,
+  ) {
+    if (forkPending.current) return;
+    forkPending.current = true;
     setForkingRunId(runId);
     try {
-      const target = await forkTask(focusedTaskId, runId);
-      await load();
-      navigate(`/tasks/${target.task_id}`);
+      const target = await forkTask(sourceTaskId, runId);
+      // 创建已成功，目录刷新由 catalog 自行处理错误，不应影响成功反馈或触发重复创建。
+      void load();
+      if (currentLocationKey.current === originLocationKey) {
+        navigate(`/tasks/${target.task_id}`);
+      } else {
+        notify.success("Fork 任务已创建");
+      }
     } catch (cause) {
       void frontendLog("ERROR", "task_fork_failed", "Fork 任务失败", {
-        data: { taskId: focusedTaskId, runId, status: cause instanceof HttpError ? cause.status : null },
+        data: { taskId: sourceTaskId, runId, status: cause instanceof HttpError ? cause.status : null },
         error: cause,
       });
       if (cause instanceof HttpError && cause.status === 409) {
-        // 409 是状态冲突：快照未就绪或仍有运行中的 Run，刷新侧栏让 fork 可用性回到后端事实。
-        notify.error("Fork 失败", {
-          error: new UserFacingError(cause.code === "SNAPSHOT_NOT_READY"
-            ? "对话快照仍在准备中，请稍后重试。"
-            : "当前任务仍有运行中的轮次，暂时不能 Fork。"),
-        });
-        await load();
+        const message = cause.code === "WORKSPACE_BUSY"
+          ? "工作区正在处理其他操作，请稍后重试。"
+          : "所选历史范围内仍有未结束的轮次，暂时不能 Fork。";
+        notify.error("Fork 失败", { error: new UserFacingError(message) });
       } else {
         notify.error("Fork 失败", {
           error: cause,
           fallback: "Fork 失败，请重试",
-          action: { label: "重试", onClick: () => void forkRun(runId) },
+          action: {
+            label: "重试",
+            onClick: () => void executeFork(sourceTaskId, runId, originLocationKey),
+          },
         });
       }
     } finally {
+      forkPending.current = false;
       setForkingRunId(null);
     }
-  }, [focusedTaskId, forkingRunId, load, navigate]);
+  }, [load, navigate]);
+
+  const forkRun = useCallback(async (runId: number) => {
+    if (focusedTaskId === null) return;
+    await executeFork(focusedTaskId, runId, location.key);
+  }, [executeFork, focusedTaskId, location.key]);
 
   /**
    * 删除工作区或任务：确认框托管 busy 与失败提示（失败时保持打开可重试）。

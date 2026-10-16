@@ -1,6 +1,7 @@
 import asyncio
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,13 +17,13 @@ from app.assistant_transport.assistant_api import (
 from app.assistant_transport.request import AddMessageCommand, AssistantAttachRequest
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.service.conversation_run_command_service import (
-    ConversationRunCommandService,
     _build_ordered_display_text,
 )
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
 )
 from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.depends import get_workspace_service
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
@@ -117,7 +118,7 @@ def test_task_route_has_one_get_method() -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_endpoint_returns_task_response_with_fork_status() -> None:
+async def test_task_endpoint_returns_task_response_without_task_level_fork_gate() -> None:
     now = datetime.now(UTC)
     record = SimpleNamespace(
         id=7,
@@ -137,9 +138,6 @@ async def test_task_endpoint_returns_task_response_with_fork_status() -> None:
         def get_task(self, _task_id: int) -> object:
             return record
 
-        def is_fork_available(self, _task_id: int) -> bool:
-            return False
-
         def get_context_window_total(self, _task_id: int) -> int | None:
             return None
 
@@ -147,7 +145,7 @@ async def test_task_endpoint_returns_task_response_with_fork_status() -> None:
 
     assert result.task_id == 7
     assert result.workspace_id == 3
-    assert result.fork_available is False
+    assert "fork_available" not in result.model_dump()
 
 
 def test_attach_route_is_separate_from_business_resume() -> None:
@@ -162,8 +160,7 @@ def test_attach_route_is_separate_from_business_resume() -> None:
 
 
 @pytest.mark.asyncio
-async def test_attach_run_only_subscribes_existing_executor(
-) -> None:
+async def test_attach_run_only_subscribes_existing_executor() -> None:
     state = _snapshot(7, "running")
 
     class _RunService:
@@ -175,8 +172,9 @@ async def test_attach_run_only_subscribes_existing_executor(
             return state
 
     service = TransportAssistantService.__new__(TransportAssistantService)
-    service._runs = _RunService()
+    service._run_service = _RunService()
     service._snapshots = _SnapshotService()
+
     async def _stream_envelopes(*_args: object, **_kwargs: object):
         yield "data: {}\n\n"
 
@@ -202,7 +200,7 @@ async def test_attach_run_rejects_terminal_run_even_when_snapshot_matches() -> N
             return state
 
     service = TransportAssistantService.__new__(TransportAssistantService)
-    service._runs = _RunService()
+    service._run_service = _RunService()
     service._snapshots = _SnapshotService()
 
     with pytest.raises(HTTPException) as error:
@@ -356,10 +354,7 @@ def test_settle_run_start_failure_swallows_settle_errors() -> None:
     service.settle_run_start_failure(7)
 
 
-_GATE_TEST_TASK_ID = 900000001
-
-
-async def test_task_run_operation_waits_without_blocking_event_loop() -> None:
+async def test_task_run_operation_waits_without_blocking_event_loop(tmp_path: Path) -> None:
     """闸门排队必须发生在工作线程：等待期间事件循环仍要能调度其它协程。
 
     ``task_run_operation`` 要跨越 ``prepare_run_start`` 的 ``await``；若用同步
@@ -368,39 +363,49 @@ async def test_task_run_operation_waits_without_blocking_event_loop() -> None:
     本用例断言等待期间心跳协程仍在推进。
     """
 
+    workspace_service = get_workspace_service()
+    root = tmp_path / "workspace"
+    root.mkdir()
+    workspace = workspace_service.create_workspace("gate-test", str(root))
+    task = workspace_service.create_task(workspace.id, "gate-test")
     service = TransportAssistantService.__new__(TransportAssistantService)
-    space = task_runtime_spaces.get_or_create(_GATE_TEST_TASK_ID)
+    space = task_runtime_spaces.get_or_create(task.id)
+    acquired = threading.Event()
     release = threading.Event()
 
     def _hold_gate() -> None:
         with space.operation(timeout=5):
-            release.wait(0.3)
+            acquired.set()
+            # 超时仅为错误实现保底解锁；正常路径由事件循环中的心跳释放。
+            release.wait(3)
 
     holder = threading.Thread(target=_hold_gate, daemon=True)
     holder.start()
-    await asyncio.sleep(0.05)  # 让持锁线程先取得闸门
-
     ticks = 0
 
     async def _heartbeat() -> None:
         nonlocal ticks
-        while True:
+        for _ in range(5):
             await asyncio.sleep(0.01)
             ticks += 1
+        release.set()
 
-    beating = asyncio.create_task(_heartbeat())
+    beating = None
     try:
-        async with service.task_run_operation(task_id=_GATE_TEST_TASK_ID):
-            pass
+        assert await asyncio.to_thread(acquired.wait, 3)
+        beating = asyncio.create_task(_heartbeat())
+        async with service.task_run_operation(task_id=task.id):
+            # 必须由心跳推进到主动释放，不能依靠持锁线程的保底超时。
+            assert ticks == 5
     finally:
         release.set()
-        holder.join(timeout=5)
-        beating.cancel()
-        task_runtime_spaces.unload(_GATE_TEST_TASK_ID)
+        await asyncio.to_thread(holder.join, 5)
+        if beating is not None:
+            beating.cancel()
+            await asyncio.gather(beating, return_exceptions=True)
+        task_runtime_spaces.unload(task.id)
 
     assert not holder.is_alive()
-    # 同步 ``operation()`` 会把事件循环停住，心跳一次都跑不到。
-    assert ticks >= 5
 
 # 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
 pytestmark = pytest.mark.usefixtures("backend_env")

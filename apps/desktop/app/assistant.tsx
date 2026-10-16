@@ -30,11 +30,9 @@ export const Assistant = ({
   initialAttachments,
   initialDisabledToolGroups,
   initialBanTools,
-  forkAvailable,
   forkingRunId,
   onForkRun,
   onTaskStateChanged,
-  onRunStateChange,
 }: {
   taskId: number;
   workspaceId?: number | null;
@@ -43,11 +41,9 @@ export const Assistant = ({
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
   initialBanTools?: string[];
-  forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
   onTaskStateChanged?: () => void;
-  onRunStateChange?: (isRunning: boolean) => void;
 }) => {
   // AppLayout may finish its task-list refresh after the snapshot request.
   // Freeze the workspace identity for this task session so that a late parent
@@ -75,11 +71,9 @@ export const Assistant = ({
       initialAttachments={initialAttachments}
       initialDisabledToolGroups={initialDisabledToolGroups}
       initialBanTools={initialBanTools}
-      forkAvailable={forkAvailable}
       forkingRunId={forkingRunId}
       onForkRun={onForkRun}
       onTaskStateChanged={onTaskStateChanged}
-      onRunStateChange={onRunStateChange}
     />
   );
 };

@@ -39,7 +39,6 @@ class TaskResponse(BaseModel):
     extra: dict[str, object] | None = None
     execution_status: str | None = None
     task_type: str = "user"
-    fork_available: bool = True
     parent_task_id: int | None = None
     parent_run_id: int | None = None
     delegation_id: int | None = None
@@ -53,7 +52,6 @@ class TaskResponse(BaseModel):
         record: TaskRecord,
         *,
         context_window_total: int | None = None,
-        fork_available: bool = True,
     ) -> "TaskResponse":
         """从 ``TaskRecord`` 值对象构造响应模型。
 
@@ -82,7 +80,6 @@ class TaskResponse(BaseModel):
             extra=record.extra,
             execution_status=record.execution_status,
             task_type=record.task_type,
-            fork_available=fork_available,
             parent_task_id=record.parent_task_id,
             parent_run_id=record.parent_run_id,
             delegation_id=record.delegation_id,

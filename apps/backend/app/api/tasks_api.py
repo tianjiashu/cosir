@@ -25,12 +25,12 @@ from app.models.errors.deletion_errors import (
     RunDeletionConflictError,
 )
 from app.models.errors.task_fork_errors import TaskForkConflictError
+from app.service.conversation_run.conversation_task_context_service import (
+    ConversationTaskContextService,
+)
 from app.service.depends import (
     get_conversation_task_context_service,
     get_task_service,
-)
-from app.service.conversation_run.conversation_task_context_service import (
-    ConversationTaskContextService,
 )
 from app.task_runtime.service.task_service import TaskService
 
@@ -82,7 +82,6 @@ async def get_task(
     return TaskResponse.from_record(
         task,
         context_window_total=task_service.get_context_window_total(task_id),
-        fork_available=task_service.is_fork_available(task_id),
     )
 
 
@@ -105,8 +104,7 @@ async def fork_task(
         ) from exc
     return TaskResponse.from_record(
         target,
-        context_window_total=task_service.get_context_window_total(target.id),
-        fork_available=True,
+        context_window_total=target.context_window_total,
     )
 
 

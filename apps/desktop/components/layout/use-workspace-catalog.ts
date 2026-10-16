@@ -233,16 +233,6 @@ export function useWorkspaceCatalog(routeTaskId: number | null, workspaceConfigu
     setSelectedWorkspaceId(workspaceId);
     if (workspaceId !== null) writeLastWorkspaceId(workspaceId);
   }, []);
-  /** 运行状态变化时就地更新 fork 可用性，不必等待下一次目录刷新。 */
-  const handleRunStateChange = useCallback((isRunning: boolean) => {
-    if (routeTaskId === null) return;
-    setWorkspaces((current) => current.map((workspace) => ({
-      ...workspace,
-      tasks: workspace.tasks.map((task) => task.task_id === routeTaskId
-        ? { ...task, fork_available: !isRunning }
-        : task),
-    })));
-  }, [routeTaskId]);
 
   return {
     workspaces,
@@ -259,7 +249,6 @@ export function useWorkspaceCatalog(routeTaskId: number | null, workspaceConfigu
     activeWorkspace,
     activeTaskWorkspaceId,
     handleTaskLoaded,
-    handleRunStateChange,
   };
 }
 

@@ -3,7 +3,6 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
-
 from app.models.runtime_notice import RuntimeNotice
 
 
@@ -18,14 +17,9 @@ def test_notice_freezes_metadata_and_keeps_routing_out_of_message_kwargs() -> No
         notice.content = "changed"
     with pytest.raises(TypeError):
         notice.metadata["source"] = "changed"
-    message = notice.build_runtime_notice_message()
-    assert message.additional_kwargs == {
-        "source": "global",
-        "scope": None,
-        "notice_type": "system_prompt_delta",
-        "run_id": 7,
-    }
+    # 投递边界（kind / run_id 路由信息）由模型节点消费时据此判断，不在此处落地为消息字段。
     assert notice.content == "规则变化"
+    assert notice.to_hint_text() == "system_hint:规则变化"
 
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])

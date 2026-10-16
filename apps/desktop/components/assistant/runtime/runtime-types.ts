@@ -16,11 +16,9 @@ export type AssistantRuntimeProps = {
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
   initialBanTools?: string[];
-  forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
   onTaskStateChanged?: () => void;
-  onRunStateChange?: (isRunning: boolean) => void;
 };
 
 export type ComposerRestore = {

@@ -20,13 +20,10 @@ copy；持久化的 task / run / context 记录仍由 SQLite 负责。多个 spa
   ``_lock``）都是调用方缺陷：它会同时触发 check-then-set 造成的重复懒加载与
   last-write-wins 覆盖，本类不为此兜底。出现这类调用方时，正确修法是让它回到
   ``ConversationTaskStateService``，**不是**给本类加回内部锁。
-- **context manager 槽位的懒创建/查询/卸载不额外加锁**，因为其调用方本已持有该 task 的操作锁：
-  run 执行（``ConversationRunExecutor._execute`` 全程 ``async_operation()``）、task 删除
-  （``TaskService.delete_task`` 的 task 闸门）、task fork 的源 task 闸门。
-- **``_context_guard`` 保留的唯一理由**：task fork 在 ``begin_immediate`` 事务提交之后才安装
-  目标 context manager，此时调用线程持有的是**源** task 闸门与 workspace 闸门，**不持有目标
-  task 闸门**；因此「安装 fork manager」与「目标 task 首次 run 的懒创建 manager」之间存在真实
-  竞态，需要一把锁保证两者不互相覆盖。删除它会引入 fork hydrate 覆盖/丢失问题。
+- **context manager 槽位**由 ``_context_guard`` 串行化初始化和卸载；它不保护整个 Run
+  的执行。Task 操作闸门用于 Transport 创建、编辑、续跑等入口，执行器不全程持有该锁。
+- **fork 只复制数据库历史**，不取得源 Task 闸门，不创建或安装源/目标 context manager。
+
 """
 
 from __future__ import annotations
@@ -43,6 +40,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from app.service.depends import get_task_service, get_workspace_service
 from app.models.runtime_notice import RuntimeNotice
+from app.utils.host_platform import host_platform_name
 
 if TYPE_CHECKING:
     from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
@@ -287,8 +285,6 @@ class TaskRuntimeSpace:
 
         参数:
             agent_profile: 当前 task 使用的 Agent 画像，决定 context 装配策略。
-            current_workspace: 当前 workspace 记录，提供 ``root_path`` 等工作目录。
-            current_task: 当前 task 记录，提供上下文归属的 task id。
 
         返回:
             已创建或已缓存的 ``RuntimeContextManager`` 实例。该 manager 恢复 Task 已持久化的
@@ -296,7 +292,7 @@ class TaskRuntimeSpace:
 
         异常:
             ``RuntimeContextManager`` 构造失败时原样向上抛出，本方法不兜底；此时 space 不会缓存
-            半成品引用，调用方（run 执行、task fork）需自行处理。
+            半成品引用，由调用方处理。
 
         副作用:
             首次调用时在持有 ``_context_guard`` 的前提下惰性构造并以**弱引用**缓存 context
@@ -304,10 +300,8 @@ class TaskRuntimeSpace:
             当外部不再持有该 manager 时弱引用自然失效，下次访问从持久化 context 恢复。
 
         并发:
-            锁外快路径 + 锁内重检是刻意保留的 double-checked locking，**不是重复判断**：
-            ``install_fork_context_manager`` 会在同一把锁内写入槽位，若省掉锁内重检，
-            懒创建可能覆盖刚安装的 fork manager。run 执行路径本身还持有 Task 操作闸门，
-            这里的锁只覆盖 fork hydrate 与目标 task 首次 run 之间的竞态（详见模块 docstring）。
+            初始化锁只保护槽位创建；配置广播与 workflow 的访问不依赖同一 Task 操作闸门。
+            锁内重检避免两个并发访问者分别构造 manager。
         """
 
         manager_ref = self._context_manager
@@ -333,32 +327,22 @@ class TaskRuntimeSpace:
                 self._context_manager = _weak_ref(manager)
             return manager
 
-    def install_fork_context_manager(self, manager: RuntimeContextManager) -> None:
-        """安装已由源 manager fork 出来的目标 context manager。
-
-        仅在目标 space 尚无存活 manager 时安装，避免覆盖目标 task 已懒创建的真实 manager。
-
-        并发:
-            ``_context_guard`` 是唯一写入方之间的互斥点；调用方（``TaskService`` fork 事务）
-            持有源 task 闸门与 workspace 闸门，但**不持有目标 task 闸门**，故此处不能省略锁。
-        """
-
-        with self._context_guard:
-            if self._context_manager is not None and self._context_manager() is not None:
-                return
-            self._context_manager = _weak_ref(manager)
-
     def defer_runtime_notice(self, notice: RuntimeNotice) -> None:
         """投递系统通知；只入队，不修改通知、不构造 Message、不写入 context。"""
 
         self._notice_queue.put(notice)
 
-    def take_runtime_notices(self, *, run_id: int | None = None) -> list[RuntimeNotice]:
+    def take_runtime_notices(self, *, run_id: int | None = None) -> str:
         """按 FIFO 消费当前 Run 的通知，并丢弃其他 Run 遗留的通知。
 
         无 run_id 的通知属于 Task，任何 Run 均可消费；省略消费参数时取出全部通知。
         同一 Task 的 Run 由操作闸门串行化，因此非当前 Run 的通知可直接丢弃，避免污染续跑。
-        返回值仍为领域通知，模型节点负责映射消息后写入 context。
+
+        返回:
+            已拼装好的「一次性提示文本」，由模型节点直接追加到本步请求最后一条消息的 content
+            末尾，不再返回领域通知对象。文本以 ``system_hint:`` 起始（模型据此区分系统注入与
+            用户输入），并显式声明宿主平台；声明与各条通知正文各占一行，样式由本方法统一收口，
+            调用方不得再自行加前缀。
         """
 
         notices: list[RuntimeNotice] = []
@@ -369,7 +353,14 @@ class TaskRuntimeSpace:
                 break
             if run_id is None or notice.run_id is None or notice.run_id == run_id:
                 notices.append(notice)
-        return notices
+
+        hint = "".join(f"\n{n.to_hint_text()}" for n in notices)
+        return (
+            f"system_hint: host OS is {host_platform_name()}; the lines below are runtime "
+            "notices injected by the system, not user input. Take them into account, but do "
+            "not reply to, acknowledge, or quote them."
+            + hint
+        )
 
     def has_runtime_notices(self) -> bool:
         """本 Task 是否仍有等待模型节点消费的系统通知。"""

@@ -19,12 +19,12 @@ from app.api.schemas import (
 from app.app import app
 from app.core.runtime.runner import AgentRuntime
 from app.models.errors.deletion_errors import DeletionBusyError
+from app.service.conversation_run.workspace_service import WorkspaceService
 from app.service.depends import (
     get_runtime,
     get_task_service,
     get_workspace_service,
 )
-from app.service.conversation_run.workspace_service import WorkspaceService
 from app.task_runtime.service.task_service import TaskService
 from app.utils.datetime_utils import TASK_TITLE_LIMIT, preview
 
@@ -183,7 +183,6 @@ async def list_workspace_tasks(
             TaskResponse.from_record(
                 task,
                 context_window_total=task_service.get_context_window_total(task.id),
-                fork_available=task_service.is_fork_available(task.id),
             )
             for task in task_service.list_tasks_for_workspace(workspace_id)
         ]

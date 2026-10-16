@@ -89,29 +89,6 @@ class RuntimeContextManager:
         default_factory=dict, init=False
     )
 
-    def fork_context_manager(self, task_id: int) -> RuntimeContextManager:
-        """为已复制 context 的目标 Task 创建独立的 fork manager。
-
-        参数:
-            task_id: 已完成持久化复制的目标 Task 标识。
-
-        返回:
-            绑定目标 Task、初始没有当前 run 且带有 ``is_fork`` 标记的新 manager。
-
-        异常:
-            RuntimeError: context service 未装配。
-
-        副作用:
-            从目标 Task 的持久化 context 加载独立 working copy；不修改源 manager。
-        """
-
-        return RuntimeContextManager(
-            current_task_id=task_id,
-            agent_profile=copy.deepcopy(self.agent_profile),
-            workspace_root=self.workspace_root,
-            is_fork=True,
-        )
-
     def __post_init__(self) -> None:
         """恢复 Task 固定系统提示词并加载其余 context working copy。
 

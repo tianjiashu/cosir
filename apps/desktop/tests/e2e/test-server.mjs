@@ -860,7 +860,7 @@ const server = createServer(async (req, res) => {
       jsonResponse(res, 404, { detail: "task not found" });
       return;
     }
-    jsonResponse(res, 200, { ...task, task_type: task.task_type ?? "user", fork_available: task.fork_available ?? true });
+    jsonResponse(res, 200, { ...task, task_type: task.task_type ?? "user" });
     return;
   }
   if (req.method === "GET" && url.pathname.startsWith("/tasks/") && url.pathname.endsWith("/assistant/state")) {

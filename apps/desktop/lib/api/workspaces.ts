@@ -23,7 +23,6 @@ export type WorkspaceTask = {
   extra?: {
     fork?: ForkTaskMetadata;
   } | null;
-  fork_available: boolean;
   execution_status: string | null;
   context_window_total: number | null;
   created_at: string;

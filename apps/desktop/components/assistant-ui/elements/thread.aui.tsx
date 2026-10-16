@@ -1,5 +1,7 @@
 "use client";
 
+import { isTerminalRunStatus } from "@/lib/assistant/contract";
+
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon } from "lucide-react";
 import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FC, type MutableRefObject, type ReactNode } from "react";
 import {
@@ -105,7 +107,6 @@ export type ThreadProps = {
   toolGroupsLoading?: boolean;
   toolGroupsError?: string | null;
   workspaceRoot?: string;
-  forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
   onResumeBusiness?: () => Promise<void>;
@@ -119,7 +120,7 @@ export type ThreadProps = {
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkAvailable" | "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "attachTransportRef"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "attachTransportRef"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
@@ -168,12 +169,12 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable = false, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null, attachTransportRef }) {
+export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null, attachTransportRef }) {
   const isEmpty = useAuiState(isNewChatView);
   const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkAvailable, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly, attachTransportRef }}>
+    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly, attachTransportRef }}>
     <ThreadComponentsContext.Provider value={components}>
       <AttachmentWorkspaceContext.Provider value={workspaceId ?? undefined}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -764,9 +765,8 @@ const AssistantMessageDefault: FC = () => {
   const runStatus = typeof custom?.runStatus === "string"
     ? custom.runStatus as TransportRun["status"]
     : null;
-  const isRunning = useAuiState((state) => state.thread.isRunning);
-  const { forkAvailable = false, forkingRunId = null, onForkRun, cancellingRunId = null, taskId, readonly = false, attachTransportRef } = useContext(ThreadContext);
-  const canFork = !readonly && isLastRunMessage && runId !== null && forkAvailable && !isRunning;
+  const { forkingRunId = null, onForkRun, cancellingRunId = null, taskId, readonly = false, attachTransportRef } = useContext(ThreadContext);
+  const canFork = !readonly && isLastRunMessage && runId !== null && isTerminalRunStatus(runStatus);
   const isForking = runId !== null && forkingRunId === runId;
 
   return (
@@ -882,17 +882,17 @@ const AssistantMessageDefault: FC = () => {
         <MessageError />
       </div>
       {!readonly && <RunUsageDisplay runId={runId} visible={isLastRunMessage} />}
-      <ActionBarPrimitive.Root hideWhenRunning className="mt-1 flex gap-1">
+      <ActionBarPrimitive.Root className="mt-1 flex gap-1">
         <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>
           <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
           <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
         </ActionBarPrimitive.Copy>
         {!readonly && isLastRunMessage && runId !== null && (
           <TooltipIconButton
-            tooltip={forkAvailable ? "从此处 Fork 新任务" : "所有 Run 完成后才能 Fork"}
+            tooltip={canFork ? "从此处 Fork 新任务" : "此轮结束后才能 Fork"}
             size="sm"
             aria-label="从此处 Fork 新任务"
-            disabled={!canFork || isForking}
+            disabled={!canFork || forkingRunId !== null}
             onClick={() => onForkRun?.(runId)}
           >
             {isForking ? <Loader2Icon className="animate-spin" /> : <GitForkIcon />}

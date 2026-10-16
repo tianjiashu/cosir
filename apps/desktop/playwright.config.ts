@@ -11,9 +11,6 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:4173",
     trace: "retain-on-failure",
-    launchOptions: process.env.COSIR_PLAYWRIGHT_EXECUTABLE
-      ? { executablePath: process.env.COSIR_PLAYWRIGHT_EXECUTABLE }
-      : undefined,
   },
   webServer: [
     {
@@ -24,5 +21,17 @@ export default defineConfig({
       reuseExistingServer: true,
     },
   ],
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: process.env.COSIR_PLAYWRIGHT_EXECUTABLE
+          ? { executablePath: process.env.COSIR_PLAYWRIGHT_EXECUTABLE }
+          : undefined,
+      },
+    },
+    // macOS 桌面使用 WebKit；全屏裁剪不能仅依赖 Chromium 回归。
+    { name: "webkit", testMatch: "fullscreen.spec.ts", use: { ...devices["Desktop Safari"] } },
+  ],
 });

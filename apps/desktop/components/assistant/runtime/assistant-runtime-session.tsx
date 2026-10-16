@@ -47,11 +47,9 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   initialAttachments,
   initialDisabledToolGroups,
   initialBanTools,
-  forkAvailable,
   forkingRunId,
   onForkRun,
   onTaskStateChanged,
-  onRunStateChange,
 }: RuntimeSessionProps) {
   const backendRuntime = useSyncExternalStore(
     subscribeBackendRuntime,
@@ -206,10 +204,8 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       toolGroupsError={toolGroupsError}
       initialMessage={initialMessage}
       initialAttachments={initialAttachments}
-      forkAvailable={forkAvailable}
       forkingRunId={forkingRunId}
       onForkRun={onForkRun}
-      onRunStateChange={onRunStateChange}
       onResumeBusiness={businessResume.resumeBusinessRun}
       onInitialMessageError={handleInitialMessageError}
       onCancelRequested={cancellation.onRequested}

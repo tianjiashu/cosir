@@ -6,7 +6,6 @@ import {
   InitialMessageBridge,
   RuntimeControlBridge,
   RuntimeRenderDiagnostics,
-  TaskStateBridge,
 } from "@/components/assistant/runtime/assistant-runtime-bridges";
 import type {
   AssistantRuntimeProps,
@@ -25,10 +24,8 @@ type AssistantThreadSurfaceProps = Pick<
   | "workspaceRoot"
   | "initialMessage"
   | "initialAttachments"
-  | "forkAvailable"
   | "forkingRunId"
   | "onForkRun"
-  | "onRunStateChange"
 > & {
   initialState: TransportState;
   backendRef: MutableRefObject<BackendRuntimeSnapshot>;
@@ -64,10 +61,8 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
   workspaceRoot,
   initialMessage,
   initialAttachments,
-  forkAvailable,
   forkingRunId,
   onForkRun,
-  onRunStateChange,
   initialState,
   backendRef,
   resumeOnMount,
@@ -97,7 +92,6 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
         attachTransportRef={attachTransportRef}
       />
       <ComposerRestoreBridge register={registerComposerRestore} />
-      <TaskStateBridge onRunStateChange={onRunStateChange} />
       <RuntimeRenderDiagnostics taskId={taskId} />
       <div className="flex h-full min-h-0 flex-col">
         <Thread
@@ -109,7 +103,6 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
           toolGroupsLoading={toolGroupsLoading}
           toolGroupsError={toolGroupsError}
           workspaceRoot={workspaceRoot}
-          forkAvailable={forkAvailable}
           forkingRunId={forkingRunId}
           onForkRun={onForkRun}
           onResumeBusiness={onResumeBusiness}

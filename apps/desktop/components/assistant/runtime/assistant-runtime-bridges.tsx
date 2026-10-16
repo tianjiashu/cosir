@@ -6,7 +6,6 @@ import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { currentTransportRun, transportMessageCount } from "@/lib/assistant/transport-state-operations";
 import type {
-  AssistantRuntimeProps,
   ComposerRestore,
   RuntimeControls,
 } from "@/components/assistant/runtime/runtime-types";
@@ -25,18 +24,6 @@ import {
   setPendingEditComposerDraft,
 } from "@/lib/assistant/edit-composer-draft";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-
-export function TaskStateBridge({
-  onRunStateChange,
-}: Pick<AssistantRuntimeProps, "onRunStateChange">) {
-  const isRunning = useAuiState((state) => state.thread.isRunning);
-
-  useEffect(() => {
-    onRunStateChange?.(isRunning);
-  }, [isRunning, onRunStateChange]);
-
-  return null;
-}
 
 export function RuntimeRenderDiagnostics({ taskId }: { taskId: number }) {
   const messageCount = useAuiState((state) => state.thread.messages.length);

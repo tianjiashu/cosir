@@ -18,15 +18,14 @@ from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk
-
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
+import pytest
 from app.core.workflows.react.nodes import model_node as model_module
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 
 @pytest.fixture(autouse=True)
@@ -282,25 +281,23 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
     assert harness.completed is True
 
 
-def test_runtime_notice_is_converted_only_when_model_consumes_it(monkeypatch: Any) -> None:
-    """通知进入本步请求和持久化历史，但不投影为面向用户的 assistant 发言。"""
+def test_runtime_notice_is_appended_to_last_message_content(monkeypatch: Any) -> None:
+    """运行期通知拼接到本步请求最后一条消息 content 末尾，不新增独立消息、不投影到 transport。"""
+    from langchain_core.messages import HumanMessage
+
     notice = RuntimeNotice(content="环境已更新", kind="test", run_id=2)
     space = task_runtime_spaces.get_or_create(1)
     space.defer_runtime_notice(notice)
+    base = HumanMessage(content="你好")
     harness = _ModelHarness(AIMessage(content="完成", response_metadata={"finish_reason": "stop"}))
-    persisted: list[tuple[Any, bool]] = []
+    harness.runtime_context.load_message = lambda: [base]
     requested: list[Any] = []
-
-    def add_message(message: Any, *, project_to_transport: bool) -> None:
-        persisted.append((message, project_to_transport))
-        harness.messages.append(message)
 
     async def astream(messages: list[Any]) -> AsyncIterator[AIMessageChunk]:
         requested.extend(messages)
         async for chunk in harness._astream(messages):
             yield chunk
 
-    harness.runtime_context.add_message = add_message
     harness.runtime_config.model.astream = astream
     monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
@@ -308,11 +305,15 @@ def test_runtime_notice_is_converted_only_when_model_consumes_it(monkeypatch: An
     _patch_lifecycle_runtime(monkeypatch, harness)
     result = asyncio.run(model_module._model_node(_state()))
     assert result["next_node"] is ReactRoute.END
-    assert len(persisted) == 1
-    message, project_to_transport = persisted[0]
-    assert isinstance(message, AIMessage)
-    assert message.content == "system_hint:环境已更新"
-    assert project_to_transport is False
-    assert requested == [message]
+    # 通知未产生独立持久化消息（仅最终 AI 输出经 finalize 落盘），也不进入 transported 历史。
+    assert not any(
+        getattr(m, "content", None) == "system_hint:环境已更新" for m in harness.messages
+    )
+    # 通知文本拼接到本步请求最后一条消息 content 末尾，且前置运行环境行。
+    from app.utils.host_platform import host_platform_name
+
+    assert requested[-1].content == (
+        f"你好\n运行环境：{host_platform_name()}\nsystem_hint:环境已更新"
+    )
     assert notice.content == "环境已更新"
     assert not space.has_runtime_notices()

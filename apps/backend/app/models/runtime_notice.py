@@ -6,8 +6,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from langchain_core.messages import AIMessage, BaseMessage
-
 
 @dataclass(frozen=True)
 class RuntimeNotice:
@@ -26,15 +24,12 @@ class RuntimeNotice:
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
 
-    def build_runtime_notice_message(self) -> BaseMessage:
-        """沿用现有 AIMessage 承载方式，后续消息角色选型只在此处调整。
+    def to_hint_text(self) -> str:
+        """供模型节点消费时追加到消息 content 的通知文本。
 
-        system_hint 前缀只在生成新消息时添加，不回写通知。此映射不等于已解决 thinking
-        provider 的 reasoning_content 要求，也不伪造思考内容；该限制留待消息策略调整。
-        持久化和是否投影到前端仍由模型节点负责。
+        不构造独立消息：历史上曾用 ``ToolMessage`` 承载，因缺必填 ``tool_call_id`` 在
+        langchain 校验器里直接 ``KeyError`` 崩溃。通知以 ``system_hint:`` 前缀拼接进本步
+        请求最后一条消息的 content 末尾，仅作用于当次模型请求；路由信息（``kind`` /
+        ``run_id``）由消费边界据此判断，不在此处落地为消息字段。
         """
-        metadata: dict[str, object] = dict(self.metadata)
-        metadata["notice_type"] = self.kind
-        if self.run_id is not None:
-            metadata["run_id"] = self.run_id
-        return AIMessage(content="system_hint:" + self.content, additional_kwargs=metadata)
+        return self.content

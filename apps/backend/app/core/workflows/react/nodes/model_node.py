@@ -21,7 +21,7 @@ import asyncio
 
 from langchain_core.messages import (
     AIMessage,
-    BaseMessage,
+    BaseMessage, SystemMessage,
 )
 from langchain_core.messages.tool import ToolCall
 from langgraph.config import get_stream_writer
@@ -43,6 +43,7 @@ from app.core.workflows.react.node_helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
 from app.core.workflows.react.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
+from app.utils.host_platform import host_platform_name
 from app.core.workflows.react.worflow_state.route import ReactRoute
 from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.core.workflows.vision_input import resolve_messages_for_model
@@ -169,16 +170,14 @@ async def _model_node(state: ReactGraphState) -> dict:
     messages: list[BaseMessage] = _runtime_context().load_message()
 
     task_space = task_runtime_spaces.get_or_create(task_id)
-    # 其它层投递领域通知，本节点通过集中映射构造 Message 后写入上下文。
-    # 归属过滤由 ``take_runtime_notices(run_id=...)`` 在取队列时完成（属于其它 Run 的消息
-    # 在此被丢弃），此处不再重复判定；本地 messages 必须同步追加，否则本次模型请求看不到它。
-    notices = task_space.take_runtime_notices(run_id=run_id)
-    for notice in notices:
-        system_message = notice.build_runtime_notice_message()
-        # 消息需要进入模型历史，但不是 assistant 面向用户的发言；投影策略单独持久化，
-        # 不污染 LangChain 消息及 provider 请求载荷。
-        _runtime_context().add_message(system_message, project_to_transport=False)
-        messages.append(system_message)
+    # 运行期通知不构造独立消息（曾用 ToolMessage 承载，因缺必填 tool_call_id 在 langchain
+    # 校验器里直接 KeyError 崩溃）；改为拼接到本步请求最后一条消息的 content 末尾，仅作用于
+    # 本次模型请求、不新增持久化消息。归属过滤由 ``take_runtime_notices(run_id=...)`` 在取队列
+    # 时完成（属于其它 Run 的消息在此被丢弃），此处不再重复判定。
+    notice = task_space.take_runtime_notices(run_id=run_id)
+    _runtime_context().add_message(SystemMessage(content=notice))
+    messages: list[BaseMessage] = _runtime_context().load_message()
+
 
     messages = await asyncio.to_thread(
         resolve_messages_for_model,
@@ -194,7 +193,6 @@ async def _model_node(state: ReactGraphState) -> dict:
                 "step_id": step_id,
                 "step_count": step_count,
                 "message_count": len(messages),
-                "runtime_notice_kinds": [notice.kind for notice in notices],
             },
         },
     )

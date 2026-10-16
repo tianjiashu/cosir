@@ -6,13 +6,12 @@ import weakref
 from types import SimpleNamespace
 
 import pytest
-
 from app.core.agents.agent_profile import AgentProfileType
+from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
     broadcast_system_prompt_delta,
     build_system_prompt_delta,
 )
-from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -164,11 +163,10 @@ def test_broadcast_notice_is_unchanged_across_tasks_and_message_conversion() -> 
     second_notice = second.take_runtime_notices()[0]
     assert first_notice is second_notice
     assert first_notice == delta.to_notice()
-    first_message = first_notice.build_runtime_notice_message()
-    second_message = second_notice.build_runtime_notice_message()
-    assert first_message.content == second_message.content == "system_hint:" + first_notice.content
-    first_message.content = "changed"
-    first_message.additional_kwargs["source"] = "changed"
-    assert second_message.content == "system_hint:" + first_notice.content
-    assert second_message.additional_kwargs["source"] == first_notice.metadata["source"]
+    first_hint = first_notice.to_hint_text()
+    second_hint = second_notice.to_hint_text()
+    assert first_hint == second_hint == "system_hint:" + first_notice.content
+    # 两个 Task 取到的通知是同一对象，但 hint 文本为不可变值，互不污染。
+    first_hint = "changed"
+    assert second_hint == "system_hint:" + first_notice.content
     assert first_notice == delta.to_notice()

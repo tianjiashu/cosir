@@ -59,6 +59,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/state-panel";
+import { FullscreenPortal } from "@/components/ui/fullscreen-portal";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamConfigurationDraft, AgentTeamNodeConfiguration } from "@/lib/api/agent-teams";
 import { DEFAULT_AGENT_TEAM_STATUS_COLOR } from "@/lib/agent-team-status";
@@ -276,7 +277,7 @@ function GraphCanvas({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const exitOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !settingsOpen) setFullscreen(false);
+      if (event.key === "Escape" && !event.defaultPrevented && !settingsOpen) setFullscreen(false);
     };
     window.addEventListener("keydown", exitOnEscape);
     return () => {
@@ -868,7 +869,7 @@ function GraphCanvas({
     setDragGhost(null);
   };
 
-  return (
+  const editor = (
     <section
       onPointerMove={moveAgentDrag}
       onPointerUp={finishAgentDrag}
@@ -1027,6 +1028,7 @@ function GraphCanvas({
       {dragGhost && <div aria-hidden="true" className={`${dragGhost.kind === "end" ? "bg-success text-success-foreground" : "bg-primary text-primary-foreground"} pointer-events-none fixed z-[200] rounded-lg px-3 py-2 text-xs font-medium shadow-xl`} style={{ left: dragGhost.x + 14, top: dragGhost.y + 14 }}>{dragGhost.kind === "end" ? <CheckCircle2Icon className="mr-2 inline size-3.5" /> : <BotIcon className="mr-2 inline size-3.5" />}{dragGhost.kind === "end" ? "END" : dragGhost.agentId}</div>}
     </section>
   );
+  return <FullscreenPortal active={fullscreen}>{editor}</FullscreenPortal>;
 }
 
 export function AgentTeamGraphEditor(props: {

@@ -22,12 +22,10 @@ type TaskSessionProps = {
   initialDisabledToolGroups?: string[];
   initialBanTools?: string[];
   workspaceRoot?: string;
-  forkAvailable?: boolean;
   forkingRunId?: number | null;
   onForkRun?: (runId: number) => void;
   onTaskLoaded?: (task: WorkspaceTask) => void;
   onTaskStateChanged?: () => void;
-  onRunStateChange?: (isRunning: boolean) => void;
 };
 
 /**
@@ -44,12 +42,10 @@ export function TaskPage({
   initialDisabledToolGroups,
   initialBanTools,
   workspaceRoot,
-  forkAvailable,
   forkingRunId,
   onForkRun,
   onTaskLoaded,
   onTaskStateChanged,
-  onRunStateChange,
 }: TaskSessionProps) {
   const initialTaskId = initialTask?.task_id ?? null;
   const [loadedTask, setLoadedTask] = useState<WorkspaceTask | null>(
@@ -153,11 +149,9 @@ export function TaskPage({
           initialAttachments={initialAttachments}
           initialDisabledToolGroups={initialDisabledToolGroups}
           initialBanTools={initialBanTools}
-          forkAvailable={forkAvailable ?? loadedTask.fork_available}
           forkingRunId={forkingRunId}
           onForkRun={onForkRun}
           onTaskStateChanged={onTaskStateChanged}
-          onRunStateChange={onRunStateChange}
         />
       </div>
     </TaskWorkspaceLayout>
