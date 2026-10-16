@@ -21,16 +21,16 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.models.terminal_session_record import TerminalSessionRecord
 from app.service.terminal.errors import TerminalSessionError, TerminalSessionStateError
-from app.service.terminal.observation import TerminalObservation
+from app.service.terminal.process_terminal_worker import ProcessTerminalWorker, WorkerEventCallback
+from app.service.terminal.shell_resolver import ShellSpec
+from app.service.terminal.terminal_observation import TerminalObservation
 from app.service.terminal.terminal_output_sanitizer import TerminalOutputSanitizer
-from app.service.terminal.preview import (
+from app.service.terminal.terminal_preview import (
     PreviewBuffer,
     TerminalPreviewAttachment,
     TerminalPreviewSubscription,
 )
-from app.service.terminal.session_status import TerminalSessionStatusChange
-from app.service.terminal.shell_resolver import ShellSpec
-from app.service.terminal.process_terminal_worker import ProcessTerminalWorker, WorkerEventCallback
+from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
 from app.utils.datetime_utils import utc_now
 
 RunCancellationCheck = Callable[[], bool]

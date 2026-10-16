@@ -23,10 +23,8 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
-from app.service.terminal.session_status import (
-    TerminalSessionStatusChange,
-    TerminalSessionStatusSource,
-)
+from app.service.terminal.terminal_session_service import TerminalSessionService
+from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 _CHILD_RUN_STATUSES = frozenset({"pending", "running", "completed", "failed", "cancelled"})
@@ -56,7 +54,7 @@ class ConversationTaskStateService:
             ``apply_planned`` 与 ``publish_state`` 更新进程本地状态并通知 SSE subscriber；child
             与 terminal 状态投影还会尽力持久化已有工具的 UI metadata。
         不访问 LangGraph checkpoint、工具 handler 或前端运行时状态；terminal session 只通过
-        ``TerminalSessionStatusSource`` 读取进程内生命周期事实。
+        ``TerminalSessionService`` 读取进程内生命周期事实。
 
     并发:
         ``_lock``（类级 ``RLock``）是每个 ``TaskRuntimeSpace`` 快照工作副本的**唯一串行化点**：
@@ -69,7 +67,7 @@ class ConversationTaskStateService:
     _lock: ClassVar[RLock] = RLock()
     _subscribers: ClassVar[dict[int, set[Subscriber]]] = {}
     _deleted_task_ids: ClassVar[set[int]] = set()
-    _terminal_status_source: TerminalSessionStatusSource | None = None
+    _terminal_status_source: TerminalSessionService | None = None
 
     def __init__(
         self,

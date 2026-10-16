@@ -16,11 +16,11 @@ from app.service.terminal.errors import (
     TerminalWorkerSignalFailedError,
     TerminalWorkerUnavailableError,
 )
+from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
 from app.service.terminal.shell_resolver import ShellResolver
 from app.service.terminal.terminal_session_service import (
     TerminalSessionService,
 )
-from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -92,9 +92,10 @@ def make_service(
 ):
     """仅在测试中替换具体构造边界，收集每个会话独立创建的 worker。
 
-    ``TerminalSessionService`` 构造不接收入参，因此这里按装配层同样的方式在构造后接线：
-    观察者赋给 ``_status_observer``；缓冲上限的事实源是 ``Constant.Terminal``，测试只在该
-    边界上收紧它（把窗口压到几字节以观察 gap），不重新引入构造参数。
+    ``status_observer`` 是构造期必需项，不传时用 no-op 观察者占位（只关心记录行为、不关心
+    回写的用例）；需要断言回写的用例自行传收集器。缓冲上限的事实源是
+    ``Constant.Terminal.MAX_RING_BUFFER_BYTES``，测试只在该边界上收紧它（把窗口压到几字节
+    以观察 gap），不引入构造参数。
     """
     workers = []
 
@@ -108,9 +109,9 @@ def make_service(
     )
     if ring_buffer_bytes is not None:
         monkeypatch.setattr(Constant.Terminal, "MAX_RING_BUFFER_BYTES", ring_buffer_bytes)
-    service = TerminalSessionService()
-    if status_observer is not None:
-        service._status_observer = status_observer
+    service = TerminalSessionService(
+        status_observer=status_observer or (lambda _change: None)
+    )
     return service, workers
 
 
@@ -395,7 +396,7 @@ def test_write_operation_id_is_idempotent_and_payload_bound(monkeypatch, tmp_pat
 
 def test_worker_construction_failure_does_not_leave_starting_metadata(tmp_path, monkeypatch):
     monkeypatch.delenv(Constant.Terminal.WORKER_ENV, raising=False)
-    service = TerminalSessionService()
+    service = TerminalSessionService(status_observer=lambda _change: None)
 
     with pytest.raises(TerminalWorkerUnavailableError, match="not configured"):
         service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)

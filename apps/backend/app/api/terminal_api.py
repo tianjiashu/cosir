@@ -17,7 +17,7 @@ from app.service.terminal.errors import (
     TerminalSessionError,
     TerminalSessionResyncRequiredError,
 )
-from app.service.terminal.preview import TerminalPreviewSubscription
+from app.service.terminal.terminal_preview import TerminalPreviewSubscription
 from app.service.terminal.terminal_session_service import TerminalSessionService
 
 

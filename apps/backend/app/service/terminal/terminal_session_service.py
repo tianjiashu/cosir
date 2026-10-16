@@ -26,26 +26,33 @@ from app.service.terminal.errors import (
     TerminalSessionStateError,
     TerminalWorkerUnavailableError,
 )
-from app.service.terminal.preview import TerminalPreviewAttachment, TerminalPreviewSubscription
-from app.service.terminal.session_runtime import (
+from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
+from app.service.terminal.shell_resolver import ShellResolver
+from app.service.terminal.terminal_preview import (
+    TerminalPreviewAttachment,
+    TerminalPreviewSubscription,
+)
+from app.service.terminal.terminal_session_runtime import (
     RunCancellationCheck,
     SessionTermination,
     TerminalSessionRuntime,
 )
-from app.service.terminal.session_status import (
+from app.service.terminal.terminal_session_status import (
     TerminalSessionStatusChange,
     TerminalSessionStatusObserverLike,
 )
-from app.service.terminal.shell_resolver import ShellResolver
-from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
 from app.utils.datetime_utils import utc_now
 
 
 class TerminalSessionService:
     """终端归 Task 所有，Run 结束不关闭；Task 删除及后端退出负责资源兜底。"""
 
-    def __init__(self, status_observer) -> None:
-        """构造时不接收入参；状态回写观察者由装配层在装配期赋值，见 ``_status_observer``。"""
+    def __init__(self, status_observer: TerminalSessionStatusObserverLike) -> None:
+        """绑定状态回写观察者；装配层必须显式传入，不做默认降级。
+
+        观察者是显式必需项而非可选钩子：终端生命周期变化必须能投影到 Transport，
+        缺失就让 TypeError 在装配期暴露，避免出现「会话状态没人回写」的静默失效。
+        """
 
         self._max_active_sessions = Constant.Terminal.MAX_ACTIVE_SESSIONS
         self._ring_buffer_bytes = Constant.Terminal.MAX_RING_BUFFER_BYTES
@@ -342,23 +349,21 @@ class TerminalSessionService:
                 },
             },
         )
-        observer = self._status_observer
-        if observer is not None:
-            try:
-                observer(change)
-            except Exception:
-                log.exception(
-                    "terminal_session_status_observer_failed",
-                    extra={
-                        "msg": "Terminal session 状态回写 Transport 失败",
-                        "data": {
-                            "task_id": change.task_id,
-                            "session_id": change.session_id,
-                            "status": change.status,
-                            "reason": change.end_reason,
-                        },
+        try:
+            self._status_observer(change)
+        except Exception:
+            log.exception(
+                "terminal_session_status_observer_failed",
+                extra={
+                    "msg": "Terminal session 状态回写 Transport 失败",
+                    "data": {
+                        "task_id": change.task_id,
+                        "session_id": change.session_id,
+                        "status": change.status,
+                        "reason": change.end_reason,
                     },
-                )
+                },
+            )
 
     def _retire_runtime(self, runtime: TerminalSessionRuntime) -> None:
         session_id = runtime.record.session_id

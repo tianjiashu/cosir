@@ -31,7 +31,7 @@ def terminal(request, tmp_path, monkeypatch):
     # worker 路径只有宿主环境变量一个来源（生产由 Tauri spawn_backend 注入），
     # 测试同样经由该边界配置，不再从 service 构造参数注入。
     monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(binary))
-    service = TerminalSessionService()
+    service = TerminalSessionService(status_observer=lambda _change: None)
     snapshot = service.start(
         task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1, shell=shell
     )
@@ -241,7 +241,7 @@ def test_zsh_keeps_user_configuration_and_can_disable_integration(tmp_path, monk
     if not binary.is_file():
         pytest.skip("terminal-worker must be built")
     monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(binary))
-    service = TerminalSessionService()
+    service = TerminalSessionService(status_observer=lambda _change: None)
     try:
         for index, integration in enumerate(["auto", "off"]):
             snapshot = service.start(  # noqa: S604 - 领域 shell 名称，不是 subprocess shell=True。

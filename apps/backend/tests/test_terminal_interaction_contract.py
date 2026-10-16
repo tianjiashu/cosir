@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from app.core.tools.tool_models.terminal_session_args import TerminalReadArgs, TerminalWriteArgs
 from app.service.terminal.errors import TerminalSessionError
-from app.service.terminal.observation import TerminalObservation, json_size
+from app.service.terminal.terminal_observation import TerminalObservation, json_size
 
 
 def test_empty_line_submits_enter_and_preserves_whitespace():
