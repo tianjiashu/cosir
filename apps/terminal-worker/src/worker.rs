@@ -10,10 +10,11 @@ use base64::Engine;
 use crate::io::{FrameWriter, SharedFrameWriter};
 use crate::lifecycle::LifecycleArbiter;
 use crate::protocol::{
-    read_control_frame, ControlFrame, WorkerEvent, MAX_INPUT_BYTES, MAX_OUTPUT_CHUNK_BYTES,
+    encode_input, read_control_frame, ControlFrame, InputKey, WorkerEvent, MAX_OUTPUT_CHUNK_BYTES,
     PROTOCOL,
 };
 use crate::pty::{PtyRuntime, TerminalControlResult};
+use crate::shell_integration::{ShellLaunch, ShellParser};
 use crate::terminal_emulator::TerminalQueryResponder;
 
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -39,26 +40,37 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
             shell,
             shell_kind,
             cwd,
-        }) if !shell_kind.trim().is_empty() => (shell, shell_kind, cwd),
+            integration,
+        }) if !shell_kind.trim().is_empty() => (shell, shell_kind, cwd, integration),
         InternalEvent::BackendEof => return Ok(()),
         _ => anyhow::bail!("first terminal worker frame must be start"),
     };
 
     let shell_kind = start.1;
-    let spawned = PtyRuntime::spawn(start.0, start.2)?;
+    let launch = ShellLaunch::prepare(start.0, &shell_kind, &start.3);
+    let spawned = PtyRuntime::spawn(launch.argv.clone(), start.2, &launch.env)?;
     let runtime = spawned.runtime;
     output.send(&WorkerEvent::Handshake {
         protocol: PROTOCOL,
         instance_id,
         pid: std::process::id(),
         pty_kind: pty_kind(),
-        capabilities: capabilities(),
+        capabilities: capabilities()
+            .into_iter()
+            .chain(InputKey::supported().iter().map(|key| key.capability()))
+            .collect(),
     })?;
+    if let Some(reason) = launch.unavailable {
+        output.send(&WorkerEvent::Shell {
+            event: serde_json::json!({"kind":"unavailable", "reason":reason}),
+        })?;
+    }
     spawn_pty_reader(
         spawned.reader,
         runtime.clone(),
         output.clone(),
         events_tx.clone(),
+        ShellParser::new(launch.token.clone()),
         TerminalQueryResponder::new(
             cfg!(windows) || matches!(shell_kind.as_str(), "cmd" | "powershell" | "pwsh"),
         ),
@@ -78,10 +90,10 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
 
         match events_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(InternalEvent::Control(frame)) => match frame {
-                ControlFrame::Write { data_base64 } => {
-                    let data = match BASE64.decode(data_base64) {
-                        Ok(data) if !data.is_empty() && data.len() <= MAX_INPUT_BYTES => data,
-                        _ => {
+                ControlFrame::Write { input } => {
+                    let data = match encode_input(input) {
+                        Ok(data) => data,
+                        Err(_) => {
                             let _ = output.send(&WorkerEvent::Error {
                                 code: "INVALID_INPUT",
                             });
@@ -208,6 +220,7 @@ fn spawn_pty_reader(
     runtime: Arc<PtyRuntime>,
     output: SharedFrameWriter,
     sender: Sender<InternalEvent>,
+    mut shell_parser: ShellParser,
     mut query_responder: TerminalQueryResponder,
 ) {
     thread::spawn(move || {
@@ -230,10 +243,30 @@ fn spawn_pty_reader(
                         let _ = sender.send(InternalEvent::BackendOutputFailed);
                         return;
                     }
-                    let event = WorkerEvent::Output {
-                        data_base64: BASE64.encode(&buffer[..size]),
-                    };
-                    if output.send(&event).is_err() {
+                    let mut start = 0;
+                    for (index, byte) in buffer[..size].iter().enumerate() {
+                        if let Some(event) = shell_parser.advance(*byte) {
+                            // 标记之前的原始字节先交付；同一块内的后续输出不能越过语义事件。
+                            if output
+                                .send(&WorkerEvent::Output {
+                                    data_base64: BASE64.encode(&buffer[start..=index]),
+                                })
+                                .is_err()
+                                || output.send(&WorkerEvent::Shell { event }).is_err()
+                            {
+                                let _ = sender.send(InternalEvent::BackendOutputFailed);
+                                return;
+                            }
+                            start = index + 1;
+                        }
+                    }
+                    if start < size
+                        && output
+                            .send(&WorkerEvent::Output {
+                                data_base64: BASE64.encode(&buffer[start..size]),
+                            })
+                            .is_err()
+                    {
                         let _ = sender.send(InternalEvent::BackendOutputFailed);
                         return;
                     }

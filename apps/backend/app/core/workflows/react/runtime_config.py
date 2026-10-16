@@ -34,6 +34,10 @@ class RuntimeConfig:
         run: 当前执行的 Conversation Run 记录，节点经它写入 run 状态（单一事实来源）。
         model: 根据 Task 冻结工具 schema 绑定的 Runnable；无工具时为基础模型。结构化输出节点
             在同一模型上临时绑定严格 JSON Schema response_format，保留请求中的工具 schema。
+        max_steps: 本轮允许的最大模型步骤数（执行期常量，源自 agent profile）。不进 graph state
+            （否则会随每份 checkpoint 冗余落盘），由编排层在 ``run()`` 时注入、graph 重放时重新注入；
+            model 节点按 ``step_count > max_steps`` 拦截超配额——计数器 ``step_count`` 留在 state，
+            阈值 ``max_steps`` 走注入，二者在此分工。
         structured_output: 本次 Agent Run 冻结的可选最终 JSON Schema 契约。
         start_time: graph 开始执行的 ``time.perf_counter()`` 时间戳（由 ``ReactLikeWorkflow.run``
             写入）。**当前无读取方**：耗时统计不在 workflow 内计算，字段保留待用。
@@ -60,6 +64,7 @@ class RuntimeConfig:
     operations: WorkflowOperations
     run: ConversationRunRecord
     model: Runnable
+    max_steps: int
     structured_output: StructuredOutputSpec | None = None
     start_time: float = 0.0
     usage_stats: ConversationRunUsageStats = field(default_factory=ConversationRunUsageStats)

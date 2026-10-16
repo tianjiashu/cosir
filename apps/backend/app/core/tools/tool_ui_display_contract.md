@@ -200,7 +200,7 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out` |
 | `terminal_list` | `standalone`、不可展开、`none` | `terminal-session` | 本次发现的 `session_count`，不复制可变的会话状态 |
 | `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、可选用途 `label`、shell/初始 cwd、status、generation 和有限 cursor 元数据；原始 PTY 输出只走 preview WebSocket |
-| `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | session/status/cursor 元数据；write 额外提供 `submitted`；完整输出或输入只进入模型 content，不进入 display_data |
+| `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | session/status 元数据；输入接受结果、shell 观察事件及 Agent 游标进入模型 content，原始输出仍由独立预览通道承载，不进入 display_data |
 | `terminal_signal` / `terminal_close` | `standalone`、不可展开、`none` | `terminal-session` | session/status 元数据；signal 额外提供受控的 `signal` |
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |

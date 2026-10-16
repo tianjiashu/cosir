@@ -2,9 +2,10 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config.constant import Constant
+from app.service.terminal.interaction import ActivityWait, TerminalInput, TerminalWait
 
 
 class TerminalListArgs(BaseModel):
@@ -37,6 +38,14 @@ class TerminalStartArgs(BaseModel):
         "the workspace root and must resolve to an existing directory inside it.",
     )
 
+    integration: Literal["auto", "off"] = Field(
+        default="auto",
+        description=(
+            "Enable shell observation when supported, or disable it explicitly. Read "
+            "returned capabilities; worker startup is not integration readiness."
+        ),
+    )
+
 
 class TerminalWriteArgs(BaseModel):
     """terminal_write 的严格参数模型。"""
@@ -57,69 +66,44 @@ class TerminalWriteArgs(BaseModel):
             f"most recent {Constant.Terminal.MAX_WRITE_OPERATION_CACHE} accepted writes."
         ),
     )
-    data: str = Field(
-        min_length=1,
-        max_length=65536,
+    input: TerminalInput = Field(
         description=(
-            "Raw UTF-8 text sent exactly as provided. No implicit Enter or decoding of "
-            "\\r, \\n, or &#13;; use submit=true to submit input."
+            "Submit one line with Enter, or send one platform-supported control key. "
+            "No input arrays, embedded newlines, or text/key mixing. A line may be "
+            "a command, a continuation, or a program answer; acceptance is not execution."
         ),
-    )
-    submit: bool = Field(
-        default=False,
-        description=(
-            "If true, append one real Enter key (CR, 0x0D) after data; use it to submit "
-            "commands or answer prompts."
-        ),
-    )
-    after_seq: int | None = Field(
-        default=None,
-        ge=0,
-        description="Return only output frames whose seq is greater than this value. Pass the "
-        "largest seq you have already processed; keep the same value when no new "
-        "frame was returned. Use null or 0 on the first call.",
     )
     wait_ms: int = Field(
         default=500,
         ge=0,
         le=30000,
-        description="Maximum time to wait for new output in milliseconds; 0 returns immediately. "
-        "This does not wait for the shell to exit.",
+        description=(
+            "Bounded activity collection after input acceptance; does not wait for "
+            "command return."
+        ),
     )
-
-    @model_validator(mode="after")
-    def validate_encoded_input_size(self) -> "TerminalWriteArgs":
-        """按实际 UTF-8 字节校验输入；submit 额外占用一个 CR 字节。"""
-
-        final_size = len(self.data.encode("utf-8")) + (1 if self.submit else 0)
-        if final_size > 64 * 1024:
-            raise ValueError("terminal input exceeds 64 KiB after UTF-8 encoding")
-        return self
 
 
 class TerminalReadArgs(BaseModel):
-    """terminal_read 的严格参数模型。"""
+    """观察游标与预览 output seq 分域；等待不改变命令生命周期。"""
 
     model_config = ConfigDict(strict=True, extra="forbid")
-
     session_id: str = Field(
-        min_length=1,
-        max_length=128,
-        description="Session ID from terminal_start or terminal_list; reusable across runs.",
+        min_length=1, max_length=128, description="Task-owned terminal session ID."
     )
-    after_seq: int | None = Field(
+    cursor: str | None = Field(
         default=None,
-        ge=0,
-        description="Return only output frames whose seq is greater than this value. Pass the "
-        "largest seq you have already processed; keep the same value when no new "
-        "frame was returned. Use null or 0 on the first call.",
+        max_length=256,
+        description=(
+            "Opaque next_cursor from a previous observation; null reads the retained " "window."
+        ),
     )
-    wait_ms: int = Field(
-        default=3000,
-        ge=0,
-        le=30000,
-        description="Maximum time to wait for new output in milliseconds; 0 returns immediately. "
-        "This does not wait for the shell to exit.",
+    wait: TerminalWait = Field(
+        default_factory=ActivityWait,
+        description=(
+            "Wait for activity, a named command to return, or a new top-level prompt. "
+            "Timeout never terminates the program."
+        ),
     )
 
 

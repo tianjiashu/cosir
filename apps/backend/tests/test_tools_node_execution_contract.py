@@ -159,7 +159,6 @@ def _state(
         tool_error_count=0,
         next_node=ReactRoute.TOOLS,
         instruction="调用 Team",
-        max_steps=10,
         final_text="",
         last_tool_results=last_tool_results or {},
         tool_call_lifecycle=lifecycle,

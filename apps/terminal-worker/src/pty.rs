@@ -29,7 +29,11 @@ pub enum TerminalControlResult {
 }
 
 impl PtyRuntime {
-    pub fn spawn(shell: Vec<String>, cwd: String) -> anyhow::Result<SpawnedPty> {
+    pub fn spawn(
+        shell: Vec<String>,
+        cwd: String,
+        env: &[(String, String)],
+    ) -> anyhow::Result<SpawnedPty> {
         if shell.is_empty() {
             anyhow::bail!("shell argv must not be empty")
         }
@@ -40,6 +44,9 @@ impl PtyRuntime {
         let mut command =
             CommandBuilder::from_argv(shell.into_iter().map(OsString::from).collect::<Vec<_>>());
         command.cwd(cwd);
+        for (key, value) in env {
+            command.env(key, value);
+        }
         let mut child = pair.slave.spawn_command(command)?;
         if child.process_id().is_none() {
             let _ = child.kill();

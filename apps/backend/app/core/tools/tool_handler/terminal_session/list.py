@@ -32,7 +32,7 @@ class TerminalListTool(HandlerBase):
         "current directory; running means the shell is alive, not that a command is finished. "
         "Sessions survive run completion and cancellation, but not backend restarts. "
         "Close sessions explicitly when no longer needed. Output history is bounded; use "
-        "terminal_read with after_seq=null to read the retained output window."
+        "terminal_read with cursor=null to read the retained output window."
     )
     args_model = TerminalListArgs
     timeout_seconds: ClassVar[float] = 10.0

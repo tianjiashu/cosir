@@ -24,14 +24,13 @@ class ReactGraphState(BaseModel):
         instruction: 模型伴随工具调用产出的文本说明，随 state 下传给 tools / observe 节点，
             使下游执行与错误排查能看到模型当时的意图；无工具调用时为空字符串。
         step_count: 当前模型步骤序号（model 节点进入时 +1）。发起推理前按
-            ``step_count > max_steps`` 拦截，超配额调用 ``_finalize_max_steps`` 收口终态。
+            ``step_count > max_steps`` 拦截（阈值 ``max_steps`` 经 RuntimeConfig 注入，不进本
+            state），超配额调用 ``_finalize_max_steps`` 收口终态。
         tool_error_count: 连续工具失败次数，成功即清零。observe 节点从本批
             ``last_tool_results`` 重算并消费（超 ``Constant.Workflow.TOOL_ERROR_LIMIT`` 判定）。
         next_node: 下一个图节点或 ``end``。model 节点选择工具、续写、结构化输出或结束；
         wait_user 节点选择放行 observe、回到 tools 或自环重新挂起；observe 节点选择继续模型或
         结束。固定转移由图边表达。
-        max_steps: 本轮允许的最大模型步骤数，执行期常量。编排层初始化；model 节点
-            ``step_count > max_steps`` 判定用。
         final_text: 终态可见文本：正常完成为模型最终回答，步数耗尽由 ``_finalize_max_steps``
             写默认失败说明。
         last_tool_results: 本批工具结果摘要（可序列化 dict，由 tools 节点对本批
@@ -49,7 +48,6 @@ class ReactGraphState(BaseModel):
     tool_error_count: int
     next_node: ReactRoute
     instruction: str = ""
-    max_steps: int
     final_text: str
     last_tool_results: dict[str, Any]
     tool_call_lifecycle: ToolCallLifecycleManager | None = None

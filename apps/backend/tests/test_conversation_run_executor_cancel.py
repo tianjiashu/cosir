@@ -95,17 +95,23 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
 
 
 @pytest.mark.asyncio
-async def test_cancel_preserves_task_terminal(tmp_path) -> None:
+async def test_cancel_preserves_task_terminal(monkeypatch, tmp_path) -> None:
     from test_terminal_session_service import make_service
 
-    terminal, factory = make_service()
+    terminal, workers = make_service(monkeypatch)
     session = terminal.start(task_id=7, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     executor = _build_executor(_RunService(status="running"))
     try:
         assert await executor.cancel(_RUN_ID) is True
-        assert not factory.workers[0].closed
-        terminal.write(str(session["session_id"]), task_id=7, data=b"next run", wait_ms=0)
-        assert factory.workers[0].writes == [b"next run"]
+        assert not workers[0].closed
+        terminal.write(
+            str(session["session_id"]),
+            task_id=7,
+            input={"type": "line", "text": "next run"},
+            operation_id="after-run-cancel",
+            wait_ms=0,
+        )
+        assert workers[0].writes == [b"next run\r"]
     finally:
         terminal.shutdown()
 

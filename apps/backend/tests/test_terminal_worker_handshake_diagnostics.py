@@ -262,9 +262,8 @@ def test_not_configured_worker_logs_before_raising(monkeypatch: pytest.MonkeyPat
 
     caplog.set_level(logging.WARNING)
     monkeypatch.delenv(worker_module.Constant.Terminal.WORKER_ENV, raising=False)
-    factory = worker_module.ProcessTerminalWorkerFactory()
 
     with pytest.raises(TerminalWorkerUnavailableError):
-        factory.create("unconfigured-instance")
+        ProcessTerminalWorker(None, "unconfigured-instance")
 
     assert any(record.getMessage() == "terminal_worker_not_configured" for record in caplog.records)

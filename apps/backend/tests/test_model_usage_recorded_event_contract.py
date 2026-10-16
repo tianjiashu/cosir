@@ -111,7 +111,6 @@ def _state(**overrides: Any) -> ReactGraphState:
         "tool_error_count": 0,
         "next_node": ReactRoute.MODEL,
         "instruction": "",
-        "max_steps": 10,
         "final_text": "",
         "last_tool_results": {"instruction": "", "observations": []},
     }
@@ -138,6 +137,7 @@ class _ModelHarness:
         fail_result: object = _UNSET,
         complete_result: object = _UNSET,
         thinking_channel: str = "",
+        max_steps: int = 10,
     ) -> None:
         self.messages: list[Any] = []
         self.events: list[Any] = []
@@ -195,6 +195,7 @@ class _ModelHarness:
             thinking_channel=thinking_channel,
             run=SimpleNamespace(task_id=task_id, id=run_id, extra=None),
             usage_stats=self.usage_stats,
+            max_steps=max_steps,
         )
 
         def add_message(message: Any, **_kwargs: Any) -> None:
@@ -739,7 +740,7 @@ def test_max_steps_exceeded_records_no_usage_event(
     harness = _ModelHarness(AIMessage(content="不应发生"))
     _install(monkeypatch, harness)
 
-    result = asyncio.run(model_module._model_node(_state(step_count=10, max_steps=10)))
+    result = asyncio.run(model_module._model_node(_state(step_count=10)))
 
     assert result["next_node"] is ReactRoute.END
     assert harness.failed is True
@@ -762,7 +763,7 @@ def test_step_count_equal_to_max_steps_still_runs_and_records(
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
 
-    result = asyncio.run(model_module._model_node(_state(step_count=9, max_steps=10)))
+    result = asyncio.run(model_module._model_node(_state(step_count=9)))
 
     assert result["next_node"] is ReactRoute.END
     data = _single_usage_data(caplog)

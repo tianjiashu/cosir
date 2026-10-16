@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import platform
@@ -20,7 +19,6 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -46,61 +44,21 @@ class _PendingSignal:
     result: Mapping[str, object] | None = None
 
 
-class TerminalWorker(Protocol):
-    """Terminal Worker 生命周期和控制操作契约。"""
+class ProcessTerminalWorker:
+    """基于长度前缀 JSON 控制帧的 Terminal Worker client。
 
-    @property
-    def pid(self) -> int | None: ...
+    Worker 进程必须先返回 ``handshake``，之后发送 ``output``、``shell``、``exit``
+    事件。二进制 PTY 数据使用 base64 字段；shell/PTY 资源由 worker 管理。
+    """
 
-    @property
-    def capabilities(self) -> frozenset[str]: ...
+    def __init__(self, executable: str | None, instance_id: str) -> None:
+        """构造时解析显式路径或宿主环境配置，不启动子进程。
 
-    def start(
-        self,
-        spec: ShellSpec,
-        cwd: str,
-        on_event: WorkerEventCallback,
-    ) -> None: ...
-
-    def write(self, data: bytes) -> None: ...
-
-    def signal(self, signal_name: str) -> None: ...
-
-    def close(self) -> None: ...
-
-
-class TerminalWorkerFactory(Protocol):
-    """创建一个尚未启动的 worker client。"""
-
-    def create(self, instance_id: str) -> TerminalWorker: ...
-
-
-class ProcessTerminalWorkerFactory:
-    """通过 ``CODING_AGENT_TERMINAL_WORKER`` 创建 sidecar worker。"""
-
-    def __init__(self, executable: str | None = None) -> None:
-        """保存显式路径；未提供时延迟读取环境变量，方便测试和桌面装配。"""
-
-        self._executable = executable
-
-    def create(self, instance_id: str) -> TerminalWorker:
-        """构造 process worker；不在此处启动子进程。
-
-        参数:
-            instance_id: 本次 worker 会话实例标识，参与握手校验并进入进程名与日志。
-
-        返回:
-            尚未启动的 :class:`ProcessTerminalWorker`。
-
-        异常:
-            TerminalWorkerUnavailableError: 未配置 worker 可执行文件时抛出（桌面宿主经
-                ``CODING_AGENT_TERMINAL_WORKER`` 注入，缺失说明装配不完整）。
-
-        副作用:
-            未配置时写一条 WARNING 日志 ``terminal_worker_not_configured``；否则只读环境变量。
+        未配置路径时记录诊断并抛 TerminalWorkerUnavailableError；service 在创建
+        会话时才构造本对象，后端启动不要求终端 sidecar 已装配。
         """
 
-        executable = self._executable or os.environ.get(Constant.Terminal.WORKER_ENV, "").strip()
+        executable = executable or os.environ.get(Constant.Terminal.WORKER_ENV, "").strip()
         if not executable:
             log.warning(
                 "terminal_worker_not_configured",
@@ -116,19 +74,6 @@ class ProcessTerminalWorkerFactory:
                 f"{Constant.Terminal.WORKER_ENV} is not configured; "
                 "terminal worker sidecar is unavailable"
             )
-        return ProcessTerminalWorker(executable, instance_id)
-
-
-class ProcessTerminalWorker:
-    """基于长度前缀 JSON 控制帧的 Terminal Worker client。
-
-    Worker 进程必须先返回 ``handshake``，之后发送 ``output``、``status``、``exit``
-    事件。二进制 PTY 数据使用 base64 字段；shell/PTY 资源由 worker 管理。
-    """
-
-    def __init__(self, executable: str, instance_id: str) -> None:
-        """初始化未启动的 worker client。"""
-
         self._executable = executable
         self.instance_id = instance_id
         self._process: subprocess.Popen[bytes] | None = None
@@ -247,6 +192,7 @@ class ProcessTerminalWorker:
                 "shell": list(spec.argv),
                 "shell_kind": spec.kind,
                 "cwd": cwd,
+                "integration": spec.integration,
             }
         )
         # 超时与「收到但不合法」是两类故障：前者可能是 worker 启动慢（可重试），后者是确定性
@@ -273,23 +219,21 @@ class ProcessTerminalWorker:
         )
         self._heartbeat_thread.start()
 
-    def write(self, data: bytes) -> None:
-        """向 worker 写入一段 PTY input bytes。"""
+    def write(self, input: dict[str, str]) -> None:
+        """将已校验的单次输入入队；worker 负责按键编码并一次写入 PTY。"""
 
         process = self._process
         if process is None or process.poll() is not None or not self._handshake_valid:
             raise TerminalWorkerUnavailableError("terminal worker is not ready")
-        payload = self._encode_frame(
-            {"type": "write", "data_base64": base64.b64encode(data).decode("ascii")}
-        )
+        payload = self._encode_frame({"type": "write", "input": input})
         with self._input_queue_lock:
             if (
                 self._input_queue.full()
-                or self._input_queue_bytes + len(data) > Constant.Terminal.MAX_INPUT_QUEUE_BYTES
+                or self._input_queue_bytes + len(payload) > Constant.Terminal.MAX_INPUT_QUEUE_BYTES
             ):
                 raise TerminalWorkerBackpressureError("terminal worker input queue is full")
             self._input_queue.put_nowait(payload)
-            self._input_queue_bytes += len(data)
+            self._input_queue_bytes += len(payload)
 
     def signal(self, signal_name: str) -> None:
         """发送 signal 并等待 worker 确认实际投递结果。"""
@@ -310,11 +254,15 @@ class ProcessTerminalWorker:
             raise TerminalWorkerUnavailableError("terminal worker signal acknowledgement timed out")
         with self._signal_lock:
             result = self._pending_signals.pop(request_id, None)
-        status = result.result.get("status") if result and result.result else None
+        if result is None or result.result is None:
+            raise TerminalWorkerUnavailableError("terminal worker signal result is missing")
+        status = result.result.get("status")
         if status == "applied":
             return
         if status == "unsupported":
-            raise TerminalWorkerSignalUnsupportedError("terminal signal is unsupported")
+            raise TerminalWorkerSignalUnsupportedError(
+                str(result.result.get("reason", "unsupported"))
+            )
         if status == "failed":
             raise TerminalWorkerSignalFailedError("terminal worker failed to deliver signal")
         raise TerminalWorkerUnavailableError("terminal worker signal result is missing")
@@ -367,9 +315,7 @@ class ProcessTerminalWorker:
                 return
             finally:
                 with self._input_queue_lock:
-                    self._input_queue_bytes = max(
-                        0, self._input_queue_bytes - _payload_data_bytes(payload)
-                    )
+                    self._input_queue_bytes = max(0, self._input_queue_bytes - len(payload))
                 self._input_queue.task_done()
 
     @staticmethod
@@ -619,18 +565,6 @@ def _read_exact(stream: object, size: int) -> bytes:
         chunks.append(chunk)
         remaining -= len(chunk)
     return b"".join(chunks)
-
-
-def _payload_data_bytes(payload: bytes) -> int:
-    """从 write frame 估算其原始 input bytes 大小。"""
-
-    try:
-        size = struct.unpack(">I", payload[:4])[0]
-        message = json.loads(payload[4 : 4 + size].decode("utf-8"))
-        encoded = message.get("data_base64") if isinstance(message, dict) else None
-        return len(base64.b64decode(encoded, validate=True)) if isinstance(encoded, str) else 0
-    except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
-        return 0
 
 
 def _sanitize_worker_stderr(raw_line: bytes, *, max_length: int = 4096) -> str:

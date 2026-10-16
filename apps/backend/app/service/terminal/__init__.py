@@ -1,5 +1,1 @@
-"""本机终端 session 领域服务。"""
-
-from app.service.terminal.terminal_session_service import TerminalSessionService
-
-__all__ = ["TerminalSessionService"]
+"""本机终端领域；包导入不装配 service，避免契约模块引入工具与运行时循环。"""

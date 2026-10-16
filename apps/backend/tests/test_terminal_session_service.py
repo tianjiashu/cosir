@@ -1,11 +1,11 @@
 import base64
 from pathlib import Path
 from queue import SimpleQueue
-from typing import cast
 
 import pytest
 
 from app.config.constant import Constant
+from app.models.runtime_notice import RuntimeNotice
 from app.service.terminal.errors import (
     TerminalSessionError,
     TerminalSessionNotFoundError,
@@ -18,18 +18,24 @@ from app.service.terminal.errors import (
 )
 from app.service.terminal.shell_resolver import ShellResolver
 from app.service.terminal.terminal_session_service import (
-    TerminalReadResult,
     TerminalSessionService,
 )
 from app.service.terminal.worker import ProcessTerminalWorker
-from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 class FakeWorker:
     pid = 4321
-    capabilities = frozenset({"signal_interrupt", "signal_eof_canonical", "signal_suspend"})
+    capabilities = frozenset(
+        {
+            "signal_interrupt",
+            "signal_eof_canonical",
+            "signal_suspend",
+            "input_ctrl_c",
+            "input_ctrl_d",
+        }
+    )
 
     def __init__(self) -> None:
         self._callback = None
@@ -40,8 +46,10 @@ class FakeWorker:
     def start(self, spec, cwd, on_event) -> None:
         self._callback = on_event
         on_event({"type": "handshake"})
+        on_event({"type": "shell", "event": {"kind": "unavailable", "reason": "test_worker"}})
 
-    def write(self, data: bytes) -> None:
+    def write(self, input) -> None:
+        data = encode_test_input(input)
         self.writes.append(data)
         self.emit_output(data)
 
@@ -69,29 +77,9 @@ class FakeWorker:
         self._callback({"type": "error", "code": code})
 
 
-class FakeWorkerFactory:
-    def __init__(self) -> None:
-        self.workers: list[FakeWorker] = []
-
-    def create(self, instance_id: str) -> FakeWorker:
-        worker = FakeWorker()
-        self.workers.append(worker)
-        return worker
-
-
 class BackpressureWorker(FakeWorker):
-    def write(self, data: bytes) -> None:
+    def write(self, input) -> None:
         raise TerminalWorkerBackpressureError("input queue is full")
-
-
-class BackpressureWorkerFactory:
-    def __init__(self) -> None:
-        self.workers: list[BackpressureWorker] = []
-
-    def create(self, instance_id: str) -> BackpressureWorker:
-        worker = BackpressureWorker()
-        self.workers.append(worker)
-        return worker
 
 
 class SignalFailureWorker(FakeWorker):
@@ -99,39 +87,29 @@ class SignalFailureWorker(FakeWorker):
         raise TerminalWorkerSignalFailedError("terminal worker failed to deliver signal")
 
 
-class SignalFailureWorkerFactory:
-    def __init__(self) -> None:
-        self.workers: list[SignalFailureWorker] = []
+def make_service(monkeypatch, *, worker_type=FakeWorker, **service_options):
+    """仅在测试中替换具体构造边界，收集每个会话独立创建的 worker。"""
+    workers = []
 
-    def create(self, instance_id: str) -> SignalFailureWorker:
-        worker = SignalFailureWorker()
-        self.workers.append(worker)
+    def construct(executable, instance_id):
+        worker = worker_type()
+        workers.append(worker)
         return worker
 
-
-class FailingWorkerFactory:
-    def create(self, instance_id: str):
-        raise RuntimeError("worker unavailable")
-
-
-def make_service(*, ring_buffer_bytes: int = 1024 * 1024):
-    factory = FakeWorkerFactory()
-    service = TerminalSessionService(
-        worker_factory=factory,
-        ring_buffer_bytes=ring_buffer_bytes,
+    monkeypatch.setattr(
+        "app.service.terminal.terminal_session_service.ProcessTerminalWorker", construct
     )
-    return service, factory
+    return TerminalSessionService(**service_options), workers
 
 
-def output_texts(result: TerminalReadResult) -> list[str]:
-    """取模型可见的 UTF-8 文本帧，用于断言游标语义。"""
+def output_texts(result: dict) -> list[str]:
+    """取本页聚合后的 UTF-8 文本，验证观察游标连续性。"""
 
-    frames = cast("list[dict[str, object]]", result.to_dict()["output"])
-    return [str(frame["data"]) for frame in frames]
+    return [event["text"] for event in result["events"] if event["type"] == "output"]
 
 
-def test_session_agent_operations_and_readers_are_cursor_based(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_session_agent_operations_and_readers_are_cursor_based(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch)
     snapshot = service.start(
         task_id=7,
         workspace_id=8,
@@ -146,24 +124,30 @@ def test_session_agent_operations_and_readers_are_cursor_based(tmp_path: Path) -
     result = service.write(
         session_id,
         task_id=7,
-        data="你好\n".encode(),
-        after_seq=0,
+        input={"type": "line", "text": "你好"},
         wait_ms=100,
+        operation_id="test-146",
     )
 
-    assert factory.workers[0].writes == ["你好\n".encode()]
-    assert result.output[0]["seq"] == 1
-    assert "next_seq" not in result.to_dict()
-    assert attachment.subscription.get(0.1) == {
-        key: value for key, value in result.output[0].items() if key != "agent_data"
-    }
-    assert service.read(session_id, task_id=7, after_seq=0, wait_ms=0).output == result.output
+    assert workers[0].writes == ["你好\r".encode()]
+    assert output_texts(result) == ["你好\r"]
+    preview = attachment.subscription.get(0.1)
+    assert preview["seq"] == 1
+    assert base64.b64decode(preview["data_base64"]) == "你好\r".encode()
+    reread = service.read(
+        session_id,
+        task_id=7,
+        cursor=agent_cursor(service, session_id, 7, 0),
+        wait={"until": "activity", "timeout_ms": 0},
+    )
+    assert output_texts(reread) == output_texts(result)
+    assert reread["next_cursor"] == result["next_cursor"]
 
 
-def test_cursor_continues_from_the_last_returned_frame(tmp_path: Path) -> None:
-    """续读使用最后一帧的 seq，工具结果无需暴露内部输出水位。"""
+def test_cursor_continues_from_the_last_returned_frame(monkeypatch, tmp_path: Path) -> None:
+    """模型使用不透明观察游标续读，底层分帧不影响文本连续性。"""
 
-    service, factory = make_service()
+    service, workers = make_service(monkeypatch)
     snapshot = service.start(
         task_id=7,
         workspace_id=8,
@@ -172,32 +156,49 @@ def test_cursor_continues_from_the_last_returned_frame(tmp_path: Path) -> None:
         run_id=1,
     )
     session_id = str(snapshot["session_id"])
-    worker = factory.workers[0]
+    worker = workers[0]
 
     # 一行输出在 ConPTY 上常被切成「内容帧 + 换行帧」两帧。
     worker.emit_output(b"line-1")
     worker.emit_output(b"\r\n")
 
-    first = service.read(session_id, task_id=7, after_seq=None, wait_ms=0)
-    assert output_texts(first) == ["line-1", "\r\n"]
-    first_cursor = first.output[-1]["seq"]
+    first = service.read(
+        session_id,
+        task_id=7,
+        cursor=agent_cursor(service, session_id, 7, None),
+        wait={"until": "activity", "timeout_ms": 0},
+    )
+    assert output_texts(first) == ["line-1\r\n"]
+    first_cursor = first["next_cursor"]
 
     worker.emit_output(b"line-2")
     worker.emit_output(b"\r\n")
 
-    applied = service.read(session_id, task_id=7, after_seq=first_cursor, wait_ms=0)
-    assert output_texts(applied) == ["line-2", "\r\n"]
-    applied_cursor = applied.output[-1]["seq"]
+    applied = service.read(
+        session_id,
+        task_id=7,
+        cursor=agent_cursor(service, session_id, 7, first_cursor),
+        wait={"until": "activity", "timeout_ms": 0},
+    )
+    assert output_texts(applied) == ["line-2\r\n"]
+    applied_cursor = applied["next_cursor"]
 
     worker.emit_output(b"line-3")
     worker.emit_output(b"\r\n")
 
-    continued = service.read(session_id, task_id=7, after_seq=applied_cursor, wait_ms=0)
-    assert output_texts(continued) == ["line-3", "\r\n"]
+    continued = service.read(
+        session_id,
+        task_id=7,
+        cursor=agent_cursor(service, session_id, 7, applied_cursor),
+        wait={"until": "activity", "timeout_ms": 0},
+    )
+    assert output_texts(continued) == ["line-3\r\n"]
 
 
-def test_agent_read_does_not_apply_a_second_output_byte_budget(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_agent_read_pages_complete_json_under_shared_output_budget(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service, workers = make_service(monkeypatch)
     snapshot = service.start(
         task_id=7,
         workspace_id=8,
@@ -207,12 +208,26 @@ def test_agent_read_does_not_apply_a_second_output_byte_budget(tmp_path: Path) -
     session_id = str(snapshot["session_id"])
 
     for _ in range(5):
-        factory.workers[0].emit_output(b"x" * (16 * 1024))
+        workers[0].emit_output(b"x" * (16 * 1024))
 
-    result = service.read(session_id, task_id=7, after_seq=0, wait_ms=0)
+    result = service.read(
+        session_id,
+        task_id=7,
+        cursor=agent_cursor(service, session_id, 7, 0),
+        wait={"until": "activity", "timeout_ms": 0},
+    )
 
-    assert len(result.output) == 5
-    assert "truncated" not in result.to_dict()
+    assert result["has_more"]
+    output = "".join(output_texts(result))
+    while result["has_more"]:
+        result = service.read(
+            session_id,
+            task_id=7,
+            cursor=result["next_cursor"],
+            wait={"until": "activity", "timeout_ms": 0},
+        )
+        output += "".join(output_texts(result))
+    assert output == "x" * (5 * 16 * 1024)
 
 
 def test_input_backpressure_does_not_notify_the_creator_run(tmp_path: Path, monkeypatch) -> None:
@@ -220,8 +235,7 @@ def test_input_backpressure_does_not_notify_the_creator_run(tmp_path: Path, monk
     task_space = _queue_space(task_id)
     monkeypatch.setattr(task_runtime_spaces, "get_or_create", lambda _task_id: task_space)
     task_space.take_runtime_notices()
-    factory = BackpressureWorkerFactory()
-    service = TerminalSessionService(worker_factory=factory)
+    service, workers = make_service(monkeypatch, worker_type=BackpressureWorker)
     first_snapshot = service.start(
         task_id=task_id,
         workspace_id=8,
@@ -236,30 +250,55 @@ def test_input_backpressure_does_not_notify_the_creator_run(tmp_path: Path, monk
     )
 
     with pytest.raises(TerminalWorkerBackpressureError):
-        service.write(str(first_snapshot["session_id"]), task_id=task_id, data=b"echo\r")
+        service.write(
+            str(first_snapshot["session_id"]),
+            task_id=task_id,
+            input={"type": "line", "text": "echo"},
+            operation_id="test-239",
+        )
     with pytest.raises(TerminalWorkerBackpressureError):
-        service.write(str(first_snapshot["session_id"]), task_id=task_id, data=b"echo\r")
+        service.write(
+            str(first_snapshot["session_id"]),
+            task_id=task_id,
+            input={"type": "line", "text": "echo"},
+            operation_id="test-241",
+        )
     with pytest.raises(TerminalWorkerBackpressureError):
-        service.write(str(second_snapshot["session_id"]), task_id=task_id, data=b"echo\r")
+        service.write(
+            str(second_snapshot["session_id"]),
+            task_id=task_id,
+            input={"type": "line", "text": "echo"},
+            operation_id="test-243",
+        )
     first_messages = task_space.take_runtime_notices(run_id=1)
 
-    assert first_messages == []
-    assert task_space.take_runtime_notices() == []
+    assert "\n" not in first_messages
+    assert "\n" not in task_space.take_runtime_notices()
     service.shutdown()
 
 
 def test_backpressure_does_not_consume_the_write_operation_id(tmp_path: Path, monkeypatch) -> None:
-    service, factory = make_service()
+    service, workers = make_service(monkeypatch)
     session = service.start(task_id=7, workspace_id=8, workspace_root=str(tmp_path), run_id=1)
-    worker = factory.workers[0]
+    worker = workers[0]
     write = worker.write
     try:
         monkeypatch.setattr(worker, "write", BackpressureWorker().write)
         with pytest.raises(TerminalWorkerBackpressureError):
-            service.write(str(session["session_id"]), task_id=7, data=b"echo\r", operation_id="op")
+            service.write(
+                str(session["session_id"]),
+                task_id=7,
+                input={"type": "line", "text": "echo"},
+                operation_id="op",
+            )
         monkeypatch.setattr(worker, "write", write)
         for _ in range(2):
-            service.write(str(session["session_id"]), task_id=7, data=b"echo\r", operation_id="op")
+            service.write(
+                str(session["session_id"]),
+                task_id=7,
+                input={"type": "line", "text": "echo"},
+                operation_id="op",
+            )
         assert worker.writes == [b"echo\r"]
     finally:
         service.shutdown()
@@ -273,8 +312,8 @@ def test_runtime_notices_drop_stale_run_scoped_notices() -> None:
 
     messages = task_space.take_runtime_notices(run_id=2)
 
-    assert [message.content for message in messages] == ["current"]
-    assert task_space.take_runtime_notices() == []
+    assert messages.splitlines()[1:] == ["current"]
+    assert "\n" not in task_space.take_runtime_notices()
 
 
 def test_take_only_discards_stale_run_scoped_messages_keeps_task_and_other_run() -> None:
@@ -296,16 +335,16 @@ def test_take_only_discards_stale_run_scoped_messages_keeps_task_and_other_run()
 
     remaining = task_space.take_runtime_notices(run_id=3)
 
-    assert [message.content for message in remaining] == [
+    assert remaining.splitlines()[1:] == [
         "task scoped",
         "other run",
     ]
     # 旧 run_id=2 的消息已在上面那次取队列时被丢弃，不会被任何后续 run 再消费。
-    assert task_space.take_runtime_notices(run_id=2) == []
+    assert "\n" not in task_space.take_runtime_notices(run_id=2)
 
 
-def test_write_operation_id_is_idempotent_and_payload_bound(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_write_operation_id_is_idempotent_and_payload_bound(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch)
     snapshot = service.start(
         task_id=7,
         workspace_id=8,
@@ -318,48 +357,48 @@ def test_write_operation_id_is_idempotent_and_payload_bound(tmp_path: Path) -> N
         session_id,
         task_id=7,
         operation_id="op-1",
-        data=b"echo\n",
-        after_seq=0,
+        input={"type": "line", "text": "echo"},
         wait_ms=100,
     )
     second = service.write(
         session_id,
         task_id=7,
         operation_id="op-1",
-        data=b"echo\n",
-        after_seq=0,
+        input={"type": "line", "text": "echo"},
         wait_ms=100,
     )
 
-    assert second == first
-    assert factory.workers[0].writes == [b"echo\n"]
+    assert not first["input"]["duplicate"]
+    assert second["input"]["duplicate"]
+    assert workers[0].writes == [b"echo\r"]
     with pytest.raises(TerminalSessionError, match="operation_id"):
         service.write(
             session_id,
             task_id=7,
             operation_id="op-1",
-            data=b"different\n",
-            after_seq=0,
+            input={"type": "line", "text": "different"},
             wait_ms=0,
         )
 
 
-def test_worker_factory_failure_does_not_leave_starting_metadata(tmp_path: Path) -> None:
-    service = TerminalSessionService(worker_factory=FailingWorkerFactory())
+def test_worker_construction_failure_does_not_leave_starting_metadata(tmp_path, monkeypatch):
+    monkeypatch.delenv(Constant.Terminal.WORKER_ENV, raising=False)
+    service = TerminalSessionService()
 
-    with pytest.raises(RuntimeError, match="worker unavailable"):
+    with pytest.raises(TerminalWorkerUnavailableError, match="not configured"):
         service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
+    assert service.list_sessions(task_id=1, workspace_id=1) == []
 
 
 def test_process_worker_rejects_input_before_handshake() -> None:
     worker = ProcessTerminalWorker("unused", "instance")
 
     with pytest.raises(TerminalWorkerUnavailableError):
-        worker.write(b"input")
+        worker.write({"type": "line", "text": "input"})
 
 
-def test_preview_disconnect_does_not_close_session(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_preview_disconnect_does_not_close_session(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch)
     snapshot = service.start(
         task_id=1,
         workspace_id=1,
@@ -370,12 +409,12 @@ def test_preview_disconnect_does_not_close_session(tmp_path: Path) -> None:
     attachment = service.subscribe(session_id, task_id=1, after_seq=None)
     service.unsubscribe(session_id, attachment.subscription)
 
-    assert not factory.workers[0].closed
+    assert not workers[0].closed
     assert service.snapshot(session_id, task_id=1)["status"] == "running"
 
 
-def test_session_ownership_and_ring_buffer_gap_are_explicit(tmp_path: Path) -> None:
-    service, factory = make_service(ring_buffer_bytes=4)
+def test_session_ownership_and_ring_buffer_gap_are_explicit(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch, ring_buffer_bytes=4)
     snapshot = service.start(
         task_id=1,
         workspace_id=1,
@@ -383,18 +422,30 @@ def test_session_ownership_and_ring_buffer_gap_are_explicit(tmp_path: Path) -> N
         run_id=1,
     )
     session_id = str(snapshot["session_id"])
-    factory.workers[0].emit_output(b"aa")
-    factory.workers[0].emit_output(b"bb")
+    workers[0].emit_output(b"aa")
+    workers[0].emit_output(b"bb")
+    workers[0].emit_output(b"cc")
 
     with pytest.raises(TerminalSessionOwnershipError):
-        service.read(session_id, task_id=2, after_seq=0, wait_ms=0)
-    with pytest.raises(TerminalSessionResyncRequiredError) as exc_info:
-        service.read(session_id, task_id=1, after_seq=0, wait_ms=0)
-    assert exc_info.value.first_available_seq == 2
+        service.read(
+            session_id,
+            task_id=2,
+            cursor=agent_cursor(service, session_id, 2, 0),
+            wait={"until": "activity", "timeout_ms": 0},
+        )
+    result = service.read(
+        session_id,
+        task_id=1,
+        cursor=agent_cursor(service, session_id, 1, 0),
+        wait={"until": "activity", "timeout_ms": 0},
+    )
+    assert result["gap"]
+    with pytest.raises(TerminalSessionResyncRequiredError):
+        service.subscribe(session_id, task_id=1, after_seq=0)
 
 
-def test_worker_exit_is_terminal_and_shutdown_closes_workers(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_worker_exit_is_terminal_and_shutdown_closes_workers(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch)
     snapshot = service.start(
         task_id=1,
         workspace_id=1,
@@ -404,21 +455,19 @@ def test_worker_exit_is_terminal_and_shutdown_closes_workers(tmp_path: Path) -> 
     session_id = str(snapshot["session_id"])
     attachment = service.subscribe(session_id, task_id=1, after_seq=None)
     attachment.subscription.activate()
-    factory.workers[0].emit_exit(17)
+    workers[0].emit_exit(17)
 
     assert service.snapshot(session_id, task_id=1)["status"] == "exited"
     assert attachment.subscription.get(0.1)["type"] == "exit"
     service.shutdown()
-    assert factory.workers[0].closed
+    assert workers[0].closed
 
 
-def test_session_status_observer_receives_async_exit_after_start(tmp_path: Path) -> None:
-    factory = FakeWorkerFactory()
+def test_session_status_observer_receives_async_exit_after_start(
+    monkeypatch, tmp_path: Path
+) -> None:
     changes = []
-    service = TerminalSessionService(
-        worker_factory=factory,
-        status_observer=changes.append,
-    )
+    service, workers = make_service(monkeypatch, status_observer=changes.append)
 
     snapshot = service.start(
         task_id=1,
@@ -426,7 +475,7 @@ def test_session_status_observer_receives_async_exit_after_start(tmp_path: Path)
         workspace_root=str(tmp_path),
         run_id=10,
     )
-    factory.workers[0].emit_exit(7)
+    workers[0].emit_exit(7)
 
     assert [change.status for change in changes] == ["running", "exited"]
     assert changes[-1].session_id == snapshot["session_id"]
@@ -435,12 +484,12 @@ def test_session_status_observer_receives_async_exit_after_start(tmp_path: Path)
     assert changes[-1].exit_code == 7
 
 
-def test_session_status_observer_receives_failure_and_explicit_close(tmp_path: Path) -> None:
-    failure_factory = FakeWorkerFactory()
+def test_session_status_observer_receives_failure_and_explicit_close(
+    monkeypatch, tmp_path: Path
+) -> None:
     failure_changes = []
-    failure_service = TerminalSessionService(
-        worker_factory=failure_factory,
-        status_observer=failure_changes.append,
+    failure_service, failure_workers = make_service(
+        monkeypatch, status_observer=failure_changes.append
     )
     failure_service.start(
         task_id=1,
@@ -448,16 +497,12 @@ def test_session_status_observer_receives_failure_and_explicit_close(tmp_path: P
         workspace_root=str(tmp_path),
         run_id=11,
     )
-    failure_factory.workers[0].emit_error("WORKER_FAILED")
+    failure_workers[0].emit_error("WORKER_FAILED")
 
     assert [change.status for change in failure_changes] == ["running", "failed"]
 
-    close_factory = FakeWorkerFactory()
     close_changes = []
-    close_service = TerminalSessionService(
-        worker_factory=close_factory,
-        status_observer=close_changes.append,
-    )
+    close_service, close_workers = make_service(monkeypatch, status_observer=close_changes.append)
     close_snapshot = close_service.start(
         task_id=1,
         workspace_id=1,
@@ -469,8 +514,8 @@ def test_session_status_observer_receives_failure_and_explicit_close(tmp_path: P
     assert [change.status for change in close_changes] == ["running", "closed"]
 
 
-def test_terminal_completion_is_retired_from_active_registry(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_terminal_completion_is_retired_from_active_registry(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch)
     snapshot = service.start(
         task_id=1,
         workspace_id=1,
@@ -479,16 +524,17 @@ def test_terminal_completion_is_retired_from_active_registry(tmp_path: Path) -> 
     )
     session_id = str(snapshot["session_id"])
 
-    factory.workers[0].emit_exit(0)
+    workers[0].emit_exit(0)
 
     assert session_id not in service._registry
     assert session_id in service._terminal_history
     assert service.snapshot(session_id, task_id=1)["status"] == "exited"
 
 
-def test_signal_delivery_failure_is_returned_without_false_success(tmp_path: Path) -> None:
-    factory = SignalFailureWorkerFactory()
-    service = TerminalSessionService(worker_factory=factory)
+def test_signal_delivery_failure_is_returned_without_false_success(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service, workers = make_service(monkeypatch, worker_type=SignalFailureWorker)
     snapshot = service.start(
         task_id=1,
         workspace_id=1,
@@ -510,10 +556,10 @@ def test_signal_ack_can_follow_output_on_the_worker_reader(tmp_path: Path, monke
     """Worker 同一 reader 先投递输出再确认信号，service 不得持锁阻断确认。"""
     import threading
 
-    service, factory = make_service()
+    service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     session_id = str(session["session_id"])
-    worker = factory.workers[0]
+    worker = workers[0]
     acknowledged = threading.Event()
 
     def read_output_then_ack():
@@ -532,9 +578,9 @@ def test_signal_ack_can_follow_output_on_the_worker_reader(tmp_path: Path, monke
         result = service.signal(session_id, task_id=1, signal_name="interrupt")
         assert result["status"] == "running"
         assert not worker.closed
-        assert output_texts(service.read(session_id, task_id=1, wait_ms=0)) == [
-            "before signal acknowledgement"
-        ]
+        assert output_texts(
+            service.read(session_id, task_id=1, wait={"until": "activity", "timeout_ms": 0})
+        ) == ["before signal acknowledgement"]
     finally:
         reader.join(timeout=3)
         service.shutdown()
@@ -545,10 +591,10 @@ def test_close_can_interrupt_an_inflight_signal(tmp_path: Path, monkeypatch) -> 
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
-    service, factory = make_service()
+    service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     session_id = str(session["session_id"])
-    worker = factory.workers[0]
+    worker = workers[0]
     entered = threading.Event()
     closed = threading.Event()
 
@@ -578,8 +624,10 @@ def test_close_can_interrupt_an_inflight_signal(tmp_path: Path, monkeypatch) -> 
         service.shutdown()
 
 
-def test_terminal_history_and_write_idempotency_cache_are_bounded(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_terminal_history_and_write_idempotency_cache_are_bounded(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service, workers = make_service(monkeypatch)
     session_ids: list[str] = []
     for index in range(Constant.Terminal.MAX_TERMINAL_HISTORY_SESSIONS + 1):
         snapshot = service.start(
@@ -589,7 +637,7 @@ def test_terminal_history_and_write_idempotency_cache_are_bounded(tmp_path: Path
             run_id=index + 1,
         )
         session_ids.append(str(snapshot["session_id"]))
-        factory.workers[-1].emit_exit(0)
+        workers[-1].emit_exit(0)
 
     assert len(service._terminal_history) == Constant.Terminal.MAX_TERMINAL_HISTORY_SESSIONS
     assert session_ids[0] not in service._terminal_history
@@ -605,19 +653,19 @@ def test_terminal_history_and_write_idempotency_cache_are_bounded(tmp_path: Path
             str(active["session_id"]),
             task_id=1,
             operation_id=f"operation-{index}",
-            data=b"x",
+            input={"type": "line", "text": "x"},
             wait_ms=0,
         )
 
     assert (
-        len(service._registry[str(active["session_id"])].accepted_writes)
+        len(service._registry[str(active["session_id"])]._accepted_writes)
         == Constant.Terminal.MAX_WRITE_OPERATION_CACHE
     )
     service.shutdown()
 
 
-def test_fatal_worker_error_is_not_projected_as_shell_exit(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_fatal_worker_error_is_not_projected_as_shell_exit(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch)
     snapshot = service.start(
         task_id=1,
         workspace_id=1,
@@ -625,16 +673,16 @@ def test_fatal_worker_error_is_not_projected_as_shell_exit(tmp_path: Path) -> No
         run_id=1,
     )
     session_id = str(snapshot["session_id"])
-    factory.workers[0].emit_error("PTY_WRITE_FAILED")
+    workers[0].emit_error("PTY_WRITE_FAILED")
 
     current = service.snapshot(session_id, task_id=1)
     assert current["status"] == "failed"
     assert current["end_reason"] == "worker_pty_write_failed"
-    assert factory.workers[0].closed
+    assert workers[0].closed
 
 
-def test_task_deletion_releases_worker_and_metadata_hook(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_task_deletion_releases_worker_and_metadata_hook(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch)
     snapshot = service.start(
         task_id=1,
         workspace_id=1,
@@ -644,20 +692,20 @@ def test_task_deletion_releases_worker_and_metadata_hook(tmp_path: Path) -> None
     session_id = str(snapshot["session_id"])
 
     assert service.delete_task_sessions([1]) == 1
-    assert factory.workers[0].closed
+    assert workers[0].closed
     with pytest.raises(TerminalSessionNotFoundError):
         service.snapshot(session_id, task_id=1)
 
 
-def test_task_deletion_closes_all_runs_and_blocks_late_start(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_task_deletion_closes_all_runs_and_blocks_late_start(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch)
     first = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=9)
     service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=10)
     other = service.start(task_id=2, workspace_id=1, workspace_root=str(tmp_path), run_id=11)
 
     assert service.delete_task_sessions([1]) == 2
-    assert all(worker.closed for worker in factory.workers[:2])
-    assert not factory.workers[2].closed
+    assert all(worker.closed for worker in workers[:2])
+    assert not workers[2].closed
     with pytest.raises(TerminalSessionNotFoundError):
         service.snapshot(str(first["session_id"]), task_id=1)
     with pytest.raises(TerminalSessionStateError, match="closing"):
@@ -685,7 +733,7 @@ def test_shell_resolver_has_platform_specific_defaults(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_preview_websocket_rejects_input_after_attach(tmp_path: Path) -> None:
+async def test_preview_websocket_rejects_input_after_attach(monkeypatch, tmp_path: Path) -> None:
     from app.api.terminal_api import terminal_preview_stream
 
     class FakeWebSocket:
@@ -715,7 +763,7 @@ async def test_preview_websocket_rejects_input_after_attach(tmp_path: Path) -> N
         async def close(self, code: int, reason: str) -> None:
             self.closed_with = (code, reason)
 
-    service, factory = make_service()
+    service, workers = make_service(monkeypatch)
     snapshot = service.start(
         task_id=1,
         workspace_id=1,
@@ -728,117 +776,166 @@ async def test_preview_websocket_rejects_input_after_attach(tmp_path: Path) -> N
 
     assert any(item["type"] == "protocol_error" for item in websocket.sent)
     assert websocket.closed_with is not None and websocket.closed_with[0] == 1008
-    assert factory.workers[0].writes == []
+    assert workers[0].writes == []
 
 
 # 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
 pytestmark = pytest.mark.usefixtures("backend_env")
 
 
-def test_write_retry_after_output_gap_does_not_repeat_input(tmp_path: Path) -> None:
-    service, factory = make_service(ring_buffer_bytes=4)
+def test_write_retry_after_output_gap_does_not_repeat_input(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch, ring_buffer_bytes=4)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     session_id = str(session["session_id"])
-    worker = factory.workers[0]
+    worker = workers[0]
     worker.emit_output(b"aa")
     worker.emit_output(b"bb")
-    first = service.write(session_id, task_id=1, operation_id="op", data=b"x", after_seq=0)
-    retry = service.write(session_id, task_id=1, operation_id="op", data=b"x", after_seq=0)
-    assert first.output_gap and retry.output_gap
-    assert worker.writes == [b"x"]
-    assert output_texts(retry) == ["x"]
+    first = service.write(
+        session_id,
+        task_id=1,
+        operation_id="op",
+        input={"type": "line", "text": "x"},
+    )
+    retry = service.write(
+        session_id,
+        task_id=1,
+        operation_id="op",
+        input={"type": "line", "text": "x"},
+    )
+    assert first["gap"]
+    assert not retry["gap"]
+    assert not retry["events"]
+    assert worker.writes == [b"x\r"]
+    assert retry["input"]["duplicate"]
     service.shutdown()
 
 
 def test_write_retry_after_read_failure_keeps_acceptance(tmp_path: Path, monkeypatch) -> None:
-    service, factory = make_service()
+    service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     session_id = str(session["session_id"])
-    original_read = service.read
+    runtime = service._registry[session_id]
+    original_read = runtime._observe
 
     def fail_read(*args, **kwargs):
         raise RuntimeError("read failed after acceptance")
 
-    monkeypatch.setattr(service, "read", fail_read)
+    monkeypatch.setattr(runtime, "_observe", fail_read)
     with pytest.raises(RuntimeError, match="read failed"):
-        service.write(session_id, task_id=1, operation_id="op", data=b"x")
-    monkeypatch.setattr(service, "read", original_read)
-    service.write(session_id, task_id=1, operation_id="op", data=b"x", wait_ms=0)
-    assert factory.workers[0].writes == [b"x"]
+        service.write(
+            session_id,
+            task_id=1,
+            operation_id="op",
+            input={"type": "line", "text": "x"},
+        )
+    monkeypatch.setattr(runtime, "_observe", original_read)
+    service.write(
+        session_id,
+        task_id=1,
+        operation_id="op",
+        input={"type": "line", "text": "x"},
+        wait_ms=0,
+    )
+    assert workers[0].writes == [b"x\r"]
     service.shutdown()
 
 
 def test_write_retry_after_shell_exit_keeps_acceptance(tmp_path: Path, monkeypatch) -> None:
     """接受输入后读取失败，期间 shell 已退出；重试仍返回原会话而不再次入队。"""
-    service, factory = make_service()
+    service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     session_id = str(session["session_id"])
-    worker = factory.workers[0]
-    read = service.read
+    worker = workers[0]
+    runtime = service._registry[session_id]
+    read = runtime._observe
 
     def exit_then_fail(*args, **kwargs):
         worker.emit_exit(7)
         raise RuntimeError("output read failed")
 
     try:
-        monkeypatch.setattr(service, "read", exit_then_fail)
+        monkeypatch.setattr(runtime, "_observe", exit_then_fail)
         with pytest.raises(RuntimeError, match="output read failed"):
-            service.write(session_id, task_id=1, operation_id="op", data=b"exit 7\r")
-        monkeypatch.setattr(service, "read", read)
-        result = service.write(session_id, task_id=1, operation_id="op", data=b"exit 7\r")
-        assert result.status == "exited"
+            service.write(
+                session_id,
+                task_id=1,
+                operation_id="op",
+                input={"type": "line", "text": "exit 7"},
+            )
+        monkeypatch.setattr(runtime, "_observe", read)
+        result = service.write(
+            session_id,
+            task_id=1,
+            operation_id="op",
+            input={"type": "line", "text": "exit 7"},
+        )
+        assert result["state"]["session_status"] == "exited"
         assert worker.writes == [b"exit 7\r"]
         with pytest.raises(TerminalSessionError, match="different input"):
-            service.write(session_id, task_id=1, operation_id="op", data=b"exit 0\r")
-        assert len(factory.workers) == 1
+            service.write(
+                session_id,
+                task_id=1,
+                operation_id="op",
+                input={"type": "line", "text": "exit 0"},
+            )
+        assert len(workers) == 1
     finally:
         service.shutdown()
 
 
-def test_concurrent_write_retries_enqueue_once(tmp_path: Path) -> None:
+def test_concurrent_write_retries_enqueue_once(monkeypatch, tmp_path: Path) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    service, factory = make_service()
+    service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     session_id = str(session["session_id"])
     with ThreadPoolExecutor(max_workers=8) as executor:
         results = list(
             executor.map(
-                lambda _: service.write(session_id, task_id=1, operation_id="op", data=b"x"),
+                lambda _: service.write(
+                    session_id,
+                    task_id=1,
+                    operation_id="op",
+                    input={"type": "line", "text": "x"},
+                ),
                 range(16),
             )
         )
-    assert all(output_texts(result) == ["x"] for result in results)
-    assert factory.workers[0].writes == [b"x"]
+    assert sum(not result["input"]["duplicate"] for result in results) == 1
+    assert workers[0].writes == [b"x\r"]
     service.shutdown()
 
 
-def test_cancel_before_acceptance_leaves_session_usable(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_cancel_before_acceptance_leaves_session_usable(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     session_id = str(session["session_id"])
     with pytest.raises(TerminalSessionStateError, match="not accepted"):
         service.write(
-            session_id, task_id=1, operation_id="op", data=b"x", is_cancelled=lambda: True
+            session_id,
+            task_id=1,
+            operation_id="op",
+            input={"type": "line", "text": "x"},
+            is_cancelled=lambda: True,
         )
-    assert factory.workers[0].writes == []
-    service.write(session_id, task_id=1, operation_id="op", data=b"x")
-    assert factory.workers[0].writes == [b"x"]
-    assert not factory.workers[0].closed
+    assert workers[0].writes == []
+    service.write(session_id, task_id=1, operation_id="op", input={"type": "line", "text": "x"})
+    assert workers[0].writes == [b"x\r"]
+    assert not workers[0].closed
     service.shutdown()
 
 
 def test_cancel_after_acceptance_does_not_repeat_input(tmp_path: Path, monkeypatch) -> None:
     import threading
 
-    service, factory = make_service()
+    service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     session_id = str(session["session_id"])
     cancelled = threading.Event()
-    worker = factory.workers[0]
+    worker = workers[0]
 
-    def accept_then_cancel(data):
-        worker.writes.append(data)
+    def accept_then_cancel(input):
+        worker.writes.append(encode_test_input(input))
         cancelled.set()
 
     monkeypatch.setattr(worker, "write", accept_then_cancel)
@@ -846,19 +943,25 @@ def test_cancel_after_acceptance_does_not_repeat_input(tmp_path: Path, monkeypat
         session_id,
         task_id=1,
         operation_id="op",
-        data=b"x",
+        input={"type": "line", "text": "x"},
         wait_ms=30000,
         is_cancelled=cancelled.is_set,
     )
-    assert result.status == "running"
+    assert result["state"]["session_status"] == "running"
     cancelled.clear()
-    service.write(session_id, task_id=1, operation_id="op", data=b"x", wait_ms=0)
-    assert worker.writes == [b"x"]
+    service.write(
+        session_id,
+        task_id=1,
+        operation_id="op",
+        input={"type": "line", "text": "x"},
+        wait_ms=0,
+    )
+    assert worker.writes == [b"x\r"]
     service.shutdown()
 
 
-def test_list_sessions_is_task_scoped_and_keeps_recent_exits(tmp_path: Path) -> None:
-    service, factory = make_service()
+def test_list_sessions_is_task_scoped_and_keeps_recent_exits(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch)
     first = service.start(
         task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1, label="dev server"
     )
@@ -869,7 +972,7 @@ def test_list_sessions_is_task_scoped_and_keeps_recent_exits(tmp_path: Path) -> 
     assert sessions[0]["label"] == "dev server"
     assert not {"worker_pid", "worker_instance_id", "shell_executable"} & sessions[0].keys()
     assert service.list_sessions(task_id=1, workspace_id=2) == []
-    factory.workers[0].emit_exit(0)
+    workers[0].emit_exit(0)
     sessions = service.list_sessions(task_id=1, workspace_id=1)
     assert (
         next(item for item in sessions if item["session_id"] == first["session_id"])["status"]
@@ -881,18 +984,24 @@ def test_list_sessions_is_task_scoped_and_keeps_recent_exits(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_workflow_finalization_preserves_task_sessions(tmp_path: Path) -> None:
+async def test_workflow_finalization_preserves_task_sessions(monkeypatch, tmp_path: Path) -> None:
     from app.core.workflows.react.workflow import ReactLikeWorkflow
 
-    service, factory = make_service()
+    service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     await ReactLikeWorkflow().finalize_run(1)
     discovered = service.list_sessions(task_id=1, workspace_id=1)
     assert discovered[0]["session_id"] == session["session_id"]
-    service.write(str(discovered[0]["session_id"]), task_id=1, data=b"next run", wait_ms=0)
-    assert factory.workers[0].writes == [b"next run"]
+    service.write(
+        str(discovered[0]["session_id"]),
+        task_id=1,
+        input={"type": "line", "text": "next run"},
+        wait_ms=0,
+        operation_id="test-892",
+    )
+    assert workers[0].writes == [b"next run\r"]
     service.shutdown()
-    assert factory.workers[0].closed
+    assert workers[0].closed
     with pytest.raises(TerminalSessionStateError, match="shutting down"):
         service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=2)
 
@@ -921,14 +1030,7 @@ def test_cleanup_during_start_cannot_leave_a_worker(tmp_path: Path, monkeypatch,
             assert release.wait(2)
             super().start(spec, cwd, on_event)
 
-    class SlowFactory(FakeWorkerFactory):
-        def create(self, instance_id):
-            worker = SlowWorker()
-            self.workers.append(worker)
-            return worker
-
-    factory = SlowFactory()
-    service = TerminalSessionService(worker_factory=factory)
+    service, workers = make_service(monkeypatch, worker_type=SlowWorker)
     original = service._close_matching
 
     def mark_cleanup(*args, **kwargs):
@@ -951,19 +1053,19 @@ def test_cleanup_during_start_cannot_leave_a_worker(tmp_path: Path, monkeypatch,
         with pytest.raises(TerminalSessionStateError, match="closing"):
             starting.result(timeout=2)
         closing.result(timeout=2)
-    assert factory.workers[0].closed
+    assert workers[0].closed
     assert service.list_sessions(task_id=1, workspace_id=1) == []
     service.shutdown()
 
 
-def test_terminal_lifecycle_writes_structured_file_log(tmp_path: Path) -> None:
+def test_terminal_lifecycle_writes_structured_file_log(monkeypatch, tmp_path: Path) -> None:
     import json
 
     from app.config.logging.configuration import configure_logging, shutdown_logging
 
     log_dir = tmp_path / "logs"
     configure_logging(log_dir)
-    service, _ = make_service()
+    service, _ = make_service(monkeypatch)
     try:
         session = service.start(task_id=7, workspace_id=8, workspace_root=str(tmp_path), run_id=9)
         service.delete_task_sessions([7])
@@ -981,3 +1083,130 @@ def test_terminal_lifecycle_writes_structured_file_log(tmp_path: Path) -> None:
     assert changes[-1]["data"]["task_id"] == 7
     assert changes[-1]["data"]["created_by_run_id"] == 9
     assert changes[-1]["data"]["reason"] == "task_deleted"
+
+
+def agent_cursor(service, session_id, task_id, value):
+    if value is None or isinstance(value, str):
+        return value
+    return f"{service.snapshot(session_id, task_id=task_id)['generation']}:{value}:0"
+
+
+def encode_test_input(input):
+    if input["type"] == "line":
+        return input["text"].encode() + b"\r"
+    return {"ctrl_c": b"\x03", "ctrl_d": b"\x04", "ctrl_z": b"\x1a"}[input["key"]]
+
+
+def test_shell_exit_ends_tracking_without_inventing_command_result(monkeypatch, tmp_path: Path):
+    service, workers = make_service(monkeypatch)
+    snapshot = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
+    session = snapshot["session_id"]
+    worker = workers[0]
+    worker._callback({"type": "shell", "event": {"kind": "command_started", "command": "python"}})
+    command = service.snapshot(session, task_id=1)["state"]["active_command_id"]
+    worker.emit_exit(7)
+    page = service.read(
+        session,
+        task_id=1,
+        wait={"until": "command_returned", "command_id": command, "timeout_ms": 0},
+    )
+    assert page["return_reason"] == "tracking_ended"
+    assert page["state"]["session_exit_code"] == 7
+    assert "result" not in page["condition"]
+    service.shutdown()
+
+
+def test_read_rejects_a_cursor_from_another_generation_without_input(monkeypatch, tmp_path: Path):
+    service, workers = make_service(monkeypatch)
+    snapshot = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
+    with pytest.raises(TerminalSessionError):
+        service.read(
+            snapshot["session_id"],
+            task_id=1,
+            cursor="old:0:0",
+        )
+    assert not workers[0].writes
+    service.shutdown()
+
+
+def test_write_observes_new_activity_and_read_continues_its_pages(tmp_path: Path, monkeypatch):
+    service, workers = make_service(monkeypatch, ring_buffer_bytes=200000)
+    snapshot = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
+    session = snapshot["session_id"]
+    workers[0].emit_output(b"old background output\n")
+    expected = "new output " * 4000
+    worker = workers[0]
+
+    def write_chunks(input):
+        data = encode_test_input(input)
+        worker.writes.append(data)
+        # 遵守真实 worker 输出块上限，让分页覆盖多帧累计输出。
+        for start in range(0, len(data), 4096):
+            worker.emit_output(data[start : start + 4096])
+
+    monkeypatch.setattr(worker, "write", write_chunks)
+    page = service.write(
+        session,
+        task_id=1,
+        operation_id="large-input",
+        input={"type": "line", "text": expected},
+        wait_ms=0,
+    )
+    assert page["has_more"]
+    parts = output_texts(page)
+    while page["has_more"]:
+        page = service.read(
+            session,
+            task_id=1,
+            cursor=page["next_cursor"],
+            wait={"until": "activity", "timeout_ms": 0},
+        )
+        parts.extend(output_texts(page))
+    assert "".join(parts) == expected + "\r"
+    workers[0].emit_output(b"later log\n")
+    later = service.read(
+        session,
+        task_id=1,
+        cursor=page["next_cursor"],
+        wait={"until": "activity", "timeout_ms": 0},
+    )
+    assert output_texts(later) == ["later log\n"]
+    assert workers[0].writes == [expected.encode() + b"\r"]
+    service.shutdown()
+
+
+@pytest.mark.parametrize(
+    "keys, supported, rejected",
+    [
+        ({"input_ctrl_c", "input_ctrl_d"}, "ctrl_d", "ctrl_z"),
+        ({"input_ctrl_c", "input_ctrl_z"}, "ctrl_z", "ctrl_d"),
+    ],
+)
+def test_control_keys_use_worker_capabilities_before_acceptance(
+    monkeypatch, tmp_path, keys, supported, rejected
+):
+    class CapabilityWorker(FakeWorker):
+        capabilities = frozenset(keys)
+
+    service, workers = make_service(monkeypatch, worker_type=CapabilityWorker)
+    snapshot = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
+    session = snapshot["session_id"]
+    try:
+        assert set(snapshot["capabilities"]) == keys
+        with pytest.raises(TerminalSessionError, match="not supported"):
+            service.write(
+                session, task_id=1, operation_id="rejected", input={"type": "key", "key": rejected}
+            )
+        assert not workers[0].writes
+        result = service.write(
+            session,
+            task_id=1,
+            operation_id="accepted",
+            input={"type": "key", "key": supported},
+            wait_ms=0,
+        )
+        assert result["input"]["accepted"]
+        assert set(result["capabilities"]) == keys
+        assert workers[0].writes == [encode_test_input({"type": "key", "key": supported})]
+    finally:
+        service.shutdown()

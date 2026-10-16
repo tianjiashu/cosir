@@ -367,7 +367,6 @@ def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
         tool_error_count=0,
         next_node=ReactRoute.MODEL,
         instruction="",
-        max_steps=1,
         final_text="",
         last_tool_results={},
         tool_call_lifecycle=ToolCallLifecycleManager(

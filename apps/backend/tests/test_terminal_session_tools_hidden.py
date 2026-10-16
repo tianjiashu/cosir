@@ -1,3 +1,5 @@
+import pytest
+
 from app.core.tools.display.terminal_display import build_session_display_payload
 from app.core.tools.tool_handler.terminal_session import (
     TerminalCloseTool,
@@ -7,7 +9,6 @@ from app.core.tools.tool_handler.terminal_session import (
     TerminalStartTool,
     TerminalWriteTool,
 )
-from app.core.tools.tool_handler.terminal_session.write import encode_terminal_input
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import (
     TerminalCloseArgs,
@@ -33,7 +34,7 @@ def test_terminal_handlers_implement_handler_base_and_are_registered(monkeypatch
 
     assert all(issubclass(handler, HandlerBase) for handler in handlers)
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.terminal_session.signal.platform.system",
+        "platform.system",
         lambda: "Linux",
     )
     registry = ToolRegistry()
@@ -53,14 +54,14 @@ def test_terminal_handlers_implement_handler_base_and_are_registered(monkeypatch
     assert "terminal_resize" not in {handler.name for handler in handlers}
 
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.terminal_session.signal.platform.system",
+        "platform.system",
         lambda: "Windows",
     )
     windows_registry = ToolRegistry()
     for handler in handlers:
         windows_registry.register(handler().to_definition_if_avaliable())
     windows_registered_names = windows_registry.get_all_tool_names()
-    assert "terminal_signal" not in windows_registered_names
+    assert "terminal_signal" in windows_registered_names
 
 
 def test_terminal_start_schema_rejects_removed_dimensions() -> None:
@@ -93,20 +94,10 @@ def test_terminal_session_schema_describes_agent_operational_semantics() -> None
     assert "inside it" in start["cwd"]["description"]
 
     write = TerminalWriteArgs.model_json_schema()["properties"]
-    assert "identical input" in write["operation_id"]["description"]
-    assert "submit=true" in write["data"]["description"]
-    assert "real Enter" in write["submit"]["description"]
-    assert "shell to exit" in write["wait_ms"]["description"]
-    assert "largest seq you have already processed" in write["after_seq"]["description"]
-    assert "next_seq" not in write["after_seq"]["description"]
-
+    assert "input" in write and "cursor" not in write
+    assert "data" not in write and "submit" not in write and "after_seq" not in write
     read = TerminalReadArgs.model_json_schema()["properties"]
-    assert "largest seq you have already processed" in read["after_seq"]["description"]
-    assert "next_seq" not in read["after_seq"]["description"]
-    assert "new output" in read["wait_ms"]["description"]
-
-    signal = TerminalSignalArgs.model_json_schema()["properties"]
-    assert "Ctrl-C-like" in signal["signal"]["description"]
+    assert "wait" in read and "cursor" in read
 
 
 def test_terminal_session_schema_describes_host_specific_shell_and_paths(
@@ -143,10 +134,7 @@ def test_terminal_signal_schema_warns_about_windows_capability(monkeypatch) -> N
         lambda: "Windows",
     )
     schema = TerminalSignalTool().to_definition().to_model_tool_definition()["parameters"]
-    assert (
-        "does not advertise terminal signal support"
-        in schema["properties"]["signal"]["description"]
-    )
+    assert "supports interrupt only" in schema["properties"]["signal"]["description"]
 
 
 def test_terminal_definitions_snapshot_host_projection_at_construction(
@@ -232,31 +220,20 @@ def test_session_display_payload_allowlists_ui_metadata() -> None:
     }
 
 
-def test_terminal_write_submit_appends_real_enter_without_decoding_data() -> None:
-    args = TerminalWriteArgs.model_validate(
-        {
-            "session_id": "session-1",
-            "operation_id": "write-1",
-            "data": "echo TERM-OK",
-            "submit": True,
-        }
+@pytest.mark.parametrize(
+    "system, keys",
+    [
+        ("Darwin", ["ctrl_c", "ctrl_d"]),
+        ("Linux", ["ctrl_c", "ctrl_d"]),
+        ("Windows", ["ctrl_c", "ctrl_z"]),
+    ],
+)
+def test_write_schema_declares_only_host_control_keys(monkeypatch, system, keys):
+    monkeypatch.setattr(
+        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system", lambda: system
     )
-    assert args.submit is True
-    assert encode_terminal_input("echo TERM-OK", submit=False) == b"echo TERM-OK"
-    assert encode_terminal_input("echo TERM-OK", submit=True) == b"echo TERM-OK\r"
-    assert encode_terminal_input(r"literal\\r\\n", submit=False) == b"literal\\\\r\\\\n"
-    assert encode_terminal_input(r"literal\\r\\n", submit=True) == b"literal\\\\r\\\\n\r"
-
-
-def test_terminal_write_schema_limits_final_utf8_bytes() -> None:
-    base = {"session_id": "session-1", "operation_id": "write-1"}
-    TerminalWriteArgs.model_validate({**base, "data": "a" * (64 * 1024 - 1), "submit": True})
-    for payload in (
-        {**base, "data": "a" * (64 * 1024), "submit": True},
-        {**base, "data": "中" * (64 * 1024), "submit": False},
-    ):
-        try:
-            TerminalWriteArgs.model_validate(payload)
-        except ValueError:
-            continue
-        raise AssertionError("terminal input exceeding the final UTF-8 byte limit was accepted")
+    schema = TerminalWriteTool().to_definition().to_model_tool_definition()["parameters"]
+    assert schema["$defs"]["InputKey"]["properties"]["key"]["enum"] == keys
+    assert "InputText" not in schema["$defs"]
+    assert "InputLine" in schema["$defs"]
+    assert "items" not in schema["properties"]["input"]

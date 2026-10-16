@@ -18,8 +18,6 @@ def _worker_path() -> Path:
         return Path(configured)
     return (
         Path(__file__).resolve().parents[3]
-        / "apps"
-        / "terminal-worker"
         / "target"
         / "debug"
         / ("terminal-worker.exe" if os.name == "nt" else "terminal-worker")
@@ -47,6 +45,7 @@ def _powershell_command_spec() -> ShellSpec:
             "-Command",
             "Write-Output terminal-worker-powershell-smoke",
         ),
+        integration="off",
     )
 
 
@@ -78,9 +77,10 @@ def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
     try:
         worker.start(_shell_spec(), str(tmp_path), on_event)
         if os.name == "nt":
-            worker.write(b"echo terminal-worker-smoke\r\nexit\r\n")
+            worker.write({"type": "line", "text": "echo terminal-worker-smoke"})
+            worker.write({"type": "line", "text": "exit"})
         else:
-            worker.write(b"printf 'terminal-worker-smoke\\n'; exit\n")
+            worker.write({"type": "line", "text": "printf 'terminal-worker-smoke\\n'; exit"})
         assert exited.wait(10), f"worker did not report shell exit: {events!r}"
     finally:
         worker.close()
@@ -92,7 +92,7 @@ def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
     )
     assert b"terminal-worker-smoke" in output
     handshake = next(event for event in events if event.get("type") == "handshake")
-    assert handshake["protocol"] == "terminal-worker-v2"
+    assert handshake["protocol"] == "terminal-worker-v4"
     assert handshake["instance_id"] == "integration-test-instance"
 
 
@@ -136,6 +136,7 @@ def test_real_worker_close_kills_shell_descendants(tmp_path: Path) -> None:
         Path(executable).name,
         executable,
         (executable, "-c", "sleep 60 & child=$!; echo CHILD_PID:$child; wait"),
+        integration="off",
     )
     worker = ProcessTerminalWorker(str(_worker_path()), "process-tree-integration-test")
     try:
@@ -224,38 +225,30 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
 
     try:
         shell = _windows_interactive_shell_spec(shell_name)
-        enter = b"\r"
         first.start(shell, str(tmp_path), first_events.append)
         second.start(shell, str(tmp_path), second_events.append)
 
         ready_marker = f"{shell_name}_READY".encode()
-        first.write(
-            b"Write-Output " + ready_marker + enter
-            if shell.kind in {"powershell", "pwsh"}
-            else b"echo " + ready_marker + enter
-        )
-        second.write(
-            b"Write-Output " + ready_marker + enter
-            if shell.kind in {"powershell", "pwsh"}
-            else b"echo " + ready_marker + enter
-        )
+        ready_command = (
+            "Write-Output " if shell.kind in {"powershell", "pwsh"} else "echo "
+        ) + ready_marker.decode()
+        first.write({"type": "line", "text": ready_command})
+        second.write({"type": "line", "text": ready_command})
         assert wait_for_output(first_events, ready_marker, 5), "first shell did not become ready"
         assert wait_for_output(second_events, ready_marker, 5), "second shell did not become ready"
 
         if shell.kind in {"powershell", "pwsh"}:
-            first.write(b"Start-Sleep -Seconds 90" + enter)
-            second.write(b"Start-Sleep -Seconds 90" + enter)
-            first_recovered = b"Write-Output FIRST_SESSION_RECOVERED" + enter
-            second_recovered = b"Write-Output SECOND_SESSION_RECOVERED" + enter
-            first_recovered_marker = b"FIRST_SESSION_RECOVERED"
-            second_recovered_marker = b"SECOND_SESSION_RECOVERED"
+            command = "Start-Sleep -Seconds 90"
+            echo = "Write-Output"
         else:
-            first.write(b"ping -n 90 127.0.0.1 >nul" + enter)
-            second.write(b"ping -n 90 127.0.0.1 >nul" + enter)
-            first_recovered = b"echo FIRST_SESSION_RECOVERED" + enter
-            second_recovered = b"echo SECOND_SESSION_RECOVERED" + enter
-            first_recovered_marker = b"FIRST_SESSION_RECOVERED"
-            second_recovered_marker = b"SECOND_SESSION_RECOVERED"
+            command = "ping -n 90 127.0.0.1 >nul"
+            echo = "echo"
+        first.write({"type": "line", "text": command})
+        second.write({"type": "line", "text": command})
+        first_recovered = f"{echo} FIRST_SESSION_RECOVERED"
+        second_recovered = f"{echo} SECOND_SESSION_RECOVERED"
+        first_recovered_marker = b"FIRST_SESSION_RECOVERED"
+        second_recovered_marker = b"SECOND_SESSION_RECOVERED"
 
         time.sleep(1)
 
@@ -266,7 +259,7 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
         assert wait_for_prompt_after(
             first_events, first_output_offset, prompt, 5
         ), "Ctrl+C did not return the first shell to its prompt"
-        first.write(first_recovered)
+        first.write({"type": "line", "text": first_recovered})
         assert wait_for_output(first_events, first_recovered_marker, 5), (
             "Ctrl+C did not return the first shell to a usable prompt: "
             f"{output_bytes(first_events)[-2000:]!r}"
@@ -279,7 +272,7 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
         assert wait_for_prompt_after(
             second_events, second_output_offset, prompt, 5
         ), "Ctrl+C did not return the second shell to its prompt"
-        second.write(second_recovered)
+        second.write({"type": "line", "text": second_recovered})
         assert wait_for_output(
             second_events, second_recovered_marker, 5
         ), "the second shell did not recover when its own Ctrl+C was sent"
@@ -302,6 +295,7 @@ def test_real_worker_close_reaps_a_suspended_job(tmp_path: Path) -> None:
         Path(executable).name,
         executable,
         (executable, "-c", "sleep 60 & child=$!; echo STOPPED_CHILD_PID:$child; wait"),
+        integration="off",
     )
     worker = ProcessTerminalWorker(str(_worker_path()), "suspend-close-integration-test")
     try:
@@ -351,11 +345,8 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(tmp_pat
     )
     from app.core.workflows.react.workflow import ReactLikeWorkflow
     from app.service.terminal.terminal_session_service import TerminalSessionService
-    from app.service.terminal.worker import ProcessTerminalWorkerFactory
 
-    terminal = TerminalSessionService(
-        worker_factory=ProcessTerminalWorkerFactory(str(_worker_path()))
-    )
+    terminal = TerminalSessionService(worker_executable=str(_worker_path()))
     cancelled_runs: set[int] = set()
     dependencies = ToolRuntimeDependencies(
         terminal_session_service=terminal, is_run_cancelled=lambda run: run in cancelled_runs
@@ -392,8 +383,7 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(tmp_pat
             .execute(
                 session_id=session_id,
                 operation_id="set-env",
-                data=set_command,
-                submit=True,
+                input={"type": "line", "text": set_command},
                 wait_ms=0,
                 execution_context=first,
             )
@@ -415,20 +405,31 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(tmp_pat
         TerminalWriteTool().execute(
             session_id=session_id,
             operation_id="check-env",
-            data=command,
-            submit=True,
+            input={"type": "line", "text": command},
             wait_ms=0,
             execution_context=second,
         )
         output = ""
-        cursor = 0
+        cursor = None
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and "STATE:kept" not in output:
-            result = terminal.read(session_id, task_id=1, after_seq=cursor, wait_ms=500)
-            for frame in result.to_dict()["output"]:
-                output += frame["data"]
-                cursor = frame["seq"]
+            result = terminal.read(
+                session_id,
+                task_id=1,
+                cursor=agent_cursor(terminal, session_id, 1, cursor),
+                wait={"until": "activity", "timeout_ms": 500},
+            )
+            for frame in result["events"]:
+                if frame["type"] == "output":
+                    output += frame["text"]
+            cursor = result["next_cursor"]
         assert "STATE:kept" in output
     finally:
         terminal.shutdown()
     assert terminal.list_sessions(task_id=1, workspace_id=1) == []
+
+
+def agent_cursor(service, session_id, task_id, value):
+    if value is None or isinstance(value, str):
+        return value
+    return f"{service.snapshot(session_id, task_id=task_id)['generation']}:{value}:0"

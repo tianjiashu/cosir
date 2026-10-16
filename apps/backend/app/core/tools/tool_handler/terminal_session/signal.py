@@ -1,10 +1,8 @@
 """``terminal_signal`` handler：向交互终端 session 发送 interrupt / EOF / suspend。
 
-信号语义与可用性由 PTY worker 声明的能力决定；Windows worker 不支持 PTY signal，因此本工具
-在 Windows 上不注册（见 ``TerminalSignalTool.avaliable()``）。
+能力由会话 worker 声明，投递成功不代表命令已经返回。
 """
 
-import platform
 from typing import ClassVar
 
 from app.core.tools.display.terminal_display import build_terminal_session_display_data
@@ -46,7 +44,6 @@ class TerminalSignalTool(HandlerBase):
     args_model = TerminalSignalArgs
     timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_TERMINAL_SESSION
-
 
     def execute(
         self,
@@ -120,9 +117,7 @@ class TerminalSignalTool(HandlerBase):
             description=describe_terminal_tool(self.name, self.description),
             handler=self.execute,
             args_model=self.args_model,
-            parameters_schema=build_terminal_session_parameters_schema(
-                self.name, self.args_model
-            ),
+            parameters_schema=build_terminal_session_parameters_schema(self.name, self.args_model),
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",
@@ -136,24 +131,3 @@ class TerminalSignalTool(HandlerBase):
                 show_result=False,
             ),
         )
-
-    def avaliable(self) -> bool:
-        """判断当前平台是否注册 ``terminal_signal``。
-
-        Windows worker 目前只提供 ConPTY 的读写与关闭能力，不声明 ``signal_interrupt``、
-        ``signal_eof_canonical`` 或 ``signal_suspend``；因此必须在工具系统装配期隐藏
-        ``terminal_signal``，避免模型收到一个注定返回 unsupported 的工具定义。Unix worker
-        保持现有能力。
-
-        返回:
-            非 Windows 平台返回 True（注册该工具）；Windows 返回 False，
-            ``build_terminal_signal_definition()`` 据此返回 ``None``。
-
-        异常:
-            无。
-
-        副作用:
-            无；只读取 ``platform.system()``。
-        """
-
-        return platform.system() != "Windows"

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_OUTPUT_CHUNK_BYTES: usize = 16 * 1024;
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
-pub const PROTOCOL: &str = "terminal-worker-v2";
+pub const PROTOCOL: &str = "terminal-worker-v4";
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -14,9 +14,10 @@ pub enum ControlFrame {
         shell: Vec<String>,
         shell_kind: String,
         cwd: String,
+        integration: String,
     },
     Write {
-        data_base64: String,
+        input: TerminalInput,
     },
     Signal {
         request_id: String,
@@ -24,6 +25,64 @@ pub enum ControlFrame {
     },
     Heartbeat,
     Shutdown,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TerminalInput {
+    Line { text: String },
+    Key { key: InputKey },
+}
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum InputKey {
+    CtrlC,
+    CtrlD,
+    CtrlZ,
+}
+impl InputKey {
+    // 握手与编码共用同一集合，避免声明可用却无法投递。
+    pub fn supported() -> &'static [Self] {
+        if cfg!(windows) {
+            &[Self::CtrlC, Self::CtrlZ]
+        } else {
+            &[Self::CtrlC, Self::CtrlD]
+        }
+    }
+    pub fn capability(self) -> &'static str {
+        match self {
+            Self::CtrlC => "input_ctrl_c",
+            Self::CtrlD => "input_ctrl_d",
+            Self::CtrlZ => "input_ctrl_z",
+        }
+    }
+}
+
+pub fn encode_input(input: TerminalInput) -> anyhow::Result<Vec<u8>> {
+    match input {
+        TerminalInput::Line { text } => {
+            // worker 是独立进程输入边界；拒绝控制字符，不能让文本绕过按键能力。
+            if text.chars().any(char::is_control) {
+                anyhow::bail!("line contains control characters");
+            }
+            if text.len() + 1 > MAX_INPUT_BYTES {
+                anyhow::bail!("input exceeds 64 KiB including Enter");
+            }
+            let mut bytes = text.into_bytes();
+            bytes.push(13);
+            Ok(bytes)
+        }
+        TerminalInput::Key { key } => {
+            if !InputKey::supported().contains(&key) {
+                anyhow::bail!("unsupported control key");
+            }
+            Ok(vec![match key {
+                InputKey::CtrlC => 3,
+                InputKey::CtrlD => 4,
+                InputKey::CtrlZ => 26,
+            }])
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -38,6 +97,9 @@ pub enum WorkerEvent {
     },
     Output {
         data_base64: String,
+    },
+    Shell {
+        event: serde_json::Value,
     },
     Error {
         code: &'static str,
@@ -89,7 +151,7 @@ mod tests {
 
     #[test]
     fn reads_length_prefixed_start_frame() {
-        let payload = br#"{"type":"start","shell":["bash"],"shell_kind":"bash","cwd":"/tmp"}"#;
+        let payload = br#"{"type":"start","shell":["bash"],"shell_kind":"bash","cwd":"/tmp","integration":"off"}"#;
         let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
         frame.extend_from_slice(payload);
 
@@ -101,6 +163,7 @@ mod tests {
                 shell,
                 shell_kind,
                 cwd,
+                integration: _,
             } => {
                 assert_eq!(shell, vec!["bash"]);
                 assert_eq!(shell_kind, "bash");
@@ -156,6 +219,76 @@ mod tests {
         assert_eq!(
             &frame[4..],
             br#"{"type":"signal_result","request_id":"req-1","status":"unsupported","reason":"platform_signal_unavailable"}"#
+        );
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    #[test]
+    fn complete_line_preserves_spaces_and_literal_escapes_and_appends_one_enter() {
+        let input: TerminalInput =
+            serde_json::from_str(r#"{"type":"line","text":"  literal\\n  "}"#).unwrap();
+        assert_eq!(encode_input(input).unwrap(), b"  literal\\n  \r");
+        assert_eq!(
+            encode_input(TerminalInput::Line {
+                text: String::new()
+            })
+            .unwrap(),
+            b"\r"
+        );
+    }
+
+    #[test]
+    fn rejects_old_inputs_newlines_control_characters_and_utf8_overflow() {
+        for json in [
+            r#"[{"type":"key","key":"ctrl_c"}]"#,
+            r#"{"type":"text","text":"raw"}"#,
+            r#"{"type":"key","key":"enter"}"#,
+        ] {
+            assert!(serde_json::from_str::<TerminalInput>(json).is_err());
+        }
+        for text in ["a\nb", "a\r", "\t", "\u{1b}", "\u{85}"] {
+            assert!(encode_input(TerminalInput::Line { text: text.into() }).is_err());
+        }
+        assert!(encode_input(TerminalInput::Line {
+            text: "中".repeat(22000)
+        })
+        .is_err());
+        assert_eq!(
+            encode_input(TerminalInput::Line {
+                text: "a".repeat(MAX_INPUT_BYTES - 1)
+            })
+            .unwrap()
+            .len(),
+            MAX_INPUT_BYTES
+        );
+        assert!(encode_input(TerminalInput::Line {
+            text: "a".repeat(MAX_INPUT_BYTES)
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn control_keys_match_advertised_platform_and_never_append_enter() {
+        for key in [InputKey::CtrlC, InputKey::CtrlD, InputKey::CtrlZ] {
+            let result = encode_input(TerminalInput::Key { key });
+            if InputKey::supported().contains(&key) {
+                assert_eq!(result.unwrap().len(), 1);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+        assert!(InputKey::supported().contains(&InputKey::CtrlC));
+        assert_eq!(
+            InputKey::supported().contains(&InputKey::CtrlZ),
+            cfg!(windows)
+        );
+        assert_eq!(
+            InputKey::supported().contains(&InputKey::CtrlD),
+            !cfg!(windows)
         );
     }
 }

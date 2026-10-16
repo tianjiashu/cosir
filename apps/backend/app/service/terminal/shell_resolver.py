@@ -16,6 +16,7 @@ class ShellSpec:
     kind: str
     executable: str
     argv: tuple[str, ...]
+    integration: str = "auto"
 
 
 class ShellResolutionError(TerminalSessionError):

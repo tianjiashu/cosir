@@ -17,6 +17,7 @@ from app.core.tools.schemas.tool_names import (
     TOOL_TERMINAL_START,
     TOOL_TERMINAL_WRITE,
 )
+from app.service.terminal.interaction import control_keys_for_platform
 from app.service.terminal.shell_resolver import ShellResolver
 
 
@@ -24,25 +25,10 @@ def build_terminal_session_parameters_schema(
     tool_name: str,
     args_model: type[BaseModel],
 ) -> Mapping[str, Any]:
-    """在 Pydantic 校验契约之上，为当前宿主补充模型可见的参数说明。
+    """按宿主补充说明，并收窄控制键枚举；实际能力在 service 按 worker 握手检查。
 
-    Pydantic 模型提供稳定的校验契约；本投影只按宿主平台改写字段 ``description``（与
-    ``execute_terminal`` 使用同一套动态 schema 模式），既不改动校验规则，也不添加会把自定义
-    shell 可执行文件误判为非法的 enum。
-
-    参数:
-        tool_name: 工具名，决定补全哪些字段；目前只处理 ``terminal_start``（``shell``、
-            ``cwd``）与 ``terminal_signal``（``signal``）。
-        args_model: 该工具的 Pydantic 参数模型。
-
-    返回:
-        深拷贝并补全后的 JSON schema；``properties`` 结构异常时原样返回。
-
-    异常:
-        无；``ShellResolver`` 解析失败时回退为「宿主默认」措辞。
-
-    副作用:
-        无；入参模型不被修改（内部使用 ``deepcopy``）。
+    shell 名称仍允许自定义可执行文件，只有封闭的控制键集合按平台投影。
+    深拷贝避免宿主枚举污染共享 Pydantic schema。
     """
 
     schema = deepcopy(args_model.model_json_schema())
@@ -59,6 +45,10 @@ def build_terminal_session_parameters_schema(
         cwd = properties.get("cwd")
         if isinstance(cwd, dict):
             cwd["description"] = _cwd_parameter_description(system)
+    elif tool_name == TOOL_TERMINAL_WRITE:
+        schema["$defs"]["InputKey"]["properties"]["key"]["enum"] = list(
+            control_keys_for_platform(system)
+        )
     elif tool_name == TOOL_TERMINAL_SIGNAL:
         signal = properties.get("signal")
         if isinstance(signal, dict):
@@ -157,8 +147,7 @@ def _signal_parameter_description(system: str) -> str:
         system: ``platform.system()`` 的结果，决定是否提示当前平台不支持信号。
 
     返回:
-        英文参数说明：三个信号的含义，以及该平台的能力边界（Windows 明确提示改用
-        ``terminal_write``）。
+        英文参数说明：三个信号的含义，以及该平台的能力边界（Windows 明确声明仅支持 interrupt）。
 
     异常:
         无。
@@ -170,8 +159,9 @@ def _signal_parameter_description(system: str) -> str:
     meaning = "interrupt is Ctrl-C-like, eof is canonical EOF, and suspend is Ctrl-Z-like"
     if system == "Windows":
         return (
-            f"Signal to send: {meaning}. The current Windows worker does not advertise "
-            "terminal signal support; use terminal_write for input instead."
+            f"Signal to send: {meaning}. The Windows worker supports interrupt only; "
+            "it does not advertise "
+            "EOF or suspend. Read session capabilities."
         )
     return (
         f"Signal to send: {meaning}. Availability depends on the capabilities of the "
@@ -208,8 +198,8 @@ def describe_terminal_tool(tool_name: str, fallback: str) -> str:
             "pwsh requires an installed PowerShell 7 executable."
         )
         signal = (
-            "The Windows worker currently advertises no terminal_signal capability; do not "
-            "use terminal_signal for interrupt, EOF, or suspend. Use terminal_write for input."
+            "The Windows worker supports interrupt; do not "
+            "use terminal_signal for EOF or suspend. Use terminal_write for input."
         )
     elif system == "Darwin":
         host = "macOS resolves shell=auto from $SHELL, falling back to zsh."
@@ -235,10 +225,12 @@ def describe_terminal_tool(tool_name: str, fallback: str) -> str:
     if tool_name == TOOL_TERMINAL_START:
         return f"{fallback} {host} {hidden}"
     if tool_name == TOOL_TERMINAL_WRITE:
+        keys = ", ".join(control_keys_for_platform(system))
         return (
-            f"{fallback} {host} Send command text in data without decoding escape sequences; "
-            "set submit=true to append one real Enter key (CR, 0x0D). This is required to "
-            "reliably submit commands through Windows ConPTY."
+            f"{fallback} {host} Supported control keys: {keys}; consult session capabilities. "
+            "A line preserves whitespace and adds exactly one Enter; empty text presses Enter. "
+            "Submit multiline structures one line at a time. Keys never append Enter and "
+            "do not guarantee interrupt or EOF."
         )
     if tool_name == TOOL_TERMINAL_SIGNAL:
         return f"{fallback} {signal}"

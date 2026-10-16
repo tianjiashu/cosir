@@ -77,7 +77,7 @@ async def _finalize_max_steps(
             "data": {
                 "step_id": step_id,
                 "step_count": effective_step_count,
-                "max_steps": state.max_steps,
+                "max_steps": rc.max_steps,
                 **event_data,
             },
         },

@@ -220,6 +220,7 @@ class ReactLikeWorkflow(AgentWorkflow):
             operations=operations,
             run=run,
             model=cast(Runnable, bound_model),
+            max_steps=agent_profile.max_steps,
             structured_output=agent_profile.structured_output,
             start_time=perf_counter(),
             usage_stats=ConversationRunUsageStats(),
@@ -269,14 +270,14 @@ class ReactLikeWorkflow(AgentWorkflow):
 
         async with build_checkpointer() as checkpointer:
             graph = self._build_graph(checkpointer)
-            # 初始 state 只填控制流字段：模型消息与 runtime context 都不进 state（前者归
-            # RuntimeContextManager，后者经 config 注入）。
+            # 初始 state 只填控制流字段：模型消息、runtime context 与 max_steps 都不进 state
+            # （消息归 RuntimeContextManager；max_steps 为执行期常量，经 RuntimeConfig 注入，
+            # 不随每份 checkpoint 冗余落盘）。
             input_state = ReactGraphState(
                 step_count=0,
                 tool_error_count=0,
                 next_node=ReactRoute.MODEL,
                 instruction="",
-                max_steps=agent_profile.max_steps,
                 final_text="",
                 last_tool_results={},
             )

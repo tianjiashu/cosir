@@ -17,10 +17,8 @@ from app.service.terminal.errors import (
     TerminalSessionError,
     TerminalSessionResyncRequiredError,
 )
-from app.service.terminal.terminal_session_service import (
-    TerminalPreviewSubscription,
-    TerminalSessionService,
-)
+from app.service.terminal.preview import TerminalPreviewSubscription
+from app.service.terminal.terminal_session_service import TerminalSessionService
 
 
 @app.websocket("/tasks/{task_id}/terminal/sessions/{session_id}/stream")

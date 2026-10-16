@@ -59,6 +59,7 @@ class TerminalStartTool(HandlerBase):
         shell: str = "auto",
         cwd: str | None = None,
         label: str | None = None,
+        integration: str = "auto",
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """创建交互终端 session 并返回其元数据。
@@ -94,6 +95,7 @@ class TerminalStartTool(HandlerBase):
                 workspace_id=execution_context.workspace_id,
                 workspace_root=str(execution_context.workspace_root),
                 shell=shell,
+                integration=integration,
                 cwd=cwd,
                 label=label,
                 run_id=execution_context.run_id,

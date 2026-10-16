@@ -149,8 +149,8 @@ async def _model_node(state: ReactGraphState) -> dict:
     run_id = operations.get_current_run().id
 
     step_count = state.step_count + 1
-    # 超配额拦截：不再发起推理，直接收口为 max_steps_reached 失败终态。
-    if step_count > state.max_steps:
+    # 超配额拦截：不再发起推理，直接收口为 max_steps_reached 失败终态（阈值经 RuntimeConfig 注入）。
+    if step_count > rc.max_steps:
         return await _finalize_max_steps(state, step_count=step_count)
     step_id = f"step-{step_count}"
     if operations.is_current_run_cancelled():

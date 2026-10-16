@@ -123,7 +123,6 @@ def _state(
         step_count=1,
         tool_error_count=0,
         next_node=ReactRoute.OBSERVE,
-        max_steps=10,
         final_text="",
         last_tool_results={"instruction": "调用 Team", "observations": observations},
         tool_call_lifecycle=(

@@ -78,3 +78,17 @@ def build_terminal_session_list_display_data(session_count: int) -> dict[str, ob
     """只展示本次发现数量；会话实时状态从 service 获取，不复制到列表卡片。"""
 
     return {"kind": "terminal-session", "session_count": session_count}
+
+
+def build_terminal_observation_display_data(payload: dict[str, Any]) -> dict[str, object]:
+    """从本次观察投影 UI 元数据，不在输入接受后再次查询可能已退役的会话。"""
+    state = payload["state"]
+    return build_terminal_session_display_data(
+        {
+            "session_id": payload["session_id"],
+            "generation": payload["generation"],
+            "status": state["session_status"],
+            "exit_code": state["session_exit_code"],
+            "end_reason": state["session_end_reason"],
+        }
+    )

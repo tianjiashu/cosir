@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel, ConfigDict, Field
+
 from app.core.tools.tool_models.child_task.child_agent_send_args import ChildAgentSendArgs
 from app.core.tools.tool_models.child_task.child_agent_status_args import ChildAgentStatusArgs
 from app.core.tools.tool_models.child_task.child_agent_wait_args import ChildAgentWaitArgs
@@ -21,11 +23,10 @@ from app.core.tools.tool_models.execute_terminal_args import (
     WindowsExecuteTerminalArgs,
 )
 from app.core.tools.tool_models.list_directory_args import ListDirectoryArgs
-from app.core.tools.tool_models.terminal_session_args import TerminalReadArgs
+from app.core.tools.tool_models.terminal_session_args import TerminalReadArgs, TerminalWriteArgs
 from app.core.tools.tool_models.web_extract_args import WebExtractArgs
 from app.core.tools.validation.argument_coercion import coerce_tool_arguments
 from app.core.tools.validation.arguments import validate_tool_arguments
-from pydantic import BaseModel, ConfigDict, Field
 
 
 class _IntOrStrModel(BaseModel):
@@ -57,21 +58,21 @@ class TestWhitelistCoercion:
         assert facts == {"timeout": "str->float"}
 
         read_adapted, read_facts = _coerce(
-            {"session_id": "term_x", "after_seq": "2", "wait_ms": 3000},
-            TerminalReadArgs,
+            {"session_id": "term_x", "wait_ms": "2"},
+            TerminalWriteArgs,
         )
-        assert read_adapted["after_seq"] == 2  # type: ignore[index]
-        assert read_facts == {"after_seq": "str->int"}
+        assert read_adapted["wait_ms"] == 2  # type: ignore[index]
+        assert read_facts == {"wait_ms": "str->int"}
 
     def test_integral_float_to_int(self) -> None:
         """``30.0`` 归一为 int 字段的 30。潜在缺陷：strict 下整数值浮点被拒造成无效重试。"""
 
         adapted, facts = _coerce(
-            {"session_id": "term_x", "after_seq": 30.0, "wait_ms": 10},
-            TerminalReadArgs,
+            {"session_id": "term_x", "wait_ms": 30.0},
+            TerminalWriteArgs,
         )
-        assert adapted["after_seq"] == 30  # type: ignore[index]
-        assert facts == {"after_seq": "float->int"}
+        assert adapted["wait_ms"] == 30  # type: ignore[index]
+        assert facts == {"wait_ms": "float->int"}
 
     def test_true_false_string_to_bool(self) -> None:
         """仅 ``"true"/"false"``（忽略大小写与空白）归一为布尔。"""
@@ -117,8 +118,8 @@ class TestWhitelistRefusals:
         """``""`` 与 ``"abc"`` 不归一（不把空串当 None，也不猜语义）。"""
 
         for bad in ("", "abc"):
-            adapted, facts = _coerce({"session_id": "term_x", "after_seq": bad}, TerminalReadArgs)
-            assert adapted["after_seq"] == bad  # type: ignore[index]
+            adapted, facts = _coerce({"session_id": "term_x", "wait_ms": bad}, TerminalWriteArgs)
+            assert adapted["wait_ms"] == bad  # type: ignore[index]
             assert facts == {}
 
     def test_literal_field_is_never_coerced(self) -> None:
@@ -151,17 +152,22 @@ class TestValidationIntegration:
         assert result.arguments["timeout"] == 30.0
         assert [item.field for item in result.coercions] == ["timeout"]
 
-    def test_terminal_read_after_seq_string_passes(self) -> None:
-        """``after_seq: "2"`` 通过且归一为整数。"""
-
+    def test_terminal_cursor_is_opaque_and_old_fields_are_rejected(self) -> None:
+        """观察游标原样传递，不能沿用预览整数序号。"""
         result = validate_tool_arguments(
-            {"session_id": "term_x", "after_seq": "2", "wait_ms": 3000},
+            {"session_id": "term_x", "cursor": "g:2:0"},
             {},
             TerminalReadArgs,
         )
         assert result.ok is True
-        assert result.arguments["after_seq"] == 2
-        assert [item.field for item in result.coercions] == ["after_seq"]
+        assert result.arguments["cursor"] == "g:2:0"
+        assert result.coercions == ()
+        old = validate_tool_arguments(
+            {"session_id": "term_x", "after_seq": 2},
+            {},
+            TerminalReadArgs,
+        )
+        assert old.ok is False
 
     def test_native_arguments_have_no_fact(self) -> None:
         """deepseek 形态（``timeout: 30`` 原生数字）通过且不产生事实。"""
@@ -210,12 +216,17 @@ class TestValidationIntegration:
         """类型类错误必须附带「传 JSON 原生类型」的可操作提示。潜在缺陷：模型无法自纠。"""
 
         result = validate_tool_arguments(
-            {"session_id": "term_x", "after_seq": "abc"},
+            {
+                "session_id": "term_x",
+                "operation_id": "op",
+                "input": {"type": "line", "text": ""},
+                "wait_ms": "abc",
+            },
             {},
-            TerminalReadArgs,
+            TerminalWriteArgs,
         )
         assert result.ok is False
-        assert "after_seq" in result.error
+        assert "wait_ms" in result.error
         assert "JSON numbers/booleans" in result.error
 
     def test_non_mapping_arguments_still_rejected(self) -> None:

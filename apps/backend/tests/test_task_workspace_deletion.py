@@ -355,7 +355,7 @@ def test_committed_deletion_closes_task_terminals(storage, tmp_path, monkeypatch
 
     workspace = get_workspace_crud().create("terminal", str(tmp_path))
     task = get_task_crud().create(workspace.id, "owner")
-    terminal, factory = make_service()
+    terminal, workers = make_service(monkeypatch)
     terminal.start(
         task_id=task.id, workspace_id=workspace.id, workspace_root=str(tmp_path), run_id=1
     )
@@ -365,7 +365,7 @@ def test_committed_deletion_closes_task_terminals(storage, tmp_path, monkeypatch
             get_workspace_service().delete_workspace(workspace.id)
         else:
             get_task_service().delete_task(task.id)
-        assert factory.workers[0].closed
+        assert workers[0].closed
         assert terminal.list_sessions(task_id=task.id, workspace_id=workspace.id) == []
     finally:
         terminal.shutdown()
@@ -380,7 +380,7 @@ def test_failed_task_deletion_does_not_close_or_fence_terminal(storage, tmp_path
 
     workspace = get_workspace_crud().create("terminal", str(tmp_path))
     task = get_task_crud().create(workspace.id, "owner")
-    terminal, factory = make_service()
+    terminal, workers = make_service(monkeypatch)
     terminal.start(
         task_id=task.id, workspace_id=workspace.id, workspace_root=str(tmp_path), run_id=1
     )
@@ -394,7 +394,7 @@ def test_failed_task_deletion_does_not_close_or_fence_terminal(storage, tmp_path
         with pytest.raises(RuntimeError, match="database delete failed"):
             get_task_service().delete_task(task.id)
         assert get_task_crud().get(task.id).id == task.id
-        assert not factory.workers[0].closed
+        assert not workers[0].closed
         assert (
             terminal.start(
                 task_id=task.id, workspace_id=workspace.id, workspace_root=str(tmp_path), run_id=2

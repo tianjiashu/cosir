@@ -3,6 +3,7 @@ mod lifecycle;
 mod process_tree;
 mod protocol;
 mod pty;
+mod shell_integration;
 mod terminal_emulator;
 mod worker;
 
