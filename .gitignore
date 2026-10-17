@@ -70,7 +70,6 @@ apps/desktop/temp/
 node_modules/
 /.tmp/
 /.workbuddy/
-/.agents/
 /.npm-cache/
 /.superpowers/
 # temp/ 目录本体保留在版本库中（靠占位文件 .gitkeep 存活），仅忽略其中内容
