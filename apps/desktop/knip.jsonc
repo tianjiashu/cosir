@@ -1,0 +1,25 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+  "entry": [
+    "src/main.tsx",
+    "vite.config.ts",
+    "playwright.config.ts",
+    "wdio.tauri.conf.mjs",
+    "eslint.config.mjs",
+    "postcss.config.mjs",
+    "scripts/*.mjs",
+    "tests/e2e/global-setup.mjs",
+    "tests/e2e/test-server.mjs",
+    "tests/e2e/**/*.spec.ts",
+    "tests/unit/**/*.test.ts",
+    "tests/tauri-e2e/**/*.spec.mjs"
+  ],
+  "project": ["**/*.{js,jsx,ts,tsx,mjs,cjs,css}"],
+  "ignoreDependencies": [
+    // WDIO resolves its runner, framework, reporter, and service from string config keys.
+    "@wdio/local-runner",
+    "@wdio/mocha-framework",
+    "@wdio/spec-reporter",
+    "@wdio/tauri-service"
+  ]
+}

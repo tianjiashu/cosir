@@ -1,6 +1,6 @@
 import type { TransportToolStatus } from "@/lib/assistant/contract";
 
-export type ToolGroupPhase = "running" | "completed" | "failed" | "cancelled" | "unknown";
+type ToolGroupPhase = "running" | "completed" | "failed" | "cancelled" | "unknown";
 
 export type ToolGroupSummary = {
   phase: ToolGroupPhase;

@@ -4,7 +4,7 @@ import type { AgentTeamConfiguration, AgentTeamStatusConfiguration } from "@/lib
 const AGENT_TEAM_REVIEW_KIND = "agent_team_review";
 const AGENT_TEAM_REVIEW_DRAFT_SCHEMA = "agent-team-review-v2";
 
-export type AgentTeamNodePreview = {
+type AgentTeamNodePreview = {
   nodeId: string;
   name: string;
   role: string;
@@ -12,7 +12,7 @@ export type AgentTeamNodePreview = {
   maxSteps: number;
 };
 
-export type AgentTeamNodeGoal = {
+type AgentTeamNodeGoal = {
   goal: string;
   summary: string;
 };
@@ -34,7 +34,7 @@ export type AgentTeamPreviewDisplay = {
 };
 
 /** Team 审批请求允许的用户决定。 */
-export type AgentTeamReviewDecision = "approve" | "reject";
+type AgentTeamReviewDecision = "approve" | "reject";
 
 /** 后端对一次「待用户决定」请求的声明（工具展示契约的 human-in-the-loop 部分）。 */
 export type AgentTeamReviewRequest = {

@@ -11,7 +11,7 @@ export type DelegationDisplay = {
   status?: ChildAgentLifecycleStatus;
 };
 
-export type ChildAgentWaitMessage = {
+type ChildAgentWaitMessage = {
   childTaskId: number;
   childRunId: number;
   status: Extract<ChildAgentLifecycleStatus, "completed" | "failed" | "cancelled">;
@@ -61,11 +61,11 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-export function positiveId(value: unknown): number | undefined {
+function positiveId(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-export function childAgentStatus(value: unknown): ChildAgentLifecycleStatus | undefined {
+function childAgentStatus(value: unknown): ChildAgentLifecycleStatus | undefined {
   return typeof value === "string" && CHILD_AGENT_STATUSES.has(value as ChildAgentLifecycleStatus)
     ? value as ChildAgentLifecycleStatus
     : undefined;

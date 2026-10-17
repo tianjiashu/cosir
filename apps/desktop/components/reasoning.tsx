@@ -320,6 +320,4 @@ export {
   ReasoningTrigger,
   ReasoningContent,
   ReasoningText,
-  ReasoningFade,
-  reasoningVariants,
 };

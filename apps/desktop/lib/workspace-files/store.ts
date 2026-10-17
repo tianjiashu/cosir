@@ -1,7 +1,7 @@
 import type { WorkspaceReference } from "@/lib/workspace-references/codec";
 import { create } from "zustand";
 
-export type FileTab = { path: string; pinned: boolean };
+type FileTab = { path: string; pinned: boolean };
 export type ReadingPosition = {
   offset: number;
   before?: number;

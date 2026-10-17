@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type TerminalPanelTarget = {
+type TerminalPanelTarget = {
   taskId: number;
   sessionId: string;
 };

@@ -12,7 +12,7 @@ import type {
   RenderIsolationScope,
 } from "./render-error-types";
 
-export type { RenderFallback, RenderFallbackContext, RenderIsolationMetadata, RenderIsolationScope } from "./render-error-types";
+export type { RenderFallback,  RenderIsolationMetadata,  } from "./render-error-types";
 
 type RenderIsolationBoundaryProps = {
   children: ReactNode;

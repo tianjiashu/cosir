@@ -67,4 +67,4 @@ function Alert({ tone, title, action, icon, role, className, children, ...props 
   )
 }
 
-export { Alert, alertVariants, type AlertTone }
+export { Alert,   }

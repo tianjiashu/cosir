@@ -123,10 +123,3 @@ export function getWorkspaceAgentTeamConfigurations(
 export function getAgentTeamRun(runId: number, options?: RequestOptions): Promise<AgentTeamRun> {
   return requestJson<AgentTeamRun>(`/agent-team/runs/${encodeURIComponent(runId)}`, options);
 }
-
-export function cancelAgentTeamRun(runId: number): Promise<AgentTeamRun> {
-  return requestJson<AgentTeamRun>(
-    `/agent-team/runs/${encodeURIComponent(runId)}/cancel`,
-    jsonRequestInit({}, { method: "POST" }),
-  );
-}

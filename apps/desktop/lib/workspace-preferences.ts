@@ -12,13 +12,6 @@ export function writeLastWorkspaceId(workspaceId: number): void {
   window.localStorage.setItem(LAST_WORKSPACE_KEY, String(workspaceId));
 }
 
-export function clearLastWorkspaceId(workspaceId?: number): void {
-  if (typeof window === "undefined") return;
-  if (workspaceId === undefined || readLastWorkspaceId() === workspaceId) {
-    window.localStorage.removeItem(LAST_WORKSPACE_KEY);
-  }
-}
-
 const SIDEBAR_COLLAPSED_KEY = "cosir:sidebar-collapsed";
 
 /** 宽屏下侧栏是否收起的用户偏好；窄屏始终以图标栏 + 抽屉呈现，不读取它。 */

@@ -11,7 +11,7 @@ import type { TransportIssue } from "@/components/assistant/transport-status";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 
-export type RecoveryReason = "transport_finished" | "retry_after_failure" | "user_resync" | "backend_restored";
+type RecoveryReason = "transport_finished" | "retry_after_failure" | "user_resync" | "backend_restored";
 
 export type RuntimeRecovery = {
   reconcileAfterTransportFinish: (target?: { runId: number | null; status: string | null }) => Promise<void>;

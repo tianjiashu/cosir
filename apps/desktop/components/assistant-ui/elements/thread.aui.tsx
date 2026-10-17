@@ -91,7 +91,7 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { notify } from "@/lib/notify";
 
-export type ThreadComponents = {
+type ThreadComponents = {
   AssistantMessage?: ComponentType;
 };
 

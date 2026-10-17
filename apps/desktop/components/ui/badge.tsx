@@ -78,4 +78,4 @@ function Badge({ className, tone, variant, shape, size, ...props }: BadgeProps) 
 
 type BadgeTone = NonNullable<VariantProps<typeof badgeVariants>["tone"]>
 
-export { Badge, badgeVariants, type BadgeTone }
+export { Badge,  type BadgeTone }

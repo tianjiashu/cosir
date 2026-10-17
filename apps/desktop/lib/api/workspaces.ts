@@ -10,7 +10,7 @@ export type Workspace = {
   updated_at: string;
 };
 
-export type ForkTaskMetadata = {
+type ForkTaskMetadata = {
   source_task_id: number;
   source_run_id: number;
 };

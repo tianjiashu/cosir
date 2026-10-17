@@ -13,7 +13,7 @@ export type RenderIsolationScope =
 export type RenderIsolationMetadata = Record<string, unknown>;
 
 /** fallback 接收的受控错误信息和当前局部重试操作。 */
-export type RenderFallbackContext = {
+type RenderFallbackContext = {
   error: Error;
   onRetry: () => void;
 };

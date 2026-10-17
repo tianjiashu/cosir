@@ -19,7 +19,7 @@ const SUPPORTED_IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png"]);
 const UNSUPPORTED_IMAGE_EXTENSIONS = new Set(["gif", "webp", "bmp", "tif", "tiff"]);
 
 /** 判断浏览器 MIME 是否属于后端附件协议支持的图片格式。 */
-export function isSupportedImageContentType(contentType: string): boolean {
+function isSupportedImageContentType(contentType: string): boolean {
   const normalized = contentType.toLowerCase();
   return normalized === "image/jpeg" || normalized === "image/png";
 }

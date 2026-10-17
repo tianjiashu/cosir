@@ -3,7 +3,7 @@
 import { requestRaw } from "@/lib/http/client";
 import { createTimeoutAbort } from "@/lib/async/abort-timeout";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { getActiveTraceId, newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/trace";
 
 const CANCEL_TOOL_CALL_TIMEOUT_MS = 15_000;
 
@@ -20,7 +20,7 @@ export async function cancelToolCall(runId: number | null, toolCallId: string): 
     return { kind: "failed", reason: "invalid_target", message: "当前命令标识无效，无法停止。" };
   }
 
-  const traceId = getActiveTraceId() ?? newTraceId();
+  const traceId = newTraceId();
   void frontendLog("INFO", "assistant_tool_call_cancel_requested", "用户请求停止终端工具调用", {
     traceId,
     data: { runId, toolCallId },

@@ -12,7 +12,7 @@ type ReaderError = { message: string; exhausted: boolean; missing: boolean };
 const summaryOf = (state: TransportState): AgentRunSummary => ({
   runId: state.current_run_id, status: currentTransportRun(state)?.status ?? null,
 });
-export const sameAgentRun = (a: AgentRunSummary, b: AgentRunSummary) => a.runId === b.runId && a.status === b.status;
+const sameAgentRun = (a: AgentRunSummary, b: AgentRunSummary) => a.runId === b.runId && a.status === b.status;
 
 /** 查询只发现观察目标变化；消息与状态仍从 canonical snapshot / SSE 读取，不向 Transport 回写摘要。 */
 export function agentReaderNeedsSync(observed: AgentRunSummary, expected: AgentRunSummary, streamEnded: boolean): boolean {

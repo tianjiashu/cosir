@@ -14,7 +14,7 @@ const WorkspaceFilesSurface = lazy(() =>
   })),
 );
 
-export type WorkbenchSurfaceKind = "files" | "agent" | "agent-configuration-draft" | "agent-team-configuration-draft" | "terminal" | "web" | "file-diff";
+type WorkbenchSurfaceKind = "files" | "agent" | "agent-configuration-draft" | "agent-team-configuration-draft" | "terminal" | "web" | "file-diff";
 export type WorkbenchSurfaceProps = {
   tab: WorkbenchTab;
   onClose: () => void;
@@ -40,7 +40,7 @@ const agentTeamConfigurationDraftSurface: ComponentType<WorkbenchSurfaceProps> =
 };
 
 /** Workbench 面板渲染注册表；标签生命周期、按需挂载和未知类型回退由共享容器统一管理。 */
-export const workbenchSurfaceRegistry: Partial<Record<WorkbenchSurfaceKind, RegisteredSurface>> = {
+const workbenchSurfaceRegistry: Partial<Record<WorkbenchSurfaceKind, RegisteredSurface>> = {
   files: {
     render: ({ tab }) => tab.kind === "files" ? (
       <Suspense fallback={<div className="p-4 text-sm">加载文件浏览器…</div>}>

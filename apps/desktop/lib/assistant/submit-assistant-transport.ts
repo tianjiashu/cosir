@@ -5,7 +5,7 @@ import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import type { TraceId } from "@/lib/trace";
 
-export type NewConversationImageAttachment = {
+type NewConversationImageAttachment = {
   file: File;
   name: string;
 };
@@ -23,7 +23,7 @@ export type SubmitAssistantTransportInput = {
   traceId: TraceId;
 };
 
-export class AssistantTransportProtocolError extends Error {
+class AssistantTransportProtocolError extends Error {
   public constructor(message: string) {
     super(message);
     this.name = "AssistantTransportProtocolError";
@@ -34,7 +34,7 @@ export class AssistantTransportProtocolError extends Error {
  * POST /assistant 在网络层失败（连接中断、请求被取消等）：请求可能已被后端受理，也可能没有。
  * 与 HTTP 非 2xx（后端明确拒绝）不同，调用方不能据此认定命令未提交。
  */
-export class AssistantTransportDeliveryUnknownError extends UserFacingError {
+class AssistantTransportDeliveryUnknownError extends UserFacingError {
   public constructor(cause: unknown) {
     super("无法确认首条消息是否已送达本机后端，对话已保留，请稍后在侧栏中打开查看");
     this.name = "AssistantTransportDeliveryUnknownError";

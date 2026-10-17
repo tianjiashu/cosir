@@ -15,7 +15,7 @@ const TERMINAL_SESSION_STATUS_PRESENTATION = {
   closed: { label: "已关闭", tone: "neutral" },
 } as const satisfies Record<string, { label: string; tone: BadgeTone }>;
 
-export type TerminalSessionStatus = keyof typeof TERMINAL_SESSION_STATUS_PRESENTATION;
+type TerminalSessionStatus = keyof typeof TERMINAL_SESSION_STATUS_PRESENTATION;
 
 export type TerminalSessionStatusPresentation = { label: string; tone: BadgeTone };
 

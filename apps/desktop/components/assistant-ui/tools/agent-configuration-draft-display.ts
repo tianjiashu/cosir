@@ -1,4 +1,4 @@
-import { asRecord, type ToolArtifact } from "./types";
+import { asRecord } from "./types";
 
 export type AgentConfigurationDraftDisplay = {
   kind: "agent-configuration-draft";
@@ -28,8 +28,4 @@ export function readAgentConfigurationDraftDisplay(value: unknown): AgentConfigu
     description: data.description,
     system_prompt: data.system_prompt,
   };
-}
-
-export function readAgentConfigurationDraftArtifact(artifact: ToolArtifact) {
-  return readAgentConfigurationDraftDisplay(artifact.display_data);
 }

@@ -70,7 +70,7 @@ export function getModelCatalogSnapshot(): ModelCatalogSnapshot {
   return snapshot;
 }
 
-export function subscribeModelCatalog(listener: () => void): () => void {
+function subscribeModelCatalog(listener: () => void): () => void {
   subscribers.add(listener);
   return () => subscribers.delete(listener);
 }

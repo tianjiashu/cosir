@@ -3,7 +3,7 @@ import { useSyncExternalStore } from "react";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
 export type ThemePreference = "light" | "dark" | "system";
-export type ResolvedTheme = Exclude<ThemePreference, "system">;
+type ResolvedTheme = Exclude<ThemePreference, "system">;
 
 export type ThemeState = {
   preference: ThemePreference;
@@ -102,7 +102,7 @@ export function setThemePreference(preference: ThemePreference): void {
   publish({ preference, resolvedTheme: resolveTheme(preference) });
 }
 
-export function getThemeState(): ThemeState {
+function getThemeState(): ThemeState {
   return state;
 }
 

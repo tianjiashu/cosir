@@ -14,9 +14,6 @@ import {
   parseSkillMentionName,
 } from "@/lib/assistant/skill-mention-token";
 
-export const FILE_ATTACHMENT_TOKEN_PREFIX = "[[cosir-file:";
-export const FILE_ATTACHMENT_TOKEN_SUFFIX = "]]";
-
 const COMPOSER_TOKEN = /\[\[cosir-(file|image|skill):([^\]]+)\]\]/g;
 const HIDDEN_ATTACHMENT_TOKEN =
   /<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->/g;

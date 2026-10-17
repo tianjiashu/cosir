@@ -1,4 +1,4 @@
-export type AssistantPerformanceReport = {
+type AssistantPerformanceReport = {
   targetRunId: number | null;
   targetRunStatus: string | null;
   frameCount: number;

@@ -89,7 +89,7 @@ export type WatchEvent = {
   type: "ready" | "changed" | "reconcile" | "heartbeat" | "closed";
   polling?: boolean;
 };
-export const filesPath = (id: number, operation: string) =>
+const filesPath = (id: number, operation: string) =>
   `/workspaces/${id}/files/${operation}`;
 export function fileUrlPath(
   id: number,

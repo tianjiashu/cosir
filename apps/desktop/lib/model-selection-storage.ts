@@ -79,7 +79,7 @@ function isReasoningEffort(
  * 返回 Partial<ModelSelection>。解析失败（raw 为空、
  * JSON.parse 异常、字段缺失或类型不符）一律返回 null，不抛异常。
  */
-export function parseStoredSelection(
+function parseStoredSelection(
   raw: string | null,
 ): Partial<ModelSelection> | null {
   if (!raw) return null;

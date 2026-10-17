@@ -23,7 +23,7 @@ export type TaskTreeModel = {
  * This is intentionally limited to Fork tasks. Delegation relationships are
  * not part of the workspace sidebar and must not accidentally enter this tree.
  */
-export function getForkSourceTaskId(task: WorkspaceTask): number | null {
+function getForkSourceTaskId(task: WorkspaceTask): number | null {
   if (task.task_type !== "fork") return null;
   const sourceTaskId = task.extra?.fork?.source_task_id;
   return typeof sourceTaskId === "number" && Number.isInteger(sourceTaskId) ? sourceTaskId : null;

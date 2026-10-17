@@ -6,7 +6,7 @@ import { CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { DISCLOSURE_ROW_CLASS } from "./disclosure-tokens";
 
-export type DisclosureRowTone = "default" | "terminal";
+type DisclosureRowTone = "default" | "terminal";
 
 type DisclosureRowLayoutProps = {
   leading?: ReactNode;

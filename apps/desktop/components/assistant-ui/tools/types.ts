@@ -72,13 +72,3 @@ export function safeExternalUrl(value: unknown): string | null {
     return null;
   }
 }
-
-export function displayValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value === null || value === undefined) return "";
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}

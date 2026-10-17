@@ -1,12 +1,9 @@
 "use client";
 
 import {
-  memo,
   useCallback,
   useRef,
   useState,
-  type FC,
-  type PropsWithChildren,
 } from "react";
 import { CheckIcon, CircleAlertIcon, LoaderIcon, WrenchIcon, XCircleIcon } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
@@ -34,7 +31,7 @@ const toolGroupVariants = cva("aui-tool-group-root group/tool-group w-full", {
   defaultVariants: { variant: "ghost" },
 });
 
-export type ToolGroupRootProps = Omit<
+type ToolGroupRootProps = Omit<
   React.ComponentProps<typeof Collapsible>,
   "open" | "onOpenChange"
 > &
@@ -197,44 +194,8 @@ function ToolGroupContent({
   );
 }
 
-type ToolGroupComponent = FC<
-  PropsWithChildren<{ startIndex: number; endIndex: number }>
-> & {
-  Root: typeof ToolGroupRoot;
-  Trigger: typeof ToolGroupTrigger;
-  Content: typeof ToolGroupContent;
-};
-
-const ToolGroupImpl: FC<
-  PropsWithChildren<{ startIndex: number; endIndex: number }>
-> = ({ children, startIndex, endIndex }) => {
-  const toolCount = endIndex - startIndex + 1;
-
-  return (
-    <ToolGroupRoot>
-      <ToolGroupTrigger count={toolCount} />
-      <ToolGroupContent>{children}</ToolGroupContent>
-    </ToolGroupRoot>
-  );
-};
-
-/**
- * @deprecated This wrapper targets the legacy `components.ToolGroup` prop
- * on `<MessagePrimitive.Parts>`. Use `<MessagePrimitive.GroupedParts>` with
- * a `groupBy` returning `"group-tool"` and compose `ToolGroupRoot` /
- * `ToolGroupTrigger` / `ToolGroupContent` directly. See `thread.tsx`.
- */
-const ToolGroup = memo(ToolGroupImpl) as unknown as ToolGroupComponent;
-
-ToolGroup.displayName = "ToolGroup";
-ToolGroup.Root = ToolGroupRoot;
-ToolGroup.Trigger = ToolGroupTrigger;
-ToolGroup.Content = ToolGroupContent;
-
 export {
-  ToolGroup,
   ToolGroupRoot,
   ToolGroupTrigger,
   ToolGroupContent,
-  toolGroupVariants,
 };

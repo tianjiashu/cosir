@@ -15,7 +15,7 @@ export function transportMessageCount(state: TransportState): number {
 }
 
 /** Perform the shallow runtime guard used by the Assistant UI state bridge. */
-export function isTransportState(value: unknown): value is TransportState {
+function isTransportState(value: unknown): value is TransportState {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as { runs?: unknown; current_run_id?: unknown };
   if (!Array.isArray(candidate.runs)) return false;

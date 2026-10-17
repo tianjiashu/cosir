@@ -1,11 +1,11 @@
 import { MarkerType, type Edge, type Node, type XYPosition } from "@xyflow/react";
 
-import type { EditorDraft as AgentTeamConfigurationDraft, EditorNode as AgentTeamNodeConfiguration, EditorLayout, EdgeRoute } from "@/lib/agent-team-editor/model";
+import type { EditorDraft as AgentTeamConfigurationDraft, EditorNode as AgentTeamNodeConfiguration, EdgeRoute } from "@/lib/agent-team-editor/model";
 import { DEFAULT_END_VIEW_ID, END_VIEW_ID_PREFIX, END_NODE_ID } from "@/lib/agent-team-editor/model";
-export { DEFAULT_END_VIEW_ID, END_VIEW_ID_PREFIX, END_NODE_ID } from "@/lib/agent-team-editor/model";
+export {   END_NODE_ID } from "@/lib/agent-team-editor/model";
 import { findAgentTeamStatus } from "@/lib/agent-team-status";
 
-export type TeamGraphNodeData = {
+type TeamGraphNodeData = {
   kind: "agent";
   nodeIndex: number;
   node: AgentTeamNodeConfiguration;
@@ -31,8 +31,6 @@ export type TeamGraphEdge = Edge<{
   routeKey: string;
   route: AgentTeamEdgeRoute | null;
 }>;
-export type AgentTeamGraphLayout = EditorLayout;
-
 export function isEndViewId(nodeId: string | null | undefined): nodeId is string {
   return Boolean(nodeId?.startsWith(END_VIEW_ID_PREFIX));
 }
@@ -200,7 +198,7 @@ export function reconcileGraphNodes(
   });
 }
 
-export function defaultNodePosition(index: number): XYPosition {
+function defaultNodePosition(index: number): XYPosition {
   return { x: 100, y: 80 + index * 180 };
 }
 

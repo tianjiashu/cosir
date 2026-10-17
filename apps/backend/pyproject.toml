@@ -57,6 +57,7 @@ dev = [
     "pytest-asyncio==0.25.2",
     "pre-commit==4.1.0",
     "pytest-cov>=7.1.0",
+    "vulture==2.16",
 ]
 
 # 桌面发布构建工具。该组只安装进独立的打包虚拟环境，不进入后端运行依赖。
@@ -118,6 +119,12 @@ ignore = [
 
 [tool.ruff.format]
 quote-style = "double"  # 与现有代码双引号约定一致
+
+[tool.vulture]
+# 首轮聚焦后端生产代码；tests/ 当前含 Vulture 无法解析的 type 注释文本。
+paths = ["app"]
+min_confidence = 80
+sort_by_size = true
 
 [tool.mypy]
 # 强类型官方基线（第零铁律：以长期稳定迭代为最终目标，类型错误应在提交前被抓住）。

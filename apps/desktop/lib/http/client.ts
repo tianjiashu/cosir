@@ -22,13 +22,13 @@ export type HttpRequestInit = RequestInit & {
 };
 
 /** 领域 JSON API 的统一下限保护，避免本机后端无响应时页面永久转圈。 */
-export const DEFAULT_JSON_TIMEOUT_MS = 30_000;
+const DEFAULT_JSON_TIMEOUT_MS = 30_000;
 
 /** 仅透传取消与超时的请求选项，供 lib/api 的读取函数接收 TanStack Query 的 signal。 */
 export type RequestOptions = Pick<HttpRequestInit, "signal" | "timeoutMs">;
 
 /** 去掉 URL 末尾的斜杠，避免拼接路径时产生双斜杠。 */
-export function stripTrailingSlash(url: string): string {
+function stripTrailingSlash(url: string): string {
   return url.replace(/\/$/, "");
 }
 

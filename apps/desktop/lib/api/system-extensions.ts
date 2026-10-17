@@ -17,7 +17,7 @@ export type MCPServerConfiguration = {
   tested?: boolean;
 };
 
-export type MCPDiscoveredTool = {
+type MCPDiscoveredTool = {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;

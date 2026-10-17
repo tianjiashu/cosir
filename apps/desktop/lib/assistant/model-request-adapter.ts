@@ -2,7 +2,7 @@ import type { ModelCatalog } from "@/lib/model-catalog";
 import { REASONING_EFFORT_VALUES } from "@/lib/model-selection-constants";
 import type { ModelSelection } from "@/lib/model-selection-storage";
 
-export type ModelContextConfig = {
+type ModelContextConfig = {
   modelName?: unknown;
   reasoningEffort?: unknown;
 };

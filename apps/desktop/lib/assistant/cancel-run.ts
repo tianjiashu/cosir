@@ -2,7 +2,7 @@
 
 import { requestRaw } from "@/lib/http/client";
 import { createTimeoutAbort } from "@/lib/async/abort-timeout";
-import { getActiveTraceId, newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/trace";
 
 const CANCEL_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -14,7 +14,7 @@ export async function cancelRun(_taskId: number | null, runId: number): Promise<
   if (!Number.isInteger(runId)) {
     return { accepted: false, reason: "invalid_run_id", message: "当前运行标识无效，无法取消。" };
   }
-  const traceId = getActiveTraceId() ?? newTraceId();
+  const traceId = newTraceId();
   const { signal, clear } = createTimeoutAbort(CANCEL_REQUEST_TIMEOUT_MS);
   try {
     // 把 traceId 作为 init 字段交给 requestRaw 统一注入 X-Trace-Id 头；

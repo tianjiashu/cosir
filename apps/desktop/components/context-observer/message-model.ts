@@ -44,14 +44,14 @@ export function valueText(value: unknown): string {
     : (JSON.stringify(value, null, 2) ?? "未提供");
 }
 
-export function toolNames(message: ContextMessage): string[] {
+function toolNames(message: ContextMessage): string[] {
   return (message.tool_calls ?? []).flatMap((call) =>
     typeof call.name === "string" ? [call.name] : [],
   );
 }
 
 /** 多模态块只提取文字作摘要；原始结构由详情完整保留，不把附件载荷塞进列表。 */
-export function contentPreview(content: unknown): string {
+function contentPreview(content: unknown): string {
   if (typeof content === "string")
     return content.replace(/\s+/g, " ").slice(0, 180);
   if (Array.isArray(content))

@@ -12,7 +12,7 @@ import { currentTransportRun } from "@/lib/assistant/transport-state-operations"
 import { useTaskAssistantReadonlyTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
 import { isTerminalRunStatus, type TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { getActiveTraceId, newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/trace";
 import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
 
 function AttachBridge({ runId, backendAvailable, controller }: { runId: number | null; backendAvailable: boolean; controller: AssistantAttachController }) {
@@ -42,7 +42,7 @@ function AgentRunTransport({ taskId, initialState, onError, onStateCommit, onFin
   onFinish: (status: { targetRunStatus: string | null }) => void;
 }) {
   const backendRuntime = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
-  const [traceId] = useState(() => getActiveTraceId() ?? newTraceId());
+  const [traceId] = useState(() => newTraceId());
   const runId = initialState.current_run_id;
   const currentRun = currentTransportRun(initialState);
   const shouldAttach = currentRun !== undefined && !isTerminalRunStatus(currentRun.status);

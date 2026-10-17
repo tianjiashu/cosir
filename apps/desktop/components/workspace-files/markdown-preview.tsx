@@ -18,7 +18,7 @@ const workspaceRehypePlugins = [
   defaultRehypePlugins.harden,
 ];
 
-export function resolveDocumentLink(
+function resolveDocumentLink(
   document: string,
   href: string,
 ): string | null {

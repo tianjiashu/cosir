@@ -1,6 +1,6 @@
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 
-export type TriStateValue = "" | "true" | "false";
+type TriStateValue = "" | "true" | "false";
 
 /**
  * Agent 模型覆盖项的结构化表单值。
@@ -16,19 +16,6 @@ export type ModelSettingsForm = {
   reasoning_effort: string;
   response_format: string;
 };
-
-/** 返回一份不覆盖任何模型参数的空表单。 */
-export function emptyModelSettingsForm(): ModelSettingsForm {
-  return {
-    temperature: "",
-    top_p: "",
-    max_tokens: "",
-    drop_params: "",
-    stream: "",
-    reasoning_effort: "",
-    response_format: "",
-  };
-}
 
 function stringValue(value: unknown): string {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean"

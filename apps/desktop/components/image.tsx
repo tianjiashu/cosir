@@ -136,7 +136,7 @@ const imageVariants = cva(
   },
 );
 
-export type ImageRootProps = React.ComponentProps<"div"> &
+type ImageRootProps = React.ComponentProps<"div"> &
   VariantProps<typeof imageVariants>;
 
 function ImageRoot({
@@ -163,7 +163,7 @@ type ImagePreviewProps = Omit<React.ComponentProps<"img">, "children"> & {
   containerClassName?: string;
 };
 
-export type ImageDisplay = "default" | "message-thumbnail";
+type ImageDisplay = "default" | "message-thumbnail";
 
 type ImageImplProps = ImageMessagePartComponent extends React.ComponentType<infer Props>
   ? Props & { display?: ImageDisplay }
@@ -419,7 +419,7 @@ function ImageContentFilterError({
   );
 }
 
-export type ImageActionsProps = {
+type ImageActionsProps = {
   part: ImageMessagePart;
   /**
    * Wire to your own generation call to show a regenerate button. The button
@@ -572,12 +572,12 @@ Image.ContentFilterError = ImageContentFilterError;
 
 export {
   Image,
-  ImageRoot,
-  ImagePreview,
-  ImageFilename,
-  ImageZoom,
-  ImageActions,
-  ImageGenerating,
-  ImageContentFilterError,
-  imageVariants,
+
+
+
+
+
+
+
+
 };

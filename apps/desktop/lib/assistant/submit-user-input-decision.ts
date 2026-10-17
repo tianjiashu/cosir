@@ -2,10 +2,10 @@ import { requestRaw } from "@/lib/http/client";
 import { parseHttpError } from "@/lib/http/errors";
 
 /** 用户对一次等待请求作出的决定（与后端 `UserDecisionKind` 对齐）。 */
-export type UserInputDecisionKind = "approve" | "reject" | "abort";
+type UserInputDecisionKind = "approve" | "reject" | "abort";
 
 /** 单条用户决定；`data` 的形状由提问工具定义（后端只透传）。 */
-export type UserInputDecision = {
+type UserInputDecision = {
   request_id: string;
   decision: UserInputDecisionKind;
   data?: Record<string, unknown>;

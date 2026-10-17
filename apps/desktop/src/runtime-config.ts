@@ -269,11 +269,6 @@ export function getBackendStatusSnapshot(): BackendStatusSnapshot {
   return backendStatusSnapshot;
 }
 
-/** 返回当前后端地址。 */
-export function getBackendBaseUrlSnapshot(): string {
-  return getBackendRuntimeSnapshot().backendBaseUrl;
-}
-
 /** 订阅 Tauri supervisor 切换后端进程或端口的通知。 */
 export function subscribeBackendRuntime(listener: () => void): () => void {
   runtimeListeners.add(listener);

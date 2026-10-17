@@ -14,7 +14,7 @@
 
 import type { MessageStatus } from "@assistant-ui/core";
 
-export type KnownTransportToolStatus =
+type KnownTransportToolStatus =
   | "pending"
   | "running"
   | "completed"
@@ -24,7 +24,7 @@ export type KnownTransportToolStatus =
 /** 后端五态之外的值只用于安全显示，不得被解释为 pending 或 completed。 */
 export type TransportToolStatus = KnownTransportToolStatus | "unknown";
 
-export type TerminalSessionPresentationVariant =
+type TerminalSessionPresentationVariant =
   | "terminal-session-list"
   | "terminal-session-start"
   | "terminal-session-read"
@@ -46,7 +46,7 @@ export type TransportToolPresentation = {
 };
 
 /** 工具的通用展示数据；具体字段由 presentation.expand_layout 解释。 */
-export type GenericTransportToolData = {
+type GenericTransportToolData = {
   kind?: string;
   [key: string]: unknown;
 };
@@ -129,7 +129,7 @@ export type TransportImagePart = {
 };
 
 /** 用户普通文件 part：只携带稳定 locator 与展示元数据。 */
-export type TransportFilePart = {
+type TransportFilePart = {
   type: "file";
   file: string;
   name: string;
@@ -142,7 +142,7 @@ export type TransportMessage = {
   parts: Array<TransportTextPart | TransportReasoningPart | TransportToolCallPart | TransportImagePart | TransportFilePart>;
 };
 
-export type ConversationStateUsage = {
+type ConversationStateUsage = {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
@@ -185,7 +185,7 @@ export type TransportError = {
  * 该集合与后端 ``Constant.Run.TERMINAL_STATUSES`` 对齐。前端只用它判断展示和
  * 传输收敛，不承担 Run 生命周期迁移或状态修复。
  */
-export const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
+const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
   "completed",
   "failed",
   "cancelled",
@@ -207,9 +207,3 @@ export type TransportState = {
   /** 运行期错误；无错误时为 null。 */
   error: TransportError | null;
 };
-
-/** 把后端领域 status 翻译为 assistant-ui MessageStatus 的映射函数签名。 */
-export type MessageStatusMapper = (
-  message: TransportMessage,
-  run: TransportRun,
-) => MessageStatus;

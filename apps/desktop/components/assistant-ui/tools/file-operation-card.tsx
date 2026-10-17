@@ -107,7 +107,7 @@ function FileOperationRow({ change }: { change: FileChange }) {
   );
 }
 
-export function fileChangeStatusLabel(status: string | undefined): string {
+function fileChangeStatusLabel(status: string | undefined): string {
   switch (status) {
     case "deleted": return "已删除";
     case "moved": return "已移动";
