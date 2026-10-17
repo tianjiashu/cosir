@@ -63,6 +63,12 @@ def _windows_interactive_shell_spec(name: str) -> ShellSpec:
     return ShellSpec(name, executable, (executable, "-NoLogo", "-NoProfile"))
 
 
+@pytest.fixture(autouse=True)
+def _configure_worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 新签名下 worker 路径经环境变量注入，构造只收 instance_id；路径与 _worker_path 对齐。
+    monkeypatch.setenv("CODING_AGENT_TERMINAL_WORKER", str(_worker_path()))
+
+
 @pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
 def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
     events: list[dict[str, object]] = []
@@ -73,7 +79,7 @@ def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
         if event.get("type") == "exit":
             exited.set()
 
-    worker = ProcessTerminalWorker(str(_worker_path()), "integration-test-instance")
+    worker = ProcessTerminalWorker("integration-test-instance")
     try:
         worker.start(_shell_spec(), str(tmp_path), on_event)
         if os.name == "nt":
@@ -106,7 +112,7 @@ def test_real_worker_powershell_command_exits(tmp_path: Path) -> None:
         if event.get("type") == "exit":
             exited.set()
 
-    worker = ProcessTerminalWorker(str(_worker_path()), "powershell-integration-test")
+    worker = ProcessTerminalWorker("powershell-integration-test")
     try:
         worker.start(_powershell_command_spec(), str(tmp_path), on_event)
         assert exited.wait(10), f"worker did not report PowerShell exit: {events!r}"
@@ -137,7 +143,7 @@ def test_real_worker_close_kills_shell_descendants(tmp_path: Path) -> None:
         (executable, "-c", "sleep 60 & child=$!; echo CHILD_PID:$child; wait"),
         integration="off",
     )
-    worker = ProcessTerminalWorker(str(_worker_path()), "process-tree-integration-test")
+    worker = ProcessTerminalWorker("process-tree-integration-test")
     try:
         worker.start(spec, str(tmp_path), on_event)
         deadline = time.monotonic() + 5
@@ -170,7 +176,7 @@ def test_real_worker_close_kills_shell_descendants(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
 def test_real_worker_signal_failure_is_reported_to_caller(tmp_path: Path) -> None:
-    worker = ProcessTerminalWorker(str(_worker_path()), "signal-integration-test")
+    worker = ProcessTerminalWorker("signal-integration-test")
     try:
         worker.start(_shell_spec(), str(tmp_path), lambda event: None)
         with pytest.raises(TerminalWorkerSignalFailedError):
@@ -188,8 +194,8 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
 ) -> None:
     first_events: list[dict[str, object]] = []
     second_events: list[dict[str, object]] = []
-    first = ProcessTerminalWorker(str(_worker_path()), f"interrupt-{shell_name}-first")
-    second = ProcessTerminalWorker(str(_worker_path()), f"interrupt-{shell_name}-second")
+    first = ProcessTerminalWorker(f"interrupt-{shell_name}-first")
+    second = ProcessTerminalWorker(f"interrupt-{shell_name}-second")
 
     def output_bytes(events: list[dict[str, object]]) -> bytes:
         return b"".join(
@@ -296,7 +302,7 @@ def test_real_worker_close_reaps_a_suspended_job(tmp_path: Path) -> None:
         (executable, "-c", "sleep 60 & child=$!; echo STOPPED_CHILD_PID:$child; wait"),
         integration="off",
     )
-    worker = ProcessTerminalWorker(str(_worker_path()), "suspend-close-integration-test")
+    worker = ProcessTerminalWorker("suspend-close-integration-test")
     try:
         worker.start(spec, str(tmp_path), on_event)
         deadline = time.monotonic() + 5

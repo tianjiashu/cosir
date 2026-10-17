@@ -29,6 +29,12 @@ from app.service.terminal.shell_resolver import ShellSpec
 _FAKE_WORKER_PID = 4242
 
 
+@pytest.fixture(autouse=True)
+def _configure_worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 正常用例需 worker 可执行已配置；占位值被 _patch_worker_process 的 mock 覆盖。
+    monkeypatch.setenv(worker_module.Constant.Terminal.WORKER_ENV, "terminal-worker")
+
+
 class _SilentStream:
     """只阻塞、不产出数据的 stdout 替身：模拟 worker 存活但不回应握手。
 
@@ -216,7 +222,7 @@ def test_rejected_handshake_raises_handshake_error_and_logs_field_comparison(
         }
     )
     _patch_worker_process(monkeypatch, _FakeProcess(stale_handshake))
-    worker = ProcessTerminalWorker("terminal-worker.exe", "expected-instance")
+    worker = ProcessTerminalWorker("expected-instance")
 
     with pytest.raises(TerminalWorkerHandshakeError) as raised:
         worker.start(_spec(), ".", lambda event: None)
@@ -243,7 +249,7 @@ def test_handshake_timeout_stays_retryable_unavailable(
     caplog.set_level(logging.WARNING)
     _patch_worker_process(monkeypatch, _FakeProcess())
     monkeypatch.setattr(worker_module, "HANDSHAKE_TIMEOUT_SECONDS", 0.05)
-    worker = ProcessTerminalWorker("terminal-worker.exe", "timeout-instance")
+    worker = ProcessTerminalWorker("timeout-instance")
 
     with pytest.raises(TerminalWorkerUnavailableError) as raised:
         worker.start(_spec(), ".", lambda event: None)
@@ -265,7 +271,7 @@ def test_not_configured_worker_logs_before_raising(monkeypatch: pytest.MonkeyPat
     monkeypatch.delenv(worker_module.Constant.Terminal.WORKER_ENV, raising=False)
 
     with pytest.raises(TerminalWorkerUnavailableError):
-        ProcessTerminalWorker(None, "unconfigured-instance")
+        ProcessTerminalWorker("unconfigured-instance")
 
     assert any(record.getMessage() == "terminal_worker_not_configured" for record in caplog.records)
 
@@ -283,7 +289,7 @@ def test_spawn_flags_only_require_windows_constant_on_windows(monkeypatch, platf
         process_api.CREATE_NO_WINDOW = 0x08000000
     monkeypatch.setattr(worker_module, "subprocess", process_api)
     monkeypatch.setattr(worker_module, "sys", SimpleNamespace(platform=platform))
-    worker = ProcessTerminalWorker("unused", "platform-flags")
+    worker = ProcessTerminalWorker("platform-flags")
     with pytest.raises(TerminalWorkerUnavailableError, match="failed to start"):
         worker.start(_spec(), ".", lambda event: None)
     assert captured["creationflags"] == (0x08000000 if platform == "win32" else 0)

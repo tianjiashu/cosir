@@ -106,7 +106,7 @@ class SignalFailureWorker(FakeWorker):
 
 
 def make_service(
-    monkeypatch, *, worker_type=FakeWorker, status_observer=None, ring_buffer_bytes=None
+        monkeypatch, *, worker_type=FakeWorker, status_observer=None, ring_buffer_bytes=None
 ):
     """仅在测试中替换具体构造边界，收集每个会话独立创建的 worker。
 
@@ -117,7 +117,7 @@ def make_service(
     """
     workers = []
 
-    def construct(executable, instance_id):
+    def construct(instance_id):
         worker = worker_type()
         worker.instance_id = instance_id
         workers.append(worker)
@@ -329,8 +329,12 @@ def test_worker_construction_failure_does_not_leave_starting_metadata(tmp_path, 
     assert service.list_sessions(task_id=1, workspace_id=1) == []
 
 
-def test_process_worker_rejects_input_before_handshake() -> None:
-    worker = ProcessTerminalWorker("unused", "instance")
+def test_process_worker_rejects_input_before_handshake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 新签名下构造需 worker 可执行已配置（路径来自环境变量），仅占位即可：测试不真正启动 sidecar。
+    monkeypatch.setenv("CODING_AGENT_TERMINAL_WORKER", "terminal-worker")
+    worker = ProcessTerminalWorker("instance")
 
     with pytest.raises(TerminalWorkerUnavailableError):
         worker.write({"type": "line", "text": "input"})
@@ -393,7 +397,7 @@ def test_worker_exit_is_terminal_and_shutdown_closes_workers(monkeypatch, tmp_pa
 
 
 def test_session_status_observer_receives_async_exit_after_start(
-    monkeypatch, tmp_path: Path
+        monkeypatch, tmp_path: Path
 ) -> None:
     changes = []
     service, workers = make_service(monkeypatch, status_observer=changes.append)
@@ -414,7 +418,7 @@ def test_session_status_observer_receives_async_exit_after_start(
 
 
 def test_session_status_observer_receives_failure_and_explicit_close(
-    monkeypatch, tmp_path: Path
+        monkeypatch, tmp_path: Path
 ) -> None:
     failure_changes = []
     failure_service, failure_workers = make_service(
@@ -461,7 +465,7 @@ def test_terminal_completion_is_retired_from_active_registry(monkeypatch, tmp_pa
 
 
 def test_signal_delivery_failure_is_returned_without_false_success(
-    monkeypatch, tmp_path: Path
+        monkeypatch, tmp_path: Path
 ) -> None:
     service, workers = make_service(monkeypatch, worker_type=SignalFailureWorker)
     snapshot = service.start(
@@ -554,7 +558,7 @@ def test_close_can_interrupt_an_inflight_signal(tmp_path: Path, monkeypatch) -> 
 
 
 def test_terminal_history_and_write_idempotency_cache_are_bounded(
-    monkeypatch, tmp_path: Path
+        monkeypatch, tmp_path: Path
 ) -> None:
     service, workers = make_service(monkeypatch)
     session_ids: list[str] = []
@@ -587,8 +591,8 @@ def test_terminal_history_and_write_idempotency_cache_are_bounded(
         )
 
     assert (
-        len(service._registry[str(active["session_id"])]._accepted_writes)
-        == Constant.Terminal.MAX_WRITE_OPERATION_CACHE
+            len(service._registry[str(active["session_id"])]._accepted_writes)
+            == Constant.Terminal.MAX_WRITE_OPERATION_CACHE
     )
     service.shutdown()
 
@@ -672,7 +676,7 @@ def test_shell_resolver_has_platform_specific_defaults(monkeypatch: pytest.Monke
     ],
 )
 def test_shell_resolver_builds_disabled_integration_into_each_launch_spec(
-    monkeypatch, requested, system
+        monkeypatch, requested, system
 ):
     monkeypatch.setattr("app.service.terminal.shell_resolver.shutil.which", lambda value: value)
     spec = ShellResolver.resolve(
@@ -923,8 +927,8 @@ def test_list_sessions_is_task_scoped_and_keeps_recent_exits(monkeypatch, tmp_pa
     workers[0].emit_exit(0)
     sessions = service.list_sessions(task_id=1, workspace_id=1)
     assert (
-        next(item for item in sessions if item["session_id"] == first["session_id"])["status"]
-        == "exited"
+            next(item for item in sessions if item["session_id"] == first["session_id"])["status"]
+            == "exited"
     )
     service.delete_task_sessions([1])
     assert service.list_sessions(task_id=1, workspace_id=1) == []
@@ -1069,7 +1073,7 @@ def test_shell_exit_ends_tracking_without_inventing_command_result(monkeypatch, 
     ],
 )
 def test_control_keys_use_worker_capabilities_before_acceptance(
-    monkeypatch, tmp_path, keys, supported, rejected
+        monkeypatch, tmp_path, keys, supported, rejected
 ):
     class CapabilityWorker(FakeWorker):
         capabilities = frozenset(keys)
