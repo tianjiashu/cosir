@@ -92,7 +92,7 @@ def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
     )
     assert b"terminal-worker-smoke" in output
     handshake = next(event for event in events if event.get("type") == "handshake")
-    assert handshake["protocol"] == "terminal-worker-v4"
+    assert handshake["protocol"] == "terminal-worker-v5"
     assert handshake["instance_id"] == "integration-test-instance"
 
 
@@ -415,26 +415,13 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
             execution_context=second,
         )
         output = ""
-        cursor = None
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and "STATE:kept" not in output:
-            result = terminal.read(
-                session_id,
-                task_id=1,
-                cursor=agent_cursor(terminal, session_id, 1, cursor),
-                wait={"until": "activity", "timeout_ms": 500},
-            )
-            for frame in result["events"]:
-                if frame["type"] == "output":
-                    output += frame["text"]
-            cursor = result["next_cursor"]
+            result = terminal.read(session_id, task_id=1, run_id=1, wait_ms=3000)
+            output = result["history"]
+            if "screen" in result:
+                output += result["screen"]["text"]
         assert "STATE:kept" in output
     finally:
         terminal.shutdown()
     assert terminal.list_sessions(task_id=1, workspace_id=1) == []
-
-
-def agent_cursor(service, session_id, task_id, value):
-    if value is None or isinstance(value, str):
-        return value
-    return f"{service.snapshot(session_id, task_id=task_id)['generation']}:{value}:0"

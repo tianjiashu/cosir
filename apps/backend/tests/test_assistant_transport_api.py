@@ -126,6 +126,8 @@ async def test_task_endpoint_returns_task_response_without_task_level_fork_gate(
         title="conversation_run",
         extra=None,
         execution_status=None,
+        current_run_id=None,
+        context_window_total=None,
         task_type="user",
         parent_task_id=None,
         parent_run_id=None,

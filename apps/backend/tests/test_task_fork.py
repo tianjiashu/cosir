@@ -12,6 +12,7 @@ from test_task5_acceptance import canonical_store as canonical_store
 from app.api.schemas import ForkTaskRequest
 from app.api.tasks_api import fork_task
 from app.models.errors.task_fork_errors import TaskForkConflictError
+from app.storage.queries.task_read_queries import TaskReadQueries
 from app.task_runtime.service.task_service import TaskService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
@@ -26,6 +27,7 @@ def fork_store(request, monkeypatch):
     service._turn = store.runs
     service._context = store.context
     service._session_factory = store.factory
+    service._task_reads = TaskReadQueries(store.factory)
     store.service = service
     store.context.create_system_prompt(store.task.id, SystemMessage(content="固定系统指令"))
 
@@ -85,7 +87,7 @@ def test_reject_active_run_anywhere_in_selected_prefix(fork_store, status, bound
     with pytest.raises(TaskForkConflictError) as caught:
         asyncio.run(store.service.fork_task(store.task.id, boundary.id))
     assert caught.value.code == "RUN_NOT_READY"
-    assert len(store.tasks.list_by_workspace(store.workspace.id)) == 1
+    assert len(store.service.list_tasks_for_workspace(store.workspace.id)) == 1
 
 
 def test_unknown_or_foreign_boundary_returns_404_without_creating_task(fork_store):
@@ -96,7 +98,7 @@ def test_unknown_or_foreign_boundary_returns_404_without_creating_task(fork_stor
         with pytest.raises(HTTPException) as caught:
             asyncio.run(fork_task(store.task.id, ForkTaskRequest(runId=boundary), store.service))
         assert caught.value.status_code == 404
-    assert len(store.tasks.list_by_workspace(store.workspace.id)) == 2
+    assert len(store.service.list_tasks_for_workspace(store.workspace.id)) == 2
 
 
 def test_copy_failure_rolls_back_target_and_runs(fork_store, monkeypatch):
@@ -109,7 +111,7 @@ def test_copy_failure_rolls_back_target_and_runs(fork_store, monkeypatch):
     monkeypatch.setattr(store.context, "clone_for_fork", fail_copy)
     with pytest.raises(RuntimeError, match="copy failed"):
         asyncio.run(store.service.fork_task(store.task.id, run.id))
-    assert len(store.tasks.list_by_workspace(store.workspace.id)) == 1
+    assert len(store.service.list_tasks_for_workspace(store.workspace.id)) == 1
     assert len(store.runs.list_by_task(store.task.id)) == 1
 
 
@@ -184,6 +186,6 @@ def test_request_cancellation_does_not_release_workspace_before_worker_finishes(
             release.set()
             assert await asyncio.to_thread(finished.wait, 3)
         with workspace_operations.operation(store.workspace.id, timeout=0):
-            assert len(store.tasks.list_by_workspace(store.workspace.id)) == 2
+            assert len(store.service.list_tasks_for_workspace(store.workspace.id)) == 2
 
     asyncio.run(scenario())

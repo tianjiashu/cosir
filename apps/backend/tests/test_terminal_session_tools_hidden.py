@@ -1,3 +1,6 @@
+import json
+from types import SimpleNamespace
+
 import pytest
 
 from app.core.tools.display.terminal_display import build_session_display_payload
@@ -8,7 +11,9 @@ from app.core.tools.tool_handler.terminal_session import (
     TerminalSignalTool,
     TerminalStartTool,
     TerminalWriteTool,
+    build_terminal_signal_definition,
 )
+from app.core.tools.tool_handler.terminal_session.common import success_observation
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import (
     TerminalCloseArgs,
@@ -97,7 +102,7 @@ def test_terminal_session_schema_describes_agent_operational_semantics() -> None
     assert "input" in write and "cursor" not in write
     assert "data" not in write and "submit" not in write and "after_seq" not in write
     read = TerminalReadArgs.model_json_schema()["properties"]
-    assert "wait" in read and "cursor" in read
+    assert "wait_ms" in read and "cursor" not in read and "wait" not in read
 
 
 def test_terminal_session_schema_describes_host_specific_shell_and_paths(
@@ -237,3 +242,79 @@ def test_write_schema_declares_only_host_control_keys(monkeypatch, system, keys)
     assert "InputText" not in schema["$defs"]
     assert "InputLine" in schema["$defs"]
     assert "items" not in schema["properties"]["input"]
+
+
+def test_windows_signal_builder_registers_interrupt_capable_tool(monkeypatch):
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    definition = build_terminal_signal_definition()
+    assert definition.name == "terminal_signal"
+    assert "Windows worker supports interrupt" in definition.description
+
+
+def test_agent_projection_removes_only_preview_watermarks_and_preserves_display():
+    payload = {
+        "session_id": "s",
+        "first_available_seq": 1,
+        "next_seq": 4,
+        "history": "[1] tail",
+    }
+    display = {"kind": "terminal-session", "first_available_seq": 1}
+    observation = success_observation(
+        "terminal_read", payload, summary="read", display_payload=display
+    )
+    content = json.loads(observation.content.split("\n", 1)[1])
+    assert content == {"session_id": "s", "history": payload["history"]}
+    assert observation.display_data == display
+    assert payload["first_available_seq"] == 1 and payload["next_seq"] == 4
+
+
+def test_terminal_list_projects_each_session_without_mutating_service_snapshots():
+    snapshots = [{"session_id": "s", "first_available_seq": 1, "next_seq": 4}]
+    service = SimpleNamespace(list_sessions=lambda **kwargs: snapshots)
+    context = SimpleNamespace(
+        task_id=1,
+        workspace_id=2,
+        run_id=3,
+        runtime_dependencies=SimpleNamespace(
+            terminal_session_service=service, is_run_cancelled=None
+        ),
+    )
+    observation = TerminalListTool().execute(context)
+    content = json.loads(observation.content.split("\n", 1)[1])
+    assert content == {"sessions": [{"session_id": "s"}]}
+    assert snapshots[0]["first_available_seq"] == 1 and snapshots[0]["next_seq"] == 4
+
+
+def test_repeated_read_error_explains_recovery_without_claiming_command_failure():
+    from app.core.tools.tool_handler.terminal_session.common import with_terminal_errors
+    from app.service.terminal.terminal_read_guard import TerminalReadGuard
+
+    guard = TerminalReadGuard()
+    for _ in range(5):
+        guard.observe(1, (1, "running"))
+    result = with_terminal_errors("terminal_read", lambda: guard.observe(1, (1, "running")))
+    assert result.status == "error" and result.retryable
+    assert "TERMINAL_READ_UNCHANGED" in result.error
+    assert "does not stop, fail, or otherwise affect the command or session" in result.error
+    assert "terminal operation failed" not in result.error
+    assert "does not reset the counter or guarantee recovery" in result.reason
+    assert "new output or state changes" in result.reason
+    assert result.display_data == {"status_hint": "重复读取"}
+    assert result.content is None
+    # 错误映射只改提示，下一次观察到真实进展即恢复。
+    assert guard.observe(1, (2, "running")) is None
+
+
+def test_other_terminal_errors_keep_the_existing_error_projection():
+    from app.core.tools.tool_handler.terminal_session.common import service_error_observation
+    from app.service.terminal.errors import TerminalReadInProgressError, TerminalSessionStateError
+
+    for error in [
+        TerminalReadInProgressError("already waiting"),
+        TerminalSessionStateError("closed"),
+    ]:
+        result = service_error_observation("terminal_read", error)
+        assert result.status == "error"
+        assert result.retryable == error.retryable
+        assert result.error == f"terminal operation failed: {error}"
+        assert result.display_data == {"status_hint": "终端失败"}

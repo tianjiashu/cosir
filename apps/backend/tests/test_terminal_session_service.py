@@ -1,6 +1,7 @@
 import base64
 from pathlib import Path
 from queue import SimpleQueue
+from typing import ClassVar
 
 import pytest
 
@@ -27,6 +28,7 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 class FakeWorker:
     pid = 4321
+    geometry: ClassVar = {"rows": 24, "columns": 80}
     capabilities = frozenset(
         {
             "signal_interrupt",
@@ -42,6 +44,13 @@ class FakeWorker:
         self.writes: list[bytes] = []
         self.signals: list[str] = []
         self.closed = False
+        self.screen = {
+            "revision": 0,
+            **self.geometry,
+            "lines": [],
+            "cursor": {"row": 0, "column": 0, "visible": True},
+            "alternate": False,
+        }
 
     def start(self, spec, cwd, on_event) -> None:
         self._callback = on_event
@@ -65,6 +74,15 @@ class FakeWorker:
             {
                 "type": "output",
                 "data_base64": base64.b64encode(data).decode("ascii"),
+            }
+        )
+
+        # service 单测注入已渲染历史，不模拟 ANSI；真实渲染由 Rust 与 PTY 集成测试验证。
+        self._callback(
+            {
+                "type": "screen",
+                "screen": self.screen,
+                "history": [data.decode("utf-8", errors="replace")],
             }
         )
 
@@ -95,7 +113,7 @@ def make_service(
     ``status_observer`` 是构造期必需项，不传时用 no-op 观察者占位（只关心记录行为、不关心
     回写的用例）；需要断言回写的用例自行传收集器。缓冲上限的事实源是
     ``Constant.Terminal.MAX_RING_BUFFER_BYTES``，测试只在该边界上收紧它（把窗口压到几字节
-    以观察 gap），不引入构造参数。
+    以观察截断），不引入构造参数。
     """
     workers = []
 
@@ -117,7 +135,7 @@ def make_service(
 def output_texts(result: dict) -> list[str]:
     """取本页聚合后的 UTF-8 文本，验证观察游标连续性。"""
 
-    return [event["text"] for event in result["events"] if event["type"] == "output"]
+    return [result["history"]] if result["history"] else []
 
 
 def test_session_agent_operations_and_readers_are_cursor_based(monkeypatch, tmp_path: Path) -> None:
@@ -146,100 +164,9 @@ def test_session_agent_operations_and_readers_are_cursor_based(monkeypatch, tmp_
     preview = attachment.subscription.get(0.1)
     assert preview["seq"] == 1
     assert base64.b64decode(preview["data_base64"]) == "你好\r".encode()
-    reread = service.read(
-        session_id,
-        task_id=7,
-        cursor=agent_cursor(service, session_id, 7, 0),
-        wait={"until": "activity", "timeout_ms": 0},
-    )
+    reread = service.read(session_id, task_id=7, run_id=1, wait_ms=0)
     assert output_texts(reread) == output_texts(result)
-    assert reread["next_cursor"] == result["next_cursor"]
-
-
-def test_cursor_continues_from_the_last_returned_frame(monkeypatch, tmp_path: Path) -> None:
-    """模型使用不透明观察游标续读，底层分帧不影响文本连续性。"""
-
-    service, workers = make_service(monkeypatch)
-    snapshot = service.start(
-        task_id=7,
-        workspace_id=8,
-        workspace_root=str(tmp_path),
-        cwd=".",
-        run_id=1,
-    )
-    session_id = str(snapshot["session_id"])
-    worker = workers[0]
-
-    # 一行输出在 ConPTY 上常被切成「内容帧 + 换行帧」两帧。
-    worker.emit_output(b"line-1")
-    worker.emit_output(b"\r\n")
-
-    first = service.read(
-        session_id,
-        task_id=7,
-        cursor=agent_cursor(service, session_id, 7, None),
-        wait={"until": "activity", "timeout_ms": 0},
-    )
-    assert output_texts(first) == ["line-1\r\n"]
-    first_cursor = first["next_cursor"]
-
-    worker.emit_output(b"line-2")
-    worker.emit_output(b"\r\n")
-
-    applied = service.read(
-        session_id,
-        task_id=7,
-        cursor=agent_cursor(service, session_id, 7, first_cursor),
-        wait={"until": "activity", "timeout_ms": 0},
-    )
-    assert output_texts(applied) == ["line-2\r\n"]
-    applied_cursor = applied["next_cursor"]
-
-    worker.emit_output(b"line-3")
-    worker.emit_output(b"\r\n")
-
-    continued = service.read(
-        session_id,
-        task_id=7,
-        cursor=agent_cursor(service, session_id, 7, applied_cursor),
-        wait={"until": "activity", "timeout_ms": 0},
-    )
-    assert output_texts(continued) == ["line-3\r\n"]
-
-
-def test_agent_read_pages_complete_json_under_shared_output_budget(
-    monkeypatch, tmp_path: Path
-) -> None:
-    service, workers = make_service(monkeypatch)
-    snapshot = service.start(
-        task_id=7,
-        workspace_id=8,
-        workspace_root=str(tmp_path),
-        run_id=1,
-    )
-    session_id = str(snapshot["session_id"])
-
-    for _ in range(5):
-        workers[0].emit_output(b"x" * (16 * 1024))
-
-    result = service.read(
-        session_id,
-        task_id=7,
-        cursor=agent_cursor(service, session_id, 7, 0),
-        wait={"until": "activity", "timeout_ms": 0},
-    )
-
-    assert result["has_more"]
-    output = "".join(output_texts(result))
-    while result["has_more"]:
-        result = service.read(
-            session_id,
-            task_id=7,
-            cursor=result["next_cursor"],
-            wait={"until": "activity", "timeout_ms": 0},
-        )
-        output += "".join(output_texts(result))
-    assert output == "x" * (5 * 16 * 1024)
+    assert reread["screen"] == result["screen"]
 
 
 def test_input_backpressure_does_not_notify_the_creator_run(tmp_path: Path, monkeypatch) -> None:
@@ -439,19 +366,9 @@ def test_session_ownership_and_ring_buffer_gap_are_explicit(monkeypatch, tmp_pat
     workers[0].emit_output(b"cc")
 
     with pytest.raises(TerminalSessionOwnershipError):
-        service.read(
-            session_id,
-            task_id=2,
-            cursor=agent_cursor(service, session_id, 2, 0),
-            wait={"until": "activity", "timeout_ms": 0},
-        )
-    result = service.read(
-        session_id,
-        task_id=1,
-        cursor=agent_cursor(service, session_id, 1, 0),
-        wait={"until": "activity", "timeout_ms": 0},
-    )
-    assert result["gap"]
+        service.read(session_id, task_id=2, run_id=1, wait_ms=0)
+    result = service.read(session_id, task_id=1, run_id=1, wait_ms=0)
+    assert result["history_truncated"]
     with pytest.raises(TerminalSessionResyncRequiredError):
         service.subscribe(session_id, task_id=1, after_seq=0)
 
@@ -590,9 +507,9 @@ def test_signal_ack_can_follow_output_on_the_worker_reader(tmp_path: Path, monke
         result = service.signal(session_id, task_id=1, signal_name="interrupt")
         assert result["status"] == "running"
         assert not worker.closed
-        assert output_texts(
-            service.read(session_id, task_id=1, wait={"until": "activity", "timeout_ms": 0})
-        ) == ["before signal acknowledgement"]
+        assert output_texts(service.read(session_id, task_id=1, run_id=1, wait_ms=0)) == [
+            "before signal acknowledgement"
+        ]
     finally:
         reader.join(timeout=3)
         service.shutdown()
@@ -834,9 +751,8 @@ def test_write_retry_after_output_gap_does_not_repeat_input(monkeypatch, tmp_pat
         operation_id="op",
         input={"type": "line", "text": "x"},
     )
-    assert first["gap"]
-    assert not retry["gap"]
-    assert not retry["events"]
+    assert first["history_truncated"]
+    assert retry["history"] == first["history"]
     assert worker.writes == [b"x\r"]
     assert retry["input"]["duplicate"]
     service.shutdown()
@@ -1122,12 +1038,6 @@ def test_terminal_lifecycle_writes_structured_file_log(monkeypatch, tmp_path: Pa
     assert started["data"]["shell_executable"]
 
 
-def agent_cursor(service, session_id, task_id, value):
-    if value is None or isinstance(value, str):
-        return value
-    return f"{service.snapshot(session_id, task_id=task_id)['generation']}:{value}:0"
-
-
 def encode_test_input(input):
     if input["type"] == "line":
         return input["text"].encode() + b"\r"
@@ -1142,73 +1052,12 @@ def test_shell_exit_ends_tracking_without_inventing_command_result(monkeypatch, 
     worker._callback({"type": "shell", "event": {"kind": "command_started", "command": "python"}})
     command = service.snapshot(session, task_id=1)["state"]["active_command_id"]
     worker.emit_exit(7)
-    page = service.read(
-        session,
-        task_id=1,
-        wait={"until": "command_returned", "command_id": command, "timeout_ms": 0},
-    )
-    assert page["return_reason"] == "tracking_ended"
+    page = service.read(session, task_id=1, run_id=1, wait_ms=0)
+    assert page["return_reason"] == "session_ended"
+    assert page["latest_command"]["status"] == "tracking_ended"
+    assert page["latest_command"]["command_id"] == command
     assert page["state"]["session_exit_code"] == 7
-    assert "result" not in page["condition"]
-    service.shutdown()
-
-
-def test_read_rejects_a_cursor_from_another_generation_without_input(monkeypatch, tmp_path: Path):
-    service, workers = make_service(monkeypatch)
-    snapshot = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
-    with pytest.raises(TerminalSessionError):
-        service.read(
-            snapshot["session_id"],
-            task_id=1,
-            cursor="old:0:0",
-        )
-    assert not workers[0].writes
-    service.shutdown()
-
-
-def test_write_observes_new_activity_and_read_continues_its_pages(tmp_path: Path, monkeypatch):
-    service, workers = make_service(monkeypatch, ring_buffer_bytes=200000)
-    snapshot = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
-    session = snapshot["session_id"]
-    workers[0].emit_output(b"old background output\n")
-    expected = "new output " * 4000
-    worker = workers[0]
-
-    def write_chunks(input):
-        data = encode_test_input(input)
-        worker.writes.append(data)
-        # 遵守真实 worker 输出块上限，让分页覆盖多帧累计输出。
-        for start in range(0, len(data), 4096):
-            worker.emit_output(data[start : start + 4096])
-
-    monkeypatch.setattr(worker, "write", write_chunks)
-    page = service.write(
-        session,
-        task_id=1,
-        operation_id="large-input",
-        input={"type": "line", "text": expected},
-        wait_ms=0,
-    )
-    assert page["has_more"]
-    parts = output_texts(page)
-    while page["has_more"]:
-        page = service.read(
-            session,
-            task_id=1,
-            cursor=page["next_cursor"],
-            wait={"until": "activity", "timeout_ms": 0},
-        )
-        parts.extend(output_texts(page))
-    assert "".join(parts) == expected + "\r"
-    workers[0].emit_output(b"later log\n")
-    later = service.read(
-        session,
-        task_id=1,
-        cursor=page["next_cursor"],
-        wait={"until": "activity", "timeout_ms": 0},
-    )
-    assert output_texts(later) == ["later log\n"]
-    assert workers[0].writes == [expected.encode() + b"\r"]
+    assert "result" not in page["latest_command"]
     service.shutdown()
 
 
@@ -1245,5 +1094,137 @@ def test_control_keys_use_worker_capabilities_before_acceptance(
         assert result["input"]["accepted"]
         assert set(result["capabilities"]) == keys
         assert workers[0].writes == [encode_test_input({"type": "key", "key": supported})]
+    finally:
+        service.shutdown()
+
+
+def test_read_waits_three_seconds_despite_output_and_returns_latest_screen(monkeypatch, tmp_path):
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.service.terminal.errors import TerminalReadInProgressError
+
+    service, workers = make_service(monkeypatch)
+    session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)[
+        "session_id"
+    ]
+    entered = threading.Event()
+
+    def cancellation_check():
+        entered.set()
+        return False
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            before = time.monotonic()
+            future = pool.submit(
+                service.read, session, task_id=1, run_id=1, is_cancelled=cancellation_check
+            )
+            assert entered.wait(1)
+            with pytest.raises(TerminalReadInProgressError):
+                service.read(session, task_id=1, run_id=1)
+            # 输入不被 read 锁阻塞；真实更新也不能使 read 提前返回。
+            service.write(
+                session,
+                task_id=1,
+                operation_id="during-read",
+                input={"type": "line", "text": "ok"},
+                wait_ms=0,
+            )
+            workers[0]._callback(
+                {
+                    "type": "screen",
+                    "screen": {
+                        **workers[0].screen,
+                        "revision": 1,
+                        "lines": [{"text": "LATEST?", "wrapped": False}],
+                    },
+                    "history": [],
+                }
+            )
+            assert not future.done()
+            result = future.result(timeout=5)
+            assert time.monotonic() - before >= 3.0
+            assert result["screen"]["text"] == "LATEST?"
+            assert result["return_reason"] == "wait_elapsed"
+    finally:
+        service.shutdown()
+
+
+def test_repeat_error_keeps_command_alive_and_changed_output_or_run_recovers(monkeypatch, tmp_path):
+    from app.service.terminal.errors import TerminalRepeatedReadError
+
+    service, workers = make_service(monkeypatch)
+    session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)[
+        "session_id"
+    ]
+    worker = workers[0]
+    worker._callback(
+        {"type": "shell", "event": {"kind": "command_started", "command": "sleep 120"}}
+    )
+    try:
+        # 服务单测用零等待隔离计数逻辑，公开工具下限另由 schema 和真实计时测试验证。
+        first = service.read(session, task_id=1, run_id=1, wait_ms=0)
+        assert "warning" not in first
+        for count in range(1, 5):
+            result = service.read(session, task_id=1, run_id=1, wait_ms=0)
+            assert result["warning"]["unchanged_reads"] == count
+            assert result["screen"] == first["screen"]
+        with pytest.raises(TerminalRepeatedReadError):
+            service.read(session, task_id=1, run_id=1, wait_ms=0)
+        assert service.snapshot(session, task_id=1)["status"] == "running"
+        assert not worker.closed and not worker.signals
+        worker.emit_output(b"new heartbeat\n")
+        recovered = service.read(session, task_id=1, run_id=1, wait_ms=0)
+        assert recovered["latest_command"]["status"] == "executing"
+        assert "warning" not in recovered
+        fresh = service.read(session, task_id=1, run_id=2, wait_ms=0)
+        assert "warning" not in fresh
+        assert fresh["screen"] == recovered["screen"]
+    finally:
+        service.shutdown()
+
+
+def test_cancelled_read_does_not_count_or_leave_read_locked(monkeypatch, tmp_path):
+    service, _ = make_service(monkeypatch)
+    session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)[
+        "session_id"
+    ]
+    try:
+        for _ in range(8):
+            result = service.read(session, task_id=1, run_id=1, is_cancelled=lambda: True)
+            assert result["return_reason"] == "cancelled"
+            assert "warning" not in result
+        result = service.read(session, task_id=1, run_id=1, wait_ms=0)
+        assert "warning" not in result
+    finally:
+        service.shutdown()
+
+
+def test_write_and_read_keep_bounded_latest_history_without_consumption(monkeypatch, tmp_path):
+    from app.service.terminal.terminal_observation import json_size
+
+    service, workers = make_service(monkeypatch)
+    session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)[
+        "session_id"
+    ]
+    try:
+        for _ in range(10):
+            workers[0].emit_output(b"old " * 4096)
+        workers[0].emit_output(b"LATEST\n")
+        first = service.write(
+            session,
+            task_id=1,
+            operation_id="answer",
+            input={"type": "line", "text": "yes"},
+            wait_ms=0,
+        )
+        assert first["history"].endswith("LATEST\nyes\r")
+        assert first["history_truncated"]
+        result = service.read(session, task_id=1, run_id=1, wait_ms=0)
+        assert result["history"].endswith("LATEST\nyes\r")
+        assert json_size(result) <= Constant.Tools.MAX_OUTPUT_CHARS
+        assert not {"next_cursor", "has_more", "gap", "events"} & result.keys()
     finally:
         service.shutdown()

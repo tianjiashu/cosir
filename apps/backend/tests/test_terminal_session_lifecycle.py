@@ -155,8 +155,8 @@ def test_close_wakes_an_existing_read_without_waiting_for_its_deadline(monkeypat
             service.read,
             session["session_id"],
             task_id=1,
-            cursor=session["next_cursor"],
-            wait={"until": "activity", "timeout_ms": 5000},
+            run_id=1,
+            wait_ms=5000,
             is_cancelled=is_cancelled,
         )
         assert reading.wait(2)

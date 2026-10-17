@@ -1,5 +1,6 @@
 """真实 PTY/ConPTY 行为验证；按实际安装的 shell 显式跳过不可验证的平台。"""
 
+import base64
 import os
 import shutil
 from pathlib import Path
@@ -37,7 +38,7 @@ def terminal(request, tmp_path, monkeypatch):
     )
     session = snapshot["session_id"]
     try:
-        ready = service.read(session, task_id=1, wait={"until": "shell_prompt", "timeout_ms": 5000})
+        ready = service.snapshot(session, task_id=1)
         assert ready["integration"]["status"] == "ready", ready
         yield service, session, shell
     finally:
@@ -55,15 +56,60 @@ def write(service, session, text, operation):
 
 
 def text(page):
-    return "".join(event["text"] for event in page["events"] if event["type"] == "output")
+    history = page["history"]
+    screen = ""
+    if "screen" in page:
+        screen = "".join(
+            row
+            + (
+                ""
+                if index + page["screen"]["row_offset"] in page["screen"]["wrapped_rows"]
+                else "\n"
+            )
+            for index, row in enumerate(page["screen"]["text"].split("\n"))
+        )
+    return history + screen
 
 
 def started(page):
-    return [event for event in page["events"] if event["type"] == "command_started"]
+    return [page["latest_command"]] if page["latest_command"] else []
 
 
 def returned(page):
-    return [event for event in page["events"] if event["type"] == "command_returned"]
+    return (
+        [page["latest_command"]]
+        if page["latest_command"] and page["latest_command"]["status"] == "returned"
+        else []
+    )
+
+
+@pytest.mark.parametrize("padding", [0, 320])
+def test_zsh_bracket_output_survives_wrapped_input_and_matches_raw_preview(terminal, padding):
+    service, session, shell = terminal
+    if shell != "zsh":
+        pytest.skip("zsh wrapped-line redraw regression")
+    after_seq = service.snapshot(session, task_id=1)["next_seq"] - 1
+    # 命令输入不含结果中的括号，避免回显文本让缺失输出的断言误通过。
+    command = ": " + "x" * padding + r"; printf '\1331\135 remaining\nOVERRIDES \133\135 TAIL\n'"
+    page = write(service, session, command, "brackets")
+    pages = [page]
+    for _ in range(20):
+        if any(returned(item) for item in pages):
+            break
+        page = service.read(session, task_id=1, run_id=1, wait_ms=3000)
+        pages.append(page)
+    assert any(returned(item) for item in pages)
+    observed = "".join(text(item) for item in pages)
+    preview = service.subscribe(session, task_id=1, after_seq=after_seq)
+    try:
+        raw = b"".join(base64.b64decode(event["data_base64"]) for event in preview.replay)
+        for expected in ("[1] remaining", "OVERRIDES [] TAIL"):
+            assert expected.encode() in raw
+            assert expected in observed
+            latest_screen = next(item["screen"] for item in reversed(pages) if "screen" in item)
+            assert text({"history": "", "screen": latest_screen}).count(expected) == 1
+    finally:
+        service.unsubscribe(session, preview.subscription)
 
 
 def test_repl_answers_do_not_create_or_complete_shell_commands(terminal):
@@ -75,24 +121,14 @@ def test_repl_answers_do_not_create_or_complete_shell_commands(terminal):
     assert not returned(first), first
     second = write(service, session, "print(6 * 7)", "answer")
     assert "42" in text(second), second
-    assert not started(second) and not returned(second), second
-    waiting = service.read(
-        session,
-        task_id=1,
-        cursor=second["next_cursor"],
-        wait={"until": "command_returned", "command_id": command, "timeout_ms": 100},
-    )
-    assert waiting["return_reason"] == "timeout"
+    assert second["latest_command"]["command_id"] == command and not returned(second), second
+    waiting = service.read(session, task_id=1, run_id=1, wait_ms=3000)
+    assert waiting["return_reason"] == "wait_elapsed"
     final = write(service, session, "exit()", "exit-python")
     if not returned(final):
-        final = service.read(
-            session,
-            task_id=1,
-            cursor=final["next_cursor"],
-            wait={"until": "command_returned", "command_id": command, "timeout_ms": 3000},
-        )
+        final = service.read(session, task_id=1, run_id=1, wait_ms=3000)
     assert final["state"]["active_command_id"] is None, final
-    done = returned(final) or [final["condition"]]
+    done = returned(final)
     assert done[0]["command_id"] == command
 
 
@@ -101,21 +137,12 @@ def test_silent_execution_wait_interrupt_and_reuse(terminal):
     command_text = "sleep 10" if shell == "zsh" else "Start-Sleep -Seconds 10"
     first = write(service, session, command_text, "sleep")
     command = started(first)[0]["command_id"]
-    waiting = service.read(
-        session,
-        task_id=1,
-        cursor=first["next_cursor"],
-        wait={"until": "command_returned", "command_id": command, "timeout_ms": 150},
-    )
-    assert waiting["return_reason"] == "timeout"
+    waiting = service.read(session, task_id=1, run_id=1, wait_ms=3000)
+    assert waiting["return_reason"] == "wait_elapsed"
     service.signal(session, task_id=1, signal_name="interrupt")
-    final = service.read(
-        session,
-        task_id=1,
-        cursor=waiting["next_cursor"],
-        wait={"until": "command_returned", "command_id": command, "timeout_ms": 3000},
-    )
-    assert final["return_reason"] == "command_returned", final
+    final = service.read(session, task_id=1, run_id=1, wait_ms=3000)
+    assert final["latest_command"]["status"] == "returned", final
+    assert final["latest_command"]["command_id"] == command
     next_page = write(service, session, "echo usable", "reuse")
     assert "usable" in text(next_page)
 
@@ -145,7 +172,7 @@ def test_state_persists_and_failed_result_is_not_reused(terminal):
         assert returned(success)[0]["result"]["code"] is None
 
 
-def test_raw_preview_is_independent_of_agent_cursor(terminal):
+def test_raw_preview_is_independent_of_agent_snapshot(terminal):
     service, session, _ = terminal
     preview = service.subscribe(session, task_id=1, after_seq=None)
     preview.subscription.activate()
@@ -173,13 +200,13 @@ def test_multiline_editing_empty_enter_and_prompt_text_are_not_execution(termina
         operation_id="empty",
         input={"type": "line", "text": ""},
     )
-    assert not started(empty) and not returned(empty), empty
+    assert empty["latest_command"] == whole["latest_command"], empty
     # 普通输出伪装成提示符不会改变 shell 命令观察。
     python = "python" if os.name == "nt" else "python3"
     active = write(service, session, python + " -q", "python")
     assert len(started(active)) == 1 and not returned(active), active
     prompt = write(service, session, 'print("PS C:\\ fake> % $ >>>")', "fake-prompt")
-    assert not started(prompt) and not returned(prompt), prompt
+    assert prompt["latest_command"] == active["latest_command"], prompt
 
 
 def test_program_question_and_two_commands_keep_distinct_boundaries(terminal):
@@ -190,17 +217,11 @@ def test_program_question_and_two_commands_keep_distinct_boundaries(terminal):
     identity = started(question)[0]["command_id"]
     assert not returned(question)
     answer = write(service, session, "yes", "answer")
-    assert not started(answer), answer
     assert returned(answer)[0]["command_id"] == identity, answer
     next_command = write(service, session, "echo second", "second")
     assert started(next_command)[0]["command_id"] != identity
-    old_wait = service.read(
-        session,
-        task_id=1,
-        cursor=next_command["next_cursor"],
-        wait={"until": "command_returned", "command_id": identity, "timeout_ms": 0},
-    )
-    assert old_wait["condition"]["command_id"] == identity
+    old_wait = service.read(session, task_id=1, run_id=1, wait_ms=3000)
+    assert old_wait["latest_command"] == next_command["latest_command"]
 
 
 def test_zsh_syntax_error_background_and_nested_shell(terminal):
@@ -210,13 +231,13 @@ def test_zsh_syntax_error_background_and_nested_shell(terminal):
     good = write(service, session, "true", "good")
     assert returned(good)[0]["result"]["success"] is True, good
     bad = write(service, session, ")", "syntax")
-    assert not started(bad) and not returned(bad), bad
+    assert bad["latest_command"] == good["latest_command"], bad
     background = write(service, session, "sleep 10 &", "background")
     assert len(returned(background)) == 1
     nested = write(service, session, "zsh -f", "nested")
     command = started(nested)[0]["command_id"]
     child = write(service, session, "echo nested", "child-command")
-    assert not started(child) and not returned(child), child
+    assert child["latest_command"] == nested["latest_command"], child
     final = write(service, session, "exit", "child-exit")
     assert returned(final)[0]["command_id"] == command
 
@@ -271,12 +292,12 @@ def test_python_multiline_needs_explicit_blank_line_and_keeps_root_command(termi
     first = write(service, session, "for n in range(2):", "header")
     body = write(service, session, "    print('MULTI_RESULT', n)", "body")
     for page in [first, body]:
-        assert not started(page) and not returned(page), page
+        assert page["latest_command"]["command_id"] == identity and not returned(page), page
         assert page["state"]["active_command_id"] == identity
         assert "MULTI_RESULT 0" not in text(page), page
     done = write(service, session, "", "blank")
     assert "MULTI_RESULT 0" in text(done) and "MULTI_RESULT 1" in text(done), done
-    assert not started(done) and not returned(done), done
+    assert done["latest_command"]["command_id"] == identity and not returned(done), done
     final = write(service, session, "exit()", "exit")
     assert returned(final)[0]["command_id"] == identity, final
 
@@ -290,10 +311,9 @@ def test_program_answers_preserve_spaces_and_allow_empty_line(terminal):
     identity = started(question)[0]["command_id"]
     first = write(service, session, "  yes  ", "spaces")
     assert "'  yes  '" in text(first), first
-    assert not started(first) and not returned(first), first
+    assert first["latest_command"]["command_id"] == identity and not returned(first), first
     second = write(service, session, "", "default")
     assert "''" in text(second), second
-    assert not started(second), second
     assert returned(second)[0]["command_id"] == identity, second
 
 
@@ -312,7 +332,9 @@ def test_control_key_interrupts_python_and_eof_returns_to_shell(terminal):
         wait_ms=500,
     )
     assert "KeyboardInterrupt" in text(interrupt), interrupt
-    assert not started(interrupt) and not returned(interrupt), interrupt
+    assert interrupt["latest_command"]["command_id"] == identity and not returned(
+        interrupt
+    ), interrupt
     key = "ctrl_z" if os.name == "nt" else "ctrl_d"
     end = service.write(
         session, task_id=1, operation_id="eof", input={"type": "key", "key": key}, wait_ms=500
@@ -322,3 +344,75 @@ def test_control_key_interrupts_python_and_eof_returns_to_shell(terminal):
     assert returned(end)[0]["command_id"] == identity, end
     usable = write(service, session, "echo usable", "reuse")
     assert "usable" in text(usable), usable
+
+
+def test_recent_output_is_bounded_and_keeps_latest_tail(terminal, tmp_path):
+    service, session, shell = terminal
+    script = tmp_path / "many_lines.py"
+    script.write_text(
+        'for _ in range(3000): print("DUPLICATE")\nprint("NEWEST_RESULT")\n', encoding="utf-8"
+    )
+    python = "python3" if shell == "zsh" else "python"
+    page = write(service, session, f"{python} '{script}'", "many-lines")
+    if not returned(page):
+        page = service.read(session, task_id=1, run_id=1)
+    assert returned(page)
+    assert "NEWEST_RESULT" in page["screen"]["text"]
+    assert page["history_truncated"]
+    assert "has_more" not in page and "next_cursor" not in page
+    from app.service.terminal.terminal_observation import json_size
+
+    assert json_size(page) <= Constant.Tools.MAX_OUTPUT_CHARS
+    reread = service.read(session, task_id=1, run_id=1)
+    assert "NEWEST_RESULT" in reread["screen"]["text"]
+    assert reread["latest_command"] == page["latest_command"]
+
+
+def test_screen_overwrite_and_unterminated_question_are_visible_without_completion(
+    terminal, tmp_path
+):
+    service, session, shell = terminal
+    script = tmp_path / "question.py"
+    script.write_text(
+        'import sys\nsys.stdout.write("obsolete\\rANSWER?\\x1b[K ")\nsys.stdout.flush()\ninput()\n',
+        encoding="utf-8",
+    )
+    python = "python3" if shell == "zsh" else "python"
+    page = write(service, session, f"{python} '{script}'", "question")
+    assert not returned(page)
+    assert "ANSWER?" in text(page)
+    assert page["screen"]["cursor"]["column"] == 8
+    assert "obsolete" not in text(page)
+    assert page["state"]["shell_phase"] == "executing"
+    unchanged = service.read(session, task_id=1, run_id=1, wait_ms=3000)
+    assert unchanged["return_reason"] == "wait_elapsed"
+    assert unchanged["screen"] == page["screen"]
+    assert unchanged["latest_command"] == page["latest_command"]
+    refresh = service.read(session, task_id=1, run_id=1, wait_ms=3000)
+    assert refresh["screen"] == page["screen"]
+    answer = write(service, session, "yes", "answer-question")
+    assert returned(answer)
+
+
+def test_real_pty_cursor_query_reaches_the_foreground_program(terminal, tmp_path):
+    service, session, shell = terminal
+    if shell != "zsh":
+        pytest.skip("Unix termios probe; Windows query path requires a Windows host")
+    script = tmp_path / "cursor_query.py"
+    script.write_text(
+        "import os, select, termios, tty\n"
+        "saved = termios.tcgetattr(0)\n"
+        "try:\n"
+        "    tty.setraw(0)\n"
+        '    os.write(1, "\\x1b[2J\\x1b[H中e\\u0301\\x1b[6n".encode())\n'
+        '    reply = b""\n'
+        '    while not reply.endswith(b"R") and select.select([0], [], [], 2)[0]:\n'
+        "        reply += os.read(0, 64)\n"
+        "finally:\n"
+        "    termios.tcsetattr(0, termios.TCSANOW, saved)\n"
+        'print("\\nQUERY_OK=" + str(reply == b"\\x1b[1;4R"))\n',
+        encoding="utf-8",
+    )
+    page = write(service, session, f"python3 '{script}'", "cursor-query")
+    assert "QUERY_OK=True" in text(page), page
+    assert returned(page)
