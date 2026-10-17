@@ -18,7 +18,7 @@ function task(id: number, workspaceId: number, title: string, updatedAt: string)
     task_type: "user",
     current_run_id: null,
     execution_status: null,
-    context_window_total: null,
+
     created_at: updatedAt,
     updated_at: updatedAt,
   };

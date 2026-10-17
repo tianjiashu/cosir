@@ -88,6 +88,7 @@ export function WorkspaceTree({
         <WorkspaceTreeActionsContext.Provider value={{ onOpenWorkspaceSettings, renderWorkspaceActions, renderTaskActions }}>
           <Tree<WorkspaceSidebarNode>
             ref={treeRef}
+            dndRootElement={containerRef.current}
             data={model}
             idAccessor={(item) => item.id}
             childrenAccessor={(item) => item.children.length > 0 ? item.children : null}

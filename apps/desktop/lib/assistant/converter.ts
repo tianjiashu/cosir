@@ -547,18 +547,17 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     }
   }
   if (messageParts.length === 0) return null;
-  const pending = toThreadMessage({
+  // 乐观消息只需要渲染上下文，不构造尚不存在的后端 Run 事实。
+  const pending = toThreadMessageWithRenderContext({
     id: `pending-${getOrCreateTransportCommandId(command)}`,
     role: "user",
     parts: messageParts,
   }, {
     runId: -1,
-    status: "completed",
+    runStatus: "completed",
     endReason: null,
-    langfuseTraceId: null,
-    messages: [],
-    usage: null,
     error: null,
+    isLastRunMessage: false,
   });
   // The optimistic message follows the same single-source shape as the
   // canonical projection. The content parts already carry all attachments.

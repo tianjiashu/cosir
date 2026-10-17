@@ -25,21 +25,12 @@ import {
 import {
   insertionCommandContent,
   parseComposerDocument,
-  reconcileComposerAttachments,
   serializeComposerDocument,
   shouldPreservePendingEditorValue,
-  type InlineComposerAttachment,
 } from "@/components/composer/composer-document";
 import { useComposerFeedback } from "@/components/composer/composer-feedback";
-import {
-  summarizeComposerFileProblems,
-  type ComposerExternalFileResult,
-} from "@/components/composer/composer-external-files";
 import { useComposerInsertion } from "@/components/composer/composer-insertion-context";
-import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
-import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { notify } from "@/lib/notify";
 
 /** 新对话页与任务内输入框共用的占位文案：同一种语气（描述要做的事 + 一个具体例子）。 */
 export const COMPOSER_PLACEHOLDER = "描述要做的事，例如：帮我查找登录相关代码…";
@@ -51,17 +42,11 @@ type ComposerEditorProps = {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
-  attachments: readonly InlineComposerAttachment[];
-  onExternalFiles?: (
-    files: readonly File[],
-  ) =>
-    | ComposerExternalFileResult<InlineComposerAttachment>
-    | Promise<ComposerExternalFileResult<InlineComposerAttachment>>;
-  onRemoveAttachment?: (id: string) => void;
+  onExternalFiles: (files: readonly File[]) => void | Promise<void>;
   placeholder?: string;
   autoFocus?: boolean;
   disabled?: boolean;
-  suspendAttachmentReconciliation?: boolean;
+  hydrating?: boolean;
   className?: string;
   "aria-label"?: string;
 };
@@ -99,13 +84,11 @@ export function ComposerEditor({
   value,
   onChange,
   onSubmit,
-  attachments,
   onExternalFiles,
-  onRemoveAttachment,
   placeholder,
   autoFocus = false,
   disabled = false,
-  suspendAttachmentReconciliation = false,
+  hydrating = false,
   className,
   "aria-label": ariaLabel,
 }: ComposerEditorProps) {
@@ -123,16 +106,16 @@ export function ComposerEditor({
     onChange,
     onSubmit,
     onExternalFiles,
+    active: !referenceBridge || referenceBridge.target === target,
     disabled,
-    attachments,
     placeholder,
   });
   propsRef.current = {
     onChange,
     onSubmit,
     onExternalFiles,
+    active: !referenceBridge || referenceBridge.target === target,
     disabled,
-    attachments,
     placeholder,
   };
 
@@ -201,70 +184,24 @@ export function ComposerEditor({
           type: "doc",
           content: slice.content.toJSON(),
         }),
-      handlePaste: (_view, event) => {
-        const files = [...(event.clipboardData?.files ?? [])];
-        if (files.length === 0) {
-          const text = event.clipboardData?.getData("text/plain") ?? "";
-          if (!decodeReferences(text).some((part) => part.type === "reference"))
-            return false;
+      handleDOMEvents: {
+        paste: (_view, event) => acceptTransfer(event, event.clipboardData),
+        drop: (_view, event) => acceptTransfer(event, event.dataTransfer),
+        dragover: (_view, event) => {
+          if (!event.dataTransfer?.types.includes("Files")) return false;
           event.preventDefault();
-          if (!propsRef.current.disabled)
-            editor?.commands.insertContent(
-              parseComposerDocument(text).content ?? [],
-            );
           return true;
-        }
-        event.preventDefault();
-        if (rejectFilesWhileDisabled("paste", files.length)) return true;
-        const text = event.clipboardData?.getData("text/plain") ?? "";
-        if (text) {
-          editor
-            ?.chain()
-            .focus()
-            .insertContent(
-              insertionCommandContent({ type: "insert-text", text }),
-            )
-            .run();
-          hasCapturedSelectionRef.current = true;
-        }
-        void handleExternalFiles(files);
-        return true;
+        },
       },
-      handleDrop: (_view, event) => {
-        const files = [...(event.dataTransfer?.files ?? [])];
-        if (files.length === 0) return false;
+      handlePaste: (_view, event) => {
+        const text = event.clipboardData?.getData("text/plain") ?? "";
+        if (!decodeReferences(text).some((part) => part.type === "reference")) return false;
         event.preventDefault();
-        if (rejectFilesWhileDisabled("drop", files.length)) return true;
-        const text = event.dataTransfer?.getData("text/plain") ?? "";
-        if (text) {
-          editor
-            ?.chain()
-            .focus()
-            .insertContent(
-              insertionCommandContent({ type: "insert-text", text }),
-            )
-            .run();
-          hasCapturedSelectionRef.current = true;
-        }
-        void handleExternalFiles(files);
+        editor?.commands.insertContent(parseComposerDocument(text).content ?? []);
         return true;
       },
     },
   });
-
-  const attachmentSignature = JSON.stringify(
-    attachments.map((attachment) => ({
-      id: attachment.id,
-      name: attachment.name,
-      kind: attachment.kind ?? "file",
-      tokenId: attachment.tokenId ?? attachment.id,
-    })),
-  );
-  const reconciliation = useMemo(
-    () => reconcileComposerAttachments(value, attachments),
-    [attachmentSignature, value],
-  );
-  const reconciliationSignatureRef = useRef("");
 
   useEffect(() => {
     if (!editor) return;
@@ -291,53 +228,6 @@ export function ComposerEditor({
     editor.setEditable(!disabled, false);
   }, [disabled, editor]);
 
-  useEffect(() => {
-    const {
-      attachmentKeys,
-      tokenKeys,
-      unmatchedTokenKeys,
-      tokenlessAttachmentKeys,
-    } = reconciliation;
-    const signature = `${unmatchedTokenKeys.join(",")}|${tokenlessAttachmentKeys.join(",")}|${suspendAttachmentReconciliation}|${disabled}`;
-    if (signature === reconciliationSignatureRef.current) return;
-    reconciliationSignatureRef.current = signature;
-
-    if (unmatchedTokenKeys.length > 0) {
-      const stage = suspendAttachmentReconciliation ? "同步中" : "已失效";
-      void frontendLog(
-        "WARNING",
-        "inline_attachment_token_unmatched",
-        `输入框存在没有附件对象的 token，显示为「附件${stage}」`,
-        {
-          data: {
-            unmatchedTokenKeys,
-            attachmentKeys,
-            tokenKeys,
-            suspendAttachmentReconciliation,
-            disabled,
-          },
-        },
-      );
-      return;
-    }
-    if (tokenlessAttachmentKeys.length > 0) {
-      void frontendLog(
-        "DEBUG",
-        "inline_attachment_token_pending",
-        "输入框附件尚未写入对应 token",
-        {
-          data: {
-            tokenlessAttachmentKeys,
-            attachmentKeys,
-            tokenKeys,
-            suspendAttachmentReconciliation,
-            disabled,
-          },
-        },
-      );
-    }
-  }, [disabled, reconciliation, suspendAttachmentReconciliation]);
-
   const insertCommand = useCallback(
     (command: Parameters<typeof insertionCommandContent>[0]) => {
       if (!editor || !editor.isEditable) return;
@@ -360,7 +250,7 @@ export function ComposerEditor({
   );
 
   useEffect(
-    () => insertion.register(insertCommand),
+    () => insertion.register(insertCommand, () => !!editor && !editor.isDestroyed && !propsRef.current.disabled && propsRef.current.active),
     [insertion, insertCommand],
   );
 
@@ -431,88 +321,23 @@ export function ComposerEditor({
     showFeedback,
   ]);
 
-  /**
-   * 禁用期间（运行中、草稿同步中等）的粘贴 / 拖放文件。
-   *
-   * ProseMirror 对不可编辑的编辑器仍会调用 handlePaste / handleDrop；文件输入已被 preventDefault，
-   * 若不提示，用户看到的就是文件「凭空消失」。返回 true 表示已拒收。
-   */
-  const rejectFilesWhileDisabled = (
-    source: "paste" | "drop",
-    fileCount: number,
-  ): boolean => {
-    if (!propsRef.current.disabled) return false;
-    notify.info("当前无法添加附件：输入框暂不可编辑，请稍后再试");
-    void frontendLog(
-      "INFO",
-      "inline_attachment_rejected_while_disabled",
-      "输入框禁用期间拒收粘贴或拖放的文件",
-      {
-        data: { source, fileCount },
-      },
-    );
+  /** 文件事件只在这里读取；图片/普通文件策略及异步生命周期交给统一附件接入边界。 */
+  const acceptTransfer = (event: ClipboardEvent | DragEvent, data: DataTransfer | null): boolean => {
+    const files = [...(data?.files ?? [])];
+    if (!files.length) return false;
+    event.preventDefault();
+    if (propsRef.current.disabled) {
+      feedback.show("输入框暂不可编辑，请稍后添加附件");
+      return true;
+    }
+    const text = data?.getData("text/plain") ?? "";
+    if (text) {
+      editor?.chain().focus().insertContent(insertionCommandContent({ type: "insert-text", text })).run();
+      hasCapturedSelectionRef.current = true;
+    }
+    void propsRef.current.onExternalFiles(files);
     return true;
   };
-
-  const handleExternalFiles = useCallback(
-    async (files: readonly File[]) => {
-      const current = propsRef.current;
-      if (files.length === 0) return;
-      if (!current.onExternalFiles) {
-        void frontendLog(
-          "INFO",
-          "inline_attachment_external_files_ignored",
-          "输入框未装配外部附件处理器，已忽略文件输入",
-          {
-            data: { fileCount: files.length },
-          },
-        );
-        feedback.show("此输入框暂不支持添加附件。");
-        return;
-      }
-      try {
-        const result = await current.onExternalFiles(files);
-        if (propsRef.current.disabled) return;
-        if (result.attachments.length > 0) {
-          insertion.dispatch({
-            type: "insert-attachments",
-            attachments: result.attachments,
-          });
-        }
-        const rejectedFiles = result.problems.filter(
-          (problem) => problem.reason === "unsupported-image",
-        );
-        if (rejectedFiles.length > 0) {
-          void frontendLog(
-            "WARNING",
-            "composer_external_image_rejected",
-            "已跳过不支持的图片附件",
-            {
-              data: {
-                count: rejectedFiles.length,
-                names: rejectedFiles.map((problem) => problem.name),
-              },
-            },
-          );
-        }
-        const problemMessage = summarizeComposerFileProblems(result.problems);
-        if (problemMessage) feedback.show(problemMessage);
-        else feedback.clear();
-      } catch (error) {
-        feedback.show(userErrorMessage(error, "添加附件失败，请重试"));
-        void frontendLog(
-          "ERROR",
-          "inline_attachment_external_files_failed",
-          "处理粘贴或拖拽附件失败",
-          {
-            data: { fileCount: files.length },
-            error,
-          },
-        );
-      }
-    },
-    [feedback, insertion],
-  );
 
   const captureUserSelection = (target: EventTarget | null) => {
     if (
@@ -533,20 +358,7 @@ export function ComposerEditor({
     if (autoFocus && !document.activeElement?.closest('[role="tree"]')) editor?.commands.focus();
   }, [autoFocus, editor]);
 
-  const attachmentView = useMemo(
-    () => ({
-      attachments,
-      disabled,
-      unmatchedAsPending: suspendAttachmentReconciliation,
-      onRemoveAttachment,
-    }),
-    [
-      attachments,
-      disabled,
-      onRemoveAttachment,
-      suspendAttachmentReconciliation,
-    ],
-  );
+  const attachmentView = useMemo(() => ({ disabled, hydrating }), [disabled, hydrating]);
 
   return (
     <ComposerEditorViewProvider value={attachmentView}>

@@ -242,12 +242,6 @@ export function MessageDetail({
               </div>
             ))}
           </dl>
-          <p className="mt-3 text-muted-foreground">
-            {cache
-              ? `缓存命中率 ${cache.rate}%，缓存读取 / 输入 tokens。`
-              : "供应商未提供可计算缓存率的输入明细。"}{" "}
-            以下为原始用量字段。
-          </p>
         </div>
       )}
       <div
@@ -266,14 +260,6 @@ export function MessageDetail({
           }}
         />
       </div>
-      <p className="shrink-0 border-t px-5 py-2 text-xs text-muted-foreground">
-        {tab === "json"
-          ? "当前接口返回的完整消息记录"
-          : plainText
-            ? "原始文本 · 保留正文格式"
-            : "原始结构 · JSON"}{" "}
-        · 只读 · 在内容区使用 Ctrl/Cmd+F 查找
-      </p>
     </section>
   );
 }

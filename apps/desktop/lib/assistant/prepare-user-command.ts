@@ -36,7 +36,7 @@ export function prepareUserCommand(command: unknown): unknown {
       .join("\n"),
   ).flatMap((id) => {
     const local = getLocalAttachmentById(id);
-    if (!local) {
+    if (!local?.path) {
       if (isEdit) return [];
       throw new LocalAttachmentUnavailableError();
     }

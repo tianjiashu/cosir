@@ -283,6 +283,7 @@ export function FileTree({
       {height > 0 && (
         <Tree<TreeItem>
           ref={tree}
+          dndRootElement={container.current}
           data={model}
           width="100%"
           height={height}

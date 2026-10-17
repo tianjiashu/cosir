@@ -4,7 +4,8 @@ import { createContext, useCallback, useContext, useMemo, useRef, type PropsWith
 import type { InlineComposerAttachment, InlineComposerSkill, ComposerInsertionCommand } from "@/components/composer/composer-document";
 
 type ComposerInsertionContextValue = {
-  register: (handler: (command: ComposerInsertionCommand) => void) => () => void;
+  register: (handler: (command: ComposerInsertionCommand) => void, isEditable: () => boolean) => () => void;
+  isAvailable: () => boolean;
   dispatch: (command: ComposerInsertionCommand) => void;
 };
 
@@ -12,17 +13,19 @@ const ComposerInsertionContext = createContext<ComposerInsertionContextValue | n
 
 /** 为一个 composer 子树提供唯一的编辑器插入命令入口。 */
 export function ComposerInsertionProvider({ children }: PropsWithChildren) {
-  const handlerRef = useRef<((command: ComposerInsertionCommand) => void) | null>(null);
-  const register = useCallback((handler: (command: ComposerInsertionCommand) => void) => {
+  const handlerRef = useRef<{ insert: (command: ComposerInsertionCommand) => void; isEditable: () => boolean } | null>(null);
+  const register = useCallback((insert: (command: ComposerInsertionCommand) => void, isEditable: () => boolean) => {
+    const handler = { insert, isEditable };
     handlerRef.current = handler;
     return () => {
       if (handlerRef.current === handler) handlerRef.current = null;
     };
   }, []);
+  const isAvailable = useCallback(() => handlerRef.current?.isEditable() ?? false, []);
   const dispatch = useCallback((command: ComposerInsertionCommand) => {
-    handlerRef.current?.(command);
+    if (handlerRef.current?.isEditable()) handlerRef.current.insert(command);
   }, []);
-  const value = useMemo(() => ({ register, dispatch }), [dispatch, register]);
+  const value = useMemo(() => ({ register, dispatch, isAvailable }), [dispatch, register, isAvailable]);
 
   return <ComposerInsertionContext.Provider value={value}>{children}</ComposerInsertionContext.Provider>;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
+import { registerInlineFileMetadata, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 
 describe("prepare user command", () => {
@@ -66,6 +66,13 @@ describe("prepare user command", () => {
         parts: [{ type: "text", text: "读取 [[cosir-file:missing]]" }],
       },
     })).toThrow("附件已失效，请重新选择附件");
+  });
+
+  it("历史元数据没有路径时仅允许编辑绑定恢复，不允许用于新的消息", () => {
+    registerInlineFileMetadata({ id: "history-only", name: "history.md", contentType: "text/markdown" });
+    const command = { type: "add-message", message: { role: "user", parts: [{ type: "text", text: "[[cosir-file:history-only]]" }] } };
+    expect(() => prepareUserCommand(command)).toThrow("附件已失效");
+    expect(prepareUserCommand({ ...command, sourceId: "history-user" })).toEqual({ ...command, sourceId: "history-user" });
   });
 
   it("keeps canonical hidden token wrappers in an edit request", () => {

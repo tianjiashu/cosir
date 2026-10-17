@@ -8,7 +8,6 @@ import {
   type WorkspaceReference,
 } from "@/lib/workspace-references/codec";
 import type { JSONContent } from "@tiptap/core";
-import { inlineAttachmentKey } from "@/lib/assistant/attachments/local-file-token";
 import {
   createSkillMentionToken,
   parseSkillMentionName,
@@ -37,13 +36,6 @@ export type ComposerInsertionCommand =
     }
   | { type: "insert-references"; references: readonly WorkspaceReference[] }
   | { type: "insert-skill"; skill: InlineComposerSkill };
-
-export type ComposerAttachmentReconciliation = {
-  attachmentKeys: string[];
-  tokenKeys: string[];
-  unmatchedTokenKeys: string[];
-  tokenlessAttachmentKeys: string[];
-};
 
 /**
  * 将持久化/受控文本转换为编辑器文档。附件、Skill token 在编辑期间是原子节点，
@@ -157,30 +149,6 @@ export function insertionCommandContent(
   }));
 }
 
-/** 比较文本中的附件 token 和当前附件集合，供 UI 呈现状态并记录诊断。 */
-export function reconcileComposerAttachments(
-  value: string,
-  attachments: readonly InlineComposerAttachment[],
-): ComposerAttachmentReconciliation {
-  const attachmentKeys = attachments.map((attachment) =>
-    inlineAttachmentKey(
-      attachment.kind ?? "file",
-      attachment.tokenId ?? attachment.id,
-    ),
-  );
-  const tokenKeys = extractAttachmentTokenKeys(value);
-  const attachmentKeySet = new Set(attachmentKeys);
-  const tokenKeySet = new Set(tokenKeys);
-  return {
-    attachmentKeys,
-    tokenKeys,
-    unmatchedTokenKeys: tokenKeys.filter((key) => !attachmentKeySet.has(key)),
-    tokenlessAttachmentKeys: attachmentKeys.filter(
-      (key) => !tokenKeySet.has(key),
-    ),
-  };
-}
-
 /** 旧受控值尚未跟上内部编辑时，让编辑器文档暂时保留最新输入。 */
 export function shouldPreservePendingEditorValue(
   propValue: string,
@@ -192,22 +160,6 @@ export function shouldPreservePendingEditorValue(
     propValue === lastPropValue &&
     propValue !== pendingInternalValue
   );
-}
-
-function extractAttachmentTokenKeys(value: string): string[] {
-  const text = mapMarkdownText(value, (part) =>
-    part.replace(HIDDEN_ATTACHMENT_TOKEN, "$1"),
-  );
-  return markdownSegments(text)
-    .filter((part) => !part.literal)
-    .flatMap((part) => [...part.text.matchAll(COMPOSER_TOKEN)])
-    .filter((match) => match[1] === "file" || match[1] === "image")
-    .map((match) =>
-      inlineAttachmentKey(
-        match[1] === "image" ? "image" : "file",
-        match[2] ?? "",
-      ),
-    );
 }
 
 function serializeInlineNode(node: JSONContent): string {

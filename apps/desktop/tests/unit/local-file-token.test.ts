@@ -1,17 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  inlineAttachmentKey,
   inlineAttachmentTokenId,
   stripInlineAttachmentTokens,
 } from "@/lib/assistant/attachments/local-file-token";
 
 describe("inline attachment identity", () => {
-  it("keeps file and image identities in one key format", () => {
-    expect(inlineAttachmentKey("file", "a")).toBe("file:a");
-    expect(inlineAttachmentKey("image", "b")).toBe("image:b");
-  });
-
   it("normalizes a lifted file copy to its canonical local file id", () => {
     expect(
       inlineAttachmentTokenId({ id: "canonical", content: [{ type: "file", data: "cosir-local-file:real" }] }),

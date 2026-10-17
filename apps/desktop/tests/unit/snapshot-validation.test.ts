@@ -7,7 +7,6 @@ const validSnapshot = (): TransportState => ({
   runs: [],
   current_run_id: null,
   approvals: {},
-  context_window_total: null,
   error: null,
 });
 
@@ -15,6 +14,32 @@ describe("Transport snapshot validation", () => {
   it("returns the complete server snapshot without creating fields", () => {
     const snapshot = validSnapshot();
     expect(parseTransportState(snapshot)).toBe(snapshot);
+  });
+
+  it.each([null, 0, 128_000])("接受 Run 级窗口值 %s，保持原快照不补字段", (contextWindowTotal) => {
+    const snapshot = { ...validSnapshot(), runs: [{
+      runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null,
+      contextWindowTotal, messages: [], usage: null, error: null,
+    }], current_run_id: 1 };
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+  });
+
+  it.each([undefined, -1, 0.5, "128000", true, NaN, Infinity])("拒绝非法 Run 窗口值 %s", (contextWindowTotal) => {
+    const snapshot = { ...validSnapshot(), runs: [{
+      runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null,
+      contextWindowTotal, messages: [], usage: null, error: null,
+    }], current_run_id: 1 };
+    expect(() => parseTransportState(snapshot)).toThrow("runs[0].contextWindowTotal");
+  });
+
+  it("拒绝旧 Task 级窗口字段，以及缺失 Run 窗口字段的快照", () => {
+    expect(() => parseTransportState({ ...validSnapshot(), context_window_total: 128_000 }))
+      .toThrow(TransportSnapshotValidationError);
+    const snapshot = { ...validSnapshot(), runs: [{
+      runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null,
+      messages: [], usage: null, error: null,
+    }], current_run_id: 1 };
+    expect(() => parseTransportState(snapshot)).toThrow("runs[0]");
   });
 
   it("rejects a missing runs field instead of treating it as an empty conversation", () => {
@@ -26,7 +51,7 @@ describe("Transport snapshot validation", () => {
 
   it("rejects invalid tool lifecycle state with a diagnostic path", () => {
     const snapshot = validSnapshot();
-    snapshot.runs = [{ runId: 1, status: "running", endReason: null, langfuseTraceId: null, usage: null, error: null, messages: [{
+    snapshot.runs = [{ runId: 1, status: "running", endReason: null, langfuseTraceId: null, contextWindowTotal: null, usage: null, error: null, messages: [{
       id: "m1",
       role: "assistant",
       parts: [{ type: "tool-call", toolCallId: "t1", toolName: "read_file", status: "future", args: {} }],
@@ -37,7 +62,7 @@ describe("Transport snapshot validation", () => {
 
   it("accepts a positive child Run locator and rejects invalid locators", () => {
     const snapshot = validSnapshot();
-    snapshot.runs = [{ runId: 1, status: "running", endReason: null, langfuseTraceId: null, usage: null, error: null, messages: [{
+    snapshot.runs = [{ runId: 1, status: "running", endReason: null, langfuseTraceId: null, contextWindowTotal: null, usage: null, error: null, messages: [{
       id: "m1",
       role: "assistant",
       parts: [{
@@ -61,7 +86,7 @@ describe("Transport snapshot validation", () => {
 
   it("accepts the minimal child session display contract", () => {
     const snapshot = validSnapshot();
-    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null, usage: null, error: null, messages: [{
+    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null, contextWindowTotal: null, usage: null, error: null, messages: [{
       id: "m1",
       role: "assistant",
       parts: [{
@@ -87,7 +112,7 @@ describe("Transport snapshot validation", () => {
 
   it("validates child wait ids, statuses, and result payloads at the transport boundary", () => {
     const snapshot = validSnapshot();
-    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null, usage: null, error: null, messages: [{
+    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null, contextWindowTotal: null, usage: null, error: null, messages: [{
       id: "m1",
       role: "assistant",
       parts: [{
@@ -121,7 +146,7 @@ describe("Transport snapshot validation", () => {
 
   it("accepts the child agent send/status result contract", () => {
     const snapshot = validSnapshot();
-    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null, usage: null, error: null, messages: [{
+    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null, contextWindowTotal: null, usage: null, error: null, messages: [{
       id: "m1",
       role: "assistant",
       parts: [{
@@ -149,7 +174,7 @@ describe("Transport snapshot validation", () => {
 
   it("rejects child output embedded in a parent delegation display", () => {
     const snapshot = validSnapshot();
-    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null, usage: null, error: null, messages: [{
+    snapshot.runs = [{ runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null, contextWindowTotal: null, usage: null, error: null, messages: [{
       id: "m1",
       role: "assistant",
       parts: [{
@@ -187,15 +212,15 @@ describe("Transport snapshot validation", () => {
 
   it("rejects an active run that is not the current run", () => {
     const snapshot = validSnapshot();
-    snapshot.runs = [{ runId: 1, status: "running", endReason: null, langfuseTraceId: null, usage: null, error: null, messages: [] }];
+    snapshot.runs = [{ runId: 1, status: "running", endReason: null, langfuseTraceId: null, contextWindowTotal: null, usage: null, error: null, messages: [] }];
     expect(() => parseTransportState(snapshot)).toThrow("current_run_id");
   });
 
   it("rejects multiple active runs instead of silently choosing one to attach", () => {
     const snapshot = validSnapshot();
     snapshot.runs = [
-      { runId: 1, status: "running", endReason: null, langfuseTraceId: null, usage: null, error: null, messages: [] },
-      { runId: 2, status: "pending", endReason: null, langfuseTraceId: null, usage: null, error: null, messages: [] },
+      { runId: 1, status: "running", endReason: null, langfuseTraceId: null, contextWindowTotal: null, usage: null, error: null, messages: [] },
+      { runId: 2, status: "pending", endReason: null, langfuseTraceId: null, contextWindowTotal: null, usage: null, error: null, messages: [] },
     ];
     snapshot.current_run_id = 1;
     expect(() => parseTransportState(snapshot)).toThrow("最多一个 active Run");
@@ -208,6 +233,7 @@ describe("Transport snapshot validation", () => {
       status: "failed",
       endReason: "model_insufficient_quota",
       langfuseTraceId: null,
+      contextWindowTotal: null,
       usage: null,
       error: { code: "model_insufficient_quota", message: "模型服务配额或余额不足，请充值或更换模型" },
       messages: [],
@@ -223,6 +249,7 @@ describe("Transport snapshot validation", () => {
       status: "failed",
       endReason: "model_insufficient_quota",
       langfuseTraceId: null,
+      contextWindowTotal: null,
       usage: null,
       error: null,
       messages: [],
@@ -239,6 +266,7 @@ describe("Transport snapshot validation", () => {
       status: "running",
       endReason: null,
       langfuseTraceId: null,
+      contextWindowTotal: null,
       usage: null,
       error: null,
       messages: [],

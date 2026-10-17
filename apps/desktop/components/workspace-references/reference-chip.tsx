@@ -6,6 +6,7 @@ import {
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import { parentsOf, useFilesStore } from "@/lib/workspace-files/store";
 import { WorkspaceFileIcon } from "@/components/workspace-files/file-icon";
+import { InlineToken } from "@/components/ui/inline-token";
 import { useReferenceBridge } from "./reference-bridge";
 
 /** 草稿和历史共用胶囊；片段预览来自消息正文，只有显式打开路径才访问当前文件。 */
@@ -13,10 +14,12 @@ export function ReferenceChip({
   reference,
   remove,
   disabled = false,
+  variant = "message",
 }: {
   reference: WorkspaceReference;
   remove?: () => void;
   disabled?: boolean;
+  variant?: "message" | "composer";
 }) {
   const bridge = useReferenceBridge();
   const name = referenceName(reference);
@@ -39,6 +42,25 @@ export function ReferenceChip({
       if (reference.content !== undefined) files.patch(id, { reference });
     }
   };
+  // 历史消息保留原有胶囊；输入框才使用与正文行高一致的紧凑视图。
+  if (variant === "composer") {
+    const fileName = reference.path.split("/").at(-1) || "工作区";
+    const detail = reference.kind === "excerpt" ? " · 摘录"
+      : reference.startLine ? ` · L${reference.startLine}–${reference.endLine}` : undefined;
+    return (
+      <span data-workspace-reference={reference.kind}>
+        <InlineToken
+          icon={<WorkspaceFileIcon name={reference.path} folder={reference.kind === "directory"} />}
+          name={`${fileName}${reference.kind === "directory" ? "/" : ""}`}
+          detail={detail}
+          description={`${reference.path || "."}${detail ?? ""}`}
+          preserveExtension={reference.kind !== "directory"}
+          open={{ label: `查看引用 ${name}`, disabled: !bridge?.workspaceId, onClick: open }}
+          remove={remove ? { label: `移除引用 ${name}`, disabled, onClick: remove } : undefined}
+        />
+      </span>
+    );
+  }
   return (
     <span
       contentEditable={false}

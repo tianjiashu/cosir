@@ -1,9 +1,8 @@
-import { mapMarkdownText } from "@/lib/assistant/markdown-literals";
 import type { CreateAttachment } from "@assistant-ui/core";
+import { registerInlineFileMetadata } from "@/lib/assistant/attachments/local-attachment-registry";
 
 import {
   inlineAttachmentTokenId,
-  LOCAL_FILE_TOKEN,
   type InlineAttachmentIdentity,
 } from "@/lib/assistant/attachments/local-file-token";
 
@@ -113,7 +112,7 @@ export type EditDraftComposerTarget = {
 
 /** 一次草稿写入的结果，供调用方记录日志并判断写入是否完整。 */
 export type ApplyEditDraftResult = {
-  /** 草稿声明的附件数。 */
+  /** 需要恢复到 AUI 的图片数。 */
   expectedCount: number;
   /** 实际新加入 composer 的附件数（同键附件不重复加入）。 */
   addedCount: number;
@@ -121,7 +120,7 @@ export type ApplyEditDraftResult = {
   removedCount: number;
   /** 为 true 表示写入途中草稿已被新代际取代，文本未被改写。 */
   superseded: boolean;
-  /** 写入异常；非 null 时文本已降级为不含内部 token 的可读形式。 */
+  /** 写入异常；非 null 时保留正文，由调用方报告图片恢复失败。 */
   error: unknown;
 };
 
@@ -151,26 +150,9 @@ export function editableDraftAttachments(
 }
 
 /**
- * 把一份编辑草稿原子地写入 composer。
- *
- * 负责什么：按「加入缺失附件 → 写入文本 → 清理草稿之外的附件」的顺序收敛 composer 状态，
- * 并保证任一中断点都不会留下「文本含 token 但附件缺失」的中间态——那会让内联 token 渲染
- * 成「附件已失效」。
- * 不负责什么：不计算草稿内容（由 `toEditableUserMessageDraft` 负责）、不做代际或生命周期
- * 决策（由调用方通过 `isStillCurrent` 提供）、不写日志（由调用方基于返回值记录）。
- *
- * 参数:
- *     composer: 目标 composer；只使用上述四项能力。
- *     text: 要写入的文本，可含 `[[cosir-file:id]]` 内部 token。
- *     attachments: 草稿声明的附件，按顺序加入；同键（`inlineAttachmentTokenId`）已存在时跳过。
- *     isStillCurrent: 返回 false 时立即停止后续步骤并保留当前状态，用于编辑代际被取代。
- *
- * 返回:
- *     写入统计与错误；`superseded` 为 true 时文本未被改写。
- *
- * 异常/副作用:
- *     不抛出：composer 或附件适配器的异常会被捕获，经 `error` 返回，并把文本降级为可读形式。
- *     副作用：修改 composer 的附件列表与文本。
+ * 普通文件只登记元数据，当前引用集合由文本 token 决定；AUI 仅恢复图片附件。
+ * 先登记文件、补齐图片，再写文本并移除 AUI 自动从历史消息提取的多余附件。
+ * 这是可中断的收敛过程，不是事务；失效操作不再写草稿，失败保留正文并返回错误。
  */
 export async function applyEditDraftToComposer(options: {
   composer: EditDraftComposerTarget;
@@ -178,12 +160,22 @@ export async function applyEditDraftToComposer(options: {
   attachments: readonly EditDraftAttachment[];
   isStillCurrent: () => boolean;
 }): Promise<ApplyEditDraftResult> {
-  const { composer, text, attachments, isStillCurrent } = options;
+  const { composer, text, isStillCurrent } = options;
+  const attachments = options.attachments.filter((attachment) => attachment.type === "image");
   const expectedCount = attachments.length;
   let addedCount = 0;
   let removedCount = 0;
 
   try {
+    if (!isStillCurrent()) return { expectedCount, addedCount, removedCount, superseded: true, error: null };
+    for (const attachment of options.attachments) {
+      if (attachment.type !== "file") continue;
+      registerInlineFileMetadata({
+        id: inlineAttachmentTokenId(attachment),
+        name: attachment.name,
+        contentType: attachment.contentType ?? "application/octet-stream",
+      });
+    }
     const existingKeys = new Set(composer.getState().attachments.map(inlineAttachmentTokenId));
     for (const attachment of attachments) {
       if (!isStillCurrent()) {
@@ -224,8 +216,7 @@ export async function applyEditDraftToComposer(options: {
 
     return { expectedCount, addedCount, removedCount, superseded: false, error: null };
   } catch (error) {
-    // 写入失败时保留可读文本：不把内部 token 留在输入框里，避免出现无法操作的占位符。
-    composer.setText(mapMarkdownText(text, part => part.replace(LOCAL_FILE_TOKEN, "附件")));
+    if (isStillCurrent()) composer.setText(text);
     return { expectedCount, addedCount, removedCount, superseded: false, error };
   }
 }

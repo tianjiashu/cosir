@@ -7,7 +7,6 @@ import {
 import {
   insertionCommandContent,
   parseComposerDocument,
-  reconcileComposerAttachments,
   serializeComposerDocument,
   shouldPreservePendingEditorValue,
 } from "@/components/composer/composer-document";
@@ -58,18 +57,6 @@ describe("composer document conversion", () => {
     expect(serializeComposerDocument(document)).toBe(
       "多行\n提示[[cosir-file:file-1]][[cosir-image:image-1]][[cosir-skill:research]]",
     );
-  });
-
-  it("附件对账只比较文件和图片 token", () => {
-    expect(reconcileComposerAttachments("[[cosir-file:a]][[cosir-skill:research]]", [
-      { id: "a", name: "a.txt" },
-      { id: "b", name: "b.txt" },
-    ])).toEqual({
-      attachmentKeys: ["file:a", "file:b"],
-      tokenKeys: ["file:a"],
-      unmatchedTokenKeys: [],
-      tokenlessAttachmentKeys: ["file:b"],
-    });
   });
 
   it("受控值追上内部编辑前保留本地草稿", () => {

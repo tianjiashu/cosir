@@ -4,28 +4,20 @@ import {
   ReactNodeViewRenderer,
   type NodeViewProps,
 } from "@tiptap/react";
-import { closeHistory } from "@tiptap/pm/history";
+import { removeComposerToken } from "./remove-composer-token";
 import { ReferenceChip } from "@/components/workspace-references/reference-chip";
 import type { WorkspaceReference } from "@/lib/workspace-references/codec";
+import { useComposerEditorView } from "@/components/composer/composer-editor-context";
 
 function ReferenceView({ node, editor, getPos }: NodeViewProps) {
+  const context = useComposerEditorView();
   return (
-    <NodeViewWrapper as="span" contentEditable={false}>
+    <NodeViewWrapper as="span" contentEditable={false} className="cosir-composer-token-node">
       <ReferenceChip
+        variant="composer"
         reference={node.attrs.reference as WorkspaceReference}
-        disabled={!editor.isEditable}
-        remove={() => {
-          const position = getPos();
-          if (position === undefined) return;
-          // 显式移除独立成一个撤销步骤，不与刚插入的引用合并。
-          editor.view.dispatch(
-            closeHistory(editor.state.tr).delete(
-              position,
-              position + node.nodeSize,
-            ),
-          );
-          editor.commands.focus();
-        }}
+        disabled={context.disabled}
+        remove={() => removeComposerToken({ node, editor, getPos })}
       />
     </NodeViewWrapper>
   );

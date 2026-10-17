@@ -14,7 +14,7 @@ const drafts = new Map<
   { text: string; attachments: readonly Attachment[] }
 >();
 
-/** 在 AUI 仍存活时保存整个前端草稿；引用仍只是 text，普通附件复用 AUI 的恢复入口。 */
+/** 在 AUI 仍存活时保存正文与图片；普通文件引用随正文保存，展示元数据复用登记表。 */
 export function useTaskComposerDraft(enabled: boolean): boolean {
   const aui = useAui();
   const text = useAuiState((state) => state.composer.text);

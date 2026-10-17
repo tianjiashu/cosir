@@ -10,16 +10,11 @@ import {
 export type ListScroll = { sequence: number } | { offset: number };
 
 /** 查询范围变化由页面 key 重建；同范围刷新只替换数据，保留筛选、定位与滚动意图。 */
-export function useMessageNavigation(
-  messages: ContextMessage[],
-  initialSequence?: number,
-) {
+export function useMessageNavigation(messages: ContextMessage[]) {
   const [filters, setFilters] = useState<MessageFilters>(INITIAL_FILTERS);
-  const [chosen, setChosen] = useState<number | null>(initialSequence ?? null);
+  const [chosen, setChosen] = useState<number | null>(null);
   const [reveal, setReveal] = useState(false);
-  const [scroll, setScroll] = useState<ListScroll | null>(
-    initialSequence === undefined ? null : { sequence: initialSequence },
-  );
+  const [scroll, setScroll] = useState<ListScroll | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const listOffset = useRef(0);
   const saved = useRef<{ sequence: number | null; offset: number } | null>(

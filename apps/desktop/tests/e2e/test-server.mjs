@@ -59,7 +59,7 @@ const emptyState = () => ({
   runs: [],
   current_run_id: null,
   approvals: {},
-  context_window_total: null,
+
   error: null,
 });
 
@@ -82,6 +82,7 @@ function stateWithExchange(previous, text, runId, assistantText, status) {
     status: terminal ? status : "running",
     endReason: status === "completed" ? "stop" : status === "failed" ? "tool_error_limit_reached" : status === "cancelled" ? "user_cancelled" : null,
     langfuseTraceId: null,
+    contextWindowTotal: null,
     messages: [
       textMessage(`user-${runId}`, "user", text, "completed"),
       textMessage(`assistant-${runId}`, "assistant", assistantText, status),
@@ -134,7 +135,7 @@ function applyUsageFixture(state, runId, secondRun) {
     cache_miss_tokens: secondRun ? 50 : null,
     reasoning_tokens: secondRun ? 40 : 20,
   };
-  state.context_window_total = 100_000;
+  run.contextWindowTotal = 100_000;
 }
 
 function toolTraceState() {
@@ -144,6 +145,7 @@ function toolTraceState() {
       status: "completed",
       endReason: "stop",
       langfuseTraceId: null,
+    contextWindowTotal: null,
       messages: [
       {
         id: "user-tool-trace",
@@ -186,7 +188,7 @@ function toolTraceState() {
     }],
     current_run_id: 77,
     approvals: {},
-    context_window_total: null,
+
     error: null,
   };
 }
@@ -198,6 +200,7 @@ function webSearchState() {
       status: "completed",
       endReason: "stop",
       langfuseTraceId: null,
+    contextWindowTotal: null,
       messages: [
       {
         id: "user-web-search",
@@ -239,7 +242,7 @@ function webSearchState() {
     }],
     current_run_id: 78,
     approvals: {},
-    context_window_total: null,
+
     error: null,
   };
 }
@@ -265,6 +268,7 @@ function delegationState() {
       status: "completed",
       endReason: "stop",
       langfuseTraceId: null,
+    contextWindowTotal: null,
       messages: [
         {
           id: "user-delegation",
@@ -308,7 +312,7 @@ function delegationState() {
     }],
     current_run_id: 500,
     approvals: {},
-    context_window_total: null,
+
     error: null,
   };
 }
@@ -834,7 +838,7 @@ const server = createServer(async (req, res) => {
     states.set(TASK_ID, delegationState());
     for (const id of [501, 502]) tasks.set(id, {
       task_id: id, workspace_id: WORKSPACE_ID, title: `子任务${id}`, task_type: "delegate_task",
-      context_window_total: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z",
+      created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(501, childDelegationState());
     states.set(502, secondChildDelegationState());

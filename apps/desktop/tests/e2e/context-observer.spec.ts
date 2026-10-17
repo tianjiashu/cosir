@@ -115,8 +115,8 @@ test("空状态、加载反馈与查询边界", async ({ page }) => {
   await page.goto("/context-observer?task_id=oops&run_id=21");
   await expect(page.getByRole("alert")).toContainText("查询地址中的 ID 无效");
 });
-test("筛选、序号定位、调用关联与整个任务范围", async ({ page }) => {
-  const api = await mock(page);
+test("筛选、调用关联与范围内定位", async ({ page }) => {
+  await mock(page);
   await page.goto("/context-observer?run_id=21");
   await expect(
     page.getByText("本轮记录，含系统提示词", { exact: true }),
@@ -140,18 +140,9 @@ test("筛选、序号定位、调用关联与整个任务范围", async ({ page 
   await expect(
     page.getByRole("option", { name: "#4 Assistant", exact: true }),
   ).toBeVisible();
-  await page.getByLabel("定位序号").fill("80");
-  await page.getByRole("button", { name: "定位", exact: true }).click();
-  await expect(
-    page.getByRole("option", { name: "#80 User", exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "查看整个任务", exact: true }).click();
-  await expect(page).toHaveURL(/task_id=42&sequence=80/);
-  await expect(detail(page).getByRole("heading")).toContainText("#80");
-  await expect
-    .poll(() => api.requests.at(-1)?.searchParams.has("run_id"))
-    .toBe(false);
-  await expect(detail(page).getByRole("heading")).toContainText("#80");
+  await page.getByRole("button", { name: "在全部记录中定位", exact: true }).click();
+  await expect(detail(page).getByRole("heading")).toContainText("#4");
+  await expect(page.getByRole("button", { name: "返回筛选结果" })).toBeVisible();
 });
 test("刷新保留列表与正文位置，失败保留旧结果，新范围不混入旧结果", async ({
   page,
@@ -228,8 +219,7 @@ test("详情用量、JSON、查找与键盘浏览，窄窗口返回保位", asyn
   await page.keyboard.press("ArrowRight");
   expect(Number(await handle.getAttribute("aria-valuenow"))).toBe(before + 24);
   await page.setViewportSize({ width: 900, height: 800 });
-  await page.getByLabel("定位序号").fill("80");
-  await page.getByRole("button", { name: "定位", exact: true }).click();
+  await page.getByRole("option", { name: "#2 Assistant", exact: true }).click();
   await expect(detail(page)).toBeVisible();
   await expect(list(page)).toBeHidden();
   await detail(page)

@@ -2,7 +2,8 @@ import { UserFacingError } from "@/lib/errors/user-facing-error";
 
 export type LocalAttachmentMetadata = {
   id: string;
-  path: string;
+  /** 历史消息只带展示信息；路径由编辑重跑边界交给后端恢复。 */
+  path?: string;
   name: string;
   contentType: string;
   kind: "image" | "file";
@@ -16,17 +17,24 @@ export class LocalAttachmentUnavailableError extends UserFacingError {
   }
 }
 
-const metadataByFile = new WeakMap<File, LocalAttachmentMetadata>();
+type NativeAttachmentMetadata = LocalAttachmentMetadata & { path: string };
+
+const metadataByFile = new WeakMap<File, NativeAttachmentMetadata>();
 const metadataById = new Map<string, LocalAttachmentMetadata>();
 
 /** Associate a native-picker path with the File object consumed by assistant-ui. */
-export function registerLocalAttachment(file: File, metadata: LocalAttachmentMetadata): File {
+export function registerLocalAttachment(file: File, metadata: NativeAttachmentMetadata): File {
   metadataByFile.set(file, metadata);
   metadataById.set(metadata.id, metadata);
   return file;
 }
 
-export function getLocalAttachment(file: File): LocalAttachmentMetadata | undefined {
+/** 保存历史普通文件的展示元数据，不覆盖本机选择器已经登记的真实路径。 */
+export function registerInlineFileMetadata(metadata: Pick<LocalAttachmentMetadata, "id" | "name" | "contentType">): void {
+  if (!metadataById.has(metadata.id)) metadataById.set(metadata.id, { ...metadata, kind: "file" });
+}
+
+export function getLocalAttachment(file: File): NativeAttachmentMetadata | undefined {
   return metadataByFile.get(file);
 }
 

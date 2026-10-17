@@ -1,105 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { addFilesToAssistantComposer } from "@/components/composer/assistant-composer-attachments";
+import { addComposerFiles } from "@/components/composer/assistant-composer-attachments";
+import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 
-type TestAttachment = {
-  id: string;
-  name: string;
-  type: string;
-  file?: File;
-};
-
-function createFile(name: string, type = "text/plain") {
-  return new File([name], name, { type });
+function nativeFile(name: string) {
+  return registerLocalAttachment(new File([], name, { type: "text/plain" }), {
+    id: name, name, path: `/workspace/${name}`, contentType: "text/plain", kind: "file",
+  });
 }
 
-describe("Assistant UI Composer 附件接入", () => {
-  it("只为运行时确认存在的普通文件返回 token，图片仍由附件条带展示", async () => {
-    const file = createFile("notes.md");
-    const image = createFile("photo.png", "image/png");
-    const attachments: TestAttachment[] = [];
-    const addAttachment = vi.fn(async (addedFile: File) => {
-      attachments.push({
-        id: `runtime-${addedFile.name}`,
-        name: addedFile.name,
-        type: addedFile.type.startsWith("image/") ? "image" : "file",
-        file: addedFile,
-      });
-    });
+describe("统一 Composer 附件接入", () => {
+  it("普通文件只返回文档 token，图片只进入图片附件集合", async () => {
+    const image = new File(["image"], "photo.png", { type: "image/png" });
+    const addImage = vi.fn();
+    const result = await addComposerFiles([nativeFile("notes.md"), image], { addImage, isCurrent: () => true });
 
-    const result = await addFilesToAssistantComposer(
-      [{ file, name: file.name }, { file: image, name: image.name }],
-      { getAttachments: () => attachments, addAttachment },
-      vi.fn(),
-    );
-
-    expect(addAttachment).toHaveBeenCalledTimes(2);
-    expect(result.attachments).toEqual([{
-      id: "runtime-notes.md",
-      name: "notes.md",
-      kind: "file",
-      tokenId: "runtime-notes.md",
-    }]);
-    expect(result.problems).toEqual([]);
+    expect(addImage).toHaveBeenCalledExactlyOnceWith(image);
+    expect(result).toEqual({ attachments: [{ id: "notes.md", name: "notes.md", kind: "file" }], problems: [] });
   });
 
-  it("单个附件失败时继续处理后续文件并返回结构化问题", async () => {
-    const failedFile = createFile("failed.md");
-    const acceptedFile = createFile("accepted.md");
-    const attachments: TestAttachment[] = [];
-    const onFailure = vi.fn();
-
-    const result = await addFilesToAssistantComposer(
-      [
-        { file: failedFile, name: failedFile.name },
-        { file: acceptedFile, name: acceptedFile.name },
-      ],
-      {
-        getAttachments: () => attachments,
-        addAttachment: async (file) => {
-          if (file === failedFile) throw new Error("adapter failed");
-          attachments.push({ id: "accepted-id", name: file.name, type: "file", file });
-        },
-      },
-      onFailure,
-    );
-
-    expect(result.attachments.map(({ id }) => id)).toEqual(["accepted-id"]);
-    expect(result.problems).toEqual([{ name: "failed.md", reason: "add-failed" }]);
-    expect(onFailure).toHaveBeenCalledWith({
-      file: { file: failedFile, name: "failed.md" },
-      stage: "add",
-      error: expect.any(Error),
-    });
+  it("在入口拒绝没有真实路径的普通文件和不支持的图片", async () => {
+    const addImage = vi.fn();
+    const result = await addComposerFiles([
+      new File([], "clipboard.md", { type: "text/plain" }),
+      new File([], "animation.gif", { type: "image/gif" }),
+    ], { addImage, isCurrent: () => true });
+    expect(addImage).not.toHaveBeenCalled();
+    expect(result).toEqual({ attachments: [], problems: [
+      { name: "clipboard.md", reason: "local-path-required" },
+      { name: "animation.gif", reason: "unsupported-image" },
+    ] });
   });
 
-  it("已存在的原生选择附件不重复加入，且身份不明确时报告失败", async () => {
-    const existingFile = createFile("existing.md");
-    const unresolvedFile = createFile("unresolved.md");
-    const attachments: TestAttachment[] = [{
-      id: "picker-id",
-      name: "existing.md",
-      type: "file",
-      file: existingFile,
-    }];
-    const addAttachment = vi.fn(async () => undefined);
-    const onFailure = vi.fn();
+  it("图片添加失败不阻断其他文件，并返回明确问题", async () => {
+    const result = await addComposerFiles([
+      new File([], "failed.png", { type: "image/png" }), nativeFile("accepted.md"),
+    ], { addImage: async () => { throw new Error("adapter failed"); }, isCurrent: () => true });
+    expect(result.attachments.map(({ id }) => id)).toEqual(["accepted.md"]);
+    expect(result.problems).toEqual([{ name: "failed.png", reason: "add-failed" }]);
+  });
 
-    const result = await addFilesToAssistantComposer(
-      [
-        { file: existingFile, name: existingFile.name, skipIfAttachmentIdExists: "picker-id" },
-        { file: unresolvedFile, name: unresolvedFile.name },
-      ],
-      { getAttachments: () => attachments, addAttachment },
-      onFailure,
-    );
-
-    expect(addAttachment).toHaveBeenCalledTimes(1);
-    expect(result.attachments).toEqual([]);
-    expect(result.problems).toEqual([{ name: "unresolved.md", reason: "add-failed" }]);
-    expect(onFailure).toHaveBeenCalledWith({
-      file: { file: unresolvedFile, name: "unresolved.md" },
-      stage: "resolve-identity",
-    });
+  it("会话在异步添加期间失效后，停止处理并丢弃待插入 token", async () => {
+    let current = true;
+    const addImage = vi.fn(async () => { current = false; });
+    const result = await addComposerFiles([
+      nativeFile("first.md"), new File([], "photo.png", { type: "image/png" }), nativeFile("last.md"),
+    ], { addImage, isCurrent: () => current });
+    expect(result).toEqual({ attachments: [], problems: [] });
+    expect(addImage).toHaveBeenCalledTimes(1);
   });
 });

@@ -16,6 +16,7 @@ import {
   isImagePath,
   isUnsupportedImagePath,
 } from "@/components/composer/attachment-policy";
+import { useComposerInsertion } from "./composer-insertion-context";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 
 export type PickedComposerAttachment =
@@ -47,94 +48,48 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
   disabled = false,
 }) => {
   const [opening, setOpening] = useState(false);
+  const insertion = useComposerInsertion();
 
-  const chooseFiles = async () => {
+  // 文件与目录共用一次接纳边界；会话卸载/禁用后，迟到结果只记录，不写任何草稿。
+  const choose = async (directory: boolean) => {
     if (opening || disabled) return;
     setOpening(true);
     try {
       const selected = await open({
-        multiple: true,
-        directory: false,
+        multiple: !directory,
+        directory,
         defaultPath: workspaceRoot,
-        title: "选择图片或参考附件",
+        title: directory ? "选择参考文件夹" : "选择图片或参考附件",
       });
       const paths = selected === null ? [] : Array.isArray(selected) ? selected : [selected];
-      if (paths.length === 0) return;
-
       const picked: PickedComposerAttachment[] = [];
       let unsupportedImageCount = 0;
       for (const selectedPath of paths) {
         const path = await invoke<string>("resolve_selected_attachment_path", { path: selectedPath });
         const name = fileName(path);
-        const contentType = contentTypeFor(path);
-        if (isUnsupportedImagePath(path, contentType)) {
+        const contentType = directory ? DIRECTORY_CONTENT_TYPE : contentTypeFor(path);
+        if (!directory && isUnsupportedImagePath(path, contentType)) {
           unsupportedImageCount += 1;
           continue;
         }
-        if (isImagePath(path, contentType)) {
-          const file = await readSelectedFile(path, name);
-          const id = crypto.randomUUID();
-          picked.push({ id, kind: "image", path, name, file: registerLocalAttachment(file, {
-            id, path, name, contentType, kind: "image",
-          }) });
-          continue;
-        }
-        const file = createEmptyAttachmentFile(name, contentType);
+        const kind = !directory && isImagePath(path, contentType) ? "image" : "file";
+        const file = kind === "image" ? await readSelectedFile(path, name) : createEmptyAttachmentFile(name, contentType);
         const id = crypto.randomUUID();
-        picked.push({ id, kind: "file", path, name, file: registerLocalAttachment(file, {
-          id, path, name, contentType, kind: "file",
+        picked.push({ id, kind, path, name, file: registerLocalAttachment(file, {
+          id, path, name, contentType, kind,
         }) });
       }
-      if (picked.length > 0) await onPicked(picked);
-      if (unsupportedImageCount > 0) {
-        onError?.(`图片附件仅支持 JPEG 和 PNG，已跳过 ${unsupportedImageCount} 个文件。`);
+      if (!insertion.isAvailable()) {
+        void frontendLog("INFO", "composer_attachment_selection_discarded", "原输入会话已关闭或禁用，忽略迟到的附件选择", {
+          data: { count: picked.length, directory },
+        });
+        return;
       }
+      if (picked.length > 0) await onPicked(picked);
+      if (unsupportedImageCount > 0) onError?.(`图片附件仅支持 JPEG 和 PNG，已跳过 ${unsupportedImageCount} 个文件。`);
     } catch (error) {
-      onError?.(userErrorMessage(error, "选择附件失败，请重试"));
-      await frontendLog("ERROR", "attachment_picker_failed", "统一附件选择失败", {
-        data: { selectedCount: 0 },
-        error,
-      });
-    } finally {
-      setOpening(false);
-    }
-  };
-
-  const chooseDirectory = async () => {
-    if (opening || disabled) return;
-    setOpening(true);
-    try {
-      const selected = await open({
-        multiple: false,
-        directory: true,
-        defaultPath: workspaceRoot,
-        title: "选择参考文件夹",
-      });
-      if (typeof selected !== "string") return;
-
-      const path = await invoke<string>("resolve_selected_attachment_path", { path: selected });
-      const name = fileName(path);
-      const id = crypto.randomUUID();
-      const file = createEmptyAttachmentFile(name, DIRECTORY_CONTENT_TYPE);
-      await onPicked([{
-        id,
-        kind: "file",
-        path,
-        name,
-        file: registerLocalAttachment(file, {
-          id,
-          path,
-          name,
-          contentType: DIRECTORY_CONTENT_TYPE,
-          kind: "file",
-        }),
-      }]);
-    } catch (error) {
-      onError?.(userErrorMessage(error, "选择文件夹失败，请重试"));
-      await frontendLog("ERROR", "attachment_directory_picker_failed", "文件夹附件选择失败", {
-        data: { selectedCount: 0 },
-        error,
-      });
+      if (insertion.isAvailable()) onError?.(userErrorMessage(error, "选择附件失败，请重试"));
+      void frontendLog("ERROR", "attachment_picker_failed", "统一附件选择失败", { data: { directory }, error });
     } finally {
       setOpening(false);
     }
@@ -160,7 +115,7 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
         <button
           type="button"
           className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          onClick={() => void chooseFiles()}
+          onClick={() => void choose(false)}
         >
           <FilePlusIcon className="text-muted-foreground size-4" />
           <span>选择文件或图片</span>
@@ -168,7 +123,7 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
         <button
           type="button"
           className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-          onClick={() => void chooseDirectory()}
+          onClick={() => void choose(true)}
         >
           <FolderOpenIcon className="text-muted-foreground size-4" />
           <span>选择文件夹</span>

@@ -396,6 +396,7 @@ def test_completed_and_failed_runs_reject_reviving_status_event() -> None:
         snapshots = InMemorySnapshotService()
         event_projector = ConversationEventProjector(snapshots)
         _start(event_projector)
+        event_projector.process(RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING))
         event_projector.process(RunStatusChangedEvent(task_id=1, run_id=1, status=terminal))
         event_projector.process(
             RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
@@ -474,6 +475,7 @@ def test_run_status_usage_is_projected(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector, context_window_total=100)
+    event_projector.process(RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING))
     event_projector.process(
         RunStatusChangedEvent(
             task_id=1,
@@ -487,7 +489,7 @@ def test_run_status_usage_is_projected(
     state = snapshots.states[1]
     assert _run(state, 1)["usage"]["total_tokens"] == 14
     assert state["current_run_id"] == 1
-    assert state["context_window_total"] == 100
+    assert _run(state, 1)["contextWindowTotal"] == 100
     assert _run(state, 1)["status"] == "completed"
 
 
@@ -496,6 +498,7 @@ def test_terminal_usage_is_projected(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
+    event_projector.process(RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING))
     event_projector.process(
         RunStatusChangedEvent(
             task_id=1,
@@ -513,7 +516,8 @@ def test_new_run_clears_previous_run_usage(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
     event_projector, snapshots = projector
-    _start(event_projector)
+    _start(event_projector, context_window_total=100)
+    event_projector.process(RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING))
     event_projector.process(
         RunStatusChangedEvent(
             task_id=1,
@@ -528,7 +532,9 @@ def test_new_run_clears_previous_run_usage(
     state = snapshots.states[1]
     assert _run(state, 1)["usage"]["total_tokens"] == 14
     assert _run(state, 2)["usage"] is None
-    assert state["context_window_total"] is None
+    assert _run(state, 2)["contextWindowTotal"] is None
+    assert _run(state, 1)["contextWindowTotal"] == 100
+    assert "context_window_total" not in state
 
 
 def test_late_previous_run_events_cannot_overwrite_current_run(
@@ -536,6 +542,7 @@ def test_late_previous_run_events_cannot_overwrite_current_run(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
+    event_projector.process(RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING))
     event_projector.process(
         RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
@@ -554,6 +561,7 @@ def test_historical_run_status_event_updates_its_own_run(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
+    event_projector.process(RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING))
     event_projector.process(
         RunStatusChangedEvent(
             task_id=1,
@@ -604,10 +612,12 @@ def test_late_run_initialization_cannot_rewind_terminal_newer_run(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
+    event_projector.process(RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING))
     event_projector.process(
         RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
     event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
+    event_projector.process(RunStatusChangedEvent(task_id=1, run_id=2, status=ConversationRunStatus.RUNNING))
     event_projector.process(
         RunStatusChangedEvent(task_id=1, run_id=2, status=ConversationRunStatus.COMPLETED)
     )

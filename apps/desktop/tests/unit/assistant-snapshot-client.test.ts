@@ -15,7 +15,6 @@ function validSnapshot(): TransportState {
     runs: [],
     current_run_id: null,
     approvals: {},
-    context_window_total: null,
     error: null,
   };
 }

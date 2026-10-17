@@ -44,9 +44,28 @@ def test_rebuild_empty_task_returns_valid_empty_snapshot() -> None:
         "runs": [],
         "current_run_id": None,
         "approvals": {},
-        "context_window_total": None,
         "error": None,
     }
+
+
+@pytest.mark.parametrize("windows", [(None, 0), (64_000, 128_000)])
+def test_rebuild_preserves_each_runs_frozen_context_window(windows: tuple[int | None, int]) -> None:
+    """重建只消费各 Run 已冻结的窗口，不把当前模型窗口套到历史 Run 上。"""
+    timestamp = _timestamp()
+    task = _task()
+    task.current_run_id = 2
+    runs = [
+        ConversationRunRecord(
+            id=index, task_id=task.id, input_text="", status="completed",
+            created_at=timestamp, updated_at=timestamp, checkpoint_thread_id=f"test-run-{index}",
+            context_window_total=window,
+        )
+        for index, window in enumerate(windows, start=1)
+    ]
+    state = ConversationTaskStateRebuilder.rebuild(task, runs, [])
+    validate_snapshot(state)
+    assert [run["contextWindowTotal"] for run in state["runs"]] == list(windows)
+    assert "context_window_total" not in state
 
 
 def test_validate_snapshot_rejects_current_run_that_is_not_present() -> None:
@@ -54,7 +73,6 @@ def test_validate_snapshot_rejects_current_run_that_is_not_present() -> None:
         "runs": [],
         "current_run_id": 99,
         "approvals": {},
-        "context_window_total": None,
         "error": None,
     }
 
@@ -89,6 +107,7 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
                 "status": "completed",
                 "endReason": None,
                 "langfuseTraceId": None,
+                "contextWindowTotal": None,
                 "usage": None,
                 "error": None,
                 "messages": [
@@ -110,7 +129,6 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
         ],
         "current_run_id": 1,
         "approvals": {},
-        "context_window_total": None,
         "error": None,
     }
 
@@ -121,19 +139,10 @@ def test_rebuild_preserves_streaming_assistant_draft_for_active_run() -> None:
     """冷重建应保留 partial 文本，并仅对 active Run 恢复 running。"""
 
     timestamp = _timestamp()
-    run = type(
-        "Run",
-        (),
-        {
-            "id": 1,
-            "task_id": 7,
-            "status": "running",
-            "end_reason": None,
-            "usage": None,
-            "error": None,
-            "created_at": timestamp,
-        },
-    )()
+    run = ConversationRunRecord(
+        id=1, task_id=7, input_text="", status="running", end_reason=None,
+        created_at=timestamp, updated_at=timestamp, checkpoint_thread_id="test-run-1",
+    )
     row = ConversationTaskContextRecord(
         id=1,
         task_id=7,
@@ -156,19 +165,10 @@ def test_rebuild_closes_streaming_assistant_draft_when_run_is_cancelled() -> Non
     """重启恢复会先取消遗留 Run，partial 不应在终态快照中继续显示 running。"""
 
     timestamp = _timestamp()
-    run = type(
-        "Run",
-        (),
-        {
-            "id": 1,
-            "task_id": 7,
-            "status": "cancelled",
-            "end_reason": "backend_restarted",
-            "usage": None,
-            "error": None,
-            "created_at": timestamp,
-        },
-    )()
+    run = ConversationRunRecord(
+        id=1, task_id=7, input_text="", status="cancelled", end_reason="backend_restarted",
+        created_at=timestamp, updated_at=timestamp, checkpoint_thread_id="test-run-1",
+    )
     row = ConversationTaskContextRecord(
         id=1,
         task_id=7,

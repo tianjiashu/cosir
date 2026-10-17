@@ -15,13 +15,13 @@ const state = (messages: TransportMessage[]): TransportState => ({
     status: "running",
     endReason: null,
     langfuseTraceId: null,
+    contextWindowTotal: null,
     messages,
     usage: null,
     error: null,
   }],
   current_run_id: 1,
   approvals: {},
-  context_window_total: null,
   error: null,
 });
 
@@ -291,7 +291,7 @@ describe("TransportFrameStore", () => {
     expect(performanceProbe.recordTerminalConvergence).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps message entries stable for task metadata and only rebuilds the affected run", () => {
+  it("Run 窗口元数据更新不重建消息，生命周期更新才刷新消息投影", () => {
     const historical = baseMessage("m-1", "old");
     const store = new TransportFrameStore(state([historical]));
     const before = store.getSnapshot();
@@ -300,12 +300,13 @@ describe("TransportFrameStore", () => {
     store.applyFrame({
       task_id: 1,
       kind: "mutation",
-      mutations: [{ kind: "set", path: ["context_window_total"], value: 120_000 }],
+      mutations: [{ kind: "set", path: ["runs", 0, "contextWindowTotal"], value: 120_000 }],
       target_run_id: 1,
       target_run_status: "running",
     });
     const metadataChange = store.getSnapshot();
-    expect(metadataChange.items).toBe(before.items);
+    expect(metadataChange.items[0]).toBe(beforeItem);
+    expect(metadataChange.state.runs[0].contextWindowTotal).toBe(120_000);
     expect(metadataChange.state).not.toBe(before.state);
 
     store.applyFrame({
@@ -333,6 +334,7 @@ describe("TransportFrameStore", () => {
           status: "pending",
           endReason: null,
           langfuseTraceId: null,
+          contextWindowTotal: null,
           messages: [baseMessage("user-2", ""), baseMessage("assistant-2", "")],
           usage: null,
           error: null,

@@ -412,10 +412,6 @@
     opacity: 0.6;
   }
 
-  [contenteditable][data-disabled="true"] .cosir-inline-file-token-remove {
-    pointer-events: none;
-  }
-
   .ProseMirror:focus {
     outline: none;
   }
@@ -424,143 +420,133 @@
     margin: 0;
   }
 
-  .cosir-inline-file-token,
-  .cosir-inline-image-token {
+  /* 行内 token 共用 24px 行盒；底对齐避免 inline-flex 的基线额外撑高正文行距。 */
+  .cosir-composer-token-node {
+    display: inline;
+  }
+
+  .cosir-inline-token {
     display: inline-flex;
+    box-sizing: border-box;
     align-items: center;
-    gap: 0.35rem;
-    margin: 0 0.15rem;
-    padding: 0.2rem 0.35rem 0.2rem 0.55rem;
+    gap: 0.25rem;
+    height: 1.5rem;
+    max-width: min(16rem, calc(100% - 0.25rem));
+    margin-inline: 0.125rem;
+    padding-inline: 0.375rem 0.125rem;
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-sm);
     background: var(--muted);
     color: var(--foreground);
-    vertical-align: middle;
+    vertical-align: bottom;
+    white-space: nowrap;
     user-select: none;
-    font-size: 0.85em;
-    line-height: 1.25;
-    transition: background-color 0.15s ease, border-color 0.15s ease;
+    font-size: 0.8125rem;
+    line-height: 1.125rem;
+    font-weight: 400;
   }
 
-  .cosir-inline-skill-token {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    margin: 0 0.15rem;
-    padding: 0.15rem 0.35rem 0.15rem 0.45rem;
-    border: 1px solid var(--skill-border);
-    border-radius: 9999px;
+  .cosir-inline-token[data-tone="skill"] {
+    border-color: var(--skill-border);
     background: var(--skill-background);
     color: var(--skill-foreground);
-    vertical-align: middle;
-    user-select: none;
-    font-size: 0.85em;
-    line-height: 1.3;
   }
 
-  .cosir-inline-skill-token > svg {
-    width: 0.95em;
-    height: 0.95em;
-    flex-shrink: 0;
-  }
-
-  .cosir-inline-skill-token-kind {
-    font-size: 0.8em;
-    font-weight: 650;
-    letter-spacing: 0.01em;
-  }
-
-  .cosir-inline-skill-token-name {
-    max-width: 14rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 600;
-  }
-
-  .cosir-inline-skill-token-remove {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.1em;
-    height: 1.1em;
-    border: 0;
-    border-radius: 9999px;
-    background: transparent;
-    color: currentColor;
-    cursor: pointer;
-    line-height: 1;
-    opacity: 0.55;
-    transition: opacity 0.15s ease, background-color 0.15s ease;
-  }
-
-  .cosir-inline-skill-token-remove:hover {
-    opacity: 1;
-    background-color: color-mix(in oklab, var(--skill-foreground) 12%, transparent);
-  }
-
-  [contenteditable][data-disabled="true"] .cosir-inline-skill-token-remove {
-    pointer-events: none;
-  }
-
-  .cosir-inline-file-token:hover,
-  .cosir-inline-image-token:hover {
-    border-color: color-mix(in oklab, var(--foreground) 18%, var(--border));
-  }
-
-  .cosir-inline-file-token-error {
+  .cosir-inline-token[data-state="pending"],
+  .cosir-inline-token[data-state="error"] {
     border-style: dashed;
     color: var(--muted-foreground);
+  }
+
+  .cosir-inline-token[data-state="error"] {
     background: color-mix(in oklab, var(--destructive) 6%, var(--muted));
-    border-color: color-mix(in oklab, var(--destructive) 25%, var(--border));
+    border-color: color-mix(in oklab, var(--destructive) 30%, var(--border));
   }
 
-  /* 附件仍在写入 composer 时的过渡态：不是错误，只是同步尚未完成。 */
-  .cosir-inline-file-token-pending {
-    border-style: dashed;
-    color: var(--muted-foreground);
+  .cosir-inline-token-label,
+  .cosir-inline-token-name {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
   }
 
-  .cosir-inline-file-token-icon {
-    width: 0.9em;
-    height: 0.9em;
-    flex-shrink: 0;
-    opacity: 0.65;
-  }
-
-  .cosir-inline-file-token-name {
-    max-width: 14rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .cosir-inline-token-label {
+    gap: 0.25rem;
+    border-radius: var(--radius-sm);
     white-space: nowrap;
   }
 
-  .cosir-inline-file-token-remove {
+  .cosir-inline-token-stem {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .cosir-inline-token-extension,
+  .cosir-inline-token-detail {
+    flex-shrink: 0;
+    max-width: 7em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .cosir-inline-token-icon {
     display: inline-flex;
+    flex-shrink: 0;
+  }
+
+  .cosir-inline-token-icon > svg {
+    width: 0.875rem;
+    height: 0.875rem;
+  }
+
+  .cosir-inline-token-open:not(:disabled) {
+    cursor: pointer;
+  }
+
+  .cosir-inline-token-open:hover:not(:disabled) {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .cosir-inline-token-remove {
+    display: inline-flex;
+    flex-shrink: 0;
     align-items: center;
     justify-content: center;
-    width: 1.15em;
-    height: 1.15em;
-    border: 0;
-    border-radius: 9999px;
-    background: transparent;
-    color: currentColor;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: var(--radius-sm);
+    color: inherit;
+    opacity: 0.55;
     cursor: pointer;
-    line-height: 1;
-    opacity: 0.5;
-    transition: opacity 0.15s ease, background-color 0.15s ease;
+    transition: opacity 150ms ease, background-color 150ms ease;
   }
 
-  .cosir-inline-file-token-remove:hover {
+  .cosir-inline-token-remove > svg {
+    width: 0.75rem;
+    height: 0.75rem;
+  }
+
+  .cosir-inline-token:hover .cosir-inline-token-remove,
+  .cosir-inline-token:focus-within .cosir-inline-token-remove {
     opacity: 1;
-    background-color: color-mix(in oklab, currentColor 12%, transparent);
   }
 
-  .cosir-inline-skill-token-remove:focus-visible,
-  .cosir-inline-file-token-remove:focus-visible {
-    outline: 2px solid var(--ring);
-    outline-offset: 1px;
+  .cosir-inline-token-remove:hover:not(:disabled) {
+    background: color-mix(in oklab, currentColor 12%, transparent);
   }
+
+  .cosir-inline-token button:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -1px;
+  }
+
+  .cosir-inline-token button:disabled {
+    cursor: default;
+    opacity: 0.5;
+  }
+
 }
 
 /*

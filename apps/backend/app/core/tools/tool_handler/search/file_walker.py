@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from app.core.tools.tool_handler.search.ignore_matcher import IgnoreMatcher
@@ -29,6 +29,7 @@ def iter_files(
     file_glob: str | None = None,
     *,
     rules: IgnoreMatcher | None = None,
+    check_interrupt: Callable[[], None] | None = None,
 ) -> Iterator[Path]:
     """递归遍历目录下的文件，按忽略匹配器跳过目录/文件并按 glob 过滤文件名。
 
@@ -38,22 +39,29 @@ def iter_files(
         rules: 忽略匹配器；为 None 时使用内置默认规则（不含 workspace 的 ``.fileignore`` 与
             ``.gitignore`` 配置）。持有 workspace 上下文的调用方应传入
             ``load_search_ignore_rules(workspace_root)``。
+        check_interrupt: 搜索调用方注入的中断检查，异常原样传播；状态采样等非搜索调用可不传。
+            在进入目录及处理每个目录项前调用，避免全部被过滤时无法响应中断。
 
     返回:
         文件路径生成器（不保证顺序）。
 
     异常:
-        不向上抛出遍历异常（权限错误由调用方读取时处理）。
+        目录读取与元数据查询的 OSError 会被跳过；中断检查异常向调用方传播。
 
     副作用:
         无（只读目录结构）。
     """
 
     active_rules = rules if rules is not None else default_ignore_rules()
-    yield from _walk(base, file_glob, active_rules)
+    yield from _walk(base, file_glob, active_rules, check_interrupt)
 
 
-def _walk(base: Path, file_glob: str | None, rules: IgnoreMatcher) -> Iterator[Path]:
+def _walk(
+    base: Path,
+    file_glob: str | None,
+    rules: IgnoreMatcher,
+    check_interrupt: Callable[[], None] | None,
+) -> Iterator[Path]:
     """递归遍历一层目录；规则对象在整次遍历中复用，避免逐层重复读取规则文件。
 
     参数:
@@ -65,16 +73,22 @@ def _walk(base: Path, file_glob: str | None, rules: IgnoreMatcher) -> Iterator[P
         当前子树下的文件路径生成器（不保证顺序）。
 
     异常:
-        不向上抛出：目录不可读时返回空结果。
+        目录不可读时返回空结果，中断检查异常继续向上传播。
 
     副作用:
         无（只读目录结构）。
     """
 
+    if check_interrupt is not None:
+        check_interrupt()
     try:
         with os.scandir(base) as entries:
             for raw_entry in entries:
-                yield from _visit_entry(Path(raw_entry.path), raw_entry, file_glob, rules)
+                if check_interrupt is not None:
+                    check_interrupt()
+                yield from _visit_entry(
+                    Path(raw_entry.path), raw_entry, file_glob, rules, check_interrupt
+                )
     except OSError:
         return
 
@@ -84,6 +98,7 @@ def _visit_entry(
     raw_entry: os.DirEntry[str],
     file_glob: str | None,
     rules: IgnoreMatcher,
+    check_interrupt: Callable[[], None] | None,
 ) -> Iterator[Path]:
     """判定单个目录项：symlink / junction 跳过、目录按规则跳过、文件按规则与 glob 过滤。
 
@@ -97,7 +112,7 @@ def _visit_entry(
         命中的文件路径生成器；目录命中忽略规则时不产出任何项（整棵子树被跳过）。
 
     异常:
-        不向上抛出：单项元数据查询失败（``OSError``）时跳过该项。
+        单项元数据查询失败（``OSError``）时跳过该项，中断检查异常继续向上传播。
 
     副作用:
         无（只读目录项元数据）。
@@ -110,7 +125,7 @@ def _visit_entry(
         if raw_entry.is_dir(follow_symlinks=False):
             if rules.match_dir(entry):
                 return
-            yield from _walk(entry, file_glob, rules)
+            yield from _walk(entry, file_glob, rules, check_interrupt)
         elif raw_entry.is_file(follow_symlinks=False):
             if rules.match_file(entry):
                 return

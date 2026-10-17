@@ -2,19 +2,15 @@
 
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
-import { HammerIcon, XIcon } from "lucide-react";
+import { HammerIcon } from "lucide-react";
+import { InlineToken } from "@/components/ui/inline-token";
+import { removeComposerToken } from "./remove-composer-token";
 import { useComposerEditorView } from "@/components/composer/composer-editor-context";
 import { createSkillMentionToken } from "@/lib/assistant/skill-mention-token";
 
 function SkillTokenView({ node, editor, getPos }: NodeViewProps) {
   const context = useComposerEditorView();
   const name = String(node.attrs.name ?? "");
-
-  function removeSkill() {
-    const position = getPos();
-    if (typeof position !== "number") return;
-    editor.view.dispatch(editor.state.tr.delete(position, position + node.nodeSize));
-  }
 
   return (
     <NodeViewWrapper
@@ -23,20 +19,19 @@ function SkillTokenView({ node, editor, getPos }: NodeViewProps) {
       data-inline-composer-token="true"
       data-skill-token="true"
       data-skill-name={name}
-      className="cosir-inline-skill-token"
+      className="cosir-composer-token-node"
     >
-      <HammerIcon className="cosir-inline-skill-token-icon" aria-hidden="true" />
-      <span className="cosir-inline-skill-token-kind">Skill</span>
-      <span className="cosir-inline-skill-token-name" title={name}>{name}</span>
-      <button
-        type="button"
-        className="cosir-inline-skill-token-remove"
-        data-skill-remove="true"
-        aria-label={`移除 Skill ${name}`}
-        disabled={context.disabled}
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={removeSkill}
-      ><XIcon aria-hidden="true" /></button>
+      <InlineToken
+        icon={<HammerIcon />}
+        name={name}
+        description={`Skill：${name}`}
+        tone="skill"
+        remove={{
+          label: `移除 Skill ${name}`,
+          disabled: context.disabled,
+          onClick: () => removeComposerToken({ node, editor, getPos }),
+        }}
+      />
     </NodeViewWrapper>
   );
 }

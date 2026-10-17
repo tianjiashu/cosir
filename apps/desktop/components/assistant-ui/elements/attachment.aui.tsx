@@ -2,7 +2,6 @@
 
 import {
   type PropsWithChildren,
-  useMemo,
   useState,
   type FC,
   isValidElement,
@@ -38,23 +37,12 @@ import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/att
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
-import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
-import {
-  classifyComposerExternalFiles,
-  summarizeComposerFileProblems,
-} from "@/components/composer/composer-external-files";
-import { addFilesToAssistantComposer } from "@/components/composer/assistant-composer-attachments";
+import { AttachmentPicker } from "@/components/composer/attachment-picker";
+import { useComposerFiles } from "@/components/composer/use-composer-files";
 import { useComposerFeedback } from "@/components/composer/composer-feedback";
-import {
-  useComposerInsertion,
-  insertAttachments,
-} from "@/components/composer/composer-insertion-context";
 import { useTaskComposerDraft } from "@/components/composer/use-task-composer-draft";
 import { ComposerEditor } from "@/components/composer/composer-editor";
-import type { InlineComposerAttachment } from "@/components/composer/composer-document";
-import { inlineAttachmentTokenId } from "@/lib/assistant/attachments/local-file-token";
 
-type InlineFileAttachment = InlineComposerAttachment;
 
 type AttachmentPreviewProps = {
   src: string;
@@ -286,7 +274,7 @@ type InlineComposerInputProps = {
   placeholder?: string;
   className?: string;
   autoFocus?: boolean;
-  suspendAttachmentReconciliation?: boolean;
+  hydrating?: boolean;
   persistTaskDraft?: boolean;
   "aria-label"?: string;
 };
@@ -295,80 +283,14 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
   placeholder,
   className,
   autoFocus,
-  suspendAttachmentReconciliation = false,
+  hydrating = false,
   persistTaskDraft = false,
   "aria-label": ariaLabel,
 }) => {
   const composer = unstable_useComposerInput();
   const restoringDraft = useTaskComposerDraft(persistTaskDraft);
   const aui = useAui();
-  const attachments = useAuiState((state) => state.composer.attachments);
-  const fileAttachments = useMemo(
-    () => attachments
-      .filter((attachment) => attachment.type !== "image")
-      .map<InlineFileAttachment>((attachment) => ({
-        id: attachment.id,
-        name: attachment.name,
-        kind: "file",
-        // 与文本 token 共用同一身份归一规则，避免「同步中」被误判为「已失效」。
-        tokenId: inlineAttachmentTokenId(attachment),
-      })),
-    [attachments],
-  );
-  /**
-   * 移除附件列表中的普通文件附件（内联 token 的 × 会经此转到附件对象）。
-   *
-   * 副作用：同步读取 composer 状态；命中时派发异步 `remove()`，不等待结果。
-   * 显式移除是用户意图，不做静默忽略——草稿同步期间输入框本身处于禁用态，无需在此二次
-   * 拦截；找不到附件时记日志，便于复盘「点了 × 没反应」。
-   */
-  const removeAttachment = (fileId: string) => {
-    const attachments = aui.composer.getState().attachments;
-    const attachmentIndex = attachments.findIndex((attachment) => attachment.id === fileId);
-    if (attachmentIndex < 0) {
-      void frontendLog("WARNING", "inline_attachment_remove_missing", "附件列表中不存在待移除附件", {
-        data: { fileId, attachmentIds: attachments.map((attachment) => attachment.id) },
-      });
-      return;
-    }
-    void aui.composer.attachment({ index: attachmentIndex }).remove();
-    void frontendLog("DEBUG", "inline_attachment_remove_dispatched", "已派发附件移除", {
-      data: {
-        fileId,
-        attachmentIndex,
-        attachmentType: attachments[attachmentIndex]?.type ?? null,
-        remainingAttachmentIds: attachments
-          .filter((_, index) => index !== attachmentIndex)
-          .map((attachment) => attachment.id),
-      },
-    });
-  };
-
-  const addExternalFiles = async (files: readonly File[]) => {
-    const { accepted, problems: rejected } = classifyComposerExternalFiles(files);
-    const result = await addFilesToAssistantComposer(
-      accepted.map((file) => ({ file, name: file.name })),
-      {
-        getAttachments: () => aui.composer.getState().attachments,
-        addAttachment: (file) => aui.composer.addAttachment(file),
-      },
-      ({ file, stage, error }) => {
-        void frontendLog(
-          stage === "add" ? "ERROR" : "WARNING",
-          "composer_attachment_intake_failed",
-          stage === "add" ? "添加输入框附件失败" : "添加附件后未找到其运行时身份",
-          {
-            data: { source: "external", stage, name: file.name, contentType: file.file.type },
-            error,
-          },
-        );
-      },
-    );
-    return {
-      attachments: result.attachments,
-      problems: [...rejected, ...result.problems],
-    };
-  };
+  const addFiles = useComposerFiles((file) => aui.composer.addAttachment(file));
 
   return (
     <ComposerEditor
@@ -379,13 +301,11 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
         // （image-attachment-adapter）记录并提示，assistant-ui 自行恢复草稿与发送状态。
         if (composer.canSend) composer.send();
       }}
-      attachments={fileAttachments}
-      onExternalFiles={addExternalFiles}
-      onRemoveAttachment={removeAttachment}
+      onExternalFiles={addFiles}
       placeholder={placeholder}
       autoFocus={autoFocus}
-      disabled={composer.isDisabled || suspendAttachmentReconciliation || restoringDraft}
-      suspendAttachmentReconciliation={suspendAttachmentReconciliation || restoringDraft}
+      disabled={composer.isDisabled || hydrating || restoringDraft}
+      hydrating={hydrating || restoringDraft}
       className={className}
       aria-label={ariaLabel}
     />
@@ -394,43 +314,14 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
 
 export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: boolean }> = ({ workspaceRoot, disabled = false }) => {
   const aui = useAui();
-  const insertion = useComposerInsertion();
   const feedback = useComposerFeedback();
-
-  const addPicked = async (picked: PickedComposerAttachment[]) => {
-    const result = await addFilesToAssistantComposer(
-      picked.map((attachment) => ({
-        file: attachment.file,
-        name: attachment.name,
-        skipIfAttachmentIdExists: attachment.id,
-      })),
-      {
-        getAttachments: () => aui.composer.getState().attachments,
-        addAttachment: (file) => aui.composer.addAttachment(file),
-      },
-      ({ file, stage, error }) => {
-        void frontendLog(
-          stage === "add" ? "ERROR" : "WARNING",
-          "composer_attachment_intake_failed",
-          stage === "add" ? "添加输入框附件失败" : "添加附件后未找到其运行时身份",
-          {
-            data: { source: "picker", stage, name: file.name, contentType: file.file.type },
-            error,
-          },
-        );
-      },
-    );
-    insertAttachments(insertion.dispatch, result.attachments);
-    const message = summarizeComposerFileProblems(result.problems);
-    if (message) feedback.show(message);
-    else feedback.clear();
-  };
+  const addFiles = useComposerFiles((file) => aui.composer.addAttachment(file));
 
   return (
     <AttachmentPicker
       workspaceRoot={workspaceRoot}
       disabled={disabled}
-      onPicked={addPicked}
+      onPicked={(picked) => addFiles(picked.map(({ file }) => file))}
       onError={(message) => {
         feedback.show(message);
         void frontendLog("WARNING", "attachment_picker_rejected", message, { data: {} });

@@ -5,6 +5,7 @@ import {
   toMessageStatus,
   toEditableUserMessageDraft,
   toThreadMessage,
+  toPendingUserMessage,
   toToolCallPart,
 } from "@/lib/assistant/converter";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
@@ -15,6 +16,7 @@ const completedRun = (runId: number, messages: TransportMessage[] = []): Transpo
   status: "completed",
   endReason: null,
   langfuseTraceId: null,
+  contextWindowTotal: null,
   messages,
   usage: null,
   error: null,
@@ -31,6 +33,25 @@ const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportT
 });
 
 describe("assistant transport converter", () => {
+  it("乐观用户消息复用渲染上下文，保持身份与附件顺序且不伪造 Run 事实", () => {
+    const command = { type: "add-message", commandId: "pending-context", message: { role: "user", parts: [
+      { type: "text", text: "查看文件和图片" },
+      { type: "file", data: "cosir-local-file:one", filename: "notes.md", mimeType: "text/markdown" },
+      { type: "image", image: "cosir-attachment://image-one" },
+    ] } };
+    const pending = toPendingUserMessage(command);
+    expect(pending).toMatchObject({
+      role: "user", attachments: [],
+      content: [
+        { type: "text", text: "查看文件和图片" },
+        { type: "file", data: "cosir-local-file:one", filename: "notes.md", mimeType: "text/markdown" },
+        { type: "image", image: "cosir-attachment://image-one" },
+      ],
+    });
+    expect(pending?.metadata.custom).toEqual({ runId: -1, isLastRunMessage: false });
+    expect(toPendingUserMessage(command)?.id).toBe(pending?.id);
+  });
+
   // 目的：Run 状态随消息一并投影，使消息渲染只依赖消息自身事实。潜在缺陷：消息组件回查
   // thread external state 时，只读作用域（无 external state 的 runtime）会在渲染期抛错。
   it("projects the run status onto assistant message metadata", () => {

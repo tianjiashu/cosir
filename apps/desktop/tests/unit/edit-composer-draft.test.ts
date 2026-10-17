@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { getLocalAttachmentById, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 
 import {
   applyEditDraftToComposer,
@@ -123,8 +124,13 @@ function draftFile(id: string) {
   };
 }
 
+function draftImage(id: string) {
+  return { id, type: "image" as const, name: `${id}.png`, contentType: "image/png",
+    content: [{ type: "image" as const, image: `cosir-attachment://${id}` }] };
+}
+
 describe("edit draft composer write", () => {
-  it("reuses an attachment already present under the same draft identity", async () => {
+  it("将历史普通文件登记为元数据并清除 AUI lift 副本", async () => {
     // assistant-ui 的 edit core 会按 message.content lift 出副本：id 不同但 locator 相同。
     const liftCopy: FakeAttachment = {
       id: "lift-copy",
@@ -148,29 +154,30 @@ describe("edit draft composer write", () => {
     });
 
     expect(result).toMatchObject({
-      expectedCount: 1,
+      expectedCount: 0,
       addedCount: 0,
-      removedCount: 1,
+      removedCount: 2,
       superseded: false,
       error: null,
     });
     expect(stub.addedIds).toEqual([]);
-    expect(stub.removedIds).toEqual(["stale"]);
+    expect(stub.removedIds).toEqual(["stale", "lift-copy"]);
+    expect(getLocalAttachmentById("keep")).toMatchObject({ name: "keep.md", kind: "file" });
     expect(stub.text()).toBe("[[cosir-file:keep]]文字");
   });
 
-  it("adds missing attachments before writing text", async () => {
+  it("只恢复图片集合，普通文件通过 token 恢复", async () => {
     const stub = createComposerStub();
 
     const result = await applyEditDraftToComposer({
       composer: stub.composer,
       text: "[[cosir-file:a]][[cosir-file:b]]",
-      attachments: [draftFile("a"), draftFile("b")],
+      attachments: [draftFile("a"), draftImage("b")],
       isStillCurrent: () => true,
     });
 
-    expect(result).toMatchObject({ addedCount: 2, removedCount: 0, superseded: false, error: null });
-    expect(stub.addedIds).toEqual(["a", "b"]);
+    expect(result).toMatchObject({ addedCount: 1, removedCount: 0, superseded: false, error: null });
+    expect(stub.addedIds).toEqual(["b"]);
     expect(stub.text()).toBe("[[cosir-file:a]][[cosir-file:b]]");
   });
 
@@ -189,19 +196,29 @@ describe("edit draft composer write", () => {
     expect(stub.addedIds).toEqual([]);
   });
 
-  it("degrades to readable text and keeps attachments when a write fails", async () => {
+  it("图片恢复失败时仍保留普通文件 token 与正文", async () => {
     const stub = createComposerStub([], true);
 
     const result = await applyEditDraftToComposer({
       composer: stub.composer,
       text: "[[cosir-file:a]]正文 `[[cosir-file:example]]`",
-      attachments: [draftFile("a")],
+      attachments: [draftFile("a"), draftImage("fail")],
       isStillCurrent: () => true,
     });
 
     expect(result.error).toBeInstanceOf(Error);
-    expect(stub.text()).toBe("附件正文 `[[cosir-file:example]]`");
+    expect(stub.text()).toBe("[[cosir-file:a]]正文 `[[cosir-file:example]]`");
     expect(stub.addedIds).toEqual([]);
+  });
+
+  it("历史展示元数据不会覆盖撤销所需的真实本机路径", async () => {
+    registerLocalAttachment(new File([], "native.md"), {
+      id: "native", name: "native.md", path: "/workspace/native.md", contentType: "text/plain", kind: "file",
+    });
+    const stub = createComposerStub();
+    await applyEditDraftToComposer({ composer: stub.composer, text: "[[cosir-file:native]]", attachments: [draftFile("native")], isStillCurrent: () => true });
+    expect(getLocalAttachmentById("native")?.path).toBe("/workspace/native.md");
+    expect(stub.attachments()).toEqual([]);
   });
 
   it("drops attachments that have no stable identity", () => {

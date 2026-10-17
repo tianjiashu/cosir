@@ -10,10 +10,10 @@ import {
 } from "@/lib/assistant/use-task-assistant-transport-runtime";
 
 const INITIAL_STATE: TransportState = {
-  runs: [],
-  current_run_id: null,
+  runs: [{ runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null,
+    contextWindowTotal: 128_000, messages: [], usage: null, error: null }],
+  current_run_id: 1,
   approvals: {},
-  context_window_total: 128_000,
   error: null,
 };
 
@@ -41,7 +41,8 @@ describe("task assistant transport runtime", () => {
   it("首帧直接提供 task Transport state，不经过未绑定的远程 thread", () => {
     const html = renderToStaticMarkup(createElement(RuntimeHarness));
 
-    expect(html).toContain("context_window_total");
+    expect(html).toContain("contextWindowTotal");
+    expect(html).toContain("128000");
     expect(html).not.toContain(">null<");
   });
 });

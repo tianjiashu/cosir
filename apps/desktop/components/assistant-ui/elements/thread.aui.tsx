@@ -276,7 +276,7 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
           <div className="flex min-w-0 items-center px-1">
             <ThreadComposerPromptToolbar />
           </div>
-          <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
+          <div className="min-h-0 min-w-0 w-full">
             <ComposerAttachments />
             <InlineComposerInput
               persistTaskDraft
@@ -285,7 +285,7 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
               autoFocus={autoFocus}
               aria-label="消息输入"
             />
-          </ComposerPrimitive.AttachmentDropzone>
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
               <TaskContextUsage />
@@ -324,7 +324,6 @@ const ThreadComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = fa
 const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const aui = useAui();
   const isRunning = useAuiState((state) => state.thread.isRunning);
-  const draftLength = useAuiState((state) => state.composer.text.length);
   const isDraftEmpty = useAuiState((state) =>
     state.composer.text.trim().length === 0 && state.composer.attachments.length === 0,
   );
@@ -342,9 +341,9 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
 
   useEffect(() => {
     void frontendLog("DEBUG", "composer_action_derived", "Composer action 状态发生变化", {
-      data: { taskId, action, isRunning, isDraftEmpty, canResume, isCancelling, cancellingRunId, runId, draftLength },
+      data: { taskId, action, isRunning, isDraftEmpty, canResume, isCancelling, cancellingRunId, runId },
     });
-  }, [action, canResume, cancellingRunId, draftLength, isCancelling, isDraftEmpty, isRunning, runId, taskId]);
+  }, [action, canResume, cancellingRunId, isCancelling, isDraftEmpty, isRunning, runId, taskId]);
 
   useEffect(() => {
     if (isRunning || !canResume) {
@@ -552,7 +551,7 @@ const UserEditMessage: FC = () => {
   // 草稿快照：写入内容与 message 对象解耦——写入 effect 只依赖消息身份，后续任何一次
   // transport 更新引起的重渲染都不会再打断正在进行的草稿写入。
   const draftRef = useRef<EditDraftSnapshot | null>(null);
-  // 草稿写入进度，仅供日志复盘；不参与渲染或业务判断。
+  // 图片写入进度，仅供日志复盘；普通文件只登记元数据，不计入 AUI 附件数。
   const hydrationProgressRef = useRef<{ expected: number; added: number; aborted: string | null }>({
     expected: 0,
     added: 0,
@@ -586,7 +585,7 @@ const UserEditMessage: FC = () => {
     const composer = aui.composer;
     const expectedAttachments = draft.attachments.length;
     const textTokenIds = localFileTokenIds(draft.text);
-    hydrationProgressRef.current = { expected: expectedAttachments, added: 0, aborted: null };
+    hydrationProgressRef.current = { expected: draft.attachments.filter((attachment) => attachment.type === "image").length, added: 0, aborted: null };
     void frontendLog("INFO", "edit_composer_hydration_started", "编辑草稿开始写入输入框", {
       data: {
         messageId: message.id,
@@ -611,8 +610,7 @@ const UserEditMessage: FC = () => {
       });
     }
 
-    // 唯一写入实现：先补齐附件、再写文本、最后清理草稿之外的附件。任何中断点都只会
-    // 「多留附件」，不会留下「文本含 token 而附件缺失」的空窗。
+    // 共用恢复器登记普通文件元数据、恢复图片并清理 AUI 提取的普通文件副本。
     void (async () => {
       if (draft.source === "recovery_override") {
         // 编辑 composer 初次挂载时会先从 canonical message 初始化；等该同步提交后再覆盖失败请求草稿。
@@ -633,9 +631,6 @@ const UserEditMessage: FC = () => {
             reason: "superseded_generation",
             addedCount: result.addedCount,
             expectedCount: result.expectedCount,
-            pendingAttachmentIds: draft.attachments
-              .slice(result.addedCount)
-              .map((pending) => pending.id),
           },
         });
       } else if (result.error) {
@@ -717,15 +712,15 @@ const UserEditMessage: FC = () => {
             <div className="flex min-w-0 items-center px-1">
               <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} />
             </div>
-            <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
+            <div className="min-h-0 min-w-0 w-full">
               <ComposerAttachments />
               <InlineComposerInput
                 className={COMPOSER_EDITOR_CLASS_NAME}
                 autoFocus
-                suspendAttachmentReconciliation={isHydrating || isRecoveryActive}
+                hydrating={isHydrating || isRecoveryActive}
                 aria-label="编辑消息"
               />
-            </ComposerPrimitive.AttachmentDropzone>
+            </div>
             <div className="flex flex-wrap items-center justify-between gap-2 px-1">
               <div className="min-w-0 flex-1">
                 <ComposerControls

@@ -14,7 +14,6 @@ const state = (overrides: Partial<TransportState> = {}): TransportState => ({
   runs: [],
   current_run_id: null,
   approvals: {},
-  context_window_total: null,
   error: null,
   ...overrides,
 });
@@ -24,6 +23,7 @@ const run = (runId: number, status: string = "completed", messages: TransportMes
   status,
   endReason: null,
   langfuseTraceId: null,
+  contextWindowTotal: null,
   messages,
   usage: null,
   error: null,

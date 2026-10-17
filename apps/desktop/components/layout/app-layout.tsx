@@ -201,7 +201,7 @@ export function AppLayout() {
       onSelectTask={selectTask}
       onOpenSettings={() => navigate("/settings")}
       onOpenWorkspaceSettings={(workspaceId) => navigate(`/workspaces/${workspaceId}/settings`)}
-      onOpenObserver={() => navigate("/context-observer", { state: { currentTaskId: focusedTaskId, returnTo: focusedTaskId ? `/tasks/${focusedTaskId}` : undefined } })}
+      onOpenObserver={() => navigate("/context-observer", { state: { returnTo: focusedTaskId ? `/tasks/${focusedTaskId}` : undefined } })}
       onRequestDelete={(target) => void actions.requestDelete(target)}
     />
   );

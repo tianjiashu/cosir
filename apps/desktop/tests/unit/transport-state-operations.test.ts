@@ -2,11 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import {
-  currentRunInputTokens,
   currentTransportRun,
   findTransportRun,
   readRuntimeTransportState,
-  transportContextWindowTotal,
+  latestMeasuredContextUsage,
   transportMessageCount,
 } from "@/lib/assistant/transport-state-operations";
 
@@ -18,6 +17,7 @@ function state(): TransportState {
         status: "running",
         endReason: null,
         langfuseTraceId: null,
+        contextWindowTotal: null,
         messages: [{
           id: "assistant-1",
           role: "assistant",
@@ -34,6 +34,7 @@ function state(): TransportState {
         status: "completed",
         endReason: null,
         langfuseTraceId: null,
+        contextWindowTotal: null,
         messages: [{ id: "assistant-2", role: "assistant", parts: [] }],
         usage: null,
         error: null,
@@ -41,7 +42,6 @@ function state(): TransportState {
     ],
     current_run_id: 1,
     approvals: {},
-    context_window_total: null,
     error: null,
   };
 }
@@ -72,10 +72,33 @@ describe("runtime transport state 读取契约", () => {
     expect(findTransportRun(state(), 2)?.status).toBe("completed");
   });
 
-  it("读取上下文窗口总量与当前 Run 输入 token，未就绪时返回 null", () => {
-    expect(transportContextWindowTotal(null)).toBeNull();
-    expect(transportContextWindowTotal({ ...state(), context_window_total: 900 })).toBe(900);
-    expect(currentRunInputTokens(null)).toBeNull();
-    expect(currentRunInputTokens(state())).toBeNull();
+  it("未就绪或尚无有效测量时返回 null", () => {
+    expect(latestMeasuredContextUsage(null)).toBeNull();
+    expect(latestMeasuredContextUsage(state())).toBeNull();
+  });
+});
+
+const measuredRun = (runId: number, used: number | null, total: number | null): TransportState["runs"][number] => ({
+  runId, status: "completed", endReason: "stop", langfuseTraceId: null, contextWindowTotal: total,
+  messages: [], error: null, usage: { input_tokens: used, output_tokens: null, total_tokens: null,
+    cache_hit_tokens: null, cache_miss_tokens: null, reasoning_tokens: null },
+});
+
+describe("最新有效上下文测量", () => {
+  it("按 Run id 选择最近一次测量，窗口和用量始终来自同一 Run", () => {
+    const snapshot = { ...state(), runs: [measuredRun(8, 400, 800), measuredRun(3, 50, 100)], current_run_id: 3 };
+    expect(latestMeasuredContextUsage(snapshot)).toEqual({ used: 400, total: 800 });
+  });
+
+  it.each([null, 0])("新 Run 尚无用量（%s）时保留之前的测量，不混用新模型窗口", (used) => {
+    const snapshot = { ...state(), runs: [measuredRun(1, 50, 100), measuredRun(2, used, 800)], current_run_id: 2 };
+    expect(latestMeasuredContextUsage(snapshot)).toEqual({ used: 50, total: 100 });
+    snapshot.runs[1].usage!.input_tokens = 200;
+    expect(latestMeasuredContextUsage(snapshot)).toEqual({ used: 200, total: 800 });
+  });
+
+  it.each([null, 0])("新 Run 没有有效窗口（%s）时不覆盖已有测量", (total) => {
+    expect(latestMeasuredContextUsage({ ...state(), runs: [measuredRun(1, 50, 100), measuredRun(2, 200, total)] }))
+      .toEqual({ used: 50, total: 100 });
   });
 });

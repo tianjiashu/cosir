@@ -53,29 +53,6 @@ export type InlineAttachmentIdentity = {
 };
 
 /**
- * 构造文本 token 与 composer 附件之间共享的内联身份键。
- *
- * 负责什么：把 `kind` 与 token id 拼成唯一匹配键，供渲染、移除、去重三处共用同一规则。
- * 不负责什么：不解析文本、不判断附件是否可用。
- *
- * 参数:
- *     kind: 内联附件类型（普通文件或图片）。
- *     tokenId: token 中携带的附件 id。
- *
- * 返回:
- *     `kind:id` 形式的匹配键。
- *
- * 异常/副作用:
- *     无；纯函数。
- */
-export function inlineAttachmentKey(
-  kind: "file" | "image",
-  tokenId: string,
-): string {
-  return `${kind}:${tokenId}`;
-}
-
-/**
  * 提取附件在文本 token 中使用的 id。
  *
  * 为什么需要：同一个附件可能来自两个来源——canonical 消息投影（`id` 即 token id）与

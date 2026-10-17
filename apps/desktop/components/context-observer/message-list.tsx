@@ -34,7 +34,6 @@ export function MessageList({
   visible: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const jumpInput = useRef<HTMLInputElement>(null);
   const changes = useMemo(() => cacheChanges(messages), [messages]);
   const virtualizer = useVirtualizer({
     count: nav.rows.length,
@@ -157,49 +156,21 @@ export function MessageList({
               >
                 {nav.filters.ascending ? <ArrowUpIcon /> : <ArrowDownIcon />}
               </Button>
+              {!nav.reveal &&
+                nav.rows.length < messages.length &&
+                nav.selected && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="ml-auto text-xs"
+                    onClick={() => nav.locate(nav.selected!.sequence)}
+                  >
+                    在全部记录中定位
+                  </Button>
+                )}
             </div>
           </>
         )}
-        <form
-          className="flex items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const input = jumpInput.current!;
-            const sequence = Number(input.value);
-            if (
-              !/^\d+$/.test(input.value) ||
-              !messages.some((message) => message.sequence === sequence)
-            ) {
-              input.setCustomValidity("当前查询范围没有该序号。");
-              input.reportValidity();
-              return;
-            }
-            input.setCustomValidity("");
-            nav.locate(sequence);
-          }}
-        >
-          <Input
-            ref={jumpInput}
-            className="w-24 text-xs"
-            aria-label="定位序号"
-            inputMode="numeric"
-            placeholder="序号 #"
-            onChange={(event) => event.target.setCustomValidity("")}
-          />
-          <Button size="sm" variant="ghost" type="submit">
-            定位
-          </Button>
-          {!nav.reveal && nav.rows.length < messages.length && nav.selected && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="ml-auto text-xs"
-              onClick={() => nav.locate(nav.selected!.sequence)}
-            >
-              在全部记录中定位
-            </Button>
-          )}
-        </form>
       </div>
       <div
         ref={host}
@@ -366,9 +337,6 @@ export function MessageList({
           })}
         </div>
       </div>
-      <p className="shrink-0 border-t px-4 py-2 text-xs text-muted-foreground">
-        上下键浏览 · Enter 查看详情 · 搜索限当前范围
-      </p>
     </section>
   );
 }

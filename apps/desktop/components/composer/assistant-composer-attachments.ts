@@ -1,73 +1,33 @@
-import type { InlineComposerAttachment } from "@/components/composer/composer-document";
-import type { ComposerFileProblem } from "@/components/composer/composer-external-files";
-import { inlineAttachmentTokenId, type InlineAttachmentIdentity } from "@/lib/assistant/attachments/local-file-token";
-
-type AssistantComposerAttachment = InlineAttachmentIdentity & {
-  name: string;
-  type: string;
-  file?: File;
-};
-
-type AssistantComposerAttachmentPort<TAttachment extends AssistantComposerAttachment> = {
-  getAttachments: () => readonly TAttachment[];
-  addAttachment: (file: File) => Promise<void>;
-};
-
-export type AssistantComposerFile = {
-  file: File;
-  name: string;
-  skipIfAttachmentIdExists?: string;
-};
-
-export type AssistantComposerAttachmentFailure = {
-  file: AssistantComposerFile;
-  stage: "add" | "resolve-identity";
-  error?: unknown;
-};
+import type { InlineComposerAttachment } from "./composer-document";
+import { classifyComposerExternalFiles, type ComposerExternalFileResult } from "./composer-external-files";
+import { getLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
+import { frontendLog } from "@/lib/logging/frontend-log";
 
 /**
- * 把文件接入 Assistant UI composer，并只为运行时确认存在的普通文件生成内联 token。
- * 文件选择器与粘贴/拖拽共用此边界，避免各入口对运行时附件身份和部分失败的处理漂移。
+ * 所有附件入口共用分类与接纳顺序。普通文件只返回 token，不进入图片附件集合；
+ * 图片交给宿主添加。每个异步步骤后确认原编辑会话仍存在，避免迟到结果写入另一草稿。
  */
-export async function addFilesToAssistantComposer<TAttachment extends AssistantComposerAttachment>(
-  files: readonly AssistantComposerFile[],
-  port: AssistantComposerAttachmentPort<TAttachment>,
-  onFailure: (failure: AssistantComposerAttachmentFailure) => void,
-): Promise<{ attachments: InlineComposerAttachment[]; problems: ComposerFileProblem[] }> {
-  const existingIds = new Set(port.getAttachments().map((attachment) => attachment.id));
-  const insertedFiles: InlineComposerAttachment[] = [];
-  const problems: ComposerFileProblem[] = [];
-
-  for (const file of files) {
-    if (file.skipIfAttachmentIdExists && existingIds.has(file.skipIfAttachmentIdExists)) continue;
-
+export async function addComposerFiles(
+  files: readonly File[],
+  port: { addImage: (file: File) => void | Promise<void>; isCurrent: () => boolean },
+): Promise<ComposerExternalFileResult<InlineComposerAttachment>> {
+  const { accepted, problems } = classifyComposerExternalFiles(files);
+  const attachments: InlineComposerAttachment[] = [];
+  for (const file of accepted) {
+    if (!port.isCurrent()) return { attachments: [], problems: [] };
+    const local = getLocalAttachment(file);
+    if (local?.kind === "file") {
+      attachments.push({ id: local.id, name: local.name, kind: "file" });
+      continue;
+    }
     try {
-      await port.addAttachment(file.file);
+      await port.addImage(file);
     } catch (error) {
       problems.push({ name: file.name, reason: "add-failed" });
-      onFailure({ file, stage: "add", error });
-      continue;
-    }
-
-    const added = port.getAttachments().find(
-      (attachment) => attachment.file === file.file && !existingIds.has(attachment.id),
-    );
-    if (!added) {
-      problems.push({ name: file.name, reason: "add-failed" });
-      onFailure({ file, stage: "resolve-identity" });
-      continue;
-    }
-
-    existingIds.add(added.id);
-    if (added.type !== "image") {
-      insertedFiles.push({
-        id: added.id,
-        name: added.name,
-        kind: "file",
-        tokenId: inlineAttachmentTokenId(added),
+      void frontendLog("ERROR", "composer_attachment_intake_failed", "添加图片附件失败", {
+        data: { name: file.name, contentType: file.type }, error,
       });
     }
   }
-
-  return { attachments: insertedFiles, problems };
+  return { attachments, problems };
 }

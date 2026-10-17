@@ -1,24 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { PendingAttachment } from "@assistant-ui/core";
 import { fileMatchesAccept } from "@assistant-ui/core/internal";
 
 import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
-import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
-
-function assertPendingAttachment(
-  attachment: PendingAttachment | AsyncGenerator<PendingAttachment, void>,
-): asserts attachment is PendingAttachment {
-  if (!("type" in attachment)) {
-    throw new Error("测试适配器返回了异步附件生成器，而不是待发送附件");
-  }
-}
 
 describe("assistant attachment adapter", () => {
-  it("uses assistant-ui's all-file wildcard", () => {
+  it("接受图片恢复契约与空 MIME 的图片文件", () => {
     const adapter = createAttachmentAdapter(7);
-    expect(adapter.accept).toBe("*");
     expect(fileMatchesAccept({ name: "photo.jpg", type: "image/jpeg" }, adapter.accept)).toBe(true);
-    expect(fileMatchesAccept({ name: "notes.md", type: "text/markdown" }, adapter.accept)).toBe(true);
+    expect(fileMatchesAccept({ name: "image-1", type: "image/*" }, adapter.accept)).toBe(true);
+    expect(fileMatchesAccept({ name: "native.png", type: "" }, adapter.accept)).toBe(true);
+    expect(fileMatchesAccept({ name: "notes.md", type: "text/markdown" }, adapter.accept)).toBe(false);
   });
 
   it("creates a pending image attachment for a JPEG file", async () => {
@@ -36,11 +27,7 @@ describe("assistant attachment adapter", () => {
 
   it("rejects unsupported GIF image uploads before the HTTP request", async () => {
     const file = new File(["image"], "animation.gif", { type: "image/gif" });
-    const attachment = await createAttachmentAdapter(7).add({ file });
-    assertPendingAttachment(attachment);
-
-    expect(attachment.type).toBe("file");
-    await expect(createAttachmentAdapter(7).send(attachment)).rejects.toThrow("JPEG 和 PNG");
+    await expect(createAttachmentAdapter(7).add({ file })).rejects.toThrow("JPEG 和 PNG");
   });
 
   it("removes only the Composer reference without deleting the workspace asset", async () => {
@@ -56,22 +43,8 @@ describe("assistant attachment adapter", () => {
     await expect(createAttachmentAdapter(7).remove(attachment)).resolves.toBeUndefined();
   });
 
-  it("reuses the local registry ID for ordinary file attachment tokens", async () => {
-    const file = registerLocalAttachment(
-      new File([], "leftHook.yml", { type: "application/yaml" }),
-      {
-        id: "local-left-hook",
-        path: "C:\\workspace\\leftHook.yml",
-        name: "leftHook.yml",
-        contentType: "application/yaml",
-        kind: "file",
-      },
-    );
-
-    await expect(createAttachmentAdapter(7).add({ file })).resolves.toMatchObject({
-      id: "local-left-hook",
-      type: "file",
-      name: "leftHook.yml",
-    });
+  it("普通文件不能重新进入图片附件集合", async () => {
+    await expect(createAttachmentAdapter(7).add({ file: new File([], "notes.md", { type: "text/plain" }) }))
+      .rejects.toThrow("JPEG 和 PNG");
   });
 });

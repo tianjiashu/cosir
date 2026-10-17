@@ -1,13 +1,10 @@
 "use client";
 
 import { createContext, useContext, type PropsWithChildren } from "react";
-import type { InlineComposerAttachment } from "@/components/composer/composer-document";
 
 export type ComposerEditorViewState = {
-  attachments: readonly InlineComposerAttachment[];
   disabled: boolean;
-  unmatchedAsPending: boolean;
-  onRemoveAttachment?: (id: string) => void;
+  hydrating: boolean;
 };
 
 const ComposerEditorViewContext = createContext<ComposerEditorViewState | null>(null);

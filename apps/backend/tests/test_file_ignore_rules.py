@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from time import monotonic
 
 from app.core.tools.guard.file_tool_state_coordinator import FileToolStateCoordinator
 from app.core.tools.schemas import ToolExecutionContext
@@ -193,7 +194,7 @@ def test_search_scope_applies_workspace_fileignore(tmp_path: Path) -> None:
     _write_ignore_file(tmp_path, "generated\n")
     kept = _touch(tmp_path / "src" / "main.py")
     _touch(tmp_path / "generated" / "gen.py")
-    scope = SearchScope.from_path(tmp_path, tmp_path)
+    scope = SearchScope.from_path(tmp_path, tmp_path, run_id=1, deadline=monotonic() + 5)
 
     produced = list(scope.iter_files())
 
@@ -282,7 +283,9 @@ def test_gitignore_skips_files_and_directories(tmp_path: Path) -> None:
     _touch(tmp_path / "build" / "gen.py")  # 整棵子树跳过
     _touch(tmp_path / "data" / "dump.log")  # 文件级跳过
 
-    produced = list(SearchScope.from_path(tmp_path, tmp_path).iter_files())
+    produced = list(
+        SearchScope.from_path(tmp_path, tmp_path, run_id=1, deadline=monotonic() + 5).iter_files()
+    )
 
     assert kept in produced
     assert tmp_path / "build" / "gen.py" not in produced
@@ -298,7 +301,9 @@ def test_search_scope_combines_fileignore_and_gitignore(tmp_path: Path) -> None:
     _touch(tmp_path / "generated" / "gen.py")  # .fileignore
     _touch(tmp_path / "data" / "dump.log")  # .gitignore
 
-    produced = list(SearchScope.from_path(tmp_path, tmp_path).iter_files())
+    produced = list(
+        SearchScope.from_path(tmp_path, tmp_path, run_id=1, deadline=monotonic() + 5).iter_files()
+    )
 
     assert kept in produced
     assert tmp_path / "generated" / "gen.py" not in produced

@@ -1,19 +1,19 @@
 "use client";
 
 import { create } from "zustand";
-import type { SetStateAction } from "react";
+import type { ComponentProps, SetStateAction } from "react";
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { FileTextIcon, Loader2Icon, SendIcon, XIcon } from "lucide-react";
+import { Loader2Icon, SendIcon } from "lucide-react";
 
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { ComposerEditor, COMPOSER_EDITOR_CLASS_NAME, COMPOSER_PLACEHOLDER } from "@/components/composer/composer-editor";
 import { ComposerFeedback, ComposerFeedbackProvider, useComposerFeedback } from "@/components/composer/composer-feedback";
-import { classifyComposerExternalFiles, type ComposerExternalFileResult } from "@/components/composer/composer-external-files";
-import { insertAttachments, useComposerInsertion, ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
-import type { InlineComposerAttachment } from "@/components/composer/composer-document";
+import { ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
+import { useComposerFiles } from "@/components/composer/use-composer-files";
+import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
 import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
 import { ComposerSurface } from "@/components/composer/composer-surface";
 import { useCreateWorkspaceFromFolder, WorkspacePicker } from "@/components/composer/workspace-picker";
@@ -29,9 +29,8 @@ import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection
 import { removeStoredToolGroupSelection, writeStoredToolGroupSelection } from "@/lib/tool-group-selection-storage";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
-import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
+import { getLocalAttachment, getLocalAttachmentById, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import { submitAssistantTransport, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-assistant-transport";
-import { isSupportedImageFile } from "@/lib/assistant/attachments/attachment-upload";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import {
   Dialog,
@@ -46,10 +45,14 @@ import { newTraceId } from "@/lib/trace";
 
 export type InitialConversationAttachment = PickedComposerAttachment;
 
-function clipboardAttachment(file: File): PickedComposerAttachment {
+type ImageDraftAttachment = Extract<PickedComposerAttachment, { kind: "image" }>;
+
+function imageAttachment(file: File): ImageDraftAttachment {
+  const local = getLocalAttachment(file);
+  if (local) return { ...local, kind: "image", file };
   const id = crypto.randomUUID();
-  const kind = isSupportedImageFile(file) ? "image" : "file";
-  const name = file.name || (kind === "image" ? `粘贴图片-${id}.png` : `粘贴附件-${id}`);
+  const kind = "image";
+  const name = file.name || `粘贴图片-${id}.png`;
   const path = `clipboard:${id}`;
   const namedFile = file.name ? file : new File([file], name, { type: file.type, lastModified: file.lastModified });
   return {
@@ -68,78 +71,58 @@ function clipboardAttachment(file: File): PickedComposerAttachment {
 }
 
 function NewConversationAttachmentChip({ attachment, onRemove }: {
-  attachment: PickedComposerAttachment;
+  attachment: ImageDraftAttachment;
   onRemove: () => void;
 }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
-    if (attachment.kind !== "image") return;
     const url = URL.createObjectURL(attachment.file);
     setPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
-  }, [attachment.file, attachment.kind]);
-
-  if (attachment.kind === "image") {
-    return (
-      <>
-        <ImageAttachmentCard
-          src={previewUrl}
-          name={attachment.name}
-          onPreview={() => setPreviewOpen(true)}
-          onRemove={onRemove}
-        />
-        <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-          <DialogContent className="p-2 sm:max-w-3xl">
-            <DialogTitle className="sr-only">预览图片：{attachment.name}</DialogTitle>
-            <div className="flex max-h-[80dvh] w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
-              {previewUrl && <img src={previewUrl} alt={attachment.name} className="max-h-[80dvh] max-w-full object-contain" />}
-            </div>
-          </DialogContent>
-        </Dialog>
-      </>
-    );
-  }
+  }, [attachment.file]);
 
   return (
-    <div className="bg-muted flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-xs">
-      <FileTextIcon className="size-3.5 shrink-0" />
-      <span className="max-w-56 truncate">{attachment.name}</span>
-      <button
-        type="button"
-        className="text-muted-foreground hover:text-foreground rounded-sm"
-        aria-label={`移除附件 ${attachment.name}`}
-        onClick={onRemove}
-      >
-        <XIcon className="size-3.5" />
-      </button>
-    </div>
+    <>
+      <ImageAttachmentCard
+        src={previewUrl}
+        name={attachment.name}
+        onPreview={() => setPreviewOpen(true)}
+        onRemove={onRemove}
+      />
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="p-2 sm:max-w-3xl">
+          <DialogTitle className="sr-only">预览图片：{attachment.name}</DialogTitle>
+          <div className="flex max-h-[80dvh] w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
+            {previewUrl && <img src={previewUrl} alt={attachment.name} className="max-h-[80dvh] max-w-full object-contain" />}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
-function NewConversationAttachmentPicker({
-  workspaceRoot,
-  existingPaths,
-  onPicked,
-}: {
+function NewConversationInput({ addImage, ...props }: Omit<ComponentProps<typeof ComposerEditor>, "onExternalFiles"> & {
+  addImage: (file: File) => void;
+}) {
+  const addFiles = useComposerFiles(addImage);
+  return <ComposerEditor {...props} onExternalFiles={addFiles} />;
+}
+
+function NewConversationAttachmentPicker({ workspaceRoot, existingPaths, addImage, disabled }: {
   workspaceRoot?: string;
   existingPaths: ReadonlySet<string>;
-  onPicked: (attachments: PickedComposerAttachment[]) => void | Promise<void>;
+  addImage: (file: File) => void;
+  disabled: boolean;
 }) {
-  const insertion = useComposerInsertion();
+  const addFiles = useComposerFiles(addImage);
   const feedback = useComposerFeedback();
   return (
     <AttachmentPicker
       workspaceRoot={workspaceRoot}
-      onPicked={async (picked) => {
-        const accepted = picked.filter((attachment) => !existingPaths.has(attachment.path.toLowerCase()));
-        if (accepted.length === 0) return;
-        await onPicked(accepted);
-        insertAttachments(insertion.dispatch, accepted
-          .filter((attachment) => attachment.kind === "file")
-          .map((attachment) => ({ id: attachment.id, name: attachment.name, kind: "file" as const })));
-      }}
+      disabled={disabled}
+      onPicked={(picked) => addFiles(picked.filter((attachment) => !existingPaths.has(attachment.path.toLowerCase())).map(({ file }) => file))}
       onError={feedback.show}
     />
   );
@@ -164,7 +147,7 @@ type NewConversationProps = {
   onTaskListChanged: () => void;
 };
 
-type NewTaskDraft = { text: string; attachments: PickedComposerAttachment[] };
+type NewTaskDraft = { text: string; attachments: ImageDraftAttachment[] };
 const emptyDraft: NewTaskDraft = { text: "", attachments: [] };
 const useNewTaskDrafts = create<{ drafts: Record<number, NewTaskDraft>; update: (id: number, update: (draft: NewTaskDraft) => NewTaskDraft) => void }>(set => ({ drafts: {}, update: (id, update) => set(state => ({ drafts: { ...state.drafts, [id]: update(state.drafts[id] ?? emptyDraft) } })) }));
 
@@ -186,6 +169,8 @@ export function NewConversation({
   pathnameRef.current = location.pathname;
   const mountedRef = useRef(true);
   const draftId = selectedWorkspaceId ?? 0;
+  const currentDraftId = useRef(draftId);
+  currentDraftId.current = draftId;
   const draft = useNewTaskDrafts(state => state.drafts[draftId] ?? emptyDraft);
   const updateDraft = useNewTaskDrafts(state => state.update);
   const text = draft.text;
@@ -194,7 +179,7 @@ export function NewConversation({
   const [modelReady, setModelReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const attachments = draft.attachments;
-  const setAttachments = (value: SetStateAction<PickedComposerAttachment[]>) => updateDraft(draftId, current => ({ ...current, attachments: typeof value === "function" ? value(current.attachments) : value }));
+  const setAttachments = (value: SetStateAction<ImageDraftAttachment[]>) => updateDraft(draftId, current => ({ ...current, attachments: typeof value === "function" ? value(current.attachments) : value }));
   const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>([]);
   const toolGroupsQuery = useQuery({
     queryKey: queryKeys.toolGroups(),
@@ -205,12 +190,14 @@ export function NewConversation({
     ? userErrorMessage(toolGroupsQuery.error, "工具组加载失败")
     : null;
   const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
-  const fileAttachments: InlineComposerAttachment[] = attachments
-    .filter((attachment) => attachment.kind === "file")
-    .map((attachment) => ({
-      id: attachment.id,
-      name: attachment.name,
-    }));
+  const addImage = (file: File) => setAttachments((current) => [...current, imageAttachment(file)]);
+  const existingPaths = new Set([
+    ...attachments.map((attachment) => attachment.path.toLowerCase()),
+    ...localFileTokenIds(text).flatMap((id) => {
+      const path = getLocalAttachmentById(id)?.path;
+      return path ? [path.toLowerCase()] : [];
+    }),
+  ]);
   const hasDraft = Boolean(text.trim() || attachments.length > 0);
   const modelState = modelSetupState(useModelCatalog());
   const workspaceCreation = useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceChange });
@@ -244,7 +231,7 @@ export function NewConversation({
     const creationCommandId = crypto.randomUUID();
     const traceId = newTraceId();
     const submittedPathname = pathnameRef.current;
-    const stillHere = () => mountedRef.current && pathnameRef.current === submittedPathname;
+    const stillHere = () => mountedRef.current && pathnameRef.current === submittedPathname && currentDraftId.current === draftId;
     let provisionalTask: StartedConversation | null = null;
     try {
       const selection = readStoredSelection({ kind: "workspace", id: selectedWorkspaceId });
@@ -260,9 +247,7 @@ export function NewConversation({
         workspaceId: selectedWorkspaceId,
         commandId: creationCommandId,
         text: trimmedText,
-        imageAttachments: sendAttachments
-          .filter((attachment) => attachment.kind === "image")
-          .map((attachment) => ({ file: attachment.file, name: attachment.name })),
+        imageAttachments: sendAttachments.map((attachment) => ({ file: attachment.file, name: attachment.name })),
         banTools: toolGroups
           .filter(({ group }) => selectedToolGroups.includes(group))
           .flatMap(({ tools }) => tools.map(({ name }) => name)),
@@ -314,7 +299,7 @@ export function NewConversation({
 
   return (
     <div className="mx-auto flex h-full w-full max-w-5xl items-center justify-center px-6">
-      <ComposerInsertionProvider>
+      <ComposerInsertionProvider key={draftId}>
       <form ref={formRef} onSubmit={submit} className="w-full">
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
           <CosirMark className="text-foreground size-16" />
@@ -349,9 +334,9 @@ export function NewConversation({
               disabled={submitting}
             />
           </div>
-          {attachments.some((attachment) => attachment.kind === "image") && (
+          {attachments.length > 0 && (
             <div className="flex h-16 min-h-0 max-h-16 min-w-0 flex-nowrap gap-2 overflow-x-auto overflow-y-hidden px-2" aria-label="待发送附件">
-              {attachments.filter((attachment) => attachment.kind === "image").map((attachment) => (
+              {attachments.map((attachment) => (
                 <NewConversationAttachmentChip
                   key={attachment.path}
                   attachment={attachment}
@@ -360,29 +345,12 @@ export function NewConversation({
               ))}
             </div>
           )}
-          <ComposerEditor
+          <NewConversationInput
+            addImage={addImage}
             value={text}
             onChange={setText}
             onSubmit={() => {
               if (canStart) formRef.current?.requestSubmit();
-            }}
-            attachments={fileAttachments}
-            onExternalFiles={(files): ComposerExternalFileResult<InlineComposerAttachment> => {
-              const { accepted, problems } = classifyComposerExternalFiles(files);
-              const picked = accepted.map(clipboardAttachment);
-              setAttachments((current) => {
-                const existing = new Set(current.map((attachment) => attachment.path.toLowerCase()));
-                return [...current, ...picked.filter((attachment) => !existing.has(attachment.path.toLowerCase()))];
-              });
-              return {
-                attachments: picked
-                  .filter((attachment) => attachment.kind === "file")
-                  .map((attachment) => ({ id: attachment.id, name: attachment.name, kind: "file" as const })),
-                problems,
-              };
-            }}
-            onRemoveAttachment={(fileId) => {
-              setAttachments((current) => current.filter((attachment) => attachment.id !== fileId));
             }}
             placeholder={COMPOSER_PLACEHOLDER}
             className={COMPOSER_EDITOR_CLASS_NAME}
@@ -400,13 +368,9 @@ export function NewConversation({
             <div className="flex items-center gap-1">
               <NewConversationAttachmentPicker
                 workspaceRoot={selectedWorkspace?.root_path}
-                existingPaths={new Set(attachments.map((attachment) => attachment.path.toLowerCase()))}
-                onPicked={async (picked) => {
-                  setAttachments((current) => {
-                    const existing = new Set(current.map((attachment) => attachment.path.toLowerCase()));
-                    return [...current, ...picked.filter((attachment) => !existing.has(attachment.path.toLowerCase()))];
-                  });
-                }}
+                existingPaths={existingPaths}
+                addImage={addImage}
+                disabled={submitting}
               />
               {blockedReason && (
                 <span id={blockedReasonId} className="text-muted-foreground px-1 text-xs">{blockedReason}</span>

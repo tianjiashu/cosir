@@ -22,6 +22,7 @@ const run = (overrides: Partial<TransportRun> = {}): TransportRun => ({
   status: "failed",
   endReason: null,
   langfuseTraceId: null,
+  contextWindowTotal: null,
   messages: [],
   usage: null,
   error: null,
@@ -138,6 +139,7 @@ describe("parseTransportState Run 级 error 严格校验对抗", () => {
     status: "failed",
     endReason: "run_failed",
     langfuseTraceId: null,
+    contextWindowTotal: null,
     usage: null,
     error: null as unknown,
     messages: [],
@@ -147,7 +149,6 @@ describe("parseTransportState Run 级 error 严格校验对抗", () => {
     runs: [{ ...baseRun, error } as unknown as TransportRun],
     current_run_id: 1,
     approvals: {},
-    context_window_total: null,
     error: null,
   });
 

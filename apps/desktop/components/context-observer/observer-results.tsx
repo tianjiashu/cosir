@@ -9,14 +9,10 @@ import { useMessageNavigation } from "./use-message-navigation";
 
 export function ObserverResults({
   messages,
-  initialSequence,
-  onWholeTask,
 }: {
   messages: ContextMessage[];
-  initialSequence?: number;
-  onWholeTask?: (sequence?: number) => void;
 }) {
-  const nav = useMessageNavigation(messages, initialSequence);
+  const nav = useMessageNavigation(messages);
   const host = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [preferredWidth, setPreferredWidth] = useState<number | null>(null);
@@ -63,30 +59,19 @@ export function ObserverResults({
   }, [narrow, nav.detailOpen, nav.selected?.sequence]);
   return (
     <div ref={host} className="flex min-h-0 flex-1 flex-col">
-      {(onWholeTask || newSequences.length > 0) && (
+      {newSequences.length > 0 && (
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-4 py-1.5">
-          {onWholeTask && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => onWholeTask(nav.selected?.sequence)}
-            >
-              查看整个任务
-            </Button>
-          )}
-          {newSequences.length > 0 && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="ml-auto"
-              onClick={() => {
-                nav.locate(Math.max(...newSequences));
-                setNewSequences([]);
-              }}
-            >
-              新增 {newSequences.length} 条 · 查看最新
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto"
+            onClick={() => {
+              nav.locate(Math.max(...newSequences));
+              setNewSequences([]);
+            }}
+          >
+            新增 {newSequences.length} 条 · 查看最新
+          </Button>
         </div>
       )}
       {!messages.length ? (

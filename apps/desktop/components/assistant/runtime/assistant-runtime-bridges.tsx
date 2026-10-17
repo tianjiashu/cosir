@@ -14,6 +14,7 @@ import type { BackendRuntimeSnapshot } from "@/src/runtime-config";
 import {
   getLocalAttachment,
   registerLocalAttachment,
+  registerInlineFileMetadata,
 } from "@/lib/assistant/attachments/local-attachment-registry";
 import {
   applyEditDraftToComposer,
@@ -23,12 +24,12 @@ import {
   queuePendingEditComposerStart,
   setPendingEditComposerDraft,
 } from "@/lib/assistant/edit-composer-draft";
+import { inlineAttachmentTokenId } from "@/lib/assistant/attachments/local-file-token";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 export function RuntimeRenderDiagnostics({ taskId }: { taskId: number }) {
   const messageCount = useAuiState((state) => state.thread.messages.length);
   const isRunning = useAuiState((state) => state.thread.isRunning);
-  const draftLength = useAuiState((state) => state.composer.text.length);
   const runId = useAuiState((state) => {
     const run = readRuntimeRun(state.thread.state);
     return typeof run?.runId === "number" ? run.runId : null;
@@ -40,9 +41,9 @@ export function RuntimeRenderDiagnostics({ taskId }: { taskId: number }) {
 
   useEffect(() => {
     void frontendLog("DEBUG", "assistant_ui_render_state", "Assistant UI 渲染状态发生变化", {
-      data: { taskId, messageCount, runId, runStatus, isRunning, draftLength },
+      data: { taskId, messageCount, runId, runStatus, isRunning },
     });
-  }, [draftLength, isRunning, messageCount, runId, runStatus, taskId]);
+  }, [isRunning, messageCount, runId, runStatus, taskId]);
 
   return null;
 }
@@ -169,7 +170,19 @@ export function InitialMessageBridge({
               kind: attachment.kind,
             });
           }
-          await composer.addAttachment("path" in attachment ? attachment.file : attachment);
+          if ("path" in attachment) {
+            if (attachment.kind === "image") await composer.addAttachment(attachment.file);
+          } else if (attachment.type === "file") {
+            for (const file of editableDraftAttachments([attachment])) {
+              registerInlineFileMetadata({
+                id: inlineAttachmentTokenId(file),
+                name: file.name,
+                contentType: file.contentType ?? "application/octet-stream",
+              });
+            }
+          } else {
+            await composer.addAttachment(attachment);
+          }
         }
         const timer = window.setTimeout(() => {
           if (cancelled || sentRef.current) return;

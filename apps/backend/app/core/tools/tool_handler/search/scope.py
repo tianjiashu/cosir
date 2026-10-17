@@ -10,8 +10,12 @@ from pathlib import Path
 from typing import Literal
 
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.tools.tool_handler.search.errors import SearchPathNotFound, SearchPathUnreadable, SearchCancelled, \
-    SearchTimedOut
+from app.core.tools.tool_handler.search.errors import (
+    SearchCancelled,
+    SearchPathNotFound,
+    SearchPathUnreadable,
+    SearchTimedOut,
+)
 from app.core.tools.tool_handler.search.file_walker import iter_files
 from app.core.tools.tool_handler.search.ignore_rules import load_search_ignore_rules
 
@@ -24,16 +28,19 @@ class SearchScope:
 
     ``path`` 是已经通过 PathResolver 安全解析的绝对路径。目录 scope 递归遍历，
     文件 scope 只产生自身一个 candidate；engine 不需要再次判断路径类型。
+    handler 必须提供所属 Run 和基于 monotonic 的绝对截止时间；遍历与内容处理共用此预算。
     """
 
     workspace_root: Path
     path: Path
     kind: ScopeKind
-    run_id: int | None = None
-    deadline: float | None = None
+    run_id: int
+    deadline: float
 
     @classmethod
-    def from_path(cls, workspace_root: Path, path: Path, run_id: int, deadline: float) -> SearchScope:
+    def from_path(
+        cls, workspace_root: Path, path: Path, run_id: int, deadline: float
+    ) -> SearchScope:
         """从已解析路径创建 scope，并拒绝不存在或不可搜索的目录项。"""
 
         try:
@@ -51,8 +58,7 @@ class SearchScope:
         if cancellation_registry.is_cancelled(self.run_id):
             raise SearchCancelled("search cancelled")
         if time.monotonic() >= self.deadline:
-            raise SearchTimedOut("search timeout cancelled")
-        return
+            raise SearchTimedOut("search timed out")
 
     def iter_files(self, file_glob: str | None = None) -> Iterator[Path]:
         """产生 scope 内候选文件，不做内容读取。
@@ -68,20 +74,26 @@ class SearchScope:
             候选文件路径生成器（不保证顺序）。
 
         异常:
-            无：规则文件读取失败由 ``load_search_ignore_rules`` 内部降级为默认规则。
+            SearchCancelled / SearchTimedOut: 即使没有候选文件也检查中断，并向 handler 传播。
+            规则文件读取失败由 ``load_search_ignore_rules`` 内部降级为默认规则。
 
         副作用:
-            规则文件缺失时可能创建 ``<workspace>/.cosir/.fileignore``（由 ``load_search_ignore_rules``
-            承担）；目录遍历本身只读。
+            ``load_search_ignore_rules`` 可能创建缺失的 ``<workspace>/.cosir/.fileignore``；
+            目录遍历本身只读。
         """
 
+        self.check_cancel_and_timeout()
         if self.kind == "file":
             if file_glob is None or fnmatch.fnmatchcase(self.path.name, file_glob):
                 yield self.path
-            return
-        yield from iter_files(
-            self.path, file_glob, rules=load_search_ignore_rules(self.workspace_root)
-        )
+        else:
+            yield from iter_files(
+                self.path,
+                file_glob,
+                rules=load_search_ignore_rules(self.workspace_root),
+                check_interrupt=self.check_cancel_and_timeout,
+            )
+        self.check_cancel_and_timeout()
 
     def display_path(self, file_path: Path) -> str:
         """生成稳定的模型可用路径；workspace 内统一使用 workspace-relative。"""

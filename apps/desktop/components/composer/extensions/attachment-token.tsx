@@ -2,8 +2,10 @@
 
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
-import { FileTextIcon, ImageIcon, XIcon } from "lucide-react";
-import { reconcileComposerAttachments, serializeComposerDocument } from "@/components/composer/composer-document";
+import { FileTextIcon, ImageIcon } from "lucide-react";
+import { InlineToken } from "@/components/ui/inline-token";
+import { removeComposerToken } from "./remove-composer-token";
+import { getLocalAttachmentById } from "@/lib/assistant/attachments/local-attachment-registry";
 import { useComposerEditorView } from "@/components/composer/composer-editor-context";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
@@ -11,41 +13,19 @@ function AttachmentTokenView({ node, editor, getPos }: NodeViewProps) {
   const context = useComposerEditorView();
   const kind = node.attrs.kind === "image" ? "image" : "file";
   const tokenId = String(node.attrs.tokenId ?? "");
-  const attachment = context.attachments.find((item) =>
-    (item.kind ?? "file") === kind && (item.tokenId ?? item.id) === tokenId,
-  );
-  const pending = !attachment && context.unmatchedAsPending;
+  const attachment = getLocalAttachmentById(tokenId);
+  const pending = !attachment && context.hydrating;
   const Icon = kind === "image" ? ImageIcon : FileTextIcon;
 
   function removeAttachment() {
-    if (!attachment) return;
-    if (!context.onRemoveAttachment) {
-      void frontendLog("WARNING", "inline_attachment_remove_unavailable", "点击移除附件，但当前输入框没有移除回调", {
-        data: { disabled: context.disabled },
-      });
-      return;
-    }
-    const position = getPos();
-    if (typeof position !== "number") return;
-    const currentText = serializeComposerDocument(editor.getJSON());
-    const from = editor.state.doc.textBetween(Math.max(0, position - 1), position) === " "
-      ? position - 1
-      : position;
-    const transaction = editor.state.tr.delete(from, position + node.nodeSize);
-    editor.view.dispatch(transaction);
-    const nextText = serializeComposerDocument(editor.getJSON());
-    const remainingTokenKeys = reconcileComposerAttachments(nextText, context.attachments).tokenKeys;
+    removeComposerToken({ node, editor, getPos });
     void frontendLog("INFO", "inline_attachment_remove_requested", "请求移除内联附件 token", {
       data: {
         kind,
         tokenId,
-        attachmentId: attachment.id,
-        textLengthBefore: currentText.length,
-        textLengthAfter: nextText.length,
-        remainingTokenKeys,
+        attachmentId: attachment?.id,
       },
     });
-    context.onRemoveAttachment(attachment.id);
   }
 
   return (
@@ -57,23 +37,22 @@ function AttachmentTokenView({ node, editor, getPos }: NodeViewProps) {
       data-token-id={tokenId}
       data-attachment-id={attachment?.id}
       data-file-id={kind === "file" ? attachment?.id : undefined}
-      className={`cosir-inline-attachment-token ${kind === "image" ? "cosir-inline-image-token" : "cosir-inline-file-token"} ${attachment ? "" : pending ? "cosir-inline-file-token-pending" : "cosir-inline-file-token-error"}`}
+      className="cosir-composer-token-node"
     >
-      <Icon className="cosir-inline-file-token-icon" aria-hidden="true" />
-      <span className="cosir-inline-file-token-name">
-        {attachment ? `${kind === "image" ? "图片：" : ""}${attachment.name}` : pending ? "附件同步中" : "附件已失效"}
-      </span>
-      {attachment && (
-        <button
-          type="button"
-          className="cosir-inline-file-token-remove"
-          data-file-remove="true"
-          aria-label={`移除附件 ${attachment.name}`}
-          disabled={context.disabled || !context.onRemoveAttachment}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={removeAttachment}
-        ><XIcon aria-hidden="true" /></button>
-      )}
+      <InlineToken
+        icon={<Icon />}
+        name={attachment?.name ?? (pending ? "附件同步中" : "附件已失效")}
+        description={attachment
+          ? attachment.path ?? attachment.name
+          : pending ? "附件正在同步" : "附件已失效，请移除后重新选择附件"}
+        preserveExtension={!!attachment}
+        state={attachment ? "ready" : pending ? "pending" : "error"}
+        remove={{
+          label: attachment ? `移除附件 ${attachment.name}` : "移除附件",
+          disabled: context.disabled,
+          onClick: removeAttachment,
+        }}
+      />
     </NodeViewWrapper>
   );
 }
