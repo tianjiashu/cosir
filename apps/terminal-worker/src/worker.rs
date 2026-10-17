@@ -11,7 +11,6 @@ use crate::io::{FrameWriter, SharedFrameWriter};
 use crate::lifecycle::LifecycleArbiter;
 use crate::protocol::{
     encode_input, read_control_frame, ControlFrame, InputKey, WorkerEvent, MAX_OUTPUT_CHUNK_BYTES,
-    PROTOCOL,
 };
 use crate::pty::{PtyRuntime, TerminalControlResult};
 use crate::shell_integration::{ShellLaunch, ShellParser};
@@ -51,7 +50,6 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
     let spawned = PtyRuntime::spawn(launch.argv.clone(), start.2, &launch.env)?;
     let runtime = spawned.runtime;
     output.send(&WorkerEvent::Handshake {
-        protocol: PROTOCOL,
         instance_id,
         pid: std::process::id(),
         pty_kind: pty_kind(),

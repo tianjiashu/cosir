@@ -23,7 +23,7 @@ write 与 read 使用同一快照结构，每次返回当前 screen 与有界最
 - 输入行是向当前终端发送文字和 Enter，不替换行编辑器已有内容；自动缩进、自动补全、用户键位绑定等由前台程序决定。高级 REPL 与全屏菜单不在通用兼容承诺内。
 - Unix 控制键只声明 ctrl_c / ctrl_d；Windows 只声明 ctrl_c / ctrl_z。参数模型按同一宿主键集合生成 schema 并校验；不属于宿主的键在参数边界报错。session 与 read/write 返回的 capabilities 中 `input_ctrl_*` 来自真实 worker 握手，service 在接受前另检查实际会话能力，worker 在独立进程边界校验。
 - key 只发送对应控制字符，不追加 Enter、不自动映射 EOF、不保证程序退出。需要后续 Enter 时显式发送空 line。terminal_signal 仍表示运行时信号操作，独立于按键投递。
-- 没有 enter/tab/backspace/escape 或光标移动键；空行替代单独 Enter。协议为 terminal-worker-v5，不兼容旧输入格式。
+- 没有 enter/tab/backspace/escape 或光标移动键；空行替代单独 Enter。Worker 输入格式随 backend/worker 源码同步演进，不承诺兼容旧二进制。
 
 例如传统 Python REPL：依次提交 `for n in range(2):`、`    print(n)`、空字符串；程序提问则提交答案或空字符串接受默认值。两者使用同一 line 契约，是否完成始终由实际程序行为与 shell 事件决定。
 

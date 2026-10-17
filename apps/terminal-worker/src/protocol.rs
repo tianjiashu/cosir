@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_OUTPUT_CHUNK_BYTES: usize = 16 * 1024;
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
-pub const PROTOCOL: &str = "terminal-worker-v5";
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -89,7 +88,6 @@ pub fn encode_input(input: TerminalInput) -> anyhow::Result<Vec<u8>> {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkerEvent {
     Handshake {
-        protocol: &'static str,
         instance_id: String,
         pid: u32,
         pty_kind: &'static str,
