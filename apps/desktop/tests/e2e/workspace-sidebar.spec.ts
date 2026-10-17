@@ -40,7 +40,7 @@ async function box(locator: Locator) {
 }
 
 for (const theme of ["light", "dark"]) {
-  test(`${theme}：长标题不溢出，选中与悬停分离，菜单不引起位移`, async ({ page }, testInfo) => {
+  test(`${theme}：长标题不溢出，选中与悬停分离，行内删除操作不引起位移`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await seedSidebar(page, theme);
     await page.goto("/tasks/100");
@@ -76,15 +76,11 @@ for (const theme of ["light", "dark"]) {
     await expect(other).toHaveAttribute("aria-selected", "false");
 
     await selected.hover();
-    const more = selected.getByRole("button", { name: `更多 ${longTitle} 操作`, exact: true });
-    await more.click();
-    await page.mouse.move(900, 500);
-    await expect(more).toHaveAttribute("aria-expanded", "true");
+    const deleteButton = selected.getByRole("button", { name: `删除 ${longTitle}`, exact: true });
+    await expect(deleteButton).toBeVisible();
     await expect(selected.locator(".workspace-tree-actions")).toHaveCSS("opacity", "1");
     await expect(selected.locator("time")).toHaveCSS("visibility", "hidden");
     expect(await box(title)).toEqual(titleBefore);
-    await page.keyboard.press("Escape");
-    await expect(more).toBeFocused();
     await page.getByRole("navigation", { name: "当前位置" }).click();
     await page.locator("aside").first().screenshot({ path: testInfo.outputPath(`${theme}-sidebar.png`) });
 
@@ -118,13 +114,12 @@ for (const theme of ["light", "dark"]) {
     await expect(selected).toBeFocused();
 
     await page.keyboard.press("Tab");
-    const more = selected.getByRole("button", { name: `更多 ${longTitle} 操作`, exact: true });
-    await expect(more).toBeFocused();
+    const deleteButton = selected.getByRole("button", { name: `删除 ${longTitle}`, exact: true });
+    await expect(deleteButton).toBeFocused();
     await page.keyboard.press("Space");
-    await expect(more).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByRole("button", { name: "删除", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: `删除任务“${longTitle}”？` })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(more).toBeFocused();
+    await expect(deleteButton).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(page.getByRole("button", { name: "系统配置", exact: true })).toBeFocused();
     await expect(page).toHaveURL(/\/tasks\/100$/);

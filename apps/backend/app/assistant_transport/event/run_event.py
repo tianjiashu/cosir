@@ -59,6 +59,7 @@ class RunInitializedEvent(ConversationEventEnvelope):
 
     Attributes:
         replace_existing: 编辑重跑时是否替换已有 Run 的 Transport 骨架。
+        context_window_total: 创建 Run 时冻结的窗口上限，随该 Run 而非 Task 投影。
 
     异常:
         pydantic.ValidationError: 信封字段非法或出现未声明字段时抛出。
@@ -106,9 +107,6 @@ class RunInitializedEvent(ConversationEventEnvelope):
                     self._run_snapshot(),
                 ),
                 ConversationStateMutation("set", ("current_run_id",), self.run_id),
-                ConversationStateMutation(
-                    "set", ("context_window_total",), self.context_window_total
-                ),
                 ConversationStateMutation("set", ("error",), None),
             ]
 
@@ -147,13 +145,13 @@ class RunInitializedEvent(ConversationEventEnvelope):
                     "status": "pending",
                     "endReason": None,
                     "langfuseTraceId": None,
+                    "contextWindowTotal": self.context_window_total,
                     "messages": self._messages(),
                     "usage": None,
                     "error": None,
                 },
             ),
             ConversationStateMutation("set", ("current_run_id",), self.run_id),
-            ConversationStateMutation("set", ("context_window_total",), self.context_window_total),
             ConversationStateMutation("set", ("error",), None),
         ]
 
@@ -173,6 +171,7 @@ class RunInitializedEvent(ConversationEventEnvelope):
             "status": "pending",
             "endReason": None,
             "langfuseTraceId": None,
+            "contextWindowTotal": self.context_window_total,
             "messages": self._messages(),
             "usage": None,
             "error": None,
@@ -289,17 +288,28 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
         if self.usage_stats is not None:
             incoming_usage = self.usage_stats.to_dict()
             current_usage = state["runs"][run_index]["usage"]
-            # 用量只在终态事件中写入；保留单调替换保护，避免重复投递或恢复流程中
-            # 较小的终态摘要覆盖已经确认的累计值。
-            if current_usage is None or all(
-                current_usage[key] is None
-                or incoming_usage[key] is None
-                or current_usage[key] <= incoming_usage[key]
-                for key in current_usage
-            ):
-                mutations.append(
-                    ConversationStateMutation("set", ("runs", run_index, "usage"), incoming_usage)
-                )
+            if incoming_usage is not None:
+                # Provider 明细可分字段缺失；只合并有效且不回退的累计值，避免未知值
+                # 或默认零值覆盖已确认的 Run 用量。
+                merged_usage = {
+                    key: (
+                        current_usage[key]
+                        if current_usage is not None
+                        and (
+                            incoming_usage[key] is None
+                            or (
+                                current_usage[key] is not None
+                                and incoming_usage[key] < current_usage[key]
+                            )
+                        )
+                        else incoming_usage[key]
+                    )
+                    for key in incoming_usage
+                }
+                if merged_usage != current_usage:
+                    mutations.append(
+                        ConversationStateMutation("set", ("runs", run_index, "usage"), merged_usage)
+                    )
         message_index = self._find_assistant_message(state, self.run_id, required=False)
         if message_index is None:
             return mutations

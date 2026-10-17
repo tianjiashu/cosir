@@ -174,24 +174,6 @@ class TaskService:
 
         return self._turn.get_latest_by_task(task_id)
 
-    def get_context_window_total(self, task_id: int) -> int | None:
-        """返回 Task 持久化的上下文窗口上限。
-
-        参数:
-            task_id: 任务标识。
-
-        返回:
-            ``tasks.context_window_total`` 的持久化值；尚未记录时为 ``None``。
-
-        异常:
-            底层任务读取异常会原样抛出。
-
-        副作用:
-            无（仅读取 Task 持久化事实）。
-        """
-
-        return self._task.get(task_id).context_window_total
-
     def get_task(self, task_id: int) -> TaskRecord:
         """按标识取单个任务，并附带派生的执行态。
 

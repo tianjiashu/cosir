@@ -90,6 +90,7 @@ class ConversationRunCrud:
         status: str = ConversationRunStatus.PENDING.value,
         agent_id: str | None = None,
         model_config_id: int | None = None,
+        context_window_total: int | None = None,
         image_paths: list[str] | None = None,
         extra: ConversationRunExtra | None = None,
         usage: ConversationRunUsage | None = None,
@@ -106,6 +107,7 @@ class ConversationRunCrud:
             status: 初始状态，默认 ``pending``。
             agent_id: 可选，本次运行绑定的 agent 标识。
             model_config_id: 可选，模型连接配置标识；None 表示未指定。
+            context_window_total: 创建 Run 时冻结的模型上下文窗口上限。
             image_paths: 可选，本次输入的图片路径列表（供多模态通道）。
             extra: 可选，运行期附加结构化数据。
             usage: 可选，符合六键契约的运行 token 用量。
@@ -134,6 +136,7 @@ class ConversationRunCrud:
                 status=status,
                 agent_id=agent_id,
                 model_config_id=model_config_id,
+                context_window_total=context_window_total,
                 image_paths=image_paths,
                 extra=extra,
                 usage=usage,
@@ -147,6 +150,7 @@ class ConversationRunCrud:
                 status=status,
                 agent_id=agent_id,
                 model_config_id=model_config_id,
+                context_window_total=context_window_total,
                 image_paths=image_paths,
                 extra=extra,
                 usage=usage,
@@ -162,6 +166,7 @@ class ConversationRunCrud:
         status: str,
         agent_id: str | None,
         model_config_id: int | None,
+        context_window_total: int | None,
         image_paths: list[str] | None,
         extra: ConversationRunExtra | None,
         usage: ConversationRunUsage | None,
@@ -180,6 +185,7 @@ class ConversationRunCrud:
             status: 初始状态字符串；空值回退 ``pending``。
             agent_id: agent 标识或 None。
             model_config_id: 厂商标识或 None。
+            context_window_total: 本次 Run 使用的模型上下文窗口上限。
             image_paths: 图片路径列表或 None。
             extra: 附加结构化数据或 None。
             usage: 初始 token 用量或 None。
@@ -203,6 +209,7 @@ class ConversationRunCrud:
             checkpoint_thread_id=str(uuid4()),
             agent_id=agent_id,
             model_config_id=model_config_id,
+            context_window_total=context_window_total,
             image_paths=image_paths,
             extra=extra.to_dict() if extra is not None else None,
             usage_json=_serialize_typed_json(usage),
@@ -286,6 +293,7 @@ class ConversationRunCrud:
             input_text=source.input_text,
             agent_id=source.agent_id,
             model_config_id=source.model_config_id,
+            context_window_total=source.context_window_total,
             image_paths=copy.deepcopy(source.image_paths),
             end_reason=source.end_reason,
             final_output=source.final_output,

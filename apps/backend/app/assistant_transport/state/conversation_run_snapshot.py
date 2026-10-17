@@ -1,4 +1,4 @@
-"""Conversation Transport 的单个 Run snapshot 契约。"""
+"""Assistant Transport 中单个 Run 的快照契约。"""
 
 from typing_extensions import TypedDict
 
@@ -22,6 +22,7 @@ class ConversationRunSnapshot(TypedDict):
     status: str
     endReason: str | None
     langfuseTraceId: str | None
+    contextWindowTotal: int | None
     messages: list[ConversationStateMessage]
     usage: ConversationStateUsage | None
     error: ConversationStateError | None

@@ -21,8 +21,8 @@ class ConversationRunModel(StorageBase):
     - 不负责：消息/工具调用等 canonical 会话事实（各自独立表）。Transport 命令只在请求
       生命周期内参与 Run 编排，不作为独立数据库事实保存。
 
-    模型路由事实分层：Run 只保存 ``model_config_id`` 和 ``extra`` 中的用户运行偏好；
-    模型名称、上下文窗口和模型能力始终由模型配置解析得到，不在 Run 内复制。
+    模型路由事实分层：模型名称与能力由 ``model_config_id`` 指向的配置解析；上下文窗口在
+    Run 创建时冻结，因为它必须与该次 Run 的 usage 配对，不能随配置或后续 Run 改变。
     ``model_config_id`` 是配置行的弱引用，配置被删除时
     由 ``ON DELETE SET NULL`` 置空，历史 Run 仍可读取其已保存的基础事实。
     """
@@ -50,6 +50,8 @@ class ConversationRunModel(StorageBase):
     model_config_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("model_configs.id", ondelete="SET NULL")
     )
+    # 与本次 Run 的 usage 配对，避免 Task 后续切换模型后改变历史占用比例。
+    context_window_total: Mapped[int | None] = mapped_column(Integer)
     image_paths: Mapped[list[str] | None] = mapped_column(JSON)
     end_reason: Mapped[str | None] = mapped_column(Text)
     final_output: Mapped[str | None] = mapped_column(Text)

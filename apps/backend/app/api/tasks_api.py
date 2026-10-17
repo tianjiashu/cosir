@@ -79,10 +79,7 @@ async def get_task(
         task = task_service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
-    return TaskResponse.from_record(
-        task,
-        context_window_total=task.context_window_total,
-    )
+    return TaskResponse.from_record(task)
 
 
 @app.post("/tasks/{task_id}/fork")
@@ -102,10 +99,7 @@ async def fork_task(
             status_code=409,
             detail={"code": exc.code, "message": exc.message, "retryable": True},
         ) from exc
-    return TaskResponse.from_record(
-        target,
-        context_window_total=target.context_window_total,
-    )
+    return TaskResponse.from_record(target)
 
 
 @app.delete("/tasks/{task_id}")

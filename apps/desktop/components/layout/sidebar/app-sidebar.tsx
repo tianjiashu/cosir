@@ -11,7 +11,7 @@ import {
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import type { DeleteTarget } from "@/components/layout/use-workspace-actions";
-import { ResourceActionMenu } from "@/components/resource-action-menu";
+import { ResourceDeleteButton } from "@/components/resource-delete-button";
 import { WorkspaceTree } from "@/components/task-tree/workspace-tree";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
@@ -88,14 +88,14 @@ export function AppSidebar({
                 onOpenWorkspaceSettings={onOpenWorkspaceSettings}
                 onSelectTask={onSelectTask}
                 renderWorkspaceActions={(workspace, tabIndex) => (
-                  <ResourceActionMenu
+                  <ResourceDeleteButton
                     tabIndex={tabIndex}
                     label={workspace.name}
                     onDelete={() => onRequestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })}
                   />
                 )}
                 renderTaskActions={(task, tabIndex) => (
-                  <ResourceActionMenu tabIndex={tabIndex} label={task.full_title} onDelete={() => onRequestDelete({ kind: "task", id: task.task_id, label: task.full_title })} />
+                  <ResourceDeleteButton tabIndex={tabIndex} label={task.full_title} onDelete={() => onRequestDelete({ kind: "task", id: task.task_id, label: task.full_title })} />
                 )}
               />
             </div>

@@ -38,7 +38,7 @@ APP_MODELS = (
 
 
 def initialize_app_schema(engine: Engine) -> None:
-    """创建当前业务表并升级上下文投影标记列。
+    """创建当前业务表并升级 Run 上下文窗口与上下文投影标记列。
 
     参数:
         engine: 已初始化的主库 SQLAlchemy 引擎。
@@ -50,12 +50,21 @@ def initialize_app_schema(engine: Engine) -> None:
         sqlalchemy.exc.SQLAlchemyError: 建表失败。
 
     副作用:
-        在当前数据库创建缺失的应用表；旧 context 表缺少投影列时追加该列，并迁移旧消息内的
-        临时 ``additional_kwargs.project_to_transport`` 标记。
+        在当前数据库创建缺失的应用表；已有 Run 表缺少窗口列时追加该列；旧 context 表缺少
+        投影列时追加该列，并迁移旧消息内的临时 ``additional_kwargs.project_to_transport`` 标记。
     """
 
     tables = [cast(Table, model.__table__) for model in APP_MODELS]
     StorageBase.metadata.create_all(engine, tables=tables)
+    run_columns = {
+        column["name"]
+        for column in inspect(engine).get_columns(ConversationRunModel.__tablename__)
+    }
+    if "context_window_total" not in run_columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text("ALTER TABLE conversation_runs ADD COLUMN context_window_total INTEGER")
+            )
     # ``create_all`` 不会为已有 SQLite 表补列；显式增加该列，避免升级后查询模型记录时缺列。
     context_columns = {
         column["name"]

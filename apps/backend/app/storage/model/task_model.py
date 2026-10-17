@@ -9,7 +9,7 @@ from app.storage.model.base import StorageBase
 
 
 class TaskModel(StorageBase):
-    """`tasks` 表模型，持有当前 Run 引用与上下文窗口事实。"""
+    """`tasks` 表模型，持有当前 Run 引用与任务容器事实。"""
 
     __tablename__ = "tasks"
 
@@ -37,13 +37,6 @@ class TaskModel(StorageBase):
         nullable=True,
         index=True,
     )
-    context_window_total: Mapped[int | None] = mapped_column(
-        Integer,
-        nullable=True,
-        default=None,
-        comment="最后一个 Run 使用的模型上下文窗口总 token 数",
-    )
-
     __table_args__ = (
         Index("idx_tasks_parent_task_id", "parent_task_id"),
         Index(

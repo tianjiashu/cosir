@@ -21,44 +21,41 @@ class ConversationRunUsageStats:
     """run 级 token 与耗时快照（覆盖更新）。
 
     字段语义与 LangChain ``UsageMetadata`` 对齐（见 langchain_core.messages.ai）：
-    - ``input_tokens``：输入 token 数（含历史、工具结果等）。
-    - ``output_tokens``：模型生成 token 数。
-    - ``total_tokens``：总 token 数（输入 + 输出）。
-    - ``cache_hit_tokens``：缓存命中 token 数（usage_metadata.input_token_details.cache_read）。
+    - ``input_tokens``：输入 token 数（含历史、工具结果等）；缺少有效 provider 值时为 None。
+    - ``output_tokens``：模型生成 token 数；缺少有效 provider 值时为 None。
+    - ``total_tokens``：总 token 数（输入 + 输出）；缺少有效 provider 值时为 None。
+    - ``cache_hit_tokens``：缓存命中 token 数；缺少明细时为 None。
     - ``cache_miss_tokens``：缓存未命中 token 数；当模型仅返回 total 时，可用
       ``total - cache_hit`` 估算。
     - ``reasoning_tokens``：推理模型产生的思考 token 数
       （usage_metadata.output_token_details.reasoning）。
 
     Attributes:
-        input_tokens: 最近一次模型调用覆盖后的输入 token 数。
-        output_tokens: 最近一次模型调用覆盖后的输出 token 数。
-        total_tokens: 最近一次模型调用覆盖后的总 token 数。
-        cache_hit_tokens: 最近一次模型调用覆盖后的缓存命中 token 数。
-        cache_miss_tokens: 最近一次模型调用覆盖后的缓存未命中 token 数。
-        reasoning_tokens: 最近一次模型调用覆盖后的推理 token 数。
+        input_tokens: 最近一次有效输入用量；provider 的零值不会覆盖已有正值。
+        output_tokens: 最近一次有效模型输出用量。
+        total_tokens: 最近一次有效总用量。
+        cache_hit_tokens: 最近一次有效缓存命中用量。
+        cache_miss_tokens: 最近一次可由 provider 明细推导的缓存未命中用量。
+        reasoning_tokens: 最近一次有效推理用量。
 
-    另有一个**非 dataclass 字段**的实例状态 ``_cache_details_complete``：记录最近一次模型调用是否
-    给出了缓存明细。它只用于决定 ``cache_miss_tokens`` 能否由本次值推导，因此不进字段表、
-    也不参与 ``to_dict``。
     """
 
-    input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int = 0
-    cache_hit_tokens: int = 0
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    cache_hit_tokens: int | None = None
     cache_miss_tokens: int | None = None
-    reasoning_tokens: int = 0
+    reasoning_tokens: int | None = None
 
     @staticmethod
-    def _safe_int(value: Any) -> int:
-        """把非负有限整数安全转为 int；异常值返回 0。
+    def _safe_int(value: Any) -> int | None:
+        """把非负有限整数安全转为 int；缺失或非法值返回 None。
 
         参数:
             value: provider ``usage_metadata`` 中的原始值。
 
         返回:
-            非负整数；``bool`` / ``None`` / 非数值 / 负值 / 非有限浮点 / 含小数浮点均返回 0。
+            非负整数；``bool`` / ``None`` / 非数值 / 负值 / 非有限浮点 / 含小数浮点均返回 None。
 
         异常:
             无（内部捕获 ``TypeError`` / ``ValueError`` / ``OverflowError``）。
@@ -67,23 +64,23 @@ class ConversationRunUsageStats:
             无。
         """
         if isinstance(value, bool) or value is None:
-            return 0
+            return None
         if isinstance(value, float) and (
                 not math.isfinite(value) or not value.is_integer() or value < 0
         ):
-            return 0
+            return None
         try:
             converted = int(value)
         except (TypeError, ValueError, OverflowError):
-            return 0
+            return None
         try:
             numeric = float(value)
         except (TypeError, ValueError, OverflowError):
-            return 0
+            return None
         return (
             converted
             if converted >= 0 and math.isfinite(numeric) and numeric == converted
-            else 0
+            else None
         )
 
     def add_usage_metadata(self, usage_metadata: dict[str, Any] | None) -> None:
@@ -111,42 +108,46 @@ class ConversationRunUsageStats:
         if not usage_metadata:
             return
 
-        self.input_tokens = self._safe_int(usage_metadata.get("input_tokens"))
+        input_tokens = self._safe_int(usage_metadata.get("input_tokens"))
+        if input_tokens is not None and (input_tokens > 0 or self.input_tokens is None):
+            self.input_tokens = input_tokens
         self.output_tokens = self._safe_int(usage_metadata.get("output_tokens"))
         self.total_tokens = self._safe_int(usage_metadata.get("total_tokens"))
 
-        cache_details_complete = False
-        cache_hit = 0
         input_details = usage_metadata.get("input_token_details")
-        if isinstance(input_details, dict) and Constant.Workflow.INPUT_CACHE_READ_KEY in input_details:
-            cache_hit = self._safe_int(input_details.get(Constant.Workflow.INPUT_CACHE_READ_KEY))
-            cache_details_complete = True
-        self.cache_hit_tokens = cache_hit
-
-        output_details = usage_metadata.get("output_token_details") or {}
-        if isinstance(output_details, dict):
-            self.reasoning_tokens = self._safe_int(output_details.get(Constant.Workflow.OUTPUT_REASONING_KEY))
-        else:
-            self.reasoning_tokens = 0
-
-        # cache_read 是 input_tokens 的子集。未命中值仅在本次 provider 给出缓存明细时
-        # 按 input - cache_hit 推导，并对 cache_read > input 做下限保护；否则置 None。
-        self.cache_miss_tokens = (
-            max(0, self.input_tokens - self.cache_hit_tokens)
-            if cache_details_complete
+        cache_hit_tokens = (
+            self._safe_int(input_details.get(Constant.Workflow.INPUT_CACHE_READ_KEY))
+            if isinstance(input_details, dict)
+            and Constant.Workflow.INPUT_CACHE_READ_KEY in input_details
             else None
         )
-        self._cache_details_complete = cache_details_complete
+        self.cache_hit_tokens = cache_hit_tokens
 
-    def to_dict(self) -> dict[str, int | None]:
+        output_details = usage_metadata.get("output_token_details") or {}
+        self.reasoning_tokens = (
+            self._safe_int(output_details.get(Constant.Workflow.OUTPUT_REASONING_KEY))
+            if isinstance(output_details, dict)
+            and Constant.Workflow.OUTPUT_REASONING_KEY in output_details
+            else None
+        )
+
+        # cache_read 是 input_tokens 的子集；只用同一份有效明细推导，避免缓存数据与输入量错配。
+        self.cache_miss_tokens = (
+            max(0, input_tokens - cache_hit_tokens)
+            if input_tokens is not None
+            and input_tokens > 0
+            and cache_hit_tokens is not None
+            else None
+        )
+
+    def to_dict(self) -> dict[str, int | None] | None:
         """把统计转成可序列化字典。
 
         参数:
             无。
 
         返回:
-            六字段字典，供 ``RunFinishedPayload`` 使用；``cache_miss_tokens`` 在 provider 从未
-            返回缓存明细时为 ``None``，其余字段均为 int。
+            六字段字典；所有值均未知时返回 ``None``，避免把缺少 usage 伪装成零用量。
 
         异常:
             无。
@@ -155,7 +156,7 @@ class ConversationRunUsageStats:
             无。
         """
 
-        return {
+        values = {
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,
@@ -163,3 +164,4 @@ class ConversationRunUsageStats:
             "cache_miss_tokens": self.cache_miss_tokens,
             "reasoning_tokens": self.reasoning_tokens,
         }
+        return values if any(value is not None for value in values.values()) else None

@@ -54,18 +54,21 @@ export function findTransportRun(
     : state.runs.find((run) => run.runId === runId);
 }
 
-/** 读取 thread external state 的上下文窗口总量；未就绪时返回 null。 */
-export function transportContextWindowTotal(value: unknown): number | null {
-  const total = readRuntimeTransportState(value)?.context_window_total;
-  return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : null;
-}
-
-/** 读取当前 Run 的 provider 输入 token 数；未就绪或未测量时返回 null。 */
-export function currentRunInputTokens(value: unknown): number | null {
+/** 从 Task 的 Run 事实中选取最新一条有效上下文窗口测量。 */
+export function latestMeasuredContextUsage(value: unknown): {
+  runId: number;
+  used: number;
+  total: number;
+} | null {
   const state = readRuntimeTransportState(value);
   if (state === null) return null;
-  const inputTokens = currentTransportRun(state)?.usage?.input_tokens;
-  return typeof inputTokens === "number" && Number.isFinite(inputTokens) && inputTokens >= 0
-    ? inputTokens
-    : null;
+  let latest: { runId: number; used: number; total: number } | null = null;
+  for (const run of state.runs) {
+    const used = run.usage?.input_tokens;
+    const total = run.contextWindowTotal;
+    if (used === null || used === undefined || !Number.isFinite(used) || used <= 0) continue;
+    if (total === null || !Number.isFinite(total) || total <= 0) continue;
+    if (latest === null || run.runId > latest.runId) latest = { runId: run.runId, used, total };
+  }
+  return latest;
 }

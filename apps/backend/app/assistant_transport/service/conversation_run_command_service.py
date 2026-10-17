@@ -273,7 +273,7 @@ class ConversationRunCommandService:
                 RunInitializedEvent(
                     task_id=task_id,
                     run_id=run.id,
-                    context_window_total=self._task.get_context_window_total(task_id),
+                    context_window_total=run.context_window_total,
                 )
             )
             self._ensure_run_visible(task_id, run.id)

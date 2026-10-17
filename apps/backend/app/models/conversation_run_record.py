@@ -50,6 +50,7 @@ class ConversationRunRecord:
     final_output: str | None = None
     agent_id: str | None = None
     model_config_id: int | None = None
+    context_window_total: int | None = None
     image_paths: list[str] | None = None
     extra: ConversationRunExtra | None = None
     usage: ConversationRunUsage | None = None
@@ -81,6 +82,7 @@ class ConversationRunRecord:
             "image_paths": self.image_paths,
             "agent_id": self.agent_id,
             "model_config_id": self.model_config_id,
+            "context_window_total": self.context_window_total,
             "extra": self.extra.to_dict() if self.extra is not None else None,
             "usage": self.usage,
             "error": self.error,
@@ -119,6 +121,7 @@ class ConversationRunRecord:
             agent_id=row.agent_id,
             image_paths=row.image_paths,
             model_config_id=row.model_config_id,
+            context_window_total=row.context_window_total,
             extra=ConversationRunExtra.from_dict(row.extra),
             usage=(
                 json.loads(row.usage_json)
@@ -146,6 +149,7 @@ class ConversationRunRecord:
             "final_output": self.final_output,
             "agent_id": self.agent_id,
             "model_config_id": self.model_config_id,
+            "context_window_total": self.context_window_total,
             "image_paths": self.image_paths,
             "extra": self.extra.to_dict() if self.extra is not None else None,
             "usage_json": json.dumps(

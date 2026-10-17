@@ -143,12 +143,12 @@ export type TransportMessage = {
 };
 
 type ConversationStateUsage = {
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-  cache_hit_tokens: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  cache_hit_tokens: number | null;
   cache_miss_tokens: number | null;
-  reasoning_tokens: number;
+  reasoning_tokens: number | null;
 };
 
 /** 一个 Run 的完整 Transport 事实，包括其消息、生命周期和 token usage。 */
@@ -158,6 +158,8 @@ export type TransportRun = {
   endReason: string | null;
   /** Langfuse 根 Trace 标识；未启用观测或初始化失败时为 null。 */
   langfuseTraceId: string | null;
+  /** 创建 Run 时冻结的模型上下文窗口上限。 */
+  contextWindowTotal: number | null;
   messages: TransportMessage[];
   usage: ConversationStateUsage | null;
   /**
@@ -202,8 +204,6 @@ export type TransportState = {
   current_run_id: number | null;
   /** 审批预留；当前固定为空对象。 */
   approvals: Record<string, never>;
-  /** 最后一个 Run 使用的模型上下文窗口上限。 */
-  context_window_total: number | null;
   /** 运行期错误；无错误时为 null。 */
   error: TransportError | null;
 };

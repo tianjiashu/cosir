@@ -358,6 +358,7 @@ class ConversationTaskStateRebuilder:
                     langfuseTraceId=(
                         run_extra.langfuse_trace_id if run_extra is not None else None
                     ),
+                    contextWindowTotal=run.context_window_total,
                     messages=snapshot_messages,
                     usage=run.usage,
                     error=ConversationTaskStateRebuilder.build_run_error(run),
@@ -366,7 +367,6 @@ class ConversationTaskStateRebuilder:
         return ConversationStateSnapshot(
             runs=snapshot_runs,
             current_run_id=task.current_run_id,
-            context_window_total=task.context_window_total,
             error=None,
             approvals={},
         )

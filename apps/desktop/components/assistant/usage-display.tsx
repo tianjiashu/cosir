@@ -15,9 +15,8 @@ import {
 import { cn } from "@/lib/utils";
 import type { TransportRun } from "@/lib/assistant/contract";
 import {
-  currentRunInputTokens,
   findTransportRun,
-  transportContextWindowTotal,
+  latestMeasuredContextUsage,
 } from "@/lib/assistant/transport-state-operations";
 
 type UsageTone = "normal" | "warning" | "critical" | "unknown";
@@ -78,7 +77,7 @@ export function getContextUsagePresentation(
   total: number | null,
 ): ContextUsagePresentation {
   const hasRatio = Number.isFinite(ratio) && ratio >= 0;
-  const measured = used !== null && total !== null && total > 0;
+  const measured = used !== null && used > 0 && total !== null && total > 0;
   const hasAnyMeasurement = measured || ratio > 0;
   const percent = hasRatio ? Math.round(ratio * 100) : null;
   const status: ContextUsagePresentation["status"] = !hasRatio || !hasAnyMeasurement
@@ -107,7 +106,7 @@ export function getContextUsagePresentation(
       tone,
       status,
       percent,
-      label: `上下文 ${percent}%`,
+      label: `上下文 ${ratio > 0 && percent === 0 ? "<1" : percent}%`,
       detail: `${formatTokenCount(used)} / ${formatTokenCount(total)} tokens`,
       remainingTokens,
       overageTokens,
@@ -118,7 +117,7 @@ export function getContextUsagePresentation(
     tone,
     status,
     percent,
-    label: `上下文 ${percent}%`,
+    label: `上下文 ${ratio > 0 && percent === 0 ? "<1" : percent}%`,
     detail: "已收到占用比例，绝对 token 尚不可用",
     remainingTokens: null,
     overageTokens: null,
@@ -183,11 +182,15 @@ function statusLabel(status: ContextUsagePresentation["status"]): string {
 }
 
 export function TaskContextUsage(): ReactElement {
-  const used = useAuiState((state) => currentRunInputTokens(state.thread.state));
-  const total = useAuiState((state) => transportContextWindowTotal(state.thread.state));
-  const ratio = used !== null && total !== null && total > 0 ? used / total : Number.NaN;
-  const presentation = getContextUsagePresentation(ratio ?? Number.NaN, used, total);
+  const measurement = useAuiState((state) => latestMeasuredContextUsage(state.thread.state));
+  const used = measurement?.used ?? null;
+  const total = measurement?.total ?? null;
+  const ratio = measurement === null ? Number.NaN : measurement.used / measurement.total;
+  const presentation = getContextUsagePresentation(ratio, used, total);
   const percent = presentation.percent === null ? 0 : Math.min(100, Math.max(0, presentation.percent));
+  const detail = measurement === null
+    ? presentation.detail
+    : `${presentation.detail} · 最近有效 Run #${measurement.runId}`;
 
   return (
     <Popover>
@@ -217,7 +220,7 @@ export function TaskContextUsage(): ReactElement {
       <PopoverContent align="start" className="w-64 max-w-[calc(100vw-1rem)]">
         <PopoverHeader>
           <PopoverTitle>上下文窗口</PopoverTitle>
-          <PopoverDescription>{presentation.detail}</PopoverDescription>
+          <PopoverDescription>{detail}</PopoverDescription>
         </PopoverHeader>
         <div className="flex items-center justify-between text-xs">
           <span className={cn(
@@ -273,7 +276,10 @@ export function RunUsageDisplay({ runId, visible }: { runId: number | null; visi
   if (!shouldDisplayRunUsage(visible, runId, run !== null)) return null;
   const known = usage !== null;
   const isRunning = run?.status === "pending" || run?.status === "running";
-  const label = known ? `本次用量 ${formatTokenCount(total ?? 0)} tokens` : isRunning ? "用量统计中…" : "本次用量 —";
+  const label = known && total !== null
+    ? `本次用量 ${formatTokenCount(total)} tokens`
+    : isRunning ? "用量统计中…" : "本次用量 —";
+  const displayCount = (value: number | null): string => value === null ? "—" : formatTokenCount(value);
 
   return (
     <Popover>
@@ -288,12 +294,12 @@ export function RunUsageDisplay({ runId, visible }: { runId: number | null; visi
           <PopoverTitle>本次 Run 用量</PopoverTitle>
         </PopoverHeader>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-          <dt className="text-muted-foreground">输入</dt><dd className="text-right">{known ? formatTokenCount(input ?? 0) : "—"}</dd>
-          <dt className="text-muted-foreground">输出</dt><dd className="text-right">{known ? formatTokenCount(output ?? 0) : "—"}</dd>
-          <dt className="text-muted-foreground">总计</dt><dd className="text-right">{known ? formatTokenCount(total ?? 0) : "—"}</dd>
-          <dt className="text-muted-foreground">缓存命中</dt><dd className="text-right">{known ? formatTokenCount(cacheHit ?? 0) : "—"}</dd>
-          <dt className="text-muted-foreground">缓存未命中</dt><dd className="text-right">{known && cacheMiss !== null ? formatTokenCount(cacheMiss) : "—"}</dd>
-          <dt className="text-muted-foreground">推理</dt><dd className="text-right">{known ? formatTokenCount(reasoning ?? 0) : "—"}</dd>
+          <dt className="text-muted-foreground">输入</dt><dd className="text-right">{displayCount(input)}</dd>
+          <dt className="text-muted-foreground">输出</dt><dd className="text-right">{displayCount(output)}</dd>
+          <dt className="text-muted-foreground">总计</dt><dd className="text-right">{displayCount(total)}</dd>
+          <dt className="text-muted-foreground">缓存命中</dt><dd className="text-right">{displayCount(cacheHit)}</dd>
+          <dt className="text-muted-foreground">缓存未命中</dt><dd className="text-right">{displayCount(cacheMiss)}</dd>
+          <dt className="text-muted-foreground">推理</dt><dd className="text-right">{displayCount(reasoning)}</dd>
         </dl>
         <div className="mt-3 border-t pt-3">
           <div className="flex items-center justify-between text-xs">

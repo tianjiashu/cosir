@@ -9,7 +9,6 @@ _SNAPSHOT_KEYS = {
     "runs",
     "current_run_id",
     "approvals",
-    "context_window_total",
     "error",
 }
 _RUN_KEYS = {
@@ -17,6 +16,7 @@ _RUN_KEYS = {
     "status",
     "endReason",
     "langfuseTraceId",
+    "contextWindowTotal",
     "messages",
     "usage",
     "error",
@@ -56,14 +56,12 @@ _USAGE_KEYS = {
 class ConversationStateSnapshot(TypedDict):
     """一个 Task 的完整 Transport state。
 
-    Task 只持有最后一个 Run 的上下文窗口总量；每个 Run 的消息、生命周期和模型 token
-    usage 均位于 ``runs`` 中。Task usage 展示直接读取当前 Run 的 usage，不复制为平铺字段。
+    Run 的消息、生命周期、usage 与窗口上限均位于 ``runs`` 中；上下文占用从 Run 事实派生。
     """
 
     runs: list[ConversationRunSnapshot]
     current_run_id: int | None
     approvals: dict[str, object]
-    context_window_total: int | None
     error: ConversationStateError | None
 
 
@@ -74,7 +72,6 @@ def empty_snapshot() -> ConversationStateSnapshot:
         "runs": [],
         "current_run_id": None,
         "approvals": {},
-        "context_window_total": None,
         "error": None,
     }
 
@@ -109,7 +106,7 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
 
     if not isinstance(state, dict) or set(state) != _SNAPSHOT_KEYS:
         raise ValueError(
-            "snapshot must contain runs, current_run_id, approvals, context_window_total and error"
+            "snapshot must contain runs, current_run_id, approvals and error"
         )
     if not isinstance(state["runs"], list) or not isinstance(state["approvals"], dict):
         raise ValueError("snapshot runs and approvals must be arrays/object")
@@ -120,12 +117,6 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
         or current_run_id < 0
     ):
         raise ValueError("snapshot current_run_id must be a non-negative integer or null")
-
-    value = state["context_window_total"]
-    if value is not None and (
-        not isinstance(value, int) or isinstance(value, bool) or value < 0
-    ):
-        raise ValueError("snapshot context_window_total must be a non-negative integer or null")
 
     seen_run_ids: set[int] = set()
     for run in state["runs"]:
@@ -153,6 +144,11 @@ def _validate_run(run: object, seen_run_ids: set[int]) -> None:
         raise ValueError("snapshot run endReason must be a string or null")
     if run["langfuseTraceId"] is not None and not isinstance(run["langfuseTraceId"], str):
         raise ValueError("snapshot run langfuseTraceId must be a string or null")
+    value = run["contextWindowTotal"]
+    if value is not None and (
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+    ):
+        raise ValueError("snapshot run contextWindowTotal must be a non-negative integer or null")
     if not isinstance(run["messages"], list):
         raise ValueError("snapshot run messages must be an array")
     if run["usage"] is not None:
@@ -185,7 +181,7 @@ def _validate_usage(usage: object) -> None:
     if not isinstance(usage, dict) or set(usage) != _USAGE_KEYS:
         raise ValueError("snapshot run usage is malformed")
     for key, value in usage.items():
-        if key == "cache_miss_tokens" and value is None:
+        if value is None:
             continue
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError("snapshot run usage is malformed")

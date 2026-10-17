@@ -75,12 +75,12 @@
   grid-area: 1 / 1;
 }
 
-.workspace-tree-row:is(:hover, :focus-within, :has([data-popup-open])) .workspace-tree-actions {
+.workspace-tree-row:is(:hover, :focus-within) .workspace-tree-actions {
   opacity: 1;
   pointer-events: auto;
 }
 
-.workspace-tree-row:is(:hover, :focus-within, :has([data-popup-open])) .workspace-tree-time {
+.workspace-tree-row:is(:hover, :focus-within) .workspace-tree-time {
   visibility: hidden;
 }
 

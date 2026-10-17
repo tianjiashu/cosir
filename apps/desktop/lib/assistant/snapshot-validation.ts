@@ -166,7 +166,7 @@ function validateUsage(value: unknown, path: string): void {
   requireExactKeys(usage, USAGE_KEYS, path);
   for (const key of USAGE_KEYS) {
     const count = usage[key];
-    if (key === "cache_miss_tokens" && count === null) continue;
+    if (count === null) continue;
     if (!Number.isInteger(count) || (count as number) < 0) {
       throw new TransportSnapshotValidationError(`${path}.${key}`, "非负整数");
     }
@@ -247,13 +247,13 @@ function validateMessage(value: unknown, path: string, seenIds: Set<string>): vo
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["runs", "current_run_id", "approvals", "context_window_total", "error"], "snapshot");
+  requireExactKeys(state, ["runs", "current_run_id", "approvals", "error"], "snapshot");
   if (!Array.isArray(state.runs)) throw new TransportSnapshotValidationError("runs", "数组");
   const runIds = new Set<number>();
   const activeRunIds: number[] = [];
   for (const [index, rawRun] of state.runs.entries()) {
     const run = requireRecord(rawRun, `runs[${index}]`);
-    requireExactKeys(run, ["runId", "status", "endReason", "langfuseTraceId", "messages", "usage", "error"], `runs[${index}]`);
+    requireExactKeys(run, ["runId", "status", "endReason", "langfuseTraceId", "contextWindowTotal", "messages", "usage", "error"], `runs[${index}]`);
     const runId = requireNullableNonNegativeInteger(run.runId, `runs[${index}].runId`);
     if (runId === null || runIds.has(runId)) throw new TransportSnapshotValidationError(`runs[${index}].runId`, "唯一的非负整数");
     runIds.add(runId);
@@ -262,6 +262,7 @@ export function parseTransportState(value: unknown): TransportState {
     if (status === "pending" || status === "running" || status === "waiting_for_input") activeRunIds.push(runId);
     if (run.endReason !== null && typeof run.endReason !== "string") throw new TransportSnapshotValidationError(`runs[${index}].endReason`, "字符串或 null");
     if (run.langfuseTraceId !== null && typeof run.langfuseTraceId !== "string") throw new TransportSnapshotValidationError(`runs[${index}].langfuseTraceId`, "字符串或 null");
+    requireNullableNonNegativeInteger(run.contextWindowTotal, `runs[${index}].contextWindowTotal`);
     if (!Array.isArray(run.messages)) throw new TransportSnapshotValidationError(`runs[${index}].messages`, "数组");
     const messageIds = new Set<string>();
     run.messages.forEach((message, messageIndex) => validateMessage(message, `runs[${index}].messages[${messageIndex}]`, messageIds));
@@ -275,7 +276,6 @@ export function parseTransportState(value: unknown): TransportState {
     throw new TransportSnapshotValidationError("current_run_id", "必须指向唯一的 active Run");
   }
   if (!isRecord(state.approvals) || Object.keys(state.approvals).length !== 0) throw new TransportSnapshotValidationError("approvals", "空对象");
-  requireNullableNonNegativeInteger(state.context_window_total, "context_window_total");
   if (state.error !== null) validateError(state.error, "error");
   return state as unknown as TransportState;
 }

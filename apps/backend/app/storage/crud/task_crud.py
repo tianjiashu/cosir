@@ -162,7 +162,6 @@ class TaskCrud:
             extra=extra,
             tool_schemas=tool_schemas or [],
             current_run_id=None,
-            context_window_total=None,
         )
         session.add(model)
         session.flush()
@@ -262,21 +261,14 @@ class TaskCrud:
             self,
             task_id: int,
             run_id: int,
-            context_window_total: int | None = None,
             session: Session | None = None,
     ) -> TaskRecord:
-        """在同一事务中记录当前 Run 及其上下文窗口总量。
-
-        上下文窗口总量必须与当前 Run 使用的模型保持一致，随 Run 绑定显式写入，而不是等上下文
-        消息变化时旁路回填。
-        """
+        """在同一事务中更新 Task 当前 Run 引用。"""
 
         values: dict[str, object] = {
             "current_run_id": run_id,
             "updated_at": to_text(utc_now()),
         }
-        if context_window_total is not None:
-            values["context_window_total"] = context_window_total
         statement = (
             update(TaskModel)
             .where(TaskModel.id == task_id)

@@ -289,6 +289,7 @@ class ConversationRunService:
                 status,
                 agent_id=agent_id,
                 model_config_id=model_config_id,
+                context_window_total=context_window_total,
                 image_paths=image_paths,
                 extra=extra,
                 session=persist_session,
@@ -296,7 +297,6 @@ class ConversationRunService:
             self._task.set_current_run_id(
                 task_id,
                 run.id,
-                context_window_total=context_window_total,
                 session=persist_session,
             )
             return run

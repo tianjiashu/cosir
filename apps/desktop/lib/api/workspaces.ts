@@ -25,7 +25,6 @@ export type WorkspaceTask = {
   } | null;
   current_run_id: number | null;
   execution_status: string | null;
-  context_window_total: number | null;
   created_at: string;
   updated_at: string;
 };
