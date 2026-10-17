@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_OUTPUT_CHUNK_BYTES: usize = 16 * 1024;
 pub const MAX_INPUT_BYTES: usize = 64 * 1024;
-pub const PROTOCOL: &str = "terminal-worker-v4";
+pub const PROTOCOL: &str = "terminal-worker-v5";
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -93,7 +93,13 @@ pub enum WorkerEvent {
         instance_id: String,
         pid: u32,
         pty_kind: &'static str,
+        rows: u16,
+        columns: u16,
         capabilities: Vec<&'static str>,
+    },
+    Screen {
+        screen: crate::terminal_screen::ScreenSnapshot,
+        history: Vec<String>,
     },
     Output {
         data_base64: String,

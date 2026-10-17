@@ -38,9 +38,13 @@ impl PtyRuntime {
             anyhow::bail!("shell argv must not be empty")
         }
         let pty_system = native_pty_system();
-        // A PTY still requires an initial geometry for shell line discipline, but this
-        // headless worker has no resizeable window or public geometry contract.
-        let pair = pty_system.openpty(PtySize::default())?;
+        // PTY、屏幕引擎、只读预览共享固定逻辑尺寸，容器布局不改变换行语义。
+        let pair = pty_system.openpty(PtySize {
+            rows: crate::terminal_screen::ROWS,
+            cols: crate::terminal_screen::COLS,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
         let mut command =
             CommandBuilder::from_argv(shell.into_iter().map(OsString::from).collect::<Vec<_>>());
         command.cwd(cwd);

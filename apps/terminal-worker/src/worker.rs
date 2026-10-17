@@ -15,7 +15,7 @@ use crate::protocol::{
 };
 use crate::pty::{PtyRuntime, TerminalControlResult};
 use crate::shell_integration::{ShellLaunch, ShellParser};
-use crate::terminal_emulator::TerminalQueryResponder;
+use crate::terminal_screen::TerminalScreen;
 
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -55,9 +55,12 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
         instance_id,
         pid: std::process::id(),
         pty_kind: pty_kind(),
+        rows: crate::terminal_screen::ROWS,
+        columns: crate::terminal_screen::COLS,
         capabilities: capabilities()
             .into_iter()
             .chain(InputKey::supported().iter().map(|key| key.capability()))
+            .chain(["screen_snapshot", "scrollback_history"])
             .collect(),
     })?;
     if let Some(reason) = launch.unavailable {
@@ -71,9 +74,6 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
         output.clone(),
         events_tx.clone(),
         ShellParser::new(launch.token.clone()),
-        TerminalQueryResponder::new(
-            cfg!(windows) || matches!(shell_kind.as_str(), "cmd" | "powershell" | "pwsh"),
-        ),
     );
     spawn_child_watcher(runtime.clone(), events_tx.clone());
 
@@ -221,9 +221,10 @@ fn spawn_pty_reader(
     output: SharedFrameWriter,
     sender: Sender<InternalEvent>,
     mut shell_parser: ShellParser,
-    mut query_responder: TerminalQueryResponder,
 ) {
     thread::spawn(move || {
+        let mut screen = TerminalScreen::new();
+        let mut query_failed = false;
         let mut buffer = vec![0_u8; MAX_OUTPUT_CHUNK_BYTES];
         loop {
             match reader.read(&mut buffer) {
@@ -232,19 +233,17 @@ fn spawn_pty_reader(
                     return;
                 }
                 Ok(size) => {
-                    let query_response_failed = !query_responder.process(&runtime, &buffer[..size]);
-                    if query_response_failed
-                        && output
-                            .send(&WorkerEvent::Error {
-                                code: "PTY_QUERY_RESPONSE_FAILED",
-                            })
-                            .is_err()
-                    {
-                        let _ = sender.send(InternalEvent::BackendOutputFailed);
-                        return;
-                    }
                     let mut start = 0;
                     for (index, byte) in buffer[..size].iter().enumerate() {
+                        screen.advance(*byte);
+                        for reply in screen.take_replies() {
+                            if !query_failed && runtime.write(reply.as_bytes()).is_err() {
+                                query_failed = true;
+                                let _ = output.send(&WorkerEvent::Error {
+                                    code: "PTY_QUERY_RESPONSE_FAILED",
+                                });
+                            }
+                        }
                         if let Some(event) = shell_parser.advance(*byte) {
                             // 标记之前的原始字节先交付；同一块内的后续输出不能越过语义事件。
                             if output
@@ -252,6 +251,7 @@ fn spawn_pty_reader(
                                     data_base64: BASE64.encode(&buffer[start..=index]),
                                 })
                                 .is_err()
+                                || publish_screen(&mut screen, &output).is_err()
                                 || output.send(&WorkerEvent::Shell { event }).is_err()
                             {
                                 let _ = sender.send(InternalEvent::BackendOutputFailed);
@@ -270,6 +270,10 @@ fn spawn_pty_reader(
                         let _ = sender.send(InternalEvent::BackendOutputFailed);
                         return;
                     }
+                    if publish_screen(&mut screen, &output).is_err() {
+                        let _ = sender.send(InternalEvent::BackendOutputFailed);
+                        return;
+                    }
                 }
                 Err(error) => {
                     let event = if pty_read_is_terminal_eof(&runtime, &error) {
@@ -283,6 +287,13 @@ fn spawn_pty_reader(
             }
         }
     });
+}
+
+fn publish_screen(screen: &mut TerminalScreen, output: &SharedFrameWriter) -> anyhow::Result<()> {
+    if let Some((screen, history)) = screen.take_update() {
+        output.send(&WorkerEvent::Screen { screen, history })?;
+    }
+    Ok(())
 }
 
 fn terminate_and_exit(
