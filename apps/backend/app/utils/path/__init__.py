@@ -3,6 +3,7 @@
 - 系统级固定路径与 ``.cosir`` 子目录：``app.utils.path.system_cosir``
 - workspace 级 ``.cosir`` 路径：``app.utils.path.workspace_cosir``
 - 路径校验（保留子树判定）：``app.utils.path.validation``
+- 相对路径基础校验：``app.utils.path.relative_path``
 """
 
 from app.utils.path.system_cosir import (
@@ -27,6 +28,7 @@ from app.utils.path.system_cosir import (
     system_skills_dir,
     system_terminal_denylist_file,
 )
+from app.utils.path.relative_path import has_nul, has_parent_segment
 from app.utils.path.validation import is_within_cosir
 from app.utils.path.workspace_cosir import (
     COSIR_AGENT_CONFIG_DIR_NAME,
@@ -64,6 +66,8 @@ __all__ = [
     "RUNTIME_DIR",
     "SYSTEM_COSIR_DIR",
     "env_file",
+    "has_nul",
+    "has_parent_segment",
     "is_within_cosir",
     "override",
     "reset",
