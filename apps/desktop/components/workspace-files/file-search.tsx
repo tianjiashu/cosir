@@ -260,7 +260,7 @@ export function FileSearch({
                 <ContextMenu.Portal>
                   <ContextMenu.Content className="z-50 min-w-40 rounded-md border bg-popover p-1 text-sm shadow-md">
                     <ContextMenu.Item
-                      disabled={!bridge?.target || bridge.busy}
+                      disabled={!bridge?.target}
                       className="cursor-default rounded px-2 py-1.5 outline-none focus:bg-muted data-[disabled]:opacity-50"
                       onSelect={() =>
                         void bridge?.add(

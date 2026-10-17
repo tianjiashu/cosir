@@ -7,6 +7,7 @@
     ".github",
     ".idea",
     ".mypy_cache",
-    ".ruff_cache"
+    ".ruff_cache",
+    "apps/backend/.pytest_cache"
   ]
 }

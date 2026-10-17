@@ -182,15 +182,13 @@ function statusLabel(status: ContextUsagePresentation["status"]): string {
 }
 
 export function TaskContextUsage(): ReactElement {
-  const measurement = useAuiState((state) => latestMeasuredContextUsage(state.thread.state));
-  const used = measurement?.used ?? null;
-  const total = measurement?.total ?? null;
-  const ratio = measurement === null ? Number.NaN : measurement.used / measurement.total;
+  // useAuiState 以 Object.is 比较快照：selector 返回新建对象会触发无限重渲染，
+  // 因此这里逐字段选择原始值，再在渲染期重组测量对象。
+  const used = useAuiState((state) => latestMeasuredContextUsage(state.thread.state)?.used ?? null);
+  const total = useAuiState((state) => latestMeasuredContextUsage(state.thread.state)?.total ?? null);
+  const ratio = used === null || total === null ? Number.NaN : used / total;
   const presentation = getContextUsagePresentation(ratio, used, total);
   const percent = presentation.percent === null ? 0 : Math.min(100, Math.max(0, presentation.percent));
-  const detail = measurement === null
-    ? presentation.detail
-    : `${presentation.detail} · 最近有效 Run #${measurement.runId}`;
 
   return (
     <Popover>
@@ -220,7 +218,7 @@ export function TaskContextUsage(): ReactElement {
       <PopoverContent align="start" className="w-64 max-w-[calc(100vw-1rem)]">
         <PopoverHeader>
           <PopoverTitle>上下文窗口</PopoverTitle>
-          <PopoverDescription>{detail}</PopoverDescription>
+          <PopoverDescription>{presentation.detail}</PopoverDescription>
         </PopoverHeader>
         <div className="flex items-center justify-between text-xs">
           <span className={cn(

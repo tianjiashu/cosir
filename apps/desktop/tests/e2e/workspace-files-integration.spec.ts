@@ -179,14 +179,11 @@ test("引用：片段原文、打开来源、删除来源、拒绝发送保留�
     .getByRole("button", { name: "展开目录 src", exact: true })
     .click();
   await surface.getByRole("treeitem", { name: "main.py", exact: true }).click();
-  await surface.getByRole("button", { name: "更多引用方式", exact: true }).click();
-  await page
-    .getByRole("button", { name: "引用行范围", exact: true })
+  await surface
+    .locator(".cm-lineNumbers .cm-gutterElement")
+    .filter({ hasText: /^1$/ })
     .click();
-  await page
-    .getByRole("button", { name: "添加行范围", exact: true })
-    .click();
-  await page.keyboard.press("Escape");
+  await surface.getByRole("button", { name: "引用选区", exact: true }).click();
   const input = page.getByLabel("新对话内容");
   const capsule = input.locator("[data-workspace-reference]");
   await expect(capsule).toHaveCount(1);
@@ -397,7 +394,7 @@ test("引用：Task 混合草稿切换后恢复附件并可移除", async ({ pag
   await expect(input).toHaveText("草稿乙");
 });
 
-test("引用：目录与文件通过右键添加、行号选区附带问题", async ({
+test("引用：目录与文件通过右键添加、选中文本可附带问题", async ({
   page,
   request,
 }) => {
@@ -428,9 +425,8 @@ test("引用：目录与文件通过右键添加、行号选区附带问题", as
   await surface
     .locator(".cm-lineNumbers .cm-gutterElement")
     .filter({ hasText: /^1$/ })
-    .click();
-  await surface.getByRole("button", { name: "更多引用方式", exact: true }).click();
-  await page.getByRole("button", { name: "解释", exact: true }).click();
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "解释", exact: true }).click();
   await page.keyboard.press("Escape");
   await expect(
     input.locator('[data-workspace-reference="snippet"]'),

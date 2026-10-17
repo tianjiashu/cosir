@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   parseComposerDocument,
   serializeComposerDocument,
@@ -10,8 +10,6 @@ import {
   type WorkspaceReference,
 } from "@/lib/workspace-references/codec";
 import { prepareReference } from "@/lib/workspace-references/prepare";
-import { getText } from "@/lib/api/workspace-files";
-vi.mock("@/lib/api/workspace-files", () => ({ getText: vi.fn() }));
 const cases: WorkspaceReference[] = [
   { kind: "file", path: "src/中文 [test](a)#% file.py" },
   { kind: "directory", path: "" },
@@ -65,20 +63,15 @@ describe("前端 Markdown 引用", () => {
     expect(decodeReferences(text)).toEqual([{ type: "text", text }]);
     expect(serializeComposerDocument(parseComposerDocument(text))).toBe(text);
   });
-  it("已选文字与路径准备完全不访问后端", async () => {
-    vi.mocked(getText).mockClear();
+  it("已选文字与路径转换为引用", () => {
     expect(
-      await prepareReference(
-        7,
-        {
-          kind: "snippet",
-          path: "a",
-          content: "old\r\ntext\n",
-          start_line: 1,
-          end_line: 2,
-        },
-        new AbortController().signal,
-      ),
+      prepareReference({
+        kind: "snippet",
+        path: "a",
+        content: "old\r\ntext\n",
+        start_line: 1,
+        end_line: 2,
+      }),
     ).toEqual({
       kind: "snippet",
       path: "a",
@@ -86,38 +79,10 @@ describe("前端 Markdown 引用", () => {
       startLine: 1,
       endLine: 2,
     });
-    await prepareReference(
-      7,
-      { kind: "file", path: "deleted.py" },
-      new AbortController().signal,
-    );
-    expect(getText).not.toHaveBeenCalled();
-  });
-  it("跨页行范围读取兼容 CRLF 分界", async () => {
-    vi.mocked(getText)
-      .mockResolvedValueOnce({
-        text: "first\r",
-        offset: 0,
-        next_offset: 6,
-        size: 15,
-        version: "",
-        encoding: "utf-8",
-      })
-      .mockResolvedValueOnce({
-        text: "\nsecond\r\nlast",
-        offset: 6,
-        next_offset: null,
-        size: 15,
-        version: "",
-        encoding: "utf-8",
-      });
-    expect(
-      await prepareReference(
-        7,
-        { kind: "snippet", path: "a", start_line: 2, end_line: 2 },
-        new AbortController().signal,
-      ),
-    ).toMatchObject({ content: "second", startLine: 2, endLine: 2 });
+    expect(prepareReference({ kind: "file", path: "deleted.py" })).toEqual({
+      kind: "file",
+      path: "deleted.py",
+    });
   });
 });
 

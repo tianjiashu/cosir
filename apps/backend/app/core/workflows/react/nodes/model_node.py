@@ -177,7 +177,8 @@ async def _model_node(state: ReactGraphState) -> dict:
     # 落库进 canonical context——它成为历史固定行后，后续 Run 的请求前缀才不会在此分叉，因此必须
     # 重新 ``load_message()`` 才能让本步请求带上它。
     notice = task_space.take_runtime_notices(run_id=run_id)
-    _runtime_context().add_message(SystemMessage(content=notice))
+    if notice:
+        _runtime_context().add_message(SystemMessage(content=notice))
     messages: list[BaseMessage] = _runtime_context().load_message()
 
 

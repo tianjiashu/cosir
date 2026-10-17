@@ -267,7 +267,12 @@ export function TextPreview({
         actions={<>
           <TooltipIconButton ref={searchTrigger} tooltip="查找文件内容" aria-label="查找文件内容" className="size-8 shrink-0" aria-expanded={showSearch}
             onClick={() => showSearch ? closeSearch() : setShowSearch(true)}><SearchIcon /></TooltipIconButton>
-          <SelectionActions workspaceId={workspaceId} path={info.path} encoding={encoding} selection={selection} excerpt={excerpt} />
+          <SelectionActions
+            workspaceId={workspaceId}
+            path={info.path}
+            selection={selection}
+            excerpt={excerpt}
+          />
         </>}
         options={<>
           <select

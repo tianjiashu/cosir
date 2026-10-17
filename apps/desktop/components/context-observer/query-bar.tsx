@@ -101,9 +101,6 @@ export function QueryBar({
           />
           {busy ? "正在读取" : "刷新"}
         </Button>
-        <span className="text-xs text-muted-foreground sm:ml-auto">
-          可单填任一 ID；同时填写时限定所属关系
-        </span>
       </div>
       {error && (
         <p role="alert" className="mt-2 text-xs text-destructive">

@@ -13,7 +13,7 @@ import { queryKeys } from "@/lib/query/query-keys";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { QueryBar } from "./context-observer/query-bar";
 import { ObserverResults } from "./context-observer/observer-results";
-import { formatTime, parseId } from "./context-observer/message-model";
+import { parseId } from "./context-observer/message-model";
 
 /** URL 拥有查询范围；服务端记录交给 Query 管理，页面不复制持久化消息事实。 */
 export function ContextObserverPage() {
@@ -122,15 +122,12 @@ export function ContextObserverPage() {
                 {resolvedTaskId ? `任务 #${resolvedTaskId}` : "任务待解析"}
                 {runId ? ` / 轮次 #${runId}` : ""}
               </span>
-              <span className="ml-2 text-muted-foreground">
-                {runId ? "本轮记录，含系统提示词" : "全部消息记录"}
-              </span>
+              {!runId && (
+                <span className="ml-2 text-muted-foreground">
+                  全部消息记录
+                </span>
+              )}
             </div>
-            <span className="text-muted-foreground" role="status">
-              {contextQuery.dataUpdatedAt
-                ? `最近读取 ${formatTime(new Date(contextQuery.dataUpdatedAt).toISOString())}${contextQuery.isFetching ? " · 正在刷新…" : ""}`
-                : "正在读取…"}
-            </span>
           </div>
           {error && (
             <ErrorState

@@ -22,7 +22,6 @@ export function AddReferenceButton({
       disabled={
         !bridge?.target ||
         bridge.workspaceId !== workspaceId ||
-        bridge.busy ||
         !inputs.length
       }
       onClick={() => void bridge?.add(workspaceId, inputs, question)}

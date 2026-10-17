@@ -1,6 +1,5 @@
 import { useBrowserVisibility } from "@/lib/workspace-files/visibility";
 import { FileBrowserMenu, IgnoredItemsDialog } from "./ignored-items-dialog";
-import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
 import { ReferencePreview } from "@/components/workspace-references/reference-preview";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -43,7 +42,6 @@ export function WorkspaceFilesSurface({
   const visibility = useBrowserVisibility(workspaceId);
   const [manageIgnored, setManageIgnored] = useState(false);
   const revision = visibility.data?.revision ?? "loading";
-  const references = useReferenceBridge();
   const session = useFilesStore((s) => fileSession(s.sessions, workspaceId));
   const patch = useFilesStore((s) => s.patch);
   const open = useFilesStore((s) => s.open);
@@ -131,17 +129,6 @@ export function WorkspaceFilesSurface({
           open={manageIgnored}
           onOpenChange={setManageIgnored}
         />
-        {references?.busy && (
-          <div
-            role="status"
-            className="flex items-center justify-between border-b px-3 py-1 text-xs"
-          >
-            正在准备引用…
-            <Button size="sm" variant="ghost" onClick={references.cancel}>
-              取消添加
-            </Button>
-          </div>
-        )}
         <div className="flex min-h-0 flex-1">
           {treeVisible && (
             <div

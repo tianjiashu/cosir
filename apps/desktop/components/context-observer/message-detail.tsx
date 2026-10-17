@@ -113,12 +113,6 @@ export function MessageDetail({
             <span className="mr-2 font-mono">#{message.sequence}</span>
             {roleLabel(message.role)}
           </h2>
-          <span className="text-xs text-muted-foreground">
-            {message.include_in_context ? "已纳入上下文" : "未纳入上下文"} ·{" "}
-            {message.run_id === null
-              ? "任务系统提示词"
-              : `Run #${message.run_id}`}
-          </span>
         </div>
         <details className="text-xs" key={message.sequence}>
           <summary className="w-fit cursor-pointer text-muted-foreground focus-ring">

@@ -56,19 +56,22 @@ export function findTransportRun(
 
 /** 从 Task 的 Run 事实中选取最新一条有效上下文窗口测量。 */
 export function latestMeasuredContextUsage(value: unknown): {
-  runId: number;
   used: number;
   total: number;
 } | null {
   const state = readRuntimeTransportState(value);
   if (state === null) return null;
-  let latest: { runId: number; used: number; total: number } | null = null;
+  let latestRunId: number | null = null;
+  let latest: { used: number; total: number } | null = null;
   for (const run of state.runs) {
     const used = run.usage?.input_tokens;
     const total = run.contextWindowTotal;
     if (used === null || used === undefined || !Number.isFinite(used) || used <= 0) continue;
     if (total === null || !Number.isFinite(total) || total <= 0) continue;
-    if (latest === null || run.runId > latest.runId) latest = { runId: run.runId, used, total };
+    if (latestRunId === null || run.runId > latestRunId) {
+      latestRunId = run.runId;
+      latest = { used, total };
+    }
   }
   return latest;
 }

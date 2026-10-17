@@ -112,7 +112,6 @@ export function ReferenceMention({
   }, [query, bridge?.workspaceId, bridge?.target, target, revision]);
   const choose = (entry: FileEntry) => {
     if (!editor || !mention || !bridge?.workspaceId) return;
-    if (bridge.busy) return;
     const replacement = {
       from: mention.from,
       to: mention.to,
@@ -174,7 +173,6 @@ export function ReferenceMention({
         <button
           type="button"
           role="option"
-          disabled={bridge.busy}
           aria-selected={i === index}
           key={entry.path}
           className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left ${i === index ? "bg-muted" : ""}`}

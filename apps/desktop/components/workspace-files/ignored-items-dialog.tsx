@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -63,10 +62,6 @@ export function IgnoredItemsDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>管理忽略项</DialogTitle>
-          <DialogDescription>
-            仅影响文件浏览器和界面搜索（含 @ 文件候选），不影响
-            Agent。已打开的阅读标签会保留。
-          </DialogDescription>
         </DialogHeader>
         {settings.isPending ? (
           <p role="status" className="text-muted-foreground">

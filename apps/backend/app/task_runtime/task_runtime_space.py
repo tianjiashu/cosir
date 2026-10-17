@@ -354,6 +354,8 @@ class TaskRuntimeSpace:
                 break
             if run_id is None or notice.run_id is None or notice.run_id == run_id:
                 notices.append(notice)
+        if not notices:
+            return ""
 
         hint = "".join(f"\n{n.to_hint_text()}" for n in notices)
         return (

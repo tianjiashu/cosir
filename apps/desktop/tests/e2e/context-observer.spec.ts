@@ -120,7 +120,7 @@ test("筛选、序号定位、调用关联与整个任务范围", async ({ page 
   await page.goto("/context-observer?run_id=21");
   await expect(
     page.getByText("本轮记录，含系统提示词", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await page.getByLabel("按角色筛选").selectOption("assistant");
   await page.getByLabel("搜索已加载消息").fill("read_file");
   await page.getByRole("option", { name: "#2 Assistant", exact: true }).click();

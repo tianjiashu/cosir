@@ -2,10 +2,8 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
 import { toast } from "sonner";
@@ -28,21 +26,19 @@ type Bridge = {
   workspaceId: number | null;
   workspaceRoot: string;
   workspaceName: string;
-  busy: boolean;
   register: (target: string, receiver: Receiver) => () => void;
   add: (
     workspace: number,
     inputs: ReferenceInput[],
     question?: string,
     replacement?: ReferenceReplacement,
-  ) => Promise<void>;
-  cancel: () => void;
+  ) => void;
 };
 const Context = createContext<Bridge | null>(null);
 export const ReferenceTargetScope = createContext<string | null>(null);
 export const useReferenceBridge = () => useContext(Context);
 
-/** 只连接当前可见 Composer；异步准备完成时再次核对目标，不向后台保活的 Task 插入。 */
+/** 只连接当前可见 Composer，避免把文件引用插入后台保活的 Task。 */
 export function ReferenceBridgeProvider({
   target,
   workspaceId,
@@ -59,13 +55,6 @@ export function ReferenceBridgeProvider({
   const current = useRef({ target, workspaceId });
   current.current = { target, workspaceId };
   const receivers = useRef<{ target: string; callback: Receiver }[]>([]);
-  const pending = useRef<AbortController | null>(null);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    pending.current?.abort();
-    setBusy(false);
-    return () => pending.current?.abort();
-  }, [target, workspaceId]);
   const register = useCallback((key: string, callback: Receiver) => {
     const entry = { target: key, callback };
     receivers.current.push(entry);
@@ -73,12 +62,8 @@ export function ReferenceBridgeProvider({
       receivers.current = receivers.current.filter((item) => item !== entry);
     };
   }, []);
-  const cancel = useCallback(() => {
-    pending.current?.abort();
-    setBusy(false);
-  }, []);
   const add = useCallback(
-    async (
+    (
       workspace: number,
       inputs: ReferenceInput[],
       question?: string,
@@ -93,48 +78,26 @@ export function ReferenceBridgeProvider({
         toast.error("请先打开当前工作区的对话输入框");
         return;
       }
-      pending.current?.abort();
-      const controller = new AbortController();
-      pending.current = controller;
-      setBusy(true);
       const references: WorkspaceReference[] = [];
       const failed: string[] = [];
-      try {
-        for (const input of inputs) {
-          if (controller.signal.aborted) return;
-          try {
-            const ref = await prepareReference(
-              workspace,
-              input,
-              controller.signal,
-            );
-            references.push(ref);
-          } catch (error) {
-            if (controller.signal.aborted) return;
-            failed.push(
-              `${input.path || "工作区"}：${userErrorMessage(error, "添加失败")}`,
-            );
-            void frontendLog(
-              "WARNING",
-              "workspace_reference_prepare_failed",
-              "准备引用失败",
-              { error, data: { workspaceId: workspace, path: input.path } },
-            );
-          }
+      for (const input of inputs) {
+        try {
+          references.push(prepareReference(input));
+        } catch (error) {
+          failed.push(
+            `${input.path || "工作区"}：${userErrorMessage(error, "添加失败")}`,
+          );
+          void frontendLog(
+            "WARNING",
+            "workspace_reference_prepare_failed",
+            "准备引用失败",
+            { error, data: { workspaceId: workspace, path: input.path } },
+          );
         }
-        if (
-          controller.signal.aborted ||
-          receivers.current.at(-1) !== destination ||
-          current.current.target !== destination.target ||
-          current.current.workspaceId !== workspace
-        )
-          return;
-        if (references.length)
-          destination.callback(references, question, replacement);
-        if (failed.length) toast.error(failed.join("\n"), { duration: 8000 });
-      } finally {
-        if (pending.current === controller) setBusy(false);
       }
+      if (references.length)
+        destination.callback(references, question, replacement);
+      if (failed.length) toast.error(failed.join("\n"), { duration: 8000 });
     },
     [],
   );
@@ -144,21 +107,10 @@ export function ReferenceBridgeProvider({
       workspaceId,
       workspaceRoot,
       workspaceName,
-      busy,
       register,
       add,
-      cancel,
     }),
-    [
-      target,
-      workspaceId,
-      workspaceRoot,
-      workspaceName,
-      busy,
-      register,
-      add,
-      cancel,
-    ],
+    [target, workspaceId, workspaceRoot, workspaceName, register, add],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
