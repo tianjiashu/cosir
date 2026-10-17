@@ -46,7 +46,15 @@ app.add_middleware(
     allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["X-Cosir-Task-Id", "X-Cosir-Thread-Id"],
+    expose_headers=[
+        "X-Cosir-Task-Id",
+        "X-Cosir-Thread-Id",
+        "Accept-Ranges",
+        "Content-Range",
+        "Content-Length",
+        "ETag",
+        "X-Cosir-Image-Preview",
+    ],
 )
 
 install_request_logging(app, log)
@@ -63,6 +71,7 @@ install_transport_request_error_handler(app)
 # ``app`` 绑定到本模块全局命名空间，覆盖此处创建的 FastAPI 实例。
 importlib.import_module("app.api.tasks_api")
 importlib.import_module("app.api.workspaces_api")
+importlib.import_module("app.api.workspace_files_api")
 importlib.import_module("app.api.model_configs_api")
 importlib.import_module("app.api.configuration.agents")
 importlib.import_module("app.api.configuration.global_instructions")

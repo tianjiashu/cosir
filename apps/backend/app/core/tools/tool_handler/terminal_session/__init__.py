@@ -19,7 +19,7 @@ def build_terminal_list_definition() -> ToolDefinition:
     return TerminalListTool().to_definition()
 
 
-def build_terminal_start_definition() -> ToolDefinition:
+def build_terminal_start_definition() -> ToolDefinition | None:
     """构建 ``terminal_start`` 的注册定义。
 
     返回:
@@ -30,7 +30,7 @@ def build_terminal_start_definition() -> ToolDefinition:
     return TerminalStartTool().to_definition_if_avaliable()
 
 
-def build_terminal_read_definition() -> ToolDefinition:
+def build_terminal_read_definition() -> ToolDefinition | None:
     """构建 ``terminal_read`` 的注册定义。
 
     返回:
@@ -41,7 +41,7 @@ def build_terminal_read_definition() -> ToolDefinition:
     return TerminalReadTool().to_definition_if_avaliable()
 
 
-def build_terminal_write_definition() -> ToolDefinition:
+def build_terminal_write_definition() -> ToolDefinition | None:
     """构建 ``terminal_write`` 的注册定义。
 
     返回:
@@ -52,19 +52,18 @@ def build_terminal_write_definition() -> ToolDefinition:
     return TerminalWriteTool().to_definition_if_avaliable()
 
 
-def build_terminal_signal_definition() -> ToolDefinition:
+def build_terminal_signal_definition() -> ToolDefinition | None:
     """构建 ``terminal_signal`` 的注册定义。
 
     返回:
-        ``ToolDefinition``；该工具在当前平台不可用时返回 ``None``——Windows worker 不声明
-        PTY signal 能力，因此 Windows 上本函数返回 ``None``（见
-        ``TerminalSignalTool.avaliable()``）。
+        当前平台均注册该工具；Windows worker 仅支持 interrupt，Unix 还支持 suspend
+        和有条件的 canonical EOF。具体会话以 worker 握手能力为准。
     """
 
     return TerminalSignalTool().to_definition_if_avaliable()
 
 
-def build_terminal_close_definition() -> ToolDefinition:
+def build_terminal_close_definition() -> ToolDefinition | None:
     """构建 ``terminal_close`` 的注册定义。
 
     返回:
