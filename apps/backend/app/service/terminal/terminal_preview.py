@@ -172,6 +172,7 @@ class PreviewBuffer:
         *,
         task_id: int,
         status: str,
+        geometry: dict[str, int],
         exit_code: int | None,
         end_reason: str | None,
     ) -> TerminalPreviewAttachment:
@@ -190,6 +191,7 @@ class PreviewBuffer:
             **self._identity,
             **self.snapshot(),
             "type": "attached",
+            **geometry,
             "task_id": task_id,
             "status": status,
         }

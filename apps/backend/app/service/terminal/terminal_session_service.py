@@ -89,7 +89,7 @@ class TerminalSessionService:
             # ``Constant.Terminal.WORKER_ENV`` 提供，由 worker 构造时自行解析；
             # 这里显式传 None 表示不覆盖宿主配置。
             runtime = TerminalSessionRuntime(
-                ProcessTerminalWorker(None, instance_id),
+                ProcessTerminalWorker(instance_id),
                 session_id=session_id,
                 task_id=task_id,
                 workspace_id=workspace_id,
@@ -148,12 +148,12 @@ class TerminalSessionService:
         *,
         task_id: int,
         workspace_id: int | None = None,
-        cursor: str | None = None,
-        wait: dict[str, Any] | None = None,
+        run_id: int,
+        wait_ms: int = 3000,
         is_cancelled: RunCancellationCheck | None = None,
     ) -> dict[str, Any]:
         runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
-        return runtime.read(cursor, wait, is_cancelled)
+        return runtime.read(run_id, wait_ms, is_cancelled)
 
     def signal(
         self,

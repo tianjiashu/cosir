@@ -12,6 +12,7 @@ from app.core.tools.schemas import (
 )
 from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.core.tools.tool_handler.terminal_session.common import (
+    agent_session_payload,
     cancelled,
     cancelled_observation,
     require_service,
@@ -32,7 +33,7 @@ class TerminalListTool(HandlerBase):
         "current directory; running means the shell is alive, not that a command is finished. "
         "Sessions survive run completion and cancellation, but not backend restarts. "
         "Close sessions explicitly when no longer needed. Output history is bounded; use "
-        "terminal_read with cursor=null to read the retained output window."
+        "terminal_read to observe the current screen and bounded recent history."
     )
     args_model = TerminalListArgs
     timeout_seconds: ClassVar[float] = 10.0
@@ -51,7 +52,7 @@ class TerminalListTool(HandlerBase):
         )
         return success_observation(
             self.name,
-            {"sessions": sessions},
+            {"sessions": [agent_session_payload(session) for session in sessions]},
             summary="Task terminal sessions.",
             display_payload=build_terminal_session_list_display_data(len(sessions)),
         )

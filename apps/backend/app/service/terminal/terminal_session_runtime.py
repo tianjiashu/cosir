@@ -19,16 +19,21 @@ from typing import Any, Final, Literal
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.service.terminal.errors import TerminalSessionError, TerminalSessionStateError
+from app.service.terminal.errors import (
+    TerminalReadInProgressError,
+    TerminalRepeatedReadError,
+    TerminalSessionError,
+    TerminalSessionStateError,
+)
 from app.service.terminal.process_terminal_worker import ProcessTerminalWorker, WorkerEventCallback
 from app.service.terminal.shell_resolver import ShellSpec
 from app.service.terminal.terminal_observation import TerminalObservation
-from app.service.terminal.terminal_output_sanitizer import TerminalOutputSanitizer
 from app.service.terminal.terminal_preview import (
     PreviewBuffer,
     TerminalPreviewAttachment,
     TerminalPreviewSubscription,
 )
+from app.service.terminal.terminal_read_guard import TerminalReadGuard
 from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
 
 RunCancellationCheck = Callable[[], bool]
@@ -75,11 +80,12 @@ class TerminalSessionRuntime:
         self.generation = f"gen_{uuid.uuid4().hex}"
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
+        self._read_lock = threading.Lock()
+        self._read_guard = TerminalReadGuard()
         # service 用此锁串行投递状态通知；不在持有状态锁时等待外部观察者。
         self.status_delivery_lock = threading.RLock()
         self._disposal_finished = threading.Event()
         self._preview = PreviewBuffer(session_id, self.generation, buffer_limit)
-        self._sanitizer = TerminalOutputSanitizer()
         self._observation = TerminalObservation(self.generation, buffer_limit, integration)
         self._capabilities: frozenset[str] = frozenset()
         self._accepted_writes: OrderedDict[str, bytes] = OrderedDict()
@@ -97,6 +103,8 @@ class TerminalSessionRuntime:
             worker = self._mutable_worker()
             worker.start(spec, self.initial_cwd, on_event)
             self._capabilities = worker.capabilities
+            if self._observation.screen is None:
+                self._observation.initialize_screen(worker.geometry)
             if self.status != "starting":
                 return None
             self._status = "running"
@@ -110,6 +118,8 @@ class TerminalSessionRuntime:
                         "worker_instance_id": worker.instance_id,
                         "worker_pid": worker.pid,
                         "shell_executable": spec.executable,
+                        "geometry": worker.geometry,
+                        "screen_engine": "alacritty_terminal",
                     },
                 },
             )
@@ -135,12 +145,10 @@ class TerminalSessionRuntime:
         is_cancelled: RunCancellationCheck | None,
     ) -> dict[str, Any]:
         with self._lock:
-            cursor = self._observation.cursor()
             duplicate = self._accept_input(input, operation_id, is_cancelled)
         # 保持同一运行态引用；Task 删除也不会撤回已经接受的输入或丢失接受事实。
         return self._observe(
-            cursor,
-            {"until": "activity", "timeout_ms": wait_ms},
+            wait_ms,
             is_cancelled,
             {"operation_id": operation_id, "accepted": True, "duplicate": duplicate},
         )
@@ -171,94 +179,97 @@ class TerminalSessionRuntime:
 
     def read(
         self,
-        cursor: str | None,
-        wait: dict[str, Any] | None,
+        run_id: int,
+        wait_ms: int,
         is_cancelled: RunCancellationCheck | None,
     ) -> dict[str, Any]:
-        return self._observe(cursor, wait, is_cancelled)
+        """同一会话只允许一个 read 等待，防止并发绕过节奏；不阻塞输入和 worker。"""
+        if not self._read_lock.acquire(blocking=False):
+            raise TerminalReadInProgressError(
+                "A read is already waiting for this session; await its result."
+            )
+        try:
+            return self._observe(wait_ms, is_cancelled, run_id=run_id)
+        finally:
+            self._read_lock.release()
 
     def _observe(
         self,
-        cursor: str | None,
-        wait: dict[str, Any] | None,
+        wait_ms: int,
         is_cancelled: RunCancellationCheck | None,
         accepted_input: dict[str, Any] | None = None,
+        *,
+        run_id: int | None = None,
     ) -> dict[str, Any]:
-        """等待与分页共用会话 condition；不通过 registry 重新定位已获得的运行态。"""
-        wait = wait or {"until": "activity", "timeout_ms": 3000}
-        deadline = time.monotonic() + wait["timeout_ms"] / 1000
-        collect_until: float | None = None
+        """等待固定时长后取最新快照；取消与会话结束提前唤醒，不把静默当完成。
+
+        read 的时长下限由工具参数边界保证；write 使用独立的输入后等待时长。
+        """
+        deadline = time.monotonic() + wait_ms / 1000
         with self._condition:
-            observation = self._observation
-            seq, offset = observation.position(cursor)
-            until = wait["until"]
-            command_id = str(wait.get("command_id", ""))
-            if until == "command_returned" and command_id not in observation.commands:
-                raise TerminalSessionError("command is unknown or its retained result expired")
-            if until == "shell_prompt" and observation.integration["status"] in {
-                "off",
-                "unavailable",
-            }:
-                raise TerminalSessionError("shell prompt observation is unavailable")
             while True:
-                now = time.monotonic()
-                reason = "timeout"
-                condition = None
-                if until == "command_returned":
-                    condition = observation.commands.get(command_id)
-                    if condition is not None:
-                        reason = condition["type"]
-                elif until == "shell_prompt" and observation.prompt_seq > seq:
-                    reason = "shell_prompt"
-                activity = observation.next_seq - 1 > seq or offset > 0
-                if until == "activity" and activity:
-                    if collect_until is None:
-                        collect_until = min(deadline, now + 0.075)
-                    if now >= collect_until:
-                        reason = "activity"
-                if self.status not in {"starting", "running"} and reason == "timeout":
-                    reason = "session_ended"
                 if is_cancelled is not None and is_cancelled():
                     reason = "cancelled"
-                envelope = {
-                    "session_id": self.session_id,
-                    "generation": self.generation,
-                    "state": {
-                        **observation.state(self.status),
-                        "session_exit_code": self._exit_code,
-                        "session_end_reason": self._end_reason,
-                    },
-                    "integration": observation.integration,
-                    "capabilities": sorted(self._capabilities),
-                    "return_reason": reason,
-                }
-                if condition is not None:
-                    envelope["condition"] = condition
-                if accepted_input is not None:
-                    envelope["input"] = accepted_input
-                # 预算同源；预留 handler 的一行说明及编码包装，正文不会再被通用字符串截断。
-                page = observation.page(cursor, envelope, Constant.Tools.MAX_OUTPUT_CHARS - 256)
-                if page["gap"]:
+                    break
+                if self.status not in {"starting", "running"}:
+                    reason = "session_ended"
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    reason = "wait_elapsed"
+                    break
+                self._condition.wait(timeout=min(remaining, 0.05))
+            observation = self._observation
+            envelope = {
+                "session_id": self.session_id,
+                "generation": self.generation,
+                "state": {
+                    **observation.state(self.status),
+                    "session_exit_code": self._exit_code,
+                    "session_end_reason": self._end_reason,
+                },
+                "integration": observation.integration,
+                "capabilities": sorted(self._capabilities),
+                "return_reason": reason,
+            }
+            if accepted_input is not None:
+                envelope["input"] = accepted_input
+            # 预留重复观察提示与 handler 包装，通用预算不应二次截断结构化结果。
+            result = observation.snapshot(envelope, Constant.Tools.MAX_OUTPUT_CHARS - 1024)
+            if run_id is not None and reason != "cancelled":
+                try:
+                    warning = self._read_guard.observe(
+                        run_id, (observation.information_version, self.status)
+                    )
+                except TerminalRepeatedReadError:
                     log.warning(
-                        "terminal_cursor_gap",
+                        "terminal_read_repeated",
                         extra={
-                            "msg": "Agent 观察窗口已淘汰部分内容",
+                            "msg": "连续观察无新信息，要求 Agent 调整等待或操作",
                             "data": {
                                 "task_id": self.task_id,
+                                "run_id": run_id,
                                 "session_id": self.session_id,
-                                "generation": self.generation,
+                                "unchanged_reads": self._read_guard.repeats,
                             },
                         },
                     )
-                if page["has_more"] or page["gap"]:
-                    page["return_reason"] = "page_available" if reason == "timeout" else reason
-                    return page
-                if reason != "timeout" or now >= deadline:
-                    return page
-                remaining = deadline - now
-                if collect_until is not None:
-                    remaining = min(remaining, collect_until - now)
-                self._condition.wait(timeout=min(remaining, 0.05))
+                    raise
+                if warning is not None:
+                    result["warning"] = warning
+                    log.info(
+                        "terminal_read_unchanged",
+                        extra={
+                            "msg": "终端观察无新信息，交付画面并提示重复次数",
+                            "data": {
+                                "task_id": self.task_id,
+                                "run_id": run_id,
+                                "session_id": self.session_id,
+                                "unchanged_reads": warning["unchanged_reads"],
+                            },
+                        },
+                    )
+            return result
 
     def signal(self, signal_name: str) -> dict[str, object]:
         required = {
@@ -289,10 +300,12 @@ class TerminalSessionRuntime:
                 "exit_code": self._exit_code,
                 "generation": self.generation,
                 **self._preview.snapshot(),
+                "geometry": self._observation.geometry()
+                if self._observation.screen is not None
+                else None,
                 "integration": self._observation.integration.copy(),
                 "state": self._observation.state(self.status),
                 "capabilities": sorted(self._capabilities),
-                "next_cursor": self._observation.cursor(),
             }
 
     def status_change(self) -> TerminalSessionStatusChange:
@@ -312,6 +325,7 @@ class TerminalSessionRuntime:
                 after_seq,
                 task_id=self.task_id,
                 status=self.status,
+                geometry=self._observation.geometry(),
                 exit_code=self._exit_code,
                 end_reason=self._end_reason,
             )
@@ -325,7 +339,12 @@ class TerminalSessionRuntime:
         kind = event.get("type")
         if kind == "output":
             return self._output(event)
-        if kind == "shell":
+        if kind == "screen":
+            with self._condition:
+                if self.status in {"starting", "running"}:
+                    self._observation.update_screen(event["screen"], event["history"])
+                    self._condition.notify_all()
+        elif kind == "shell":
             with self._condition:
                 if self.status in {"starting", "running"}:
                     self._shell_event(event["event"])
@@ -381,7 +400,6 @@ class TerminalSessionRuntime:
             return self.finish("failed", "worker_output_chunk_too_large")
         with self._condition:
             if self.status in {"starting", "running"}:
-                self._observation.output(self._sanitizer.feed(data))
                 self._preview.append(encoded, len(data))
                 self._condition.notify_all()
         return None
@@ -396,7 +414,6 @@ class TerminalSessionRuntime:
         with self._condition:
             if self.status not in {"starting", "running"}:
                 return None
-            self._observation.output(self._sanitizer.finish())
             active = self._observation.active
             self._observation.end_tracking("session_ended")
             if active is not None:

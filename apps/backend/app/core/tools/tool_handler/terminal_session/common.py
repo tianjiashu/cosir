@@ -15,7 +15,7 @@ from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
-from app.service.terminal.errors import TerminalSessionError
+from app.service.terminal.errors import TerminalRepeatedReadError, TerminalSessionError
 
 if TYPE_CHECKING:
     from app.service.terminal.terminal_session_service import TerminalSessionService
@@ -98,9 +98,8 @@ def service_error_observation(
         exc: service 抛出的 ``TerminalSessionError``。
 
     返回:
-        错误观察：``error`` 只陈述事实（含 ``exc.code``），``reason`` 按 ``exc.retryable``
-        分别给出「等待瞬时条件恢复后重试」或「先修正会话或参数再重试」，``status_hint`` 为
-        前端短提示「终端失败」。
+        重复读取单独解释为观察限制，UI 显示「重复读取」，不暗示命令失败或延长等待必然恢复。
+        其他领域错误继续按 retryable 提供重试建议，UI 显示「终端失败」。
 
     异常:
         无；``exc`` 本身已是归一化后的领域错误。
@@ -109,6 +108,18 @@ def service_error_observation(
         无；只构造观察对象，不写日志、不改会话状态。
     """
 
+    if isinstance(exc, TerminalRepeatedReadError):
+        return tool_error(
+            tool_name,
+            f"{exc.code}: {exc}",
+            reason=(
+                "Increasing wait_ms does not reset the counter or guarantee recovery. "
+                "Normal reads resume when new output or state changes are observed. "
+                "Inspect prior prompts before deciding whether to wait longer or provide input."
+            ),
+            retryable=exc.retryable,
+            status_hint="重复读取",
+        )
     return tool_error(
         tool_name,
         f"terminal operation failed: {exc}",
@@ -125,6 +136,15 @@ def service_error_observation(
     )
 
 
+def agent_session_payload(payload: dict[str, object]) -> dict[str, object]:
+    """只移除单个会话结果的预览水位；列表调用方逐项投影，不修改原快照或观察事件。"""
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in {"first_available_seq", "next_seq"}
+    }
+
+
 def success_observation(
     tool_name: str,
     payload: dict[str, object],
@@ -136,8 +156,8 @@ def success_observation(
 
     参数:
         tool_name: 工具名，写入观察的工具标识。
-        payload: service 结构化结果；以紧凑 JSON 追加到 ``content`` 供模型读取，内部输出水位
-        ``next_seq`` 不属于 Agent 工具契约，会在此边界剔除。
+        payload: service 结构化结果；以紧凑 JSON 追加到 ``content`` 供模型读取。
+            顶层预览水位在此剔除；sessions 列表由调用方逐项使用 agent_session_payload。
         summary: 一行英文摘要，作为 ``content`` 首行。
         display_payload: 已按 allowlist 投影的展示数据，写入 ``display_data``。
 
@@ -152,10 +172,11 @@ def success_observation(
         无；只构造观察对象。
     """
 
-    agent_payload = {key: value for key, value in payload.items() if key != "next_seq"}
+    agent_payload = agent_session_payload(payload)
+    encoded = json.dumps(agent_payload, ensure_ascii=False, separators=(",", ":"))
     return tool_success(
         tool_name=tool_name,
-        content=f"{summary}\n{json.dumps(agent_payload, ensure_ascii=False, separators=(',', ':'))}",
+        content=f"{summary}\n{encoded}",
         display_data=display_payload,
     )
 

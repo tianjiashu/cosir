@@ -1,17 +1,17 @@
-"""shell 观察的唯一进程内投影与有界日志。
+"""shell 语义与最近滚动历史的有界快照；屏幕事实由 worker 唯一维护。
 
-预览继续使用原始 output seq；此处的游标绑定 generation，并支持文本内偏移。
-命令只由 shell 事件创建，输入接受、输出静默与信号投递均不构成命令返回。
+观察允许丢弃旧内容，不提供消费游标。命令只由 shell 事件创建，
+输入接受、输出静默与重复读取错误均不构成命令返回。
 """
 
 from __future__ import annotations
 
 import json
-from collections import OrderedDict, deque
 from copy import deepcopy
 from typing import Any
 
 from app.service.terminal.errors import TerminalSessionError
+from app.service.terminal.terminal_screen_projection import project_screen
 
 
 def json_size(value: object) -> int:
@@ -19,60 +19,67 @@ def json_size(value: object) -> int:
 
 
 class TerminalObservation:
-    """由 session lock 保护；保留窗口与命令结果均有界，不写数据库。"""
+    """由 session lock 保护；历史有界，只保留最近命令，不写数据库。"""
 
     def __init__(self, generation: str, limit: int, integration: str) -> None:
         self.generation = generation
         self.limit = limit
-        self.events: deque[tuple[int, dict[str, Any], int]] = deque()
-        self.size = 0
-        self.next_seq = 1
+        self.history_text = ""
+        self.history_omitted = False
+        self.information_version = 0
+        self.screen: dict[str, Any] | None = None
         self.phase = "unknown"
-        self.active: str | None = None
         self.command_counter = 0
-        self.prompt_seq = 0
         self.cwd: str | None = None
-        self.commands: OrderedDict[str, dict[str, Any] | None] = OrderedDict()
+        self.latest_command: dict[str, Any] | None = None
         self.integration: dict[str, Any] = {
             "status": "starting" if integration == "auto" else "off",
             "capabilities": [],
             "reason": None,
         }
 
-    def cursor(self, seq: int | None = None, offset: int = 0) -> str:
-        return f"{self.generation}:{self.next_seq - 1 if seq is None else seq}:{offset}"
+    @property
+    def active(self) -> str | None:
+        command = self.latest_command
+        return (
+            command["command_id"]
+            if command is not None and command["status"] == "executing"
+            else None
+        )
 
-    def position(self, cursor: str | None) -> tuple[int, int]:
-        if cursor is None:
-            return (self.events[0][0] - 1 if self.events else self.next_seq - 1, 0)
-        try:
-            generation, seq_text, offset_text = cursor.split(":")
-            seq, offset = int(seq_text), int(offset_text)
-        except (ValueError, TypeError) as exc:
-            raise TerminalSessionError("invalid observation cursor") from exc
-        if generation != self.generation or seq < 0 or seq >= self.next_seq or offset < 0:
-            raise TerminalSessionError(
-                "observation cursor belongs to another generation or position"
-            )
-        if offset:
-            entry = next((event for number, event, _ in self.events if number == seq), None)
-            if entry is not None and (entry["type"] != "output" or offset >= len(entry["text"])):
-                raise TerminalSessionError("invalid observation text offset")
-        return seq, offset
+    def initialize_screen(self, geometry: dict[str, int]) -> None:
+        self.screen = {
+            "revision": 0,
+            **geometry,
+            "lines": [{"text": "", "wrapped": False} for _ in range(geometry["rows"])],
+            "cursor": {"row": 0, "column": 0, "visible": True},
+            "alternate": False,
+        }
 
-    def append(self, event: dict[str, Any]) -> None:
-        size = json_size(event)
-        self.events.append((self.next_seq, event, size))
-        self.next_seq += 1
-        self.size += size
-        while self.size > self.limit and self.events:
-            _, _, removed = self.events.popleft()
-            self.size -= removed
+    def geometry(self) -> dict[str, int]:
+        # 订阅发生于 start 成功后；尺寸由握手初始化，并贯穿终态保留。
+        assert self.screen is not None
+        return {key: self.screen[key] for key in ("rows", "columns")}
 
-    def output(self, text: str) -> None:
-        # 小块使单个输出不会一次淘汰整个保留窗口；分页仍可在字符边界切分。
-        for start in range(0, len(text), 1024):
-            self.append({"type": "output", "text": text[start : start + 1024]})
+    def update_screen(self, screen: dict[str, Any], history: list[str]) -> None:
+        """worker 独占屏幕事实；此层只替换快照并将真正滚出的文本加入历史。"""
+        # 闪烁可见性不算新信息；真实文字、位置、备用屏幕及滚动历史仍算进展。
+        if (
+            self.screen is None
+            or any(self.screen[key] != screen[key] for key in ("lines", "alternate"))
+            or any(self.screen["cursor"][key] != screen["cursor"][key] for key in ("row", "column"))
+        ):
+            self.information_version += 1
+        self.screen = screen
+        for text in history:
+            self.history(text)
+
+    def history(self, text: str) -> None:
+        if text:
+            self.information_version += 1
+            combined = self.history_text + text
+            self.history_omitted |= len(combined) > self.limit
+            self.history_text = combined[-self.limit :]
 
     def shell_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
         kind = event["kind"]
@@ -98,43 +105,40 @@ class TerminalObservation:
             if self.active is not None:
                 self.end_tracking("unexpected_command_boundary")
             self.command_counter += 1
-            self.active = f"{self.generation}/c{self.command_counter}"
+            command_id = f"{self.generation}/c{self.command_counter}"
             self.phase = "executing"
-            self.commands[self.active] = None
-            while len(self.commands) > 128:
-                self.commands.popitem(last=False)
             text = event["command"]
             result = {
                 "type": kind,
-                "command_id": self.active,
+                "command_id": command_id,
                 "command": text[:1024],
                 "command_text_truncated": len(text) > 1024,
             }
+            self.latest_command = {**result, "status": "executing"}
+            del self.latest_command["type"]
         elif kind == "command_returned":
             if self.active is None:
                 return None
             result = {"type": kind, "command_id": self.active, "result": event["result"]}
-            self.commands[self.active] = result
-            self.active = None
+            assert self.latest_command is not None
+            self.latest_command.update(status="returned", result=event["result"])
             self.phase = "unknown"  # 只有随后 prompt 标记才证明进入输入阶段。
         elif kind == "shell_prompt":
             if self.active is not None:
                 self.end_tracking("prompt_without_command_result")
             self.phase = "editing"
             self.cwd = event.get("cwd")
-            self.prompt_seq = self.next_seq
             result = {"type": kind, "cwd": self.cwd}
         else:
             raise TerminalSessionError(f"unknown shell observation: {kind}")
-        self.append(result)
+        self.information_version += 1
         return result
 
     def end_tracking(self, reason: str) -> None:
         if self.active is not None:
-            event = {"type": "tracking_ended", "command_id": self.active, "reason": reason}
-            self.commands[self.active] = event
-            self.append(event)
-            self.active = None
+            assert self.latest_command is not None
+            self.latest_command.update(status="tracking_ended", reason=reason)
+            self.information_version += 1
         self.phase = "unknown"
 
     def state(self, status: str) -> dict[str, Any]:
@@ -143,73 +147,32 @@ class TerminalObservation:
             "shell_phase": self.phase,
             "active_command_id": self.active,
             "cwd": self.cwd,
-            "observed_cursor": self.cursor(),
         }
 
-    def page(self, cursor: str | None, envelope: dict[str, Any], max_chars: int) -> dict[str, Any]:
-        """按完整 JSON 大小分页；游标只跨过实际交付的字符或事件。"""
-        seq, offset = self.position(cursor)
-        first = self.events[0][0] if self.events else self.next_seq
-        gap = seq < first - 1 or (offset > 0 and seq < first)
-        if gap:
-            seq, offset = first - 1, 0
+    def snapshot(self, envelope: dict[str, Any], max_chars: int) -> dict[str, Any]:
+        """先保留状态和当前屏幕，再用剩余预算保留最近历史；不消费任何输出。"""
         result = {
             **deepcopy(envelope),
-            "events": [],
-            "next_cursor": self.cursor(seq, offset),
-            "has_more": False,
-            "gap": gap,
+            "latest_command": deepcopy(self.latest_command),
+            "history": "",
+            "history_truncated": self.history_omitted or bool(self.history_text),
         }
+        # 为 screen 的文本分配余量，元数据不足时显式失败，绝不截坏 JSON。
+        result["screen"] = project_screen(self.screen, max_chars - json_size(result) - 16)
         if json_size(result) > max_chars:
             raise TerminalSessionError("observation budget cannot hold metadata")
-        for number, event, _ in self.events:
-            if number < seq or (number == seq and not offset):
-                continue
-            start = offset if number == seq else 0
-            if event["type"] == "output":
-                text = event["text"][start:]
-                low, high = 0, len(text)
-                while low < high:
-                    middle = (low + high + 1) // 2
-                    if json_size(self._text_page(result, number, start, text, middle)) <= max_chars:
-                        low = middle
-                    else:
-                        high = middle - 1
-                if low == 0:
-                    result["has_more"] = True
-                    return result
-                result = self._text_page(result, number, start, text, low)
-                if low < len(text):
-                    result["has_more"] = True
-                    return result
+        low, high = 0, len(self.history_text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            candidate = {
+                **result,
+                "history": self.history_text[-middle:],
+                "history_truncated": self.history_omitted or middle < len(self.history_text),
+            }
+            if json_size(candidate) <= max_chars:
+                low = middle
             else:
-                candidate_event = {
-                    **result,
-                    "events": [*result["events"], deepcopy(event)],
-                    "next_cursor": self.cursor(number),
-                    "has_more": False,
-                }
-                if json_size(candidate_event) > max_chars:
-                    result["has_more"] = True
-                    return result
-                result = candidate_event
-        result["has_more"] = False
+                high = middle - 1
+        result["history"] = self.history_text[-low:] if low else ""
+        result["history_truncated"] = self.history_omitted or low < len(self.history_text)
         return result
-
-    def _text_page(
-        self, page: dict[str, Any], number: int, start: int, text: str, count: int
-    ) -> dict[str, Any]:
-        previous = page["events"]
-        if previous and previous[-1]["type"] == "output":
-            items = [
-                *previous[:-1],
-                {"type": "output", "text": previous[-1]["text"] + text[:count]},
-            ]
-        else:
-            items = [*previous, {"type": "output", "text": text[:count]}]
-        return {
-            **page,
-            "events": items,
-            "next_cursor": self.cursor(number, start + count if count < len(text) else 0),
-            "has_more": False,
-        }

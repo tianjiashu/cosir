@@ -33,8 +33,14 @@ class TerminalWriteTool(HandlerBase):
         "shell command, a multiline continuation, or an answer to a program. Input "
         "acceptance is not execution. Reuse operation_id only with identical "
         "input. Cancellation stops waiting, not accepted input. Use returned "
-        "next_cursor with terminal_read to continue observing. Observations begin "
-        "immediately before input acceptance and may include background output."
+        "terminal_read for later observations. After the bounded wait, returns the current "
+        "screen, recent history and latest_command state; these snapshots may overlap. "
+        "Old output can be lost; no cursor or pagination is provided. screen.truncated and "
+        "history_truncated mark loss. Screen text replaces the previous view; row_offset and "
+        "first_row_omitted_chars mark omitted prefixes, wrapped_rows uses original row indices. "
+        "latest_command may predate this input; compare command_id instead of treating an old "
+        "result as this input's result. "
+        "Only shell integration proves command return; prompts, timeouts and accepted input do not."
     )
     args_model = TerminalWriteArgs
     timeout_seconds: ClassVar[float] = 35.0

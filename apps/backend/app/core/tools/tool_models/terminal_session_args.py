@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config.constant import Constant
-from app.service.terminal.interaction import ActivityWait, TerminalInput, TerminalWait
+from app.service.terminal.interaction import TerminalInput
 
 
 class TerminalListArgs(BaseModel):
@@ -78,31 +78,27 @@ class TerminalWriteArgs(BaseModel):
         ge=0,
         le=30000,
         description=(
-            "Bounded activity collection after input acceptance; does not wait for "
-            "command return."
+            "Wait this long after input acceptance, unless cancelled or the session ends; "
+            "does not wait for command return."
         ),
     )
 
 
 class TerminalReadArgs(BaseModel):
-    """观察游标与预览 output seq 分域；等待不改变命令生命周期。"""
+    """当前画面观察不提供分页；等待不改变命令生命周期。"""
 
     model_config = ConfigDict(strict=True, extra="forbid")
     session_id: str = Field(
         min_length=1, max_length=128, description="Task-owned terminal session ID."
     )
-    cursor: str | None = Field(
-        default=None,
-        max_length=256,
+    wait_ms: int = Field(
+        default=3000,
+        ge=3000,
+        le=30000,
         description=(
-            "Opaque next_cursor from a previous observation; null reads the retained " "window."
-        ),
-    )
-    wait: TerminalWait = Field(
-        default_factory=ActivityWait,
-        description=(
-            "Wait for activity, a named command to return, or a new top-level prompt. "
-            "Timeout never terminates the program."
+            "Wait at least 3 seconds before returning the current screen and recent history. "
+            "Only cancellation or session end returns early. Increase this when repeated "
+            "reads show no progress."
         ),
     )
 

@@ -1,6 +1,6 @@
 """交互终端 read 的工具边界；shell 观察由 service 统一管理。"""
 
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from app.core.tools.display.terminal_display import build_terminal_observation_display_data
 from app.core.tools.schemas import (
@@ -29,12 +29,20 @@ from app.core.tools.tool_models import TerminalReadArgs
 class TerminalReadTool(HandlerBase):
     name = TOOL_TERMINAL_READ
     description = (
-        "Observe terminal output and shell events using next_cursor. Wait for "
-        "activity, a named command_returned, or a new shell_prompt. Timeout and "
-        "output do not mean completion. A command returning means the shell "
-        "regained control, not that background or suspended processes ended. gap "
-        "means retained output was lost; has_more means continue paging. "
-        "Interactive program input does not create a shell command."
+        "Wait at least 3 seconds, then observe the current terminal screen, bounded recent history "
+        "and latest_command state. No cursor or pagination; snapshots may overlap and old output "
+        "may be lost. For complete output, redirect the command to a file. Screen text replaces "
+        "the previous view; wrapped_rows uses original zero-based rows, row_offset and "
+        "first_row_omitted_chars mark omitted prefixes. screen.truncated/history_truncated "
+        "explicitly mark loss. The first read establishes a baseline without counting a repeat. "
+        "New information resets the repeat count and produces no warning. Consecutive reads "
+        "with no new information warn on counts 1 through 4 and return a recoverable read error "
+        "from count 5 onward. Warnings show the count and suggest a longer wait when no input "
+        "is needed; new output or state changes restore reads. Inspect prompts before waiting "
+        "longer. A longer wait does not reset the counter or guarantee recovery. "
+        "Only shell integration determines command return; executing can mean waiting "
+        "for input, and returned does not mean background processes ended. A read error does "
+        "not fail or stop the command. Cancellation or session end may return before the wait ends."
     )
     args_model = TerminalReadArgs
     timeout_seconds: ClassVar[float] = 35.0
@@ -43,11 +51,10 @@ class TerminalReadTool(HandlerBase):
     def execute(
         self,
         session_id: str,
-        cursor: str | None = None,
-        wait: dict[str, Any] | None = None,
+        wait_ms: int = 3000,
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
-        """仅观察，不控制命令；分页游标不越过未交付的输出。"""
+        """只读有界当前快照；重复观察错误不改变会话或命令状态。"""
         if execution_context is None:
             raise ValueError("terminal_read requires execution context")
         if cancelled(execution_context):
@@ -59,8 +66,8 @@ class TerminalReadTool(HandlerBase):
                 session_id,
                 task_id=execution_context.task_id,
                 workspace_id=execution_context.workspace_id,
-                cursor=cursor,
-                wait=wait,
+                run_id=execution_context.run_id,
+                wait_ms=wait_ms,
                 is_cancelled=lambda: cancelled(execution_context),
             )
             return success_observation(

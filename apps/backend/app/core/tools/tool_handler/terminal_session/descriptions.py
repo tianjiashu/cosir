@@ -25,10 +25,9 @@ def build_terminal_session_parameters_schema(
     tool_name: str,
     args_model: type[BaseModel],
 ) -> Mapping[str, Any]:
-    """按宿主补充说明，并收窄控制键枚举；实际能力在 service 按 worker 握手检查。
+    """按宿主补充说明；控制键枚举与校验由参数模型统一生成。
 
-    shell 名称仍允许自定义可执行文件，只有封闭的控制键集合按平台投影。
-    深拷贝避免宿主枚举污染共享 Pydantic schema。
+    shell 名称仍允许自定义可执行文件。深拷贝避免描述修改污染共享 Pydantic schema。
     """
 
     schema = deepcopy(args_model.model_json_schema())
@@ -45,10 +44,6 @@ def build_terminal_session_parameters_schema(
         cwd = properties.get("cwd")
         if isinstance(cwd, dict):
             cwd["description"] = _cwd_parameter_description(system)
-    elif tool_name == TOOL_TERMINAL_WRITE:
-        schema["$defs"]["InputKey"]["properties"]["key"]["enum"] = list(
-            control_keys_for_platform(system)
-        )
     elif tool_name == TOOL_TERMINAL_SIGNAL:
         signal = properties.get("signal")
         if isinstance(signal, dict):

@@ -27,6 +27,7 @@ from app.models.errors.deletion_errors import (
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service import depends as service_depends
 from app.storage.checkpoint_gc import cleanup_orphan_checkpoint_threads
+from app.storage.queries.task_read_queries import TaskReadQueries
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -68,6 +69,7 @@ class TaskService:
         self._state = service_depends.get_conversation_task_state_service()
         self._task_context_crud = service_depends.get_conversation_task_context_crud()
         self._session_factory = main_session_factory()
+        self._task_reads = TaskReadQueries(self._session_factory)
 
     def get_or_create_task(
         self,
@@ -197,8 +199,8 @@ class TaskService:
             task_id: 任务标识。
 
         返回:
-            对应的 ``TaskRecord``，其 ``execution_status`` 由最新轮次派生
-            （见 ``task_display_status``）。
+            对应的 ``TaskRecord``，其 ``execution_status`` 从 ``current_run_id`` 指向的 Run 投影；
+            无当前 Run 时为空，不维护额外状态机。
 
         异常:
             KeyError: 如果指定任务不存在。
@@ -207,7 +209,7 @@ class TaskService:
         副作用:
             无（仅读取）。
         """
-        return self._task.get(task_id)
+        return self._task_reads.get(task_id)
 
     async def fork_task(self, source_task_id: int, source_run_id: int) -> TaskRecord:
         """在指定历史 Run 处创建一个独立的 fork Task。"""
@@ -346,7 +348,7 @@ class TaskService:
         """列出某工作区下的用户任务（排除委派子任务）。
 
         委派子任务（``task_type='delegate_task'``）不进侧边栏对话列表，故本方法仅返回
-        ``task_type='user'`` 的任务，按更新时间倒序。
+        ``task_type='user'`` 或 ``'fork'`` 的任务，按更新时间倒序。
 
         参数:
             workspace_id: 工作区标识。
@@ -360,7 +362,7 @@ class TaskService:
         副作用:
             无（仅读取）。
         """
-        return self._task.list_by_workspace(workspace_id)
+        return self._task_reads.list_by_workspace(workspace_id)
 
     def delete_task(self, task_id: int) -> None:
         """原子删除任务树并级联清理其下全部子产物。
