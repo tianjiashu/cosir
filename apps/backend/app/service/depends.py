@@ -43,6 +43,8 @@ if TYPE_CHECKING:
     from app.service.model_config import ModelConfigService
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
     from app.service.terminal.terminal_session_service import TerminalSessionService
+    from app.service.workspace_files.file_watch import WorkspaceFileWatcher
+    from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
     from app.storage.crud.model_config_crud import ModelConfigCrud
@@ -276,6 +278,22 @@ def get_conversation_task_context_service() -> ConversationTaskContextService:
 
 
 @lru_cache(maxsize=1)
+def get_workspace_files_service() -> WorkspaceFilesService:
+    """装配只读文件服务；工作区记录经装配层 crud 单例解析。"""
+    from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
+
+    return WorkspaceFilesService()
+
+
+@lru_cache(maxsize=1)
+def get_workspace_file_watcher() -> WorkspaceFileWatcher:
+    """监听器按订阅启动，由依赖关闭入口释放。"""
+    from app.service.workspace_files.file_watch import WorkspaceFileWatcher
+
+    return WorkspaceFileWatcher()
+
+
+@lru_cache(maxsize=1)
 def get_workspace_service() -> WorkspaceService:
     """Return the process-local WorkspaceService singleton.
 
@@ -412,7 +430,6 @@ def get_conversation_run_observability_service() -> ConversationRunObservability
     return ConversationRunObservabilityService()
 
 
-
 @lru_cache(maxsize=1)
 def get_conversation_event_projector() -> ConversationEventProjector:
     """返回进程级 conversation event → snapshot projector。"""
@@ -462,6 +479,12 @@ def reset_service_dependencies() -> None:
         ConversationTaskStateService,
     )
 
+    if get_workspace_file_watcher.cache_info().currsize:
+        get_workspace_file_watcher().close()
+    get_workspace_file_watcher.cache_clear()
+    if get_workspace_files_service.cache_info().currsize:
+        get_workspace_files_service().close()
+    get_workspace_files_service.cache_clear()
     _shutdown_cached_runtime_before_reset()
     ConversationTaskStateService.clear_process_state()
     get_workspace_service.cache_clear()
