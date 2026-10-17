@@ -30,26 +30,27 @@ from app.models import (
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
+from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 
 
 def _build_ordered_display_text(
-        parts: Sequence[AssistantTextPart | AssistantImagePart],
+    parts: Sequence[AssistantTextPart | AssistantImagePart],
 ) -> str:
     """将 composer 的文本/图片顺序编码进既有 Run 展示文本值。"""
 
     image_token = Constant.Cosir.LOCAL_IMAGE_TOKEN
     emitted_image_ids = {
-        image_id
+        match.group(1)
         for part in parts
         if isinstance(part, AssistantTextPart)
-        for image_id in image_token.findall(
-            Constant.Transport.HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text)
-        )
+        for match in find_message_tokens(image_token, part.text)
     }
     segments: list[str] = []
     for part in parts:
         if isinstance(part, AssistantTextPart):
-            segments.append(Constant.Transport.HIDDEN_LOCAL_FILE_TOKEN.sub(r"\1", part.text))
+            segments.append(
+                replace_message_tokens(Constant.Transport.HIDDEN_LOCAL_FILE_TOKEN, r"\1", part.text)
+            )
         else:
             asset_id = part.image.removeprefix("cosir-attachment://")
             if asset_id in emitted_image_ids:

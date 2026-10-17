@@ -62,7 +62,7 @@ class Constant:
         # 每个 session 保留的最近已接受输入摘要数；随终态历史淘汰或 Task 删除释放。
         MAX_WRITE_OPERATION_CACHE: int = 4096
         # 服务侧与 Worker 握手时约定的协议版本标识。
-        WORKER_PROTOCOL: str = "terminal-worker-v4"
+        WORKER_PROTOCOL: str = "terminal-worker-v5"
         # Worker 子进程启动时注入的环境变量键，用于标识自身为终端 worker。
         WORKER_ENV: str = "CODING_AGENT_TERMINAL_WORKER"
 

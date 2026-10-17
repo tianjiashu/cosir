@@ -36,6 +36,7 @@ from app.service.conversation_run.conversation_task_context_service import (
 )
 from app.service.depends import get_model_config_service
 from app.storage.store_engines import main_session_factory
+from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +158,9 @@ class ConversationRunService:
             )
 
         result: list[ConversationRunFileAttachment] = []
-        for attachment_id in dict.fromkeys(Constant.Cosir.LOCAL_FILE_TOKEN.findall(display_text)):
+        for attachment_id in dict.fromkeys(
+            m.group(1) for m in find_message_tokens(Constant.Cosir.LOCAL_FILE_TOKEN, display_text)
+        ):
             resolved_attachment = merged.get(attachment_id)
             if resolved_attachment is None or not (
                 Path(resolved_attachment["path"]).is_file()
@@ -182,8 +185,10 @@ class ConversationRunService:
                 raise ValueError("ordinary file attachment is unavailable")
             return attachment["path"]
 
-        return Constant.Cosir.LOCAL_IMAGE_TOKEN.sub(
-            "", Constant.Cosir.LOCAL_FILE_TOKEN.sub(replace, text)
+        return replace_message_tokens(
+            Constant.Cosir.LOCAL_IMAGE_TOKEN,
+            "",
+            replace_message_tokens(Constant.Cosir.LOCAL_FILE_TOKEN, replace, text),
         )
 
     @staticmethod

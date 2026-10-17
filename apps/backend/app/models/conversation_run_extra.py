@@ -7,6 +7,7 @@ from typing import Literal
 
 from app.config.constant import Constant
 from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
+from app.utils.message_tokens import find_message_tokens
 
 ReasoningEffort = Literal["low", "high", "max"]
 
@@ -79,7 +80,14 @@ class ConversationRunExtra:
                 }
             )
 
-        token_ids = list(dict.fromkeys(Constant.Cosir.LOCAL_FILE_TOKEN.findall(self.display_text)))
+        token_ids = list(
+            dict.fromkeys(
+
+                    m.group(1)
+                    for m in find_message_tokens(Constant.Cosir.LOCAL_FILE_TOKEN, self.display_text)
+
+            )
+        )
         if token_ids != [attachment["id"] for attachment in normalized]:
             raise ValueError("display_text attachment tokens do not match attachments")
         object.__setattr__(self, "attachments", normalized)

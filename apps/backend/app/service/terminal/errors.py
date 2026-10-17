@@ -1,4 +1,4 @@
-"""Terminal session domain errors."""
+"""终端会话领域错误；观察策略错误不改变命令生命周期。"""
 
 
 class TerminalSessionError(Exception):
@@ -24,6 +24,20 @@ class TerminalSessionStateError(TerminalSessionError):
     """当前 session 状态不允许请求的操作。"""
 
     code = "TERMINAL_SESSION_STATE_ERROR"
+
+
+class TerminalRepeatedReadError(TerminalSessionError):
+    """连续观察没有新信息；新输出或状态变化后可恢复，不终止程序。"""
+
+    code = "TERMINAL_READ_UNCHANGED"
+    retryable = True
+
+
+class TerminalReadInProgressError(TerminalSessionError):
+    """已有 read 正在等待；拒绝并发读取，不阻塞输入或信号。"""
+
+    code = "TERMINAL_READ_IN_PROGRESS"
+    retryable = True
 
 
 class TerminalSessionCapacityError(TerminalSessionError):

@@ -24,13 +24,13 @@ TASK_SYSTEM_PROMPT_SEQUENCE = 0
 class ConversationTaskContextService:
     """维护 LangChain 原生消息的 Task 级有序 context。
 
-    以 ``conversation_task_contexts`` 表为唯一持久化真相，每条完整消息或 assistant
-    partial 草稿一行；
-    运行时仅经 CRUD 读写，不存在进程内 context working copy（避免与数据库双写漂移）。
+    以 ``conversation_task_contexts`` 表为唯一持久化事实源，每条完整消息或 assistant
+    partial 草稿一行。``RuntimeContextManager`` 持有 Task 级内存工作副本，并经本服务
+    读写持久化记录；观测页读取存储记录，不读取或替代运行时工作副本。
 
     职责边界：
     - 负责：固定 Task system prompt 的首次持久化、消息与 Transport metadata 的追加、
-      assistant 草稿原地替换、按 run 删除、序列号分配、纳入过滤读取。
+      assistant 草稿原地替换、按 run 删除、序号查询、纳入过滤读取。
     - 不负责：消息内容语义校验、压缩策略（由上下文管理器负责）。
     """
 

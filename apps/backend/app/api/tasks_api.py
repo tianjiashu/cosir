@@ -81,7 +81,7 @@ async def get_task(
         raise HTTPException(status_code=404, detail="task not found") from exc
     return TaskResponse.from_record(
         task,
-        context_window_total=task_service.get_context_window_total(task_id),
+        context_window_total=task.context_window_total,
     )
 
 
