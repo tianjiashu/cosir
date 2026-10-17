@@ -168,39 +168,6 @@ class TaskCrud:
         session.flush()
         return TaskRecord.from_model(model)
 
-    def list_by_workspace(self, workspace_id: int) -> list[TaskRecord]:
-        """列出某工作区下的用户任务（排除委派子任务），按更新时间倒序。
-
-        委派子任务（``task_type='delegate_task'``）不出现在侧边栏对话列表中，因此本方法仅返回
-        ``task_type='user'`` 的任务。
-
-        参数:
-            workspace_id: 工作区标识（整数 id）。
-
-        返回:
-            该工作区的用户任务列表，按 ``updated_at`` 再 ``id`` 倒序排列；无匹配时为空列表。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            打开一次主库只读 session。
-        """
-        with self._session_factory() as session:
-            rows = (
-                session.execute(
-                    select(TaskModel)
-                    .where(
-                        TaskModel.workspace_id == workspace_id,
-                        TaskModel.task_type.in_(("user", "fork")),
-                    )
-                    .order_by(TaskModel.updated_at.desc(), TaskModel.id.desc())
-                )
-                .scalars()
-                .all()
-            )
-        return [TaskRecord.from_model(row) for row in rows]
-
     def next_fork_title(self, workspace_id: int, base_title: str, session: Session) -> str:
         """在外部事务中生成当前工作区内可读的 fork 标题。"""
 
@@ -332,7 +299,7 @@ class TaskCrud:
     def list_ids_by_workspace(self, workspace_id: int, session: Session | None = None) -> list[int]:
         """仅返回某工作区下全部 task 的整数 id 列表。
 
-        相比 ``list_by_workspace``，本方法只查 ``id`` 一列，用于跨表级联删除等只需 id
+        本方法只查 ``id`` 一列，用于跨表级联删除等只需 id
         的场景，避免整行读取。
 
         参数:

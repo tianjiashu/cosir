@@ -412,38 +412,38 @@ class AgentRuntime:
         ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
         allows_tools = allows_tools - ban_tools if allows_tools else set()
 
-        # if not ban_tools:
-        #     task_space.defer_runtime_notice(
-        #         RuntimeNotice(
-        #             content=(
-        #                 "Tool availability notice: all tools are available for this round."
-        #             ),
-        #             kind="tool_availability",
-        #             run_id=run.id,
-        #         )
-        #     )
-        # elif not allows_tools:
-        #     task_space.defer_runtime_notice(
-        #         RuntimeNotice(
-        #             content=(
-        #                 "Tool availability notice: all tools are not available for this round."
-        #             ),
-        #             kind="tool_availability",
-        #             run_id=run.id,
-        #         )
-        #     )
-        # else:
-        task_space.defer_runtime_notice(
-            RuntimeNotice(
-                content=(
-                    "Tool availability notice: the following tools are disabled for this "
-                    f"round and calls to them will be rejected: {', '.join(sorted(ban_tools))}. "
-                    f"{', '.join(sorted(allows_tools))} tools available."
-                ),
-                kind="tool_availability",
-                run_id=run.id,
+        if not ban_tools:
+            task_space.defer_runtime_notice(
+                RuntimeNotice(
+                    content=(
+                        "Tool availability notice: all tools are available for this round."
+                    ),
+                    kind="tool_availability",
+                    run_id=run.id,
+                )
             )
-        )
+        elif not allows_tools:
+            task_space.defer_runtime_notice(
+                RuntimeNotice(
+                    content=(
+                        "Tool availability notice: all tools are not available for this round."
+                    ),
+                    kind="tool_availability",
+                    run_id=run.id,
+                )
+            )
+        else:
+            task_space.defer_runtime_notice(
+                RuntimeNotice(
+                    content=(
+                        "Tool availability notice: the following tools are disabled for this "
+                        f"round and calls to them will be rejected: {', '.join(sorted(ban_tools))}. "
+                        f"{', '.join(sorted(allows_tools))} tools available."
+                    ),
+                    kind="tool_availability",
+                    run_id=run.id,
+                )
+            )
 
         execution_context = self._resolve_execution_context(task, run_id=run.id)
         runtime_dependencies = None

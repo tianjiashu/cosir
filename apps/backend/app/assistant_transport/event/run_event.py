@@ -32,6 +32,7 @@ from app.config.logging.logger import log
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunError
 from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.utils.message_tokens import find_message_tokens
 
 # Run 状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）一律丢弃。
 # ``cancelled -> running`` 与 ``waiting_for_input -> running`` 是合法恢复迁移，由
@@ -364,7 +365,7 @@ def build_user_input_parts(
     cursor = 0
     referenced_image_ids: set[str] = set()
     referenced_file_ids: set[str] = set()
-    for match in Constant.Transport.INPUT_TOKEN.finditer(display_text):
+    for match in find_message_tokens(Constant.Transport.INPUT_TOKEN, display_text):
         text_part = display_text[cursor : match.start()]
         if text_part:
             parts.append({"type": "text", "text": text_part, "status": "completed"})

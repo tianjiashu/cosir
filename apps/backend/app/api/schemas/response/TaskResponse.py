@@ -13,7 +13,8 @@ class TaskResponse(BaseModel):
         task_id: 任务标识。
         workspace_id: 所属工作区标识。
         title: 任务标题。
-        execution_status: 派生执行状态，可能为 None。
+        current_run_id: Task 当前指向的 Run；无 Run 时为 None。
+        execution_status: 当前 Run 的读取投影，不持久化；无 Run 时为 None。
         task_type: 任务类型，``"user"`` 为用户创建，``"fork"`` 为历史分支，
             ``"delegate_task"`` 为委派子任务。
         parent_task_id: 父任务标识，仅委派子任务有值。
@@ -37,6 +38,7 @@ class TaskResponse(BaseModel):
     workspace_id: int
     title: str
     extra: dict[str, object] | None = None
+    current_run_id: int | None = None
     execution_status: str | None = None
     task_type: str = "user"
     parent_task_id: int | None = None
@@ -78,6 +80,7 @@ class TaskResponse(BaseModel):
             workspace_id=record.workspace_id,
             title=record.title,
             extra=record.extra,
+            current_run_id=record.current_run_id,
             execution_status=record.execution_status,
             task_type=record.task_type,
             parent_task_id=record.parent_task_id,
