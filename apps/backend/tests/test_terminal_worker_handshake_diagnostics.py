@@ -1,6 +1,6 @@
 """Terminal Worker 握手失败的错误分类与可排查日志测试。
 
-覆盖：协议不兼容（确定性）判为不可重试、握手超时仍可重试、两类失败各自的 WARNING 事件与字段
+覆盖：握手身份不匹配（确定性）判为不可重试、握手超时仍可重试、两类失败各自的 WARNING 事件与字段
 对照，以及经 ``service_error_observation`` 投影给模型时 ``retryable``/``reason`` 的变化。
 """
 
@@ -19,6 +19,7 @@ import pytest
 from app.core.tools.tool_handler.terminal_session.common import service_error_observation
 from app.service.terminal import process_terminal_worker as worker_module
 from app.service.terminal.errors import (
+    TerminalWorkerHandshakeError,
     TerminalWorkerProtocolError,
     TerminalWorkerUnavailableError,
 )
@@ -172,65 +173,65 @@ def _handshake_record(caplog: pytest.LogCaptureFixture) -> logging.LogRecord:
     )
 
 
-def test_protocol_error_is_non_retryable_worker_unavailable_subclass() -> None:
-    """协议不兼容必须是「不可重试」，同时保留父类身份以免既有捕获点漏接。"""
+def test_handshake_error_is_non_retryable_worker_unavailable_subclass() -> None:
+    """握手身份不匹配不可重试，同时保留父类身份以免既有捕获点漏接。"""
 
-    assert issubclass(TerminalWorkerProtocolError, TerminalWorkerUnavailableError)
-    assert TerminalWorkerProtocolError.code == "TERMINAL_WORKER_PROTOCOL_MISMATCH"
-    assert TerminalWorkerProtocolError.retryable is False
+    assert issubclass(TerminalWorkerHandshakeError, TerminalWorkerUnavailableError)
+    assert TerminalWorkerHandshakeError.code == "TERMINAL_WORKER_HANDSHAKE_REJECTED"
+    assert TerminalWorkerHandshakeError.retryable is False
     assert TerminalWorkerUnavailableError.retryable is True
 
 
-def test_service_error_observation_marks_protocol_mismatch_as_not_retryable() -> None:
-    """投影给模型的协议不兼容错误必须是 retryable=False，并给「先修再试」而非「稍后重试」。"""
+def test_service_error_observation_marks_rejected_handshake_as_not_retryable() -> None:
+    """投影给模型的握手错误必须不可重试，并给「先修再试」而非「稍后重试」。"""
 
     observation = service_error_observation(
         "terminal_start",
-        TerminalWorkerProtocolError("handshake rejected"),
+        TerminalWorkerHandshakeError("handshake rejected"),
     )
 
     assert observation.status == "error"
     assert observation.retryable is False
     assert observation.display_data["status_hint"] == "终端失败"
-    assert "TERMINAL_WORKER_PROTOCOL_MISMATCH" in (observation.reason or "")
+    assert "TERMINAL_WORKER_HANDSHAKE_REJECTED" in (observation.reason or "")
     assert "Fix the session or arguments before retrying." in (observation.reason or "")
 
 
-def test_rejected_handshake_raises_protocol_error_and_logs_field_comparison(
+def test_rejected_handshake_raises_handshake_error_and_logs_field_comparison(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """收到旧协议握手时要抛不可重试的协议错误，并在日志里给出期望/实际字段对照。"""
+    """收到身份不匹配的握手时抛不可重试错误，并记录期望/实际字段对照。"""
 
     caplog.set_level(logging.WARNING)
     stale_handshake = _frame(
         {
             "type": "handshake",
-            "protocol": "terminal-worker-v1",
             "instance_id": "stale-instance",
             "pid": _FAKE_WORKER_PID,
             "pty_kind": "conpty",
+            "rows": 24,
+            "columns": 80,
             "capabilities": [],
         }
     )
     _patch_worker_process(monkeypatch, _FakeProcess(stale_handshake))
     worker = ProcessTerminalWorker("terminal-worker.exe", "expected-instance")
 
-    with pytest.raises(TerminalWorkerProtocolError) as raised:
+    with pytest.raises(TerminalWorkerHandshakeError) as raised:
         worker.start(_spec(), ".", lambda event: None)
 
     message = str(raised.value)
     assert "expected-instance" in message
     assert "stale-instance" in message
-    assert "terminal-worker-v1" in message
-    assert worker_module.Constant.Terminal.WORKER_PROTOCOL in message
+    assert "verify that the configured worker executable belongs to this application" in message
 
     record = _handshake_record(caplog)
     data = record.data  # type: ignore[attr-defined]
     assert data["reason"] == "rejected"
-    assert data["received_protocol"] == "terminal-worker-v1"
-    assert data["expected_protocol"] == worker_module.Constant.Terminal.WORKER_PROTOCOL
     assert data["received_pid"] == _FAKE_WORKER_PID
+    assert data["received_rows"] == 24
+    assert data["received_columns"] == 80
 
 
 def test_handshake_timeout_stays_retryable_unavailable(
@@ -254,7 +255,7 @@ def test_handshake_timeout_stays_retryable_unavailable(
     data = record.data  # type: ignore[attr-defined]
     assert data["reason"] == "timeout"
     assert data["timeout_seconds"] == 0.05
-    assert data["received_protocol"] is None
+    assert data["received_instance_id"] is None
 
 
 def test_not_configured_worker_logs_before_raising(monkeypatch: pytest.MonkeyPatch, caplog) -> None:

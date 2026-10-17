@@ -19,6 +19,7 @@
 from pathlib import Path
 from typing import ClassVar
 
+from app.utils.path.relative_path import has_nul
 from app.utils.path.validation import is_within_cosir
 
 
@@ -440,6 +441,6 @@ class PathResolver:
 
         if not isinstance(path, str) or not path.strip():
             return "path must be a non-empty string"
-        if "\x00" in path:
+        if has_nul(path):
             return "path must not contain NUL characters"
         return ""

@@ -3,7 +3,6 @@
 import sys
 import tempfile
 from contextlib import asynccontextmanager
-from datetime import datetime
 from pathlib import Path
 
 import uvicorn
@@ -13,10 +12,15 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.app import app
-from app.models import WorkspaceRecord
-from app.service.depends import get_workspace_file_watcher, get_workspace_files_service
-from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
-from app.service.workspace_files.watch import WorkspaceFileWatcher
+from app.service.depends import (
+    close_service_dependencies,
+    get_workspace_crud,
+    get_workspace_file_watcher,
+    get_workspace_files_service,
+)
+from app.service.workspace_files.file_watch import WorkspaceFileWatcher
+from app.storage.store_engines import init_storage
+from app.utils.path import system_cosir as paths
 
 
 @asynccontextmanager
@@ -33,9 +37,17 @@ async def fixture_lifespan(_app: FastAPI):
             "# Local image\n\n![asset](media/deep/photo.png)", encoding="utf-8"
         )
         (root / "large.txt").write_text("中文😀 line\n" * 350000, encoding="utf-8")
-        record = WorkspaceRecord(1, "demo", str(root), datetime.now(), datetime.now())
-        files = WorkspaceFilesService(lambda _id: record)
-        watcher = WorkspaceFileWatcher(files)
+        # 隔离 storage 到临时目录，避免触碰生产数据库；watcher 与 api 共享同一 service 单例。
+        storage_dir = Path(tempfile.mkdtemp(prefix="cosir-files-e2e-storage-"))
+        paths.override(
+            DATABASE_FILE=storage_dir / "app.sqlite3",
+            CHECKPOINT_FILE=storage_dir / "checkpoints.sqlite3",
+            LOG_DIR=storage_dir / "logs",
+        )
+        init_storage()
+        get_workspace_crud().create("demo", str(root))
+        files = get_workspace_files_service()
+        watcher = WorkspaceFileWatcher()
         app.dependency_overrides[get_workspace_files_service] = lambda: files
         app.dependency_overrides[get_workspace_file_watcher] = lambda: watcher
         app.state.fixture_root = root
@@ -44,6 +56,7 @@ async def fixture_lifespan(_app: FastAPI):
         watcher.close()
         files.close()
         app.dependency_overrides.clear()
+        close_service_dependencies()
 
 
 @app.post("/__test__/files/update")

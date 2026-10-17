@@ -3,7 +3,6 @@
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,17 +11,16 @@ from app.app import app
 from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.tool_handler.find_files import FindFilesTool
 from app.core.tools.tool_handler.search_content import SearchContentTool
-from app.models import WorkspaceRecord
-from app.service.depends import get_workspace_files_service
+from app.service.depends import get_workspace_crud, get_workspace_files_service
 from app.service.workspace_files.browser_visibility import BrowserVisibilityStore
 from app.service.workspace_files.file_models import FileConflictError
 from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
 
 
 @pytest.fixture
-def files(tmp_path):
-    record = WorkspaceRecord(1, "demo", str(tmp_path), datetime.now(), datetime.now())
-    service = WorkspaceFilesService(lambda _: record)
+def files(tmp_path, isolated_storage):
+    get_workspace_crud().create("demo", str(tmp_path))
+    service = WorkspaceFilesService()
     yield service
     service.close()
 

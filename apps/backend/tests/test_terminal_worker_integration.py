@@ -92,7 +92,6 @@ def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
     )
     assert b"terminal-worker-smoke" in output
     handshake = next(event for event in events if event.get("type") == "handshake")
-    assert handshake["protocol"] == "terminal-worker-v5"
     assert handshake["instance_id"] == "integration-test-instance"
 
 

@@ -378,6 +378,8 @@ class WorkspaceService:
                         orphan_checkpoint_threads=frozenset(orphan_threads),
                     )
                 )
+                if service_depends.get_workspace_file_watcher.cache_info().currsize:
+                    service_depends.get_workspace_file_watcher().close_workspace(workspace_id)
                 self._drop_workspace_config_scopes(workspace_record.root_path)
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc

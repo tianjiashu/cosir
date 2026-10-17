@@ -40,6 +40,7 @@ from app.core.tools.tool_handler.patch_write.patch_parser import (
     parse_git_unified_diff_detailed,
 )
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
+from app.utils.path.relative_path import has_nul
 
 
 class FileResourcePathError(ValueError):
@@ -278,7 +279,7 @@ class FileResourceResolver:
                     "empty path will always be rejected."
                 ),
             )
-        if "\x00" in value:
+        if has_nul(value):
             raise FileResourcePathError(
                 "path must not contain NUL characters",
                 reason="the path contains a NUL character; pass a valid path string.",

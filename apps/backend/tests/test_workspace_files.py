@@ -3,33 +3,24 @@
 import asyncio
 import os
 import threading
-from datetime import datetime
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.app import app
-from app.models import WorkspaceRecord
-from app.service.depends import get_workspace_files_service
+from app.service.depends import get_workspace_crud, get_workspace_files_service
 from app.service.workspace_files.directory_index import DirectoryIndex
 from app.service.workspace_files.file_content import FULL_TEXT_BYTES, TEXT_CHUNK_BYTES, read_text
 from app.service.workspace_files.file_models import FileConflictError, FileEntry
 from app.service.workspace_files.text_search import search_text
-from app.service.workspace_files.watch import WorkspaceFileWatcher
-from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
+from app.service.workspace_files.file_watch import WorkspaceFileWatcher
 
 
 @pytest.fixture
-def files(tmp_path):
-    record = WorkspaceRecord(1, "project", str(tmp_path), datetime.now(), datetime.now())
-
-    def lookup(workspace_id):
-        if workspace_id != 1:
-            raise KeyError(workspace_id)
-        return record
-
-    service = WorkspaceFilesService(lookup)
+def files(tmp_path, isolated_storage):
+    get_workspace_crud().create("project", str(tmp_path))
+    service = get_workspace_files_service()
     yield service
     service.close()
 
@@ -181,7 +172,7 @@ def test_http_contract_and_resource_range(files, tmp_path):
 
 @pytest.mark.asyncio
 async def test_watch_native_update_and_release(files, tmp_path):
-    watcher = WorkspaceFileWatcher(files)
+    watcher = WorkspaceFileWatcher()
     sub = await asyncio.to_thread(watcher.subscribe, 1, [""], asyncio.get_running_loop())
     try:
         (tmp_path / "new.txt").write_text("new")
@@ -305,7 +296,7 @@ def test_search_pages_visit_every_result_with_bounded_windows(files, tmp_path):
 
 @pytest.mark.asyncio
 async def test_watch_degrades_when_emitter_dies_and_releases(files, monkeypatch):
-    from app.service.workspace_files import watch
+    from app.service.workspace_files import file_watch
 
     class DeadEmitter:
         def is_alive(self):
@@ -333,7 +324,7 @@ async def test_watch_degrades_when_emitter_dies_and_releases(files, monkeypatch)
 
     observer = FailedObserver()
     monkeypatch.setattr(watch, "Observer", lambda: observer)
-    watcher = WorkspaceFileWatcher(files)
+    watcher = WorkspaceFileWatcher()
     sub = watcher.subscribe(1, [""], asyncio.get_running_loop())
     assert watcher.check_health(sub)
     watcher.unsubscribe(sub)

@@ -24,7 +24,7 @@ from app.api.schemas.response.VisibilityChangeResponse import VisibilityChangeRe
 from app.api.schemas.response.WorkspaceResourceResponse import WorkspaceResourceResponse
 from app.app import app
 from app.service.depends import get_workspace_file_watcher, get_workspace_files_service
-from app.service.workspace_files.workspace_files_service import (
+from app.service.workspace_files import (
     FileConflictError,
     WorkspaceFileWatcher,
     WorkspaceFilesService,

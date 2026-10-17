@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
+from app.utils.path.relative_path import has_nul, has_parent_segment
 
 # 文本性判定的采样窗口：64 KiB 足以覆盖文本文件头部特征，且不随文件体积增长。
 TEXT_SAMPLE_BYTES = 64 * 1024
@@ -53,8 +54,9 @@ def resolve_workspace_relative_path(
     if (
         normalized.startswith("/")
         or re.match(r"^[A-Za-z]:", normalized)
-        or "\x00" in normalized
-        or any(part in {"", ".", ".."} for part in normalized.split("/"))
+        or has_nul(normalized)
+        or any(part in {"", "."} for part in normalized.split("/"))
+        or has_parent_segment(normalized)
     ):
         return None, f"{label} must be a normalized workspace-relative path"
     lexical_path = resolver.workspace_root.resolve().joinpath(*normalized.split("/"))

@@ -64,22 +64,27 @@ class TerminalSessionResyncRequiredError(TerminalSessionError):
 
 
 class TerminalWorkerUnavailableError(TerminalSessionError):
-    """Terminal Worker sidecar 不可用或协议握手失败。"""
+    """Terminal Worker sidecar 不可用。"""
 
     code = "TERMINAL_WORKER_UNAVAILABLE"
     retryable = True
 
 
 class TerminalWorkerProtocolError(TerminalWorkerUnavailableError):
-    """Terminal Worker 协议不兼容：握手字段或控制帧格式与 backend 期望不符。
+    """Terminal Worker 控制帧格式无效。
 
-    与父类的区别是**确定性**：同一对（backend 版本、worker 二进制）无论重试多少次都会失败
-    （典型成因：sidecar 未随协议升级重建、可执行文件被替换成其它程序），因此标记
-    ``retryable=False``，正确处置是重建/替换 worker 二进制，而不是重试工具调用。继承父类以保证
-    既有的 ``except TerminalWorkerUnavailableError`` 捕获点（session 失败收敛）不遗漏。
+    格式错误在当前进程中不可恢复，故不重试；继承父类以保证既有的
+    ``except TerminalWorkerUnavailableError`` 捕获点仍能收敛 session 失败。
     """
 
-    code = "TERMINAL_WORKER_PROTOCOL_MISMATCH"
+    code = "TERMINAL_WORKER_PROTOCOL_ERROR"
+    retryable = False
+
+
+class TerminalWorkerHandshakeError(TerminalWorkerUnavailableError):
+    """Worker 握手字段与当前启动实例不符，需修复 worker 配置后再重试。"""
+
+    code = "TERMINAL_WORKER_HANDSHAKE_REJECTED"
     retryable = False
 
 
