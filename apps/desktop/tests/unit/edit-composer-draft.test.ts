@@ -194,13 +194,13 @@ describe("edit draft composer write", () => {
 
     const result = await applyEditDraftToComposer({
       composer: stub.composer,
-      text: "[[cosir-file:a]]正文",
+      text: "[[cosir-file:a]]正文 `[[cosir-file:example]]`",
       attachments: [draftFile("a")],
       isStillCurrent: () => true,
     });
 
     expect(result.error).toBeInstanceOf(Error);
-    expect(stub.text()).toBe("附件正文");
+    expect(stub.text()).toBe("附件正文 `[[cosir-file:example]]`");
     expect(stub.addedIds).toEqual([]);
   });
 

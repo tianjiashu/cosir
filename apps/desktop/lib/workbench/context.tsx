@@ -13,6 +13,7 @@ type WorkbenchContextValue = {
 
 const WorkbenchContext = createContext<WorkbenchContextValue | null>(null);
 
+/** workspaceId 由布局导航边界在丢弃确认后提交；这里只同步当前会话，不发起导航或弹窗。 */
 export function WorkbenchProvider({ workspaceId, children }: { workspaceId: number | null; children: ReactNode }) {
   const ensureWorkspace = useWorkbenchStore((state) => state.ensureWorkspace);
   const openAgentTab = useWorkbenchStore((state) => state.openAgentTab);

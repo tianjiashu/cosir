@@ -16,8 +16,8 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 type NotifyAction = { label: string; onClick: () => void };
 
 export const notify = {
-  success(message: string, options?: { description?: string }) {
-    toast.success(message, { description: options?.description });
+  success(message: string, options?: { description?: string; action?: NotifyAction }) {
+    toast.success(message, { description: options?.description, action: options?.action });
   },
 
   info(message: string, options?: { description?: string }) {

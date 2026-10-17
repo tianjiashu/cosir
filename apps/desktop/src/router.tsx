@@ -20,7 +20,7 @@ import { WorkspaceConfigurationPage } from "@/components/workspace-configuration
  * 因此 `tasks/:taskId` 只做标识校验。新增页面：在这里加一条子路由并声明 section。
  */
 
-const conversation: RouteHandle = { section: "conversation" };
+const conversation: RouteHandle = { section: "conversation", files: true };
 const settings: RouteHandle = { section: "settings" };
 const workspaceSettings: RouteHandle = { section: "workspace-settings" };
 const observer: RouteHandle = { section: "observer" };
@@ -85,7 +85,7 @@ export function createAppRouter() {
         { path: "workspaces/:workspaceId/settings", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },
         { path: "workspaces/:workspaceId/settings/:tab", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },
         { path: "context-observer", element: <ContextObserverPage />, handle: observer },
-        { path: "*", element: <NotFoundRoute />, handle: conversation },
+        { path: "*", element: <NotFoundRoute />, handle: { section: "conversation" } },
       ],
     },
   ]);

@@ -104,9 +104,9 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
 
   await expect(page).toHaveURL(/\/tasks\/42$/);
   await expect.poll(() => assistantRequests.length).toBe(1);
-  // AppLayout refresh is a normal parent re-render and must not replace
-  // the active Assistant Transport session or abort its response body.
-  await page.getByRole("button", { name: "刷新工作区" }).click();
+  // 创建后的自动目录同步必须显示新任务，且不能替换 Assistant 会话或中断流。
+  await expect(page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "你好" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "刷新工作区" })).toHaveCount(0);
   expect(assistantRequests[0]?.status).toBe(200);
   expect(assistantRequests[0]?.body.workspaceId).toBe(7);
   expect(assistantRequests[0]?.body.modelConfigId).toBe(1);

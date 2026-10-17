@@ -1,12 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ReferenceTargetScope,
+  useReferenceBridge,
+} from "@/components/workspace-references/reference-bridge";
+import {
+  decodeReferences,
+  referenceIdentity,
+} from "@/lib/workspace-references/codec";
+import { WorkspaceReferenceNode } from "./extensions/workspace-reference";
+import { ReferenceMention } from "@/components/workspace-references/reference-mention";
+
+import { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { StarterKit } from "@tiptap/starter-kit";
+import { Placeholder } from "@tiptap/extension-placeholder";
 import { AttachmentToken } from "@/components/composer/extensions/attachment-token";
 import { SkillToken } from "@/components/composer/extensions/skill-token";
 import { ComposerEditorViewProvider } from "@/components/composer/composer-editor-context";
-import { resolveComposerInsertionPosition, shouldSubmitOnEnter } from "@/components/composer/composer-editor-policy";
+import {
+  resolveComposerInsertionPosition,
+  shouldSubmitOnEnter,
+} from "@/components/composer/composer-editor-policy";
 import {
   insertionCommandContent,
   parseComposerDocument,
@@ -16,7 +31,10 @@ import {
   type InlineComposerAttachment,
 } from "@/components/composer/composer-document";
 import { useComposerFeedback } from "@/components/composer/composer-feedback";
-import { summarizeComposerFileProblems, type ComposerExternalFileResult } from "@/components/composer/composer-external-files";
+import {
+  summarizeComposerFileProblems,
+  type ComposerExternalFileResult,
+} from "@/components/composer/composer-external-files";
 import { useComposerInsertion } from "@/components/composer/composer-insertion-context";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
@@ -34,7 +52,11 @@ type ComposerEditorProps = {
   onChange: (value: string) => void;
   onSubmit: () => void;
   attachments: readonly InlineComposerAttachment[];
-  onExternalFiles?: (files: readonly File[]) => ComposerExternalFileResult<InlineComposerAttachment> | Promise<ComposerExternalFileResult<InlineComposerAttachment>>;
+  onExternalFiles?: (
+    files: readonly File[],
+  ) =>
+    | ComposerExternalFileResult<InlineComposerAttachment>
+    | Promise<ComposerExternalFileResult<InlineComposerAttachment>>;
   onRemoveAttachment?: (id: string) => void;
   placeholder?: string;
   autoFocus?: boolean;
@@ -65,6 +87,7 @@ const composerExtensions = [
     underline: false,
   }),
   AttachmentToken,
+  WorkspaceReferenceNode,
   SkillToken,
 ];
 
@@ -87,14 +110,42 @@ export function ComposerEditor({
   "aria-label": ariaLabel,
 }: ComposerEditorProps) {
   const insertion = useComposerInsertion();
+  const referenceBridge = useReferenceBridge();
+  const explicitTarget = useContext(ReferenceTargetScope);
+  const target = explicitTarget ?? referenceBridge?.target;
   const feedback = useComposerFeedback();
+  const showFeedback = feedback.show;
   const isComposingRef = useRef(false);
   const hasCapturedSelectionRef = useRef(false);
   const lastPropValueRef = useRef(value);
   const pendingInternalValueRef = useRef<string | null>(null);
-  const propsRef = useRef({ onChange, onSubmit, onExternalFiles, disabled, attachments });
-  const [currentValue, setCurrentValue] = useState(value);
-  propsRef.current = { onChange, onSubmit, onExternalFiles, disabled, attachments };
+  const propsRef = useRef({
+    onChange,
+    onSubmit,
+    onExternalFiles,
+    disabled,
+    attachments,
+    placeholder,
+  });
+  propsRef.current = {
+    onChange,
+    onSubmit,
+    onExternalFiles,
+    disabled,
+    attachments,
+    placeholder,
+  };
+
+  const extensions = useMemo(
+    () => [
+      ...composerExtensions,
+      Placeholder.configure({
+        placeholder: () => propsRef.current.placeholder ?? "",
+        showOnlyWhenEditable: false,
+      }),
+    ],
+    [],
+  );
 
   if (value !== lastPropValueRef.current) {
     lastPropValueRef.current = value;
@@ -103,19 +154,27 @@ export function ComposerEditor({
 
   const editor = useEditor({
     immediatelyRender: false,
-    extensions: composerExtensions,
+    extensions,
     content: parseComposerDocument(value),
     editable: !disabled,
     onUpdate: ({ editor: updatedEditor }) => {
       const nextValue = serializeComposerDocument(updatedEditor.getJSON());
       pendingInternalValueRef.current = nextValue;
-      setCurrentValue(nextValue);
       propsRef.current.onChange(nextValue);
     },
     editorProps: {
+      // 让 useEditor 持续管理属性，保留 ProseMirror 类名且不被后续渲染覆盖。
       attributes: {
+        class: cn(
+          "cosir-composer-editor min-w-0 min-h-20 max-h-48 w-full overflow-y-auto whitespace-pre-wrap break-words",
+          className,
+        ),
         role: "textbox",
         "aria-multiline": "true",
+        "aria-disabled": String(disabled),
+        "data-disabled": String(disabled),
+        ...(placeholder ? { "aria-placeholder": placeholder } : {}),
+        ...(ariaLabel ? { "aria-label": ariaLabel } : {}),
       },
       handleKeyDown: (_view, event) => {
         const current = propsRef.current;
@@ -123,21 +182,49 @@ export function ComposerEditor({
           key: event.key,
           shiftKey: event.shiftKey,
           defaultPrevented: event.defaultPrevented,
-          nativeEvent: { isComposing: event.isComposing, keyCode: event.keyCode },
+          nativeEvent: {
+            isComposing: event.isComposing,
+            keyCode: event.keyCode,
+          },
         };
-        if (current.disabled || !shouldSubmitOnEnter(enterEvent, isComposingRef.current)) return false;
+        if (
+          current.disabled ||
+          !shouldSubmitOnEnter(enterEvent, isComposingRef.current)
+        )
+          return false;
         event.preventDefault();
         current.onSubmit();
         return true;
       },
+      clipboardTextSerializer: (slice) =>
+        serializeComposerDocument({
+          type: "doc",
+          content: slice.content.toJSON(),
+        }),
       handlePaste: (_view, event) => {
         const files = [...(event.clipboardData?.files ?? [])];
-        if (files.length === 0) return false;
+        if (files.length === 0) {
+          const text = event.clipboardData?.getData("text/plain") ?? "";
+          if (!decodeReferences(text).some((part) => part.type === "reference"))
+            return false;
+          event.preventDefault();
+          if (!propsRef.current.disabled)
+            editor?.commands.insertContent(
+              parseComposerDocument(text).content ?? [],
+            );
+          return true;
+        }
         event.preventDefault();
         if (rejectFilesWhileDisabled("paste", files.length)) return true;
         const text = event.clipboardData?.getData("text/plain") ?? "";
         if (text) {
-          editor?.chain().focus().insertContent(insertionCommandContent({ type: "insert-text", text })).run();
+          editor
+            ?.chain()
+            .focus()
+            .insertContent(
+              insertionCommandContent({ type: "insert-text", text }),
+            )
+            .run();
           hasCapturedSelectionRef.current = true;
         }
         void handleExternalFiles(files);
@@ -150,7 +237,13 @@ export function ComposerEditor({
         if (rejectFilesWhileDisabled("drop", files.length)) return true;
         const text = event.dataTransfer?.getData("text/plain") ?? "";
         if (text) {
-          editor?.chain().focus().insertContent(insertionCommandContent({ type: "insert-text", text })).run();
+          editor
+            ?.chain()
+            .focus()
+            .insertContent(
+              insertionCommandContent({ type: "insert-text", text }),
+            )
+            .run();
           hasCapturedSelectionRef.current = true;
         }
         void handleExternalFiles(files);
@@ -159,12 +252,14 @@ export function ComposerEditor({
     },
   });
 
-  const attachmentSignature = JSON.stringify(attachments.map((attachment) => ({
-    id: attachment.id,
-    name: attachment.name,
-    kind: attachment.kind ?? "file",
-    tokenId: attachment.tokenId ?? attachment.id,
-  })));
+  const attachmentSignature = JSON.stringify(
+    attachments.map((attachment) => ({
+      id: attachment.id,
+      name: attachment.name,
+      kind: attachment.kind ?? "file",
+      tokenId: attachment.tokenId ?? attachment.id,
+    })),
+  );
   const reconciliation = useMemo(
     () => reconcileComposerAttachments(value, attachments),
     [attachmentSignature, value],
@@ -173,66 +268,168 @@ export function ComposerEditor({
 
   useEffect(() => {
     if (!editor) return;
-    if (shouldPreservePendingEditorValue(value, lastPropValueRef.current, pendingInternalValueRef.current)) return;
-    if (value === pendingInternalValueRef.current) pendingInternalValueRef.current = null;
+    if (
+      shouldPreservePendingEditorValue(
+        value,
+        lastPropValueRef.current,
+        pendingInternalValueRef.current,
+      )
+    )
+      return;
+    if (value === pendingInternalValueRef.current)
+      pendingInternalValueRef.current = null;
     if (serializeComposerDocument(editor.getJSON()) !== value) {
-      editor.commands.setContent(parseComposerDocument(value), { emitUpdate: false });
+      editor.commands.setContent(parseComposerDocument(value), {
+        emitUpdate: false,
+      });
     }
-    setCurrentValue(value);
   }, [editor, value]);
 
   useEffect(() => {
     if (!editor) return;
-    editor.setEditable(!disabled);
-    const dom = editor.view.dom;
-    dom.className = cn("min-w-0 min-h-20 max-h-48 w-full overflow-y-auto whitespace-pre-wrap break-words", className);
-    dom.setAttribute("role", "textbox");
-    dom.setAttribute("aria-multiline", "true");
-    dom.setAttribute("aria-disabled", String(disabled));
-    dom.setAttribute("data-disabled", String(disabled));
-    dom.setAttribute("data-empty", currentValue.trim().length === 0 ? "true" : "false");
-    if (placeholder) dom.setAttribute("aria-placeholder", placeholder);
-    else dom.removeAttribute("aria-placeholder");
-    if (ariaLabel) dom.setAttribute("aria-label", ariaLabel);
-    else dom.removeAttribute("aria-label");
-    if (placeholder) dom.setAttribute("data-placeholder", placeholder);
-    else dom.removeAttribute("data-placeholder");
-  }, [ariaLabel, className, currentValue, disabled, editor, placeholder]);
+    // 可编辑状态切换不是用户编辑，不能把尚未同步的文档回写到受控草稿。
+    editor.setEditable(!disabled, false);
+  }, [disabled, editor]);
 
   useEffect(() => {
-    const { attachmentKeys, tokenKeys, unmatchedTokenKeys, tokenlessAttachmentKeys } = reconciliation;
+    const {
+      attachmentKeys,
+      tokenKeys,
+      unmatchedTokenKeys,
+      tokenlessAttachmentKeys,
+    } = reconciliation;
     const signature = `${unmatchedTokenKeys.join(",")}|${tokenlessAttachmentKeys.join(",")}|${suspendAttachmentReconciliation}|${disabled}`;
     if (signature === reconciliationSignatureRef.current) return;
     reconciliationSignatureRef.current = signature;
 
     if (unmatchedTokenKeys.length > 0) {
       const stage = suspendAttachmentReconciliation ? "同步中" : "已失效";
-      void frontendLog("WARNING", "inline_attachment_token_unmatched", `输入框存在没有附件对象的 token，显示为「附件${stage}」`, {
-        data: { unmatchedTokenKeys, attachmentKeys, tokenKeys, suspendAttachmentReconciliation, disabled },
-      });
+      void frontendLog(
+        "WARNING",
+        "inline_attachment_token_unmatched",
+        `输入框存在没有附件对象的 token，显示为「附件${stage}」`,
+        {
+          data: {
+            unmatchedTokenKeys,
+            attachmentKeys,
+            tokenKeys,
+            suspendAttachmentReconciliation,
+            disabled,
+          },
+        },
+      );
       return;
     }
     if (tokenlessAttachmentKeys.length > 0) {
-      void frontendLog("DEBUG", "inline_attachment_token_pending", "输入框附件尚未写入对应 token", {
-        data: { tokenlessAttachmentKeys, attachmentKeys, tokenKeys, suspendAttachmentReconciliation, disabled },
-      });
+      void frontendLog(
+        "DEBUG",
+        "inline_attachment_token_pending",
+        "输入框附件尚未写入对应 token",
+        {
+          data: {
+            tokenlessAttachmentKeys,
+            attachmentKeys,
+            tokenKeys,
+            suspendAttachmentReconciliation,
+            disabled,
+          },
+        },
+      );
     }
   }, [disabled, reconciliation, suspendAttachmentReconciliation]);
 
-  const insertCommand = useCallback((command: Parameters<typeof insertionCommandContent>[0]) => {
-    if (!editor || !editor.isEditable) return;
-    const content = insertionCommandContent(command);
-    if (content.length === 0) return;
-    const position = resolveComposerInsertionPosition(
-      hasCapturedSelectionRef.current,
-      editor.state.selection.anchor,
-      editor.state.doc.content.size,
-    );
-    editor.chain().focus().setTextSelection(position).insertContent(content).run();
-    hasCapturedSelectionRef.current = true;
-  }, [editor]);
+  const insertCommand = useCallback(
+    (command: Parameters<typeof insertionCommandContent>[0]) => {
+      if (!editor || !editor.isEditable) return;
+      const content = insertionCommandContent(command);
+      if (content.length === 0) return;
+      const position = resolveComposerInsertionPosition(
+        hasCapturedSelectionRef.current,
+        editor.state.selection.anchor,
+        editor.state.doc.content.size,
+      );
+      editor
+        .chain()
+        .focus()
+        .setTextSelection(position)
+        .insertContent(content)
+        .run();
+      hasCapturedSelectionRef.current = true;
+    },
+    [editor],
+  );
 
-  useEffect(() => insertion.register(insertCommand), [insertion, insertCommand]);
+  useEffect(
+    () => insertion.register(insertCommand),
+    [insertion, insertCommand],
+  );
+
+  useEffect(() => {
+    if (
+      !editor ||
+      !referenceBridge ||
+      !target ||
+      referenceBridge.target !== target
+    )
+      return;
+    return referenceBridge.register(
+      target,
+      (references, question, replacement) => {
+        if (!editor.isEditable) {
+          showFeedback("输入框暂不可编辑，请稍后添加引用");
+          return;
+        }
+        const keys = new Set(
+          decodeReferences(serializeComposerDocument(editor.getJSON())).flatMap(
+            (part) =>
+              part.type === "reference"
+                ? [referenceIdentity(part.reference)]
+                : [],
+          ),
+        );
+        const unique = references.filter((ref) => {
+          const key = referenceIdentity(ref);
+          if (keys.has(key)) return false;
+          keys.add(key);
+          return true;
+        });
+        const content = [
+          ...insertionCommandContent({
+            type: "insert-references",
+            references: unique,
+          }),
+          ...insertionCommandContent({
+            type: "insert-text",
+            text: question ? ` ${question}` : "",
+          }),
+        ];
+        // @ 准备失败不修改草稿；等待期间用户改过该文本时也不删除新输入。
+        const replace =
+          replacement &&
+          replacement.to <= editor.state.doc.content.size &&
+          editor.state.doc.textBetween(replacement.from, replacement.to) ===
+            replacement.text;
+        const position = replace
+          ? replacement.from
+          : resolveComposerInsertionPosition(
+              hasCapturedSelectionRef.current,
+              editor.state.selection.anchor,
+              editor.state.doc.content.size,
+            );
+        const chain = editor.chain().focus();
+        if (replace) chain.deleteRange(replacement);
+        chain.setTextSelection(position).insertContent(content).run();
+        hasCapturedSelectionRef.current = true;
+        if (!unique.length) showFeedback("这些引用已在当前草稿中");
+      },
+    );
+  }, [
+    editor,
+    referenceBridge?.register,
+    referenceBridge?.target,
+    target,
+    showFeedback,
+  ]);
 
   /**
    * 禁用期间（运行中、草稿同步中等）的粘贴 / 拖放文件。
@@ -240,70 +437,124 @@ export function ComposerEditor({
    * ProseMirror 对不可编辑的编辑器仍会调用 handlePaste / handleDrop；文件输入已被 preventDefault，
    * 若不提示，用户看到的就是文件「凭空消失」。返回 true 表示已拒收。
    */
-  const rejectFilesWhileDisabled = (source: "paste" | "drop", fileCount: number): boolean => {
+  const rejectFilesWhileDisabled = (
+    source: "paste" | "drop",
+    fileCount: number,
+  ): boolean => {
     if (!propsRef.current.disabled) return false;
     notify.info("当前无法添加附件：输入框暂不可编辑，请稍后再试");
-    void frontendLog("INFO", "inline_attachment_rejected_while_disabled", "输入框禁用期间拒收粘贴或拖放的文件", {
-      data: { source, fileCount },
-    });
+    void frontendLog(
+      "INFO",
+      "inline_attachment_rejected_while_disabled",
+      "输入框禁用期间拒收粘贴或拖放的文件",
+      {
+        data: { source, fileCount },
+      },
+    );
     return true;
   };
 
-  const handleExternalFiles = useCallback(async (files: readonly File[]) => {
-    const current = propsRef.current;
-    if (files.length === 0) return;
-    if (!current.onExternalFiles) {
-      void frontendLog("INFO", "inline_attachment_external_files_ignored", "输入框未装配外部附件处理器，已忽略文件输入", {
-        data: { fileCount: files.length },
-      });
-      feedback.show("此输入框暂不支持添加附件。");
-      return;
-    }
-    try {
-      const result = await current.onExternalFiles(files);
-      if (propsRef.current.disabled) return;
-      if (result.attachments.length > 0) {
-        insertion.dispatch({ type: "insert-attachments", attachments: result.attachments });
+  const handleExternalFiles = useCallback(
+    async (files: readonly File[]) => {
+      const current = propsRef.current;
+      if (files.length === 0) return;
+      if (!current.onExternalFiles) {
+        void frontendLog(
+          "INFO",
+          "inline_attachment_external_files_ignored",
+          "输入框未装配外部附件处理器，已忽略文件输入",
+          {
+            data: { fileCount: files.length },
+          },
+        );
+        feedback.show("此输入框暂不支持添加附件。");
+        return;
       }
-      const rejectedFiles = result.problems.filter((problem) => problem.reason === "unsupported-image");
-      if (rejectedFiles.length > 0) {
-        void frontendLog("WARNING", "composer_external_image_rejected", "已跳过不支持的图片附件", {
-          data: { count: rejectedFiles.length, names: rejectedFiles.map((problem) => problem.name) },
-        });
+      try {
+        const result = await current.onExternalFiles(files);
+        if (propsRef.current.disabled) return;
+        if (result.attachments.length > 0) {
+          insertion.dispatch({
+            type: "insert-attachments",
+            attachments: result.attachments,
+          });
+        }
+        const rejectedFiles = result.problems.filter(
+          (problem) => problem.reason === "unsupported-image",
+        );
+        if (rejectedFiles.length > 0) {
+          void frontendLog(
+            "WARNING",
+            "composer_external_image_rejected",
+            "已跳过不支持的图片附件",
+            {
+              data: {
+                count: rejectedFiles.length,
+                names: rejectedFiles.map((problem) => problem.name),
+              },
+            },
+          );
+        }
+        const problemMessage = summarizeComposerFileProblems(result.problems);
+        if (problemMessage) feedback.show(problemMessage);
+        else feedback.clear();
+      } catch (error) {
+        feedback.show(userErrorMessage(error, "添加附件失败，请重试"));
+        void frontendLog(
+          "ERROR",
+          "inline_attachment_external_files_failed",
+          "处理粘贴或拖拽附件失败",
+          {
+            data: { fileCount: files.length },
+            error,
+          },
+        );
       }
-      const problemMessage = summarizeComposerFileProblems(result.problems);
-      if (problemMessage) feedback.show(problemMessage);
-      else feedback.clear();
-    } catch (error) {
-      feedback.show(userErrorMessage(error, "添加附件失败，请重试"));
-      void frontendLog("ERROR", "inline_attachment_external_files_failed", "处理粘贴或拖拽附件失败", {
-        data: { fileCount: files.length },
-        error,
-      });
-    }
-  }, [feedback, insertion]);
+    },
+    [feedback, insertion],
+  );
 
   const captureUserSelection = (target: EventTarget | null) => {
-    if (!editor || !(target instanceof Node) || !editor.view.dom.contains(target)) return;
+    if (
+      !editor ||
+      !(target instanceof Node) ||
+      !editor.view.dom.contains(target)
+    )
+      return;
     const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0 || !selection.anchorNode) return;
+    if (!selection || selection.rangeCount === 0 || !selection.anchorNode)
+      return;
     if (!editor.view.dom.contains(selection.anchorNode)) return;
     hasCapturedSelectionRef.current = true;
   };
 
   useEffect(() => {
-    if (autoFocus) editor?.commands.focus();
+    // 从树导航打开任务时保留键盘焦点，避免异步挂载的输入框中断方向键与 Tab 操作。
+    if (autoFocus && !document.activeElement?.closest('[role="tree"]')) editor?.commands.focus();
   }, [autoFocus, editor]);
 
-  const attachmentView = useMemo(() => ({
-    attachments,
-    disabled,
-    unmatchedAsPending: suspendAttachmentReconciliation,
-    onRemoveAttachment,
-  }), [attachments, disabled, onRemoveAttachment, suspendAttachmentReconciliation]);
+  const attachmentView = useMemo(
+    () => ({
+      attachments,
+      disabled,
+      unmatchedAsPending: suspendAttachmentReconciliation,
+      onRemoveAttachment,
+    }),
+    [
+      attachments,
+      disabled,
+      onRemoveAttachment,
+      suspendAttachmentReconciliation,
+    ],
+  );
 
   return (
     <ComposerEditorViewProvider value={attachmentView}>
+      <ReferenceMention
+        editor={editor}
+        bridge={referenceBridge}
+        target={target ?? null}
+      />
       <EditorContent
         editor={editor}
         onFocus={(event) => {
@@ -311,8 +562,12 @@ export function ComposerEditor({
         }}
         onMouseUp={(event) => captureUserSelection(event.target)}
         onKeyUp={(event) => captureUserSelection(event.target)}
-        onCompositionStart={() => { isComposingRef.current = true; }}
-        onCompositionEnd={() => { isComposingRef.current = false; }}
+        onCompositionStart={() => {
+          isComposingRef.current = true;
+        }}
+        onCompositionEnd={() => {
+          isComposingRef.current = false;
+        }}
       />
     </ComposerEditorViewProvider>
   );

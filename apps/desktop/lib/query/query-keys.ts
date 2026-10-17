@@ -7,6 +7,14 @@
  */
 export const queryKeys = {
   all: ["cosir"] as const,
+  workbenchAgent: (workspaceId: number, taskId: number, generation: number) =>
+    ["cosir", "workbench-agent", workspaceId, taskId, generation] as const,
+  files: (id: number) => ["cosir", "files", id] as const,
+  browserVisibility: (id: number) => ["cosir", "files", id, "visibility"] as const,
+  fileDirectory: (id: number, path: string, revision: string) => ["cosir", "files", id, "directory", path, revision] as const,
+  fileInfo: (id: number, path: string) => ["cosir", "files", id, "info", path] as const,
+  fileText: (id: number, path: string, version: string, encoding: string, offset: number, tail: boolean, before?: number) => ["cosir", "files", id, "text", path, version, encoding, offset, tail, before] as const,
+  fileResource: (id: number, path: string, version: string) => ["cosir", "files", id, "resource", path, version] as const,
   agents: (workspaceId: number | null) => ["cosir", "agents", workspaceId ?? "system"] as const,
   agentTeams: (workspaceId: number | null) => ["cosir", "agent-teams", workspaceId ?? "system"] as const,
   agentTeamRun: (teamRunId: number) => ["cosir", "agent-team-run", teamRunId] as const,

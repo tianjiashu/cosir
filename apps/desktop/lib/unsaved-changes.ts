@@ -6,12 +6,11 @@ import { requestConfirmation } from "@/lib/confirm/confirm-store";
 /**
  * 未保存修改的统一守卫。
  *
- * 编辑器在有未保存内容时用 `useUnsavedChanges` 登记；任何会卸载这些编辑器的离开动作
- * （切换配置标签、返回工作区、关闭工作台标签）先 `await confirmDiscardUnsaved(scope)`。
- * 编辑器卸载即自动注销，因此「放弃」后无需手动清理。
- * scope 只用于区分互不影响的区域：离开配置中心不应询问工作台里的草稿。
+ * 配置页和对话框编辑器用 `useUnsavedChanges` 登记；真正离开并丢弃本地编辑时先确认。
+ * 卸载只注销登记；工作台草稿由独立 store/session 持有，使用 workbench/drafts 的销毁确认，
+ * 不参与本模块，避免把面板隐藏误当成丢弃。
  */
-export type UnsavedScope = "settings" | "workbench" | "dialog";
+export type UnsavedScope = "settings" | "dialog";
 
 type Source = { scope: UnsavedScope; label: string };
 

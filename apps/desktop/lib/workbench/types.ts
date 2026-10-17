@@ -37,4 +37,13 @@ export type WorkbenchAgentTeamConfigurationDraftTab = {
   session: TeamEditorSession;
 };
 
-export type WorkbenchTab = WorkbenchAgentTab | WorkbenchAgentConfigurationDraftTab | WorkbenchAgentTeamConfigurationDraftTab;
+export type WorkbenchFilesTab = {
+  id: `workspace-files:${number}`;
+  kind: "files";
+  workspaceId: number;
+  title: string;
+  rootPath: string;
+  workspaceName: string;
+};
+
+export type WorkbenchTab = WorkbenchFilesTab | WorkbenchAgentTab | WorkbenchAgentConfigurationDraftTab | WorkbenchAgentTeamConfigurationDraftTab;

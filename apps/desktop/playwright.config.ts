@@ -31,7 +31,7 @@ export default defineConfig({
           : undefined,
       },
     },
-    // macOS 桌面使用 WebKit；全屏裁剪不能仅依赖 Chromium 回归。
-    { name: "webkit", testMatch: "fullscreen.spec.ts", use: { ...devices["Desktop Safari"] } },
+    // macOS 桌面使用 WebKit；全屏裁剪与文件阅读器不能仅依赖 Chromium 回归。
+    { name: "webkit", testMatch: ["workbench-agent-status.spec.ts", "workbench-boundaries.spec.ts", "context-observer.spec.ts", "fullscreen.spec.ts", "workspace-files.spec.ts", "workspace-files-integration.spec.ts", "composer-placeholder.spec.ts", "workspace-sidebar.spec.ts"], use: { ...devices["Desktop Safari"] } },
   ],
 });

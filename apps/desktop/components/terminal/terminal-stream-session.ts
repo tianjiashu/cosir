@@ -1,20 +1,10 @@
 import "@xterm/xterm/css/xterm.css";
-
-import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { TerminalResizeController } from "./terminal-resize-controller";
 import { xtermAppearance } from "./xterm-appearance";
 
-/**
- * 只读交互终端的 xterm 容器。
- *
- * 与一次性命令的 cumulative snapshot renderer 分开：交互 session 接收后端的
- * 原始 bytes，交给 xterm 解释 CR/ANSI/光标移动，不经过 React 文本节点。
- */
+/** 只读预览沿用 worker 的逻辑尺寸；容器滚动，不因面板缩放重新折行。 */
 export class TerminalStreamSession {
   private readonly terminal: Terminal;
-  private readonly fitAddon: FitAddon;
-  private readonly resizeController: TerminalResizeController;
 
   constructor(container: HTMLElement) {
     this.terminal = new Terminal({
@@ -24,39 +14,19 @@ export class TerminalStreamSession {
       scrollback: 10_000,
       ...xtermAppearance(),
     });
-    this.fitAddon = new FitAddon();
-    this.terminal.loadAddon(this.fitAddon);
     this.terminal.open(container);
-    try {
-      this.fitAddon.fit();
-    } catch {
-      // The host can be between React layout phases; the resize controller retries.
-    }
-    this.resizeController = new TerminalResizeController(container, () => this.fit());
   }
 
-  write(data: Uint8Array): void {
-    this.terminal.write(data);
+  setGeometry(rows: number, columns: number): void {
+    this.terminal.resize(columns, rows);
   }
+
+  write(data: Uint8Array): void { this.terminal.write(data); }
 
   clear(): void {
     this.terminal.clear();
     this.terminal.reset();
   }
 
-  dispose(): void {
-    this.resizeController.dispose();
-    this.terminal.dispose();
-  }
-
-  private fit(): boolean {
-    if (!this.terminal.element?.isConnected) return false;
-    try {
-      this.fitAddon.fit();
-      return true;
-    } catch {
-      // The element can be between React layout phases; the next resize retries.
-      return false;
-    }
-  }
+  dispose(): void { this.terminal.dispose(); }
 }

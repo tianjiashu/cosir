@@ -1,5 +1,8 @@
 "use client";
 
+import { create } from "zustand";
+import type { SetStateAction } from "react";
+
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -161,6 +164,10 @@ type NewConversationProps = {
   onTaskListChanged: () => void;
 };
 
+type NewTaskDraft = { text: string; attachments: PickedComposerAttachment[] };
+const emptyDraft: NewTaskDraft = { text: "", attachments: [] };
+const useNewTaskDrafts = create<{ drafts: Record<number, NewTaskDraft>; update: (id: number, update: (draft: NewTaskDraft) => NewTaskDraft) => void }>(set => ({ drafts: {}, update: (id, update) => set(state => ({ drafts: { ...state.drafts, [id]: update(state.drafts[id] ?? emptyDraft) } })) }));
+
 const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
 
 export function NewConversation({
@@ -178,11 +185,16 @@ export function NewConversation({
   const pathnameRef = useRef(location.pathname);
   pathnameRef.current = location.pathname;
   const mountedRef = useRef(true);
-  const [text, setText] = useState("");
+  const draftId = selectedWorkspaceId ?? 0;
+  const draft = useNewTaskDrafts(state => state.drafts[draftId] ?? emptyDraft);
+  const updateDraft = useNewTaskDrafts(state => state.update);
+  const text = draft.text;
+  const setText = (text: string) => updateDraft(draftId, current => ({ ...current, text }));
   const [submitting, setSubmitting] = useState(false);
   const [modelReady, setModelReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [attachments, setAttachments] = useState<PickedComposerAttachment[]>([]);
+  const attachments = draft.attachments;
+  const setAttachments = (value: SetStateAction<PickedComposerAttachment[]>) => updateDraft(draftId, current => ({ ...current, attachments: typeof value === "function" ? value(current.attachments) : value }));
   const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>([]);
   const toolGroupsQuery = useQuery({
     queryKey: queryKeys.toolGroups(),
@@ -262,6 +274,7 @@ export function NewConversation({
         modelConfigId: selection.modelConfigId,
         reasoningEffort: selection.reasoningEffort ?? null,
       });
+      updateDraft(draftId, () => emptyDraft);
       if (stillHere()) {
         onStarted(task, selectedToolGroups);
       } else {

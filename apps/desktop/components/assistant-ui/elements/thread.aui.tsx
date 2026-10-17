@@ -23,6 +23,7 @@ import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
 import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
+import { UserMessageText } from "@/components/workspace-references/user-message-text";
 import { MarkdownText } from "@/components/markdown-text";
 import { PartRenderBoundary } from "@/components/assistant-ui/elements/part-render-boundary";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
@@ -278,6 +279,7 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
           <ComposerPrimitive.AttachmentDropzone className="min-h-0 min-w-0 w-full">
             <ComposerAttachments />
             <InlineComposerInput
+              persistTaskDraft
               placeholder={COMPOSER_PLACEHOLDER}
               className={COMPOSER_EDITOR_CLASS_NAME}
               autoFocus={autoFocus}
@@ -498,7 +500,7 @@ const UserMessageView: FC = () => {
                   />
                 )}
               >
-                <MarkdownText status={part.status} />
+                <UserMessageText text={part.text} status={part.status} />
               </PartRenderBoundary>
             ) : null}</MessagePrimitive.Parts>
           </div>

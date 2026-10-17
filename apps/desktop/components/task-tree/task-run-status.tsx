@@ -2,14 +2,15 @@ import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 /**
- * 任务执行状态（后端 `execution_status`，由最新轮次派生）的统一呈现。
+ * 任务执行状态（后端 `execution_status`，由 Task 当前指向的 Run 投影）的统一呈现。
  *
  * 侧栏任务行与页面头部共用，保证同一状态在两处的文案与语气一致。
- * 已完成与无轮次不展示状态，只有需要用户注意的状态才出现。
+ * 侧栏与页面头部默认隐藏已完成与无轮次；工作台标签可显式展示完成态。
  */
 type Presentation = { label: string; tone: BadgeTone; active: boolean };
 
 const PRESENTATION: Record<string, Presentation> = {
+  completed: { label: "已完成", tone: "success", active: false },
   pending: { label: "排队中", tone: "info", active: true },
   running: { label: "运行中", tone: "info", active: true },
   waiting_for_input: { label: "等待确认", tone: "warning", active: false },
@@ -17,7 +18,8 @@ const PRESENTATION: Record<string, Presentation> = {
   cancelled: { label: "已停止", tone: "neutral", active: false },
 };
 
-export function taskRunStatusPresentation(status: string | null | undefined): Presentation | null {
+export function taskRunStatusPresentation(status: string | null | undefined, showCompleted = false): Presentation | null {
+  if (status === "completed" && !showCompleted) return null;
   return status ? PRESENTATION[status] ?? null : null;
 }
 

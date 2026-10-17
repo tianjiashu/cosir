@@ -1,0 +1,89 @@
+/* 导航当前项与键盘焦点分离；颜色只消费应用主题 token。 */
+.workspace-tree-row {
+  border-radius: var(--radius-md);
+  color: var(--foreground);
+  outline: none;
+  transition: background-color 150ms;
+}
+
+.workspace-tree-row:hover {
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+
+.workspace-tree-row[data-current] {
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+
+.workspace-tree-row[data-current] .workspace-tree-title {
+  font-weight: 600;
+}
+
+.workspace-tree-row:focus-visible {
+  outline: 2px solid var(--muted-foreground);
+  outline-offset: -2px;
+}
+
+.workspace-tree-row .text-muted-foreground {
+  color: color-mix(in oklab, var(--muted-foreground) 88%, var(--foreground));
+}
+
+.workspace-tree-node {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  padding-right: 4px;
+  gap: 4px;
+}
+
+.workspace-tree-task {
+  gap: 8px;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
+.workspace-tree-task-marker {
+  position: relative;
+  display: flex;
+  flex: 0 0 32px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+}
+
+.workspace-tree-workspace-actions {
+  flex: 0 0 56px;
+}
+
+.workspace-tree-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.workspace-tree-task-tail {
+  display: grid;
+  flex: 0 0 64px;
+  min-width: 0;
+  align-items: center;
+  text-align: right;
+}
+
+.workspace-tree-task-tail > * {
+  grid-area: 1 / 1;
+}
+
+.workspace-tree-row:is(:hover, :focus-within, :has([data-popup-open])) .workspace-tree-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.workspace-tree-row:is(:hover, :focus-within, :has([data-popup-open])) .workspace-tree-time {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-tree-row { transition: none; }
+}

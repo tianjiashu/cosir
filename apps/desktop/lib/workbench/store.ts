@@ -11,6 +11,7 @@ type WorkbenchState = {
   panelOpen: boolean;
   panelWidth: number;
   ensureWorkspace: (workspaceId: number | null) => void;
+  openFiles: (workspaceId: number, rootPath: string, workspaceName: string) => void;
   openAgentTab: (input: Omit<WorkbenchAgentTab, "id" | "kind">) => void;
   openAgentConfigurationDraftTab: (input: Omit<WorkbenchAgentConfigurationDraftTab, "id" | "kind" | "dirty">) => void;
   updateAgentConfigurationDraft: (tabId: string, draft: WorkbenchAgentConfigurationDraftTab["draft"]) => void;
@@ -38,6 +39,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   panelWidth: 480,
   ensureWorkspace: (workspaceId) => set((state) => state.workspaceId === workspaceId ? state : {
     ...state, workspaceId, tabs: [], activeTabId: null, savedDraftToolCallIds: [], panelOpen: false,
+  }),
+  openFiles: (workspaceId, rootPath, workspaceName) => set(state => {
+    const id = `workspace-files:${workspaceId}` as const;
+    const tab = { id, kind: "files" as const, workspaceId, rootPath, workspaceName, title: "文件" };
+    return { workspaceId, tabs: state.tabs.some(t => t.id === id) ? state.tabs : [...state.tabs, tab], activeTabId: id, panelOpen: true };
   }),
   openAgentTab: (input) => set((state) => {
     const id = tabId(input.taskId);

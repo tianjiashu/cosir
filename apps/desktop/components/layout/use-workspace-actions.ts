@@ -1,5 +1,7 @@
 "use client";
 
+import { useFilesStore } from "@/lib/workspace-files/store";
+
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
@@ -123,6 +125,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     if (!confirmed) return;
     if (target.kind === "workspace") {
       closeWorkspaceTabs(target.id);
+      useFilesStore.getState().forget(target.id);
       if (deletingCurrentWorkspace) {
         selectWorkspace(null);
         navigate("/");

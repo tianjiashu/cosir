@@ -1,3 +1,4 @@
+import { mapMarkdownText } from "@/lib/assistant/markdown-literals";
 import type { CreateAttachment } from "@assistant-ui/core";
 
 import {
@@ -224,7 +225,7 @@ export async function applyEditDraftToComposer(options: {
     return { expectedCount, addedCount, removedCount, superseded: false, error: null };
   } catch (error) {
     // 写入失败时保留可读文本：不把内部 token 留在输入框里，避免出现无法操作的占位符。
-    composer.setText(text.replace(LOCAL_FILE_TOKEN, "附件"));
+    composer.setText(mapMarkdownText(text, part => part.replace(LOCAL_FILE_TOKEN, "附件")));
     return { expectedCount, addedCount, removedCount, superseded: false, error };
   }
 }

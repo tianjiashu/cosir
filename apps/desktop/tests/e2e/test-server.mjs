@@ -49,6 +49,12 @@ function resetTestState() {
   telemetry.requestBodies = [];
 }
 
+function taskProjection(task) {
+  const state = states.get(task.task_id);
+  const currentRunId = state?.current_run_id ?? null;
+  return { ...task, current_run_id: currentRunId, execution_status: state?.runs.find(run => run.runId === currentRunId)?.status ?? null };
+}
+
 const emptyState = () => ({
   runs: [],
   current_run_id: null,
@@ -670,7 +676,7 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.method === "GET" && url.pathname === `/workspaces/${WORKSPACE_ID}/tasks`) {
-    jsonResponse(res, 200, [...tasks.values()]);
+    jsonResponse(res, 200, [...tasks.values()].filter(task => task.task_type !== "delegate_task").map(taskProjection));
     return;
   }
   if (req.method === "POST" && url.pathname === `/workspaces/${WORKSPACE_ID}/tasks`) {
@@ -826,6 +832,10 @@ const server = createServer(async (req, res) => {
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(TASK_ID, delegationState());
+    for (const id of [501, 502]) tasks.set(id, {
+      task_id: id, workspace_id: WORKSPACE_ID, title: `子任务${id}`, task_type: "delegate_task",
+      context_window_total: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z",
+    });
     states.set(501, childDelegationState());
     states.set(502, secondChildDelegationState());
     jsonResponse(res, 200, { task_id: TASK_ID, child_task_id: 501, second_child_task_id: 502 });
@@ -860,7 +870,7 @@ const server = createServer(async (req, res) => {
       jsonResponse(res, 404, { detail: "task not found" });
       return;
     }
-    jsonResponse(res, 200, { ...task, task_type: task.task_type ?? "user" });
+    jsonResponse(res, 200, { ...taskProjection(task), task_type: task.task_type ?? "user" });
     return;
   }
   if (req.method === "GET" && url.pathname.startsWith("/tasks/") && url.pathname.endsWith("/assistant/state")) {

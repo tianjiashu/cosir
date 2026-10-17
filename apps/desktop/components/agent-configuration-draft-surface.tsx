@@ -34,7 +34,6 @@ import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
-import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import type { WorkbenchAgentConfigurationDraftTab } from "@/lib/workbench/types";
 
@@ -44,7 +43,7 @@ type ConfigurationScope = "workspace" | "system";
  * 在 Workbench 中编辑一次工具生成的临时草稿。
  *
  * 组件只持有前端工作副本；只有用户点击保存后才调用既有配置 API。关闭、刷新或对话卡片
- * 本身都不会把草稿写入配置文件或数据库。未保存时登记到 workbench 未保存守卫。
+ * 本身都不会把草稿写入配置文件或数据库。未保存状态随工作台会话保留，由关闭和工作区切换边界读取。
  */
 export function AgentConfigurationDraftSurface({
   tab,
@@ -63,7 +62,6 @@ export function AgentConfigurationDraftSurface({
   }));
   const [modelSettings, setModelSettings] = useState<ModelSettingsForm>(() => modelSettingsToForm(tab.draft.model_settings));
   const selectedToolGroups = useMemo(() => form.allowed_tool_groups, [form.allowed_tool_groups]);
-  useUnsavedChanges("workbench", "子 Agent 配置草稿", tab.dirty);
 
   const toolGroupsQuery = useQuery({
     queryKey: queryKeys.toolGroups(),

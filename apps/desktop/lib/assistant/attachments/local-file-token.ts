@@ -1,3 +1,7 @@
+import {
+  markdownSegments,
+  mapMarkdownText,
+} from "@/lib/assistant/markdown-literals";
 import { LOCAL_FILE_DATA_PREFIX } from "@/lib/assistant/attachments/local-attachment-registry";
 
 /** Stable client-only token used to render a local ordinary attachment inline. */
@@ -7,7 +11,11 @@ export const LOCAL_FILE_TOKEN = /\[\[cosir-file:([^\]]+)\]\]/g;
 export const LOCAL_IMAGE_LOCATOR_PREFIX = "cosir-attachment://";
 
 export function localFileTokenIds(text: string): string[] {
-  return [...text.matchAll(LOCAL_FILE_TOKEN)].map((match) => match[1]);
+  return markdownSegments(text)
+    .filter((part) => !part.literal)
+    .flatMap((part) =>
+      [...part.text.matchAll(LOCAL_FILE_TOKEN)].map((match) => match[1]),
+    );
 }
 
 /** 注释包裹或裸写形式的内联附件 token（含图片），用于从用户可见文本中剔除。 */
@@ -31,7 +39,11 @@ const INLINE_ATTACHMENT_TOKEN_PATTERN =
  *     无；纯函数。
  */
 export function stripInlineAttachmentTokens(text: string): string {
-  return text.replace(INLINE_ATTACHMENT_TOKEN_PATTERN, " ").replace(/\s+/g, " ").trim();
+  return mapMarkdownText(text, (part) =>
+    part.replace(INLINE_ATTACHMENT_TOKEN_PATTERN, " "),
+  )
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /** 内联附件身份判定所需的最小视图：只读取附件 id 与 content 里的 locator。 */
@@ -56,7 +68,10 @@ export type InlineAttachmentIdentity = {
  * 异常/副作用:
  *     无；纯函数。
  */
-export function inlineAttachmentKey(kind: "file" | "image", tokenId: string): string {
+export function inlineAttachmentKey(
+  kind: "file" | "image",
+  tokenId: string,
+): string {
   return `${kind}:${tokenId}`;
 }
 
@@ -77,12 +92,18 @@ export function inlineAttachmentKey(kind: "file" | "image", tokenId: string): st
  * 异常/副作用:
  *     无；纯函数。
  */
-export function inlineAttachmentTokenId(attachment: InlineAttachmentIdentity): string {
-  const fileContent = attachment.content?.find((content) => content.type === "file");
+export function inlineAttachmentTokenId(
+  attachment: InlineAttachmentIdentity,
+): string {
+  const fileContent = attachment.content?.find(
+    (content) => content.type === "file",
+  );
   if (fileContent?.data?.startsWith(LOCAL_FILE_DATA_PREFIX)) {
     return fileContent.data.slice(LOCAL_FILE_DATA_PREFIX.length);
   }
-  const imageContent = attachment.content?.find((content) => content.type === "image");
+  const imageContent = attachment.content?.find(
+    (content) => content.type === "image",
+  );
   if (imageContent?.image?.startsWith(LOCAL_IMAGE_LOCATOR_PREFIX)) {
     return imageContent.image.slice(LOCAL_IMAGE_LOCATOR_PREFIX.length);
   }

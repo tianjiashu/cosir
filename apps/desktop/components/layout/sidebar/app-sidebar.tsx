@@ -2,12 +2,11 @@
 
 import type { ReactNode } from "react";
 import {
-  MessageSquarePlusIcon,
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
-  RefreshCwIcon,
   SearchIcon,
   Settings2Icon,
+  SquarePenIcon,
 } from "lucide-react";
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
@@ -68,53 +67,40 @@ export function AppSidebar({
         </Button>
       </div>
 
-      {rail ? (
-        <div className="flex flex-col items-center gap-1 p-2">
-          <Button variant="ghost" size="icon" onClick={onNewConversation} aria-label="新对话" title={withShortcut("新对话", "newConversation")}>
-            <MessageSquarePlusIcon />
-          </Button>
-        </div>
-      ) : (
-        <>
-          <div className="flex shrink-0 gap-2 p-3">
-            <Button className="min-w-0 flex-1 justify-start gap-2" onClick={onNewConversation} title={withShortcut("新对话", "newConversation")}>
-              <MessageSquarePlusIcon className="size-4" />
-              <span className="truncate">新对话</span>
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => void load()} disabled={status === "loading"} aria-label="刷新工作区">
-              <RefreshCwIcon className={status === "loading" ? "animate-spin" : ""} />
-            </Button>
-          </div>
-          <nav className="flex min-h-0 flex-1 flex-col px-2 pb-4" aria-label="工作区任务列表">
-            <p className="text-muted-foreground shrink-0 truncate px-2 pb-2 text-xs font-medium">我的工作区</p>
-            {status === "loading" && <LoadingState size="compact" label="正在加载工作区…" className="px-2" />}
-            {status === "error" && <ErrorState className="mx-2 text-xs" message={error} onRetry={() => void load()} />}
-            {status === "ready" && workspaces.length === 0 && <EmptyState size="compact" title="暂无工作区" description="在新对话页添加一个本机目录作为工作区。" className="px-2" />}
-            {workspaces.length > 0 && (
-              <div className="min-h-0 flex-1">
-                <WorkspaceTree
-                  workspaces={workspaces}
-                  activeTaskId={section === "conversation" ? focusedTaskId : null}
-                  selectedWorkspaceId={catalog.selectedWorkspaceId}
-                  expandedWorkspaceIds={catalog.expandedWorkspaceIds}
-                  onWorkspaceExpansionChange={catalog.updateWorkspaceExpansion}
-                  onSelectWorkspace={catalog.selectWorkspace}
-                  onOpenWorkspaceSettings={onOpenWorkspaceSettings}
-                  onSelectTask={onSelectTask}
-                  renderWorkspaceActions={(workspace) => (
-                    <ResourceActionMenu
-                      label={workspace.name}
-                      onDelete={() => onRequestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })}
-                    />
-                  )}
-                  renderTaskActions={(task) => (
-                    <ResourceActionMenu label={task.full_title} onDelete={() => onRequestDelete({ kind: "task", id: task.task_id, label: task.full_title })} />
-                  )}
-                />
-              </div>
-            )}
-          </nav>
-        </>
+      <div className={cn("shrink-0", rail ? "flex justify-center p-2" : "px-3 pt-3 pb-5")}>
+        <SidebarLink rail={rail} active={false} icon={<SquarePenIcon className="size-4" />} label="新对话" shortcut="newConversation" onClick={onNewConversation} />
+      </div>
+      {!rail && (
+        <nav className="flex min-h-0 flex-1 flex-col px-2 pb-4" aria-label="工作区任务列表">
+          <p className="text-muted-foreground shrink-0 truncate px-2 pb-2 text-xs font-medium">我的工作区</p>
+          {status === "loading" && <LoadingState size="compact" label="正在加载工作区…" className="px-2" />}
+          {status === "error" && <ErrorState className="mx-2 text-xs" message={error} onRetry={() => void load()} />}
+          {status === "ready" && workspaces.length === 0 && <EmptyState size="compact" title="暂无工作区" description="在新对话页添加一个本机目录作为工作区。" className="px-2" />}
+          {workspaces.length > 0 && (
+            <div className="min-h-0 flex-1">
+              <WorkspaceTree
+                workspaces={workspaces}
+                activeTaskId={section === "conversation" ? focusedTaskId : null}
+                selectedWorkspaceId={catalog.selectedWorkspaceId}
+                expandedWorkspaceIds={catalog.expandedWorkspaceIds}
+                onWorkspaceExpansionChange={catalog.updateWorkspaceExpansion}
+                onSelectWorkspace={catalog.selectWorkspace}
+                onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+                onSelectTask={onSelectTask}
+                renderWorkspaceActions={(workspace, tabIndex) => (
+                  <ResourceActionMenu
+                    tabIndex={tabIndex}
+                    label={workspace.name}
+                    onDelete={() => onRequestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })}
+                  />
+                )}
+                renderTaskActions={(task, tabIndex) => (
+                  <ResourceActionMenu tabIndex={tabIndex} label={task.full_title} onDelete={() => onRequestDelete({ kind: "task", id: task.task_id, label: task.full_title })} />
+                )}
+              />
+            </div>
+          )}
+        </nav>
       )}
 
       <div className={cn("mt-auto shrink-0 border-t", rail ? "flex flex-col items-center gap-1 p-2" : "p-3")}>

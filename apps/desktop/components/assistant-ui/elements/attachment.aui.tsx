@@ -49,6 +49,7 @@ import {
   useComposerInsertion,
   insertAttachments,
 } from "@/components/composer/composer-insertion-context";
+import { useTaskComposerDraft } from "@/components/composer/use-task-composer-draft";
 import { ComposerEditor } from "@/components/composer/composer-editor";
 import type { InlineComposerAttachment } from "@/components/composer/composer-document";
 import { inlineAttachmentTokenId } from "@/lib/assistant/attachments/local-file-token";
@@ -286,6 +287,7 @@ type InlineComposerInputProps = {
   className?: string;
   autoFocus?: boolean;
   suspendAttachmentReconciliation?: boolean;
+  persistTaskDraft?: boolean;
   "aria-label"?: string;
 };
 
@@ -294,9 +296,11 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
   className,
   autoFocus,
   suspendAttachmentReconciliation = false,
+  persistTaskDraft = false,
   "aria-label": ariaLabel,
 }) => {
   const composer = unstable_useComposerInput();
+  const restoringDraft = useTaskComposerDraft(persistTaskDraft);
   const aui = useAui();
   const attachments = useAuiState((state) => state.composer.attachments);
   const fileAttachments = useMemo(
@@ -380,8 +384,8 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
       onRemoveAttachment={removeAttachment}
       placeholder={placeholder}
       autoFocus={autoFocus}
-      disabled={composer.isDisabled || suspendAttachmentReconciliation}
-      suspendAttachmentReconciliation={suspendAttachmentReconciliation}
+      disabled={composer.isDisabled || suspendAttachmentReconciliation || restoringDraft}
+      suspendAttachmentReconciliation={suspendAttachmentReconciliation || restoringDraft}
       className={className}
       aria-label={ariaLabel}
     />

@@ -9,7 +9,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { createWorkspace, type Workspace } from "@/lib/api/workspaces";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { writeLastWorkspaceId } from "@/lib/workspace-preferences";
 
 type WorkspacePickerProps = {
   workspaces: Workspace[];
@@ -18,12 +17,6 @@ type WorkspacePickerProps = {
   onWorkspaceCreated: (workspace: Workspace) => Promise<void>;
   showCreateLabel?: boolean;
 };
-
-/** 选中工作区并记为最近使用：新对话页的所有选择入口都走这里，下次打开时才能恢复同一工作区。 */
-function selectAndRemember(workspaceId: number, onWorkspaceChange: (workspaceId: number) => void) {
-  writeLastWorkspaceId(workspaceId);
-  onWorkspaceChange(workspaceId);
-}
 
 /**
  * 「从文件夹添加工作区」流程：系统目录选择 → 创建 → 等宿主刷新目录 → 选中新工作区。
@@ -48,7 +41,7 @@ export function useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceCh
       const name = picked.split(/[\\/]/).filter(Boolean).at(-1) ?? "新工作区";
       const workspace = await createWorkspace({ name, root_path: picked });
       await onWorkspaceCreated(workspace);
-      selectAndRemember(workspace.workspace_id, onWorkspaceChange);
+      onWorkspaceChange(workspace.workspace_id);
       return true;
     } catch (cause) {
       setError(userErrorMessage(cause, "创建工作区失败，请重试"));
@@ -62,13 +55,14 @@ export function useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceCh
   return { create, creating, error };
 }
 
+/** 只发出选择意图；确认、提交选择和最近工作区偏好由布局目录边界统一处理。 */
 export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceChange, onWorkspaceCreated, showCreateLabel = false }: WorkspacePickerProps) {
   const [openMenu, setOpenMenu] = useState(false);
   const { create, creating, error } = useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceChange });
   const selected = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
 
   const chooseWorkspace = (workspaceId: number) => {
-    selectAndRemember(workspaceId, onWorkspaceChange);
+    onWorkspaceChange(workspaceId);
     setOpenMenu(false);
   };
 

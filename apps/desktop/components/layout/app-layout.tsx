@@ -1,9 +1,10 @@
 "use client";
 
+import { ReferenceBridgeProvider, ReferenceTargetScope } from "@/components/workspace-references/reference-bridge";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Outlet,
-  useBlocker,
   useLocation,
   useMatches,
   useNavigate,
@@ -27,16 +28,17 @@ import { TaskPage } from "@/components/task-page";
 import { TaskRunStatusBadge } from "@/components/task-tree/task-run-status";
 import { Button } from "@/components/ui/button";
 import { Workbench } from "@/components/workbench";
+import { useWorkbenchLayout } from "./use-workbench-layout";
+import { useWorkspaceNavigation } from "./use-workspace-navigation";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { APP_SHORTCUTS } from "@/lib/shortcuts";
-import { confirmDiscardUnsaved, hasUnsavedChanges } from "@/lib/unsaved-changes";
 import { WorkbenchProvider } from "@/lib/workbench/context";
 import { useWorkbenchStore } from "@/lib/workbench/store";
-import { readSidebarCollapsed, writeSidebarCollapsed, writeLastWorkspaceId } from "@/lib/workspace-preferences";
+import { readSidebarCollapsed, writeSidebarCollapsed } from "@/lib/workspace-preferences";
 import { cn } from "@/lib/utils";
 
 /** 路由表上每个子路由通过 handle 声明自己属于哪个区域（见 src/router.tsx）。 */
-export type RouteHandle = { section: SidebarSection };
+export type RouteHandle = { section: SidebarSection; files?: boolean };
 
 type TaskRouteState = {
   initialMessage?: string;
@@ -56,8 +58,6 @@ export function useAppOutlet(): AppOutletContext {
 }
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
-/** 路由切换会卸载的编辑区：配置页面板与挂在任务页 composer 里的模型配置对话框。 */
-const GUARDED_SCOPES = ["settings", "dialog"] as const;
 
 function parsePositiveId(value: string | undefined): number | null {
   const parsed = Number(value);
@@ -97,10 +97,18 @@ export function AppLayout() {
     setKeptTaskId(routeTaskId);
     setKeptTaskState(routeTaskState);
   }, [routeTaskId, routeTaskState, section]);
+  const filesVisible = Boolean((leaf?.handle as RouteHandle | undefined)?.files) && (!params.taskId || routeTaskId !== null);
   const focusedTaskId = section === "conversation" ? routeTaskId : keptTaskId;
   const taskState = section === "conversation" ? routeTaskState : keptTaskState;
 
-  const catalog = useWorkspaceCatalog(focusedTaskId, workspaceConfigurationId);
+  const rawCatalog = useWorkspaceCatalog(focusedTaskId, workspaceConfigurationId);
+  const selectWorkspace = useWorkspaceNavigation(rawCatalog, focusedTaskId);
+  const catalog = useMemo(() => ({ ...rawCatalog, selectWorkspace }), [rawCatalog, selectWorkspace]);
+  const currentWorkbenchWorkspaceId = useWorkbenchStore(state => state.workspaceId);
+  // 未知 task 的归属仍在加载时，null 不是离开当前工作区的意图，不销毁已有草稿。
+  const workbenchWorkspaceId = catalog.activeTaskWorkspaceId
+    ?? (focusedTaskId !== null ? currentWorkbenchWorkspaceId : null);
+  const workbenchLayout = useWorkbenchLayout();
   // 快捷键先于导航函数注册，经 ref 调用最新的实现。
   const startNewConversationRef = useRef<() => void>(() => undefined);
   const actions = useWorkspaceActions(catalog, focusedTaskId);
@@ -137,55 +145,24 @@ export function AppLayout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   useCommandPaletteHotkey(useCallback(() => setPaletteOpen(true), []));
 
-  // ---- 未保存修改：离开配置路由（含切换标签）统一拦截 ----
-  // "dialog" 也在内：全局快捷键（⌘N 等）可能在模态的模型配置对话框打开时触发导航。
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => (
-    currentLocation.pathname !== nextLocation.pathname
-    && GUARDED_SCOPES.some((scope) => hasUnsavedChanges(scope))
-  ));
-  const blockerHandledRef = useRef(false);
-  useEffect(() => {
-    if (blocker.state !== "blocked") {
-      blockerHandledRef.current = false;
-      return;
-    }
-    if (blockerHandledRef.current) return;
-    blockerHandledRef.current = true;
-    void (async () => {
-      for (const scope of GUARDED_SCOPES) {
-        if (!(await confirmDiscardUnsaved(scope))) {
-          blocker.reset();
-          return;
-        }
-      }
-      blocker.proceed();
-    })();
-  }, [blocker]);
-
   // ---- 工作台 ----
-  const workbenchTabs = useWorkbenchStore((state) => state.tabs);
+  const allWorkbenchTabs = useWorkbenchStore((state) => state.tabs);
+  const workbenchTabs = allWorkbenchTabs.filter(tab => filesVisible || tab.kind !== "files");
   const workbenchPanelOpen = useWorkbenchStore((state) => state.panelOpen);
   const setWorkbenchPanelOpen = useWorkbenchStore((state) => state.setPanelOpen);
-  // 收起只卸载当前激活的草稿编辑器；未激活标签页的草稿保存在 workbench store 中，收起后仍在。
-  const requestWorkbenchPanelClose = useCallback(async () => {
-    if (!(await confirmDiscardUnsaved("workbench"))) return;
-    setWorkbenchPanelOpen(false);
-  }, [setWorkbenchPanelOpen]);
+  // 收起只改变可见性；草稿由工作台会话保留，真正销毁由关闭/工作区切换边界确认。
   const toggleWorkbenchPanel = useCallback(() => {
-    if (workbenchPanelOpen) void requestWorkbenchPanelClose();
-    else setWorkbenchPanelOpen(true);
-  }, [requestWorkbenchPanelClose, setWorkbenchPanelOpen, workbenchPanelOpen]);
+    setWorkbenchPanelOpen(!workbenchPanelOpen);
+  }, [setWorkbenchPanelOpen, workbenchPanelOpen]);
 
   // ---- 导航意图 ----
   const startNewConversation = useCallback(() => {
-    if (catalog.selectedWorkspaceId) writeLastWorkspaceId(catalog.selectedWorkspaceId);
     navigate("/");
-  }, [catalog.selectedWorkspaceId, navigate]);
+  }, [navigate]);
   startNewConversationRef.current = startNewConversation;
-  const selectTask = useCallback((task: { task_id: number }, workspaceId: number) => {
-    catalog.selectWorkspace(workspaceId);
+  const selectTask = useCallback((task: { task_id: number }) => {
     navigate(`/tasks/${task.task_id}`);
-  }, [catalog, navigate]);
+  }, [navigate]);
   const conversationPath = keptTaskId === null ? "/" : `/tasks/${keptTaskId}`;
 
   const crumbs = useMemo<Crumb[]>(() => {
@@ -224,13 +201,14 @@ export function AppLayout() {
       onSelectTask={selectTask}
       onOpenSettings={() => navigate("/settings")}
       onOpenWorkspaceSettings={(workspaceId) => navigate(`/workspaces/${workspaceId}/settings`)}
-      onOpenObserver={() => navigate("/context-observer")}
+      onOpenObserver={() => navigate("/context-observer", { state: { currentTaskId: focusedTaskId, returnTo: focusedTaskId ? `/tasks/${focusedTaskId}` : undefined } })}
       onRequestDelete={(target) => void actions.requestDelete(target)}
     />
   );
 
   return (
-    <WorkbenchProvider workspaceId={catalog.activeTaskWorkspaceId}>
+    <ReferenceBridgeProvider workspaceRoot={catalog.activeWorkspace?.root_path ?? ""} workspaceName={catalog.activeWorkspace?.name ?? "工作区"} target={filesVisible ? (routeTaskId ? `task:${routeTaskId}` : `new:${catalog.selectedWorkspaceId}`) : null} workspaceId={catalog.activeWorkspace?.workspace_id ?? null}>
+    <WorkbenchProvider workspaceId={workbenchWorkspaceId}>
       <div className="bg-background relative flex h-dvh min-h-0 overflow-hidden">
         <BackendStatusBanner />
         <aside
@@ -251,17 +229,34 @@ export function AppLayout() {
           </>
         )}
 
+        <div ref={workbenchLayout.containerRef} className="flex min-h-0 min-w-0 flex-1">
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <PageHeader
             crumbs={crumbs}
             status={showTaskLayer ? <TaskRunStatusBadge status={catalog.activeTask?.execution_status} /> : undefined}
             actions={(
               <>
+                {filesVisible && catalog.activeWorkspace && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-transparent focus-visible:border-transparent"
+                    aria-label="浏览工作区文件"
+                    onClick={() => useWorkbenchStore.getState().openFiles(
+                      catalog.activeWorkspace!.workspace_id,
+                      catalog.activeWorkspace!.root_path,
+                      catalog.activeWorkspace!.name,
+                    )}
+                  >
+                    文件
+                  </Button>
+                )}
                 {workbenchTabs.length > 0 && (
                   <Button
                     type="button"
                     variant={workbenchPanelOpen ? "secondary" : "outline"}
                     size="sm"
+                    className="border-transparent focus-visible:border-transparent"
                     aria-label={`工作台，${workbenchTabs.length} 个标签，${workbenchPanelOpen ? "点击收起" : "点击打开"}`}
                     aria-pressed={workbenchPanelOpen}
                     title={workbenchPanelOpen ? "收起工作台" : "打开工作台"}
@@ -279,7 +274,7 @@ export function AppLayout() {
           <div className="relative min-h-0 flex-1 overflow-hidden">
             {focusedTaskId !== null && (
               <div className="h-full" inert={!showTaskLayer} aria-hidden={!showTaskLayer || undefined}>
-                <TaskPage
+                <ReferenceTargetScope.Provider value={`task:${focusedTaskId}`}><TaskPage
                   key={focusedTaskId}
                   taskId={focusedTaskId}
                   initialTask={catalog.activeTask}
@@ -294,7 +289,7 @@ export function AppLayout() {
                   onTaskStateChanged={() => {
                     if (catalog.activeTaskWorkspaceId !== null) void catalog.refreshWorkspaceTasks(catalog.activeTaskWorkspaceId);
                   }}
-                />
+                /></ReferenceTargetScope.Provider>
               </div>
             )}
             {!showTaskLayer && (
@@ -317,12 +312,15 @@ export function AppLayout() {
           region="workbench"
           label="工作台"
           // 收起会改变 resetKey，从而清除崩溃状态；下次打开重新挂载。
-          resetKey={`workbench:${catalog.activeTaskWorkspaceId ?? "none"}:${workbenchPanelOpen ? "open" : "closed"}`}
+          resetKey={`workbench:${workbenchWorkspaceId ?? "none"}:${workbenchPanelOpen ? "open" : "closed"}`}
           fallbackClassName="w-80 shrink-0 border-l p-3"
           escape={{ label: "收起工作台", onClick: () => setWorkbenchPanelOpen(false) }}
         >
-          <Workbench workspaceId={catalog.activeTaskWorkspaceId} onRequestClose={() => void requestWorkbenchPanelClose()} />
+          <Workbench filesVisible={filesVisible} workspaceId={workbenchWorkspaceId}
+            width={workbenchLayout.width} minWidth={workbenchLayout.minWidth} maxWidth={workbenchLayout.maxWidth}
+            onWidthChange={workbenchLayout.setWidth} onRequestClose={() => setWorkbenchPanelOpen(false)} />
         </IsolatedRegion>
+        </div>
       </div>
       <CommandPalette
         open={paletteOpen}
@@ -332,6 +330,6 @@ export function AppLayout() {
         onNewConversation={() => startNewConversationRef.current()}
         onNavigate={navigate}
       />
-    </WorkbenchProvider>
+    </WorkbenchProvider></ReferenceBridgeProvider>
   );
 }

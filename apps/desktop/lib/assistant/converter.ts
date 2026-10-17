@@ -1,3 +1,4 @@
+import { mapMarkdownText } from "@/lib/assistant/markdown-literals";
 import type { MessageStatus } from "@assistant-ui/core";
 import type { CompleteAttachment, CreateAttachment } from "@assistant-ui/core";
 import type {
@@ -99,15 +100,15 @@ function toTextPart(part: TransportTextPart, role: TransportMessage["role"]): Th
 function hideLocalFileTokens(text: string): string {
   // Keep the token in the underlying editable text for edit/resend recovery,
   // but render it as an HTML comment so internal IDs never appear in chat UI.
-  return text.replace(/\[\[cosir-(?:file|image):[^\]]+\]\]/g, (token) => `<!-- ${token} -->`);
+  return mapMarkdownText(text, part => part.replace(/\[\[cosir-(?:file|image):[^\]]+\]\]/g, (token) => `<!-- ${token} -->`));
 }
 
 function revealLocalFileTokens(text: string): string {
-  return text.replace(/<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->/g, "$1");
+  return mapMarkdownText(text, part => part.replace(/<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->/g, "$1"));
 }
 
 function revealEditableFileTokens(text: string): string {
-  return revealLocalFileTokens(text).replace(/\[\[cosir-image:[^\]]+\]\]/g, "");
+  return mapMarkdownText(revealLocalFileTokens(text), part => part.replace(/\[\[cosir-image:[^\]]+\]\]/g, ""));
 }
 
 function toImageAttachment(part: TransportImagePart, index: number): CompleteAttachment {
@@ -195,8 +196,7 @@ export function toEditableUserMessageDraft(message: ThreadUserMessage): Editable
   const knownAttachmentTokens = new Set(
     message.content
       .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
-      .flatMap((part) => [...part.text.matchAll(/\[\[cosir-file:([^\]]+)\]\]/g)]
-        .map((match) => `file:${match[1]}`)),
+      .flatMap((part) => localFileTokenIds(part.text).map(id => `file:${id}`)),
   );
   const orderedAttachments: CompleteAttachment[] = [];
   const seenAttachmentIds = new Set<string>();

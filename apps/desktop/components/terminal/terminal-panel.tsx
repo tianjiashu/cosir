@@ -84,6 +84,7 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
           sessionRef.current?.clear();
           setNotice({ text: "正在重新同步输出", tone: "muted" });
         } else if (event.type === "attached" || event.type === "status") {
+          if (event.type === "attached") sessionRef.current?.setGeometry(event.rows, event.columns);
           if (event.status) setSessionStatus(event.status);
           setNotice(null);
         } else if (event.type === "exit") {
@@ -209,7 +210,7 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
           <XIcon className="size-4" aria-hidden="true" />
         </button>
       </header>
-      <div ref={containerRef} className="min-h-0 flex-1 px-3 py-2" data-terminal-stream="true" />
+      <div ref={containerRef} className="min-h-0 flex-1 overflow-auto px-3 py-2" data-terminal-stream="true" />
     </section>
   );
 }

@@ -391,18 +391,19 @@
     max-height: calc(100dvh - 2rem);
   }
 
-  /* contenteditable 没有原生 placeholder，使用受控的 data-empty 状态呈现提示。 */
-  [contenteditable="true"][data-placeholder][data-empty="true"]::before,
-  [contenteditable="false"][data-placeholder][data-empty="true"]::before {
+  /* 空状态由 Tiptap Placeholder 标记；提示不占行高，与首段光标共享起点。 */
+  .cosir-composer-editor > p.is-editor-empty:first-child::before {
     content: attr(data-placeholder);
-    display: block;
+    float: left;
+    height: 0;
+    max-width: 100%;
     color: var(--muted-foreground);
     opacity: 0.65;
     pointer-events: none;
     white-space: pre-wrap;
   }
 
-  [contenteditable="true"][data-placeholder][data-empty="true"]:focus::before {
+  .cosir-composer-editor:focus > p.is-editor-empty:first-child::before {
     opacity: 0.8;
   }
 

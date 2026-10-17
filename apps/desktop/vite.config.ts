@@ -1,3 +1,4 @@
+import { pdfAssetsPlugin } from "./scripts/pdf-assets-plugin";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "node:path";
@@ -25,6 +26,7 @@ const MARKDOWN_PACKAGE_PREFIXES = [
   "rehype-",
   "remark-",
   "space-separated",
+  "stringify-entities",
   "style-to-",
   "trim-lines",
   "trough",
@@ -51,7 +53,9 @@ function isMarkdownPackage(packageName: string): boolean {
     || MARKDOWN_PACKAGE_PREFIXES.some((prefix) => packageName.startsWith(prefix));
 }
 
-function getVendorChunk(packageName: string): string {
+function getVendorChunk(packageName: string): string | undefined {
+  if (packageName.startsWith("@codemirror/lang-") && packageName !== "@codemirror/lang-markdown") return undefined;
+  if (packageName === "@codemirror/language-data") return undefined;
   if (["react", "react-dom", "scheduler", "use-sync-external-store"].includes(packageName)) {
     return "vendor-react";
   }
@@ -61,6 +65,8 @@ function getVendorChunk(packageName: string): string {
   if (packageName.startsWith("@assistant-ui/") || packageName === "assistant-stream") {
     return "vendor-assistant-ui";
   }
+  if (packageName === "pdfjs-dist") return "vendor-pdf";
+  if (packageName === "@react-symbols/icons") return "vendor-file-icons";
   if (isMarkdownPackage(packageName)) return "vendor-markdown";
   if (["react-diff-view", "diff"].includes(packageName)) return "vendor-content";
   if (packageName.startsWith("@tauri-apps/")) return "vendor-tauri";
@@ -100,7 +106,7 @@ export default defineConfig(({ command }) => {
   process.env.NODE_ENV = command === "serve" ? "development" : "production";
 
   return {
-    plugins: [react()],
+    plugins: [react(), pdfAssetsPlugin()],
     resolve: {
       alias: { "@": path.resolve(__dirname, ".") },
     },

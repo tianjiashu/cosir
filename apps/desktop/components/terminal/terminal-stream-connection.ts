@@ -2,7 +2,7 @@ import { getApiBaseUrl } from "@/lib/http/client";
 import { newTraceId } from "@/lib/trace";
 
 export type TerminalStreamEvent =
-  | { type: "attached"; generation?: string | null; status?: string; next_seq?: number }
+  | { type: "attached"; rows: number; columns: number; generation?: string | null; status?: string; next_seq?: number }
   | { type: "output"; generation?: string | null; seq: number; data_base64: string }
   | { type: "status"; generation?: string | null; status?: string }
   | { type: "exit"; generation?: string | null; status?: string; exit_code?: number | null; end_reason?: string }

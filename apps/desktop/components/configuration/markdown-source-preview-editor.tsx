@@ -2,10 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { basicSetup, EditorView } from "codemirror";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
 import { Streamdown } from "streamdown";
 
+import {
+  editorTheme,
+  useEditorSyntaxTheme,
+} from "@/components/code-editor-theme";
 import { Button } from "@/components/ui/button";
 import { markdownPlugins } from "@/components/markdown-rendering-config";
 import { handleMarkdownKeydown } from "@/components/configuration/markdown-editor-shortcuts";
@@ -22,34 +26,6 @@ type MarkdownSourcePreviewEditorProps = {
   ariaLabel?: string;
 };
 
-const editorTheme = EditorView.theme({
-  "&": {
-    backgroundColor: "transparent",
-    color: "var(--foreground)",
-    height: "100%",
-  },
-  ".cm-scroller": {
-    fontFamily: "var(--app-font-mono)",
-    lineHeight: "1.7",
-    overflow: "auto",
-  },
-  ".cm-content": {
-    minHeight: "100%",
-    padding: "1rem",
-  },
-  ".cm-gutters": {
-    backgroundColor: "transparent",
-    border: "0",
-    color: "var(--muted-foreground)",
-  },
-  ".cm-activeLine, .cm-activeLineGutter": {
-    backgroundColor: "color-mix(in srgb, var(--muted) 45%, transparent)",
-  },
-  ".cm-focused": {
-    outline: "none",
-  },
-});
-
 function CodeMirrorSourceEditor({
   value,
   onChange,
@@ -58,6 +34,8 @@ function CodeMirrorSourceEditor({
   minHeight,
   ariaLabel = "Markdown 源码编辑器",
 }: Omit<MarkdownSourcePreviewEditorProps, "initialMode">) {
+  const syntaxTheme = useEditorSyntaxTheme();
+  const themeCompartment = useRef(new Compartment());
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const suppressChangeRef = useRef(false);
@@ -76,6 +54,7 @@ function CodeMirrorSourceEditor({
         basicSetup,
         markdown(),
         editorTheme,
+        themeCompartment.current.of(syntaxTheme),
         EditorView.lineWrapping,
         EditorState.readOnly.of(readOnly),
         EditorView.editable.of(!readOnly),
@@ -103,10 +82,18 @@ function CodeMirrorSourceEditor({
     const view = viewRef.current;
     if (!view || view.state.doc.toString() === value) return;
     suppressChangeRef.current = true;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: value },
+    });
     suppressChangeRef.current = false;
     setIsEmpty(value.length === 0);
   }, [value]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: themeCompartment.current.reconfigure(syntaxTheme),
+    });
+  }, [syntaxTheme]);
 
   return (
     <div className="relative h-full" style={{ minHeight }}>
@@ -153,7 +140,10 @@ export function MarkdownSourcePreviewEditor({
     />
   );
   const preview = (
-    <div className="aui-md h-full overflow-auto p-4 leading-6" style={{ minHeight }}>
+    <div
+      className="aui-md h-full overflow-auto p-4 leading-6"
+      style={{ minHeight }}
+    >
       {value ? (
         <Streamdown
           mode="static"
@@ -174,7 +164,11 @@ export function MarkdownSourcePreviewEditor({
   return (
     <div className="border-border/70 bg-card/70 overflow-hidden rounded-2xl border shadow-sm">
       <div className="bg-muted/30 flex items-center justify-end gap-1 border-b px-3 py-2">
-        <div className="bg-background flex rounded-lg border p-0.5" role="tablist" aria-label="Markdown 编辑视图">
+        <div
+          className="bg-background flex rounded-lg border p-0.5"
+          role="tablist"
+          aria-label="Markdown 编辑视图"
+        >
           {modeItems.map((item) => (
             <Button
               key={item.id}
@@ -192,7 +186,12 @@ export function MarkdownSourcePreviewEditor({
       </div>
       {mode === "source" && <div>{source}</div>}
       {mode === "preview" && <div>{preview}</div>}
-      {mode === "split" && <div className="grid divide-y lg:grid-cols-2 lg:divide-x lg:divide-y-0">{source}{preview}</div>}
+      {mode === "split" && (
+        <div className="grid divide-y lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+          {source}
+          {preview}
+        </div>
+      )}
     </div>
   );
 }
