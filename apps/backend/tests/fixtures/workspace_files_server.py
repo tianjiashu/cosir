@@ -41,7 +41,6 @@ async def fixture_lifespan(_app: FastAPI):
         storage_dir = Path(tempfile.mkdtemp(prefix="cosir-files-e2e-storage-"))
         paths.override(
             DATABASE_FILE=storage_dir / "app.sqlite3",
-            CHECKPOINT_FILE=storage_dir / "checkpoints.sqlite3",
             LOG_DIR=storage_dir / "logs",
         )
         init_storage()

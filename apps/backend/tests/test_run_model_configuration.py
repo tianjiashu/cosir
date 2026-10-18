@@ -16,7 +16,6 @@ def _run(*, reasoning_effort: str | None) -> ConversationRunRecord:
         status="running",
         created_at=now,
         updated_at=now,
-        checkpoint_thread_id="checkpoint-1",
         model_config_id=7,
         extra=ConversationRunExtra(
             display_text="hello",

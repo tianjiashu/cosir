@@ -15,11 +15,11 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
 
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
+from app.core.llm_provider.messages import AIMessage, ToolMessage
 from app.models.conversation_task_context import (
     ConversationTaskContextRecord,
     TransportMetadata,

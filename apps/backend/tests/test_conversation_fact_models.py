@@ -4,12 +4,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.assistant_transport.event import RunStatusChangedEvent
+from app.core.llm_provider.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_extra import ConversationRunExtra
@@ -17,7 +17,9 @@ from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
 from app.service.conversation_run.conversation_run_service import ConversationRunService
-from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
+from app.service.conversation_run.conversation_task_context_service import (
+    ConversationTaskContextService,
+)
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -109,7 +111,6 @@ def test_run_record_round_trips_usage_and_error() -> None:
         status="failed",
         created_at=_timestamp(),
         updated_at=_timestamp(),
-        checkpoint_thread_id="thread-11",
         usage=usage,
         error=error,
     )
@@ -332,7 +333,6 @@ def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -
         status="failed",
         created_at=_timestamp(),
         updated_at=_timestamp(),
-        checkpoint_thread_id="thread-11",
         extra=ConversationRunExtra(
             display_text="run input",
             attachments=[],
@@ -353,7 +353,7 @@ def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -
             "code": "provider_error",
             "message": "provider unavailable",
         }
-        assert cloned.checkpoint_thread_id != source.checkpoint_thread_id
+        assert cloned.execution_data == {}
         assert cloned.extra is not None
         assert cloned.extra.langfuse_trace_id is None
     finally:
@@ -513,7 +513,6 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
                     task_id=7,
                     input_text="hello",
                     status="running",
-                    checkpoint_thread_id="thread-11",
                 )
             )
             context = ConversationTaskContextRecord(

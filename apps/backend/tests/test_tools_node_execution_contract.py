@@ -18,18 +18,18 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from langchain_core.messages import ToolMessage
 
 from app.assistant_transport.event import ToolCallStatusChangedEvent
+from app.core.llm_provider.messages import ToolMessage
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolObservation, UserDecision, UserDecisionKind
+from app.core.workflows.react.execution_state.route import ReactRoute
+from app.core.workflows.react.execution_state.state import ReactExecutionState
 from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
 from app.core.workflows.react.nodes.tools_node import _merge_batch_results
-from app.core.workflows.react.worflow_state.route import ReactRoute
-from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 lifecycle_module = importlib.import_module(
     "app.core.workflows.react.node_helper.tool_call_lifecycle"
@@ -151,10 +151,10 @@ def _state(
     lifecycle: ToolCallLifecycleManager | None,
     *,
     last_tool_results: dict[str, Any] | None = None,
-) -> ReactGraphState:
+) -> ReactExecutionState:
     """构造 ``_tools_node`` 所需的最小 state。"""
 
-    return ReactGraphState(
+    return ReactExecutionState(
         step_count=3,
         tool_error_count=0,
         next_node=ReactRoute.TOOLS,

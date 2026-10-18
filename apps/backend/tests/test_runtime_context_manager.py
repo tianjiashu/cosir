@@ -2,16 +2,16 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from langchain_core.messages import (
+
+from app.core.context.context_entry import ContextEntry
+from app.core.context.runtime_context_manager import RuntimeContextManager
+from app.core.llm_provider.messages import (
     AIMessage,
     AIMessageChunk,
     HumanMessage,
     SystemMessage,
     ToolMessage,
 )
-
-from app.core.context.context_entry import ContextEntry
-from app.core.context.runtime_context_manager import RuntimeContextManager
 from app.models.conversation_task_context import ConversationTaskContextRecord
 
 
@@ -40,6 +40,7 @@ class _ContextService:
         include_in_context: bool,
         transport_metadata: object = None,
         is_streaming: bool = False,
+        project_to_transport: bool = True,
     ) -> None:
         self.appended.append((task_id, run_id, message, seq, include_in_context))
         self.current_max_sequence = seq

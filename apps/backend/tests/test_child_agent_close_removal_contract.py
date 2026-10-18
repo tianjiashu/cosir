@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import importlib
 import importlib.util
 import threading
@@ -29,9 +28,7 @@ from pydantic import ValidationError
 # 打破在途重构中的循环导入：先 import 包本体，再导入其子模块。
 import app.core.tools as _tools_pkg
 from app.config.constant import Constant
-from app.core.tools.schemas import ALL_TOOL_NAMES, ToolDefinition, ToolName
-from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
-from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
+from app.core.tools.schemas import ALL_TOOL_NAMES, ToolName
 from app.core.tools.tool_handler.child_task.child_agent_send import (
     ChildAgentSendTool,
     build_child_agent_send_definition,
@@ -48,13 +45,7 @@ from app.core.tools.tool_models.child_task import (
     ChildAgentSendArgs,
     ChildAgentStatusArgs,
     ChildAgentWaitArgs,
-    DelegateTaskArgs,
 )
-from app.core.tools.tool_models.child_task.delegate_task_args import (
-    AGENT_NAME_MAX,
-    MESSAGE_MAX,
-)
-from app.core.tools.tool_registry import ToolRegistry
 from app.core.tools.tool_system import ToolSystem
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
@@ -128,7 +119,6 @@ def storage(tmp_path: Path) -> Iterator[None]:
     db_dir.mkdir()
     paths.override(
         DATABASE_FILE=db_dir / "app.sqlite3",
-        CHECKPOINT_FILE=db_dir / "checkpoints.sqlite3",
         LOG_DIR=db_dir / "logs",
     )
     init_storage()
@@ -171,20 +161,10 @@ def test_removed_source_files_are_absent_from_disk() -> None:
     """
 
     handler_py = (
-        _APP_DIR
-        / "core"
-        / "tools"
-        / "tool_handler"
-        / "child_task"
-        / "child_agent_close.py"
+        _APP_DIR / "core" / "tools" / "tool_handler" / "child_task" / "child_agent_close.py"
     )
     args_py = (
-        _APP_DIR
-        / "core"
-        / "tools"
-        / "tool_models"
-        / "child_task"
-        / "child_agent_close_args.py"
+        _APP_DIR / "core" / "tools" / "tool_models" / "child_task" / "child_agent_close_args.py"
     )
     assert not handler_py.exists(), f"残留源文件: {handler_py}"
     assert not args_py.exists(), f"残留源文件: {args_py}"
@@ -347,7 +327,7 @@ def test_registry_reads_are_thread_safe(storage: None) -> None:
         try:
             for _ in range(200):
                 results.append(registry.get_all_tool_names())
-        except BaseException as exc:  # noqa: BLE001 - 测试需捕获线程内任何异常
+        except BaseException as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=_read) for _ in range(8)]

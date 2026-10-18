@@ -36,7 +36,6 @@ def storage(tmp_path: Path, install_process_singletons):
     db_dir.mkdir()
     paths.override(
         DATABASE_FILE=db_dir / "app.sqlite3",
-        CHECKPOINT_FILE=db_dir / "checkpoints.sqlite3",
         LOG_DIR=db_dir / "logs",
     )
     init_storage()
@@ -65,7 +64,8 @@ def _make_dir(tmp_path: Path, name: str) -> Path:
 # 1. 复用返回同一条记录
 # ---------------------------------------------------------------------------
 def test_reuse_returns_same_record(storage, tmp_path) -> None:
-    # 目的：验证同路径二次 create 命中复用、保留既有 name、不重复插入。潜在缺陷：重复插入或覆盖 name。
+    # 目的：验证同路径二次 create 命中复用、保留既有 name、不重复插入。
+    # 潜在缺陷：重复插入或覆盖 name。
     service = get_workspace_service()
     root = _make_dir(tmp_path, "ws_reuse")
 
@@ -134,7 +134,8 @@ def test_new_branch_creates_cosir_dirs(storage, tmp_path) -> None:
 # 5. 复用分支重建缺失的 .cosir
 # ---------------------------------------------------------------------------
 def test_reuse_branch_rebuilds_missing_cosir(storage, tmp_path) -> None:
-    # 目的：验证复用分支在 .cosir 被删后仍会重建并复用同一条记录。潜在缺陷：复用分支忽略 .cosir 重建。
+    # 目的：验证复用分支在 .cosir 被删后仍会重建并复用同一条记录。
+    # 潜在缺陷：复用分支忽略 .cosir 重建。
     service = get_workspace_service()
     root = _make_dir(tmp_path, "ws_missing_cosir")
 
@@ -154,7 +155,8 @@ def test_reuse_branch_rebuilds_missing_cosir(storage, tmp_path) -> None:
 # 6. .cosir 初始化失败降级
 # ---------------------------------------------------------------------------
 def test_cosir_init_failure_downgrades(storage, tmp_path) -> None:
-    # 目的：验证 .cosir 已被同名文件占位导致 mkdir 失败时仍返回 record 且不抛错、不重复插入。潜在缺陷：向上抛异常。
+    # 目的：验证 .cosir 已被同名文件占位导致 mkdir 失败时仍返回 record
+    # 且不抛错、不重复插入。潜在缺陷：向上抛异常。
     service = get_workspace_service()
     root = _make_dir(tmp_path, "ws_cosir_file")
     (root / ".cosir").write_text("x")  # 同名文件占位
@@ -170,7 +172,8 @@ def test_cosir_init_failure_downgrades(storage, tmp_path) -> None:
 # 7. 非法 root_path 抛 ValueError
 # ---------------------------------------------------------------------------
 def test_invalid_root_path_raises_value_error(storage, tmp_path) -> None:
-    # 目的：验证相对路径 / 不存在目录 / 已存在文件三种非法 root_path 均抛 ValueError。潜在缺陷：校验缺失或类型不符。
+    # 目的：验证相对路径 / 不存在目录 / 已存在文件三种非法 root_path 均抛
+    # ValueError。潜在缺陷：校验缺失或类型不符。
     service = get_workspace_service()
 
     # (a) 相对路径
@@ -239,7 +242,8 @@ def test_list_workspaces(storage, tmp_path) -> None:
 
 
 def test_create_task_creates_task(storage, tmp_path) -> None:
-    # 目的：验证 create_task 在写闸门内为 workspace 创建 task 并返回记录。潜在缺陷：未创建或异常类型错误。
+    # 目的：验证 create_task 在写闸门内为 workspace 创建 task
+    # 并返回记录。潜在缺陷：未创建或异常类型错误。
     service = get_workspace_service()
     root = _make_dir(tmp_path, "ws_task")
 
@@ -252,7 +256,8 @@ def test_create_task_creates_task(storage, tmp_path) -> None:
 
 
 def test_delete_workspace_removes_record(storage, tmp_path) -> None:
-    # 目的：验证 delete_workspace 级联删除 task 并移除 workspace 记录。潜在缺陷：记录残留或事务未提交。
+    # 目的：验证 delete_workspace 级联删除 task 并移除 workspace
+    # 记录。潜在缺陷：记录残留或事务未提交。
     service = get_workspace_service()
     root = _make_dir(tmp_path, "ws_delete")
 

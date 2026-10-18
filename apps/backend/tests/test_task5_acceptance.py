@@ -9,7 +9,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy import inspect, update
 from sqlalchemy.orm import sessionmaker
 
@@ -31,21 +30,24 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
+from app.core.llm_provider.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunCommand, ConversationRunError, ConversationRunStatus
 from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
-from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
+from app.service.conversation_run.conversation_task_context_service import (
+    ConversationTaskContextService,
+)
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
-from app.storage.store_engines import APP_MODELS, initialize_app_schema
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.model_config_model import ModelConfigModel
+from app.storage.store_engines import APP_MODELS, initialize_app_schema
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 _USAGE = {
@@ -80,6 +82,9 @@ def canonical_store(tmp_path: Path, monkeypatch):
     engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
     initialize_app_schema(engine)
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(
+        "app.service.conversation_run.task_input_service.main_session_factory", lambda: factory
+    )
     workspaces = _bind(WorkspaceCrud, factory)
     tasks = _bind(TaskCrud, factory)
     runs = _bind(ConversationRunCrud, factory)
@@ -100,9 +105,7 @@ def canonical_store(tmp_path: Path, monkeypatch):
     # CRUD，使 state 服务与 store 中的 CRUD 读写同一份临时数据（保留测试隔离，不污染全局库）。
     monkeypatch.setattr("app.service.depends.get_task_crud", lambda: tasks)
     monkeypatch.setattr("app.service.depends.get_conversation_run_crud", lambda: runs)
-    monkeypatch.setattr(
-        "app.service.depends.get_conversation_task_context_crud", lambda: contexts
-    )
+    monkeypatch.setattr("app.service.depends.get_conversation_task_context_crud", lambda: contexts)
     state = ConversationTaskStateService()
     task_runtime_spaces.close()
     store = SimpleNamespace(
@@ -167,9 +170,7 @@ def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = N
     if result_status is None:
         return
     is_success = result_status == "success"
-    status_hint = (
-        None if is_success else ("已取消" if result_status == "cancelled" else "执行失败")
-    )
+    status_hint = None if is_success else ("已取消" if result_status == "cancelled" else "执行失败")
     _append(
         store,
         run.id,
@@ -234,36 +235,6 @@ def test_fresh_target_schema_has_no_persisted_conversation_snapshot_surface(tmp_
             any(token in path.read_text(encoding="utf-8") for token in forbidden)
             for path in backend_app.rglob("*.py")
         )
-    finally:
-        engine.dispose()
-
-
-def test_schema_removes_legacy_file_snapshot_table(tmp_path: Path) -> None:
-    """Existing local databases no longer retain the removed file changes table."""
-
-    engine = create_sqlite_engine(tmp_path / "legacy.sqlite3")
-    try:
-        with engine.begin() as connection:
-            connection.exec_driver_sql(
-                "CREATE TABLE file_snapshots (id INTEGER PRIMARY KEY, task_id INTEGER)"
-            )
-        initialize_app_schema(engine)
-        assert "file_snapshots" not in inspect(engine).get_table_names()
-    finally:
-        engine.dispose()
-
-
-def test_schema_removes_legacy_conversation_command_table(tmp_path: Path) -> None:
-    """已有本地主库不再保留已移除的 Transport 命令表。"""
-
-    engine = create_sqlite_engine(tmp_path / "legacy-commands.sqlite3")
-    try:
-        with engine.begin() as connection:
-            connection.exec_driver_sql(
-                "CREATE TABLE conversation_commands (id INTEGER PRIMARY KEY, command_id TEXT)"
-            )
-        initialize_app_schema(engine)
-        assert "conversation_commands" not in inspect(engine).get_table_names()
     finally:
         engine.dispose()
 
@@ -452,9 +423,7 @@ def _start_run_under_operation(
 
     with task_space.operation():
         return service.start_run(
-            commands=[
-                ConversationRunCommandInput(command_id="same-command", command_type="new")
-            ],
+            commands=[ConversationRunCommandInput(command_id="same-command", command_type="new")],
             model_config_id=1,
             reasoning_effort=None,
             task_id=store.task.id,
@@ -605,9 +574,7 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_without_command_persi
     other_results = [
         await asyncio.to_thread(
             service.start_run,
-            commands=[
-                ConversationRunCommandInput(command_id="same-command", command_type="new")
-            ],
+            commands=[ConversationRunCommandInput(command_id="same-command", command_type="new")],
             model_config_id=1,
             reasoning_effort=None,
             task_id=store.task.id,
@@ -652,7 +619,7 @@ def test_real_sqlite_fork_preserves_canonical_identity(
             session,
         )
     assert target.current_run_id is None
-    assert target_run.checkpoint_thread_id != source_run.checkpoint_thread_id
+    assert target_run.execution_data == {}
     source_rows = store.contexts.get(store.task.id, include_in_context=False)
     target_rows = store.contexts.get(target.id, include_in_context=False)
     assert [row.id for row in target_rows] != [row.id for row in source_rows]

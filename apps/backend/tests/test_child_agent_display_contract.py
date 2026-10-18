@@ -2,14 +2,13 @@
 
 from datetime import UTC, datetime
 
-from langchain_core.messages import AIMessage, ToolMessage
-
 # Load the tool package before the transport event package to match the production
 # dependency bootstrap and avoid the legacy import cycle during isolated collection.
 import app.core.tools  # noqa: F401
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
+from app.core.llm_provider.messages import AIMessage, ToolMessage
 from app.core.tools.display.child_agent_display import (
     build_child_agent_result_display_data,
     build_child_agent_wait_display_data,
@@ -34,7 +33,6 @@ def _run(
         status=status,
         created_at=now,
         updated_at=now,
-        checkpoint_thread_id=f"checkpoint-{run_id}",
         final_output=final_output,
         end_reason=None if status == "completed" else "child_failed",
         agent_id="reviewer",

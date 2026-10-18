@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy.orm import sessionmaker
 
 import app.core.runtime.conversation_run_executor as executor_module
@@ -19,6 +18,7 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
+from app.core.llm_provider.messages import AIMessage, HumanMessage, ToolMessage
 from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.core.workflows.workflow_operations import WorkflowOperations
 from app.models.conversation_run_command import ConversationRunCommand
@@ -47,7 +47,6 @@ def _run(run_id: int, task_id: int = 7) -> ConversationRunRecord:
         status="completed",
         created_at=_timestamp(run_id),
         updated_at=_timestamp(run_id),
-        checkpoint_thread_id=f"thread-{run_id}",
         end_reason="done",
         final_output=f"output-{run_id}",
     )
@@ -234,7 +233,13 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     service = ConversationRunService.__new__(ConversationRunService)
     service._run = RunCrud()
     service._task = TaskCrud()
-    service._session_factory = None
+    from contextlib import nullcontext
+
+    from app.storage.crud.task_input_crud import TaskInputCrud
+
+    service._session_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
+    queued = []
+    monkeypatch.setattr(TaskInputCrud, "append", lambda self, *args: queued.append(args))
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: Projector())
     monkeypatch.setattr(
         "app.service.conversation_run.conversation_run_service.get_model_config_service",
@@ -408,4 +413,4 @@ def test_resume_cancelled_run_clears_usage_and_error_and_reuses_checkpoint_threa
     assert resumed.error is None
     # resume 执行模式下 workflow 以 input_state=None 让 LangGraph 从该线程的既有 checkpoint
     # 继续；换新线程会让续跑落到空线程上，因此这里必须保持不变。
-    assert resumed.checkpoint_thread_id == run.checkpoint_thread_id
+    assert resumed.execution_data == run.execution_data

@@ -12,6 +12,7 @@ import asyncio
 import httpx
 import openai
 import pytest
+
 from app.core.agents.model_settings import ModelSettings
 from app.core.llm_provider import model_probe
 from app.core.llm_provider.model_probe import ModelProbeFailureKind, probe_chat_model
@@ -61,10 +62,13 @@ class _FakeModel:
     """最小模型替身：``astream`` 返回预设流。"""
 
     def __init__(self, stream: _FakeStream) -> None:
-        self.stream = stream
+        self._stream = stream
 
-    def astream(self, messages: object, **kwargs: object) -> _FakeStream:
-        return self.stream
+    def stream(self, messages: object, **kwargs: object) -> _FakeStream:
+        return self._stream
+
+    async def close(self) -> None:
+        pass
 
 
 def _install_model(monkeypatch: pytest.MonkeyPatch, stream: _FakeStream) -> None:

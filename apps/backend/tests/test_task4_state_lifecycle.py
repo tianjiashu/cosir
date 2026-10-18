@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
@@ -15,11 +14,15 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
+from app.core.llm_provider.messages import AIMessage, HumanMessage, SystemMessage
 from app.models import ConversationRunStatus
 from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
+from app.service.conversation_run import (
+    conversation_run_state_service as conversation_run_state_service_module,
+)
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -49,7 +52,6 @@ def _run(run_id: int, status: str) -> ConversationRunRecord:
         status=status,
         created_at=now,
         updated_at=now,
-        checkpoint_thread_id=f"checkpoint-{run_id}",
     )
 
 
@@ -152,9 +154,7 @@ def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
         def list_by_task(self, _task_id: int) -> list[ConversationRunRecord]:
             return [run]
 
-    service = _make_state_service(
-        CanonicalSources(), CanonicalSources(), CanonicalSources()
-    )
+    service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
 
     state = service.get_state(7)
 
@@ -303,34 +303,36 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             return [run]
 
     service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
-    task_runtime_spaces.get_or_create(7).replace_snapshot({
-        "runs": [
-            {
-                "runId": 2,
-                "status": "running",
-                "endReason": None,
-                "langfuseTraceId": None,
-                "messages": [
-                    {
-                        "id": "stale-user",
-                        "role": "user",
-                        "parts": [{"type": "text", "text": "stale", "status": "completed"}],
-                    },
-                    {
-                        "id": "stale-assistant",
-                        "role": "assistant",
-                        "parts": [{"type": "text", "text": "stale", "status": "running"}],
-                    },
-                ],
-                "usage": None,
-                "error": None,
-            }
-        ],
-        "current_run_id": 2,
-        "approvals": {},
-        "context_window_total": None,
-        "error": None,
-    })
+    task_runtime_spaces.get_or_create(7).replace_snapshot(
+        {
+            "runs": [
+                {
+                    "runId": 2,
+                    "status": "running",
+                    "endReason": None,
+                    "langfuseTraceId": None,
+                    "messages": [
+                        {
+                            "id": "stale-user",
+                            "role": "user",
+                            "parts": [{"type": "text", "text": "stale", "status": "completed"}],
+                        },
+                        {
+                            "id": "stale-assistant",
+                            "role": "assistant",
+                            "parts": [{"type": "text", "text": "stale", "status": "running"}],
+                        },
+                    ],
+                    "usage": None,
+                    "error": None,
+                }
+            ],
+            "current_run_id": 2,
+            "approvals": {},
+            "context_window_total": None,
+            "error": None,
+        }
+    )
 
     state = service.get_state(7)
 
@@ -366,6 +368,7 @@ def test_claim_run_propagates_post_commit_projector_failure(
 
     with pytest.raises(RuntimeError, match="transport unavailable"):
         service.claim_pending_run(7)
+    monkeypatch.undo()
 
 
 def test_malformed_context_deserialization_fails_at_state_read_boundary() -> None:

@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
-from langchain_core.messages import HumanMessage
 from sqlalchemy import func, select
 
 from app.api.tasks_api import delete_run as delete_run_endpoint
+from app.core.llm_provider.messages import HumanMessage
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.deletion_errors import DeletionBusyError, RunDeletionConflictError
 from app.service.depends import (
@@ -34,7 +34,6 @@ def storage(tmp_path: Path):
     db_dir.mkdir()
     paths.override(
         DATABASE_FILE=db_dir / "app.sqlite3",
-        CHECKPOINT_FILE=db_dir / "checkpoints.sqlite3",
         LOG_DIR=db_dir / "logs",
     )
     init_storage()

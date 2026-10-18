@@ -7,18 +7,18 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from langchain_core.messages import (
+
+import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
+from app.assistant_transport.event import RunStatusChangedEvent
+from app.core.context.context_entry import ContextEntry
+from app.core.context.runtime_context_manager import RuntimeContextManager, _as_ai_message
+from app.core.llm_provider.messages import (
     AIMessage,
     AIMessageChunk,
     HumanMessage,
     SystemMessage,
     ToolMessage,
 )
-
-import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
-from app.assistant_transport.event import RunStatusChangedEvent
-from app.core.context.context_entry import ContextEntry
-from app.core.context.runtime_context_manager import RuntimeContextManager, _as_ai_message
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
@@ -86,57 +86,15 @@ def test_runtime_context_persists_complete_ai_fields_and_ordered_parts() -> None
     assert persisted["args"][2] == message
 
 
-def test_runtime_context_fresh_run_reloads_canonical_user_after_reset(monkeypatch) -> None:
-    user = ContextEntry(HumanMessage(content="hello"), 11, 1)
-
-    class _FreshContextService:
-        def __init__(self) -> None:
-            self.entries: list[ContextEntry] = [user]
-            self.delete_calls = 0
-
-        def delete_by_run_id(self, _task_id: int, _run_id: int) -> None:
-            self.delete_calls += 1
-            self.entries = []
-
-        def append(
-            self,
-            _task_id: int,
-            _run_id: int,
-            message: Any,
-            _sequence: int,
-            include_in_context: bool = True,
-            transport_metadata: Any = None,
-        ) -> None:
-            self.entries.append(ContextEntry(message, _run_id, _sequence))
-
-        def entries_in_context(self, _task_id: int) -> list[ContextEntry]:
-            return list(self.entries)
-
-        def max_sequence(self, _task_id: int) -> int:
-            return max((entry.sequence for entry in self.entries), default=0)
-
-    service = _FreshContextService()
+def test_begin_run_binds_identity_without_rewriting_context() -> None:
+    service = _RecordingContextService()
     manager = _runtime_manager(service)
-    # ensure_run_user_message 写完后经投影器推送事件（进程内投影器依赖存储单例，这里用空操作）。
-    monkeypatch.setattr(
-        "app.core.context.runtime_context_manager.get_conversation_event_projector",
-        lambda: SimpleNamespace(process=lambda *args, **kwargs: None),
-    )
-
-    manager.begin_run(
-        SimpleNamespace(
-            id=11,
-            task_id=7,
-            input_text="hello",
-        ),
-        "fresh",
-    )
-    # 与 workflow 一致：graph 启动前补写 canonical user 消息（begin_run 已清空该 run 旧条目）。
-    manager.ensure_run_user_message("hello")
-
-    assert [entry.message for entry in service.entries_in_context(7)] == [user.message]
-    assert [entry.message for entry in manager._entries] == [user.message]
-    assert service.delete_calls == 1
+    message = HumanMessage(content="existing")
+    manager._entries = [ContextEntry(message, 11, 1)]
+    manager.begin_run(SimpleNamespace(id=12, task_id=7), "fresh")
+    assert manager.current_run_id == 12
+    assert manager._entries[0].message is message
+    assert service.appended == []
 
 
 def test_merged_chunk_preserves_complete_langchain_message_semantics() -> None:
@@ -179,9 +137,7 @@ def test_tool_call_lifecycle_freezes_presentation_in_serializable_state(monkeypa
     # 展示声明只在 ``allowed`` 桶写入，故本用例必须把工具放进本轮允许集合。
     manager = ToolCallLifecycleManager(allows_tools=("read_file",))
     tool_definitions = [
-        SimpleNamespace(
-            name="read_file", display=SimpleNamespace(to_dict=lambda: {"verb": "Read"})
-        )
+        SimpleNamespace(name="read_file", display=SimpleNamespace(to_dict=lambda: {"verb": "Read"}))
     ]
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
@@ -374,7 +330,7 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
     """恢复：Run 终态与工具收口在同一个事务内提交，提交后不再投影快照。"""
 
     order: list[str] = []
-    recovered_run = SimpleNamespace(id=11, task_id=7, status="cancelled")
+    recovered_run = SimpleNamespace(id=11, task_id=7, status="cancelled", execution_data={})
 
     class _Transaction:
         def __enter__(self):
@@ -402,12 +358,16 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
             usage: object = None,
             error: object = None,
             session: object = None,
+            execution_data: object = None,
         ) -> object:
             assert session is not None
             order.append("run")
             return recovered_run
 
     class _ContextService:
+        def invalidate_waiting_calls(self, task_id, run_id, session):
+            pass
+
         def close_unclosed_tool_calls_for_run(
             self, task_id: int, run_id: int, session: object = None
         ) -> list[str]:
@@ -462,11 +422,11 @@ def test_create_run_writes_user_context_and_task_current_run_before_projector(mo
     monkeypatch.setattr(
         "app.service.task.conversation_run_service.get_model_config_service",
         lambda: SimpleNamespace(
-                get_config=lambda _config_id: SimpleNamespace(
-                    supports_reasoning_effort=False,
-                    supports_image=False,
-                    context_window_k=128,
-                )
+            get_config=lambda _config_id: SimpleNamespace(
+                supports_reasoning_effort=False,
+                supports_image=False,
+                context_window_k=128,
+            )
         ),
     )
 
@@ -515,11 +475,11 @@ def test_create_run_with_external_session_defers_initialization_events_to_owner(
     monkeypatch.setattr(
         "app.service.task.conversation_run_service.get_model_config_service",
         lambda: SimpleNamespace(
-                get_config=lambda _config_id: SimpleNamespace(
-                    supports_reasoning_effort=False,
-                    supports_image=False,
-                    context_window_k=128,
-                )
+            get_config=lambda _config_id: SimpleNamespace(
+                supports_reasoning_effort=False,
+                supports_image=False,
+                context_window_k=128,
+            )
         ),
     )
 

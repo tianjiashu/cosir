@@ -18,14 +18,14 @@ from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
-import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 import pytest
+
+import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
+from app.core.llm_provider.messages import AIMessage, AIMessageChunk
+from app.core.workflows.react.execution_state.route import ReactRoute
+from app.core.workflows.react.execution_state.state import ReactExecutionState
 from app.core.workflows.react.nodes import model_node as model_module
-from app.core.workflows.react.worflow_state.route import ReactRoute
-from app.core.workflows.react.worflow_state.state import ReactGraphState
-from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-from langchain_core.messages import AIMessage, AIMessageChunk
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +51,7 @@ def _patch_task_space(monkeypatch: Any):
     return task_space
 
 
-def _state(**overrides: Any) -> ReactGraphState:
+def _state(**overrides: Any) -> ReactExecutionState:
     """构造最小可执行的 ReAct graph state。"""
 
     values: dict[str, Any] = {
@@ -64,7 +64,7 @@ def _state(**overrides: Any) -> ReactGraphState:
         "last_tool_results": {"instruction": "", "observations": []},
     }
     values.update(overrides)
-    return ReactGraphState(**values)
+    return ReactExecutionState(**values)
 
 
 class _ModelHarness:
@@ -98,6 +98,7 @@ class _ModelHarness:
             return object()
 
         self.operations = SimpleNamespace(
+            task_tool_schemas=[],
             model_tools=[SimpleNamespace(name="read_file", display=None)],
             all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
             allows_tools=frozenset({"read_file"}),
@@ -111,9 +112,10 @@ class _ModelHarness:
         )
         self.runtime_config = SimpleNamespace(
             operations=self.operations,
-            model=SimpleNamespace(astream=self._astream),
-            final_model=SimpleNamespace(astream=self._astream),
+            model=SimpleNamespace(stream=self._astream),
+            final_model=SimpleNamespace(stream=self._astream),
             structured_output=None,
+            max_steps=10,
             workspace_id=1,
             thinking_channel="",
             # model 节点读 WorkflowOperations.allows_tools 构造生命周期允许集合。
@@ -165,7 +167,7 @@ class _ModelHarness:
             flush_message_chunk=flush_message_chunk,
         )
 
-    async def _astream(self, _messages: list[Any]) -> AsyncIterator[AIMessageChunk]:
+    async def _astream(self, _messages: list[Any], **kwargs: Any) -> AsyncIterator[AIMessageChunk]:
         for chunk in self._chunks:
             yield chunk
 
@@ -211,7 +213,7 @@ def test_normal_finish_reason_is_required_for_final_response(monkeypatch: Any) -
     result = asyncio.run(model_module._model_node(_state()))
 
     assert result["next_node"] is ReactRoute.END
-    assert harness.completed is True
+    assert harness.completed is False
     assert harness.failed is False
     assert [type(item) for item in harness.messages] == [AIMessage]
 
@@ -278,42 +280,33 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
     result = asyncio.run(model_module._model_node(_state()))
 
     assert result["next_node"] is ReactRoute.END
-    assert harness.completed is True
+    assert harness.completed is False
 
 
-def test_runtime_notice_is_appended_to_last_message_content(monkeypatch: Any) -> None:
-    """运行期通知拼接到本步请求最后一条消息 content 末尾，不新增独立消息、不投影到 transport。"""
-    from langchain_core.messages import HumanMessage
+def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None:
+    """通知经 context 持久化后参与下一次模型请求，不改写用户原文。"""
+    from app.core.llm_provider.messages import HumanMessage, SystemMessage
 
-    notice = RuntimeNotice(content="环境已更新", kind="test", run_id=2)
-    space = task_runtime_spaces.get_or_create(1)
-    space.defer_runtime_notice(notice)
     base = HumanMessage(content="你好")
     harness = _ModelHarness(AIMessage(content="完成", response_metadata={"finish_reason": "stop"}))
-    harness.runtime_context.load_message = lambda: [base]
+    harness.runtime_context.load_message = lambda: [base, *harness.messages]
     requested: list[Any] = []
+    space = task_runtime_spaces.get_or_create(1)
+    monkeypatch.setattr(space, "take_runtime_notices", lambda **kw: "环境已更新")
 
-    async def astream(messages: list[Any]) -> AsyncIterator[AIMessageChunk]:
+    async def stream(messages: list[Any], **kwargs: Any) -> AsyncIterator[AIMessageChunk]:
         requested.extend(messages)
-        async for chunk in harness._astream(messages):
+        async for chunk in harness._astream(messages, **kwargs):
             yield chunk
 
-    harness.runtime_config.model.astream = astream
+    harness.runtime_config.model.stream = stream
     monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
     monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
     result = asyncio.run(model_module._model_node(_state()))
     assert result["next_node"] is ReactRoute.END
-    # 通知未产生独立持久化消息（仅最终 AI 输出经 finalize 落盘），也不进入 transported 历史。
-    assert not any(
-        getattr(m, "content", None) == "system_hint:环境已更新" for m in harness.messages
-    )
-    # 通知文本拼接到本步请求最后一条消息 content 末尾，且前置运行环境行。
-    from app.utils.host_platform import host_platform_name
-
-    assert requested[-1].content == (
-        f"你好\n运行环境：{host_platform_name()}\nsystem_hint:环境已更新"
-    )
-    assert notice.content == "环境已更新"
-    assert not space.has_runtime_notices()
+    assert isinstance(requested[-1], SystemMessage)
+    assert requested[-1].content == "环境已更新"
+    assert harness.messages[0] == requested[-1]
+    assert base.content == "你好"

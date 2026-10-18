@@ -17,11 +17,8 @@ from app.assistant_transport.request import (
 )
 from app.assistant_transport.service.conversation_run_command_service import _resumable_status
 from app.core.tools.schemas.user_decision import (
-    UserDecision,
     UserDecisionKind,
-    build_resume_payload,
 )
-from app.core.workflows.react.node_helper.user_input_projection import parse_resume_decision
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
 
@@ -57,9 +54,7 @@ def _decision_command(*, request_id: str = "12", decision: str = "approve") -> d
 def test_decision_command_parses_and_maps_to_domain() -> None:
     """决定命令在 wire 边界完成校验并映射为领域值对象。"""
 
-    request = AssistantTransportRequest.model_validate(
-        _request([_decision_command()], runId=31)
-    )
+    request = AssistantTransportRequest.model_validate(_request([_decision_command()], runId=31))
 
     (command,) = request.commands
     assert isinstance(command, UserInputDecisionCommand)
@@ -107,9 +102,7 @@ def test_multiple_decision_commands_are_rejected() -> None:
     other["commandId"] = "cmd-3"
 
     with pytest.raises(TransportRequestError) as raised:
-        AssistantTransportRequest.model_validate(
-            _request([_decision_command(), other], runId=31)
-        )
+        AssistantTransportRequest.model_validate(_request([_decision_command(), other], runId=31))
 
     assert raised.value.code == "MULTIPLE_USER_DECISION_COMMANDS"
 
@@ -150,28 +143,6 @@ def test_force_reject_is_not_client_submittable() -> None:
     assert raised.value.code == "FORCE_REJECT_NOT_CLIENT_SUBMITTABLE"
 
 
-def test_resume_payload_round_trips_through_node_parser() -> None:
-    """workflow 产出的恢复载荷必须能被等待节点解析。
-
-    这是真实决定链路的唯一联结点：``workflow`` 用 ``build_resume_payload`` 造载荷、``wait_user``
-    用 ``parse_resume_decision`` 解析。两处各维护一份键名（``kind`` vs ``decision``）时，测试可以
-    各自自洽而线上 100% 失败，因此必须锁死往返一致。
-    """
-
-    decision = UserDecision(
-        request_id="12", kind=UserDecisionKind.APPROVE, data={"goal": "交付报告"}
-    )
-
-    payload = build_resume_payload(decision)
-
-    assert payload == {
-        "decision": {"request_id": "12", "decision": "approve", "data": {"goal": "交付报告"}}
-    }
-    assert parse_resume_decision(payload) == decision
-    # 无决定时注入空决定：``wait_user`` 据此重新挂起同一请求，而不是把空值当批准。
-    assert build_resume_payload(None) == {"decision": None}
-
-
 def test_resumable_status_maps_waiting_and_cancelled_only() -> None:
     """只有「等待用户决定」与「已取消」能续跑同一 checkpoint。"""
 
@@ -180,13 +151,11 @@ def test_resumable_status_maps_waiting_and_cancelled_only() -> None:
         is ConversationRunStatus.WAITING_FOR_INPUT
     )
     assert (
-        _resumable_status(ConversationRunStatus.CANCELLED.value)
-        is ConversationRunStatus.CANCELLED
+        _resumable_status(ConversationRunStatus.CANCELLED.value) is ConversationRunStatus.CANCELLED
     )
     for status in (
         ConversationRunStatus.PENDING.value,
         ConversationRunStatus.RUNNING.value,
         ConversationRunStatus.COMPLETED.value,
-        ConversationRunStatus.FAILED.value,
     ):
         assert _resumable_status(status) is None

@@ -19,7 +19,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
 
 import app.core.tools.tool_execute.tool_access_gate as gate_module
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
@@ -34,6 +33,7 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.hook.hook_event import HookDecision
 from app.core.hook.hook_result import HookResult
+from app.core.llm_provider.messages import AIMessage, ToolMessage
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import (
     ToolCall,
@@ -43,12 +43,12 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
 from app.core.tools.tool_handler.read_file import ReadFileTool
 from app.core.tools.tool_registry import ToolRegistry
+from app.core.workflows.react.execution_state.route import ReactRoute
+from app.core.workflows.react.execution_state.state import ReactExecutionState
 from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
-from app.core.workflows.react.worflow_state.route import ReactRoute
-from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.models.conversation_task_context import ConversationTaskContextRecord
 
 # ============================================================================
@@ -166,7 +166,7 @@ def _summary(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-def _state(lifecycle: ToolCallLifecycleManager, **overrides: Any) -> ReactGraphState:
+def _state(lifecycle: ToolCallLifecycleManager, **overrides: Any) -> ReactExecutionState:
     """构造 ``_tools_node`` 所需的最小 graph state。"""
 
     values: dict[str, Any] = {
@@ -180,7 +180,7 @@ def _state(lifecycle: ToolCallLifecycleManager, **overrides: Any) -> ReactGraphS
         "tool_call_lifecycle": lifecycle,
     }
     values.update(overrides)
-    return ReactGraphState(**values)
+    return ReactExecutionState(**values)
 
 
 def _execution_context(tmp_path: Any) -> ToolExecutionContext:

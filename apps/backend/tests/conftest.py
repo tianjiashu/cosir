@@ -155,14 +155,12 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         configuration_scope_source, "system_agent_team_config_dir", lambda: system_teams
     )
-    monkeypatch.setattr(
-        agent_profile_config, "system_agent_team_config_dir", lambda: system_teams
-    )
+    monkeypatch.setattr(agent_profile_config, "system_agent_team_config_dir", lambda: system_teams)
 
 
 @pytest.fixture
 def isolated_storage(tmp_path: Path) -> Iterator[None]:
-    """为用例装配隔离的主库与 checkpoint 路径。
+    """为用例装配隔离的主库与日志路径。
 
     为什么需要它：任务运行时空间、service 与 CRUD 现在都在构造时取真实会话工厂
     （``TaskRuntimeSpace.__post_init__`` 会读当前 task），因此触碰服务层的用例必须先初始化主库；
@@ -188,7 +186,6 @@ def isolated_storage(tmp_path: Path) -> Iterator[None]:
     db_dir.mkdir()
     paths.override(
         DATABASE_FILE=db_dir / "app.sqlite3",
-        CHECKPOINT_FILE=db_dir / "checkpoints.sqlite3",
         LOG_DIR=db_dir / "logs",
     )
     init_storage()

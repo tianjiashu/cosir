@@ -15,8 +15,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import asyncio
+import contextlib
 import threading
 import time
 from pathlib import Path
@@ -32,6 +32,7 @@ from app.assistant_transport.event import (
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
+    UserInputAppendedEvent,
 )
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -307,6 +308,14 @@ async def test_projection_ordering_kill_then_drain_then_project(
     real_projector = ConversationEventProjector(owner)
     real_projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
     real_projector.process(
+        UserInputAppendedEvent(
+            task_id=_TASK_ID,
+            run_id=_RUN_ID,
+            message_id="user-1",
+            parts=[{"type": "text", "text": "test"}],
+        )
+    )
+    real_projector.process(
         RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running")
     )
     real_projector.process(
@@ -339,9 +348,7 @@ async def test_projection_ordering_kill_then_drain_then_project(
                 run_id=_RUN_ID,
                 tool_call_id="call-cancel",
                 seq=seq,
-                data=TerminalOutputDeltaData(
-                    kind="terminal_output_delta", text=text
-                ),
+                data=TerminalOutputDeltaData(kind="terminal_output_delta", text=text),
             )
         )
 
@@ -534,6 +541,14 @@ def _seed_running_execute_terminal(projector: ConversationEventProjector, call_i
     """在真实 projector 上初始化一个 ``execute_terminal`` 的 running part。"""
 
     projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
+    projector.process(
+        UserInputAppendedEvent(
+            task_id=_TASK_ID,
+            run_id=_RUN_ID,
+            message_id="user-1",
+            parts=[{"type": "text", "text": "test"}],
+        )
+    )
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))
     projector.process(
         ToolCallCreatedEvent(
@@ -669,9 +684,7 @@ def test_real_cancel_projection_wipes_streamed_output_preexisting_defect(
             run_id=_RUN_ID,
             tool_call_id="call-t",
             seq=0,
-            data=TerminalOutputDeltaData(
-                kind="terminal_output_delta", text=streamed
-            ),
+            data=TerminalOutputDeltaData(kind="terminal_output_delta", text=streamed),
         )
     )
     assert owner.state["runs"][0]["messages"][1]["parts"][0]["display_data"]["output"] == streamed

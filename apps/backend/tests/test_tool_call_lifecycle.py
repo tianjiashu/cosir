@@ -3,17 +3,15 @@
 from types import SimpleNamespace
 from typing import Any
 
-from langchain_core.messages import ToolMessage
-
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.tools.schemas import ToolCall
+from app.core.workflows.react.execution_state.route import ReactRoute
+from app.core.workflows.react.execution_state.state import ReactExecutionState
 from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     SettlementResult,
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
-from app.core.workflows.react.worflow_state.route import ReactRoute
-from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
 def _summary(**overrides: object) -> dict[str, Any]:
@@ -213,9 +211,7 @@ def test_create_begin_and_cancel_update_serializable_state() -> None:
 
     harness = _LifecycleHarness()
     original = harness.manager
-    harness.create(
-        ToolCall(tool_name="read_file", call_id="call-1", arguments={"path": "a.py"})
-    )
+    harness.create(ToolCall(tool_name="read_file", call_id="call-1", arguments={"path": "a.py"}))
     assert harness.manager is not original
     assert harness.manager.valid_calls["call-1"].status == "pending"
     assert harness.events[0].type == "tool_call_created"
@@ -360,9 +356,7 @@ def test_blocked_call_closure_is_settled_without_status_event() -> None:
 def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
     """state checkpoint 解码后仍恢复为 manager，而不是普通 dict。"""
 
-    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-
-    state = ReactGraphState(
+    state = ReactExecutionState(
         step_count=0,
         tool_error_count=0,
         next_node=ReactRoute.MODEL,
@@ -377,11 +371,10 @@ def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
                     tool_name="read_file",
                     status="running",
                 )
-            }
+            },
         ),
     )
-    serializer = JsonPlusSerializer()
-    restored = serializer.loads_typed(serializer.dumps_typed(state))
+    restored = ReactExecutionState.model_validate_json(state.model_dump_json())
 
     assert isinstance(restored.tool_call_lifecycle, ToolCallLifecycleManager)
     assert restored.tool_call_lifecycle.valid_calls["call-1"].status == "running"

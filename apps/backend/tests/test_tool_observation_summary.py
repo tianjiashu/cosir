@@ -14,22 +14,22 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from langchain_core.messages import ToolMessage
 
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
+from app.core.llm_provider.messages import ToolMessage
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolObservation
+from app.core.workflows.react.execution_state.route import ReactRoute
+from app.core.workflows.react.execution_state.state import ReactExecutionState
 from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
 from app.core.workflows.react.nodes import observation_node as observe_module
 from app.core.workflows.react.nodes import tools_node as tools_module
-from app.core.workflows.react.worflow_state.route import ReactRoute
-from app.core.workflows.react.worflow_state.state import ReactGraphState
 
 
-def _state(**overrides: Any) -> ReactGraphState:
+def _state(**overrides: Any) -> ReactExecutionState:
     """构造最小可执行的 ReAct graph state。
 
     ``tool_request`` 是历史 state 字段，现在只作为用例声明「本批有哪些调用」的输入：真正的调用
@@ -47,7 +47,7 @@ def _state(**overrides: Any) -> ReactGraphState:
         "tool_call_lifecycle": _pending_lifecycle(overrides.get("tool_request")),
     }
     values.update(overrides)
-    return ReactGraphState(**values)
+    return ReactExecutionState(**values)
 
 
 def _pending_lifecycle(tool_request: dict[str, Any] | None) -> ToolCallLifecycleManager:
@@ -101,9 +101,7 @@ class _WorkflowHarness:
             self.messages.append(message)
             return "appended"
 
-        self.runtime_context = SimpleNamespace(
-            add_message=add_message, load_message=lambda: []
-        )
+        self.runtime_context = SimpleNamespace(add_message=add_message, load_message=lambda: [])
 
     def patch(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """把 tools/observe/lifecycle 三个模块的运行期依赖绑定到本桩。"""

@@ -12,7 +12,6 @@ from app.core.tools.schemas.user_input_request import UserInputRequest
 from app.core.workflows.react.node_helper.user_input_projection import (
     apply_decision_to_observations,
     extract_request,
-    parse_resume_decision,
     request_call_id,
 )
 
@@ -73,41 +72,6 @@ def test_extract_request_rejects_multiple_pending_requests() -> None:
         extract_request([_observation(), second])
 
 
-def test_parse_resume_decision_maps_wire_value_to_domain() -> None:
-    decision = parse_resume_decision({
-        "decision": {"request_id": "12", "decision": "reject", "data": {"feedback": "调整分工"}}
-    })
-
-    assert decision is not None
-    assert decision.kind is UserDecisionKind.REJECT
-    assert decision.data == {"feedback": "调整分工"}
-
-
-@pytest.mark.parametrize("value", ["approve", {"decision": "approve"}])
-def test_parse_resume_decision_rejects_invalid_shape(value: object) -> None:
-    with pytest.raises(ValueError):
-        parse_resume_decision(value)
-
-
-def test_parse_resume_decision_accepts_force_reject_without_request_id() -> None:
-    """系统合成的强行拒绝没有定位信息：解析层不得因缺 ``request_id`` 拒绝它。"""
-
-    decision = parse_resume_decision(
-        {"decision": {"request_id": "", "decision": "force_reject", "data": {}}}
-    )
-
-    assert decision is not None
-    assert decision.kind is UserDecisionKind.FORCE_REJECT
-    assert decision.request_id == ""
-
-
-def test_parse_resume_decision_still_requires_request_id_for_client_kinds() -> None:
-    """除强行拒绝外的决定仍必须定位请求：缺 ``request_id`` 是外部输入契约分叉。"""
-
-    with pytest.raises(ValueError, match="非空 request_id"):
-        parse_resume_decision({"decision": {"decision": "reject", "data": {}}})
-
-
 def test_approval_clears_request_without_rewriting_tool_result() -> None:
     observations = [_observation()]
 
@@ -121,9 +85,7 @@ def test_approval_clears_request_without_rewriting_tool_result() -> None:
 def test_rejection_marks_tool_result_cancelled_and_preserves_feedback() -> None:
     observations = [_observation()]
 
-    (amended,) = apply_decision_to_observations(
-        observations, _decision(UserDecisionKind.REJECT)
-    )
+    (amended,) = apply_decision_to_observations(observations, _decision(UserDecisionKind.REJECT))
 
     assert amended["user_input_request"] is None
     assert amended["status"] == "cancelled"

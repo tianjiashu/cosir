@@ -40,14 +40,15 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk
 
 import app.core.workflows.react.node_helper.finalize_max_steps as finalize_module
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
+from app.core.llm_provider.messages import AIMessage, AIMessageChunk
 from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflows.react.execution_state.route import ReactRoute
+from app.core.workflows.react.execution_state.state import ReactExecutionState
+from app.core.workflows.react.node_helper.common import RunStopped
 from app.core.workflows.react.nodes import model_node as model_module
-from app.core.workflows.react.worflow_state.route import ReactRoute
-from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 EVENT_NAME = "model_usage_recorded"
@@ -103,7 +104,7 @@ def _patch_task_space(monkeypatch: Any) -> Any:
     return task_space
 
 
-def _state(**overrides: Any) -> ReactGraphState:
+def _state(**overrides: Any) -> ReactExecutionState:
     """构造最小可执行的 ReAct graph state。"""
 
     values: dict[str, Any] = {
@@ -115,7 +116,7 @@ def _state(**overrides: Any) -> ReactGraphState:
         "last_tool_results": {"instruction": "", "observations": []},
     }
     values.update(overrides)
-    return ReactGraphState(**values)
+    return ReactExecutionState(**values)
 
 
 class _ModelHarness:
@@ -146,9 +147,7 @@ class _ModelHarness:
         self.cancelled = False
         self.task_id = task_id
         self.run_id = run_id
-        self.usage_stats = (
-            usage_stats if usage_stats is not None else ConversationRunUsageStats()
-        )
+        self.usage_stats = usage_stats if usage_stats is not None else ConversationRunUsageStats()
         self._message = message
         # 显式传空列表表示「零 chunk 流」，故不能写成 ``chunks or [...]``。
         self._chunks = chunks if chunks is not None else [AIMessageChunk(content="")]
@@ -174,9 +173,8 @@ class _ModelHarness:
             return self._cancel_after_first_chunk and self._chunk_consumed
 
         self.operations = SimpleNamespace(
-            all_vaild_tools=[
-                SimpleNamespace(name=name, display=None) for name in registered_tools
-            ],
+            task_tool_schemas=[],
+            all_vaild_tools=[SimpleNamespace(name=name, display=None) for name in registered_tools],
             allows_tools=allows_tools,
             get_current_task=lambda: SimpleNamespace(id=task_id),
             get_current_run=lambda: SimpleNamespace(task_id=task_id, id=run_id),
@@ -188,8 +186,8 @@ class _ModelHarness:
         )
         self.runtime_config = SimpleNamespace(
             operations=self.operations,
-            model=SimpleNamespace(astream=self._astream),
-            final_model=SimpleNamespace(astream=self._astream),
+            model=SimpleNamespace(stream=self._astream),
+            final_model=SimpleNamespace(stream=self._astream),
             structured_output=structured_output,
             workspace_id=1,
             thinking_channel=thinking_channel,
@@ -238,7 +236,7 @@ class _ModelHarness:
             flush_message_chunk=flush_message_chunk,
         )
 
-    async def _astream(self, _messages: list[Any]) -> AsyncIterator[AIMessageChunk]:
+    async def _astream(self, _messages: list[Any], **kwargs: Any) -> AsyncIterator[AIMessageChunk]:
         for chunk in self._chunks:
             yield chunk
 
@@ -289,7 +287,8 @@ def test_single_step_records_exactly_one_event_with_consistent_context(
 ) -> None:
     """test_purpose: 成功一步（多 chunk 流）恰好一条 ``model_usage_recorded``，7 个字段与运行上下文
     一致、原始 usage 原样透传、``usage_metadata_present=true``、``run_usage`` 含 cache_miss 推导
-    （潜在缺陷：日志写进流式循环 → 每 chunk 一条；字段取错源；present 恒真；cache_miss 未推导）。"""
+    （潜在缺陷：日志写进流式循环 → 每 chunk 一条；字段取错源；present 恒真；cache_miss
+    未推导）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
     raw_usage = {
@@ -321,7 +320,7 @@ def test_single_step_records_exactly_one_event_with_consistent_context(
     result = asyncio.run(model_module._model_node(_state(step_count=2)))
 
     assert result["next_node"] is ReactRoute.END
-    assert harness.completed is True
+    assert harness.completed is False
 
     data = _single_usage_data(caplog)
     # 定位字段必须与运行上下文（operations 的当前 task / run 与 state 步号）逐一对齐。
@@ -355,7 +354,8 @@ def test_event_is_emitted_after_stats_cover_update_not_before(
     monkeypatch: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
     """test_purpose: 事件必须在 ``add_usage_metadata`` **之后**记录 —— 先污染 stats 再跑一步，
-    ``run_usage`` 必须是本步快照而非上一步残留（潜在缺陷：日志被挪到更新之前，run_usage 落后一步）。"""
+    ``run_usage`` 必须是本步快照而非上一步残留（潜在缺陷：日志被挪到更新之前，run_usage
+    落后一步）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
     stats = ConversationRunUsageStats()
@@ -540,7 +540,8 @@ def test_missing_usage_keeps_previous_run_snapshot_and_flags_absent(
 def test_zero_token_usage_counts_as_present(
     monkeypatch: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """test_purpose: 边界 —— provider 回报了全零用量（非空 dict）时 ``usage_metadata_present`` 仍为
+    """test_purpose: 边界 —— provider 回报了全零用量（非空 dict）时
+    ``usage_metadata_present`` 仍为
     True（「provider 给了用量」与「用量为零」是两件事）
     （潜在缺陷：用 token 数值之和判断 present，把「零用量」误报成「未给用量」）。"""
 
@@ -686,7 +687,8 @@ def test_non_dict_input_token_details_does_not_crash_and_miss_stays_none(
 def test_bool_token_values_are_not_reported_as_tokens(
     monkeypatch: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """test_purpose: 边界 —— 布尔值不得被当作 token 数（``True`` 是 int 的子类，容易被 int() 吞下）
+    """test_purpose: 边界 —— 布尔值不得被当作 token 数（``True`` 是 int
+    的子类，容易被 int() 吞下）
     （潜在缺陷：input_tokens=True 被记成 1，悄无声息地污染用量归因）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
@@ -733,7 +735,8 @@ def test_empty_model_stream_records_no_usage_event(
 def test_max_steps_exceeded_records_no_usage_event(
     monkeypatch: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """test_purpose: ``step_count > max_steps`` 时不发起推理、不调 ``add_usage_metadata``，因而绝不能
+    """test_purpose: ``step_count > max_steps`` 时不发起推理、不调
+    ``add_usage_metadata``，因而绝不能
     有用量事件，且终态为步数耗尽（潜在缺陷：超配额仍记一条用量 / 仍调用模型）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
@@ -775,14 +778,15 @@ def test_step_count_equal_to_max_steps_still_runs_and_records(
 def test_cancelled_before_request_records_no_usage_event(
     monkeypatch: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """test_purpose: 请求前即命中取消 → 未发起推理、未调 ``add_usage_metadata``，绝不能出现用量事件；
+    """test_purpose: 请求前即命中取消 → 未发起推理、未调
+    ``add_usage_metadata``，绝不能出现用量事件；
     同时必须落定取消终态（潜在缺陷：取消分支与用量记录顺序错位，取消的 run 被记一次用量）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
     harness = _ModelHarness(AIMessage(content="不应发生"), cancel_before_request=True)
     _install(monkeypatch, harness)
 
-    with pytest.raises(RuntimeError):  # graph 外 interrupt 抛 RuntimeError
+    with pytest.raises(RunStopped):  # graph 外 interrupt 抛 RuntimeError
         asyncio.run(model_module._model_node(_state()))
 
     assert harness.cancelled is True
@@ -805,7 +809,7 @@ def test_cancelled_during_stream_records_no_usage_event(
     )
     _install(monkeypatch, harness)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RunStopped):
         asyncio.run(model_module._model_node(_state()))
 
     assert harness.cancelled is True
@@ -964,7 +968,7 @@ def test_final_response_race_lost_records_usage_event_exactly_once(
     assert result["next_node"] is ReactRoute.END
     data = _single_usage_data(caplog)
     assert data["run_usage"]["input_tokens"] == 21
-    assert len(_records(caplog, "model_node_final_response_terminal_race_lost")) == 1
+    assert harness.completed is False  # 成功终态由 loop 落定，model 步只返回结果。
 
 
 def test_reasoning_channel_step_records_usage_event_exactly_once(
@@ -997,9 +1001,9 @@ def test_reasoning_channel_step_records_usage_event_exactly_once(
     result = asyncio.run(model_module._model_node(_state()))
 
     assert result["next_node"] is ReactRoute.END
-    assert any(getattr(event, "part", None) == "reasoning" for event in harness.events), (
-        "reasoning 增量必须投影为 reasoning part 事件"
-    )
+    assert any(
+        getattr(event, "part", None) == "reasoning" for event in harness.events
+    ), "reasoning 增量必须投影为 reasoning part 事件"
     data = _single_usage_data(caplog)
     assert data["run_usage"]["reasoning_tokens"] == 9
 

@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
@@ -16,6 +15,7 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
+from app.core.llm_provider.messages import AIMessage, HumanMessage, ToolMessage
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -56,8 +56,13 @@ def test_rebuild_preserves_each_runs_frozen_context_window(windows: tuple[int | 
     task.current_run_id = 2
     runs = [
         ConversationRunRecord(
-            id=index, task_id=task.id, input_text="", status="completed",
-            created_at=timestamp, updated_at=timestamp, checkpoint_thread_id=f"test-run-{index}",
+            id=index,
+            task_id=task.id,
+            input_text="",
+            status="completed",
+            created_at=timestamp,
+            updated_at=timestamp,
+            execution_data={},
             context_window_total=window,
         )
         for index, window in enumerate(windows, start=1)
@@ -140,8 +145,14 @@ def test_rebuild_preserves_streaming_assistant_draft_for_active_run() -> None:
 
     timestamp = _timestamp()
     run = ConversationRunRecord(
-        id=1, task_id=7, input_text="", status="running", end_reason=None,
-        created_at=timestamp, updated_at=timestamp, checkpoint_thread_id="test-run-1",
+        id=1,
+        task_id=7,
+        input_text="",
+        status="running",
+        end_reason=None,
+        created_at=timestamp,
+        updated_at=timestamp,
+        execution_data={},
     )
     row = ConversationTaskContextRecord(
         id=1,
@@ -166,8 +177,14 @@ def test_rebuild_closes_streaming_assistant_draft_when_run_is_cancelled() -> Non
 
     timestamp = _timestamp()
     run = ConversationRunRecord(
-        id=1, task_id=7, input_text="", status="cancelled", end_reason="backend_restarted",
-        created_at=timestamp, updated_at=timestamp, checkpoint_thread_id="test-run-1",
+        id=1,
+        task_id=7,
+        input_text="",
+        status="cancelled",
+        end_reason="backend_restarted",
+        created_at=timestamp,
+        updated_at=timestamp,
+        execution_data={},
     )
     row = ConversationTaskContextRecord(
         id=1,
@@ -306,7 +323,6 @@ def test_rebuild_restores_ordinary_file_from_run_extra() -> None:
         status="completed",
         created_at=timestamp,
         updated_at=timestamp,
-        checkpoint_thread_id="checkpoint-1",
         extra=ConversationRunExtra(
             display_text="请查看 [[cosir-file:file-1]]",
             attachments=[
@@ -324,7 +340,16 @@ def test_rebuild_restores_ordinary_file_from_run_extra() -> None:
         id=1,
         task_id=7,
         run_id=1,
-        message=HumanMessage(content=run.input_text),
+        message=HumanMessage(
+            content=run.input_text,
+            additional_kwargs={
+                "user_input": {
+                    "input_text": run.input_text,
+                    "image_paths": [],
+                    "extra": run.extra.to_dict(),
+                }
+            },
+        ),
         include_in_context=True,
         sequence=1,
     )
@@ -352,7 +377,6 @@ def test_rebuild_restores_user_file_when_context_write_was_interrupted() -> None
         status="pending",
         created_at=timestamp,
         updated_at=timestamp,
-        checkpoint_thread_id="checkpoint-1",
         extra=ConversationRunExtra(
             display_text="请查看 [[cosir-file:file-1]]",
             attachments=[
@@ -369,12 +393,7 @@ def test_rebuild_restores_user_file_when_context_write_was_interrupted() -> None
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [])
 
-    assert state["runs"][0]["messages"][0]["parts"][-1] == {
-        "type": "file",
-        "file": "cosir-local-file:file-1",
-        "name": "notes.md",
-        "contentType": "text/markdown",
-    }
+    assert state["runs"][0]["messages"] == []
     validate_snapshot(state)
 
 

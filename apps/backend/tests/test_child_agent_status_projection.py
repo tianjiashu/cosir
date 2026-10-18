@@ -8,13 +8,13 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
+from app.core.llm_provider.messages import AIMessage, ToolMessage
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
@@ -50,7 +50,6 @@ def _run(run_id: int, task_id: int, status: str) -> ConversationRunRecord:
         status=status,
         created_at=NOW,
         updated_at=NOW,
-        checkpoint_thread_id=f"checkpoint-{run_id}",
     )
 
 
@@ -180,27 +179,36 @@ def _reset_task_runtime_spaces(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_cold_rebuild_reconciles_live_child_statuses_by_exact_run_locator() -> None:
     rows = _tool_rows(
-        ("delegate-call", {
-            "kind": "delegation-result",
-            "title": "Review",
-            "child_task_id": 2,
-            "child_run_id": 20,
-            "status": "running",
-        }),
-        ("send-call", {
-            "kind": "child-agent-result",
-            "operation": "send",
-            "child_task_id": 2,
-            "child_run_id": 21,
-            "status": "running",
-        }),
-        ("status-call", {
-            "kind": "child-agent-result",
-            "operation": "status",
-            "child_task_id": 2,
-            "child_run_id": 20,
-            "status": "running",
-        }),
+        (
+            "delegate-call",
+            {
+                "kind": "delegation-result",
+                "title": "Review",
+                "child_task_id": 2,
+                "child_run_id": 20,
+                "status": "running",
+            },
+        ),
+        (
+            "send-call",
+            {
+                "kind": "child-agent-result",
+                "operation": "send",
+                "child_task_id": 2,
+                "child_run_id": 21,
+                "status": "running",
+            },
+        ),
+        (
+            "status-call",
+            {
+                "kind": "child-agent-result",
+                "operation": "status",
+                "child_task_id": 2,
+                "child_run_id": 20,
+                "status": "running",
+            },
+        ),
     )
     sources = _Sources(rows)
     sources.runs[2][0].status = "completed"
@@ -217,27 +225,36 @@ def test_cold_rebuild_reconciles_live_child_statuses_by_exact_run_locator() -> N
 
 def test_live_refresh_updates_delegate_and_send_without_overwriting_old_run() -> None:
     rows = _tool_rows(
-        ("delegate-call", {
-            "kind": "delegation-result",
-            "title": "Review",
-            "child_task_id": 2,
-            "child_run_id": 20,
-            "status": "running",
-        }),
-        ("send-call", {
-            "kind": "child-agent-result",
-            "operation": "send",
-            "child_task_id": 2,
-            "child_run_id": 21,
-            "status": "running",
-        }),
-        ("status-call", {
-            "kind": "child-agent-result",
-            "operation": "status",
-            "child_task_id": 2,
-            "child_run_id": 20,
-            "status": "running",
-        }),
+        (
+            "delegate-call",
+            {
+                "kind": "delegation-result",
+                "title": "Review",
+                "child_task_id": 2,
+                "child_run_id": 20,
+                "status": "running",
+            },
+        ),
+        (
+            "send-call",
+            {
+                "kind": "child-agent-result",
+                "operation": "send",
+                "child_task_id": 2,
+                "child_run_id": 21,
+                "status": "running",
+            },
+        ),
+        (
+            "status-call",
+            {
+                "kind": "child-agent-result",
+                "operation": "status",
+                "child_task_id": 2,
+                "child_run_id": 20,
+                "status": "running",
+            },
+        ),
     )
     sources = _Sources(rows)
     service = _service(sources)
@@ -259,39 +276,47 @@ def test_live_refresh_updates_delegate_and_send_without_overwriting_old_run() ->
     assert [status for _, _, status in sources.metadata_updates] == ["completed", "cancelled"]
 
 
-def test_event_projection_persists_status_when_parent_tool_row_arrives_after_child_completion(
-) -> None:
+def test_event_projection_persists_status_when_parent_tool_row_arrives_after_child_completion() -> (
+    None
+):
     rows = _tool_rows(
-        ("delegate-call", {
-            "kind": "delegation-result",
-            "title": "Review",
-            "child_task_id": 2,
-            "child_run_id": 20,
-            "status": "running",
-        }),
-        ("send-call", {
-            "kind": "child-agent-result",
-            "operation": "send",
-            "child_task_id": 2,
-            "child_run_id": 21,
-            "status": "running",
-        }),
-        ("status-call", {
-            "kind": "child-agent-result",
-            "operation": "status",
-            "child_task_id": 2,
-            "child_run_id": 20,
-            "status": "running",
-        }),
+        (
+            "delegate-call",
+            {
+                "kind": "delegation-result",
+                "title": "Review",
+                "child_task_id": 2,
+                "child_run_id": 20,
+                "status": "running",
+            },
+        ),
+        (
+            "send-call",
+            {
+                "kind": "child-agent-result",
+                "operation": "send",
+                "child_task_id": 2,
+                "child_run_id": 21,
+                "status": "running",
+            },
+        ),
+        (
+            "status-call",
+            {
+                "kind": "child-agent-result",
+                "operation": "status",
+                "child_task_id": 2,
+                "child_run_id": 20,
+                "status": "running",
+            },
+        ),
     )
     sources = _Sources(rows)
     service = _service(sources)
     service.get_state(1)
 
     sources.runs[2][0].status = "completed"
-    change = service.apply_planned(
-        SimpleNamespace(task_id=1, run_id=10, plan=lambda _state: [])
-    )
+    change = service.apply_planned(SimpleNamespace(task_id=1, run_id=10, plan=lambda _state: []))
 
     assert change.mutations
     assert _display_by_call(service.get_state(1), "delegate-call")["status"] == "completed"
@@ -360,6 +385,7 @@ def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_met
             assert json.loads(row.transport_metadata_json) == updated
     finally:
         engine.dispose()
+
 
 # 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
 pytestmark = pytest.mark.usefixtures("backend_env")

@@ -7,7 +7,6 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,6 +16,7 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
+from app.core.llm_provider.messages import AIMessage, ToolMessage
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
@@ -47,7 +47,6 @@ def _run() -> ConversationRunRecord:
         status="completed",
         created_at=NOW,
         updated_at=NOW,
-        checkpoint_thread_id="checkpoint-10",
     )
 
 
@@ -217,7 +216,8 @@ def test_cold_rebuild_closes_orphaned_running_session_and_keeps_tool_completed()
 
     assert display["status"] == "closed"
     assert display["end_reason"] == "backend_restarted"
-    assert state["runs"][0]["messages"][1]["parts"][0]["status"] == "completed"  # type: ignore[index]
+    parts = state["runs"][0]["messages"][0]["parts"]
+    assert next(part for part in parts if part["type"] == "tool-call")["status"] == "completed"
     assert sources.updates == [("closed", "backend_restarted", None)]
 
 

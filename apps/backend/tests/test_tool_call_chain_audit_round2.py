@@ -20,8 +20,6 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
-
 import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
 import app.core.workflows.react.nodes.observation_node as observation_node_module
 import app.core.workflows.react.nodes.tools_node as tools_node_module
@@ -32,6 +30,7 @@ from app.assistant_transport.event import (
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
+    UserInputAppendedEvent,
 )
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -44,14 +43,15 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import TransportFrame
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_context_manager import RuntimeContextManager
+from app.core.llm_provider.messages import AIMessage, SystemMessage, ToolMessage
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall, ToolObservation
+from app.core.workflows.react.execution_state.route import ReactRoute
+from app.core.workflows.react.execution_state.state import ReactExecutionState
 from app.core.workflows.react.node_helper.tool_call_lifecycle import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
-from app.core.workflows.react.worflow_state.route import ReactRoute
-from app.core.workflows.react.worflow_state.state import ReactGraphState
 from app.models.conversation_task_context import ConversationTaskContextRecord
 
 _TASK_ID = 7
@@ -170,7 +170,7 @@ def _summary(**overrides: Any) -> dict[str, Any]:
     return base
 
 
-def _state(lifecycle: Any, **overrides: Any) -> ReactGraphState:
+def _state(lifecycle: Any, **overrides: Any) -> ReactExecutionState:
     """构造节点所需的最小 graph state。"""
 
     values: dict[str, Any] = {
@@ -184,7 +184,7 @@ def _state(lifecycle: Any, **overrides: Any) -> ReactGraphState:
         "tool_call_lifecycle": lifecycle,
     }
     values.update(overrides)
-    return ReactGraphState(**values)
+    return ReactExecutionState(**values)
 
 
 class _MemorySnapshotOwner:
@@ -224,6 +224,14 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
+    projector.process(
+        UserInputAppendedEvent(
+            task_id=_TASK_ID,
+            run_id=_RUN_ID,
+            message_id="u1",
+            parts=[{"type": "text", "text": "test", "status": "completed"}],
+        )
+    )
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))
     projector.process(
         ToolCallCreatedEvent(

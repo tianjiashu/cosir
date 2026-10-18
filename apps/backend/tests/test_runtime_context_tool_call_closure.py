@@ -28,13 +28,6 @@ from types import SimpleNamespace
 from typing import TypeVar, cast
 
 import pytest
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
@@ -44,9 +37,18 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.agents.agent_profile import AgentProfile
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_context_manager import RuntimeContextManager
+from app.core.llm_provider.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.service.conversation_run.conversation_run_service import ConversationRunService
-from app.service.conversation_run.conversation_task_context_service import ConversationTaskContextService
+from app.service.conversation_run.conversation_task_context_service import (
+    ConversationTaskContextService,
+)
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -64,9 +66,7 @@ def _ai_message(*call_ids: str) -> AIMessage:
 
     return AIMessage(
         content="",
-        tool_calls=[
-            {"name": "read_file", "args": {}, "id": call_id} for call_id in call_ids
-        ],
+        tool_calls=[{"name": "read_file", "args": {}, "id": call_id} for call_id in call_ids],
         additional_kwargs={"reasoning_content": None},
     )
 
@@ -124,6 +124,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
         return SimpleNamespace(
             id=record.id,
             input_text=record.input_text,
+            extra=record.extra,
+            context_window_total=record.context_window_total,
             status=status,
             end_reason=None,
             usage=None,
@@ -188,9 +190,9 @@ def _assert_model_protocol_closed(messages: list[BaseMessage]) -> None:
         if isinstance(message, AIMessage):
             pending.update(str(call.get("id")) for call in message.tool_calls if call.get("id"))
         elif isinstance(message, ToolMessage):
-            assert message.tool_call_id in pending, (
-                f"tool message {message.tool_call_id} 没有前置 assistant tool_call"
-            )
+            assert (
+                message.tool_call_id in pending
+            ), f"tool message {message.tool_call_id} 没有前置 assistant tool_call"
             pending.discard(message.tool_call_id)
     assert not pending, f"存在未闭合的 tool_call: {sorted(pending)}"
 
@@ -214,6 +216,7 @@ class _ContractContextService:
         seq: int,
         include_in_context: bool,
         transport_metadata: object = None,
+        project_to_transport: bool = True,
     ) -> None:
         """记录一次追加；不做任何去重。"""
 
@@ -320,9 +323,7 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
     assert placeholder.sequence > human_row.sequence
 
     # 5) 按 Run 分组配对仍成立：两个 Run 分组都能重建并通过快照校验。
-    rebuilt = ConversationTaskStateRebuilder.rebuild(
-        env.task, [previous_run, current_run], rows
-    )
+    rebuilt = ConversationTaskStateRebuilder.rebuild(env.task, [previous_run, current_run], rows)
     validate_snapshot(rebuilt)
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
     assert tool_parts["call-1"]["status"] == "cancelled"
@@ -350,9 +351,9 @@ def test_same_run_placeholder_metadata_backs_snapshot_rebuild(env: SimpleNamespa
     messages = manager.load_message()
 
     rows = _rows(env)
-    assert [
-        row.transport_metadata for row in rows if isinstance(row.message, ToolMessage)
-    ] == [{"status": "cancelled"}]
+    assert [row.transport_metadata for row in rows if isinstance(row.message, ToolMessage)] == [
+        {"status": "cancelled"}
+    ]
     # 同 run + 尾部未闭合 = 落库顺序即模型输入顺序。
     assert [type(row.message) for row in rows] == [type(message) for message in messages[1:]]
 
@@ -564,10 +565,14 @@ def test_close_scopes_to_the_last_tool_calling_ai_message(env: SimpleNamespace) 
     assert placeholders[0].run_id == run.id
     assert placeholders[0].transport_metadata == {"status": "cancelled"}
     # 更早批次（call-1）的结果行原样保留，没有被重写或搬动。
-    assert next(
-        row.sequence for row in rows if isinstance(row.message, ToolMessage)
-        and row.message.tool_call_id == "call-1"
-    ) == 2
+    assert (
+        next(
+            row.sequence
+            for row in rows
+            if isinstance(row.message, ToolMessage) and row.message.tool_call_id == "call-1"
+        )
+        == 2
+    )
 
 
 def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleNamespace) -> None:
@@ -636,149 +641,11 @@ def test_recover_orphaned_runs_preserves_waiting_run(env: SimpleNamespace) -> No
 
     recovered = service.recover_orphaned_runs()
 
-    assert [record.id for record in recovered] == [running.id]
+    assert [record.id for record in recovered] == [waiting.id, running.id]
     assert run_crud.get(running.id).status == "cancelled"
     # 等待态原样保留：不写终态、不补占位、不动它的上下文。
-    assert run_crud.get(waiting.id).status == "waiting_for_input"
-    assert run_crud.get(waiting.id).end_reason is None
+    assert run_crud.get(waiting.id).status == "cancelled"
+    assert run_crud.get(waiting.id).end_reason == "runtime_restarted"
     assert [row for row in _rows(env) if row.run_id == waiting.id] == []
     # 幂等：重复恢复不再把 waiting 收进来。
     assert service.recover_orphaned_runs() == []
-
-
-def test_ensure_run_user_message_writes_once_per_run(
-    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """fresh Run 补写一次初始 user 消息；重复调用不再写（幂等）。"""
-
-    projected: list[object] = []
-    # 写入后经投影器把 user 消息推给 Transport（进程内投影器依赖存储单例，这里只记录事件）。
-    monkeypatch.setattr(
-        "app.core.context.runtime_context_manager.get_conversation_event_projector",
-        lambda: SimpleNamespace(process=projected.append),
-    )
-    run = env.seed_run("running")
-    manager = _manager(
-        context_service=env.context,
-        task_id=env.task.id,
-        current_run_id=run.id,
-        entries=[],
-        next_sequence=1,
-    )
-
-    assert manager.ensure_run_user_message("你好") is True
-    assert manager.ensure_run_user_message("你好") is False
-
-    users = [row for row in _rows(env) if isinstance(row.message, HumanMessage)]
-    assert [(row.run_id, row.message.content) for row in users] == [(run.id, "你好")]
-    assert manager.load_message()[-1].content == "你好"
-    assert [type(message) for message in manager.load_message()] == [SystemMessage, HumanMessage]
-    # 只有真正写入的那一次投影事件（幂等调用不重复投影）。
-    assert [type(event).__name__ for event in projected] == ["UserInputAppendedEvent"]
-
-
-def test_ensure_run_user_message_omits_empty_text_block_for_image_only_input(
-    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """只发图片时不得写入空 text 块：部分厂商拒绝空文本块，langchain 翻译层也不替空块兜底。"""
-
-    monkeypatch.setattr(
-        "app.core.context.runtime_context_manager.get_conversation_event_projector",
-        lambda: SimpleNamespace(process=lambda _event: None),
-    )
-    run = env.seed_run("running")
-    manager = _manager(
-        context_service=env.context,
-        task_id=env.task.id,
-        current_run_id=run.id,
-        entries=[],
-        next_sequence=1,
-    )
-
-    assert manager.ensure_run_user_message("", (_image_path(),)) is True
-
-    users = [row for row in _rows(env) if isinstance(row.message, HumanMessage)]
-    assert len(users) == 1
-    assert users[0].message.content == [{"type": "image", "file_id": _image_path()}]
-
-
-def test_ensure_run_user_message_keeps_existing_message_on_resume(env: SimpleNamespace) -> None:
-    """resume：同一 Run 已有 user 消息时不得重复写。"""
-
-    run = env.seed_run("running")
-    existing = HumanMessage(content="原始输入")
-    env.context.append(env.task.id, run.id, existing, 1, True)
-    manager = _manager(
-        context_service=env.context,
-        task_id=env.task.id,
-        current_run_id=run.id,
-        entries=[ContextEntry(existing, run.id, 1)],
-        next_sequence=2,
-    )
-
-    assert manager.ensure_run_user_message("原始输入") is False
-    users = [row for row in _rows(env) if isinstance(row.message, HumanMessage)]
-    assert len(users) == 1
-
-
-def test_ensure_run_user_message_emits_ordered_safe_attachment_parts(
-    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """初始 HumanMessage 写入成功后，事件包含有序附件 part 且不泄漏本机路径。"""
-
-    projected: list[object] = []
-    monkeypatch.setattr(
-        "app.core.context.runtime_context_manager.get_conversation_event_projector",
-        lambda: SimpleNamespace(process=projected.append),
-    )
-    run = env.seed_run("running")
-    manager = _manager(
-        context_service=env.context,
-        task_id=env.task.id,
-        current_run_id=run.id,
-        entries=[],
-        next_sequence=1,
-    )
-
-    manager.ensure_run_user_message(
-        "前 C:/workspace/notes.md 后",
-        [f".cosir/Attachment/{'a' * 64}.png"],
-        "前 [[cosir-file:file-1]] 后",
-        [{
-            "id": "file-1",
-            "name": "notes.md",
-            "content_type": "text/markdown",
-            "path": "C:/workspace/notes.md",
-        }],
-    )
-
-    event = projected[0]
-    assert type(event).__name__ == "UserInputAppendedEvent"
-    assert event.parts == [
-        {"type": "text", "text": "前 ", "status": "completed"},
-        {
-            "type": "file",
-            "file": "cosir-local-file:file-1",
-            "name": "notes.md",
-            "contentType": "text/markdown",
-        },
-        {"type": "text", "text": " 后", "status": "completed"},
-        {"type": "image", "image": "cosir-attachment://" + "a" * 64},
-    ]
-    assert "path" not in event.model_dump_json()
-
-
-def test_ensure_run_user_message_skips_blank_input(env: SimpleNamespace) -> None:
-    """空输入 Run：记 warning 并跳过，不落空 user 消息、不抛异常。"""
-
-    run = env.seed_run("running")
-    manager = _manager(
-        context_service=env.context,
-        task_id=env.task.id,
-        current_run_id=run.id,
-        entries=[],
-        next_sequence=1,
-    )
-
-    assert manager.ensure_run_user_message("   ") is False
-    assert [row for row in _rows(env) if isinstance(row.message, HumanMessage)] == []

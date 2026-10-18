@@ -11,8 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.core.llm_provider.messages import HumanMessage, SystemMessage
 from app.core.workflows import vision_input
 from app.models.errors.llm_provider_exceptions import VisionImageError
 
@@ -75,9 +75,10 @@ def test_mixed_history_resolves_only_the_image_message(
     assert resolved[1].content == [{"type": "text", "text": "先聊点别的"}]
     # 带图消息被就地替换为已解析的图片块。
     image_block = resolved[2].content[1]
-    assert image_block["type"] == "image"
-    assert image_block["mime_type"] == "image/png"
-    assert image_block["base64"] == "iVBORw0KGgpub3QtYS1yZWFsLXBuZw=="
+    assert image_block["type"] == "image_url"
+    assert (
+        image_block["image_url"]["url"] == "data:image/png;base64,iVBORw0KGgpub3QtYS1yZWFsLXBuZw=="
+    )
     assert "file_id" not in image_block
 
 
@@ -87,13 +88,11 @@ def test_resolved_block_converts_to_provider_image_url(
     """解析结果必须能被 provider 适配器转成 ``image_url`` data URL（缺 ``mime_type`` 会抛错）。"""
 
     # 用适配器自身做断言：它正是生产路径构造 payload 的入口，能同时钉住块形状与 MIME。
-    from langchain_openai.chat_models.base import _convert_message_to_dict
+    from app.core.llm_provider.openai_model import to_provider_message
 
-    resolved = vision_input.resolve_messages_for_model(
-        [_human(_TEXT, _IMAGE_REF)], workspace_id=1
-    )
+    resolved = vision_input.resolve_messages_for_model([_human(_TEXT, _IMAGE_REF)], workspace_id=1)
 
-    payload = _convert_message_to_dict(resolved[0])
+    payload = to_provider_message(resolved[0])
 
     image_block = payload["content"][1]
     assert image_block["type"] == "image_url"

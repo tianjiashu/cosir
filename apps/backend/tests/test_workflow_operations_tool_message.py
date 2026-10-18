@@ -1,5 +1,4 @@
-from langchain_core.messages import ToolMessage
-
+from app.core.llm_provider.messages import ToolMessage
 from app.core.tools.schemas import ToolObservation
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.workflows.workflow_operations import WorkflowOperations

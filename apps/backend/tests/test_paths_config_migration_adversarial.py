@@ -45,8 +45,7 @@ def _expected_default_data_dir() -> Path:
     if sys.platform in {"darwin", "win32"}:
         return Path.home()
     raise AssertionError(
-        f"测试运行于不受支持的平台 {sys.platform}；"
-        "未注入 CODING_AGENT_DATA_DIR 时不应解析数据根"
+        f"测试运行于不受支持的平台 {sys.platform}；" "未注入 CODING_AGENT_DATA_DIR 时不应解析数据根"
     )
 
 
@@ -65,10 +64,6 @@ def test_default_constants_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
         assert paths.DATA_DIR.is_absolute()
         assert data_root / ".cosir" / "logs" == paths.LOG_DIR
         assert data_root / ".cosir" / "storage" / "app.sqlite3" == paths.DATABASE_FILE
-        assert (
-            data_root / ".cosir" / "storage" / "langgraph_checkpoints.sqlite"
-            == paths.CHECKPOINT_FILE
-        )
         assert data_root / ".cosir" / "runtime" == paths.RUNTIME_DIR
     finally:
         _reset_paths()
@@ -90,10 +85,6 @@ def test_reset_only_data_dir_makes_log_dir_follow(
         assert data_dir == paths.DATA_DIR
         assert data_dir / ".cosir" / "logs" == paths.LOG_DIR
         assert data_dir / ".cosir" / "storage" / "app.sqlite3" == paths.DATABASE_FILE
-        assert (
-            data_dir / ".cosir" / "storage" / "langgraph_checkpoints.sqlite"
-            == paths.CHECKPOINT_FILE
-        )
         assert data_dir / ".cosir" / "runtime" == paths.RUNTIME_DIR
     finally:
         _reset_paths()
@@ -136,9 +127,9 @@ def test_reset_is_idempotent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.delenv("CODING_AGENT_LOG_DIR", raising=False)
     try:
         paths.reset()
-        first = (paths.DATA_DIR, paths.LOG_DIR, paths.DATABASE_FILE, paths.CHECKPOINT_FILE)
+        first = (paths.DATA_DIR, paths.LOG_DIR, paths.DATABASE_FILE)
         paths.reset()
-        second = (paths.DATA_DIR, paths.LOG_DIR, paths.DATABASE_FILE, paths.CHECKPOINT_FILE)
+        second = (paths.DATA_DIR, paths.LOG_DIR, paths.DATABASE_FILE)
         assert first == second
     finally:
         _reset_paths()
@@ -154,14 +145,12 @@ def test_override_partial_keeps_others(monkeypatch: pytest.MonkeyPatch) -> None:
     paths.reset()
     before_data = paths.DATA_DIR
     before_db = paths.DATABASE_FILE
-    before_ckpt = paths.CHECKPOINT_FILE
     new_log = Path("/custom/log/dir")
     try:
         paths.override(LOG_DIR=new_log)
         assert new_log == paths.LOG_DIR
         assert before_data == paths.DATA_DIR
         assert before_db == paths.DATABASE_FILE
-        assert before_ckpt == paths.CHECKPOINT_FILE
     finally:
         _reset_paths()
 
@@ -172,23 +161,21 @@ def test_override_all_four_keys(tmp_path: Path) -> None:
         DATA_DIR=tmp_path / "a",
         LOG_DIR=tmp_path / "b",
         DATABASE_FILE=tmp_path / "c.sqlite3",
-        CHECKPOINT_FILE=tmp_path / "d.sqlite3",
     )
     try:
         assert tmp_path / "a" == paths.DATA_DIR
         assert tmp_path / "b" == paths.LOG_DIR
         assert tmp_path / "c.sqlite3" == paths.DATABASE_FILE
-        assert tmp_path / "d.sqlite3" == paths.CHECKPOINT_FILE
     finally:
         _reset_paths()
 
 
 def test_override_unknown_key_raises_value_error(tmp_path: Path) -> None:
     # 目的：未知键抛 ValueError 且不产生副作用。潜在缺陷：静默接受未知键或写坏模块属性。
-    before = (paths.DATA_DIR, paths.LOG_DIR, paths.DATABASE_FILE, paths.CHECKPOINT_FILE)
+    before = (paths.DATA_DIR, paths.LOG_DIR, paths.DATABASE_FILE)
     with pytest.raises(ValueError):
         paths.override(NOT_A_PATH=tmp_path / "x")
-    after = (paths.DATA_DIR, paths.LOG_DIR, paths.DATABASE_FILE, paths.CHECKPOINT_FILE)
+    after = (paths.DATA_DIR, paths.LOG_DIR, paths.DATABASE_FILE)
     assert before == after
 
 
@@ -220,7 +207,7 @@ def test_override_data_dir_updates_system_cosir_dir(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "attribute",
-    ["LOG_DIR", "DATABASE_FILE", "CHECKPOINT_FILE", "DATA_DIR"],
+    ["LOG_DIR", "DATABASE_FILE", "DATA_DIR"],
 )
 def test_settings_has_no_path_attribute(attribute: str) -> None:
     # 目的：四个固定路径不再是 Settings 属性（迁移完成）。潜在缺陷：残留类属性导致双事实源。
@@ -295,25 +282,6 @@ def test_system_cosir_dir_reads_paths_data_dir(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # F. store_engines 使用 paths 常量
 # ---------------------------------------------------------------------------
-def test_init_storage_creates_db_and_checkpoint_parent(tmp_path: Path) -> None:
-    # 目的：override 指向 tmp 后 init_storage() 在该目录创建主库文件与 checkpoint 父目录。
-    # 潜在缺陷：仍写死旧路径。
-    from app.storage import store_engines
-
-    store_engines.close_storage()
-    db_dir = tmp_path / "storage"
-    db_dir.mkdir()
-    db_file = db_dir / "app.sqlite3"
-    ckpt_file = db_dir / "nested" / "checkpoints.sqlite3"
-    paths.override(DATABASE_FILE=db_file, CHECKPOINT_FILE=ckpt_file)
-    try:
-        store_engines.init_storage()
-        assert db_file.exists(), "init_storage 未在 paths.DATABASE_FILE 创建库文件"
-        assert ckpt_file.parent.is_dir(), "checkpoint 父目录未创建"
-        assert store_engines.checkpoint_path() == str(ckpt_file)
-    finally:
-        store_engines.close_storage()
-        _reset_paths()
 
 
 def test_init_storage_switches_engine_on_path_change(tmp_path: Path) -> None:
@@ -329,17 +297,16 @@ def test_init_storage_switches_engine_on_path_change(tmp_path: Path) -> None:
     db_a = dir_a / "app.sqlite3"
     db_b = dir_b / "app.sqlite3"
     try:
-        paths.override(DATABASE_FILE=db_a, CHECKPOINT_FILE=dir_a / "ck.sqlite3")
+        paths.override(DATABASE_FILE=db_a)
         store_engines.init_storage()
         engine_a = store_engines.main_engine()
         assert db_a.exists()
 
-        paths.override(DATABASE_FILE=db_b, CHECKPOINT_FILE=dir_b / "ck.sqlite3")
+        paths.override(DATABASE_FILE=db_b)
         store_engines.init_storage()
         engine_b = store_engines.main_engine()
         assert engine_b is not engine_a, "路径变化后仍复用旧引擎"
         assert db_b.exists()
-        assert store_engines.checkpoint_path() == str(dir_b / "ck.sqlite3")
     finally:
         store_engines.close_storage()
         _reset_paths()
@@ -352,7 +319,7 @@ def test_init_storage_same_path_is_noop_reuse(tmp_path: Path) -> None:
     store_engines.close_storage()
     db_dir = tmp_path / "same"
     db_dir.mkdir()
-    paths.override(DATABASE_FILE=db_dir / "app.sqlite3", CHECKPOINT_FILE=db_dir / "ck.sqlite3")
+    paths.override(DATABASE_FILE=db_dir / "app.sqlite3")
     try:
         store_engines.init_storage()
         engine_first = store_engines.main_engine()
@@ -420,11 +387,9 @@ def test_override_database_file_does_not_touch_data_dir(tmp_path: Path) -> None:
     # 潜在缺陷：误触发全量重算。
     paths.override(DATA_DIR=tmp_path / "root", LOG_DIR=tmp_path / "logs")
     try:
-        ckpt_before = paths.CHECKPOINT_FILE
         paths.override(DATABASE_FILE=tmp_path / "custom.sqlite3")
         assert tmp_path / "root" == paths.DATA_DIR
         assert tmp_path / "logs" == paths.LOG_DIR
-        assert ckpt_before == paths.CHECKPOINT_FILE
         assert tmp_path / "custom.sqlite3" == paths.DATABASE_FILE
     finally:
         _reset_paths()
@@ -435,11 +400,9 @@ def test_override_log_dir_does_not_touch_data_dir_derived_files(tmp_path: Path) 
     # 潜在缺陷：错误地以 LOG_DIR 推导 storage。
     paths.override(DATA_DIR=tmp_path / "root", LOG_DIR=tmp_path / "root" / "logs")
     db_before = paths.DATABASE_FILE
-    ckpt_before = paths.CHECKPOINT_FILE
     try:
         paths.override(LOG_DIR=tmp_path / "elsewhere")
         assert db_before == paths.DATABASE_FILE
-        assert ckpt_before == paths.CHECKPOINT_FILE
     finally:
         _reset_paths()
 
@@ -481,24 +444,13 @@ def test_sensitivity_to_data_dir_mutation_runtime(
         _reset_paths()
 
 
-def test_sensitivity_to_checkpoint_name_mutation_runtime(tmp_path: Path) -> None:
-    # 目的：模拟 checkpoint 文件名被写错时可检出。潜在缺陷：文件名硬编码错拼而测试未捕获。
-    paths.override(CHECKPOINT_FILE=tmp_path / "langgraph_checkpoint.sqlite")  # 少一个 s
-    try:
-        assert paths.CHECKPOINT_FILE.name != "langgraph_checkpoints.sqlite"
-    finally:
-        _reset_paths()
-        # 复位后应恢复正确文件名。
-        assert paths.CHECKPOINT_FILE.name == "langgraph_checkpoints.sqlite"
-
-
 # ---------------------------------------------------------------------------
 # I. paths 模块内部契约（推导表 / env 归一化 / override 语义）
 # ---------------------------------------------------------------------------
-def _snapshot() -> tuple[Path, Path, Path, Path]:
+def _snapshot() -> tuple[Path, Path, Path]:
     """抓取四个固定路径常量的当前值，用于原子性与污染断言。"""
 
-    return (paths.DATA_DIR, paths.LOG_DIR, paths.DATABASE_FILE, paths.CHECKPOINT_FILE)
+    return (paths.DATA_DIR, paths.LOG_DIR, paths.DATABASE_FILE)
 
 
 @pytest.fixture(autouse=True)

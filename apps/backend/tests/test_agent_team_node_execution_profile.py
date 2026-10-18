@@ -38,7 +38,6 @@ from app.service.agent_team.agent_team_preparation_service import (
 )
 from app.service.depends import get_model_config_service, get_runtime
 
-
 # --------------------------------------------------------------------------- #
 # 构造助手
 # --------------------------------------------------------------------------- #
@@ -121,7 +120,6 @@ def _node_run(
         status="running",
         created_at=now,
         updated_at=now,
-        checkpoint_thread_id="checkpoint-node-101",
         agent_id="general-assistant",
         model_config_id=model_config_id,
         extra=ConversationRunExtra(
@@ -155,9 +153,7 @@ def _create_model_config(*, model_name: str, base_url: str) -> int:
     return record.id
 
 
-def _stub_preparation_registry(
-    monkeypatch: pytest.MonkeyPatch, child: AgentProfile
-) -> None:
+def _stub_preparation_registry(monkeypatch: pytest.MonkeyPatch, child: AgentProfile) -> None:
     """把准备服务对 Agent 注册表的查找替换为最小桩，保留装配逻辑本体。"""
 
     registry = SimpleNamespace(resolve=lambda scope, agent_id: child)
@@ -477,7 +473,9 @@ def test_preparation_snapshot_freezes_preferences_without_connection_fields(
     for node_id, snapshot in result.node_runtime_snapshots.items():
         frozen = snapshot["model_settings"]
         for leaked in _RUNTIME_ONLY_FIELDS:
-            assert leaked not in frozen, f"{node_id} 快照的 model_settings 泄漏了运行期字段 {leaked}"
+            assert (
+                leaked not in frozen
+            ), f"{node_id} 快照的 model_settings 泄漏了运行期字段 {leaked}"
         # 偏好项必须保留（执行期靠它 + run.model_config_id 还原完整设置）。
         assert frozen["reasoning_effort"] == "high"
         assert frozen["stream"] is True
