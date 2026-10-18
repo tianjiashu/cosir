@@ -40,7 +40,7 @@ export function MessageDetail({
   const scrollPositions = useRef(new Map<string, number>());
   const hasTools =
     message.role === "tool" ||
-    Boolean(message.tool_calls?.length || message.invalid_tool_calls?.length);
+    Boolean(message.tool_calls?.length);
   const tabs: { value: DetailTab; label: string }[] = [
     { value: "content", label: "内容" },
     ...(hasTools ? [{ value: "tools" as const, label: "工具调用" }] : []),
@@ -74,7 +74,6 @@ export function MessageDetail({
                     }
                   : {
                       tool_calls: message.tool_calls ?? [],
-                      invalid_tool_calls: message.invalid_tool_calls ?? [],
                     },
               ),
     [message, tab],
@@ -217,12 +216,6 @@ export function MessageDetail({
                   </div>
                 );
               })}
-              {Boolean(message.invalid_tool_calls?.length) && (
-                <p className="text-destructive">
-                  包含 {message.invalid_tool_calls!.length} 条无效调用，详见下方
-                  invalid_tool_calls。
-                </p>
-              )}
             </>
           )}
         </div>

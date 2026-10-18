@@ -11,7 +11,6 @@ export type ContextMessage = {
   role: string;
   content: unknown;
   tool_calls?: Array<Record<string, unknown>> | null;
-  invalid_tool_calls?: Array<Record<string, unknown>> | null;
   usage_metadata?: Record<string, unknown> | null;
   tool_call_id?: string | null;
   status?: string | null;
