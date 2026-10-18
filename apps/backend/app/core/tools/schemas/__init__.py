@@ -45,7 +45,6 @@ from app.core.tools.schemas.user_decision import (
     EXECUTING_DECISION_KINDS,
     UserDecision,
     UserDecisionKind,
-    build_resume_payload,
 )
 from app.core.tools.schemas.user_input_request import (
     DEFAULT_DECISIONS,
@@ -97,5 +96,4 @@ __all__ = [
     "UserDecision",
     "UserDecisionKind",
     "UserInputRequest",
-    "build_resume_payload",
 ]
