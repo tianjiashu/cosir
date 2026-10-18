@@ -5,6 +5,75 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/context-messages": {
+      "get": {
+        "summary": "List Context Messages",
+        "description": "按 Task 或 Run 读取全部 Agent 上下文消息及其时间戳。",
+        "operationId": "list_context_messages_context_messages_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContextMessageResponse"
+                  },
+                  "title": "Response List Context Messages Context Messages Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tasks/{task_id}": {
       "get": {
         "summary": "Get Task",
@@ -152,7 +221,7 @@
     "/tasks/{task_id}/runs/{run_id}": {
       "delete": {
         "summary": "Delete Run",
-        "description": "删除单个 run 及其会话历史与产物。\n\n允许删除 task 内任意位置的 run（含中间），不重排剩余上下文序号。级联清理该 run 的\n会话消息、命令、委派记录、终端 session 与 run 行，提交后回收孤儿 LangGraph checkpoint。\n\n参数:\n    task_id: 来自路由的任务标识。\n    run_id: 来自路由的 Conversation Run 标识。\n    task_service: 通过依赖注入的任务 service（负责级联清理）。\n\n返回:\n    删除结果 ``DeleteRunResponse``。\n\n异常:\n    HTTPException: 404——task 或 run 不存在/不匹配；409——task 内存在运行中的 run\n        （不可删除）或删除闸门忙。\n\n副作用:\n    级联删除该 run 及其关联数据；与 delete_task 一致经 asyncio.to_thread 移出 event loop。",
+        "description": "删除单个 run 及其会话历史与产物。\n\n允许删除 task 内任意位置的 run（含中间），不重排剩余上下文序号。级联清理该 run 的\n会话消息、命令、委派记录、终端 session 与 run 行。\n\n参数:\n    task_id: 来自路由的任务标识。\n    run_id: 来自路由的 Conversation Run 标识。\n    task_service: 通过依赖注入的任务 service（负责级联清理）。\n\n返回:\n    删除结果 ``DeleteRunResponse``。\n\n异常:\n    HTTPException: 404——task 或 run 不存在/不匹配；409——task 内存在运行中的 run\n        （不可删除）或删除闸门忙。\n\n副作用:\n    级联删除该 run 及其关联数据；与 delete_task 一致经 asyncio.to_thread 移出 event loop。",
         "operationId": "delete_run_tasks__task_id__runs__run_id__delete",
         "parameters": [
           {
@@ -409,6 +478,532 @@
         }
       }
     },
+    "/workspaces/{workspace_id}/files/visibility": {
+      "get": {
+        "summary": "Visibility",
+        "operationId": "visibility_workspaces__workspace_id__files_visibility_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserVisibilityResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Change Visibility",
+        "operationId": "change_visibility_workspaces__workspace_id__files_visibility_patch",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisibilityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisibilityChangeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/files/directory": {
+      "get": {
+        "summary": "Directory",
+        "operationId": "directory_workspaces__workspace_id__files_directory_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 2000,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectoryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/files/info": {
+      "get": {
+        "summary": "Info",
+        "operationId": "info_workspaces__workspace_id__files_info_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileInfoResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/files/text": {
+      "get": {
+        "summary": "Text",
+        "operationId": "text_workspaces__workspace_id__files_text_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "encoding",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "utf-8",
+              "title": "Encoding"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          {
+            "name": "tail",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Tail"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TextResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/files/resource": {
+      "get": {
+        "summary": "Resource",
+        "operationId": "resource_workspaces__workspace_id__files_resource_get",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/files/search": {
+      "post": {
+        "summary": "Search",
+        "operationId": "search_workspaces__workspace_id__files_search_post",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/files/watch": {
+      "post": {
+        "summary": "Watch",
+        "operationId": "watch_workspaces__workspace_id__files_watch_post",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workspaces/{workspace_id}/files/find-text": {
+      "post": {
+        "summary": "Find Text",
+        "operationId": "find_text_workspaces__workspace_id__files_find_text_post",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Workspace Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TextSearchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/model-configs": {
       "get": {
         "summary": "List Model Configs",
@@ -579,6 +1174,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Delete Model Config Model Configs  Config Id  Delete"
                 }
               }
@@ -772,6 +1368,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Delete Configuration Agent Configuration Agents  Agent Id  Delete"
                 }
               }
@@ -937,6 +1534,340 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EnvironmentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/terminal-denylist": {
+      "get": {
+        "summary": "Get Terminal Denylist Configuration",
+        "description": "读取 deny-list；缺失时由 service 初始化默认配置文件。",
+        "operationId": "get_terminal_denylist_configuration_configuration_terminal_denylist_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalDenylistResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Terminal Denylist Configuration",
+        "description": "校验并保存新的 pattern 列表。",
+        "operationId": "update_terminal_denylist_configuration_configuration_terminal_denylist_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TerminalDenylistUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalDenylistResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/mcp-servers": {
+      "get": {
+        "summary": "Get Mcp Servers Configuration",
+        "description": "读取系统级 MCP 服务配置。",
+        "operationId": "get_mcp_servers_configuration_configuration_mcp_servers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPServersResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Update Mcp Servers Configuration",
+        "description": "替换并保存系统级 MCP 服务配置。",
+        "operationId": "update_mcp_servers_configuration_configuration_mcp_servers_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MCPServersUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPServersResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/mcp-servers/test": {
+      "post": {
+        "summary": "Test Mcp Server Configuration",
+        "description": "短连接测试未保存的 MCP 配置并读取工具目录。",
+        "operationId": "test_mcp_server_configuration_configuration_mcp_servers_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MCPServerTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPServerTestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/skills": {
+      "get": {
+        "summary": "List System Skills",
+        "description": "列出系统 Skill 目录中的有效技能及启用状态。",
+        "operationId": "list_system_skills_configuration_skills_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SkillInfoResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List System Skills Configuration Skills Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/skills/{name}": {
+      "get": {
+        "summary": "Get System Skill",
+        "description": "读取只读详情，不受 Skill 当前启用状态限制。",
+        "operationId": "get_system_skill_configuration_skills__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillDocumentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete System Skill",
+        "description": "删除系统目录内的 Skill。",
+        "operationId": "delete_system_skill_configuration_skills__name__delete",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillDeleteResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/skills/enabled": {
+      "put": {
+        "summary": "Update System Skill Enabled",
+        "description": "保存系统 Skill 启用名单。",
+        "operationId": "update_system_skill_enabled_configuration_skills_enabled_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillsEnabledUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SkillInfoResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Update System Skill Enabled Configuration Skills Enabled Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/skills/import": {
+      "post": {
+        "summary": "Import System Skill",
+        "description": "从桌面原生选择器选中的本机路径导入 Skill。",
+        "operationId": "import_system_skill_configuration_skills_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillsImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillInfoResponse"
                 }
               }
             }
@@ -1135,6 +2066,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Delete Workspace Configuration Agent Workspaces  Workspace Id  Configuration Agents  Agent Id  Delete"
                 }
               }
@@ -1362,6 +2294,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Upload Attachment Workspaces  Workspace Id  Attachments Post"
                 }
               }
@@ -1446,6 +2379,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Get Tool Groups Tools Groups Get"
                 }
@@ -1467,6 +2401,7 @@
               "application/json": {
                 "schema": {
                   "items": {
+                    "additionalProperties": true,
                     "type": "object"
                   },
                   "type": "array",
@@ -1497,6 +2432,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Save Agent Team Configuration Configuration Agent Teams Post"
                 }
@@ -1552,6 +2488,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Update System Agent Team Configuration Configuration Agent Teams  Team Id  Put"
                 }
               }
@@ -1594,6 +2531,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Delete System Agent Team Configuration Configuration Agent Teams  Team Id  Delete"
                 }
               }
@@ -1636,7 +2574,8 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object"
+                    "type": "object",
+                    "additionalProperties": true
                   },
                   "title": "Response List Workspace Agent Team Configurations Workspaces  Workspace Id  Configuration Agent Teams Get"
                 }
@@ -1687,6 +2626,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Save Workspace Agent Team Configuration Workspaces  Workspace Id  Configuration Agent Teams Post"
                 }
               }
@@ -1750,6 +2690,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Update Workspace Agent Team Configuration Workspaces  Workspace Id  Configuration Agent Teams  Team Id  Put"
                 }
               }
@@ -1801,6 +2742,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Delete Workspace Agent Team Configuration Workspaces  Workspace Id  Configuration Agent Teams  Team Id  Delete"
                 }
               }
@@ -1841,8 +2783,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "title": "Response Get Agent Team Run Agent Team Runs  Run Id  Get"
+                  "$ref": "#/components/schemas/AgentTeamRunResponse"
                 }
               }
             }
@@ -1882,8 +2823,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "title": "Response Cancel Agent Team Run Agent Team Runs  Run Id  Cancel Post"
+                  "$ref": "#/components/schemas/AgentTeamRunResponse"
                 }
               }
             }
@@ -1904,7 +2844,7 @@
     "/assistant": {
       "post": {
         "summary": "Assistant Transport",
-        "description": "接收用户消息并返回 Assistant Transport 状态流。\n\n参数:\n    request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。\n    run_executor: 负责启动已完成装配的 Conversation Run。\n    transport_service: 负责校验请求、创建或恢复 Run 并建立 Transport 响应。\n\n返回:\n    使用项目自有 frame 协议编码的 ``text/event-stream`` 响应。\n\n异常:\n    HTTPException: 请求任务不存在或运行切片创建失败时抛出。\n\n副作用:\n    创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；\n    运行期间更新数据库和 canonical conversation facts。",
+        "description": "提交用户消息、编辑或业务续跑，返回 JSON 接收回执。\n后台执行独立于请求；输出由 attach SSE 订阅，普通入队不会替换订阅。",
         "operationId": "assistant_transport_assistant_post",
         "requestBody": {
           "content": {
@@ -1921,7 +2861,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAccepted"
+                }
               }
             }
           },
@@ -2110,62 +3052,6 @@
           }
         }
       }
-    },
-    "/configuration/terminal-denylist": {
-      "get": {
-        "summary": "Get Terminal Denylist Configuration",
-        "description": "读取 deny-list；缺失时由 service 初始化默认配置文件。",
-        "operationId": "get_terminal_denylist_configuration_configuration_terminal_denylist_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TerminalDenylistResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "summary": "Update Terminal Denylist Configuration",
-        "description": "校验并保存新的 pattern 列表。",
-        "operationId": "update_terminal_denylist_configuration_configuration_terminal_denylist_put",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TerminalDenylistUpdateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TerminalDenylistResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -2260,6 +3146,7 @@
             "title": "Model Config Id"
           },
           "model_settings": {
+            "additionalProperties": true,
             "type": "object",
             "title": "Model Settings"
           }
@@ -2317,6 +3204,7 @@
             "title": "Model Config Id"
           },
           "model_settings": {
+            "additionalProperties": true,
             "type": "object",
             "title": "Model Settings"
           },
@@ -2385,6 +3273,237 @@
         ],
         "title": "AgentConfigurationResponse",
         "description": "校验并序列化 Agent 配置响应。\n\n参数:\n    agent_id: Agent 标识。\n    role: Agent 角色描述。\n    description: Agent 用途说明。\n    system_prompt: 系统提示词正文。\n    allowed_tool_groups: 允许使用的工具分组名称列表。\n    max_steps: 单次运行的最大推理步数。\n    model_config_id: 可选，数据库模型连接配置标识。\n    model_settings: 模型参数覆盖项。\n    source: 配置来源（内置或用户文件）。\n    path: 配置文件路径；无文件时为 None。\n    editable: 是否可编辑。\n    deletable: 是否可删除。\n    validation_status: 配置校验状态。\n    validation_error: 校验失败原因；通过时为 None。\n    file_name: 配置文件名；缺失时为 None。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "AgentTeamAgentResponse": {
+        "properties": {
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "task_id",
+          "title",
+          "agent_id",
+          "role",
+          "status"
+        ],
+        "title": "AgentTeamAgentResponse"
+      },
+      "AgentTeamNodeResponse-Input": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "goal_summary": {
+            "type": "string",
+            "title": "Goal Summary"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "visits": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTeamNodeVisitResponse"
+            },
+            "type": "array",
+            "title": "Visits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "node_id",
+          "name",
+          "agent_id",
+          "role",
+          "goal_summary",
+          "status",
+          "visits"
+        ],
+        "title": "AgentTeamNodeResponse"
+      },
+      "AgentTeamNodeResponse-Output": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "goal_summary": {
+            "type": "string",
+            "title": "Goal Summary"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "visits": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTeamNodeVisitResponse"
+            },
+            "type": "array",
+            "title": "Visits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "node_id",
+          "name",
+          "agent_id",
+          "role",
+          "goal_summary",
+          "status",
+          "visits"
+        ],
+        "title": "AgentTeamNodeResponse"
+      },
+      "AgentTeamNodeVisitResponse": {
+        "properties": {
+          "visit_number": {
+            "type": "integer",
+            "title": "Visit Number"
+          },
+          "conversation_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Run Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTeamAgentResponse"
+            },
+            "type": "array",
+            "title": "Agents"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "visit_number",
+          "conversation_run_id",
+          "status",
+          "agents"
+        ],
+        "title": "AgentTeamNodeVisitResponse"
+      },
+      "AgentTeamRunResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "team_id": {
+            "type": "string",
+            "title": "Team Id"
+          },
+          "goal": {
+            "type": "string",
+            "title": "Goal"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTeamNodeResponse-Output"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "current_node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Node Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "team_id",
+          "goal",
+          "status",
+          "nodes",
+          "current_node_id"
+        ],
+        "title": "AgentTeamRunResponse",
+        "description": "供执行卡渲染的 TeamRun 投影，不包含可恢复执行用的内部 state。"
       },
       "AssistantAttachRequest": {
         "properties": {
@@ -2522,12 +3641,6 @@
                   "$ref": "#/components/schemas/BanToolsCommand"
                 },
                 {
-                  "$ref": "#/components/schemas/ProposeAgentConfigurationCommand"
-                },
-                {
-                  "$ref": "#/components/schemas/ProposeAgentTeamConfigurationCommand"
-                },
-                {
                   "$ref": "#/components/schemas/UserInputDecisionCommand"
                 }
               ]
@@ -2627,6 +3740,7 @@
           "tools": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2638,6 +3752,7 @@
           "callSettings": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2649,6 +3764,7 @@
           "config": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2792,6 +3908,181 @@
         ],
         "title": "Body_upload_attachment_workspaces__workspace_id__attachments_post"
       },
+      "BrowserVisibilityResponse": {
+        "properties": {
+          "ignored_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Ignored Paths"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ignored_paths",
+          "revision"
+        ],
+        "title": "BrowserVisibilityResponse"
+      },
+      "CommandAccepted": {
+        "properties": {
+          "runId": {
+            "type": "integer",
+            "title": "Runid"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ConversationStateSnapshot"
+          },
+          "queued": {
+            "type": "boolean",
+            "title": "Queued"
+          }
+        },
+        "type": "object",
+        "required": [
+          "runId",
+          "state",
+          "queued"
+        ],
+        "title": "CommandAccepted",
+        "description": "queued 表示本次提交未启动执行者；state 是提交时的读取快照。"
+      },
+      "ContextMessageResponse": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "task_id": {
+            "type": "integer",
+            "title": "Task Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "include_in_context": {
+            "type": "boolean",
+            "title": "Include In Context"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "content": {
+            "title": "Content"
+          },
+          "tool_calls": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Calls"
+          },
+          "invalid_tool_calls": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalid Tool Calls"
+          },
+          "usage_metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage Metadata"
+          },
+          "tool_call_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Call Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "task_id",
+          "run_id",
+          "sequence",
+          "include_in_context",
+          "created_at",
+          "updated_at",
+          "role",
+          "content"
+        ],
+        "title": "ContextMessageResponse",
+        "description": "一条按消息角色投影的上下文持久化记录。"
+      },
       "ConversationRunSnapshot": {
         "properties": {
           "runId": {
@@ -2823,6 +4114,17 @@
               }
             ],
             "title": "Langfusetraceid"
+          },
+          "contextWindowTotal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contextwindowtotal"
           },
           "messages": {
             "items": {
@@ -2858,6 +4160,7 @@
           "status",
           "endReason",
           "langfuseTraceId",
+          "contextWindowTotal",
           "messages",
           "usage",
           "error"
@@ -2980,6 +4283,14 @@
       },
       "ConversationStateSnapshot": {
         "properties": {
+          "queued_messages": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Queued Messages"
+          },
           "runs": {
             "items": {
               "$ref": "#/components/schemas/ConversationRunSnapshot"
@@ -2999,19 +4310,9 @@
             "title": "Current Run Id"
           },
           "approvals": {
+            "additionalProperties": true,
             "type": "object",
             "title": "Approvals"
-          },
-          "context_window_total": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Context Window Total"
           },
           "error": {
             "anyOf": [
@@ -3029,11 +4330,10 @@
           "runs",
           "current_run_id",
           "approvals",
-          "context_window_total",
           "error"
         ],
         "title": "ConversationStateSnapshot",
-        "description": "一个 Task 的完整 Transport state。\n\nTask 只持有最后一个 Run 的上下文窗口总量；每个 Run 的消息、生命周期和模型 token\nusage 均位于 ``runs`` 中。Task usage 展示直接读取当前 Run 的 usage，不复制为平铺字段。"
+        "description": "一个 Task 的完整 Transport state。\n\nRun 的消息、生命周期、usage 与窗口上限均位于 ``runs`` 中；上下文占用从 Run 事实派生。"
       },
       "ConversationStateTextPart": {
         "properties": {
@@ -3093,6 +4393,7 @@
             "title": "Status"
           },
           "args": {
+            "additionalProperties": true,
             "type": "object",
             "title": "Args"
           },
@@ -3108,12 +4409,14 @@
             "title": "Error"
           },
           "presentation": {
+            "additionalProperties": true,
             "type": "object",
             "title": "Presentation"
           },
           "display_data": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3121,6 +4424,10 @@
               }
             ],
             "title": "Display Data"
+          },
+          "team_run_id": {
+            "type": "integer",
+            "title": "Team Run Id"
           },
           "isError": {
             "type": "boolean",
@@ -3160,19 +4467,47 @@
       "ConversationStateUsage": {
         "properties": {
           "input_tokens": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Input Tokens"
           },
           "output_tokens": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Output Tokens"
           },
           "total_tokens": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Total Tokens"
           },
           "cache_hit_tokens": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cache Hit Tokens"
           },
           "cache_miss_tokens": {
@@ -3187,7 +4522,14 @@
             "title": "Cache Miss Tokens"
           },
           "reasoning_tokens": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Reasoning Tokens"
           }
         },
@@ -3306,6 +4648,49 @@
         ],
         "title": "DeleteWorkspaceResponse",
         "description": "校验并序列化工作区删除结果响应。\n\n参数:\n    workspace_id: 被删除的工作区标识。\n    deleted: 是否删除成功。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "DirectoryResponse": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/FileEntryResponse"
+            },
+            "type": "array",
+            "title": "Entries"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "hidden_count": {
+            "type": "integer",
+            "title": "Hidden Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "entries",
+          "next_cursor",
+          "total"
+        ],
+        "title": "DirectoryResponse"
       },
       "EnvironmentChangeRequest": {
         "properties": {
@@ -3504,7 +4889,40 @@
         "title": "EnvironmentFieldResponse",
         "description": "单个环境变量的展示元数据与脱敏状态。\n\n``value`` 与 ``disk_value`` 对 secret 字段始终为 ``None``；调用方只能通过 ``masked``\n判断是否已经配置，不能从响应中恢复敏感值。"
       },
-      "EnvironmentGroupResponse": {
+      "EnvironmentGroupResponse-Input": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentFieldResponse"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "description",
+          "fields"
+        ],
+        "title": "EnvironmentGroupResponse",
+        "description": "配置中心中的一组相关环境变量。"
+      },
+      "EnvironmentGroupResponse-Output": {
         "properties": {
           "id": {
             "type": "string",
@@ -3561,7 +4979,7 @@
         "properties": {
           "groups": {
             "items": {
-              "$ref": "#/components/schemas/EnvironmentGroupResponse"
+              "$ref": "#/components/schemas/EnvironmentGroupResponse-Output"
             },
             "type": "array",
             "title": "Groups"
@@ -3592,6 +5010,105 @@
         ],
         "title": "EnvironmentUpdateRequest",
         "description": "校验环境文件批量更新请求体。\n\n参数:\n    changes: 字段名到变更意图的映射；未出现的字段保持原值。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 字段类型不符或携带额外字段时由 Pydantic 校验抛出。\n\n副作用:\n    无（只做结构校验，不读写文件）。"
+      },
+      "FileEntryResponse": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "symlink": {
+            "type": "boolean",
+            "title": "Symlink",
+            "default": false
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "name",
+          "kind"
+        ],
+        "title": "FileEntryResponse"
+      },
+      "FileInfoResponse": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "root_path": {
+            "type": "string",
+            "title": "Root Path"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "modified_ns": {
+            "type": "integer",
+            "title": "Modified Ns"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "mime": {
+            "type": "string",
+            "title": "Mime"
+          },
+          "encoding": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Encoding"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "name",
+          "root_path",
+          "size",
+          "modified_ns",
+          "version",
+          "kind",
+          "mime",
+          "encoding"
+        ],
+        "title": "FileInfoResponse"
       },
       "ForkTaskRequest": {
         "properties": {
@@ -3683,6 +5200,272 @@
         ],
         "title": "HealthResponse",
         "description": "后端存活探针响应。\n\n当前为最小占位实现：仅携带 ``status`` 字段标识进程存活，不探测子系统就绪态。\n真实探针（聚合 storage / 模型配置中心）为后续 TODO，\n届时将扩展字段并产出不含 secret 明文的健康摘要。\n\n参数:\n    status: 健康状态标识，占位实现固定为 ``\"health\"``。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "MCPServerConfigRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "stdio",
+              "sse",
+              "streamable_http"
+            ],
+            "title": "Transport",
+            "default": "stdio"
+          },
+          "command": {
+            "type": "string",
+            "title": "Command",
+            "default": ""
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Args"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Env"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "default": ""
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Headers"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "MCPServerConfigRequest",
+        "description": "HTTP 层接收的单个 MCP 服务配置。"
+      },
+      "MCPServerConfigResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "stdio",
+              "sse",
+              "streamable_http"
+            ],
+            "title": "Transport"
+          },
+          "command": {
+            "type": "string",
+            "title": "Command"
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Args"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Env"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Headers"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "tested": {
+            "type": "boolean",
+            "title": "Tested"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "transport",
+          "command",
+          "args",
+          "env",
+          "url",
+          "headers",
+          "enabled",
+          "tested"
+        ],
+        "title": "MCPServerConfigResponse",
+        "description": "返回给配置界面的 MCP 服务配置。"
+      },
+      "MCPServerTestRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "stdio",
+              "sse",
+              "streamable_http"
+            ],
+            "title": "Transport",
+            "default": "stdio"
+          },
+          "command": {
+            "type": "string",
+            "title": "Command",
+            "default": ""
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Args"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Env"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "default": ""
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Headers"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "MCPServerTestRequest",
+        "description": "描述一次未保存的 MCP 服务连接测试。"
+      },
+      "MCPServerTestResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "tools": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "agent_available": {
+            "type": "boolean",
+            "title": "Agent Available",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "success",
+          "tools"
+        ],
+        "title": "MCPServerTestResponse",
+        "description": "MCP 连接测试结果及发现的工具。"
+      },
+      "MCPServersResponse": {
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/MCPServerConfigResponse"
+            },
+            "type": "array",
+            "title": "Servers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "servers"
+        ],
+        "title": "MCPServersResponse",
+        "description": "当前已保存的 MCP 服务配置列表。"
+      },
+      "MCPServersUpdateRequest": {
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/MCPServerConfigRequest"
+            },
+            "type": "array",
+            "title": "Servers"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "servers"
+        ],
+        "title": "MCPServersUpdateRequest",
+        "description": "待保存的完整 MCP 服务列表。"
       },
       "MainAgentPromptResponse": {
         "properties": {
@@ -4078,64 +5861,6 @@
         "title": "ModelConfigUpdateRequest",
         "description": "只覆盖显式传入的模型连接配置字段。"
       },
-      "ProposeAgentConfigurationCommand": {
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "custom",
-            "title": "Type"
-          },
-          "commandId": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Commandid"
-          },
-          "name": {
-            "type": "string",
-            "const": "propose-agent-configuration",
-            "title": "Name"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "type",
-          "commandId",
-          "name"
-        ],
-        "title": "ProposeAgentConfigurationCommand",
-        "description": "声明当前消息需要临时开放配置提案工具。\n\n该命令没有 payload、版本或兼容性字段；它只表达本次 Run 的能力意图，真正的草稿仍由\n模型调用工具生成，配置保存也不在此命令内发生。"
-      },
-      "ProposeAgentTeamConfigurationCommand": {
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "custom",
-            "title": "Type"
-          },
-          "commandId": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Commandid"
-          },
-          "name": {
-            "type": "string",
-            "const": "propose-agent-team-configuration",
-            "title": "Name"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "type",
-          "commandId",
-          "name"
-        ],
-        "title": "ProposeAgentTeamConfigurationCommand",
-        "description": "声明当前消息需要临时开放 Team 配置提案工具。\n\n命令只记录本轮能力意图；草稿由工具生成，保存由用户在配置编辑器中显式触发。"
-      },
       "SaveAgentTeamConfigurationRequest": {
         "properties": {
           "scope": {
@@ -4147,6 +5872,7 @@
             "title": "Scope"
           },
           "configuration": {
+            "additionalProperties": true,
             "type": "object",
             "title": "Configuration"
           }
@@ -4159,6 +5885,147 @@
         ],
         "title": "SaveAgentTeamConfigurationRequest",
         "description": "保存 Team 配置文件所需的本地参数。"
+      },
+      "SearchRequest": {
+        "properties": {
+          "include_directories": {
+            "type": "boolean",
+            "title": "Include Directories",
+            "default": false
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Offset",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "SearchRequest"
+      },
+      "SkillDeleteResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "deleted"
+        ],
+        "title": "SkillDeleteResponse",
+        "description": "已删除 Skill 的结果。"
+      },
+      "SkillDocumentResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "enabled",
+          "content"
+        ],
+        "title": "SkillDocumentResponse",
+        "description": "Skill 只读详情与 Markdown 内容。"
+      },
+      "SkillInfoResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "description",
+          "enabled"
+        ],
+        "title": "SkillInfoResponse",
+        "description": "系统 Skill 列表项。"
+      },
+      "SkillsEnabledUpdateRequest": {
+        "properties": {
+          "enabled_skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Enabled Skills"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled_skills"
+        ],
+        "title": "SkillsEnabledUpdateRequest",
+        "description": "需要启用的 Skill 名称集合。"
+      },
+      "SkillsImportRequest": {
+        "properties": {
+          "source_path": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Source Path"
+          },
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "directory",
+              "archive"
+            ],
+            "title": "Source Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_path",
+          "source_type"
+        ],
+        "title": "SkillsImportRequest",
+        "description": "描述本机 Skill 文件夹或 ZIP 的来源路径。"
       },
       "TaskResponse": {
         "properties": {
@@ -4177,6 +6044,7 @@
           "extra": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -4184,6 +6052,17 @@
               }
             ],
             "title": "Extra"
+          },
+          "current_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Run Id"
           },
           "execution_status": {
             "anyOf": [
@@ -4200,11 +6079,6 @@
             "type": "string",
             "title": "Task Type",
             "default": "user"
-          },
-          "fork_available": {
-            "type": "boolean",
-            "title": "Fork Available",
-            "default": true
           },
           "parent_task_id": {
             "anyOf": [
@@ -4239,17 +6113,6 @@
             ],
             "title": "Delegation Id"
           },
-          "context_window_total": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Context Window Total"
-          },
           "created_at": {
             "type": "string",
             "title": "Created At"
@@ -4268,17 +6131,137 @@
           "updated_at"
         ],
         "title": "TaskResponse",
-        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    execution_status: 派生执行状态，可能为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"fork\"`` 为历史分支，\n        ``\"delegate_task\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_run_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    context_window_total: 最后一个 Run 使用的模型上下文窗口上限 token，可能为 None。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    current_run_id: Task 当前指向的 Run；无 Run 时为 None。\n    execution_status: 当前 Run 的读取投影，不持久化；无 Run 时为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"fork\"`` 为历史分支，\n        ``\"delegate_task\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_run_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "TerminalDenylistResponse": {
+        "properties": {
+          "patterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Patterns"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patterns"
+        ],
+        "title": "TerminalDenylistResponse",
+        "description": "向配置界面返回当前正则字符串列表。"
+      },
+      "TerminalDenylistUpdateRequest": {
+        "properties": {
+          "patterns": {
+            "items": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "type": "array",
+            "maxItems": 256,
+            "title": "Patterns"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patterns"
+        ],
+        "title": "TerminalDenylistUpdateRequest",
+        "description": "只接受有限长度的正则字符串列表。"
+      },
+      "TextResponse": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "encoding": {
+            "type": "string",
+            "title": "Encoding"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text",
+          "offset",
+          "next_offset",
+          "size",
+          "version",
+          "encoding"
+        ],
+        "title": "TextResponse"
+      },
+      "TextSearchRequest": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "query": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Query"
+          },
+          "encoding": {
+            "type": "string",
+            "title": "Encoding"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Offset",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "query",
+          "encoding",
+          "version"
+        ],
+        "title": "TextSearchRequest"
       },
       "UserDecisionKind": {
         "type": "string",
         "enum": [
           "approve",
           "reject",
-          "abort"
+          "abort",
+          "force_reject"
         ],
         "title": "UserDecisionKind",
-        "description": "用户可作出的决定种类（框架级闭集）。\n\n路由目标由工作流的固定映射决定，提问工具不能改写：\n\n- ``APPROVE``：批准该调用。``tools`` 节点以「已确认」上下文重新执行该调用。\n- ``REJECT``：驳回该调用。不执行，用户意见内联进该调用的观察交给模型重新提案。\n- ``ABORT``：放弃该调用。不执行，观察按取消收口，模型按「被用户取消」继续。"
+        "description": "用户可作出的决定种类（框架级闭集）。\n\n路由目标由工作流的固定映射决定，提问工具不能改写：\n\n- ``APPROVE``：批准该调用。``tools`` 节点以「已确认」上下文重新执行该调用。\n- ``REJECT``：驳回该调用。不执行，用户意见内联进该调用的观察交给模型重新提案。\n- ``ABORT``：放弃该调用。不执行，观察按取消收口，模型按「被用户取消」继续。\n- ``FORCE_REJECT``：强行驳回**当前唯一**的待决请求，不核对 ``request_id``，也不要求请求\n  声明过该种类。它由系统合成（取消一个停在 ``wait_user`` 断点上的 Run），不是用户在卡片上\n  做的选择：消费方在 ``wait_user`` 内把它归一为对该请求的普通 ``REJECT``，因此校验、观察\n  改写与领域收尾与真实驳回同构。客户端不得提交它。"
       },
       "UserInputDecisionCommand": {
         "properties": {
@@ -4325,6 +6308,7 @@
             "$ref": "#/components/schemas/UserDecisionKind"
           },
           "data": {
+            "additionalProperties": true,
             "type": "object",
             "title": "Data"
           }
@@ -4340,23 +6324,17 @@
       },
       "UserInputDecisionPayload": {
         "properties": {
-          "decisions": {
-            "items": {
-              "$ref": "#/components/schemas/UserInputDecisionItem"
-            },
-            "type": "array",
-            "maxItems": 32,
-            "minItems": 1,
-            "title": "Decisions"
+          "decision": {
+            "$ref": "#/components/schemas/UserInputDecisionItem"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "decisions"
+          "decision"
         ],
         "title": "UserInputDecisionPayload",
-        "description": "一次续跑携带的决定集合。"
+        "description": "一次续跑携带的单个用户决定。"
       },
       "ValidationError": {
         "properties": {
@@ -4390,6 +6368,63 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VisibilityChangeResponse": {
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/BrowserVisibilityResponse"
+          },
+          "changed_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Changed Paths"
+          }
+        },
+        "type": "object",
+        "required": [
+          "settings",
+          "changed_paths"
+        ],
+        "title": "VisibilityChangeResponse"
+      },
+      "VisibilityRequest": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Paths"
+          },
+          "ignored": {
+            "type": "boolean",
+            "title": "Ignored"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paths",
+          "ignored"
+        ],
+        "title": "VisibilityRequest"
+      },
+      "WatchRequest": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4096,
+            "title": "Paths"
+          }
+        },
+        "type": "object",
+        "title": "WatchRequest"
       },
       "WorkspaceFileIgnoreResponse": {
         "properties": {
@@ -4502,45 +6537,6 @@
         ],
         "title": "WorkspaceResponse",
         "description": "校验并序列化工作区状态响应（与 ``WorkspaceRecord.to_dict()`` 对齐）。\n\n参数:\n    workspace_id: 工作区标识。\n    name: 工作区名称。\n    root_path: 工作区根目录路径。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
-      },
-      "TerminalDenylistResponse": {
-        "properties": {
-          "patterns": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Patterns"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "patterns"
-        ],
-        "title": "TerminalDenylistResponse",
-        "description": "向配置界面返回当前正则字符串列表。"
-      },
-      "TerminalDenylistUpdateRequest": {
-        "properties": {
-          "patterns": {
-            "items": {
-              "type": "string",
-              "maxLength": 512
-            },
-            "type": "array",
-            "maxItems": 256,
-            "minItems": 0,
-            "title": "Patterns"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "patterns"
-        ],
-        "title": "TerminalDenylistUpdateRequest",
-        "description": "只接受有限长度的正则字符串列表。"
       }
     }
   }

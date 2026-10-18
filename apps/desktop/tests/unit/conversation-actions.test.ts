@@ -6,7 +6,7 @@ import {
   getTransportRunId,
   isEditableLatestRunUserMessage,
   isLatestUserMessage,
-  isResumableCancelledRun,
+  canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
 import type { TransportMessage, TransportState } from "@/lib/assistant/contract";
 
@@ -61,8 +61,8 @@ describe("conversation actions", () => {
       runs: [run(7, "cancelled", [{ id: "u7", role: "user", parts: [] }])],
       current_run_id: 7,
     });
-    expect(isResumableCancelledRun(resumable)).toBe(true);
-    expect(isResumableCancelledRun({ ...resumable, runs: [run(7, "completed", resumable.runs[0].messages)] })).toBe(false);
+    expect(canResumeStoppedRun(resumable)).toBe(true);
+    expect(canResumeStoppedRun({ ...resumable, runs: [run(7, "completed", resumable.runs[0].messages)] })).toBe(false);
   });
 
   it("keeps the three composer button states deterministic", () => {
@@ -78,4 +78,20 @@ describe("conversation actions", () => {
     expect(getTransportRunId({ current_run_id: 9 })).toBe(9);
     expect(getTransportRunId({ current_run_id: "9" })).toBeNull();
   });
+});
+
+it("keeps only the newest queued message editable while the Run is active", () => {
+  const snapshot = state({
+    runs: [run(1, "running", [{ id: "consumed", role: "user", parts: [] }])],
+    current_run_id: 1,
+    queued_messages: [
+      { id: "q1", role: "user", parts: [] },
+      { id: "q2", role: "user", parts: [] },
+    ],
+  });
+  expect(getLatestUserMessageId(snapshot)).toBe("q2");
+  expect(isEditableLatestRunUserMessage(snapshot, "consumed")).toBe(false);
+  expect(isEditableLatestRunUserMessage(snapshot, "q1")).toBe(false);
+  expect(isEditableLatestRunUserMessage(snapshot, "q2")).toBe(true);
+  expect(canResumeStoppedRun(state({ runs: [run(1, "failed")], current_run_id: 1, queued_messages: [{ id: "q", role: "user", parts: [] }] }))).toBe(true);
 });

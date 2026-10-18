@@ -247,7 +247,12 @@ function validateMessage(value: unknown, path: string, seenIds: Set<string>): vo
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["runs", "current_run_id", "approvals", "error"], "snapshot");
+  requireExactKeys(state, ["runs", "current_run_id", "approvals", "error", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  if (state.queued_messages !== undefined) {
+    if (!Array.isArray(state.queued_messages)) throw new TransportSnapshotValidationError("queued_messages", "数组");
+    const ids = new Set<string>();
+    state.queued_messages.forEach((message, index) => validateMessage(message, `queued_messages[${index}]`, ids));
+  }
   if (!Array.isArray(state.runs)) throw new TransportSnapshotValidationError("runs", "数组");
   const runIds = new Set<number>();
   const activeRunIds: number[] = [];

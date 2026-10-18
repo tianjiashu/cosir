@@ -220,7 +220,7 @@ export class TransportFrameStore {
     let rebuildAll = false;
     let structureChanged = false;
     for (const mutation of frame.mutations) {
-      if (mutation.path.length === 0) {
+      if (mutation.path.length === 0 || mutation.path[0] === "queued_messages") {
         rebuildAll = true;
       }
       if (mutation.path[0] === "runs") {
@@ -336,7 +336,12 @@ export class TransportFrameStore {
       kind: "pending",
       command,
     }));
-    this.items = [...this.canonicalItems, ...error, ...pending];
+    const queued: FrameStoreItem[] = (this.state.queued_messages ?? []).map((message) => ({
+      kind: "canonical", message,
+      context: { runId: this.state.current_run_id ?? 0, runStatus: "pending", endReason: null,
+        error: null, isLastRunMessage: false },
+    }));
+    this.items = [...this.canonicalItems, ...queued, ...error, ...pending];
   }
 
   private rebuildRunRanges(): void {

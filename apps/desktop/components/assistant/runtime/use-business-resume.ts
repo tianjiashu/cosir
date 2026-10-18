@@ -188,7 +188,7 @@ export function useBusinessResume(
           method: "POST",
           signal,
           traceId: context.traceId,
-          headers: { Accept: "text/event-stream" },
+          headers: { Accept: "application/json" },
         }));
         if (!response.ok) {
           requestDefinitivelyRejected = true;

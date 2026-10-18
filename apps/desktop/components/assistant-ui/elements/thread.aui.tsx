@@ -50,7 +50,7 @@ import {
   deriveComposerAction,
   getTransportRunId,
   isEditableLatestRunUserMessage,
-  isResumableCancelledRun,
+  canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
 import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
 import { toEditableUserMessageDraft } from "@/lib/assistant/converter";
@@ -329,7 +329,7 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   );
   const { cancellingRunId, onResumeBusiness, onCancelRequested, onCancelResult } = useContext(ThreadContext);
   const runId = useAuiState((state) => getTransportRunId(state.thread.state));
-  const canResume = useAuiState((state) => isResumableCancelledRun(readRuntimeTransportState(state.thread.state)));
+  const canResume = useAuiState((state) => canResumeStoppedRun(readRuntimeTransportState(state.thread.state)));
   const isCancelling = cancellingRunId !== null && cancellingRunId === runId;
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
   const [resuming, setResuming] = useState(false);
@@ -417,9 +417,12 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   }
 
   return (
-    <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label="发送" />}>
-      <ArrowUpIcon className="size-4" />
-    </ComposerPrimitive.Send>
+    <div className="flex items-center gap-2">
+      {isRunning && <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} onCancelRequested={onCancelRequested} onCancelResult={onCancelResult} />} />}
+      <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label={isRunning ? "加入队列" : "发送"} />}>
+        <ArrowUpIcon className="size-4" />
+      </ComposerPrimitive.Send>
+    </div>
   );
 };
 
@@ -462,10 +465,10 @@ const UserMessageView: FC = () => {
   const hasText = useAuiState((state) => state.message.parts.some(
     (part) => part.type === "text" && part.text.trim().length > 0,
   ));
-  const isRunning = useAuiState((state) => state.thread.isRunning);
+  const isQueued = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages?.some((message) => message.id === messageId) ?? false);
   const readonly = useContext(ThreadContext).readonly === true;
   const canEdit = useAuiState((state) => {
-    if (readonly || isRunning || !isEditableLatestRunUserMessage(
+    if (readonly || !isEditableLatestRunUserMessage(
       readRuntimeTransportState(state.thread.state),
       messageId,
     )) return false;
@@ -484,6 +487,7 @@ const UserMessageView: FC = () => {
       className="group flex flex-col items-end px-2 [content-visibility:auto] [contain-intrinsic-size:auto_6rem]"
     >
       <div className="flex max-w-[85%] flex-col items-end gap-2">
+        {isQueued && <span className="text-xs text-muted-foreground">已排队</span>}
         <UserMessageAttachments />
         {hasText && (
           <div className="bg-primary/10 text-foreground rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">

@@ -15,7 +15,7 @@ Tauri 桌面应用
 ├─ Rust 主进程：窗口、IPC、后端生命周期
 ├─ WebView2：React 前端
 └─ Python/FastAPI 后端子进程
-   ├─ Agent Runtime / LangGraph workflow
+   ├─ Agent Runtime / 原生 ReAct workflow（OpenAI SDK）
    ├─ 本机 SQLite
    └─ 按需创建的工具执行子进程
 ```
@@ -81,7 +81,7 @@ Tauri 桌面应用
 - `event` 使用稳定的 snake_case 名称；`task_id`、`run_id` 等标识放入 `data`。同一执行链路复用同一 `trace_id`；前端 HTTP 请求通过 `X-Trace-Id` 传入后端，后端绑定日志上下文。
 - 前端 Tauri 日志查看系统级 `.cosir/logs/frontend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；浏览器开发模式查看 WebView/浏览器控制台。
 - 后端运行日志查看系统级 `.cosir/logs/backend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；启动、停止或崩溃问题查看系统级 `.cosir/logs/desktop-YYYY-MM-DD.log`、`backend-console-YYYY-MM-DD.log` 及其大小分片；`backend.bootstate.json` 位于系统级 `.cosir/runtime/`。
-- 系统级 `.cosir` 由 Tauri 按平台放在用户主目录：**macOS 为 `~/.cosir`，Windows 为 `%USERPROFILE%\.cosir`**；经桌面宿主启动（含 `tauri dev`）时 `CODING_AGENT_DATA_DIR` 由 `spawn_backend` 按 `data_dir` 是否提供**条件注入**，桌面宿主恒传用户主目录，故等价于主目录，无 dev/prod 分支；后端统一追加 `.cosir`。绕过 Tauri 直跑后端时，macOS/Windows 同样回落到用户主目录，其他平台回落到 `<repo>`。系统运行数据包括 `.env`、SQLite、checkpoint、日志和 runtime；工作区级 `.cosir` 仍位于各工作区根目录下。
+- 系统级 `.cosir` 由 Tauri 按平台放在用户主目录：**macOS 为 `~/.cosir`，Windows 为 `%USERPROFILE%\.cosir`**；经桌面宿主启动（含 `tauri dev`）时 `CODING_AGENT_DATA_DIR` 由 `spawn_backend` 按 `data_dir` 是否提供**条件注入**，桌面宿主恒传用户主目录，故等价于主目录，无 dev/prod 分支；后端统一追加 `.cosir`。绕过 Tauri 直跑后端时，macOS/Windows 同样回落到用户主目录，其他平台回落到 `<repo>`。系统运行数据包括 `.env`、SQLite、日志和 runtime；工作区级 `.cosir` 仍位于各工作区根目录下。
 - 日志和观测是诊断旁路，不是业务事实。目前不做脱敏，日志或观测失败不得阻断 Agent 主流程。
 
 ## 进程生命周期边界
@@ -91,9 +91,9 @@ Tauri 桌面应用
 - 后端绑定 `127.0.0.1`，桌面模式由 Tauri 动态分配端口。前端必须读取 runtime config，不得硬编码生产端口；开发或测试 fallback 端口不是桌面生产契约。
 - Tauri 负责等待 bootstate 与 `/health`、报告失败、有限重试以及退出时清理后端进程树。`/health` 仅表示 liveness，不代表数据库和模型已全部可用。
 - 后端 lifespan 负责初始化和关闭数据库、Run executor、运行期依赖与观测组件。工具子进程由工具执行层负责取消、超时和进程树清理。
-- 交互终端归 Task 所有，允许同一 Task 的后续 Run 复用。Run 完成、失败、取消或历史 Run 删除不关闭终端；Agent 显式关闭、shell 自然退出、Task 删除提交后或后端退出时清理。活会话由 `TerminalSessionService` 管理，不进入 LangGraph checkpoint，不跨后端重启恢复；前端仅订阅只读预览。
+- 交互终端归 Task 所有，允许同一 Task 的后续 Run 复用。Run 完成、失败、取消或历史 Run 删除不关闭终端；Agent 显式关闭、shell 自然退出、Task 删除提交后或后端退出时清理。活会话由 `TerminalSessionService` 管理，不进入 Run 执行进度，不跨后端重启恢复；前端仅订阅只读预览。
 - 后端崩溃恢复必须有限且串行，不得无限重启。恢复耗尽后由用户显式重启；生命周期 generation 用于防止旧进程或旧线程覆盖当前状态。
-- 后端重启时，遗留 active Run（含 child Run）收敛为 `cancelled`；不得隐式重放旧 Agent 执行。进程内 registry、subscriber 和运行任务不跨重启恢复。
+- 后端重启时，遗留 active Run（含 waiting 与 child Run）收敛为 `cancelled`，待决请求失效、inbox 保留；不得隐式重放旧 Agent 执行。进程内 registry、subscriber 和运行任务不跨重启恢复。
 
 ## 进程间接口边界
 
@@ -110,20 +110,22 @@ Tauri 桌面应用
 
 - 领域 JSON API 统一通过前端 `lib/http/client.ts` 处理动态基地址、`no-store`、`X-Trace-Id` 和非 2xx 错误。Assistant SSE、业务 resume 和资源请求由各自 transport/resource 边界管理，但仍须遵守动态地址和 trace 规则。
 - Assistant UI wire schema 只属于 `apps/backend/app/assistant_transport/`，不得泄漏到 workflow、领域 service 或 storage。
-- `POST /assistant` 创建或继续业务 Run；attach 只订阅既有 Run；state 读取 canonical snapshot；cancel 显式取消 Run。
-- Assistant 命令的 `commandId` 仅用于单次请求内的结构化边界与去重（同请求内须唯一），不入库、不承担跨请求幂等。同一 task 同时只允许一个 active Run，command、Run 和初始 snapshot 的创建由同一用例事务保护。
+- `POST /assistant` 接收输入、编辑或继续业务 Run，返回 JSON 回执；attach 只订阅既有 Run；state 读取 canonical snapshot；cancel 显式取消 Run。
+- Assistant 命令的 `commandId` 仅用于单次请求内的结构化边界与去重（同请求内须唯一），不入库、不承担跨请求幂等。同一 task 同时只允许一个 active Run 和一个执行者。Run、初始 inbox 输入和 Task 当前 Run 指针由同一用例事务保护；snapshot 在提交后投影。
 - HTTP/SSE 断开只表示订阅中断，不自动取消或重放业务 Run。前端可以重新 attach 已有 Run；只有明确的 business resume 才能继续业务执行。
 
 ## 数据与事实所有权
 
 - 后端拥有 task、workspace、Run、Agent context、model_config 配置、Agent Team 配置（文件系统持久化）与 Agent Team run（SQLite）等持久化事实；前端状态只负责交互和渲染。
-- 主业务库为 `<DATA_DIR>/.cosir/storage/app.sqlite3`；运行日志在 `.cosir/logs/`；checkpoint 在 `.cosir/storage/`。三者职责与路径分离，不得跨层复用 session 或事实模型。
-- `ConversationRunModel.status` 是对话 Run 生命周期状态的唯一事实源；Agent Team run 由独立的 `AgentTeamRunModel.status` 承载其生命周期，二者各为自身 Run 类型的唯一事实源。Transport snapshot、Agent context 和 LangGraph checkpoint 都不得演化成任一 Run 类型的第二套状态机。
+- 主业务库为 `<DATA_DIR>/.cosir/storage/app.sqlite3`；运行日志在 `.cosir/logs/`。业务库与日志职责、路径分离，不得跨层复用 session 或事实模型。
+- `ConversationRunModel.status` 是对话 Run 生命周期状态的唯一事实源；Agent Team run 由独立的 `AgentTeamRunModel.status` 承载其生命周期，二者各为自身 Run 类型的唯一事实源。Transport snapshot 与 Agent context 都不得演化成任一 Run 类型的第二套状态机。
 - Agent Team 的 `AgentTeamRunModel` 分 `pending` 确认门槛与 `running` 执行两态；同一主 Run 同时只允许一个待确认 TeamRun（pending 唯一约束），确认边界以 `update_status_if_in` 原子迁移。节点运行快照（`AgentTeamRunState.node_runtime`）只冻结 `allowed_tools`（工具名）；Coordinator 创建节点 Task 时从注册表解析对应 schema，并固化到该 Task 的 `tool_schemas`，不要在 TeamRun 快照重复保存工具 schema。
 - Agent context 的持久化事实由 `conversation_task_contexts` 承载；`RuntimeContextManager` 是 Task 级 context 的唯一运行时协调入口和进程内 working copy owner，但不是数据库事实源。
 - `ConversationTaskStateService` 负责 Transport snapshot 的重建与投影编排；`TaskRuntimeSpace` 按 taskId 持有 snapshot working copy，首次读取时懒加载重建，后续复用内存对象。`ConversationEventProjector` 只负责把 conversation event 投影到 snapshot。`ConversationStateSnapshot` 面向前端 Transport，不是 Agent context 的镜像。
 - context 与 Transport snapshot 允许短暂不一致，以最终一致性收敛。snapshot 普通读取不重复重建；数据库写入后由 projector 或明确的 rebuild 边界更新内存 snapshot。不得为了消除流式时序差异而强行把 Run、context、snapshot 放入一个全局事务。
-- LangGraph checkpoint 只服务 workflow 恢复，不代表 Run 生命周期状态。
+- Run 同时拥有生命周期与持久执行进度，不再维护独立 checkpoint。普通续跑从模型边界继续，等待恢复只消费已持久化的当前请求及决定；不重放已执行工具。
+- Task inbox 持久化尚未消费的用户输入；每次普通模型调用前，将当前批次按序原子转入 context。一条 Run 可包含多条 user message。最终回答结束当前 Run，旧执行者释放后才为剩余 inbox 新建 Run；取消、失败和等待不会因普通输入到达自动继续。
+- 编辑定位稳定消息身份。未消费队尾消息原地更新；已消费的最新用户消息在停止后截断其后 context 并重置同一 Run。外部工具副作用不回滚。
 - `task_runtime`、取消 registry、snapshot subscriber 等属于当前后端进程内的协调状态，不是持久化事实。
 - WebView `localStorage` 只保存用户偏好（模型选择、最近 workspace、收藏提示词等）；各类偏好由对应 storage module 管理，不得存储任务或对话事实。
 
@@ -140,7 +142,7 @@ Tauri 桌面应用
 工具执行结果的前端渲染是后端 `ToolObservation.display_data` 与前端 renderer 之间的稳定契约，不新增进程或服务；完整字段规范见 `apps/backend/app/core/tools/tool_ui_display_contract.md`，本文件只描述边界。
 
 - 两层契约：静态展示声明 `ToolDisplayHints` 随 `ToolDefinition` 传给客户端，只声明 `verb`/`icon`/`variant`/`surface`/`expandable`/`expand_layout`/`default_open`/`show_result` 等 UI 意图，不含动态结果、渲染函数或业务数据；成功态非空 `ToolObservation.display_data` 必须有稳定 `kind`，由后端 `apps/backend/app/core/tools/display/` 纯函数投影，不执行额外 IO。错误态按受控短提示规则，不带成功态 `kind`。
-- human-in-the-loop 请求不是展示数据：工具要求用户先作出决定时，把请求挂在 `ToolObservation.user_input_request`（工具层领域类型 `UserInputRequest`），由 `wait_user` 节点据此挂起图，并在挂起前把它投影进该调用的 tool part 载荷；工具、工作流与前端都不再把审批声明塞进 `display_data`，也不为「是否等待作答」另设布尔字段（请求存在与否即判据）。
+- human-in-the-loop 请求不是展示数据：工具要求用户先作出决定时，把请求挂在 `ToolObservation.user_input_request`（工具层领域类型 `UserInputRequest`），由 `wait_user` 步骤据此保存 Run 等待数据并退出执行，并在挂起前把它投影进该调用的 tool part 载荷；工具、工作流与前端都不再把审批声明塞进 `display_data`，也不为「是否等待作答」另设布尔字段（请求存在与否即判据）。
 - 状态唯一来源：`ToolObservation.status` 表达工具执行结果，取值 `success`/`error`/`cancelled`；Transport 侧工具 part 生命周期为 `pending`/`running`/`completed`/`failed`/`cancelled`，其中 `completed`/`failed`/`cancelled` 由 observation 经 `success→completed`、`error→failed`、`cancelled→cancelled` 投影，`pending`/`running` 为执行前/执行中状态。前端不得建立第二套状态机，也不得从 `args`/`result` 反推展示结果。
 - 前端路由：`components/assistant-ui/tools/tool-part.tsx` 通过 `tool-renderer-registry.ts` 按 `data.kind` 与 `presentation.expand_layout` 选择 renderer；通用布局为 `details`/`list`/`diff`/`write`/`terminal`/`none`，专用 renderer 可承载明确的业务交互。禁止按工具名编写专用渲染分支；未知 `kind` 走 `ToolFallback`，不导致消息流崩溃。
 - 错误三通道隔离：工具 UI 短提示走受控 `display_data.status_hint`（约 5 字，来自后端分类映射）；Run 错误 `error.message` 可直接使用模型 HTTP 响应体的 `message` 字段供用户排查，但不得透传完整响应体。生命周期走 Transport status。前端不展示堆栈、原始异常、原始 prompt、凭据或大段模型正文；失败 `display_data` 不得携带成功态的目标、结果或输出字段。

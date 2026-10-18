@@ -107,7 +107,7 @@ export async function submitAssistantTransport(
       method: "POST",
       traceId: input.traceId,
       headers: {
-        Accept: "text/event-stream",
+        Accept: "application/json",
         "Content-Type": "application/json",
       },
       body,

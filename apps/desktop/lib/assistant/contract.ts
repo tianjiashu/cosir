@@ -200,6 +200,7 @@ export function isTerminalRunStatus(status: string | null | undefined): boolean 
 
 /** Task 级 Transport state；Run 事实全部按 Run 保存在 `runs` 中。 */
 export type TransportState = {
+  queued_messages?: TransportMessage[];
   runs: TransportRun[];
   current_run_id: number | null;
   /** 审批预留；当前固定为空对象。 */

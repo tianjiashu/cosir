@@ -15,6 +15,7 @@ import {
   type FrameStoreItem,
 } from "@/lib/assistant/transport-frame-store";
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import { parseTransportState } from "@/lib/assistant/snapshot-validation";
 import { parseHttpError } from "@/lib/http/errors";
 
 export type TaskAssistantTransportOptions = {
@@ -130,6 +131,7 @@ function useTaskAssistantTransportAdapter(
     let accepted = false;
     try {
       const response = await fetch(url, {
+        cache: "no-store",
         method: "POST",
         headers: await optionsRef.current.headers(),
         body: JSON.stringify(requestBody),
@@ -204,8 +206,39 @@ function useTaskAssistantTransportAdapter(
     }
     const addCommands = commands.filter(isAddMessageCommand) as UserAddMessageCommand[];
     if (addCommands.length > 0) store.setPendingCommands(addCommands);
-    await openStream(optionsRef.current.api, requestBody, commands);
-  }, [openStream, store]);
+    let acceptedByBackend = false;
+    try {
+      const response = await fetch(optionsRef.current.api, {
+        cache: "no-store",
+        method: "POST", headers: await optionsRef.current.headers(),
+        body: JSON.stringify(requestBody),
+      });
+      if (!response.ok) throw await parseHttpError(response);
+      acceptedByBackend = true;
+      const accepted = await response.json();
+      const state = parseTransportState(accepted.state);
+      store.clearPendingCommands(addCommands);
+      // 已有订阅接收提交事件，不能用较早的 HTTP 快照覆盖正在到达的流式帧。
+      if (!activeStreamRef.current || accepted.queued === false) {
+        if (!activeStreamRef.current) store.importState(state);
+        const run = state.runs.find((candidate) => candidate.runId === state.current_run_id);
+        if (run && ["pending", "running", "waiting_for_input"].includes(run.status)) {
+          void openStream(optionsRef.current.resumeApi, {
+            ...await optionsRef.current.body(), commands: [], runId: run.runId,
+            taskId, threadId: `conversation_run-${taskId}`,
+          }, []);
+        }
+      }
+      optionsRef.current.onResponse?.(response);
+    } catch (error) {
+      store.clearPendingCommands(addCommands);
+      await optionsRef.current.onError?.(error instanceof Error ? error : new Error(String(error)), {
+        commands, phase: acceptedByBackend ? "accepted-stream-failed" : "request-rejected",
+        updateState: (updater) => store.importState(updater(store.getSnapshot().state)),
+        clearPendingCommands: () => store.clearPendingCommands(addCommands),
+      });
+    }
+  }, [openStream, store, taskId]);
 
   const attach = useCallback(async () => {
     const state = store.getSnapshot();
@@ -239,13 +272,14 @@ function useTaskAssistantTransportAdapter(
   const onCancel = useCallback(async () => {
     const state = store.getSnapshot();
     const runId = state.targetRunId ?? state.state.current_run_id;
-    closeActiveStream();
     if (runId === null) return;
     try {
-      await fetch(`${new URL(optionsRef.current.api).origin}/runs/${runId}/cancel`, {
+      const response = await fetch(`${new URL(optionsRef.current.api).origin}/runs/${runId}/cancel`, {
+        cache: "no-store",
         method: "POST",
         headers: await optionsRef.current.headers(),
       });
+      if (!response.ok) throw await parseHttpError(response);
       optionsRef.current.onCancel?.({ commands: state.pendingCommands });
     } catch (error) {
       const normalized = error instanceof Error ? error : new Error(String(error));

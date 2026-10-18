@@ -387,3 +387,20 @@ describe("TransportFrameStore", () => {
     expect(store.getSnapshot().pendingCommands).toEqual([second]);
   });
 });
+
+it("moves a queued message into its Run without duplicating its stable identity", () => {
+  const queued: TransportMessage = { id: "q1", role: "user", parts: [{ type: "text", text: "later", status: "completed" }] };
+  const initial = state([baseMessage("a1", "working")]);
+  initial.queued_messages = [queued];
+  const store = new TransportFrameStore(initial);
+  expect(store.getSnapshot().items.filter((item) => item.kind === "canonical").map((item) => item.message.id)).toEqual(["a1", "q1"]);
+  store.applyFrame({
+    task_id: 1, kind: "mutation", target_run_id: 1, target_run_status: "running",
+    mutations: [
+      { kind: "set", path: ["queued_messages"], value: [] },
+      { kind: "set", path: ["runs", 0, "messages", 1], value: queued },
+    ],
+  });
+  store.flushScheduledPublication();
+  expect(store.getSnapshot().items.filter((item) => item.kind === "canonical").map((item) => item.message.id)).toEqual(["a1", "q1"]);
+});

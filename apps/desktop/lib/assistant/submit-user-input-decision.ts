@@ -21,8 +21,7 @@ export type SubmitUserInputDecisionInput = {
 /**
  * 提交 human-in-the-loop 决定并恢复等待中的 Run。
  *
- * 决定是**一次请求的输入**，不落库：它随续跑请求（同一批携带 `runId`）到达后端，被解析成
- * LangGraph `Command(resume=...)` 的载荷交给等待节点消费。因此本函数必须携带 `runId`——
+ * 决定与 Run 的恢复迁移一起持久化，只能回答当前等待请求。因此本函数必须携带 `runId`——
  * 它与空 commands 的续跑语义等价，区别只在于额外带上了用户的结构化决定。
  *
  * 只负责请求序列化与 accepted barrier 校验，不消费 POST 返回流。等待输入时原订阅已经结束，
@@ -37,7 +36,7 @@ export async function submitUserInputDecision(
   const response = await requestRaw("/assistant", {
     method: "POST",
     headers: {
-      Accept: "text/event-stream",
+      Accept: "application/json",
       "Content-Type": "application/json",
     },
     body: JSON.stringify({

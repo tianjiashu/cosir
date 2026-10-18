@@ -1,23 +1,21 @@
 [project]
 name = "coding-agent-backend"
 version = "0.1.0"
-description = "Local desktop coding-agent backend (FastAPI + LangGraph)."
+description = "Local desktop coding-agent backend (FastAPI + OpenAI SDK)."
 requires-python = ">=3.11"
 # 单一依赖来源：迁移自 requirements.txt，由 uv.lock 锁定。
 dependencies = [
     "fastapi==0.119.1",
     "python-multipart==0.0.20",
     "httpx==0.28.1",
+    "openai==2.46.0",
     "jsonschema==4.23.0",
-    "langgraph==1.2.10 ; python_version >= '3.11'",
-    "langgraph-checkpoint-sqlite==3.1.0 ; python_version >= '3.11'",
     # Langfuse 可观测性（LLM/工具调用 trace；基于 OpenTelemetry，v4 客户端 API）。
     "langfuse==4.14.1",
     "pydantic==2.12.4",
     "python-dotenv==1.0.1",
     "SQLAlchemy==2.0.36",
     "uvicorn[standard]==0.34.0",
-    "langchain==1.3.1",
     # 多语言语法检查（guard/syntax_check）：tree-sitter 宿主 + 各语言官方 grammar 包。
     # 选型说明：原选 tree-sitter-language-pack（371 语言），但该包不支持 windows-x86_64
     # （仅 linux/macOS），本桌面端为 Windows，故改用官方 grammar 包方案（Windows 预编译 wheel）。
@@ -33,11 +31,8 @@ dependencies = [
     "tree-sitter-c==0.23.5",
     "tree-sitter-c-sharp==0.23.1",
     # 视觉输入（多模态）：用户图片运行期读文件校验尺寸/探测真实格式/防解压炸弹。
-    # 仅用于运行期读文件，不参与多模态序列化（序列化由 LangChain 原生透传）。
+    # 仅用于运行期读文件，不参与多模态序列化（序列化由 OpenAI SDK 适配器负责）。
     "pillow==11.3.0",
-    # 显式声明代码直接 import 的包（app/llm_provider/model_factory.py: from langchain_openai
-    # import ChatOpenAI）。此前为 langchain 的传递依赖，现显式化以避免 uv 重解析时丢失。
-    "langchain-openai==1.6.0",
     "unidiff==0.7.5",
     "pathspec==0.12.1",
     "mcp==1.30.0",
