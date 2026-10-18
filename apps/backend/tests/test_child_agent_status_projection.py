@@ -14,13 +14,14 @@ from sqlalchemy.orm import Session
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
-from app.core.llm_provider.messages import AIMessage, ToolMessage
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.model.base import StorageBase
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
+
+pytestmark = pytest.mark.usefixtures("isolated_storage")
 
 NOW = datetime(2026, 9, 24, tzinfo=UTC)
 
@@ -57,8 +58,8 @@ def _tool_rows(*displays: tuple[str, dict[str, object]]) -> list[ConversationTas
     calls = [
         {
             "id": tool_call_id,
-            "name": tool_name,
-            "args": {},
+            "type": "function",
+            "function": {"name": tool_name, "arguments": json.dumps({})},
         }
         for tool_call_id, tool_name in (
             ("delegate-call", "delegate_task"),
@@ -70,7 +71,7 @@ def _tool_rows(*displays: tuple[str, dict[str, object]]) -> list[ConversationTas
         ConversationTaskContextRecord(
             task_id=1,
             run_id=10,
-            message=AIMessage(content="", tool_calls=calls),
+            message={"role": "assistant", "content": "", "tool_calls": calls},
             include_in_context=True,
             sequence=1,
             transport_metadata={},
@@ -85,7 +86,7 @@ def _tool_rows(*displays: tuple[str, dict[str, object]]) -> list[ConversationTas
             ConversationTaskContextRecord(
                 task_id=1,
                 run_id=10,
-                message=ToolMessage(content="result", tool_call_id=tool_call_id),
+                message={"role": "tool", "content": "result", "tool_call_id": tool_call_id},
                 include_in_context=True,
                 sequence=sequence,
                 transport_metadata={
@@ -171,6 +172,14 @@ def _reset_task_runtime_spaces(monkeypatch: pytest.MonkeyPatch) -> None:
         ConversationTaskStateRebuilder,
         "get_tool_display",
         staticmethod(lambda _name: {}),
+    )
+    monkeypatch.setattr(
+        "app.task_runtime.task_runtime_space.get_task_service",
+        lambda: SimpleNamespace(get_task=lambda task_id: _task(task_id)),
+    )
+    monkeypatch.setattr(
+        "app.task_runtime.task_runtime_space.get_workspace_service",
+        lambda: SimpleNamespace(get_workspace=lambda _id: SimpleNamespace(id=1)),
     )
     ConversationTaskStateService.clear_process_state()
     yield
@@ -341,9 +350,11 @@ def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_met
         with Session(engine) as session:
             session.add(
                 ConversationTaskContextModel(
+                    message_id="test-message",
+                    metadata_json="{}",
                     task_id=1,
                     run_id=10,
-                    message_json=json.dumps({"type": "ai", "data": {"content": "old"}}),
+                    message_json=json.dumps({"role": "assistant", **{"content": "old"}}),
                     include_in_context=True,
                     sequence=2,
                     transport_metadata_json=json.dumps(metadata),
@@ -369,7 +380,7 @@ def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_met
                 ConversationTaskContextRecord(
                     task_id=1,
                     run_id=10,
-                    message=AIMessage(content="new"),
+                    message={"role": "assistant", "content": "new"},
                     include_in_context=True,
                     sequence=2,
                 ),

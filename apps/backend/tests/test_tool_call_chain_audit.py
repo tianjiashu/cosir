@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -21,8 +22,8 @@ from typing import Any
 import pytest
 
 import app.core.tools.tool_execute.tool_access_gate as gate_module
-import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
-import app.core.workflows.react.nodes.tools_node as tools_node_module
+import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
+import app.core.workflow.nodes.tools_node as tools_node_module
 from app.assistant_transport.event import (
     ToolCallCreatedEvent,
     ToolCallStatusChangedEvent,
@@ -33,7 +34,6 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.hook.hook_event import HookDecision
 from app.core.hook.hook_result import HookResult
-from app.core.llm_provider.messages import AIMessage, ToolMessage
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import (
     ToolCall,
@@ -43,9 +43,9 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
 from app.core.tools.tool_handler.read_file import ReadFileTool
 from app.core.tools.tool_registry import ToolRegistry
-from app.core.workflows.react.execution_state.route import ReactRoute
-from app.core.workflows.react.execution_state.state import ReactExecutionState
-from app.core.workflows.react.node_helper.tool_call_lifecycle import (
+from app.core.workflow.execution_state.route import ReactRoute
+from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
@@ -97,11 +97,11 @@ class _LifecycleHarness:
             all_vaild_tools=self.model_tools,
             model_tools=self.model_tools,
             allows_tools=frozenset(self.allows_tools),
-            to_tool_model_message=lambda observation: ToolMessage(
-                content=str(observation.content or observation.error or ""),
-                tool_call_id=observation.tool_call_id,
-                name=observation.tool_name,
-            ),
+            to_tool_model_message=lambda observation: {
+                "role": "tool",
+                "content": str(observation.content or observation.error or ""),
+                "tool_call_id": observation.tool_call_id,
+            },
         )
         self.runtime_config = SimpleNamespace(
             operations=self.operations,
@@ -604,8 +604,13 @@ def test_t3_settle_closes_unregistered_tool_name_record_silently() -> None:
     harness = _LifecycleHarness(registered_tool_names=("read_file",))
     with harness.runtime():
         classified = harness.manager.classify(
-            tool_calls=[{"id": "ghost-1", "name": "ghost_tool", "args": {}}],
-            invalid_tool_calls=[],
+            tool_calls=[
+                {
+                    "id": "ghost-1",
+                    "type": "function",
+                    "function": {"name": "ghost_tool", "arguments": json.dumps({})},
+                }
+            ],
         )
 
     # 前置事实：未注册名进 valid_calls，且未发任何创建事件、未投影为 part。
@@ -626,7 +631,7 @@ def test_t3_settle_closes_unregistered_tool_name_record_silently() -> None:
     assert harness.writer.status_events == [], f"实发事件={harness.writer.status_events}"
     assert updated.valid_calls["ghost-1"].status == "completed"
     # 模型侧协议照常闭合（写一条 ToolMessage），并带隐藏标记。
-    assert [message.tool_call_id for message in harness.messages] == ["ghost-1"]
+    assert [message.get("tool_call_id") for message in harness.messages] == ["ghost-1"]
     assert harness.metadata[-1].get("hidden") is True
 
 
@@ -640,8 +645,13 @@ def test_t3_cancel_skips_the_same_unregistered_record() -> None:
     harness = _LifecycleHarness(registered_tool_names=("read_file",))
     with harness.runtime():
         classified = harness.manager.classify(
-            tool_calls=[{"id": "ghost-1", "name": "ghost_tool", "args": {}}],
-            invalid_tool_calls=[],
+            tool_calls=[
+                {
+                    "id": "ghost-1",
+                    "type": "function",
+                    "function": {"name": "ghost_tool", "arguments": json.dumps({})},
+                }
+            ],
         )
         cancelled = classified.cancel(task_id=11, run_id=200, step_id="step-3")
 
@@ -686,8 +696,13 @@ def test_t3_blocked_call_is_closed_silently_by_settle() -> None:
     )
     with harness.runtime():
         classified = harness.manager.classify(
-            tool_calls=[{"id": "hidden-1", "name": "write_file", "args": {"path": "b.txt"}}],
-            invalid_tool_calls=[],
+            tool_calls=[
+                {
+                    "id": "hidden-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                }
+            ],
         )
 
     assert "hidden-1" in classified.blocked_calls
@@ -708,7 +723,7 @@ def test_t3_blocked_call_is_closed_silently_by_settle() -> None:
 
     assert event_status == "failed"
     assert harness.writer.status_events == []
-    assert [message.tool_call_id for message in harness.messages] == ["hidden-1"]
+    assert [message.get("tool_call_id") for message in harness.messages] == ["hidden-1"]
     assert updated.blocked_calls["hidden-1"].status == "failed"
 
 
@@ -722,8 +737,13 @@ def test_t3_settle_is_idempotent_for_already_terminal_records() -> None:
     harness = _LifecycleHarness(registered_tool_names=("read_file",))
     with harness.runtime():
         classified = harness.manager.classify(
-            tool_calls=[{"id": "call-1", "name": "read_file", "args": {"path": "a.txt"}}],
-            invalid_tool_calls=[],
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                }
+            ],
         )
         first, _ = classified.settle(task_id=11, run_id=200, step_id="step-3", summary=_summary())
         second, _ = first.settle(task_id=11, run_id=200, step_id="step-3", summary=_summary())
@@ -750,10 +770,17 @@ def test_t3_cancel_settles_registered_allowed_call_but_skips_blocked() -> None:
     with harness.runtime():
         classified = harness.manager.classify(
             tool_calls=[
-                {"id": "ok-1", "name": "read_file", "args": {"path": "a.txt"}},
-                {"id": "blocked-1", "name": "write_file", "args": {"path": "b.txt"}},
+                {
+                    "id": "ok-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
+                {
+                    "id": "blocked-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
             ],
-            invalid_tool_calls=[],
         )
         cancelled = classified.cancel(task_id=11, run_id=200, step_id="step-3")
 
@@ -782,9 +809,21 @@ def test_t3_create_projects_only_allowed_bucket() -> None:
             run_id=200,
             step_id="step-3",
             raw_tool_calls=[
-                {"id": "ok-1", "name": "read_file", "args": {"path": "a.txt"}},
-                {"id": "blocked-1", "name": "write_file", "args": {"path": "b.txt"}},
-                {"id": "ghost-1", "name": "ghost_tool", "args": "{'broken':"},
+                {
+                    "id": "ok-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
+                {
+                    "id": "blocked-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
+                {
+                    "id": "ghost-1",
+                    "type": "function",
+                    "function": {"name": "ghost_tool", "arguments": "{'broken':"},
+                },
             ],
         )
 
@@ -792,7 +831,7 @@ def test_t3_create_projects_only_allowed_bucket() -> None:
     assert "blocked-1" in created.blocked_calls
     assert "ghost-1" in created.valid_calls
     # 未闭合 JSON 片段（str）被放进保留键，而不是被抹成空参数。
-    assert created.valid_calls["ghost-1"].args == {"Invaild_args": "{'broken':"}
+    assert created.valid_calls["ghost-1"].args == {}
 
 
 def test_t3_settle_batch_error_counting_and_lifecycle_writeback() -> None:
@@ -809,8 +848,13 @@ def test_t3_settle_batch_error_counting_and_lifecycle_writeback() -> None:
     harness = _LifecycleHarness(registered_tool_names=("read_file",))
     with harness.runtime():
         classified = harness.manager.classify(
-            tool_calls=[{"id": "c1", "name": "read_file", "args": {"path": "a.txt"}}],
-            invalid_tool_calls=[],
+            tool_calls=[
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                }
+            ],
         )
         result = classified.settle_batch(
             task_id=11,
@@ -852,7 +896,7 @@ def _ai_row(tool_calls: list[dict[str, Any]]) -> ConversationTaskContextRecord:
         id=1,
         task_id=7,
         run_id=1,
-        message=AIMessage(content="", tool_calls=tool_calls),
+        message={"role": "assistant", "content": "", "tool_calls": tool_calls},
         include_in_context=False,
         sequence=1,
     )
@@ -869,7 +913,7 @@ def _tool_row(
         id=row_id,
         task_id=7,
         run_id=1,
-        message=ToolMessage(content=content, tool_call_id=tool_call_id),
+        message={"role": "tool", "content": content, "tool_call_id": tool_call_id},
         include_in_context=False,
         sequence=sequence,
         transport_metadata=metadata,
@@ -893,8 +937,16 @@ def test_t4_cold_rebuild_skips_the_hidden_disabled_call(
     rows = [
         _ai_row(
             [
-                {"id": "normal-1", "name": "read_file", "args": {"path": "a.txt"}},
-                {"id": "hidden-1", "name": "write_file", "args": {"path": "b.txt"}},
+                {
+                    "id": "normal-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
+                {
+                    "id": "hidden-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
             ]
         ),
         _tool_row(
@@ -942,8 +994,16 @@ def test_t4_cold_rebuild_hidden_call_without_result_stays_cancelled(
     rows = [
         _ai_row(
             [
-                {"id": "normal-1", "name": "read_file", "args": {"path": "a.txt"}},
-                {"id": "hidden-1", "name": "write_file", "args": {"path": "b.txt"}},
+                {
+                    "id": "normal-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
+                {
+                    "id": "hidden-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
             ]
         ),
         _tool_row(
@@ -987,8 +1047,16 @@ def test_t4_live_and_cold_projection_agree_on_one_part(
             run_id=200,
             step_id="step-3",
             raw_tool_calls=[
-                {"id": "normal-1", "name": "read_file", "args": {"path": "a.txt"}},
-                {"id": "hidden-1", "name": "write_file", "args": {"path": "b.txt"}},
+                {
+                    "id": "normal-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
+                {
+                    "id": "hidden-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
             ],
         )
 
@@ -999,8 +1067,16 @@ def test_t4_live_and_cold_projection_agree_on_one_part(
     rows = [
         _ai_row(
             [
-                {"id": "normal-1", "name": "read_file", "args": {"path": "a.txt"}},
-                {"id": "hidden-1", "name": "write_file", "args": {"path": "b.txt"}},
+                {
+                    "id": "normal-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
+                {
+                    "id": "hidden-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
             ]
         ),
         _tool_row(
@@ -1049,6 +1125,7 @@ def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
         usage=None,
         error=None,
         input_text="",
+        context_window_total=None,
         image_paths=None,
         extra=None,
         created_at=None,
@@ -1057,8 +1134,16 @@ def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
     rows = [
         _ai_row(
             [
-                {"id": "normal-1", "name": "read_file", "args": {"path": "a.txt"}},
-                {"id": "hidden-1", "name": "write_file", "args": {"path": "b.txt"}},
+                {
+                    "id": "normal-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
+                {
+                    "id": "hidden-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
             ]
         ),
         _tool_row(
@@ -1104,7 +1189,15 @@ def test_t4_orphan_tool_message_raises_runtime_error(
         lambda: _FakeRebuildRegistry(("read_file",)),
     )
     rows = [
-        _ai_row([{"id": "normal-1", "name": "read_file", "args": {"path": "a.txt"}}]),
+        _ai_row(
+            [
+                {
+                    "id": "normal-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                }
+            ]
+        ),
         _tool_row(
             2,
             "orphan-9",
@@ -1188,8 +1281,13 @@ def test_t4_delegation_display_data_backfills_child_locators(
             [
                 {
                     "id": "delegate-1",
-                    "name": "delegate_task",
-                    "args": {"child_agent_id": "reviewer", "message": "review"},
+                    "type": "function",
+                    "function": {
+                        "name": "delegate_task",
+                        "arguments": json.dumps(
+                            {"child_agent_id": "reviewer", "message": "review"}
+                        ),
+                    },
                 }
             ]
         ),
@@ -1242,10 +1340,17 @@ def test_t4_hidden_marksurvives_from_settle_to_cold_rebuild(
     with harness.runtime():
         classified = harness.manager.classify(
             tool_calls=[
-                {"id": "normal-1", "name": "read_file", "args": {"path": "a.txt"}},
-                {"id": "hidden-1", "name": "write_file", "args": {"path": "b.txt"}},
+                {
+                    "id": "normal-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
+                {
+                    "id": "hidden-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
             ],
-            invalid_tool_calls=[],
         )
     assert list(classified.valid_calls) == ["normal-1"]
     assert list(classified.blocked_calls) == ["hidden-1"]
@@ -1271,8 +1376,16 @@ def test_t4_hidden_marksurvives_from_settle_to_cold_rebuild(
     rows = [
         _ai_row(
             [
-                {"id": "normal-1", "name": "read_file", "args": {"path": "a.txt"}},
-                {"id": "hidden-1", "name": "write_file", "args": {"path": "b.txt"}},
+                {
+                    "id": "normal-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
+                {
+                    "id": "hidden-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
             ]
         ),
         _tool_row(

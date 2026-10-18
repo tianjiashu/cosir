@@ -1,18 +1,16 @@
+import json
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+)
 
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_context_manager import RuntimeContextManager
-from app.core.llm_provider.messages import (
-    AIMessage,
-    AIMessageChunk,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from tests.sdk_fixtures import sdk_completion
 
 
 class _ContextService:
@@ -41,9 +39,11 @@ class _ContextService:
         transport_metadata: object = None,
         is_streaming: bool = False,
         project_to_transport: bool = True,
-    ) -> None:
+        metadata=None,
+    ) -> ContextEntry:
         self.appended.append((task_id, run_id, message, seq, include_in_context))
         self.current_max_sequence = seq
+        return ContextEntry(message, run_id, seq, metadata=metadata or {})
 
     def streaming_messages_for_run(self, _task_id: int, _run_id: int) -> list[object]:
         return []
@@ -60,20 +60,28 @@ def _manager(context_service: _ContextService, *, next_sequence: int = 0) -> Run
     manager.compressor = None
     manager.context_service = context_service
     manager.current_run_id = None
-    manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
+    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     manager._entries = []
     manager._message_sequence = next_sequence
     manager._streaming_messages = {}
     return manager
 
 
-def _ai_message(*call_ids: str) -> AIMessage:
+def _ai_message(*call_ids: str) -> ChatCompletionAssistantMessageParam:
     """构造带工具调用的 AI 消息：配对规则以「最后一条携带 ``tool_calls`` 的 AI 消息」为目标。"""
 
-    return AIMessage(
-        content="",
-        tool_calls=[{"name": "read_file", "args": {}, "id": call_id} for call_id in call_ids],
-    )
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": "read_file", "arguments": json.dumps({})},
+            }
+            for call_id in call_ids
+        ],
+    }
 
 
 def test_runtime_context_manager_owns_next_sequence_after_run_restart() -> None:
@@ -84,7 +92,7 @@ def test_runtime_context_manager_owns_next_sequence_after_run_restart() -> None:
     manager.begin_run(
         SimpleNamespace(task_id=7, id=2),
     )
-    manager.add_message(HumanMessage(content="second message"))
+    manager.add_message({"role": "user", "content": "second message"})
 
     assert context_service.appended[0][3] == 2
     assert manager._message_sequence == 3
@@ -93,7 +101,7 @@ def test_runtime_context_manager_owns_next_sequence_after_run_restart() -> None:
 def test_runtime_context_manager_resume_keeps_persisted_run_entries() -> None:
     context_service = _ContextService(max_sequence=4)
     context_service.loaded = [
-        ContextEntry(HumanMessage(content="existing"), 2, 3),
+        ContextEntry({"role": "user", "content": "existing"}, 2, 3),
     ]
     manager = _manager(context_service, next_sequence=5)
     manager._entries = list(context_service.loaded)
@@ -114,29 +122,36 @@ def test_load_message_moves_existing_tool_result_before_later_human_message() ->
     context_service = _ContextService(max_sequence=4)
     context_service.loaded = [
         ContextEntry(
-            AIMessage(
-                content="",
-                tool_calls=[{"name": "execute_terminal", "args": {}, "id": "call-1"}],
-            ),
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "execute_terminal", "arguments": json.dumps({})},
+                    }
+                ],
+            },
             1,
             1,
         ),
-        ContextEntry(HumanMessage(content="continue"), 2, 2),
-        ContextEntry(ToolMessage(content="cancelled", tool_call_id="call-1"), 2, 3),
+        ContextEntry({"role": "user", "content": "continue"}, 2, 2),
+        ContextEntry({"role": "tool", "content": "cancelled", "tool_call_id": "call-1"}, 1, 3),
     ]
     manager = _manager(context_service)
     manager._entries = list(context_service.loaded)
 
     messages = manager.load_message()
 
-    assert [type(message) for message in messages] == [
-        SystemMessage,
-        AIMessage,
-        ToolMessage,
-        HumanMessage,
+    assert [message["role"] for message in messages] == [
+        "system",
+        "assistant",
+        "tool",
+        "user",
     ]
-    assert messages[2].tool_call_id == "call-1"
-    assert messages[3].content == "continue"
+    assert messages[2].get("tool_call_id") == "call-1"
+    assert messages[3].get("content") == "continue"
     assert context_service.appended == []
 
 
@@ -147,10 +162,10 @@ def test_streaming_draft_is_finalized_in_place_into_one_context_row() -> None:
     manager = _manager(context_service, next_sequence=5)
     manager.current_run_id = 2
 
-    first = manager.add_message_chunk(AIMessageChunk(content="你好"), stream_id="step-1")
-    manager.add_message_chunk(AIMessageChunk(content="，世界"), stream_id="step-1")
+    first = manager.save_stream_snapshot(sdk_completion(content="你好"), stream_id="step-1")
+    manager.save_stream_snapshot(sdk_completion(content="你好，世界"), stream_id="step-1")
 
-    assert first.content == "你好"
+    assert first.get("content") == "你好"
     assert manager._message_sequence == 6
     assert manager._entries == []
     assert len(context_service.appended) == 1
@@ -167,7 +182,7 @@ def test_streaming_draft_is_finalized_in_place_into_one_context_row() -> None:
     assert manager._streaming_messages[(2, "step-1")].persisted_text_length == len("你好，世界")
 
     # 收口（flush 的 finalize 态）一次完成：丢弃内存草稿状态 + 原地写入调用方交付的修订版。
-    revised = AIMessage(content="你好，世界", tool_calls=[])
+    revised = {"role": "assistant", "content": "你好，世界", "tool_calls": []}
     returned = manager.flush_message_chunk(
         stream_id="step-1", run_id=2, mode="finalize", message=revised
     )
@@ -207,7 +222,7 @@ def test_flush_rejects_unknown_mode() -> None:
     context_service = _ContextService(max_sequence=4)
     manager = _manager(context_service, next_sequence=5)
     manager.current_run_id = 2
-    manager.add_message_chunk(AIMessageChunk(content="半截"), stream_id="step-1")
+    manager.save_stream_snapshot(sdk_completion(content="半截"), stream_id="step-1")
 
     with pytest.raises(ValueError):
         manager.flush_message_chunk(stream_id="step-1", mode=cast(Any, "complete"))
@@ -223,10 +238,12 @@ def test_flush_rejects_message_outside_finalize_mode() -> None:
     context_service = _ContextService(max_sequence=4)
     manager = _manager(context_service, next_sequence=5)
     manager.current_run_id = 2
-    manager.add_message_chunk(AIMessageChunk(content="半截"), stream_id="step-1")
+    manager.save_stream_snapshot(sdk_completion(content="半截"), stream_id="step-1")
 
     with pytest.raises(ValueError):
-        manager.flush_message_chunk(stream_id="step-1", message=AIMessage(content="修订版"))
+        manager.flush_message_chunk(
+            stream_id="step-1", message={"role": "assistant", "content": "修订版"}
+        )
 
     # 报错发生在写入之前：内存草稿仍在，且没有发生任何原地写入。
     assert list(manager._streaming_messages) == [(2, "step-1")]
@@ -244,10 +261,10 @@ def test_add_message_replaces_paired_tool_result_row_in_place() -> None:
     manager = _manager(context_service, next_sequence=5)
     manager.current_run_id = 2
     manager.add_message(_ai_message("call-1"))
-    manager.add_message(ToolMessage(content="placeholder", tool_call_id="call-1"))
+    manager.add_message({"role": "tool", "content": "placeholder", "tool_call_id": "call-1"})
 
     outcome = manager.add_message(
-        ToolMessage(content="real", tool_call_id="call-1"),
+        {"role": "tool", "content": "real", "tool_call_id": "call-1"},
         transport_metadata={"status": "completed"},
     )
 
@@ -257,7 +274,7 @@ def test_add_message_replaces_paired_tool_result_row_in_place() -> None:
     assert replaced.sequence == 6
     assert replaced.include_in_context is True
     assert replaced.transport_metadata == {"status": "completed"}
-    assert [entry.message.content for entry in manager._entries] == ["", "real"]
+    assert [entry.message.get("content") for entry in manager._entries] == ["", "real"]
     assert manager._message_sequence == 7, "覆盖不得推进序号游标"
 
 
@@ -272,10 +289,12 @@ def test_add_message_appends_when_same_run_reuses_call_id_in_a_later_step() -> N
     manager = _manager(context_service, next_sequence=5)
     manager.current_run_id = 2
     manager.add_message(_ai_message("call-1"))
-    manager.add_message(ToolMessage(content="step1 result", tool_call_id="call-1"))
+    manager.add_message({"role": "tool", "content": "step1 result", "tool_call_id": "call-1"})
     manager.add_message(_ai_message("call-1"))
 
-    outcome = manager.add_message(ToolMessage(content="step2 result", tool_call_id="call-1"))
+    outcome = manager.add_message(
+        {"role": "tool", "content": "step2 result", "tool_call_id": "call-1"}
+    )
 
     assert outcome == "appended"
     assert [
@@ -283,13 +302,13 @@ def test_add_message_appends_when_same_run_reuses_call_id_in_a_later_step() -> N
         for item in context_service.appended
         if isinstance(item[2], ConversationTaskContextRecord)
     ] == [], "上一 model 步的结果行不得被覆盖"
-    assert [entry.message.content for entry in manager._entries][-2:] == ["", "step2 result"]
+    assert [entry.message.get("content") for entry in manager._entries][-2:] == ["", "step2 result"]
 
 
 def test_add_message_does_not_overwrite_another_run_row_with_same_tool_call_id() -> None:
     """同一 ``tool_call_id`` 可跨 Run 复用：不得覆盖别的 Run 已有的结果行。
 
-    判据沿用 ``plan_tool_call_closure`` 的配对规则（只认目标 ``AIMessage`` 之后、同 Run 的既有
+    判据沿用 ``plan_tool_call_closures`` 的配对规则（只认目标 ``AIMessage`` 之后、同 Run 的既有
     结果行），因此「当前 Run 的调用没有结果、别的 Run 用了同一个 id」时必须走追加。
     """
 
@@ -297,16 +316,18 @@ def test_add_message_does_not_overwrite_another_run_row_with_same_tool_call_id()
     manager = _manager(context_service, next_sequence=5)
     manager.current_run_id = 1
     manager.add_message(_ai_message("call-1"))
-    manager.add_message(ToolMessage(content="run1 result", tool_call_id="call-1"))
+    manager.add_message({"role": "tool", "content": "run1 result", "tool_call_id": "call-1"})
 
     # 切到 run 2，模型复用同一 id，并写它的真实结果。
     manager.current_run_id = 2
     manager.add_message(_ai_message("call-1"))
 
-    outcome = manager.add_message(ToolMessage(content="run2 result", tool_call_id="call-1"))
+    outcome = manager.add_message(
+        {"role": "tool", "content": "run2 result", "tool_call_id": "call-1"}
+    )
 
     assert outcome == "appended"
-    assert [entry.message.content for entry in manager._entries][2:] == ["", "run2 result"]
+    assert [entry.message.get("content") for entry in manager._entries][2:] == ["", "run2 result"]
     assert [
         item[2]
         for item in context_service.appended
@@ -321,8 +342,8 @@ def test_flush_message_chunk_cancel_drops_state_but_persists_partial() -> None:
     manager = _manager(context_service, next_sequence=5)
     manager.current_run_id = 2
 
-    manager.add_message_chunk(AIMessageChunk(content="你好"), stream_id="step-1")
-    manager.add_message_chunk(AIMessageChunk(content="，世界"), stream_id="step-1")
+    manager.save_stream_snapshot(sdk_completion(content="你好"), stream_id="step-1")
+    manager.save_stream_snapshot(sdk_completion(content="你好，世界"), stream_id="step-1")
     assert manager._streaming_messages != {}
 
     result = manager.flush_message_chunk(stream_id="step-1", mode="cancel")
@@ -336,4 +357,4 @@ def test_flush_message_chunk_cancel_drops_state_but_persists_partial() -> None:
     assert record.is_streaming is True
     assert record.include_in_context is False
     # 返回截至当前的聚合消息
-    assert result is not None and result.content == "你好，世界"
+    assert result is not None and result.get("content") == "你好，世界"

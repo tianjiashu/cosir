@@ -32,7 +32,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.stream import TransportFrame
 from app.config.constant import Constant
-from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
 

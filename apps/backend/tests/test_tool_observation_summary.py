@@ -10,23 +10,22 @@
 """
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
-from app.core.llm_provider.messages import ToolMessage
+import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolObservation
-from app.core.workflows.react.execution_state.route import ReactRoute
-from app.core.workflows.react.execution_state.state import ReactExecutionState
-from app.core.workflows.react.node_helper.tool_call_lifecycle import (
+from app.core.workflow.execution_state.route import ReactRoute
+from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
-from app.core.workflows.react.nodes import observation_node as observe_module
-from app.core.workflows.react.nodes import tools_node as tools_module
+from app.core.workflow.nodes import tools_node as tools_module, observation_node as observe_module
 
 
 def _state(**overrides: Any) -> ReactExecutionState:
@@ -59,7 +58,7 @@ def _pending_lifecycle(tool_request: dict[str, Any] | None) -> ToolCallLifecycle
         valid_calls={
             call["id"]: ToolCallLifecycleRecord(
                 tool_call_id=call["id"],
-                tool_name=call["name"],
+                tool_name=call["function"]["name"],
                 status="pending",
             )
             for call in calls
@@ -79,16 +78,18 @@ class _WorkflowHarness:
             return ToolRunResult(observations=observations)
 
         self.operations = SimpleNamespace(
-            model_tools=[SimpleNamespace(name="list_directory", display=None)],
-            all_vaild_tools=[SimpleNamespace(name="list_directory", display=None)],
+            model_tools=[SimpleNamespace(name="list_directory", display=None, need_HIL=False)],
+            all_vaild_tools=[SimpleNamespace(name="list_directory", display=None, need_HIL=False)],
             allows_tools=frozenset({"list_directory"}),
             get_current_task=lambda: SimpleNamespace(id=1),
             get_current_run=lambda: SimpleNamespace(id=2),
             is_current_run_cancelled=lambda: False,
             run_tool_calls=run_tool_calls,
-            to_tool_model_message=lambda observation: ToolMessage(
-                content=observation.content, tool_call_id=observation.tool_call_id
-            ),
+            to_tool_model_message=lambda observation: {
+                "role": "tool",
+                "content": observation.content,
+                "tool_call_id": observation.tool_call_id,
+            },
         )
         # ``run`` 供 ``begin`` 发 running 事件时定位（run_id）；缺失会在工具节点内 AttributeError。
         self.runtime_config = SimpleNamespace(
@@ -133,7 +134,13 @@ def test_tools_summary_uses_tool_call_id_key(monkeypatch: pytest.MonkeyPatch) ->
         tools_module._tools_node(
             _state(
                 tool_request={
-                    "tool_calls": [{"name": "list_directory", "args": {}, "id": "call-1"}]
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "list_directory", "arguments": json.dumps({})},
+                        }
+                    ]
                 },
                 instruction="看看目录",
             )
@@ -164,7 +171,15 @@ def test_tools_summary_feeds_observe_without_key_error(
     )
     harness.patch(monkeypatch)
     state = _state(
-        tool_request={"tool_calls": [{"name": "list_directory", "args": {}, "id": "call-1"}]},
+        tool_request={
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "list_directory", "arguments": json.dumps({})},
+                }
+            ]
+        },
         instruction="看看目录",
     )
 
@@ -185,8 +200,8 @@ def test_tools_summary_feeds_observe_without_key_error(
     status_events = [event for event in harness.events if event.type == "tool_call_status_changed"]
     assert [event.status for event in status_events] == ["running", "completed"]
     assert [event.tool_call_id for event in status_events] == ["call-1", "call-1"]
-    assert isinstance(harness.messages[-1], ToolMessage)
-    assert harness.messages[-1].tool_call_id == "call-1"
+    assert harness.messages[-1]["role"] == "tool"
+    assert harness.messages[-1].get("tool_call_id") == "call-1"
 
 
 def test_observe_settles_failed_observation_from_tools_summary(
@@ -214,7 +229,13 @@ def test_observe_settles_failed_observation_from_tools_summary(
         tools_module._tools_node(
             _state(
                 tool_request={
-                    "tool_calls": [{"name": "list_directory", "args": {}, "id": "call-9"}]
+                    "tool_calls": [
+                        {
+                            "id": "call-9",
+                            "type": "function",
+                            "function": {"name": "list_directory", "arguments": json.dumps({})},
+                        }
+                    ]
                 },
                 instruction="",
             )
@@ -237,5 +258,5 @@ def test_observe_settles_failed_observation_from_tools_summary(
     status_events = [event for event in harness.events if event.type == "tool_call_status_changed"]
     assert [event.status for event in status_events] == ["running", "failed"]
     assert status_events[-1].error == "目录不存在"
-    assert isinstance(harness.messages[-1], ToolMessage)
-    assert harness.messages[-1].tool_call_id == "call-9"
+    assert harness.messages[-1]["role"] == "tool"
+    assert harness.messages[-1].get("tool_call_id") == "call-9"

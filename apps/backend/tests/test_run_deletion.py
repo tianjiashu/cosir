@@ -7,7 +7,6 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 
 from app.api.tasks_api import delete_run as delete_run_endpoint
-from app.core.llm_provider.messages import HumanMessage
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.deletion_errors import DeletionBusyError, RunDeletionConflictError
 from app.service.depends import (
@@ -64,7 +63,7 @@ def test_delete_middle_run_removes_only_its_data(storage) -> None:
             ConversationTaskContextRecord(
                 task_id=task.id,
                 run_id=run.id,
-                message=HumanMessage(content=f"message-{seq}"),
+                message={"role": "user", "content": f"message-{seq}"},
                 include_in_context=True,
                 sequence=seq,
             )

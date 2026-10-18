@@ -16,7 +16,6 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
-from app.core.llm_provider.messages import AIMessage, ToolMessage
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.task_record import TaskRecord
@@ -57,10 +56,17 @@ def _rows(
         ConversationTaskContextRecord(
             task_id=1,
             run_id=10,
-            message=AIMessage(
-                content="",
-                tool_calls=[{"id": call_id, "name": "terminal_start", "args": {}}],
-            ),
+            message={
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "terminal_start", "arguments": json.dumps({})},
+                    }
+                ],
+            },
             include_in_context=True,
             sequence=1,
             transport_metadata={},
@@ -68,7 +74,7 @@ def _rows(
         ConversationTaskContextRecord(
             task_id=1,
             run_id=10,
-            message=ToolMessage(content="started", tool_call_id=call_id),
+            message={"role": "tool", "content": "started", "tool_call_id": call_id},
             include_in_context=True,
             sequence=2,
             transport_metadata={
@@ -261,6 +267,8 @@ def test_terminal_metadata_update_is_atomic_and_preserves_other_transport_fields
         with Session(engine) as session:
             session.add(
                 ConversationTaskContextModel(
+                    message_id="test-message",
+                    metadata_json="{}",
                     task_id=1,
                     run_id=10,
                     sequence=2,

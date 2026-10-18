@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,9 +19,8 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
-from app.core.llm_provider.messages import AIMessage, HumanMessage, ToolMessage
 from app.core.runtime.conversation_run_executor import ConversationRunExecutor
-from app.core.workflows.workflow_operations import WorkflowOperations
+from app.core.workflow.workflow_operations import WorkflowOperations
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -32,7 +32,6 @@ from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import initialize_app_schema
-from app.task_runtime.service.task_service import TaskService
 
 
 def _timestamp(second: int = 0) -> datetime:
@@ -63,31 +62,6 @@ def _task(task_id: int = 7) -> TaskRecord:
     )
 
 
-def _metadata(parts: list[dict[str, object]], status: str = "success") -> dict[str, object]:
-    return {
-        "schema_version": 1,
-        "parts": parts,
-        "tool_result": {
-            "status": status,
-            "display_data": {"kind": "read-file-meta"},
-            "status_hint": None,
-            "error": None,
-        },
-    }
-
-
-def _plain_metadata() -> dict[str, object]:
-    """Return metadata valid for a non-tool context message."""
-
-    return {"schema_version": 1, "parts": [], "tool_result": None}
-
-
-def _call_metadata(parts: list[dict[str, object]]) -> dict[str, object]:
-    """Return metadata valid for an AI message carrying tool-call parts."""
-
-    return {"schema_version": 1, "parts": parts, "tool_result": None}
-
-
 def _context_row(
     row_id: int,
     run_id: int,
@@ -102,7 +76,7 @@ def _context_row(
         message=message,
         include_in_context=True,
         sequence=sequence,
-        transport_metadata=metadata or _metadata([]),
+        transport_metadata=metadata,
     )
 
 
@@ -272,32 +246,29 @@ def test_rebuilder_scopes_same_provider_tool_call_id_per_run(
         staticmethod(lambda _name: {"verb": "Read"}),
     )
     call_id = "provider-call-reused"
-    tool_part = {
-        "type": "tool-call",
-        "toolCallId": call_id,
-        "toolName": "read_file",
-        "status": "pending",
-        "args": {},
-        "presentation": {},
-        "isError": False,
-    }
     rows = [
-        _context_row(101, 11, HumanMessage(content="one"), 1, _plain_metadata()),
+        _context_row(101, 11, {"role": "user", "content": "one"}, 1),
         _context_row(
             102,
             11,
-            AIMessage(
-                content="answer",
-                tool_calls=[{"name": "read_file", "args": {}, "id": call_id}],
-                additional_kwargs={"reasoning_content": None},
-            ),
+            {
+                "role": "assistant",
+                "content": "answer",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": json.dumps({})},
+                    }
+                ],
+                "reasoning_content": None,
+            },
             2,
-            _call_metadata([tool_part]),
         ),
         _context_row(
             103,
             11,
-            ToolMessage(content="one result", tool_call_id=call_id),
+            {"role": "tool", "content": "one result", "tool_call_id": call_id},
             3,
             {
                 "status": "completed",
@@ -306,22 +277,28 @@ def test_rebuilder_scopes_same_provider_tool_call_id_per_run(
                 "error": None,
             },
         ),
-        _context_row(201, 12, HumanMessage(content="two"), 4, _plain_metadata()),
+        _context_row(201, 12, {"role": "user", "content": "two"}, 4),
         _context_row(
             202,
             12,
-            AIMessage(
-                content="answer",
-                tool_calls=[{"name": "read_file", "args": {}, "id": call_id}],
-                additional_kwargs={"reasoning_content": None},
-            ),
+            {
+                "role": "assistant",
+                "content": "answer",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": json.dumps({})},
+                    }
+                ],
+                "reasoning_content": None,
+            },
             5,
-            _call_metadata([tool_part]),
         ),
         _context_row(
             203,
             12,
-            ToolMessage(content="two result", tool_call_id=call_id),
+            {"role": "tool", "content": "two result", "tool_call_id": call_id},
             6,
             {
                 "status": "completed",
@@ -346,14 +323,12 @@ def test_rebuilder_scopes_same_provider_tool_call_id_per_run(
     )
 
 
-def test_task_service_reads_persisted_context_window_without_capability_lookup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    persisted_task = _task()
-    persisted_task.context_window_total = 8192
-    service = TaskService.__new__(TaskService)
-    service._task = SimpleNamespace(get=lambda _task_id: persisted_task)
-    assert service.get_context_window_total(7) == 8192
+def test_rebuild_reads_run_owned_context_windows_without_capability_lookup() -> None:
+    runs = [_run(11), _run(12)]
+    runs[0].context_window_total = 8192
+    runs[1].context_window_total = 16384
+    state = ConversationTaskStateRebuilder.rebuild(_task(), runs, [])
+    assert [run["contextWindowTotal"] for run in state["runs"]] == [8192, 16384]
 
 
 @pytest.fixture

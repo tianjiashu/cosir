@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.core.workflows.react import workflow as module
-from app.core.workflows.react.execution_state.route import ReactRoute
+import app.core.workflow.workflow as module
+from app.core.workflow.execution_state.route import ReactRoute
+from tests.sdk_fixtures import sdk_completion
 
 
 @pytest.fixture
@@ -114,11 +115,12 @@ async def test_wait_returns_without_extra_model_or_queue(loop, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ["success", "invalid", "error", "cancel", "tools"])
+@pytest.mark.parametrize(
+    "outcome", ["success", "invalid", "error", "cancel", "tools", "tools_empty", "truncated"]
+)
 async def test_structured_output_finishes_before_run_completion(loop, monkeypatch, outcome):
     """格式化期间仍属原 Run；仅完整校验后完成，队列不在格式化请求前消费。"""
-    from app.core.llm_provider.messages import AIMessage
-    from app.core.workflows.react.nodes import structured_output_node as structured
+    from app.core.workflow.nodes import structured_output_node as structured
 
     context = SimpleNamespace(load_message=lambda: [])
     monkeypatch.setattr(structured, "_runtime_context", lambda: context)
@@ -136,17 +138,29 @@ async def test_structured_output_finishes_before_run_completion(loop, monkeypatc
     async def complete(messages, **kw):
         assert outputs == []
         loop.calls.append("format")
-        assert all(not message.tool_calls for message in messages if isinstance(message, AIMessage))
-        if outcome == "tools":
-            return AIMessage(
-                content='{"ok":true}',
-                tool_calls=[{"id": "unexpected", "name": "write_file", "args": {}}],
+        assert all(message.get("content") is not None for message in messages)
+        assert all(
+            not message.get("tool_calls") for message in messages if message["role"] == "assistant"
+        )
+        if outcome in {"tools", "tools_empty"}:
+            return sdk_completion(
+                '{"ok":true}' if outcome == "tools" else None,
+                tool_calls=[
+                    {
+                        "id": "unexpected",
+                        "type": "function",
+                        "function": {"name": "write_file", "arguments": "{}"},
+                    }
+                ],
             )
         if outcome == "error":
             raise ConnectionError("provider unavailable")
         if outcome == "cancel":
             loop.ops.is_current_run_cancelled = lambda: True
-        return AIMessage(content='{"ok":true}' if outcome != "invalid" else "invalid")
+        return sdk_completion(
+            '{"ok":true}' if outcome != "invalid" else "invalid",
+            finish_reason="length" if outcome == "truncated" else "stop",
+        )
 
     loop.model.complete = complete
     monkeypatch.setattr(module, "_model_node", model)
@@ -157,9 +171,13 @@ async def test_structured_output_finishes_before_run_completion(loop, monkeypatc
         await module.ReactLikeWorkflow().run(loop.ops)
     assert loop.calls.count("queue") == 1
     assert outputs == (
-        {"success": ['{"ok":true}'], "invalid": ["自然回答"], "tools": ["自然回答"]}.get(
-            outcome, []
-        )
+        {
+            "success": ['{"ok":true}'],
+            "invalid": ["自然回答"],
+            "tools": ["自然回答"],
+            "tools_empty": ["自然回答"],
+            "truncated": ["自然回答"],
+        }.get(outcome, [])
     )
     if outcome == "cancel":
         assert loop.calls[-1] == "cancel"

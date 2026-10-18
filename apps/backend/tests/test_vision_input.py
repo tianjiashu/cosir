@@ -1,22 +1,16 @@
-"""``resolve_messages_for_model`` 的图片引用解析契约。
-
-该链路此前完全没有用例覆盖，三处缺陷因此长期存在：把 langchain 的只读 property
-``content_blocks`` 当可写字段赋值、循环的「本条消息是否需要解析」判据写反（带图消息被跳过、
-纯文本消息被误处理）、转换结果缺 ``mime_type``（provider 适配器直接抛错）。本文件按「能被
-provider 消费」这一外部契约钉住该行为。
-"""
+"""SDK image_url 中的本机附件定位符只在模型请求副本中解析。"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
+from openai.types.chat import ChatCompletionUserMessageParam
 
-from app.core.llm_provider.messages import HumanMessage, SystemMessage
-from app.core.workflows import vision_input
+import app.core.workflow.vision_input as vision_input
 from app.models.errors.llm_provider_exceptions import VisionImageError
 
-_IMAGE_REF = {"type": "image", "file_id": "attachments/a.png"}
+_IMAGE_REF = {"type": "image_url", "image_url": {"url": "cosir-attachment://attachments/a.png"}}
 _TEXT = {"type": "text", "text": "看看这张图"}
 
 
@@ -51,10 +45,10 @@ def attachment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _FakeAttachme
     return service
 
 
-def _human(*blocks: dict[str, str]) -> HumanMessage:
+def _human(*blocks: dict[str, str]) -> ChatCompletionUserMessageParam:
     """按 canonical 形状构造人类消息（整块复制，避免用例间共享可变对象）。"""
 
-    return HumanMessage(content=[dict(block) for block in blocks])
+    return {"role": "user", "content": [dict(block) for block in blocks]}
 
 
 def test_mixed_history_resolves_only_the_image_message(
@@ -66,15 +60,15 @@ def test_mixed_history_resolves_only_the_image_message(
     with_image = _human(_TEXT, _IMAGE_REF)
 
     resolved = vision_input.resolve_messages_for_model(
-        [SystemMessage(content="sys"), plain, with_image], workspace_id=7
+        [{"role": "system", "content": "sys"}, plain, with_image], workspace_id=7
     )
 
     assert attachment.calls == [(7, "attachments/a.png")]
     # 入参不被改写；纯文本消息原样保留。
-    assert plain.content == [{"type": "text", "text": "先聊点别的"}]
-    assert resolved[1].content == [{"type": "text", "text": "先聊点别的"}]
+    assert plain.get("content") == [{"type": "text", "text": "先聊点别的"}]
+    assert resolved[1].get("content") == [{"type": "text", "text": "先聊点别的"}]
     # 带图消息被就地替换为已解析的图片块。
-    image_block = resolved[2].content[1]
+    image_block = resolved[2].get("content")[1]
     assert image_block["type"] == "image_url"
     assert (
         image_block["image_url"]["url"] == "data:image/png;base64,iVBORw0KGgpub3QtYS1yZWFsLXBuZw=="
@@ -85,31 +79,27 @@ def test_mixed_history_resolves_only_the_image_message(
 def test_resolved_block_converts_to_provider_image_url(
     attachment: _FakeAttachmentService,
 ) -> None:
-    """解析结果必须能被 provider 适配器转成 ``image_url`` data URL（缺 ``mime_type`` 会抛错）。"""
+    """解析结果直接满足 SDK 消息格式，无额外 provider 消息转换。"""
 
-    # 用适配器自身做断言：它正是生产路径构造 payload 的入口，能同时钉住块形状与 MIME。
-    from app.core.llm_provider.openai_model import to_provider_message
+    # 通过 SDK 类型校验，确认请求副本的块形状可直接上行。
+    from app.core.llm_provider.message_codec import validate_message
 
     resolved = vision_input.resolve_messages_for_model([_human(_TEXT, _IMAGE_REF)], workspace_id=1)
 
-    payload = to_provider_message(resolved[0])
+    payload = validate_message(resolved[0])
 
     image_block = payload["content"][1]
     assert image_block["type"] == "image_url"
     assert image_block["image_url"]["url"].startswith("data:image/png;base64,")
 
 
-def test_unresolved_reference_without_path_is_rejected(
-    attachment: _FakeAttachmentService,
-) -> None:
-    """``file_id`` 为空时必须显式失败，不得把坏块放行给 provider。"""
+def test_attachment_read_failure_propagates(attachment, monkeypatch):
+    def reject(*args):
+        raise VisionImageError("附件不可用")
 
+    monkeypatch.setattr(attachment, "resolve_for_model", reject)
     with pytest.raises(VisionImageError):
-        vision_input.resolve_messages_for_model(
-            [_human(_TEXT, {"type": "image", "file_id": ""})], workspace_id=1
-        )
-
-    assert attachment.calls == []
+        vision_input.resolve_messages_for_model([_human(_TEXT, _IMAGE_REF)], workspace_id=1)
 
 
 def test_already_resolved_image_is_left_untouched(
@@ -117,13 +107,16 @@ def test_already_resolved_image_is_left_untouched(
 ) -> None:
     """已解析（含 ``base64``）的图片块不得被重复编码，也不触发附件读取。"""
 
-    resolved_block = {"type": "image", "base64": "AAA", "mime_type": "image/png"}
+    resolved_block = {
+        "type": "image_url",
+        "image_url": {"url": "https://example.invalid/image.png"},
+    }
 
     resolved = vision_input.resolve_messages_for_model(
         [_human(_TEXT, resolved_block)], workspace_id=1
     )
 
-    assert resolved[0].content[1] == resolved_block
+    assert resolved[0].get("content")[1] == resolved_block
     assert attachment.calls == []
 
 

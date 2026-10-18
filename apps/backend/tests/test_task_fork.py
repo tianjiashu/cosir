@@ -10,7 +10,6 @@ from test_task5_acceptance import canonical_store as canonical_store
 
 from app.api.schemas import ForkTaskRequest
 from app.api.tasks_api import fork_task
-from app.core.llm_provider.messages import AIMessage, HumanMessage, SystemMessage
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.storage.queries.task_read_queries import TaskReadQueries
 from app.task_runtime.service.task_service import TaskService
@@ -29,7 +28,7 @@ def fork_store(request, monkeypatch):
     service._session_factory = store.factory
     service._task_reads = TaskReadQueries(store.factory)
     store.service = service
-    store.context.create_system_prompt(store.task.id, SystemMessage(content="固定系统指令"))
+    store.context.create_system_prompt(store.task.id, {"role": "system", "content": "固定系统指令"})
 
     def runtime_access_forbidden(*args, **kwargs):
         raise AssertionError("fork must not access runtime spaces")
@@ -41,9 +40,11 @@ def fork_store(request, monkeypatch):
 def append_run(store, status):
     run = store.runs.create(store.task.id, status, status=status)
     sequence = store.context.max_sequence(store.task.id) + 1
-    store.context.append(store.task.id, run.id, HumanMessage(content=f"user-{run.id}"), sequence)
     store.context.append(
-        store.task.id, run.id, AIMessage(content=f"assistant-{run.id}"), sequence + 1
+        store.task.id, run.id, {"role": "user", "content": f"user-{run.id}"}, sequence
+    )
+    store.context.append(
+        store.task.id, run.id, {"role": "assistant", "content": f"assistant-{run.id}"}, sequence + 1
     )
     return run
 
@@ -139,7 +140,7 @@ def test_success_response_does_not_read_database_after_commit(fork_store, monkey
     def forbidden(*args):
         raise AssertionError("post-commit read")
 
-    monkeypatch.setattr(store.service, "get_context_window_total", forbidden)
+    monkeypatch.setattr(store.service, "get_task", forbidden)
     response = asyncio.run(fork_task(store.task.id, ForkTaskRequest(runId=run.id), store.service))
     assert response.task_id != store.task.id
     assert "fork_available" not in response.model_dump()

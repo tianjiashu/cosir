@@ -1,33 +1,22 @@
-"""``RuntimeContextManager._close_unclosed_tool_calls`` 的逻辑缺陷验证。
+"""工具协议的完整性、事实保留与重启恢复边界。
 
-调用点（``load_message`` 是唯一入口）：
-
-- ``model_node``：每个推理步取上下文前调用；
-- ``structured_output_node``：结构化收口前取上下文时调用；
-- ``tools_node`` 执行前取消分支**不写占位**，声明「由下一次 load_message 兜底」，因此取消/崩溃
-  遗留的占位实际落在**下一个 run**（或同 run resume 时的取数时刻）。
-
-本文件同时使用两条证据链：
-
-1. 真实 SQLite + 真实 ``ConversationTaskContextService``：钉住占位的**持久化身份**
-   （run_id、sequence、transport_metadata）、真实结果对占位的覆盖语义及其与下游快照重建
-   （``ConversationTaskStateRebuilder`` / ``validate_snapshot``）的契约；
-2. 按当前 service 契约实现的假服务：钉住「占位跳过」与反向孤儿消息两条分支——持久化层已不再
-   知道工具调用身份，「该调用是否已有结果行」由 ``RuntimeContextManager`` 依据内存
-   working copy 判定。
-
-标注 ``xfail(strict=True)`` 的用例断言的是**期望行为**（当前失败即为缺陷证据）；
-一旦修复，用例会 XPASS 失败，提醒删除标记。
+真实 SQLite 覆盖配对依据、缺结果占位、结果原地替换和冷加载顺序；无调用依据的结果
+不能发给模型，也不能靠丢弃或伪造调用修复。协议错误必须携带稳定定位并保留数据库事实。
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TypeVar, cast
 
 import pytest
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionMessageParam,
+)
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
@@ -37,13 +26,7 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.agents.agent_profile import AgentProfile
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_context_manager import RuntimeContextManager
-from app.core.llm_provider.messages import (
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
+from app.core.context.tool_call_closure import ContextProtocolError
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_task_context_service import (
@@ -61,14 +44,22 @@ _TOOL_STATUS_VALUES = {"pending", "running", "completed", "failed", "cancelled"}
 _CrudT = TypeVar("_CrudT")
 
 
-def _ai_message(*call_ids: str) -> AIMessage:
-    """构造与运行期同形的 AIMessage（快照重建按 ``additional_kwargs`` 取 reasoning 通道）。"""
+def _ai_message(*call_ids: str) -> ChatCompletionAssistantMessageParam:
+    """构造 SDK 原生 assistant 工具调用。"""
 
-    return AIMessage(
-        content="",
-        tool_calls=[{"name": "read_file", "args": {}, "id": call_id} for call_id in call_ids],
-        additional_kwargs={"reasoning_content": None},
-    )
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": "read_file", "arguments": json.dumps({})},
+            }
+            for call_id in call_ids
+        ],
+        "reasoning_content": None,
+    }
 
 
 def _image_path() -> str:
@@ -167,7 +158,7 @@ def _manager(
     manager.context_service = cast(ConversationTaskContextService, context_service)
     manager.current_run_id = current_run_id
     manager.is_fork = False
-    manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
+    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     manager._entries = list(entries)
     manager._message_sequence = next_sequence
     # 与真实 dataclass 字段同形：Run 重置路径会访问流式草稿表。
@@ -182,18 +173,20 @@ def _rows(env: SimpleNamespace) -> list[ConversationTaskContextRecord]:
     return cast(list[ConversationTaskContextRecord], rows)
 
 
-def _assert_model_protocol_closed(messages: list[BaseMessage]) -> None:
+def _assert_model_protocol_closed(messages: list[ChatCompletionMessageParam]) -> None:
     """断言模型输入满足 provider 工具协议（忽略首条 system prompt）。"""
 
     pending: set[str] = set()
     for message in messages[1:]:
-        if isinstance(message, AIMessage):
-            pending.update(str(call.get("id")) for call in message.tool_calls if call.get("id"))
-        elif isinstance(message, ToolMessage):
+        if message["role"] == "assistant":
+            pending.update(
+                str(call.get("id")) for call in message.get("tool_calls") if call.get("id")
+            )
+        elif message["role"] == "tool":
             assert (
-                message.tool_call_id in pending
-            ), f"tool message {message.tool_call_id} 没有前置 assistant tool_call"
-            pending.discard(message.tool_call_id)
+                message.get("tool_call_id") in pending
+            ), f"tool message {message.get('tool_call_id')} 没有前置 assistant tool_call"
+            pending.discard(message.get("tool_call_id"))
     assert not pending, f"存在未闭合的 tool_call: {sorted(pending)}"
 
 
@@ -206,13 +199,13 @@ class _ContractContextService:
     """
 
     def __init__(self) -> None:
-        self.appended: list[tuple[int | None, BaseMessage, int]] = []
+        self.appended: list[tuple[int | None, ChatCompletionMessageParam, int]] = []
 
     def append(
         self,
         task_id: int,
         run_id: int | None,
-        message: BaseMessage,
+        message: ChatCompletionMessageParam,
         seq: int,
         include_in_context: bool,
         transport_metadata: object = None,
@@ -221,6 +214,7 @@ class _ContractContextService:
         """记录一次追加；不做任何去重。"""
 
         self.appended.append((run_id, message, seq))
+        return ContextEntry(message, run_id, seq)
 
     def entries_in_context(self, task_id: int) -> list[ContextEntry]:
         """纯内存用例不通过 service 读取历史。"""
@@ -246,14 +240,23 @@ def test_duplicate_call_id_slots_fail_loudly_instead_of_reusing_a_row(
     """
 
     run = env.seed_run("running")
-    duplicate_calls = AIMessage(
-        content="",
-        tool_calls=[
-            {"name": "read_file", "args": {}, "id": "call-1"},
-            {"name": "read_file", "args": {}, "id": "call-1"},
+    duplicate_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": json.dumps({})},
+            },
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": json.dumps({})},
+            },
         ],
-    )
-    existing_result = ToolMessage(content="result", tool_call_id="call-1")
+    }
+    existing_result = {"role": "tool", "content": "result", "tool_call_id": "call-1"}
     env.context.append(env.task.id, run.id, duplicate_calls, 1, True)
     env.context.append(env.task.id, run.id, existing_result, 2, True)
     manager = _manager(
@@ -283,7 +286,7 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
     previous_run = env.seed_run("cancelled")
     current_run = env.seed_run("completed")
     ai_message = _ai_message("call-1")
-    human_message = HumanMessage(content="继续")
+    human_message = {"role": "user", "content": "继续"}
     env.context.append(env.task.id, previous_run.id, ai_message, 1, True)
     env.context.append(env.task.id, current_run.id, human_message, 2, True)
 
@@ -300,19 +303,19 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
     messages = manager.load_message()
 
     # 1) 模型输入闭合且顺序正确（占位插在 AI 之后、下一 Run 的 Human 之前）。
-    assert [type(message) for message in messages] == [
-        SystemMessage,
-        AIMessage,
-        ToolMessage,
-        HumanMessage,
+    assert [message["role"] for message in messages] == [
+        "system",
+        "assistant",
+        "tool",
+        "user",
     ]
     _assert_model_protocol_closed(messages)
 
     rows = _rows(env)
-    placeholders = [row for row in rows if isinstance(row.message, ToolMessage)]
+    placeholders = [row for row in rows if row.message["role"] == "tool"]
     assert len(placeholders) == 1
     placeholder = placeholders[0]
-    human_row = next(row for row in rows if isinstance(row.message, HumanMessage))
+    human_row = next(row for row in rows if row.message["role"] == "user")
 
     # 2) 占位归属**发起调用的** Run，而不是恰好正在执行的新 Run。
     assert placeholder.run_id == previous_run.id != current_run.id
@@ -351,11 +354,11 @@ def test_same_run_placeholder_metadata_backs_snapshot_rebuild(env: SimpleNamespa
     messages = manager.load_message()
 
     rows = _rows(env)
-    assert [row.transport_metadata for row in rows if isinstance(row.message, ToolMessage)] == [
+    assert [row.transport_metadata for row in rows if row.message["role"] == "tool"] == [
         {"status": "cancelled"}
     ]
     # 同 run + 尾部未闭合 = 落库顺序即模型输入顺序。
-    assert [type(row.message) for row in rows] == [type(message) for message in messages[1:]]
+    assert [row.message["role"] for row in rows] == [message["role"] for message in messages[1:]]
 
     # 该 metadata 的直接消费者：重建入口取 status 不再崩，且产出合法 wire 终态。
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
@@ -366,66 +369,89 @@ def test_same_run_placeholder_metadata_backs_snapshot_rebuild(env: SimpleNamespa
     validate_snapshot(rebuilt)
 
 
-def test_close_unclosed_tool_calls_appends_placeholder_beside_earlier_orphan_result() -> None:
-    """目标 ``AIMessage`` 之前残留的结果行不影响补占位：该调用仍被补上占位并闭合。
-
-    配对规则只认目标消息**之后**的结果行，因此排在它之前的结果会被当成本次缺失，于是补一行占位
-    （追加在目标之后）。这是刻意的取舍：宁可多补一行占位让**当前**调用闭合，也不复用/覆盖那条错位
-    的结果行——复用会让本 Run 的调用指向别的调用的输出。错位行本身原样保留，它是本文件下方
-    ``xfail`` 登记的孤儿缺陷（模型输入在那种形态下仍不闭合）。
-    """
-
-    service = _ContractContextService()
+@pytest.mark.parametrize("later_call", [False, True])
+def test_orphan_result_fails_before_any_repair_and_preserves_facts(env, caplog, later_call):
+    """后出现同 ID 调用也不能倒配；失败不补占位、不改内容、身份、标记或序号。"""
+    run = env.seed_run("running")
+    result = {"role": "tool", "content": "外部文件已写入", "tool_call_id": "call-ghost"}
+    env.context.append(env.task.id, run.id, result, 1, True, {"status": "completed"})
+    if later_call:
+        env.context.append(env.task.id, run.id, _ai_message("call-ghost"), 2, True)
+    original = _rows(env)
     manager = _manager(
-        context_service=service,
-        task_id=7,
-        current_run_id=1,
-        entries=[
-            ContextEntry(ToolMessage(content="orphan", tool_call_id="call-1"), 1, 1),
-            ContextEntry(_ai_message("call-1"), 1, 2),
-        ],
-        next_sequence=3,
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=run.id,
+        entries=env.context.entries_in_context(env.task.id),
+        next_sequence=len(original) + 1,
     )
-
-    manager.load_message()
-
-    assert len(service.appended) == 1, "缺失结果必须补一行占位"
-    appended_ids = [item[1].tool_call_id for item in service.appended]
-    assert appended_ids == ["call-1"]
-    messages = [entry.message for entry in manager._entries]
-    assert [type(message).__name__ for message in messages] == [
-        "ToolMessage",
-        "AIMessage",
-        "ToolMessage",
-    ]
-    assert messages[0].content == "orphan", "错位的结果行必须原样保留，不得被复用或覆盖"
-    assert messages[2].tool_call_id == "call-1"
-
-    # 占位落在目标消息之后 ⇒ 下一次取数即被配对规则认到，不会反复补行。
-    manager.load_message()
-    assert len(service.appended) == 1
+    for _ in range(2):
+        with pytest.raises(ContextProtocolError) as caught:
+            manager.load_message()
+        assert caught.value.reason == "orphan_tool_result"
+        assert caught.value.entry.message == result
+        assert _rows(env) == original
+        assert manager._entries == env.context.entries_in_context(env.task.id)
+    record = next(r for r in caplog.records if r.msg == "runtime_context_tool_protocol_invalid")
+    assert record.data["task_id"] == env.task.id
+    assert record.data["context_run_id"] == run.id
+    assert record.data["message_id"] == original[0].message_id
+    assert record.data["sequence"] == 1
+    assert record.data["tool_call_id"] == "call-ghost"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="缺陷: 反向孤儿 ToolMessage（无前置 tool_call）未被处理，模型输入仍是非法协议",
-)
-def test_orphan_tool_message_is_closed_or_dropped() -> None:
-    """期望行为：没有前置 AI 工具调用的 ToolMessage 不得原样进入模型输入。"""
-
+@pytest.mark.parametrize("case", ["no_call", "wrong_run", "unknown_id"])
+def test_new_tool_result_requires_current_call_before_writing(env, case):
+    """没有正确调用依据的新结果不能进入 context，错误保留输入以便调用方定位。"""
+    run = env.seed_run("running")
     manager = _manager(
-        context_service=_ContractContextService(),
-        task_id=7,
-        current_run_id=1,
-        entries=[
-            ContextEntry(ToolMessage(content="stale result", tool_call_id="call-ghost"), 1, 1),
-        ],
-        next_sequence=2,
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=run.id,
+        entries=[],
+        next_sequence=1,
     )
+    if case != "no_call":
+        manager.add_message(_ai_message("call-1"))
+    if case == "wrong_run":
+        manager.current_run_id = env.seed_run("running").id
+    original = _rows(env)
+    message = {
+        "role": "tool",
+        "content": "result",
+        "tool_call_id": "unknown" if case == "unknown_id" else "call-1",
+    }
+    with pytest.raises(ContextProtocolError) as caught:
+        manager.add_message(message, transport_metadata={"status": "completed"})
+    assert caught.value.reason == "tool_result_without_current_call"
+    assert caught.value.entry.message == message
+    assert _rows(env) == original
+    assert manager._message_sequence == len(original) + 1
 
-    messages = manager.load_message()
 
-    _assert_model_protocol_closed(messages)
+@pytest.mark.parametrize("case", ["wrong_run", "duplicate"])
+def test_persisted_result_must_have_one_owner_in_the_same_run(env, case):
+    run = env.seed_run("running")
+    other = env.seed_run("running")
+    env.context.append(env.task.id, run.id, _ai_message("call-1"), 1, True)
+    result = {"role": "tool", "content": "result", "tool_call_id": "call-1"}
+    env.context.append(env.task.id, other.id if case == "wrong_run" else run.id, result, 2, True)
+    if case == "duplicate":
+        env.context.append(env.task.id, run.id, result, 3, True)
+    original = _rows(env)
+    manager = _manager(
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=run.id,
+        entries=env.context.entries_in_context(env.task.id),
+        next_sequence=len(original) + 1,
+    )
+    with pytest.raises(ContextProtocolError) as caught:
+        manager.load_message()
+    assert caught.value.reason == (
+        "orphan_tool_result" if case == "wrong_run" else "duplicate_tool_result"
+    )
+    assert _rows(env) == original
 
 
 def test_placeholder_does_not_block_later_real_tool_result(env: SimpleNamespace) -> None:
@@ -450,22 +476,22 @@ def test_placeholder_does_not_block_later_real_tool_result(env: SimpleNamespace)
     manager.load_message()
 
     outcome = manager.add_message(
-        ToolMessage(content="real tool output", tool_call_id="call-1", status="success"),
+        {"role": "tool", "content": "real tool output", "tool_call_id": "call-1"},
         transport_metadata={"status": "completed"},
     )
 
     assert outcome == "replaced"
     rows = _rows(env)
-    result_rows = [row for row in rows if isinstance(row.message, ToolMessage)]
+    result_rows = [row for row in rows if row.message["role"] == "tool"]
     assert len(result_rows) == 1, "真实结果必须覆盖占位，不得并排留下第二行"
     assert result_rows[0].sequence == 2, "覆盖复用占位已占用的序号"
-    assert result_rows[0].message.content == "real tool output"
+    assert result_rows[0].message.get("content") == "real tool output"
     assert result_rows[0].transport_metadata == {"status": "completed"}
 
     messages = manager.load_message()
     _assert_model_protocol_closed(messages)
-    modeled = [message for message in messages if isinstance(message, ToolMessage)]
-    assert [message.content for message in modeled] == ["real tool output"]
+    modeled = [message for message in messages if message["role"] == "tool"]
+    assert [message.get("content") for message in modeled] == ["real tool output"]
 
 
 def test_close_unclosed_tool_call_is_idempotent_and_ordered(env: SimpleNamespace) -> None:
@@ -474,8 +500,8 @@ def test_close_unclosed_tool_call_is_idempotent_and_ordered(env: SimpleNamespace
     run = env.seed_run("running")
     first_call = _ai_message("call-1")
     second_call = _ai_message("call-2", "call-3")
-    first_result = ToolMessage(content="a done", tool_call_id="call-1")
-    third_result = ToolMessage(content="c done", tool_call_id="call-3")
+    first_result = {"role": "tool", "content": "a done", "tool_call_id": "call-1"}
+    third_result = {"role": "tool", "content": "c done", "tool_call_id": "call-3"}
     env.context.append(env.task.id, run.id, first_call, 1, True)
     env.context.append(env.task.id, run.id, first_result, 2, True)
     env.context.append(env.task.id, run.id, second_call, 3, True)
@@ -496,31 +522,29 @@ def test_close_unclosed_tool_call_is_idempotent_and_ordered(env: SimpleNamespace
 
     messages = manager.load_message()
 
-    tool_ids = [message.tool_call_id for message in messages if isinstance(message, ToolMessage)]
+    tool_ids = [message.get("tool_call_id") for message in messages if message["role"] == "tool"]
     assert tool_ids == ["call-1", "call-2", "call-3"]
     _assert_model_protocol_closed(messages)
-    assert len([row for row in _rows(env) if isinstance(row.message, ToolMessage)]) == 3
+    assert len([row for row in _rows(env) if row.message["role"] == "tool"]) == 3
 
     manager._entries = [
         ContextEntry(message, run.id, index) for index, message in enumerate(messages[1:], start=1)
     ]
     manager.load_message()
 
-    assert len([row for row in _rows(env) if isinstance(row.message, ToolMessage)]) == 3
+    assert len([row for row in _rows(env) if row.message["role"] == "tool"]) == 3
 
 
-def test_close_scopes_to_the_last_tool_calling_ai_message(env: SimpleNamespace) -> None:
-    """一个 Run 内多步推理：只收口最后一条 AI 消息上未配对的结果，不动更早批次。
-
-    一次模型调用只落库一条 ``AIMessage``；上一批调用在下一次取数前已被 ``settle`` 写全，
-    因此「最后一条 AIMessage」就是唯一可能的未闭合位置（``close`` 只从尾部定位）。
-    """
+def test_close_keeps_completed_batches_and_only_appends_missing_results(
+    env: SimpleNamespace,
+) -> None:
+    """多批次共用配对计划：已完成批次不写库，只有缺失结果才补占位。"""
 
     run = env.seed_run("running")
     first_call = _ai_message("call-1")
-    first_result = ToolMessage(content="a done", tool_call_id="call-1")
+    first_result = {"role": "tool", "content": "a done", "tool_call_id": "call-1"}
     second_call = _ai_message("call-2", "call-3")
-    second_result = ToolMessage(content="b done", tool_call_id="call-2")
+    second_result = {"role": "tool", "content": "b done", "tool_call_id": "call-2"}
     env.context.append(env.task.id, run.id, first_call, 1, True)
     env.context.append(env.task.id, run.id, first_result, 2, True)
     env.context.append(env.task.id, run.id, second_call, 3, True)
@@ -542,24 +566,24 @@ def test_close_scopes_to_the_last_tool_calling_ai_message(env: SimpleNamespace) 
     messages = manager.load_message()
 
     # 只补 call-3 一条占位，且顺序仍是 AI -> Tool×3。
-    assert [message.tool_call_id for message in messages if isinstance(message, ToolMessage)] == [
+    assert [message.get("tool_call_id") for message in messages if message["role"] == "tool"] == [
         "call-1",
         "call-2",
         "call-3",
     ]
     _assert_model_protocol_closed(messages)
     rows = _rows(env)
-    assert [type(row.message) for row in rows] == [
-        AIMessage,
-        ToolMessage,
-        AIMessage,
-        ToolMessage,
-        ToolMessage,
+    assert [row.message["role"] for row in rows] == [
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "tool",
     ]
     placeholders = [
         row
         for row in rows
-        if isinstance(row.message, ToolMessage) and row.message.tool_call_id == "call-3"
+        if row.message["role"] == "tool" and row.message.get("tool_call_id") == "call-3"
     ]
     assert len(placeholders) == 1
     assert placeholders[0].run_id == run.id
@@ -569,7 +593,7 @@ def test_close_scopes_to_the_last_tool_calling_ai_message(env: SimpleNamespace) 
         next(
             row.sequence
             for row in rows
-            if isinstance(row.message, ToolMessage) and row.message.tool_call_id == "call-1"
+            if row.message["role"] == "tool" and row.message.get("tool_call_id") == "call-1"
         )
         == 2
     )
@@ -580,8 +604,8 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
 
     run = env.seed_run("running")
     ai_message = _ai_message("call-1", "call-2")
-    settled = ToolMessage(content="a done", tool_call_id="call-1")
-    human = HumanMessage(content="user input")
+    settled = {"role": "tool", "content": "a done", "tool_call_id": "call-1"}
+    human = {"role": "user", "content": "user input"}
     env.context.append(env.task.id, run.id, human, 1, True)
     env.context.append(env.task.id, run.id, ai_message, 2, True)
     env.context.append(env.task.id, run.id, settled, 3, True, {"status": "completed"})
@@ -602,8 +626,8 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     assert persisted.end_reason == "runtime_restarted"
 
     rows = _rows(env)
-    tool_rows = [row for row in rows if isinstance(row.message, ToolMessage)]
-    assert [(row.message.tool_call_id, row.run_id) for row in tool_rows] == [
+    tool_rows = [row for row in rows if row.message["role"] == "tool"]
+    assert [(row.message.get("tool_call_id"), row.run_id) for row in tool_rows] == [
         ("call-1", run.id),
         ("call-2", run.id),
     ]
@@ -623,12 +647,8 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     }
 
 
-def test_recover_orphaned_runs_preserves_waiting_run(env: SimpleNamespace) -> None:
-    """重启恢复不收口「等待用户决定」的 Run：图断点与决定通道都还在，用户回来仍能作答。
-
-    running 的 Run 才是「驱动者已随进程消失」的遗留，必须收敛；waiting 被收口会让用户白等一场
-    （还会把待确认的卡片变成一张已取消的空壳）。
-    """
+def test_recover_orphaned_runs_cancels_waiting_run(env: SimpleNamespace) -> None:
+    """重启统一取消 waiting 和 running，旧等待请求失效，不自动继续执行。"""
 
     waiting = env.seed_run("waiting_for_input")
     running = env.seed_run("running")
@@ -643,9 +663,209 @@ def test_recover_orphaned_runs_preserves_waiting_run(env: SimpleNamespace) -> No
 
     assert [record.id for record in recovered] == [waiting.id, running.id]
     assert run_crud.get(running.id).status == "cancelled"
-    # 等待态原样保留：不写终态、不补占位、不动它的上下文。
+    # 等待态收敛为取消；无调用时不凭空补占位。
     assert run_crud.get(waiting.id).status == "cancelled"
     assert run_crud.get(waiting.id).end_reason == "runtime_restarted"
     assert [row for row in _rows(env) if row.run_id == waiting.id] == []
     # 幂等：重复恢复不再把 waiting 收进来。
     assert service.recover_orphaned_runs() == []
+
+
+def test_cold_reload_normalizes_earlier_batches_without_rewriting_facts(env):
+    """修复后继续产生新批次，再冷加载仍闭合；历史占位和结果不重复写库。"""
+    first = env.seed_run("cancelled")
+    current = env.seed_run("running")
+    env.context.append(env.task.id, first.id, _ai_message("old-call"), 1, True)
+    env.context.append(env.task.id, current.id, {"role": "user", "content": "继续"}, 2, True)
+    manager = _manager(
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=current.id,
+        entries=env.context.entries_in_context(env.task.id),
+        next_sequence=3,
+    )
+    manager.load_message()
+    manager.add_message(_ai_message("new-call"))
+    manager.add_message({"role": "tool", "content": "done", "tool_call_id": "new-call"})
+    original = _rows(env)
+    for _ in range(2):
+        cold = _manager(
+            context_service=env.context,
+            task_id=env.task.id,
+            current_run_id=current.id,
+            entries=env.context.entries_in_context(env.task.id),
+            next_sequence=6,
+        )
+        messages = cold.load_message()
+        assert [m["role"] for m in messages] == [
+            "system",
+            "assistant",
+            "tool",
+            "user",
+            "assistant",
+            "tool",
+        ]
+        _assert_model_protocol_closed(messages)
+        assert _rows(env) == original
+
+
+def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypatch):
+    """流式取消产生的展示占位不是执行结果，不得提升为模型上下文的孤儿 tool。"""
+    import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle
+    from tests.sdk_fixtures import sdk_completion
+
+    run = env.seed_run("running")
+    manager = _manager(
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=run.id,
+        entries=[],
+        next_sequence=1,
+    )
+    completion = sdk_completion(tool_calls=_ai_message("preview")["tool_calls"])
+    manager.save_stream_snapshot(completion, stream_id="step-1")
+    manager.flush_message_chunk(stream_id="step-1", mode="cancel")
+    monkeypatch.setattr(lifecycle, "_runtime_context", lambda: manager)
+    events = []
+    monkeypatch.setattr(lifecycle, "get_stream_writer", lambda: events.append)
+    state = lifecycle.ToolCallLifecycleManager(
+        valid_calls={
+            "preview": lifecycle.ToolCallLifecycleRecord(
+                tool_call_id="preview", tool_name="read_file"
+            ),
+        }
+    )
+    state.cancel(task_id=env.task.id, run_id=run.id, step_id="step-1")
+    original = _rows(env)
+    assert [row.message["role"] for row in original] == ["assistant", "tool"]
+    assert all(not row.include_in_context for row in original)
+    assert events[0].status == "cancelled"
+    cold = _manager(
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=run.id,
+        entries=env.context.entries_in_context(env.task.id),
+        next_sequence=3,
+    )
+    assert [m["role"] for m in cold.load_message()] == ["system"]
+    assert _rows(env) == original
+
+
+def test_recovery_keeps_invalid_context_but_cancels_all_orphan_runs(env, caplog):
+    """一个 Run 无法安全补配对时不阻断其取消或后续 Run 恢复，也不擅自改写结果。"""
+    broken = env.seed_run("running")
+    healthy = env.seed_run("waiting_for_input")
+    env.context.append(
+        env.task.id,
+        broken.id,
+        {"role": "tool", "content": "已执行", "tool_call_id": "ghost"},
+        1,
+        True,
+    )
+    env.context.append(env.task.id, healthy.id, _ai_message("pending"), 2, True)
+    original = _rows(env)[0]
+    service = ConversationRunService.__new__(ConversationRunService)
+    service._run = _bind(ConversationRunCrud, env.factory)
+    service._context = env.context
+    service._session_factory = env.factory
+    recovered = service.recover_orphaned_runs()
+    assert [run.id for run in recovered] == [broken.id, healthy.id]
+    assert all(run.status == "cancelled" for run in recovered)
+    assert _rows(env)[0] == original
+    assert _rows(env)[-1].message["tool_call_id"] == "pending"
+    assert _rows(env)[-1].transport_metadata == {"status": "cancelled"}
+    assert service.recover_orphaned_runs() == []
+    assert any(r.msg == "run_recovery_context_protocol_invalid" for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, monkeypatch):
+    """在模型请求和 inbox 消费前失败，原始结果与未消费输入都保持原状。"""
+    from app.core.workflow.execution_state.route import ReactRoute
+    from app.core.workflow.execution_state.state import ReactExecutionState
+    from app.core.workflow.nodes import model_node
+    from app.storage.crud.task_input_crud import TaskInputCrud
+    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+    run = env.seed_run("running")
+    env.context.append(
+        env.task.id, run.id, {"role": "tool", "content": "已执行", "tool_call_id": "ghost"}, 1, True
+    )
+    with env.factory.begin() as session:
+        TaskInputCrud().append(session, env.task.id, "queued", {"input_text": "新消息"})
+    manager = _manager(
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=run.id,
+        entries=env.context.entries_in_context(env.task.id),
+        next_sequence=2,
+    )
+    with pytest.raises(ContextProtocolError):
+        manager.consume_user_inputs()
+    requested = []
+
+    async def stream(*_args, **_kwargs):
+        requested.append(True)
+        yield None
+
+    rc = SimpleNamespace(
+        max_steps=10,
+        model=SimpleNamespace(stream=stream),
+        operations=SimpleNamespace(
+            get_current_task=lambda: env.task,
+            get_current_run=lambda: run,
+            get_current_workspace=lambda: SimpleNamespace(id=1),
+            is_current_run_cancelled=lambda: False,
+        ),
+    )
+    monkeypatch.setattr(model_node, "_runtime_config", lambda: rc)
+    monkeypatch.setattr(model_node, "_runtime_context", lambda: manager)
+    monkeypatch.setattr(model_node, "get_stream_writer", lambda: lambda _event: None)
+    monkeypatch.setattr(
+        task_runtime_spaces,
+        "get_or_create",
+        lambda _id: SimpleNamespace(take_runtime_notices=lambda **_kw: None),
+    )
+    with pytest.raises(ContextProtocolError):
+        await model_node._model_node(
+            ReactExecutionState(
+                step_count=0,
+                tool_error_count=0,
+                next_node=ReactRoute.MODEL,
+                final_text="",
+                last_tool_results={"observations": []},
+            )
+        )
+    assert requested == []
+    with env.factory() as session:
+        queued = TaskInputCrud().list_pending(session, env.task.id)
+        assert [item.message_id for item in queued] == ["queued"]
+    assert len(_rows(env)) == 1
+
+
+def test_included_result_cannot_promote_an_incomplete_draft_into_a_call(env):
+    """库中即使有同 ID 草稿，也不能把未完成调用提升为已执行依据。"""
+    run = env.seed_run("running")
+    env.context.append(
+        env.task.id, run.id, _ai_message("partial"), 1, include_in_context=False, is_streaming=True
+    )
+    env.context.append(
+        env.task.id,
+        run.id,
+        {"role": "tool", "content": "result", "tool_call_id": "partial"},
+        2,
+        True,
+    )
+    original = _rows(env)
+    manager = _manager(
+        context_service=env.context,
+        task_id=env.task.id,
+        current_run_id=run.id,
+        entries=env.context.entries_in_context(env.task.id),
+        next_sequence=3,
+    )
+    with pytest.raises(ContextProtocolError, match="orphan_tool_result"):
+        manager.load_message()
+    assert _rows(env) == original
+    assert _rows(env)[0].is_streaming
+    assert not _rows(env)[0].include_in_context

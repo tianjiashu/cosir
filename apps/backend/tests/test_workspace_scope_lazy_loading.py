@@ -65,7 +65,7 @@ def _file_agent_profile(agent_id: str, *, role: str) -> AgentProfile:
         allowed_tools=["read_file"],
         agent_type=AgentProfileType.CHILD,
         system_prompt="probe",
-        workflow=None,  # type: ignore[arg-type]
+
     )
 
 

@@ -45,8 +45,8 @@ from app.core.tools.schemas import (
 from app.core.tools.schemas import tool_definition as tool_definition_module
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_registry import ToolRegistry
-from app.core.workflows import workflow_operations as workflow_operations_module
-from app.core.workflows.workflow_operations import WorkflowOperations
+import app.core.workflow.workflow_operations as workflow_operations_module
+from app.core.workflow.workflow_operations import WorkflowOperations
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 

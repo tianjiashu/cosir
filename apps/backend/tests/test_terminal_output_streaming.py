@@ -21,6 +21,7 @@ from app.assistant_transport.event import (
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
+    UserInputAppendedEvent,
     tool_runtime_output_adapter,
 )
 from app.assistant_transport.event.tool_runtime_output_adapter import (
@@ -50,7 +51,7 @@ from app.core.tools.tool_handler import execute_terminal as execute_terminal_mod
 from app.core.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.core.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.core.tools.tool_handler.terminal.output_collector import _OutputCollector
-from app.core.workflows.workflow_operations import WorkflowOperations
+from app.core.workflow.workflow_operations import WorkflowOperations
 
 
 class ChunkStream:
@@ -510,6 +511,12 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
+    projector.process(
+        UserInputAppendedEvent(
+            task_id=7, run_id=9, message_id="user-1",
+            parts=[{"type": "text", "text": "run tool", "status": "completed"}],
+        )
+    )
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(
@@ -545,6 +552,12 @@ def test_final_terminal_status_preserves_complete_streamed_display_output() -> N
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
+    projector.process(
+        UserInputAppendedEvent(
+            task_id=7, run_id=9, message_id="user-1",
+            parts=[{"type": "text", "text": "run tool", "status": "completed"}],
+        )
+    )
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(

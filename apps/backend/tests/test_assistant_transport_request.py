@@ -214,3 +214,14 @@ def test_accepts_explicit_ordinary_file_attachment_metadata() -> None:
     )
 
     assert request.commands[0].message.attachments[0].id == "file-1"
+
+
+@pytest.mark.parametrize("effort", [None, "low", "high", "max"])
+def test_reasoning_effort_uses_run_domain_values(effort):
+    assert _request(reasoningEffort=effort).reasoningEffort == effort
+
+
+@pytest.mark.parametrize("effort", ["medium", "", "HIGH", 1, True])
+def test_invalid_reasoning_effort_is_rejected_by_wire_schema(effort):
+    with pytest.raises(ValidationError, match="reasoningEffort"):
+        _request(reasoningEffort=effort)

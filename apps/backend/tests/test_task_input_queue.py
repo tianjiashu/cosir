@@ -1,5 +1,6 @@
 """真实 SQLite 验证 inbox 转移、编辑和重启边界。"""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -7,7 +8,6 @@ import pytest
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
-from app.core.llm_provider.messages import AIMessage, HumanMessage, ToolMessage
 from app.models import ConversationRunCommand
 from app.service.conversation_run.task_input_service import TaskInputService
 from app.service.depends import (
@@ -21,6 +21,7 @@ from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.model.model_config_model import ModelConfigModel
 from app.storage.store_engines import main_session_factory
+from tests.sdk_fixtures import sdk_events
 
 
 @pytest.fixture
@@ -60,11 +61,11 @@ def test_atomic_queue_consumption_and_multiple_users_same_run(store):
     pending = store.inputs.pending(store.task.id)
     assert [p["input_text"] for p in pending] == ["first", "second"]
     entries = store.inputs.consume(store.task.id, store.run.id, 1)
-    assert [e.message.content for e in entries] == ["first", "second"]
-    assert entries[-1].message.id == second
+    assert [e.message.get("content") for e in entries] == ["first", "second"]
+    assert entries[-1].message_id == second
     assert all(e.run_id == store.run.id for e in entries)
     assert store.inputs.consume(store.task.id, store.run.id, 3) == []
-    assert [e.message.id for e in store.context.entries_in_context(store.task.id)] == [
+    assert [e.message_id for e in store.context.entries_in_context(store.task.id)] == [
         p["id"] for p in pending
     ]
 
@@ -100,12 +101,16 @@ def test_pending_edit_keeps_identity_without_starting_run(store):
 
 def test_consumed_edit_preserves_prefix_and_run_identity(store):
     entries = store.inputs.consume(store.task.id, store.run.id, 1)
-    store.context.append(store.task.id, store.run.id, AIMessage(content="first response"), 2)
+    store.context.append(
+        store.task.id, store.run.id, {"role": "assistant", "content": "first response"}, 2
+    )
     mid = store.inputs.enqueue(
         store.task.id, ConversationRunCommand(display_text="second"), store.config_id
     )
     store.inputs.consume(store.task.id, store.run.id, 3)
-    store.context.append(store.task.id, store.run.id, AIMessage(content="discard"), 4)
+    store.context.append(
+        store.task.id, store.run.id, {"role": "assistant", "content": "discard"}, 4
+    )
     store.crud.update_status_if_in(
         store.run.id,
         "cancelled",
@@ -121,9 +126,9 @@ def test_consumed_edit_preserves_prefix_and_run_identity(store):
         None,
     )
     rows = store.context.entries_in_context(store.task.id)
-    assert [e.message.content for e in rows] == ["first", "first response", "edited"]
-    assert rows[0].message.id == entries[0].message.id
-    assert rows[-1].message.id == mid
+    assert [e.message.get("content") for e in rows] == ["first", "first response", "edited"]
+    assert rows[0].message_id == entries[0].message_id
+    assert rows[-1].message_id == mid
     assert store.crud.get(store.run.id).status == "running"
     assert store.crud.get(store.run.id).execution_data == {"step_count": 5, "tool_error_count": 0}
 
@@ -133,13 +138,23 @@ def test_restart_cancels_wait_and_preserves_inbox(store):
     store.context.append(
         store.task.id,
         store.run.id,
-        AIMessage(content="", tool_calls=[{"id": "c", "name": "tool", "args": {}}]),
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c",
+                    "type": "function",
+                    "function": {"name": "tool", "arguments": json.dumps({})},
+                }
+            ],
+        },
         2,
     )
     store.context.append(
         store.task.id,
         store.run.id,
-        ToolMessage(content="waiting", tool_call_id="c"),
+        {"role": "tool", "content": "waiting", "tool_call_id": "c"},
         3,
         transport_metadata={
             "status": "running",
@@ -170,12 +185,12 @@ def test_restart_cancels_wait_and_preserves_inbox(store):
 
 def test_snapshot_groups_multiple_users_and_pending_inputs(store):
     store.inputs.consume(store.task.id, store.run.id, 1)
-    store.context.append(store.task.id, store.run.id, AIMessage(content="reply"), 2)
+    store.context.append(store.task.id, store.run.id, {"role": "assistant", "content": "reply"}, 2)
     second = store.inputs.enqueue(
         store.task.id, ConversationRunCommand(display_text="second"), store.config_id
     )
     store.inputs.consume(store.task.id, store.run.id, 3)
-    store.context.append(store.task.id, store.run.id, AIMessage(content="reply2"), 4)
+    store.context.append(store.task.id, store.run.id, {"role": "assistant", "content": "reply2"}, 4)
     queued = store.inputs.enqueue(
         store.task.id, ConversationRunCommand(display_text="third"), store.config_id
     )
@@ -206,7 +221,7 @@ def test_completed_run_handoff_claims_next_batch_without_duplicating_input(store
     assert [p["id"] for p in store.inputs.pending(store.task.id)] == [message_id]
     entries = store.inputs.consume(store.task.id, result.run.id, 2)
     assert entries[0].run_id == result.run.id
-    assert entries[0].message.id == message_id
+    assert entries[0].message_id == message_id
 
 
 @pytest.mark.parametrize("status", ["cancelled", "failed", "waiting_for_input"])
@@ -242,13 +257,23 @@ def test_wait_cancel_closes_request_without_starting_model(store, monkeypatch):
     store.context.append(
         store.task.id,
         store.run.id,
-        AIMessage(tool_calls=[{"id": "c", "name": "tool", "args": {}}]),
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "c",
+                    "type": "function",
+                    "function": {"name": "tool", "arguments": json.dumps({})},
+                }
+            ],
+        },
         2,
     )
     store.context.append(
         store.task.id,
         store.run.id,
-        ToolMessage(content="waiting", tool_call_id="c"),
+        {"role": "tool", "content": "waiting", "tool_call_id": "c"},
         3,
         transport_metadata={
             "status": "running",
@@ -321,8 +346,7 @@ async def test_real_loop_consumes_between_requests_and_leaves_final_queue_for_ne
     from unittest.mock import AsyncMock
 
     from app.core.context.runtime_context_manager import SystemPromptBuilder
-    from app.core.llm_provider.messages import AIMessageChunk
-    from app.core.workflows.react import workflow as workflow_module
+    import app.core.workflow.workflow as workflow_module
     from app.service.depends import get_conversation_event_projector
 
     states = get_conversation_run_state_service()
@@ -331,15 +355,16 @@ async def test_real_loop_consumes_between_requests_and_leaves_final_queue_for_ne
     requests = []
 
     async def stream(messages, **kwargs):
-        requests.append([m.content for m in messages if isinstance(m, HumanMessage)])
+        requests.append([m.get("content") for m in messages if m["role"] == "user"])
         text = "during request" if len(requests) == 1 else "after final"
         store.inputs.enqueue(
             store.task.id, ConversationRunCommand(display_text=text), store.config_id
         )
-        yield AIMessageChunk(
-            content="partial" if len(requests) == 1 else "done",
-            response_metadata={"finish_reason": "length" if len(requests) == 1 else "stop"},
-        )
+        for event in sdk_events(
+            [{"content": "partial" if len(requests) == 1 else "done"}],
+            finish_reason="length" if len(requests) == 1 else "stop",
+        ):
+            yield event
 
     model = SimpleNamespace(stream=stream, close=AsyncMock())
     monkeypatch.setattr(
@@ -467,17 +492,85 @@ def test_failed_resume_updates_existing_snapshot_without_consuming_queue(store):
     assert len(store.inputs.pending(store.task.id)) == 1
 
 
-def test_legacy_graph_schema_is_rejected_without_changing_user_data(tmp_path):
-    from sqlalchemy import create_engine, inspect
+def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, monkeypatch):
+    """数据库读回 SDK JSON；消息身份、用户展示和响应信息均不进入模型正文。"""
+    import json
 
-    from app.storage.store_engines import initialize_app_schema
+    from app.core.context.runtime_context_manager import RuntimeContextManager, SystemPromptBuilder
 
-    engine = create_engine(f"sqlite:///{tmp_path / 'old.sqlite'}")
-    with engine.begin() as connection:
-        connection.exec_driver_sql(
-            "CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, checkpoint_thread_id TEXT)"
-        )
-    with pytest.raises(RuntimeError, match="旧版执行数据"):
-        initialize_app_schema(engine)
-    assert inspect(engine).get_table_names() == ["conversation_runs"]
-    engine.dispose()
+    monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
+    context = RuntimeContextManager(store.task.id, SimpleNamespace())
+    context.begin_run(store.run)
+    context.consume_user_inputs()
+    user = store.context.entries_in_context(store.task.id)[1]
+    assert user.metadata["user_input"]["input_text"] == "first"
+    assert user.message == {"role": "user", "content": "first"}
+    assert user.message_id
+    for event in sdk_events(
+        [
+            {
+                "content": "checking",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": '{"path":'},
+                    }
+                ],
+            },
+            {"tool_calls": [{"index": 0, "function": {"arguments": '"a.py"}'}}]},
+        ],
+        finish_reason="tool_calls",
+        usage={"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
+    ):
+        context.save_stream_snapshot(event.snapshot, stream_id="step-1")
+    draft = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)[-1]
+    context.flush_message_chunk(stream_id="step-1", mode="finalize")
+    finalized = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)[-1]
+    assert finalized.message_id == draft.message_id
+    assert finalized.sequence == draft.sequence
+    assert finalized.metadata["finish_reason"] == "tool_calls"
+    assert finalized.metadata["usage"]["total_tokens"] == 10
+    assert finalized.message["tool_calls"][0]["function"]["arguments"] == '{"path":"a.py"}'
+    assert "parsed" not in json.dumps(finalized.message)
+    context.add_message(
+        {"role": "tool", "tool_call_id": "call", "content": "waiting"},
+        transport_metadata={"status": "running"},
+    )
+    waiting = store.context.entries_in_context(store.task.id)[-1]
+    context.add_message(
+        {"role": "tool", "tool_call_id": "call", "content": "file contents"},
+        transport_metadata={"status": "completed"},
+    )
+    completed = store.context.entries_in_context(store.task.id)[-1]
+    assert (completed.message_id, completed.sequence) == (waiting.message_id, waiting.sequence)
+    reloaded = RuntimeContextManager(store.task.id, SimpleNamespace())
+    assert reloaded.load_message() == context.load_message()
+    assert [m["role"] for m in reloaded.load_message()] == ["system", "user", "assistant", "tool"]
+    assert all(
+        "user_input" not in m and "message_id" not in m and "usage" not in m
+        for m in reloaded.load_message()
+    )
+
+
+def test_cancelled_sdk_draft_is_durable_but_excluded_on_resume(store, monkeypatch):
+    from app.core.context.runtime_context_manager import RuntimeContextManager, SystemPromptBuilder
+
+    monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
+    context = RuntimeContextManager(store.task.id, SimpleNamespace())
+    context.begin_run(store.run)
+    context.consume_user_inputs()
+    events = sdk_events([{"content": "partial"}, {"content": " tail"}], finish_reason=None)
+    first = context.save_stream_snapshot(next(events).snapshot, stream_id="step-1")
+    for event in events:
+        context.save_stream_snapshot(event.snapshot, stream_id="step-1")
+    assert first["content"] == "partial"
+    context.flush_message_chunk(stream_id="step-1", mode="cancel")
+    rows = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)
+    assert rows[-1].message["content"] == "partial tail"
+    assert not rows[-1].include_in_context
+    assert not context._streaming_messages
+    reloaded = RuntimeContextManager(store.task.id, SimpleNamespace())
+    reloaded.begin_run(store.run, "resume")
+    assert [m["role"] for m in reloaded.load_message()] == ["system", "user"]

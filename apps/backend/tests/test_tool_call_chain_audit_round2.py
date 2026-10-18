@@ -14,15 +14,18 @@
 from __future__ import annotations
 
 import copy
+import json
 import unittest.mock as mock
 from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 
-import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
-import app.core.workflows.react.nodes.observation_node as observation_node_module
-import app.core.workflows.react.nodes.tools_node as tools_node_module
+import pytest
+
+import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
+import app.core.workflow.nodes.observation_node as observation_node_module
+import app.core.workflow.nodes.tools_node as tools_node_module
 from app.assistant_transport.event import (
     RunInitializedEvent,
     RunStatusChangedEvent,
@@ -43,12 +46,11 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import TransportFrame
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_context_manager import RuntimeContextManager
-from app.core.llm_provider.messages import AIMessage, SystemMessage, ToolMessage
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall, ToolObservation
-from app.core.workflows.react.execution_state.route import ReactRoute
-from app.core.workflows.react.execution_state.state import ReactExecutionState
-from app.core.workflows.react.node_helper.tool_call_lifecycle import (
+from app.core.workflow.execution_state.route import ReactRoute
+from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
@@ -98,11 +100,11 @@ class _LifecycleHarness:
         self.operations = SimpleNamespace(
             all_vaild_tools=self.model_tools,
             allows_tools=frozenset(self.allows_tools),
-            to_tool_model_message=lambda observation: ToolMessage(
-                content=str(observation.content or observation.error or ""),
-                tool_call_id=observation.tool_call_id,
-                name=observation.tool_name,
-            ),
+            to_tool_model_message=lambda observation: {
+                "role": "tool",
+                "content": str(observation.content or observation.error or ""),
+                "tool_call_id": observation.tool_call_id,
+            },
             get_current_task=lambda: SimpleNamespace(id=_TASK_ID),
             get_current_run=lambda: SimpleNamespace(id=_RUN_ID),
             is_current_run_cancelled=lambda: self.cancelled,
@@ -513,10 +515,17 @@ def test_p4_settle_batch_writes_tool_messages_in_summary_order() -> None:
     with harness.runtime():
         classified = harness.manager.classify(
             tool_calls=[
-                {"id": "blocked-1", "name": "write_file", "args": {"path": "b.txt"}},
-                {"id": "valid-1", "name": "read_file", "args": {"path": "a.txt"}},
+                {
+                    "id": "blocked-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
+                {
+                    "id": "valid-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
             ],
-            invalid_tool_calls=[],
         )
         # tool_calls 顺序（model_node 重写后的形态）：blocked 在前。
         assert list(classified.blocked_calls) == ["blocked-1"]
@@ -534,7 +543,7 @@ def test_p4_settle_batch_writes_tool_messages_in_summary_order() -> None:
             inherited_error_count=0,
         )
 
-    assert [message.tool_call_id for message in harness.messages] == ["valid-1", "blocked-1"]
+    assert [message.get("tool_call_id") for message in harness.messages] == ["valid-1", "blocked-1"]
 
 
 class _RecordingContextService:
@@ -571,6 +580,7 @@ class _RecordingContextService:
         project_to_transport: bool = True,
     ) -> None:
         self.appended.append((task_id, run_id, message, sequence, include_in_context))
+        return ContextEntry(message, run_id, sequence)
 
     def replace_message(self, record: Any) -> None:
         self.replaced.append(record)
@@ -592,7 +602,7 @@ def _memory_manager(
     manager.context_service = service
     manager.current_run_id = _RUN_ID
     manager.is_fork = False
-    manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
+    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     manager._entries = []
     manager._message_sequence = next_sequence
     manager._streaming_messages = {}
@@ -612,31 +622,36 @@ def test_p4_memory_reorders_but_persisted_order_is_never_fixed() -> None:
     manager = _memory_manager(service, next_sequence=1)
 
     manager.add_message(
-        AIMessage(
-            content="",
-            tool_calls=[
-                {"name": "write_file", "args": {}, "id": "blocked-1"},
-                {"name": "read_file", "args": {}, "id": "valid-1"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "blocked-1",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({})},
+                },
+                {
+                    "id": "valid-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({})},
+                },
             ],
-        )
+        }
     )
     # 落库顺序故意与 tool_calls 相反（valid 先、blocked 后）。
-    manager.add_message(ToolMessage(content="valid result", tool_call_id="valid-1"))
-    manager.add_message(ToolMessage(content="disabled", tool_call_id="blocked-1"))
+    manager.add_message({"role": "tool", "content": "valid result", "tool_call_id": "valid-1"})
+    manager.add_message({"role": "tool", "content": "disabled", "tool_call_id": "blocked-1"})
 
-    persisted_before = [
-        getattr(message, "tool_call_id", None) for _, _, message, _, _ in service.appended
-    ]
+    persisted_before = [message.get("tool_call_id") for _, _, message, _, _ in service.appended]
     assert persisted_before == [None, "valid-1", "blocked-1"], f"落库顺序={persisted_before}"
 
     loaded = manager.load_message()
-    tool_messages = [message.tool_call_id for message in loaded if isinstance(message, ToolMessage)]
+    tool_messages = [message.get("tool_call_id") for message in loaded if message["role"] == "tool"]
     # 内存工作副本被重排为 tool_calls 顺序。
     assert tool_messages == ["blocked-1", "valid-1"], f"内存顺序={tool_messages}"
     # 数据库侧没有任何改写：append 记录不变，replace 为空。
-    persisted_after = [
-        getattr(message, "tool_call_id", None) for _, _, message, _, _ in service.appended
-    ]
+    persisted_after = [message.get("tool_call_id") for _, _, message, _, _ in service.appended]
     assert persisted_after == persisted_before, "数据库落库顺序未被修正（缺陷：永不修正）"
     assert service.replaced == []
 
@@ -659,31 +674,40 @@ def test_p5_placeholder_is_replaced_by_real_result_after_resume() -> None:
     manager = _memory_manager(service, next_sequence=1)
 
     manager.add_message(
-        AIMessage(
-            content="",
-            tool_calls=[
-                {"name": "read_file", "args": {}, "id": "A"},
-                {"name": "write_file", "args": {}, "id": "B"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "A",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({})},
+                },
+                {
+                    "id": "B",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({})},
+                },
             ],
-        )
+        }
     )
-    manager.add_message(ToolMessage(content="A result", tool_call_id="A"))
+    manager.add_message({"role": "tool", "content": "A result", "tool_call_id": "A"})
 
     # 模拟进程崩溃后 resume：load_message 为未配对的 B 补 cancelled 占位。
     loaded = manager.load_message()
-    tool_ids = [message.tool_call_id for message in loaded if isinstance(message, ToolMessage)]
+    tool_ids = [message.get("tool_call_id") for message in loaded if message["role"] == "tool"]
     assert tool_ids == ["A", "B"], f"补占位后的顺序={tool_ids}"
-    assert "did not produce a result" in str(loaded[-1].content), "B 应得到 cancelled 占位"
+    assert "did not produce a result" in str(loaded[-1].get("content")), "B 应得到 cancelled 占位"
 
     # 真实结果到达。
     outcome = manager.add_message(
-        ToolMessage(content="real B result", tool_call_id="B"),
+        {"role": "tool", "content": "real B result", "tool_call_id": "B"},
         transport_metadata={"status": "completed"},
     )
 
     assert outcome == "replaced", "占位必须被原地覆盖，而不是并排追加第二行"
     assert len(service.replaced) == 1
-    assert [entry.message.content for entry in manager._entries] == [
+    assert [entry.message.get("content") for entry in manager._entries] == [
         "",
         "A result",
         "real B result",
@@ -693,27 +717,35 @@ def test_p5_placeholder_is_replaced_by_real_result_after_resume() -> None:
 
 
 def test_p5_placeholder_of_another_run_is_not_overwritten() -> None:
-    """P5-b：对照组——归属不同 Run 的既有结果行不会被覆盖（跨 run 保护生效）。
-
-    被测行为：``add_message(run_id=<另一个 run>)`` 时 ``candidate.run_id != target_run_id``，
-    走 append 分支。缺陷判定：符合预期。
-    """
+    """跨 Run 结果不能覆盖旧行，也不能在没有新调用依据时追加成孤儿。"""
+    from app.core.context.tool_call_closure import ContextProtocolError
 
     service = _RecordingContextService(max_sequence=0)
     manager = _memory_manager(service, next_sequence=1)
     manager.current_run_id = _RUN_ID
 
     manager.add_message(
-        AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "A"}])
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "A",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({})},
+                }
+            ],
+        }
     )
-    manager.add_message(ToolMessage(content="old run result", tool_call_id="A"))
+    manager.add_message({"role": "tool", "content": "old run result", "tool_call_id": "A"})
 
-    outcome = manager.add_message(
-        ToolMessage(content="new run result", tool_call_id="A"), run_id=_RUN_ID + 1
-    )
-
-    assert outcome == "appended", "不同 Run 的结果行不得被覆盖"
-    assert len(manager._entries) == 3
+    with pytest.raises(ContextProtocolError, match="tool_result_without_current_call"):
+        manager.add_message(
+            {"role": "tool", "content": "new run result", "tool_call_id": "A"}, run_id=_RUN_ID + 1
+        )
+    assert len(manager._entries) == 2
+    assert manager._entries[-1].message["content"] == "old run result"
+    assert service.replaced == []
 
 
 # ============================================================================
@@ -738,10 +770,17 @@ async def test_p6_observe_node_settles_even_when_run_is_cancelled() -> None:
     with harness.runtime():
         classified = harness.manager.classify(
             tool_calls=[
-                {"id": "ok-1", "name": "read_file", "args": {"path": "a.txt"}},
-                {"id": "cancelled-1", "name": "read_file", "args": {"path": "b.txt"}},
+                {
+                    "id": "ok-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
+                },
+                {
+                    "id": "cancelled-1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "b.txt"})},
+                },
             ],
-            invalid_tool_calls=[],
         )
 
     state = _state(
@@ -765,7 +804,7 @@ async def test_p6_observe_node_settles_even_when_run_is_cancelled() -> None:
         patch = await observation_node_module._observe_node(state)
 
     # 事实 1：两条观察都被结算（写了 2 条 ToolMessage），尽管 run 已取消。
-    assert [message.tool_call_id for message in harness.messages] == ["ok-1", "cancelled-1"]
+    assert [message.get("tool_call_id") for message in harness.messages] == ["ok-1", "cancelled-1"]
     # 事实 2：终态事件照发（ok-1 completed / cancelled-1 cancelled）。
     assert [(event.tool_call_id, event.status) for event in harness.writer.status_events] == [
         ("ok-1", "completed"),

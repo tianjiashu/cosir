@@ -59,7 +59,7 @@ def _child_profile() -> AgentProfile:
         allowed_tools=["read_file", "write_file", "delegate_task"],
         agent_type=AgentProfileType.CHILD,
         system_prompt="Test child system prompt.",
-        workflow=None,  # type: ignore[arg-type]
+
     )
 
 

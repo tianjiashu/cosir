@@ -37,7 +37,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.config.constant import Constant
 from app.core.llm_provider.model_failure import classify_model_failure
 from app.core.runtime.runner import AgentRuntime
-from app.core.workflows.agent_workflow import WorkflowRunFailure
+from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models import conversation_run_failure as failure_catalog
 from app.models.conversation_run_failure import (
     run_failure_message,
@@ -83,16 +83,22 @@ class _RecordingRunStateService:
         return SimpleNamespace(id=run_id) if self._settles else None
 
 
-def _make_agent(workflow_error: BaseException) -> SimpleNamespace:
+def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) -> SimpleNamespace:
     """构造带失败 workflow 的 agent profile 替身（``run`` 必须非 None）。"""
 
-    async def _boom(*_args: object, **_kwargs: object) -> None:
-        raise workflow_error
+    class _StubWorkflow:
+        async def run(self, *_args: object, **_kwargs: object) -> None:
+            raise workflow_error
 
+        async def finalize_run(self, _run_id: int) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.core.workflow.workflow.ReactLikeWorkflow", _StubWorkflow
+    )
     return SimpleNamespace(
         agent_id="main_agent",
         run=SimpleNamespace(id=7, task_id=3),
-        workflow=SimpleNamespace(run=_boom),
     )
 
 
@@ -504,7 +510,7 @@ def test_run_agent_propagates_settlement_runtime_error(
 
     with pytest.raises(RuntimeError, match="db down"):
         asyncio.run(
-            runtime.run_agent(_make_agent(RuntimeError("node exploded")))
+            runtime.run_agent(_make_agent(monkeypatch, RuntimeError("node exploded")))
         )
 
     assert len(run_state_service.calls) == 1
@@ -520,7 +526,7 @@ def test_run_agent_propagates_settlement_key_error(
 
     with pytest.raises(KeyError):
         asyncio.run(
-            runtime.run_agent(_make_agent(RuntimeError("node exploded")))
+            runtime.run_agent(_make_agent(monkeypatch, RuntimeError("node exploded")))
         )
 
     assert len(run_state_service.calls) == 1
@@ -536,7 +542,7 @@ def test_run_agent_does_not_swallow_base_exception(
 
     with pytest.raises(KeyboardInterrupt):
         asyncio.run(
-            runtime.run_agent(_make_agent(KeyboardInterrupt()))
+            runtime.run_agent(_make_agent(monkeypatch, KeyboardInterrupt()))
         )
 
     assert run_state_service.calls == []
@@ -554,7 +560,7 @@ def test_run_agent_settles_with_profile_run_id_without_operations(
     run_state_service = _RecordingRunStateService()
     runtime = _make_runtime(monkeypatch, run_state_service, operations_available=False)
 
-    asyncio.run(runtime.run_agent(_make_agent(RuntimeError("operations unavailable"))))
+    asyncio.run(runtime.run_agent(_make_agent(monkeypatch, RuntimeError("operations unavailable"))))
 
     assert [call["run_id"] for call in run_state_service.calls] == [7]
 
@@ -572,7 +578,7 @@ def test_run_agent_settles_with_empty_string_code_records_empty_reason(
     runtime = _make_runtime(monkeypatch, run_state_service)
     failure = WorkflowRunFailure("", "空 code 的失败")
 
-    asyncio.run(runtime.run_agent(_make_agent(failure)))
+    asyncio.run(runtime.run_agent(_make_agent(monkeypatch, failure)))
 
     assert run_state_service.calls[0]["end_reason"] == ""
     assert str(run_state_service.calls[0]["final_output"]).strip()

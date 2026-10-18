@@ -351,7 +351,7 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
         TerminalStartTool,
         TerminalWriteTool,
     )
-    from app.core.workflows.react.workflow import ReactLikeWorkflow
+    from app.core.workflow.workflow import ReactLikeWorkflow
     from app.service.terminal.terminal_session_service import TerminalSessionService
 
     # worker 路径只有宿主环境变量一个来源，测试沿用同一配置边界。

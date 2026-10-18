@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -30,8 +31,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
-from app.core.llm_provider.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunCommand, ConversationRunError, ConversationRunStatus
 from app.models.conversation_task_context import TransportMetadata
 from app.models.enums.tool_call_status import ToolCallEventStatus
@@ -106,6 +106,14 @@ def canonical_store(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("app.service.depends.get_task_crud", lambda: tasks)
     monkeypatch.setattr("app.service.depends.get_conversation_run_crud", lambda: runs)
     monkeypatch.setattr("app.service.depends.get_conversation_task_context_crud", lambda: contexts)
+    monkeypatch.setattr(
+        "app.task_runtime.task_runtime_space.get_task_service",
+        lambda: SimpleNamespace(get_task=tasks.get),
+    )
+    monkeypatch.setattr(
+        "app.task_runtime.task_runtime_space.get_workspace_service",
+        lambda: SimpleNamespace(get_workspace=workspaces.get),
+    )
     state = ConversationTaskStateService()
     task_runtime_spaces.close()
     store = SimpleNamespace(
@@ -151,21 +159,28 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
 def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = None) -> None:
     """Persist canonical user, AI/tool-call, and optional ToolMessage facts.
 
-    AI 消息与运行期同形：``content=""`` + ``additional_kwargs["reasoning_content"]=None``
-    （快照重建按这两个通道取文本/reasoning part）。工具结果行随行写入 wire 口径的
+    assistant 使用 SDK 原生字段 ``content``、``reasoning_content`` 和 ``tool_calls``。
+    工具结果行随行写入 wire 口径的
     ``TransportMetadata``（``status`` 取终态、``display_data`` 与短提示分列），与运行期
     ``ToolCallLifecycleManager.settle`` 的写入口径一致。
     """
 
-    _append(store, run.id, HumanMessage(content=f"user-{run.id}"))
+    _append(store, run.id, {"role": "user", "content": f"user-{run.id}"})
     _append(
         store,
         run.id,
-        AIMessage(
-            content="",
-            tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": call_id}],
-            additional_kwargs={"reasoning_content": None},
-        ),
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.py"})},
+                }
+            ],
+            "reasoning_content": None,
+        },
     )
     if result_status is None:
         return
@@ -174,11 +189,11 @@ def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = N
     _append(
         store,
         run.id,
-        ToolMessage(
-            content="file content" if is_success else "tool failed",
-            tool_call_id=call_id,
-            status="success" if is_success else "error",
-        ),
+        {
+            "role": "tool",
+            "content": "file content" if is_success else "tool failed",
+            "tool_call_id": call_id,
+        },
         metadata=TransportMetadata(
             status=_TOOL_WIRE_STATUS[result_status],
             display_data=(
@@ -228,7 +243,6 @@ def test_fresh_target_schema_has_no_persisted_conversation_snapshot_surface(tmp_
         forbidden = (
             "conversation_task_snapshots",
             "ConversationTaskSnapshot",
-            "state_json",
             "ensure_state_snapshot",
         )
         assert not any(
@@ -259,13 +273,13 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     state = store.state.get_state(store.task.id)
     assert [run["runId"] for run in state["runs"]] == [completed.id, failed.id, cancelled.id]
     assert state["current_run_id"] == cancelled.id
+    first_user = store.contexts.get(store.task.id, include_in_context=False)[0]
     assert [message["id"] for message in state["runs"][0]["messages"]] == [
-        f"user-{completed.id}",
-        f"assistant-{completed.id}",
+        first_user.message_id,
+        f"assistant-{first_user.message_id}",
     ]
-    # 冷读的 user 文本以 Run 输入事实为准（``build_user_message`` 取 extra.display_text
-    # 或 run.input_text），context 里的 HumanMessage 只用于判定「该 Run 有用户消息」。
-    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == completed.input_text
+    # 消息身份与正文取自 context，Run.input_text 仅记录首条输入的摘要。
+    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == f"user-{completed.id}"
     # 工具终态由 Run 分组配对产出（同一份 canonical 行同时驱动冷读快照与模型上下文）。
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
         store.contexts.get(store.task.id, include_in_context=False)
@@ -293,7 +307,7 @@ def test_real_sqlite_malformed_metadata_fails_and_not_as_empty_state(
     ai_row = next(
         row
         for row in store.contexts.get(store.task.id, include_in_context=False)
-        if isinstance(row.message, AIMessage)
+        if row.message["role"] == "assistant"
     )
     with store.factory.begin() as session:
         session.execute(
@@ -315,7 +329,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
 
     store = canonical_store
     run = _create_run(store, current=True)
-    _append(store, run.id, HumanMessage(content="durable user"))
+    _append(store, run.id, {"role": "user", "content": "durable user"})
     service = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run = store.runs
 
@@ -324,7 +338,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
             raise RuntimeError("SSE failed after commit")
 
     monkeypatch.setattr(
-        "app.service.task.conversation_run_state_service.service_depends.get_conversation_event_projector",
+        "app.service.conversation_run.conversation_run_state_service.service_depends.get_conversation_event_projector",
         lambda: FailingProjector(),
     )
     stats = ConversationRunUsageStats(**_USAGE)
@@ -342,8 +356,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
     ConversationTaskStateService.clear_process_state()
     state = store.state.get_state(store.task.id)
     assert state["runs"][0]["status"] == "completed"
-    # 同上：冷读 user 文本取 Run 输入事实，而非 context 行正文。
-    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == run.input_text
+    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == "durable user"
 
 
 @pytest.mark.asyncio
@@ -354,11 +367,11 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
 
     store = canonical_store
     run = _create_run(store, current=True)
-    _append(store, run.id, HumanMessage(content="user"))
+    _append(store, run.id, {"role": "user", "content": "user"})
     _append(
         store,
         run.id,
-        AIMessage(content="canonical", additional_kwargs={"reasoning_content": None}),
+        {"role": "assistant", "content": "canonical", "reasoning_content": None},
     )
     stream_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
     stream_service._snapshots = store.state
@@ -399,7 +412,6 @@ def _command_service(store) -> ConversationRunCommandService:
     service._context = store.context
     service._task = SimpleNamespace(
         get_latest_run=store.runs.get_latest_by_task,
-        get_context_window_total=lambda task_id: store.tasks.get(task_id).context_window_total,
     )
     return service
 
@@ -505,7 +517,7 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_without_command_persi
         lambda: store.factory,
     )
     monkeypatch.setattr(
-        "app.service.task.conversation_run_service.get_model_config_service",
+        "app.service.conversation_run.conversation_run_service.get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _config_id: SimpleNamespace(
                 supports_reasoning_effort=False,
@@ -553,7 +565,7 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_without_command_persi
     assert sum(isinstance(result, ConversationRunStartResult) for result in results) == 1
     assert sum(isinstance(result, ValueError) for result in results) == 1
     assert len(store.runs.list_by_task(store.task.id)) == 1
-    # user 消息由 workflow 在 graph 启动前写入，命令服务不写 context。
+    # 命令只入 inbox，user context 在普通模型边界消费输入时写入。
     assert store.contexts.get(store.task.id, include_in_context=False) == []
     first_run = store.runs.list_by_task(store.task.id)[0]
     # 第一个 Run 必须经状态 service 收口，而不是直接改 CRUD：Run 终态要靠事件投影同步到
@@ -607,7 +619,7 @@ def test_real_sqlite_fork_preserves_canonical_identity(
     _settle_run(store, source_run, "completed", "done")
     store.context.create_system_prompt(
         store.task.id,
-        SystemMessage(content="fixed system prompt"),
+        {"role": "system", "content": "fixed system prompt"},
     )
     target = store.tasks.create(store.workspace.id, "fork")
     with store.factory.begin() as session:
@@ -647,7 +659,7 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     repaired = [
         row
         for row in store.contexts.get(store.task.id, include_in_context=False)
-        if isinstance(row.message, ToolMessage)
+        if row.message["role"] == "tool"
     ]
     assert len(repaired) == 1
     assert repaired[0].run_id == run.id

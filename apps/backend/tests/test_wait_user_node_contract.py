@@ -12,16 +12,16 @@ from app.core.tools.schemas.user_decision import (
     UserDecision,
     UserDecisionKind,
 )
-from app.core.workflows.react.execution_state.route import ReactRoute
-from app.core.workflows.react.execution_state.state import ReactExecutionState
-from app.core.workflows.react.node_helper.tool_call_lifecycle import (
+from app.core.workflow.execution_state.route import ReactRoute
+from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
 
-wait_node_module = importlib.import_module("app.core.workflows.react.nodes.wait_user_node")
+wait_node_module = importlib.import_module("app.core.workflow.nodes.wait_user_node")
 lifecycle_module = importlib.import_module(
-    "app.core.workflows.react.node_helper.tool_call_lifecycle"
+    "app.core.workflow.node_helper.tool_call_lifecycle"
 )
 
 _TOOL_NAME = "agent_team"

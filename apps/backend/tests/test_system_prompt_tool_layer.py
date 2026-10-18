@@ -43,7 +43,7 @@ def _child_profile(
         allowed_tools=["read_file"],
         agent_type=AgentProfileType.CHILD,
         system_prompt="Child prompt.",
-        workflow=None,  # type: ignore[arg-type]
+
     )
 
 

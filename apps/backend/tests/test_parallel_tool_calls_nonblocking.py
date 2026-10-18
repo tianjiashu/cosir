@@ -20,7 +20,7 @@ from app.config.constant import Constant
 from app.core.observability.tool_trace_recorder import _NullToolTraceRecorder
 from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
-from app.core.workflows.workflow_operations import WorkflowOperations
+from app.core.workflow.workflow_operations import WorkflowOperations
 
 _PARALLEL_TOOL = "fake_parallel_tool"
 

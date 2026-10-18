@@ -1,4 +1,4 @@
-"""Task 4 RED tests for canonical cold reads and snapshot persistence removal."""
+"""canonical 冷读、TaskRuntimeSpace 懒加载与快照进程生命周期。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
-from app.core.llm_provider.messages import AIMessage, HumanMessage, SystemMessage
 from app.models import ConversationRunStatus
 from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_record import ConversationRunRecord
@@ -39,7 +38,6 @@ def _task() -> TaskRecord:
         created_at=now,
         updated_at=now,
         current_run_id=2,
-        context_window_total=100,
     )
 
 
@@ -49,6 +47,7 @@ def _run(run_id: int, status: str) -> ConversationRunRecord:
         id=run_id,
         task_id=7,
         input_text=f"input-{run_id}",
+        context_window_total=100,
         status=status,
         created_at=now,
         updated_at=now,
@@ -56,9 +55,17 @@ def _run(run_id: int, status: str) -> ConversationRunRecord:
 
 
 @pytest.fixture(autouse=True)
-def _reset_task_runtime_spaces() -> None:
-    """Keep each state-service test isolated from the task-local process cache."""
+def _reset_task_runtime_spaces(monkeypatch) -> None:
+    """隔离任务服务依赖与进程缓存，保留真实 TaskRuntimeSpace 的懒加载行为。"""
 
+    monkeypatch.setattr(
+        "app.task_runtime.task_runtime_space.get_task_service",
+        lambda: SimpleNamespace(get_task=lambda _id: _task()),
+    )
+    monkeypatch.setattr(
+        "app.task_runtime.task_runtime_space.get_workspace_service",
+        lambda: SimpleNamespace(get_workspace=lambda _id: SimpleNamespace(id=3)),
+    )
     ConversationTaskStateService.clear_process_state()
     yield
     ConversationTaskStateService.clear_process_state()
@@ -84,7 +91,7 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
             id=11,
             task_id=7,
             run_id=2,
-            message=HumanMessage(content="from canonical context"),
+            message={"role": "user", "content": "from canonical context"},
             include_in_context=True,
             sequence=1,
         )
@@ -108,9 +115,8 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
 
     assert state["current_run_id"] == 2
     assert [run["runId"] for run in state["runs"]] == [1, 2]
-    # user 消息文本取自 runs 行的 ``input_text``（``extra.display_text`` 优先），
-    # context 行只承载喂给模型的上下文序列，不参与 user 消息文本的重建。
-    assert state["runs"][1]["messages"][0]["parts"][0]["text"] == "input-2"
+    # 同 Run 可有多个用户输入，正文取对应 context，不能重复使用 Run 的首条 input_text。
+    assert state["runs"][1]["messages"][0]["parts"][0]["text"] == "from canonical context"
 
 
 def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
@@ -123,7 +129,7 @@ def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
             id=10,
             task_id=7,
             run_id=None,
-            message=SystemMessage(content="internal system prompt"),
+            message={"role": "system", "content": "internal system prompt"},
             include_in_context=True,
             sequence=0,
         ),
@@ -131,7 +137,7 @@ def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
             id=11,
             task_id=7,
             run_id=2,
-            message=HumanMessage(content="canonical user message"),
+            message={"role": "user", "content": "canonical user message"},
             include_in_context=True,
             sequence=1,
         ),
@@ -139,7 +145,7 @@ def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
             id=12,
             task_id=7,
             run_id=2,
-            message=AIMessage(content="canonical assistant message"),
+            message={"role": "assistant", "content": "canonical assistant message"},
             include_in_context=True,
             sequence=2,
         ),
@@ -173,7 +179,7 @@ def test_state_snapshot_is_lazily_rebuilt_once_per_task_runtime_space() -> None:
             id=11,
             task_id=7,
             run_id=2,
-            message=HumanMessage(content="durable"),
+            message={"role": "user", "content": "durable"},
             include_in_context=True,
             sequence=1,
         )
@@ -218,7 +224,7 @@ def test_memory_state_is_not_written_to_persistence_and_rebuilds_after_restart()
             id=11,
             task_id=7,
             run_id=2,
-            message=HumanMessage(content="durable"),
+            message={"role": "user", "content": "durable"},
             include_in_context=True,
             sequence=1,
         )
@@ -241,7 +247,7 @@ def test_memory_state_is_not_written_to_persistence_and_rebuilds_after_restart()
     ConversationTaskStateService.clear_process_state()
     restarted = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     rebuilt = restarted.get_state(7)
-    assert rebuilt["runs"][0]["messages"][0]["parts"][0]["text"] == "input-2"
+    assert rebuilt["runs"][0]["messages"][0]["parts"][0]["text"] == "durable"
 
 
 def test_canonical_state_sources_failures_are_logged_and_not_replaced_by_empty_state(
@@ -268,7 +274,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             id=11,
             task_id=7,
             run_id=2,
-            message=HumanMessage(content="committed user"),
+            message={"role": "user", "content": "committed user"},
             include_in_context=True,
             sequence=1,
         ),
@@ -276,20 +282,9 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             id=12,
             task_id=7,
             run_id=2,
-            message=AIMessage(content="committed assistant fact"),
+            message={"role": "assistant", "content": "committed assistant fact"},
             include_in_context=True,
             sequence=2,
-            transport_metadata={
-                "schema_version": 1,
-                "parts": [
-                    {
-                        "type": "text",
-                        "text": "committed assistant fact",
-                        "status": "completed",
-                    }
-                ],
-                "tool_result": None,
-            },
         ),
     ]
 
@@ -323,13 +318,13 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                             "parts": [{"type": "text", "text": "stale", "status": "running"}],
                         },
                     ],
+                    "contextWindowTotal": None,
                     "usage": None,
                     "error": None,
                 }
             ],
             "current_run_id": 2,
             "approvals": {},
-            "context_window_total": None,
             "error": None,
         }
     )

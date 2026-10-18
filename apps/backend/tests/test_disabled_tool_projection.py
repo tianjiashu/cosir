@@ -1,11 +1,12 @@
 """Disabled tool closure projection regression tests."""
 
+import json
+
 import pytest
 
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.core.llm_provider.messages import AIMessage, ToolMessage
 from app.models.conversation_task_context import (
     ConversationTaskContextRecord,
     TransportMetadata,
@@ -30,10 +31,17 @@ def test_rebuild_pairs_disabled_tool_closure_with_transport_metadata(
             id=1,
             task_id=7,
             run_id=1,
-            message=AIMessage(
-                content="",
-                tool_calls=[{"id": "disabled-1", "name": "read_file", "args": {}}],
-            ),
+            message={
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "disabled-1",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": json.dumps({})},
+                    }
+                ],
+            },
             include_in_context=True,
             sequence=1,
         ),
@@ -41,11 +49,11 @@ def test_rebuild_pairs_disabled_tool_closure_with_transport_metadata(
             id=2,
             task_id=7,
             run_id=1,
-            message=ToolMessage(
-                content="This tool is disabled for the current run.",
-                tool_call_id="disabled-1",
-                name="read_file",
-            ),
+            message={
+                "role": "tool",
+                "content": "This tool is disabled for the current run.",
+                "tool_call_id": "disabled-1",
+            },
             include_in_context=True,
             sequence=2,
             transport_metadata=TransportMetadata(status="cancelled"),

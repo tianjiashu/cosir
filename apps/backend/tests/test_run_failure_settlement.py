@@ -38,7 +38,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.config.constant import Constant
 from app.core.runtime import runner as runner_module
 from app.core.runtime.runner import AgentRuntime
-from app.core.workflows.agent_workflow import WorkflowRunFailure
+from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models.conversation_run_failure import (
     run_failure_message,
 )
@@ -109,6 +109,7 @@ def _running_state() -> ConversationStateSnapshot:
             langfuseTraceId=None,
             messages=[],
             usage=None,
+            contextWindowTotal=None,
             error=None,
         )
     ]
@@ -159,16 +160,22 @@ def test_failure_code_for_honours_workflow_failure_code() -> None:
     )
 
 
-def _make_agent(workflow_error: BaseException) -> SimpleNamespace:
+def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) -> SimpleNamespace:
     """构造带失败 workflow 的 agent profile 替身（``run`` 字段必须非 None）。"""
 
-    async def _boom(*_args: object, **_kwargs: object) -> None:
-        raise workflow_error
+    class _StubWorkflow:
+        async def run(self, *_args: object, **_kwargs: object) -> None:
+            raise workflow_error
 
+        async def finalize_run(self, _run_id: int) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.core.workflow.workflow.ReactLikeWorkflow", _StubWorkflow
+    )
     return SimpleNamespace(
         agent_id="main_agent",
         run=SimpleNamespace(id=7, task_id=3),
-        workflow=SimpleNamespace(run=_boom),
     )
 
 
@@ -227,7 +234,7 @@ async def test_run_agent_settles_failed_run_without_propagating(
     original = _ConnectFailure()
     runtime = _make_runtime(monkeypatch, object(), run_state_service=run_state_service)
 
-    await runtime.run_agent(_make_agent(original))
+    await runtime.run_agent(_make_agent(monkeypatch, original))
 
     network_error_code = ErrorKind.MODEL_NETWORK_ERROR.value
     assert run_state_service.calls == [
@@ -250,7 +257,7 @@ async def test_run_agent_tolerates_lost_settlement_race(
     run_state_service = _RecordingRunStateService(settles=False)
     runtime = _make_runtime(monkeypatch, object(), run_state_service=run_state_service)
 
-    await runtime.run_agent(_make_agent(RuntimeError("node exploded")))
+    await runtime.run_agent(_make_agent(monkeypatch, RuntimeError("node exploded")))
 
     assert len(run_state_service.calls) == 1
 
@@ -271,13 +278,10 @@ async def test_run_agent_settles_even_when_operations_unavailable(
         monkeypatch, None, build_operations_error=original, run_state_service=run_state_service
     )
 
-    await runtime.run_agent(_make_agent(original))
+    await runtime.run_agent(_make_agent(monkeypatch, original))
 
     assert len(run_state_service.calls) == 1
-    assert (
-        run_state_service.calls[0]["end_reason"]
-        == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
-    )
+    assert run_state_service.calls[0]["end_reason"] == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
 
 
 @pytest.mark.asyncio
@@ -293,7 +297,7 @@ async def test_run_agent_propagates_settlement_failure(
     runtime = _make_runtime(monkeypatch, object(), run_state_service=run_state_service)
 
     with pytest.raises(RuntimeError, match="db down"):
-        await runtime.run_agent(_make_agent(RuntimeError("node exploded")))
+        await runtime.run_agent(_make_agent(monkeypatch, RuntimeError("node exploded")))
 
     assert len(run_state_service.calls) == 1
 
@@ -345,9 +349,7 @@ def test_build_run_error_projects_persisted_contract() -> None:
         },
     )
 
-    assert ConversationTaskStateRebuilder.build_run_error(
-        cast(ConversationRunRecord, run)
-    ) == {
+    assert ConversationTaskStateRebuilder.build_run_error(cast(ConversationRunRecord, run)) == {
         "code": _SERVICE_ERROR_CODE,
         "message": run_failure_message(_SERVICE_ERROR_CODE),
     }
@@ -368,7 +370,11 @@ def test_build_run_error_returns_none_without_persisted_error() -> None:
         {"code": "", "message": "运行失败"},
         {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED, "message": ""},
         {"code": 1, "message": "运行失败"},
-        {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED, "message": "运行失败", "retryable": True},
+        {
+            "code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED,
+            "message": "运行失败",
+            "retryable": True,
+        },
     ],
 )
 def test_build_run_error_rejects_malformed_payload(payload: dict[str, object]) -> None:
@@ -400,3 +406,32 @@ def test_validate_snapshot_accepts_controlled_run_error() -> None:
     }
 
     validate_snapshot(state)
+
+
+@pytest.mark.asyncio
+async def test_context_protocol_failure_has_local_code_and_preserves_diagnostic_boundary(
+    monkeypatch,
+):
+    """上下文完整性失败落定为本地错误，不归因于模型服务、不把工具正文显示给用户。"""
+    from app.core.context.context_entry import ContextEntry
+    from app.core.context.tool_call_closure import ContextProtocolError
+
+    error = ContextProtocolError(
+        "orphan_tool_result",
+        ContextEntry(
+            {"role": "tool", "content": "private tool output", "tool_call_id": "ghost"},
+            7,
+            4,
+        ),
+        "ghost",
+    )
+    state = _RecordingRunStateService()
+    runtime = _make_runtime(monkeypatch, object(), run_state_service=state)
+    await runtime.run_agent(_make_agent(monkeypatch, error))
+    assert len(state.calls) == 1
+    assert state.calls[0]["end_reason"] == Constant.Run.RUN_FAILURE_CODE_CONTEXT_PROTOCOL_INVALID
+    assert state.calls[0]["final_output"] == run_failure_message(
+        Constant.Run.RUN_FAILURE_CODE_CONTEXT_PROTOCOL_INVALID
+    )
+    assert state.calls[0]["error_message"] is None
+    assert "private tool output" not in str(state.calls)

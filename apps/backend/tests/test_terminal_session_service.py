@@ -937,7 +937,7 @@ def test_list_sessions_is_task_scoped_and_keeps_recent_exits(monkeypatch, tmp_pa
 
 @pytest.mark.asyncio
 async def test_workflow_finalization_preserves_task_sessions(monkeypatch, tmp_path: Path) -> None:
-    from app.core.workflows.react.workflow import ReactLikeWorkflow
+    from app.core.workflow.workflow import ReactLikeWorkflow
 
     service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)

@@ -1,5 +1,6 @@
 """Rebuild-boundary tests for the canonical Transport snapshot assembler."""
 
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -15,7 +16,6 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
-from app.core.llm_provider.messages import AIMessage, HumanMessage, ToolMessage
 from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -158,7 +158,7 @@ def test_rebuild_preserves_streaming_assistant_draft_for_active_run() -> None:
         id=1,
         task_id=7,
         run_id=1,
-        message=AIMessage(content="输出到一半"),
+        message={"role": "assistant", "content": "输出到一半"},
         include_in_context=False,
         sequence=1,
         is_streaming=True,
@@ -190,7 +190,7 @@ def test_rebuild_closes_streaming_assistant_draft_when_run_is_cancelled() -> Non
         id=1,
         task_id=7,
         run_id=1,
-        message=AIMessage(content="输出到一半"),
+        message={"role": "assistant", "content": "输出到一半"},
         include_in_context=False,
         sequence=1,
         is_streaming=True,
@@ -218,20 +218,26 @@ def test_rebuild_restores_child_run_locator_and_workspace_role_from_display_data
         id=1,
         task_id=7,
         run_id=1,
-        message=AIMessage(
-            content="",
-            tool_calls=[
+        message={
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
                 {
                     "id": "delegate-1",
-                    "name": "delegate_task",
-                    "args": {
-                        "child_agent_id": "reviewer",
-                        "message": "review",
-                        "agent_name": "审查代码",
+                    "type": "function",
+                    "function": {
+                        "name": "delegate_task",
+                        "arguments": json.dumps(
+                            {
+                                "child_agent_id": "reviewer",
+                                "message": "review",
+                                "agent_name": "审查代码",
+                            }
+                        ),
                     },
                 }
             ],
-        ),
+        },
         include_in_context=False,
         sequence=1,
     )
@@ -239,7 +245,7 @@ def test_rebuild_restores_child_run_locator_and_workspace_role_from_display_data
         id=2,
         task_id=7,
         run_id=1,
-        message=ToolMessage(content="started", tool_call_id="delegate-1"),
+        message={"role": "tool", "content": "started", "tool_call_id": "delegate-1"},
         include_in_context=False,
         sequence=2,
         transport_metadata={
@@ -340,16 +346,15 @@ def test_rebuild_restores_ordinary_file_from_run_extra() -> None:
         id=1,
         task_id=7,
         run_id=1,
-        message=HumanMessage(
-            content=run.input_text,
-            additional_kwargs={
-                "user_input": {
-                    "input_text": run.input_text,
-                    "image_paths": [],
-                    "extra": run.extra.to_dict(),
+        message={"role": "user", "content": run.input_text},
+        metadata={
+            "user_input": {
+                "extra": {
+                    "display_text": run.extra.display_text,
+                    "attachments": run.extra.attachments,
                 }
-            },
-        ),
+            }
+        },
         include_in_context=True,
         sequence=1,
     )

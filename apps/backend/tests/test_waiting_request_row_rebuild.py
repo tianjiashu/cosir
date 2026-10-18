@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -19,16 +20,15 @@ import pytest
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.core.llm_provider.messages import AIMessage, ToolMessage
 from app.models.conversation_task_context import (
     ConversationTaskContextRecord,
     TransportMetadata,
 )
 
 _TOOL_CALL = {
-    "name": "agent_team",
-    "args": {"team_id": "code-quality"},
     "id": "call-a",
+    "type": "function",
+    "function": {"name": "agent_team", "arguments": json.dumps({"team_id": "code-quality"})},
 }
 
 _CARD_PAYLOAD: dict[str, Any] = {
@@ -72,7 +72,7 @@ def _rows(metadata: TransportMetadata | None) -> list[ConversationTaskContextRec
         ConversationTaskContextRecord(
             task_id=3,
             run_id=2,
-            message=AIMessage(content="", tool_calls=[dict(_TOOL_CALL)]),
+            message={"role": "assistant", "content": "", "tool_calls": [dict(_TOOL_CALL)]},
             include_in_context=True,
             sequence=1,
         )
@@ -82,9 +82,11 @@ def _rows(metadata: TransportMetadata | None) -> list[ConversationTaskContextRec
             ConversationTaskContextRecord(
                 task_id=3,
                 run_id=2,
-                message=ToolMessage(
-                    content="waiting for the user's decision", tool_call_id="call-a"
-                ),
+                message={
+                    "role": "tool",
+                    "content": "waiting for the user's decision",
+                    "tool_call_id": "call-a",
+                },
                 include_in_context=True,
                 sequence=2,
                 transport_metadata=metadata,

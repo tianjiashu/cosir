@@ -26,7 +26,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
+import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.assistant_transport.event import (
     RunInitializedEvent,
     RunStatusChangedEvent,
@@ -63,7 +63,7 @@ from app.core.tools.tool_execute.tool_terminal_projection import (
 )
 from app.core.tools.tool_handler.read_file import ReadFileTool
 from app.core.tools.tool_registry import ToolRegistry
-from app.core.workflows.react.node_helper.tool_call_lifecycle import (
+from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
@@ -1263,7 +1263,7 @@ def test_lifecycle_ui_error_delegates_to_projection(
 ) -> None:
     """judged: lifecycle ``_ui_error`` 逐分支等于投影模块 ``terminal_error_hint``。"""
 
-    from app.core.workflows.react.node_helper.tool_call_lifecycle import _ui_error
+    from app.core.workflow.node_helper.tool_call_lifecycle import _ui_error
 
     summary = {"display_data": display_data}
     assert _ui_error(summary, event_status) == terminal_error_hint(event_status, display_data)
@@ -1565,7 +1565,7 @@ def test_two_paths_agree_on_malformed_display_data(
 def test_lifecycle_ui_data_delegates_to_normalize_display_data() -> None:
     """judged: lifecycle ``_ui_data`` 逐分支等于投影模块 ``normalize_display_data``（无第二份归一）。"""
 
-    from app.core.workflows.react.node_helper.tool_call_lifecycle import _ui_data
+    from app.core.workflow.node_helper.tool_call_lifecycle import _ui_data
 
     class _Undeepcopyable:
         def __deepcopy__(self, _memo: Any) -> Any:

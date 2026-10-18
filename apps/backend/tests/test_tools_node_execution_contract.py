@@ -20,21 +20,20 @@ from typing import Any
 import pytest
 
 from app.assistant_transport.event import ToolCallStatusChangedEvent
-from app.core.llm_provider.messages import ToolMessage
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolObservation, UserDecision, UserDecisionKind
-from app.core.workflows.react.execution_state.route import ReactRoute
-from app.core.workflows.react.execution_state.state import ReactExecutionState
-from app.core.workflows.react.node_helper.tool_call_lifecycle import (
+from app.core.workflow.execution_state.route import ReactRoute
+from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
-from app.core.workflows.react.nodes.tools_node import _merge_batch_results
+from app.core.workflow.nodes import _merge_batch_results
 
 lifecycle_module = importlib.import_module(
-    "app.core.workflows.react.node_helper.tool_call_lifecycle"
+    "app.core.workflow.node_helper.tool_call_lifecycle"
 )
-tools_node_module = importlib.import_module("app.core.workflows.react.nodes.tools_node")
+tools_node_module = importlib.import_module("app.core.workflow.nodes.tools_node")
 
 _TOOL_NAME = "agent_team"
 
@@ -68,11 +67,11 @@ class _Harness:
             allows_tools=frozenset({_TOOL_NAME}),
             get_current_task=lambda: SimpleNamespace(id=11),
             run_tool_calls=self._run_tool_calls,
-            to_tool_model_message=lambda observation: ToolMessage(
-                content=str(observation.content or observation.error or ""),
-                tool_call_id=observation.tool_call_id,
-                name=observation.tool_name,
-            ),
+            to_tool_model_message=lambda observation: {
+                "role": "tool",
+                "content": str(observation.content or observation.error or ""),
+                "tool_call_id": observation.tool_call_id,
+            },
         )
         self.runtime_config = SimpleNamespace(
             operations=self.operations,

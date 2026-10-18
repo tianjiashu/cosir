@@ -1,13 +1,15 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from app.core.agents.agent_profile import AgentProfile
-from app.core.agents.model_settings import ModelSettings
+from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.llm_provider import model_factory
-from app.models.conversation_run_extra import ConversationRunExtra
+from app.models.conversation_run_extra import ConversationRunExtra, ReasoningEffort
 from app.models.conversation_run_record import ConversationRunRecord
 
 
-def _run(*, reasoning_effort: str | None) -> ConversationRunRecord:
+def _run(*, reasoning_effort: ReasoningEffort | None) -> ConversationRunRecord:
     now = datetime.now(UTC)
     return ConversationRunRecord(
         id=1,
@@ -30,7 +32,7 @@ def _profile() -> AgentProfile:
         agent_id="main_agent",
         role="主 Agent",
         system_prompt="system",
-        workflow=object(),
+
         model_settings=ModelSettings(
             temperature=0.2,
             reasoning_effort="high",
@@ -93,3 +95,20 @@ def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
     assert resolved.model_name == "profile-model"
     assert resolved.context_window_k == 64
     assert resolved.supports_thinking is False
+
+
+@pytest.mark.parametrize("effort", ["low", "high", "max"])
+def test_profile_reasoning_effort_survives_configuration_and_run_round_trip(effort):
+    settings = ModelSettings.from_json({"reasoning_effort": effort, "temperature": 0.2})
+    extra = ConversationRunExtra(
+        display_text="hello", attachments=[], reasoning_effort=settings.reasoning_effort
+    )
+    restored = ConversationRunExtra.from_dict(extra.to_dict())
+    assert restored.reasoning_effort == effort
+    assert settings.to_dict() == {"reasoning_effort": effort, "temperature": 0.2}
+
+
+@pytest.mark.parametrize("effort", ["medium", "", "HIGH", 1, True, None])
+def test_invalid_profile_reasoning_effort_fails_at_configuration_boundary(effort):
+    with pytest.raises(ModelSettingsError):
+        ModelSettings.from_json({"reasoning_effort": effort})

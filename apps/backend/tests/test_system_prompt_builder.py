@@ -39,7 +39,7 @@ def _profile() -> AgentProfile:
         allowed_tools=[],
         agent_type=AgentProfileType.MAIN,
         system_prompt="Test main system prompt.",
-        workflow=None,  # type: ignore[arg-type]
+
     )
 
 

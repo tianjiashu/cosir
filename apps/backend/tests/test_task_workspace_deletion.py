@@ -7,7 +7,6 @@ from sqlalchemy import func, select
 
 from app.api.tasks_api import delete_task as delete_task_endpoint
 from app.api.workspaces_api import delete_workspace as delete_workspace_endpoint
-from app.core.llm_provider.messages import HumanMessage
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service.depends import (
@@ -78,7 +77,7 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
         ConversationTaskContextRecord(
             task_id=root.id,
             run_id=root_run.id,
-            message=HumanMessage(content="root canonical message"),
+            message={"role": "user", "content": "root canonical message"},
             include_in_context=True,
             sequence=1,
         )
@@ -87,7 +86,7 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
         ConversationTaskContextRecord(
             task_id=child.id,
             run_id=child_run.id,
-            message=HumanMessage(content="child canonical message"),
+            message={"role": "user", "content": "child canonical message"},
             include_in_context=True,
             sequence=1,
         )

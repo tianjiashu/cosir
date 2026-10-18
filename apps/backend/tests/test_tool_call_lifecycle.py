@@ -1,13 +1,14 @@
 """ToolCallLifecycleManager 的状态、事件和序列化契约测试。"""
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
-import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
+import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.tools.schemas import ToolCall
-from app.core.workflows.react.execution_state.route import ReactRoute
-from app.core.workflows.react.execution_state.state import ReactExecutionState
-from app.core.workflows.react.node_helper.tool_call_lifecycle import (
+from app.core.workflow.execution_state.route import ReactRoute
+from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.node_helper import (
     SettlementResult,
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
@@ -95,21 +96,22 @@ class _LifecycleHarness:
         return result
 
     def create(self, tool_call: ToolCall) -> None:
-        """创建工具调用并保存返回的 state 快照（参数在创建期落进记录）。"""
-
+        """模拟预览和完整输出准入两个边界，只有 classify 才解析执行参数。"""
+        calls = [
+            {
+                "id": tool_call.call_id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.tool_name,
+                    "arguments": json.dumps(tool_call.arguments),
+                },
+            }
+        ]
         with self._patch_runtime():
             self.manager = self.manager.create(
-                task_id=1,
-                run_id=2,
-                step_id="step-3",
-                raw_tool_calls=[
-                    {
-                        "id": tool_call.call_id,
-                        "name": tool_call.tool_name,
-                        "args": tool_call.arguments,
-                    }
-                ],
+                task_id=1, run_id=2, step_id="step-3", raw_tool_calls=calls
             )
+            self.manager = self.manager.classify(tool_calls=calls)
 
     def begin(self, call_id: str) -> None:
         """把已创建的工具调用迁移为 running（迁移只按状态判定，不再重传参数）。"""
@@ -246,9 +248,21 @@ def test_create_is_idempotent_and_handles_multiple_calls() -> None:
             run_id=2,
             step_id="step-3",
             raw_tool_calls=[
-                {"id": "a", "name": "read_file"},
-                {"id": "b", "name": "write_file"},
-                {"id": "a", "name": "read_file"},
+                {
+                    "id": "a",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({})},
+                },
+                {
+                    "id": "b",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({})},
+                },
+                {
+                    "id": "a",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({})},
+                },
             ],
         )
 
@@ -265,8 +279,13 @@ def test_banned_tool_is_filtered_from_live_projection_and_execution() -> None:
 
     with harness._patch_runtime():
         harness.manager = harness.manager.classify(
-            tool_calls=[{"name": "read_file", "args": {}, "id": "blocked-call"}],
-            invalid_tool_calls=[],
+            tool_calls=[
+                {
+                    "id": "blocked-call",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({})},
+                }
+            ],
         )
 
     assert harness.events == []
@@ -295,16 +314,31 @@ def test_mixed_banned_tool_only_projects_and_executes_allowed_call() -> None:
             run_id=2,
             step_id="step-3",
             raw_tool_calls=[
-                {"id": "blocked", "name": "read_file"},
-                {"id": "allowed", "name": "write_file"},
+                {
+                    "id": "blocked",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({})},
+                },
+                {
+                    "id": "allowed",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({})},
+                },
             ],
         )
         harness.manager = harness.manager.classify(
             tool_calls=[
-                {"name": "read_file", "args": {}, "id": "blocked"},
-                {"name": "write_file", "args": {}, "id": "allowed"},
+                {
+                    "id": "blocked",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({})},
+                },
+                {
+                    "id": "allowed",
+                    "type": "function",
+                    "function": {"name": "write_file", "arguments": json.dumps({})},
+                },
             ],
-            invalid_tool_calls=[],
         )
 
     # ``classify`` 只重建集合、不发事件；创建事件由 ``create`` 发出（此处只有一条 allowed）。
@@ -334,7 +368,13 @@ def test_blocked_call_closure_is_settled_without_status_event() -> None:
             task_id=1,
             run_id=2,
             step_id="step-3",
-            raw_tool_calls=[{"id": "blocked", "name": "read_file"}],
+            raw_tool_calls=[
+                {
+                    "id": "blocked",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": json.dumps({})},
+                }
+            ],
         )
         harness.manager, event_status = harness.manager.settle(
             task_id=1,

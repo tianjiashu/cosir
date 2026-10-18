@@ -2,25 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from openai.types.chat import (
+    ChatCompletionToolMessageParam,
+)
 
-import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
+import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.assistant_transport.event import RunStatusChangedEvent
 from app.core.context.context_entry import ContextEntry
-from app.core.context.runtime_context_manager import RuntimeContextManager, _as_ai_message
-from app.core.llm_provider.messages import (
-    AIMessage,
-    AIMessageChunk,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
-from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflows.react.node_helper.tool_call_lifecycle import (
+from app.core.context.runtime_context_manager import RuntimeContextManager
+from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
@@ -29,6 +26,7 @@ from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
+from tests.sdk_fixtures import sdk_completion
 
 
 class _RecordingContextService:
@@ -39,6 +37,7 @@ class _RecordingContextService:
     def append(self, *args: Any, **kwargs: Any) -> None:
         self.appended.append({"args": args, "kwargs": kwargs})
         self.current_max_sequence = args[3]
+        return ContextEntry(args[2], args[1], args[3])
 
     def entries_in_context(self, _task_id: int) -> list[ContextEntry]:
         return []
@@ -63,22 +62,25 @@ def _runtime_manager(service: _RecordingContextService) -> RuntimeContextManager
     manager._entries = []
     manager._message_sequence = 1
     manager._streaming_messages = {}
-    manager._system_entry = ContextEntry(SystemMessage(content="system"), None, -1)
+    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     return manager
 
 
 def test_runtime_context_persists_complete_ai_fields_and_ordered_parts() -> None:
     service = _RecordingContextService()
     manager = _runtime_manager(service)
-    message = AIMessage(
-        content="answer",
-        additional_kwargs={"reasoning_content": "think", "provider_flag": True},
-        tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
-        invalid_tool_calls=[],
-        response_metadata={"model_name": "model-x"},
-        usage_metadata={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
-        id="msg-1",
-    )
+    message = {
+        "role": "assistant",
+        "content": "answer",
+        "reasoning_content": "think",
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": json.dumps({"path": "a.py"})},
+            }
+        ],
+    }
 
     manager.add_message(message)
 
@@ -89,7 +91,7 @@ def test_runtime_context_persists_complete_ai_fields_and_ordered_parts() -> None
 def test_begin_run_binds_identity_without_rewriting_context() -> None:
     service = _RecordingContextService()
     manager = _runtime_manager(service)
-    message = HumanMessage(content="existing")
+    message = {"role": "user", "content": "existing"}
     manager._entries = [ContextEntry(message, 11, 1)]
     manager.begin_run(SimpleNamespace(id=12, task_id=7), "fresh")
     assert manager.current_run_id == 12
@@ -97,40 +99,20 @@ def test_begin_run_binds_identity_without_rewriting_context() -> None:
     assert service.appended == []
 
 
-def test_merged_chunk_preserves_complete_langchain_message_semantics() -> None:
-    """聚合 chunk 收口为 ``AIMessage`` 时必须保留完整 LangChain 消息语义。
+def test_sdk_response_projection_preserves_raw_tool_arguments():
+    from app.core.llm_provider.message_codec import assistant_message
 
-    合并职责已由 ``ModelChunkProcessor.collect`` 收敛到
-    ``RuntimeContextManager.add_message_chunk`` / ``flush_message_chunk`` 使用的
-    ``_as_ai_message``，本测试锁定该转换不丢失 content / name / id / additional_kwargs /
-    response_metadata / usage_metadata 以及 tool_calls / invalid_tool_calls。
-    """
-
-    chunk = AIMessageChunk(
-        content=[{"type": "text", "text": "structured", "index": 0}],
-        name="assistant",
-        id="msg-1",
-        additional_kwargs={"provider_flag": True, "reasoning_content": "think"},
-        response_metadata={"model_name": "model-x"},
-        usage_metadata={"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
-        tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
-        invalid_tool_calls=[{"name": "broken", "args": "{", "id": "call-bad", "error": "bad"}],
-        tool_call_chunks=[
-            {"name": "read_file", "args": '{"path":"a.py"}', "id": "call-1", "index": 0}
+    response = sdk_completion(
+        "answer",
+        reasoning_content="think",
+        tool_calls=[
+            {"id": "call", "type": "function", "function": {"name": "read_file", "arguments": "{"}}
         ],
     )
-
-    collected = _as_ai_message(chunk)
-
-    assert isinstance(collected, AIMessage)
-    assert collected.content == chunk.content
-    assert collected.name == chunk.name
-    assert collected.id == chunk.id
-    assert collected.additional_kwargs == chunk.additional_kwargs
-    assert collected.response_metadata == chunk.response_metadata
-    assert collected.usage_metadata == chunk.usage_metadata
-    assert collected.tool_calls == chunk.tool_calls
-    assert collected.invalid_tool_calls == chunk.invalid_tool_calls
+    projected = assistant_message(response.choices[0].message)
+    assert projected["content"] == "answer"
+    assert projected["reasoning_content"] == "think"
+    assert projected["tool_calls"][0]["function"]["arguments"] == "{"
 
 
 def test_tool_call_lifecycle_freezes_presentation_in_serializable_state(monkeypatch) -> None:
@@ -154,7 +136,9 @@ def test_tool_call_lifecycle_freezes_presentation_in_serializable_state(monkeypa
         task_id=7,
         run_id=11,
         step_id="step-1",
-        raw_tool_calls=[{"id": "call-1", "name": "read_file"}],
+        raw_tool_calls=[
+            {"id": "call-1", "type": "function", "function": {"name": "read_file", "arguments": ""}}
+        ],
     )
 
     assert manager.valid_calls["call-1"].presentation == {"verb": "Read"}
@@ -178,9 +162,9 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
     order: list[str] = []
 
     class _RuntimeContext:
-        def add_message(self, message: ToolMessage, **kwargs: Any) -> str:
+        def add_message(self, message: ChatCompletionToolMessageParam, **kwargs: Any) -> str:
             order.append("database")
-            assert message.status == "success"
+            assert "status" not in message
             assert kwargs["transport_metadata"]["display_data"] == {
                 "kind": "read-file-meta",
                 "path": "a.py",
@@ -191,11 +175,11 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
     writer = order.append
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
-            to_tool_model_message=lambda observation: ToolMessage(
-                content=observation.content,
-                tool_call_id=observation.tool_call_id,
-                status=observation.status,
-            ),
+            to_tool_model_message=lambda observation: {
+                "role": "tool",
+                "content": observation.content,
+                "tool_call_id": observation.tool_call_id,
+            },
             model_tools=[],
         )
     )
@@ -239,7 +223,7 @@ def test_failed_tool_event_uses_sanitized_display_data(monkeypatch) -> None:
     events: list[Any] = []
 
     class _RuntimeContext:
-        def add_message(self, message: ToolMessage, **kwargs: Any) -> str:
+        def add_message(self, message: ChatCompletionToolMessageParam, **kwargs: Any) -> str:
             assert kwargs["transport_metadata"]["display_data"] == {
                 "kind": "read-file-meta",
                 "path": "a.py",
@@ -249,11 +233,11 @@ def test_failed_tool_event_uses_sanitized_display_data(monkeypatch) -> None:
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
-            to_tool_model_message=lambda observation: ToolMessage(
-                content=observation.content,
-                tool_call_id=observation.tool_call_id,
-                status=observation.status,
-            ),
+            to_tool_model_message=lambda observation: {
+                "role": "tool",
+                "content": observation.content,
+                "tool_call_id": observation.tool_call_id,
+            },
             model_tools=[],
         )
     )
@@ -290,17 +274,17 @@ def test_tool_settle_overwrites_existing_result_row_and_still_emits_terminal_eve
     writes: list[str] = []
 
     class _RuntimeContext:
-        def add_message(self, _message: ToolMessage, **_kwargs: Any) -> str:
+        def add_message(self, _message: ChatCompletionToolMessageParam, **_kwargs: Any) -> str:
             writes.append("replaced")
             return "replaced"
 
     runtime_config = SimpleNamespace(
         operations=SimpleNamespace(
-            to_tool_model_message=lambda observation: ToolMessage(
-                content=observation.content,
-                tool_call_id=observation.tool_call_id,
-                status=observation.status,
-            ),
+            to_tool_model_message=lambda observation: {
+                "role": "tool",
+                "content": observation.content,
+                "tool_call_id": observation.tool_call_id,
+            },
             model_tools=[],
         )
     )
@@ -385,112 +369,94 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
     assert order == ["begin", "run", "context", "commit"]
 
 
-def test_create_run_writes_user_context_and_task_current_run_before_projector(monkeypatch) -> None:
-    order: list[str] = []
-    run = SimpleNamespace(id=11, task_id=7, input_text="hello")
+def _creation_service(store, monkeypatch, projector):
+    """创建与冷读共用临时 SQLite，模型解析只注入配置事实。"""
+    from app.storage.model.model_config_model import ModelConfigModel
 
-    class _RunCrud:
-        def create(self, *args: Any, **kwargs: Any):
-            order.append("run")
-            return run
-
-    class _TaskCrud:
-        def set_current_run_id(self, task_id: int, run_id: int, **kwargs: Any) -> None:
-            order.append("task")
-            assert (task_id, run_id) == (7, 11)
-
-    class _ContextService:
-        def append_user_message_once(
-            self, task_id: int, run_id: int, text: str, **kwargs: Any
-        ) -> bool:
-            order.append("user")
-            assert (task_id, run_id, text) == (7, 11, "hello")
-            return True
-
-    class _Projector:
-        def process(self, event: Any, **kwargs: Any) -> None:
-            order.append("event")
-
+    with store.factory.begin() as session:
+        session.add(
+            ModelConfigModel(
+                id=1,
+                config_name="test",
+                base_url="http://localhost",
+                api_key="test",
+                model_name="test",
+                context_window_k=128,
+            )
+        )
     service = ConversationRunService.__new__(ConversationRunService)
-    service._run = _RunCrud()
-    service._task = _TaskCrud()
-    service._context = _ContextService()
-    service._session_factory = None
+    service._run = store.runs
+    service._task = store.tasks
+    service._context = store.context
+    service._session_factory = store.factory
+    monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: projector)
     monkeypatch.setattr(
-        "app.service.depends.get_conversation_event_projector", lambda: _Projector()
-    )
-    monkeypatch.setattr(
-        "app.service.task.conversation_run_service.get_model_config_service",
+        "app.service.conversation_run.conversation_run_service.get_model_config_service",
         lambda: SimpleNamespace(
-            get_config=lambda _config_id: SimpleNamespace(
+            get_config=lambda _id: SimpleNamespace(
                 supports_reasoning_effort=False,
                 supports_image=False,
                 context_window_k=128,
             )
         ),
     )
+    return service
 
-    result = service.create_run(
-        7,
+
+def test_create_run_commits_inbox_and_current_run_before_projector(request, monkeypatch):
+    """独立连接在事件发布时已能看到整组事实，context 留待模型边界消费。"""
+    from app.service.conversation_run.task_input_service import TaskInputService
+
+    store = request.getfixturevalue("canonical_store")
+    events = []
+
+    class Projector:
+        def process(self, event):
+            assert store.tasks.get(store.task.id).current_run_id == event.run_id
+            assert store.runs.get(event.run_id).context_window_total == 128000
+            assert TaskInputService().pending(store.task.id)[0]["input_text"] == "hello"
+            assert store.contexts.get(store.task.id, include_in_context=False) == []
+            events.append(event)
+
+    service = _creation_service(store, monkeypatch, Projector())
+    run = service.create_run(
+        store.task.id,
         model_config_id=1,
         run_command=ConversationRunCommand(display_text="hello"),
     )
-
-    assert result is run
-    # create_run 只落 Run/Task 事实与 run_initialized 事件：用户消息由 canonical 写入路径
-    # 的调用方（ConversationRunCommandService）负责，不在此处 append。
-    assert order == ["run", "task", "event"]
+    assert len(events) == 1
+    assert events[0].run_id == run.id
 
 
 def test_create_run_with_external_session_defers_initialization_events_to_owner(
+    request,
     monkeypatch,
-) -> None:
-    events: list[Any] = []
-    run = SimpleNamespace(id=11, task_id=7, input_text="hello")
+):
+    """外部事务内的 Run/inbox/指针不可提前暴露，回滚不留下任何一项。"""
+    from app.service.conversation_run.task_input_service import TaskInputService
+    from app.storage.crud.task_input_crud import TaskInputCrud
 
-    class _RunCrud:
-        def create(self, *args: Any, **kwargs: Any):
-            return run
-
-    class _TaskCrud:
-        def set_current_run_id(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-    class _ContextService:
-        def append_user_message_once(self, *args: Any, **kwargs: Any) -> bool:
-            return True
-
-    class _Projector:
-        def process(self, event: Any, **kwargs: Any) -> None:
-            events.append(event)
-
-    service = ConversationRunService.__new__(ConversationRunService)
-    service._run = _RunCrud()
-    service._task = _TaskCrud()
-    service._context = _ContextService()
-    service._session_factory = None
-    monkeypatch.setattr(
-        "app.service.depends.get_conversation_event_projector", lambda: _Projector()
-    )
-    monkeypatch.setattr(
-        "app.service.task.conversation_run_service.get_model_config_service",
-        lambda: SimpleNamespace(
-            get_config=lambda _config_id: SimpleNamespace(
-                supports_reasoning_effort=False,
-                supports_image=False,
-                context_window_k=128,
-            )
-        ),
-    )
-
-    result = service.create_run(
-        7,
-        model_config_id=1,
-        run_command=ConversationRunCommand(display_text="hello"),
-        session=object(),
-    )
-
-    assert result is run
+    store = request.getfixturevalue("canonical_store")
+    events = []
+    service = _creation_service(store, monkeypatch, SimpleNamespace(process=events.append))
+    with store.factory() as session:
+        service.create_run(
+            store.task.id,
+            model_config_id=1,
+            run_command=ConversationRunCommand(display_text="hello"),
+            session=session,
+        )
+        assert (
+            TaskInputCrud().list_pending(session, store.task.id)[0].payload["input_text"] == "hello"
+        )
+        assert store.runs.list_by_task(store.task.id) == []
+        assert store.tasks.get(store.task.id).current_run_id is None
+        assert TaskInputService().pending(store.task.id) == []
+        assert events == []
+        session.rollback()
+    assert store.runs.list_by_task(store.task.id) == []
+    assert TaskInputService().pending(store.task.id) == []
+    assert store.tasks.get(store.task.id).current_run_id is None
     assert events == []
 
 
@@ -518,7 +484,7 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
                 "total_tokens": 5,
                 "cache_hit_tokens": 1,
                 "cache_miss_tokens": 2,
-                "reasoning_tokens": 0,
+                "reasoning_tokens": None,
             }
             assert kwargs["error"] == {
                 "code": "tool_error_limit_reached",

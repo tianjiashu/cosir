@@ -9,7 +9,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.assistant_transport.event import RunStatusChangedEvent
-from app.core.llm_provider.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_extra import ConversationRunExtra
@@ -35,20 +34,11 @@ def _timestamp() -> datetime:
 
 
 def test_context_record_round_trips_with_row_identity_and_transport_metadata() -> None:
-    metadata = {
-        "schema_version": 1,
-        "parts": [{"type": "text", "text": "hello", "status": "completed"}],
-        "tool_result": {
-            "status": "success",
-            "display_data": {"kind": "file"},
-            "status_hint": None,
-            "error": None,
-        },
-    }
+    metadata = {"status": "completed", "display_data": {"kind": "read-file-meta", "path": "a.py"}}
     record = ConversationTaskContextRecord(
         task_id=7,
         run_id=11,
-        message=HumanMessage(content="hello"),
+        message={"role": "tool", "tool_call_id": "call-1", "content": "hello"},
         include_in_context=True,
         sequence=3,
         id=41,
@@ -60,6 +50,7 @@ def test_context_record_round_trips_with_row_identity_and_transport_metadata() -
 
     assert model.id == 41
     assert restored.id == 41
+    assert restored.message_id == record.message_id
     assert restored.message == record.message
     assert restored.transport_metadata == metadata
     assert json.loads(model.transport_metadata_json) == metadata
@@ -71,6 +62,9 @@ def test_context_storage_exposes_only_canonical_message_fields() -> None:
         "task_id",
         "run_id",
         "message_json",
+        "message_id",
+        "metadata_json",
+        "project_to_transport",
         "transport_metadata_json",
         "include_in_context",
         "is_streaming",
@@ -82,9 +76,11 @@ def test_context_storage_exposes_only_canonical_message_fields() -> None:
 
 def test_context_record_rejects_malformed_metadata_json() -> None:
     model = ConversationTaskContextModel(
+        message_id="test-message",
+        metadata_json="{}",
         task_id=7,
         run_id=11,
-        message_json=json.dumps({"type": "human", "data": {"content": "hello"}}),
+        message_json=json.dumps({"role": "user", **{"content": "hello"}}),
         include_in_context=True,
         sequence=3,
         transport_metadata_json="{not-json",
@@ -361,16 +357,7 @@ def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -
 
 
 def test_context_clone_copies_transport_fields_to_real_row() -> None:
-    metadata = {
-        "schema_version": 1,
-        "parts": [{"type": "text", "text": "source", "status": "completed"}],
-        "tool_result": {
-            "status": "success",
-            "display_data": {"kind": "file"},
-            "status_hint": None,
-            "error": None,
-        },
-    }
+    metadata = {"status": "completed", "display_data": {"kind": "read-file-meta", "path": "a.py"}}
     engine = create_engine("sqlite://")
     StorageBase.metadata.create_all(engine)
     try:
@@ -382,17 +369,21 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
                 ConversationTaskContextRecord(
                     task_id=7,
                     run_id=None,
-                    message=SystemMessage(content="fixed system prompt"),
+                    message={"role": "system", "content": "fixed system prompt"},
                     include_in_context=True,
                     sequence=0,
                 )._to_model()
             )
             session.add(
                 ConversationTaskContextModel(
+                    message_id="test-message",
+                    metadata_json=json.dumps({"source": "tool"}),
                     id=41,
                     task_id=7,
                     run_id=11,
-                    message_json=json.dumps({"type": "human", "data": {"content": "source"}}),
+                    message_json=json.dumps(
+                        {"role": "tool", "tool_call_id": "call-1", "content": "source"}
+                    ),
                     include_in_context=True,
                     sequence=3,
                     transport_metadata_json=json.dumps(metadata),
@@ -404,12 +395,19 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
             cloned_row = session.scalar(
                 select(ConversationTaskContextModel).where(
                     ConversationTaskContextModel.task_id == 8,
-                    ConversationTaskContextModel.sequence == 3,
+                    ConversationTaskContextModel.sequence == 1,
                 )
             )
 
             assert cloned_row is not None
             assert cloned_row.run_id == 22
+            assert cloned_row.message_id == "test-message"
+            assert json.loads(cloned_row.metadata_json) == {"source": "tool"}
+            assert json.loads(cloned_row.message_json) == {
+                "role": "tool",
+                "tool_call_id": "call-1",
+                "content": "source",
+            }
             assert json.loads(cloned_row.transport_metadata_json) == metadata
     finally:
         engine.dispose()
@@ -429,14 +427,14 @@ def test_context_crud_raises_on_sequence_collision() -> None:
         first = ConversationTaskContextRecord(
             task_id=7,
             run_id=11,
-            message=ToolMessage(content="done", tool_call_id="call-1", status="success"),
+            message={"role": "tool", "content": "done", "tool_call_id": "call-1"},
             include_in_context=True,
             sequence=1,
         )
         conflicting_sequence = ConversationTaskContextRecord(
             task_id=7,
             run_id=11,
-            message=ToolMessage(content="other", tool_call_id="call-2", status="success"),
+            message={"role": "tool", "content": "other", "tool_call_id": "call-2"},
             include_in_context=True,
             sequence=1,
         )
@@ -462,7 +460,7 @@ def test_streaming_draft_finalize_replaces_row_in_place_without_new_row() -> Non
         draft = ConversationTaskContextRecord(
             task_id=7,
             run_id=11,
-            message=AIMessage(content="半截草稿"),
+            message={"role": "assistant", "content": "半截草稿"},
             include_in_context=False,
             sequence=1,
             is_streaming=True,
@@ -470,10 +468,20 @@ def test_streaming_draft_finalize_replaces_row_in_place_without_new_row() -> Non
         finalized = ConversationTaskContextRecord(
             task_id=7,
             run_id=11,
-            message=AIMessage(
-                content="修订后的完整回复",
-                tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
-            ),
+            message={
+                "role": "assistant",
+                "content": "修订后的完整回复",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({"path": "a.py"}),
+                        },
+                    }
+                ],
+            },
             include_in_context=True,
             sequence=1,
             is_streaming=False,
@@ -489,12 +497,12 @@ def test_streaming_draft_finalize_replaces_row_in_place_without_new_row() -> Non
             assert rows[0].run_id == 11
             assert rows[0].include_in_context is True
             assert rows[0].is_streaming is False
-            assert rows[0].message.content == "修订后的完整回复"
+            assert rows[0].message.get("content") == "修订后的完整回复"
             # LangChain 反序列化会给 tool_call 补 type 键，故按字段断言而不是整体相等。
-            tool_calls = rows[0].message.tool_calls
+            tool_calls = rows[0].message.get("tool_calls")
             assert len(tool_calls) == 1
-            assert tool_calls[0]["name"] == "read_file"
-            assert tool_calls[0]["args"] == {"path": "a.py"}
+            assert tool_calls[0]["function"]["name"] == "read_file"
+            assert json.loads(tool_calls[0]["function"]["arguments"]) == {"path": "a.py"}
             assert tool_calls[0]["id"] == "call-1"
     finally:
         engine.dispose()
@@ -518,10 +526,20 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
             context = ConversationTaskContextRecord(
                 task_id=7,
                 run_id=11,
-                message=AIMessage(
-                    content="I will inspect it",
-                    tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
-                ),
+                message={
+                    "role": "assistant",
+                    "content": "I will inspect it",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": json.dumps({"path": "a.py"}),
+                            },
+                        }
+                    ],
+                },
                 include_in_context=True,
                 sequence=1,
             )
@@ -563,7 +581,7 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
                 for record in (
                     ConversationTaskContextRecord._from_model(row) for row in context_rows
                 )
-                if isinstance(record.message, ToolMessage)
+                if record.message["role"] == "tool"
             ]
 
         assert len(recovered) == 1
@@ -571,7 +589,7 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
         assert run_row.status == "cancelled"
         assert run_row.end_reason == "runtime_restarted"
         assert len(repaired) == 1
-        assert repaired[0].message.tool_call_id == "call-1"
+        assert repaired[0].message.get("tool_call_id") == "call-1"
         assert repaired[0].run_id == 11
         # 统一收口为取消：占位与 Run 终态同口径，冷读重建据此得到 cancelled tool part。
         assert repaired[0].transport_metadata == {"status": "cancelled"}
@@ -581,7 +599,7 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
         engine.dispose()
 
 
-def test_task_record_round_trips_current_run_and_context_window() -> None:
+def test_task_record_round_trips_current_run_without_run_owned_context_window() -> None:
     now = _timestamp()
     model = TaskModel(
         id=7,
@@ -589,7 +607,6 @@ def test_task_record_round_trips_current_run_and_context_window() -> None:
         title="task",
         task_type="user",
         current_run_id=11,
-        context_window_total=128,
         created_at=now.isoformat(),
         updated_at=now.isoformat(),
     )
@@ -597,15 +614,14 @@ def test_task_record_round_trips_current_run_and_context_window() -> None:
     record = TaskRecord.from_model(model)
 
     assert record.current_run_id == 11
-    assert record.context_window_total == 128
+    assert "context_window_total" not in record.to_dict()
     assert record.to_dict()["current_run_id"] == 11
-    assert record.to_dict()["context_window_total"] == 128
     round_tripped = record.to_model()
     assert round_tripped.current_run_id == 11
-    assert round_tripped.context_window_total == 128
+    assert "context_window_total" not in TaskModel.__table__.columns
 
 
-def test_task_crud_new_task_has_empty_run_and_window_defaults() -> None:
+def test_task_crud_new_task_has_no_current_run() -> None:
     engine = create_engine("sqlite://")
     StorageBase.metadata.create_all(engine)
     try:
@@ -623,7 +639,6 @@ def test_task_crud_new_task_has_empty_run_and_window_defaults() -> None:
             )
 
         assert record.current_run_id is None
-        assert record.context_window_total is None
     finally:
         engine.dispose()
 

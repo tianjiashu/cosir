@@ -1,55 +1,36 @@
-"""``_model_node`` 新增可观测事件 ``model_usage_recorded`` 的行为契约测试。
+"""模型步的结构化 usage 日志契约。
 
-被验证的行为（``app/core/workflows/react/nodes/model_node.py::_model_node``）：模型步在
-``rc.usage_stats.add_usage_metadata(ai_message.usage_metadata)`` 之后、``flush_message_chunk(
-mode="finalize")`` 收口之前，写一条 INFO 事件 ``model_usage_recorded``，``extra["data"]`` 含
-7 个字段：``task_id`` / ``run_id`` / ``step_id`` / ``step_count`` / ``usage_metadata_present``
-（bool）/ ``usage_metadata``（provider 原始 dict 或 None）/ ``run_usage``（
-``ConversationRunUsageStats.to_dict()``）。
-
-覆盖断言：
-1. 正常一步：恰好一条事件，``task_id`` / ``run_id`` / ``step_id`` / ``step_count`` 与运行上下文
-   一致，``usage_metadata`` 等于模型返回的原始 usage_metadata，``usage_metadata_present`` 为 True，
-   ``run_usage`` 与 ``ConversationRunUsageStats.to_dict()`` 一致（含 ``cache_miss_tokens`` 由
-   ``input - cache_read`` 推导）；
-2. ``usage_metadata`` 为 None 或空 dict：节点不抛异常、事件仍被记录、``usage_metadata_present``
-   为 False、``run_usage`` 保持上一轮（或全零）快照。
-
-对抗重点（除正向契约外，刻意从易出缺陷的角度切入）：
-- **事件频次**：一条事件对应「一步」而非「一个 chunk」——多 chunk 流下重复记录是常见缺陷；
-- **记录时机**：事件必须在 ``add_usage_metadata`` **之后**记录（否则 ``run_usage`` 落后一步）；
-- **覆盖更新而非累加**：``run_usage`` 只能是本步快照，不与本步前的历史累加；
-- **不得越界记录**：空流（RuntimeError）、超步数、请求前取消、流式期取消四条提前退出路径都不得
-  产出 ``model_usage_recorded``（这些路径根本没调用 ``add_usage_metadata``，记了就是「谎报用量」）；
-- **快照独立性**：``run_usage`` 是本次快照，事后篡改它不得影响 run 级统计对象；
-- **取值边界**：``cache_read > input_tokens`` 的下限保护、provider 未给缓存明细时
-  ``cache_miss_tokens`` 恒为 ``None``、非法缓存值（负值 / 非数 / None / 非 dict）不得抛异常；
-- **区分能力**：``usage_metadata_present`` 必须能把「本步没有用量」与「本步用量恰好等于
-  run_usage」区分开。
-
-本文件只在 ``tests/`` 下新增，不修改任何生产代码；被发现的缺陷只报告不修复。
+日志在 SDK usage 归一并更新 Run 统计之后、消息收口之前记录，每步一次。
+覆盖输入来源、未知与零的区分、快照独立性、缓存明细异常，以及取消/空流/超步数
+等不产生 usage 事件的边界。provider 不返回用量时保留上一有效快照；首次缺失为 None。
 """
 
 from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import logging
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from openai.lib.streaming.chat import ChunkEvent
+from openai.types import CompletionUsage
+from openai.types.chat import ChatCompletion
 
-import app.core.workflows.react.node_helper.finalize_max_steps as finalize_module
-import app.core.workflows.react.node_helper.tool_call_lifecycle as lifecycle_module
-from app.core.llm_provider.messages import AIMessage, AIMessageChunk
-from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflows.react.execution_state.route import ReactRoute
-from app.core.workflows.react.execution_state.state import ReactExecutionState
-from app.core.workflows.react.node_helper.common import RunStopped
-from app.core.workflows.react.nodes import model_node as model_module
+import app.core.workflow.node_helper.finalize_max_steps as finalize_module
+import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
+from app.core.llm_provider.message_codec import assistant_message
+from app.core.llm_provider.openai_model import usage_from_response
+from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.route import ReactRoute
+from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.node_helper import RunStopped
+from app.core.workflow.nodes import model_node as model_module
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from tests.sdk_fixtures import sdk_completion, sdk_event, sdk_usage
 
 EVENT_NAME = "model_usage_recorded"
 BACKEND_LOGGER = "coding_agent.backend"
@@ -124,9 +105,9 @@ class _ModelHarness:
 
     def __init__(
         self,
-        message: AIMessage,
+        message: ChatCompletion,
         *,
-        chunks: list[AIMessageChunk] | None = None,
+        chunks: list[dict[str, Any]] | None = None,
         usage_stats: ConversationRunUsageStats | None = None,
         task_id: int = TASK_ID,
         run_id: int = RUN_ID,
@@ -150,8 +131,8 @@ class _ModelHarness:
         self.usage_stats = usage_stats if usage_stats is not None else ConversationRunUsageStats()
         self._message = message
         # 显式传空列表表示「零 chunk 流」，故不能写成 ``chunks or [...]``。
-        self._chunks = chunks if chunks is not None else [AIMessageChunk(content="")]
-        self._merged_chunk: AIMessageChunk | None = None
+        self._chunks = chunks if chunks is not None else [{"content": ""}]
+        self._merged_chunk: ChatCompletion | None = None
         self._cancel_before_request = cancel_before_request
         self._cancel_after_first_chunk = cancel_after_first_chunk
         self._chunk_consumed = False
@@ -199,23 +180,23 @@ class _ModelHarness:
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
 
-        def add_message_chunk(
-            chunk: AIMessageChunk, *, stream_id: str, run_id: Any = None
-        ) -> AIMessage:
+        def save_stream_snapshot(
+            chunk: ChatCompletion, *, stream_id: str, run_id: Any = None
+        ) -> ChatCompletion:
             del stream_id, run_id
             self._chunk_consumed = True
-            self._merged_chunk = chunk if self._merged_chunk is None else self._merged_chunk + chunk
+            self._merged_chunk = chunk
             # 假流：把「本轮完整输出」预置为 ``message``（真实 provider 的聚合结果与它同形），
             # 真实聚合行为由 RuntimeContextManager 的单测钉住。
-            return self._message
+            return assistant_message(self._message.choices[0].message)
 
         def flush_message_chunk(
             *,
             stream_id: str,
             run_id: Any = None,
             mode: str = "running",
-            message: AIMessage | None = None,
-        ) -> AIMessage | None:
+            message: ChatCompletion | None = None,
+        ) -> ChatCompletion | None:
             del stream_id, run_id
             if mode == "finalize":
                 if message is None:
@@ -227,18 +208,18 @@ class _ModelHarness:
                 raise ValueError("message is only accepted in finalize mode")
             if mode == "cancel":
                 self._merged_chunk = None
-            return self._message
+            return assistant_message(self._message.choices[0].message)
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
             add_message=add_message,
-            add_message_chunk=add_message_chunk,
+            save_stream_snapshot=save_stream_snapshot,
             flush_message_chunk=flush_message_chunk,
         )
 
-    async def _astream(self, _messages: list[Any], **kwargs: Any) -> AsyncIterator[AIMessageChunk]:
+    async def _astream(self, _messages: list[Any], **kwargs: Any) -> AsyncIterator[ChunkEvent]:
         for chunk in self._chunks:
-            yield chunk
+            yield sdk_event(chunk, self._message)
 
 
 def _install(monkeypatch: Any, harness: _ModelHarness) -> None:
@@ -273,7 +254,8 @@ def _single_usage_data(caplog: pytest.LogCaptureFixture) -> dict[str, Any]:
     assert record.name == BACKEND_LOGGER
     data = record.data
     assert set(data) == DATA_KEYS, f"data 键集合漂移：{sorted(data)}"
-    assert set(data["run_usage"]) == RUN_USAGE_KEYS
+    if data["run_usage"] is not None:
+        assert set(data["run_usage"]) == RUN_USAGE_KEYS
     return data
 
 
@@ -298,18 +280,16 @@ def test_single_step_records_exactly_one_event_with_consistent_context(
         "input_token_details": {"cache_read": 400},
         "output_token_details": {"reasoning": 50},
     }
-    message = AIMessage(
-        content="完成回答。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata=dict(raw_usage),
+    message = sdk_completion(
+        content="完成回答。", finish_reason="stop", usage=sdk_usage(dict(raw_usage))
     )
     stats = ConversationRunUsageStats()
     harness = _ModelHarness(
         message,
         chunks=[
-            AIMessageChunk(content="完"),
-            AIMessageChunk(content="成"),
-            AIMessageChunk(content="回答。"),
+            {"content": "完"},
+            {"content": "成"},
+            {"content": "回答。"},
         ],
         usage_stats=stats,
         task_id=TASK_ID,
@@ -331,7 +311,7 @@ def test_single_step_records_exactly_one_event_with_consistent_context(
     assert data["step_count"] == 3
     # provider 原始 dict 原样透传：内容相等，且是同一对象（未被包装 / 裁剪 / 复制）。
     assert data["usage_metadata"] == raw_usage
-    assert data["usage_metadata"] is message.usage_metadata
+    assert data["usage_metadata"] == usage_from_response(message.usage)
     # present 是「本步到底有没有用量」的显式标记，True 必须是真正的 bool 而非 truthy。
     assert data["usage_metadata_present"] is True
     # run_usage 必须等于本步覆盖更新后的 run 级快照（含 cache_miss = input - cache_read）。
@@ -370,15 +350,17 @@ def test_event_is_emitted_after_stats_cover_update_not_before(
     )
     previous = stats.to_dict()
 
-    message = AIMessage(
+    message = sdk_completion(
         content="本步回答。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={
-            "input_tokens": 50,
-            "output_tokens": 5,
-            "total_tokens": 55,
-            "input_token_details": {"cache_read": 10},
-        },
+        finish_reason="stop",
+        usage=sdk_usage(
+            {
+                "input_tokens": 50,
+                "output_tokens": 5,
+                "total_tokens": 55,
+                "input_token_details": {"cache_read": 10},
+            }
+        ),
     )
     harness = _ModelHarness(message, usage_stats=stats)
     _install(monkeypatch, harness)
@@ -392,7 +374,7 @@ def test_event_is_emitted_after_stats_cover_update_not_before(
         "total_tokens": 55,
         "cache_hit_tokens": 10,
         "cache_miss_tokens": 40,
-        "reasoning_tokens": 0,
+        "reasoning_tokens": None,
     }
     assert data["run_usage"] != previous, "run_usage 不得是上一步残留（说明日志早于更新）"
     assert data["run_usage"]["input_tokens"] != 1050, "run_usage 不得是累计值（累加语义）"
@@ -405,15 +387,17 @@ def test_reasoning_detail_alone_does_not_set_cache_miss(
     必须为 ``None``（潜在缺陷：把「未知」算成 0 或 input 全量）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="回答。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={
-            "input_tokens": 80,
-            "output_tokens": 12,
-            "total_tokens": 92,
-            "output_token_details": {"reasoning": 9},
-        },
+        finish_reason="stop",
+        usage=sdk_usage(
+            {
+                "input_tokens": 80,
+                "output_tokens": 12,
+                "total_tokens": 92,
+                "output_token_details": {"reasoning": 9},
+            }
+        ),
     )
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
@@ -422,7 +406,7 @@ def test_reasoning_detail_alone_does_not_set_cache_miss(
 
     data = _single_usage_data(caplog)
     assert data["run_usage"]["reasoning_tokens"] == 9
-    assert data["run_usage"]["cache_hit_tokens"] == 0
+    assert data["run_usage"]["cache_hit_tokens"] is None
     assert data["run_usage"]["cache_miss_tokens"] is None
 
 
@@ -434,15 +418,17 @@ def test_logged_run_usage_is_an_independent_snapshot(
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
     stats = ConversationRunUsageStats()
-    message = AIMessage(
+    message = sdk_completion(
         content="回答。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={
-            "input_tokens": 30,
-            "output_tokens": 3,
-            "total_tokens": 33,
-            "input_token_details": {"cache_read": 20},
-        },
+        finish_reason="stop",
+        usage=sdk_usage(
+            {
+                "input_tokens": 30,
+                "output_tokens": 3,
+                "total_tokens": 33,
+                "input_token_details": {"cache_read": 20},
+            }
+        ),
     )
     harness = _ModelHarness(message, usage_stats=stats)
     _install(monkeypatch, harness)
@@ -469,15 +455,14 @@ def test_missing_provider_usage_is_tolerated_and_marked_absent(
     missing_usage: dict[str, Any] | None,
 ) -> None:
     """test_purpose: ``usage_metadata`` 为 None **或空 dict** 时节点不得抛异常、事件仍被记录、
-    ``usage_metadata_present`` 为 False、``run_usage`` 为全零快照
+    ``usage_metadata_present`` 为 False、``run_usage`` 为 None
     （潜在缺陷：对 None / 空 dict 取下标 → TypeError；或该步干脆不记事件，跨步对比缺一环）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(content="回答。", response_metadata={"finish_reason": "stop"})
+    message = sdk_completion(content="回答。", finish_reason="stop")
     if missing_usage is not None:
-        # AIMessage 校验期拒绝空 dict（UsageMetadata 有必填键），运行期却可能出现未校验的空 dict
-        # （chunk 合并 / 反序列化），故绕过校验如实构造该状态。
-        message.usage_metadata = missing_usage
+        # SDK 对厂商空对象进行宽松构造；不能把缺失用量当零或清除上一步有效统计。
+        message.usage = CompletionUsage.model_construct(**missing_usage)
     stats = ConversationRunUsageStats()
     harness = _ModelHarness(message, usage_stats=stats)
     _install(monkeypatch, harness)
@@ -489,17 +474,10 @@ def test_missing_provider_usage_is_tolerated_and_marked_absent(
     assert data["step_id"] == "step-1"
     assert data["step_count"] == 1
     assert data["usage_metadata_present"] is False
-    assert data["usage_metadata"] is message.usage_metadata
+    assert data["usage_metadata"] == usage_from_response(message.usage)
     assert not data["usage_metadata"], "None 与空 dict 都表示 provider 未返回 usage"
     assert data["run_usage"] == ConversationRunUsageStats().to_dict()
-    assert data["run_usage"] == {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "cache_hit_tokens": 0,
-        "cache_miss_tokens": None,
-        "reasoning_tokens": 0,
-    }
+    assert data["run_usage"] is None
 
 
 def test_missing_usage_keeps_previous_run_snapshot_and_flags_absent(
@@ -523,7 +501,7 @@ def test_missing_usage_keeps_previous_run_snapshot_and_flags_absent(
     before = stats.to_dict()
     assert before["input_tokens"] != 0
 
-    message = AIMessage(content="回答。", response_metadata={"finish_reason": "stop"})
+    message = sdk_completion(content="回答。", finish_reason="stop")
     harness = _ModelHarness(message, usage_stats=stats)
     _install(monkeypatch, harness)
 
@@ -546,10 +524,10 @@ def test_zero_token_usage_counts_as_present(
     （潜在缺陷：用 token 数值之和判断 present，把「零用量」误报成「未给用量」）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="回答。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        finish_reason="stop",
+        usage=sdk_usage({"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}),
     )
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
@@ -558,7 +536,7 @@ def test_zero_token_usage_counts_as_present(
 
     data = _single_usage_data(caplog)
     assert data["usage_metadata_present"] is True
-    assert data["usage_metadata"] == {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    assert data["usage_metadata"] == usage_from_response(message.usage)
     assert data["run_usage"]["cache_miss_tokens"] is None
 
 
@@ -574,15 +552,17 @@ def test_cache_miss_clamps_to_zero_when_cache_read_exceeds_input(
     取下限 0（潜在缺陷：缺 ``max(0, ...)`` 保护，把负值写进 run 级用量）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="回答。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={
-            "input_tokens": 10,
-            "output_tokens": 1,
-            "total_tokens": 11,
-            "input_token_details": {"cache_read": 50},
-        },
+        finish_reason="stop",
+        usage=sdk_usage(
+            {
+                "input_tokens": 10,
+                "output_tokens": 1,
+                "total_tokens": 11,
+                "input_token_details": {"cache_read": 50},
+            }
+        ),
     )
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
@@ -601,15 +581,17 @@ def test_cache_read_exactly_equal_to_input_gives_zero_miss(
     真 0 而非 None（潜在缺陷：``==`` / ``>=`` 边界写错，全命中被报成未知）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="回答。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={
-            "input_tokens": 10,
-            "output_tokens": 1,
-            "total_tokens": 11,
-            "input_token_details": {"cache_read": 10},
-        },
+        finish_reason="stop",
+        usage=sdk_usage(
+            {
+                "input_tokens": 10,
+                "output_tokens": 1,
+                "total_tokens": 11,
+                "input_token_details": {"cache_read": 10},
+            }
+        ),
     )
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
@@ -623,29 +605,35 @@ def test_cache_read_exactly_equal_to_input_gives_zero_miss(
 
 @pytest.mark.parametrize(
     ("cache_read", "expected_hit"),
-    [(-5, 0), ("abc", 0), (None, 0), (12.7, 0), (True, 0), (13, 13)],
+    [(-5, None), ("abc", None), (None, None), (12.7, None), (True, None), (13, 13)],
     ids=["negative", "non_numeric", "null", "fraction", "bool", "valid"],
 )
 def test_invalid_cache_read_values_are_sanitized_without_raising(
     monkeypatch: Any,
     caplog: pytest.LogCaptureFixture,
     cache_read: Any,
-    expected_hit: int,
+    expected_hit: int | None,
 ) -> None:
-    """test_purpose: 非法 ``cache_read``（负数 / 非数 / None / 小数 / bool）必须被安全归一为整数而
+    """test_purpose: 非法 ``cache_read``（负数 / 非数 / None / 小数 / bool）必须被标为未知而
     不抛异常，且事件照常记录（潜在缺陷：直接 int() 转换 → 异常上抛打断整步；负数直接进快照）。
-    注意「键存在」即视为 provider 给了缓存明细，故这些用例的 cache_miss 由 input - hit 推导。"""
+    只有有效缓存明细才可推导 cache_miss。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(content="回答。")
+    message = sdk_completion(content="回答。", finish_reason=None)
     # 绕过 pydantic 校验：这些值在生产运行期可能出现在未经校验的 usage_metadata 里。
-    message.usage_metadata = {
-        "input_tokens": 20,
-        "output_tokens": 2,
-        "total_tokens": 22,
-        "input_token_details": {"cache_read": cache_read},
-    }
-    message.response_metadata = {"finish_reason": "stop"}
+    message.usage = CompletionUsage.model_construct(
+        **sdk_usage(
+            {
+                "input_tokens": 20,
+                "output_tokens": 2,
+                "total_tokens": 22,
+                "input_token_details": {"cache_read": cache_read},
+            }
+        )
+    )
+    # SDK 构造器会把 bool 转为 int；直接赋值以测试到达边界的原始异常明细。
+    message.usage.prompt_tokens_details.cached_tokens = cache_read
+    message.choices[0].finish_reason = "stop"
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
 
@@ -654,7 +642,9 @@ def test_invalid_cache_read_values_are_sanitized_without_raising(
     data = _single_usage_data(caplog)
     assert data["usage_metadata_present"] is True
     assert data["run_usage"]["cache_hit_tokens"] == expected_hit
-    assert data["run_usage"]["cache_miss_tokens"] == 20 - expected_hit
+    assert data["run_usage"]["cache_miss_tokens"] == (
+        20 - expected_hit if expected_hit is not None else None
+    )
 
 
 def test_non_dict_input_token_details_does_not_crash_and_miss_stays_none(
@@ -665,21 +655,25 @@ def test_non_dict_input_token_details_does_not_crash_and_miss_stays_none(
     或把无法判读的明细当成「全未命中」）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(content="回答。")
-    message.usage_metadata = {
-        "input_tokens": 40,
-        "output_tokens": 4,
-        "total_tokens": 44,
-        "input_token_details": "cache_read=10",
-    }
-    message.response_metadata = {"finish_reason": "stop"}
+    message = sdk_completion(content="回答。", finish_reason=None)
+    message.usage = CompletionUsage.model_construct(
+        **sdk_usage(
+            {
+                "input_tokens": 40,
+                "output_tokens": 4,
+                "total_tokens": 44,
+                "input_token_details": "cache_read=10",
+            }
+        )
+    )
+    message.choices[0].finish_reason = "stop"
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
 
     asyncio.run(model_module._model_node(_state()))
 
     data = _single_usage_data(caplog)
-    assert data["run_usage"]["cache_hit_tokens"] == 0
+    assert data["run_usage"]["cache_hit_tokens"] is None
     assert data["run_usage"]["cache_miss_tokens"] is None
     assert data["usage_metadata_present"] is True
 
@@ -692,20 +686,24 @@ def test_bool_token_values_are_not_reported_as_tokens(
     （潜在缺陷：input_tokens=True 被记成 1，悄无声息地污染用量归因）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(content="回答。")
-    message.usage_metadata = {
-        "input_tokens": True,
-        "output_tokens": 3,
-        "total_tokens": 3,
-    }
-    message.response_metadata = {"finish_reason": "stop"}
+    message = sdk_completion(content="回答。", finish_reason=None)
+    message.usage = CompletionUsage.model_construct(
+        **sdk_usage(
+            {
+                "input_tokens": True,
+                "output_tokens": 3,
+                "total_tokens": 3,
+            }
+        )
+    )
+    message.choices[0].finish_reason = "stop"
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
 
     asyncio.run(model_module._model_node(_state()))
 
     data = _single_usage_data(caplog)
-    assert data["run_usage"]["input_tokens"] == 0
+    assert data["run_usage"]["input_tokens"] is None
     assert data["run_usage"]["output_tokens"] == 3
     assert data["run_usage"]["total_tokens"] == 3
 
@@ -722,7 +720,7 @@ def test_empty_model_stream_records_no_usage_event(
     （潜在缺陷：日志挪到空流检查之前 → 谎报一次用量）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    harness = _ModelHarness(AIMessage(content=""), chunks=[])
+    harness = _ModelHarness(sdk_completion(content="", finish_reason=None), chunks=[])
     _install(monkeypatch, harness)
 
     with pytest.raises(RuntimeError):
@@ -740,7 +738,7 @@ def test_max_steps_exceeded_records_no_usage_event(
     有用量事件，且终态为步数耗尽（潜在缺陷：超配额仍记一条用量 / 仍调用模型）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    harness = _ModelHarness(AIMessage(content="不应发生"))
+    harness = _ModelHarness(sdk_completion(content="不应发生", finish_reason=None))
     _install(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state(step_count=10)))
@@ -758,10 +756,10 @@ def test_step_count_equal_to_max_steps_still_runs_and_records(
     （潜在缺陷：把 ``> max_steps`` 误写成 ``>=``，最后一整步被静默吞掉）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="最后一步。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={"input_tokens": 7, "output_tokens": 3, "total_tokens": 10},
+        finish_reason="stop",
+        usage=sdk_usage({"input_tokens": 7, "output_tokens": 3, "total_tokens": 10}),
     )
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
@@ -772,7 +770,7 @@ def test_step_count_equal_to_max_steps_still_runs_and_records(
     data = _single_usage_data(caplog)
     assert data["step_id"] == "step-10"
     assert data["step_count"] == 10
-    assert data["usage_metadata"] == message.usage_metadata
+    assert data["usage_metadata"] == usage_from_response(message.usage)
 
 
 def test_cancelled_before_request_records_no_usage_event(
@@ -783,7 +781,9 @@ def test_cancelled_before_request_records_no_usage_event(
     同时必须落定取消终态（潜在缺陷：取消分支与用量记录顺序错位，取消的 run 被记一次用量）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    harness = _ModelHarness(AIMessage(content="不应发生"), cancel_before_request=True)
+    harness = _ModelHarness(
+        sdk_completion(content="不应发生", finish_reason=None), cancel_before_request=True
+    )
     _install(monkeypatch, harness)
 
     with pytest.raises(RunStopped):  # graph 外 interrupt 抛 RuntimeError
@@ -803,8 +803,8 @@ def test_cancelled_during_stream_records_no_usage_event(
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
     harness = _ModelHarness(
-        AIMessage(content="半截"),
-        chunks=[AIMessageChunk(content="半")],
+        sdk_completion(content="半截", finish_reason=None),
+        chunks=[{"content": "半"}],
         cancel_after_first_chunk=True,
     )
     _install(monkeypatch, harness)
@@ -830,16 +830,24 @@ def test_tools_route_records_usage_event_exactly_once(
     （潜在缺陷：只在最终回答分支记录，工具路径的用量漏记）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="",
-        response_metadata={"finish_reason": "tool_calls"},
-        tool_calls=[{"name": "read_file", "args": {"path": "a.py"}, "id": "call-1"}],
-        usage_metadata={
-            "input_tokens": 300,
-            "output_tokens": 15,
-            "total_tokens": 315,
-            "input_token_details": {"cache_read": 100},
-        },
+        finish_reason="tool_calls",
+        tool_calls=[
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": json.dumps({"path": "a.py"})},
+            }
+        ],
+        usage=sdk_usage(
+            {
+                "input_tokens": 300,
+                "output_tokens": 15,
+                "total_tokens": 315,
+                "input_token_details": {"cache_read": 100},
+            }
+        ),
     )
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
@@ -854,7 +862,7 @@ def test_tools_route_records_usage_event_exactly_once(
         "total_tokens": 315,
         "cache_hit_tokens": 100,
         "cache_miss_tokens": 200,
-        "reasoning_tokens": 0,
+        "reasoning_tokens": None,
     }
 
 
@@ -865,10 +873,10 @@ def test_structured_output_route_records_usage_event_exactly_once(
     （潜在缺陷：结构化收口分支整段漏记用量）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="结构化前的自然语言。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={"input_tokens": 20, "output_tokens": 4, "total_tokens": 24},
+        finish_reason="stop",
+        usage=sdk_usage({"input_tokens": 20, "output_tokens": 4, "total_tokens": 24}),
     )
     harness = _ModelHarness(message, structured_output=object())
     _install(monkeypatch, harness)
@@ -877,7 +885,7 @@ def test_structured_output_route_records_usage_event_exactly_once(
 
     assert result["next_node"] is ReactRoute.STRUCTURED_OUTPUT
     data = _single_usage_data(caplog)
-    assert data["usage_metadata"] == message.usage_metadata
+    assert data["usage_metadata"] == usage_from_response(message.usage)
 
 
 def test_invalid_output_records_usage_event_before_failing(
@@ -887,10 +895,10 @@ def test_invalid_output_records_usage_event_before_failing(
     （潜在缺陷：失败早退分支吞掉用量记录，失败 run 的 token 消耗不可见）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={"input_tokens": 9, "output_tokens": 0, "total_tokens": 9},
+        finish_reason="stop",
+        usage=sdk_usage({"input_tokens": 9, "output_tokens": 0, "total_tokens": 9}),
     )
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
@@ -911,9 +919,10 @@ def test_continuation_route_records_usage_event_exactly_once(
     （潜在缺陷：续写分支整段跳过用量记录）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="未确认完成",
-        usage_metadata={"input_tokens": 11, "output_tokens": 6, "total_tokens": 17},
+        usage=sdk_usage({"input_tokens": 11, "output_tokens": 6, "total_tokens": 17}),
+        finish_reason=None,
     )
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
@@ -923,7 +932,7 @@ def test_continuation_route_records_usage_event_exactly_once(
     assert result["next_node"] is ReactRoute.MODEL
     data = _single_usage_data(caplog)
     assert data["step_id"] == "step-2"
-    assert data["usage_metadata"] == message.usage_metadata
+    assert data["usage_metadata"] == usage_from_response(message.usage)
 
 
 def test_truncated_output_records_usage_event_exactly_once(
@@ -933,10 +942,10 @@ def test_truncated_output_records_usage_event_exactly_once(
     （潜在缺陷：截断路径与续写路径记录口径不一致，某些提前返回漏记用量）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="回答到一半",
-        response_metadata={"finish_reason": "length"},
-        usage_metadata={"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+        finish_reason="length",
+        usage=sdk_usage({"input_tokens": 5, "output_tokens": 2, "total_tokens": 7}),
     )
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
@@ -945,7 +954,7 @@ def test_truncated_output_records_usage_event_exactly_once(
 
     assert result["next_node"] is ReactRoute.MODEL
     data = _single_usage_data(caplog)
-    assert data["usage_metadata"] == message.usage_metadata
+    assert data["usage_metadata"] == usage_from_response(message.usage)
 
 
 def test_final_response_race_lost_records_usage_event_exactly_once(
@@ -955,10 +964,10 @@ def test_final_response_race_lost_records_usage_event_exactly_once(
     END 收口，用量事件不重不漏（潜在缺陷：race-lost 分支重复记录或漏记用量）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="最终回答。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={"input_tokens": 21, "output_tokens": 8, "total_tokens": 29},
+        finish_reason="stop",
+        usage=sdk_usage({"input_tokens": 21, "output_tokens": 8, "total_tokens": 29}),
     )
     harness = _ModelHarness(message, complete_result=None)
     _install(monkeypatch, harness)
@@ -978,21 +987,23 @@ def test_reasoning_channel_step_records_usage_event_exactly_once(
     reasoning_tokens 如实入快照（潜在缺陷：reasoning 分支异常 / 提前返回导致用量漏记）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
-    message = AIMessage(
+    message = sdk_completion(
         content="回答。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata={
-            "input_tokens": 40,
-            "output_tokens": 12,
-            "total_tokens": 52,
-            "output_token_details": {"reasoning": 9},
-        },
+        finish_reason="stop",
+        usage=sdk_usage(
+            {
+                "input_tokens": 40,
+                "output_tokens": 12,
+                "total_tokens": 52,
+                "output_token_details": {"reasoning": 9},
+            }
+        ),
     )
     harness = _ModelHarness(
         message,
         chunks=[
-            AIMessageChunk(content="", additional_kwargs={"reasoning_content": "思考中"}),
-            AIMessageChunk(content="回答。"),
+            {"content": "", **{"reasoning_content": "思考中"}},
+            {"content": "回答。"},
         ],
         thinking_channel="reasoning_content",
     )
@@ -1021,10 +1032,8 @@ def test_logged_usage_metadata_equals_provider_dict_not_a_copy(
         "total_tokens": 110,
         "input_token_details": {"cache_read": 40},
     }
-    message = AIMessage(
-        content="回答。",
-        response_metadata={"finish_reason": "stop"},
-        usage_metadata=copy.deepcopy(raw_usage),
+    message = sdk_completion(
+        content="回答。", finish_reason="stop", usage=sdk_usage(copy.deepcopy(raw_usage))
     )
     harness = _ModelHarness(message)
     _install(monkeypatch, harness)
@@ -1032,6 +1041,9 @@ def test_logged_usage_metadata_equals_provider_dict_not_a_copy(
     asyncio.run(model_module._model_node(_state()))
 
     data = _single_usage_data(caplog)
-    assert data["usage_metadata"] == raw_usage
-    assert message.usage_metadata == raw_usage
-    assert set(message.usage_metadata or {}) == set(raw_usage), "键集合不得被派生字段污染"
+    assert data["usage_metadata"] == usage_from_response(message.usage)
+    assert message.usage.prompt_tokens == raw_usage["input_tokens"]
+    assert (
+        message.usage.prompt_tokens_details.cached_tokens
+        == raw_usage["input_token_details"]["cache_read"]
+    )
