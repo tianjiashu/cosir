@@ -34,7 +34,7 @@ from time import perf_counter
 
 import httpx
 import openai
-from langchain_core.messages import HumanMessage
+from openai.types.chat import ChatCompletionUserMessageParam
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -144,7 +144,7 @@ async def probe_chat_model(
     try:
         model = build_chat_model(settings)
         async with asyncio.timeout(timeout_seconds):
-            stream = model.astream([HumanMessage(content="ping")])
+            stream = model.stream([ChatCompletionUserMessageParam(content="ping", role="user")])
             try:
                 async for _chunk in stream:
                     # 首个生成 chunk 即证明端点、模型与流式通道可用；不等待整段生成。
@@ -153,7 +153,10 @@ async def probe_chat_model(
                 # 提前返回时必须显式关闭流，避免连接与异步生成器悬挂；关闭本身失败不得改变
                 # 已得出的结论（成功不能被降级为失败），因此单独兜住并只记日志。
                 try:
-                    await stream.aclose()
+                    try:
+                        await stream.aclose()
+                    finally:
+                        await model.close()
                 except Exception as exc:
                     log.warning(
                         "model_probe_stream_close_failed",
