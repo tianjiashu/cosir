@@ -21,7 +21,7 @@
 
 1. **执行前时机不可靠**
 
-   `model_node` 先把 LangChain `AIMessage` 交给 `RuntimeContextManager`，工具事实通常由 `tools_node`/`RuntimeOperations` 的 `on_tool_call_started` 才创建。这样前端只能在工具节点开始后看到调用，无法保证“handler 执行前已有可展示的工具卡片”。
+   `model_node` 先把 LangChain `AIMessage` 交给 `RuntimeMessageContextManager`，工具事实通常由 `tools_node`/`RuntimeOperations` 的 `on_tool_call_started` 才创建。这样前端只能在工具节点开始后看到调用，无法保证“handler 执行前已有可展示的工具卡片”。
 
 2. **状态机不完整**
 

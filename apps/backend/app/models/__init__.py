@@ -6,7 +6,6 @@ model，文件名与 model 相关。不承载服务、适配或 node_helper 逻�
 
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
-from app.models.conversation_run_extra import ConversationRunExtra
 from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
 from app.models.conversation_run_record import ConversationRunError, ConversationRunRecord
 from app.models.conversation_run_usage import ConversationRunUsage
@@ -18,7 +17,6 @@ __all__ = [
     "ConversationRunAttachmentInput",
     "ConversationRunCommand",
     "ConversationRunError",
-    "ConversationRunExtra",
     "ConversationRunFileAttachment",
     "ConversationRunRecord",
     "ConversationRunStatus",

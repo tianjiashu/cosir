@@ -49,8 +49,8 @@ Tauri Rust 主进程
 - React 只通过动态 runtime config 访问 localhost backend；不创建、停止或重启 backend。
 - `ConversationTaskSnapshotService` 是 Transport snapshot 的唯一 owner。
 - `ConversationEventProjector` 只把 conversation event 投影为 snapshot mutation，不维护
-  第二套 Run 状态机，也不触碰 `RuntimeContextManager`。
-- `RuntimeContextManager` 继续负责 LLM context 的 working copy、序列、消息存储和持久化；
+  第二套 Run 状态机，也不触碰 `RuntimeMessageContextManager`。
+- `RuntimeMessageContextManager` 继续负责 LLM context 的 working copy、序列、消息存储和持久化；
   UI snapshot 不反向写入 context。
 - `ConversationRunModel.status` 是 Run 生命周期唯一事实源；snapshot 读取边界只做现有的
   终态对账。
@@ -450,7 +450,7 @@ assistant-ui transport projection
 - 当前 active Run 是否允许加载历史；
 - 编辑、删除、fork、root set 如何使 cursor 失效；
 - SQLite 是否仍用单 JSON snapshot，还是引入可分页的本地事实表；
-- UI history window 与 `RuntimeContextManager` 的 context/compaction 如何保持边界。
+- UI history window 与 `RuntimeMessageContextManager` 的 context/compaction 如何保持边界。
 
 P4 不应由 converter、assistant-ui runtime 或 Transport subscriber 临时决定。
 

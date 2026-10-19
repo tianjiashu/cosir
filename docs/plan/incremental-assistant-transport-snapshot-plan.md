@@ -207,7 +207,7 @@ canonical state。它不是 LLM context，也不承担 context 构建规则；co
 - 保存 run 终态。
 
 不允许 `assistant_api.py`、`ConversationStateService`、`RuntimeOperations` 各自维护一份
-业务 JSON。它们只能通过 snapshot port 读取或提交 mutation。`RuntimeContextManager` 是
+业务 JSON。它们只能通过 snapshot port 读取或提交 mutation。`RuntimeMessageContextManager` 是
 LLM context 的运行时容器，不得从 `controller.state` 或 Transport snapshot 反向充当 context
 事实源；本阶段不改变它的构建规则。
 

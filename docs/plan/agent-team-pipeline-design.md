@@ -137,7 +137,7 @@ Transport snapshot         面向前端的只读投影
 LangGraph checkpoint       workflow 恢复数据，不代表 Run 生命周期
 ~~~
 
-RuntimeContextManager 继续负责 Agent 上下文；Team 向节点提供共同目标、节点预设指令和前置节点的 output 字符串。Team 不复制完整对话上下文，也不把 Transport snapshot 当作内部业务事实源。
+RuntimeMessageContextManager 继续负责 Agent 上下文；Team 向节点提供共同目标、节点预设指令和前置节点的 output 字符串。Team 不复制完整对话上下文，也不把 Transport snapshot 当作内部业务事实源。
 
 ## 3. Agent Team 工具契约
 

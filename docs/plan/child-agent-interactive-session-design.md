@@ -31,7 +31,7 @@ Task + ConversationRun（主业务库）
 4. 删除 `DelegationModel`、`DelegationRecord`、`DelegationCrud` 和 `DelegationService`。
 5. 父子关系使用已有的 `Task.parent_task_id + Task.parent_run_id`；Child Run 通过 `ConversationRun.task_id` 归属 Child Task。
 6. checkpoint 只保存 Child Agent session 的可序列化定位信息，用于父工具调用、Transport 冷读和启动恢复。
-7. Child Agent 运行中收到的消息进入进程内 mailbox，只能在 Child workflow 的安全边界被消费，禁止外部直接修改 `RuntimeContextManager`。
+7. Child Agent 运行中收到的消息进入进程内 mailbox，只能在 Child workflow 的安全边界被消费，禁止外部直接修改 `RuntimeMessageContextManager`。
 8. 父 Run 完成、失败、取消或执行器关闭时，统一关闭该父 Run 遗留的 Child Agent；Child Agent 不跨父 Run 继续后台运行。
 9. 应用重启时，先按现有规则收敛遗留 active Run，再扫描每个主 Task 最近一次 Run 的 Child Agent checkpoint，补齐 Child Agent session 的关闭投影。
 
@@ -55,7 +55,7 @@ Task + ConversationRun（主业务库）
 
 ### 2.3 不能直接把消息写进 Child context
 
-`RuntimeContextManager` 是 Task 级 working copy owner，负责 context sequence、内存 entries、持久化和 listener。父工具线程直接向 Child context append 消息会绕过 Child workflow 的上下文边界，带来 sequence 竞争、模型正在调用时上下文突变和 checkpoint/canonical context 不一致。
+`RuntimeMessageContextManager` 是 Task 级 working copy owner，负责 context sequence、内存 entries、持久化和 listener。父工具线程直接向 Child context append 消息会绕过 Child workflow 的上下文边界，带来 sequence 竞争、模型正在调用时上下文突变和 checkpoint/canonical context 不一致。
 
 因此发送消息必须是 Child Agent runtime 的 mailbox 操作，由 Child workflow 在安全边界消费。
 
@@ -320,7 +320,7 @@ ConversationRunStateService（唯一 canonical finalization hook owner）
 
 `child_agent_wait` 是第一个显式 async-capable model tool：复用现有 ToolDefinition、ToolAccessGate、ToolObservation 和 ToolExecutionContext，但通过正式的 `AsyncToolHandler` Protocol 在 workflow event loop 上 `await ChildAgentSessionService.wait_async()`，不进入 `asyncio.to_thread`，也不阻塞 backend event loop。ToolDefinition 增加必填语义字段 `handler_kind: Literal["sync", "async"]`；注册期校验 async handler 的 Protocol 和 `parallel_mode="serial"`，不允许运行期猜测或 `getattr` 探测。等待 condition 同时监听 Child 终态、父 Run cancellation、Child session closing 和 backend shutdown；所有中断都返回带 `interrupted_by` 的结构化部分结果，不转换为工具错误，且不继续阻塞到完整 timeout。`ChildAgentSessionService.close()`、`cancel_descendants()` 和 `shutdown()` 都必须唤醒 async waiters。
 
-等待工具不创建 Run、不启动 follow-up、不修改 Child `RuntimeContextManager`，也不把 Child 输出自动追加到父 context；`final_output` 只作为本次工具结果提供给父模型。session service 仍设置显式 `MAX_CONCURRENT_CHILD_WAITS` waiter slot，slot 在 async handler 的 `try/finally` 中获取和释放；超限返回稳定工具错误 `child_agent_wait_concurrency_exceeded`。因为等待不占用同步工具线程池，父 Agent 等待 Child、Child 又等待 Grandchild 不会形成线程池饥饿，仍必须覆盖嵌套等待测试。
+等待工具不创建 Run、不启动 follow-up、不修改 Child `RuntimeMessageContextManager`，也不把 Child 输出自动追加到父 context；`final_output` 只作为本次工具结果提供给父模型。session service 仍设置显式 `MAX_CONCURRENT_CHILD_WAITS` waiter slot，slot 在 async handler 的 `try/finally` 中获取和释放；超限返回稳定工具错误 `child_agent_wait_concurrency_exceeded`。因为等待不占用同步工具线程池，父 Agent 等待 Child、Child 又等待 Grandchild 不会形成线程池饥饿，仍必须覆盖嵌套等待测试。
 
 Async tool 管线的具体复用和分流契约：
 
@@ -718,7 +718,7 @@ Child cleanup、mailbox close、checkpoint projection 都是正式契约，装�
 - [ ] checkpoint 是否只保存可序列化 locator，而没有句柄或完整内容？
 - [ ] 父 Run 的所有退出路径是否都关闭 Child Agent？
 - [ ] 应用重启是否不会隐式重放 Child Agent？
-- [ ] `child_agent_send` 是否避免直接修改 Child `RuntimeContextManager`？
+- [ ] `child_agent_send` 是否避免直接修改 Child `RuntimeMessageContextManager`？
 - [ ] Child Task/Run 的归属校验是否阻止跨父 Run 操作？
 - [ ] UI 是否复用了现有 Assistant attach、Workbench 和 terminal 生命周期模式？
 - [ ] SSE 断开、Tab 关闭和 Run cancel 是否保持语义分离？

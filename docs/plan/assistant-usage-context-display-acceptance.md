@@ -35,7 +35,7 @@
 
 ### C. context usage 更新
 
-- [x] `RuntimeContextManager` 的 context 变更按完整有效 entries 重算，不发生重复累加；resume 会重新投影。
+- [x] `RuntimeMessageContextManager` 的 context 变更按完整有效 entries 重算，不发生重复累加；resume 会重新投影。
 - [x] context event 把 `used_tokens` 和有效 context window 一起投影到 snapshot；前端能展示 used/window。
 - [x] `context_usage` 仍由 backend 计算，允许超额；前端只做视觉 clamp，不改事实比例。
 - [x] Task DB 的 `context_usage_used` 与实时 snapshot 的最终一致性策略有失败安全和日志。

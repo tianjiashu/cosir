@@ -18,7 +18,7 @@
   -> runs[*].usage
   -> Assistant Transport
 
-RuntimeContextManager
+RuntimeMessageContextManager
   -> ContextUsageComputeListener 重算完整 context
   -> ContextUsageUpdatedEvent + tasks.context_usage_used
   -> snapshot.context_usage / TaskResponse
@@ -48,7 +48,7 @@ RuntimeContextManager
 Tauri / React WebView
   -> localhost Assistant Transport
 本机 FastAPI backend
-  -> LangGraph workflow / RuntimeContextManager / tools
+  -> LangGraph workflow / RuntimeMessageContextManager / tools
   -> SQLite
 ```
 
@@ -56,7 +56,7 @@ Tauri / React WebView
 |---|---|
 | Agent 与计量运行在哪个进程 | LangGraph、模型调用、context 计算和 snapshot 投影都在本机 FastAPI 进程；React 只渲染 |
 | run 用量事实源 | `RuntimeConfig.usage_stats` / `ConversationRunUsageStats`，由模型节点在完整 `AIMessage` 产生后累加 |
-| Task context 事实源 | `RuntimeContextManager` 的 `_entries` 与 `used_tokens`；持久化事实为 context service 和 `tasks.context_usage_used` |
+| Task context 事实源 | `RuntimeMessageContextManager` 的 `_entries` 与 `used_tokens`；持久化事实为 context service 和 `tasks.context_usage_used` |
 | UI snapshot owner | `ConversationTaskSnapshotService`；`ConversationEventProjector` 只把事件投影为 snapshot |
 | 持久化 | snapshot、context、Task 字段进入 SQLite；assistant-ui store 只是不可持久化渲染副本 |
 | 启动/停止 | Tauri 负责启动和停止 FastAPI；窗口隐藏不停止 backend，真正退出才停止进程树 |
@@ -111,7 +111,7 @@ run 用量按现有注释“不落库”，只依赖 snapshot 已经投影的值
 
 已确认的代码事实：
 
-- `RuntimeContextManager.__post_init__()` 会对加载后的有效 context 触发一次 `LOAD_HISTORY`；`begin_run()` 根据当前 run model 设置 `total_tokens`，`add_message()` 和压缩后会重新触发完整 context 计算。
+- `RuntimeMessageContextManager.__post_init__()` 会对加载后的有效 context 触发一次 `LOAD_HISTORY`；`begin_run()` 根据当前 run model 设置 `total_tokens`，`add_message()` 和压缩后会重新触发完整 context 计算。
 - `ContextUsageComputeListener` 只处理 `add_message`、`load_history`、`context_compressed`，按完整 entries 重算，而不是增量累加，避免重复统计。
 - 比例公式是 `used / total`；`total` 来自 `CapabilityService.get_model_context_window()`，并受设置中的软上限影响；超额比例允许大于 1。
 - listener 同时调用 projector 写入 snapshot，并调用 `TaskService.update_context_usage()` 回写 `tasks.context_usage_used`。
@@ -150,13 +150,13 @@ context_window_total: number | null;
 
 listener 先经 projector 提交 snapshot，再写 `tasks.context_usage_used`。写回失败时，实时对话快照和重新打开任务的 Task 数据可能短暂不一致；当前 listener 的直接 `get_task_service().update_context_usage()` 没有本地捕获异常，写回失败可能向上抛出并中断本次 context 变更，这不是理想的旁路失败安全。
 
-这符合项目允许的最终一致性边界，但修正后需要可恢复：以 RuntimeContextManager 重新计算值为准，在下一次 context 变更或任务重新加载时修复；不能让 Task API 的旧值覆盖活动 Transport snapshot。
+这符合项目允许的最终一致性边界，但修正后需要可恢复：以 RuntimeMessageContextManager 重新计算值为准，在下一次 context 变更或任务重新加载时修复；不能让 Task API 的旧值覆盖活动 Transport snapshot。
 
 #### P2（已修正）：事件到达顺序没有 context revision
 
 projector 有 event id 去重和进程内锁，但没有“上下文版本”字段。若未来允许同 Task 并行恢复或异步写事件，迟到的旧 context event 可能覆盖新值。
 
-**修正**：暂不引入全局消息队列；在事件中增加由 RuntimeContextManager 单调递增的 `context_revision`，snapshot 只接受大于等于当前版本的 context update。单用户单 Task 串行执行是当前默认边界，但 revision 能保护后续恢复路径。
+**修正**：暂不引入全局消息队列；在事件中增加由 RuntimeMessageContextManager 单调递增的 `context_revision`，snapshot 只接受大于等于当前版本的 context update。单用户单 Task 串行执行是当前默认边界，但 revision 能保护后续恢复路径。
 
 #### P2（已修正）：初始 manager 装载时会出现一次 0 比例
 
@@ -274,7 +274,7 @@ Run token usage 不再通过独立事件流式更新；模型节点只更新 run
 4. `app/assistant_transport/event/run_event.py`：由终态 `RunStatusChangedEvent.usage_stats` 投影 Run usage；`usage_event.py` 只承载 context absolute/window 字段。
 5. `app/core/workflows/conversation_run_usage_stats.py`：实现 cache miss 口径，补足 provider details 异常值防御和单元测试。
 6. `app/core/context/context_listener/context_usage_compute_listener.py`：传递 absolute/window，保留估算来源；将 Task DB 写回改为失败安全的最终一致性旁路；修复模块 docstring 中已经不存在的 `publish_event` 描述。
-7. `app/core/context/runtime_context_manager.py`：确保 begin_run 后的实际窗口进入 context event；如实施 revision，则在这里递增 context revision。
+7. `app/core/context/runtime_message_context_manager.py`：确保 begin_run 后的实际窗口进入 context event；如实施 revision，则在这里递增 context revision。
 8. `app/api/schemas/response/TaskResponse.py`、`app/api/tasks_api.py`、`app/api/workspaces_api.py`：若保留 Task API 上下文字段，统一注入可确定的窗口值，不确定时返回 null。
 9. 相关 backend tests：覆盖 fresh/resume、新 run 清零、usage event 累计、终态/取消、context absolute/window、超额、NaN/Infinity、防乱序和 backend restart 后 best-effort 语义。
 
@@ -317,7 +317,7 @@ Phase 3  精度增强（可选）
 
 - 不把 `context_usage` 当作本次 run token 使用量；二者分母和生命周期不同。
 - 不在前端用 `ratio * 128000` 反推出绝对 token；窗口可能是动态软上限，也可能发生模型切换。
-- 不把所有历史 assistant message 的 `metadata.steps` 相加来模拟当前 Task context；assistant-ui 的 steps 是模型调用 usage，不等于 RuntimeContextManager 的有效 context。
+- 不把所有历史 assistant message 的 `metadata.steps` 相加来模拟当前 Task context；assistant-ui 的 steps 是模型调用 usage，不等于 RuntimeMessageContextManager 的有效 context。
 - 不为显示三段 system/tools/messages 而编造固定数字；官方 Context breakdown 要求每段输入确实可追溯。
 - 不在 SQLite、Transport snapshot、React store 各维护一套独立 usage 累加器。
 - 不以“失败时显示 0”掩盖 provider 未返回 usage 或 backend 崩溃造成的不完整统计。

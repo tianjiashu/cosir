@@ -120,11 +120,12 @@ Tauri 桌面应用
 - 主业务库为 `<DATA_DIR>/.cosir/storage/app.sqlite3`；运行日志在 `.cosir/logs/`。业务库与日志职责、路径分离，不得跨层复用 session 或事实模型。
 - `ConversationRunModel.status` 是对话 Run 生命周期状态的唯一事实源；Agent Team run 由独立的 `AgentTeamRunModel.status` 承载其生命周期，二者各为自身 Run 类型的唯一事实源。Transport snapshot 与 Agent context 都不得演化成任一 Run 类型的第二套状态机。
 - Agent Team 的 `AgentTeamRunModel` 分 `pending` 确认门槛与 `running` 执行两态；同一主 Run 同时只允许一个待确认 TeamRun（pending 唯一约束），确认边界以 `update_status_if_in` 原子迁移。节点运行快照（`AgentTeamRunState.node_runtime`）只冻结 `allowed_tools`（工具名）；Coordinator 创建节点 Task 时从注册表解析对应 schema，并固化到该 Task 的 `tool_schemas`，不要在 TeamRun 快照重复保存工具 schema。
-- Agent context 的持久化事实由 `conversation_task_contexts` 承载；`RuntimeContextManager` 是 Task 级 context 的唯一运行时协调入口和进程内 working copy owner，但不是数据库事实源。
+- Agent context 的持久化事实由 `conversation_task_contexts` 承载；`RuntimeMessageContextManager` 是 Task 级 context 的唯一运行时协调入口和进程内 working copy owner，但不是数据库事实源。
 - `ConversationTaskStateService` 负责 Transport snapshot 的重建与投影编排；`TaskRuntimeSpace` 按 taskId 持有 snapshot working copy，首次读取时懒加载重建，后续复用内存对象。`ConversationEventProjector` 只负责把 conversation event 投影到 snapshot。`ConversationStateSnapshot` 面向前端 Transport，不是 Agent context 的镜像。
+- 模型流式输出由 SDK 聚合，同一次调用持续替换同一条 context 记录，流式期间不纳入模型上下文；响应完整且通过工具准入后才设置 `include_in_context=True`。中断输出保留供 Transport 重建，续跑不加载；不维护另一份流式聚合缓存。inbox 变更只投影排队消息，不以全量重建覆盖正在输出的 Transport 内容。
 - context 与 Transport snapshot 允许短暂不一致，以最终一致性收敛。snapshot 普通读取不重复重建；数据库写入后由 projector 或明确的 rebuild 边界更新内存 snapshot。不得为了消除流式时序差异而强行把 Run、context、snapshot 放入一个全局事务。
-- Run 同时拥有生命周期与持久执行进度，不再维护独立 checkpoint。普通续跑从模型边界继续，等待恢复只消费已持久化的当前请求及决定；不重放已执行工具。
-- Task inbox 持久化尚未消费的用户输入；每次普通模型调用前，将当前批次按序原子转入 context。一条 Run 可包含多条 user message。最终回答结束当前 Run，旧执行者释放后才为剩余 inbox 新建 Run；取消、失败和等待不会因普通输入到达自动继续。
+- Run 同时拥有生命周期、冻结执行选项与持久执行进度，不保存用户正文、图片或附件副本，也不维护独立 checkpoint。普通续跑从模型边界继续，等待恢复只消费已持久化的当前请求及决定；不重放已执行工具。
+- Task inbox 持久化尚未消费的用户输入及发起配置；发起配置仅用于交接新 Run，不修改正在执行的 Run，也不进入 context。每次普通模型调用前，将当前批次按序原子转入 context。一条 Run 可包含多条 user message。最终回答结束当前 Run，旧执行者释放后才为剩余 inbox 新建 Run；取消、失败和等待不会因普通输入到达自动继续。
 - 编辑定位稳定消息身份。未消费队尾消息原地更新；已消费的最新用户消息在停止后截断其后 context 并重置同一 Run。外部工具副作用不回滚。
 - `task_runtime`、取消 registry、snapshot subscriber 等属于当前后端进程内的协调状态，不是持久化事实。
 - WebView `localStorage` 只保存用户偏好（模型选择、最近 workspace、收藏提示词等）；各类偏好由对应 storage module 管理，不得存储任务或对话事实。
@@ -146,7 +147,7 @@ Tauri 桌面应用
 - 状态唯一来源：`ToolObservation.status` 表达工具执行结果，取值 `success`/`error`/`cancelled`；Transport 侧工具 part 生命周期为 `pending`/`running`/`completed`/`failed`/`cancelled`，其中 `completed`/`failed`/`cancelled` 由 observation 经 `success→completed`、`error→failed`、`cancelled→cancelled` 投影，`pending`/`running` 为执行前/执行中状态。前端不得建立第二套状态机，也不得从 `args`/`result` 反推展示结果。
 - 前端路由：`components/assistant-ui/tools/tool-part.tsx` 通过 `tool-renderer-registry.ts` 按 `data.kind` 与 `presentation.expand_layout` 选择 renderer；通用布局为 `details`/`list`/`diff`/`write`/`terminal`/`none`，专用 renderer 可承载明确的业务交互。禁止按工具名编写专用渲染分支；未知 `kind` 走 `ToolFallback`，不导致消息流崩溃。
 - 错误三通道隔离：工具 UI 短提示走受控 `display_data.status_hint`（约 5 字，来自后端分类映射）；Run 错误 `error.message` 可直接使用模型 HTTP 响应体的 `message` 字段供用户排查，但不得透传完整响应体。生命周期走 Transport status。前端不展示堆栈、原始异常、原始 prompt、凭据或大段模型正文；失败 `display_data` 不得携带成功态的目标、结果或输出字段。
-- 当前已注册工具 `kind`（布局见契约）：`read_file`→`read-file-meta`、`search_content`→`content-search-results`、`find_files`→`file-list`、`list_directory`→`directory-list`、`write_file`/`patch_write`/`apply_patch`/`delete_file`/`move_file`→`file-changes`，文件工具重复调用→`repeated-call`，`execute_terminal`→`terminal-result`、`terminal_*`→`terminal-session`、`web_search`→`web-search-results`、`web_extract`→`web-extract-urls`、`delegate_task`→`delegation-result`、`child_agent_*`→`child-agent-result`/`child-agent-wait-result`、`propose_agent_configuration`→`agent-configuration-draft`。Agent Team 的 `agent_team`→`agent-team-preview` 与 `propose_agent_team_configuration`→`agent-team-configuration-draft` 已实现但当前未注册。
+- 当前已注册工具 `kind`（布局见契约）：`read_file`→`read-file-meta`、`search_content`→`content-search-results`、`find_files`→`file-list`、`list_directory`→`directory-list`、`write_file`/`patch_write`/`apply_patch`/`delete_file`/`move_file`→`file-changes`，文件工具重复调用→`repeated-call`，`execute_terminal`→`terminal-result`、`terminal_*`→`terminal-session`、`web_search`→`web-search-results`、`web_extract`→`web-extract-urls`、`delegate_task`→`delegation-result`、`child_agent_*`→`child-agent-result`/`child-agent-wait-result`、`propose_agent_configuration`→`agent-configuration-draft`。Agent Team 的 `agent_team`→`agent-team-approval` / `agent-team-execution` 与 `propose_agent_team_configuration`→`agent-team-configuration-draft` 已注册，是否开放由 Agent 工具选择与 Run 授权决定。
 - 文件变更职责：`apply_patch` 只修改已有文件内容；新建、删除和移动分别由 `write_file`、`delete_file`、`move_file` 负责。
 - 展示数据不是后端事实源：`display_data` 只服务 UI 渲染与重连恢复；`artifact_data` 只承载内部工具产物，不得进入 Assistant Transport；`ToolObservation.content` 不被当作通用 UI 展示数据来源。
 
@@ -158,10 +159,11 @@ Tauri 桌面应用
 - `task_runtime` 是进程内并发协调层：task operation 串行化同一 task 的 Run 创建、编辑、resume 等互斥操作；workspace operation 仲裁运行、删除和关闭冲突。其锁和 registry 不跨进程、不跨重启。
 - AgentRuntime/workflow 在后端进程内运行。工具按 `execution_mode` 在线程内或独立进程执行；独立工具进程负责队列通信、取消、超时和进程树清理，但不拥有业务事实，也不构成新服务层。
 - Hook 是运行期扩展边界：registry 负责注册索引，interceptor 负责触发、匹配、拒绝短路与失败安全；异常默认记录放行，不阻断主 Run。
+- 模型工具统一导出 strict function schema，复用 OpenAI SDK 从参数模型生成，再做必要的平台收窄并固化到 Task；模型请求不临时重写 schema。工具执行入口仍负责本地业务校验。
 - provider/model 配置是数据库事实，由 model config service（`ModelConfigService`）管理；运行时模型构建只消费解析后的配置。能力目录不等于连接可用性，provider 连接测试也不等于 Agent Run。
-- Observability 是可降级旁路。workflow/service 通过窄接口记录 trace，不直接依赖具体观测实现；初始化、记录或 flush 失败不得改变 Run 结果。
-- RuntimeContextManager 是agent上下文唯一管理事实源，负责系统提示词构建、上下文修复加载、run续跑/恢复的上下文管理、上下文压缩（未实现）、上下文token计算、上下文序列管理、模型消息存储和持久化。
-    - ContextEntry 作为上下文消息单位，记录消息的run_id、message、sequence。
+- 诊断使用本地结构化日志与上下文观测页，不接入外部 tracing；日志失败不得改变 Run 结果，上下文仍由既有持久化事实管理。
+- RuntimeMessageContextManager 是 Task 上下文的运行时协调入口与 working copy owner，负责系统提示词、消息序列、SDK 消息持久化和工具协议闭合；持久化事实归 context 表。输入服务负责 inbox 原子转移，Transport 服务负责提交后投影，Run service 负责生命周期与恢复决策。
+    - ContextEntry 作为上下文消息单位，承载稳定消息身份、Run 归属与排序；正文采用 OpenAI SDK 请求消息格式，附属信息按消息角色使用单一强类型 metadata 保存；用户展示绑定、模型响应信息和工具展示事实不进入模型请求。
 - context 和 snapshot不需要事务保持强一致性，只需要在读取的时候，保持最终一致性即可
 
 ## 代码目录边界
@@ -174,7 +176,7 @@ Tauri 桌面应用
 - `apps/backend/app/agent_team/`：Agent Team 领域（配置、状态、注册表、协调器），不含 HTTP 与用例编排。
 - `apps/backend/app/models/`：ORM 记录与枚举（`ConversationRunModel`、`*_record` 等）。
 - `apps/backend/app/storage/`：SQLite engine、schema、CRUD 与事务；`task_runtime/`：进程内 task/workspace 并发协调。
-- `apps/backend/app/core/`：agents/context/llm_provider/runtime/workflows/tools/hook/observability，覆盖 Agent 定义、上下文、模型供应、执行、workflow、工具与可降级观测。
+- `apps/backend/app/core/`：agents/context/llm_provider/runtime/workflows/tools/hook，覆盖 Agent 定义、上下文、模型供应、执行、workflow、工具与运行期扩展。
 - `apps/backend/app/config/`：进程配置；`utils/`：路径等通用工具；`lifespan.py`/`app.py`/`bootstate.py`：应用装配与启动。
 
 ## docstring 约定【必须中文】【**主线任务**执行用户指令，**支线任务**发现docString漂移，并向用户说明，不擅自主动改】

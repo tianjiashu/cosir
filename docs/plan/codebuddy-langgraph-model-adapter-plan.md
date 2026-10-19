@@ -37,7 +37,7 @@ CodeBuddy SDK 的 Python API 是异步的，`query()` 返回异步消息迭代�
 - 不执行 CodeBuddy 内置工具。
 - 不加载 CodeBuddy 项目配置、MCP、Skills、Commands、Rules 或 Subagents。
 - 不把 CodeBuddy 会话作为本项目的第二套对话事实源。
-- 继续由本项目的 LangGraph checkpoint、RuntimeContextManager 和 Conversation Run 管理对话事实及恢复。
+- 继续由本项目的 LangGraph checkpoint、RuntimeMessageContextManager 和 Conversation Run 管理对话事实及恢复。
 
 ### 2.2 非目标
 
@@ -72,7 +72,7 @@ LangGraph 的 `astream()` 可以消费模型的消息流；官方文档说明，
 
 本方案选择前一种方式：CodeBuddy 适配器实现标准 LangChain `AIMessageChunk`，继续使用当前模型节点和已有 snapshot 投影链路，不新增 CodeBuddy 专用的 workflow stream 协议。
 
-LangGraph 的持久化由 graph checkpointer 按 `thread_id` 管理短期线程状态；本项目另外由 RuntimeContextManager 管理 canonical context。因此适配器不应再使用 CodeBuddy `resume` 保存第二份对话历史。[LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
+LangGraph 的持久化由 graph checkpointer 按 `thread_id` 管理短期线程状态；本项目另外由 RuntimeMessageContextManager 管理 canonical context。因此适配器不应再使用 CodeBuddy `resume` 保存第二份对话历史。[LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
 
 ## 4. 当前项目边界
 
@@ -85,9 +85,9 @@ LangGraph 的持久化由 graph checkpointer 按 `thread_id` 管理短期线程�
 1. 根据 provider/model 构建 `BaseChatModel`；
 2. 尝试调用 `bind_tools()`；
 3. 在 model node 中调用 `model.astream(messages)`；
-4. 将 `AIMessageChunk` 交给 RuntimeContextManager、LangGraph custom stream 和 Transport snapshot。
+4. 将 `AIMessageChunk` 交给 RuntimeMessageContextManager、LangGraph custom stream 和 Transport snapshot。
 
-CodeBuddy 适配器应接入第 1 步和第 2 步之间，不能把 CodeBuddy 类型泄漏到 workflow、RuntimeContextManager、Assistant Transport 或 storage。
+CodeBuddy 适配器应接入第 1 步和第 2 步之间，不能把 CodeBuddy 类型泄漏到 workflow、RuntimeMessageContextManager、Assistant Transport 或 storage。
 
 ## 5. “禁用工具”的确定性策略
 
@@ -365,7 +365,7 @@ Provider/model 表继续保存：
 - Transport snapshot；
 - CodeBuddy session transcript。
 
-LangGraph 官方文档将 checkpointer 定义为线程范围的短期状态持久化机制；本项目已经有 SQLite checkpoint 和 RuntimeContextManager，因此不应再引入 CodeBuddy session 作为恢复事实源。[LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
+LangGraph 官方文档将 checkpointer 定义为线程范围的短期状态持久化机制；本项目已经有 SQLite checkpoint 和 RuntimeMessageContextManager，因此不应再引入 CodeBuddy session 作为恢复事实源。[LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
 
 ## 10. 错误、日志和取消
 
@@ -477,7 +477,7 @@ codebuddy_process_cleanup_failed
 
 - CodeBuddy 可以在当前 LangGraph workflow 中作为 `BaseChatModel` 调用；
 - CodeBuddy 任何内置工具、MCP 工具、Skills 和项目 settings 都不会被执行或加载；
-- LangGraph/RuntimeContextManager 仍是对话和恢复事实源；
+- LangGraph/RuntimeMessageContextManager 仍是对话和恢复事实源；
 - `model.astream()` 的文本能正常进入现有 UI 流；
 - thinking 能进入现有 reasoning 通道；
 - `bind_tools()` 不会造成工具执行或伪造工具调用；

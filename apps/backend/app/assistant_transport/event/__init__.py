@@ -14,10 +14,10 @@
 - ``conversation_event_envelope``：所有事件共有的信封字段、抽象 ``plan`` 契约，以及 ``plan``
   共用的 snapshot 定位与消息骨架静态方法（``_message`` / ``_find_assistant_message`` /
   ``_find_message_part`` / ``_find_tool``，内部复用 ``_locate_message`` / ``_locate_part``）。
-- ``run_event``：run 骨架建立、执行状态迁移、用户输入有序 parts。
+- ``run_event``：run 骨架建立、执行状态迁移、已完成结果更新、用户输入有序 parts。
 - ``message_event``：消息内 text / reasoning part 的内容追加与阶段收口。
 - ``tool_call_event``：工具调用生命周期与终态批量收束。
-- Run 的 token 用量随 ``run_status_changed`` 事件投影，不单独建立 Task usage 事件。
+- Run 的 token 用量随状态迁移或已完成结果事件投影，不单独建立 Task usage 事件。
 - ``conversation_event``：判别式联合总入口。
 """
 
@@ -30,8 +30,8 @@ from app.assistant_transport.event.message_event import (
 )
 from app.assistant_transport.event.run_event import (
     RunInitializedEvent,
+    RunResultUpdatedEvent,
     RunStatusChangedEvent,
-    RunTraceUpdatedEvent,
     UserInputAppendedEvent,
     build_user_input_parts,
 )
@@ -53,8 +53,8 @@ __all__ = [
     "ConversationEvent",
     "ConversationEventEnvelope",
     "RunInitializedEvent",
+    "RunResultUpdatedEvent",
     "RunStatusChangedEvent",
-    "RunTraceUpdatedEvent",
     "TerminalOutputDeltaData",
     "ToolCallCreatedEvent",
     "ToolCallEventStatus",

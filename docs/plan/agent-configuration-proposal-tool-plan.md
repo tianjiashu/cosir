@@ -201,7 +201,7 @@ schema 校验其工具名，并计算最终 `allows_tools`。普通对话不携�
 
 - 全局 AGENTS.md；
 - 主 Agent prompt；
-- RuntimeContextManager 的长期系统上下文；
+- RuntimeMessageContextManager 的长期系统上下文；
 - Agent profile JSON；
 - workspace 配置文件。
 
