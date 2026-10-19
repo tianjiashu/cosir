@@ -18,6 +18,7 @@ from app.assistant_transport.event import (
     ConversationEvent,
     ConversationEventEnvelope,
     RunInitializedEvent,
+    RunResultUpdatedEvent,
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
     ToolCallsSettledEvent,
@@ -49,6 +50,15 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
             "end_reason": None,
         },
         RunStatusChangedEvent,
+    ),
+    (
+        {
+            "type": "run_result_updated",
+            "task_id": 1,
+            "run_id": 1,
+            "end_reason": "structured_output_failed",
+        },
+        RunResultUpdatedEvent,
     ),
     (
         {

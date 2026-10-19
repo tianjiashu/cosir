@@ -21,6 +21,7 @@ from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion
 
 import app.core.workflow.node_helper.finalize_max_steps as finalize_module
+import app.core.workflow.node_helper.streaming_part_state_machine as streaming_module
 import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
@@ -93,7 +94,6 @@ def _state(**overrides: Any) -> ReactExecutionState:
         "tool_error_count": 0,
         "next_node": ReactRoute.MODEL,
         "instruction": "",
-        "final_text": "",
         "last_tool_results": {"instruction": "", "observations": []},
     }
     values.update(overrides)
@@ -132,7 +132,7 @@ class _ModelHarness:
         self._message = message
         # 显式传空列表表示「零 chunk 流」，故不能写成 ``chunks or [...]``。
         self._chunks = chunks if chunks is not None else [{"content": ""}]
-        self._merged_chunk: ChatCompletion | None = None
+        self.saved_responses = []
         self._cancel_before_request = cancel_before_request
         self._cancel_after_first_chunk = cancel_after_first_chunk
         self._chunk_consumed = False
@@ -170,6 +170,7 @@ class _ModelHarness:
             model=SimpleNamespace(stream=self._astream),
             final_model=SimpleNamespace(stream=self._astream),
             structured_output=structured_output,
+            structured_output_messages=None,
             workspace_id=1,
             thinking_channel=thinking_channel,
             run=SimpleNamespace(task_id=task_id, id=run_id, extra=None),
@@ -180,56 +181,32 @@ class _ModelHarness:
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
 
-        def save_stream_snapshot(
-            chunk: ChatCompletion, *, stream_id: str, run_id: Any = None
-        ) -> ChatCompletion:
-            del stream_id, run_id
-            self._chunk_consumed = True
-            self._merged_chunk = chunk
-            # 假流：把「本轮完整输出」预置为 ``message``（真实 provider 的聚合结果与它同形），
-            # 真实聚合行为由 RuntimeContextManager 的单测钉住。
-            return assistant_message(self._message.choices[0].message)
-
-        def flush_message_chunk(
-            *,
-            stream_id: str,
-            run_id: Any = None,
-            mode: str = "running",
-            message: ChatCompletion | None = None,
-        ) -> ChatCompletion | None:
-            del stream_id, run_id
-            if mode == "finalize":
-                if message is None:
-                    raise AssertionError("model_node must pass the finalized message")
-                self._merged_chunk = None
-                self.messages.append(message)
-                return message
-            if message is not None:
-                raise ValueError("message is only accepted in finalize mode")
-            if mode == "cancel":
-                self._merged_chunk = None
-            return assistant_message(self._message.choices[0].message)
+        def save_model_response(snapshot, *, include_in_context, run_id=None, existing=None):
+            self.saved_responses.append((snapshot, include_in_context))
+            if include_in_context:
+                self.messages.append(assistant_message(snapshot.choices[0].message))
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
             add_message=add_message,
-            save_stream_snapshot=save_stream_snapshot,
-            flush_message_chunk=flush_message_chunk,
+            save_model_response=save_model_response,
         )
 
     async def _astream(self, _messages: list[Any], **kwargs: Any) -> AsyncIterator[ChunkEvent]:
         for chunk in self._chunks:
             yield sdk_event(chunk, self._message)
+            self._chunk_consumed = True
 
 
 def _install(monkeypatch: Any, harness: _ModelHarness) -> None:
     """把三处 graph runtime 依赖绑定到测试桩（model / lifecycle / 超步数收口各自持有引用）。"""
 
     for module in (model_module, lifecycle_module):
-        monkeypatch.setattr(module, "_runtime_config", lambda: harness.runtime_config)
-        monkeypatch.setattr(module, "_runtime_context", lambda: harness.runtime_context)
+        monkeypatch.setattr(module, "_runtime_context", lambda: harness.runtime_config)
+        monkeypatch.setattr(module, "_message_context", lambda: harness.runtime_context)
+    for module in (lifecycle_module, streaming_module):
         monkeypatch.setattr(module, "get_stream_writer", lambda: harness.events.append)
-    monkeypatch.setattr(finalize_module, "_runtime_config", lambda: harness.runtime_config)
+    monkeypatch.setattr(finalize_module, "_runtime_context", lambda: harness.runtime_config)
 
 
 def _records(caplog: pytest.LogCaptureFixture, name: str) -> list[logging.LogRecord]:
@@ -300,7 +277,8 @@ def test_single_step_records_exactly_one_event_with_consistent_context(
     result = asyncio.run(model_module._model_node(_state(step_count=2)))
 
     assert result["next_node"] is ReactRoute.END
-    assert harness.completed is False
+    # 最终回答在产出节点就地落定 completed（loop 不再二次落库）。
+    assert harness.completed is True
 
     data = _single_usage_data(caplog)
     # 定位字段必须与运行上下文（operations 的当前 task / run 与 state 步号）逐一对齐。
@@ -869,8 +847,7 @@ def test_tools_route_records_usage_event_exactly_once(
 def test_structured_output_route_records_usage_event_exactly_once(
     monkeypatch: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """test_purpose: 配置了结构化输出时最终文本路由到 structured_output，用量事件仍恰好一条
-    （潜在缺陷：结构化收口分支整段漏记用量）。"""
+    """配置结构化输出时先完成自然语言主线，再路由支线；本步用量仍只记录一次。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
     message = sdk_completion(
@@ -884,15 +861,54 @@ def test_structured_output_route_records_usage_event_exactly_once(
     result = asyncio.run(model_module._model_node(_state()))
 
     assert result["next_node"] is ReactRoute.STRUCTURED_OUTPUT
+    assert harness.completed
+    assert harness.runtime_config.structured_output_messages == []
     data = _single_usage_data(caplog)
     assert data["usage_metadata"] == usage_from_response(message.usage)
 
 
-def test_invalid_output_records_usage_event_before_failing(
+def test_empty_main_output_still_routes_to_structured_branch(monkeypatch: Any) -> None:
+    """主线仅有完成原因时也先落定 Run，再执行已配置的结构化支线。"""
+
+    harness = _ModelHarness(
+        sdk_completion(content="", finish_reason="content_filter"),
+        structured_output=object(),
+    )
+    _install(monkeypatch, harness)
+
+    result = asyncio.run(model_module._model_node(_state()))
+
+    assert result["next_node"] is ReactRoute.STRUCTURED_OUTPUT
+    assert harness.completed is True
+
+
+def test_structured_context_capture_failure_still_completes_main_run(monkeypatch: Any) -> None:
+    """支线冻结上下文失败不推迟自然语言主线落定。"""
+
+    message = sdk_completion(content="自然回答", finish_reason="stop")
+    harness = _ModelHarness(message, structured_output=object())
+    _install(monkeypatch, harness)
+    reads = 0
+
+    def load_messages() -> list[Any]:
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            raise RuntimeError("capture failed")
+        return []
+
+    harness.runtime_context.load_message = load_messages
+    result = asyncio.run(model_module._model_node(_state()))
+
+    assert result["next_node"] is ReactRoute.STRUCTURED_OUTPUT
+    assert harness.completed
+    assert harness.runtime_config.structured_output_messages is None
+
+
+def test_empty_output_records_usage_event_before_completing(
     monkeypatch: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """test_purpose: 非法输出（正常完成原因但无内容、无工具调用）判定失败前，本步用量仍须先被记录
-    （潜在缺陷：失败早退分支吞掉用量记录，失败 run 的 token 消耗不可见）。"""
+    """无正文但有完成原因时仍完成 Run，并保留本步用量。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
     message = sdk_completion(
@@ -906,10 +922,11 @@ def test_invalid_output_records_usage_event_before_failing(
     result = asyncio.run(model_module._model_node(_state()))
 
     assert result["next_node"] is ReactRoute.END
-    assert harness.failed is True
+    assert harness.completed is True
+    assert harness.failed is False
     data = _single_usage_data(caplog)
     assert data["usage_metadata_present"] is True
-    assert len(_records(caplog, "model_node_invalid_output")) == 1
+    assert len(_records(caplog, "model_node_final_response")) == 1
 
 
 def test_continuation_route_records_usage_event_exactly_once(
@@ -935,11 +952,10 @@ def test_continuation_route_records_usage_event_exactly_once(
     assert data["usage_metadata"] == usage_from_response(message.usage)
 
 
-def test_truncated_output_records_usage_event_exactly_once(
+def test_length_output_records_usage_event_exactly_once(
     monkeypatch: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """test_purpose: 长度截断（finish_reason=length）回流 model 且不注入提示，用量事件仍恰好一条
-    （潜在缺陷：截断路径与续写路径记录口径不一致，某些提前返回漏记用量）。"""
+    """长度完成原因也结束 Run，用量事件仍恰好一条。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)
     message = sdk_completion(
@@ -952,7 +968,8 @@ def test_truncated_output_records_usage_event_exactly_once(
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["next_node"] is ReactRoute.MODEL
+    assert result["next_node"] is ReactRoute.END
+    assert harness.completed is True
     data = _single_usage_data(caplog)
     assert data["usage_metadata"] == usage_from_response(message.usage)
 
@@ -977,7 +994,8 @@ def test_final_response_race_lost_records_usage_event_exactly_once(
     assert result["next_node"] is ReactRoute.END
     data = _single_usage_data(caplog)
     assert data["run_usage"]["input_tokens"] == 21
-    assert harness.completed is False  # 成功终态由 loop 落定，model 步只返回结果。
+    # 落定入口被调用过，但条件更新对已终态的 Run 是 no-op，用量仍只记一条。
+    assert harness.completed is True
 
 
 def test_reasoning_channel_step_records_usage_event_exactly_once(

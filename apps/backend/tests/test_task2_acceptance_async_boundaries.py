@@ -253,7 +253,6 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     monkeypatch.setattr(lifespan_module, "set_agent_registry", lambda _value: None)
     monkeypatch.setattr(lifespan_module, "set_runtime", lambda _value: None)
     monkeypatch.setattr(lifespan_module, "AgentRuntime", lambda **_kwargs: object())
-    monkeypatch.setattr(lifespan_module, "flush_langfuse", lambda: None)
     monkeypatch.setattr(lifespan_module.HookInterceptor, "safe_fire", lambda *_args: None)
     monkeypatch.setattr("app.core.hook.initialize_hook_registry", lambda: None)
 

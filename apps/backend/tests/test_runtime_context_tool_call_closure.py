@@ -25,9 +25,10 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.agents.agent_profile import AgentProfile
 from app.core.context.context_entry import ContextEntry
-from app.core.context.runtime_context_manager import RuntimeContextManager
+from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.context.tool_call_closure import ContextProtocolError
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import ToolMessageMetadata
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
@@ -110,12 +111,10 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
     def seed_run(status: str) -> SimpleNamespace:
         """用真实 run CRUD 建一条 Run，并返回快照重建所需的最小 Run 事实。"""
 
-        record = runs.create(task.id, f"input for {status} run", status=status)
+        record = runs.create(task.id, status=status)
         # 快照重建按 ``ConversationRunRecord`` 读取 Run 输入事实，桩必须与真实记录同形。
         return SimpleNamespace(
             id=record.id,
-            input_text=record.input_text,
-            extra=record.extra,
             context_window_total=record.context_window_total,
             status=status,
             end_reason=None,
@@ -146,23 +145,20 @@ def _manager(
     current_run_id: int | None,
     entries: list[ContextEntry],
     next_sequence: int,
-) -> RuntimeContextManager:
+) -> RuntimeMessageContextManager:
     """按运行时装配口径构造 manager（跳过需要真实 graph 环境才能跑通的 ``__post_init__``）。"""
 
-    manager = object.__new__(RuntimeContextManager)
+    manager = object.__new__(RuntimeMessageContextManager)
     manager.current_task_id = task_id
     manager.agent_profile = cast(AgentProfile, SimpleNamespace())
     manager.workspace_root = ""
-    manager.compressor = None
     # 假服务按协议实现 append，不继承真实 service 类型。
     manager.context_service = cast(ConversationTaskContextService, context_service)
     manager.current_run_id = current_run_id
-    manager.is_fork = False
     manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     manager._entries = list(entries)
     manager._message_sequence = next_sequence
     # 与真实 dataclass 字段同形：Run 重置路径会访问流式草稿表。
-    manager._streaming_messages = {}
     return manager
 
 
@@ -194,7 +190,7 @@ class _ContractContextService:
     """按 ``ConversationTaskContextService`` 当前契约实现的假服务。
 
     契约（见 service / CRUD docstring）：``append`` 只追加、恒不返回去重结果——持久化层不再
-    知道「工具调用身份」；「该调用是否已有结果行」由 ``RuntimeContextManager`` 依据内存
+    知道「工具调用身份」；「该调用是否已有结果行」由 ``RuntimeMessageContextManager`` 依据内存
     working copy（``_entries``）判定，命中时走 ``replace_message`` 原地覆盖。
     """
 
@@ -208,7 +204,7 @@ class _ContractContextService:
         message: ChatCompletionMessageParam,
         seq: int,
         include_in_context: bool,
-        transport_metadata: object = None,
+        metadata: object = None,
         project_to_transport: bool = True,
     ) -> None:
         """记录一次追加；不做任何去重。"""
@@ -258,7 +254,9 @@ def test_duplicate_call_id_slots_fail_loudly_instead_of_reusing_a_row(
     }
     existing_result = {"role": "tool", "content": "result", "tool_call_id": "call-1"}
     env.context.append(env.task.id, run.id, duplicate_calls, 1, True)
-    env.context.append(env.task.id, run.id, existing_result, 2, True)
+    env.context.append(
+        env.task.id, run.id, existing_result, 2, True, ToolMessageMetadata(status="completed")
+    )
     manager = _manager(
         context_service=env.context,
         task_id=env.task.id,
@@ -320,8 +318,8 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
     # 2) 占位归属**发起调用的** Run，而不是恰好正在执行的新 Run。
     assert placeholder.run_id == previous_run.id != current_run.id
     # 3) 占位随行写入 Transport 终态与合法状态。
-    placeholder_metadata: object = placeholder.transport_metadata
-    assert placeholder_metadata == {"status": "cancelled"}
+    placeholder_metadata: object = placeholder.metadata
+    assert placeholder_metadata == ToolMessageMetadata.model_validate({"status": "cancelled"})
     # 4) 占位序号全局递增，因此落库顺序仍在下一 Run 的 Human 之后（模型输入靠内存重排修正）。
     assert placeholder.sequence > human_row.sequence
 
@@ -354,8 +352,8 @@ def test_same_run_placeholder_metadata_backs_snapshot_rebuild(env: SimpleNamespa
     messages = manager.load_message()
 
     rows = _rows(env)
-    assert [row.transport_metadata for row in rows if row.message["role"] == "tool"] == [
-        {"status": "cancelled"}
+    assert [row.metadata for row in rows if row.message["role"] == "tool"] == [
+        ToolMessageMetadata(status="cancelled")
     ]
     # 同 run + 尾部未闭合 = 落库顺序即模型输入顺序。
     assert [row.message["role"] for row in rows] == [message["role"] for message in messages[1:]]
@@ -422,7 +420,9 @@ def test_new_tool_result_requires_current_call_before_writing(env, case):
         "tool_call_id": "unknown" if case == "unknown_id" else "call-1",
     }
     with pytest.raises(ContextProtocolError) as caught:
-        manager.add_message(message, transport_metadata={"status": "completed"})
+        manager.add_message(
+            message, metadata=ToolMessageMetadata.model_validate({"status": "completed"})
+        )
     assert caught.value.reason == "tool_result_without_current_call"
     assert caught.value.entry.message == message
     assert _rows(env) == original
@@ -435,9 +435,18 @@ def test_persisted_result_must_have_one_owner_in_the_same_run(env, case):
     other = env.seed_run("running")
     env.context.append(env.task.id, run.id, _ai_message("call-1"), 1, True)
     result = {"role": "tool", "content": "result", "tool_call_id": "call-1"}
-    env.context.append(env.task.id, other.id if case == "wrong_run" else run.id, result, 2, True)
+    env.context.append(
+        env.task.id,
+        other.id if case == "wrong_run" else run.id,
+        result,
+        2,
+        True,
+        ToolMessageMetadata(status="completed"),
+    )
     if case == "duplicate":
-        env.context.append(env.task.id, run.id, result, 3, True)
+        env.context.append(
+            env.task.id, run.id, result, 3, True, ToolMessageMetadata(status="completed")
+        )
     original = _rows(env)
     manager = _manager(
         context_service=env.context,
@@ -477,7 +486,7 @@ def test_placeholder_does_not_block_later_real_tool_result(env: SimpleNamespace)
 
     outcome = manager.add_message(
         {"role": "tool", "content": "real tool output", "tool_call_id": "call-1"},
-        transport_metadata={"status": "completed"},
+        metadata=ToolMessageMetadata.model_validate({"status": "completed"}),
     )
 
     assert outcome == "replaced"
@@ -486,7 +495,7 @@ def test_placeholder_does_not_block_later_real_tool_result(env: SimpleNamespace)
     assert len(result_rows) == 1, "真实结果必须覆盖占位，不得并排留下第二行"
     assert result_rows[0].sequence == 2, "覆盖复用占位已占用的序号"
     assert result_rows[0].message.get("content") == "real tool output"
-    assert result_rows[0].transport_metadata == {"status": "completed"}
+    assert result_rows[0].metadata == ToolMessageMetadata.model_validate({"status": "completed"})
 
     messages = manager.load_message()
     _assert_model_protocol_closed(messages)
@@ -503,7 +512,9 @@ def test_close_unclosed_tool_call_is_idempotent_and_ordered(env: SimpleNamespace
     first_result = {"role": "tool", "content": "a done", "tool_call_id": "call-1"}
     third_result = {"role": "tool", "content": "c done", "tool_call_id": "call-3"}
     env.context.append(env.task.id, run.id, first_call, 1, True)
-    env.context.append(env.task.id, run.id, first_result, 2, True)
+    env.context.append(
+        env.task.id, run.id, first_result, 2, True, ToolMessageMetadata(status="completed")
+    )
     env.context.append(env.task.id, run.id, second_call, 3, True)
     env.context.append(env.task.id, run.id, third_result, 4, True, {"status": "completed"})
 
@@ -546,7 +557,9 @@ def test_close_keeps_completed_batches_and_only_appends_missing_results(
     second_call = _ai_message("call-2", "call-3")
     second_result = {"role": "tool", "content": "b done", "tool_call_id": "call-2"}
     env.context.append(env.task.id, run.id, first_call, 1, True)
-    env.context.append(env.task.id, run.id, first_result, 2, True)
+    env.context.append(
+        env.task.id, run.id, first_result, 2, True, ToolMessageMetadata(status="completed")
+    )
     env.context.append(env.task.id, run.id, second_call, 3, True)
     env.context.append(env.task.id, run.id, second_result, 4, True, {"status": "completed"})
 
@@ -587,7 +600,7 @@ def test_close_keeps_completed_batches_and_only_appends_missing_results(
     ]
     assert len(placeholders) == 1
     assert placeholders[0].run_id == run.id
-    assert placeholders[0].transport_metadata == {"status": "cancelled"}
+    assert placeholders[0].metadata == ToolMessageMetadata.model_validate({"status": "cancelled"})
     # 更早批次（call-1）的结果行原样保留，没有被重写或搬动。
     assert (
         next(
@@ -632,9 +645,9 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
         ("call-2", run.id),
     ]
     # 只补缺失项：已有结果行原样保留，新增占位带取消终态与调用所属 Run。
-    assert tool_rows[0].transport_metadata == {"status": "completed"}
+    assert tool_rows[0].metadata == ToolMessageMetadata.model_validate({"status": "completed"})
     placeholder = tool_rows[1]
-    assert placeholder.transport_metadata == {"status": "cancelled"}
+    assert placeholder.metadata == ToolMessageMetadata.model_validate({"status": "cancelled"})
     assert placeholder.run_id == run.id
 
     # 冷读：Run 终态与工具 part 终态对齐，快照无需额外投影即可通过校验。
@@ -686,7 +699,10 @@ def test_cold_reload_normalizes_earlier_batches_without_rewriting_facts(env):
     )
     manager.load_message()
     manager.add_message(_ai_message("new-call"))
-    manager.add_message({"role": "tool", "content": "done", "tool_call_id": "new-call"})
+    manager.add_message(
+        {"role": "tool", "content": "done", "tool_call_id": "new-call"},
+        metadata=ToolMessageMetadata(status="completed"),
+    )
     original = _rows(env)
     for _ in range(2):
         cold = _manager(
@@ -723,9 +739,8 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
         next_sequence=1,
     )
     completion = sdk_completion(tool_calls=_ai_message("preview")["tool_calls"])
-    manager.save_stream_snapshot(completion, stream_id="step-1")
-    manager.flush_message_chunk(stream_id="step-1", mode="cancel")
-    monkeypatch.setattr(lifecycle, "_runtime_context", lambda: manager)
+    manager.save_model_response(completion, include_in_context=False)
+    monkeypatch.setattr(lifecycle, "_message_context", lambda: manager)
     events = []
     monkeypatch.setattr(lifecycle, "get_stream_writer", lambda: events.append)
     state = lifecycle.ToolCallLifecycleManager(
@@ -761,6 +776,7 @@ def test_recovery_keeps_invalid_context_but_cancels_all_orphan_runs(env, caplog)
         {"role": "tool", "content": "已执行", "tool_call_id": "ghost"},
         1,
         True,
+        metadata=ToolMessageMetadata(status="completed"),
     )
     env.context.append(env.task.id, healthy.id, _ai_message("pending"), 2, True)
     original = _rows(env)[0]
@@ -773,7 +789,7 @@ def test_recovery_keeps_invalid_context_but_cancels_all_orphan_runs(env, caplog)
     assert all(run.status == "cancelled" for run in recovered)
     assert _rows(env)[0] == original
     assert _rows(env)[-1].message["tool_call_id"] == "pending"
-    assert _rows(env)[-1].transport_metadata == {"status": "cancelled"}
+    assert _rows(env)[-1].metadata == ToolMessageMetadata.model_validate({"status": "cancelled"})
     assert service.recover_orphaned_runs() == []
     assert any(r.msg == "run_recovery_context_protocol_invalid" for r in caplog.records)
 
@@ -784,15 +800,31 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
     from app.core.workflow.execution_state.route import ReactRoute
     from app.core.workflow.execution_state.state import ReactExecutionState
     from app.core.workflow.nodes import model_node
+    from app.models.conversation_input import ConversationInput, QueuedTaskInput
+    from app.models.conversation_run_options import ConversationRunOptions
+    from app.service.conversation_run.task_input_service import TaskInputService
     from app.storage.crud.task_input_crud import TaskInputCrud
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
     run = env.seed_run("running")
     env.context.append(
-        env.task.id, run.id, {"role": "tool", "content": "已执行", "tool_call_id": "ghost"}, 1, True
+        env.task.id,
+        run.id,
+        {"role": "tool", "content": "已执行", "tool_call_id": "ghost"},
+        1,
+        True,
+        metadata=ToolMessageMetadata(status="completed"),
     )
     with env.factory.begin() as session:
-        TaskInputCrud().append(session, env.task.id, "queued", {"input_text": "新消息"})
+        TaskInputCrud().append(
+            session,
+            env.task.id,
+            QueuedTaskInput(
+                message=ConversationInput(input_text="新消息", display_text="新消息"),
+                model_config_id=1,
+                options=ConversationRunOptions(),
+            ),
+        )
     manager = _manager(
         context_service=env.context,
         task_id=env.task.id,
@@ -801,7 +833,7 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
         next_sequence=2,
     )
     with pytest.raises(ContextProtocolError):
-        manager.consume_user_inputs()
+        TaskInputService().consume_into_context(manager, run.id)
     requested = []
 
     async def stream(*_args, **_kwargs):
@@ -818,9 +850,8 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
             is_current_run_cancelled=lambda: False,
         ),
     )
-    monkeypatch.setattr(model_node, "_runtime_config", lambda: rc)
-    monkeypatch.setattr(model_node, "_runtime_context", lambda: manager)
-    monkeypatch.setattr(model_node, "get_stream_writer", lambda: lambda _event: None)
+    monkeypatch.setattr(model_node, "_runtime_context", lambda: rc)
+    monkeypatch.setattr(model_node, "_message_context", lambda: manager)
     monkeypatch.setattr(
         task_runtime_spaces,
         "get_or_create",
@@ -832,29 +863,27 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
                 step_count=0,
                 tool_error_count=0,
                 next_node=ReactRoute.MODEL,
-                final_text="",
                 last_tool_results={"observations": []},
             )
         )
     assert requested == []
     with env.factory() as session:
         queued = TaskInputCrud().list_pending(session, env.task.id)
-        assert [item.message_id for item in queued] == ["queued"]
+        assert [item.payload["message"]["input_text"] for item in queued] == ["新消息"]
     assert len(_rows(env)) == 1
 
 
 def test_included_result_cannot_promote_an_incomplete_draft_into_a_call(env):
     """库中即使有同 ID 草稿，也不能把未完成调用提升为已执行依据。"""
     run = env.seed_run("running")
-    env.context.append(
-        env.task.id, run.id, _ai_message("partial"), 1, include_in_context=False, is_streaming=True
-    )
+    env.context.append(env.task.id, run.id, _ai_message("partial"), 1, include_in_context=False)
     env.context.append(
         env.task.id,
         run.id,
         {"role": "tool", "content": "result", "tool_call_id": "partial"},
         2,
         True,
+        metadata=ToolMessageMetadata(status="completed"),
     )
     original = _rows(env)
     manager = _manager(
@@ -867,5 +896,4 @@ def test_included_result_cannot_promote_an_incomplete_draft_into_a_call(env):
     with pytest.raises(ContextProtocolError, match="orphan_tool_result"):
         manager.load_message()
     assert _rows(env) == original
-    assert _rows(env)[0].is_streaming
     assert not _rows(env)[0].include_in_context

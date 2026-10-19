@@ -45,7 +45,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.stream import TransportFrame
 from app.core.context.context_entry import ContextEntry
-from app.core.context.runtime_context_manager import RuntimeContextManager
+from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.workflow.execution_state.route import ReactRoute
@@ -55,6 +55,7 @@ from app.core.workflow.node_helper import (
     ToolCallLifecycleRecord,
 )
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import ToolMessageMetadata
 
 _TASK_ID = 7
 _RUN_ID = 9
@@ -119,7 +120,7 @@ class _LifecycleHarness:
 
         def _add_message(message: Any, **kwargs: Any) -> str:
             self.messages.append(message)
-            self.metadata.append(kwargs.get("transport_metadata") or {})
+            self.metadata.append(kwargs.get("metadata") or {})
             return "appended"
 
         self.runtime_context = SimpleNamespace(add_message=_add_message)
@@ -131,8 +132,8 @@ class _LifecycleHarness:
 
         with mock.patch.multiple(
             lifecycle_module,
-            _runtime_config=lambda: self.runtime_config,
-            _runtime_context=lambda: self.runtime_context,
+            _runtime_context=lambda: self.runtime_config,
+            _message_context=lambda: self.runtime_context,
             get_stream_writer=lambda: self.writer,
         ):
             yield
@@ -181,7 +182,6 @@ def _state(lifecycle: Any, **overrides: Any) -> ReactExecutionState:
         "next_node": ReactRoute.TOOLS,
         "instruction": "",
         "max_steps": 10,
-        "final_text": "",
         "last_tool_results": {},
         "tool_call_lifecycle": lifecycle,
     }
@@ -322,7 +322,7 @@ async def test_p1_pending_records_are_replayed_on_reentry() -> None:
 
     with (
         harness.runtime(),
-        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
+        mock.patch.object(tools_node_module, "_runtime_context", lambda: runtime_config),
     ):
         await tools_node_module._tools_node(_state(harness.manager))
 
@@ -372,7 +372,7 @@ async def test_p1_running_records_are_not_replayed() -> None:
 
     with (
         harness.runtime(),
-        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
+        mock.patch.object(tools_node_module, "_runtime_context", lambda: runtime_config),
     ):
         await tools_node_module._tools_node(_state(harness.manager))
 
@@ -575,8 +575,7 @@ class _RecordingContextService:
         message: Any,
         sequence: int,
         include_in_context: bool,
-        transport_metadata: Any = None,
-        is_streaming: bool = False,
+        metadata: Any = None,
         project_to_transport: bool = True,
     ) -> None:
         self.appended.append((task_id, run_id, message, sequence, include_in_context))
@@ -591,21 +590,18 @@ class _RecordingContextService:
 
 def _memory_manager(
     service: _RecordingContextService, next_sequence: int = 1
-) -> RuntimeContextManager:
-    """构造绕过真实持久化的 ``RuntimeContextManager``（与既有测试同口径）。"""
+) -> RuntimeMessageContextManager:
+    """构造绕过真实持久化的 ``RuntimeMessageContextManager``（与既有测试同口径）。"""
 
-    manager = object.__new__(RuntimeContextManager)
+    manager = object.__new__(RuntimeMessageContextManager)
     manager.current_task_id = _TASK_ID
     manager.agent_profile = SimpleNamespace()
     manager.workspace_root = ""
-    manager.compressor = None
     manager.context_service = service
     manager.current_run_id = _RUN_ID
-    manager.is_fork = False
     manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     manager._entries = []
     manager._message_sequence = next_sequence
-    manager._streaming_messages = {}
     return manager
 
 
@@ -640,8 +636,14 @@ def test_p4_memory_reorders_but_persisted_order_is_never_fixed() -> None:
         }
     )
     # 落库顺序故意与 tool_calls 相反（valid 先、blocked 后）。
-    manager.add_message({"role": "tool", "content": "valid result", "tool_call_id": "valid-1"})
-    manager.add_message({"role": "tool", "content": "disabled", "tool_call_id": "blocked-1"})
+    manager.add_message(
+        {"role": "tool", "content": "valid result", "tool_call_id": "valid-1"},
+        metadata=ToolMessageMetadata(status="completed"),
+    )
+    manager.add_message(
+        {"role": "tool", "content": "disabled", "tool_call_id": "blocked-1"},
+        metadata=ToolMessageMetadata(status="completed"),
+    )
 
     persisted_before = [message.get("tool_call_id") for _, _, message, _, _ in service.appended]
     assert persisted_before == [None, "valid-1", "blocked-1"], f"落库顺序={persisted_before}"
@@ -691,7 +693,10 @@ def test_p5_placeholder_is_replaced_by_real_result_after_resume() -> None:
             ],
         }
     )
-    manager.add_message({"role": "tool", "content": "A result", "tool_call_id": "A"})
+    manager.add_message(
+        {"role": "tool", "content": "A result", "tool_call_id": "A"},
+        metadata=ToolMessageMetadata(status="completed"),
+    )
 
     # 模拟进程崩溃后 resume：load_message 为未配对的 B 补 cancelled 占位。
     loaded = manager.load_message()
@@ -702,7 +707,7 @@ def test_p5_placeholder_is_replaced_by_real_result_after_resume() -> None:
     # 真实结果到达。
     outcome = manager.add_message(
         {"role": "tool", "content": "real B result", "tool_call_id": "B"},
-        transport_metadata={"status": "completed"},
+        metadata=ToolMessageMetadata.model_validate({"status": "completed"}),
     )
 
     assert outcome == "replaced", "占位必须被原地覆盖，而不是并排追加第二行"
@@ -737,11 +742,16 @@ def test_p5_placeholder_of_another_run_is_not_overwritten() -> None:
             ],
         }
     )
-    manager.add_message({"role": "tool", "content": "old run result", "tool_call_id": "A"})
+    manager.add_message(
+        {"role": "tool", "content": "old run result", "tool_call_id": "A"},
+        metadata=ToolMessageMetadata(status="completed"),
+    )
 
     with pytest.raises(ContextProtocolError, match="tool_result_without_current_call"):
         manager.add_message(
-            {"role": "tool", "content": "new run result", "tool_call_id": "A"}, run_id=_RUN_ID + 1
+            {"role": "tool", "content": "new run result", "tool_call_id": "A"},
+            run_id=_RUN_ID + 1,
+            metadata=ToolMessageMetadata(status="completed"),
         )
     assert len(manager._entries) == 2
     assert manager._entries[-1].message["content"] == "old run result"
@@ -798,7 +808,7 @@ async def test_p6_observe_node_settles_even_when_run_is_cancelled() -> None:
     with (
         harness.runtime(),
         mock.patch.object(
-            observation_node_module, "_runtime_config", lambda: harness.runtime_config
+            observation_node_module, "_runtime_context", lambda: harness.runtime_config
         ),
     ):
         patch = await observation_node_module._observe_node(state)

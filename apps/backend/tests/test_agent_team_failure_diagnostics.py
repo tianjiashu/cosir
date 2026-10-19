@@ -18,6 +18,7 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.tools.schemas import UserDecision, UserDecisionKind
 from app.core.tools.tool_handler.agent_team.agent_team_run import AgentTeamRunTool
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import ToolMessageMetadata
 from app.service.agent_team import agent_team_execution_timeline
 from app.service.agent_team import agent_team_run_service as run_service_module
 from app.service.agent_team.agent_team_execution_timeline import project_node_visits
@@ -34,7 +35,6 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
                 "runId": 3,
                 "status": "running",
                 "endReason": None,
-                "langfuseTraceId": None,
                 "messages": [
                     {
                         "id": "message-1",
@@ -194,12 +194,14 @@ def test_cold_rebuild_keeps_failed_team_run_locator(monkeypatch) -> None:
             sequence=2,
             include_in_context=True,
             message={"role": "tool", "content": "失败", "tool_call_id": "call-1"},
-            transport_metadata={
-                "status": "failed",
-                "error": "执行失败",
-                "display_data": {"status_hint": "执行失败"},
-                "team_run_id": 17,
-            },
+            metadata=ToolMessageMetadata.model_validate(
+                {
+                    "status": "failed",
+                    "error": "执行失败",
+                    "display_data": {"status_hint": "执行失败"},
+                    "team_run_id": 17,
+                }
+            ),
         ),
     ]
 

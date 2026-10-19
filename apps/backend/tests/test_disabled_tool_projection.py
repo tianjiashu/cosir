@@ -9,11 +9,11 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 )
 from app.models.conversation_task_context import (
     ConversationTaskContextRecord,
-    TransportMetadata,
 )
+from app.models.message_metadata import ToolMessageMetadata
 
 
-def test_rebuild_pairs_disabled_tool_closure_with_transport_metadata(
+def test_rebuild_pairs_disabled_tool_closure_with_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """禁用调用的 ToolMessage 参与冷重建时，必须有完整的状态 metadata。"""
@@ -56,7 +56,7 @@ def test_rebuild_pairs_disabled_tool_closure_with_transport_metadata(
             },
             include_in_context=True,
             sequence=2,
-            transport_metadata=TransportMetadata(status="cancelled"),
+            metadata=ToolMessageMetadata(status="cancelled"),
         ),
     ]
 

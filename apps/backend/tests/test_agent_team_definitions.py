@@ -34,12 +34,11 @@ from app.service.configuration.agent_team_configuration_service import (
 )
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.engine_cache import create_sqlite_engine
-from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
+from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.task_model import TaskModel
 from app.storage.model.workspace_model import WorkspaceModel
-from app.storage.store_engines import initialize_app_schema
-from app.storage.store_engines import main_session_factory
+from app.storage.store_engines import initialize_app_schema, main_session_factory
 
 
 def _configuration(**overrides: object) -> dict[str, object]:
@@ -54,13 +53,19 @@ def _configuration(**overrides: object) -> dict[str, object]:
                 "node_id": "develop",
                 "name": "开发",
                 "agent_id": "general-assistant",
-                "statuses": [{"name": "done", "color": "#16A34A"}, {"name": "blocked", "color": "#DC2626"}],
+                "statuses": [
+                    {"name": "done", "color": "#16A34A"},
+                    {"name": "blocked", "color": "#DC2626"},
+                ],
             },
             {
                 "node_id": "review",
                 "name": "审查",
                 "agent_id": "general-assistant",
-                "statuses": [{"name": "passed", "color": "#16A34A"}, {"name": "needs_changes", "color": "#F59E0B"}],
+                "statuses": [
+                    {"name": "passed", "color": "#16A34A"},
+                    {"name": "needs_changes", "color": "#F59E0B"},
+                ],
             },
         ],
         "transitions": [
@@ -105,7 +110,10 @@ def test_proposal_uses_start_node_id_without_scope_or_extra_fields() -> None:
 
 @pytest.mark.parametrize(
     ("field", "value"),
-    (("node_id", "review node"), ("statuses", [{"name": "PASS", "color": "#16A34A"}, {"name": "fail", "color": "#DC2626"}])),
+    (
+        ("node_id", "review node"),
+        ("statuses", [{"name": "PASS", "color": "#16A34A"}, {"name": "fail", "color": "#DC2626"}]),
+    ),
 )
 def test_configuration_rejects_invalid_identifier_and_status_formats(
     field: str, value: object
@@ -384,14 +392,20 @@ def test_configuration_rejects_removed_join_fields() -> None:
                         "node_id": "develop",
                         "name": "开发",
                         "agent_id": "general-assistant",
-                        "statuses": [{"name": "done", "color": "#16A34A"}, {"name": "join", "color": "#3B82F6"}],
+                        "statuses": [
+                            {"name": "done", "color": "#16A34A"},
+                            {"name": "join", "color": "#3B82F6"},
+                        ],
                         "join_policy": "all",
                     },
                     {
                         "node_id": "review",
                         "name": "审查",
                         "agent_id": "general-assistant",
-                        "statuses": [{"name": "passed", "color": "#16A34A"}, {"name": "needs_changes", "color": "#F59E0B"}],
+                        "statuses": [
+                            {"name": "passed", "color": "#16A34A"},
+                            {"name": "needs_changes", "color": "#F59E0B"},
+                        ],
                     },
                 ]
             )
@@ -493,6 +507,13 @@ def test_team_run_crud_round_trips_persisted_confirmation_state(
         session.add(task)
         session.flush()
         run = ConversationRunModel(
+            options={"ban_tools": [], "reasoning_effort": None},
+            execution_data={
+                "step_count": 0,
+                "tool_error_count": 0,
+                "waiting": None,
+                "decision": None,
+            },
             task_id=task.id,
             status="waiting_for_input",
         )
@@ -507,7 +528,6 @@ def test_team_run_crud_round_trips_persisted_confirmation_state(
         workspace_id=workspace.id,
         parent_task_id=task.id,
         parent_run_id=run.id,
-
         goal="检查代码",
         node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
     )
@@ -534,6 +554,13 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
         session.add(task)
         session.flush()
         run = ConversationRunModel(
+            options={"ban_tools": [], "reasoning_effort": None},
+            execution_data={
+                "step_count": 0,
+                "tool_error_count": 0,
+                "waiting": None,
+                "decision": None,
+            },
             task_id=task.id,
             status="waiting_for_input",
         )
@@ -547,7 +574,6 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
         workspace_id=workspace.id,
         parent_task_id=task.id,
         parent_run_id=run.id,
-
         goal="检查代码",
         node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
     )
@@ -616,7 +642,17 @@ def test_create_pending_confirmation_supersedes_previous_pending(tmp_path: Path)
         task = TaskModel(workspace_id=workspace.id, title="parent", tool_schemas=[])
         session.add(task)
         session.flush()
-        run = ConversationRunModel(task_id=task.id, status="waiting_for_input")
+        run = ConversationRunModel(
+            options={"ban_tools": [], "reasoning_effort": None},
+            execution_data={
+                "step_count": 0,
+                "tool_error_count": 0,
+                "waiting": None,
+                "decision": None,
+            },
+            task_id=task.id,
+            status="waiting_for_input",
+        )
         session.add(run)
         session.flush()
         workspace_id, task_id, run_id = workspace.id, task.id, run.id
@@ -668,7 +704,17 @@ def test_supersede_pending_for_parent_unblocks_reproposal(tmp_path: Path) -> Non
         task = TaskModel(workspace_id=workspace.id, title="parent", tool_schemas=[])
         session.add(task)
         session.flush()
-        run = ConversationRunModel(task_id=task.id, status="waiting_for_input")
+        run = ConversationRunModel(
+            options={"ban_tools": [], "reasoning_effort": None},
+            execution_data={
+                "step_count": 0,
+                "tool_error_count": 0,
+                "waiting": None,
+                "decision": None,
+            },
+            task_id=task.id,
+            status="waiting_for_input",
+        )
         session.add(run)
         session.flush()
         workspace_id, task_id, run_id = workspace.id, task.id, run.id
@@ -747,7 +793,17 @@ def test_user_rejection_ends_pending_team_run_idempotently(tmp_path: Path) -> No
         task = TaskModel(workspace_id=workspace.id, title="parent", tool_schemas=[])
         session.add(task)
         session.flush()
-        parent_run = ConversationRunModel(task_id=task.id, status="waiting_for_input")
+        parent_run = ConversationRunModel(
+            options={"ban_tools": [], "reasoning_effort": None},
+            execution_data={
+                "step_count": 0,
+                "tool_error_count": 0,
+                "waiting": None,
+                "decision": None,
+            },
+            task_id=task.id,
+            status="waiting_for_input",
+        )
         session.add(parent_run)
         session.flush()
         workspace_id, task_id, parent_run_id = workspace.id, task.id, parent_run.id
@@ -787,7 +843,17 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
         parent_task = TaskModel(workspace_id=workspace.id, title="parent", tool_schemas=[])
         session.add(parent_task)
         session.flush()
-        parent_run = ConversationRunModel(task_id=parent_task.id, status="running")
+        parent_run = ConversationRunModel(
+            options={"ban_tools": [], "reasoning_effort": None},
+            execution_data={
+                "step_count": 0,
+                "tool_error_count": 0,
+                "waiting": None,
+                "decision": None,
+            },
+            task_id=parent_task.id,
+            status="running",
+        )
         session.add(parent_run)
         session.flush()
         node_task = TaskModel(
@@ -800,7 +866,17 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
         )
         session.add(node_task)
         session.flush()
-        node_run = ConversationRunModel(task_id=node_task.id, status="running")
+        node_run = ConversationRunModel(
+            options={"ban_tools": [], "reasoning_effort": None},
+            execution_data={
+                "step_count": 0,
+                "tool_error_count": 0,
+                "waiting": None,
+                "decision": None,
+            },
+            task_id=node_task.id,
+            status="running",
+        )
         session.add(node_run)
         session.flush()
         child_task = TaskModel(
@@ -813,7 +889,17 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
         )
         session.add(child_task)
         session.flush()
-        child_run = ConversationRunModel(task_id=child_task.id, status="completed")
+        child_run = ConversationRunModel(
+            options={"ban_tools": [], "reasoning_effort": None},
+            execution_data={
+                "step_count": 0,
+                "tool_error_count": 0,
+                "waiting": None,
+                "decision": None,
+            },
+            task_id=child_task.id,
+            status="completed",
+        )
         session.add(child_run)
         session.flush()
         child_task.current_run_id = child_run.id
@@ -860,11 +946,13 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
     develop = next(node for node in view["nodes"] if node["node_id"] == "develop")
     assert develop["task_id"] == expected_node_task_id
     assert develop["agent_count"] == 2
-    assert develop["child_agents"] == [{
-        "task_id": expected_child_task_id,
-        "title": "搜索资料",
-        "status": "completed",
-    }]
+    assert develop["child_agents"] == [
+        {
+            "task_id": expected_child_task_id,
+            "title": "搜索资料",
+            "status": "completed",
+        }
+    ]
     assert view["execution_steps"][0]["child_agents"] == develop["child_agents"]
     assert view["execution_steps"][0]["goal"] == "实现与验证功能"
     assert "state" not in view

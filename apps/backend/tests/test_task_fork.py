@@ -10,6 +10,7 @@ from test_task5_acceptance import canonical_store as canonical_store
 
 from app.api.schemas import ForkTaskRequest
 from app.api.tasks_api import fork_task
+from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.storage.queries.task_read_queries import TaskReadQueries
 from app.task_runtime.service.task_service import TaskService
@@ -38,7 +39,7 @@ def fork_store(request, monkeypatch):
 
 
 def append_run(store, status):
-    run = store.runs.create(store.task.id, status, status=status)
+    run = store.runs.create(store.task.id, status=status)
     sequence = store.context.max_sequence(store.task.id) + 1
     store.context.append(
         store.task.id, run.id, {"role": "user", "content": f"user-{run.id}"}, sequence
@@ -65,7 +66,7 @@ def test_fork_terminal_history_while_later_run_is_active(fork_store, terminal, l
     assert target.tool_schemas == store.task.tool_schemas
     assert target.extra == {"fork": {"source_task_id": store.task.id, "source_run_id": boundary.id}}
     assert {run.id for run in cloned_runs}.isdisjoint({first.id, boundary.id, later.id})
-    assert all(run.execution_data == {} for run in cloned_runs)
+    assert all(run.execution_data == ConversationRunProgress() for run in cloned_runs)
     target_rows = store.contexts.get(target.id, include_in_context=False)
     assert [row.message for row in target_rows] == [
         row.message for row in source_rows if row.run_id in {None, first.id, boundary.id}
@@ -92,7 +93,7 @@ def test_reject_active_run_anywhere_in_selected_prefix(fork_store, status, bound
 def test_unknown_or_foreign_boundary_returns_404_without_creating_task(fork_store):
     store = fork_store
     other = store.tasks.create(store.workspace.id, "other")
-    foreign = store.runs.create(other.id, "foreign", status="completed")
+    foreign = store.runs.create(other.id, status="completed")
     for boundary in (foreign.id, foreign.id + 100):
         with pytest.raises(HTTPException) as caught:
             asyncio.run(fork_task(store.task.id, ForkTaskRequest(runId=boundary), store.service))

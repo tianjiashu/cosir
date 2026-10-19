@@ -51,6 +51,11 @@ from app.service.agent_team.agent_team_preparation_service import (
 # --------------------------------------------------------------------------- #
 
 
+def _node_inputs(**goals: str) -> list[dict[str, str]]:
+    """模型输入使用显式节点列表；领域服务与批准输入仍使用节点映射。"""
+    return [{"node_id": node_id, "goal": goal, "summary": goal} for node_id, goal in goals.items()]
+
+
 def _configuration(**overrides: object) -> dict[str, object]:
     """构造一份通过领域校验的 Team 配置文档（两个节点、均可到达 END）。"""
 
@@ -325,7 +330,7 @@ def test_execute_without_context_is_a_non_retryable_error() -> None:
     observation = _bare_tool().execute(
         team_id="code-quality",
         goal="交付报告",
-        node_goals={"develop": "实现"},
+        node_goals=_node_inputs(develop='实现'),
         execution_context=None,
     )
 
@@ -347,7 +352,7 @@ def test_prepare_branch_reports_missing_team_as_non_retryable_creation_invalid()
     observation = tool.execute(
         team_id="ghost-team",
         goal="交付报告",
-        node_goals={"develop": "实现"},
+        node_goals=_node_inputs(develop='实现'),
         execution_context=_context(),
     )
 
@@ -376,7 +381,7 @@ def test_prepare_branch_strips_team_id_before_resolving() -> None:
     tool.execute(
         team_id="   code-quality   ",
         goal="交付报告",
-        node_goals={"develop": "实现"},
+        node_goals=_node_inputs(develop='实现'),
         execution_context=context,
     )
 
@@ -397,7 +402,7 @@ def test_whitespace_only_team_id_resolves_to_the_empty_string() -> None:
     observation = tool.execute(
         team_id="    ",
         goal="交付报告",
-        node_goals={"develop": "实现"},
+        node_goals=_node_inputs(develop='实现'),
         execution_context=_context(),
     )
 
@@ -442,7 +447,7 @@ def test_approve_decision_routes_to_start_branch_only() -> None:
     observation = tool.execute(
         team_id="code-quality",
         goal="交付报告",
-        node_goals={"develop": "实现", "review": "审查"},
+        node_goals=_node_inputs(develop='实现', review='审查'),
         execution_context=context,
     )
 
@@ -484,7 +489,7 @@ def test_execute_reports_runtime_unavailable_without_injected_parent_profile() -
     observation = tool.execute(
         team_id="code-quality",
         goal="交付报告",
-        node_goals={"develop": "实现"},
+        node_goals=_node_inputs(develop='实现'),
         execution_context=context,
     )
 
@@ -510,7 +515,7 @@ def test_non_approve_decision_never_starts_a_run(kind: UserDecisionKind) -> None
     observation = tool.execute(
         team_id="code-quality",
         goal="交付报告",
-        node_goals={"develop": "实现"},
+        node_goals=_node_inputs(develop='实现'),
         execution_context=_context(
             UserDecision(request_id="7", kind=kind, data={"configuration": _configuration()})
         ),
@@ -662,22 +667,21 @@ def test_team_id_argument_rejects_blank_and_unknown_fields() -> None:
     """
 
     with pytest.raises(ValidationError):
-        AgentTeamArgs(team_id="", goal="goal", node_goals={"develop": "实现"})
+        AgentTeamArgs(team_id="", goal="goal", node_goals=_node_inputs(develop='实现'))
 
     with pytest.raises(ValidationError):
-        AgentTeamArgs(team_id="code-quality", goal="goal", node_goals={})
+        AgentTeamArgs(team_id="code-quality", goal="goal", node_goals=_node_inputs())
 
     with pytest.raises(ValidationError):
         AgentTeamArgs(
             team_id="code-quality",
             goal="goal",
-            node_goals={"develop": "实现"},
+            node_goals=_node_inputs(develop='实现'),
             unexpected="x",  # type: ignore[call-arg]
         )
 
-    # 纯空白 team_id 在参数层被接受（长度非零），执行层 strip 后落空——记录该边界事实。
-    args = AgentTeamArgs(team_id="   ", goal="goal", node_goals={"develop": "实现"})
-    assert args.team_id.strip() == ""
+    with pytest.raises(ValidationError):
+        AgentTeamArgs(team_id="   ", goal="goal", node_goals=_node_inputs(develop="实现"))
 
 
 # --------------------------------------------------------------------------- #
@@ -714,7 +718,7 @@ def test_prepare_branch_succeeds_for_an_existing_team(monkeypatch) -> None:
     observation = tool.execute(
         team_id="code-quality",
         goal="交付报告",
-        node_goals={"develop": "实现", "review": "审查"},
+        node_goals=_node_inputs(develop='实现', review='审查'),
         execution_context=_context(),
     )
 

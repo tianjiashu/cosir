@@ -1,8 +1,7 @@
 """model 节点「本轮输出能否收口」的契约测试。
 
-覆盖：空流必须响亮失败（不固化空消息）、只有正常完成原因才能完成 Run、长度截断回到 model 自行
-延续、缺失完成原因不得当作最终回答（经 task 级延迟队列注入续写提示）、``end_turn`` 语义等价于正常
-结束。
+覆盖：空流必须响亮失败（不固化空消息）、无工具时任意完成原因都结束 Run、空正文仍可完成、
+缺失完成原因只保留展示并重试，以及工具批次未完成时不执行工具。
 
 历史：本文件由 ``test_tool_call_repair_flow.py`` 拆分而来。该文件其余用例建立在已移除的契约上
 （graph state 的 ``tool_request`` / ``tool_rejection_count`` / ``final_answer_only``、tools 节点承担
@@ -22,6 +21,7 @@ import pytest
 from openai.lib.streaming.chat import ChunkEvent
 from openai.types.chat import ChatCompletion
 
+import app.core.workflow.node_helper.streaming_part_state_machine as streaming_module
 import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.workflow.execution_state.route import ReactRoute
@@ -63,7 +63,6 @@ def _state(**overrides: Any) -> ReactExecutionState:
         "next_node": ReactRoute.MODEL,
         "instruction": "",
         "max_steps": 10,
-        "final_text": "",
         "last_tool_results": {"instruction": "", "observations": []},
     }
     values.update(overrides)
@@ -77,14 +76,16 @@ class _ModelHarness:
         self.messages: list[Any] = []
         self.events: list[Any] = []
         self.completed = False
+        self.completion_fields: dict[str, Any] = {}
         self.failed = False
         self._message = message
         # 显式传空列表表示「零 chunk 流」，故不能写成 ``chunks or [...]``（空列表会被默认值吞掉）。
         self._chunks = chunks if chunks is not None else [{"content": ""}]
-        self._merged_chunk: ChatCompletion | None = None
+        self.saved_responses = []
 
-        def complete_run_if_running(*_args: Any, **_kwargs: Any) -> object:
+        def complete_run_if_running(*_args: Any, **kwargs: Any) -> object:
             self.completed = True
+            self.completion_fields = kwargs
             return object()
 
         def fail_run_if_running(*_args: Any, **_kwargs: Any) -> object:
@@ -123,42 +124,15 @@ class _ModelHarness:
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
 
-        def save_stream_snapshot(
-            chunk: ChatCompletion, *, stream_id: str, run_id: Any = None
-        ) -> ChatCompletion:
-            del stream_id, run_id
-            self._merged_chunk = chunk
-            # 假流：本用例把「本轮完整输出」预置为 ``message``（真实 provider 的 chunk 聚合结果与它
-            # 同形：finish_reason / tool_calls / usage 都在其中），故累积结果直接返回它；真实的
-            # 聚合、节流与固化行为由 manager 单测钉住。
-            return assistant_message(self._message.choices[0].message)
-
-        def flush_message_chunk(
-            *,
-            stream_id: str,
-            run_id: Any = None,
-            mode: str = "running",
-            message: ChatCompletion | None = None,
-        ) -> ChatCompletion | None:
-            del stream_id, run_id
-            if mode == "finalize":
-                # 不模拟「省略 message 时固化内存聚合结果」：节点必须交付修订版，省略即契约被破坏。
-                if message is None:
-                    raise AssertionError("model_node must pass the finalized message")
-                self._merged_chunk = None
-                self.messages.append(message)
-                return message
-            if message is not None:
-                raise ValueError("message is only accepted in finalize mode")
-            if mode == "cancel":
-                self._merged_chunk = None
-            return assistant_message(self._message.choices[0].message)
+        def save_model_response(snapshot, *, include_in_context, run_id=None, existing=None):
+            self.saved_responses.append((snapshot, include_in_context))
+            if include_in_context:
+                self.messages.append(assistant_message(snapshot.choices[0].message))
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
             add_message=add_message,
-            save_stream_snapshot=save_stream_snapshot,
-            flush_message_chunk=flush_message_chunk,
+            save_model_response=save_model_response,
         )
 
     async def _astream(self, _messages: list[Any], **kwargs: Any) -> AsyncIterator[ChunkEvent]:
@@ -169,63 +143,127 @@ class _ModelHarness:
 def _patch_lifecycle_runtime(monkeypatch: Any, harness: _ModelHarness) -> None:
     """把 lifecycle 的 graph runtime 依赖绑定到测试桩。"""
 
-    monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: harness.runtime_config)
-    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(lifecycle_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: harness.events.append)
 
 
 def test_empty_model_stream_fails_loudly_without_finalizing(monkeypatch: Any) -> None:
     """模型一个 chunk 都没产出时必须响亮失败，不得固化出一条空 assistant 消息。
 
-    该分支在收口处、早于任何 lifecycle / tools 交互，因此只打 ``model_module`` 的桩即可覆盖。
+    finally 统一收口展示，但空流不会产生持久化记录。
     """
 
     harness = _ModelHarness(sdk_completion(content="", finish_reason=None), chunks=[])
-    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
-    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    _patch_lifecycle_runtime(monkeypatch, harness)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
 
     with pytest.raises(RuntimeError):
         asyncio.run(model_module._model_node(_state()))
 
     assert harness.messages == [], "空流不得固化任何消息"
+    assert harness.saved_responses == []
 
 
-def test_normal_finish_reason_is_required_for_final_response(monkeypatch: Any) -> None:
-    """没有工具调用时，只有正常 finish_reason 才能完成 Run。"""
+@pytest.mark.parametrize(
+    "identities",
+    [
+        [("", "read_file")],
+        [("   ", "read_file")],
+        [("call", "")],
+        [("call", "read_file"), ("call", "read_file")],
+        [("call", "read_file"), ("call", "write_file")],
+        [("call", "write_file"), ("call", "read_file")],
+    ],
+)
+def test_invalid_tool_identity_rejects_batch_and_cancels_preview(monkeypatch, identities):
+    """完整批次身份错误必须取消草稿和预览，不能覆盖调用或进入工具执行。"""
+    response = sdk_completion(
+        "说明",
+        finish_reason="tool_calls",
+        tool_calls=[
+            {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+            for call_id, name in identities
+        ],
+    )
+    harness = _ModelHarness(response)
+    # write_file 已注册但本轮禁用，验证跨 allowed/blocked 桶也不能重复身份。
+    harness.operations.all_vaild_tools.append(SimpleNamespace(name="write_file", display=None))
+    placeholders = []
+    harness.runtime_context.add_message = lambda message, **kwargs: placeholders.append(
+        (message, kwargs)
+    )
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
+    _patch_lifecycle_runtime(monkeypatch, harness)
+
+    with pytest.raises(ValueError, match="模型工具调用"):
+        asyncio.run(model_module._model_node(_state()))
+
+    assert harness.messages == []
+    assert len(harness.saved_responses) == 1
+    assert harness.saved_responses[0][1] is False
+    assert not harness.completed
+    assert len(placeholders) == (1 if len(identities) > 1 else 0)
+    for message, metadata in placeholders:
+        assert message["tool_call_id"] == "call"
+        assert metadata["include_in_context"] is False
+        assert metadata["metadata"].status == "cancelled"
+    statuses = [
+        event.status
+        for event in harness.events
+        if isinstance(event, lifecycle_module.ToolCallStatusChangedEvent)
+    ]
+    assert statuses == (["cancelled"] if len(identities) > 1 else [])
+
+
+def test_finish_reason_completes_final_response(monkeypatch: Any) -> None:
+    """没有工具调用时，完成原因与最终文本一起交给 Run 完成入口。"""
 
     message = sdk_completion(content="已完成回答。", finish_reason="stop")
     harness = _ModelHarness(message)
-    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
-    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
 
     assert result["next_node"] is ReactRoute.END
-    assert harness.completed is False
+    # 最终回答在产出节点就地落定 completed，不再由 loop 二次落库。
+    assert harness.completed is True
     assert harness.failed is False
+    assert harness.completion_fields == {"final_output": "已完成回答。", "end_reason": "stop"}
     assert [item["role"] for item in harness.messages] == ["assistant"]
 
 
-def test_truncated_model_output_continues_without_injected_prompt(monkeypatch: Any) -> None:
-    """达到长度上限的文本不能完成 Run，直接回到 model 由模型自行延续，不注入续写提示。"""
+@pytest.mark.parametrize(
+    "finish_reason", ["length", "content_filter", "tool_calls", "provider_custom"]
+)
+def test_any_finish_reason_without_tool_calls_completes_run(
+    monkeypatch: Any, finish_reason: str
+) -> None:
+    """完成原因只要求存在；不按值或正文是否完整做额外判断。"""
 
-    message = sdk_completion(content="回答到一半", finish_reason="length")
+    message = sdk_completion(content="回答到一半", finish_reason=finish_reason)
     harness = _ModelHarness(message)
-    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
-    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["next_node"] is ReactRoute.MODEL
-    assert harness.completed is False
+    assert result["next_node"] is ReactRoute.END
+    assert harness.completed is True
     assert harness.failed is False
-    # length 类截断只表示本轮达到输出上限，由模型自行从已有输出继续；既不就地写入
-    # canonical context，也不进 task 级延迟队列。
+    assert harness.completion_fields == {
+        "final_output": "回答到一半",
+        "end_reason": finish_reason,
+    }
     assert [item["role"] for item in harness.messages] == ["assistant"]
     assert task_runtime_spaces.get_or_create(1).take_runtime_notices() == []
 
@@ -235,21 +273,38 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
 
     message = sdk_completion(content="未确认完成", finish_reason=None)
     harness = _ModelHarness(message)
-    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
-    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
 
     assert result["next_node"] is ReactRoute.MODEL
     assert harness.completed is False
-    # 续写提示不再就地写入 canonical context，而是经 task 级延迟队列在下一个 model 步注入；
-    # 故本轮 harness.messages 只含 AIMessage，提示位于延迟队列。
-    assert [item["role"] for item in harness.messages] == ["assistant"]
+    # 展示行保留，但没有进入下一步模型的 canonical context。
+    assert harness.messages == []
+    assert [include for _, include in harness.saved_responses] == [False]
     deferred_system_messages = task_runtime_spaces.get_or_create(1).take_runtime_notices()
     assert len(deferred_system_messages) == 1
-    assert "finish_reason=missing" in deferred_system_messages[0].content
+    assert "no finish_reason" in deferred_system_messages[0].content
+
+
+def test_empty_content_with_finish_reason_completes_run(monkeypatch: Any) -> None:
+    """模型仅返回完成原因时，Run 也应完成并写入空的最终文本。"""
+
+    harness = _ModelHarness(sdk_completion(content="", finish_reason="stop"))
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
+    _patch_lifecycle_runtime(monkeypatch, harness)
+
+    result = asyncio.run(model_module._model_node(_state()))
+
+    assert result["next_node"] is ReactRoute.END
+    assert harness.completed is True
+    assert harness.failed is False
+    assert harness.completion_fields == {"final_output": "", "end_reason": "stop"}
 
 
 def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
@@ -257,15 +312,15 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
 
     message = sdk_completion(content="完成。", finish_reason="end_turn")
     harness = _ModelHarness(message)
-    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
-    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
 
     assert result["next_node"] is ReactRoute.END
-    assert harness.completed is False
+    assert harness.completed is True
 
 
 def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None:
@@ -286,9 +341,9 @@ def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None
             yield chunk
 
     harness.runtime_config.model.stream = stream
-    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
-    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
     result = asyncio.run(model_module._model_node(_state()))
     assert result["next_node"] is ReactRoute.END
@@ -317,9 +372,9 @@ def test_invalid_tool_arguments_preserved_and_never_dispatched(monkeypatch, argu
         ],
     )
     harness = _ModelHarness(response)
-    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
-    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
     patch = asyncio.run(model_module._model_node(_state()))
     assert patch["next_node"] == ReactRoute.TOOLS
@@ -327,7 +382,7 @@ def test_invalid_tool_arguments_preserved_and_never_dispatched(monkeypatch, argu
     assert patch["tool_call_lifecycle"].valid_calls["call"].argument_error
     harness.operations.run_tool_calls = AsyncMock(return_value=ToolRunResult(observations=[]))
     harness.operations.all_vaild_tools[0].need_HIL = False
-    monkeypatch.setattr(tools_module, "_runtime_config", lambda: harness.runtime_config)
+    monkeypatch.setattr(tools_module, "_runtime_context", lambda: harness.runtime_config)
     result = asyncio.run(tools_module._tools_node(_state().model_copy(update=patch)))
     calls = harness.operations.run_tool_calls.call_args.args[1]
     assert calls == []
@@ -346,9 +401,9 @@ def test_truncated_tool_batch_is_not_executed_even_with_complete_json(monkeypatc
         ],
     )
     harness = _ModelHarness(response)
-    monkeypatch.setattr(model_module, "_runtime_config", lambda: harness.runtime_config)
-    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(model_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_lifecycle_runtime(monkeypatch, harness)
     result = asyncio.run(model_module._model_node(_state()))
     assert result["next_node"] == ReactRoute.MODEL

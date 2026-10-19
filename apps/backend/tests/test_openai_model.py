@@ -1,16 +1,86 @@
 """真实 SDK + 本机 HTTP mock 覆盖消息边界与流式聚合。"""
 
-import asyncio
 import json
 
 import httpx
 import pytest
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletion
 
-from app.core.llm_provider.cancellable_stream import ModelRequestCancelled, cancellable_stream
 from app.core.llm_provider.message_codec import assistant_message, validate_message
 from app.core.llm_provider.openai_model import OpenAIChatModel, usage_from_response
 from tests.sdk_fixtures import sdk_events
+
+
+@pytest.mark.asyncio
+async def test_complete_preserves_bound_tools_without_changing_stream_requests():
+    """真实 SDK 请求同时验证工具前缀、非流式响应与单次格式化参数隔离。"""
+    requests = []
+    completion = {
+        "id": "result-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "test",
+        "choices": [{
+            "index": 0,
+            "finish_reason": "length",
+            "message": {"role": "assistant", "content": '{"partial":'},
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+    }
+
+    def handler(request):
+        body = json.loads(request.content)
+        requests.append(body)
+        if not body["stream"]:
+            return httpx.Response(200, json=completion)
+        chunk = {
+            "id": "stream-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "test",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "delta": {"role": "assistant", "content": "done"},
+            }],
+        }
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n",
+        )
+
+    schemas = [{"name": "read_file"}, {"name": "write_file"}]
+    model = OpenAIChatModel(
+        AsyncOpenAI(
+            api_key="test",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        ),
+        {"model": "test"},
+        tools=schemas,
+    )
+    messages = [{"role": "user", "content": "go"}]
+    try:
+        assert [event async for event in model.stream(messages)]
+        response = await model.complete(messages, response_format={"type": "json_object"})
+        assert [event async for event in model.stream(messages)]
+        assert isinstance(response, ChatCompletion)
+        assert response.model_dump(exclude_unset=True) == completion
+        expected_tools = [{"type": "function", "function": schema} for schema in schemas]
+        assert all(request["tools"] == expected_tools for request in requests)
+        assert all(request["messages"] == messages for request in requests)
+        assert requests[0] == requests[2]
+        assert requests[0]["stream"] is True
+        assert requests[0]["stream_options"] == {"include_usage": True}
+        assert "tool_choice" not in requests[0]
+        assert "response_format" not in requests[0]
+        assert requests[1]["stream"] is False
+        assert requests[1]["tool_choice"] == "none"
+        assert requests[1]["response_format"] == {"type": "json_object"}
+        assert "stream_options" not in requests[1]
+    finally:
+        await model.close()
 
 
 @pytest.mark.asyncio
@@ -78,7 +148,6 @@ async def test_sdk_stream_preserves_reasoning_tools_usage_and_request():
     client = AsyncOpenAI(
         api_key="test", http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
     )
-    model = OpenAIChatModel(client, {"model": "test"})
     result = None
     snapshots = []
     schemas = [
@@ -92,10 +161,8 @@ async def test_sdk_stream_preserves_reasoning_tools_usage_and_request():
             },
         }
     ]
-    async for chunk in model.stream(
-        [{"role": "user", "content": "go"}],
-        tools=schemas,
-    ):
+    model = OpenAIChatModel(client, {"model": "test"}, tools=schemas)
+    async for chunk in model.stream([{"role": "user", "content": "go"}]):
         snapshots.append(chunk.snapshot)
         result = chunk.snapshot.model_copy(deep=True)
     second = None
@@ -114,18 +181,20 @@ async def test_sdk_stream_preserves_reasoning_tools_usage_and_request():
     await model.close()
     assert snapshots[0].choices[0].message.tool_calls[0].function.arguments == '{"path":'
     message = result.choices[0].message
-    assert second.choices[0].message.tool_calls[0].id != message.tool_calls[0].id
+    assert second.choices[0].message.tool_calls[0].id == message.tool_calls[0].id == "c1"
     assert requests[1]["messages"][-1]["tool_call_id"] == message.tool_calls[0].id
     assert message.content == "说明"
     assert message.model_extra["reasoning_content"] == "先想再做"
     assert message.tool_calls[0].function.arguments == '{"path":"a"}'
-    assert message.tool_calls[0].id.startswith("call_")
+    assert snapshots[0].choices[0].message.tool_calls[0].id == "c1"
     assert result.choices[0].finish_reason == "tool_calls"
     assert usage_from_response(result.usage)["input_token_details"]["cache_read"] == 4
     assert "parsed" not in requests[1]["messages"][1]
     assert "index" not in requests[1]["messages"][1]["tool_calls"][0]
     assert requests[0]["messages"] == [{"role": "user", "content": "go"}]
     assert requests[0]["tools"] == [{"type": "function", "function": schemas[0]}]
+    assert requests[1]["tools"] == requests[0]["tools"]
+    assert "response_format" not in requests[0]
     assert client.is_closed()
 
 
@@ -153,30 +222,6 @@ def test_sdk_aggregation_preserves_incomplete_arguments_without_executing():
     final = list(events)[-1].snapshot
     assert final.choices[0].message.tool_calls[0].function.arguments == '{"path":'
     assert final.choices[0].finish_reason == "length"
-
-
-@pytest.mark.asyncio
-async def test_cancel_while_waiting_first_token_closes_network_generator():
-    closed = asyncio.Event()
-    cancelled = False
-
-    async def source():
-        try:
-            await asyncio.Event().wait()
-            yield "unreachable"
-        finally:
-            closed.set()
-
-    async def consume():
-        async for _ in cancellable_stream(source(), lambda: cancelled):
-            pass
-
-    task = asyncio.create_task(consume())
-    await asyncio.sleep(0.02)
-    cancelled = True
-    with pytest.raises(ModelRequestCancelled):
-        await asyncio.wait_for(task, timeout=1)
-    assert closed.is_set()
 
 
 @pytest.mark.parametrize(
@@ -221,16 +266,16 @@ async def test_sdk_malformed_usage_details_do_not_fail_completed_response(detail
     from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
 
     def handler(_request):
-        chunk = {
+        completion = {
             "id": "r1",
             "created": 1,
             "model": "test",
-            "object": "chat.completion.chunk",
+            "object": "chat.completion",
             "choices": [
                 {
                     "index": 0,
                     "finish_reason": "stop",
-                    "delta": {
+                    "message": {
                         "role": "assistant",
                         "content": "完成",
                     },
@@ -244,11 +289,7 @@ async def test_sdk_malformed_usage_details_do_not_fail_completed_response(detail
                 "completion_tokens_details": details,
             },
         }
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            content="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n",
-        )
+        return httpx.Response(200, json=completion)
 
     client = AsyncOpenAI(
         api_key="test",

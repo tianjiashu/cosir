@@ -111,7 +111,7 @@ class _LifecycleHarness:
 
         def _add_message(message: Any, **kwargs: Any) -> str:
             self.messages.append(message)
-            self.metadata.append(kwargs.get("transport_metadata") or {})
+            self.metadata.append(kwargs.get("metadata") or {})
             return "appended"
 
         self.runtime_context = SimpleNamespace(add_message=_add_message)
@@ -125,8 +125,8 @@ class _LifecycleHarness:
 
         with mock.patch.multiple(
             lifecycle_module,
-            _runtime_config=lambda: self.runtime_config,
-            _runtime_context=lambda: self.runtime_context,
+            _runtime_context=lambda: self.runtime_config,
+            _message_context=lambda: self.runtime_context,
             get_stream_writer=lambda: self.writer,
         ):
             yield
@@ -175,7 +175,6 @@ def _state(lifecycle: ToolCallLifecycleManager, **overrides: Any) -> ReactExecut
         "next_node": ReactRoute.TOOLS,
         "instruction": "请读取文件",
         "max_steps": 10,
-        "final_text": "",
         "last_tool_results": {},
         "tool_call_lifecycle": lifecycle,
     }
@@ -277,7 +276,7 @@ async def test_t1_terminal_records_are_not_sent_to_execution_on_reentry() -> Non
     state = _state(harness.manager)
     with (
         harness.runtime(),
-        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
+        mock.patch.object(tools_node_module, "_runtime_context", lambda: runtime_config),
     ):
         patch = await tools_node_module._tools_node(state)
 
@@ -340,7 +339,7 @@ async def test_t1_begin_snapshot_is_written_back_to_state_patch() -> None:
     state = _state(harness.manager)
     with (
         harness.runtime(),
-        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
+        mock.patch.object(tools_node_module, "_runtime_context", lambda: runtime_config),
     ):
         # 先直接观测 begin 的返回值：pending → running，并发一条 running 事件。
         begin_result = harness.manager.begin(task_id=11, run_id=200, step_id="step-3")
@@ -394,7 +393,7 @@ async def test_t1_missing_lifecycle_raises_runtime_error() -> None:
 
     with (
         harness.runtime(),
-        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
+        mock.patch.object(tools_node_module, "_runtime_context", lambda: runtime_config),
         pytest.raises(RuntimeError, match="tool_call_lifecycle is required"),
     ):
         await tools_node_module._tools_node(_state(None))
@@ -449,7 +448,7 @@ async def test_t1_terminal_sessions_do_not_enter_checkpoint() -> None:
     state = _state(harness.manager)
     with (
         harness.runtime(),
-        mock.patch.object(tools_node_module, "_runtime_config", lambda: runtime_config),
+        mock.patch.object(tools_node_module, "_runtime_context", lambda: runtime_config),
     ):
         patch = await tools_node_module._tools_node(state)
 
@@ -597,7 +596,7 @@ def test_t3_settle_closes_unregistered_tool_name_record_silently() -> None:
     被测行为：先用 ``classify`` 把未注册工具名（``ghost_tool``）造进 ``valid_calls``
     （其 ``part_projected`` 为 ``False``），再对同一 call_id 结算一条 success 观察。
     修复后实际观测：**不发** ``ToolCallStatusChangedEvent``，只写一条 ``ToolMessage``，
-    且该 ToolMessage 的 ``transport_metadata`` 带 ``hidden=True``（供冷重建跳过建 part）。
+    且该 ToolMessage 的 ``metadata`` 带 ``hidden=True``（供冷重建跳过建 part）。
     修复前：会向一个前端不存在的 part 发终态事件（projector 记「part 缺失」告警）。
     """
 
@@ -632,7 +631,7 @@ def test_t3_settle_closes_unregistered_tool_name_record_silently() -> None:
     assert updated.valid_calls["ghost-1"].status == "completed"
     # 模型侧协议照常闭合（写一条 ToolMessage），并带隐藏标记。
     assert [message.get("tool_call_id") for message in harness.messages] == ["ghost-1"]
-    assert harness.metadata[-1].get("hidden") is True
+    assert harness.metadata[-1].hidden is True
 
 
 def test_t3_cancel_skips_the_same_unregistered_record() -> None:
@@ -679,7 +678,7 @@ def test_t3_settle_closes_orphan_record_silently() -> None:
     assert updated.valid_calls["orphan-1"].status == "completed"
     assert updated.valid_calls["orphan-1"].part_projected is False
     assert harness.writer.status_events == [], f"实发事件={harness.writer.status_events}"
-    assert harness.metadata[-1].get("hidden") is True
+    assert harness.metadata[-1].hidden is True
 
 
 def test_t3_blocked_call_is_closed_silently_by_settle() -> None:
@@ -916,7 +915,7 @@ def _tool_row(
         message={"role": "tool", "content": content, "tool_call_id": tool_call_id},
         include_in_context=False,
         sequence=sequence,
-        transport_metadata=metadata,
+        metadata=metadata,
     )
 
 
@@ -926,7 +925,7 @@ def test_t4_cold_rebuild_skips_the_hidden_disabled_call(
     """T4-a：冷重建跳过「本轮被禁用 / 隐藏闭合」的调用（与实时链路一致，无 part）。
 
     被测行为：一条 AIMessage（1 个正常调用 + 1 个隐藏闭合调用）+ 两条 ToolMessage，其中隐藏
-    调用的结果行带 ``transport_metadata.hidden=True``（由 ``settle`` 写入）。
+    调用的结果行带 ``metadata.hidden=True``（由 ``settle`` 写入）。
     修复后实际观测：只返回 ``normal-1`` 一个 part；隐藏调用被整条跳过。
     """
 
@@ -1267,7 +1266,7 @@ def test_t4_delegation_display_data_backfills_child_locators(
     """T4-h：委派结果的展示数据回填 child_task_id / child_run_id / agent_role。
 
     实际观测：``display_data.kind == "delegation-result"`` 时，part 上出现 ``child_task_id``
-    与 ``child_run_id``；``display_data`` 无持久化 role 时按 ``child_agent_roles`` 回填，
+    与 ``child_run_id``；``display_data`` 使用持久化 role，
     并把 role 写回 ``display_data["role"]`` 与 ``part["agent_role"]``。
     是否符合预期：符合（旧委派记录的 role 回填既定行为）。
     """
@@ -1285,7 +1284,11 @@ def test_t4_delegation_display_data_backfills_child_locators(
                     "function": {
                         "name": "delegate_task",
                         "arguments": json.dumps(
-                            {"child_agent_id": "reviewer", "message": "review"}
+                            {
+                                "child_agent_id": "reviewer",
+                                "role": "workspace-reviewer",
+                                "message": "review",
+                            }
                         ),
                     },
                 }
@@ -1302,6 +1305,7 @@ def test_t4_delegation_display_data_backfills_child_locators(
                     "child_task_id": 22,
                     "child_run_id": 220,
                     "child_agent_id": "reviewer",
+                    "role": "workspace-reviewer",
                 },
                 "error": None,
             },
@@ -1309,9 +1313,7 @@ def test_t4_delegation_display_data_backfills_child_locators(
         ),
     ]
 
-    part = ConversationTaskStateRebuilder.build_pair_tool_part(
-        rows, child_agent_roles={(22, "reviewer"): "workspace-reviewer"}
-    )["delegate-1"]
+    part = ConversationTaskStateRebuilder.build_pair_tool_part(rows)["delegate-1"]
 
     assert part["child_task_id"] == 22
     assert part["child_run_id"] == 220
@@ -1371,7 +1373,7 @@ def test_t4_hidden_marksurvives_from_settle_to_cold_rebuild(
     # 事实 1：隐藏调用不发终态事件（前端无 part）。
     assert harness.writer.status_events == [], f"实发事件={harness.writer.status_events}"
     # 事实 2：结果行带 hidden 标记。
-    assert harness.metadata[-1].get("hidden") is True
+    assert harness.metadata[-1].hidden is True
     # 事实 3：冷重建据此跳过该调用。
     rows = [
         _ai_row(

@@ -16,6 +16,7 @@ from app.core.tools.display.child_agent_display import (
 from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import ToolMessageMetadata
 
 
 def _run(
@@ -29,7 +30,6 @@ def _run(
     return ConversationRunRecord(
         id=run_id,
         task_id=task_id,
-        input_text="child input",
         status=status,
         created_at=now,
         updated_at=now,
@@ -130,7 +130,7 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
             },
             include_in_context=True,
             sequence=1,
-            transport_metadata={},
+            metadata={},
         ),
         ConversationTaskContextRecord(
             task_id=1,
@@ -138,25 +138,24 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
             message={"role": "tool", "content": "started", "tool_call_id": "delegate-call"},
             include_in_context=True,
             sequence=2,
-            transport_metadata={
-                "status": "completed",
-                "display_data": {
-                    "kind": "delegation-result",
-                    "title": "Review",
-                    "child_agent_id": "reviewer",
-                    "child_task_id": 2,
-                    "child_run_id": 20,
-                    "status": "running",
-                },
-            },
+            metadata=ToolMessageMetadata.model_validate(
+                {
+                    "status": "completed",
+                    "display_data": {
+                        "kind": "delegation-result",
+                        "title": "Review",
+                        "child_agent_id": "reviewer",
+                        "child_task_id": 2,
+                        "child_run_id": 20,
+                        "status": "running",
+                    },
+                }
+            ),
         ),
     ]
 
-    # Legacy delegation rows are deliberately ignored: display_data is the only dynamic
-    # delegation payload accepted by cold rebuild. ``child_agent_roles`` 是
-    # ``(child_task_id, child_agent_id) -> role`` 的回填映射，这里传空映射代表「没有可回填
-    # 的旧 role」，验证重建不会自行推断 role。
-    parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows, {})
+    # 历史展示仅来自持久化载荷，未保存 role 时不从当前配置推断。
+    parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
 
-    assert parts["delegate-call"]["display_data"] == rows[1].transport_metadata["display_data"]
+    assert parts["delegate-call"]["display_data"] == rows[1].metadata.display_data
     assert "final_output" not in parts["delegate-call"]["display_data"]

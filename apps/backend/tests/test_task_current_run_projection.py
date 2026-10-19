@@ -45,8 +45,8 @@ def store(tmp_path):
 )
 def test_uses_current_pointer_instead_of_latest_created_run(store, status):
     task = store.tasks.create(store.workspace.id, "子任务", task_type="delegate_task")
-    current = store.runs.create(task.id, "当前", status=status)
-    store.runs.create(task.id, "更晚创建但未选中", status="completed")
+    current = store.runs.create(task.id, status=status)
+    store.runs.create(task.id, status="completed")
     store.tasks.set_current_run_id(task.id, current.id)
     record = store.service.get_task(task.id)
     assert (record.current_run_id, record.execution_status) == (current.id, status)
@@ -64,12 +64,12 @@ def test_no_run_and_missing_task(store):
 
 def test_resume_and_replacement_are_read_without_cached_state(store):
     task = store.tasks.create(store.workspace.id, "恢复")
-    run = store.runs.create(task.id, "当前", status="cancelled")
+    run = store.runs.create(task.id, status="cancelled")
     store.tasks.set_current_run_id(task.id, run.id)
     assert store.reads.get(task.id).execution_status == "cancelled"
     store.runs.update_status_if_in(run.id, "running", ("cancelled",))
     assert store.reads.get(task.id).execution_status == "running"
-    later = store.runs.create(task.id, "新 Run", status="pending")
+    later = store.runs.create(task.id, status="pending")
     store.tasks.set_current_run_id(task.id, later.id)
     assert store.reads.get(task.id).current_run_id == later.id
 
@@ -77,7 +77,7 @@ def test_resume_and_replacement_are_read_without_cached_state(store):
 def test_workspace_projection_is_one_query_and_keeps_catalog_filter(store):
     for kind in ("user", "fork", "delegate_task"):
         task = store.tasks.create(store.workspace.id, kind, task_type=kind)
-        run = store.runs.create(task.id, kind, status="waiting_for_input")
+        run = store.runs.create(task.id, status="waiting_for_input")
         store.tasks.set_current_run_id(task.id, run.id)
     statements = []
 

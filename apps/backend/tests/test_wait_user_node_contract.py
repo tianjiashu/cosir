@@ -20,9 +20,7 @@ from app.core.workflow.node_helper import (
 )
 
 wait_node_module = importlib.import_module("app.core.workflow.nodes.wait_user_node")
-lifecycle_module = importlib.import_module(
-    "app.core.workflow.node_helper.tool_call_lifecycle"
-)
+lifecycle_module = importlib.import_module("app.core.workflow.node_helper.tool_call_lifecycle")
 
 _TOOL_NAME = "agent_team"
 
@@ -109,7 +107,6 @@ def _state(
         step_count=1,
         tool_error_count=0,
         next_node=ReactRoute.OBSERVE,
-        final_text="",
         last_tool_results={"instruction": "调用 Team", "observations": observations},
         tool_call_lifecycle=(
             _lifecycle("call-a", "call-b", "call-c") if lifecycle is _UNSET else lifecycle
@@ -134,11 +131,11 @@ def runtime(monkeypatch):
             handle_rejection=lambda req, decision: rejections.append(decision)
         ),
     )
-    monkeypatch.setattr(wait_node_module, "_runtime_config", lambda: runtime)
+    monkeypatch.setattr(wait_node_module, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: events.append)
     monkeypatch.setattr(
         lifecycle_module,
-        "_runtime_context",
+        "_message_context",
         lambda: SimpleNamespace(add_message=lambda *a, **k: writes.append(k)),
     )
     return SimpleNamespace(
@@ -151,10 +148,9 @@ def test_wait_persists_request_and_execution_with_transition(runtime):
     wait_node_module.suspend_for_input(state)
     saved = runtime.transitions[0]["execution_data"]
     assert (
-        saved["waiting"]["last_tool_results"]["observations"][0]["user_input_request"]["request_id"]
-        == "12"
+        saved.waiting.last_tool_results.observations[0]["user_input_request"]["request_id"] == "12"
     )
-    assert runtime.writes[0]["transport_metadata"]["status"] == "running"
+    assert runtime.writes[0]["metadata"].status == "running"
     assert len(runtime.events) == 1
 
 

@@ -663,7 +663,7 @@ def _tool_state_with_status(status: str, tool_call_id: str) -> dict[str, Any]:
 def test_placeholder_overwrite_transition_cancelled_to_completed_is_applied() -> None:
     """``cancelled -> completed`` 必须放行：占位被真实结果覆盖后前端要翻到真实终态。
 
-    链路：取消/崩溃时 ``RuntimeContextManager.load_message`` 会为未配对调用补 ``cancelled``
+    链路：取消/崩溃时 ``RuntimeMessageContextManager.load_message`` 会为未配对调用补 ``cancelled``
     占位（投影为 cancelled part），该 run 续跑重放后真实结果经 ``add_message`` 按配对规则命中
     该行并原地覆盖
     同一行，结算事件携带 completed。若投影层丢弃该迁移，数据库已是真实终态而 snapshot 会永久

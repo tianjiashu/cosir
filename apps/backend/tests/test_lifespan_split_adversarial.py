@@ -770,7 +770,6 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         "get_conversation_run_executor",
         record("get_executor", _Executor()),
     )
-    monkeypatch.setattr(lifespan_module, "flush_langfuse", record("flush_langfuse"))
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", record("close_deps"))
     monkeypatch.setattr(lifespan_module, "ToolSystem", _ToolSystemStub(recorder))
     monkeypatch.setattr(

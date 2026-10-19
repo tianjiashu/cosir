@@ -30,9 +30,7 @@ from app.core.workflow.node_helper import (
 )
 from app.core.workflow.nodes import _merge_batch_results
 
-lifecycle_module = importlib.import_module(
-    "app.core.workflow.node_helper.tool_call_lifecycle"
-)
+lifecycle_module = importlib.import_module("app.core.workflow.node_helper.tool_call_lifecycle")
 tools_node_module = importlib.import_module("app.core.workflow.nodes.tools_node")
 
 _TOOL_NAME = "agent_team"
@@ -101,11 +99,11 @@ class _Harness:
         with (
             mock.patch.multiple(
                 lifecycle_module,
-                _runtime_config=lambda: self.runtime_config,
-                _runtime_context=lambda: self.runtime_context,
+                _runtime_context=lambda: self.runtime_config,
+                _message_context=lambda: self.runtime_context,
                 get_stream_writer=lambda: self.writer,
             ),
-            mock.patch.object(tools_node_module, "_runtime_config", lambda: self.runtime_config),
+            mock.patch.object(tools_node_module, "_runtime_context", lambda: self.runtime_config),
         ):
             yield
 
@@ -158,7 +156,6 @@ def _state(
         tool_error_count=0,
         next_node=ReactRoute.TOOLS,
         instruction="调用 Team",
-        final_text="",
         last_tool_results=last_tool_results or {},
         tool_call_lifecycle=lifecycle,
     )

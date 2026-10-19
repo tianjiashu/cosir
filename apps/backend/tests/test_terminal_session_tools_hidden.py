@@ -145,7 +145,7 @@ def test_terminal_signal_schema_warns_about_windows_capability(monkeypatch) -> N
 def test_terminal_definitions_snapshot_host_projection_at_construction(
     monkeypatch,
 ) -> None:
-    """终端定义在构造时固化宿主投影，不依赖 ToolDefinition provider 热路径。"""
+    """终端定义在构造、注册时固化 strict 宿主投影，不在请求热路径重新生成。"""
 
     handlers = (
         TerminalListTool,
@@ -159,7 +159,7 @@ def test_terminal_definitions_snapshot_host_projection_at_construction(
         "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
         lambda: "Windows",
     )
-    definitions = [handler().to_definition() for handler in handlers]
+    definitions = [handler().to_definition().normalized() for handler in handlers]
     windows_payloads = [definition.to_model_tool_definition() for definition in definitions]
 
     for definition in definitions:

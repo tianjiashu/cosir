@@ -37,7 +37,6 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.stream import TransportFrame
 from app.config.constant import Constant
-from app.core.observability.tool_trace_recorder import _NullToolTraceRecorder
 from app.core.tools.display.terminal_display import build_terminal_display_data
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.schemas import ToolCall, ToolExecutionContext, ToolObservation
@@ -377,7 +376,6 @@ async def test_workflow_binds_running_loop_for_process_output_channel(
             )
 
     operations._executor = cast(ToolExecutor, Executor())
-    operations._trace_recorder = _NullToolTraceRecorder()
 
     result = await operations.run_tool_calls(
         task_id=7,

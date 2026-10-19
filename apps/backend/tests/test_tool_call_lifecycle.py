@@ -65,8 +65,8 @@ class _LifecycleHarness:
 
         return patch.multiple(
             lifecycle_module,
-            _runtime_config=lambda: self.runtime_config,
-            _runtime_context=lambda: self.runtime_context,
+            _runtime_context=lambda: self.runtime_config,
+            _message_context=lambda: self.runtime_context,
             get_stream_writer=lambda: self.events.append,
         )
 
@@ -401,7 +401,6 @@ def test_graph_state_checkpoint_restores_lifecycle_manager() -> None:
         tool_error_count=0,
         next_node=ReactRoute.MODEL,
         instruction="",
-        final_text="",
         last_tool_results={},
         tool_call_lifecycle=ToolCallLifecycleManager(
             allows_tools=("read_file",),

@@ -35,7 +35,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
-from app.core.observability.tool_trace_recorder import _NullToolTraceRecorder
+import app.core.workflow.workflow_operations as workflow_operations_module
 from app.core.tools.schemas import (
     ToolCall,
     ToolDefinition,
@@ -45,7 +45,6 @@ from app.core.tools.schemas import (
 from app.core.tools.schemas import tool_definition as tool_definition_module
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_registry import ToolRegistry
-import app.core.workflow.workflow_operations as workflow_operations_module
 from app.core.workflow.workflow_operations import WorkflowOperations
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -136,7 +135,6 @@ def _operations_with_executor(
 
     operations = WorkflowOperations.__new__(WorkflowOperations)
     operations._executor = cast(ToolExecutor, executor)
-    operations._trace_recorder = _NullToolTraceRecorder()
     operations._execution_context = execution_context
     operations._allowed_tool_names = frozenset(allowed or ())
     operations._parallel_mode_by_name = dict(parallel_modes or {})
@@ -217,14 +215,15 @@ def test_tool_definition_requires_handler_and_args_model() -> None:
         )
 
 
-def test_model_projection_exposes_only_name_description_parameters() -> None:
-    """模型可见投影的键必须恰为 name/description/parameters：被删字段不得泄漏进下发结构。"""
+def test_model_projection_exposes_strict_function_contract() -> None:
+    """模型可见投影只含 strict function 契约，被删调度字段不得泄漏进下发结构。"""
 
     definition = _make_definition(parameters_schema={"type": "object", "properties": {}})
 
     projection = definition.to_model_tool_definition()
 
-    assert set(projection) == {"name", "description", "parameters"}
+    assert set(projection) == {"name", "description", "parameters", "strict"}
+    assert projection["strict"] is True
     assert projection["name"] == "probe_tool"
 
 
@@ -238,7 +237,11 @@ def test_normalized_derives_schema_when_no_parameters_schema() -> None:
 
     assert normalized is not definition
     assert normalized.parameters_schema != {}
-    assert normalized.parameters_schema == _ProbeArgs.model_json_schema()
+    assert normalized.parameters_schema == {
+        **_ProbeArgs.model_json_schema(),
+        "additionalProperties": False,
+        "required": ["message"],
+    }
     assert normalized.name == definition.name
 
 
@@ -302,7 +305,11 @@ def test_register_stores_normalized_definition_and_bumps_generation() -> None:
 
     stored = registry.get_tool_definition("probe_tool")
     assert stored is not None
-    assert stored.parameters_schema == _ProbeArgs.model_json_schema()
+    assert stored.parameters_schema == {
+        **_ProbeArgs.model_json_schema(),
+        "additionalProperties": False,
+        "required": ["message"],
+    }
     assert registry.generation == 1
 
 

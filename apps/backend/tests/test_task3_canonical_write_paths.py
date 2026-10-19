@@ -15,7 +15,7 @@ from openai.types.chat import (
 import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.assistant_transport.event import RunStatusChangedEvent
 from app.core.context.context_entry import ContextEntry
-from app.core.context.runtime_context_manager import RuntimeContextManager
+from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
@@ -23,10 +23,12 @@ from app.core.workflow.node_helper import (
 )
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_failure import run_failure_message
+from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from tests.sdk_fixtures import sdk_completion
+from tests.test_task5_acceptance import canonical_store as canonical_store
 
 
 class _RecordingContextService:
@@ -49,24 +51,21 @@ class _RecordingContextService:
         return None
 
 
-def _runtime_manager(service: _RecordingContextService) -> RuntimeContextManager:
-    manager = object.__new__(RuntimeContextManager)
+def _runtime_manager(service: _RecordingContextService) -> RuntimeMessageContextManager:
+    manager = object.__new__(RuntimeMessageContextManager)
     manager.current_task_id = 7
     manager.agent_profile = SimpleNamespace()
     manager.workspace_root = ""
-    manager.compressor = None
     manager.context_service = service
     manager.current_run_id = 11
-    manager.is_fork = False
     manager._system_entry = None
     manager._entries = []
     manager._message_sequence = 1
-    manager._streaming_messages = {}
     manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     return manager
 
 
-def test_runtime_context_persists_complete_ai_fields_and_ordered_parts() -> None:
+def test_message_context_persists_complete_ai_fields_and_ordered_parts() -> None:
     service = _RecordingContextService()
     manager = _runtime_manager(service)
     message = {
@@ -93,7 +92,7 @@ def test_begin_run_binds_identity_without_rewriting_context() -> None:
     manager = _runtime_manager(service)
     message = {"role": "user", "content": "existing"}
     manager._entries = [ContextEntry(message, 11, 1)]
-    manager.begin_run(SimpleNamespace(id=12, task_id=7), "fresh")
+    manager.begin_run(SimpleNamespace(id=12, task_id=7))
     assert manager.current_run_id == 12
     assert manager._entries[0].message is message
     assert service.appended == []
@@ -129,7 +128,7 @@ def test_tool_call_lifecycle_freezes_presentation_in_serializable_state(monkeypa
         )
     )
     events: list[Any] = []
-    monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: runtime_config)
+    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: runtime_config)
     monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: events.append)
 
     manager = manager.create(
@@ -165,11 +164,11 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
         def add_message(self, message: ChatCompletionToolMessageParam, **kwargs: Any) -> str:
             order.append("database")
             assert "status" not in message
-            assert kwargs["transport_metadata"]["display_data"] == {
+            assert kwargs["metadata"].display_data == {
                 "kind": "read-file-meta",
                 "path": "a.py",
             }
-            assert "artifact_data" not in kwargs["transport_metadata"]
+            assert "artifact_data" not in kwargs["metadata"].model_dump()
             return "appended"
 
     writer = order.append
@@ -192,8 +191,8 @@ def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypat
         }
     )
 
-    monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: runtime_config)
-    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: runtime_context)
+    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: runtime_config)
+    monkeypatch.setattr(lifecycle_module, "_message_context", lambda: runtime_context)
     monkeypatch.setattr(
         lifecycle_module, "get_stream_writer", lambda: lambda event: writer("event")
     )
@@ -224,11 +223,11 @@ def test_failed_tool_event_uses_sanitized_display_data(monkeypatch) -> None:
 
     class _RuntimeContext:
         def add_message(self, message: ChatCompletionToolMessageParam, **kwargs: Any) -> str:
-            assert kwargs["transport_metadata"]["display_data"] == {
+            assert kwargs["metadata"].display_data == {
                 "kind": "read-file-meta",
                 "path": "a.py",
             }
-            assert kwargs["transport_metadata"]["error"] == "执行失败"
+            assert kwargs["metadata"].error == "执行失败"
             return "appended"
 
     runtime_config = SimpleNamespace(
@@ -248,8 +247,8 @@ def test_failed_tool_event_uses_sanitized_display_data(monkeypatch) -> None:
             )
         }
     )
-    monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: runtime_config)
-    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: _RuntimeContext())
+    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: runtime_config)
+    monkeypatch.setattr(lifecycle_module, "_message_context", lambda: _RuntimeContext())
     monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: events.append)
 
     updated, status = manager.settle(
@@ -295,8 +294,8 @@ def test_tool_settle_overwrites_existing_result_row_and_still_emits_terminal_eve
             )
         }
     )
-    monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: runtime_config)
-    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: _RuntimeContext())
+    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: runtime_config)
+    monkeypatch.setattr(lifecycle_module, "_message_context", lambda: _RuntimeContext())
     monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: events.append)
 
     manager.settle(
@@ -314,7 +313,9 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
     """恢复：Run 终态与工具收口在同一个事务内提交，提交后不再投影快照。"""
 
     order: list[str] = []
-    recovered_run = SimpleNamespace(id=11, task_id=7, status="cancelled", execution_data={})
+    recovered_run = SimpleNamespace(
+        id=11, task_id=7, status="cancelled", execution_data=ConversationRunProgress()
+    )
 
     class _Transaction:
         def __enter__(self):
@@ -400,6 +401,16 @@ def _creation_service(store, monkeypatch, projector):
             )
         ),
     )
+    monkeypatch.setattr(
+        "app.service.conversation_run.conversation_input_preparation_service.get_model_config_service",
+        lambda: SimpleNamespace(
+            get_config=lambda _id: SimpleNamespace(
+                supports_reasoning_effort=False,
+                supports_image=False,
+                context_window_k=128,
+            )
+        ),
+    )
     return service
 
 
@@ -414,7 +425,9 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
         def process(self, event):
             assert store.tasks.get(store.task.id).current_run_id == event.run_id
             assert store.runs.get(event.run_id).context_window_total == 128000
-            assert TaskInputService().pending(store.task.id)[0]["input_text"] == "hello"
+            assert (
+                TaskInputService().pending(store.task.id)[0].payload.message.input_text == "hello"
+            )
             assert store.contexts.get(store.task.id, include_in_context=False) == []
             events.append(event)
 
@@ -447,7 +460,8 @@ def test_create_run_with_external_session_defers_initialization_events_to_owner(
             session=session,
         )
         assert (
-            TaskInputCrud().list_pending(session, store.task.id)[0].payload["input_text"] == "hello"
+            TaskInputCrud().list_pending(session, store.task.id)[0].payload["message"]["input_text"]
+            == "hello"
         )
         assert store.runs.list_by_task(store.task.id) == []
         assert store.tasks.get(store.task.id).current_run_id is None

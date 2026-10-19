@@ -9,16 +9,23 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.assistant_transport.event import RunStatusChangedEvent
+from app.models.conversation_input import ConversationInput
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
-from app.models.conversation_run_extra import ConversationRunExtra
+from app.models.conversation_run_options import ConversationRunOptions
+from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import ToolMessageMetadata
 from app.models.task_record import TaskRecord
+from app.service.conversation_run.conversation_input_preparation_service import (
+    ConversationInputPreparationService,
+)
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
+from app.service.conversation_run.task_input_service import TaskInputService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -33,7 +40,7 @@ def _timestamp() -> datetime:
     return datetime.now(UTC)
 
 
-def test_context_record_round_trips_with_row_identity_and_transport_metadata() -> None:
+def test_context_record_round_trips_with_row_identity_and_metadata() -> None:
     metadata = {"status": "completed", "display_data": {"kind": "read-file-meta", "path": "a.py"}}
     record = ConversationTaskContextRecord(
         task_id=7,
@@ -42,7 +49,7 @@ def test_context_record_round_trips_with_row_identity_and_transport_metadata() -
         include_in_context=True,
         sequence=3,
         id=41,
-        transport_metadata=metadata,
+        metadata=metadata,
     )
 
     model = record._to_model()
@@ -52,8 +59,10 @@ def test_context_record_round_trips_with_row_identity_and_transport_metadata() -
     assert restored.id == 41
     assert restored.message_id == record.message_id
     assert restored.message == record.message
-    assert restored.transport_metadata == metadata
-    assert json.loads(model.transport_metadata_json) == metadata
+    assert restored.metadata == ToolMessageMetadata.model_validate(metadata)
+    assert json.loads(model.metadata_json) == ToolMessageMetadata.model_validate(
+        metadata
+    ).model_dump(mode="json")
 
 
 def test_context_storage_exposes_only_canonical_message_fields() -> None:
@@ -65,9 +74,7 @@ def test_context_storage_exposes_only_canonical_message_fields() -> None:
         "message_id",
         "metadata_json",
         "project_to_transport",
-        "transport_metadata_json",
         "include_in_context",
-        "is_streaming",
         "sequence",
         "created_at",
         "updated_at",
@@ -77,13 +84,12 @@ def test_context_storage_exposes_only_canonical_message_fields() -> None:
 def test_context_record_rejects_malformed_metadata_json() -> None:
     model = ConversationTaskContextModel(
         message_id="test-message",
-        metadata_json="{}",
         task_id=7,
         run_id=11,
         message_json=json.dumps({"role": "user", **{"content": "hello"}}),
         include_in_context=True,
         sequence=3,
-        transport_metadata_json="{not-json",
+        metadata_json="{not-json",
     )
 
     with pytest.raises((TypeError, ValueError)):
@@ -103,7 +109,6 @@ def test_run_record_round_trips_usage_and_error() -> None:
     record = ConversationRunRecord(
         id=11,
         task_id=7,
-        input_text="run input",
         status="failed",
         created_at=_timestamp(),
         updated_at=_timestamp(),
@@ -120,8 +125,9 @@ def test_run_record_round_trips_usage_and_error() -> None:
     assert restored.error == error
 
 
-def test_run_extra_serializes_direct_shape_without_version() -> None:
-    extra = ConversationRunExtra(
+def test_input_serializes_separately_from_run_options() -> None:
+    message = ConversationInput(
+        input_text="请阅读 attachments/readme.md",
         display_text="请阅读 [[cosir-file:readme.md]]",
         attachments=[
             {
@@ -131,11 +137,11 @@ def test_run_extra_serializes_direct_shape_without_version() -> None:
                 "path": "attachments/readme.md",
             }
         ],
-        reasoning_effort="high",
-        langfuse_trace_id="trace-11",
     )
 
-    serialized = extra.to_dict()
+    serialized = message.model_dump(mode="json")
+    assert "reasoning_effort" not in serialized
+    assert "ban_tools" not in serialized
     assert serialized == {
         "display_text": "请阅读 [[cosir-file:readme.md]]",
         "attachments": [
@@ -146,17 +152,16 @@ def test_run_extra_serializes_direct_shape_without_version() -> None:
                 "path": "attachments/readme.md",
             }
         ],
-        "ban_tools": [],
-        "reasoning_effort": "high",
-        "langfuse_trace_id": "trace-11",
+        "input_text": "请阅读 attachments/readme.md",
+        "image_paths": [],
     }
     assert "version" not in serialized
-    assert ConversationRunExtra.from_dict(serialized) == extra
+    assert ConversationInput.model_validate(serialized) == message
 
 
-def test_run_extra_rejects_legacy_assistant_input_wrapper() -> None:
+def test_input_rejects_legacy_assistant_input_wrapper() -> None:
     with pytest.raises((TypeError, ValueError)):
-        ConversationRunExtra.from_dict(
+        ConversationInput.model_validate(
             {
                 "assistant_input": {
                     "version": 1,
@@ -169,7 +174,7 @@ def test_run_extra_rejects_legacy_assistant_input_wrapper() -> None:
 
 def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
     attachment_path = Path(__file__)
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = ConversationInputPreparationService.__new__(ConversationInputPreparationService)
     service._task = SimpleNamespace(
         get=lambda _task_id: SimpleNamespace(
             tool_schemas=[
@@ -191,54 +196,54 @@ def test_run_service_prepares_new_command_for_model_and_persistence() -> None:
         ],
     )
 
-    prepared = service._prepare_command(  # type: ignore[attr-defined]
+    prepared = service._prepare_command(
         7,
         command,
-        run_id=None,
         supports_image=False,
-        reasoning_effort=None,
     )
 
     assert prepared.input_text == f"请阅读 {attachment_path}"
-    assert prepared.extra is not None
-    assert prepared.extra.display_text == command.display_text
-    assert prepared.extra.attachments[0]["id"] == "readme"
-    assert prepared.extra.ban_tools == []
+    assert prepared.display_text == command.display_text
+    assert prepared.attachments[0]["id"] == "readme"
 
 
-def test_run_service_delays_banned_tools_to_task_resolution() -> None:
-    service = ConversationRunService.__new__(ConversationRunService)
-    service._task = SimpleNamespace(
-        get=lambda _task_id: SimpleNamespace(
-            tool_schemas=[
-                {"name": "execute_terminal"},
-                {"name": "web_search"},
-                {"name": "propose_agent_configuration"},
-            ]
-        )
+def test_input_preparation_keeps_run_options_out_of_message(monkeypatch) -> None:
+    from app.service.conversation_run import conversation_input_preparation_service as preparation
+
+    service = ConversationInputPreparationService.__new__(ConversationInputPreparationService)
+    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
+    monkeypatch.setattr(
+        preparation,
+        "get_model_config_service",
+        lambda: SimpleNamespace(
+            get_config=lambda _id: SimpleNamespace(
+                supports_reasoning_effort=True, supports_image=False
+            )
+        ),
     )
-    command = ConversationRunCommand(
-        display_text="检查项目",
-        ban_tools=["execute_terminal"],
-    )
-
-    prepared = service._prepare_command(  # type: ignore[attr-defined]
+    queued = service.prepare_input(
         7,
-        command,
-        run_id=None,
-        supports_image=False,
-        reasoning_effort=None,
+        ConversationRunCommand(
+            display_text="检查项目",
+            ban_tools=["execute_terminal"],
+        ),
+        3,
+        "high",
     )
-
-    assert prepared.extra is not None
-    assert prepared.extra.attachments == []
-    assert prepared.extra.ban_tools == ["execute_terminal"]
-    assert prepared.extra.to_dict()["ban_tools"] == ["execute_terminal"]
+    assert queued.options.ban_tools == ["execute_terminal"]
+    assert queued.options.reasoning_effort == "high"
+    assert queued.model_config_id == 3
+    assert set(queued.message.model_dump()) == {
+        "input_text",
+        "display_text",
+        "image_paths",
+        "attachments",
+    }
 
 
 def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
     attachment_path = Path(__file__).parent
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = ConversationInputPreparationService.__new__(ConversationInputPreparationService)
     service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(tool_schemas=[]))
     command = ConversationRunCommand(
         display_text="请检查 [[cosir-file:references]]",
@@ -252,17 +257,14 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
         ],
     )
 
-    prepared = service._prepare_command(  # type: ignore[attr-defined]
+    prepared = service._prepare_command(
         7,
         command,
-        run_id=None,
         supports_image=False,
-        reasoning_effort=None,
     )
 
     assert prepared.input_text == f"请检查 {attachment_path}"
-    assert prepared.extra is not None
-    assert prepared.extra.attachments == [
+    assert prepared.attachments == [
         {
             "id": "references",
             "name": "references",
@@ -272,9 +274,13 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
     ]
 
 
-def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
+def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
+    from app.service.conversation_run import conversation_input_preparation_service as preparation
+    from app.service.conversation_run import task_input_service
+
     attachment_path = Path(__file__)
-    existing_extra = ConversationRunExtra(
+    previous = ConversationInput(
+        input_text=f"请阅读 {attachment_path}",
         display_text="请阅读 [[cosir-file:readme]]",
         attachments=[
             {
@@ -284,11 +290,19 @@ def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
                 "path": str(attachment_path),
             }
         ],
-        reasoning_effort=None,
     )
-    service = ConversationRunService.__new__(ConversationRunService)
-    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(tool_schemas=[]))
-    service._run = SimpleNamespace(get=lambda _run_id: SimpleNamespace(extra=existing_extra))
+    service = ConversationInputPreparationService.__new__(ConversationInputPreparationService)
+    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
+    monkeypatch.setattr(task_input_service, "ConversationInputPreparationService", lambda: service)
+    monkeypatch.setattr(
+        preparation,
+        "get_model_config_service",
+        lambda: SimpleNamespace(
+            get_config=lambda _id: SimpleNamespace(
+                supports_reasoning_effort=True, supports_image=False
+            )
+        ),
+    )
     command = ConversationRunCommand(
         display_text="请再次阅读 [[cosir-file:readme]]",
         attachments=[
@@ -299,21 +313,12 @@ def test_run_service_prepares_edit_command_from_existing_attachment() -> None:
             )
         ],
     )
-
-    prepared = service._prepare_command(  # type: ignore[attr-defined]
-        7,
-        command,
-        run_id=11,
-        supports_image=False,
-        reasoning_effort=None,
-    )
-
-    assert prepared.input_text == f"请再次阅读 {attachment_path}"
-    assert prepared.extra is not None
-    assert prepared.extra.attachments[0]["path"] == str(attachment_path)
+    prepared = TaskInputService._prepare_edit_payload(7, command, 3, None, previous)
+    assert prepared.message.input_text == f"请再次阅读 {attachment_path}"
+    assert prepared.message.attachments[0]["path"] == str(attachment_path)
 
 
-def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -> None:
+def test_run_crud_clone_preserves_options_and_resets_progress() -> None:
     usage = {
         "input_tokens": 10,
         "output_tokens": 4,
@@ -325,15 +330,10 @@ def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -
     source = ConversationRunRecord(
         id=11,
         task_id=7,
-        input_text="run input",
         status="failed",
         created_at=_timestamp(),
         updated_at=_timestamp(),
-        extra=ConversationRunExtra(
-            display_text="run input",
-            attachments=[],
-            langfuse_trace_id="trace-source",
-        ),
+        options=ConversationRunOptions(reasoning_effort="high"),
         usage=usage,
         error={"code": "provider_error", "message": "provider unavailable"},
     )
@@ -349,9 +349,8 @@ def test_run_crud_clone_for_fork_preserves_facts_with_independent_checkpoint() -
             "code": "provider_error",
             "message": "provider unavailable",
         }
-        assert cloned.execution_data == {}
-        assert cloned.extra is not None
-        assert cloned.extra.langfuse_trace_id is None
+        assert cloned.execution_data == ConversationRunProgress()
+        assert cloned.options == source.options
     finally:
         engine.dispose()
 
@@ -377,7 +376,6 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
             session.add(
                 ConversationTaskContextModel(
                     message_id="test-message",
-                    metadata_json=json.dumps({"source": "tool"}),
                     id=41,
                     task_id=7,
                     run_id=11,
@@ -386,7 +384,7 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
                     ),
                     include_in_context=True,
                     sequence=3,
-                    transport_metadata_json=json.dumps(metadata),
+                    metadata_json=json.dumps(metadata),
                 )
             )
             session.flush()
@@ -402,13 +400,14 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
             assert cloned_row is not None
             assert cloned_row.run_id == 22
             assert cloned_row.message_id == "test-message"
-            assert json.loads(cloned_row.metadata_json) == {"source": "tool"}
             assert json.loads(cloned_row.message_json) == {
                 "role": "tool",
                 "tool_call_id": "call-1",
                 "content": "source",
             }
-            assert json.loads(cloned_row.transport_metadata_json) == metadata
+            assert json.loads(cloned_row.metadata_json) == ToolMessageMetadata.model_validate(
+                metadata
+            ).model_dump(mode="json")
     finally:
         engine.dispose()
 
@@ -430,6 +429,7 @@ def test_context_crud_raises_on_sequence_collision() -> None:
             message={"role": "tool", "content": "done", "tool_call_id": "call-1"},
             include_in_context=True,
             sequence=1,
+            metadata=ToolMessageMetadata(status="completed"),
         )
         conflicting_sequence = ConversationTaskContextRecord(
             task_id=7,
@@ -437,73 +437,12 @@ def test_context_crud_raises_on_sequence_collision() -> None:
             message={"role": "tool", "content": "other", "tool_call_id": "call-2"},
             include_in_context=True,
             sequence=1,
+            metadata=ToolMessageMetadata(status="completed"),
         )
         with Session(engine) as session:
             crud.create(first, session=session)
             with pytest.raises(IntegrityError):
                 crud.create(conflicting_sequence, session=session)
-    finally:
-        engine.dispose()
-
-
-def test_streaming_draft_finalize_replaces_row_in_place_without_new_row() -> None:
-    """收口是原地替换草稿行：行数与 sequence 不变，只翻转 include_in_context / is_streaming。
-
-    这是「同一条 assistant 消息只占一行」的持久化层不变量：流式草稿行被收口后不允许再新增
-    第二行（历史缺陷：``flush`` 原地固化 + ``add_message`` 追加修订版，两行都进模型上下文）。
-    """
-
-    engine = create_engine("sqlite://")
-    StorageBase.metadata.create_all(engine)
-    try:
-        crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
-        draft = ConversationTaskContextRecord(
-            task_id=7,
-            run_id=11,
-            message={"role": "assistant", "content": "半截草稿"},
-            include_in_context=False,
-            sequence=1,
-            is_streaming=True,
-        )
-        finalized = ConversationTaskContextRecord(
-            task_id=7,
-            run_id=11,
-            message={
-                "role": "assistant",
-                "content": "修订后的完整回复",
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "type": "function",
-                        "function": {
-                            "name": "read_file",
-                            "arguments": json.dumps({"path": "a.py"}),
-                        },
-                    }
-                ],
-            },
-            include_in_context=True,
-            sequence=1,
-            is_streaming=False,
-        )
-        with Session(engine) as session:
-            crud.create(draft, session=session)
-
-            crud.replace_message(7, 1, finalized, session=session)
-
-            rows = crud.get(7, include_in_context=False, session=session)
-            assert len(rows) == 1
-            assert rows[0].sequence == 1
-            assert rows[0].run_id == 11
-            assert rows[0].include_in_context is True
-            assert rows[0].is_streaming is False
-            assert rows[0].message.get("content") == "修订后的完整回复"
-            # LangChain 反序列化会给 tool_call 补 type 键，故按字段断言而不是整体相等。
-            tool_calls = rows[0].message.get("tool_calls")
-            assert len(tool_calls) == 1
-            assert tool_calls[0]["function"]["name"] == "read_file"
-            assert json.loads(tool_calls[0]["function"]["arguments"]) == {"path": "a.py"}
-            assert tool_calls[0]["id"] == "call-1"
     finally:
         engine.dispose()
 
@@ -519,8 +458,9 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
                 ConversationRunModel(
                     id=11,
                     task_id=7,
-                    input_text="hello",
                     status="running",
+                    options=ConversationRunOptions().model_dump(mode="json"),
+                    execution_data=ConversationRunProgress().model_dump(mode="json"),
                 )
             )
             context = ConversationTaskContextRecord(
@@ -592,7 +532,7 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
         assert repaired[0].message.get("tool_call_id") == "call-1"
         assert repaired[0].run_id == 11
         # 统一收口为取消：占位与 Run 终态同口径，冷读重建据此得到 cancelled tool part。
-        assert repaired[0].transport_metadata == {"status": "cancelled"}
+        assert repaired[0].metadata == ToolMessageMetadata.model_validate({"status": "cancelled"})
         # 不处理快照：恢复路径不投影任何事件。
         assert projected == []
     finally:

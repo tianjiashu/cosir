@@ -5,7 +5,7 @@ import pytest
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.llm_provider import model_factory
-from app.models.conversation_run_extra import ConversationRunExtra, ReasoningEffort
+from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.conversation_run_record import ConversationRunRecord
 
 
@@ -14,14 +14,11 @@ def _run(*, reasoning_effort: ReasoningEffort | None) -> ConversationRunRecord:
     return ConversationRunRecord(
         id=1,
         task_id=2,
-        input_text="hello",
         status="running",
         created_at=now,
         updated_at=now,
         model_config_id=7,
-        extra=ConversationRunExtra(
-            display_text="hello",
-            attachments=[],
+        options=ConversationRunOptions(
             reasoning_effort=reasoning_effort,
         ),
     )
@@ -32,7 +29,6 @@ def _profile() -> AgentProfile:
         agent_id="main_agent",
         role="主 Agent",
         system_prompt="system",
-
         model_settings=ModelSettings(
             temperature=0.2,
             reasoning_effort="high",
@@ -47,31 +43,28 @@ def _profile() -> AgentProfile:
     )
 
 
-def test_run_extra_serializes_explicit_reasoning_effort_without_capability_snapshot() -> None:
-    extra = ConversationRunExtra(
-        display_text="hello",
-        attachments=[],
+def test_run_options_serializes_explicit_reasoning_effort_without_capability_snapshot() -> None:
+    extra = ConversationRunOptions(
         reasoning_effort="low",
     )
 
-    assert extra.to_dict() == {
-        "display_text": "hello",
-        "attachments": [],
+    assert extra.model_dump() == {
         "ban_tools": [],
         "reasoning_effort": "low",
     }
-    assert ConversationRunExtra.from_dict(extra.to_dict()) == extra
+    assert ConversationRunOptions.model_validate(extra.model_dump()) == extra
 
 
 def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def _build_chat_model(model_settings: ModelSettings):
+    def _build_chat_model(model_settings: ModelSettings, *, tools):
         captured.update(
             {
                 "model_name": model_settings.model_name,
                 "reasoning_effort": model_settings.reasoning_effort,
                 "temperature": model_settings.temperature,
+                "tools": tools,
             }
         )
         return object()
@@ -85,12 +78,14 @@ def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
     derived = _profile().derive_for_run(_run(reasoning_effort="low"))
     resolved = model_factory.resolve_chat_model(
         agent_profile=derived,
+        tools=[{"name": "read_file"}],
     )
 
     assert captured == {
         "model_name": "profile-model",
         "reasoning_effort": "low",
         "temperature": 0.2,
+        "tools": [{"name": "read_file"}],
     }
     assert resolved.model_name == "profile-model"
     assert resolved.context_window_k == 64
@@ -100,10 +95,8 @@ def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
 @pytest.mark.parametrize("effort", ["low", "high", "max"])
 def test_profile_reasoning_effort_survives_configuration_and_run_round_trip(effort):
     settings = ModelSettings.from_json({"reasoning_effort": effort, "temperature": 0.2})
-    extra = ConversationRunExtra(
-        display_text="hello", attachments=[], reasoning_effort=settings.reasoning_effort
-    )
-    restored = ConversationRunExtra.from_dict(extra.to_dict())
+    extra = ConversationRunOptions(reasoning_effort=settings.reasoning_effort)
+    restored = ConversationRunOptions.model_validate(extra.model_dump())
     assert restored.reasoning_effort == effort
     assert settings.to_dict() == {"reasoning_effort": effort, "temperature": 0.2}
 

@@ -25,6 +25,7 @@ from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.message_metadata import parse_message_metadata
 from app.models.task_record import TaskRecord
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
@@ -42,7 +43,6 @@ def _run(run_id: int, task_id: int = 7) -> ConversationRunRecord:
     return ConversationRunRecord(
         id=run_id,
         task_id=task_id,
-        input_text=f"input-{run_id}",
         status="completed",
         created_at=_timestamp(run_id),
         updated_at=_timestamp(run_id),
@@ -76,7 +76,7 @@ def _context_row(
         message=message,
         include_in_context=True,
         sequence=sequence,
-        transport_metadata=metadata,
+        metadata=parse_message_metadata(message["role"], metadata or {}),
     )
 
 
@@ -190,7 +190,7 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[object] = []
-    run = SimpleNamespace(id=11, task_id=7, input_text="hello")
+    run = SimpleNamespace(id=11, task_id=7)
 
     class RunCrud:
         def create(self, *_args: Any, **_kwargs: Any) -> Any:
@@ -225,7 +225,27 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
             )
         ),
     )
+    monkeypatch.setattr(
+        "app.service.conversation_run.conversation_input_preparation_service.get_model_config_service",
+        lambda: SimpleNamespace(
+            get_config=lambda _config_id: SimpleNamespace(
+                supports_reasoning_effort=False,
+                supports_image=False,
+                context_window_k=128,
+            )
+        ),
+    )
 
+    from app.service.conversation_run.conversation_input_preparation_service import (
+        ConversationInputPreparationService,
+    )
+
+    preparation = ConversationInputPreparationService.__new__(ConversationInputPreparationService)
+    preparation._task = SimpleNamespace(get=lambda _id: SimpleNamespace(workspace_id=None))
+    monkeypatch.setattr(
+        "app.service.conversation_run.conversation_run_service.ConversationInputPreparationService",
+        lambda: preparation,
+    )
     service.create_run(
         7,
         model_config_id=1,
@@ -273,7 +293,6 @@ def test_rebuilder_scopes_same_provider_tool_call_id_per_run(
             {
                 "status": "completed",
                 "display_data": {"kind": "read-file-meta"},
-                "status_hint": None,
                 "error": None,
             },
         ),
@@ -303,7 +322,6 @@ def test_rebuilder_scopes_same_provider_tool_call_id_per_run(
             {
                 "status": "completed",
                 "display_data": {"kind": "read-file-meta"},
-                "status_hint": None,
                 "error": None,
             },
         ),
@@ -350,7 +368,7 @@ def real_run_crud(tmp_path: Path) -> tuple[ConversationRunCrud, TaskRecord, Any]
         engine.dispose()
 
 
-def test_resume_cancelled_run_clears_usage_and_error_and_reuses_checkpoint_thread(
+def test_resume_cancelled_run_clears_terminal_fields_and_preserves_progress(
     real_run_crud: tuple[ConversationRunCrud, TaskRecord, Any],
 ) -> None:
     run_crud, task, _engine = real_run_crud
@@ -365,14 +383,13 @@ def test_resume_cancelled_run_clears_usage_and_error_and_reuses_checkpoint_threa
     error = {"code": "old_failure", "message": "old"}
     run = run_crud.create(
         task.id,
-        "input",
         status="cancelled",
         usage=usage,
         error=error,
         session=None,
     )
 
-    # 续跑由 update_status_if_in 承担：清空上一轮终态字段，但**必须复用原 checkpoint 线程**。
+    # 续跑清除终态字段，保留模型边界的累计进度。
     resumed = run_crud.update_status_if_in(
         run.id,
         ConversationRunStatus.RUNNING.value,
@@ -386,6 +403,4 @@ def test_resume_cancelled_run_clears_usage_and_error_and_reuses_checkpoint_threa
     assert resumed.final_output is None
     assert resumed.usage is None
     assert resumed.error is None
-    # resume 执行模式下 workflow 以 input_state=None 让 LangGraph 从该线程的既有 checkpoint
-    # 继续；换新线程会让续跑落到空线程上，因此这里必须保持不变。
     assert resumed.execution_data == run.execution_data

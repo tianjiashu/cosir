@@ -33,8 +33,9 @@ from app.assistant_transport.service.transport_stream_service import (
 )
 from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunCommand, ConversationRunError, ConversationRunStatus
-from app.models.conversation_task_context import TransportMetadata
+from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.enums.tool_call_status import ToolCallEventStatus
+from app.models.message_metadata import ToolMessageMetadata
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.service.conversation_run.conversation_task_context_service import (
@@ -103,6 +104,10 @@ def canonical_store(tmp_path: Path, monkeypatch):
     ConversationTaskStateService.clear_process_state()
     # ConversationTaskStateService 现在从 depends 取 CRUD 单例；这里把三个 getter 指向本夹具的临时库
     # CRUD，使 state 服务与 store 中的 CRUD 读写同一份临时数据（保留测试隔离，不污染全局库）。
+    monkeypatch.setattr(
+        "app.service.conversation_run.conversation_input_preparation_service.get_task_crud",
+        lambda: tasks,
+    )
     monkeypatch.setattr("app.service.depends.get_task_crud", lambda: tasks)
     monkeypatch.setattr("app.service.depends.get_conversation_run_crud", lambda: runs)
     monkeypatch.setattr("app.service.depends.get_conversation_task_context_crud", lambda: contexts)
@@ -139,7 +144,7 @@ def canonical_store(tmp_path: Path, monkeypatch):
 def _create_run(store, *, status: str = "running", current: bool = False):
     """Create a real Run and optionally make it the Task's explicit current Run."""
 
-    run = store.runs.create(store.task.id, f"input for run {status}", status=status)
+    run = store.runs.create(store.task.id, status=status)
     if current:
         store.tasks.set_current_run_id(store.task.id, run.id)
     return run
@@ -148,7 +153,7 @@ def _create_run(store, *, status: str = "running", current: bool = False):
 def _append(store, run_id: int, message: object, *, metadata: object = None) -> None:
     """按 Task 内下一个可用序号追加一条 context 事实。
 
-    序号游标属于调用方（运行期由 ``RuntimeContextManager`` 持有）：本 node_helper 用
+    序号游标属于调用方（运行期由 ``RuntimeMessageContextManager`` 持有）：本 node_helper 用
     ``max_sequence + 1`` 复现同一口径，避免测试直接依赖 ``(task_id, sequence)`` 唯一键的细节。
     """
 
@@ -161,7 +166,7 @@ def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = N
 
     assistant 使用 SDK 原生字段 ``content``、``reasoning_content`` 和 ``tool_calls``。
     工具结果行随行写入 wire 口径的
-    ``TransportMetadata``（``status`` 取终态、``display_data`` 与短提示分列），与运行期
+    ``ToolMessageMetadata``（``status`` 取终态、``display_data`` 与短提示分列），与运行期
     ``ToolCallLifecycleManager.settle`` 的写入口径一致。
     """
 
@@ -194,7 +199,7 @@ def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = N
             "content": "file content" if is_success else "tool failed",
             "tool_call_id": call_id,
         },
-        metadata=TransportMetadata(
+        metadata=ToolMessageMetadata(
             status=_TOOL_WIRE_STATUS[result_status],
             display_data=(
                 {"kind": "read-file-meta", "path": "a.py"}
@@ -313,7 +318,7 @@ def test_real_sqlite_malformed_metadata_fails_and_not_as_empty_state(
         session.execute(
             update(ConversationTaskContextModel)
             .where(ConversationTaskContextModel.id == ai_row.id)
-            .values(transport_metadata_json="{not-json")
+            .values(metadata_json="{not-json")
         )
 
     # ``ConversationTaskContextRecord._from_model`` 用原生 ``json.loads`` 反序列化 metadata，
@@ -526,6 +531,16 @@ async def test_real_sqlite_same_task_is_mutually_exclusive_without_command_persi
             )
         ),
     )
+    monkeypatch.setattr(
+        "app.service.conversation_run.conversation_input_preparation_service.get_model_config_service",
+        lambda: SimpleNamespace(
+            get_config=lambda _config_id: SimpleNamespace(
+                supports_reasoning_effort=False,
+                supports_image=False,
+                context_window_k=128,
+            )
+        ),
+    )
     with store.factory.begin() as session:
         session.add(
             ModelConfigModel(
@@ -631,7 +646,7 @@ def test_real_sqlite_fork_preserves_canonical_identity(
             session,
         )
     assert target.current_run_id is None
-    assert target_run.execution_data == {}
+    assert target_run.execution_data == ConversationRunProgress()
     source_rows = store.contexts.get(store.task.id, include_in_context=False)
     target_rows = store.contexts.get(target.id, include_in_context=False)
     assert [row.id for row in target_rows] != [row.id for row in source_rows]
@@ -663,7 +678,7 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     ]
     assert len(repaired) == 1
     assert repaired[0].run_id == run.id
-    assert repaired[0].transport_metadata == {"status": "cancelled"}
+    assert repaired[0].metadata == ToolMessageMetadata.model_validate({"status": "cancelled"})
     ConversationTaskStateService.clear_process_state()
     state = store.state.get_state(store.task.id)
     assert state["runs"][0]["status"] == "cancelled"

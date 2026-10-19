@@ -19,7 +19,6 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import cast
 
@@ -106,7 +105,6 @@ def _running_state() -> ConversationStateSnapshot:
             runId=1,
             status="running",
             endReason=None,
-            langfuseTraceId=None,
             messages=[],
             usage=None,
             contextWindowTotal=None,
@@ -205,9 +203,6 @@ def _make_runtime(
     async def _noop_fire(_context: object) -> None:
         return None
 
-    @asynccontextmanager
-    async def _trace(_metadata: object) -> object:
-        yield SimpleNamespace(trace_id=None, callbacks=[], tool_trace_recorder=None)
 
     def _build(_self: AgentRuntime, *_args: object, **_kwargs: object) -> object:
         if build_operations_error is not None:
@@ -215,7 +210,6 @@ def _make_runtime(
         return operations
 
     monkeypatch.setattr(runner_module.HookInterceptor, "async_safe_fire", _noop_fire)
-    monkeypatch.setattr(runner_module, "conversation_run_trace", _trace)
     monkeypatch.setattr(AgentRuntime, "_build_operations", _build)
     return runtime
 

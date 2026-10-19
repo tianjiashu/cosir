@@ -350,20 +350,19 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
     env_file = root / ".env"
     _bind_env_file(monkeypatch, env_file)
     env_file.write_text(
-        "DEFAULT_LANGUAGE=en\nCUSTOM=value\nLANGFUSE_SECRET_KEY=old-secret\n",
+        "DEFAULT_LANGUAGE=en\nCUSTOM=value\nFIRECRAWL_API_KEY=old-secret\n",
         encoding="utf-8",
     )
     service = EnvironmentConfigurationService()
     monkeypatch.setattr(Settings, "DEFAULT_LANGUAGE", "process-old")
 
     fields = service.read()
-    secret = next(field for field in fields if field["name"] == "LANGFUSE_SECRET_KEY")
+    secret = next(field for field in fields if field["name"] == "FIRECRAWL_API_KEY")
     assert secret["value"] is None
     assert secret["masked"] is True
 
     groups = service.read_grouped()
-    assert [group["id"] for group in groups] == ["general", "web", "langfuse"]
-    langfuse = next(group for group in groups if group["id"] == "langfuse")
+    assert [group["id"] for group in groups] == ["general", "web"]
     response = EnvironmentResponse(groups=groups)
     assert response.groups[0].fields[0].name == "DEFAULT_LANGUAGE"
     max_steps = next(
@@ -375,24 +374,6 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
     assert max_steps.type == "integer"
     assert max_steps.value == 300
     assert max_steps.minimum == 1
-    assert [field["name"] for field in langfuse["fields"]] == [
-        "LANGFUSE_ENABLED",
-        "LANGFUSE_PUBLIC_KEY",
-        "LANGFUSE_SECRET_KEY",
-        "LANGFUSE_BASE_URL",
-    ]
-    assert (
-        next(field for field in langfuse["fields"] if field["name"] == "LANGFUSE_ENABLED")[
-            "component"
-        ]
-        == "checkbox"
-    )
-    assert (
-        next(field for field in langfuse["fields"] if field["name"] == "LANGFUSE_SECRET_KEY")[
-            "component"
-        ]
-        == "password"
-    )
     web = next(group for group in groups if group["id"] == "web")
     assert [field["name"] for field in web["fields"]] == [
         "FIRECRAWL_API_KEY",
@@ -418,10 +399,10 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
     assert language["value"] == "process-old"
     assert language["disk_value"] == "zh"
     service.update(
-        {"LANGFUSE_SECRET_KEY": EnvironmentChange("clear")},
+        {"FIRECRAWL_API_KEY": EnvironmentChange("clear")},
     )
     assert (
-        next(field for field in service.read() if field["name"] == "LANGFUSE_SECRET_KEY")["masked"]
+        next(field for field in service.read() if field["name"] == "FIRECRAWL_API_KEY")["masked"]
         is False
     )
     with pytest.raises(EnvironmentConfigurationError):

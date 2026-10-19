@@ -253,7 +253,7 @@ class _LifecycleHarness:
 
             本假对象只用于验证 ``settle`` 不因写入命中既有行而跳过落库与终态事件；真实「覆盖既有
             行」语义（行数、序号、metadata）由真实 SQLite 用例钉住
-            （tests/test_runtime_context_tool_call_closure.py 的占位覆盖用例）。
+            （tests/test_message_context_tool_call_closure.py 的占位覆盖用例）。
             """
 
             self.messages.append(message)
@@ -269,8 +269,8 @@ class _LifecycleHarness:
 
         return patch.multiple(
             lifecycle_module,
-            _runtime_config=lambda: self.runtime_config,
-            _runtime_context=lambda: self.runtime_context,
+            _runtime_context=lambda: self.runtime_config,
+            _message_context=lambda: self.runtime_context,
             get_stream_writer=lambda: self._stream_writer,
         )
 
@@ -1190,7 +1190,6 @@ def test_real_storage_backed_projection_updates_snapshot(
             "runId": 5,
             "status": "running",
             "endReason": None,
-            "langfuseTraceId": None,
             "messages": [
                 {"id": "m0", "role": "user", "parts": []},
                 {
@@ -1242,8 +1241,6 @@ def _part_from_state(state: ConversationStateSnapshot, run_id: int, call_id: str
 # ---------------------------------------------------------------------------
 # 委托一致性：lifecycle 的 _event_status / _ui_error 必须与投影模块逐分支一致
 # ---------------------------------------------------------------------------
-
-
 
 
 @pytest.mark.parametrize(
@@ -1639,7 +1636,6 @@ def test_cancel_moves_pending_and_running_only() -> None:
     assert harness.manager.valid_calls["done"].status == "completed", "已终态调用不得被 cancel 改写"
     assert sorted(e.tool_call_id for e in harness.events) == ["p", "r"]
     assert all(e.status == "cancelled" for e in harness.events)
-
 
 
 # ---------------------------------------------------------------------------

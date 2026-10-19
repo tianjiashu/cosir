@@ -2,23 +2,18 @@
 
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import pytest
 
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.assistant_transport.service.conversation_task_state_service import (
-    ConversationTaskStateService,
-)
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
-from app.core.agents.agent_profile import AgentProfile, AgentProfileType
-from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.agents.agent_profile_source import AgentProfileScopeSource
-from app.models.conversation_run_extra import ConversationRunExtra
+from app.models.conversation_input import ConversationInput
+from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.models.task_record import TaskRecord
 
 
@@ -58,11 +53,10 @@ def test_rebuild_preserves_each_runs_frozen_context_window(windows: tuple[int | 
         ConversationRunRecord(
             id=index,
             task_id=task.id,
-            input_text="",
             status="completed",
             created_at=timestamp,
             updated_at=timestamp,
-            execution_data={},
+            execution_data=ConversationRunProgress(),
             context_window_total=window,
         )
         for index, window in enumerate(windows, start=1)
@@ -111,7 +105,6 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
                 "runId": 1,
                 "status": "completed",
                 "endReason": None,
-                "langfuseTraceId": None,
                 "contextWindowTotal": None,
                 "usage": None,
                 "error": None,
@@ -140,19 +133,18 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
     validate_snapshot(state)  # 不应抛 ValueError
 
 
-def test_rebuild_preserves_streaming_assistant_draft_for_active_run() -> None:
-    """冷重建应保留 partial 文本，并仅对 active Run 恢复 running。"""
+def test_rebuild_keeps_interrupted_output_stopped_even_when_run_is_active() -> None:
+    """已落库的中断输出已停止生成，后续 Run 继续执行也不能把旧文本恢复为 running。"""
 
     timestamp = _timestamp()
     run = ConversationRunRecord(
         id=1,
         task_id=7,
-        input_text="",
         status="running",
         end_reason=None,
         created_at=timestamp,
         updated_at=timestamp,
-        execution_data={},
+        execution_data=ConversationRunProgress(),
     )
     row = ConversationTaskContextRecord(
         id=1,
@@ -161,30 +153,28 @@ def test_rebuild_preserves_streaming_assistant_draft_for_active_run() -> None:
         message={"role": "assistant", "content": "输出到一半"},
         include_in_context=False,
         sequence=1,
-        is_streaming=True,
     )
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
 
     assert state["runs"][0]["messages"][0]["parts"] == [
-        {"type": "text", "text": "输出到一半", "status": "running"}
+        {"type": "text", "text": "输出到一半", "status": "completed"}
     ]
     validate_snapshot(state)
 
 
-def test_rebuild_closes_streaming_assistant_draft_when_run_is_cancelled() -> None:
+def test_rebuild_keeps_interrupted_output_when_run_is_cancelled() -> None:
     """重启恢复会先取消遗留 Run，partial 不应在终态快照中继续显示 running。"""
 
     timestamp = _timestamp()
     run = ConversationRunRecord(
         id=1,
         task_id=7,
-        input_text="",
         status="cancelled",
         end_reason="backend_restarted",
         created_at=timestamp,
         updated_at=timestamp,
-        execution_data={},
+        execution_data=ConversationRunProgress(),
     )
     row = ConversationTaskContextRecord(
         id=1,
@@ -193,7 +183,6 @@ def test_rebuild_closes_streaming_assistant_draft_when_run_is_cancelled() -> Non
         message={"role": "assistant", "content": "输出到一半"},
         include_in_context=False,
         sequence=1,
-        is_streaming=True,
     )
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
@@ -230,6 +219,7 @@ def test_rebuild_restores_child_run_locator_and_workspace_role_from_display_data
                         "arguments": json.dumps(
                             {
                                 "child_agent_id": "reviewer",
+                                "role": "workspace-reviewer",
                                 "message": "review",
                                 "agent_name": "审查代码",
                             }
@@ -248,20 +238,22 @@ def test_rebuild_restores_child_run_locator_and_workspace_role_from_display_data
         message={"role": "tool", "content": "started", "tool_call_id": "delegate-1"},
         include_in_context=False,
         sequence=2,
-        transport_metadata={
-            "status": "completed",
-            "display_data": {
-                "kind": "delegation-result",
-                "child_task_id": 22,
-                "child_run_id": 220,
-                "child_agent_id": "reviewer",
-            },
-        },
+        metadata=ToolMessageMetadata.model_validate(
+            {
+                "status": "completed",
+                "display_data": {
+                    "kind": "delegation-result",
+                    "child_task_id": 22,
+                    "child_run_id": 220,
+                    "child_agent_id": "reviewer",
+                    "role": "workspace-reviewer",
+                },
+            }
+        ),
     )
 
     tool_part = ConversationTaskStateRebuilder.build_pair_tool_part(
         [row, result_row],
-        child_agent_roles={(22, "reviewer"): "workspace-reviewer"},
     )["delegate-1"]
 
     assert tool_part["child_task_id"] == 22
@@ -271,90 +263,33 @@ def test_rebuild_restores_child_run_locator_and_workspace_role_from_display_data
     assert tool_part["display_data"]["role"] == "workspace-reviewer"
 
 
-def test_legacy_role_lookup_uses_child_task_workspace(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """旧委派记录的 role 回填从 child Task 所属 workspace 目录解析。"""
-
-    configured_profile = AgentProfile(
-        agent_id="workspace-reviewer",
-        role="workspace role",
-        allowed_tools=["read_file"],
-        agent_type=AgentProfileType.CHILD,
-        system_prompt="Review the requested code.",
-    )
-    registry = AgentProfileRegistry(AgentProfileScopeSource())
-    registry.register("workspace-eight", configured_profile)
-
-    class _TaskSource:
-        def get(self, task_id: int) -> SimpleNamespace:
-            assert task_id == 22
-            return SimpleNamespace(workspace_id=8)
-
-    class _WorkspaceService:
-        def get_workspace(self, workspace_id: int) -> SimpleNamespace:
-            assert workspace_id == 8
-            return SimpleNamespace(id=8, root_path="workspace-eight")
-
-    state_service = object.__new__(ConversationTaskStateService)
-    state_service._task_source = _TaskSource()
-    monkeypatch.setattr(
-        "app.service.depends.get_workspace_service",
-        lambda: _WorkspaceService(),
-    )
-    monkeypatch.setattr("app.config.configuration.get_agent_registry", lambda: registry)
-    rows = [
-        SimpleNamespace(
-            transport_metadata={
-                "display_data": {
-                    "kind": "delegation-result",
-                    "child_task_id": 22,
-                    "child_agent_id": "workspace-reviewer",
-                }
-            }
-        )
-    ]
-
-    roles = state_service._resolve_legacy_child_agent_roles(rows)
-
-    assert roles == {(22, "workspace-reviewer"): "workspace role"}
-
-
-def test_rebuild_restores_ordinary_file_from_run_extra() -> None:
+def test_rebuild_restores_ordinary_file_from_context_input() -> None:
     timestamp = _timestamp()
     run = ConversationRunRecord(
         id=1,
         task_id=7,
-        input_text="请查看 C:/workspace/notes.md",
         status="completed",
         created_at=timestamp,
         updated_at=timestamp,
-        extra=ConversationRunExtra(
-            display_text="请查看 [[cosir-file:file-1]]",
-            attachments=[
-                {
-                    "id": "file-1",
-                    "name": "notes.md",
-                    "content_type": "text/markdown",
-                    "path": "C:/workspace/notes.md",
-                }
-            ],
-            reasoning_effort=None,
-        ),
+    )
+    message = ConversationInput(
+        input_text="请查看 C:/workspace/notes.md",
+        display_text="请查看 [[cosir-file:file-1]]",
+        attachments=[
+            {
+                "id": "file-1",
+                "name": "notes.md",
+                "content_type": "text/markdown",
+                "path": "C:/workspace/notes.md",
+            }
+        ],
     )
     row = ConversationTaskContextRecord(
         id=1,
         task_id=7,
         run_id=1,
-        message={"role": "user", "content": run.input_text},
-        metadata={
-            "user_input": {
-                "extra": {
-                    "display_text": run.extra.display_text,
-                    "attachments": run.extra.attachments,
-                }
-            }
-        },
+        message={"role": "user", "content": message.input_text},
+        metadata=UserMessageMetadata(presentation=message.presentation()),
         include_in_context=True,
         sequence=1,
     )
@@ -373,27 +308,14 @@ def test_rebuild_restores_ordinary_file_from_run_extra() -> None:
     validate_snapshot(state)
 
 
-def test_rebuild_restores_user_file_when_context_write_was_interrupted() -> None:
+def test_rebuild_does_not_invent_user_message_from_run() -> None:
     timestamp = _timestamp()
     run = ConversationRunRecord(
         id=1,
         task_id=7,
-        input_text="请查看 C:/workspace/notes.md",
         status="pending",
         created_at=timestamp,
         updated_at=timestamp,
-        extra=ConversationRunExtra(
-            display_text="请查看 [[cosir-file:file-1]]",
-            attachments=[
-                {
-                    "id": "file-1",
-                    "name": "notes.md",
-                    "content_type": "text/markdown",
-                    "path": "C:/workspace/notes.md",
-                }
-            ],
-            reasoning_effort=None,
-        ),
     )
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [])
@@ -402,14 +324,14 @@ def test_rebuild_restores_user_file_when_context_write_was_interrupted() -> None
     validate_snapshot(state)
 
 
-def test_malformed_conversation_run_extra_is_rejected() -> None:
+def test_legacy_input_wrapper_is_rejected() -> None:
     with pytest.raises((TypeError, ValueError)):
-        ConversationRunExtra.from_dict({"assistant_input": {}})
+        ConversationInput.model_validate({"assistant_input": {}})
 
 
 def test_blank_file_path_is_rejected() -> None:
     with pytest.raises((TypeError, ValueError)):
-        ConversationRunExtra.from_dict(
+        ConversationInput.model_validate(
             {
                 "display_text": "请查看 [[cosir-file:file-1]]",
                 "attachments": [
@@ -420,7 +342,6 @@ def test_blank_file_path_is_rejected() -> None:
                         "path": "   ",
                     }
                 ],
-                "ban_tools": [],
-                "reasoning_effort": None,
+                "input_text": "请查看 notes.md",
             }
         )

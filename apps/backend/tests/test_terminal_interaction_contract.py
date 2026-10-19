@@ -27,7 +27,7 @@ def test_host_key_schema_and_actual_argument_validation_agree(
         result = validate_tool_arguments(args, schema, TerminalWriteArgs)
         assert result.ok == (key in allowed)
         if key == rejected:
-            assert "input.key.key" in result.error
+            assert "input.InputKey.key" in result.error
             assert system in result.error and rejected in result.error
 
 

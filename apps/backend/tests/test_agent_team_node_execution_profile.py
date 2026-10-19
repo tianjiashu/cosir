@@ -30,7 +30,7 @@ from app.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.models.conversation_run_extra import ConversationRunExtra
+from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_run_record import ConversationRunRecord
 from app.service.agent_team import agent_team_preparation_service as prep_module
 from app.service.agent_team.agent_team_preparation_service import (
@@ -116,15 +116,12 @@ def _node_run(
     return ConversationRunRecord(
         id=101,
         task_id=7,
-        input_text="node input",
         status="running",
         created_at=now,
         updated_at=now,
         agent_id="general-assistant",
         model_config_id=model_config_id,
-        extra=ConversationRunExtra(
-            display_text="node input",
-            attachments=[],
+        options=ConversationRunOptions(
             reasoning_effort=reasoning_effort,
         ),
     )
@@ -240,7 +237,7 @@ def test_node_run_profile_materializes_model_runtime_settings_from_run() -> None
     )
     registry_profile = _registry_child_profile()
     node_runtime = _node_runtime(config_id)
-    # run.extra 刻意不设置 reasoning_effort：快照偏好必须是唯一的来源。
+    # run.options 刻意不设置 reasoning_effort：快照偏好必须是唯一的来源。
     node_run = _node_run(config_id, reasoning_effort=None)
 
     profile = _coordinator()._build_node_run_profile(registry_profile, node_runtime, node_run)
@@ -327,7 +324,7 @@ def test_node_run_profile_takes_connection_fields_from_run_not_from_snapshot() -
 
 
 @pytest.mark.usefixtures("backend_env")
-def test_unmaterialized_registry_settings_would_fail_runtime_config(
+def test_unmaterialized_registry_settings_would_fail_runtime_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """(缺陷证明) 还原修复前「直接用注册表未物化设置」时，上面的断言必然失败。

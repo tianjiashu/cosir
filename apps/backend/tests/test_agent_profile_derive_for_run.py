@@ -7,12 +7,12 @@ profile 补缺」）、Run 推理强度最终覆盖。不覆盖 runner/workflow 
 工具允许集合不再通过 AgentProfile 派生，避免把一次 Run 的权限修改写回 profile。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings
-from app.models.conversation_run_extra import ConversationRunExtra
+from app.models.conversation_run_options import ConversationRunOptions
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class _RunRoute:
 
     参数:
         model_config_id: 本次 Run 选择的模型配置标识。
-        extra: Run 用户运行偏好。
+        options: Run 用户运行偏好。
 
     返回:
         无（数据承载类型）。
@@ -34,7 +34,7 @@ class _RunRoute:
     """
 
     model_config_id: int | None = None
-    extra: ConversationRunExtra | None = None
+    options: ConversationRunOptions = field(default_factory=ConversationRunOptions)
 
 
 def _child_profile() -> AgentProfile:
@@ -59,7 +59,6 @@ def _child_profile() -> AgentProfile:
         allowed_tools=["read_file", "write_file", "delegate_task"],
         agent_type=AgentProfileType.CHILD,
         system_prompt="Test child system prompt.",
-
     )
 
 
@@ -190,9 +189,7 @@ def test_derive_for_run_run_reasoning_effort_overrides_profile() -> None:
 
     derived = profile.derive_for_run(
         run=_RunRoute(
-            extra=ConversationRunExtra(
-                display_text="hello",
-                attachments=[],
+            options=ConversationRunOptions(
                 reasoning_effort="low",
             )
         ),

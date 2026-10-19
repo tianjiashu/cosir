@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -46,7 +45,6 @@ from app.models.conversation_run_record import ConversationRunRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.enums.error_kind import ErrorKind
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
-
 
 # --------------------------------------------------------------------------------------
 # 测试替身
@@ -126,9 +124,6 @@ def _make_runtime(
     async def _noop_fire(_context: object) -> None:
         return None
 
-    @asynccontextmanager
-    async def _trace(_metadata: object) -> object:
-        yield SimpleNamespace(trace_id=None, callbacks=[], tool_trace_recorder=None)
 
     def _build(_self: AgentRuntime, *_args: object, **_kwargs: object) -> object:
         if operations_available:
@@ -136,7 +131,6 @@ def _make_runtime(
         raise RuntimeError("operations unavailable")
 
     monkeypatch.setattr(runner_module.HookInterceptor, "async_safe_fire", _noop_fire)
-    monkeypatch.setattr(runner_module, "conversation_run_trace", _trace)
     monkeypatch.setattr(AgentRuntime, "_build_operations", _build)
     return runtime
 
@@ -150,7 +144,6 @@ def _record_state() -> ConversationStateSnapshot:
             runId=1,
             status="running",
             endReason=None,
-            langfuseTraceId=None,
             messages=[],
             usage=None,
             error=None,
@@ -752,7 +745,6 @@ _RUN_REQUIRED_KEYS = {
     "runId",
     "status",
     "endReason",
-    "langfuseTraceId",
     "messages",
     "usage",
     "error",

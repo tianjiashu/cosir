@@ -1,7 +1,7 @@
 """待确认占位结果行 → 冷重建恢复审批卡片的契约测试。
 
-背景：``wait_user`` 在挂起前为每条待决调用写一条占位 ``ToolMessage`` 行，``transport_metadata``
-携带卡片载荷与请求（``RuntimeContextManager.add_message``，同 ``tool_call_id`` 命中既有行时原地
+背景：``wait_user`` 在挂起前为每条待决调用写一条占位 ``ToolMessage`` 行，``metadata``
+携带卡片载荷与请求（``RuntimeMessageContextManager.add_message``，同 ``tool_call_id`` 命中既有行时原地
 覆盖）。冷重建（``ConversationTaskStateRebuilder.build_pair_tool_part``）的 part 动态数据**只**
 从该类行的 metadata 读取，因此这条行决定了「进程重启后还能不能看到审批卡片、还能不能作答」。
 
@@ -22,8 +22,8 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 )
 from app.models.conversation_task_context import (
     ConversationTaskContextRecord,
-    TransportMetadata,
 )
+from app.models.message_metadata import ToolMessageMetadata
 
 _TOOL_CALL = {
     "id": "call-a",
@@ -65,7 +65,7 @@ def _backend_env(backend_env: None) -> None:
     return None
 
 
-def _rows(metadata: TransportMetadata | None) -> list[ConversationTaskContextRecord]:
+def _rows(metadata: ToolMessageMetadata | None) -> list[ConversationTaskContextRecord]:
     """构造「AI 消息带 tool_calls + 一条结果行」的最小 context。"""
 
     rows = [
@@ -89,7 +89,7 @@ def _rows(metadata: TransportMetadata | None) -> list[ConversationTaskContextRec
                 },
                 include_in_context=True,
                 sequence=2,
-                transport_metadata=metadata,
+                metadata=metadata,
             )
         )
     return rows
@@ -100,7 +100,7 @@ def test_waiting_row_rebuilds_approval_card_with_form() -> None:
 
     parts = ConversationTaskStateRebuilder.build_pair_tool_part(
         _rows(
-            TransportMetadata(
+            ToolMessageMetadata(
                 status="running",
                 display_data={**_CARD_PAYLOAD, "user_input_request": _REQUEST_PAYLOAD},
                 error=None,

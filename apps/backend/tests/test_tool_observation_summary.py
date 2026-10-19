@@ -25,7 +25,8 @@ from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
 )
-from app.core.workflow.nodes import tools_node as tools_module, observation_node as observe_module
+from app.core.workflow.nodes import observation_node as observe_module
+from app.core.workflow.nodes import tools_node as tools_module
 
 
 def _state(**overrides: Any) -> ReactExecutionState:
@@ -41,7 +42,6 @@ def _state(**overrides: Any) -> ReactExecutionState:
         "next_node": ReactRoute.MODEL,
         "instruction": "",
         "max_steps": 10,
-        "final_text": "",
         "last_tool_results": {"instruction": "", "observations": []},
         "tool_call_lifecycle": _pending_lifecycle(overrides.get("tool_request")),
     }
@@ -107,10 +107,10 @@ class _WorkflowHarness:
     def patch(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """把 tools/observe/lifecycle 三个模块的运行期依赖绑定到本桩。"""
 
-        monkeypatch.setattr(tools_module, "_runtime_config", lambda: self.runtime_config)
-        monkeypatch.setattr(observe_module, "_runtime_config", lambda: self.runtime_config)
-        monkeypatch.setattr(lifecycle_module, "_runtime_config", lambda: self.runtime_config)
-        monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: self.runtime_context)
+        monkeypatch.setattr(tools_module, "_runtime_context", lambda: self.runtime_config)
+        monkeypatch.setattr(observe_module, "_runtime_context", lambda: self.runtime_config)
+        monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: self.runtime_config)
+        monkeypatch.setattr(lifecycle_module, "_message_context", lambda: self.runtime_context)
         monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: self.events.append)
 
 

@@ -18,6 +18,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 )
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import ToolMessageMetadata
 from app.models.task_record import TaskRecord
 from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
@@ -42,7 +43,6 @@ def _run() -> ConversationRunRecord:
     return ConversationRunRecord(
         id=10,
         task_id=1,
-        input_text="start terminal",
         status="completed",
         created_at=NOW,
         updated_at=NOW,
@@ -69,7 +69,7 @@ def _rows(
             },
             include_in_context=True,
             sequence=1,
-            transport_metadata={},
+            metadata={},
         ),
         ConversationTaskContextRecord(
             task_id=1,
@@ -77,15 +77,17 @@ def _rows(
             message={"role": "tool", "content": "started", "tool_call_id": call_id},
             include_in_context=True,
             sequence=2,
-            transport_metadata={
-                "status": "completed",
-                "display_data": {
-                    "kind": "terminal-session",
-                    "session_id": "term-1",
-                    "status": status,
-                    "shell_kind": "powershell",
-                },
-            },
+            metadata=ToolMessageMetadata.model_validate(
+                {
+                    "status": "completed",
+                    "display_data": {
+                        "kind": "terminal-session",
+                        "session_id": "term-1",
+                        "status": status,
+                        "shell_kind": "powershell",
+                    },
+                }
+            ),
         ),
     ]
 
@@ -141,7 +143,7 @@ class _Sources:
         for index, row in enumerate(self.rows):
             if row.sequence != sequence:
                 continue
-            metadata = dict(row.transport_metadata or {})
+            metadata = row.metadata.model_dump()
             display = dict(metadata["display_data"])
             display.update(
                 status=status,
@@ -149,7 +151,7 @@ class _Sources:
                 exit_code=exit_code,
             )
             metadata["display_data"] = display
-            self.rows[index] = replace(row, transport_metadata=metadata)
+            self.rows[index] = replace(row, metadata=metadata)
 
 
 def _service(sources: _Sources) -> ConversationTaskStateService:
@@ -268,19 +270,21 @@ def test_terminal_metadata_update_is_atomic_and_preserves_other_transport_fields
             session.add(
                 ConversationTaskContextModel(
                     message_id="test-message",
-                    metadata_json="{}",
                     task_id=1,
                     run_id=10,
                     sequence=2,
-                    message_json=json.dumps({"type": "tool"}),
-                    transport_metadata_json=json.dumps(
+                    message_json=json.dumps(
+                        {"role": "tool", "tool_call_id": "call-1", "content": "running"}
+                    ),
+                    metadata_json=json.dumps(
                         {
                             "display_data": {
                                 "kind": "terminal-session",
                                 "session_id": "term-1",
                                 "status": "running",
                             },
-                            "concurrent_field": "preserve",
+                            "status": "completed",
+                            "hidden": True,
                         },
                     ),
                 )
@@ -308,9 +312,7 @@ def test_terminal_metadata_update_is_atomic_and_preserves_other_transport_fields
         )
 
         with Session(engine) as session:
-            metadata_json = session.scalar(
-                select(ConversationTaskContextModel.transport_metadata_json)
-            )
+            metadata_json = session.scalar(select(ConversationTaskContextModel.metadata_json))
         assert metadata_json is not None
         assert json.loads(metadata_json) == {
             "display_data": {
@@ -320,7 +322,8 @@ def test_terminal_metadata_update_is_atomic_and_preserves_other_transport_fields
                 "end_reason": "backend_shutdown",
                 "exit_code": None,
             },
-            "concurrent_field": "preserve",
+            "status": "completed",
+            "hidden": True,
         }
     finally:
         engine.dispose()
@@ -361,9 +364,9 @@ def test_cross_run_references_reconcile_and_receive_async_exit(monkeypatch) -> N
     ]
     assert all(display["status"] == "exited" for display in displays)
     assert [
-        row.transport_metadata["display_data"]["status"]
+        row.metadata.display_data["status"]
         for row in sources.rows
-        if "display_data" in row.transport_metadata
+        if isinstance(row.metadata, ToolMessageMetadata) and row.metadata.display_data is not None
     ] == ["exited", "exited"]
 
 
@@ -391,9 +394,10 @@ def test_cross_run_projection_persists_and_reconciles_late_rows_in_sqlite(monkey
 
         def persisted_displays(task_id):
             return [
-                row.transport_metadata["display_data"]
+                row.metadata.display_data
                 for row in crud.get(task_id, include_in_context=False)
-                if "display_data" in row.transport_metadata
+                if isinstance(row.metadata, ToolMessageMetadata)
+                and row.metadata.display_data is not None
             ]
 
         assert [item["exit_code"] for item in persisted_displays(1)] == [7, 7]

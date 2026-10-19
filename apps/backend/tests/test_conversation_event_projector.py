@@ -13,6 +13,7 @@ from app.assistant_transport.event import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
     RunInitializedEvent,
+    RunResultUpdatedEvent,
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
@@ -554,6 +555,35 @@ def test_late_previous_run_events_cannot_overwrite_current_run(
     assert _run(state, 2)["status"] == "pending"
     assert _run(state, 1)["status"] == "completed"
     assert _run(state, 1)["usage"] is None
+
+
+def test_structured_result_updates_completed_run_without_status_transition(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """支线失败原因和用量可在 completed 后更新，已有主线状态保持不变。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event_projector.process(
+        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+    )
+    event_projector.process(
+        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+    )
+    event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
+    change = event_projector.process(
+        RunResultUpdatedEvent(
+            task_id=1,
+            run_id=1,
+            end_reason="structured_output_failed",
+            usage_stats=ConversationRunUsageStats(input_tokens=4, output_tokens=2, total_tokens=6),
+        )
+    )
+    assert change is not None and change.mutations
+    assert snapshots.states[1]["current_run_id"] == 2
+    assert _run(snapshots.states[1], 1)["status"] == "completed"
+    assert _run(snapshots.states[1], 1)["endReason"] == "structured_output_failed"
+    assert _run(snapshots.states[1], 1)["usage"]["total_tokens"] == 6
 
 
 def test_historical_run_status_event_updates_its_own_run(

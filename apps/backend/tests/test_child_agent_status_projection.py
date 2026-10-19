@@ -16,6 +16,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 )
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import ToolMessageMetadata
 from app.models.task_record import TaskRecord
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.model.base import StorageBase
@@ -47,7 +48,6 @@ def _run(run_id: int, task_id: int, status: str) -> ConversationRunRecord:
     return ConversationRunRecord(
         id=run_id,
         task_id=task_id,
-        input_text=f"input-{run_id}",
         status=status,
         created_at=NOW,
         updated_at=NOW,
@@ -74,7 +74,7 @@ def _tool_rows(*displays: tuple[str, dict[str, object]]) -> list[ConversationTas
             message={"role": "assistant", "content": "", "tool_calls": calls},
             include_in_context=True,
             sequence=1,
-            transport_metadata={},
+            metadata={},
         )
     ]
     for sequence, (call, (_, display)) in enumerate(
@@ -89,10 +89,12 @@ def _tool_rows(*displays: tuple[str, dict[str, object]]) -> list[ConversationTas
                 message={"role": "tool", "content": "result", "tool_call_id": tool_call_id},
                 include_in_context=True,
                 sequence=sequence,
-                transport_metadata={
-                    "status": "completed",
-                    "display_data": display,
-                },
+                metadata=ToolMessageMetadata.model_validate(
+                    {
+                        "status": "completed",
+                        "display_data": display,
+                    }
+                ),
             )
         )
     return rows
@@ -134,7 +136,7 @@ class _Sources:
         self.metadata_updates.append((task_id, sequence, status))
         for index, row in enumerate(self.rows):
             if row.task_id == task_id and row.sequence == sequence:
-                metadata = dict(row.transport_metadata or {})
+                metadata = row.metadata.model_dump()
                 display = dict(metadata.get("display_data") or {})
                 if (
                     display.get("child_task_id") == child_task_id
@@ -142,7 +144,7 @@ class _Sources:
                 ):
                     display["status"] = status
                     metadata["display_data"] = display
-                    self.rows[index] = replace(row, transport_metadata=metadata)
+                    self.rows[index] = replace(row, metadata=metadata)
 
 
 def _service(sources: _Sources) -> ConversationTaskStateService:
@@ -345,19 +347,20 @@ def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_met
                 "child_run_id": 20,
                 "status": "running",
             },
-            "other_field": "must-survive",
+            "team_run_id": 77,
         }
         with Session(engine) as session:
             session.add(
                 ConversationTaskContextModel(
                     message_id="test-message",
-                    metadata_json="{}",
                     task_id=1,
                     run_id=10,
-                    message_json=json.dumps({"role": "assistant", **{"content": "old"}}),
+                    message_json=json.dumps(
+                        {"role": "tool", "tool_call_id": "call-1", "content": "old"}
+                    ),
                     include_in_context=True,
                     sequence=2,
-                    transport_metadata_json=json.dumps(metadata),
+                    metadata_json=json.dumps(metadata),
                 )
             )
             session.flush()
@@ -370,9 +373,9 @@ def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_met
                 )
             )
             assert row is not None
-            updated = json.loads(row.transport_metadata_json)
+            updated = json.loads(row.metadata_json)
             assert updated["display_data"]["status"] == "failed"
-            assert updated["other_field"] == "must-survive"
+            assert updated["team_run_id"] == 77
 
             crud.replace_message(
                 1,
@@ -380,7 +383,8 @@ def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_met
                 ConversationTaskContextRecord(
                     task_id=1,
                     run_id=10,
-                    message={"role": "assistant", "content": "new"},
+                    message={"role": "tool", "tool_call_id": "call-1", "content": "new"},
+                    metadata=ToolMessageMetadata(status="cancelled"),
                     include_in_context=True,
                     sequence=2,
                 ),
@@ -393,7 +397,10 @@ def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_met
                 )
             )
             assert row is not None
-            assert json.loads(row.transport_metadata_json) == updated
+            assert (
+                json.loads(row.metadata_json)
+                == ToolMessageMetadata(status="cancelled").model_dump()
+            )
     finally:
         engine.dispose()
 

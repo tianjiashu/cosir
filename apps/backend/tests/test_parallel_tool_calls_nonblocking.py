@@ -17,7 +17,6 @@ from typing import cast
 import pytest
 
 from app.config.constant import Constant
-from app.core.observability.tool_trace_recorder import _NullToolTraceRecorder
 from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.workflow.workflow_operations import WorkflowOperations
@@ -118,7 +117,6 @@ def _make_operations(executor: _FakeToolExecutor) -> WorkflowOperations:
     # 门面声明的 ``_executor`` 是真实 ``ToolExecutor``；本模块只消费它的 ``execute`` 语义，
     # 故用 ``cast`` 注入替身，而不是为假执行器伪造整条执行管线。
     operations._executor = cast(ToolExecutor, executor)
-    operations._trace_recorder = _NullToolTraceRecorder()
     operations._execution_context = None
     operations._allowed_tool_names = frozenset({_PARALLEL_TOOL})
     operations._parallel_mode_by_name = {_PARALLEL_TOOL: "parallel"}

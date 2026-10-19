@@ -46,7 +46,6 @@ def _run(run_id: int, status: str) -> ConversationRunRecord:
     return ConversationRunRecord(
         id=run_id,
         task_id=7,
-        input_text=f"input-{run_id}",
         context_window_total=100,
         status=status,
         created_at=now,
@@ -305,7 +304,6 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     "runId": 2,
                     "status": "running",
                     "endReason": None,
-                    "langfuseTraceId": None,
                     "messages": [
                         {
                             "id": "stale-user",

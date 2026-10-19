@@ -88,8 +88,8 @@ def test_enforce_budget_is_unlimited_without_token_limit():
     assert spb.SystemPromptBuilder._enforce_budget(body) == body
 
 
-def test_runtime_context_advertises_markdown_rendering_capabilities():
-    out = spb.SystemPromptBuilder._build_runtime_context(_profile(), "/workspace")
+def test_message_context_advertises_markdown_rendering_capabilities():
+    out = spb.SystemPromptBuilder._build_message_context(_profile(), "/workspace")
 
     assert (
         "- Markdown output: LaTeX math (`$$...$$`), Mermaid diagrams (including "
