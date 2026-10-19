@@ -1,32 +1,24 @@
-"""一次 run 的 token 与耗时统计（运行时累加器）。
+"""单次驱动的模型用量统计；Run 终态、等待或结构化支线收束时写回业务记录。"""
 
-本值对象作为 ``RuntimeConfig`` 的可变成员被 model 节点写入、被 Run 终态事件读取；
-不进入 LangGraph checkpoint，只在单次 graph 执行期间生效。
-"""
 import math
 from dataclasses import dataclass
 from typing import Any
 
 from app.config.constant import Constant
 
-
-# LangChain UsageMetadata 契约中缓存/推理细节的键名（以 provider 返回的
-# _create_usage_metadata：usage_metadata["input_token_details"]["cache_read"]、
-# usage_metadata["output_token_details"]["reasoning"]）。旧 OpenAI 兼容扁平键
-# prompt_cache_hit_tokens / reasoning_tokens 等旧版扁平键不再作为兼容分支，勿再用。
+# SDK/厂商字段由 usage_from_response 映射；本类只消费归一后的字段并校验数值。
 
 
 @dataclass
 class ConversationRunUsageStats:
     """run 级 token 与耗时快照（覆盖更新）。
 
-    字段语义与 LangChain ``UsageMetadata`` 对齐（见 langchain_core.messages.ai）：
+    字段语义与 领域用量 metadata 对齐（由 SDK 适配器归一）：
     - ``input_tokens``：输入 token 数（含历史、工具结果等）；缺少有效 provider 值时为 None。
     - ``output_tokens``：模型生成 token 数；缺少有效 provider 值时为 None。
     - ``total_tokens``：总 token 数（输入 + 输出）；缺少有效 provider 值时为 None。
     - ``cache_hit_tokens``：缓存命中 token 数；缺少明细时为 None。
-    - ``cache_miss_tokens``：缓存未命中 token 数；当模型仅返回 total 时，可用
-      ``total - cache_hit`` 估算。
+    - ``cache_miss_tokens``：仅由同次响应的有效输入量和缓存命中明细推导，缺少明细时为 None。
     - ``reasoning_tokens``：推理模型产生的思考 token 数
       （usage_metadata.output_token_details.reasoning）。
 
@@ -66,7 +58,7 @@ class ConversationRunUsageStats:
         if isinstance(value, bool) or value is None:
             return None
         if isinstance(value, float) and (
-                not math.isfinite(value) or not value.is_integer() or value < 0
+            not math.isfinite(value) or not value.is_integer() or value < 0
         ):
             return None
         try:
@@ -84,16 +76,16 @@ class ConversationRunUsageStats:
         )
 
     def add_usage_metadata(self, usage_metadata: dict[str, Any] | None) -> None:
-        """按 LangChain ``UsageMetadata`` 标准契约覆盖更新一次模型调用的 token 统计。
+        """按 领域用量 metadata 标准契约覆盖更新一次模型调用的 token 统计。
 
         单一事实来源：模型节点在每次模型调用产出 ``ai_message`` 后调用本方法，
-        从 ``ai_message.usage_metadata`` 取数。实测表明 provider 返回的
-        ``usage_metadata`` 已是该次 run 的累计值，因此本方法采用「覆盖更新」语义：
+        从 ``usage_from_response(completion.usage)`` 取数。SDK 适配器返回的
+        ``usage_metadata`` 是单次请求的完整用量，因此本方法采用「覆盖更新」语义：
         每次调用都用最新一次的用量**替换**既有值，而非逐次相加，避免多轮 / 多子调用
         回流时重复累加导致总量虚高。最终生效的是最后一次有效 ``usage_metadata`` 的快照。
 
         参数:
-            usage_metadata: ``AIMessage.usage_metadata``（dict 或 None）；None / 空字典时安全忽略。
+            usage_metadata: SDK usage 归一后的统计字典；None / 空字典时安全忽略。
 
         返回:
             无。
@@ -134,9 +126,7 @@ class ConversationRunUsageStats:
         # cache_read 是 input_tokens 的子集；只用同一份有效明细推导，避免缓存数据与输入量错配。
         self.cache_miss_tokens = (
             max(0, input_tokens - cache_hit_tokens)
-            if input_tokens is not None
-            and input_tokens > 0
-            and cache_hit_tokens is not None
+            if input_tokens is not None and input_tokens > 0 and cache_hit_tokens is not None
             else None
         )
 
