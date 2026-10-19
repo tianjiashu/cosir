@@ -207,7 +207,7 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
             },
         )
     operations.update_completed_result(
-        end_reason="结构化输出支线异常，保留自然语言最终回复",
+        end_reason=Constant.Workflow.STRUCTURED_OUTPUT_FAILURE_REASON,
         usage_stats=runtime.usage_stats,
     )
     return route_state(state.step_count, ReactRoute.END)
