@@ -6,7 +6,6 @@ const snapshot = (status: string) => ({
     runId: index + 1,
     status: runStatus,
     endReason: null,
-    langfuseTraceId: null,
     messages: [
       { id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index + 1}`, status: "completed" }] },
       { id: `a-${index}`, role: "assistant", parts: [{ type: "text", text: `回答 ${index + 1}`, status: runStatus === "running" ? "running" : "completed" }] },

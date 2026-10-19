@@ -10,7 +10,7 @@ import {
 } from "@/lib/assistant/use-task-assistant-transport-runtime";
 
 const INITIAL_STATE: TransportState = {
-  runs: [{ runId: 1, status: "completed", endReason: "stop", langfuseTraceId: null,
+  runs: [{ runId: 1, status: "completed", endReason: "stop",
     contextWindowTotal: 128_000, messages: [], usage: null, error: null }],
   current_run_id: 1,
   approvals: {},

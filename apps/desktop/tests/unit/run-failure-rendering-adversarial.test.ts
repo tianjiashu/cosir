@@ -21,7 +21,6 @@ const run = (overrides: Partial<TransportRun> = {}): TransportRun => ({
   runId: 1,
   status: "failed",
   endReason: null,
-  langfuseTraceId: null,
   contextWindowTotal: null,
   messages: [],
   usage: null,
@@ -61,7 +60,6 @@ describe("toMessageStatusForRun 全组合对抗", () => {
     const failed = run({
       status: "failed",
       endReason: "cancelled",
-      langfuseTraceId: null,
       error: { code: "run_cancelled", message: "已取消本轮对话" },
     });
     expect(toMessageStatus(assistantMessage(), failed)).toEqual({
@@ -74,7 +72,6 @@ describe("toMessageStatusForRun 全组合对抗", () => {
     const failed = run({
       status: "failed",
       endReason: "client_disconnected",
-      langfuseTraceId: null,
       error: { code: "client_disconnected", message: "连接已断开" },
     });
     expect(toMessageStatus(assistantMessage(), failed)).toEqual({
@@ -87,7 +84,6 @@ describe("toMessageStatusForRun 全组合对抗", () => {
     const cancelled = run({
       status: "cancelled",
       endReason: "user_cancelled",
-      langfuseTraceId: null,
       error: { code: "model_insufficient_quota", message: "模型服务配额或余额不足" },
     });
     expect(toMessageStatus(assistantMessage(), cancelled)).toEqual({
@@ -101,7 +97,6 @@ describe("toMessageStatusForRun 全组合对抗", () => {
     const completed = run({
       status: "completed",
       endReason: "stop",
-      langfuseTraceId: null,
       error: { code: "model_insufficient_quota", message: "残留错误" },
     });
     expect(toMessageStatus(assistantMessage(), completed)).toEqual({
@@ -138,7 +133,6 @@ describe("parseTransportState Run 级 error 严格校验对抗", () => {
     runId: 1,
     status: "failed",
     endReason: "run_failed",
-    langfuseTraceId: null,
     contextWindowTotal: null,
     usage: null,
     error: null as unknown,

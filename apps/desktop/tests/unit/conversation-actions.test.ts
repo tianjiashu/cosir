@@ -22,7 +22,6 @@ const run = (runId: number, status: string = "completed", messages: TransportMes
   runId,
   status,
   endReason: null,
-  langfuseTraceId: null,
   contextWindowTotal: null,
   messages,
   usage: null,

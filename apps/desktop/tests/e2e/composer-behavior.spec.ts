@@ -206,7 +206,7 @@ test("Task 保活但已进入配置页时，迟到文件不写入隐藏草稿", 
 
 test("重载后的历史普通文件可编辑、撤销移除并重跑，路径由后端绑定恢复", async ({ page }) => {
   const state = {
-    runs: [{ runId: 70, status: "completed", endReason: "stop", langfuseTraceId: null, contextWindowTotal: null, usage: null, error: null,
+    runs: [{ runId: 70, status: "completed", endReason: "stop", contextWindowTotal: null, usage: null, error: null,
       messages: [
         { id: "history-user", role: "user", parts: [
           { type: "text", text: "查看 ", status: "completed" },

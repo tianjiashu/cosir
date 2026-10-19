@@ -27,7 +27,7 @@ type RunDiagnosticsInput = {
   runId: number;
   status: string;
   /** 只读作用域没有 Transport external state，此时为 null，只输出标识与状态。 */
-  run: Pick<TransportRun, "endReason" | "langfuseTraceId" | "error"> | null;
+  run: Pick<TransportRun, "endReason" | "error"> | null;
 };
 
 /**
@@ -40,7 +40,6 @@ export function formatRunDiagnostics({ taskId, runId, status, run }: RunDiagnost
   const lines = [`task_id=${taskId}`, `run_id=${runId}`, `run_status=${status}`];
   if (run?.endReason) lines.push(`end_reason=${run.endReason}`);
   if (run?.error) lines.push(`error_code=${run.error.code}`);
-  if (run?.langfuseTraceId) lines.push(`langfuse_trace_id=${run.langfuseTraceId}`);
   return lines.join("\n");
 }
 

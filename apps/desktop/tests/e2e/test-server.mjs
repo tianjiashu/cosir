@@ -81,7 +81,6 @@ function stateWithExchange(previous, text, runId, assistantText, status) {
     runId,
     status: terminal ? status : "running",
     endReason: status === "completed" ? "stop" : status === "failed" ? "tool_error_limit_reached" : status === "cancelled" ? "user_cancelled" : null,
-    langfuseTraceId: null,
     contextWindowTotal: null,
     messages: [
       textMessage(`user-${runId}`, "user", text, "completed"),
@@ -144,7 +143,6 @@ function toolTraceState() {
       runId: 77,
       status: "completed",
       endReason: "stop",
-      langfuseTraceId: null,
     contextWindowTotal: null,
       messages: [
       {
@@ -199,7 +197,6 @@ function webSearchState() {
       runId: 78,
       status: "completed",
       endReason: "stop",
-      langfuseTraceId: null,
     contextWindowTotal: null,
       messages: [
       {
@@ -267,7 +264,6 @@ function delegationState() {
       runId: 500,
       status: "completed",
       endReason: "stop",
-      langfuseTraceId: null,
     contextWindowTotal: null,
       messages: [
         {

@@ -71,49 +71,15 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await page.route("http://127.0.0.1:8000/configuration/environment", (route) => route.fulfill({
     json: {
       groups: [{
-        id: "langfuse",
-        label: "Langfuse 可观测性",
-        description: "配置 Agent 与工具调用链路追踪。",
+        id: "web",
+        label: "网页工具",
+        description: "配置网页搜索与正文提取。",
         fields: [
           {
-            name: "LANGFUSE_ENABLED",
-            type: "boolean",
-            component: "checkbox",
-            label: "启用 Langfuse",
-            secret: false,
-            default: false,
-            value: false,
-            disk_value: false,
-            configured: false,
-            masked: false,
-            source: "default",
-            process_override: false,
-            options: [],
-            placeholder: null,
-            clearable: true,
-          },
-          {
-            name: "LANGFUSE_SECRET_KEY",
+            name: "FIRECRAWL_API_KEY",
             type: "string",
             component: "password",
-            label: "Secret Key",
-            secret: true,
-            default: null,
-            value: null,
-            disk_value: null,
-            configured: false,
-            masked: false,
-            source: "default",
-            process_override: false,
-            options: [],
-            placeholder: "请输入 Secret Key",
-            clearable: true,
-          },
-          {
-            name: "LANGFUSE_PUBLIC_KEY",
-            type: "string",
-            component: "password",
-            label: "Public Key",
+            label: "API Key",
             secret: true,
             default: null,
             value: null,
@@ -190,28 +156,25 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await expect(page.getByRole("textbox", { name: "Markdown 源码编辑器" })).toHaveText("# 主 Agent 协议");
 
   await settingsNav.getByRole("link", { name: "环境变量" }).click();
-  await expect(page.getByRole("heading", { name: "Langfuse 可观测性" })).toBeVisible();
-  await expect(page.getByText("Secret Key", { exact: true })).toBeVisible();
-  await expect(page.getByRole("switch", { name: "启用 Langfuse" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "网页工具" })).toBeVisible();
   await expect(page.getByRole("button", { name: "重启后端" })).toHaveCount(0);
   await expect(page.getByText("当前进程", { exact: true })).toHaveCount(0);
   await expect(page.getByText("重启后预计（已保存文件）", { exact: true })).toHaveCount(0);
   await expect(page.getByText("默认值", { exact: true })).toHaveCount(0);
-  await expect(page.getByPlaceholder("请输入 Secret Key", { exact: true })).toBeVisible();
   await expect(page.getByText("输入新值将覆盖当前密钥；留空表示不变，点击清除按钮可删除已保存值。", { exact: true })).toHaveCount(0);
 
   // 清除已保存的密钥后显示「将清除」并可撤销，而不是继续提示「留空保持不变」。
-  const publicKey = page.getByLabel("Public Key", { exact: true });
-  await expect(publicKey).toHaveAttribute("placeholder", "已配置（留空保持不变）");
-  await page.getByRole("button", { name: "清除 Public Key" }).click();
+  const apiKey = page.getByLabel("API Key", { exact: true });
+  await expect(apiKey).toHaveAttribute("placeholder", "已配置（留空保持不变）");
+  await page.getByRole("button", { name: "清除 API Key" }).click();
   await expect(page.getByText("将清除", { exact: true })).toBeVisible();
-  await expect(publicKey).toHaveAttribute("placeholder", "保存后将清除已保存值");
-  await page.getByRole("button", { name: "撤销清除 Public Key" }).click();
+  await expect(apiKey).toHaveAttribute("placeholder", "保存后将清除已保存值");
+  await page.getByRole("button", { name: "撤销清除 API Key" }).click();
   await expect(page.getByText("将清除", { exact: true })).toHaveCount(0);
-  await expect(publicKey).toHaveAttribute("placeholder", "已配置（留空保持不变）");
+  await expect(apiKey).toHaveAttribute("placeholder", "已配置（留空保持不变）");
   await expect(page.getByRole("button", { name: "保存变量" })).toBeDisabled();
 
-  await page.getByPlaceholder("请输入 Secret Key", { exact: true }).fill("new-secret");
+  await page.getByLabel("API Key", { exact: true }).fill("new-secret");
   await page.getByRole("button", { name: /保存变量/ }).click();
   await expect(page.getByText("环境变量已保存", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "保存变量" })).toBeDisabled();

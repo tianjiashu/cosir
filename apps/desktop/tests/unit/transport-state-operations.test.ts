@@ -16,7 +16,6 @@ function state(): TransportState {
         runId: 1,
         status: "running",
         endReason: null,
-        langfuseTraceId: null,
         contextWindowTotal: null,
         messages: [{
           id: "assistant-1",
@@ -33,7 +32,6 @@ function state(): TransportState {
         runId: 2,
         status: "completed",
         endReason: null,
-        langfuseTraceId: null,
         contextWindowTotal: null,
         messages: [{ id: "assistant-2", role: "assistant", parts: [] }],
         usage: null,
@@ -79,7 +77,7 @@ describe("runtime transport state 读取契约", () => {
 });
 
 const measuredRun = (runId: number, used: number | null, total: number | null): TransportState["runs"][number] => ({
-  runId, status: "completed", endReason: "stop", langfuseTraceId: null, contextWindowTotal: total,
+  runId, status: "completed", endReason: "stop", contextWindowTotal: total,
   messages: [], error: null, usage: { input_tokens: used, output_tokens: null, total_tokens: null,
     cache_hit_tokens: null, cache_miss_tokens: null, reasoning_tokens: null },
 });

@@ -11,7 +11,7 @@ describe("run diagnostics actions", () => {
       .toBe("task_id=12\nrun_id=45\nrun_status=completed");
   });
 
-  it("appends end reason, error code and trace id when the run provides them", () => {
+  it("appends end reason and error code when the run provides them", () => {
     expect(formatRunDiagnostics({
       taskId: 12,
       runId: 45,
@@ -19,7 +19,6 @@ describe("run diagnostics actions", () => {
       run: {
         endReason: "model_error",
         error: { code: "MODEL_HTTP_ERROR", message: "上游返回 500" },
-        langfuseTraceId: "trace-abc",
       },
     })).toBe([
       "task_id=12",
@@ -27,7 +26,6 @@ describe("run diagnostics actions", () => {
       "run_status=failed",
       "end_reason=model_error",
       "error_code=MODEL_HTTP_ERROR",
-      "langfuse_trace_id=trace-abc",
     ].join("\n"));
   });
 

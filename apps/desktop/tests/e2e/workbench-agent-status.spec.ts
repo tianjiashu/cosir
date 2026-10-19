@@ -5,7 +5,7 @@ const origin = "http://127.0.0.1:8000";
 const terminal = (status: string) => ["completed", "failed", "cancelled"].includes(status);
 function snapshot(runId: number | null, status = "completed", text = "阅读内容") {
   return { current_run_id: runId, approvals: {}, context_window_total: null, error: null,
-    runs: runId === null ? [] : [{ runId, status, endReason: null, langfuseTraceId: null, usage: null, error: null,
+    runs: runId === null ? [] : [{ runId, status, endReason: null, usage: null, error: null,
       messages: [{ id: `assistant-${runId}`, role: "assistant", parts: [{ type: "text", text, status: terminal(status) ? "completed" : "running" }] }] }],
   };
 }

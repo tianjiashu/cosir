@@ -85,14 +85,14 @@ describe("configuration API", () => {
     requestJson.mockResolvedValueOnce({ groups: [] });
     const { updateEnvironmentConfiguration } = await import("@/lib/api/configuration");
     await updateEnvironmentConfiguration({
-      LANGFUSE_SECRET_KEY: { operation: "unchanged" },
+      FIRECRAWL_API_KEY: { operation: "unchanged" },
       DEFAULT_LANGUAGE: { operation: "clear" },
     });
 
     expect(jsonRequestInit).toHaveBeenCalledWith(
       {
         changes: {
-          LANGFUSE_SECRET_KEY: { operation: "unchanged" },
+          FIRECRAWL_API_KEY: { operation: "unchanged" },
           DEFAULT_LANGUAGE: { operation: "clear" },
         },
       },

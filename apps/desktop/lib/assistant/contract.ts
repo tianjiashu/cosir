@@ -156,8 +156,6 @@ export type TransportRun = {
   runId: number;
   status: string;
   endReason: string | null;
-  /** Langfuse 根 Trace 标识；未启用观测或初始化失败时为 null。 */
-  langfuseTraceId: string | null;
   /** 创建 Run 时冻结的模型上下文窗口上限。 */
   contextWindowTotal: number | null;
   messages: TransportMessage[];

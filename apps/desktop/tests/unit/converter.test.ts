@@ -15,7 +15,6 @@ const completedRun = (runId: number, messages: TransportMessage[] = []): Transpo
   runId,
   status: "completed",
   endReason: null,
-  langfuseTraceId: null,
   contextWindowTotal: null,
   messages,
   usage: null,
@@ -353,7 +352,6 @@ describe("assistant transport converter", () => {
       ...completedRun(1),
       status: "failed",
       endReason: "client_disconnected",
-      langfuseTraceId: null,
       error: { code: "client_disconnected", message: "连接已断开，本轮对话被中断，请重新发送" },
     };
 
