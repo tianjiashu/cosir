@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import app.core.workflow.workflow as module
-from app.core.workflow.execution_state.route import ReactRoute
+from app.core.workflow.execution_state.react_route import ReactRoute
 from app.models.conversation_run_progress import ConversationRunProgress
 from tests.sdk_fixtures import sdk_completion
 

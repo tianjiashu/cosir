@@ -19,8 +19,8 @@ import pytest
 import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolObservation
-from app.core.workflow.execution_state.route import ReactRoute
-from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,

@@ -24,8 +24,9 @@ from openai.types.chat import ChatCompletion
 import app.core.workflow.node_helper.streaming_part_state_machine as streaming_module
 import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.llm_provider.message_codec import assistant_message
-from app.core.workflow.execution_state.route import ReactRoute
-from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.step_context import StepContext
 from app.core.workflow.nodes import model_node as model_module
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from tests.sdk_fixtures import sdk_completion, sdk_event
@@ -97,6 +98,7 @@ class _ModelHarness:
             model_tools=[SimpleNamespace(name="read_file", display=None)],
             all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
             allows_tools=frozenset({"read_file"}),
+            vaild_tool_name=lambda name: name == "read_file",
             # model / tools 节点按「当前 task 维度」取上下文，故桩必须暴露 get_current_task。
             get_current_task=lambda: SimpleNamespace(id=1),
             get_current_run=lambda: SimpleNamespace(task_id=1, id=2),
@@ -119,12 +121,13 @@ class _ModelHarness:
                 add_usage_metadata=lambda _metadata: None,
                 to_dict=lambda: {},
             ),
+            step_context=StepContext(),
         )
 
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
 
-        def save_model_response(snapshot, *, include_in_context, run_id=None, existing=None):
+        def save_model_response(snapshot, *, include_in_context, **_kwargs):
             self.saved_responses.append((snapshot, include_in_context))
             if include_in_context:
                 self.messages.append(assistant_message(snapshot.choices[0].message))

@@ -727,7 +727,12 @@ def test_cold_reload_normalizes_earlier_batches_without_rewriting_facts(env):
 
 def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypatch):
     """流式取消产生的展示占位不是执行结果，不得提升为模型上下文的孤儿 tool。"""
-    import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle
+    from openai.types.chat import ParsedFunctionToolCall
+
+    import app.core.workflow.node_helper.streaming_part_state_machine as machine_module
+    from app.assistant_transport.event import ToolCallStatusChangedEvent
+    from app.core.workflow.execution_state.step_context import StepContext
+    from app.core.workflow.node_helper import StreamingPartStateMachine
     from tests.sdk_fixtures import sdk_completion
 
     run = env.seed_run("running")
@@ -740,21 +745,39 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
     )
     completion = sdk_completion(tool_calls=_ai_message("preview")["tool_calls"])
     manager.save_model_response(completion, include_in_context=False)
-    monkeypatch.setattr(lifecycle, "_message_context", lambda: manager)
-    events = []
-    monkeypatch.setattr(lifecycle, "get_stream_writer", lambda: events.append)
-    state = lifecycle.ToolCallLifecycleManager(
-        valid_calls={
-            "preview": lifecycle.ToolCallLifecycleRecord(
-                tool_call_id="preview", tool_name="read_file"
-            ),
-        }
+    operations = SimpleNamespace(
+        vaild_tool_name=lambda name: name == "read_file",
+        all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
+        allows_tools=frozenset({"read_file"}),
     )
-    state.cancel(task_id=env.task.id, run_id=run.id, step_id="step-1")
+    events: list[object] = []
+    monkeypatch.setattr(machine_module, "_message_context", lambda: manager)
+    runtime = SimpleNamespace(operations=operations, step_context=StepContext())
+    monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(machine_module, "get_stream_writer", lambda: events.append)
+    machine = StreamingPartStateMachine(
+        task_id=env.task.id,
+        run_id=run.id,
+        step_id="step-1",
+    )
+    machine.tool_call(
+        [
+            ParsedFunctionToolCall(
+                id="preview",
+                type="function",
+                function={"name": "read_file", "arguments": json.dumps({})},
+            )
+        ]
+    )
+    machine.cancel()
     original = _rows(env)
     assert [row.message["role"] for row in original] == ["assistant", "tool"]
     assert all(not row.include_in_context for row in original)
-    assert events[0].status == "cancelled"
+    assert [
+        (event.tool_call_id, event.status)
+        for event in events
+        if isinstance(event, ToolCallStatusChangedEvent)
+    ] == [("preview", "cancelled")]
     cold = _manager(
         context_service=env.context,
         task_id=env.task.id,

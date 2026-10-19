@@ -62,6 +62,7 @@ def _manager(context_service: _ContextService, *, next_sequence: int = 0) -> Run
     manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     manager._entries = []
     manager._message_sequence = next_sequence
+    manager._draft_response = None
     return manager
 
 
@@ -173,7 +174,7 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
     entry = manager.save_model_response(sdk_completion(content="part"), include_in_context=False)
     identity = entry.message_id
     entry = manager.save_model_response(
-        sdk_completion(content="part tail"), include_in_context=False, existing=entry
+        sdk_completion(content="part tail"), include_in_context=False
     )
     assert manager.next_sequence == 6
     assert manager._entries == []
@@ -182,12 +183,12 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
     assert record.sequence == 5
     assert record.message["content"] == "part tail"
     assert not record.include_in_context
-    manager.save_model_response(
-        sdk_completion(content="part tail"), include_in_context=True, existing=entry
-    )
+    manager.save_model_response(sdk_completion(content="part tail"), include_in_context=True)
     assert service.appended[-1][2].include_in_context
     assert manager._entries == [entry]
     assert manager.next_sequence == 6
+    # 提交即结束本次草稿：下一次调用必须新起一行。
+    assert manager._draft_response is None
 
 
 def test_add_message_replaces_paired_tool_result_row_in_place() -> None:

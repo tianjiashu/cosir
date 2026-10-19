@@ -403,6 +403,7 @@ async def test_real_loop_consumes_between_requests_and_leaves_final_queue_for_ne
         get_current_workspace=lambda: WorkspaceCrud().get(store.task.workspace_id),
         task_tool_schemas=[],
         allows_tools=(),
+        vaild_tool_name=lambda _name: True,
         is_current_run_cancelled=lambda: False,
         save_execution=lambda data: store.crud.save_execution(store.run.id, data),
         process_event=get_conversation_event_projector().process,
@@ -482,7 +483,10 @@ async def test_queue_commands_during_stream_preserve_output_and_replace_one_row(
         TransportAssistantService,
     )
     from app.config.constant import Constant
-    from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager, SystemPromptBuilder
+    from app.core.context.runtime_message_context_manager import (
+        RuntimeMessageContextManager,
+        SystemPromptBuilder,
+    )
     from app.service.depends import get_conversation_event_projector
 
     states = get_conversation_run_state_service()
@@ -585,6 +589,7 @@ async def test_queue_commands_during_stream_preserve_output_and_replace_one_row(
         get_current_workspace=lambda: WorkspaceCrud().get(store.task.workspace_id),
         task_tool_schemas=[],
         allows_tools=(),
+        vaild_tool_name=lambda _name: True,
         is_current_run_cancelled=lambda: False,
         save_execution=lambda data: store.crud.save_execution(store.run.id, data),
         process_event=get_conversation_event_projector().process,
@@ -667,7 +672,10 @@ def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, 
     """数据库读回 SDK JSON；消息身份、用户展示和响应信息均不进入模型正文。"""
     import json
 
-    from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager, SystemPromptBuilder
+    from app.core.context.runtime_message_context_manager import (
+        RuntimeMessageContextManager,
+        SystemPromptBuilder,
+    )
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     context = RuntimeMessageContextManager(store.task.id, SimpleNamespace(), store.context)
@@ -678,7 +686,6 @@ def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, 
     assert "input_text" not in user.metadata.presentation.model_dump()
     assert user.message == {"role": "user", "content": "first"}
     assert user.message_id
-    response_entry = None
     for _event in sdk_events(
         [
             {
@@ -698,14 +705,14 @@ def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, 
         usage={"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
     ):
         response_entry = context.save_model_response(
-            _event.snapshot, include_in_context=False, existing=response_entry
+            _event.snapshot, include_in_context=False
         )
         rows = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)
         responses = [row for row in rows if row.message["role"] == "assistant"]
         assert len(responses) == 1
         assert responses[0].message_id == response_entry.message_id
         assert not responses[0].include_in_context
-    context.save_model_response(_event.snapshot, include_in_context=True, existing=response_entry)
+    context.save_model_response(_event.snapshot, include_in_context=True)
     finalized = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)[-1]
     assert finalized.metadata.finish_reason == "tool_calls"
     assert finalized.metadata.usage.total_tokens == 10
@@ -742,7 +749,10 @@ async def test_queue_during_tool_preview_keeps_pending_part_executable(store, mo
     from app.assistant_transport.service.transport_assistant_service import (
         TransportAssistantService,
     )
-    from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager, SystemPromptBuilder
+    from app.core.context.runtime_message_context_manager import (
+        RuntimeMessageContextManager,
+        SystemPromptBuilder,
+    )
     from tests.sdk_fixtures import sdk_completion
 
     get_conversation_run_state_service().claim_pending_run(store.run.id)
@@ -806,7 +816,10 @@ async def test_queue_during_tool_preview_keeps_pending_part_executable(store, mo
 
 
 def test_cancelled_sdk_output_is_durable_but_excluded_on_resume(store, monkeypatch):
-    from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager, SystemPromptBuilder
+    from app.core.context.runtime_message_context_manager import (
+        RuntimeMessageContextManager,
+        SystemPromptBuilder,
+    )
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     context = RuntimeMessageContextManager(store.task.id, SimpleNamespace(), store.context)
@@ -894,6 +907,7 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
         get_current_workspace=lambda: WorkspaceCrud().get(store.task.workspace_id),
         task_tool_schemas=[],
         allows_tools=(),
+        vaild_tool_name=lambda _name: True,
         is_current_run_cancelled=lambda: cancellation_registry.is_cancelled(store.run.id),
         save_execution=lambda data: store.crud.save_execution(store.run.id, data),
         process_event=get_conversation_event_projector().process,

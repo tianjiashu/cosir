@@ -31,7 +31,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
-from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunCommand, ConversationRunError, ConversationRunStatus
 from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.enums.tool_call_status import ToolCallEventStatus

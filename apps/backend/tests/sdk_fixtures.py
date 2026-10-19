@@ -3,10 +3,18 @@
 from collections.abc import Iterable
 from typing import Any
 
-from openai.lib.streaming.chat import ChatCompletionStreamState, ChunkEvent
+from openai.lib.streaming.chat import (
+    ChatCompletionStreamState,
+    ChunkEvent,
+    ParsedChatCompletionSnapshot,
+)
 from openai.types import CompletionUsage
-from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice
+from openai.types.chat import (
+    ChatCompletion,
+    ChatCompletionChunk,
+    ParsedChatCompletionMessage,
+)
+from openai.types.chat.parsed_chat_completion import ParsedChoice
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
 
@@ -17,23 +25,27 @@ def sdk_completion(
     tool_calls: list[dict[str, Any]] | None = None,
     usage: dict[str, Any] | None = None,
     reasoning_content: str | None = None,
-) -> ChatCompletion:
-    """构造完整 SDK 响应；参数使用 SDK 原生字段。"""
+) -> ParsedChatCompletionSnapshot:
+    """构造完整 SDK 响应；参数使用 SDK 原生字段。
+
+    返回聚合快照类型（``ParsedChatCompletion[object]``）而非基类：生产侧
+    ``save_model_response`` / ``assistant_message`` 只接受快照消息，测试桩跟随同一契约。
+    """
     message: dict[str, Any] = {"role": "assistant", "content": content}
     if tool_calls is not None:
         message["tool_calls"] = tool_calls
     if reasoning_content is not None:
         message["reasoning_content"] = reasoning_content
-    return ChatCompletion.model_construct(
+    return ParsedChatCompletionSnapshot.model_construct(
         id="completion-test",
         created=1,
         model="test",
         object="chat.completion",
         choices=[
-            Choice.model_construct(
+            ParsedChoice.model_construct(
                 index=0,
                 finish_reason=finish_reason,
-                message=ChatCompletionMessage.model_validate(message),
+                message=ParsedChatCompletionMessage.model_validate(message),
             )
         ],
         usage=CompletionUsage.model_construct(**usage) if usage is not None else None,

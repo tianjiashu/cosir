@@ -48,8 +48,8 @@ from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.runtime.run_result import ToolRunResult
 from app.core.tools.schemas import ToolCall, ToolObservation
-from app.core.workflow.execution_state.route import ReactRoute
-from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,

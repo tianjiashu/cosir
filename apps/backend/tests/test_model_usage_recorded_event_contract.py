@@ -25,9 +25,10 @@ import app.core.workflow.node_helper.streaming_part_state_machine as streaming_m
 import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
-from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.execution_state.route import ReactRoute
-from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.react_route import ReactRoute
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.step_context import StepContext
 from app.core.workflow.node_helper import RunStopped
 from app.core.workflow.nodes import model_node as model_module
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -157,6 +158,7 @@ class _ModelHarness:
             task_tool_schemas=[],
             all_vaild_tools=[SimpleNamespace(name=name, display=None) for name in registered_tools],
             allows_tools=allows_tools,
+            vaild_tool_name=lambda name: name in registered_tools,
             get_current_task=lambda: SimpleNamespace(id=task_id),
             get_current_run=lambda: SimpleNamespace(task_id=task_id, id=run_id),
             get_current_workspace=lambda: SimpleNamespace(id=1),
@@ -176,12 +178,13 @@ class _ModelHarness:
             run=SimpleNamespace(task_id=task_id, id=run_id, extra=None),
             usage_stats=self.usage_stats,
             max_steps=max_steps,
+            step_context=StepContext(),
         )
 
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
 
-        def save_model_response(snapshot, *, include_in_context, run_id=None, existing=None):
+        def save_model_response(snapshot, *, include_in_context, **_kwargs):
             self.saved_responses.append((snapshot, include_in_context))
             if include_in_context:
                 self.messages.append(assistant_message(snapshot.choices[0].message))

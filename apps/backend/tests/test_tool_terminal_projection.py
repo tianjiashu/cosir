@@ -1616,28 +1616,6 @@ def test_settle_overwrites_existing_result_row_and_still_emits_terminal_event() 
     assert [event.status for event in harness.events] == ["completed"]
 
 
-def test_cancel_moves_pending_and_running_only() -> None:
-    """缺陷类型：cancel 误伤已终态调用，将其改写为 cancelled（判据：收口判据是状态）。"""
-
-    harness = _LifecycleHarness()
-    harness.manager.valid_calls["p"] = ToolCallLifecycleRecord(tool_call_id="p", tool_name="read_file")
-    harness.manager.valid_calls["r"] = ToolCallLifecycleRecord(
-        tool_call_id="r", tool_name="read_file", status="running"
-    )
-    harness.manager.valid_calls["done"] = ToolCallLifecycleRecord(
-        tool_call_id="done", tool_name="read_file", status="completed"
-    )
-
-    with harness._patch_runtime():
-        harness.manager = harness.manager.cancel(task_id=1, run_id=2, step_id="step-3")
-
-    assert harness.manager.valid_calls["p"].status == "cancelled"
-    assert harness.manager.valid_calls["r"].status == "cancelled"
-    assert harness.manager.valid_calls["done"].status == "completed", "已终态调用不得被 cancel 改写"
-    assert sorted(e.tool_call_id for e in harness.events) == ["p", "r"]
-    assert all(e.status == "cancelled" for e in harness.events)
-
-
 # ---------------------------------------------------------------------------
 # M. 第三轮：丢弃留痕同源（真实日志捕获）、无日志噪声、keyword-only 签名
 # ---------------------------------------------------------------------------

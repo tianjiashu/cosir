@@ -13,9 +13,10 @@ from app.core.llm_provider.openai_model import OpenAIChatModel
 from app.core.runtime.conversation_run_cancellation_registry import (
     ConversationRunCancellationRegistry,
 )
-from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.execution_state.route import ReactRoute
-from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.react_route import ReactRoute
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.step_context import StepContext
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming_module
 from app.core.workflow.node_helper import tool_call_lifecycle as lifecycle_module
 from app.core.workflow.node_helper.common import RunStopped
@@ -149,6 +150,7 @@ def bind_node(monkeypatch, model):
         thinking_channel="",
         usage_stats=ConversationRunUsageStats(),
         structured_output=None,
+        step_context=StepContext(),
         operations=SimpleNamespace(
             get_current_task=lambda: SimpleNamespace(id=1, workspace_id=1),
             get_current_run=lambda: SimpleNamespace(id=7),
@@ -156,6 +158,7 @@ def bind_node(monkeypatch, model):
             is_current_run_cancelled=lambda: registry.is_cancelled(7),
             cancel_run_if_running=lambda **kw: cancellations.append(kw),
             allows_tools=(),
+            vaild_tool_name=lambda _name: True,
             task_tool_schemas=[],
         ),
     )

@@ -1,14 +1,22 @@
 """StreamingPartStateMachine 的增量合并与 part 顺序契约测试。"""
 
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
+
+from openai.types.chat import ParsedFunctionToolCall
 
 from app.assistant_transport.event import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
+    ToolCallCreatedEvent,
+    ToolCallStatusChangedEvent,
 )
+from app.core.workflow.execution_state.step_context import StepContext
 from app.core.workflow.node_helper import (
     StreamingPartStateMachine,
 )
+from app.core.workflow.node_helper import streaming_part_state_machine as machine_module
 
 
 class _Clock:
@@ -40,15 +48,15 @@ class _Harness:
     ) -> None:
         self.clock = clock or _Clock()
         self.events: list[Any] = []
-        self.machine = StreamingPartStateMachine(
-            self.events.append,
-            task_id=1,
-            run_id=2,
-            step_id="step-1",
-            text_flush_min_chars=min_chars,
-            text_flush_max_interval_seconds=max_interval,
-            now=self.clock,
-        )
+        # stream_writer 在构造期从运行上下文取得，测试用替身提供收集器。
+        with patch.object(machine_module, "get_stream_writer", lambda: self.events.append):
+            self.machine = StreamingPartStateMachine(task_id=1, run_id=2, step_id="step-1")
+        # 合并阈值与时钟是构造期固化的实现细节（生产取 Constant + time.monotonic），测试按用例
+        # 白盒注入，才能在字符阈值与时间阈值两个维度上可控。
+        self.machine._min_chars = min_chars
+        self.machine._max_interval = max_interval
+        self.machine._now = self.clock
+        self.machine._last_flush_at = self.clock()
 
     @property
     def deltas(self) -> list[AssistantTextDeltaEvent]:
@@ -140,7 +148,7 @@ def test_tool_call_flushes_pending_before_closing() -> None:
     harness = _Harness(min_chars=1_000, max_interval=1_000.0)
 
     harness.machine.text("tail")
-    harness.machine.tool_call()
+    harness.machine.tool_call([])
 
     assert harness.event_kinds() == ["delta:text", "closed:text"]
     assert harness.transcript("text") == "tail"
@@ -208,7 +216,7 @@ def test_part_lifecycle_is_well_formed_across_interleaving() -> None:
     harness.clock.advance(0.02)
     harness.machine.reasoning("ef")
     harness.machine.text("gh")
-    harness.machine.tool_call()
+    harness.machine.tool_call([])
     harness.machine.text("ij")
     harness.machine.finish()
 
@@ -224,3 +232,91 @@ def test_part_lifecycle_is_well_formed_across_interleaving() -> None:
     assert running == set()
     assert harness.transcript("text") == "cdghij"
     assert harness.transcript("reasoning") == "abef"
+
+
+def _tool_call(call_id: str, tool_name: str) -> ParsedFunctionToolCall:
+    """构造 SDK 快照里形态的 function 调用（草稿期 arguments 为空串）。"""
+
+    return ParsedFunctionToolCall(
+        id=call_id,
+        type="function",
+        function={"name": tool_name, "arguments": ""},
+    )
+
+
+def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> None:
+    """取消先收口 text part，再逐条收敛已投影调用；未投影的调用不参与。
+
+    投影判据是「已注册 ∩ 本轮放行」：``write_file`` 虽已注册但不在 ``allows_tools`` 内，
+    没有前端 part，因此既不发创建事件也不在取消时收口。
+    """
+
+    harness = _Harness(min_chars=1_000, max_interval=1_000.0)
+    written: list[Any] = []
+    operations = SimpleNamespace(
+        vaild_tool_name=lambda name: name in {"read_file", "write_file"},
+        all_vaild_tools=[
+            SimpleNamespace(name="read_file", display=None),
+            SimpleNamespace(name="write_file", display=None),
+        ],
+        allows_tools=frozenset({"read_file"}),
+    )
+    runtime = SimpleNamespace(operations=operations, step_context=StepContext())
+    monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        machine_module,
+        "_message_context",
+        lambda: SimpleNamespace(add_message=lambda message, **_: written.append(message)),
+    )
+
+    harness.machine.text("hi")
+    harness.machine.tool_call(
+        [_tool_call("c1", "read_file"), _tool_call("c2", "write_file")]
+    )
+    harness.machine.cancel()
+
+    assert harness.event_kinds() == ["delta:text", "closed:text"]
+    created = [event for event in harness.events if isinstance(event, ToolCallCreatedEvent)]
+    assert [event.tool_call_id for event in created] == ["c1"]
+    cancelled = [event for event in harness.events if isinstance(event, ToolCallStatusChangedEvent)]
+    assert [(event.tool_call_id, event.status) for event in cancelled] == [("c1", "cancelled")]
+    assert [message["tool_call_id"] for message in written] == ["c1"]
+
+
+def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monkeypatch) -> None:
+    """同一请求内重复帧只投影一次；请求边界清空记账后同一 id 才会重新投影。"""
+
+    operations = SimpleNamespace(
+        vaild_tool_name=lambda name: name == "read_file",
+        all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
+        allows_tools=frozenset({"read_file"}),
+    )
+    written: list[Any] = []
+    runtime = SimpleNamespace(operations=operations, step_context=StepContext())
+    monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        machine_module,
+        "_message_context",
+        lambda: SimpleNamespace(add_message=lambda message, **_: written.append(message)),
+    )
+
+    first = _Harness(min_chars=1_000, max_interval=1_000.0)
+    # 累积快照：第二帧带着同一个调用再次到达。
+    first.machine.tool_call([_tool_call("c1", "read_file")])
+    first.machine.tool_call([_tool_call("c1", "read_file")])
+
+    created = [event for event in first.events if isinstance(event, ToolCallCreatedEvent)]
+    assert [event.tool_call_id for event in created] == ["c1"]
+
+    # 请求边界：model_node 清空记账，同一 id 属于新请求，必须重新投影。
+    runtime.step_context = StepContext()
+    second_events: list[Any] = []
+    with patch.object(machine_module, "get_stream_writer", lambda: second_events.append):
+        second = StreamingPartStateMachine(task_id=1, run_id=2, step_id="step-2")
+    second.tool_call([_tool_call("c1", "read_file")])
+
+    assert [
+        event.tool_call_id
+        for event in second_events
+        if isinstance(event, ToolCallCreatedEvent)
+    ] == ["c1"]

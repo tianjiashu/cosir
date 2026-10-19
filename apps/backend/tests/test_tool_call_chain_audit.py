@@ -43,8 +43,8 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
 from app.core.tools.tool_handler.read_file import ReadFileTool
 from app.core.tools.tool_registry import ToolRegistry
-from app.core.workflow.execution_state.route import ReactRoute
-from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
@@ -634,30 +634,6 @@ def test_t3_settle_closes_unregistered_tool_name_record_silently() -> None:
     assert harness.metadata[-1].hidden is True
 
 
-def test_t3_cancel_skips_the_same_unregistered_record() -> None:
-    """T3-b：对照用例——``cancel`` 对同一条「未注册工具名」记录**跳过**、不发任何事件。
-
-    实际观测：``cancel()`` 后事件列表为空，记录状态仍为 ``pending``（未被收口）。
-    修复后 ``settle``（T3-a）与 ``cancel`` 共用 ``part_projected`` 判据，两条路径同口径。
-    """
-
-    harness = _LifecycleHarness(registered_tool_names=("read_file",))
-    with harness.runtime():
-        classified = harness.manager.classify(
-            tool_calls=[
-                {
-                    "id": "ghost-1",
-                    "type": "function",
-                    "function": {"name": "ghost_tool", "arguments": json.dumps({})},
-                }
-            ],
-        )
-        cancelled = classified.cancel(task_id=11, run_id=200, step_id="step-3")
-
-    assert harness.writer.events == []
-    assert cancelled.valid_calls["ghost-1"].status == "pending"
-
-
 def test_t3_settle_closes_orphan_record_silently() -> None:
     """T3-c：``settle`` 对**完全没有记录**的 call_id 即时补建 pending 记录并**静默闭合**。
 
@@ -750,44 +726,6 @@ def test_t3_settle_is_idempotent_for_already_terminal_records() -> None:
     assert len(harness.writer.status_events) == 1
     assert len(harness.messages) == 1
     assert second.valid_calls["call-1"].status == "completed"
-
-
-def test_t3_cancel_settles_registered_allowed_call_but_skips_blocked() -> None:
-    """T3-f：``cancel`` 只对「已注册 ∩ 本轮放行 ∩ 未终态」的记录发 cancelled 事件。
-
-    实际观测：
-    - ``read_file``（已注册且在 allows_tools）→ 发一条 cancelled 事件，记录变为 cancelled；
-    - ``write_file``（已注册但不在 allows_tools，落在 blocked_calls）→ 完全不参与收口，
-      状态保持 pending，无事件。
-    是否符合预期：符合（blocked_calls 从未投影为 part，收口没有对象）。
-    """
-
-    harness = _LifecycleHarness(
-        registered_tool_names=("read_file", "write_file"),
-        allows_tools=("read_file",),
-    )
-    with harness.runtime():
-        classified = harness.manager.classify(
-            tool_calls=[
-                {
-                    "id": "ok-1",
-                    "type": "function",
-                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
-                },
-                {
-                    "id": "blocked-1",
-                    "type": "function",
-                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
-                },
-            ],
-        )
-        cancelled = classified.cancel(task_id=11, run_id=200, step_id="step-3")
-
-    assert [(event.tool_call_id, event.status) for event in harness.writer.status_events] == [
-        ("ok-1", "cancelled")
-    ]
-    assert cancelled.valid_calls["ok-1"].status == "cancelled"
-    assert cancelled.blocked_calls["blocked-1"].status == "pending"
 
 
 def test_t3_create_projects_only_allowed_bucket() -> None:

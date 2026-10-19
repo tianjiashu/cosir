@@ -9,7 +9,30 @@ from openai.types.chat import ChatCompletion
 
 from app.core.llm_provider.message_codec import assistant_message, validate_message
 from app.core.llm_provider.openai_model import OpenAIChatModel, usage_from_response
-from tests.sdk_fixtures import sdk_events
+from tests.sdk_fixtures import sdk_completion, sdk_events
+
+
+def test_assistant_message_drops_unusable_or_unregistered_calls() -> None:
+    """身份缺失 / 工具未注册的调用不进入请求正文；只登记已注册且身份完整的调用。"""
+
+    completed = sdk_completion(
+        content="说明",
+        tool_calls=[
+            {"id": "ok", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+            {"id": "", "type": "function", "function": {"name": "read_file", "arguments": "{}"}},
+            {
+                "id": "ghost",
+                "type": "function",
+                "function": {"name": "ghost_tool", "arguments": "{}"},
+            },
+        ],
+    )
+
+    message = assistant_message(
+        completed.choices[0].message, is_known_tool=lambda name: name == "read_file"
+    )
+
+    assert [call["id"] for call in message["tool_calls"]] == ["ok"]
 
 
 @pytest.mark.asyncio
@@ -242,7 +265,7 @@ def test_usage_preserves_unknown_and_explicit_zero(provider_usage, expected):
     """SDK 未返回的字段不补零、不推算，仍由统计层统一校验数值。"""
     from openai.types import CompletionUsage
 
-    from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
+    from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 
     stats = ConversationRunUsageStats()
     normalized = usage_from_response(CompletionUsage.model_construct(**provider_usage))
@@ -263,7 +286,7 @@ def test_usage_preserves_unknown_and_explicit_zero(provider_usage, expected):
 @pytest.mark.parametrize("details", ["invalid", [1, 2]])
 async def test_sdk_malformed_usage_details_do_not_fail_completed_response(details):
     """实际 SDK 响应边界容忍厂商明细形状异常，完成的回答仍能交付。"""
-    from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
+    from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 
     def handler(_request):
         completion = {

@@ -16,7 +16,7 @@ import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.assistant_transport.event import RunStatusChangedEvent
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
-from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.node_helper import (
     ToolCallLifecycleManager,
     ToolCallLifecycleRecord,
@@ -28,7 +28,6 @@ from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from tests.sdk_fixtures import sdk_completion
-from tests.test_task5_acceptance import canonical_store as canonical_store
 
 
 class _RecordingContextService:

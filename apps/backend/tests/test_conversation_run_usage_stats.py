@@ -1,4 +1,4 @@
-from app.core.workflow.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 
 
 def test_usage_metadata_replaces_previous_snapshot() -> None:
