@@ -1,12 +1,6 @@
-"""Agent 执行的运行时引擎，也是 workflow 的调用与异常收敛边界。
+"""Agent 运行入口：物化依赖、驱动业务 loop 并收束错误和进程内资源。
 
-本模块是 workflow 的唯一组织者：解析本次 Run 的 Agent profile、装配 ``WorkflowOperations`` 门面、
-触发运行期 Hook、驱动 ``workflow.run``，并收敛 workflow 逃逸的异常。模型流消费、工具调度与节点
-路由等执行细节都在具体 workflow 内，本模块不感知。
-
-不负责：Run 的正常终态（completed / cancelled / 等待用户输入）由 workflow 节点落定；checkpoint
-读写由 workflow 持有的 checkpointer 负责；任务 / 工作区 / 轮次的 CRUD 与查询委托对应 service。
-"""
+Run 生命周期与持久进度由领域服务维护，模型上下文归 Task。"""
 
 import asyncio
 
@@ -16,28 +10,21 @@ from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.model_settings import ModelSettings
+from app.core.context.tool_call_closure import ContextProtocolError
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.llm_provider.model_failure import (
     classify_model_failure,
     extract_model_response_message,
 )
-from app.core.observability import (
-    TraceMetadata,
-    conversation_run_trace,
-)
-from app.core.observability.tool_trace_recorder import ToolTraceRecorder
-from app.core.runtime.conversation_run_cancellation_registry import (
-    cancellation_registry,
-)
 from app.core.runtime.execution_mode import ExecutionMode
 from app.core.runtime.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
-from app.core.tools.schemas import ToolExecutionContext, UserDecision
+from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
-from app.core.workflows.agent_workflow import WorkflowRunFailure
-from app.core.workflows.workflow_operations import WorkflowOperations
+from app.core.workflow.workflow_operations import WorkflowOperations
+from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models import (
     ConversationRunRecord,
     ConversationRunStatus,
@@ -45,8 +32,8 @@ from app.models import (
     WorkspaceRecord,
 )
 from app.models.conversation_run_failure import run_failure_message
+from app.models.runtime_notice import RuntimeNotice
 from app.service.depends import (
-    get_conversation_run_observability_service,
     get_conversation_run_service,
     get_conversation_run_state_service,
     get_model_config_service,
@@ -54,30 +41,16 @@ from app.service.depends import (
     get_terminal_session_service,
     get_workspace_service,
 )
-from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 class AgentRuntime:
-    """执行与生命周期引擎：驱动 workflow，并把执行边界收口在这一层。
-
-    状态单一事实来源是 ``ConversationRun``：本引擎只推进 run 执行态与异常终态。协作取消作用于
-    run 而非直接杀协程——由 workflow 节点在检查点处观察取消信号后停止派发（见 ``model_node``）。
-
-    职责边界：
-    - 负责：解析 per-run Agent profile、装配 ``WorkflowOperations``、触发 USER_PROMPT_SUBMIT /
-      STOP Hook、驱动 ``workflow.run``、把逃逸异常分类后落定 Run failed 终态并记 ``task_failed``、
-      结束前回收进程内取消信号。
-    - 不负责：模型流消费、工具调度与节点路由（在 workflow 内）；Run 正常终态（由 workflow 节点
-      落定）；checkpoint 读写（由 workflow 持有的 checkpointer 负责）；checkpoint 回放与历史事件
-      回看（由 Conversation service 提供）；工作区 / 任务 / 轮次的 CRUD 与查询（委托给对应
-      service 层）。不对外暴露 service 访问器，service 仅作为私有协作者。
-    """
+    """组装 Run 的运行依赖并驱动工作流；不持有独立恢复状态。"""
 
     def __init__(
-            self,
-            *,
-            process_tool_output_channel_factory: (ProcessToolOutputChannelFactory | None) = None,
+        self,
+        *,
+        process_tool_output_channel_factory: (ProcessToolOutputChannelFactory | None) = None,
     ) -> None:
         """解析并持有本引擎的私有协作者。
 
@@ -156,7 +129,9 @@ class AgentRuntime:
         workspace = self._workspace_service.get_workspace(task.workspace_id)
         agent_id: str = run.agent_id or "main_agent"
         workspace_scope = (
-            AgentProfileRegistry.SYSTEM_WORKSPACE if agent_id == "main_agent" else workspace.root_path
+            AgentProfileRegistry.SYSTEM_WORKSPACE
+            if agent_id == "main_agent"
+            else workspace.root_path
         )
         # ``resolve`` 不抛配置异常：workspace 未命中会回退 system 作用域，仍取不到才返回 None
         # （见 ``AgentProfileRegistry`` 的已知缺口），因此这里只有「解析不到」这一条失败路径。
@@ -169,19 +144,20 @@ class AgentRuntime:
     async def finalize_run(self, agent: AgentProfile, run_id: int) -> None:
         """在执行器完成兜底状态收敛后调用工作流资源收尾契约。"""
 
-        await agent.workflow.finalize_run(run_id)
+        from app.core.workflow.workflow import ReactLikeWorkflow
+
+        await ReactLikeWorkflow().finalize_run(run_id)
 
     async def run_agent(
-            self,
-            agent: AgentProfile,
-            *,
-            execution_mode: ExecutionMode = "fresh",
-            user_decision: UserDecision | None = None,
+        self,
+        agent: AgentProfile,
+        *,
+        execution_mode: ExecutionMode = "fresh",
     ) -> None:
         """驱动一次 agent run 执行，并作为 workflow 异常的收敛边界。
 
         本方法是「运行时 ↔ 工作流」的唯一驱动入口：装配门面 → 驱动 workflow → 分类并落定异常
-        终态 → 回收进程内取消信号。它不落定正常终态，那些由 workflow 节点在收束时完成。
+        终态 → 回收工具级取消信号。它不落定正常终态，那些由 workflow 节点在收束时完成。
 
         参数:
             agent: 当前 run 的 Agent profile。**必须是 per-run 派生副本**（经
@@ -189,9 +165,7 @@ class AgentRuntime:
                 run 执行期间可安全写入副本上的运行时字段（如 ``main_agent``），
                 不污染共享实例。
             execution_mode: 本次执行是 ``fresh`` / ``resume`` / ``resume_with_input``，原样透传给
-                ``agent.workflow.run``。
-            user_decision: 本次续跑携带的用户结构化决定（human-in-the-loop），原样透传给
-                ``agent.workflow.run``；创建 / 编辑路径为 ``None``。
+                ``ReactLikeWorkflow.run``。
 
         异常:
             RuntimeError: ``agent.run`` 为 None（profile 未绑定 run）时抛出。
@@ -201,9 +175,10 @@ class AgentRuntime:
 
         副作用:
             触发 USER_PROMPT_SUBMIT（认领成功后）与 STOP（正常收束 / 取消 / 挂起）Hook；异常终态经
-            run 状态服务条件更新落定并记 ``task_failed`` 日志；结束前清理进程内取消信号。本轮消息
+            run 状态服务条件更新落定并记 ``task_failed`` 日志；结束前回收本 Run 遗留的工具级
+            取消信号（Task 级信号归驱动方释放边界）。本轮消息
             落库、canonical conversation facts 与快照收口由 ``workflow.run`` 内的
-            ``RuntimeContextManager`` 负责。
+            ``RuntimeMessageContextManager`` 负责。
         """
 
         if agent.run is None:
@@ -224,45 +199,21 @@ class AgentRuntime:
         # ``task_failed`` 日志里区分「workflow 执行失败」与「门面尚未装配就失败」。
         operations: WorkflowOperations | None = None
         try:
-            metadata = TraceMetadata(
-                task_id=task_id,
-                run_id=run_id,
-                agent_id=agent.agent_id,
+            operations = self._build_operations(
+                workspace,
+                task,
+                run,
+                agent,
             )
-            async with conversation_run_trace(metadata) as trace_result:
-                if trace_result.trace_id is not None:
-                    try:
-                        get_conversation_run_observability_service().set_langfuse_trace_id(
-                            run_id,
-                            trace_result.trace_id,
-                        )
-                    except Exception:
-                        log.exception(
-                            "langfuse_trace_id_persist_failed",
-                            extra={
-                                "msg": "Langfuse trace_id 持久化失败，继续执行 Agent",
-                                "data": {"run_id": run_id, "task_id": task_id},
-                            },
-                        )
-                operations = self._build_operations(
-                    workspace,
-                    task,
-                    run,
-                    agent,
-                    tool_trace_recorder=trace_result.tool_trace_recorder,
-                )
-                # 本轮消息轨迹（清空残留、落 user 基线、逐条增量落库）统一由 workflow.run 内的
-                # RuntimeContextManager 负责，runner 不再直接落库。
-                await agent.workflow.run(
-                    operations,
-                    callbacks=trace_result.callbacks,
-                    langfuse_trace_id=trace_result.trace_id,
-                    execution_mode=execution_mode,
-                    user_decision=user_decision,
-                )
-            # Langfuse recorder 使用 SDK 自带的后台批量上报。不能在对话收尾路径
-            # 主动调用同步 flush：网络不可用时 SDK 会等待重试，导致 run 无法及时
-            # 进入 completed/failed 终态，前端会一直显示运行中。
+            # 本轮消息轨迹（清空残留、落 user 基线、逐条增量落库）统一由 workflow.run 内的
+            # RuntimeMessageContextManager 负责，runner 不再直接落库。
+            # 流程固定使用 ReAct 工作流（不再从 profile 取可配置 workflow 实例）。
+            from app.core.workflow.workflow import ReactLikeWorkflow
+
+            await ReactLikeWorkflow().run(
+                operations,
+                execution_mode=execution_mode,
+            )
             current_run = await asyncio.to_thread(
                 get_conversation_run_service().get_run,
                 run_id,
@@ -294,7 +245,10 @@ class AgentRuntime:
             log.exception(
                 "task_failed",
                 extra={
-                    "msg": f"run 执行失败，失败 code: {failure_code}，错误类型: {type(exc).__name__}",
+                    "msg": (
+                        f"run 执行失败，失败 code: {failure_code}，"
+                        f"错误类型: {type(exc).__name__}"
+                    ),
                     "data": {
                         "task_id": task_id,
                         "run_id": run_id,
@@ -305,7 +259,7 @@ class AgentRuntime:
                 },
             )
         finally:
-            cancellation_registry.clear(run_id)
+            # Task 级取消信号由驱动方的释放边界取走（执行器 / Team 协调器），这里不清理。
             # 工具级信号由工具执行层在单次调用结束时释放；这里兜底回收「点名了已结束的
             # 工具调用」这类不会再被消费的信号，避免进程内信号随会话累积。
             tool_call_cancellation_registry.clear_run(run_id)
@@ -314,75 +268,39 @@ class AgentRuntime:
     def _failure_code_for(exc: BaseException) -> str:
         """把异常归类为 Run 失败 code；识别不出模型调用错误时用中性兜底 code。
 
+        上下文完整性错误使用本地失败 code，不归因于模型服务。
         工作流已经判定过失败语义的异常（``WorkflowRunFailure``）自带 code，直接用它，不再
         二次猜测；其余异常交给模型失败分类器，分类不出时回退中性 code，避免把普通执行错误
         误报成模型问题。
 
         参数:
-            exc: 待归类的异常。可能来自 workflow 执行期、graph 构建期、门面构建期或
-                trace 装配期。
+            exc: 待归类的异常。可能来自 workflow 执行期或运行时门面构建期。
 
         返回:
             ``ErrorKind`` 的模型错误分类值，或 ``Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED``
             （无法判定时）。
         """
 
+        if isinstance(exc, ContextProtocolError):
+            return Constant.Run.RUN_FAILURE_CODE_CONTEXT_PROTOCOL_INVALID
         if isinstance(exc, WorkflowRunFailure):
             return exc.failure_code
         return classify_model_failure(exc) or Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
 
-    def _resolve_execution_context(
-            self,
-            task: TaskRecord,
-            run_id: int = 0,
-    ) -> ToolExecutionContext | None:
-        """按 task 解析其所属 workspace 的执行上下文；workspace 缺失时返回 None。
-
-        工具运行期依赖（Agent 目录、终端会话、取消判定、进程工具输出通道）随本上下文一起透传，
-        因此 workspace 缺失时整个依赖对象为空，破坏性工具与子 Agent 委派都不可用。
-
-        参数:
-            task: 当前执行的任务记录；提供 ``workspace_id`` 与 ``task_id``。
-            run_id: 当前执行所属轮次标识，供工具执行上下文和取消边界使用；缺省为 0。
-
-        返回:
-            命中 workspace 时返回 ToolExecutionContext；workspace 不存在时返回 None。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 数据库层异常原样冒泡，由 ``run_agent`` 的异常边界
-                落定 failed 终态并记 ``task_failed``，不做静默降级。
-
-        副作用:
-            workspace 不存在时记 warning 日志。
-        """
-
-        try:
-            workspace = self._workspace_service.get_workspace(task.workspace_id)
-        except KeyError:
-            log.warning(
-                "workspace_not_found_for_task",
-                extra={
-                    "msg": "任务所属 workspace 不存在，破坏性工具将不可用",
-                    "data": {"task_id": task.id, "workspace_id": task.workspace_id},
-                },
-            )
-            return None
-        return ToolExecutionContext.from_workspace(task.id, workspace, run_id=run_id)
-
     def _build_operations(
-            self,
-            workspace: WorkspaceRecord,
-            task: TaskRecord,
-            run: ConversationRunRecord,
-            agent_profile: AgentProfile,
-            tool_trace_recorder: ToolTraceRecorder | None = None,
+        self,
+        workspace: WorkspaceRecord,
+        task: TaskRecord,
+        run: ConversationRunRecord,
+        agent_profile: AgentProfile,
     ) -> WorkflowOperations:
         """为单个 run 构建运行时操作门面，并算出本轮的工具准入边界。
 
         本方法不改 Task 固化的工具定义，只产出本轮 ``allows_tools``：以 Task 固化工具名为基准集合，
         减去本 Run 的 ``ban_tools``、加上对应配置提案开关打开时的提案工具。该集合只供
-        ``ToolCallLifecycleManager`` 在模型返回工具调用后执行运行期准入拦截；模型绑定始终使用 Task
-        创建时固化的完整 schema，不得按本轮 ``allows_tools`` 过滤，否则会改变同一 Task 的模型请求前缀
+        ``ToolAccessGate`` 在模型返回工具调用后执行运行期准入拦截；模型绑定始终使用 Task
+        创建时固化的完整 schema，不得按本轮 ``allows_tools`` 过滤，否则会改变同一 Task
+        的模型请求前缀
         并破坏缓存复用。workspace 可见性由 ``execution_context`` 负责，是另一道独立边界。
 
         参数:
@@ -390,34 +308,32 @@ class AgentRuntime:
             task: 当前执行的任务记录（已预取，提供 ``workspace_id`` 与 ``task_id``）。
             run: 当前执行的 Conversation Run 记录（提供 ``run_id`` 作为门面绑定）。
             agent_profile: 驱动本轮执行的 agent profile。
-            tool_trace_recorder: 可选的工具调用 trace 记录器（依赖倒置）；为 None 时
-                工具执行不产生 trace，行为与集成前一致。
 
         返回:
-            已注入 tool_executor / allows_tools / execution_context / runtime_dependencies /
-            trace_recorder 的 WorkflowOperations 实例。
+            已注入 tool_executor / allows_tools / execution_context / runtime_dependencies 的
+            WorkflowOperations 实例。
 
         副作用:
             向本 Task 的延迟提示队列投递本轮工具准入说明（禁用集合或「全部放行」，均为
             ``RuntimeNotice``），
             由下一次 model 节点入口转换为消息并写入上下文；未消费的通知不会进入模型请求。
-            通知带 ``run_id`` 归属标记，只由本 Run 消费（本 Run 未消费则由下一 Run 取队列丢弃）；正文用
+            通知带 ``run_id`` 归属标记，只由本 Run 消费（本 Run 未消费则由下一 Run
+            取队列丢弃）；正文用
             ``sorted`` 后的工具名列表，避免同一集合跨进程产生不同文本。该通知一旦消费即成为
             canonical 历史的固定行，落库策略本身不得改动：它是后续 Run 请求前缀的一部分，
-            改为「仅本次请求注入、不落库」会让下一个 Run 从本轮用户消息处起前缀分叉，丢掉整段缓存复用。
+            改为「仅本次请求注入、不落库」会让下一个 Run 从本轮用户消息处起前缀分叉，
+            丢掉整段缓存复用。
         """
         task_space = task_runtime_spaces.get_or_create(task.id)
-        allows_tools = {tool.get("name") for tool in task_space.task_tool_schemas}
+        allows_tools = {tool["name"] for tool in task_space.task_tool_schemas}
 
-        ban_tools = set(run.extra.ban_tools if run.extra is not None else ())
+        ban_tools = set(run.options.ban_tools)
         allows_tools = allows_tools - ban_tools if allows_tools else set()
 
         if not ban_tools:
             task_space.defer_runtime_notice(
                 RuntimeNotice(
-                    content=(
-                        "Tool availability notice: all tools are available for this round."
-                    ),
+                    content=("Tool availability notice: all tools are available for this round."),
                     kind="tool_availability",
                     run_id=run.id,
                 )
@@ -437,7 +353,8 @@ class AgentRuntime:
                 RuntimeNotice(
                     content=(
                         "Tool availability notice: the following tools are disabled for this "
-                        f"round and calls to them will be rejected: {', '.join(sorted(ban_tools))}. "
+                        "round and calls to them will be rejected: "
+                        f"{', '.join(sorted(ban_tools))}. "
                         f"{', '.join(sorted(allows_tools))} tools available."
                     ),
                     kind="tool_availability",
@@ -445,16 +362,13 @@ class AgentRuntime:
                 )
             )
 
-        execution_context = self._resolve_execution_context(task, run_id=run.id)
-        runtime_dependencies = None
-        if execution_context is not None:
-            runtime_dependencies = ToolRuntimeDependencies(
-                parent_agent_profile=agent_profile,
-                agent_profile_registry=get_agent_registry(),
-                terminal_session_service=get_terminal_session_service(),
-                is_run_cancelled=cancellation_registry.is_cancelled,
-                process_tool_output_channel_factory=self._process_tool_output_channel_factory,
-            )
+        execution_context = ToolExecutionContext.from_workspace(task.id, workspace, run_id=run.id)
+        runtime_dependencies = ToolRuntimeDependencies(
+            parent_agent_profile=agent_profile,
+            agent_profile_registry=get_agent_registry(),
+            terminal_session_service=get_terminal_session_service(),
+            process_tool_output_channel_factory=self._process_tool_output_channel_factory,
+        )
         return WorkflowOperations(
             tool_executor=self._tool_executor,
             agent_profile=agent_profile,
@@ -464,5 +378,4 @@ class AgentRuntime:
             allows_tools=allows_tools,
             execution_context=execution_context,
             runtime_dependencies=runtime_dependencies,
-            tool_trace_recorder=tool_trace_recorder,
         )
