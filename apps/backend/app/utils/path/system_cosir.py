@@ -9,7 +9,6 @@
 ``<DATA_DIR>/.cosir/.env``
 ``<DATA_DIR>/.cosir/logs/``
 ``<DATA_DIR>/.cosir/storage/app.sqlite3``
-``<DATA_DIR>/.cosir/storage/langgraph_checkpoints.sqlite``
 ``<DATA_DIR>/.cosir/runtime/``
 ``<DATA_DIR>/.cosir/config/terminal_denylist.json``
 ``<DATA_DIR>/.cosir/config/mcp_servers.json``
@@ -48,7 +47,6 @@ _MCP_SERVERS_FILE_NAME: Final[str] = "mcp_servers.json"
 _SKILLS_CONFIG_FILE_NAME: Final[str] = "skills.json"
 _SKILLS_DIR_NAME: Final[str] = "skills"
 _DATABASE_FILE_NAME: Final[str] = "app.sqlite3"
-_CHECKPOINT_FILE_NAME: Final[str] = "langgraph_checkpoints.sqlite"
 LOG_FILE_NAME: Final[str] = "backend.log"
 
 
@@ -71,7 +69,7 @@ def _resolve_data_dir() -> Path:
     桌面模式使用 Tauri 注入的 ``CODING_AGENT_DATA_DIR``；直接运行后端时，macOS 与
     Windows 使用当前用户主目录。其他平台不支持未注入数据根的运行方式：必须由桌面宿主注入
     ``CODING_AGENT_DATA_DIR``，否则抛出异常。``.cosir`` 子目录由本模块统一追加，不允许
-    日志、数据库或 checkpoint 各自选择根目录。
+    日志或数据库 各自选择根目录。
     """
 
     configured = _env_path("CODING_AGENT_DATA_DIR")
@@ -109,12 +107,6 @@ def _database_file(data_dir: Path) -> Path:
     return _system_cosir_dir(data_dir) / _STORAGE_DIR_NAME / _DATABASE_FILE_NAME
 
 
-def _checkpoint_file(data_dir: Path) -> Path:
-    """返回系统级 LangGraph checkpoint SQLite 文件。"""
-
-    return _system_cosir_dir(data_dir) / _STORAGE_DIR_NAME / _CHECKPOINT_FILE_NAME
-
-
 def _runtime_dir(data_dir: Path) -> Path:
     """返回系统级运行时目录。"""
 
@@ -126,7 +118,6 @@ _DERIVERS: Final[dict[str, Callable[[Path], Path]]] = {
     "SYSTEM_COSIR_DIR": _system_cosir_dir,
     "LOG_DIR": _log_dir,
     "DATABASE_FILE": _database_file,
-    "CHECKPOINT_FILE": _checkpoint_file,
     "RUNTIME_DIR": _runtime_dir,
 }
 
@@ -142,7 +133,6 @@ DATA_DIR: Path = _initial["DATA_DIR"]
 SYSTEM_COSIR_DIR: Path = _initial["SYSTEM_COSIR_DIR"]
 LOG_DIR: Path = _initial["LOG_DIR"]
 DATABASE_FILE: Path = _initial["DATABASE_FILE"]
-CHECKPOINT_FILE: Path = _initial["CHECKPOINT_FILE"]
 RUNTIME_DIR: Path = _initial["RUNTIME_DIR"]
 
 

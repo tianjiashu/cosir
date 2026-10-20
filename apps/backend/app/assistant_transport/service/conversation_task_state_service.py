@@ -13,6 +13,7 @@ from app.assistant_transport.event import ConversationEvent
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
+from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
 )
@@ -23,6 +24,8 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
+from app.core.context.context_entry import ContextEntry
+from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.service.terminal.terminal_session_service import TerminalSessionService
 from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -53,7 +56,7 @@ class ConversationTaskStateService:
         ``get_state`` 可能读取三张 canonical SQLite 表，并只缓存一份内存副本。
             ``apply_planned`` 与 ``publish_state`` 更新进程本地状态并通知 SSE subscriber；child
             与 terminal 状态投影还会尽力持久化已有工具的 UI metadata。
-        不访问 LangGraph checkpoint、工具 handler 或前端运行时状态；terminal session 只通过
+        不访问 Run 执行进度、工具 handler 或前端运行时状态；terminal session 只通过
         ``TerminalSessionService`` 读取进程内生命周期事实。
 
     并发:
@@ -80,6 +83,34 @@ class ConversationTaskStateService:
         self._context_source = depends.get_conversation_task_context_crud()
         self._terminal_status_source = depends.get_terminal_session_service()
 
+    def project_consumed_inputs(
+        self, task_id: int, run_id: int, entries: list[ContextEntry]
+    ) -> None:
+        """inbox 提交后投影已消费消息；wire parts 的构造留在 Transport 边界。"""
+        from app.assistant_transport.event import UserInputAppendedEvent, build_user_input_parts
+        from app.service.depends import get_conversation_event_projector
+
+        projector = get_conversation_event_projector()
+        for entry in entries:
+            if (
+                not isinstance(entry.metadata, UserMessageMetadata)
+                or entry.metadata.presentation is None
+            ):
+                raise ValueError("已消费用户输入缺少展示绑定")
+            presentation = entry.metadata.presentation
+            projector.process(
+                UserInputAppendedEvent(
+                    task_id=task_id,
+                    run_id=run_id,
+                    message_id=entry.message_id,
+                    parts=build_user_input_parts(
+                        presentation.display_text,
+                        presentation.image_paths,
+                        presentation.attachments,
+                    ),
+                )
+            )
+
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
         """返回已校验的 task 级工作副本，首次访问时懒重建。
 
@@ -97,6 +128,44 @@ class ConversationTaskStateService:
             state = space.get_snapshot(lambda: self._rebuild(task_id))
             validate_snapshot(state)
             return state
+
+    def refresh_queued_inputs(self, task_id: int) -> ConversationStateSnapshot:
+        """inbox 提交后只更新排队消息，保留正在投影的正文和工具生命周期。
+
+        流式 context 已持久化的 SDK 快照可能领先于尚未发出的 Transport delta；
+        此时全量重建会提前展示正文，再追加重复 delta。队列变更不应替换输出部分。
+        """
+        with self._lock:
+            self._ensure_not_deleted(task_id)
+            space = task_runtime_spaces.get_or_create(task_id)
+            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            mutation = ConversationStateMutation(
+                "set", ("queued_messages",), self._queued_messages(task_id)
+            )
+            _apply_mutation(state, mutation)
+            self._publish(
+                TransportFrame(
+                    task_id=task_id,
+                    kind="mutation",
+                    mutations=(mutation,),
+                    current_run_id=state["current_run_id"],
+                    current_run_status=_current_run_status(state),
+                )
+            )
+            return copy.deepcopy(state)
+
+    @staticmethod
+    def _queued_messages(task_id: int) -> list[ConversationStateMessage]:
+        from app.service.conversation_run.task_input_service import TaskInputService, user_message
+
+        return [
+            ConversationTaskStateRebuilder.build_user_message(
+                item.message_id,
+                user_message(item.payload.message),
+                UserMessageMetadata(presentation=item.payload.message.presentation()),
+            )
+            for item in TaskInputService().pending(task_id)
+        ]
 
     def rebuild_state(self, task_id: int) -> ConversationStateSnapshot:
         """丢弃进程内 working copy，并立即从 canonical 记录重建该 task 的快照。
@@ -145,7 +214,7 @@ class ConversationTaskStateService:
             mutations = list(event.plan(state))
             for mutation in mutations:
                 _apply_mutation(state, mutation)
-            # A child can finish before the parent ToolMessage is persisted. Reconcile any
+            # A child can finish before the parent tool 消息 is persisted. Reconcile any
             # already-present child display payload after every event so that this race does
             # not leave the newly materialized parent card at ``running`` forever.
             mutations.extend(
@@ -299,13 +368,12 @@ class ConversationTaskStateService:
             task = self._task_source.get(task_id)
             runs = self._run_source.list_by_task(task_id)
             context_rows = self._context_source.get(task_id, include_in_context=False)
-            child_agent_roles = self._resolve_legacy_child_agent_roles(context_rows)
             state = ConversationTaskStateRebuilder.rebuild(
                 task,
                 runs,
                 context_rows,
-                child_agent_roles=child_agent_roles,
             )
+            state["queued_messages"] = self._queued_messages(task_id)
             self._reconcile_child_delegation_statuses(state, persist=False)
             self._reconcile_terminal_session_statuses(
                 state,
@@ -337,59 +405,6 @@ class ConversationTaskStateService:
             },
         )
         return state
-
-    def _resolve_legacy_child_agent_roles(
-        self,
-        context_rows: list[Any],
-    ) -> dict[tuple[int, str], str]:
-        """按每个 child Task 所属 workspace 解析旧委派记录缺失的 role。"""
-
-        child_targets: set[tuple[int, str]] = set()
-        for row in context_rows:
-            metadata = row.transport_metadata or {}
-            display = metadata.get("display_data")
-            if not isinstance(display, dict) or display.get("kind") != "delegation-result":
-                continue
-            child_task_id = display.get("child_task_id")
-            child_agent_id = display.get("child_agent_id")
-            if (
-                _is_positive_int(child_task_id)
-                and isinstance(child_agent_id, str)
-                and child_agent_id.strip()
-                and not (isinstance(display.get("role"), str) and display["role"].strip())
-            ):
-                child_targets.add((child_task_id, child_agent_id))
-        if not child_targets:
-            return {}
-
-        from app.config.configuration import get_agent_registry
-        from app.core.agents.agent_profile import AgentProfileConfigError
-        from app.service.depends import get_workspace_service
-
-        workspace_service = get_workspace_service()
-        registry = get_agent_registry()
-        roles: dict[tuple[int, str], str] = {}
-        for child_task_id, child_agent_id in sorted(child_targets):
-            try:
-                child_task = self._task_source.get(child_task_id)
-                workspace = workspace_service.get_workspace(child_task.workspace_id)
-                profile = registry.resolve(workspace.root_path, child_agent_id)
-            except (AgentProfileConfigError, KeyError, RuntimeError) as exc:
-                log.warning(
-                    "legacy_child_agent_role_resolution_failed",
-                    extra={
-                        "msg": "旧委派记录无法按 child workspace 解析 Agent role",
-                        "data": {
-                            "child_task_id": child_task_id,
-                            "child_agent_id": child_agent_id,
-                            "error_type": type(exc).__name__,
-                        },
-                    },
-                )
-                continue
-            if profile is not None and profile.role.strip():
-                roles[(child_task_id, child_agent_id)] = profile.role
-        return roles
 
     def refresh_parent_delegation(
         self,
@@ -620,8 +635,9 @@ class ConversationTaskStateService:
         try:
             rows = self._context_source.get(target_task_id, include_in_context=False)
             for row in rows:
-                metadata = row.transport_metadata or {}
-                display = metadata.get("display_data")
+                if not isinstance(row.metadata, ToolMessageMetadata):
+                    continue
+                display = row.metadata.display_data
                 if not _matches_terminal_session_display(display, change.session_id):
                     continue
                 if _updated_terminal_display(display, change) == display:
@@ -668,7 +684,7 @@ class ConversationTaskStateService:
 
         该修复只处理 snapshot 中已经存在的动态 child display，不会从工具名、Task 关系或
         缺失的 ``display_data`` 创建任何 UI part。冷重建因此仍保持 display_data 优先，
-        但能收敛「子 Run 终态事件早于父 ToolMessage 持久化」留下的窗口。
+        但能收敛「子 Run 终态事件早于父 tool 消息 持久化」留下的窗口。
 
         参数:
             state: 当前 task 的 Transport working copy。
@@ -776,8 +792,9 @@ class ConversationTaskStateService:
         try:
             rows = self._context_source.get(parent_task_id, include_in_context=False)
             for row in rows:
-                metadata = row.transport_metadata or {}
-                display = metadata.get("display_data")
+                if not isinstance(row.metadata, ToolMessageMetadata):
+                    continue
+                display = row.metadata.display_data
                 if not isinstance(display, dict) or not _matches_dynamic_child_display(
                     display,
                     child_task_id,

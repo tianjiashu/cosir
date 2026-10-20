@@ -21,13 +21,14 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.runtime.execution_mode import ExecutionMode
-from app.core.tools.schemas.user_decision import UserDecision
 from app.models import (
     ConversationRunAttachmentInput,
     ConversationRunCommand,
     ConversationRunRecord,
 )
+from app.models.conversation_run_options import ReasoningEffort
 from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.user_decision import UserDecision
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
@@ -36,7 +37,7 @@ from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 def _build_ordered_display_text(
     parts: Sequence[AssistantTextPart | AssistantImagePart],
 ) -> str:
-    """将 composer 的文本/图片顺序编码进既有 Run 展示文本值。"""
+    """将 composer 的文本/图片顺序编码进输入消息的展示文本。"""
 
     image_token = Constant.Cosir.LOCAL_IMAGE_TOKEN
     emitted_image_ids = {
@@ -61,27 +62,10 @@ def _build_ordered_display_text(
 
 
 def _resumable_status(status: str) -> ConversationRunStatus | None:
-    """把 Run 的持久化状态映射为允许的续跑源状态。
+    """返回显式续跑允许的来源：取消、失败、等待用户决定。"""
 
-    只有这两种状态能续跑同一 checkpoint，差别在语义来源：``cancelled`` 是「被取消 / 崩溃收敛
-    后由用户继续」，``waiting_for_input`` 是「等待用户决定后带决定继续」。其他状态（含终态
-    失败与已完成）都不允许续跑。
-
-    参数:
-        status: ``conversation_runs.status`` 的持久化值。
-
-    返回:
-        对应的 ``ConversationRunStatus``；不可续跑时为 ``None``。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    if status == ConversationRunStatus.CANCELLED.value:
-        return ConversationRunStatus.CANCELLED
+    if status in {ConversationRunStatus.CANCELLED.value, ConversationRunStatus.FAILED.value}:
+        return ConversationRunStatus(status)
     if status == ConversationRunStatus.WAITING_FOR_INPUT.value:
         return ConversationRunStatus.WAITING_FOR_INPUT
     return None
@@ -89,20 +73,12 @@ def _resumable_status(status: str) -> ConversationRunStatus | None:
 
 @dataclass(frozen=True)
 class ConversationRunStartResult:
-    """表示一次 Run 命令分类与执行准备结果。
-
-    ``execution_mode`` 表示 AgentRuntime 的执行方式；编辑重跑由调用方先删除被编辑的
-    Run、再走新建路径实现，因此其结果就是普通新建结果（``execution_mode="fresh"``，
-    ``run`` 与被编辑的 Run 不同）。
-
-    ``user_decision`` 是本次续跑携带的用户结构化决定（human-in-the-loop）；创建 / 编辑
-    路径恒为 ``None``。它随结果一并交给调用方，避免决定经过进程内旁路或二次查询传递。
-    """
+    """命令接收回执；should_start 区分入队与启动，Run 身份在编辑和续跑时保持。"""
 
     run: ConversationRunRecord
     initial_state: ConversationStateSnapshot
     execution_mode: ExecutionMode = "fresh"
-    user_decision: UserDecision | None = None
+    should_start: bool = True
 
 
 @dataclass(frozen=True)
@@ -118,7 +94,7 @@ class ConversationRunCommandInput:
 
 
 class ConversationRunCommandService:
-    """在任务边界内接收 Transport command 并原子创建、删除（编辑重跑）或恢复 Run。"""
+    """Task 闸门内编排输入、编辑和恢复；执行器独立驱动，订阅不改变业务。"""
 
     def __init__(self) -> None:
         """初始化 Run 编排、Run 状态与 snapshot 持久化依赖。"""
@@ -129,7 +105,8 @@ class ConversationRunCommandService:
         self._task = service_depends.get_task_service()
 
     def build_command_inputs(
-            self, request: AssistantTransportRequest,
+        self,
+        request: AssistantTransportRequest,
     ) -> list[ConversationRunCommandInput]:
         """把 Transport 请求中的命令归一化为命令服务的输入信封列表。"""
 
@@ -142,9 +119,9 @@ class ConversationRunCommandService:
         ]
 
     def build_run_command(
-            self,
-            request: AssistantTransportRequest,
-            command: AddMessageCommand,
+        self,
+        request: AssistantTransportRequest,
+        command: AddMessageCommand,
     ) -> ConversationRunCommand:
         """把 Transport 请求归一化为领域 Run 输入命令。
 
@@ -208,13 +185,57 @@ class ConversationRunCommandService:
         if self._run_state.has_active_run(task_id, session=session):
             raise ValueError(f"task {task_id} already has an active run")
 
+    def start_queued_run(self, task_id: int) -> ConversationRunStartResult | None:
+        """前一驱动释放后在 Task 闸门内调用；只有正常完成才自动接下一批。"""
+        from app.service.conversation_run.task_input_service import TaskInputService
+
+        latest = self._task.get_latest_run(task_id)
+        if latest is None or latest.status != "completed":
+            return None
+        pending = TaskInputService().pending(task_id)
+        if not pending:
+            return None
+        payload = pending[0].payload
+        with main_session_factory().begin() as session:
+            self._assert_no_active_run(task_id, session)
+            run = self._conversation_run.create_run(
+                task_id=task_id,
+                agent_id="main_agent",
+                model_config_id=payload.model_config_id,
+                queued_input=payload,
+                session=session,
+            )
+        return self._activate_created_run(run)
+
+    def submit_input(self, *, commands, model_config_id, reasoning_effort, task_id, run_command):
+        """调用方持 Task 闸门；已有 Run 时只排队，暂停态不因消息到达自动恢复。"""
+        latest = self._task.get_latest_run(task_id)
+        if latest is not None and (
+            latest.status in {"pending", "running", "waiting_for_input", "cancelled", "failed"}
+            or service_depends.get_conversation_run_executor().has_execution(latest.id)
+        ):
+            from app.service.conversation_run.task_input_service import TaskInputService
+
+            if model_config_id != latest.model_config_id:
+                raise ValueError("当前 Run 尚未结束，不能切换模型")
+            TaskInputService().enqueue(task_id, run_command, model_config_id, reasoning_effort)
+            state = self._state.refresh_queued_inputs(task_id)
+            return ConversationRunStartResult(run=latest, initial_state=state, should_start=False)
+        return self.start_run(
+            commands=commands,
+            model_config_id=model_config_id,
+            reasoning_effort=reasoning_effort,
+            task_id=task_id,
+            run_command=run_command,
+        )
+
     def start_run(
-            self,
-            commands: Sequence[ConversationRunCommandInput],
-            model_config_id: int | None,
-            reasoning_effort: str | None = None,
-            task_id: int | None = None,
-            run_command: ConversationRunCommand | None = None,
+        self,
+        commands: Sequence[ConversationRunCommandInput],
+        model_config_id: int | None,
+        reasoning_effort: ReasoningEffort | None = None,
+        task_id: int | None = None,
+        run_command: ConversationRunCommand | None = None,
     ) -> ConversationRunStartResult:
         """接收一批 Transport command 并原子创建一个新 Run。
 
@@ -258,16 +279,21 @@ class ConversationRunCommandService:
                 run_command=run_command,
             )
         log.info(
-            "context_message_persisted",
+            "task_input_enqueued",
             extra={
-                "msg": "Run 初始 user context 已提交",
+                "msg": "Run 与初始用户队列输入已提交",
                 "data": {
                     "task_id": task_id,
                     "run_id": run.id,
-                    "message_type": "HumanMessage",
+                    "message_role": "user",
                 },
             },
         )
+        return self._activate_created_run(run)
+
+    def _activate_created_run(self, run: ConversationRunRecord) -> ConversationRunStartResult:
+        """首条输入与队列交接共用装配边界；提交后的装配失败必须收敛 Run。"""
+        task_id = run.task_id
         try:
             service_depends.get_conversation_event_projector().process(
                 RunInitializedEvent(
@@ -276,7 +302,8 @@ class ConversationRunCommandService:
                     context_window_total=run.context_window_total,
                 )
             )
-            self._ensure_run_visible(task_id, run.id)
+            # 初始输入仍在 inbox，回执与订阅应立即显示它，不等待首个模型请求。
+            self._state.publish_state(task_id, self._state.rebuild_state(task_id))
             running_run = self._run_state.claim_pending_run(run.id)
             if running_run is None:
                 raise ValueError(f"run {run.id} is not editable in its current state")
@@ -299,67 +326,45 @@ class ConversationRunCommandService:
             execution_mode="fresh",
         )
 
-    def delete_edited_run(self, task_id: int, run_id: int) -> None:
-        """删除被编辑的最近 Run，为「编辑重跑」腾出 task 的 active 槽位。
+    def edit_input(
+        self,
+        task_id: int,
+        run_id: int,
+        message_id: str,
+        run_command: ConversationRunCommand,
+        model_config_id: int,
+        reasoning_effort: ReasoningEffort | None,
+    ) -> ConversationRunStartResult:
+        """消息级编辑：保留 Run 身份和目标消息之前的 context。"""
+        from app.service.conversation_run.task_input_service import TaskInputService
 
-        编辑重跑复用新建路径：本方法只删除被编辑的 Run 及其全部会话事实（context、
-        checkpoint、终端元数据，并置空引用它的 ``tasks.parent_run_id``），随后由调用方
-        （Assistant Transport）继续走 ``start_run`` 创建一条全新 Run。``run_id`` 必须是
-        该 task 的最近 Run。
-
-        参数:
-            task_id: 所属任务标识。
-            run_id: 被编辑的 Conversation Run 标识（必须是该 task 的最近 run）。
-
-        返回:
-            无。
-
-        异常:
-            ValueError: ``run_id`` 不是该 task 最近 run，或 task 已有 active run
-                （由 API 层翻译为可重试的 409）。
-            KeyError: task 或 run 不存在。
-
-        副作用:
-            删除该 Run 的 context / checkpoint / 终端元数据；并按 canonical 重建 Transport
-            进程内快照，丢弃仍含该 Run 的 working copy。客户端可见性由随后新建 Run 的响应
-            首帧（full）收敛，本方法不发布帧。
-        """
-
-        latest_run = self._task.get_latest_run(task_id)
-        if latest_run is None or latest_run.id != run_id:
-            raise ValueError(f"run {run_id} does not belong to task {task_id}")
-        # 显式用 ValueError 判 active：``delete_run_locked`` 抛的
-        # ``RunDeletionConflictError`` 是 RuntimeError，会绕过 API 的 409 映射变成 500。
-        self._assert_no_active_run(task_id)
-        # 调用方（Assistant Transport）已持有 task 操作闸门；该闸门是非可重入的
-        # ``threading.Lock``，因此用已持锁变体删除，不能再进入 ``delete_run``。
-        self._task.delete_run_locked(task_id, run_id)
-        # 进程内 working copy 仍含被删 Run：按 canonical 重建、丢弃它，让随后的 start_run
-        # 把新 Run 投影进这份干净副本。
-        self._state.rebuild_state(task_id)
+        latest = self._task.get_latest_run(task_id)
+        if latest is None or latest.id != run_id:
+            raise ValueError("只能编辑当前任务最新的用户消息")
+        should_start = TaskInputService().edit_latest(
+            task_id, run_id, message_id, run_command, model_config_id, reasoning_effort
+        )
+        if should_start:
+            state = self._state.rebuild_state(task_id)
+            self._state.publish_state(task_id, state)
+        else:
+            state = self._state.refresh_queued_inputs(task_id)
+        return ConversationRunStartResult(
+            run=self._conversation_run.get_run(run_id),
+            initial_state=state,
+            execution_mode="resume",
+            should_start=should_start,
+        )
 
     def resume_run(
-            self,
-            task_id: int,
-            run_id: int,
-            *,
-            expected_status: ConversationRunStatus | None = None,
-            user_decision: UserDecision | None = None,
+        self,
+        task_id: int,
+        run_id: int,
+        *,
+        expected_status: ConversationRunStatus | None = None,
+        user_decision: UserDecision | None = None,
     ) -> ConversationRunStartResult:
-        """校验最近 Run 的身份和状态，迁移为 running 并返回 checkpoint 续跑结果。
-
-        参数:
-            task_id: 目标任务标识。
-            run_id: 待续跑的 Run 标识。
-            expected_status: 允许的续跑源状态；``None`` 表示按 Run 当前持久化状态自动判定
-                （``cancelled`` 与 ``waiting_for_input`` 都续跑同一 checkpoint，差别只在
-                语义来源）。显式传入用于「只允许等待态恢复」这类收窄场景。
-            user_decision: 本次续跑携带的用户结构化决定（human-in-the-loop）；随结果原样
-                交给调用方，由执行器透传进图。
-
-        异常:
-            ValueError: Run 不存在、不属于该 task、当前状态不可续跑，或缺少用户消息。
-        """
+        """验证最新 Run 与待决请求，先持久化决定及状态迁移，再交执行器启动。"""
         execution_mode: ExecutionMode = "resume"
         latest_run = self._task.get_latest_run(task_id)
         if latest_run is None or latest_run.id != run_id:
@@ -367,22 +372,29 @@ class ConversationRunCommandService:
         current_status = expected_status or _resumable_status(latest_run.status)
         if current_status is None or latest_run.status != current_status.value:
             raise ValueError(f"run {run_id} is not resumable from status {latest_run.status}")
+        if current_status is ConversationRunStatus.WAITING_FOR_INPUT:
+            from app.core.workflow.node_helper.user_input_projection import extract_request
+
+            continuation = latest_run.execution_data.continuation
+            request = extract_request(continuation.observations) if continuation else None
+            if (
+                request is None
+                or user_decision is None
+                or request.request_id != user_decision.request_id
+                or not request.accepts(user_decision.kind)
+            ):
+                raise ValueError("等待恢复需要当前请求的有效决定")
+        elif user_decision is not None:
+            raise ValueError("当前 Run 不接受用户决定")
         state = self._ensure_run_visible(task_id, run_id)
         if state["current_run_id"] != run_id:
             raise ValueError(f"run {run_id} is not the current conversation_run run")
-        if not any(
-                message["role"] == "user"
-                for run in state["runs"]
-                if run["runId"] == run_id
-                for message in run["messages"]
-        ):
-            raise ValueError(f"run {run_id} has no user message")
         try:
-            if current_status is ConversationRunStatus.CANCELLED:
+            if user_decision is None:
                 resumed = self._run_state.resume_cancelled_run(run_id)
             else:
                 execution_mode = "resume_with_input"
-                resumed = self._run_state.resume_waiting_run(run_id)
+                resumed = self._run_state.resume_waiting_run(run_id, user_decision=user_decision)
             if resumed is None:
                 raise ValueError(f"run {run_id} is no longer resumable")
             state = self._state.get_state(task_id)
@@ -400,12 +412,9 @@ class ConversationRunCommandService:
             run=resumed,
             initial_state=state,
             execution_mode=execution_mode,
-            user_decision=user_decision,
         )
 
-    def _ensure_run_visible(
-            self, task_id: int, run_id: int
-    ) -> ConversationStateSnapshot:
+    def _ensure_run_visible(self, task_id: int, run_id: int) -> ConversationStateSnapshot:
         """返回含指定 run 的快照；快照缺失该 run（与 canonical 分叉）时按 canonical 重建。
 
         快照是进程内 working copy，允许短暂滞后；但当它**完全没有**某条 canonical 确实存在
@@ -447,15 +456,11 @@ class ConversationRunCommandService:
         )
         rebuilt: ConversationStateSnapshot = self._state.rebuild_state(task_id)
         if not has_run(rebuilt, run_id):
-            raise RuntimeError(
-                f"run {run_id} is absent from both snapshot and canonical rebuild"
-            )
+            raise RuntimeError(f"run {run_id} is absent from both snapshot and canonical rebuild")
         self._state.publish_state(task_id, rebuilt)
         return rebuilt
 
-    def _converge_failed_setup(
-            self, run_id: int, *, end_reason: str = "run_setup_failed"
-    ) -> None:
+    def _converge_failed_setup(self, run_id: int, *, end_reason: str = "run_setup_failed") -> None:
         """run 事务已提交、但请求内后续步骤失败时的当场收敛。
 
         负责把本次请求碰过的 run（认领前 ``pending``、认领后 ``running``）统一收敛为

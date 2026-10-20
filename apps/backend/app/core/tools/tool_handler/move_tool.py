@@ -160,7 +160,7 @@ class MoveTool(HandlerBase):
                 "move destination parent directory does not exist",
                 "choose a destination whose parent directory already exists.",
             )
-        if cancellation_registry.is_cancelled(execution_context.run_id):
+        if cancellation_registry.is_cancelled(execution_context.task_id):
             return tool_cancelled(tool_name=self.name)
         try:
             current_source, source_error = resolver.resolve_within_workspace(

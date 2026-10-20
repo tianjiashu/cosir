@@ -3,34 +3,37 @@
 from __future__ import annotations
 
 import copy
+from uuid import uuid4
 
-from langchain_core.messages import BaseMessage, SystemMessage
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionSystemMessageParam
 from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
 from app.core.context.context_entry import ContextEntry
 from app.core.context.tool_call_closure import (
     build_placeholder_tool_message,
-    plan_tool_call_closure,
+    plan_tool_call_closures,
 )
-from app.models.conversation_task_context import ConversationTaskContextRecord, TransportMetadata
-from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
+from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import MessageMetadata, ToolMessageMetadata, empty_message_metadata
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
+from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
 
 TASK_SYSTEM_PROMPT_SEQUENCE = 0
 
 
 class ConversationTaskContextService:
-    """维护 LangChain 原生消息的 Task 级有序 context。
+    """维护 领域消息的 Task 级有序 context。
 
-    以 ``conversation_task_contexts`` 表为唯一持久化事实源，每条完整消息或 assistant
-    partial 草稿一行。``RuntimeContextManager`` 持有 Task 级内存工作副本，并经本服务
+    以 ``conversation_task_contexts`` 表为唯一持久化事实源，每条完整消息占一行；
+    assistant 中断输出也保存为一行，但不纳入模型上下文。
+    ``RuntimeMessageContextManager`` 持有 Task 级内存工作副本，并经本服务
     读写持久化记录；观测页读取存储记录，不读取或替代运行时工作副本。
 
     职责边界：
     - 负责：固定 Task system prompt 的首次持久化、消息与 Transport metadata 的追加、
-      assistant 草稿原地替换、按 run 删除、序号查询、纳入过滤读取。
+      工具占位原地替换、按 run 删除、序号查询、纳入过滤读取。
     - 不负责：消息内容语义校验、压缩策略（由上下文管理器负责）。
     """
 
@@ -65,56 +68,33 @@ class ConversationTaskContextService:
         self,
         task_id: int,
         run_id: int | None,
-        message: BaseMessage,
+        message: ChatCompletionMessageParam,
         seq: int,
         include_in_context: bool = True,
-        transport_metadata: TransportMetadata | None = None,
-        is_streaming: bool = False,
+        metadata: MessageMetadata | None = None,
         project_to_transport: bool = True,
         session: Session | None = None,
-    ) -> None:
-        """以独立事务追加一条完整 LangChain 消息。
+        *,
+        message_id: str | None = None,
+    ) -> ContextEntry:
+        """追加 SDK 正文并返回带稳定身份的 working-copy entry。
 
-        参数顺序保持 ``task_id, run_id, message, seq, include_in_context``，以兼容调用点的
-        位置传参（``seq`` 为第 4 个位置参数）。
-
-        参数:
-            task_id: 目标任务标识。
-            run_id: 产生消息的 Conversation Run 标识；system 消息可为 ``None``。
-            message: 完整 LangChain 消息对象；不会被重建或裁剪字段。
-            seq: 该行在 Task 内的序号（必填，非负）；由调用方按 ``(task_id, sequence)`` 唯一约束
-                自行分配，本方法不做自增也不做去重。
-            include_in_context: 该消息是否纳入上下文视图，默认 ``True``。
-            project_to_transport: 是否将消息投影到 Assistant Transport；与模型上下文纳入标记独立。
-            is_streaming: 是否为仅供 Transport 冷重建的 assistant 流式草稿。草稿必须同时
-                使用 ``include_in_context=False``，避免半截消息进入下一次模型请求。
-            transport_metadata: 该消息对应的 Transport 元数据；无则为 ``None``。
-            session: 可选外部事务；传入时复用该事务，不自行提交。
-
-        返回:
-            无。同一工具调用的结果是否已存在由业务层判定（``RuntimeContextManager``），
-            不在持久化层做去重——需要覆盖既有行时走 :meth:`replace_message`。
-
-        异常:
-            ValueError: 流式草稿被要求纳入模型上下文。
-            持久化失败时由 CRUD 回滚并向上传播。
-
-        副作用:
-            新增一行上下文消息；序号由调用方给定，本方法既不自增也不去重。
+        有外部 Session 时加入用例事务，不自行提交；否则完成单次存储事务。
+        用户消息沿用 inbox 行 ID 转成的展示身份，其余消息在此分配身份。调用方分配 sequence；
+        本层不做工具去重，已有结果的覆盖由 RuntimeMessageContextManager 决定。
+        数据库写入失败向上传播。
         """
 
         record = ConversationTaskContextRecord(
             task_id=task_id,
             run_id=run_id,
             message=message,
+            message_id=message_id or str(uuid4()),
+            metadata=metadata if metadata is not None else empty_message_metadata(message["role"]),
             include_in_context=include_in_context,
             sequence=seq,
-            transport_metadata=transport_metadata,
             project_to_transport=project_to_transport,
-            is_streaming=is_streaming,
         )
-        if is_streaming and include_in_context:
-            raise ValueError("streaming context messages must not enter model context")
         self._crud.create(record, session=session)
         if session is None:
             log.info(
@@ -130,16 +110,7 @@ class ConversationTaskContextService:
                 },
             )
 
-    def streaming_messages_for_run(
-        self, task_id: int, run_id: int
-    ) -> list[ConversationTaskContextRecord]:
-        """返回指定 Run 尚未收口的流式 assistant 草稿，按 sequence 排序。"""
-
-        return [
-            record
-            for record in self._crud.get(task_id, include_in_context=False)
-            if record.run_id == run_id and record.is_streaming
-        ]
+        return ContextEntry(message, run_id, seq, record.message_id, record.metadata)
 
     def replace_message(
         self,
@@ -147,12 +118,9 @@ class ConversationTaskContextService:
         *,
         session: Session | None = None,
     ) -> None:
-        """原地替换一条已存在的上下文行的内容（消息正文、标记位与可选 Transport metadata）。
+        """按稳定序号完整替换正文、标记和 metadata，不隐式保留旧展示字段。
 
-        ``record.sequence`` 是行的稳定身份；方法不新增行，因此既用于「流式草稿更新 / 收口」，
-        也用于「占位被真实工具结果覆盖」。``record.transport_metadata`` 为 ``None`` 时保留行内既有
-        metadata（正文替换不清展示状态），需要改写时必须给出完整 metadata。持久化层异常向调用方
-        传播，由调用方的运行终态处理。
+        工具占位替换提交完整消息记录；调用方负责沿用消息身份。
         """
 
         self._crud.replace_message(
@@ -171,6 +139,8 @@ class ConversationTaskContextService:
                 run_id=record.run_id,
                 message=record.message,
                 sequence=record.sequence,
+                message_id=record.message_id,
+                metadata=record.metadata,
             )
             for record in records
         ]
@@ -207,17 +177,20 @@ class ConversationTaskContextService:
 
         if (
             record.run_id is not None
-            or not isinstance(record.message, SystemMessage)
+            or not record.message["role"] == "system"
             or not record.include_in_context
-            or record.is_streaming
         ):
             raise RuntimeError(
                 f"task {task_id} sequence {TASK_SYSTEM_PROMPT_SEQUENCE} "
                 "is not a valid system prompt entry"
             )
-        return ContextEntry(record.message, record.run_id, record.sequence)
+        return ContextEntry(
+            record.message, record.run_id, record.sequence, record.message_id, record.metadata
+        )
 
-    def create_system_prompt(self, task_id: int, prompt: SystemMessage) -> ContextEntry:
+    def create_system_prompt(
+        self, task_id: int, prompt: ChatCompletionSystemMessageParam
+    ) -> ContextEntry:
         """持久化新 Task 的完整系统提示词并返回其 canonical entry。
 
         参数:
@@ -242,7 +215,6 @@ class ConversationTaskContextService:
             message=prompt,
             include_in_context=True,
             sequence=TASK_SYSTEM_PROMPT_SEQUENCE,
-            is_streaming=False,
         )
         self._crud.create(record)
         log.info(
@@ -252,7 +224,9 @@ class ConversationTaskContextService:
                 "data": {"task_id": task_id, "sequence": TASK_SYSTEM_PROMPT_SEQUENCE},
             },
         )
-        return ContextEntry(prompt, None, TASK_SYSTEM_PROMPT_SEQUENCE)
+        return ContextEntry(
+            prompt, None, TASK_SYSTEM_PROMPT_SEQUENCE, record.message_id, record.metadata
+        )
 
     def max_sequence(self, task_id: int, session: Session | None = None) -> int:
         """返回 Task 当前最大 sequence；无记录时为 0。"""
@@ -290,11 +264,11 @@ class ConversationTaskContextService:
                         task_id=target_task_id,
                         run_id=None,
                         message=copy.deepcopy(source_entry.message),
+                        message_id=source_entry.message_id,
+                        metadata=copy.deepcopy(source_entry.metadata),
                         include_in_context=True,
                         sequence=TASK_SYSTEM_PROMPT_SEQUENCE,
                         project_to_transport=source_entry.project_to_transport,
-                        transport_metadata=copy.deepcopy(source_entry.transport_metadata),
-                        is_streaming=False,
                     ),
                     session=session,
                 )
@@ -308,11 +282,11 @@ class ConversationTaskContextService:
                     task_id=target_task_id,
                     run_id=run_id_map[source_entry.run_id],
                     message=copy.deepcopy(source_entry.message),
+                    message_id=source_entry.message_id,
+                    metadata=copy.deepcopy(source_entry.metadata),
                     include_in_context=source_entry.include_in_context,
                     sequence=next_sequence,
                     project_to_transport=source_entry.project_to_transport,
-                    transport_metadata=copy.deepcopy(source_entry.transport_metadata),
-                    is_streaming=source_entry.is_streaming,
                 ),
                 session=session,
             )
@@ -342,38 +316,37 @@ class ConversationTaskContextService:
         self._crud.delete_by_run_id(task_id, run_id, session=session)
         if session is not None:
             # 外部事务通常关闭 autoflush；编辑用例随后会在同一 session 中重新写入
-            # canonical HumanMessage，先 flush 才能让幂等读取看见删除事实。
+            # canonical user 消息，先 flush 才能让幂等读取看见删除事实。
             session.flush()
+
+    def invalidate_waiting_calls(self, task_id: int, run_id: int, session: Session) -> None:
+        """等待取消/启动恢复共用：取消占位并移除可点击请求，已完成结果保持原样。"""
+        from dataclasses import replace
+
+        for record in self._crud.get(task_id, include_in_context=False, session=session):
+            if record.run_id != run_id or record.message["role"] != "tool":
+                continue
+            metadata = record.metadata
+            if not isinstance(metadata, ToolMessageMetadata) or metadata.status not in {
+                "pending",
+                "running",
+            }:
+                continue
+            replacement = replace(
+                record,
+                message=build_placeholder_tool_message(record.message["tool_call_id"], "unknown"),
+                metadata=ToolMessageMetadata(status="cancelled", display_data=None, error=None),
+            )
+            self._crud.replace_message(task_id, record.sequence, replacement, session=session)
 
     def close_unclosed_tool_calls_for_run(
         self, task_id: int, run_id: int, session: Session | None = None
     ) -> list[str]:
-        """为指定 Run 最后一个 ``AIMessage`` 上未产生结果的调用补 ``cancelled`` 占位。
+        """按完整配对计划为指定 Run 的缺失结果补中断占位，不重放工具。
 
-        供进程重启恢复（``ConversationRunService.recover_orphaned_runs``）使用：崩溃或被强杀
-        会让该 Run 的 ``AIMessage(tool_calls)`` 没有结果行，模型协议因此不闭合。本方法只补
-        缺失的占位事实，不重排、不删除已有行：
-
-        - 已有结果与占位的相对顺序由运行时 ``RuntimeContextManager`` 在取数时修复；
-        - 占位归属该 Run（与调用同 Run），冷读快照按 Run 分组配对才不会错位。
-
-        配对规则与运行时收口共用 ``plan_tool_call_closure``，避免两处规则漂移。
-
-        参数:
-            task_id: 归属的 Task 标识。
-            run_id: 待收口的 Conversation Run 标识。
-            session: 可选外部事务；传入时复用该事务且不自行提交（恢复流程与 Run 终态同事务）。
-
-        返回:
-            本次新增占位的 ``tool_call_id`` 列表（按 ``tool_calls`` 顺序）；无未配对调用、
-            或同名结果行已存在时为空列表。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 持久化失败时向上传播，由调用方事务回滚。
-
-        副作用:
-            为该 Run 中未产生结果的调用各追加一行 ``ToolMessage``（``include_in_context=True``、
-            ``TransportMetadata(status="cancelled")``）并推进序号。
+        外部事务由恢复用例拥有。ContextProtocolError 表示原始调用依据不完整，此时不写任何
+        占位；恢复用例保留原始记录并单独完成 Run 取消，避免一个坏 Task 阻断整个后端启动。
+        结果只重排模型输入，不改持久序号；返回本次补建的调用 ID。
         """
 
         records = self._crud.get(task_id, include_in_context=True, session=session)
@@ -382,24 +355,23 @@ class ConversationTaskContextService:
                 run_id=record.run_id,
                 message=record.message,
                 sequence=record.sequence,
+                message_id=record.message_id,
+                metadata=record.metadata,
             )
             for record in records
             if record.run_id == run_id
         ]
-        plan = plan_tool_call_closure(entries)
-        if plan is None or not plan.missing_slots:
-            return []
-
+        plans = plan_tool_call_closures(entries)
         next_sequence = self.max_sequence(task_id, session=session) + 1
         repaired: list[str] = []
-        for slot in plan.missing_slots:
+        for slot in (slot for plan in plans for slot in plan.missing_slots):
             self.append(
                 task_id,
                 run_id,
                 build_placeholder_tool_message(slot.call_id, slot.tool_name),
                 next_sequence,
                 True,
-                TransportMetadata(status="cancelled"),
+                ToolMessageMetadata(status="cancelled"),
                 session=session,
             )
             repaired.append(slot.call_id)

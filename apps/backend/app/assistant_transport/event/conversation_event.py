@@ -23,8 +23,8 @@ from app.assistant_transport.event.message_event import (
 )
 from app.assistant_transport.event.run_event import (
     RunInitializedEvent,
+    RunResultUpdatedEvent,
     RunStatusChangedEvent,
-    RunTraceUpdatedEvent,
     UserInputAppendedEvent,
 )
 from app.assistant_transport.event.tool_call_event import (
@@ -38,9 +38,9 @@ from app.assistant_transport.event.tool_runtime_event import ToolCallRuntimeUpda
 # 使本清单同时充当一次 run 的时间线说明。
 ConversationEvent = Annotated[
     RunInitializedEvent
-    | RunTraceUpdatedEvent
     | UserInputAppendedEvent
     | RunStatusChangedEvent
+    | RunResultUpdatedEvent
     | AssistantTextDeltaEvent
     | AssistantPartClosedEvent
     | ToolCallCreatedEvent

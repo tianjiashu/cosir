@@ -1,8 +1,12 @@
 """Conversation Transport Task snapshot 的中性 JSON 契约。"""
+
+from typing import NotRequired
+
 from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
+from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.config.constant import Constant
 
 _SNAPSHOT_KEYS = {
@@ -15,7 +19,6 @@ _RUN_KEYS = {
     "runId",
     "status",
     "endReason",
-    "langfuseTraceId",
     "contextWindowTotal",
     "messages",
     "usage",
@@ -59,6 +62,7 @@ class ConversationStateSnapshot(TypedDict):
     Run 的消息、生命周期、usage 与窗口上限均位于 ``runs`` 中；上下文占用从 Run 事实派生。
     """
 
+    queued_messages: NotRequired[list[ConversationStateMessage]]
     runs: list[ConversationRunSnapshot]
     current_run_id: int | None
     approvals: dict[str, object]
@@ -104,10 +108,8 @@ def current_run(state: ConversationStateSnapshot) -> ConversationRunSnapshot | N
 def validate_snapshot(state: ConversationStateSnapshot) -> None:
     """严格校验新 Task snapshot 的结构、归属和数值边界。"""
 
-    if not isinstance(state, dict) or set(state) != _SNAPSHOT_KEYS:
-        raise ValueError(
-            "snapshot must contain runs, current_run_id, approvals and error"
-        )
+    if not isinstance(state, dict) or set(state) - {"queued_messages"} != _SNAPSHOT_KEYS:
+        raise ValueError("snapshot must contain runs, current_run_id, approvals and error")
     if not isinstance(state["runs"], list) or not isinstance(state["approvals"], dict):
         raise ValueError("snapshot runs and approvals must be arrays/object")
     current_run_id = state["current_run_id"]
@@ -118,6 +120,14 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     ):
         raise ValueError("snapshot current_run_id must be a non-negative integer or null")
 
+    queued = state.get("queued_messages", [])
+    if not isinstance(queued, list):
+        raise ValueError("queued_messages must be an array")
+    seen_input_ids: set[str] = set()
+    for message in queued:
+        _validate_message(message, seen_input_ids)
+        if message["role"] != "user":
+            raise ValueError("queued_messages must contain user messages")
     seen_run_ids: set[int] = set()
     for run in state["runs"]:
         _validate_run(run, seen_run_ids)
@@ -142,12 +152,8 @@ def _validate_run(run: object, seen_run_ids: set[int]) -> None:
         raise ValueError("snapshot run status must be a non-empty string")
     if run["endReason"] is not None and not isinstance(run["endReason"], str):
         raise ValueError("snapshot run endReason must be a string or null")
-    if run["langfuseTraceId"] is not None and not isinstance(run["langfuseTraceId"], str):
-        raise ValueError("snapshot run langfuseTraceId must be a string or null")
     value = run["contextWindowTotal"]
-    if value is not None and (
-        not isinstance(value, int) or isinstance(value, bool) or value < 0
-    ):
+    if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
         raise ValueError("snapshot run contextWindowTotal must be a non-negative integer or null")
     if not isinstance(run["messages"], list):
         raise ValueError("snapshot run messages must be an array")
@@ -180,7 +186,7 @@ def _validate_message(message: object, seen_message_ids: set[str]) -> None:
 def _validate_usage(usage: object) -> None:
     if not isinstance(usage, dict) or set(usage) != _USAGE_KEYS:
         raise ValueError("snapshot run usage is malformed")
-    for key, value in usage.items():
+    for value in usage.values():
         if value is None:
             continue
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -223,9 +229,8 @@ def _validate_part(part: object) -> None:
     if part_type == "file":
         if set(part) != _FILE_PART_KEYS:
             raise ValueError("snapshot file part contains unknown fields")
-        if (
-            not isinstance(part.get("file"), str)
-            or not Constant.Transport.FILE_LOCATOR.fullmatch(part["file"])
+        if not isinstance(part.get("file"), str) or not Constant.Transport.FILE_LOCATOR.fullmatch(
+            part["file"]
         ):
             raise ValueError("snapshot file part locator is invalid")
         if not isinstance(part.get("name"), str) or not part["name"]:

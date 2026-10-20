@@ -23,7 +23,7 @@ from app.assistant_transport.state.conversation_state_part import (
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.constant import Constant
 
-AssistantTextPartKind = Literal["text", "reasoning"]
+AssistantTextPartKind = Literal["text", "reasoning","tool_call"]
 
 
 class AssistantTextDeltaEvent(ConversationEventEnvelope):

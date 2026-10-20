@@ -72,7 +72,7 @@ class FindFilesTool(HandlerBase):
             )
         try:
             scope = SearchScope.from_path(
-                execution_context.workspace_root, resolved_path, execution_context.run_id, time.monotonic() + self.timeout_seconds
+                execution_context.workspace_root, resolved_path, execution_context.task_id, time.monotonic() + self.timeout_seconds
             )
             device_error = resolver.blocked_recursive_search_reason(path, resolved_path)
             if device_error:

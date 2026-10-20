@@ -1,25 +1,25 @@
 """Conversation Run 持久化状态值对象。
 
-单一职责：承载一次用户与 Agent 轮次的不可变业务数据并提供序列化（to_dict）。
+单一职责：承载允许多条用户输入的一次 Agent 执行及持久进度并提供序列化（to_dict）。
 不负责数据库操作（由 ``storage/crud/conversation_run_crud`` 负责）。
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 from typing_extensions import TypedDict
 
-from app.models.conversation_run_extra import ConversationRunExtra
+from app.models.conversation_run_options import ConversationRunOptions
+from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.conversation_run_usage import ConversationRunUsage
 from app.utils.datetime_utils import from_text, to_text
 
 if TYPE_CHECKING:
     from app.storage.model.conversation_run_model import ConversationRunModel
-
 
 
 class ConversationRunError(TypedDict):
@@ -40,19 +40,16 @@ class ConversationRunRecord:
 
     id: int
     task_id: int
-    input_text: str
     status: str
     created_at: datetime
     updated_at: datetime
-    # 与数据库 run 主键分离的 LangGraph thread 身份；checkpoint 生命周期可能长于主库自增 ID。
-    checkpoint_thread_id: str
+    execution_data: ConversationRunProgress = field(default_factory=ConversationRunProgress)
     end_reason: str | None = None
     final_output: str | None = None
     agent_id: str | None = None
     model_config_id: int | None = None
     context_window_total: int | None = None
-    image_paths: list[str] | None = None
-    extra: ConversationRunExtra | None = None
+    options: ConversationRunOptions = field(default_factory=ConversationRunOptions)
     usage: ConversationRunUsage | None = None
     error: ConversationRunError | None = None
 
@@ -75,64 +72,42 @@ class ConversationRunRecord:
         return {
             "id": self.id,
             "task_id": self.task_id,
-            "input_text": self.input_text,
+            "execution_data": self.execution_data.model_dump(mode="json"),
             "status": self.status,
             "end_reason": self.end_reason,
             "final_output": self.final_output,
-            "image_paths": self.image_paths,
             "agent_id": self.agent_id,
             "model_config_id": self.model_config_id,
             "context_window_total": self.context_window_total,
-            "extra": self.extra.to_dict() if self.extra is not None else None,
+            "options": self.options.model_dump(mode="json"),
             "usage": self.usage,
             "error": self.error,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
-            "checkpoint_thread_id": self.checkpoint_thread_id,
         }
 
     @classmethod
     def from_model(cls, row: ConversationRunModel) -> ConversationRunRecord:
-        """从 ORM 行构造轮次记录值对象。
+        """在持久化读取边界校验选项与执行进度，非法结构抛 ValidationError。
 
-        参数:
-            row: ``conversation_runs`` 表的行对象。
-
-        返回:
-            对应的 ``ConversationRunRecord``；文本时间戳经 ``from_text`` 还原为 datetime。
-
-        异常:
-            json.JSONDecodeError: 如果持久化的 usage/error JSON 非法。
-            TypeError: 如果 usage/error 结构不符合 typed JSON 契约。
-
-        副作用:
-            无。
+        时间戳还原为 datetime；usage/error 解析为 JSON，非法文本抛 JSONDecodeError。
+        不读取旧输入字段，也不从消息推导 Run 配置。
         """
         return cls(
             id=row.id,
             task_id=row.task_id,
-            input_text=row.input_text,
+            execution_data=ConversationRunProgress.model_validate(row.execution_data),
             status=row.status,
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
-            checkpoint_thread_id=row.checkpoint_thread_id,
             end_reason=row.end_reason,
             final_output=row.final_output,
             agent_id=row.agent_id,
-            image_paths=row.image_paths,
             model_config_id=row.model_config_id,
             context_window_total=row.context_window_total,
-            extra=ConversationRunExtra.from_dict(row.extra),
-            usage=(
-                json.loads(row.usage_json)
-                if row.usage_json is not None
-                else None
-            ),
-            error=(
-                json.loads(row.error_json)
-                if row.error_json is not None
-                else None
-            ),
+            options=ConversationRunOptions.model_validate(row.options),
+            usage=(json.loads(row.usage_json) if row.usage_json is not None else None),
+            error=(json.loads(row.error_json) if row.error_json is not None else None),
         )
 
     def to_model(self) -> ConversationRunModel:
@@ -142,16 +117,14 @@ class ConversationRunRecord:
 
         model_kwargs: dict[str, object] = {
             "task_id": self.task_id,
-            "input_text": self.input_text,
+            "execution_data": self.execution_data.model_dump(mode="json"),
             "status": self.status,
-            "checkpoint_thread_id": self.checkpoint_thread_id,
             "end_reason": self.end_reason,
             "final_output": self.final_output,
             "agent_id": self.agent_id,
             "model_config_id": self.model_config_id,
             "context_window_total": self.context_window_total,
-            "image_paths": self.image_paths,
-            "extra": self.extra.to_dict() if self.extra is not None else None,
+            "options": self.options.model_dump(mode="json"),
             "usage_json": json.dumps(
                 self.usage, ensure_ascii=False, sort_keys=True, allow_nan=False
             ),

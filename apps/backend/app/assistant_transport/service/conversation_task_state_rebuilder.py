@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from itertools import groupby
 from operator import attrgetter
 from typing import cast
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.messages.tool import ToolCall
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionMessageFunctionToolCallParam,
+    ChatCompletionMessageParam,
+    ChatCompletionUserMessageParam,
+)
 
 from app.assistant_transport.event import build_user_input_parts
+from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_part import (
-    ConversationStatePart,
     ConversationStateTextPart,
     ConversationStateToolCallPart,
 )
@@ -23,9 +27,10 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
 from app.config.configuration import get_tool_registry
-from app.models.conversation_run_extra import ConversationRunExtra
+from app.core.llm_provider.message_codec import display_arguments
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import MessageMetadata, ToolMessageMetadata, UserMessageMetadata
 from app.models.task_record import TaskRecord
 from app.utils.message_content import content_to_text
 
@@ -74,30 +79,27 @@ class ConversationTaskStateRebuilder:
     @staticmethod
     def build_pair_tool_part(
         rows: list[ConversationTaskContextRecord],
-        child_agent_roles: Mapping[tuple[int, str], str] | None = None,
     ) -> dict[str, ConversationStateToolCallPart]:
         """把单个 Run 的 context 行配对为 ``toolCallId → tool-call part`` 映射。
 
         配对规则：AI 消息中的每个工具调用先以 ``cancelled`` 初始状态登记，随后由同一
-        ``tool_call_id`` 的 ToolMessage 行补全真实生命周期状态、``display_data`` 与错误标记。
-        动态展示数据只从 ToolMessage 的 ``transport_metadata.display_data`` 读取；冷重建不
+        ``tool_call_id`` 的 tool 消息 行补全真实生命周期状态、``display_data`` 与错误标记。
+        动态展示数据只从 tool 消息 的 ``metadata.display_data`` 读取；冷重建不
         通过工具名、委派记录或子任务记录推断展示数据。
 
-        **隐藏调用不建 part**：ToolMessage 行带 ``transport_metadata.hidden`` 的调用（本轮未
+        **隐藏调用不建 part**：tool 消息 行带 ``metadata.hidden`` 的调用（本轮未
         放行 / 工具名未注册 — 实时链路从未为它们发过 ``ToolCallCreatedEvent``）被整条跳过，
         否则刷新页面会凭空多出实时快照里不存在的工具气泡。
 
         参数:
             rows: 单个 Run 的 context 行，调用方保证已按 ``sequence`` 排序。
-            child_agent_roles: 由调用方按 child task 的 workspace 解析出的旧记录 role，键为
-                ``(child_task_id, child_agent_id)``；已持久化 role 优先于此回填值。
 
         返回:
             以工具调用 id 为键的 tool-call part 字典；``status`` 恒为字符串，未收到结果的
             调用保持 ``cancelled``。
 
         异常:
-            RuntimeError: ToolMessage 行找不到同一 Run 内对应的 AI 工具调用（上下文被破坏）。
+            RuntimeError: tool 消息 行找不到同一 Run 内对应的 AI 工具调用（上下文被破坏）。
 
         副作用:
             无（纯函数，不访问数据库、注册表之外的状态或前端运行时）。
@@ -105,89 +107,47 @@ class ConversationTaskStateRebuilder:
         # 先扫一遍结果行收集隐藏调用：AI 消息的 tool_calls 里可能包含它们，但实时链路从未为
         # 这些调用建过 part，冷重建必须与实时口径一致地跳过。
         hidden_call_ids = {
-            cast(ToolMessage, row.message).tool_call_id
+            row.message.get("tool_call_id")
             for row in rows
-            if isinstance(row.message, ToolMessage)
-            and (row.transport_metadata or {}).get("hidden") is True
+            if row.message["role"] == "tool"
+            and isinstance(row.metadata, ToolMessageMetadata)
+            and row.metadata.hidden
         }
         tool_parts: dict[str, ConversationStateToolCallPart] = {}
         for row in rows:
-            message: BaseMessage = row.message
-            if isinstance(message, AIMessage) and cast(AIMessage, message).tool_calls:
-                ai_message = cast(AIMessage, message)
-                calls: list[ToolCall] = ai_message.tool_calls
+            message: ChatCompletionMessageParam = row.message
+            if message["role"] == "assistant" and message.get("tool_calls"):
+                ai_message = message
+                calls = cast(
+                    list[ChatCompletionMessageFunctionToolCallParam],
+                    ai_message.get("tool_calls") or [],
+                )
                 for call in calls:
-                    if call.get("id") in hidden_call_ids:
+                    # 中断输出可能只有部分调用身份；尚未建立的工具预览不重建为 part。
+                    if not call["id"] or not call["function"]["name"]:
+                        continue
+                    if call["id"] in hidden_call_ids:
                         continue
                     tool_part = ConversationStateToolCallPart(
                         type="tool-call",
-                        toolCallId=call.get("id"),
-                        toolName=call.get("name"),
-                        args=call.get("args"),
+                        toolCallId=call["id"],
+                        toolName=call["function"]["name"],
+                        args=display_arguments(call["function"]["arguments"]),
                         presentation=ConversationTaskStateRebuilder.get_tool_display(
-                            call.get("name")
+                            call["function"]["name"]
                         ),
                         status="cancelled",
                     )
-                    tool_parts[call.get("id")] = tool_part
-            if isinstance(message, ToolMessage):
-                tool_message = cast(ToolMessage, message)
-                if tool_message.tool_call_id in hidden_call_ids:
+                    tool_parts[call["id"]] = tool_part
+            if message["role"] == "tool" and isinstance(row.metadata, ToolMessageMetadata):
+                tool_message = message
+                if tool_message["tool_call_id"] in hidden_call_ids:
                     continue
-                tool_part: ConversationStateToolCallPart = tool_parts.get(tool_message.tool_call_id)
-                if tool_part is None:
+                paired_part = tool_parts.get(tool_message["tool_call_id"])
+                if paired_part is None:
                     raise RuntimeError("未闭合tool")
-                metadata_status = row.transport_metadata.get("status")
-                if metadata_status is not None:
-                    tool_part["status"] = metadata_status
-                display_data = row.transport_metadata.get("display_data")
-                team_run_id = row.transport_metadata.get("team_run_id")
-                if team_run_id is not None:
-                    tool_part["team_run_id"] = team_run_id
-                if display_data is not None:
-                    tool_part["display_data"] = display_data
-                elif "display_data" not in tool_part:
-                    tool_part["display_data"] = None
-                if (
-                    isinstance(display_data, dict)
-                    and display_data.get("kind") == "delegation-result"
-                ):
-                    child_task_id = display_data.get("child_task_id")
-                    if isinstance(child_task_id, int) and child_task_id > 0:
-                        tool_part["child_task_id"] = child_task_id
-                    child_run_id = display_data.get("child_run_id")
-                    if (
-                        isinstance(child_run_id, int)
-                        and not isinstance(child_run_id, bool)
-                        and child_run_id > 0
-                    ):
-                        tool_part["child_run_id"] = child_run_id
-                    child_agent_id = display_data.get("child_agent_id")
-                    if isinstance(child_agent_id, str) and child_agent_id:
-                        persisted_role = display_data.get("role")
-                        if isinstance(persisted_role, str) and persisted_role.strip():
-                            tool_part["agent_role"] = persisted_role
-                        else:
-                            child_task_id = display_data.get("child_task_id")
-                            if (
-                                isinstance(child_task_id, int)
-                                and not isinstance(child_task_id, bool)
-                                and child_agent_roles is not None
-                            ):
-                                persisted_role = child_agent_roles.get(
-                                    (child_task_id, child_agent_id)
-                                )
-                        if isinstance(persisted_role, str) and persisted_role.strip():
-                            display_data = dict(display_data)
-                            display_data["role"] = persisted_role
-                            tool_part["display_data"] = display_data
-                            tool_part["agent_role"] = persisted_role
-                if tool_part["status"] == "failed":
-                    tool_part["isError"] = True
-                    tool_part["error"] = row.transport_metadata.get("error")
-                else:
-                    tool_part["isError"] = False
-                    tool_part["error"] = None
+                tool_part = paired_part
+                tool_part.update(project_tool_result(row.metadata))
 
         return tool_parts
 
@@ -213,29 +173,33 @@ class ConversationTaskStateRebuilder:
         return tool_definition.display.to_dict()
 
     @staticmethod
-    def build_user_message(run: ConversationRunRecord) -> ConversationStateMessage:
-        """从 Run 输入事实构造可冷重建的 user 消息。
-
-        正常执行会先写入 Human context；若进程恰好在该写入前崩溃，Run.extra 仍是已提交
-        的普通附件事实，因此 snapshot 不能因为缺少 context 行而丢失用户消息或附件。
-        """
-        extra: ConversationRunExtra | None = getattr(run, "extra", None)
-        text = extra.display_text if extra is not None else run.input_text
-        user_parts: list[ConversationStatePart] = cast(
-            list[ConversationStatePart],
-            build_user_input_parts(
-                text,
-                getattr(run, "image_paths", None) or [],
-                cast(
-                    Sequence[Mapping[str, str]],
-                    extra.attachments if extra is not None else [],
-                ),
-            ),
-        )
+    def build_user_message(
+        message_id: str, message: ChatCompletionUserMessageParam, metadata: MessageMetadata
+    ) -> ConversationStateMessage:
+        """用户展示绑定来自记录 metadata，消息身份独立于 SDK 正文与 Run 首条输入。"""
+        payload = metadata.presentation if isinstance(metadata, UserMessageMetadata) else None
+        if payload is None:
+            return ConversationStateMessage(
+                id=message_id,
+                role="user",
+                parts=[
+                    {
+                        "type": "text",
+                        "text": content_to_text(message.get("content")),
+                        "status": "completed",
+                    }
+                ],
+            )
         return ConversationStateMessage(
-            id=f"user-{run.id}",
+            id=message_id,
             role="user",
-            parts=user_parts,
+            parts=[
+                *build_user_input_parts(
+                    payload.display_text,
+                    payload.image_paths,
+                    payload.attachments,
+                )
+            ],
         )
 
     @staticmethod
@@ -243,21 +207,18 @@ class ConversationTaskStateRebuilder:
         task: TaskRecord,
         runs: Sequence[ConversationRunRecord],
         context_rows: Sequence[ConversationTaskContextRecord],
-        child_agent_roles: Mapping[tuple[int, str], str] | None = None,
     ) -> ConversationStateSnapshot:
         """从三类规范记录装配出通过校验的 Task 级 Transport 快照。
 
         参数:
             task: Task 级当前 Run 与上下文用量事实。
             runs: 属于 ``task`` 的全部 Run 记录。
-            context_rows: 该 Task 已持久化的 LangChain 消息与 Transport 元数据。
-            delegations: 为保持调用方接口稳定而保留；委派展示数据来自 context metadata。
-            child_agent_roles: 调用方按 child task workspace 解析出的旧 role 回填映射。
+            context_rows: 该 Task 已持久化的 领域消息与 Transport 元数据。
 
         返回:
             新的 ``ConversationStateSnapshot``。Run 的排序为 ``created_at`` 再按 id；同一 Run 的
-            assistant 行会合并为一条消息，所有消息 id 均取自 context 行 id。流式 assistant 草稿
-            保留在 assistant 消息中，其文本 part 仅在所属 Run 仍活跃时为 ``running``。
+            assistant 行按用户消息分组展示。中断输出也保留展示；已落库文本均已停止生成，
+            不由 Run 状态反推。
 
         异常:
             RuntimeError: 某条工具结果行在同一 Run 内找不到对应的 AI 工具调用。
@@ -290,7 +251,6 @@ class ConversationTaskStateRebuilder:
 
             tool_parts_dict = ConversationTaskStateRebuilder.build_pair_tool_part(
                 rows,
-                child_agent_roles=child_agent_roles,
             )
 
             snapshot_messages: list[ConversationStateMessage] = []
@@ -302,62 +262,56 @@ class ConversationTaskStateRebuilder:
                 if not row.project_to_transport:
                     continue
                 message = row.message
-                if isinstance(message, HumanMessage):
+                if message["role"] == "user":
                     has_user_message = True
-                    snapshot_messages.append(ConversationTaskStateRebuilder.build_user_message(run))
-                elif isinstance(message, AIMessage):
-                    ai_message: AIMessage = cast(AIMessage, message)
-                    text_status = (
-                        "running"
-                        if row.is_streaming and run.status in {
-                            "pending", "running", "waiting_for_input"
-                        }
-                        else "completed"
+                    if assistant_message["parts"]:
+                        snapshot_messages.append(assistant_message)
+                    snapshot_messages.append(
+                        ConversationTaskStateRebuilder.build_user_message(
+                            row.message_id, message, row.metadata
+                        )
                     )
-                    if ai_message.additional_kwargs.get("reasoning_content") is not None:
+                    assistant_message = ConversationStateMessage(
+                        id=f"assistant-{row.message_id}", role="assistant", parts=[]
+                    )
+                elif message["role"] == "assistant":
+                    ai_message: ChatCompletionAssistantMessageParam = message
+                    if ai_message.get("reasoning_content") is not None:
                         assistant_message["parts"].append(
                             ConversationStateTextPart(
                                 type="reasoning",
-                                text=content_to_text(
-                                    ai_message.additional_kwargs["reasoning_content"]
-                                ),
-                                status=text_status,
+                                text=content_to_text(ai_message.get("reasoning_content")),
+                                status="completed",
                             )
                         )
-                    if ai_message.content is not None:
+                    if ai_message.get("content") is not None:
                         assistant_message["parts"].append(
                             ConversationStateTextPart(
                                 type="text",
-                                text=content_to_text(ai_message.content),
-                                status=text_status,
+                                text=content_to_text(ai_message.get("content")),
+                                status="completed",
                             )
                         )
-                    if ai_message.tool_calls is not None and len(ai_message.tool_calls) > 0:
-                        calls: list[ToolCall] = ai_message.tool_calls
+                    if ai_message.get("tool_calls"):
+                        calls = cast(
+                            list[ChatCompletionMessageFunctionToolCallParam],
+                            ai_message.get("tool_calls") or [],
+                        )
                         for call in calls:
-                            tool_part = tool_parts_dict.get(call.get("id"))
+                            tool_part = tool_parts_dict.get(call["id"])
                             if tool_part is None:
                                 # 隐藏调用（本轮未放行 / 工具名未注册）：``build_pair_tool_part``
                                 # 不为它们建 part，实时链路同样没有 part，此处必须跳过而不是
                                 # 抛 KeyError——展示层缺口不得让冷重建整张快照失败。
                                 continue
                             assistant_message["parts"].append(tool_part)
-            run_extra: ConversationRunExtra | None = getattr(run, "extra", None)
-            if not has_user_message and (
-                getattr(run, "input_text", "").strip()
-                or getattr(run, "image_paths", None)
-                or (run_extra.attachments if run_extra is not None else [])
-            ):
-                snapshot_messages.append(ConversationTaskStateRebuilder.build_user_message(run))
-            snapshot_messages.append(assistant_message)
+            if has_user_message or assistant_message["parts"]:
+                snapshot_messages.append(assistant_message)
             snapshot_runs.append(
                 ConversationRunSnapshot(
                     runId=run.id,
                     status=run.status,
                     endReason=run.end_reason,
-                    langfuseTraceId=(
-                        run_extra.langfuse_trace_id if run_extra is not None else None
-                    ),
                     contextWindowTotal=run.context_window_total,
                     messages=snapshot_messages,
                     usage=run.usage,

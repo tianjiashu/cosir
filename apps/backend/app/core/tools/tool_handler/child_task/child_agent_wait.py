@@ -5,6 +5,7 @@ import time
 from typing import ClassVar
 
 from app.config.constant import Constant
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.child_agent_display import build_child_agent_wait_display_data
 from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_WAIT,
@@ -124,10 +125,9 @@ class ChildAgentWaitTool(HandlerBase):
                 retryable=True,
             )
 
-        is_parent_cancelled = execution_context.runtime_dependencies.is_run_cancelled
         deadline = time.monotonic() + timeout_seconds
         while True:
-            if is_parent_cancelled is not None and is_parent_cancelled(execution_context.run_id):
+            if cancellation_registry.is_cancelled(execution_context.task_id):
                 return tool_cancelled(
                     tool_name=self.name,
                 )

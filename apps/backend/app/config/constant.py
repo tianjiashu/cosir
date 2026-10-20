@@ -92,6 +92,7 @@ class Constant:
         RUN_FAILURE_CODE_MAX_STEPS: str = "max_steps_reached"
         # workflow 图执行异常。
         RUN_FAILURE_CODE_GRAPH_FAILED: str = "workflow_graph_failed"
+        RUN_FAILURE_CODE_CONTEXT_PROTOCOL_INVALID: str = "context_protocol_invalid"
         # workflow 图已被标记为结束，无法继续。
         RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED: str = "graph_already_finished"
         # 后端重启导致本轮对话中断。
@@ -123,20 +124,18 @@ class Constant:
         SEED: int | None = None
 
     class Workflow:
-        """LangGraph React workflow 的共享常量。"""
+        """ReAct loop 的共享常量。"""
 
         # Provider 归一化后表示「正常结束、无需续写」的 finish_reason 集合。
         NORMAL_FINISH_REASONS: frozenset[str] = frozenset({"stop", "end", "end_turn"})
-        # 表示「因长度受限截断、需续写」的 finish_reason 集合。
-        CONTINUATION_FINISH_REASONS: frozenset[str] = frozenset(
-            {"length", "max_tokens", "max_output_tokens"}
-        )
         # 工具参数非法时，回传给模型的参数预览截断字符数。
         INVALID_TOOL_ARGS_PREVIEW_CHARS: int = 500
         # 单次工具调用错误累计展示的字符预算上限。
         INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS: int = 2000
         # 结构化输出阶段的模型请求总次数上限，包含首次请求与后续重试。
         STRUCTURED_OUTPUT_MAX_ATTEMPTS: int = 4
+        # 已完成 Run 的结构化支线失败原因；不改变 Run 生命周期状态。
+        STRUCTURED_OUTPUT_FAILURE_REASON: str = "structured_output_failed"
         # 连续工具调用失败次数上限：达到即终止本轮 Run（end_reason 取
         # ``Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT``）。由 ``observation_node`` 判定。
         # 取值沿用迁移前 ``CODING_AGENT_TOOL_ERROR_LIMIT`` 的实际生效值（100，容许长会话中的
@@ -151,9 +150,9 @@ class Constant:
             "The agent stopped after reaching the maximum number of steps "
             "before producing a final answer."
         )
-        # LangChain UsageMetadata 缓存读明细键名（``input_token_details["cache_read"]``）。
+        # 领域用量 metadata 缓存读明细键名（``input_token_details["cache_read"]``）。
         INPUT_CACHE_READ_KEY: str = "cache_read"
-        # LangChain UsageMetadata 推理明细键名（``output_token_details["reasoning"]``）。
+        # 领域用量 metadata 推理明细键名（``output_token_details["reasoning"]``）。
         OUTPUT_REASONING_KEY: str = "reasoning"
 
     class SystemPrompt:
@@ -170,20 +169,6 @@ class Constant:
         GLOBAL_INSTRUCTION_MAX_FILE_TOKENS: int = 10_000
         # Layer 3（Workspace 项目指令）token 上限。
         WORKSPACE_INSTRUCTION_MAX_FILE_TOKENS: int = 10_000
-
-    class Context:
-        """Task 级 context 运行时（``RuntimeContextManager``）的共享常量。
-
-        仅承载 context 读写边界自身的数值闸门（流式草稿落库的刷新阈值、序号规则等），不含
-        业务规则；业务规则由 ``RuntimeContextManager`` 与其协作的 service 负责。
-        """
-
-        # 流式 assistant 草稿落库的最小新增字符数：累积未落库字符达到该值才触发一次持久化写，
-        # 减少碎片写入（与最大间隔阈值取「或」关系一同生效）。
-        STREAMING_PERSIST_MIN_CHARS: int = 64
-        # 流式 assistant 草稿落库的最大间隔时间（秒）：距上次落库超过该值即触发一次持久化写，
-        # 避免低频流式场景下草稿长时间不落库、崩溃后恢复滞后过多。
-        STREAMING_PERSIST_MAX_INTERVAL_SECONDS: float = 0.25
 
     class Attachment:
         """附件上传与图片归一化的共享常量。"""

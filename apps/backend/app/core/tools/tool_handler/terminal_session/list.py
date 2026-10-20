@@ -66,7 +66,6 @@ class TerminalListTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            parameters_schema=self.args_model.model_json_schema(),
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",

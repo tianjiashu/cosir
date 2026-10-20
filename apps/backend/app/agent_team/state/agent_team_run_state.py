@@ -134,16 +134,14 @@ class AgentTeamRunState(BaseModel):
         )
 
     def cancel(self):
+        """向当前节点 Task 发停止信号；信号由 Coordinator 在节点 Run 结束后取走。"""
         node_id = self.current_node_id
         if node_id is None:
             return
         execution = self.node_executions[node_id]
         if not execution.conversation_run_ids:
             return
-        run_id = execution.conversation_run_ids[-1]
-        if cancellation_registry.is_cancelled(run_id):
-            return
-        cancellation_registry.mark_cancelled(run_id)
+        cancellation_registry.request_cancel(execution.task_id)
 
     def node_references(self) -> list[tuple[int, int]]:
         """返回所有节点 Task/Run 引用，供取消和诊断使用。"""

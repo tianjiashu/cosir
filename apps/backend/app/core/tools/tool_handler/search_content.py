@@ -77,7 +77,7 @@ class SearchContentTool(HandlerBase):
             return _path_error(self.name, path_error or path)
         try:
             scope = SearchScope.from_path(
-                workspace_root, resolved_path, execution_context.run_id, time.monotonic() + self.timeout_seconds
+                workspace_root, resolved_path, execution_context.task_id, time.monotonic() + self.timeout_seconds
             )
             device_error = resolver.blocked_recursive_search_reason(path, resolved_path)
             if device_error:

@@ -7,25 +7,26 @@
 
 职责边界：
 - 负责：``pending``、``running``、``waiting_for_input`` 与终态之间的条件迁移及其事件发布、
-  active run 判定查询，以及已 ``completed`` Run 的结果字段改写（不迁移状态、不发事件）。
+  active run 判定查询，以及已 ``completed`` Run 的结果字段改写（不迁移状态，发布结果事件）。
 - 不负责：Run 记录读取（见 ``ConversationRunService``）；命令输入解析与附件处理、Run 创建与
   编辑的用例编排（见 ``ConversationRunService``）；崩溃恢复中「Run 终态 + 未闭合工具调用」
   的多事实收口同样由 ``ConversationRunService`` 编排。
 - 不拥有跨表事务：各迁移方法在 CRUD 的条件更新内自成一次写入；仅 ``has_active_run``
   接受调用方传入的外部 ``session``，此时事务提交与事件发布由调用方负责。
 
-持久化事实归 ``ConversationRunCrud``；本模块只表达「一次合法状态迁移 + 其对应事件」。
+持久化事实归 ``ConversationRunCrud``；本模块表达合法状态迁移及已完成结果更新的事件。
 """
+
 from __future__ import annotations
 
 from typing import cast
 
 from sqlalchemy.orm import Session
 
-from app.assistant_transport.event import RunStatusChangedEvent
+from app.assistant_transport.event import RunResultUpdatedEvent, RunStatusChangedEvent
 from app.assistant_transport.event.dispatch import dispatch_conversation_event
 from app.config.constant import Constant
-from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import (
     ConversationRunError,
     ConversationRunRecord,
@@ -34,7 +35,9 @@ from app.models import (
 from app.models.conversation_run_failure import (
     run_failure_message,
 )
+from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.conversation_run_usage import ConversationRunUsage
+from app.models.user_decision import UserDecision
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
 
@@ -52,19 +55,16 @@ _RUN_STATUS_TRANSITIONS: dict[ConversationRunStatus, tuple[ConversationRunStatus
     ),
     ConversationRunStatus.WAITING_FOR_INPUT: (
         ConversationRunStatus.RUNNING,
+        ConversationRunStatus.CANCELLED,
     ),
     ConversationRunStatus.CANCELLED: (ConversationRunStatus.RUNNING,),
     ConversationRunStatus.COMPLETED: (),
-    ConversationRunStatus.FAILED: (),
+    ConversationRunStatus.FAILED: (ConversationRunStatus.RUNNING,),
 }
 
 
 class ConversationRunStateService:
-    """Conversation Run 状态机与状态迁移的唯一入口；Run 记录读取见 ``ConversationRunService``。
-
-    另承载「终态已落定后仍要修正字段」的窄口子（见 :meth:`fix_final_output_if_completed`），
-    它刻意不构成状态迁移，也不发布状态事件。
-    """
+    """Conversation Run 状态机与状态迁移的唯一入口；Run 记录读取见 ``ConversationRunService``。"""
 
     def __init__(self) -> None:
         """初始化状态 service：装配 run CRUD 与会话工厂。
@@ -87,8 +87,8 @@ class ConversationRunStateService:
 
     @staticmethod
     def _allowed_source_statuses(
-            target_status: ConversationRunStatus,
-            candidates: tuple[ConversationRunStatus, ...] | None = None,
+        target_status: ConversationRunStatus,
+        candidates: tuple[ConversationRunStatus, ...] | None = None,
     ) -> tuple[str, ...]:
         """从唯一状态图按候选范围派生允许迁入目标状态的来源状态值。"""
 
@@ -100,7 +100,7 @@ class ConversationRunStateService:
 
     @staticmethod
     def usage_payload(
-            usage_stats: ConversationRunUsageStats | None,
+        usage_stats: ConversationRunUsageStats | None,
     ) -> ConversationRunUsage | None:
         """把运行时 token 累加器转成 Run 行可持久化的六键字典。
 
@@ -123,9 +123,9 @@ class ConversationRunStateService:
 
     @staticmethod
     def terminal_error(
-            status: ConversationRunStatus,
-            end_reason: str | None,
-            message: str | None = None,
+        status: ConversationRunStatus,
+        end_reason: str | None,
+        message: str | None = None,
     ) -> ConversationRunError | None:
         """把终态状态映射为持久化错误契约。
 
@@ -175,7 +175,8 @@ class ConversationRunStateService:
             session: 可选，调用方已开启的事务会话；为 None 时本方法自建只读会话。
 
         返回:
-            该 task 存在 ``pending``、``running`` 或 ``waiting_for_input`` Run 时返回 True，否则 False。
+            该 task 存在 ``pending``、``running`` 或
+            ``waiting_for_input`` Run 时返回 True，否则 False。
 
         异常:
             无；底层会话或查询失败按 SQLAlchemy 语义向上传播。
@@ -194,37 +195,31 @@ class ConversationRunStateService:
         with self._session_factory() as owned_session:
             return self._run.has_run_in_status(task_id, statuses, owned_session)
 
+    def reset_for_edit(self, run_id: int, session: Session) -> ConversationRunRecord:
+        """与消息截断同事务重置 Run；提交后的快照重建统一发布新状态。"""
+        previous = self._run.get_in_session(session, run_id)
+        progress = ConversationRunProgress(step_count=previous.execution_data.step_count)
+        record = self._run.update_status_if_in(
+            run_id,
+            "running",
+            ("completed", "cancelled", "failed"),
+            session=session,
+            clear_terminal_fields=True,
+            execution_data=progress,
+        )
+        if record is None:
+            raise ValueError("只有已停止的 Run 可以编辑重跑")
+        return record
+
     def resume_cancelled_run(self, run_id: int) -> ConversationRunRecord | None:
-        """恢复任意 cancelled run 为 ``running``，清空上一轮终态字段。
-
-        本方法只表达「哪些迁移合法」（``cancelled`` → ``running``）与事件发布；清空上一轮
-        终态字段由 ``update_status_if_in`` 的 ``clear_terminal_fields`` 完成。
-
-        ``checkpoint_thread_id`` 保持原值：``resume`` 执行模式下 workflow 传
-        ``input_state=None`` 让 LangGraph 从该线程的**既有 checkpoint** 继续，换新线程会让
-        续跑落到一个没有 checkpoint 的空线程上。
-
-        参数:
-            run_id: 待恢复的 Conversation Run 标识。
-
-        返回:
-            恢复后的记录；run 当前不是 ``cancelled`` 时返回 None。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 写入失败。run 不存在时按零行更新静默返回 None
-                （存在性由调用方按需预检）。
-
-        副作用:
-            条件更新 run 为 ``running``（清空上一轮终态字段，``checkpoint_thread_id``
-            保持不变）并发布 RUNNING 状态事件；条件不满足时不做任何写入。
-        """
+        """显式恢复 cancelled/failed Run，清空终态字段；执行器从模型边界继续。"""
 
         record = self._run.update_status_if_in(
             run_id,
             ConversationRunStatus.RUNNING.value,
             self._allowed_source_statuses(
                 ConversationRunStatus.RUNNING,
-                (ConversationRunStatus.CANCELLED,),
+                (ConversationRunStatus.CANCELLED, ConversationRunStatus.FAILED),
             ),
             clear_terminal_fields=True,
         )
@@ -240,30 +235,19 @@ class ConversationRunStateService:
         return record
 
     def mark_waiting_for_input_if_running(
-            self, run_id: int, usage_stats: ConversationRunUsageStats | None = None
+        self,
+        run_id: int,
+        usage_stats: ConversationRunUsageStats | None = None,
+        *,
+        execution_data: ConversationRunProgress,
     ) -> ConversationRunRecord | None:
-        """将运行中的 Run 原子迁移到等待用户输入状态。
-
-        调用方必须先确保 LangGraph interrupt checkpoint 已持久化。仅 ``running`` 可以进入
-        等待状态；条件更新未命中时返回 ``None``，且不发布重复事件。
-
-        参数:
-            run_id: 当前 Conversation Run 标识。
-
-        返回:
-            迁移成功时返回最新 Run 记录；状态已由并发路径改变时返回 None。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 条件更新失败。
-
-        副作用:
-            原子更新 Run 状态并在成功后发布 ``waiting_for_input`` 事实事件。
-        """
+        """把等待数据与 running→waiting_for_input 一起提交；成功后才发布状态。"""
 
         record = self._run.update_status_if_in(
             run_id,
             ConversationRunStatus.WAITING_FOR_INPUT.value,
             self._allowed_source_statuses(ConversationRunStatus.WAITING_FOR_INPUT),
+            execution_data=execution_data,
             end_reason=None,
             error=None,
             usage=self.usage_payload(usage_stats),
@@ -280,24 +264,18 @@ class ConversationRunStateService:
         )
         return record
 
-    def resume_waiting_run(self, run_id: int) -> ConversationRunRecord | None:
-        """将等待用户输入的 Run 原子恢复为 ``running`` 并发布状态事件。
+    def resume_waiting_run(
+        self, run_id: int, *, user_decision: UserDecision
+    ) -> ConversationRunRecord | None:
+        """把决定与 waiting_for_input→running 一起提交，后续执行只消费该决定。"""
 
-        checkpoint 身份保持不变，由调用方随后以 ``resume`` 执行模式恢复图状态。
-
-        参数:
-            run_id: 待恢复的 Conversation Run 标识。
-
-        返回:
-            迁移成功时返回最新 Run 记录；Run 不再等待输入时返回 None。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 条件更新失败。
-
-        副作用:
-            清除旧终态字段，将 Run 原子迁移到 ``running`` 并发布状态事件。
-        """
-
+        progress = self._run.get(run_id).execution_data
+        continuation = progress.continuation
+        if continuation is None:
+            raise ValueError("等待恢复缺少待决调用")
+        progress = progress.model_copy(
+            update={"continuation": continuation.model_copy(update={"decision": user_decision})}
+        )
         record = self._run.update_status_if_in(
             run_id,
             ConversationRunStatus.RUNNING.value,
@@ -306,6 +284,7 @@ class ConversationRunStateService:
                 (ConversationRunStatus.WAITING_FOR_INPUT,),
             ),
             clear_terminal_fields=True,
+            execution_data=progress,
         )
         if record is None:
             return None
@@ -357,12 +336,14 @@ class ConversationRunStateService:
         return None
 
     def complete_run_if_running(
-            self,
-            run_id: int,
-            final_output: str | None = None,
-            usage_stats: ConversationRunUsageStats | None = None,
+        self,
+        run_id: int,
+        final_output: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
+        *,
+        end_reason: str | None = None,
     ) -> ConversationRunRecord | None:
-        """Complete a running Conversation Run atomically.
+        """原子完成仍处于 running 的 Conversation Run。
 
         业务语义：仅 ``running`` 可进入 ``completed`` 终态并落库回复文本；约束收敛在
         本方法（service 层），CRUD 层只做通用的「状态白名单 + 原子更新」。Agent 对该
@@ -372,6 +353,7 @@ class ConversationRunStateService:
             run_id: 待完成的 Conversation Run 标识。
             final_output: 可选，Agent 对该轮次的最终回答文本；为 None 时不修改该列。
             usage_stats: 可选，运行用量统计，终态时按六键契约落库并发布事件。
+            end_reason: 可选，模型原始完成原因，随状态与最终回答原子落库。
 
         返回:
             成功完成时返回更新后的 ConversationRunRecord；run 已不是 running 时返回 None。
@@ -381,7 +363,7 @@ class ConversationRunStateService:
             sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
 
         副作用:
-            条件满足时更新 run 状态为 completed（并可选写入 final_output 与用量），随后
+            条件满足时更新 run 状态为 completed（并可选写入结果、原因与用量），随后
             发布 COMPLETED 状态事件。
         """
 
@@ -389,7 +371,7 @@ class ConversationRunStateService:
             run_id,
             ConversationRunStatus.COMPLETED.value,
             self._allowed_source_statuses(ConversationRunStatus.COMPLETED),
-            None,
+            end_reason,
             final_output=final_output,
             usage=self.usage_payload(usage_stats),
             error=None,
@@ -401,66 +383,46 @@ class ConversationRunStateService:
                 task_id=record.task_id,
                 run_id=run_id,
                 status=ConversationRunStatus.COMPLETED,
+                end_reason=end_reason,
                 usage_stats=usage_stats,
             ),
         )
         return record
 
-    def fix_final_output_if_completed(
-            self,
-            run_id: int,
-            final_output: str | None = None,
-            usage_stats: ConversationRunUsageStats | None = None,
+    def update_completed_result(
+        self,
+        run_id: int,
+        *,
+        final_output: str | None = None,
+        end_reason: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
-        """用后置产出的结构化结果原地改写已 ``completed`` Run 的最终回答。
+        """结构化支线只改写已完成 Run 的结果与用量，不重新发布生命周期事件。"""
 
-        结构化输出节点在 ReAct 收束之后运行：自然语言回复已随 ``running → completed`` 落库，
-        本方法只在这个终态上替换结果与用量字段。它**不是**状态迁移——``completed`` 在
-        ``_RUN_STATUS_TRANSITIONS`` 里是终态（无出边），同一状态重复发布也被契约禁止，故这里
-        刻意不发 ``RunStatusChangedEvent``，只改列。白名单只放 ``completed``，因此已
-        ``cancelled`` / ``failed`` 的 Run 不会被「修回」成成功结果（结构化输出与用户取消的
-        竞争走这条路径）。
-
-        参数:
-            run_id: 目标 Conversation Run 标识。
-            final_output: 校验通过的结构化 JSON 文本；为 None 时不修改该列。
-            usage_stats: 运行用量累加器（结构化输出这一步的消耗已累加其中）；为 None 时不
-                修改用量列。
-
-        返回:
-            改写成功时返回更新后的 ``ConversationRunRecord``；Run 不是 ``completed``、或两个
-            待写字段都为 None（无可改写内容）时返回 None。
-
-        异常:
-            TypeError: usage 不符合 typed JSON 契约。
-            sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
-
-        副作用:
-            命中时更新 run 行的 ``final_output`` / ``usage_json`` 与 ``updated_at``；不改
-            状态、不发事件。
-        """
-
-        values: dict[str, object] = {}
-        if final_output is not None:
-            values["final_output"] = final_output
-        usage = self.usage_payload(usage_stats)
-        if usage is not None:
-            values["usage_json"] = usage
-        if not values:
-            return None
-        return self._run.update_fields_if_in(
+        record = self._run.update_completed_result(
             run_id,
-            values,
-            (ConversationRunStatus.COMPLETED.value,),
+            final_output=final_output,
+            end_reason=end_reason,
+            usage=self.usage_payload(usage_stats),
         )
+        if record is not None:
+            dispatch_conversation_event(
+                RunResultUpdatedEvent(
+                    task_id=record.task_id,
+                    run_id=run_id,
+                    end_reason=record.end_reason,
+                    usage_stats=usage_stats,
+                )
+            )
+        return record
 
     def fail_run_if_running(
-            self,
-            run_id: int,
-            end_reason: str | None = None,
-            final_output: str | None = None,
-            usage_stats: ConversationRunUsageStats | None = None,
-            error_message: str | None = None,
+        self,
+        run_id: int,
+        end_reason: str | None = None,
+        final_output: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
+        error_message: str | None = None,
     ) -> ConversationRunRecord | None:
         """原子失败结束仍处于可失败状态的 Run，并发布错误事件。
 
@@ -514,11 +476,11 @@ class ConversationRunStateService:
         return record
 
     def cancel_run_if_running(
-            self,
-            run_id: int,
-            end_reason: str = "user_cancelled",
-            final_output: str | None = None,
-            usage_stats: ConversationRunUsageStats | None = None,
+        self,
+        run_id: int,
+        end_reason: str = "user_cancelled",
+        final_output: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
         """将 active Run 标记 cancelled，并发布其 Transport 展示状态。
 
@@ -548,7 +510,10 @@ class ConversationRunStateService:
         record = self._run.update_status_if_in(
             run_id,
             ConversationRunStatus.CANCELLED.value,
-            self._allowed_source_statuses(ConversationRunStatus.CANCELLED),
+            self._allowed_source_statuses(
+                ConversationRunStatus.CANCELLED,
+                (ConversationRunStatus.PENDING, ConversationRunStatus.RUNNING),
+            ),
             end_reason,
             final_output=final_output,
             usage=self.usage_payload(usage_stats),
@@ -565,19 +530,5 @@ class ConversationRunStateService:
                 usage_stats=usage_stats,
                 error=error,
             ),
-        )
-        return record
-
-    def cancel_run_for_startup_recovery(
-            self, run_id: int, end_reason: str = "runtime_restarted"
-    ) -> ConversationRunRecord | None:
-        """启动恢复时取消遗留 Run，不发布进程内实时事件或安排后续执行。"""
-
-        record = self._run.update_status_if_in(
-            run_id,
-            ConversationRunStatus.CANCELLED.value,
-            self._allowed_source_statuses(ConversationRunStatus.CANCELLED),
-            end_reason,
-            error=self.terminal_error(ConversationRunStatus.CANCELLED, end_reason),
         )
         return record

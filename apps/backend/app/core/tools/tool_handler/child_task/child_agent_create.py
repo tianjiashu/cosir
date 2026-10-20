@@ -139,7 +139,7 @@ class DelegateTaskTool(HandlerBase):
                 reason="Configure the parent agent profile error before delegating work.",
                 retryable=False,
             )
-        if cancellation_registry.is_cancelled(execution_context.run_id):
+        if cancellation_registry.is_cancelled(execution_context.task_id):
             return tool_cancelled(
                 tool_name=self.name,
             )
@@ -313,7 +313,6 @@ class DelegateTaskTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            parameters_schema=DelegateTaskArgs.model_json_schema(),
             timeout_seconds=self.timeout_seconds,
             execution_mode="thread",
             parallel_mode="parallel",

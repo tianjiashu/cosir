@@ -7,13 +7,13 @@ from app.models.conversation_run_attachment_input import ConversationRunAttachme
 
 @dataclass(frozen=True, slots=True)
 class ConversationRunCommand:
-    """描述一次新建或编辑 Run 的已归一化用户输入。
+    """描述首条、追加或编辑消息的已归一化用户输入。
 
     ``display_text`` 保留用户可见文本和普通附件 token；图片只携带已上传附件 id，
     普通附件携带可选的本机路径，``ban_tools`` 保留用户本次 Run 禁用的工具名列表。
     ``allows_tools`` 不在此命令中提前计算，而是在运行时结合 Task 固化工具目录后生成
     最终执行快照。该类型不依赖 Assistant Transport 的 wire schema，由 Transport 适配层
-    或其它本地入口构造，交给 ``ConversationRunService`` 持久化，再由 Runner 解析。
+    或其它本地入口构造，经输入准备服务解析后存入 inbox；模型边界消费时归属 Run 和 context。
     """
 
     display_text: str

@@ -63,7 +63,8 @@ class ConversationEventEnvelope(BaseModel):
         """返回 ``(run_index, message_index)``。"""
 
         run_index = ConversationEventEnvelope._find_run(state, run_id)
-        for message_index, message in enumerate(state["runs"][run_index]["messages"]):
+        for message_index in range(len(state["runs"][run_index]["messages"]) - 1, -1, -1):
+            message = state["runs"][run_index]["messages"][message_index]
             if message["role"] == "assistant":
                 return run_index, message_index
         if required:
@@ -80,7 +81,8 @@ class ConversationEventEnvelope(BaseModel):
         """返回 ``(run_index, message_index, part_index)``。"""
 
         run_index = ConversationEventEnvelope._find_run(state, run_id)
-        for message_index, message in enumerate(state["runs"][run_index]["messages"]):
+        for message_index in range(len(state["runs"][run_index]["messages"]) - 1, -1, -1):
+            message = state["runs"][run_index]["messages"][message_index]
             if message["role"] != role:
                 continue
             for part_index, part in enumerate(message["parts"]):

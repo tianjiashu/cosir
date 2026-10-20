@@ -29,9 +29,6 @@ if TYPE_CHECKING:
         ConversationRunExecutor,
     )
     from app.core.runtime.runner import AgentRuntime
-    from app.service.conversation_run.conversation_run_observability_service import (
-        ConversationRunObservabilityService,
-    )
     from app.service.conversation_run.conversation_run_service import ConversationRunService
     from app.service.conversation_run.conversation_run_state_service import (
         ConversationRunStateService,
@@ -420,17 +417,6 @@ def get_conversation_run_state_service() -> ConversationRunStateService:
 
 
 @lru_cache(maxsize=1)
-def get_conversation_run_observability_service() -> ConversationRunObservabilityService:
-    """返回进程级 Conversation Run 可观测性事实 service。"""
-
-    from app.service.conversation_run.conversation_run_observability_service import (
-        ConversationRunObservabilityService,
-    )
-
-    return ConversationRunObservabilityService()
-
-
-@lru_cache(maxsize=1)
 def get_conversation_event_projector() -> ConversationEventProjector:
     """返回进程级 conversation event → snapshot projector。"""
     from app.assistant_transport.service.conversation_event_projector import (
@@ -490,7 +476,6 @@ def reset_service_dependencies() -> None:
     get_workspace_service.cache_clear()
     get_conversation_run_service.cache_clear()
     get_conversation_run_state_service.cache_clear()
-    get_conversation_run_observability_service.cache_clear()
     get_task_service.cache_clear()
     get_workspace_crud.cache_clear()
     get_conversation_run_crud.cache_clear()

@@ -7,11 +7,11 @@ cwd 路径语法、信号能力边界）。这些文本一律使用英文——�
 
 import platform
 from collections.abc import Mapping
-from copy import deepcopy
 from typing import Any
 
 from pydantic import BaseModel
 
+from app.core.tools.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tools.schemas.tool_names import (
     TOOL_TERMINAL_SIGNAL,
     TOOL_TERMINAL_START,
@@ -27,10 +27,10 @@ def build_terminal_session_parameters_schema(
 ) -> Mapping[str, Any]:
     """按宿主补充说明；控制键枚举与校验由参数模型统一生成。
 
-    shell 名称仍允许自定义可执行文件。深拷贝避免描述修改污染共享 Pydantic schema。
+    shell 名称仍允许自定义可执行文件；每次基于 SDK 新生成的 strict schema 补充描述。
     """
 
-    schema = deepcopy(args_model.model_json_schema())
+    schema = strict_parameters_schema(args_model)
     properties = schema.get("properties")
     if not isinstance(properties, dict):
         return schema

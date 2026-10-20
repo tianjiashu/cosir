@@ -31,6 +31,9 @@ _RUN_FAILURE_MESSAGES: dict[str, str] = {
     Constant.Run.RUN_FAILURE_CODE_MODEL_OUTPUT_INVALID: "模型未返回可用内容，请重试",
     Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT: "连续工具调用失败过多，已停止本轮对话",
     Constant.Run.RUN_FAILURE_CODE_MAX_STEPS: "已达最大步数上限，已停止本轮对话",
+    Constant.Run.RUN_FAILURE_CODE_CONTEXT_PROTOCOL_INVALID: (
+        "工具调用上下文不完整，已停止执行并保留原始记录，请查看日志排查"
+    ),
     Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED: "对话运行中断，请重试",
     Constant.Run.RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED: "本轮对话已结束，无法继续，请新建对话",
     Constant.Run.RUN_FAILURE_CODE_BACKEND_RESTARTED: "后端已重启，本轮对话被中断，请重新发送",

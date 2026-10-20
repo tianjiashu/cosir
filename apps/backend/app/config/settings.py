@@ -13,7 +13,7 @@
 - **不可变、无需按环境覆盖的数值上限不在此处**：系统提示词预算、工具输出与并发上限、
   Web 限额、日志轮转等固定值统一收敛到 ``app.config.constant.Constant`` 的对应域；判定标准
   是「是否存在真实的按环境覆盖需求」，不是数值大小。
-- 进程固定路径（数据根 / 日志目录 / 主库与 checkpoint 文件）不在此定义，唯一事实源为
+- 进程固定路径（数据根 / 日志目录 / 主库与运行期缓存 文件）不在此定义，唯一事实源为
   ``app.utils.path.system_cosir``；``Settings.load`` 会触发其 ``reset`` 与环境变量对齐。
 - 保留下来的配置全进程共享、启动后只读；测试需临时改值时经 ``monkeypatch.setattr``（自动还原）。
   主 Agent 的单轮最大步数由 ``MAIN_AGENT_MAX_STEPS`` 环境配置加载到这里，再注入主 Agent
@@ -40,7 +40,8 @@ class Settings:
         - 负责：进程级运行配置的定义、加载（含 ``.env`` 覆盖）与校验；测试临时改值由调用方
           经 ``monkeypatch.setattr`` 完成，本类不提供覆盖入口。
         - 不负责：不可变静态常量（见 ``app.config.constant.Constant``）、模型相关配置
-          （见 ``app.core.agents.model_settings``）、进程固定路径（见 ``app.utils.path.system_cosir``）、
+          （见 ``app.core.agents.model_settings``）、进程固定路径（见
+          ``app.utils.path.system_cosir``）、
           任何业务读写。
     """
 
@@ -67,14 +68,6 @@ class Settings:
     WEB_EXTRACT_BACKEND: ClassVar[str] = ""
     WEB_BACKEND: ClassVar[str] = ""
 
-    # --- Langfuse 可观测性（云服务器自托管，详见 docs/Langfuse可观测性集成技术方案.md） ---
-    # 启用开关 + 密钥齐备 + langfuse 可导入，三者满足 ``tracing_enabled()`` 才返回 True。
-    # 密钥仅通过同名环境变量（``LANGFUSE_*``）注入，不写入代码库，避免泄露。
-    LANGFUSE_ENABLED: ClassVar[bool] = False
-    LANGFUSE_PUBLIC_KEY: ClassVar[str | None] = None
-    LANGFUSE_SECRET_KEY: ClassVar[str | None] = None
-    # 云服务器经反向代理对外暴露的 HTTPS 域名（指向 langfuse/server）。
-    LANGFUSE_BASE_URL: ClassVar[str] = ""
     # 记录由系统配置文件注入的值，使配置中心能够与桌面宿主/启动器提供的进程环境区分。
     _LOADED_ENV_VALUES: ClassVar[dict[str, str]] = {}
 
@@ -82,7 +75,8 @@ class Settings:
     def _load_env_file() -> None:
         """从系统级 ``.cosir/.env`` 加载未显式设置的环境变量。
 
-        配置文件位置完全由 ``app.utils.path.system_cosir.env_file()`` 决定（``<数据根>/.cosir/.env``），本方法
+        配置文件位置完全由 ``app.utils.path.system_cosir.env_file()``
+        决定（``<数据根>/.cosir/.env``），本方法
         不接受路径参数，避免出现第二套位置口径。
 
         返回:
@@ -119,34 +113,6 @@ class Settings:
         """判断当前环境值是否由本次 Settings 加载从配置文件注入。"""
 
         return name in cls._LOADED_ENV_VALUES
-
-    @staticmethod
-    def _env_bool(name: str, default: bool) -> bool:
-        """读取布尔环境变量。
-
-        参数:
-            name: 环境变量名。
-            default: 未设置时使用的默认值。
-
-        返回:
-            解析后的布尔值。
-
-        异常:
-            ValueError: 如果变量值不是受支持的布尔文本。
-
-        副作用:
-            读取进程环境变量。
-        """
-
-        value = os.environ.get(name)
-        if value is None:
-            return default
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-        raise ValueError(f"{name} must be a boolean value")
 
     @staticmethod
     def _env_positive_int(name: str, default: int) -> int:
@@ -189,12 +155,11 @@ class Settings:
             无。
 
         异常:
-            ValueError: ``LANGFUSE_ENABLED`` 不是受支持的布尔文本，或
-                ``MAIN_AGENT_MAX_STEPS`` 不是正整数时抛出。
+            ValueError: ``MAIN_AGENT_MAX_STEPS`` 不是正整数时抛出。
 
         副作用:
             加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性；经 ``paths.reset``
-            按当前环境重新对齐固定路径（数据根 / 日志目录 / 主业务库与 checkpoint 文件）。
+            按当前环境重新对齐固定路径（数据根 / 日志目录 / 主业务库与运行期缓存 文件）。
         """
         cls._load_env_file()
         # 固定路径唯一事实源在 ``app.utils.path.system_cosir``：加载 .env 后按环境重新对齐，使
@@ -203,12 +168,3 @@ class Settings:
         # 环境变量名与类字段名同名（见模块 docstring）：读取的键即字段本身，无前缀映射。
         cls.DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "zh").strip().lower()
         cls.MAIN_AGENT_MAX_STEPS = cls._env_positive_int("MAIN_AGENT_MAX_STEPS", 300)
-
-        # Langfuse 可观测性配置（缺省关闭，显式开启且仅在密钥齐备时生效）。
-        cls.LANGFUSE_ENABLED = cls._env_bool("LANGFUSE_ENABLED", False)
-        cls.LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY")
-        cls.LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY")
-        cls.LANGFUSE_BASE_URL = os.environ.get(
-            "LANGFUSE_BASE_URL",
-            "",
-        )

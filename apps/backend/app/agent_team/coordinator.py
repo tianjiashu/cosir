@@ -16,6 +16,7 @@ from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
+from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.models import ConversationRunRecord
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_failure import run_failure_message
@@ -395,7 +396,12 @@ class AgentTeamCoordinator:
             )
             raise
 
-        asyncio.run(self._runner.run_agent(run_profile))
+        try:
+            asyncio.run(self._runner.run_agent(run_profile))
+        finally:
+            # 节点 Run 不经 ConversationRunExecutor 驱动，这里就是它的释放边界：取走 Task 信号，
+            # 避免残留到同一节点 Task 的下一次执行。
+            cancellation_registry.consume(node_execution.task_id)
         node_run = self._run_service.get_run(node_run.id)
 
         return node_execution, node_run
@@ -592,6 +598,12 @@ class AgentTeamCoordinator:
                 *self._team_run_crud.list_pending_confirmations(),
                 *self._team_run_crud.list_active(),
         ):
+            node_task_ids = {
+                task_id
+                for task_id, _ in AgentTeamRunState.model_validate(row.state_json).node_references()
+            }
+            if row.parent_task_id not in task_ids and not node_task_ids & task_ids:
+                continue
             team = self.cancel(row.id)
             if team is not None:
                 cancelled += 1
@@ -627,12 +639,14 @@ class AgentTeamCoordinator:
         return cancelled
 
     def recover_after_restart(self) -> int:
-        """把后端重启遗留的 Team 运行和未确认方案收敛为 cancelled，不自动重放。"""
+        """把后端重启遗留的运行中 Team 收敛为 cancelled，不自动重放。
 
-        pending = self._team_run_crud.list_pending_confirmations()
-        active = self._team_run_crud.list_active()
+        待确认（pending）的 TeamRun 保留：它挂在仍处于等待态的主 Run 上，重启后用户照常批准、
+        驳回或取消；收敛它会让仍可点击的审批卡片必然失败。
+        """
+
         recovered = 0
-        for row in (*pending, *active):
+        for row in self._team_run_crud.list_active():
             previous_status = row.status
             updated = self._team_run_crud.update_status_if_in(
                 row.id,

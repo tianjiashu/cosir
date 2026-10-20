@@ -5,7 +5,7 @@
 
 为什么放在 utils（leaf）而非 vision_content_blocks：
 - 这两类判断被多处复用：附件类型推断、运行期视觉预筛
-  （``core/workflows/.../vision_content_blocks`` 编排层）、workflow 图片路径过滤。
+  （``core/workflow/.../vision_content_blocks`` 编排层）、workflow 图片路径过滤。
   放在编排层会导致其它层跨层引用其私有函数，违反分层依赖。
 - 它们只依赖标准库 ``mimetypes`` 与同属 ``app.utils`` 的 ``constants`` / ``cosir_paths``，
   无循环依赖风险，符合 leaf 层定位。

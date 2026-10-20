@@ -14,6 +14,7 @@ from app.assistant_transport.request import (
     AssistantAttachRequest,
     AssistantTransportRequest,
 )
+from app.assistant_transport.response.command_accepted import CommandAccepted
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
@@ -34,29 +35,14 @@ from app.service.depends import (
 from app.task_runtime.service.task_service import TaskService
 
 
-@app.post("/assistant")
+@app.post("/assistant", response_model=CommandAccepted)
 async def assistant_transport(
-        request: AssistantTransportRequest,
-        run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
-        transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
-) -> StreamingResponse:
-    """接收用户消息并返回 Assistant Transport 状态流。
-
-    参数:
-        request: Assistant UI request 请求，当前业务命令为文本 ``add-message``。
-        run_executor: 负责启动已完成装配的 Conversation Run。
-        transport_service: 负责校验请求、创建或恢复 Run 并建立 Transport 响应。
-
-    返回:
-        使用项目自有 frame 协议编码的 ``text/event-stream`` 响应。
-
-    异常:
-        HTTPException: 请求任务不存在或运行切片创建失败时抛出。
-
-    副作用:
-        创建一个 pending run，并立即启动后台 Agent 执行（与 HTTP 订阅解耦）；
-        运行期间更新数据库和 canonical conversation facts。
-    """
+    request: AssistantTransportRequest,
+    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
+) -> Response:
+    """提交用户消息、编辑或业务续跑，返回 JSON 接收回执。
+    后台执行独立于请求；输出由 attach SSE 订阅，普通入队不会替换订阅。"""
 
     command = next(
         (command for command in request.commands if isinstance(command, AddMessageCommand)),
@@ -73,6 +59,27 @@ async def assistant_transport(
     )
 
     try:
+        if mode == "resume" and request.runId is not None:
+            import asyncio
+
+            from app.service.depends import get_conversation_run_service
+
+            resume_run = await asyncio.to_thread(
+                get_conversation_run_service().get_run, request.runId
+            )
+            if resume_run.status not in {"waiting_for_input", "cancelled", "failed"}:
+                raise ValueError("Run 当前不可续跑")
+            await run_executor.wait_released(request.runId)
+        if mode == "edit" and request.runId is not None:
+            import asyncio
+
+            from app.service.depends import get_conversation_run_service
+
+            edited_run = await asyncio.to_thread(
+                get_conversation_run_service().get_run, request.runId
+            )
+            if edited_run.status not in {"pending", "running"}:
+                await run_executor.wait_released(request.runId)
         async with transport_service.task_run_operation(task_id=task_id):
             # 准备 run 启动结果
             start_result = await transport_service.prepare_run_start(
@@ -85,13 +92,9 @@ async def assistant_transport(
             initial_state = start_result.initial_state
 
             try:
-                # 用户决定随启动一并交给执行器：它是一次请求级的输入，不能经进程内旁路或
-                # 二次查询传递（决定不落库）。
-                await run_executor.start(
-                    run.id,
-                    start_result.execution_mode,
-                    start_result.user_decision,
-                )
+                # 状态与决定已原子落库，执行器从 Run 读取恢复事实。
+                if start_result.should_start:
+                    await run_executor.start(run.id, start_result.execution_mode)
             except Exception:
                 # 真失败：run 已被本次请求置为 active，但执行器没有起来，必须收敛，否则该 task
                 # 会残留一个无执行器的 active run（new 与 resume 都会被状态校验拒绝）。
@@ -112,11 +115,9 @@ async def assistant_transport(
                     run_id=request.runId,
                 )
 
-            return transport_service.build_response(
-                task_id=task_id,
-                thread_id=f"task-{task_id}",
-                run_id=run.id,
-                state=initial_state,
+            return JSONResponse(
+                {"runId": run.id, "state": initial_state, "queued": not start_result.should_start},
+                headers={"X-Cosir-Task-Id": str(task_id), "X-Cosir-Thread-Id": request.threadId},
             )
     except HTTPException:
         # 由 ``_raise_transport_error`` 抛出的领域冲突响应必须原样到达 FastAPI。
@@ -191,10 +192,10 @@ async def assistant_transport(
 
 @app.post("/tasks/{task_id}/assistant/attach")
 async def assistant_transport_attach(
-        task_id: int,
-        request: AssistantAttachRequest,
-        task_service: TaskService = Depends(get_task_service),
-        transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
+    task_id: int,
+    request: AssistantAttachRequest,
+    task_service: TaskService = Depends(get_task_service),
+    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> StreamingResponse:
     """重新订阅已有 Run，不触发业务 resume。"""
 
@@ -235,11 +236,9 @@ async def assistant_transport_attach(
 
 @app.get("/tasks/{task_id}/assistant/state")
 async def assistant_transport_state(
-        task_id: int,
-        task_service: TaskService = Depends(get_task_service),
-        state_service: ConversationTaskStateService = Depends(
-            get_conversation_task_state_service
-        ),
+    task_id: int,
+    task_service: TaskService = Depends(get_task_service),
+    state_service: ConversationTaskStateService = Depends(get_conversation_task_state_service),
 ) -> ConversationStateSnapshot:
     """返回某任务的首屏历史 state（服务端权威对话视图）。
 
@@ -289,83 +288,61 @@ async def assistant_transport_state(
     return state
 
 
-@app.post("/runs/{run_id}/cancel")
-async def cancel_run(
-        run_id: int,
-        run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+@app.post("/tasks/{task_id}/cancel")
+async def cancel_task(
+    task_id: int,
+    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
 ) -> Response:
-    """显式取消一个 Conversation Run。
+    """停止 Task 当前的执行。
 
-    表现层只做输入校验、调用业务层与异常映射，不编排取消时序——「向进程内取消信号源
-    标记该 run」已收口到 ``ConversationRunExecutor.cancel`` 单一入口。HTTP 断连不会
-    调用本端点；重复取消只返回既有信号状态，不重复标记，也不改变任何持久化事实。
-
-    本端点只表示**取消信号已被接受**，不表示 run 已经终结：run 的终态转移
-    （active → cancelled）由 workflow 经 run_service 落定，前端需继续以 canonical
-    snapshot 为准判断该 run 是否已收束。
-
-    参数:
-        run_id: Conversation Run 标识。
-        run_executor: 进程内取消信号标记的唯一入口。
-
-    返回:
-        包含 ``run_id`` 与 ``cancelled`` 的 JSON 对象。
+    按 task 而不是 run 取消：同一 Task 内 Run 串行，命中的永远是当前执行，不依赖前端可能
+    滞后的 run_id。本端点只表示**取消信号已被接受**，Run 终态由 workflow 在检查点落定，前端
+    继续以 canonical snapshot 为准；等待用户决定的 Run 会以强制拒绝恢复后同样收敛。重复请求
+    幂等返回 200。HTTP 断连不会调用本端点。
 
     异常:
-        HTTPException: run 不存在时返回 404；该 run 此前已标记过取消（信号已存在）时
-        返回 409；标记内部失败时返回 500。
-
-    副作用:
-        向进程内取消信号源写入该 run；不落库 run 状态、不取消后台执行 task。
+        HTTPException: task 不存在时 404；Task 当前没有可停止的执行时 409；内部失败时 500。
     """
     try:
-        result = await run_executor.cancel(run_id, end_reason="user_cancelled")
+        accepted = await run_executor.cancel(task_id)
     except KeyError as exc:
         log.warning(
-            "conversation_run_cancel_not_found",
-            extra={"msg": "取消请求未找到 Conversation Run", "data": {"run_id": run_id}},
+            "task_cancel_not_found",
+            extra={"msg": "取消请求未找到 Task", "data": {"task_id": task_id}},
         )
-        raise HTTPException(status_code=404, detail="run not found") from exc
+        raise HTTPException(status_code=404, detail="task not found") from exc
     except Exception as exc:
         log.exception(
-            "cancel_run_failed",
-            extra={"msg": "取消 Conversation Run 失败", "data": {"run_id": run_id}},
+            "task_cancel_failed",
+            extra={"msg": "停止 Task 执行失败", "data": {"task_id": task_id}},
         )
-        raise HTTPException(status_code=500, detail="failed to cancel run") from exc
-    if not result:
+        raise HTTPException(status_code=500, detail="failed to cancel task") from exc
+    if not accepted:
         log.info(
-            "conversation_run_cancel_rejected",
-            extra={"msg": "Conversation Run 当前状态不允许取消", "data": {"run_id": run_id}},
+            "task_cancel_rejected",
+            extra={"msg": "Task 当前没有可停止的执行", "data": {"task_id": task_id}},
         )
-        raise HTTPException(status_code=409, detail="run is not in a cancellable state")
+        raise HTTPException(status_code=409, detail="task has no cancellable execution")
     log.info(
-        "conversation_run_cancelled",
-        extra={
-            "msg": "Conversation Run 已取消",
-            "data": {"run_id": run_id, "result": result},
-        },
+        "task_cancel_accepted",
+        extra={"msg": "Task 取消信号已接受", "data": {"task_id": task_id}},
     )
-    return JSONResponse(
-        content={
-            "run_id": run_id,
-            "cancelled": result,
-        }
-    )
+    return JSONResponse(content={"task_id": task_id, "cancelled": True})
 
 
 @app.post("/runs/{run_id}/tool-calls/{tool_call_id}/cancel")
 async def cancel_tool_call(
-        run_id: int,
-        tool_call_id: str,
-        run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+    run_id: int,
+    tool_call_id: str,
+    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
 ) -> Response:
     """显式取消一个正在执行的工具调用（工具级取消）。
 
     表现层只做输入校验、调用业务层与异常映射，不编排取消时序——「向进程内工具级取消
     信号源标记该工具调用」已收口到 ``ConversationRunExecutor.cancel_tool_call`` 单一入口。
 
-    与 ``POST /runs/{run_id}/cancel`` 的差别是取消范围：run 级取消要求整个 Conversation
-    Run 停止执行，run 终态由 workflow 落定；本端点只中止**一次**工具调用，run 与 Agent
+    与 ``POST /tasks/{task_id}/cancel`` 的差别是取消范围：Task 级取消要求当前执行整体停止，
+    run 终态由 workflow 落定；本端点只中止**一次**工具调用，run 与 Agent
     在其后继续执行。因此本端点只表示**取消信号已被接受**，不表示工具调用已经结束：被
     点名的工具在执行层检出信号后返回取消观察，其终态与模型侧 ``ToolMessage`` 由 workflow
     落定，前端需继续以 canonical snapshot 为准。HTTP 断连不会调用本端点。

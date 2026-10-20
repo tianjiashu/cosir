@@ -166,9 +166,9 @@ class ConversationTaskContextCrud:
             with self._session_factory.begin() as owned_session:
                 self.create(record, session=owned_session)
             return
-        with session.begin_nested():
-            session.add(model)
-            session.flush()
+        # 外部事务是唯一提交边界；SQLite legacy 模式下首个 SAVEPOINT 的释放会提前提交。
+        session.add(model)
+        session.flush()
 
     def replace_message(
         self,
@@ -177,15 +177,13 @@ class ConversationTaskContextCrud:
         record: ConversationTaskContextRecord,
         session: Session | None = None,
     ) -> None:
-        """原子替换同一条 context 行的内容：消息正文、归属、两个标记位与可选 Transport metadata。
+        """原子替换同一条 context 行的内容：消息正文、归属、模型与展示标记及完整角色 metadata。
 
-        本方法是「原地替换一行」的唯一入口（流式草稿更新、草稿收口、占位被真实工具结果覆盖都
+        本方法是「原地替换一行」的唯一入口（占位被真实工具结果覆盖等操作都
         经它），因此**不改变行身份与顺序**：``id`` / ``task_id`` / ``sequence`` 保持原值，调用方
         必须保证 ``record`` 与目标 task/sequence 匹配。
 
-        Transport metadata 采用与事件契约一致的「**None 表示不改写**」语义：``record`` 未提供
-        metadata 时保留行内既有值——正文替换不得清掉由旁路（child display、terminal 展示状态）
-        维护的 metadata；需要写入新终态时必须显式给出完整 metadata（覆盖占位走这条）。
+        metadata 与正文整体替换，不保留旧等待请求或错误；旁路状态更新使用下方的原子 JSON 更新。
 
         参数:
             task_id: 目标行所属 Task。
@@ -195,12 +193,11 @@ class ConversationTaskContextCrud:
 
         异常:
             ValueError: ``record`` 的 task/sequence 与目标不匹配。
-            KeyError: 目标行不存在（草稿或行已被删除，属调用顺序错误）。
+            KeyError: 目标行不存在。
 
         副作用:
             就地更新该行的 ``run_id`` / ``message_json`` / ``include_in_context`` /
-            ``project_to_transport`` / ``is_streaming``；``record.transport_metadata`` 非 ``None`` 时
-            一并更新 ``transport_metadata_json``；不新增、不删除行。
+            ``project_to_transport`` 与完整 ``metadata_json``；不新增、不删除行。
         """
 
         if record.task_id != task_id or record.sequence != sequence:
@@ -219,11 +216,9 @@ class ConversationTaskContextCrud:
         replacement = record._to_model()
         model.run_id = replacement.run_id
         model.message_json = replacement.message_json
+        model.metadata_json = replacement.metadata_json
         model.include_in_context = replacement.include_in_context
         model.project_to_transport = replacement.project_to_transport
-        model.is_streaming = replacement.is_streaming
-        if record.transport_metadata is not None:
-            model.transport_metadata_json = replacement.transport_metadata_json
         session.flush()
 
     def update_child_display_status(
@@ -253,7 +248,7 @@ class ConversationTaskContextCrud:
             sqlalchemy.exc.SQLAlchemyError: 数据库写入失败。
 
         副作用:
-            仅在 locator 仍匹配时更新 ``transport_metadata_json``；不发布 Assistant
+            仅在 locator 仍匹配时更新 ``metadata_json``；不发布 Assistant
             Transport 事件。
         """
 
@@ -269,17 +264,15 @@ class ConversationTaskContextCrud:
                 )
             return
 
-        metadata_json = ConversationTaskContextModel.transport_metadata_json
+        metadata_json = ConversationTaskContextModel.metadata_json
         display_kind = func.json_extract(metadata_json, "$.display_data.kind")
         statement = (
             update(ConversationTaskContextModel)
             .where(
                 ConversationTaskContextModel.task_id == task_id,
                 ConversationTaskContextModel.sequence == sequence,
-                func.json_extract(metadata_json, "$.display_data.child_task_id")
-                == child_task_id,
-                func.json_extract(metadata_json, "$.display_data.child_run_id")
-                == child_run_id,
+                func.json_extract(metadata_json, "$.display_data.child_task_id") == child_task_id,
+                func.json_extract(metadata_json, "$.display_data.child_run_id") == child_run_id,
                 or_(
                     display_kind == "delegation-result",
                     and_(
@@ -289,7 +282,7 @@ class ConversationTaskContextCrud:
                 ),
             )
             .values(
-                transport_metadata_json=func.json_set(
+                metadata_json=func.json_set(
                     metadata_json,
                     "$.display_data.status",
                     status,
@@ -329,7 +322,7 @@ class ConversationTaskContextCrud:
                 )
             return
 
-        metadata_json = ConversationTaskContextModel.transport_metadata_json
+        metadata_json = ConversationTaskContextModel.metadata_json
         display_kind = func.json_extract(metadata_json, "$.display_data.kind")
         display_status = func.json_extract(metadata_json, "$.display_data.status")
         updated_metadata = func.json_set(
@@ -354,9 +347,18 @@ class ConversationTaskContextCrud:
                 # exited/failed/closed state.
                 display_status.in_(("starting", "running")),
             )
-            .values(transport_metadata_json=updated_metadata)
+            .values(metadata_json=updated_metadata)
         )
         session.execute(statement)
+
+    def delete_from_sequence(self, task_id: int, sequence: int, session: Session) -> None:
+        """由编辑用例决定截断位置；保留严格早于目标消息的历史。"""
+        session.execute(
+            delete(ConversationTaskContextModel).where(
+                ConversationTaskContextModel.task_id == task_id,
+                ConversationTaskContextModel.sequence >= sequence,
+            )
+        )
 
     def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:
         """删除指定 task 下某 run 的全部上下文消息行。

@@ -1,7 +1,6 @@
 """Conversation Run 持久化模型。"""
 
-from uuid import uuid4
-
+from pydantic import JsonValue
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,21 +9,10 @@ from app.storage.model.base import StorageBase
 
 
 class ConversationRunModel(StorageBase):
-    """``conversation_runs`` 表模型：一次 Agent 运行的持久化事实。
+    """Run 生命周期、执行配置与恢复进度的唯一持久化记录。
 
-    Run 是「一次 Agent 执行」的独立实体：承载输入文本、Agent 身份、模型连接配置、
-    图片输入、终态原因、回复正文与运行附加事实。运行标识即本行 ``id``，由 ``StorageBase``
-    提供自增主键。
-
-    职责边界：
-    - 负责：单次运行的输入、模型连接路由、状态机与终态结果。
-    - 不负责：消息/工具调用等 canonical 会话事实（各自独立表）。Transport 命令只在请求
-      生命周期内参与 Run 编排，不作为独立数据库事实保存。
-
-    模型路由事实分层：模型名称与能力由 ``model_config_id`` 指向的配置解析；上下文窗口在
-    Run 创建时冻结，因为它必须与该次 Run 的 usage 配对，不能随配置或后续 Run 改变。
-    ``model_config_id`` 是配置行的弱引用，配置被删除时
-    由 ``ON DELETE SET NULL`` 置空，历史 Run 仍可读取其已保存的基础事实。
+    用户正文和附件归 inbox/context；Run 只保留模型路由、冻结选项和终态结果。
+    context_window_total 与本 Run 的 usage 配对，不随后续配置变化。
     """
 
     __tablename__ = "conversation_runs"
@@ -40,22 +28,16 @@ class ConversationRunModel(StorageBase):
     )
 
     task_id: Mapped[int] = mapped_column(Integer, ForeignKey("tasks.id"), nullable=False)
-    # LangGraph checkpoint 身份在新 run 创建时固定；历史 fork 只复制 durable run facts，
-    # 不复制 checkpoint 内容，也不共享源 run 的 checkpoint 身份。
-    checkpoint_thread_id: Mapped[str] = mapped_column(
-        String(36), nullable=False, default=lambda: str(uuid4())
-    )
-    input_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    execution_data: Mapped[dict[str, JsonValue]] = mapped_column(JSON, nullable=False)
     agent_id: Mapped[str | None] = mapped_column(Text)
     model_config_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("model_configs.id", ondelete="SET NULL")
     )
     # 与本次 Run 的 usage 配对，避免 Task 后续切换模型后改变历史占用比例。
     context_window_total: Mapped[int | None] = mapped_column(Integer)
-    image_paths: Mapped[list[str] | None] = mapped_column(JSON)
+    options: Mapped[dict[str, JsonValue]] = mapped_column(JSON, nullable=False)
     end_reason: Mapped[str | None] = mapped_column(Text)
     final_output: Mapped[str | None] = mapped_column(Text)
-    extra: Mapped[dict | None] = mapped_column(JSON)
     usage_json: Mapped[str | None] = mapped_column(Text)
     error_json: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(

@@ -23,6 +23,7 @@ _KNOWN_EVENT_TYPES = {
     "run_trace_updated",
     "user_input_appended",
     "run_status_changed",
+    "run_result_updated",
     "assistant_text_delta",
     "assistant_part_closed",
     "tool_call_created",
@@ -35,8 +36,7 @@ _KNOWN_EVENT_TYPES = {
 class _EventIdWindow:
     """按到达顺序保留最近 N 条 event_id 的**有界**集合。
 
-    只服务于「同一投递路径的近距离重放」（例如 LangGraph 在 interrupt/resume 后重放
-    custom stream 里缓冲的同一事件对象）。超出容量的旧 id 被淘汰后不再去重，这是刻意的
+    只服务于同一投递路径内重复提交的同一个事件对象。超出容量的旧 id 被淘汰后不再去重，这是刻意的
     取舍：以此换取恒定内存上界，而真实重放距离远小于窗口容量。
     """
 
@@ -108,7 +108,7 @@ class ConversationEventProjector:
 
     Projector 是 Transport 适配边界：它只读取 event 并维护 snapshot；子 Run 状态投影时，
     state service 会尽力把父委派 display metadata 写回已有 context 行，但不修改
-    ``RuntimeContextManager`` 的消息正文。每个 event 自带 ``plan`` 方法（继承自
+    ``RuntimeMessageContextManager`` 的消息正文。每个 event 自带 ``plan`` 方法（继承自
     ``ConversationEventEnvelope`` 的抽象契约），projector 直接调用 ``event.plan(state)``
     获得 mutation，无需按类型分派。事件在单个 backend 进程内按 workflow 的消费顺序处理。
 

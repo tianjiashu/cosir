@@ -32,7 +32,6 @@ class RuntimeNotice:
         ``system_hint:`` 标记、宿主平台声明与逐行拼接都归消费边界
         （``TaskRuntimeSpace.take_runtime_notices``）统一收口，本方法只回吐正文——这样同一条通知
         广播到多个 Task 时不会各自累加前缀。``kind`` / ``run_id`` 只服务队列的归属过滤与观测，
-        不落成消息字段（历史上曾把通知映射为 ``ToolMessage``，因缺必填 ``tool_call_id`` 在
-        langchain 校验器里直接 ``KeyError`` 崩溃，故不再走「每条通知一个消息」的路子）。
+        不落成消息字段；通知作为系统说明，不能伪造没有对应调用的工具消息。
         """
         return self.content

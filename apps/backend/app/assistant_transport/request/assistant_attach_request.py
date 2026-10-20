@@ -1,7 +1,7 @@
 """Assistant Transport attach 请求的 wire schema。
 
 本模块只描述桌面端重新订阅已有 Conversation Run 的 transport 请求结构，不依赖领域模型、
-LangGraph 或 storage。wire 字段遵循 assistant-ui 的 camelCase 约定；attach 请求只消费身份
+workflow 或 storage。wire 字段遵循 assistant-ui 的 camelCase 约定；attach 请求只消费身份
 字段（threadId / taskId / runId / commands），并显式忽略 assistant-ui 的通用 transport
 envelope（state / system / tools / callSettings / config）。
 """

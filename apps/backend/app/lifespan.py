@@ -50,8 +50,6 @@ from app.core.agents.agent_profile_config import (
     ensure_system_agent_team_config_dir,
 )
 from app.core.hook import HookContext, HookEvent, HookInterceptor
-from app.core.observability import flush_langfuse
-from app.core.observability.langfuse_runtime import reload_langfuse_from_settings
 from app.core.runtime.runner import AgentRuntime
 from app.core.tools import ToolSystem
 from app.service.configuration.agent_team_configuration_service import (
@@ -193,7 +191,6 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     # 文件管线，确保 Settings.load 或依赖初始化失败也有固定 JSONL 现场。
     install_logging_for_current_process(log_dir=paths.LOG_DIR)
     Settings.load()
-    reload_langfuse_from_settings()
     initialize_service_dependencies()
     # 重建一次管线：Settings.load() 已把 .env 载入进程环境并调用 paths.reset()，此刻
     # paths.LOG_DIR 才是最终数据根（CODING_AGENT_DATA_DIR）下的日志目录。轮转参数与函数默认值
@@ -276,10 +273,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
                 try:
                     await asyncio.to_thread(get_terminal_session_service().shutdown)
                 finally:
-                    try:
-                        await asyncio.to_thread(flush_langfuse)
-                    finally:
-                        await asyncio.to_thread(close_service_dependencies)
+                    await asyncio.to_thread(close_service_dependencies)
             # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
             _mark_boot_stopped()
         finally:

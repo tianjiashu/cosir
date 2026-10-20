@@ -1,7 +1,7 @@
 """Conversation Run 生命周期事件。
 
-本模块只承载「一次 Conversation Run 自身的创建与状态迁移」这一单一职责：run 骨架的建立、
-run 执行状态的迁移（含终态）。run 内消息与工具的细节事实不在此模块。每个事件把自身的投影
+本模块只承载「一次 Conversation Run 自身的创建与状态及结果更新」这一单一职责：run 骨架的建立、
+run 执行状态的迁移和终态后的结果更新。run 内消息与工具的细节事实不在此模块。每个事件把自身的投影
 逻辑实现在 ``plan`` 中。
 
 状态词表直接复用 ``ConversationRunStatus``（领域枚举单一事实源），不在本模块重复字面量。
@@ -10,7 +10,7 @@ run 执行状态的迁移（含终态）。run 内消息与工具的细节事实
 ``tool_call_event``）；本模块只定义用户输入事实事件的 Transport parts。
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, cast
 
@@ -29,8 +29,9 @@ from app.assistant_transport.state.conversation_state_part import (
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunError
+from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.utils.message_tokens import find_message_tokens
 
@@ -38,24 +39,56 @@ from app.utils.message_tokens import find_message_tokens
 # ``cancelled -> running`` 与 ``waiting_for_input -> running`` 是合法恢复迁移，由
 # ``ConversationRunStateService`` 在数据库条件更新成功之后才发出；若在此丢弃，snapshot 会永久
 # 停在终态，后续 tool-call 创建事件随之被终态短路丢弃，最终在工具状态迁移事件上抛 KeyError 中断
-# 整个 Run。``completed`` / ``failed`` 仍不可逆，避免迟到事件把已结束的 Run 拉回 active。
+# 整个 Run。``completed`` 不接受普通续跑，避免迟到事件把已结束的 Run 拉回 active。
 _ALLOWED_RUN_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
     "pending": frozenset({"pending", "running", "failed", "cancelled"}),
     "running": frozenset({"running", "waiting_for_input", "completed", "failed", "cancelled"}),
     "waiting_for_input": frozenset({"waiting_for_input", "running", "failed", "cancelled"}),
     "cancelled": frozenset({"cancelled", "running"}),
-    "failed": frozenset({"failed"}),
+    "failed": frozenset({"failed", "running"}),
     "completed": frozenset({"completed"}),
 }
+
+
+def _usage_mutations(
+    state: ConversationStateSnapshot,
+    run_index: int,
+    usage_stats: ConversationRunUsageStats | None,
+) -> list[ConversationStateMutation]:
+    """将新增模型用量并入 Run 快照；缺失字段和较小值不回退已有事实。"""
+
+    if usage_stats is None:
+        return []
+    incoming_usage = usage_stats.to_dict()
+    if incoming_usage is None:
+        return []
+    current_usage = state["runs"][run_index]["usage"]
+    merged_usage = {
+        key: (
+            current_usage[key]
+            if current_usage is not None
+            and (
+                incoming_usage[key] is None
+                or (
+                    current_usage[key] is not None
+                    and incoming_usage[key] < current_usage[key]
+                )
+            )
+            else incoming_usage[key]
+        )
+        for key in incoming_usage
+    }
+    if merged_usage == current_usage:
+        return []
+    return [ConversationStateMutation("set", ("runs", run_index, "usage"), merged_usage)]
 
 
 class RunInitializedEvent(ConversationEventEnvelope):
     """一个 Conversation Run 已被创建并绑定到 Task。
 
-    事实语义：本次请求已接收、run 已落库，Transport 侧应为其建立 user / assistant 两条
-    消息骨架与 ``run.runId`` 基线。本事件**不携带用户输入文本**——文本由紧随其后的
-    ``UserInputAppendedEvent`` 追加，使「run 已存在但输入尚未写完」这个中间态也是合法且
-    可渲染的。编辑重跑也可用 ``replace_existing`` 重建骨架。
+    事实语义：本次请求已接收、Run 已落库，Transport 侧建立空消息列表与 Run
+    基线。用户输入及 assistant 消息由各自的投影边界追加；编辑重跑可用
+    ``replace_existing`` 重建 Run 骨架。
 
     Attributes:
         replace_existing: 编辑重跑时是否替换已有 Run 的 Transport 骨架。
@@ -77,13 +110,13 @@ class RunInitializedEvent(ConversationEventEnvelope):
         self,
         state: ConversationStateSnapshot,
     ) -> Sequence[ConversationStateMutation]:
-        """规划 Run 的 user/assistant 消息骨架。
+        """规划空消息列表与 Run 骨架。
 
         参数:
             state: 当前 Task snapshot。
 
         返回:
-            建立 user / assistant 消息骨架与 ``run`` 基线的 mutation 列表；普通初始化在
+            建立空消息列表与 ``run`` 基线的 mutation 列表；普通初始化在
             已存在同一 Run 时回空列表（幂等），``replace_existing`` 则用于编辑重跑。
 
         异常:
@@ -144,7 +177,6 @@ class RunInitializedEvent(ConversationEventEnvelope):
                     "runId": self.run_id,
                     "status": "pending",
                     "endReason": None,
-                    "langfuseTraceId": None,
                     "contextWindowTotal": self.context_window_total,
                     "messages": self._messages(),
                     "usage": None,
@@ -156,52 +188,22 @@ class RunInitializedEvent(ConversationEventEnvelope):
         ]
 
     def _messages(self) -> list[ConversationStateMessage]:
-        """Build the empty user/assistant skeleton without user input content."""
+        """返回待后续投影填充的空消息列表。"""
 
-        return [
-            self._message(f"user-{self.run_id}", "user", []),
-            self._message(f"assistant-{self.run_id}", "assistant", []),
-        ]
+        return []
 
     def _run_snapshot(self) -> dict[str, object]:
-        """Build the reset Run snapshot used by the edit projection."""
+        """返回编辑重跑使用的空 Run 骨架。"""
 
         return {
             "runId": self.run_id,
             "status": "pending",
             "endReason": None,
-            "langfuseTraceId": None,
             "contextWindowTotal": self.context_window_total,
             "messages": self._messages(),
             "usage": None,
             "error": None,
         }
-
-
-class RunTraceUpdatedEvent(ConversationEventEnvelope):
-    """一次 Run 的 Langfuse 根 Trace 标识已经持久化。
-
-    事实语义：Run observability service 已经把 trace ID 写入 canonical Run 事实，Transport
-    侧只需把它投影到对应 Run。事件不创建、不验证 Langfuse Trace，也不改变 Run 生命周期。
-    """
-
-    type: Literal["run_trace_updated"] = "run_trace_updated"
-    trace_id: str = Field(min_length=1)
-
-    def plan(
-        self,
-        state: ConversationStateSnapshot,
-    ) -> Sequence[ConversationStateMutation]:
-        """规划 Langfuse trace ID 的单字段快照更新。"""
-
-        run_index = self._find_run(state, self.run_id)
-        return [
-            ConversationStateMutation(
-                "set",
-                ("runs", run_index, "langfuseTraceId"),
-                self.trace_id,
-            )
-        ]
 
 
 class RunStatusChangedEvent(ConversationEventEnvelope):
@@ -285,31 +287,7 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
             ConversationStateMutation("set", ("runs", run_index, "endReason"), self.end_reason),
             ConversationStateMutation("set", ("runs", run_index, "error"), self.error),
         ]
-        if self.usage_stats is not None:
-            incoming_usage = self.usage_stats.to_dict()
-            current_usage = state["runs"][run_index]["usage"]
-            if incoming_usage is not None:
-                # Provider 明细可分字段缺失；只合并有效且不回退的累计值，避免未知值
-                # 或默认零值覆盖已确认的 Run 用量。
-                merged_usage = {
-                    key: (
-                        current_usage[key]
-                        if current_usage is not None
-                        and (
-                            incoming_usage[key] is None
-                            or (
-                                current_usage[key] is not None
-                                and incoming_usage[key] < current_usage[key]
-                            )
-                        )
-                        else incoming_usage[key]
-                    )
-                    for key in incoming_usage
-                }
-                if merged_usage != current_usage:
-                    mutations.append(
-                        ConversationStateMutation("set", ("runs", run_index, "usage"), merged_usage)
-                    )
+        mutations.extend(_usage_mutations(state, run_index, self.usage_stats))
         message_index = self._find_assistant_message(state, self.run_id, required=False)
         if message_index is None:
             return mutations
@@ -332,26 +310,49 @@ class RunStatusChangedEvent(ConversationEventEnvelope):
         return mutations
 
 
+class RunResultUpdatedEvent(ConversationEventEnvelope):
+    """已完成 Run 的结构化支线结果已落库；仅更新原因和用量投影，不重发状态事件。"""
+
+    type: Literal["run_result_updated"] = "run_result_updated"
+    end_reason: str | None = None
+    usage_stats: ConversationRunUsageStats | None = None
+
+    def plan(self, state: ConversationStateSnapshot) -> Sequence[ConversationStateMutation]:
+        run_index = self._find_run(state, self.run_id)
+        if state["runs"][run_index]["status"] != ConversationRunStatus.COMPLETED.value:
+            log.warning(
+                "transport_run_result_update_dropped",
+                extra={
+                    "msg": "已完成 Run 的结果事件未命中 completed 快照",
+                    "data": {
+                        "task_id": self.task_id,
+                        "run_id": self.run_id,
+                        "snapshot_status": state["runs"][run_index]["status"],
+                    },
+                },
+            )
+            return []
+        return [
+            ConversationStateMutation("set", ("runs", run_index, "endReason"), self.end_reason),
+            *_usage_mutations(state, run_index, self.usage_stats),
+        ]
+
+
 UserInputPart = ConversationStateTextPart | ConversationStateImagePart | ConversationStateFilePart
 
 
 def build_user_input_parts(
     display_text: str,
     image_paths: Sequence[str],
-    file_attachments: Sequence[Mapping[str, str]],
+    file_attachments: Sequence[ConversationRunFileAttachment],
 ) -> list[UserInputPart]:
-    """Build ordered safe Transport parts from persisted user-input facts.
+    """将已消费或排队输入的展示绑定投影为安全 locator parts，不读取附件内容。
 
-    The existing ``display_text`` value carries internal image/file markers solely to preserve
-    the composer order across the existing Run JSON extra field. The markers are converted to
-    safe locator parts here; the resulting parts contain no local path or binary content. Old
-    records without image markers retain the historical image-path append fallback.
-
-    Raises:
-        ValueError: If a display token has no matching attachment or no part can be built.
+    display_text 中的 token 保留编辑器顺序；未嵌入正文的图片按输入顺序追加。
+    token 无对应附件或输入无可展示内容时抛 ValueError。
     """
 
-    attachments_by_id: dict[str, Mapping[str, str]] = {}
+    attachments_by_id: dict[str, ConversationRunFileAttachment] = {}
     for attachment_record in file_attachments:
         attachment_id = attachment_record.get("id")
         if (
@@ -421,7 +422,7 @@ def build_user_input_parts(
 class UserInputAppendedEvent(ConversationEventEnvelope):
     """用户本轮完整输入已落库并追加到该 Run 的 user 消息。
 
-    事实语义：canonical context 已成功写入本轮 HumanMessage，Transport 侧应将完整且有序
+    事实语义：canonical context 已成功写入本轮 SDK user message，Transport 侧应将完整且有序
     的文本、图片和普通文件 parts 一次性写入 user 消息。附件 part 只携带受控 locator 与
     展示元数据；本事件不读取磁盘、不查询附件内容，也不生成附件文件。
 
@@ -434,6 +435,7 @@ class UserInputAppendedEvent(ConversationEventEnvelope):
     """
 
     type: Literal["user_input_appended"] = "user_input_appended"
+    message_id: str
     parts: list[UserInputPart] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -468,46 +470,27 @@ class UserInputAppendedEvent(ConversationEventEnvelope):
                 raise ValueError("user input event contains an unsupported part")
         return self
 
-    def plan(
-        self,
-        state: ConversationStateSnapshot,
-    ) -> Sequence[ConversationStateMutation]:
-        """规划 user 消息完整有序 parts 的一次性写入。
-
-        参数:
-            state: 当前 Task snapshot。
-
-        返回:
-            单条 ``set`` mutation（将完整有序 parts 写入 user 消息）。
-
-        异常:
-            KeyError: 该 run 的 user text part 不存在。
-
-        副作用:
-            无。
-        """
-
+    def plan(self, state: ConversationStateSnapshot) -> Sequence[ConversationStateMutation]:
+        """一次消费追加独立用户消息和后续 assistant 气泡；重复投影按消息身份去重。"""
         run_index = self._find_run(state, self.run_id)
-        message_index = next(
-            (
-                index
-                for index, message in enumerate(state["runs"][run_index]["messages"])
-                if message["role"] == "user"
-            ),
-            None,
-        )
-        if message_index is None:
-            raise KeyError(f"user message for run {self.run_id} not found")
-        current_parts = state["runs"][run_index]["messages"][message_index]["parts"]
-        next_parts: list[dict[str, object]] = [
-            cast(dict[str, object], dict(part)) for part in self.parts
-        ]
-        if current_parts == next_parts:
+        messages = state["runs"][run_index]["messages"]
+        if any(m["id"] == self.message_id for m in messages):
             return []
+        # 连续消费多条 user 时移除尚无输出的 assistant 占位。
+        updated = list(messages)
+        if updated and updated[-1]["role"] == "assistant" and not updated[-1]["parts"]:
+            updated.pop()
+        updated.extend(
+            [
+                self._message(self.message_id, "user", self.parts),
+                self._message(f"assistant-{self.message_id}", "assistant", []),
+            ]
+        )
         return [
+            ConversationStateMutation("set", ("runs", run_index, "messages"), updated),
             ConversationStateMutation(
                 "set",
-                ("runs", run_index, "messages", message_index, "parts"),
-                next_parts,
-            )
+                ("queued_messages",),
+                [m for m in state.get("queued_messages", []) if m["id"] != self.message_id],
+            ),
         ]

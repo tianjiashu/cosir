@@ -147,9 +147,7 @@ class AgentTeamRunService:
         task_ids = [execution.task_id for execution in executions.values()]
         child_tasks_by_parent = tasks.list_by_parent_task_ids(task_ids)
         run_ids = [
-            run_id
-            for execution in executions.values()
-            for run_id in execution.conversation_run_ids
+            run_id for execution in executions.values() for run_id in execution.conversation_run_ids
         ]
         run_ids.extend(
             task.current_run_id
@@ -203,15 +201,17 @@ class AgentTeamRunService:
                 node_status = "skipped"
             else:
                 node_status = "queued"
-            node_views.append({
-                "node_id": node_id,
-                "name": node["name"],
-                "agent_id": node["agent_id"],
-                "role": state.node_runtime[node_id].role or node["agent_id"],
-                "goal_summary": state.node_runtime[node_id].node_goal_summary,
-                "status": node_status,
-                "visits": visits,
-            })
+            node_views.append(
+                {
+                    "node_id": node_id,
+                    "name": node["name"],
+                    "agent_id": node["agent_id"],
+                    "role": state.node_runtime[node_id].role or node["agent_id"],
+                    "goal_summary": state.node_runtime[node_id].node_goal_summary,
+                    "status": node_status,
+                    "visits": visits,
+                }
+            )
         return {
             "id": row.id,
             "team_id": row.team_id,
@@ -219,9 +219,7 @@ class AgentTeamRunService:
             "status": row.status,
             "nodes": node_views,
             "current_node_id": (
-                state.current_node_id
-                if row.status == AgentTeamRunStatus.RUNNING.value
-                else None
+                state.current_node_id if row.status == AgentTeamRunStatus.RUNNING.value else None
             ),
         }
 
@@ -272,8 +270,7 @@ class AgentTeamRunService:
         TeamRun 始终是唯一执行事实源。两个并发确认请求中只有一个能够成功迁移状态。
 
         幂等：条件迁移未命中（``rowcount == 0``）时不再抛错，而是返回该行的当前事实。
-        human-in-the-loop 的批准由图重放投递，进程在「已启动」与「写 checkpoint」之间终止会
-        重复确认；此时必须如实返回「已在运行 / 已结束」，既不重复启动 Coordinator，也不让
+        重复确认必须如实返回「已在运行 / 已结束」，既不重复启动 Coordinator，也不让
         调用方误判为失败。
 
         参数:

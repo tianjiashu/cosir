@@ -21,7 +21,6 @@ class ConversationRunSnapshot(TypedDict):
     runId: int
     status: str
     endReason: str | None
-    langfuseTraceId: str | None
     contextWindowTotal: int | None
     messages: list[ConversationStateMessage]
     usage: ConversationStateUsage | None

@@ -79,7 +79,7 @@ class AgentTeamRunTool(HandlerBase):
             self,
             team_id: str,
             goal: str,
-            node_goals: dict[str, dict[str, str]],
+            node_goals: list[dict[str, str]],
             execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
         """准备待确认方案，或在用户批准后真正启动该 TeamRun。
@@ -123,15 +123,16 @@ class AgentTeamRunTool(HandlerBase):
                 ),
                 retryable=False,
             )
-        node_goals = {
-            node_id: AgentTeamNodeGoal.model_validate(node_goal)
-            for node_id, node_goal in node_goals.items()
-        }
         decision = execution_context.user_decision
         if decision is not None and decision.kind in EXECUTING_DECISION_KINDS:
             return self._start_confirmed_run(decision, parent_agent_profile)
+        # 参数入口已检查 node_id 唯一性；只在准备阶段转换，批准阶段消费持久化决定。
+        goals_by_node = {
+            item["node_id"]: AgentTeamNodeGoal(goal=item["goal"], summary=item["summary"])
+            for item in node_goals
+        }
         return self._prepare_pending_run(
-            team_id, goal, node_goals, execution_context, parent_agent_profile
+            team_id, goal, goals_by_node, execution_context, parent_agent_profile
         )
 
     def _prepare_pending_run(
@@ -324,7 +325,7 @@ class AgentTeamRunTool(HandlerBase):
             AgentTeamRunStatus.CANCELLED.value,
             AgentTeamRunStatus.FAILED.value,
         }:
-            # 条件迁移未生效且行已终态：多为后端重启把 pending 收敛为 cancelled，或节点执行在
+            # 条件迁移未生效且行已终态：多为 Team 已被取消（主 Run 停止或任务删除），或节点执行在
             # 本次调用内就失败并收敛。此时不能报告成功，否则模型会继续等一个永远不会运行的 Team；
             # ``end_reason`` 必须一起回传，否则模型只能把「节点已失败」误读成「运行时状态问题」。
             return self._confirmation_error(

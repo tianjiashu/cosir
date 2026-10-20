@@ -37,7 +37,8 @@ class MCPTool(HandlerBase):
     description = (
         "Discover and call tools from configured MCP servers. Use action='list' first to get "
         "server names, tool names, descriptions, and input schemas; then use action='call' "
-        "with the selected server, tool, and arguments."
+        "with the selected server, tool, and a JSON-encoded object string in arguments. "
+        "For discovery, set tool_name=null and arguments='{}'."
     )
     args_model = MCPArgs
     timeout_seconds = 90.0
@@ -51,7 +52,11 @@ class MCPTool(HandlerBase):
         arguments: dict[str, Any] | None = None,
         execution_context: ToolExecutionContext | None = None,
     ) -> ToolObservation:
-        """列出本机已启用且测试通过服务的工具，或调用其中一项工具。"""
+        """列出本机已启用且测试通过服务的工具，或调用其中一项工具。
+
+        arguments 已由 MCPArgs 在参数入口从 JSON 字符串解析为对象；handler 不再解析，
+        模型上下文保留原始字符串，执行参数对象只在当前工具调用内流转。
+        """
 
         try:
             servers = enabled_servers(read_mcp_configuration())

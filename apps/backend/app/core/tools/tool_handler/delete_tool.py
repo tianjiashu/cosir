@@ -93,7 +93,7 @@ class DeleteTool(HandlerBase):
                 reason="provide a path to one existing regular file inside the workspace.",
                 retryable=False,
             )
-        if cancellation_registry.is_cancelled(execution_context.run_id):
+        if cancellation_registry.is_cancelled(execution_context.task_id):
             return tool_cancelled(tool_name=self.name)
         try:
             current, current_error = resolver.resolve_within_workspace(path.replace("\\", "/"))

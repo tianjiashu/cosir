@@ -41,15 +41,15 @@ from app.core.tools.schemas.tool_output import (
     ProcessToolOutputChannel,
     ProcessToolOutputChannelFactory,
 )
-from app.core.tools.schemas.user_decision import (
-    EXECUTING_DECISION_KINDS,
-    UserDecision,
-    UserDecisionKind,
-)
 from app.core.tools.schemas.user_input_request import (
     DEFAULT_DECISIONS,
     USER_INPUT_REQUEST_KEY,
     UserInputRequest,
+)
+from app.models.user_decision import (
+    EXECUTING_DECISION_KINDS,
+    UserDecision,
+    UserDecisionKind,
 )
 
 __all__ = [

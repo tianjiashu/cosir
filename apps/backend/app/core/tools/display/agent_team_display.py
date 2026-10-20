@@ -19,7 +19,7 @@ def build_agent_team_preview_display_data(
 
     「这张卡需要用户确认」不是展示事实：它由 ``agent_team`` 工具随观察下发的
     ``ToolObservation.user_input_request`` 表达（见 ``review_request``），投影给前端的载荷由
-    ``ToolCallLifecycleManager.project_user_input_request`` 组装。本函数只负责卡片本身。
+    ``project_waiting_request`` 组装。本函数只负责卡片本身。
     """
 
     fields = (

@@ -12,16 +12,14 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-import copy
 import json
-from collections.abc import Mapping
-from dataclasses import replace
-from uuid import uuid4
 
 from sqlalchemy import asc, delete, desc, select, update
 from sqlalchemy.orm import Session
 
-from app.models import ConversationRunError, ConversationRunExtra, ConversationRunRecord
+from app.models import ConversationRunError, ConversationRunRecord
+from app.models.conversation_run_options import ConversationRunOptions
+from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.conversation_run_usage import ConversationRunUsage
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.storage.model.conversation_run_model import ConversationRunModel
@@ -54,11 +52,6 @@ def _serialize_typed_json(value: object | None) -> str | None:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
-# 需要按 typed JSON 口径序列化的列：调用方传领域字典，由本层统一转成列文本，避免 JSON 列的
-# 存储格式泄漏到 service 层。口径与 ``update_status_if_in_session`` 完全同源。
-_TYPED_JSON_COLUMNS = frozenset({"usage_json", "error_json"})
-
-
 class ConversationRunCrud:
     """``conversation_runs`` 表的纯 CRUD。
 
@@ -83,62 +76,68 @@ class ConversationRunCrud:
         """
         self._session_factory = main_session_factory()
 
+    def save_execution(self, run_id: int, data: ConversationRunProgress) -> None:
+        """单一驱动者更新 Run 执行进度；生命周期仍由状态 service 条件迁移。"""
+        with self._session_factory.begin() as session:
+            session.execute(
+                update(ConversationRunModel)
+                .where(ConversationRunModel.id == run_id)
+                .values(execution_data=data.model_dump(mode="json"))
+            )
+
+    def update_completed_result(
+        self,
+        run_id: int,
+        *,
+        final_output: str | None = None,
+        end_reason: str | None = None,
+        usage: ConversationRunUsage | None = None,
+    ) -> ConversationRunRecord | None:
+        """仅更新已完成 Run 的支线结果，不产生状态迁移；未命中返回 None。"""
+
+        values: dict[str, object] = {}
+        if final_output is not None:
+            values["final_output"] = final_output
+        if end_reason is not None:
+            values["end_reason"] = end_reason
+        if usage is not None:
+            values["usage_json"] = _serialize_typed_json(usage)
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(ConversationRunModel)
+                .where(
+                    ConversationRunModel.id == run_id,
+                    ConversationRunModel.status == ConversationRunStatus.COMPLETED.value,
+                )
+                .values(**values)
+            )
+            if not result.rowcount:
+                return None
+            session.flush()
+            return self.get_in_session(session, run_id)
+
     def create(
         self,
         task_id: int,
-        input_text: str,
         status: str = ConversationRunStatus.PENDING.value,
         agent_id: str | None = None,
         model_config_id: int | None = None,
         context_window_total: int | None = None,
-        image_paths: list[str] | None = None,
-        extra: ConversationRunExtra | None = None,
+        options: ConversationRunOptions | None = None,
         usage: ConversationRunUsage | None = None,
         error: ConversationRunError | None = None,
         session: Session | None = None,
     ) -> ConversationRunRecord:
-        """新建一条 run 记录并落库。
-
-        主键 ``id`` 由存储引擎自增分配，即本次运行的 run 标识。
-
-        参数:
-            task_id: 所属任务标识（整数 id）。
-            input_text: 本次运行的输入文本；不能为空白。
-            status: 初始状态，默认 ``pending``。
-            agent_id: 可选，本次运行绑定的 agent 标识。
-            model_config_id: 可选，模型连接配置标识；None 表示未指定。
-            context_window_total: 创建 Run 时冻结的模型上下文窗口上限。
-            image_paths: 可选，本次输入的图片路径列表（供多模态通道）。
-            extra: 可选，运行期附加结构化数据。
-            usage: 可选，符合六键契约的运行 token 用量。
-            error: 可选，结构化运行错误。
-            session: 可选，外部事务 session；传入时复用该事务不自行提交，
-                None 时自行开启并提交事务。
-
-        返回:
-            落库成功的 ``ConversationRunRecord``（含自增分配的 id）。
-
-        异常:
-            ValueError: 如果 input_text 去除首尾空白后为空。
-            sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
-
-        副作用:
-            向 ``conversation_runs`` 表插入一行。
-        """
-        if not input_text.strip() and not image_paths:
-            raise ValueError("input_text must be a non-empty string")
-
+        """在调用方事务内创建 Run 记录；不发布事件、不写会话消息。"""
         if session is not None:
             return self._insert_and_flush(
                 session,
                 task_id=task_id,
-                input_text=input_text,
                 status=status,
                 agent_id=agent_id,
                 model_config_id=model_config_id,
                 context_window_total=context_window_total,
-                image_paths=image_paths,
-                extra=extra,
+                options=options,
                 usage=usage,
                 error=error,
             )
@@ -146,13 +145,11 @@ class ConversationRunCrud:
             return self._insert_and_flush(
                 managed_session,
                 task_id=task_id,
-                input_text=input_text,
                 status=status,
                 agent_id=agent_id,
                 model_config_id=model_config_id,
                 context_window_total=context_window_total,
-                image_paths=image_paths,
-                extra=extra,
+                options=options,
                 usage=usage,
                 error=error,
             )
@@ -162,32 +159,27 @@ class ConversationRunCrud:
         session: Session,
         *,
         task_id: int,
-        input_text: str,
         status: str,
         agent_id: str | None,
         model_config_id: int | None,
         context_window_total: int | None,
-        image_paths: list[str] | None,
-        extra: ConversationRunExtra | None,
+        options: ConversationRunOptions | None,
         usage: ConversationRunUsage | None,
         error: ConversationRunError | None,
     ) -> ConversationRunRecord:
         """在给定 session 内插入 run 行并 flush 取回自增 id。
 
         直接构造 ``ConversationRunModel``：``id`` / ``created_at`` / ``updated_at`` 由存储基类
-        在写入时填充，本方法只负责业务列；``checkpoint_thread_id`` 是本次执行的 LangGraph
-        身份，每条新 Run 都重新生成。
+        在写入时填充，本方法只负责业务列；执行进度从零计数开始。
 
         参数:
             session: 处于事务中的 SQLAlchemy session。
             task_id: 所属任务标识。
-            input_text: 输入文本（调用方已校验非空）。
-            status: 初始状态字符串；空值回退 ``pending``。
+            status: 初始状态字符串。
             agent_id: agent 标识或 None。
             model_config_id: 厂商标识或 None。
             context_window_total: 本次 Run 使用的模型上下文窗口上限。
-            image_paths: 图片路径列表或 None。
-            extra: 附加结构化数据或 None。
+            options: 本次执行配置。
             usage: 初始 token 用量或 None。
             error: 初始结构化错误或 None。
 
@@ -203,15 +195,12 @@ class ConversationRunCrud:
         """
         model = ConversationRunModel(
             task_id=task_id,
-            input_text=input_text,
-            status=status or ConversationRunStatus.PENDING.value,
-            # 每条新 Run 必须拿到全新的 checkpoint 身份，不能复用任何已读到的历史身份。
-            checkpoint_thread_id=str(uuid4()),
+            status=status,
             agent_id=agent_id,
             model_config_id=model_config_id,
             context_window_total=context_window_total,
-            image_paths=image_paths,
-            extra=extra.to_dict() if extra is not None else None,
+            options=(options or ConversationRunOptions()).model_dump(mode="json"),
+            execution_data=ConversationRunProgress().model_dump(mode="json"),
             usage_json=_serialize_typed_json(usage),
             error_json=_serialize_typed_json(error),
         )
@@ -286,22 +275,17 @@ class ConversationRunCrud:
         source: ConversationRunRecord,
         target_task_id: int,
     ) -> ConversationRunRecord:
-        """在调用方事务中静默复制历史 run，并为 fork 生成独立 checkpoint 身份。"""
+        """在调用方事务中复制历史 Run；新 Run 的执行进度从初始状态开始。"""
 
         model = ConversationRunModel(
             task_id=target_task_id,
-            input_text=source.input_text,
             agent_id=source.agent_id,
             model_config_id=source.model_config_id,
             context_window_total=source.context_window_total,
-            image_paths=copy.deepcopy(source.image_paths),
             end_reason=source.end_reason,
             final_output=source.final_output,
-            extra=(
-                replace(source.extra, langfuse_trace_id=None).to_dict()
-                if source.extra is not None
-                else None
-            ),
+            options=source.options.model_dump(mode="json"),
+            execution_data=ConversationRunProgress().model_dump(mode="json"),
             usage_json=_serialize_typed_json(source.usage),
             error_json=_serialize_typed_json(source.error),
             status=source.status,
@@ -415,27 +399,7 @@ class ConversationRunCrud:
         return ConversationRunRecord.from_model(row)
 
     def list_recoverable(self) -> list[ConversationRunRecord]:
-        """返回进程重启后仍需收敛的 pending/running 运行。
-
-        **``waiting_for_input`` 不在内**：它不是「驱动者随进程消失」的遗留，而是图正停在
-        human-in-the-loop 断点上——图断点与决定通道都还在，用户回来仍能作答。收口它会让用户白等
-        一场，还会把待确认的卡片变成一张已取消的空壳。它的终态只由取消 / 异常 / 用户决定收口
-        （判据见 :class:`ConversationRunStateService` 的状态图）。「等待用户输入的 Run 也是 active
-        run」这条仍然成立，见 :meth:`has_active_for_task`。
-
-        参数:
-            无。
-
-        返回:
-            状态为 ``pending`` 或 ``running`` 的 run 列表，按 ``created_at`` 再 ``id``
-            升序；无匹配时为空列表。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            打开一次主库只读 session。
-        """
+        """读取失去执行者的 pending/running Run；waiting 保留待决请求。"""
         with self._session_factory() as session:
             rows = (
                 session.execute(
@@ -489,38 +453,9 @@ class ConversationRunCrud:
         error: ConversationRunError | None = None,
         session: Session | None = None,
         clear_terminal_fields: bool = False,
+        execution_data: ConversationRunProgress | None = None,
     ) -> ConversationRunRecord | None:
-        """以乐观锁方式把 run 更新为目标状态，仅当其当前状态在允许集合内。
-
-        只负责 ``WHERE status IN (allowed_statuses)`` 条件下的原子更新，用于避免并发收尾
-        请求改写历史终态；目标状态、允许的前置状态集合与伴随字段由调用方（service 层）
-        决定。``clear_terminal_fields`` 为真时额外清空上一轮的四个终态字段（详见
-        ``update_status_if_in_session``）；本方法不改动 ``checkpoint_thread_id``。
-
-        参数:
-            run_id: run 标识（整数 id）。
-            target_status: 期望写入的状态字符串。
-            allowed_statuses: 允许执行更新的前置状态白名单；当前状态不在此集合时
-                不做任何修改并返回 None。
-            end_reason: 可选，更新时一并写入的终态原因；为 None 时不修改该列。
-            final_output: 可选，更新时一并写入的最终回答文本；为 None 时不修改该列。
-            usage: 可选，更新时一并写入的 token 用量；为 None 时不修改该列。
-            error: 可选，更新时一并写入的结构化错误；为 None 时不修改该列。
-            session: 可选外部事务 session；传入时复用且不自行提交。
-            clear_terminal_fields: 是否清空上一轮的四个终态字段（默认 False）。
-
-        返回:
-            更新成功时返回更新后的 ``ConversationRunRecord``；当前状态不在允许集合内时
-            返回 None。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。注意：run 不存在时不会抛 KeyError，
-            而是按零行更新静默返回 None（需判存在性时调用方应先 ``get``）。
-
-        副作用:
-            条件满足时更新对应行的 ``status``、``updated_at`` 与可选的伴随字段；不改动
-            ``checkpoint_thread_id``。
-        """
+        """按来源状态白名单原子更新，传入外部 Session 时加入用例事务。"""
         if session is not None:
             return self.update_status_if_in_session(
                 session,
@@ -532,6 +467,7 @@ class ConversationRunCrud:
                 usage,
                 error,
                 clear_terminal_fields,
+                execution_data,
             )
         with self._session_factory.begin() as session:
             return self.update_status_if_in_session(
@@ -544,104 +480,8 @@ class ConversationRunCrud:
                 usage,
                 error,
                 clear_terminal_fields,
+                execution_data,
             )
-
-    def update_extra(
-        self,
-        run_id: int,
-        extra: ConversationRunExtra,
-        session: Session | None = None,
-    ) -> ConversationRunRecord:
-        """更新 Run 的扩展事实并返回最新记录。
-
-        该方法只负责 ``conversation_runs.extra`` 单列写入，不解释模型偏好或附件语义；
-        快照何时冻结由上层 Run 用例决定。传入外部 session 时加入调用方事务且不提交，
-        未传入时自行开启并提交一次单表事务。
-
-        参数:
-            run_id: 要更新的 Run 标识。
-            extra: 已通过领域值对象校验的扩展事实。
-            session: 可选外部事务会话。
-
-        返回:
-            更新后的 ``ConversationRunRecord``。
-
-        异常:
-            KeyError: Run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 数据库更新失败。
-
-        副作用:
-            更新 ``conversation_runs.extra`` JSON 列；不发布事件、不修改 Run 状态。
-        """
-
-        def update_in_session(current_session: Session) -> ConversationRunRecord:
-            result = current_session.execute(
-                update(ConversationRunModel)
-                .where(ConversationRunModel.id == run_id)
-                .values(extra=extra.to_dict())
-            )
-            if not result.rowcount:
-                raise KeyError(run_id)
-            current_session.flush()
-            return self.get_in_session(current_session, run_id)
-
-        if session is not None:
-            return update_in_session(session)
-        with self._session_factory.begin() as managed_session:
-            return update_in_session(managed_session)
-
-    def update_langfuse_trace_id(
-        self,
-        run_id: int,
-        trace_id: str,
-        session: Session | None = None,
-    ) -> ConversationRunRecord:
-        """把 Run 的 Langfuse 根 Trace ID 写入 ``extra`` JSON。
-
-        参数:
-            run_id: 目标 Conversation Run 标识。
-            trace_id: 已由 Langfuse SDK 生成的非空 Trace ID。
-            session: 可选外部事务；传入时复用且不自行提交。
-
-        返回:
-            更新后的 ``ConversationRunRecord``。
-
-        异常:
-            ValueError: ``trace_id`` 为空白。
-            KeyError: Run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 数据库更新失败。
-
-        副作用:
-            更新 ``conversation_runs.extra``；不发布 Transport 事件，事件由 Run
-            observability service 在事务提交后发布。
-        """
-
-        if not trace_id.strip():
-            raise ValueError("trace_id must be non-empty")
-
-        def update_in_session(current_session: Session) -> ConversationRunRecord:
-            current = self.get_in_session(current_session, run_id)
-            extra = current.extra
-            if extra is None:
-                extra = ConversationRunExtra(
-                    display_text=current.input_text,
-                    attachments=[],
-                )
-            updated_extra = replace(extra, langfuse_trace_id=trace_id)
-            result = current_session.execute(
-                update(ConversationRunModel)
-                .where(ConversationRunModel.id == run_id)
-                .values(extra=updated_extra.to_dict())
-            )
-            if not result.rowcount:
-                raise KeyError(run_id)
-            current_session.flush()
-            return self.get_in_session(current_session, run_id)
-
-        if session is not None:
-            return update_in_session(session)
-        with self._session_factory.begin() as managed_session:
-            return update_in_session(managed_session)
 
     @staticmethod
     def update_status_if_in_session(
@@ -654,45 +494,13 @@ class ConversationRunCrud:
         usage: ConversationRunUsage | None = None,
         error: ConversationRunError | None = None,
         clear_terminal_fields: bool = False,
+        execution_data: ConversationRunProgress | None = None,
     ) -> ConversationRunRecord | None:
-        """在给定事务中按状态白名单原子更新 run。
-
-        除通用的状态白名单更新外，``clear_terminal_fields`` 为真时把上一轮的四个终态字段
-        显式清空：给 ``end_reason`` 等可选参数传 ``None`` 只表示「不修改该列」，表达不了
-        「清空」，因此清空必须是一个独立开关。
-
-        本方法**不**改动 ``checkpoint_thread_id``。``resume`` 执行模式下 workflow 会以
-        ``input_state=None`` 让 LangGraph 从该线程的**既有 checkpoint** 继续，因此续跑
-        必须复用原线程；一旦轮换，续跑就会落到一个没有任何 checkpoint 的空线程上，续跑
-        语义直接失效。线程的轮换只发生在「以新输入重新执行」的路径（删除旧 Run 并新建）。
-
-        参数:
-            session: 处于事务中的 SQLAlchemy session（本方法不提交）。
-            run_id: run 标识（整数 id）。
-            target_status: 期望写入的状态字符串。
-            allowed_statuses: 允许执行更新的前置状态白名单；当前状态不在此集合时不做
-                任何修改并返回 None。
-            end_reason: 可选，更新时一并写入的终态原因；为 None 时不修改该列。
-            final_output: 可选，更新时一并写入的最终回答文本；为 None 时不修改该列。
-            usage: 可选，更新时一并写入的 token 用量；为 None 时不修改该列。
-            error: 可选，更新时一并写入的结构化错误；为 None 时不修改该列。
-            clear_terminal_fields: 是否清空上一轮的四个终态字段（默认 False）。为真时
-                先清空，随后仍由非 None 的入参覆盖。
-
-        返回:
-            更新成功时返回更新后的 ``ConversationRunRecord``；当前状态不在允许集合内时
-            返回 None。
-
-        异常:
-            TypeError: usage / error 不符合 typed JSON 契约。
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            条件满足时更新对应行的 ``status``、``updated_at`` 与可选的伴随字段；不改动
-            ``checkpoint_thread_id``。
-        """
+        """事务内条件更新 Run 及执行数据；只返回真正命中的记录。"""
 
         values: dict[str, object] = {"status": target_status}
+        if execution_data is not None:
+            values["execution_data"] = execution_data.model_dump(mode="json")
         if clear_terminal_fields:
             values.update(
                 end_reason=None,
@@ -720,72 +528,6 @@ class ConversationRunCrud:
             return None
         session.flush()
         return ConversationRunCrud.get_in_session(session, run_id)
-
-    def update_fields_if_in(
-        self,
-        run_id: int,
-        values: Mapping[str, object],
-        allowed_statuses: tuple[str, ...],
-        session: Session | None = None,
-    ) -> ConversationRunRecord | None:
-        """按状态白名单原子改写 run 的任意列，不迁移状态。
-
-        与 ``update_status_if_in`` 同属乐观锁更新，但本方法不解释终态字段语义、也不改
-        ``status``：``values`` 直接作为列值写入。用来表达「Run 已落定终态，但个别事实仍需
-        修正」——典型场景是结构化输出节点在 ``running → completed`` 之后改写 ``final_output``。
-        这类改写不构成状态迁移，事件由调用方（service 层）决定是否发布，本层一概不发。
-
-        ``_TYPED_JSON_COLUMNS`` 中的列收领域字典（如 ``usage_json`` 传六键用量 dict），
-        由本层按存储口径序列化，调用方不必接触列文本格式。
-
-        参数:
-            run_id: run 标识（整数 id）。
-            values: 列名到列值的映射（如 ``{"final_output": "..."}``）；typed JSON 列传领域
-                字典。空映射不是一次有效改写，会由 SQLAlchemy 直接报错。
-            allowed_statuses: 允许执行更新的前置状态白名单；当前状态不在此集合时不做任何
-                修改并返回 None。
-            session: 可选外部事务 session；传入时复用且不自行提交，None 时自行开启并提交
-                一次单表事务。
-
-        返回:
-            更新成功时返回更新后的 ``ConversationRunRecord``；当前状态不在允许集合内或 run
-            不存在（两者都表现为零行更新）时返回 None。
-
-        异常:
-            TypeError: typed JSON 列的值含 NaN 或不可 JSON 编码的对象。
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败（含 ``values`` 带不存在列名的情形）。
-
-        副作用:
-            条件满足时更新对应行的指定列与 ``updated_at``（由 ``StorageBase`` 的 ``onupdate``
-            刷新）；不改动 ``checkpoint_thread_id``，不发布事件。
-        """
-
-        def update_in_session(current_session: Session) -> ConversationRunRecord | None:
-            prepared = {
-                column: (
-                    _serialize_typed_json(value)
-                    if column in _TYPED_JSON_COLUMNS
-                    else value
-                )
-                for column, value in values.items()
-            }
-            result = current_session.execute(
-                update(ConversationRunModel)
-                .where(
-                    ConversationRunModel.id == run_id,
-                    ConversationRunModel.status.in_(allowed_statuses),
-                )
-                .values(**prepared)
-            )
-            if not result.rowcount:
-                return None
-            current_session.flush()
-            return self.get_in_session(current_session, run_id)
-
-        if session is not None:
-            return update_in_session(session)
-        with self._session_factory.begin() as managed_session:
-            return update_in_session(managed_session)
 
     def list_ids_by_task_ids(self, task_ids: list[int]) -> list[int]:
         """返回一批任务下全部 run 的标识列表。
@@ -844,65 +586,6 @@ class ConversationRunCrud:
                 select(ConversationRunModel.id).where(ConversationRunModel.task_id.in_(task_ids))
             ).all()
         ]
-
-    def collect_checkpoint_threads_by_task_ids(
-        self, session: Session, task_ids: list[int]
-    ) -> set[str]:
-        """在调用方事务内收集一批任务对应的 checkpoint thread id 集合。
-
-        参数:
-            session: 处于事务中的 SQLAlchemy session（本方法只读、不提交）。
-            task_ids: 任务标识列表（整数 id）；为空时直接返回空集合。
-
-        返回:
-            这些任务下 run 的 ``checkpoint_thread_id`` 集合（跳过空值）；无匹配时为空集合。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            无（仅在该事务内执行一次只读查询）。
-        """
-
-        if not task_ids:
-            return set()
-        rows = session.execute(
-            select(ConversationRunModel.checkpoint_thread_id).where(
-                ConversationRunModel.task_id.in_(task_ids)
-            )
-        ).all()
-        return {row[0] for row in rows if row[0]}
-
-    def collect_checkpoint_threads_by_thread_ids(
-        self, session: Session, thread_ids: set[str]
-    ) -> set[str]:
-        """返回主库中仍被任意 run 引用的 checkpoint thread id 集合。
-
-        用于级联删除后判断哪些 thread 已成孤儿：传入删除前收集到的 thread 集合，
-        返回其中仍被主库剩余 run 引用的子集，差集即为可 GC 的孤儿。
-
-        参数:
-            session: 处于事务中的 SQLAlchemy session（本方法只读、不提交）。
-            thread_ids: 待判定的 checkpoint thread id 集合；为空时直接返回空集合。
-
-        返回:
-            仍被主库 run 引用的 thread id 集合；无匹配时为空集合。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            无（仅在该事务内执行一次只读查询）。
-        """
-
-        if not thread_ids:
-            return set()
-        rows = session.execute(
-            select(ConversationRunModel.checkpoint_thread_id).where(
-                ConversationRunModel.checkpoint_thread_id.in_(thread_ids)
-            )
-        ).all()
-        return {row[0] for row in rows if row[0]}
 
     def delete_by_ids(self, run_ids: list[int], session: Session | None = None) -> None:
         """按标识批量删除 run。

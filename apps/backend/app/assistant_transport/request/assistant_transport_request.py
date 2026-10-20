@@ -1,8 +1,8 @@
 """Assistant Transport wire schema。
 
-本模块只描述桌面端与后端之间的 Assistant UI request 请求结构，不依赖领域模型、
-LangGraph 或 storage。wire 字段遵循 assistant-ui 的 camelCase 约定；进入 service 层
-后由 API 边界映射为后端 snake_case 领域参数。
+本模块只描述桌面端与后端之间的 Assistant UI request 请求结构，不依赖
+workflow 或 storage 的执行逻辑；推理强度复用领域枚举。wire 字段遵循 assistant-ui 的
+camelCase 约定，进入 service 层后映射为后端 snake_case 领域参数。
 """
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -14,14 +14,11 @@ from app.assistant_transport.request.command.user_input_decision_command import 
 )
 from app.config.logging.logger import log
 from app.core.tools.schemas import UserDecision, UserDecisionKind
+from app.models.conversation_run_options import ReasoningEffort
 
 # custom 命令共用 wire ``type`` discriminator，因此每种受支持的项目命令都按明确 schema
 # 定义，并通过字面量 ``name`` 区分。
-AssistantCommand = (
-    AddMessageCommand
-    | BanToolsCommand
-    | UserInputDecisionCommand
-)
+AssistantCommand = AddMessageCommand | BanToolsCommand | UserInputDecisionCommand
 
 
 class AssistantTransportRequest(BaseModel):
@@ -40,7 +37,7 @@ class AssistantTransportRequest(BaseModel):
     taskId: int = Field(ge=1)
     workspaceId: int | None = Field(default=None, ge=1)
     modelConfigId: int | None = Field(default=None, ge=1)
-    reasoningEffort: str | None = Field(default=None)
+    reasoningEffort: ReasoningEffort | None = Field(default=None)
     # 空 commands 用于恢复指定 run；编辑重跑的 add-message 也必须携带当前 runId。
     runId: int | None = Field(default=None)
 
@@ -63,7 +60,6 @@ class AssistantTransportRequest(BaseModel):
         性约束，与领域 service 的运行期校验（task 是否存在、run 冲突、run 占用状态）
         严格分离：
 
-        - ``reasoningEffort`` 必须在允许集合 ``{low, high, max}`` 内；
         - ``commands`` 内 ``commandId`` 必须唯一；
         - ``threadId`` 必须与 ``task-{taskId}`` 一致，二者是同一领域身份的两种表达；
         - 一次请求最多包含一个 ``add-message`` 命令（首版运行模型不支持批量消息）；
@@ -90,14 +86,6 @@ class AssistantTransportRequest(BaseModel):
         副作用:
             无；仅做只读断言，不触碰 storage 或 service。
         """
-        allowed_effort = {"low", "high", "max"}
-        if self.reasoningEffort is not None and self.reasoningEffort not in allowed_effort:
-            raise TransportRequestError(
-                status_code=400,
-                code="REASONING_EFFORT_INVALID",
-                message=f"reasoningEffort 必须是 {sorted(allowed_effort)} 之一",
-                retryable=False,
-            )
         if len({command.commandId for command in self.commands}) != len(self.commands):
             raise TransportRequestError(
                 status_code=400,
@@ -137,9 +125,7 @@ class AssistantTransportRequest(BaseModel):
         # 用户决定走的是一条独立的续跑路径：它消费既有 Run 的挂起断点，语义上与新消息互斥
         # （同批会把「新建/编辑」和「恢复」两种 Run 模式混在一次请求里）。
         decision_commands = [
-            command
-            for command in self.commands
-            if isinstance(command, UserInputDecisionCommand)
+            command for command in self.commands if isinstance(command, UserInputDecisionCommand)
         ]
         if len(decision_commands) > 1:
             raise TransportRequestError(
@@ -222,11 +208,12 @@ class AssistantTransportRequest(BaseModel):
                 return decision
         return None
 
+
 class TransportRequestError(Exception):
     """纯 wire 契约校验失败的结构化异常。
 
     由 ``AssistantTransportRequest.validate_transport_constraints``（``model_validator``）
-    在请求解析阶段自动抛出，仅描述与领域持久化无关的结构性约束违反，覆盖：推理深度取值、
+    在请求解析阶段自动抛出，仅描述与领域持久化无关的结构性约束违反，覆盖：
     commandId 唯一性、thread/task 一致性、add-message 数量上限与未支持命令类型。
     API 适配层（``app/app.py`` 的全局 exception_handler）负责把它映射为统一的 Assistant
     Transport HTTP 错误体，保持与 ``_raise_transport_error`` 相同的 ``code`` / ``message`` /

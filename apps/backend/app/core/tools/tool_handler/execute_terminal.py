@@ -34,6 +34,7 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tools.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL
@@ -170,7 +171,7 @@ class ExecuteTerminalTool(HandlerBase):
             无。使用初始化阶段选定的 ``args_model`` 与检测到的可用 shell。
 
         返回:
-            ``args_model.model_json_schema()`` 的投影（``shell`` 的 ``enum`` / ``description``
+            统一 strict schema 的投影（``shell`` 的 ``enum`` / ``description``
             已按本机可用值收敛）；参数模型未声明 ``shell`` 属性时原样返回并记 WARNING。
 
         异常:
@@ -181,7 +182,7 @@ class ExecuteTerminalTool(HandlerBase):
             WARNING 日志（``execute_terminal_shell_schema_missing``）。
         """
 
-        schema = self.args_model.model_json_schema()
+        schema = strict_parameters_schema(self.args_model)
         properties = schema.get("properties")
         if not isinstance(properties, dict):
             # 参数模型必然有 properties；走到这里说明 pydantic 投影结构异常，原样返回即可，

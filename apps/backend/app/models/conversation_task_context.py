@@ -1,88 +1,61 @@
-"""Task 级 LangChain Agent context 值对象。"""
+"""Task 级 Agent context 值对象。"""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import NotRequired, TypedDict
+from dataclasses import dataclass, field
+from uuid import uuid4
 
-from langchain_core.messages import (
-    BaseMessage,
-    _message_from_dict,
-    message_to_dict,
+from openai.types.chat import ChatCompletionMessageParam
+
+from app.core.llm_provider.message_codec import validate_message
+from app.models.message_metadata import (
+    EmptyMessageMetadata,
+    MessageMetadata,
+    empty_message_metadata,
+    parse_message_metadata,
 )
-
-from app.assistant_transport.state.conversation_state_part import ToolCallStatus
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
-
-
-class TransportMetadata(TypedDict):
-    """工具结果行随行携带的 Transport 展示元数据。
-
-    ``hidden`` 标记「该调用在前端没有 tool-call part」（本轮未放行 / 工具名未注册 / 恢复补建的
-    孤儿调用）。它由 ``ToolCallLifecycleManager.settle`` 按 ``part_projected`` 写入，冷重建
-    （``ConversationTaskStateRebuilder.build_pair_tool_part``）据此跳过建 part，使刷新页面后的
-    快照与实时快照一致——实时链路从未为这些调用发过 ``ToolCallCreatedEvent``。
-    ``team_run_id`` 独立于错误态 ``display_data`` 持久化，供失败卡片冷重建后继续查询 TeamRun。
-    """
-
-    status: ToolCallStatus
-    error: NotRequired[str | None]
-    display_data: NotRequired[dict[str, object] | None]
-    team_run_id: NotRequired[int]
-    approvalRequestId: NotRequired[None]
-    hidden: NotRequired[bool]
 
 
 @dataclass(frozen=True)
 class ConversationTaskContextRecord:
     task_id: int
     run_id: int | None
-    message: BaseMessage
+    message: ChatCompletionMessageParam
     include_in_context: bool
     sequence: int
+    message_id: str = field(default_factory=lambda: str(uuid4()))
+    metadata: MessageMetadata = field(default_factory=EmptyMessageMetadata)
     # 与 ``include_in_context`` 独立：消息可供模型使用但不对前端投影。
     project_to_transport: bool = True
-    # None 是合法取值：无 Transport 语义的消息（如 assistant 正文）不携带 metadata；写入侧
-    # 「None 表示不改写」只作用于原地替换路径，追加路径照实落 ``null``。
-    transport_metadata: TransportMetadata | None = None
-    is_streaming: bool = False
     id: int | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
+    def __post_init__(self) -> None:
+        """默认空数据只用于无附属信息的消息；显式 metadata 必须匹配正文角色。"""
+        if type(self.metadata) is EmptyMessageMetadata:
+            object.__setattr__(self, "metadata", empty_message_metadata(self.message["role"]))
+        else:
+            object.__setattr__(
+                self, "metadata", parse_message_metadata(self.message["role"], self.metadata)
+            )
+
     @classmethod
     def _from_model(cls, model: ConversationTaskContextModel) -> ConversationTaskContextRecord:
-        """从持久化模型重建一条上下文记录。
-
-        参数:
-            model: ``conversation_task_contexts`` 行实例，列已含单条消息的全部字段。
-
-        返回:
-            含 row id、task_id、run_id、消息、Transport metadata、模型纳入标记、Transport 投影标记、
-            排序和创建/更新时间的记录。
-
-        异常:
-            json.JSONDecodeError: ``message_json`` 不是合法 JSON。
-            KeyError: ``message_json`` 反序列化结果不是 ``message_to_dict`` 约定结构。
-            TypeError: ``transport_metadata_json`` 不是 JSON 文本或 metadata 含非法值。
-            ValueError: ``transport_metadata_json`` 不符合 typed metadata 契约。
-
-        副作用:
-            无副作用；纯映射。
-        """
-
+        """读取边界校验 SDK 正文及对应角色 metadata；旧字段和错误角色结构直接报错。"""
         message_doc = json.loads(model.message_json)
         return cls(
             id=model.id,
             task_id=model.task_id,
             run_id=model.run_id,
-            message=_message_from_dict(message_doc),
+            message=validate_message(message_doc),
+            message_id=model.message_id,
+            metadata=parse_message_metadata(message_doc["role"], json.loads(model.metadata_json)),
             include_in_context=model.include_in_context,
             project_to_transport=model.project_to_transport,
             sequence=model.sequence,
-            transport_metadata=json.loads(model.transport_metadata_json),
-            is_streaming=model.is_streaming,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )
@@ -97,8 +70,8 @@ class ConversationTaskContextRecord:
             含 task_id、run_id、消息 JSON、模型纳入标记、Transport 投影标记与排序的模型实例。
 
         异常:
-            TypeError: ``message`` 无法被 ``message_to_dict`` 序列化。
-            TypeError: ``transport_metadata`` 无法编码为 typed JSON metadata。
+            TypeError: SDK 消息包含无法 JSON 序列化的值。
+            ValueError: metadata 无法序列化为 JSON。
 
         副作用:
             无副作用；纯映射。
@@ -108,15 +81,10 @@ class ConversationTaskContextRecord:
             id=self.id,
             task_id=self.task_id,
             run_id=self.run_id,
-            message_json=json.dumps(message_to_dict(self.message), ensure_ascii=False),
-            transport_metadata_json=json.dumps(
-                self.transport_metadata,
-                ensure_ascii=False,
-                sort_keys=True,
-                allow_nan=False,
-            ),
+            message_json=json.dumps(self.message, ensure_ascii=False, allow_nan=False),
+            message_id=self.message_id,
+            metadata_json=self.metadata.model_dump_json(),
             include_in_context=self.include_in_context,
             project_to_transport=self.project_to_transport,
-            is_streaming=self.is_streaming,
             sequence=self.sequence,
         )
