@@ -93,7 +93,7 @@ class SystemPromptBuilder:
             读取系统级全局指令文件与 workspace 指令文件（失败均容错）；按可用工具读取对应的
             Agent、Team、MCP 和 Skill 本机目录；Agent 系统提示词已在 profile 装配阶段载入。
         """
-        layer1 = SystemPromptBuilder._build_runtime_context(agent_profile, workspace_root)
+        layer1 = SystemPromptBuilder._build_message_context(agent_profile, workspace_root)
         layer2 = SystemPromptBuilder._build_agent_layer(agent_profile)
         tool_layer = SystemPromptBuilder._build_tool_layer(
             workspace_root, agent_profile.allowed_tools
@@ -105,7 +105,7 @@ class SystemPromptBuilder:
 
     # --- Layer 1: 动态变量层（运行期事实，不读文件） ---
     @staticmethod
-    def _build_runtime_context(agent_profile: AgentProfile, workspace_root: str) -> str:
+    def _build_message_context(agent_profile: AgentProfile, workspace_root: str) -> str:
         """构建动态变量层：身份与角色、操作系统、工作区根目录与写入边界、工具集合、用户语言。
 
         文案为英文（读者是模型，与工具描述、子 Agent 选择指南保持同一语言）。本层只承载
