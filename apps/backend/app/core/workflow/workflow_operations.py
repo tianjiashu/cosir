@@ -227,35 +227,12 @@ class WorkflowOperations:
             return None
 
     def is_current_run_cancelled(self) -> bool:
-        """返回当前绑定的 run 是否已被要求停止。
+        """返回当前 Task 是否收到停止信号。
 
-        取消信号来自进程内 run 级取消注册表（set 语义，``cancellation_registry``）：执行上下文
-        注入的 ``ToolRuntimeDependencies.is_run_cancelled`` 优先（它已冻结 run_id、直查同一
-        注册表），未注入时本方法按 run id 兜底查询。
-
-        本方法刻意不做 DB 兜底查询：工具取消检查会在 process 模式工具的 50ms 轮询中被反复调用，
-        高频读库不可接受。信号在 run 执行结束时由 ``ConversationRunRunner`` 清空；注册表属当前
-        后端进程内状态，不跨重启。
-
-        参数:
-            无。
-
-        返回:
-            当前 run 已被取消时返回 True；未绑定 run 或无取消信号时返回 False。
-
-        异常:
-            无。
-
-        副作用:
-            无（只读进程内信号）。
+        信号按 task_id 记录（同一 Task 同时只有一个执行），只读进程内注册表、不查库：工具的
+        50ms 轮询也走同一入口，高频读库不可接受。
         """
-        current_run = self._current_run
-        if current_run is None:
-            return False
-        should_cancel = self._execution_context.runtime_dependencies.is_run_cancelled
-        if should_cancel is not None:
-            return should_cancel(current_run.id)
-        return cancellation_registry.is_cancelled(current_run.id)
+        return cancellation_registry.is_cancelled(self._current_task.id)
 
     def save_execution(self, data: ConversationRunProgress) -> None:
         """驱动边界保存执行数据；工具和模型节点不直接访问 CRUD。"""

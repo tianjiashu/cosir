@@ -79,7 +79,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
                 "data": {"step_id": step_id, "run_id": run_id},
             },
         )
-        operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
+        operations.cancel_run_if_running(usage_stats=rc.usage_stats)
         raise RunStopped()
 
     log.info(
