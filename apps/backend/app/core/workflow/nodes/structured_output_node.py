@@ -13,10 +13,9 @@ from openai.types.shared_params import ResponseFormatJSONObject
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.openai_model import usage_from_response
-from app.core.workflow.execution_state.route import ReactRoute
-from app.core.workflow.execution_state.state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, route_state
-from app.core.workflow.vision_input import resolve_messages_for_model
 from app.utils.message_content import content_to_text
 
 
@@ -145,17 +144,9 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
     if spec is None:
         raise RuntimeError("structured_output 节点缺少输出契约")
 
-    messages = _message_context().load_message()
-
-    request_failed = False
     try:
-        task = operations.get_current_task()
-        # 图片解析和重试只改动冻结副本，不写回 canonical context。
-        context_messages = await asyncio.to_thread(
-            resolve_messages_for_model,
-            messages,
-            workspace_id=task.workspace_id,
-        )
+        # load_message 返回模型请求副本（附件已解析）；重试只改动这份副本，不写回 canonical。
+        context_messages = await asyncio.to_thread(_message_context().load_message)
         # 非流式 JSON 模式；本地 schema 校验最终输出契约。
         retry_feedback: str | None = None
         final_output: str | None = None
