@@ -14,11 +14,10 @@ from app.core.runtime.conversation_run_cancellation_registry import (
     ConversationRunCancellationRegistry,
 )
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.step_context import StepContext
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming_module
-from app.core.workflow.node_helper import tool_call_lifecycle as lifecycle_module
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import model_node, structured_output_node
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -158,15 +157,17 @@ def bind_node(monkeypatch, model):
             is_current_run_cancelled=lambda: registry.is_cancelled(7),
             cancel_run_if_running=lambda **kw: cancellations.append(kw),
             allows_tools=(),
+            all_vaild_tools=[],
             vaild_tool_name=lambda _name: True,
             task_tool_schemas=[],
         ),
     )
     for module in (model_node, structured_output_node):
         monkeypatch.setattr(module, "_runtime_context", lambda: runtime)
-        monkeypatch.setattr(module, "resolve_messages_for_model", lambda messages, **kw: messages)
     monkeypatch.setattr(model_node, "_message_context", lambda: context)
-    monkeypatch.setattr(lifecycle_module, "_message_context", lambda: context)
+    monkeypatch.setattr(streaming_module, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(streaming_module, "_message_context", lambda: context)
+    monkeypatch.setattr(structured_output_node, "_message_context", lambda: context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: lambda event: None)
     monkeypatch.setattr(
         task_runtime_spaces,
@@ -247,12 +248,14 @@ async def test_cancel_settles_after_stream_close_and_part_flush(monkeypatch, can
         assert body.closed.is_set()
         order.append(type(event).__name__)
 
-    original_cancel_tools = lifecycle_module.ToolCallLifecycleManager.cancel
+    original_cancel_tools = streaming_module.StreamingPartStateMachine.cancel
 
-    def cancel_tools(self, **kwargs):
+    def cancel_tools(self):
+        assert order == []
+        result = original_cancel_tools(self)
         assert order == ["AssistantTextDeltaEvent", "AssistantPartClosedEvent"]
         order.append("cancel_tools")
-        return original_cancel_tools(self, **kwargs)
+        return result
 
     original_cancel_run = bound.runtime.operations.cancel_run_if_running
 
@@ -262,7 +265,7 @@ async def test_cancel_settles_after_stream_close_and_part_flush(monkeypatch, can
         original_cancel_run(**kwargs)
 
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: project)
-    monkeypatch.setattr(lifecycle_module.ToolCallLifecycleManager, "cancel", cancel_tools)
+    monkeypatch.setattr(streaming_module.StreamingPartStateMachine, "cancel", cancel_tools)
     bound.runtime.operations.cancel_run_if_running = cancel_run
     driver = asyncio.create_task(model_node._model_node(bound.state))
     try:

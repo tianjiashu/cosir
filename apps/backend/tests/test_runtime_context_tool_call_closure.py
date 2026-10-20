@@ -151,7 +151,7 @@ def _manager(
     manager = object.__new__(RuntimeMessageContextManager)
     manager.current_task_id = task_id
     manager.agent_profile = cast(AgentProfile, SimpleNamespace())
-    manager.workspace_root = ""
+    manager.workspace = SimpleNamespace(id=7, root_path="")
     # 假服务按协议实现 append，不继承真实 service 类型。
     manager.context_service = cast(ConversationTaskContextService, context_service)
     manager.current_run_id = current_run_id
@@ -466,10 +466,8 @@ def test_persisted_result_must_have_one_owner_in_the_same_run(env, case):
 def test_placeholder_does_not_block_later_real_tool_result(env: SimpleNamespace) -> None:
     """占位不得阻塞同一调用真实结果的写入：真实结果原地覆盖占位，只留一行。
 
-    可达路径：run 在工具执行前被取消 -> ``tools_node`` 跳过执行且不写占位 ->
-    下一次 ``load_message``（同 run resume 或下一 run）补 ``cancelled`` 占位 ->
-    该 run 的 pending 调用被重放执行 -> ``ToolCallLifecycleManager.settle`` 经
-    ``add_message`` 写真实结果 -> 按配对规则命中占位行并原地覆盖（不新增行、不推进序号）。
+    测试直接写入取消占位与真实结果，验证 ``add_message`` 按调用身份原地覆盖，
+    不新增行或推进序号；普通 Run 恢复不会重放已执行工具。
     """
 
     run = env.seed_run("running")
@@ -744,7 +742,9 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
         next_sequence=1,
     )
     completion = sdk_completion(tool_calls=_ai_message("preview")["tool_calls"])
-    manager.save_model_response(completion, include_in_context=False)
+    manager.save_model_response(
+        completion, include_in_context=False, registered_tool_names={"read_file"}
+    )
     operations = SimpleNamespace(
         vaild_tool_name=lambda name: name == "read_file",
         all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
@@ -820,8 +820,8 @@ def test_recovery_keeps_invalid_context_but_cancels_all_orphan_runs(env, caplog)
 @pytest.mark.asyncio
 async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, monkeypatch):
     """在模型请求和 inbox 消费前失败，原始结果与未消费输入都保持原状。"""
-    from app.core.workflow.execution_state.route import ReactRoute
-    from app.core.workflow.execution_state.state import ReactExecutionState
+    from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+    from app.core.workflow.execution_state.react_route import ReactRoute
     from app.core.workflow.nodes import model_node
     from app.models.conversation_input import ConversationInput, QueuedTaskInput
     from app.models.conversation_run_options import ConversationRunOptions

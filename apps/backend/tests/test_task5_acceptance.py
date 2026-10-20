@@ -60,7 +60,7 @@ _USAGE = {
     "reasoning_tokens": 1,
 }
 
-# 工具执行结果 -> Transport 工具 part 的 wire 终态（与 tool_call_lifecycle 的映射一致）。
+# 工具执行结果到 Transport 工具 part 的 wire 终态。
 _TOOL_WIRE_STATUS: dict[str, ToolCallEventStatus] = {
     "success": "completed",
     "error": "failed",
@@ -162,12 +162,7 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
 
 
 def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = None) -> None:
-    """Persist canonical user, AI/tool-call, and optional ToolMessage facts.
-
-    assistant 使用 SDK 原生字段 ``content``、``reasoning_content`` 和 ``tool_calls``。
-    工具结果行随行写入 wire 口径的
-    ``ToolMessageMetadata``（``status`` 取终态、``display_data`` 与短提示分列），与运行期
-    ``ToolCallLifecycleManager.settle`` 的写入口径一致。
+    """写入 canonical 用户、assistant 和工具消息，工具元数据使用 Transport 终态口径。
     """
 
     _append(store, run.id, {"role": "user", "content": f"user-{run.id}"})

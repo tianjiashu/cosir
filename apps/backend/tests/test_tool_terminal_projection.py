@@ -1,32 +1,15 @@
-"""工具终态投影（tool_terminal_projection / tool_executor / tool_call_lifecycle）的独立对抗性验证。
-
-本文件针对本次变更的三个文件，按用户给定的判据 A-H 逐条构造用例，使用真实的事件
-``plan`` mutation 与（可选的）真实 storage，而不是只复述实现：
-
-- A：成功 / 失败 / 取消三条路径「提前投影」与「settle 兜底」终态同值。
-- B：四条 early-return 分支（未注册工具 / profile 权限拒绝 / 参数非法 / execution_context
-  为 None）各投出恰一次终态事件（execution_context 为 None 时不投影）。
-- C：run_id<=0 / tool_call_id 为空时跳过投影（projector 不被调用）。
-- D：投影失败吞异常、返回 False、不改写 observation、写 error 日志。
-- E：重复投影（execute 提前 + settle 兜底）后快照终态确定、不漂移。
-- F：terminal_error_hint 边界（空串 / 非字符串 / None / 非映射）。
-- G：process 隔离工具（execute_terminal）在父进程投影、子进程不投影；成功终态不清空已流出
-  的 display_data.output。
-- H：并行批次下每个调用各自投出一态、互不串台。
-"""
+"""工具终态投影与传输快照的边界测试。"""
 
 from __future__ import annotations
 
 import copy
 import threading
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.assistant_transport.event import (
     RunInitializedEvent,
     RunStatusChangedEvent,
@@ -63,10 +46,6 @@ from app.core.tools.tool_execute.tool_terminal_projection import (
 )
 from app.core.tools.tool_handler.read_file import ReadFileTool
 from app.core.tools.tool_registry import ToolRegistry
-from app.core.workflow.node_helper import (
-    ToolCallLifecycleManager,
-    ToolCallLifecycleRecord,
-)
 
 # ---------------------------------------------------------------------------
 # 共享测试替身
@@ -134,9 +113,7 @@ class _RecordingProjector:
 def _install_projector(monkeypatch: pytest.MonkeyPatch, projector: Any) -> None:
     """把投影模块取用的 projector 工厂替换为常量替身。"""
 
-    monkeypatch.setattr(
-        projection_module, "get_conversation_event_projector", lambda: projector
-    )
+    monkeypatch.setattr(projection_module, "get_conversation_event_projector", lambda: projector)
 
 
 def _make_context(tmp_path: Path, **overrides: Any) -> ToolExecutionContext:
@@ -207,9 +184,7 @@ def test_project_records_terminal_state_event_payload(
 
     projector = _RecordingProjector()
     _install_projector(monkeypatch, projector)
-    observation = _observation(
-        "error", display_data={"status_hint": "读取失败", "extra": 1}
-    )
+    observation = _observation("error", display_data={"status_hint": "读取失败", "extra": 1})
 
     # 目标：确认投影构造的 event 三字段与预期同值（不是弱断言）。
     result = project_tool_terminal_state(
@@ -236,56 +211,6 @@ def test_project_records_terminal_state_event_payload(
 # ---------------------------------------------------------------------------
 
 
-class _LifecycleHarness:
-    """装配 lifecycle 运行期依赖并收集发出的终态事件。"""
-
-    def __init__(self) -> None:
-        self.events: list[Any] = []
-        self.messages: list[Any] = []
-        self.operations = SimpleNamespace(
-            to_tool_model_message=lambda observation: ("tool-message", observation.tool_call_id),
-            model_tools=[SimpleNamespace(name="read_file", display=None)],
-        )
-        self.runtime_config = SimpleNamespace(operations=self.operations)
-
-        def add_message(message: Any, **_kwargs: Any) -> str:
-            """假写入：记录消息并回「replaced」（命中既有行）这一分支。
-
-            本假对象只用于验证 ``settle`` 不因写入命中既有行而跳过落库与终态事件；真实「覆盖既有
-            行」语义（行数、序号、metadata）由真实 SQLite 用例钉住
-            （tests/test_message_context_tool_call_closure.py 的占位覆盖用例）。
-            """
-
-            self.messages.append(message)
-            return "replaced"
-
-        stream_writer = self.events.append
-        self.runtime_context = SimpleNamespace(add_message=add_message)
-        self.manager = ToolCallLifecycleManager()
-        self._stream_writer = stream_writer
-
-    def _patch_runtime(self) -> Any:
-        from unittest.mock import patch
-
-        return patch.multiple(
-            lifecycle_module,
-            _runtime_context=lambda: self.runtime_config,
-            _message_context=lambda: self.runtime_context,
-            get_stream_writer=lambda: self._stream_writer,
-        )
-
-    def settle(self, summary: dict[str, Any]) -> Any:
-        with self._patch_runtime():
-            manager, event_status = self.manager.settle(
-                task_id=1,
-                run_id=2,
-                step_id="step-3",
-                summary=summary,
-            )
-        self.manager = manager
-        return event_status
-
-
 def _summary_from_observation(observation: ToolObservation) -> dict[str, Any]:
     """按 ``tools`` 节点的 dataclasses.asdict 口径把 observation 转为摘要。"""
 
@@ -299,46 +224,6 @@ def _summary_from_observation(observation: ToolObservation) -> dict[str, Any]:
         "retryable": observation.retryable,
         "display_data": observation.display_data,
     }
-
-
-@pytest.mark.parametrize(
-    "status,display_data",
-    [
-        ("success", {"kind": "read-file-meta", "path": "a.py"}),
-        ("error", {"status_hint": "读取失败"}),
-        ("error", None),
-        ("cancelled", None),
-        ("weird", {"status_hint": ""}),
-    ],
-)
-def test_projection_and_settle_agree_on_terminal_fields(
-    status: str, display_data: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """判据 A：同一 observation 经「提前投影」与「settle 兜底」得到同值 status/error/display_data。"""
-
-    observation = _observation(status, display_data=display_data)
-
-    # 路径 1：提前投影。
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-    assert project_tool_terminal_state(
-        task_id=1, run_id=2, tool_call_id="call-1", observation=observation
-    )
-    advance_event = projector.events[0]
-
-    # 路径 2：settle 兜底。
-    harness = _LifecycleHarness()
-    harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
-        tool_call_id="call-1", tool_name="read_file"
-    )
-    harness.settle(_summary_from_observation(observation))
-    settle_event = next(
-        event for event in harness.events if isinstance(event, ToolCallStatusChangedEvent)
-    )
-
-    assert advance_event.status == settle_event.status
-    assert advance_event.error == settle_event.error
-    assert advance_event.display_data == settle_event.display_data
 
 
 def test_projection_and_settle_agree_display_data_is_deep_copied(
@@ -371,7 +256,9 @@ def _count_projections(monkeypatch: pytest.MonkeyPatch) -> _RecordingProjector:
     return projector
 
 
-def test_unknown_tool_projects_exactly_one_failed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_unknown_tool_projects_exactly_one_failed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """判据 B：未注册工具（门禁拒绝）经单一出口投出恰一次 failed 终态。"""
 
     projector = _count_projections(monkeypatch)
@@ -721,6 +608,9 @@ def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: s
     projector = ConversationEventProjector(owner)
     projector.process(RunInitializedEvent(task_id=task_id, run_id=run_id))
     projector.process(RunStatusChangedEvent(task_id=task_id, run_id=run_id, status="running"))
+    owner.state["runs"][-1]["messages"].append(
+        {"id": f"assistant-{run_id}", "role": "assistant", "parts": []}
+    )
     projector.process(
         ToolCallCreatedEvent(
             task_id=task_id, run_id=run_id, tool_call_id=call_id, tool_name="read_file"
@@ -728,7 +618,11 @@ def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: s
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=task_id, run_id=run_id, tool_call_id=call_id, status="running", args={"path": "a"}
+            task_id=task_id,
+            run_id=run_id,
+            tool_call_id=call_id,
+            status="running",
+            args={"path": "a"},
         )
     )
 
@@ -742,58 +636,12 @@ def _part(owner: _MemorySnapshotOwner, run_id: int, call_id: str) -> dict[str, A
     raise AssertionError("tool-call part not found")
 
 
-def test_double_projection_keeps_snapshot_terminal_state_stable() -> None:
-    """判据 E：先提前投影、再 settle 兜底，同一 part 终态确定且两次后完全同值（不漂移）。"""
-
-    owner = _MemorySnapshotOwner(empty_snapshot())
-    _seed_run(owner, task_id=1, run_id=9, call_id="call-1")
-    projector = ConversationEventProjector(owner)
-    observation = _observation(
-        "error", display_data={"status_hint": "读取失败", "kind": "read-file-meta"}
-    )
-    summary = _summary_from_observation(observation)
-
-    # 第一次：提前投影（等价于 ToolExecutor.execute 的单一出口）。
-    projector.process(
-        ToolCallStatusChangedEvent(
-            task_id=1,
-            run_id=9,
-            tool_call_id="call-1",
-            status=terminal_status(observation.status),
-            error=terminal_error_hint("failed", observation.display_data),
-            display_data=copy.deepcopy(dict(observation.display_data)),
-        )
-    )
-    after_advance = copy.deepcopy(_part(owner, 9, "call-1"))
-
-    # 第二次：settle 兜底（同值终态）。
-    lifecycle = ToolCallLifecycleManager(
-        valid_calls={"call-1": ToolCallLifecycleRecord(tool_call_id="call-1", tool_name="read_file")}
-    )
-    harness = _LifecycleHarness()
-    harness.manager = lifecycle
-    harness.settle(summary)
-    settle_event = next(
-        e for e in harness.events if isinstance(e, ToolCallStatusChangedEvent)
-    )
-    projector.process(settle_event)
-    after_settle = copy.deepcopy(_part(owner, 9, "call-1"))
-
-    assert after_advance["status"] == "failed"
-    assert after_settle["status"] == after_advance["status"] == "failed"
-    assert after_settle["error"] == after_advance["error"] == "读取失败"
-    assert after_settle["display_data"] == after_advance["display_data"]
-    assert after_settle["isError"] is True
-
-
 def test_double_projection_cancel_then_settle_is_stable() -> None:
     """判据 E 补：取消路径「提前投影 → settle 兜底」终态确定不变（同值自迁移幂等）。"""
 
     owner = _MemorySnapshotOwner(empty_snapshot())
     _seed_run(owner, task_id=1, run_id=9, call_id="call-1")
     projector = ConversationEventProjector(owner)
-    observation = _observation("cancelled")
-
     projector.process(
         ToolCallStatusChangedEvent(
             task_id=1,
@@ -1010,6 +858,9 @@ def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
     projector = ConversationEventProjector(owner)
     projector.process(RunInitializedEvent(task_id=1, run_id=9))
     projector.process(RunStatusChangedEvent(task_id=1, run_id=9, status="running"))
+    owner.state["runs"][-1]["messages"].append(
+        {"id": "assistant-9", "role": "assistant", "parts": []}
+    )
     projector.process(
         ToolCallCreatedEvent(
             task_id=1, run_id=9, tool_call_id="call-t", tool_name="execute_terminal"
@@ -1155,7 +1006,10 @@ def test_parallel_batch_distinct_statuses_do_not_cross_talk(
 def test_module_reads_projector_from_service_depends() -> None:
     """判据 E 加强：投影模块的 projector 取自 ``app.service.depends``（进程级唯一收口）。"""
 
-    assert projection_module.get_conversation_event_projector is __import__("app.service.depends", fromlist=["x"]).get_conversation_event_projector
+    assert (
+        projection_module.get_conversation_event_projector
+        is __import__("app.service.depends", fromlist=["x"]).get_conversation_event_projector
+    )
 
 
 def test_real_storage_backed_projection_updates_snapshot(
@@ -1190,6 +1044,7 @@ def test_real_storage_backed_projection_updates_snapshot(
             "runId": 5,
             "status": "running",
             "endReason": None,
+            "contextWindowTotal": None,
             "messages": [
                 {"id": "m0", "role": "user", "parts": []},
                 {
@@ -1236,65 +1091,6 @@ def _part_from_state(state: ConversationStateSnapshot, run_id: int, call_id: str
             if isinstance(part, dict) and part.get("toolCallId") == call_id:
                 return part
     raise AssertionError("tool-call part not found")
-
-
-# ---------------------------------------------------------------------------
-# 委托一致性：lifecycle 的 _event_status / _ui_error 必须与投影模块逐分支一致
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "event_status,display_data",
-    [
-        ("completed", {"status_hint": "x"}),
-        ("cancelled", {"status_hint": "x"}),
-        ("failed", {"status_hint": "读取失败"}),
-        ("failed", {"status_hint": ""}),
-        ("failed", {"status_hint": 123}),
-        ("failed", None),
-        ("failed", ["not", "mapping"]),
-    ],
-)
-def test_lifecycle_ui_error_delegates_to_projection(
-    event_status: str, display_data: Any
-) -> None:
-    """judged: lifecycle ``_ui_error`` 逐分支等于投影模块 ``terminal_error_hint``。"""
-
-    from app.core.workflow.node_helper.tool_call_lifecycle import _ui_error
-
-    summary = {"display_data": display_data}
-    assert _ui_error(summary, event_status) == terminal_error_hint(event_status, display_data)
-
-
-def test_settle_batch_mixed_statuses_emits_consistent_events() -> None:
-    """判据 A/E 集成：settle_batch 混合成功/失败/取消，事件终态与投影模块映射一致。"""
-
-    harness = _LifecycleHarness()
-    summaries = [
-        _summary_from_observation(_observation("success", tool_call_id="c1")),
-        _summary_from_observation(
-            _observation("error", tool_call_id="c2", display_data={"status_hint": "读取失败"})
-        ),
-        _summary_from_observation(_observation("cancelled", tool_call_id="c3")),
-    ]
-    for summary in summaries:
-        harness.manager.valid_calls[summary["tool_call_id"]] = ToolCallLifecycleRecord(
-            tool_call_id=summary["tool_call_id"], tool_name=summary["tool_name"]
-        )
-
-    with harness._patch_runtime():
-        result = harness.manager.settle_batch(
-            task_id=1, run_id=2, step_id="step-3", summaries=summaries, inherited_error_count=0
-        )
-    harness.manager = result.lifecycle
-
-    terminal_events = [e for e in harness.events if isinstance(e, ToolCallStatusChangedEvent)]
-    assert [(e.tool_call_id, e.status, e.error) for e in terminal_events] == [
-        ("c1", "completed", None),
-        ("c2", "failed", "读取失败"),
-        ("c3", "cancelled", "已取消"),
-    ]
-    assert result.error_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1517,105 +1313,6 @@ def test_execute_falls_back_to_context_tool_call_id_on_unhandled_failure(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "display_data",
-    [
-        ["not", "a", "mapping"],
-        "raw-string",
-        123,
-    ],
-)
-def test_two_paths_agree_on_malformed_display_data(
-    display_data: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """缺陷类型：展示数据畸形时「提前投影」与「settle 兜底」两条路径降级不一致（判据 A）。
-
-    契约：两条路径都投出终态、``display_data`` 均为 None、``error`` 均为失败兜底。
-    """
-
-    observation = _observation("error", display_data=display_data)
-
-    # 路径 1：提前投影。
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-    assert project_tool_terminal_state(
-        task_id=1, run_id=2, tool_call_id="call-1", observation=observation
-    )
-    advance_event = projector.events[0]
-
-    # 路径 2：settle 兜底。
-    harness = _LifecycleHarness()
-    harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
-        tool_call_id="call-1", tool_name="read_file"
-    )
-    harness.settle(_summary_from_observation(observation))
-    settle_event = next(
-        e for e in harness.events if isinstance(e, ToolCallStatusChangedEvent)
-    )
-
-    assert advance_event.status == settle_event.status == "failed"
-    assert advance_event.display_data is None
-    assert settle_event.display_data is None
-    assert advance_event.error == settle_event.error == "执行失败"
-
-
-def test_lifecycle_ui_data_delegates_to_normalize_display_data() -> None:
-    """judged: lifecycle ``_ui_data`` 逐分支等于投影模块 ``normalize_display_data``（无第二份归一）。"""
-
-    from app.core.workflow.node_helper.tool_call_lifecycle import _ui_data
-
-    class _Undeepcopyable:
-        def __deepcopy__(self, _memo: Any) -> Any:
-            raise RuntimeError("cannot deep copy")
-
-    for value in (None, {}, {"a": 1}, ["x"], "s", 3, {"bad": _Undeepcopyable()}):
-        summary = {"display_data": value}
-        assert _ui_data(summary) == normalize_display_data(value)
-        if normalize_display_data(value) is None:
-            assert _ui_data(summary) is None
-
-
-# ---------------------------------------------------------------------------
-# L. lifecycle 结算与投影相伴的终态路径（提升变更面覆盖）
-# ---------------------------------------------------------------------------
-
-
-def test_settle_is_idempotent_after_terminal_state() -> None:
-    """缺陷类型：已终态记录被 settle 二次结算，重复写上下文/重复发事件（判据 E）。"""
-
-    harness = _LifecycleHarness()
-    harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
-        tool_call_id="call-1", tool_name="read_file", status="completed"
-    )
-    summary = _summary_from_observation(_observation("success", tool_call_id="call-1"))
-
-    event_status = harness.settle(summary)
-
-    assert event_status == "completed"
-    assert harness.messages == [], "已终态记录不得重复写 ToolMessage"
-    assert harness.events == [], "已终态记录不得重复发终态事件"
-
-
-def test_settle_overwrites_existing_result_row_and_still_emits_terminal_event() -> None:
-    """结算命中既有结果行（占位）时原地覆盖，并照常发终态事件。
-
-    覆盖语义的由来：取消/崩溃留下的 ``cancelled`` 占位不得阻塞同一调用的真实结果，也不得
-    与它并排留下第二行；前端必须能从占位状态翻到真实终态。
-    """
-
-    harness = _LifecycleHarness()
-    harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
-        tool_call_id="call-1", tool_name="read_file"
-    )
-    summary = _summary_from_observation(_observation("success", tool_call_id="call-1"))
-
-    event_status = harness.settle(summary)
-
-    assert event_status == "completed"
-    assert harness.messages == [("tool-message", "call-1")]
-    assert [event.status for event in harness.events] == ["completed"]
-
-
 # ---------------------------------------------------------------------------
 # M. 第三轮：丢弃留痕同源（真实日志捕获）、无日志噪声、keyword-only 签名
 # ---------------------------------------------------------------------------
@@ -1652,62 +1349,6 @@ def test_dropped_留痕_early_path_carries_full_identity(
     assert "not" not in str(data)
 
 
-def test_dropped_留痕_settle_path_carries_tool_call_id(caplog: pytest.LogCaptureFixture) -> None:
-    """判据 A：结算路径（_ui_data）对同一畸形载荷同样写 warning，至少含 tool_call_id。"""
-
-    harness = _LifecycleHarness()
-    harness.manager.valid_calls["call-settle"] = ToolCallLifecycleRecord(
-        tool_call_id="call-settle", tool_name="read_file"
-    )
-    summary = _summary_from_observation(
-        _observation("error", display_data=["not", "a", "mapping"], tool_call_id="call-settle")
-    )
-
-    with caplog.at_level("WARNING"):
-        with harness._patch_runtime():
-            harness.manager.settle(task_id=1, run_id=2, step_id="s", summary=summary)
-
-    dropped = _dropped_records(caplog)
-    assert dropped, "结算路径必须对畸形载荷留痕（同源）"
-    assert all(r.data["tool_call_id"] == "call-settle" for r in dropped)
-
-
-def test_dropped_留痕_two_paths_same_event_name_and_type(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """判据 A：两条路径对同一畸形载荷写出**同名**事件且 display_data_type 一致（同源）。"""
-
-    monkeypatch.setattr(projection_module, "get_conversation_event_projector", lambda: _RecordingProjector())
-
-    with caplog.at_level("WARNING"):
-        project_tool_terminal_state(
-            task_id=1,
-            run_id=2,
-            tool_call_id="call-1",
-            observation=_observation("error", display_data=123),
-        )
-        early = _dropped_records(caplog)
-
-    caplog.clear()
-    harness = _LifecycleHarness()
-    harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
-        tool_call_id="call-1", tool_name="read_file"
-    )
-    with caplog.at_level("WARNING"):
-        with harness._patch_runtime():
-            harness.manager.settle(
-                task_id=1,
-                run_id=2,
-                step_id="s",
-                summary=_summary_from_observation(_observation("error", display_data=123)),
-            )
-        settle = _dropped_records(caplog)
-
-    assert early and settle
-    assert early[0].message == settle[0].message == "tool_display_data_dropped"
-    assert early[0].data["display_data_type"] == settle[0].data["display_data_type"] == "int"
-
-
 @pytest.mark.parametrize("value", [None, {}, {"kind": "read-file-meta"}, {"a": 1, "b": [2]}])
 def test_no_dropped_log_for_none_empty_or_valid(
     value: Any, caplog: pytest.LogCaptureFixture
@@ -1717,36 +1358,6 @@ def test_no_dropped_log_for_none_empty_or_valid(
     with caplog.at_level("WARNING"):
         normalize_display_data(value)
         normalize_display_data(value, task_id=1, run_id=2, tool_call_id="c")
-
-    assert _dropped_records(caplog) == []
-
-
-def test_no_dropped_log_along_early_and_settle_for_valid_payload(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """判据 B：合法载荷走完整两条路径时不得产生任何丢弃 warning（无日志噪声）。"""
-
-    _install_projector(monkeypatch, _RecordingProjector())
-    payload = {"kind": "read-file-meta", "path": "a.py"}
-
-    with caplog.at_level("WARNING"):
-        project_tool_terminal_state(
-            task_id=1,
-            run_id=2,
-            tool_call_id="call-1",
-            observation=_observation("error", display_data=payload),
-        )
-        harness = _LifecycleHarness()
-        harness.manager.valid_calls["call-1"] = ToolCallLifecycleRecord(
-            tool_call_id="call-1", tool_name="read_file"
-        )
-        with harness._patch_runtime():
-            harness.manager.settle(
-                task_id=1,
-                run_id=2,
-                step_id="s",
-                summary=_summary_from_observation(_observation("error", display_data=payload)),
-            )
 
     assert _dropped_records(caplog) == []
 
@@ -1769,29 +1380,3 @@ def test_normalize_display_data_defaults_are_optional() -> None:
     assert normalize_display_data({"a": 1}, task_id=1) == {"a": 1}
     assert normalize_display_data({"a": 1}, run_id=2) == {"a": 1}
     assert normalize_display_data({"a": 1}, tool_call_id="c") == {"a": 1}
-
-
-def test_settle_malformed_display_data_writes_two_identical_warnings(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """判据 E：settle 一次调用对同一畸形载荷写**两条**相同 warning（_ui_data 被调用两次）。
-
-    核实已知副作用是否真实存在；本用例只做事实核实，不评判可接受性。
-    """
-
-    harness = _LifecycleHarness()
-    harness.manager.valid_calls["call-dup"] = ToolCallLifecycleRecord(
-        tool_call_id="call-dup", tool_name="read_file"
-    )
-    summary = _summary_from_observation(
-        _observation("error", display_data=["bad"], tool_call_id="call-dup")
-    )
-
-    with caplog.at_level("WARNING"):
-        with harness._patch_runtime():
-            harness.manager.settle(task_id=1, run_id=2, step_id="s", summary=summary)
-
-    dropped = _dropped_records(caplog)
-    assert len(dropped) == 2, f"预期 settle 一次调用写两条 warning，实际 {len(dropped)}"
-    assert dropped[0].data == dropped[1].data
-    assert dropped[0].data["tool_call_id"] == "call-dup"

@@ -84,8 +84,8 @@ async def test_empty_first_frame_and_multiple_choices_reach_consumer():
 @pytest.mark.parametrize(
     "ids, expected", [(["c", "1"], "c1"), (["c1", "c1"], "c1c1"), ([None, None], "")]
 )
-async def test_tool_id_deltas_are_not_rewritten_or_suppressed(ids, expected):
-    """ID 完全遵循 SDK 增量拼接；缺失身份留给完整调用准入裁决。"""
+async def test_tool_id_deltas_are_not_rewritten_or_suppressed(monkeypatch, ids, expected):
+    """ID 完全遵循 SDK 增量拼接；缺失身份的调用在投影时被丢弃。"""
     frames = []
     for index, call_id in enumerate(ids):
         call = {"index": 0, "function": {"arguments": "{" if index == 0 else "}"}}
@@ -109,8 +109,11 @@ async def test_tool_id_deltas_are_not_rewritten_or_suppressed(ids, expected):
         events = [event async for event in model.stream([])]
         assert body.closed
         assert [event.chunk.choices[0].delta.tool_calls[0].id for event in events] == ids
-        message = assistant_message(events[-1].snapshot.choices[0].message)
-        assert message["tool_calls"][0]["id"] == expected
-        assert message["tool_calls"][0]["function"]["arguments"] == "{}"
+        message = assistant_message(events[-1].snapshot.choices[0].message, {"read_file"})
+        if expected:
+            assert message["tool_calls"][0]["id"] == expected
+            assert message["tool_calls"][0]["function"]["arguments"] == "{}"
+        else:
+            assert "tool_calls" not in message
     finally:
         await model.close()

@@ -1,31 +1,14 @@
-"""工具调用链路第二轮审计测试（独立测试方，只观测真实行为，不修改生产代码）。
-
-在第一轮 ``test_tool_call_chain_audit.py`` 之外，钉死第二轮交叉审查提出的六个可疑点：
-
-- P1 ``_tools_node`` 重入：checkpoint 停在 ``pending`` 时是否有副作用工具被二次执行
-- P2 ``ToolCallStatusChangedEvent`` 终态事件是否清空已流出的终端输出（按 ``kind`` 分形状验证）
-- P4 ToolMessage 落库顺序 vs ``AIMessage.tool_calls`` 顺序（内存重排 vs 数据库落库顺序）
-- P5 崩溃占位被真实结果覆盖（resume 场景，不并排留第二行）
-- P6 ``_observe_node`` 在 run 已取消时是否仍执行一整轮结算
-
-所有用例只依赖内存假对象与 monkeypatch，不连真实模型 / 数据库 / 网络。
-"""
+"""工具结果投影与 context 配对的内存测试。"""
 
 from __future__ import annotations
 
 import copy
 import json
-import unittest.mock as mock
-from collections.abc import Iterator
-from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
-import app.core.workflow.nodes.observation_node as observation_node_module
-import app.core.workflow.nodes.tools_node as tools_node_module
 from app.assistant_transport.event import (
     RunInitializedEvent,
     RunStatusChangedEvent,
@@ -46,14 +29,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import TransportFrame
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
-from app.core.runtime.run_result import ToolRunResult
-from app.core.tools.schemas import ToolCall, ToolObservation
-from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.node_helper import (
-    ToolCallLifecycleManager,
-    ToolCallLifecycleRecord,
-)
+from app.core.tools.schemas import ToolObservation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 
@@ -67,7 +43,7 @@ _RUN_ID = 9
 
 
 class _FakeStreamWriter:
-    """收集 lifecycle 发出的全部事件的假 stream writer。"""
+    """收集工具链路事件的假 stream writer。"""
 
     def __init__(self) -> None:
         self.events: list[Any] = []
@@ -78,65 +54,6 @@ class _FakeStreamWriter:
     @property
     def status_events(self) -> list[ToolCallStatusChangedEvent]:
         return [event for event in self.events if isinstance(event, ToolCallStatusChangedEvent)]
-
-
-class _LifecycleHarness:
-    """lifecycle 的运行时依赖装配：operations / runtime_context / stream writer。"""
-
-    def __init__(
-        self,
-        registered_tool_names: tuple[str, ...] = ("read_file", "write_file"),
-        allows_tools: tuple[str, ...] | None = None,
-    ) -> None:
-        self.registered_tool_names = tuple(registered_tool_names)
-        self.allows_tools = (
-            tuple(registered_tool_names) if allows_tools is None else tuple(allows_tools)
-        )
-        self.writer = _FakeStreamWriter()
-        self.messages: list[Any] = []
-        self.metadata: list[dict[str, Any]] = []
-        self.model_tools = [
-            SimpleNamespace(name=name, display=None) for name in self.registered_tool_names
-        ]
-        self.operations = SimpleNamespace(
-            all_vaild_tools=self.model_tools,
-            allows_tools=frozenset(self.allows_tools),
-            to_tool_model_message=lambda observation: {
-                "role": "tool",
-                "content": str(observation.content or observation.error or ""),
-                "tool_call_id": observation.tool_call_id,
-            },
-            get_current_task=lambda: SimpleNamespace(id=_TASK_ID),
-            get_current_run=lambda: SimpleNamespace(id=_RUN_ID),
-            is_current_run_cancelled=lambda: self.cancelled,
-            fail_run_if_running=lambda **_kwargs: SimpleNamespace(id=_RUN_ID),
-        )
-        self.cancelled = False
-        self.runtime_config = SimpleNamespace(
-            operations=self.operations,
-            run=SimpleNamespace(id=_RUN_ID),
-            usage_stats=SimpleNamespace(),
-        )
-
-        def _add_message(message: Any, **kwargs: Any) -> str:
-            self.messages.append(message)
-            self.metadata.append(kwargs.get("metadata") or {})
-            return "appended"
-
-        self.runtime_context = SimpleNamespace(add_message=_add_message)
-        self.manager = ToolCallLifecycleManager(allows_tools=self.allows_tools)
-
-    @contextmanager
-    def runtime(self) -> Iterator[None]:
-        """在 lifecycle 模块内注入假运行时依赖（可恢复）。"""
-
-        with mock.patch.multiple(
-            lifecycle_module,
-            _runtime_context=lambda: self.runtime_config,
-            _message_context=lambda: self.runtime_context,
-            get_stream_writer=lambda: self.writer,
-        ):
-            yield
 
 
 def _observation(**overrides: Any) -> ToolObservation:
@@ -171,22 +88,6 @@ def _summary(**overrides: Any) -> dict[str, Any]:
     }
     base.update(overrides)
     return base
-
-
-def _state(lifecycle: Any, **overrides: Any) -> ReactExecutionState:
-    """构造节点所需的最小 graph state。"""
-
-    values: dict[str, Any] = {
-        "step_count": 3,
-        "tool_error_count": 0,
-        "next_node": ReactRoute.TOOLS,
-        "instruction": "",
-        "max_steps": 10,
-        "last_tool_results": {},
-        "tool_call_lifecycle": lifecycle,
-    }
-    values.update(overrides)
-    return ReactExecutionState(**values)
 
 
 class _MemorySnapshotOwner:
@@ -273,143 +174,6 @@ def _tool_part(state: ConversationStateSnapshot) -> dict[str, Any]:
 # ============================================================================
 # P1. ``_tools_node`` 重入：pending 记录是否被二次执行
 # ============================================================================
-
-
-async def test_p1_pending_records_are_replayed_on_reentry() -> None:
-    """P1-a：checkpoint 停在 ``pending`` 时，有副作用的 ``write_file`` 被再次送去执行。
-
-    被测行为：``_tools_node`` 的可执行集合 = ``valid_tools + blocked_tool_calls`` 中
-    ``status == "pending"`` 的记录。工具执行期间进程退出时，checkpoint 仍是 model 节点
-    返回的快照（全部 ``pending``），续跑重入本节点会把整批（含 ``write_file`` 这类有副作用
-    工具）**重放**。
-    缺陷判定：**缺陷**（``tools_node.py`` 顶部 docstring 自述为「剩余缺口（未决）」）。
-    """
-
-    harness = _LifecycleHarness(
-        registered_tool_names=("read_file", "write_file"),
-        allows_tools=("read_file", "write_file"),
-    )
-    harness.manager = ToolCallLifecycleManager(
-        allows_tools=("read_file", "write_file"),
-        valid_calls={
-            "write-1": ToolCallLifecycleRecord(
-                tool_call_id="write-1",
-                tool_name="write_file",
-                status="pending",
-                args={"path": "a.txt", "content": "x"},
-            ),
-        },
-    )
-
-    captured: dict[str, Any] = {}
-
-    async def _fake_run_tool_calls(
-        task_id: int, calls: list[ToolCall], step_id: str, loop: Any
-    ) -> ToolRunResult:
-        captured["calls"] = list(calls)
-        return ToolRunResult(
-            observations=[_observation(tool_name=call.tool_name) for call in calls]
-        )
-
-    runtime_config = SimpleNamespace(
-        operations=SimpleNamespace(
-            all_vaild_tools=[],
-            get_current_task=lambda: SimpleNamespace(id=_TASK_ID),
-            run_tool_calls=_fake_run_tool_calls,
-        ),
-        run=SimpleNamespace(id=_RUN_ID),
-    )
-
-    with (
-        harness.runtime(),
-        mock.patch.object(tools_node_module, "_runtime_context", lambda: runtime_config),
-    ):
-        await tools_node_module._tools_node(_state(harness.manager))
-
-    executed = [call.call_id for call in captured["calls"]]
-    # 缺陷事实：pending 的 write_file 被再次送去执行（二次写入）。
-    assert executed == ["write-1"], f"实际执行集合={executed}"
-
-
-async def test_p1_running_records_are_not_replayed() -> None:
-    """P1-b：对照组——快照已含 ``running``（begin 已写回）时，记录**不再**被送去执行。
-
-    被测行为：``pending_records`` 只收 ``status == "pending"``，``running`` 记录被剔除。
-    缺陷判定：符合预期（防重放判据在状态维度有效）。
-    注意：真实 LangGraph 语义下 checkpoint 只在节点返回后落盘，因此「工具执行期崩溃」时
-    快照恒为 ``pending``，走不到这个分支 —— 本用例只证明过滤逻辑本身有效。
-    """
-
-    harness = _LifecycleHarness(
-        registered_tool_names=("read_file", "write_file"),
-        allows_tools=("read_file", "write_file"),
-    )
-    harness.manager = ToolCallLifecycleManager(
-        allows_tools=("read_file", "write_file"),
-        valid_calls={
-            "write-1": ToolCallLifecycleRecord(
-                tool_call_id="write-1", tool_name="write_file", status="running"
-            ),
-        },
-    )
-
-    captured: dict[str, Any] = {}
-
-    async def _fake_run_tool_calls(
-        task_id: int, calls: list[ToolCall], step_id: str, loop: Any
-    ) -> ToolRunResult:
-        captured["calls"] = list(calls)
-        return ToolRunResult(observations=[])
-
-    runtime_config = SimpleNamespace(
-        operations=SimpleNamespace(
-            all_vaild_tools=[],
-            get_current_task=lambda: SimpleNamespace(id=_TASK_ID),
-            run_tool_calls=_fake_run_tool_calls,
-        ),
-        run=SimpleNamespace(id=_RUN_ID),
-    )
-
-    with (
-        harness.runtime(),
-        mock.patch.object(tools_node_module, "_runtime_context", lambda: runtime_config),
-    ):
-        await tools_node_module._tools_node(_state(harness.manager))
-
-    assert captured["calls"] == [], f"实际执行集合={captured['calls']}"
-
-
-async def test_p1_begin_migrates_blocked_calls_without_projecting_event() -> None:
-    """P1-c（已修复）：``begin`` 覆盖 ``blocked_calls``，且隐藏调用不发状态事件。
-
-    被测行为：``begin()`` 把 ``valid_calls`` 与 ``blocked_calls`` 中 ``pending`` 的记录一并迁移为
-    ``running``，使「未起跑」恒等价于「仍是 ``pending``」——``tools`` 只按该判据选取执行集合，
-    因此重入不会把已被门禁拒绝的调用再次送去执行层。``blocked_calls`` 从未建立前端 part
-    （``part_projected=False``），迁移不发状态事件，否则 projector 只会记一条「part 缺失」告警。
-    缺陷判定：原缺陷（blocked 恒 pending ⇒ 每次重入都被重复送去执行层）已消除。
-    """
-
-    harness = _LifecycleHarness(
-        registered_tool_names=("read_file", "write_file"),
-        allows_tools=("read_file",),
-    )
-    harness.manager = ToolCallLifecycleManager(
-        allows_tools=("read_file",),
-        blocked_calls={
-            "hidden-1": ToolCallLifecycleRecord(
-                tool_call_id="hidden-1",
-                tool_name="write_file",
-                status="pending",
-                part_projected=False,
-            ),
-        },
-    )
-
-    with harness.runtime():
-        after_begin = harness.manager.begin(task_id=_TASK_ID, run_id=_RUN_ID, step_id="step-3")
-
-    assert after_begin.blocked_calls["hidden-1"].status == "running"
-    assert [event.status for event in harness.writer.status_events] == []
 
 
 # ============================================================================
@@ -500,52 +264,6 @@ def test_p2_non_terminal_result_kind_is_also_wiped() -> None:
 # ============================================================================
 
 
-def test_p4_settle_batch_writes_tool_messages_in_summary_order() -> None:
-    """P4-a：``settle_batch`` 按 summaries 顺序写 ToolMessage，与 ``tool_calls`` 顺序无关。
-
-    被测行为：``model_node`` 把 ``ai_message.tool_calls`` 重写为 ``blocked + valid``，而
-    ``settle_batch`` 按 ``observations`` 顺序（valid 先、blocked 后）写 ToolMessage。
-    缺陷判定：中等（顺序不一致，但 provider 按 tool_call_id 配对，功能不受影响）。
-    """
-
-    harness = _LifecycleHarness(
-        registered_tool_names=("read_file", "write_file"),
-        allows_tools=("read_file",),
-    )
-    with harness.runtime():
-        classified = harness.manager.classify(
-            tool_calls=[
-                {
-                    "id": "blocked-1",
-                    "type": "function",
-                    "function": {"name": "write_file", "arguments": json.dumps({"path": "b.txt"})},
-                },
-                {
-                    "id": "valid-1",
-                    "type": "function",
-                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
-                },
-            ],
-        )
-        # tool_calls 顺序（model_node 重写后的形态）：blocked 在前。
-        assert list(classified.blocked_calls) == ["blocked-1"]
-        assert list(classified.valid_calls) == ["valid-1"]
-
-        classified.settle_batch(
-            task_id=_TASK_ID,
-            run_id=_RUN_ID,
-            step_id="step-3",
-            # 执行顺序：valid 先、blocked 后（run_tool_calls 的实际顺序）。
-            summaries=[
-                _summary(tool_call_id="valid-1"),
-                _summary(tool_call_id="blocked-1", status="error", error="disabled"),
-            ],
-            inherited_error_count=0,
-        )
-
-    assert [message.get("tool_call_id") for message in harness.messages] == ["valid-1", "blocked-1"]
-
-
 class _RecordingContextService:
     """记录 append / replace 的最小 context service（不落真实数据库）。"""
 
@@ -596,7 +314,7 @@ def _memory_manager(
     manager = object.__new__(RuntimeMessageContextManager)
     manager.current_task_id = _TASK_ID
     manager.agent_profile = SimpleNamespace()
-    manager.workspace_root = ""
+    manager.workspace = SimpleNamespace(id=7, root_path="")
     manager.context_service = service
     manager.current_run_id = _RUN_ID
     manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
@@ -761,66 +479,3 @@ def test_p5_placeholder_of_another_run_is_not_overwritten() -> None:
 # ============================================================================
 # P6. ``_observe_node`` 在 run 已取消时是否仍执行一整轮结算
 # ============================================================================
-
-
-async def test_p6_observe_node_settles_even_when_run_is_cancelled() -> None:
-    """P6：run 已被取消时，``_observe_node`` **仍然**结算整批观察并路由回 model。
-
-    被测行为：``_observe_node`` 全文没有 ``is_current_run_cancelled()`` 检查。
-    缺陷判定：低危（收敛仍可靠：路由回 model 后由 ``model_node`` 入口检查命中并 interrupt；
-    代价是被取消的 run 会多跑一轮结算）。
-    """
-
-    harness = _LifecycleHarness(
-        registered_tool_names=("read_file",),
-        allows_tools=("read_file",),
-    )
-    harness.cancelled = True
-
-    with harness.runtime():
-        classified = harness.manager.classify(
-            tool_calls=[
-                {
-                    "id": "ok-1",
-                    "type": "function",
-                    "function": {"name": "read_file", "arguments": json.dumps({"path": "a.txt"})},
-                },
-                {
-                    "id": "cancelled-1",
-                    "type": "function",
-                    "function": {"name": "read_file", "arguments": json.dumps({"path": "b.txt"})},
-                },
-            ],
-        )
-
-    state = _state(
-        classified,
-        last_tool_results={
-            "instruction": "",
-            "observations": [
-                _summary(tool_call_id="ok-1"),
-                _summary(tool_call_id="cancelled-1", status="cancelled"),
-            ],
-        },
-        next_node=ReactRoute.MODEL,
-    )
-
-    with (
-        harness.runtime(),
-        mock.patch.object(
-            observation_node_module, "_runtime_context", lambda: harness.runtime_config
-        ),
-    ):
-        patch = await observation_node_module._observe_node(state)
-
-    # 事实 1：两条观察都被结算（写了 2 条 ToolMessage），尽管 run 已取消。
-    assert [message.get("tool_call_id") for message in harness.messages] == ["ok-1", "cancelled-1"]
-    # 事实 2：终态事件照发（ok-1 completed / cancelled-1 cancelled）。
-    assert [(event.tool_call_id, event.status) for event in harness.writer.status_events] == [
-        ("ok-1", "completed"),
-        ("cancelled-1", "cancelled"),
-    ]
-    # 事实 3：路由回 model，由 model_node 入口的取消检查收敛。
-    assert patch["next_node"] == ReactRoute.MODEL
-    # 事实 4：取消不计入连续失败。
-    assert patch["tool_error_count"] == 0

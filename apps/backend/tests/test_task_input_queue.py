@@ -8,7 +8,6 @@ import pytest
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
-from app.core.tools.schemas.tool_call_lifecycle_state import ToolCallLifecycleState
 from app.models import ConversationRunCommand
 from app.models.conversation_run_progress import (
     ConversationRunProgress,
@@ -58,6 +57,19 @@ def store(isolated_storage, tmp_path):
         service=service,
         context=get_conversation_task_context_service(),
         crud=ConversationRunCrud(),
+    )
+
+
+def _context_manager(store):
+    """按运行时装配口径构造 manager：工作区记录供系统提示词与附件解析使用。"""
+
+    from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
+
+    return RuntimeMessageContextManager(
+        store.task.id,
+        SimpleNamespace(),
+        store.context,
+        workspace=SimpleNamespace(id=store.task.workspace_id, root_path=""),
     )
 
 
@@ -179,7 +191,12 @@ def test_restart_cancels_wait_and_preserves_inbox(store):
             waiting=RunWaitingState(
                 instruction="",
                 last_tool_results=ToolBatchSnapshot(instruction="", observations=[]),
-                tool_call_lifecycle=ToolCallLifecycleState(),
+                pending_call={
+                    "id": "c",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                },
+                projected_tool_calls={"c": "read_file"},
             ),
         ),
     )
@@ -484,7 +501,6 @@ async def test_queue_commands_during_stream_preserve_output_and_replace_one_row(
     )
     from app.config.constant import Constant
     from app.core.context.runtime_message_context_manager import (
-        RuntimeMessageContextManager,
         SystemPromptBuilder,
     )
     from app.service.depends import get_conversation_event_projector
@@ -531,7 +547,7 @@ async def test_queue_commands_during_stream_preserve_output_and_replace_one_row(
                 TaskCrud().get(store.task.id), [store.crud.get(store.run.id)], rows
             )
             assert [p["text"] for p in parts(cold)] == ["thinking", first + "B"]
-            reloaded = RuntimeMessageContextManager(store.task.id, SimpleNamespace(), store.context)
+            reloaded = _context_manager(store)
             assert [m["role"] for m in reloaded.load_message()] == ["system", "user"]
             before = state_service.get_state(store.task.id)
             assert [p["text"] for p in parts(before)] == [
@@ -632,7 +648,12 @@ def test_wait_decision_is_validated_before_transition_and_committed_with_run(sto
             last_tool_results=ToolBatchSnapshot(
                 instruction="", observations=[{"user_input_request": request}]
             ),
-            tool_call_lifecycle=ToolCallLifecycleState(),
+            pending_call={
+                "id": "c",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": "{}"},
+            },
+            projected_tool_calls={"c": "read_file"},
         ),
     )
     store.crud.update_status_if_in(
@@ -673,12 +694,11 @@ def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, 
     import json
 
     from app.core.context.runtime_message_context_manager import (
-        RuntimeMessageContextManager,
         SystemPromptBuilder,
     )
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
-    context = RuntimeMessageContextManager(store.task.id, SimpleNamespace(), store.context)
+    context = _context_manager(store)
     context.begin_run(store.run)
     store.inputs.consume_into_context(context, store.run.id)
     user = store.context.entries_in_context(store.task.id)[1]
@@ -705,14 +725,16 @@ def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, 
         usage={"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
     ):
         response_entry = context.save_model_response(
-            _event.snapshot, include_in_context=False
+            _event.snapshot, include_in_context=False, registered_tool_names={"read_file"}
         )
         rows = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)
         responses = [row for row in rows if row.message["role"] == "assistant"]
         assert len(responses) == 1
         assert responses[0].message_id == response_entry.message_id
         assert not responses[0].include_in_context
-    context.save_model_response(_event.snapshot, include_in_context=True)
+    context.save_model_response(
+        _event.snapshot, include_in_context=True, registered_tool_names={"read_file"}
+    )
     finalized = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)[-1]
     assert finalized.metadata.finish_reason == "tool_calls"
     assert finalized.metadata.usage.total_tokens == 10
@@ -729,7 +751,7 @@ def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, 
     )
     completed = store.context.entries_in_context(store.task.id)[-1]
     assert (completed.message_id, completed.sequence) == (waiting.message_id, waiting.sequence)
-    reloaded = RuntimeMessageContextManager(store.task.id, SimpleNamespace(), store.context)
+    reloaded = _context_manager(store)
     assert reloaded.load_message() == context.load_message()
     assert [m["role"] for m in reloaded.load_message()] == ["system", "user", "assistant", "tool"]
     assert all(
@@ -750,14 +772,13 @@ async def test_queue_during_tool_preview_keeps_pending_part_executable(store, mo
         TransportAssistantService,
     )
     from app.core.context.runtime_message_context_manager import (
-        RuntimeMessageContextManager,
         SystemPromptBuilder,
     )
     from tests.sdk_fixtures import sdk_completion
 
     get_conversation_run_state_service().claim_pending_run(store.run.id)
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
-    context = RuntimeMessageContextManager(store.task.id, SimpleNamespace(), store.context)
+    context = _context_manager(store)
     context.begin_run(store.run)
     store.inputs.consume_into_context(context, store.run.id)
     state_service = ConversationTaskStateService()
@@ -772,6 +793,7 @@ async def test_queue_during_tool_preview_keeps_pending_part_executable(store, mo
             ]
         ),
         include_in_context=False,
+        registered_tool_names={"read_file"},
     )
     state_service.apply_planned(
         ToolCallCreatedEvent(
@@ -817,21 +839,22 @@ async def test_queue_during_tool_preview_keeps_pending_part_executable(store, mo
 
 def test_cancelled_sdk_output_is_durable_but_excluded_on_resume(store, monkeypatch):
     from app.core.context.runtime_message_context_manager import (
-        RuntimeMessageContextManager,
         SystemPromptBuilder,
     )
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
-    context = RuntimeMessageContextManager(store.task.id, SimpleNamespace(), store.context)
+    context = _context_manager(store)
     context.begin_run(store.run)
     store.inputs.consume_into_context(context, store.run.id)
     events = sdk_events([{"content": "partial"}, {"content": " tail"}], finish_reason=None)
     last_event = list(events)[-1]
-    context.save_model_response(last_event.snapshot, include_in_context=False)
+    context.save_model_response(
+        last_event.snapshot, include_in_context=False, registered_tool_names=set()
+    )
     rows = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)
     assert rows[-1].message["content"] == "partial tail"
     assert not rows[-1].include_in_context
-    reloaded = RuntimeMessageContextManager(store.task.id, SimpleNamespace(), store.context)
+    reloaded = _context_manager(store)
     reloaded.begin_run(store.run)
     assert [m["role"] for m in reloaded.load_message()] == ["system", "user"]
 

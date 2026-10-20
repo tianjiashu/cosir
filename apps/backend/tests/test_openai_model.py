@@ -12,8 +12,8 @@ from app.core.llm_provider.openai_model import OpenAIChatModel, usage_from_respo
 from tests.sdk_fixtures import sdk_completion, sdk_events
 
 
-def test_assistant_message_drops_unusable_or_unregistered_calls() -> None:
-    """身份缺失 / 工具未注册的调用不进入请求正文；只登记已注册且身份完整的调用。"""
+def test_assistant_message_filters_unregistered_calls() -> None:
+    """缺失 id 或未注册的工具名不进入模型正文。"""
 
     completed = sdk_completion(
         content="说明",
@@ -28,9 +28,7 @@ def test_assistant_message_drops_unusable_or_unregistered_calls() -> None:
         ],
     )
 
-    message = assistant_message(
-        completed.choices[0].message, is_known_tool=lambda name: name == "read_file"
-    )
+    message = assistant_message(completed.choices[0].message, {"read_file"})
 
     assert [call["id"] for call in message["tool_calls"]] == ["ok"]
 
@@ -44,11 +42,13 @@ async def test_complete_preserves_bound_tools_without_changing_stream_requests()
         "object": "chat.completion",
         "created": 1,
         "model": "test",
-        "choices": [{
-            "index": 0,
-            "finish_reason": "length",
-            "message": {"role": "assistant", "content": '{"partial":'},
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "length",
+                "message": {"role": "assistant", "content": '{"partial":'},
+            }
+        ],
         "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
     }
 
@@ -62,11 +62,13 @@ async def test_complete_preserves_bound_tools_without_changing_stream_requests()
             "object": "chat.completion.chunk",
             "created": 1,
             "model": "test",
-            "choices": [{
-                "index": 0,
-                "finish_reason": "stop",
-                "delta": {"role": "assistant", "content": "done"},
-            }],
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "delta": {"role": "assistant", "content": "done"},
+                }
+            ],
         }
         return httpx.Response(
             200,
@@ -107,7 +109,7 @@ async def test_complete_preserves_bound_tools_without_changing_stream_requests()
 
 
 @pytest.mark.asyncio
-async def test_sdk_stream_preserves_reasoning_tools_usage_and_request():
+async def test_sdk_stream_preserves_reasoning_tools_usage_and_request(monkeypatch) -> None:
     requests = []
     raw = [
         {
@@ -192,7 +194,7 @@ async def test_sdk_stream_preserves_reasoning_tools_usage_and_request():
     async for chunk in model.stream(
         [
             {"role": "user", "content": "go"},
-            assistant_message(result.choices[0].message),
+            assistant_message(result.choices[0].message, {"read_file"}),
             {
                 "role": "tool",
                 "content": "read",
@@ -265,7 +267,9 @@ def test_usage_preserves_unknown_and_explicit_zero(provider_usage, expected):
     """SDK 未返回的字段不补零、不推算，仍由统计层统一校验数值。"""
     from openai.types import CompletionUsage
 
-    from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+    from app.core.workflow.execution_state.conversation_run_usage_stats import (
+        ConversationRunUsageStats,
+    )
 
     stats = ConversationRunUsageStats()
     normalized = usage_from_response(CompletionUsage.model_construct(**provider_usage))
@@ -286,7 +290,9 @@ def test_usage_preserves_unknown_and_explicit_zero(provider_usage, expected):
 @pytest.mark.parametrize("details", ["invalid", [1, 2]])
 async def test_sdk_malformed_usage_details_do_not_fail_completed_response(details):
     """实际 SDK 响应边界容忍厂商明细形状异常，完成的回答仍能交付。"""
-    from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+    from app.core.workflow.execution_state.conversation_run_usage_stats import (
+        ConversationRunUsageStats,
+    )
 
     def handler(_request):
         completion = {

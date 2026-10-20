@@ -52,11 +52,13 @@ class _ContextService:
         self.appended.append((7, 2, record, getattr(record, "sequence", 0), False))
 
 
-def _manager(context_service: _ContextService, *, next_sequence: int = 0) -> RuntimeMessageContextManager:
+def _manager(
+    context_service: _ContextService, *, next_sequence: int = 0
+) -> RuntimeMessageContextManager:
     manager = object.__new__(RuntimeMessageContextManager)
     manager.current_task_id = 7
     manager.agent_profile = SimpleNamespace()
-    manager.workspace_root = ""
+    manager.workspace = SimpleNamespace(id=7, root_path="")
     manager.context_service = context_service
     manager.current_run_id = None
     manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
@@ -160,7 +162,9 @@ def test_save_model_response_writes_once_and_controls_context_membership(include
     manager = _manager(context_service, next_sequence=5)
     manager.current_run_id = 2
     response = sdk_completion(content="最后收到的内容")
-    manager.save_model_response(response, include_in_context=include_in_context)
+    manager.save_model_response(
+        response, include_in_context=include_in_context, registered_tool_names=set()
+    )
     assert len(context_service.appended) == 1
     assert context_service.appended[0][2]["content"] == "最后收到的内容"
     assert context_service.appended[0][4] is include_in_context
@@ -171,10 +175,16 @@ def test_save_model_response_writes_once_and_controls_context_membership(include
 def test_stream_snapshots_replace_one_identity_until_context_admission():
     service = _ContextService(max_sequence=4)
     manager = _manager(service, next_sequence=5)
-    entry = manager.save_model_response(sdk_completion(content="part"), include_in_context=False)
+    entry = manager.save_model_response(
+        sdk_completion(content="part"),
+        include_in_context=False,
+        registered_tool_names=set(),
+    )
     identity = entry.message_id
     entry = manager.save_model_response(
-        sdk_completion(content="part tail"), include_in_context=False
+        sdk_completion(content="part tail"),
+        include_in_context=False,
+        registered_tool_names=set(),
     )
     assert manager.next_sequence == 6
     assert manager._entries == []
@@ -183,12 +193,39 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
     assert record.sequence == 5
     assert record.message["content"] == "part tail"
     assert not record.include_in_context
-    manager.save_model_response(sdk_completion(content="part tail"), include_in_context=True)
+    manager.save_model_response(
+        sdk_completion(content="part tail"),
+        include_in_context=True,
+        registered_tool_names=set(),
+    )
     assert service.appended[-1][2].include_in_context
     assert manager._entries == [entry]
     assert manager.next_sequence == 6
     # 提交即结束本次草稿：下一次调用必须新起一行。
     assert manager._draft_response is None
+
+
+def test_model_response_filters_unknown_calls_before_persistence():
+    service = _ContextService(max_sequence=0)
+    manager = _manager(service, next_sequence=1)
+    manager.current_run_id = 2
+    response = sdk_completion(
+        tool_calls=[
+            {
+                "id": "known",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": "{"},
+            },
+            {"id": "unknown", "type": "function", "function": {"name": "other", "arguments": "{}"}},
+        ]
+    )
+
+    entry = manager.save_model_response(
+        response, include_in_context=True, registered_tool_names={"read_file"}
+    )
+
+    assert [call["id"] for call in entry.message["tool_calls"]] == ["known"]
+    assert entry.message["tool_calls"][0]["function"]["arguments"] == "{"
 
 
 def test_add_message_replaces_paired_tool_result_row_in_place() -> None:

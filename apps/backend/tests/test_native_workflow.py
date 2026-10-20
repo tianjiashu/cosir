@@ -32,6 +32,7 @@ def loop(monkeypatch):
         save_execution=lambda value: progress.append(value),
         complete_run_if_running=lambda *a, **k: calls.append("complete"),
         cancel_run_if_running=lambda **k: calls.append("cancel"),
+        allows_tools={"review"},
     )
     monkeypatch.setattr(
         module,
@@ -85,7 +86,7 @@ async def test_cancelled_resume_does_not_replay_old_tools(loop, monkeypatch):
 
     async def model(state):
         assert state.step_count == 3
-        assert state.tool_call_lifecycle is None
+        assert state.calls == []
         return {"next_node": ReactRoute.END}
 
     monkeypatch.setattr(module, "_model_node", model)
@@ -166,9 +167,7 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
         )
         # 主线先完成：落定 completed 后再走结构化支线（未取消时直接 complete_run_if_running）。
         assert (
-            runtime.operations.complete_run_if_running(
-                runtime.usage_stats, final_output="自然回答"
-            )
+            runtime.operations.complete_run_if_running(runtime.usage_stats, final_output="自然回答")
             is not None
         )
         return {"next_node": ReactRoute.STRUCTURED_OUTPUT}
@@ -226,10 +225,6 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
 @pytest.mark.parametrize("decision_kind", ["approve", "reject"])
 async def test_wait_resume_roundtrip_only_reopens_decided_call(loop, monkeypatch, decision_kind):
     """持久等待数据恢复为可执行状态；已完成工具不重放，决定消费后不再留恢复入口。"""
-    from app.core.tools.schemas.tool_call_lifecycle_state import (
-        ToolCallLifecycleRecord,
-        ToolCallLifecycleState,
-    )
     from app.core.tools.schemas.user_decision import UserDecision, UserDecisionKind
     from app.models.conversation_run_progress import RunWaitingState, ToolBatchSnapshot
 
@@ -255,21 +250,12 @@ async def test_wait_resume_roundtrip_only_reopens_decided_call(loop, monkeypatch
                     }
                 ],
             ),
-            tool_call_lifecycle=ToolCallLifecycleState(
-                allows_tools=("review",),
-                valid_calls={
-                    "completed": ToolCallLifecycleRecord(
-                        tool_call_id="completed",
-                        tool_name="review",
-                        status="completed",
-                    ),
-                    "waiting": ToolCallLifecycleRecord(
-                        tool_call_id="waiting",
-                        tool_name="review",
-                        status="running",
-                    ),
-                },
-            ),
+            pending_call={
+                "id": "waiting",
+                "type": "function",
+                "function": {"name": "review", "arguments": "{}"},
+            },
+            projected_tool_calls={"waiting": "review"},
         ),
         decision=decision,
     )
@@ -288,16 +274,12 @@ async def test_wait_resume_roundtrip_only_reopens_decided_call(loop, monkeypatch
 
     async def tools(state):
         assert decision_kind == "approve"
-        pending = [
-            call for call in state.tool_call_lifecycle.valid_tools if call.status == "pending"
-        ]
-        assert [call.tool_call_id for call in pending] == ["waiting"]
-        assert pending[0].user_decision == decision
+        assert [call["id"] for call in state.calls] == ["waiting"]
+        assert state.replay_decision == decision
         loop.calls.append("approved_tool")
         return {"next_node": ReactRoute.OBSERVE}
 
     async def observe(state):
-        assert state.tool_call_lifecycle.valid_calls["completed"].status == "completed"
         assert state.last_tool_results["observations"][0].get("user_input_request") is None
         loop.calls.append("observe")
         return {"next_node": ReactRoute.END}

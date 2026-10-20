@@ -22,12 +22,11 @@ from openai.types.chat import ChatCompletion
 
 import app.core.workflow.node_helper.finalize_max_steps as finalize_module
 import app.core.workflow.node_helper.streaming_part_state_machine as streaming_module
-import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.step_context import StepContext
 from app.core.workflow.node_helper import RunStopped
 from app.core.workflow.nodes import model_node as model_module
@@ -184,10 +183,12 @@ class _ModelHarness:
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
 
-        def save_model_response(snapshot, *, include_in_context, **_kwargs):
+        def save_model_response(snapshot, *, include_in_context, registered_tool_names):
             self.saved_responses.append((snapshot, include_in_context))
             if include_in_context:
-                self.messages.append(assistant_message(snapshot.choices[0].message))
+                self.messages.append(
+                    assistant_message(snapshot.choices[0].message, registered_tool_names)
+                )
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
@@ -202,13 +203,13 @@ class _ModelHarness:
 
 
 def _install(monkeypatch: Any, harness: _ModelHarness) -> None:
-    """把三处 graph runtime 依赖绑定到测试桩（model / lifecycle / 超步数收口各自持有引用）。"""
+    """把模型步与超步数收口依赖绑定到测试桩。"""
 
-    for module in (model_module, lifecycle_module):
+    for module in (model_module, streaming_module):
         monkeypatch.setattr(module, "_runtime_context", lambda: harness.runtime_config)
+    for module in (model_module, streaming_module):
         monkeypatch.setattr(module, "_message_context", lambda: harness.runtime_context)
-    for module in (lifecycle_module, streaming_module):
-        monkeypatch.setattr(module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     monkeypatch.setattr(finalize_module, "_runtime_context", lambda: harness.runtime_config)
 
 

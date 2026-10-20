@@ -4,9 +4,6 @@
 ``level`` / ``propagate`` / ``disabled`` 与 ``logging.disable()`` 阈值。本模块证明它确实生效，
 并攻击它可能的绕过面（同用例内不得越界复原、``disabled`` 与全局阈值都要覆盖）。
 
-历史：本文件原先还含一组针对 ``ToolCallLifecycleManager.fail_invalid_tools`` 的契约用例；该能力
-已从模块中移除（非法调用现在由 ``classify`` 归属到 ``valid_calls`` / ``blocked_calls``，再由执行层
-门禁产出可读拒绝、经 ``settle`` 闭合模型协议），故该组用例随能力一并删除。
 """
 
 from __future__ import annotations

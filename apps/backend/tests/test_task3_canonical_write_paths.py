@@ -8,19 +8,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from openai.types.chat import (
-    ChatCompletionToolMessageParam,
-)
+from test_task5_acceptance import canonical_store as canonical_store
 
-import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.assistant_transport.event import RunStatusChangedEvent
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.node_helper import (
-    ToolCallLifecycleManager,
-    ToolCallLifecycleRecord,
-)
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_progress import ConversationRunProgress
@@ -54,7 +47,7 @@ def _runtime_manager(service: _RecordingContextService) -> RuntimeMessageContext
     manager = object.__new__(RuntimeMessageContextManager)
     manager.current_task_id = 7
     manager.agent_profile = SimpleNamespace()
-    manager.workspace_root = ""
+    manager.workspace = SimpleNamespace(id=7, root_path="")
     manager.context_service = service
     manager.current_run_id = 11
     manager._system_entry = None
@@ -97,7 +90,7 @@ def test_begin_run_binds_identity_without_rewriting_context() -> None:
     assert service.appended == []
 
 
-def test_sdk_response_projection_preserves_raw_tool_arguments():
+def test_sdk_response_projection_preserves_raw_tool_arguments(monkeypatch) -> None:
     from app.core.llm_provider.message_codec import assistant_message
 
     response = sdk_completion(
@@ -107,39 +100,10 @@ def test_sdk_response_projection_preserves_raw_tool_arguments():
             {"id": "call", "type": "function", "function": {"name": "read_file", "arguments": "{"}}
         ],
     )
-    projected = assistant_message(response.choices[0].message)
+    projected = assistant_message(response.choices[0].message, {"read_file"})
     assert projected["content"] == "answer"
     assert projected["reasoning_content"] == "think"
     assert projected["tool_calls"][0]["function"]["arguments"] == "{"
-
-
-def test_tool_call_lifecycle_freezes_presentation_in_serializable_state(monkeypatch) -> None:
-    # 展示声明只在 ``allowed`` 桶写入，故本用例必须把工具放进本轮允许集合。
-    manager = ToolCallLifecycleManager(allows_tools=("read_file",))
-    tool_definitions = [
-        SimpleNamespace(name="read_file", display=SimpleNamespace(to_dict=lambda: {"verb": "Read"}))
-    ]
-    runtime_config = SimpleNamespace(
-        operations=SimpleNamespace(
-            model_tools=tool_definitions,
-            # 与真实契约同形：``_valid_tool_name`` / ``_presentation_for`` 读 ``all_vaild_tools``。
-            all_vaild_tools=tool_definitions,
-        )
-    )
-    events: list[Any] = []
-    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: runtime_config)
-    monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: events.append)
-
-    manager = manager.create(
-        task_id=7,
-        run_id=11,
-        step_id="step-1",
-        raw_tool_calls=[
-            {"id": "call-1", "type": "function", "function": {"name": "read_file", "arguments": ""}}
-        ],
-    )
-
-    assert manager.valid_calls["call-1"].presentation == {"verb": "Read"}
 
 
 def _tool_summary() -> dict[str, Any]:
@@ -154,158 +118,6 @@ def _tool_summary() -> dict[str, Any]:
         "display_data": {"kind": "read-file-meta", "path": "a.py"},
         "artifact_data": {"before": "secret"},
     }
-
-
-def test_tool_settle_persists_before_transport_event_and_is_idempotent(monkeypatch) -> None:
-    order: list[str] = []
-
-    class _RuntimeContext:
-        def add_message(self, message: ChatCompletionToolMessageParam, **kwargs: Any) -> str:
-            order.append("database")
-            assert "status" not in message
-            assert kwargs["metadata"].display_data == {
-                "kind": "read-file-meta",
-                "path": "a.py",
-            }
-            assert "artifact_data" not in kwargs["metadata"].model_dump()
-            return "appended"
-
-    writer = order.append
-    runtime_config = SimpleNamespace(
-        operations=SimpleNamespace(
-            to_tool_model_message=lambda observation: {
-                "role": "tool",
-                "content": observation.content,
-                "tool_call_id": observation.tool_call_id,
-            },
-            model_tools=[],
-        )
-    )
-    runtime_context = _RuntimeContext()
-    manager = ToolCallLifecycleManager(
-        valid_calls={
-            "call-1": ToolCallLifecycleRecord(
-                tool_call_id="call-1", tool_name="read_file", status="running"
-            )
-        }
-    )
-
-    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: runtime_config)
-    monkeypatch.setattr(lifecycle_module, "_message_context", lambda: runtime_context)
-    monkeypatch.setattr(
-        lifecycle_module, "get_stream_writer", lambda: lambda event: writer("event")
-    )
-
-    first = manager.settle_batch(
-        task_id=7,
-        run_id=11,
-        step_id="step-1",
-        summaries=[_tool_summary()],
-        inherited_error_count=0,
-    )
-    second = first.lifecycle.settle_batch(
-        task_id=7,
-        run_id=11,
-        step_id="step-1",
-        summaries=[_tool_summary()],
-        inherited_error_count=0,
-    )
-
-    assert order == ["database", "event"]
-    assert second.lifecycle.valid_calls["call-1"].status == "completed"
-
-
-def test_failed_tool_event_uses_sanitized_display_data(monkeypatch) -> None:
-    """失败终态的展示数据与短提示取自 ``display_data`` 分类，不携带原始 provider 文本。"""
-
-    events: list[Any] = []
-
-    class _RuntimeContext:
-        def add_message(self, message: ChatCompletionToolMessageParam, **kwargs: Any) -> str:
-            assert kwargs["metadata"].display_data == {
-                "kind": "read-file-meta",
-                "path": "a.py",
-            }
-            assert kwargs["metadata"].error == "执行失败"
-            return "appended"
-
-    runtime_config = SimpleNamespace(
-        operations=SimpleNamespace(
-            to_tool_model_message=lambda observation: {
-                "role": "tool",
-                "content": observation.content,
-                "tool_call_id": observation.tool_call_id,
-            },
-            model_tools=[],
-        )
-    )
-    manager = ToolCallLifecycleManager(
-        valid_calls={
-            "call-1": ToolCallLifecycleRecord(
-                tool_call_id="call-1", tool_name="read_file", status="running"
-            )
-        }
-    )
-    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: runtime_config)
-    monkeypatch.setattr(lifecycle_module, "_message_context", lambda: _RuntimeContext())
-    monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: events.append)
-
-    updated, status = manager.settle(
-        task_id=7,
-        run_id=11,
-        step_id="step-1",
-        summary={**_tool_summary(), "status": "error", "error": "raw provider detail"},
-    )
-
-    assert status == "failed"
-    assert updated.valid_calls["call-1"].status == "failed"
-    assert events[0].display_data == {"kind": "read-file-meta", "path": "a.py"}
-    assert events[0].error == "执行失败"
-
-
-def test_tool_settle_overwrites_existing_result_row_and_still_emits_terminal_event(
-    monkeypatch,
-) -> None:
-    """命中既有结果行（占位）时结算覆盖该行，并照常发终态事件。"""
-
-    events: list[Any] = []
-    writes: list[str] = []
-
-    class _RuntimeContext:
-        def add_message(self, _message: ChatCompletionToolMessageParam, **_kwargs: Any) -> str:
-            writes.append("replaced")
-            return "replaced"
-
-    runtime_config = SimpleNamespace(
-        operations=SimpleNamespace(
-            to_tool_model_message=lambda observation: {
-                "role": "tool",
-                "content": observation.content,
-                "tool_call_id": observation.tool_call_id,
-            },
-            model_tools=[],
-        )
-    )
-    manager = ToolCallLifecycleManager(
-        valid_calls={
-            "call-1": ToolCallLifecycleRecord(
-                tool_call_id="call-1", tool_name="read_file", status="running"
-            )
-        }
-    )
-    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: runtime_config)
-    monkeypatch.setattr(lifecycle_module, "_message_context", lambda: _RuntimeContext())
-    monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: events.append)
-
-    manager.settle(
-        task_id=7,
-        run_id=11,
-        step_id="step-1",
-        summary=_tool_summary(),
-    )
-
-    assert writes == ["replaced"]
-    assert [event.status for event in events] == ["completed"]
 
 
 def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:

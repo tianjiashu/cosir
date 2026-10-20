@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from openai.types.chat import ChatCompletionUserMessageParam
 
-import app.core.workflow.vision_input as vision_input
+import app.core.context.vision_input as vision_input
 from app.models.errors.llm_provider_exceptions import VisionImageError
 
 _IMAGE_REF = {"type": "image_url", "image_url": {"url": "cosir-attachment://attachments/a.png"}}

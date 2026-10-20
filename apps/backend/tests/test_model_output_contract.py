@@ -1,16 +1,4 @@
-"""model 节点「本轮输出能否收口」的契约测试。
-
-覆盖：空流必须响亮失败（不固化空消息）、无工具时任意完成原因都结束 Run、空正文仍可完成、
-缺失完成原因只保留展示并重试，以及工具批次未完成时不执行工具。
-
-历史：本文件由 ``test_tool_call_repair_flow.py`` 拆分而来。该文件其余用例建立在已移除的契约上
-（graph state 的 ``tool_request`` / ``tool_rejection_count`` / ``final_answer_only``、tools 节点承担
-工具调用创建与「修复提示」收口、``ToolCallLifecycleManager.invalid_calls`` /
-``fail_invalid_tools``）；当前契约是「model 节点登记调用并发出创建事件、tools 节点执行尚未起跑的
-调用、observe 节点统一结算并注入修复提示」，由 ``test_tool_call_chain_audit*.py``、
-``test_tools_node_execution_contract.py``、``test_wait_user_node_contract.py`` 与
-``test_tool_observation_summary.py`` 覆盖，故随契约一并删除。
-"""
+"""模型输出收口契约：无完成原因的草稿只供展示，工具身份按注册表过滤。"""
 
 import asyncio
 from collections.abc import AsyncIterator
@@ -22,10 +10,9 @@ from openai.lib.streaming.chat import ChunkEvent
 from openai.types.chat import ChatCompletion
 
 import app.core.workflow.node_helper.streaming_part_state_machine as streaming_module
-import app.core.workflow.node_helper.tool_call_lifecycle as lifecycle_module
 from app.core.llm_provider.message_codec import assistant_message
-from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.step_context import StepContext
 from app.core.workflow.nodes import model_node as model_module
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -127,15 +114,18 @@ class _ModelHarness:
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
 
-        def save_model_response(snapshot, *, include_in_context, **_kwargs):
+        def save_model_response(snapshot, *, include_in_context, registered_tool_names):
             self.saved_responses.append((snapshot, include_in_context))
             if include_in_context:
-                self.messages.append(assistant_message(snapshot.choices[0].message))
+                self.messages.append(
+                    assistant_message(snapshot.choices[0].message, registered_tool_names)
+                )
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
             add_message=add_message,
             save_model_response=save_model_response,
+            abandon_model_response=lambda: None,
         )
 
     async def _astream(self, _messages: list[Any], **kwargs: Any) -> AsyncIterator[ChunkEvent]:
@@ -143,12 +133,12 @@ class _ModelHarness:
             yield sdk_event(chunk, self._message)
 
 
-def _patch_lifecycle_runtime(monkeypatch: Any, harness: _ModelHarness) -> None:
-    """把 lifecycle 的 graph runtime 依赖绑定到测试桩。"""
+def _patch_model_runtime(monkeypatch: Any, harness: _ModelHarness) -> None:
+    """把流式投影依赖绑定到测试桩。"""
 
-    monkeypatch.setattr(lifecycle_module, "_runtime_context", lambda: harness.runtime_config)
-    monkeypatch.setattr(lifecycle_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(lifecycle_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(streaming_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(streaming_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
 
 
 def test_empty_model_stream_fails_loudly_without_finalizing(monkeypatch: Any) -> None:
@@ -158,7 +148,7 @@ def test_empty_model_stream_fails_loudly_without_finalizing(monkeypatch: Any) ->
     """
 
     harness = _ModelHarness(sdk_completion(content="", finish_reason=None), chunks=[])
-    _patch_lifecycle_runtime(monkeypatch, harness)
+    _patch_model_runtime(monkeypatch, harness)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
@@ -171,18 +161,20 @@ def test_empty_model_stream_fails_loudly_without_finalizing(monkeypatch: Any) ->
 
 
 @pytest.mark.parametrize(
-    "identities",
+    "identities, expected_ids",
     [
-        [("", "read_file")],
-        [("   ", "read_file")],
-        [("call", "")],
-        [("call", "read_file"), ("call", "read_file")],
-        [("call", "read_file"), ("call", "write_file")],
-        [("call", "write_file"), ("call", "read_file")],
+        ([("", "read_file")], []),
+        ([("   ", "read_file")], []),
+        ([("call", "")], []),
+        ([("call", "unknown_tool")], []),
+        ([("call", "read_file"), ("", "write_file")], ["call"]),
+        ([("call", "read_file"), ("call", "write_file")], ["call", "call"]),
     ],
 )
-def test_invalid_tool_identity_rejects_batch_and_cancels_preview(monkeypatch, identities):
-    """完整批次身份错误必须取消草稿和预览，不能覆盖调用或进入工具执行。"""
+def test_model_filters_unusable_calls_without_rejecting_batch(
+    monkeypatch, identities, expected_ids
+):
+    """缺失身份或未注册的调用不进入 context；其余调用由后续执行层处理。"""
     response = sdk_completion(
         "说明",
         finish_reason="tool_calls",
@@ -192,35 +184,38 @@ def test_invalid_tool_identity_rejects_batch_and_cancels_preview(monkeypatch, id
         ],
     )
     harness = _ModelHarness(response)
-    # write_file 已注册但本轮禁用，验证跨 allowed/blocked 桶也不能重复身份。
+    # 已注册但本轮禁用的调用仍留在模型协议中，由执行层拒绝。
     harness.operations.all_vaild_tools.append(SimpleNamespace(name="write_file", display=None))
-    placeholders = []
-    harness.runtime_context.add_message = lambda message, **kwargs: placeholders.append(
-        (message, kwargs)
-    )
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
-    _patch_lifecycle_runtime(monkeypatch, harness)
+    _patch_model_runtime(monkeypatch, harness)
 
-    with pytest.raises(ValueError, match="模型工具调用"):
-        asyncio.run(model_module._model_node(_state()))
+    result = asyncio.run(model_module._model_node(_state()))
 
-    assert harness.messages == []
-    assert len(harness.saved_responses) == 1
-    assert harness.saved_responses[0][1] is False
-    assert not harness.completed
-    assert len(placeholders) == (1 if len(identities) > 1 else 0)
-    for message, metadata in placeholders:
-        assert message["tool_call_id"] == "call"
-        assert metadata["include_in_context"] is False
-        assert metadata["metadata"].status == "cancelled"
-    statuses = [
-        event.status
-        for event in harness.events
-        if isinstance(event, lifecycle_module.ToolCallStatusChangedEvent)
-    ]
-    assert statuses == (["cancelled"] if len(identities) > 1 else [])
+    assert [call["id"] for call in harness.messages[-1].get("tool_calls", [])] == expected_ids
+    assert result["next_node"] is (ReactRoute.TOOLS if expected_ids else ReactRoute.END)
+    assert [included for _, included in harness.saved_responses] == [False, True]
+
+
+def test_filtered_calls_do_not_prevent_retry_without_finish_reason(monkeypatch):
+    response = sdk_completion(
+        "",
+        finish_reason=None,
+        tool_calls=[
+            {"id": "unknown", "type": "function", "function": {"name": "other", "arguments": "{}"}}
+        ],
+    )
+    harness = _ModelHarness(response)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
+    _patch_model_runtime(monkeypatch, harness)
+
+    result = asyncio.run(model_module._model_node(_state()))
+
+    assert result["next_node"] is ReactRoute.MODEL
+    assert [included for _, included in harness.saved_responses] == [False]
 
 
 def test_finish_reason_completes_final_response(monkeypatch: Any) -> None:
@@ -231,7 +226,7 @@ def test_finish_reason_completes_final_response(monkeypatch: Any) -> None:
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
-    _patch_lifecycle_runtime(monkeypatch, harness)
+    _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -243,9 +238,7 @@ def test_finish_reason_completes_final_response(monkeypatch: Any) -> None:
     assert [item["role"] for item in harness.messages] == ["assistant"]
 
 
-@pytest.mark.parametrize(
-    "finish_reason", ["length", "content_filter", "tool_calls", "provider_custom"]
-)
+@pytest.mark.parametrize("finish_reason", ["length", "content_filter", "provider_custom"])
 def test_any_finish_reason_without_tool_calls_completes_run(
     monkeypatch: Any, finish_reason: str
 ) -> None:
@@ -256,7 +249,7 @@ def test_any_finish_reason_without_tool_calls_completes_run(
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
-    _patch_lifecycle_runtime(monkeypatch, harness)
+    _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -279,7 +272,7 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
-    _patch_lifecycle_runtime(monkeypatch, harness)
+    _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -290,7 +283,7 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     assert [include for _, include in harness.saved_responses] == [False]
     deferred_system_messages = task_runtime_spaces.get_or_create(1).take_runtime_notices()
     assert len(deferred_system_messages) == 1
-    assert "no finish_reason" in deferred_system_messages[0].content
+    assert deferred_system_messages[0].kind == "model_continuation"
 
 
 def test_empty_content_with_finish_reason_completes_run(monkeypatch: Any) -> None:
@@ -300,7 +293,7 @@ def test_empty_content_with_finish_reason_completes_run(monkeypatch: Any) -> Non
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
-    _patch_lifecycle_runtime(monkeypatch, harness)
+    _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -318,7 +311,7 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
-    _patch_lifecycle_runtime(monkeypatch, harness)
+    _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
 
@@ -347,7 +340,7 @@ def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
-    _patch_lifecycle_runtime(monkeypatch, harness)
+    _patch_model_runtime(monkeypatch, harness)
     result = asyncio.run(model_module._model_node(_state()))
     assert result["next_node"] is ReactRoute.END
     assert requested[-1]["role"] == "system"
@@ -378,24 +371,24 @@ def test_invalid_tool_arguments_preserved_and_never_dispatched(monkeypatch, argu
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
-    _patch_lifecycle_runtime(monkeypatch, harness)
+    _patch_model_runtime(monkeypatch, harness)
     patch = asyncio.run(model_module._model_node(_state()))
     assert patch["next_node"] == ReactRoute.TOOLS
     assert harness.messages[-1]["tool_calls"][0]["function"]["arguments"] == arguments
-    assert patch["tool_call_lifecycle"].valid_calls["call"].argument_error
+    assert patch["calls"][0]["function"]["arguments"] == arguments
     harness.operations.run_tool_calls = AsyncMock(return_value=ToolRunResult(observations=[]))
     harness.operations.all_vaild_tools[0].need_HIL = False
     monkeypatch.setattr(tools_module, "_runtime_context", lambda: harness.runtime_config)
     result = asyncio.run(tools_module._tools_node(_state().model_copy(update=patch)))
-    calls = harness.operations.run_tool_calls.call_args.args[1]
-    assert calls == []
+    assert harness.operations.run_tool_calls.call_count == 0
     observations = result["last_tool_results"]["observations"]
     assert observations[0]["status"] == "error"
     assert observations[0]["tool_call_id"] == "call"
 
 
 @pytest.mark.parametrize("finish_reason", ["length", None])
-def test_truncated_tool_batch_is_not_executed_even_with_complete_json(monkeypatch, finish_reason):
+def test_tool_calls_take_priority_over_finish_reason(monkeypatch, finish_reason):
+    """过滤后仍有调用就进入工具节点，参数与完成原因均不在此拦截。"""
     response = sdk_completion(
         "",
         finish_reason=finish_reason,
@@ -407,8 +400,9 @@ def test_truncated_tool_batch_is_not_executed_even_with_complete_json(monkeypatc
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
-    _patch_lifecycle_runtime(monkeypatch, harness)
+    _patch_model_runtime(monkeypatch, harness)
     result = asyncio.run(model_module._model_node(_state()))
-    assert result["next_node"] == ReactRoute.MODEL
-    assert all(m["role"] != "assistant" for m in harness.messages)
-    assert task_runtime_spaces.get_or_create(1).has_runtime_notices()
+    assert result["next_node"] is ReactRoute.TOOLS
+    assert harness.messages[-1]["tool_calls"][0]["id"] == "call"
+    assert [included for _, included in harness.saved_responses] == [False, True]
+    assert not task_runtime_spaces.get_or_create(1).has_runtime_notices()
