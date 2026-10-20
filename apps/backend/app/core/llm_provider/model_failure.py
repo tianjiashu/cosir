@@ -70,7 +70,7 @@ def _error_nodes(body: Any) -> Iterator[Mapping[str, Any]]:
 def _response_body(exc: BaseException) -> Any | None:
     """读取第三方异常的响应体数据属性；不读取状态码或调用异常对象的方法。"""
 
-    # OpenAI SDK 与 LangChain OpenAI 异常会在 body 数据属性中保留解析后的 HTTP 响应体。
+    # OpenAI SDK 异常会在 body 数据属性中保留解析后的 HTTP 响应体。
     # 这是第三方对象的数据属性读取；异常对象不满足该形状时按无响应体处理。
     try:
         return getattr(exc, "body", None)
@@ -82,7 +82,7 @@ def extract_model_response_message(exc: BaseException) -> str | None:
     """从模型异常的 HTTP 响应体提取原始 message 字段。
 
     参数:
-        exc: 模型调用链路上抛出的异常；可能是 SDK / LangChain 包装后的异常。
+        exc: 模型调用链路上抛出的异常；可能是 SDK 包装后的异常。
 
     返回:
         响应体中首个非空 ``message`` / ``msg`` 字符串，保留其原始内容，仅去除首尾空白；
@@ -109,7 +109,7 @@ def classify_model_failure(exc: BaseException) -> str | None:
     """识别没有 HTTP 响应体的通用传输错误，不猜测 provider 业务错误。
 
     参数:
-        exc: 模型调用链路上抛出的异常；异常可能被 SDK 或 LangChain 包装。
+        exc: 模型调用链路上抛出的异常；异常可能被 SDK 包装。
 
     返回:
         超时或连接失败对应的 ``ErrorKind`` 稳定字符串；其余异常返回 ``None``，由 workflow
