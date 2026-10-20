@@ -4,6 +4,7 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper.common import _runtime_context
 from app.core.workflow.node_helper.tool_observation_projection import settle_observations
 
@@ -16,10 +17,9 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
     """
     rc = _runtime_context()  # 取运行时配置（本节点只用其中的 operations 与 usage_stats）
     operations = rc.operations  # 领域操作
-    # tools 节点产出的结果摘要。首次运行（从未执行过工具步）时 state 里仍是初始空 dict，
-    # 故用 ``get`` 防御，避免任何路径漏置键时整条收口链路崩溃。
-    observations = state.last_tool_results.get("observations", [])
-    instruction = state.last_tool_results.get("instruction", "")
+    batch = rc.batch
+    observations = batch.observations
+    instruction = batch.instruction
     run_id = operations.get_current_run().id
     step_id = f"step-{state.step_count}"  # 工具是 model 步的延续，复用同一步 step_id
     # 写 canonical tool 消息后再投影终态，冷重建与实时快照使用同一份结果。
@@ -28,6 +28,7 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
         step_id=step_id,
         inherited_error_count=state.tool_error_count,
     )
+    rc.batch = ToolBatch()
 
     log.info(
         "observe_node_completed",
@@ -61,7 +62,6 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
             return {
                 "tool_error_count": tool_error_count,
                 "next_node": ReactRoute.END,
-                "last_tool_results": {},
             }
         log.warning(
             "observe_node_error_limit",
@@ -79,7 +79,6 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
         return {
             "tool_error_count": tool_error_count,
             "next_node": ReactRoute.END,
-            "last_tool_results": {},
         }
 
     # 正常返回：把更新后的计数写回 state，并清空已结算的本批摘要——本节点是
@@ -88,5 +87,4 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
     return {
         "tool_error_count": tool_error_count,
         "next_node": ReactRoute.MODEL,
-        "last_tool_results": {},
     }

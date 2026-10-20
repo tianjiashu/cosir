@@ -12,12 +12,12 @@ part 事件流：首个 delta 隐式开启一个 part，切通道 / 出 tool_cal
 
 本模块承载「单次模型请求内 part 的生命周期」单一职责，是 ``model_node`` 流式循环的辅助单元；
 不负责 usage 与 Run 终态，那些由调用方处理。状态机持有「当前处于开启态的 part」「该 part 尚未
-发出的增量缓冲」「本请求已投影给前端的工具调用」三份状态，把原先散落在流式循环多处（切通道先
+发出的增量缓冲」；有效工具调用及其投影状态归当前批次。它把原先散落在流式循环多处（切通道先
 关旧 part、tool_call / 取消 / 流末收口）的开关逻辑收口到一处。
 
 取消时工具 part 的收敛也归这里（见 :meth:`StreamingPartStateMachine.cancel`）：它的输入正是
-本实例记录的「已投影调用」，而 Run 级补偿收束（``ToolCallsSettledEvent``）发生在驱动收尾，
-实时性不足以覆盖「流中断那一刻」。
+当前批次记录的有效调用中「已投影」部分，而 Run 级补偿收束（``ToolCallsSettledEvent``）
+发生在驱动收尾，实时性不足以覆盖「流中断那一刻」。
 """
 
 import time
@@ -34,6 +34,7 @@ from app.assistant_transport.event import (
 )
 from app.config.constant import Constant
 from app.core.context.tool_call_closure import build_placeholder_tool_message
+from app.core.workflow.execution_state.tool_batch import ValidToolCall
 from app.core.workflow.node_helper import get_stream_writer
 from app.core.workflow.node_helper.common import _message_context, _runtime_context
 from app.core.workflow.workflow_operations import WorkflowOperations
@@ -59,8 +60,7 @@ class StreamingPartStateMachine:
     状态:
         ``_active``: 当前已开启但未收口的 part（``"text"`` / ``"reasoning"`` / ``None``）。
         ``_pending``: 该 active part 上尚未发出的增量文本（合并缓冲，只归属 active 通道）。
-        「已投影调用」记账不归本实例，取自 ``RuntimeContext.step_context``：``model_node`` 每次
-        请求开始前整体换新，所以它既承担本请求的累积快照去重，也正好是 ``cancel()`` 的收口范围。
+        有效调用及其投影状态不归本实例，取自当前工具批次；新模型请求新建批次。
 
     输入（公开方法）:
         ``text(delta)`` / ``reasoning(delta)``：追加一段增量并维持该通道为 active；是否立即
@@ -89,7 +89,7 @@ class StreamingPartStateMachine:
             step_id: 当前 step ID，写入事件信封。
 
         副作用:
-            无；只初始化状态与依赖。「已投影调用」记账取自 ``RuntimeContext``，由驱动共享，
+            无；只初始化状态与依赖。有效调用记账取自当前 ``ToolBatch``，由驱动共享，
             本实例只在 :meth:`tool_call` 写入、在 :meth:`cancel` 读回。
         """
 
@@ -139,7 +139,7 @@ class StreamingPartStateMachine:
         self._append_to_pending(delta)
 
     def tool_call(self, raw_tool_calls: list[ParsedFunctionToolCall]) -> None:
-        """模型产出 tool_call 时收口当前 active part，并投影新出现的调用身份。
+        """模型产出 tool_call 时收口当前 active part，并记录有效调用的投影状态。
 
         ``raw_tool_calls`` 取自 SDK 累积快照而非本帧增量：流式期间每帧都带着此前出现过的全部
         调用，故必须按 ``call_id`` 去重，否则同一调用会在每个 chunk 重复建前端 part。工具 part
@@ -153,14 +153,15 @@ class StreamingPartStateMachine:
 
         副作用:
             先发出待发缓冲与 ``AssistantPartClosedEvent``；随后对每个尚未投影的调用发出一次
-            ``ToolCallCreatedEvent``，并记入 ``RuntimeContext.step_context`` 的投影记账。
+            ``ToolCallCreatedEvent``；已注册但本轮禁用的调用也记入批次，标为 ``banned``。
         """
 
         self._close()
         if not raw_tool_calls:
             # 空批次只负责收口 part，不必触碰运行期依赖（也避免在无 graph 上下文时取值）。
             return
-        projected = _runtime_context().step_context.projected_tool_calls
+        runtime = _runtime_context()
+        valid_calls = runtime.batch.valid_tool_calls
         for raw_tool_call in raw_tool_calls:
             # 快照是累积草稿：id / name 由 provider 按 index 首帧给出，个别 provider 可能晚一帧
             # 才带上。SDK 用 model_construct 构造快照、不做校验，缺字段会直接 AttributeError 并炸
@@ -172,11 +173,15 @@ class StreamingPartStateMachine:
                 or not call_id.strip()
                 or not isinstance(tool_name, str)
                 or not tool_name.strip()
-                or call_id in projected
+                or call_id in valid_calls
             ):
                 continue
-            if self.create_tool_call(call_id, tool_name):
-                projected[call_id] = tool_name
+            if not runtime.operations.vaild_tool_name(tool_name):
+                continue
+            projected = self.create_tool_call(call_id, tool_name)
+            valid_calls[call_id] = ValidToolCall(
+                name=tool_name, projection="projected" if projected else "banned"
+            )
 
     def finish(self) -> None:
         """流结束或被取消时收口当前 active part（幂等：无 active 时不发事件）。
@@ -205,8 +210,10 @@ class StreamingPartStateMachine:
 
         self._close()
         runtime_context = _message_context()
-        # 记账由 model_node 在每次请求开始前清空，因此这里只含本请求已投影的调用。
-        for call_id, tool_name in _runtime_context().step_context.projected_tool_calls.items():
+        # 记账由 model_node 在每次请求开始前清空；仅收敛其中已投影的调用。
+        for call_id, call in _runtime_context().batch.valid_tool_calls.items():
+            if call.projection != "projected":
+                continue
             self._stream_writer(
                 ToolCallStatusChangedEvent(
                     task_id=self._task_id,
@@ -217,7 +224,7 @@ class StreamingPartStateMachine:
                 )
             )
             runtime_context.add_message(
-                build_placeholder_tool_message(call_id, tool_name),
+                build_placeholder_tool_message(call_id, call.name),
                 metadata=ToolMessageMetadata(
                     status="cancelled",
                     display_data=None,
@@ -292,22 +299,11 @@ class StreamingPartStateMachine:
             self._close()
             self._active = part
 
-    def create_tool_call(self, call_id: str | None, tool_name: str | None) -> bool:
-        """投影一次工具调用身份，返回是否真的发出了 ``ToolCallCreatedEvent``。
+    def create_tool_call(self, call_id: str, tool_name: str) -> bool:
+        """为已通过身份和注册表过滤的调用创建卡片；本轮禁用则留给工具层拒绝。"""
 
-        返回 ``False`` 的路径都不入已投影集合，调用方据此决定是否记账：id / 工具名缺失或为空属于
-        草稿未就绪或解析噪声（后续快照帧会补全），提前记账会让该调用永远没有前端 part；工具名
-        未注册同理。参数合法性由工具执行边界裁决，这里只回答「前端能
-        不能画出这个气泡」。
-        """
-
-        if not call_id or not call_id.strip() or not tool_name or not tool_name.strip():
-            return False
         operations: WorkflowOperations = _runtime_context().operations
-        if not operations.vaild_tool_name(tool_name):
-            return False
         if tool_name not in operations.allows_tools:
-            # 禁用工具仍交给执行层形成错误观察，但不创建前端卡片。
             return False
         # 只为本轮放行的工具创建卡片；被拦调用仍保留在模型协议中，由执行层返回错误观察。
         presentation: dict[str, object] = {}

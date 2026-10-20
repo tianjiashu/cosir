@@ -38,10 +38,6 @@ def __getattr__(name: str) -> Any:
         from app.core.workflow.nodes.tools_node import _tools_node
 
         return _tools_node
-    if name == "_merge_batch_results":
-        from app.core.workflow.nodes.tools_node import _merge_batch_results
-
-        return _merge_batch_results
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -51,5 +47,4 @@ __all__ = [
     "_observe_node",
     "_structured_output_node",
     "_tools_node",
-    "_merge_batch_results",
 ]

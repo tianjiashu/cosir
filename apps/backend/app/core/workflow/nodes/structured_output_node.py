@@ -178,7 +178,7 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
                 extra={
                     "msg": "结构化输出未通过校验，将按限制重试",
                     "data": {
-                        "run_id": runtime.run.id,
+                        "run_id": operations.get_current_run().id,
                         "schema_name": spec.name,
                         "attempt": attempt,
                         "reason": retry_feedback,
@@ -191,7 +191,7 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
             extra={
                 "msg": "结构化输出支线异常，保留自然语言最终回复",
                 "data": {
-                    "run_id": runtime.run.id,
+                    "run_id": operations.get_current_run().id,
                     "schema_name": spec.name,
                     "error_type": type(exc).__name__,
                 },

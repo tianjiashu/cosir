@@ -24,8 +24,9 @@ from app.models.message_metadata import ToolMessageMetadata
 def project_waiting_request(summary: dict[str, Any], *, step_id: str) -> None:
     """挂起前物化审批卡片与占位结果，重启后可从 context 重建同一表单。"""
     runtime = _runtime_context()
+    batch = runtime.batch
     call_id = summary["tool_call_id"]
-    if call_id not in runtime.step_context.projected_tool_calls:
+    if not batch.was_projected(call_id):
         raise ValueError(f"待决调用没有可供用户作答的工具卡片：{call_id}")
     request = UserInputRequest.from_dict(summary[USER_INPUT_REQUEST_KEY])
     display_data = dict(
@@ -35,14 +36,14 @@ def project_waiting_request(summary: dict[str, Any], *, step_id: str) -> None:
     canonical_write = _message_context().add_message(
         build_waiting_input_tool_message(call_id, summary["tool_name"]),
         metadata=ToolMessageMetadata(status="running", display_data=display_data),
-        run_id=runtime.run.id,
+        run_id=runtime.operations.get_current_run().id,
     )
     log.info(
         "user_input_request_transport_persisted",
         extra={
             "msg": "待决请求已投影并持久化",
             "data": {
-                "run_id": runtime.run.id,
+                "run_id": runtime.operations.get_current_run().id,
                 "tool_call_id": call_id,
                 "request_id": request.request_id,
                 "canonical_write": canonical_write,
@@ -51,8 +52,8 @@ def project_waiting_request(summary: dict[str, Any], *, step_id: str) -> None:
     )
     get_stream_writer()(
         ToolCallStatusChangedEvent(
-            task_id=runtime.run.task_id,
-            run_id=runtime.run.id,
+            task_id=runtime.operations.get_current_run().task_id,
+            run_id=runtime.operations.get_current_run().id,
             step_id=step_id,
             tool_call_id=call_id,
             status="running",
@@ -66,6 +67,7 @@ def settle_observations(
 ) -> tuple[int, int]:
     """按观察顺序闭合模型协议并计算连续失败；可见性取本步创建事件的记账。"""
     runtime = _runtime_context()
+    batch = runtime.batch
     count = inherited_error_count
     errors = 0
     for summary in summaries:
@@ -84,7 +86,7 @@ def settle_observations(
             display_data=display_data,
             team_run_id=summary.get("team_run_id"),
         )
-        visible = call_id in runtime.step_context.projected_tool_calls
+        visible = batch.was_projected(call_id)
         canonical_write = _message_context().add_message(
             runtime.operations.to_tool_model_message(observation),
             metadata=ToolMessageMetadata(
@@ -100,7 +102,7 @@ def settle_observations(
             extra={
                 "msg": "工具观察已写入 canonical context",
                 "data": {
-                    "run_id": runtime.run.id,
+                    "run_id": runtime.operations.get_current_run().id,
                     "tool_call_id": call_id,
                     "status": status,
                     "canonical_write": canonical_write,
@@ -110,8 +112,8 @@ def settle_observations(
         if visible:
             get_stream_writer()(
                 ToolCallStatusChangedEvent(
-                    task_id=runtime.run.task_id,
-                    run_id=runtime.run.id,
+                    task_id=runtime.operations.get_current_run().task_id,
+                    run_id=runtime.operations.get_current_run().id,
                     step_id=step_id,
                     tool_call_id=call_id,
                     status=status,

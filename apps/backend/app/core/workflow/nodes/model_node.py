@@ -18,7 +18,7 @@ from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.execution_state.step_context import StepContext
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper.common import (
     RunStopped,
     _message_context,
@@ -49,8 +49,8 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     step_id = f"step-{step_count}"
 
     # 超配额时不再发起推理，落定 max_steps_reached 失败终态。
-    if step_count > rc.max_steps:
-        return await _finalize_max_steps(state, step_count=step_count)
+    if step_count > rc.step_limit:
+        return await _finalize_max_steps(step_count)
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
@@ -69,13 +69,14 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     messages: list[ChatCompletionMessageParam] = await asyncio.to_thread(
         _message_context().load_message
     )
+    registered_tool_names = frozenset(definition.name for definition in operations.all_vaild_tools)
 
     if operations.is_current_run_cancelled():
         log.info(
             "model_node_cancelled_before_request",
             extra={
                 "msg": f"模型请求前检测到 run 已取消，跳过模型调用，step_id={step_id}",
-                "data": {"step_id": step_id, "run_id": rc.run.id},
+                "data": {"step_id": step_id, "run_id": run_id},
             },
         )
         operations.cancel_run_if_running(usage_stats=rc.usage_stats, final_output="user_cancelled")
@@ -93,13 +94,10 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         },
     )
     # part 生命周期收口：把交错的 text/reasoning 流转换为顺序括号化的 part 事件流。
-    # 每次请求整体换新记账：快照只含本请求的调用，跨 step 累积既无收益，又会让取消误收敛上一
-    # step 已执行的调用（用 cancelled 占位覆盖其真实结果行）。
-    rc.step_context = StepContext()
+    # 每次模型请求新建批次，取消只收敛本次已投影的调用。
+    rc.batch = ToolBatch()
     parts = StreamingPartStateMachine(task_id=task_id, run_id=run_id, step_id=step_id)
 
-    # 流式展示与最终入 context 使用同一工具目录过滤规则；禁用工具仍由执行层拒绝。
-    registered_tool_names = frozenset(definition.name for definition in operations.all_vaild_tools)
     # SDK 快照负责聚合；context 只保存请求正文副本和独立响应元数据。
     aggregated_message: ParsedChatCompletionSnapshot | None = None
 
@@ -165,8 +163,13 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     ai_message: ChatCompletionAssistantMessageParam = assistant_message(
         choice.message, registered_tool_names
     )
-    calls = ai_message.get("tool_calls") or []
-
+    calls = [
+        cast(ChatCompletionMessageFunctionToolCallParam, call)
+        for call in ai_message.get("tool_calls") or []
+    ]
+    if calls:
+        # 最终消息是有效调用的权威集合；补记最后一帧才完整的身份。
+        parts.tool_call(choice.message.tool_calls or [])
 
     if not calls and finish_reason is None:
         parts.cancel()
@@ -176,7 +179,6 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         )
         return route_state(step_count, ReactRoute.MODEL)
 
-
     _message_context().save_model_response(
         aggregated_message,
         include_in_context=True,
@@ -185,9 +187,6 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
 
     usage = usage_from_response(aggregated_message.usage)
     rc.usage_stats.add_usage_metadata(usage)
-    # 单步 usage 与累计 Run usage 同时记录，便于定位缓存命中变化。
-    # 缺失用量不等于零：保留 presence 标记，避免把沿用的累计值误读为本步用量。
-
     log.info(
         "model_node_completed",
         extra={
@@ -201,19 +200,17 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     )
 
     if calls:
-        # 有任意工具调用（合法或非法）都进 tools 节点：合法调用真正执行，非法调用由 observe 结算；
+        # 有任意有效工具调用都进 tools 节点；参数是否合法由执行边界决定，失败由 observe 结算；
         # 工具结果是否回流 model 也由 observe 决定。``instruction`` 把模型同时给出的说明文本带给
         # 下游，使工具执行与错误排查能看到模型当时的意图。
-        return {
-            **route_state(step_count, ReactRoute.TOOLS),
-            "instruction": ai_message.get("content")
-            if isinstance(ai_message.get("content"), str)
-            else "",
-            "calls": calls,
-        }
+        rc.batch.calls = calls
+        content = ai_message.get("content")
+        rc.batch.instruction = content if isinstance(content, str) else ""
+        return route_state(step_count, ReactRoute.TOOLS)
 
     # 无工具调用且 finish_reason 非 None：正文可以为空；结构化处理作为已完成 Run 的支线。
     final_answer = content_to_text(ai_message.get("content"))
+    rc.batch = ToolBatch()
     structured = rc.structured_output is not None
     log.info(
         "model_node_final_response",
@@ -230,10 +227,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     completed = operations.complete_run_if_running(
         rc.usage_stats, final_output=final_answer, end_reason=finish_reason
     )
-    return {
-        **route_state(
-            step_count,
-            ReactRoute.STRUCTURED_OUTPUT if structured and completed else ReactRoute.END,
-        ),
-        "instruction": "",
-    }
+    return route_state(
+        step_count,
+        ReactRoute.STRUCTURED_OUTPUT if structured and completed else ReactRoute.END,
+    )

@@ -14,65 +14,12 @@ from app.assistant_transport.event import ToolCallStatusChangedEvent
 from app.config.logging.logger import log
 from app.core.llm_provider.message_codec import decode_tool_arguments
 from app.core.tools.schemas import ToolCall, ToolObservation
-from app.core.tools.schemas.user_decision import UserDecision
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _runtime_context, get_stream_writer
 from app.models.runtime_notice import RuntimeNotice
-
-
-def _merge_batch_results(
-    previous: dict[str, Any],
-    incoming: list[dict[str, Any]],
-    *,
-    instruction: str,
-) -> dict[str, Any]:
-    """把本批观察并入既有批次，按 ``tool_call_id`` 覆盖同一条调用的观察。
-
-    为什么必须合并而不是整批覆盖：同一模型步的调用可能分多遍执行（用户批准后重跑被批准的调用），
-    整批覆盖会丢掉同批其它调用的结果，``observe`` 结算时就会少写 ``tool 消息``（模型侧的配对
-    出现空洞）。批次以 ``observe`` 的结算为界（结算后清空 ``last_tool_results``），因此首遍合并的
-    起点是空批次，与「覆盖」等价。
-
-    ``instruction`` 由调用方显式给出，不从 ``previous`` 读取：批次起点为空时 ``previous`` 里没有
-    instruction，从它读取会把模型本步的伴随文本丢掉。
-
-    参数:
-        previous: 既有 ``last_tool_results``（``instruction`` / ``observations``）。
-        incoming: 本遍执行产出的观察摘要列表。
-        instruction: 本模型步的 instruction（``state.instruction``），每遍执行都传同一个值。
-
-    返回:
-        合并后的新 dict：``instruction`` 为入参值，``observations`` 按入参顺序用新观察覆盖同
-        ``tool_call_id`` 的旧项，新调用追加在尾部。
-
-    异常:
-        无（缺失 ``tool_call_id`` 的观察原样追加，交由下游契约校验）。
-
-    副作用:
-        无（纯函数，不修改入参）。
-    """
-
-    existing = previous.get("observations")
-    merged: list[dict[str, Any]] = list(existing) if isinstance(existing, list) else []
-    index = {
-        str(item.get("tool_call_id") or ""): position
-        for position, item in enumerate(merged)
-        if isinstance(item, dict) and item.get("tool_call_id")
-    }
-    for observation in incoming:
-        call_id = str(observation.get("tool_call_id") or "")
-        position = index.get(call_id)
-        if position is None:
-            index[call_id] = len(merged)
-            merged.append(observation)
-            continue
-        merged[position] = observation
-    return {
-        "instruction": instruction,
-        "observations": merged,
-    }
+from app.models.user_decision import UserDecision
 
 
 def _to_tool_call(
@@ -107,22 +54,24 @@ def _summary(observation: ToolObservation) -> dict[str, Any]:
 
 
 async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
-    """解析并执行当前模型批次；批准恢复时 state.calls 只含目标调用。
+    """解析并执行当前模型批次；批准恢复时批次只含目标调用。
 
-    多调用批次若含 HIL 工具则整体拒绝，防止其它工具先产生副作用。参数 JSON
+    多调用批次若含 HIL 工具则整体拒绝，防止其它工具先产生副作用；待决请求必须独占批次。
+    参数 JSON
     在此转换为 dict；畸形参数直接形成观察，不进入工具执行器。结果仅合并到本批摘要，
     canonical tool 消息与终态事件统一由 observe 节点结算。
     """
     rc = _runtime_context()  # 取运行时配置
     operations = rc.operations  # 领域操作
+    batch = rc.batch
     task = operations.get_current_task()  # 任务（工具执行需要 task_id）
     task_id = task.id
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
-    instruction = state.instruction
+    instruction = batch.instruction
 
     # 普通续跑从模型边界开始；等待批准只恢复待批准的单条调用，因此无需第二套
     # pending/running 快照防止节点重放。
-    prepared = [_to_tool_call(call, state.replay_decision) for call in state.calls]
+    prepared = [_to_tool_call(call, batch.decision_for(call["id"])) for call in batch.calls]
     tool_calls = [call for call in prepared if isinstance(call, ToolCall)]
     invalid_observations = [item for item in prepared if isinstance(item, ToolObservation)]
 
@@ -130,12 +79,12 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
     hil_tool_names = sorted(
         {
             raw_call["function"]["name"]
-            for raw_call in state.calls
+            for raw_call in batch.calls
             if (definition := definitions_by_name.get(raw_call["function"]["name"])) is not None
             and definition.need_HIL
         }
     )
-    blocked_batch = len(state.calls) > 1 and bool(hil_tool_names)
+    blocked_batch = len(batch.calls) > 1 and bool(hil_tool_names)
 
     log.info(
         "tools_node_started",
@@ -160,7 +109,7 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
                 retryable=True,
                 tool_call_id=call["id"],
             )
-            for call in state.calls
+            for call in batch.calls
         ]
         from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -172,7 +121,7 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
                     "none of its tools ran. Retry the human approval tool in a separate batch."
                 ),
                 kind="tool_batch_blocked",
-                run_id=rc.run.id,
+                run_id=operations.get_current_run().id,
             )
         )
         next_node = ReactRoute.OBSERVE
@@ -181,7 +130,7 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
             extra={
                 "msg": "包含人工确认工具的多调用批次已整体拦截，未执行任何工具",
                 "data": {
-                    "run_id": rc.run.id,
+                    "run_id": operations.get_current_run().id,
                     "step_id": step_id,
                     "hil_tool_names": hil_tool_names,
                     "call_ids": [call.call_id for call in tool_calls],
@@ -190,12 +139,12 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
         )
     else:
         for tool_call in tool_calls:
-            if tool_call.call_id not in rc.step_context.projected_tool_calls:
+            if not batch.was_projected(tool_call.call_id):
                 continue
             get_stream_writer()(
                 ToolCallStatusChangedEvent(
                     task_id=task_id,
-                    run_id=rc.run.id,
+                    run_id=operations.get_current_run().id,
                     step_id=step_id,
                     tool_call_id=tool_call.call_id,
                     status="running",
@@ -212,11 +161,12 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
             else None
         )
         observations = invalid_observations + (tool_run.observations if tool_run else [])
-        next_node = (
-            ReactRoute.WAIT_USER
-            if any(observation.user_input_request is not None for observation in observations)
-            else ReactRoute.OBSERVE
+        requires_input = any(
+            observation.user_input_request is not None for observation in observations
         )
+        if requires_input and len(batch.calls) != 1:
+            raise ValueError("待决请求必须独占工具批次；产出请求的工具应声明 need_HIL")
+        next_node = ReactRoute.WAIT_USER if requires_input else ReactRoute.OBSERVE
 
     log.info(
         "tools_node_tool_run",
@@ -243,15 +193,6 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
 
     observation_dicts = [_summary(observation) for observation in observations]
 
-    return {
-        # 恒定按 ``tool_call_id`` 合并：同一模型步可能分多遍执行（批准后重跑被批准的调用），
-        # 整批覆盖会丢掉同批其它调用的结果，observe 结算时就会少写 tool 消息（模型侧配对
-        # 出现空洞）。批次边界由 observe 的结算（清空 last_tool_results）划定，故首遍合并的
-        # 起点是空批次，与「覆盖」等价。
-        "last_tool_results": _merge_batch_results(
-            state.last_tool_results,
-            observation_dicts,
-            instruction=instruction or "",
-        ),
-        "next_node": next_node,
-    }
+    batch.merge_observations(observation_dicts)
+    batch.approved_call = None
+    return {"next_node": next_node}

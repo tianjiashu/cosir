@@ -20,6 +20,7 @@ from app.core.workflow.nodes import (
     _tools_node,
 )
 from app.core.workflow.nodes.wait_user_node import suspend_for_input, wait_user_node
+from app.core.workflow.tool_continuation import restore_tool_batch
 from app.core.workflow.workflow_operations import WorkflowOperations
 from app.models.conversation_run_progress import ConversationRunProgress
 from app.service.conversation_run.task_input_service import TaskInputService
@@ -64,9 +65,8 @@ class ReactLikeWorkflow:
         progress = run.execution_data
         runtime = RuntimeContext(
             operations=operations,
-            run=run,
             model=resolved.model,
-            max_steps=progress.step_count + profile.max_steps,
+            step_limit=progress.step_count + profile.max_steps,
             structured_output=profile.structured_output,
             thinking_channel="reasoning_content" if resolved.supports_thinking else "",
             usage_stats=(
@@ -80,31 +80,21 @@ class ReactLikeWorkflow:
             step_count=progress.step_count,
             tool_error_count=progress.tool_error_count,
             next_node=ReactRoute.MODEL,
-            last_tool_results={},
         )
         with execution_scope(runtime, context):
             if execution_mode == "resume_with_input":
-                decision = progress.decision
-                waiting = progress.waiting
-                if decision is None or waiting is None:
+                continuation = progress.continuation
+                if continuation is None or continuation.decision is None:
                     raise ValueError("等待恢复缺少已提交的请求或决定")
-                runtime.step_context.projected_tool_calls.update(waiting.projected_tool_calls)
-                state = ReactExecutionState.model_validate(
-                    {
-                        **state.model_dump(),
-                        "instruction": waiting.instruction,
-                        "last_tool_results": waiting.last_tool_results.model_dump(),
-                        "calls": [waiting.pending_call],
-                    }
-                )
-                state = state.model_copy(update=wait_user_node(state, decision))
+                runtime.batch = restore_tool_batch(continuation)
+                state = state.model_copy(update=wait_user_node(state, continuation.decision))
                 self._save_progress(operations, state)
             while True:
                 if state.next_node == ReactRoute.MODEL:
                     if operations.is_current_run_cancelled():
                         operations.cancel_run_if_running(usage_stats=runtime.usage_stats)
                         return
-                    if state.step_count < runtime.max_steps:
+                    if state.step_count < runtime.step_limit:
                         await asyncio.to_thread(
                             TaskInputService().consume_into_context, context, run.id
                         )
