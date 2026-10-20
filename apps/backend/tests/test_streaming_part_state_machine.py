@@ -12,7 +12,7 @@ from app.assistant_transport.event import (
     ToolCallCreatedEvent,
     ToolCallStatusChangedEvent,
 )
-from app.core.workflow.execution_state.step_context import StepContext
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import (
     StreamingPartStateMachine,
 )
@@ -261,7 +261,7 @@ def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> No
         ],
         allows_tools=frozenset({"read_file"}),
     )
-    runtime = SimpleNamespace(operations=operations, step_context=StepContext())
+    runtime = SimpleNamespace(operations=operations, batch=ToolBatch())
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
         machine_module,
@@ -271,8 +271,11 @@ def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> No
 
     harness.machine.text("hi")
     harness.machine.tool_call(
-        [_tool_call("c1", "read_file"), _tool_call("c2", "write_file")]
+        [_tool_call("c1", "read_file"), _tool_call("c2", "write_file"), _tool_call("c3", "unknown")]
     )
+    assert {
+        call_id: call.projection for call_id, call in runtime.batch.valid_tool_calls.items()
+    } == {"c1": "projected", "c2": "banned"}
     harness.machine.cancel()
 
     assert harness.event_kinds() == ["delta:text", "closed:text"]
@@ -292,7 +295,7 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
         allows_tools=frozenset({"read_file"}),
     )
     written: list[Any] = []
-    runtime = SimpleNamespace(operations=operations, step_context=StepContext())
+    runtime = SimpleNamespace(operations=operations, batch=ToolBatch())
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
         machine_module,
@@ -309,14 +312,12 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
     assert [event.tool_call_id for event in created] == ["c1"]
 
     # 请求边界：model_node 清空记账，同一 id 属于新请求，必须重新投影。
-    runtime.step_context = StepContext()
+    runtime.batch = ToolBatch()
     second_events: list[Any] = []
     with patch.object(machine_module, "get_stream_writer", lambda: second_events.append):
         second = StreamingPartStateMachine(task_id=1, run_id=2, step_id="step-2")
     second.tool_call([_tool_call("c1", "read_file")])
 
     assert [
-        event.tool_call_id
-        for event in second_events
-        if isinstance(event, ToolCallCreatedEvent)
+        event.tool_call_id for event in second_events if isinstance(event, ToolCallCreatedEvent)
     ] == ["c1"]

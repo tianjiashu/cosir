@@ -658,8 +658,8 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     }
 
 
-def test_recover_orphaned_runs_cancels_waiting_run(env: SimpleNamespace) -> None:
-    """重启统一取消 waiting 和 running，旧等待请求失效，不自动继续执行。"""
+def test_recover_orphaned_runs_preserves_waiting_run(env: SimpleNamespace) -> None:
+    """重启只收敛失去执行者的 running；waiting 留待用户提交决定。"""
 
     waiting = env.seed_run("waiting_for_input")
     running = env.seed_run("running")
@@ -672,11 +672,10 @@ def test_recover_orphaned_runs_cancels_waiting_run(env: SimpleNamespace) -> None
 
     recovered = service.recover_orphaned_runs()
 
-    assert [record.id for record in recovered] == [waiting.id, running.id]
+    assert [record.id for record in recovered] == [running.id]
     assert run_crud.get(running.id).status == "cancelled"
-    # 等待态收敛为取消；无调用时不凭空补占位。
-    assert run_crud.get(waiting.id).status == "cancelled"
-    assert run_crud.get(waiting.id).end_reason == "runtime_restarted"
+    assert run_crud.get(waiting.id).status == "waiting_for_input"
+    assert run_crud.get(waiting.id).end_reason is None
     assert [row for row in _rows(env) if row.run_id == waiting.id] == []
     # 幂等：重复恢复不再把 waiting 收进来。
     assert service.recover_orphaned_runs() == []
@@ -729,7 +728,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
 
     import app.core.workflow.node_helper.streaming_part_state_machine as machine_module
     from app.assistant_transport.event import ToolCallStatusChangedEvent
-    from app.core.workflow.execution_state.step_context import StepContext
+    from app.core.workflow.execution_state.tool_batch import ToolBatch
     from app.core.workflow.node_helper import StreamingPartStateMachine
     from tests.sdk_fixtures import sdk_completion
 
@@ -752,7 +751,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
     )
     events: list[object] = []
     monkeypatch.setattr(machine_module, "_message_context", lambda: manager)
-    runtime = SimpleNamespace(operations=operations, step_context=StepContext())
+    runtime = SimpleNamespace(operations=operations, batch=ToolBatch())
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(machine_module, "get_stream_writer", lambda: events.append)
     machine = StreamingPartStateMachine(
@@ -789,8 +788,8 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
     assert _rows(env) == original
 
 
-def test_recovery_keeps_invalid_context_but_cancels_all_orphan_runs(env, caplog):
-    """一个 Run 无法安全补配对时不阻断其取消或后续 Run 恢复，也不擅自改写结果。"""
+def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
+    """无法安全补配对的 running 仍取消；独立 waiting 保留原请求。"""
     broken = env.seed_run("running")
     healthy = env.seed_run("waiting_for_input")
     env.context.append(
@@ -808,11 +807,10 @@ def test_recovery_keeps_invalid_context_but_cancels_all_orphan_runs(env, caplog)
     service._context = env.context
     service._session_factory = env.factory
     recovered = service.recover_orphaned_runs()
-    assert [run.id for run in recovered] == [broken.id, healthy.id]
-    assert all(run.status == "cancelled" for run in recovered)
+    assert [run.id for run in recovered] == [broken.id]
+    assert service._run.get(healthy.id).status == "waiting_for_input"
     assert _rows(env)[0] == original
-    assert _rows(env)[-1].message["tool_call_id"] == "pending"
-    assert _rows(env)[-1].metadata == ToolMessageMetadata.model_validate({"status": "cancelled"})
+    assert _rows(env)[-1].message["tool_calls"][0]["id"] == "pending"
     assert service.recover_orphaned_runs() == []
     assert any(r.msg == "run_recovery_context_protocol_invalid" for r in caplog.records)
 
@@ -864,7 +862,7 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
         yield None
 
     rc = SimpleNamespace(
-        max_steps=10,
+        step_limit=10,
         model=SimpleNamespace(stream=stream),
         operations=SimpleNamespace(
             get_current_task=lambda: env.task,
@@ -886,7 +884,6 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
                 step_count=0,
                 tool_error_count=0,
                 next_node=ReactRoute.MODEL,
-                last_tool_results={"observations": []},
             )
         )
     assert requested == []

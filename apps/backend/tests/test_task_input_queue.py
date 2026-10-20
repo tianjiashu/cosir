@@ -11,8 +11,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.models import ConversationRunCommand
 from app.models.conversation_run_progress import (
     ConversationRunProgress,
-    RunWaitingState,
-    ToolBatchSnapshot,
+    ToolContinuation,
 )
 from app.models.message_metadata import ToolMessageMetadata
 from app.service.conversation_run.task_input_service import TaskInputService
@@ -188,15 +187,13 @@ def test_restart_cancels_wait_and_preserves_inbox(store):
         ("pending",),
         execution_data=ConversationRunProgress(
             step_count=2,
-            waiting=RunWaitingState(
-                instruction="",
-                last_tool_results=ToolBatchSnapshot(instruction="", observations=[]),
+            continuation=ToolContinuation(
+                observations=[],
                 pending_call={
                     "id": "c",
                     "type": "function",
                     "function": {"name": "read_file", "arguments": "{}"},
                 },
-                projected_tool_calls={"c": "read_file"},
             ),
         ),
     )
@@ -204,11 +201,12 @@ def test_restart_cancels_wait_and_preserves_inbox(store):
         store.task.id, ConversationRunCommand(display_text="later"), store.config_id
     )
     recovered = store.service.recover_orphaned_runs()
-    assert recovered[0].status == "cancelled"
-    assert recovered[0].execution_data.waiting is None
+    assert recovered == []
+    assert store.crud.get(store.run.id).status == "waiting_for_input"
+    assert store.crud.get(store.run.id).execution_data.continuation is not None
     assert store.inputs.pending(store.task.id)[0].payload.message.input_text == "later"
     rows = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)
-    assert rows[-1].metadata == ToolMessageMetadata(status="cancelled")
+    assert rows[-1].metadata.status == "running"
     assert store.service.recover_orphaned_runs() == []
 
 
@@ -274,56 +272,6 @@ def test_paused_run_queue_does_not_auto_start(store, status):
     assert store.crud.get(store.run.id).status == status
 
 
-def test_wait_cancel_closes_request_without_starting_model(store, monkeypatch):
-    from app.assistant_transport.service.conversation_task_state_rebuilder import (
-        ConversationTaskStateRebuilder,
-    )
-
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder, "get_tool_display", lambda _: {"verb": "执行"}
-    )
-    store.inputs.consume(store.task.id, store.run.id, 1)
-    store.context.append(
-        store.task.id,
-        store.run.id,
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "c",
-                    "type": "function",
-                    "function": {"name": "tool", "arguments": json.dumps({})},
-                }
-            ],
-        },
-        2,
-    )
-    store.context.append(
-        store.task.id,
-        store.run.id,
-        {"role": "tool", "content": "waiting", "tool_call_id": "c"},
-        3,
-        metadata=ToolMessageMetadata.model_validate(
-            {
-                "status": "running",
-                "display_data": {"user_input_request": {"request_id": "old"}},
-            }
-        ),
-    )
-    store.crud.update_status_if_in(
-        store.run.id,
-        "waiting_for_input",
-        ("pending",),
-        execution_data=ConversationRunProgress(step_count=1),
-    )
-    result = get_conversation_run_state_service().cancel_waiting_run(store.run.id)
-    assert result.status == "cancelled"
-    row = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)[-1]
-    assert row.metadata.display_data is None
-    assert row.metadata.status == "cancelled"
-
-
 @pytest.mark.asyncio
 async def test_executor_handoff_waits_for_cleanup_and_starts_new_run(store, monkeypatch):
     import asyncio
@@ -374,9 +322,7 @@ async def test_executor_handoff_waits_for_cleanup_and_starts_new_run(store, monk
 
 
 @pytest.mark.asyncio
-async def test_real_loop_consumes_between_requests_and_leaves_final_queue_for_next_run(
-    store, monkeypatch
-):
+async def test_completed_model_response_leaves_during_stream_input_for_next_run(store, monkeypatch):
     from unittest.mock import AsyncMock
 
     import app.core.workflow.workflow as workflow_module
@@ -419,6 +365,7 @@ async def test_real_loop_consumes_between_requests_and_leaves_final_queue_for_ne
         get_current_task=lambda: store.task,
         get_current_workspace=lambda: WorkspaceCrud().get(store.task.workspace_id),
         task_tool_schemas=[],
+        all_vaild_tools=[],
         allows_tools=(),
         vaild_tool_name=lambda _name: True,
         is_current_run_cancelled=lambda: False,
@@ -429,19 +376,19 @@ async def test_real_loop_consumes_between_requests_and_leaves_final_queue_for_ne
         ),
     )
     await workflow_module.ReactLikeWorkflow().run(ops)
-    assert requests == [["first"], ["first", "during request"]]
+    assert requests == [["first"]]
     responses = [
         row
         for row in store.context.entries_in_context(store.task.id)
         if row.message["role"] == "assistant"
     ]
-    assert [row.message["content"] for row in responses] == ["partial", "done"]
+    assert [row.message["content"] for row in responses] == ["partial"]
     assert store.crud.get(store.run.id).status == "completed"
     assert [p.payload.message.input_text for p in store.inputs.pending(store.task.id)] == [
-        "after final"
+        "during request"
     ]
     messages = ConversationTaskStateService().rebuild_state(store.task.id)["runs"][0]["messages"]
-    assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant"]
+    assert [m["role"] for m in messages] == ["user", "assistant"]
     model.close.assert_awaited_once()
 
 
@@ -604,6 +551,7 @@ async def test_queue_commands_during_stream_preserve_output_and_replace_one_row(
         get_current_task=lambda: store.task,
         get_current_workspace=lambda: WorkspaceCrud().get(store.task.workspace_id),
         task_tool_schemas=[],
+        all_vaild_tools=[],
         allows_tools=(),
         vaild_tool_name=lambda _name: True,
         is_current_run_cancelled=lambda: False,
@@ -643,22 +591,20 @@ def test_wait_decision_is_validated_before_transition_and_committed_with_run(sto
     }
     progress = ConversationRunProgress(
         step_count=2,
-        waiting=RunWaitingState(
-            instruction="",
-            last_tool_results=ToolBatchSnapshot(
-                instruction="", observations=[{"user_input_request": request}]
-            ),
+        continuation=ToolContinuation(
+            observations=[{"user_input_request": request}],
             pending_call={
                 "id": "c",
                 "type": "function",
                 "function": {"name": "read_file", "arguments": "{}"},
             },
-            projected_tool_calls={"c": "read_file"},
         ),
     )
     store.crud.update_status_if_in(
         store.run.id, "waiting_for_input", ("pending",), execution_data=progress
     )
+    assert store.service.recover_orphaned_runs() == []
+    assert store.crud.get(store.run.id).execution_data.continuation is not None
     commands = ConversationRunCommandService()
     with pytest.raises(ValueError, match="有效决定"):
         commands.resume_run(
@@ -670,7 +616,7 @@ def test_wait_decision_is_validated_before_transition_and_committed_with_run(sto
     decision = UserDecision(kind=UserDecisionKind.APPROVE, request_id="current")
     accepted = commands.resume_run(store.task.id, store.run.id, user_decision=decision)
     assert accepted.execution_mode == "resume_with_input"
-    assert store.crud.get(store.run.id).execution_data.decision == decision
+    assert store.crud.get(store.run.id).execution_data.continuation.decision == decision
     assert accepted.initial_state["runs"][0]["status"] == "running"
     with pytest.raises(ValueError):
         commands.resume_run(store.task.id, store.run.id, user_decision=decision)
@@ -929,6 +875,7 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
         get_current_task=lambda: store.task,
         get_current_workspace=lambda: WorkspaceCrud().get(store.task.workspace_id),
         task_tool_schemas=[],
+        all_vaild_tools=[],
         allows_tools=(),
         vaild_tool_name=lambda _name: True,
         is_current_run_cancelled=lambda: cancellation_registry.is_cancelled(store.run.id),
@@ -956,7 +903,7 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
 
     monkeypatch.setattr(states, "fail_run_if_running", fail_run)
     agent = SimpleNamespace(run=store.run)
-    cancellation_registry.clear(store.run.id)
+    cancellation_registry.consume(store.task.id)
     driver = asyncio.create_task(runtime.run_agent(agent))
     try:
         await asyncio.wait_for(reading.wait(), 1)
@@ -964,7 +911,7 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
             store.inputs.enqueue(
                 store.task.id, ConversationRunCommand(display_text="next"), store.config_id
             )
-        cancellation_registry.mark_cancelled(store.run.id)
+        cancellation_registry.request_cancel(store.task.id)
         assert not driver.done()
         assert not closed.is_set()
         assert store.crud.get(store.run.id).status == "running"
@@ -991,7 +938,7 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
                 "next"
             ]
             states.resume_cancelled_run(store.run.id)
-        cancellation_registry.clear(store.run.id)
+        cancellation_registry.consume(store.task.id)
         await runtime.run_agent(agent, execution_mode="resume")
         assert store.crud.get(store.run.id).status == "completed"
         assert all(m.get("content") != "partial" for m in requests[1])
@@ -1004,7 +951,7 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
         if not driver.done():
             driver.cancel()
             await asyncio.gather(driver, return_exceptions=True)
-        cancellation_registry.clear(store.run.id)
+        cancellation_registry.consume(store.task.id)
 
 
 def test_queued_options_only_apply_when_handing_off_to_new_run(store):

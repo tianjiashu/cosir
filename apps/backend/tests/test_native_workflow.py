@@ -86,7 +86,9 @@ async def test_cancelled_resume_does_not_replay_old_tools(loop, monkeypatch):
 
     async def model(state):
         assert state.step_count == 3
-        assert state.calls == []
+        from app.core.workflow.node_helper.common import _runtime_context
+
+        assert _runtime_context().batch.calls == []
         return {"next_node": ReactRoute.END}
 
     monkeypatch.setattr(module, "_model_node", model)
@@ -225,39 +227,34 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
 @pytest.mark.parametrize("decision_kind", ["approve", "reject"])
 async def test_wait_resume_roundtrip_only_reopens_decided_call(loop, monkeypatch, decision_kind):
     """持久等待数据恢复为可执行状态；已完成工具不重放，决定消费后不再留恢复入口。"""
-    from app.core.tools.schemas.user_decision import UserDecision, UserDecisionKind
-    from app.models.conversation_run_progress import RunWaitingState, ToolBatchSnapshot
+    from app.models.conversation_run_progress import ToolContinuation
+    from app.models.user_decision import UserDecision, UserDecisionKind
 
     decision = UserDecision(kind=UserDecisionKind(decision_kind), request_id="request")
     progress = ConversationRunProgress(
         step_count=4,
-        waiting=RunWaitingState(
-            instruction="continue",
-            last_tool_results=ToolBatchSnapshot(
-                instruction="continue",
-                observations=[
-                    {
-                        "tool_call_id": "waiting",
-                        "tool_name": "review",
-                        "status": "success",
-                        "content": "waiting for approval",
-                        "user_input_request": {
-                            "request_id": "request",
-                            "kind": "review",
-                            "prompt": "allow?",
-                            "decisions": ["approve", "reject"],
-                        },
-                    }
-                ],
-            ),
+        continuation=ToolContinuation(
+            observations=[
+                {
+                    "tool_call_id": "waiting",
+                    "tool_name": "review",
+                    "status": "success",
+                    "content": "waiting for approval",
+                    "user_input_request": {
+                        "request_id": "request",
+                        "kind": "review",
+                        "prompt": "allow?",
+                        "decisions": ["approve", "reject"],
+                    },
+                }
+            ],
             pending_call={
                 "id": "waiting",
                 "type": "function",
                 "function": {"name": "review", "arguments": "{}"},
             },
-            projected_tool_calls={"waiting": "review"},
+            decision=decision,
         ),
-        decision=decision,
     )
     loop.run.execution_data = ConversationRunProgress.model_validate_json(
         progress.model_dump_json()
@@ -274,13 +271,18 @@ async def test_wait_resume_roundtrip_only_reopens_decided_call(loop, monkeypatch
 
     async def tools(state):
         assert decision_kind == "approve"
-        assert [call["id"] for call in state.calls] == ["waiting"]
-        assert state.replay_decision == decision
+        from app.core.workflow.node_helper.common import _runtime_context
+
+        batch = _runtime_context().batch
+        assert [call["id"] for call in batch.calls] == ["waiting"]
+        assert batch.decision_for("waiting") == decision
         loop.calls.append("approved_tool")
         return {"next_node": ReactRoute.OBSERVE}
 
     async def observe(state):
-        assert state.last_tool_results["observations"][0].get("user_input_request") is None
+        from app.core.workflow.node_helper.common import _runtime_context
+
+        assert _runtime_context().batch.observations[0].get("user_input_request") is None
         loop.calls.append("observe")
         return {"next_node": ReactRoute.END}
 
@@ -294,4 +296,58 @@ async def test_wait_resume_roundtrip_only_reopens_decided_call(loop, monkeypatch
         "approved_tool" if decision_kind == "approve" else "reject",
         "observe",
     ]
-    assert all(saved.waiting is None and saved.decision is None for saved in loop.progress)
+    assert all(saved.continuation is None for saved in loop.progress)
+
+
+@pytest.mark.asyncio
+async def test_cancel_waiting_resume_rejects_then_stops_at_model(loop, monkeypatch):
+    """停止等待态：以强制拒绝恢复，拒绝结算待决调用后在 MODEL 检查点落定取消。"""
+    from app.models.conversation_run_progress import ToolContinuation
+    from app.models.user_decision import UserDecision, UserDecisionKind
+
+    loop.run.execution_data = ConversationRunProgress(
+        step_count=4,
+        continuation=ToolContinuation(
+            observations=[
+                {
+                    "tool_call_id": "waiting",
+                    "tool_name": "review",
+                    "status": "success",
+                    "content": "waiting for approval",
+                    "user_input_request": {
+                        "request_id": "request",
+                        "kind": "review",
+                        "prompt": "allow?",
+                        "decisions": ["approve", "reject"],
+                    },
+                }
+            ],
+            pending_call={
+                "id": "waiting",
+                "type": "function",
+                "function": {"name": "review", "arguments": "{}"},
+            },
+            decision=UserDecision(kind=UserDecisionKind.FORCE_REJECT, request_id="request"),
+        ),
+    )
+    loop.ops.is_current_run_cancelled = lambda: True
+    monkeypatch.setattr(
+        module,
+        "get_tool_system",
+        lambda: SimpleNamespace(
+            user_input_decision_handlers=SimpleNamespace(
+                handle_rejection=lambda request, answer: loop.calls.append(answer.kind.value),
+            ),
+        ),
+    )
+
+    async def observe(state):
+        loop.calls.append("observe")
+        return {"next_node": ReactRoute.MODEL}
+
+    monkeypatch.setattr(module, "_observe_node", observe)
+    monkeypatch.setattr(module, "_tools_node", AsyncMock(side_effect=AssertionError("不应执行")))
+    monkeypatch.setattr(module, "_model_node", AsyncMock(side_effect=AssertionError("不应请求")))
+    await module.ReactLikeWorkflow().run(loop.ops, execution_mode="resume_with_input")
+    # 强制拒绝归一为普通驳回，领域收尾（如待确认 Team）与真实驳回同构；之后不消费 inbox。
+    assert loop.calls == ["reject", "observe", "cancel"]

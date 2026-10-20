@@ -15,6 +15,7 @@ import {
   type FrameStoreItem,
 } from "@/lib/assistant/transport-frame-store";
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import { cancelTask } from "@/lib/assistant/cancel-task";
 import { parseTransportState } from "@/lib/assistant/snapshot-validation";
 import { parseHttpError } from "@/lib/http/errors";
 
@@ -270,23 +271,16 @@ function useTaskAssistantTransportAdapter(
     return sendCommands([toAddMessageCommand(message)]);
   }, [sendCommands]);
   const onCancel = useCallback(async () => {
-    const state = store.getSnapshot();
-    const runId = state.targetRunId ?? state.state.current_run_id;
-    if (runId === null) return;
-    try {
-      const response = await fetch(`${new URL(optionsRef.current.api).origin}/runs/${runId}/cancel`, {
-        cache: "no-store",
-        method: "POST",
-        headers: await optionsRef.current.headers(),
-      });
-      if (!response.ok) throw await parseHttpError(response);
-      optionsRef.current.onCancel?.({ commands: state.pendingCommands });
-    } catch (error) {
-      const normalized = error instanceof Error ? error : new Error(String(error));
-      optionsRef.current.onCancel?.({ error: normalized, commands: state.pendingCommands });
-      throw normalized;
+    const commands = store.getSnapshot().pendingCommands;
+    const result = await cancelTask(taskId);
+    if (result.accepted) {
+      optionsRef.current.onCancel?.({ commands });
+      return;
     }
-  }, [closeActiveStream, store]);
+    const error = new Error(result.message);
+    optionsRef.current.onCancel?.({ error, commands });
+    throw error;
+  }, [store, taskId]);
   const onRefetchThread = useCallback(async () => {
     const currentSnapshot = store.getSnapshot();
     if (currentSnapshot.targetRunStatus === "pending" || currentSnapshot.targetRunStatus === "running" || currentSnapshot.targetRunStatus === "waiting_for_input") {

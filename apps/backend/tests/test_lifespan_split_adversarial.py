@@ -126,7 +126,7 @@ def test_all_domain_routes_registered_on_same_app() -> None:
         "/assistant",
         "/tasks/{task_id}/assistant/attach",
         "/tasks/{task_id}/assistant/state",
-        "/runs/{run_id}/cancel",
+        "/tasks/{task_id}/cancel",
         "/runs/{run_id}/tool-calls/{tool_call_id}/cancel",
         "/configuration/terminal-denylist",
     }

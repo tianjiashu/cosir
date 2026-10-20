@@ -9,9 +9,9 @@
 投影给前端的载荷由 ``project_user_input_request`` 组装。
 
 为什么用 ``@dataclass`` 而不是 pydantic：本类型会作为 ``ToolObservation`` 的字段随观察经
-``dataclasses.asdict`` 投影进 workflow state（LangGraph checkpoint 只接受可 JSON 序列化的值），
+``dataclasses.asdict`` 投影进 Run 等待数据（只接受可 JSON 序列化的值），
 而 ``asdict`` 会递归 dataclass、却**不会**转换 pydantic 模型（只做深拷贝），放 pydantic 会让
-checkpoint 落盘失败。
+等待数据落盘失败。
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.tools.schemas.user_decision import UserDecisionKind
+from app.models.user_decision import UserDecisionKind
 
 # 工具未在请求里声明允许集合时的默认值：「批准 / 驳回」是最小通用交互，工具想让用户可放弃时
 # 显式加 ``abort``。
@@ -79,7 +79,7 @@ class UserInputRequest:
     def from_dict(cls, raw: object) -> UserInputRequest:
         """从 state 里的投影形状还原请求并校验。
 
-        为什么需要它：观察经 ``dataclasses.asdict`` 进 checkpoint 后是普通 dict（元组字段保持元组、
+        为什么需要它：观察经 ``dataclasses.asdict`` 持久化后是普通 dict（元组字段保持元组、
         枚举元素保持枚举），工作流每次派生都要把它还原成类型化值。校验必须在这一处显式失败，
         不能让畸形声明静默退化成「本次没有待决请求」——那会表现为「用户根本没被问到」，
         且没有任何痕迹。

@@ -1,6 +1,6 @@
 """任务领域端点。
 
-包含任务查询、事件与 checkpoint 取消端点。所有端点通过模块级 ``@app.*`` 装饰器
+包含任务查询、事件与运行期缓存 取消端点。所有端点通过模块级 ``@app.*`` 装饰器
 直接注册到 ``app.api.app.app`` 单例中。
 
 分层约定：任务查询、轮次列表与事件回放均依赖业务 service；取消与健康检查属于
@@ -19,6 +19,7 @@ from app.api.schemas import (
     TaskResponse,
 )
 from app.app import app
+from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
     ProvisionalTaskCleanupConflictError,
@@ -29,6 +30,7 @@ from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
 from app.service.depends import (
+    get_conversation_run_executor,
     get_conversation_task_context_service,
     get_task_service,
 )
@@ -106,6 +108,7 @@ async def fork_task(
 async def delete_task(
     task_id: int,
     task_service: TaskService = Depends(get_task_service),
+    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
     creation_command_id: str | None = Query(default=None, alias="creationCommandId"),
 ) -> DeleteTaskResponse:
     """删除单个任务及其级联的轮次与运行时事件。
@@ -121,7 +124,7 @@ async def delete_task(
         HTTPException: 当任务不存在时抛出。
 
     副作用:
-        级联删除该任务下的轮次、运行时事件与任务自身。
+        先停止任务树内的活动执行并等待释放，再级联删除该任务下的轮次、运行时事件与任务自身。
     """
 
     try:
@@ -134,6 +137,10 @@ async def delete_task(
                 creation_command_id,
             )
         else:
+            # 先在删除闸门外停止整棵任务树的执行并等其释放，否则工作流会在已删除的 Task 上
+            # 继续请求模型、执行工具。
+            task_ids = await asyncio.to_thread(task_service.collect_task_tree_ids, task_id)
+            await run_executor.stop_tasks(task_ids)
             await asyncio.to_thread(task_service.delete_task, task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
@@ -159,7 +166,7 @@ async def delete_run(
     """删除单个 run 及其会话历史与产物。
 
     允许删除 task 内任意位置的 run（含中间），不重排剩余上下文序号。级联清理该 run 的
-    会话消息、命令、委派记录、终端 session 与 run 行，提交后回收孤儿 LangGraph checkpoint。
+    会话消息、命令、委派记录、终端 session 与 run 行。
 
     参数:
         task_id: 来自路由的任务标识。

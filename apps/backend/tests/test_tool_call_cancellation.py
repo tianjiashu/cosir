@@ -45,6 +45,8 @@ _RUN_A = 950001
 _RUN_B = 950002
 _RUN_EXECUTOR = 950003
 _CLEANUP_RUN_IDS = (_RUN_A, _RUN_B, _RUN_EXECUTOR)
+# _make_context 绑定的 Task：Task 级取消信号按它记录。
+_TASK_ID = 11
 
 
 class _NoArgs(BaseModel):
@@ -151,12 +153,12 @@ def _build_executor(run_service: object) -> ConversationRunExecutor:
 def _isolated_cancellation_registries():
     """每个用例前后清空进程内取消信号，避免用例间串扰。"""
 
+    cancellation_registry.consume(_TASK_ID)
     for run_id in _CLEANUP_RUN_IDS:
-        cancellation_registry.clear(run_id)
         tool_call_cancellation_registry.clear_run(run_id)
     yield
+    cancellation_registry.consume(_TASK_ID)
     for run_id in _CLEANUP_RUN_IDS:
-        cancellation_registry.clear(run_id)
         tool_call_cancellation_registry.clear_run(run_id)
 
 
@@ -323,7 +325,7 @@ def test_tool_call_signal_does_not_touch_run_level_registry() -> None:
     )
 
     assert observation.status == "cancelled"
-    assert cancellation_registry.is_cancelled(_RUN_A) is False
+    assert cancellation_registry.is_cancelled(_TASK_ID) is False
 
 
 def _capture_terminal_projection(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
@@ -363,8 +365,8 @@ def test_cancelled_execution_returns_cancelled_observation() -> None:
     assert observation.reason
 
 
-def test_thread_mode_post_execution_boundary_converts_success_to_cancelled() -> None:
-    """thread 模式执行后边界：handler 已成功返回，但执行期间出现取消信号则转取消观察。"""
+def test_thread_mode_keeps_result_when_cancel_arrives_during_execution() -> None:
+    """thread 模式：handler 已完成就保留真实结果，执行期间到达的取消不推翻已发生的副作用。"""
 
     tool = _make_tool(
         _handler_marks_own_call_signal, name="thread_post_boundary", execution_mode="thread"
@@ -377,9 +379,7 @@ def test_thread_mode_post_execution_boundary_converts_success_to_cancelled() -> 
         tool_call_id="call-post",
     )
 
-    # 成功结果被丢弃并转为取消观察。
-    assert observation.status == "cancelled"
-    assert observation.content is None
+    assert observation.status == "success"
 
 
 def test_runner_cancellation_does_not_project_transport_state(
@@ -454,7 +454,7 @@ def test_tool_call_signal_is_released_after_execution() -> None:
     """单次执行结束后（任意结果）工具级信号必须被释放，run 级信号不受影响。"""
 
     tool_call_cancellation_registry.mark_cancelled(_RUN_A, "call-1")
-    cancellation_registry.mark_cancelled(_RUN_A)
+    cancellation_registry.request_cancel(_TASK_ID)
     tool = _make_tool(_handler_sleeps_then_writes, name="proc_release", execution_mode="thread")
 
     observation = ToolHandlerRunner().execute(
@@ -466,7 +466,7 @@ def test_tool_call_signal_is_released_after_execution() -> None:
 
     assert observation.status == "cancelled"
     assert tool_call_cancellation_registry.is_cancelled(_RUN_A, "call-1") is False
-    assert cancellation_registry.is_cancelled(_RUN_A) is True
+    assert cancellation_registry.is_cancelled(_TASK_ID) is True
 
 
 def test_late_tool_call_signal_survives_until_run_cleanup() -> None:
@@ -494,9 +494,9 @@ def test_build_cancel_check_watches_both_signal_sources() -> None:
     tool_call_cancellation_registry.clear(_RUN_A, "call-1")
     assert check() is False
 
-    cancellation_registry.mark_cancelled(_RUN_A)
+    cancellation_registry.request_cancel(_TASK_ID)
     assert check() is True
-    cancellation_registry.clear(_RUN_A)
+    cancellation_registry.consume(_TASK_ID)
     assert check() is False
 
 
@@ -514,7 +514,7 @@ async def test_cancel_tool_call_marks_signal_and_rejects_duplicate() -> None:
     assert await executor.cancel_tool_call(_RUN_EXECUTOR, "call-1") is True
     assert tool_call_cancellation_registry.is_cancelled(_RUN_EXECUTOR, "call-1") is True
     assert await executor.cancel_tool_call(_RUN_EXECUTOR, "call-1") is False
-    assert cancellation_registry.is_cancelled(_RUN_EXECUTOR) is False
+    assert cancellation_registry.is_cancelled(_TASK_ID) is False
 
 
 @pytest.mark.asyncio
@@ -575,7 +575,7 @@ def test_cancel_tool_call_endpoint_is_registered() -> None:
     }
 
     assert ("/runs/{run_id}/tool-calls/{tool_call_id}/cancel", ("POST",)) in routes
-    assert ("/runs/{run_id}/cancel", ("POST",)) in routes
+    assert ("/tasks/{task_id}/cancel", ("POST",)) in routes
 
 
 # ---------------------------------------------------------------------------

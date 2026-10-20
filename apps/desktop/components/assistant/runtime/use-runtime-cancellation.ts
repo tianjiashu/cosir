@@ -17,7 +17,9 @@ type RuntimeCancellation = {
 type RuntimeCancellationDependencies = Pick<RuntimeRecovery, "reconcileAfterTransportFinish">
   & Pick<CancellationConfirmation, "confirmCancellation" | "cancellationSettled">;
 
-const ACTIVE_RUN_STATUSES = new Set(["pending", "running"]);
+// 停止等待用户决定的 Run 时，后端以强制拒绝恢复它（waiting → running → cancelled），
+// 迟到的 waiting 帧不能被当作「已收敛」。
+const UNSETTLED_RUN_STATUSES = new Set(["pending", "running", "waiting_for_input"]);
 
 /**
  * Coordinate the cancellation signal with the local Assistant UI runtime.
@@ -82,7 +84,7 @@ export function useRuntimeCancellation(
     const requestedRun = state.runs.find((run) => run.runId === requestedRunId);
     const isCancellationSettled = currentRun?.runId !== requestedRunId
       || requestedRun === undefined
-      || !ACTIVE_RUN_STATUSES.has(requestedRun.status);
+      || !UNSETTLED_RUN_STATUSES.has(requestedRun.status);
     if (!isCancellationSettled) return;
 
     context.cancelRequestedRunIdRef.current = null;

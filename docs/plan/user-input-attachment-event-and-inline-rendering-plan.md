@@ -39,7 +39,7 @@ UserInputAppendedEvent
 
 当前 [RunInitializedEvent](../../apps/backend/app/assistant_transport/event/run_event.py) 携带
 `image_paths` 和 `file_attachments`，并在事件投影时提前创建用户消息附件 part；随后
-`RuntimeContextManager` 再写入 canonical `HumanMessage`，仅通过
+`RuntimeMessageContextManager` 再写入 canonical `HumanMessage`，仅通过
 `UserInputAppendedEvent` 追加文本。
 
 这造成三个问题：
@@ -140,7 +140,7 @@ UserInputAppendedEvent(
 
 修改范围：
 
-- `apps/backend/app/core/context/runtime_context_manager.py`
+- `apps/backend/app/core/context/runtime_message_context_manager.py`
 - `apps/backend/app/assistant_transport/service/conversation_run_command_service.py`
 - `apps/backend/app/service/task/conversation_run_service.py`
 
@@ -149,7 +149,7 @@ UserInputAppendedEvent(
 ```text
 1. 创建并持久化 Run
 2. RunInitializedEvent 创建空消息骨架
-3. RuntimeContextManager 写入本轮 HumanMessage
+3. RuntimeMessageContextManager 写入本轮 HumanMessage
 4. HumanMessage 持久化成功后，发布一次 UserInputAppendedEvent
 5. projector 将完整有序 parts 写入 user message
 ```
@@ -297,7 +297,7 @@ image("...")
 ## 9. 建议实施顺序
 
 1. 先调整事件契约和 projector 测试，确认 Run 初始化不再携带用户附件。
-2. 再调整 `RuntimeContextManager` 和两个 Run command service 的事件生产顺序。
+2. 再调整 `RuntimeMessageContextManager` 和两个 Run command service 的事件生产顺序。
 3. 更新前端 Transport contract/converter，确保 image/file 类型不被混为一类。
 4. 将用户附件渲染移动到消息气泡内部。
 5. 最后实现按有序 parts 的精确 inline 渲染，并补齐编辑、重发和冷启动验收。

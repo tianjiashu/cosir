@@ -5,7 +5,7 @@
 职责边界：
 - 负责：任务容器创建（不含首轮次）、从最新 turn 派生执行态、任务树原子级联删除
   （编排 ``TaskCrud``/``ConversationRunCrud``/``ConversationTaskContextCrud`` 在单事务内逐个清理，
-  孤儿 checkpoint 线程交 ``checkpoint_gc`` 回收）。
+  Run 执行进度随记录级联删除）。
 - 不负责：直接 SQL 操作（委托给上述 CRUD）；不写执行态（执行态由 ``Turn`` 持有，本
   service 仅派生展示）；不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
 """
@@ -26,7 +26,6 @@ from app.models.errors.deletion_errors import (
 )
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service import depends as service_depends
-from app.storage.checkpoint_gc import cleanup_orphan_checkpoint_threads
 from app.storage.queries.task_read_queries import TaskReadQueries
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
@@ -39,7 +38,6 @@ class TaskDeletionResult:
     """一次已提交任务级联删除需要执行的进程内清理信息。"""
 
     task_ids: frozenset[int]
-    orphan_checkpoint_threads: frozenset[str]
 
 
 class TaskService:
@@ -151,6 +149,18 @@ class TaskService:
         task_runtime_spaces.get_or_create(task_id)
         return self._task.get(task_id)
 
+    def collect_task_tree_ids(self, task_id: int) -> set[int]:
+        """返回任务及其递归委派子任务的 id；删除前先停止这些 Task 的执行。"""
+        return self._collect_task_tree_ids(task_id)
+
+    def list_task_ids_for_workspace(self, workspace_id: int) -> set[int]:
+        """返回工作区下全部 task id（含委派子任务与 Team 节点任务）。"""
+        return set(self._task.list_ids_by_workspace(workspace_id))
+
+    def list_child_tasks(self, task_id: int) -> list[TaskRecord]:
+        """返回由该任务直接委派的子任务（不含 Agent Team 节点任务）。"""
+        return self._task.list_by_parent_task(task_id)
+
     def get_latest_run(self, task_id: int) -> ConversationRunRecord | None:
         """返回某任务下创建时间最新的 run。
 
@@ -232,7 +242,7 @@ class TaskService:
         workspace 闸门协调结构性删除；源 Task 不加锁，也不访问运行时 context。
         状态校验与全部历史复制在同一个 BEGIN IMMEDIATE 事务内完成。Run 的
         新主键通过 ``ConversationRunCrud.clone_for_task`` 生成，再用映射表改写 context；
-        不触发普通 run 创建事件，也不复制 LangGraph checkpoint 内容。
+        不触发普通 Run 创建事件；执行进度不随历史分叉复制。
 
         参数:
             source_task_id: 被 fork 的源 Task 标识。
@@ -352,7 +362,7 @@ class TaskService:
         删除前先校验任务存在（不存在则抛 ``KeyError``），再按固定的 workspace → task
         锁顺序取得结构性写操作闸门。在单个 ``BEGIN IMMEDIATE`` 事务内按「子任务先于父任务」
         的后序清理每个任务自身及其产物，保证原子性（全删或全不删）。
-        提交后回收孤儿 LangGraph checkpoint 线程并卸载进程内 runtime space。Task 删除不负责
+        提交后卸载进程内 runtime space。Task 删除不负责
         删除图片附件，也不触发 workspace 附件孤儿 GC。删除是高风险操作，保留 start / complete
         审计日志。
 
@@ -369,7 +379,7 @@ class TaskService:
         副作用:
             从 ``conversation_task_contexts`` / ``conversation_runs`` / ``tasks`` 表删除该任务树
             相关数据；并提交后清理已删任务遗留的
-            孤儿 LangGraph checkpoint 线程、卸载进程内 runtime space。
+            运行期缓存并卸载进程内 runtime space。
         """
 
         task = self._task.get(task_id)
@@ -464,7 +474,7 @@ class TaskService:
         return result
 
     def delete_run(self, task_id: int, run_id: int) -> None:
-        """删除单个 run 及其会话上下文与产物（checkpoint）；Task 终端继续保留。
+        """删除单个 run 及其会话上下文与执行进度；Task 终端继续保留。
 
         允许删除 task 内任意位置的 run（含中间），不重排剩余 context 的 ``sequence``。
         先校验 run 属于该 task（否则 ``KeyError``）；再按 workspace → task 锁顺序取得结构性
@@ -472,7 +482,7 @@ class TaskService:
         ``RunDeletionConflictError``），该判断在持有 task 闸门后执行，与 run 创建路径互斥。
         在单个 ``BEGIN IMMEDIATE`` 事务内按外键依赖逆序清理：context → command → delegation →
             ``tasks.parent_run_id`` 引用 → run 行（``tasks.current_run_id`` 由
-        ``ON DELETE SET NULL`` 自动处理）。提交后回收本 run 遗留的孤儿 LangGraph checkpoint 线程。
+        ``ON DELETE SET NULL`` 自动处理）。执行进度随 Run 行删除。
 
         不新增 run 级进程内 snapshot 失效入口：Transport 快照刷新由前端在删除后重新拉取/重连
         处理（见架构边界：允许 context 与 snapshot 最终一致）。
@@ -493,7 +503,7 @@ class TaskService:
         副作用:
             从 ``conversation_task_contexts`` / ``conversation_runs`` 删除该 run 相关行，并把
             ``tasks`` 中
-            ``parent_run_id`` 指向本 run 的引用置空；提交后回收孤儿 checkpoint 线程。
+            ``parent_run_id`` 指向本 run 的引用置空；执行进度随 Run 行删除。
         """
 
         task = self._task.get(task_id)
@@ -506,34 +516,11 @@ class TaskService:
             raise DeletionBusyError("task", task_id) from exc
 
     def delete_run_locked(self, task_id: int, run_id: int) -> None:
-        """在调用方已持有 workspace/task 闸门时删除单个 run 及其会话事实。
-
-        ``delete_run`` 取得闸门后委托本方法；``ConversationRunCommandService`` 的编辑重跑
-        运行在 Transport 的 task 闸门内（``task_run_operation``），而该闸门是**非可重入**的
-        ``threading.Lock``，因此必须直接调用本方法，不能再次进入 ``delete_run``。
-
-        校验 run 属于该 task（否则 ``KeyError``）；active run 守卫在调用方持锁后重查，
-        避免与 run 创建路径的竞态。在单个 ``BEGIN IMMEDIATE`` 事务内按外键依赖逆序清理：
-        context → ``tasks.parent_run_id`` 引用 → run 行（``tasks.current_run_id`` 由
-        ``ON DELETE SET NULL`` 自动处理）；提交后回收本 run 遗留的孤儿 LangGraph checkpoint 线程。
-
-        参数:
-            task_id: run 所属任务标识。
-            run_id: 待删除的 Conversation Run 标识。
-
-        返回:
-            无。
-
-        异常:
-            KeyError: 如果 run 不存在，或 run 不属于该 task。
-            RunDeletionConflictError: 如果 task 内存在 active run。
-            sqlalchemy.exc.SQLAlchemyError: 如果删除事务失败（回滚）。
-        """
+        """在已持 Task 闸门时删除指定 Run 的 context 与记录；Task 终端继续保留。"""
 
         run = self._turn.get(run_id)
         if run.task_id != task_id:
             raise KeyError(run_id)
-        checkpoint_thread = run.checkpoint_thread_id
         # active run 守卫必须在调用方持有 task 闸门后执行：run 创建同样需要该闸门，
         # 持锁后重查可避免 get 与持锁之间新启一个 active run 的竞态。
         if self._turn.has_active_for_task(task_id):
@@ -552,12 +539,6 @@ class TaskService:
             self._context.delete_by_run_id(task_id, run_id, session=session)
             self._task.clear_parent_run_id_by_run_id(run_id, session=session)
             self._turn.delete_by_ids([run_id], session)
-            remaining_threads = self._turn.collect_checkpoint_threads_by_thread_ids(
-                session, {checkpoint_thread}
-            )
-        orphan_threads = {checkpoint_thread} - remaining_threads
-        if orphan_threads:
-            cleanup_orphan_checkpoint_threads(orphan_threads)
         log.info(
             "run_deleted",
             extra={"msg": "run deleted", "data": {"task_id": task_id, "run_id": run_id}},
@@ -662,51 +643,19 @@ class TaskService:
     def delete_task_tree_in_session(
         self, root_task_id: int, session: Session
     ) -> TaskDeletionResult:
-        """在调用方事务内删除一棵 task 树，不提交也不做进程内清理。
-
-        参数:
-            root_task_id: 待删除任务树的根 task 标识。
-            session: 已开启的主库事务 session；调用方必须先取得相关 runtime 闸门。
-
-        返回:
-            包含已删除 task 标识和待提交后回收的 checkpoint thread 标识的结果。
-
-        异常:
-            KeyError: 如果根 task 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败。
-
-        副作用:
-            在当前事务中删除 task 树及全部子产物；不提交、不卸载 runtime space。
-        """
+        """按后序在同一事务删除任务树，返回提交后需卸载的 Task 集合。"""
 
         task_ids_postorder = self._collect_task_tree_ids_postorder(root_task_id, session=session)
-        orphan_threads: set[str] = set()
         for current_id in task_ids_postorder:
-            orphan_threads |= self._delete_single_task_in_session(current_id, session)
+            self._delete_single_task_in_session(current_id, session)
         return TaskDeletionResult(
             task_ids=frozenset(task_ids_postorder),
-            orphan_checkpoint_threads=frozenset(orphan_threads),
         )
 
     def finalize_deleted_task_spaces(self, result: TaskDeletionResult) -> None:
-        """执行已提交 task 删除的进程内 runtime 清理和 checkpoint GC。
-
-        参数:
-            result: 已提交的 task 删除结果。
-
-        返回:
-            无。
-
-        异常:
-            无。checkpoint GC 本身失败安全；runtime 清理异常由调用方观察并记录。
-
-        副作用:
-            封闭已删除 Task 的终端入口并释放 worker，标记并卸载 runtime 投影，
-            回收不再被主库引用的 checkpoint。终端清理放在提交后，避免事务回滚留下关闭围栏。
-        """
+        """数据库提交后清理终端和 Task 运行时空间；回滚路径不关闭活会话。"""
 
         service_depends.get_terminal_session_service().delete_task_sessions(result.task_ids)
-        cleanup_orphan_checkpoint_threads(set(result.orphan_checkpoint_threads))
         self._unload_deleted_task_spaces(set(result.task_ids))
 
     def _unload_deleted_task_spaces(self, task_ids: set[int]) -> None:
@@ -740,39 +689,15 @@ class TaskService:
                     },
                 )
 
-    def _delete_single_task_in_session(self, task_id: int, session: Session) -> set[str]:
-        """在调用方事务内删除单个任务及其产物，返回孤儿 checkpoint 线程集合。
-
-        顺序：先解除本任务行对 ``parent_run_id`` 的引用，再按外键依赖逆序删除
-        context / run，最后删除 task 行。
-
-        参数:
-            task_id: 待删除任务的标识。
-            session: 处于事务中的 SQLAlchemy session（本方法不提交）。
-
-        返回:
-            已不再被主库剩余 run 引用的 checkpoint thread id 集合。
-
-        异常:
-            KeyError: 如果任务不存在。
-            sqlalchemy.exc.SQLAlchemyError: 如果任一删除失败（由调用方回滚）。
-
-        副作用:
-            在 session 内删除该任务的产物与任务行；不提交、不卸载 space。
-        """
+    def _delete_single_task_in_session(self, task_id: int, session: Session) -> None:
+        """在调用方事务内删除 Task 与全部子产物；外键级联删除未消费 inbox。"""
 
         self._task.ensure_task(session, task_id)  # 存在性守卫
         # 解除 tasks.parent_run_id 对 run 的引用。
         self._task.clear_parent_run_id([task_id], session)
 
-        checkpoint_threads = self._turn.collect_checkpoint_threads_by_task_ids(session, [task_id])
         run_ids = self._turn.collect_run_ids_by_task_ids(session, [task_id])
 
         self._task_context_crud.delete_by_task_ids([task_id], session)
         self._turn.delete_by_ids(run_ids, session)
         self._task.delete_by_ids([task_id], session)
-
-        remaining_threads = self._turn.collect_checkpoint_threads_by_thread_ids(
-            session, checkpoint_threads
-        )
-        return checkpoint_threads - remaining_threads

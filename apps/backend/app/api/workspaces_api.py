@@ -17,10 +17,12 @@ from app.api.schemas import (
     WorkspaceResponse,
 )
 from app.app import app
+from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.core.runtime.runner import AgentRuntime
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service.conversation_run.workspace_service import WorkspaceService
 from app.service.depends import (
+    get_conversation_run_executor,
     get_runtime,
     get_task_service,
     get_workspace_service,
@@ -126,6 +128,8 @@ async def create_workspace(
 async def delete_workspace(
     workspace_id: int,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
+    task_service: TaskService = Depends(get_task_service),
+    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
 ) -> DeleteWorkspaceResponse:
     """删除工作区及其下游任务、轮次与运行记录。
 
@@ -140,12 +144,16 @@ async def delete_workspace(
         HTTPException: 当工作区不存在时抛出。
 
     副作用:
-        级联删除工作区下的任务、轮次、事件、步骤与 durable run。
+        先停止工作区内的活动执行并等待释放，再级联删除工作区下的任务、轮次、事件、步骤与
+        durable run。
     """
 
     try:
         # 级联删除是同步 DB 操作（单 BEGIN IMMEDIATE 写锁事务），经 asyncio.to_thread
         # 移出 event loop，避免冻结其它 task 的 turn 调度。
+        # 先在删除闸门外停止工作区内全部 Task 的执行并等其释放，再级联删除。
+        task_ids = await asyncio.to_thread(task_service.list_task_ids_for_workspace, workspace_id)
+        await run_executor.stop_tasks(task_ids)
         await asyncio.to_thread(workspace_service.delete_workspace, workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc

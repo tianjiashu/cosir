@@ -27,7 +27,7 @@ from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.execution_state.step_context import StepContext
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import RunStopped
 from app.core.workflow.nodes import model_node as model_module
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -176,8 +176,8 @@ class _ModelHarness:
             thinking_channel=thinking_channel,
             run=SimpleNamespace(task_id=task_id, id=run_id, extra=None),
             usage_stats=self.usage_stats,
-            max_steps=max_steps,
-            step_context=StepContext(),
+            step_limit=max_steps,
+            batch=ToolBatch(),
         )
 
         def add_message(message: Any, **_kwargs: Any) -> None:

@@ -13,7 +13,7 @@ import app.core.workflow.node_helper.streaming_part_state_machine as streaming_m
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.execution_state.step_context import StepContext
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.nodes import model_node as model_module
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from tests.sdk_fixtures import sdk_completion, sdk_event
@@ -99,7 +99,7 @@ class _ModelHarness:
             model=SimpleNamespace(stream=self._astream),
             final_model=SimpleNamespace(stream=self._astream),
             structured_output=None,
-            max_steps=10,
+            step_limit=10,
             workspace_id=1,
             thinking_channel="",
             # model 节点读 WorkflowOperations.allows_tools 构造生命周期允许集合。
@@ -108,7 +108,7 @@ class _ModelHarness:
                 add_usage_metadata=lambda _metadata: None,
                 to_dict=lambda: {},
             ),
-            step_context=StepContext(),
+            batch=ToolBatch(),
         )
 
         def add_message(message: Any, **_kwargs: Any) -> None:
@@ -375,13 +375,13 @@ def test_invalid_tool_arguments_preserved_and_never_dispatched(monkeypatch, argu
     patch = asyncio.run(model_module._model_node(_state()))
     assert patch["next_node"] == ReactRoute.TOOLS
     assert harness.messages[-1]["tool_calls"][0]["function"]["arguments"] == arguments
-    assert patch["calls"][0]["function"]["arguments"] == arguments
+    assert harness.runtime_config.batch.calls[0]["function"]["arguments"] == arguments
     harness.operations.run_tool_calls = AsyncMock(return_value=ToolRunResult(observations=[]))
     harness.operations.all_vaild_tools[0].need_HIL = False
     monkeypatch.setattr(tools_module, "_runtime_context", lambda: harness.runtime_config)
     result = asyncio.run(tools_module._tools_node(_state().model_copy(update=patch)))
     assert harness.operations.run_tool_calls.call_count == 0
-    observations = result["last_tool_results"]["observations"]
+    observations = harness.runtime_config.batch.observations
     assert observations[0]["status"] == "error"
     assert observations[0]["tool_call_id"] == "call"
 

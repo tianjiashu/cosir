@@ -3,15 +3,18 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from app.core.llm_provider.message_codec import assistant_message
-from app.core.tools.schemas import ToolObservation, UserDecision, UserDecisionKind
+from app.core.tools.schemas import ToolObservation, UserDecision, UserDecisionKind, UserInputRequest
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.execution_state.step_context import StepContext
+from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming
 from app.core.workflow.node_helper import tool_observation_projection as projection
 from app.core.workflow.nodes import tools_node, wait_user_node
-from app.models.conversation_run_progress import RunWaitingState, ToolBatchSnapshot
+from app.core.workflow.tool_continuation import freeze_tool_continuation, restore_tool_batch
+from app.models.conversation_run_progress import ToolContinuation
 from tests.sdk_fixtures import sdk_completion
 
 
@@ -30,8 +33,6 @@ def _state(
         step_count=1,
         tool_error_count=0,
         next_node=ReactRoute.TOOLS,
-        calls=calls or [],
-        last_tool_results={"instruction": "", "observations": observations or []},
     )
 
 
@@ -83,47 +84,120 @@ def test_tools_node_decodes_arguments_and_preserves_approved_decision(monkeypatc
 
     operations = SimpleNamespace(
         get_current_task=lambda: SimpleNamespace(id=3),
+        get_current_run=lambda: SimpleNamespace(id=4, task_id=3),
         all_vaild_tools=[SimpleNamespace(name="read_file", need_HIL=False)],
         run_tool_calls=run_calls,
     )
     runtime = SimpleNamespace(
         operations=operations,
-        run=SimpleNamespace(id=4),
-        step_context=StepContext(projected_tool_calls={"call-1": "read_file"}),
+        batch=ToolBatch(
+            calls=[_raw(arguments='{"path":"a.py"}')],
+            valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")},
+            approved_call=("call-1", decision),
+        ),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(tools_node, "get_stream_writer", lambda: events.append)
-    state = _state(calls=[_raw(arguments='{"path":"a.py"}')]).model_copy(
-        update={"replay_decision": decision}
-    )
-
-    patch = asyncio.run(tools_node._tools_node(state))
+    patch = asyncio.run(tools_node._tools_node(_state()))
 
     assert len(received) == 1
     assert received[0].arguments == {"path": "a.py"}
     assert received[0].user_decision == decision
+    assert runtime.batch.approved_call is None
     assert events[0].status == "running"
     assert patch["next_node"] is ReactRoute.OBSERVE
+
+    runtime.batch = ToolBatch(calls=[_raw("next-call")])
+    asyncio.run(tools_node._tools_node(_state()))
+    assert received[-1].user_decision is None
+
+
+def test_banned_registered_call_reaches_executor_without_tool_card(monkeypatch) -> None:
+    received = []
+    events = []
+
+    async def run_calls(_task_id, calls, _step_id, _loop):
+        received.extend(calls)
+        return SimpleNamespace(observations=[])
+
+    operations = SimpleNamespace(
+        get_current_task=lambda: SimpleNamespace(id=3),
+        get_current_run=lambda: SimpleNamespace(id=4, task_id=3),
+        all_vaild_tools=[
+            SimpleNamespace(name="read_file", need_HIL=False),
+            SimpleNamespace(name="write_file", need_HIL=False),
+        ],
+        run_tool_calls=run_calls,
+    )
+    banned = {**_raw("banned"), "function": {"name": "write_file", "arguments": "{}"}}
+    runtime = SimpleNamespace(
+        operations=operations,
+        batch=ToolBatch(
+            calls=[_raw("visible"), banned],
+            valid_tool_calls={
+                "visible": ValidToolCall(name="read_file", projection="projected"),
+                "banned": ValidToolCall(name="write_file", projection="banned"),
+            },
+        ),
+    )
+    monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(tools_node, "get_stream_writer", lambda: events.append)
+
+    asyncio.run(tools_node._tools_node(_state()))
+
+    assert [call.call_id for call in received] == ["visible", "banned"]
+    assert [event.tool_call_id for event in events] == ["visible"]
+
+
+def test_unmarked_wait_request_cannot_suspend_a_multi_call_batch(monkeypatch) -> None:
+    async def run_calls(_task_id, _calls, _step_id, _loop):
+        return SimpleNamespace(
+            observations=[
+                ToolObservation(
+                    tool_name="read_file",
+                    status="success",
+                    tool_call_id="call-1",
+                    user_input_request=UserInputRequest(request_id="review", kind="approval"),
+                )
+            ]
+        )
+
+    runtime = SimpleNamespace(
+        operations=SimpleNamespace(
+            get_current_task=lambda: SimpleNamespace(id=3),
+            get_current_run=lambda: SimpleNamespace(id=4, task_id=3),
+            all_vaild_tools=[SimpleNamespace(name="read_file", need_HIL=False)],
+            run_tool_calls=run_calls,
+        ),
+        batch=ToolBatch(calls=[_raw("call-1"), _raw("call-2")]),
+    )
+    monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+
+    with pytest.raises(ValueError, match="待决请求必须独占工具批次"):
+        asyncio.run(tools_node._tools_node(_state()))
 
 
 def test_malformed_json_never_reaches_tool_executor(monkeypatch) -> None:
     called = []
     operations = SimpleNamespace(
         get_current_task=lambda: SimpleNamespace(id=3),
+        get_current_run=lambda: SimpleNamespace(id=4, task_id=3),
         all_vaild_tools=[SimpleNamespace(name="read_file", need_HIL=False)],
         run_tool_calls=lambda *args: called.append(args),
     )
     runtime = SimpleNamespace(
         operations=operations,
-        run=SimpleNamespace(id=4),
-        step_context=StepContext(projected_tool_calls={"call-1": "read_file"}),
+        batch=ToolBatch(
+            calls=[_raw(arguments='{"path":')],
+            valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")},
+        ),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
 
-    patch = asyncio.run(tools_node._tools_node(_state(calls=[_raw(arguments='{"path":')])))
+    asyncio.run(tools_node._tools_node(_state()))
 
     assert called == []
-    assert patch["last_tool_results"]["observations"][0]["status"] == "error"
+    assert runtime.batch.observations[0]["status"] == "error"
 
 
 def test_internal_artifact_does_not_enter_tool_batch_snapshot() -> None:
@@ -136,23 +210,27 @@ def test_internal_artifact_does_not_enter_tool_batch_snapshot() -> None:
     assert "artifact_data" not in tools_node._summary(observation)
 
 
-def test_waiting_snapshot_round_trips_only_the_target_call() -> None:
-    waiting = RunWaitingState(
-        instruction="read",
-        last_tool_results=ToolBatchSnapshot(instruction="read", observations=[]),
-        pending_call=_raw(),
-        projected_tool_calls={"call-1": "read_file"},
+def test_waiting_continuation_restores_only_projected_target() -> None:
+    batch = ToolBatch(
+        calls=[_raw()],
+        observations=[{"tool_call_id": "call-1", "status": "running"}],
+        valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")},
     )
-    restored = RunWaitingState.model_validate_json(waiting.model_dump_json())
-    assert restored.pending_call["id"] == "call-1"
-    assert restored.projected_tool_calls == {"call-1": "read_file"}
+    frozen = freeze_tool_continuation(batch, _raw())
+    persisted = ToolContinuation.model_validate_json(frozen.model_dump_json())
+    restored = restore_tool_batch(persisted)
+    assert [call["id"] for call in restored.calls] == ["call-1"]
+    assert restored.observations == batch.observations
+    assert restored.was_projected("call-1")
 
 
 def test_waiting_card_is_persisted_before_live_event(monkeypatch) -> None:
     order = []
     runtime = SimpleNamespace(
-        run=SimpleNamespace(id=4, task_id=3),
-        step_context=StepContext(projected_tool_calls={"call-1": "read_file"}),
+        operations=SimpleNamespace(get_current_run=lambda: SimpleNamespace(id=4, task_id=3)),
+        batch=ToolBatch(
+            valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")}
+        ),
     )
     monkeypatch.setattr(projection, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
@@ -199,24 +277,29 @@ def test_approval_replays_one_call_and_rejection_only_settles(monkeypatch) -> No
         "user_input_request": request,
     }
     runtime = SimpleNamespace(
-        run=SimpleNamespace(id=4),
-        operations=SimpleNamespace(allows_tools={"read_file"}),
+        operations=SimpleNamespace(
+            allows_tools={"read_file"},
+            get_current_run=lambda: SimpleNamespace(id=4),
+        ),
+        batch=ToolBatch(calls=[_raw(), _raw("call-2")], observations=[observation]),
         user_input_decision_handlers=SimpleNamespace(handle_rejection=lambda *_: None),
     )
     monkeypatch.setattr(wait_user_node, "_runtime_context", lambda: runtime)
-    state = _state(calls=[_raw(), _raw("call-2")], observations=[observation])
+    state = _state()
 
     approved = wait_user_node.wait_user_node(
         state, UserDecision(request_id="review-1", kind=UserDecisionKind.APPROVE)
     )
+    approved_calls = [call["id"] for call in runtime.batch.calls]
+    runtime.batch = ToolBatch(calls=[_raw(), _raw("call-2")], observations=[observation])
     rejected = wait_user_node.wait_user_node(
         state, UserDecision(request_id="review-1", kind=UserDecisionKind.REJECT)
     )
 
     assert approved["next_node"] is ReactRoute.TOOLS
-    assert [call["id"] for call in approved["calls"]] == ["call-1"]
+    assert approved_calls == ["call-1"]
     assert rejected["next_node"] is ReactRoute.OBSERVE
-    assert rejected["last_tool_results"]["observations"][0]["status"] == "cancelled"
+    assert runtime.batch.observations[0]["status"] == "cancelled"
 
 
 def test_observation_persists_before_event_and_hides_unprojected_calls(monkeypatch) -> None:
@@ -224,13 +307,19 @@ def test_observation_persists_before_event_and_hides_unprojected_calls(monkeypat
     runtime = SimpleNamespace(
         run=SimpleNamespace(id=4, task_id=3),
         operations=SimpleNamespace(
+            get_current_run=lambda: SimpleNamespace(id=4, task_id=3),
             to_tool_model_message=lambda obs: {
                 "role": "tool",
                 "tool_call_id": obs.tool_call_id,
                 "content": obs.content,
+            },
+        ),
+        batch=ToolBatch(
+            valid_tool_calls={
+                "visible": ValidToolCall(name="read_file", projection="projected"),
+                "hidden": ValidToolCall(name="read_file", projection="banned"),
             }
         ),
-        step_context=StepContext(projected_tool_calls={"visible": "read_file"}),
     )
     written_metadata = []
 

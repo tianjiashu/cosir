@@ -1,4 +1,4 @@
-"""Tool definition value object."""
+"""工具定义及模型可见契约。"""
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from app.core.tools.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tools.schemas.tool_display import ToolDisplayHints
 
 
@@ -13,7 +14,7 @@ from app.core.tools.schemas.tool_display import ToolDisplayHints
 class ToolDefinition:
     """工具系统的元数据与 handler 契约单一事实来源（frozen）。
 
-    模型可见结构（name / description / parameters）由 ``to_model_tool_definition``
+    模型可见的 strict function 定义由 ``to_model_tool_definition``
     投影；内部契约字段（resource_keys / execution_mode 等）不进模型
     可见结构，仅由对应消费模块读取。本类纯数据契约，不持有任何执行或调度逻辑。
 
@@ -47,12 +48,9 @@ class ToolDefinition:
     need_HIL: bool = False
 
     def normalized(self) -> "ToolDefinition":
-        """Return a copy with a derived schema when none was supplied.
+        """注册时固定 strict 参数 schema，模型调用阶段不再转换。
 
-        无 ``parameters_schema`` 时，复用 ``to_model_tool_definition`` 的产出
-        （``args_model.model_json_schema()`` + 本类 name/description），保证模型可见
-        schema 单一事实来源。
-        strict 化不在此处做，统一由下游 ``bind_tools(strict=True)`` 承担，避免重复劳动。
+        显式 schema 由平台投影从 strict_parameters_schema 生成；其余由统一出口生成。
         """
         if self.parameters_schema:
             return self
@@ -73,22 +71,23 @@ class ToolDefinition:
         )
 
     def to_model_tool_definition(self) -> dict[str, Any]:
-        """Project to the model-facing tool definition (name/description/schema).
+        """导出可固化到 Task 的 strict function 定义。
 
         仅做投影：用本类 ``name`` / ``description`` 覆盖 pydantic 类名（如
         ``SearchContentArgs``），确保 registry / tools_node / 前端全链路使用注册名
         （如 ``search_content``）这一唯一事实来源，不被 pydantic 类名污染。
 
-        参数 schema 使用显式 ``parameters_schema``；未显式提供时由 ``args_model`` 生成。
-        **不做 strict 化**（交由下游 ``bind_tools(strict=True)`` 统一承担）。
+        参数 schema 使用显式 strict 投影；未显式提供时复用 SDK 从 ``args_model`` 生成。
+        模型须显式填写所有字段；本地业务约束与默认值仍由工具参数入口处理。
 
-        返回 ``{"name", "description", "parameters"}``（裸 function 形状，由
-        ``bind_tools`` 包裹为 ``{"type": "function", "function": {...}}``）。
+        返回含 ``strict=True`` 的裸 function 形状，由
+        SDK 适配器包裹为 ``{"type": "function", "function": {...}}``。
         """
-        # 名称/描述取本类契约而非 args_model.__name__，避免 LangChain 用 pydantic 类名
+        # 名称/描述取本类契约而非 args_model.__name__，避免 pydantic 类名
         # 覆盖注册名，污染全链路唯一事实来源。
         return {
             "name": self.name,
             "description": self.description,
-            "parameters": self.parameters_schema or self.args_model.model_json_schema(),
+            "strict": True,
+            "parameters": self.parameters_schema or strict_parameters_schema(self.args_model),
         }

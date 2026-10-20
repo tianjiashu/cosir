@@ -8,7 +8,7 @@
   :func:`project_tool_terminal_state`，使快照先于 canonical context 更新；
 - **管线异常兜底**：同处在 ``ToolExecutor.execute`` 捕获到未归一化异常时调用
   :func:`project_unhandled_tool_failure`（此时尚无观察对象）；
-- **结算兜底**：``ToolCallLifecycleManager.settle`` 在写入 ``ToolMessage`` 后经
+- **结算兜底**：``settle_observations`` 在写入 ``tool 消息`` 后经
   ``ToolCallStatusChangedEvent`` 再发一次同值终态。兜底不因提前投影而删除，两者对同一调用
   产生相同终态（投影按自迁移幂等吸收）。
 
@@ -29,7 +29,7 @@
 职责边界：
 - 负责：观察状态 → 事件终态的映射、终态短提示的选择、展示数据形状归一、把终态直投进进程内快照。
 - 不负责：构造模型侧观察（``tool_success`` / ``tool_error`` / ``tool_cancelled``）、写模型
-  上下文 ``ToolMessage``（``observe`` 节点）、非法与孤儿调用的补偿收束。
+  上下文 ``tool 消息``（``observe`` 节点）、非法与孤儿调用的补偿收束。
 
 投影是**展示旁路**：任何失败（含展示数据畸形、不可深拷贝）都只记日志并降级，绝不改变工具
 观察、不落库、不中断 turn。
@@ -218,9 +218,7 @@ def _project(
         # 触发 ImportError（后端启动即失败）。投影属运行期路径，此处导入时 event 包已完全就绪。
         from app.assistant_transport.event import ToolCallStatusChangedEvent
 
-        # 直投而非 ``dispatch_conversation_event``：后者在 graph 上下文内优先把事件入 LangGraph
-        # custom stream，而 custom stream 要等节点返回才流出；本投影发生在 tools 节点内部的
-        # 工具执行期，走 stream 会让「提前」退化成「整批跑完才可见」。
+        # 工具执行期间立即投影，终端提前返回无需等待整批工具结束。
         get_conversation_event_projector().process(
             ToolCallStatusChangedEvent(
                 task_id=task_id,
@@ -270,12 +268,12 @@ def project_tool_terminal_state(
 ) -> bool:
     """把一个已归一化的工具观察提前投影为进程内快照的工具终态。
 
-    时序：投影刻意**早于** ``ToolMessage`` 落 canonical context（后者由 ``observe`` 节点在
+    时序：投影刻意**早于** ``tool 消息`` 落 canonical context（后者由 ``observe`` 节点在
     整批工具结束后写入）。该不一致是允许的：快照是进程内 ephemeral working copy，进程终止后
-    由 ``ConversationTaskStateService._rebuild`` 从数据库重建；对没有 ``ToolMessage`` 行的
+    由 ``ConversationTaskStateService._rebuild`` 从数据库重建；对没有 ``tool 消息`` 行的
     tool-call part，重建默认投影为 ``cancelled``
     （``ConversationTaskStateRebuilder.build_pair_tool_part``），与「结果丢失且 run 已收敛」
-    的事实一致。代价是进程在写 ``ToolMessage`` 之前终止时，该 part 会从 ``completed`` /
+    的事实一致。代价是进程在写 ``tool 消息`` 之前终止时，该 part 会从 ``completed`` /
     ``failed`` 回退为 ``cancelled``。
 
     参数:

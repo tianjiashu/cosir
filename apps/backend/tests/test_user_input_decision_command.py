@@ -16,10 +16,10 @@ from app.assistant_transport.request import (
     UserInputDecisionCommand,
 )
 from app.assistant_transport.service.conversation_run_command_service import _resumable_status
-from app.core.tools.schemas.user_decision import (
+from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.user_decision import (
     UserDecisionKind,
 )
-from app.models.enums.conversation_run_status import ConversationRunStatus
 
 
 def _request(commands: list[dict[str, object]], **overrides: object) -> dict[str, object]:

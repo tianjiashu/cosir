@@ -51,13 +51,12 @@ def test_delete_honours_run_cancellation(tmp_path: Path) -> None:
     target = tmp_path / "keep.txt"
     target.write_bytes(b"keep\n")
     run_id = 7_700_555
-    cancellation_registry.clear(run_id)
     context = _context(tmp_path, run_id=run_id)
-    cancellation_registry.mark_cancelled(run_id)
+    cancellation_registry.request_cancel(context.task_id)
     try:
         observation = DeleteTool().execute(context, path="keep.txt")
     finally:
-        cancellation_registry.clear(run_id)
+        cancellation_registry.consume(context.task_id)
 
     assert observation.status == "cancelled"
     assert target.exists()

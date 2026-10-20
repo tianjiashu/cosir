@@ -16,12 +16,12 @@ from app.core.tools.tool_handler.search.scope import SearchScope
 from app.core.tools.tool_handler.search_content import SearchContentTool
 
 
-def _context(root: Path, *, run_id: int = 1) -> ToolExecutionContext:
+def _context(root: Path, *, task_id: int = 1) -> ToolExecutionContext:
     return ToolExecutionContext(
-        task_id=1,
+        task_id=task_id,
         workspace_id=1,
         workspace_root=root,
-        run_id=run_id,
+        run_id=1,
     )
 
 
@@ -30,9 +30,9 @@ def test_search_scope_accepts_file_and_directory(tmp_path: Path) -> None:
     source.parent.mkdir()
     source.write_text("needle\nother\n", encoding="utf-8")
 
-    file_scope = SearchScope.from_path(tmp_path, source, run_id=1, deadline=monotonic() + 5)
+    file_scope = SearchScope.from_path(tmp_path, source, task_id=1, deadline=monotonic() + 5)
     directory_scope = SearchScope.from_path(
-        tmp_path, source.parent, run_id=1, deadline=monotonic() + 5
+        tmp_path, source.parent, task_id=1, deadline=monotonic() + 5
     )
 
     assert file_scope.kind == "file"
@@ -79,7 +79,7 @@ def test_search_content_recurses_directory_and_skips_binary(tmp_path: Path) -> N
 def test_search_content_returns_structured_engine_page_and_paginates(tmp_path: Path) -> None:
     source = tmp_path / "main.py"
     source.write_text("needle one\nneedle two\n", encoding="utf-8")
-    scope = SearchScope.from_path(tmp_path, source.parent, run_id=1, deadline=monotonic() + 5)
+    scope = SearchScope.from_path(tmp_path, source.parent, task_id=1, deadline=monotonic() + 5)
 
     page = search_content(scope, "needle", limit=1, offset=1)
 
@@ -122,28 +122,28 @@ def test_search_content_has_cooperative_thread_timeout(tmp_path: Path, monkeypat
 
 
 @pytest.fixture
-def search_run():
-    run_id = 9876
+def search_task():
+    task_id = 9876
     try:
-        yield run_id
+        yield task_id
     finally:
-        cancellation_registry.clear(run_id)
+        cancellation_registry.consume(task_id)
 
 
 @pytest.mark.parametrize("tool_type", [FindFilesTool, SearchContentTool])
 @pytest.mark.parametrize("interrupt", ["timeout", "cancel"])
 def test_search_interrupts_even_without_candidates(
-    tmp_path: Path, monkeypatch, search_run, tool_type, interrupt
+    tmp_path: Path, monkeypatch, search_task, tool_type, interrupt
 ) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
     if interrupt == "timeout":
         monkeypatch.setattr(tool_type, "timeout_seconds", 0.0)
     else:
-        cancellation_registry.mark_cancelled(search_run)
+        cancellation_registry.request_cancel(search_task)
 
     observation = tool_type().execute(
-        pattern="needle", path="empty", execution_context=_context(tmp_path, run_id=search_run)
+        pattern="needle", path="empty", execution_context=_context(tmp_path, task_id=search_task)
     )
 
     if interrupt == "timeout":
@@ -157,7 +157,7 @@ def test_search_interrupts_even_without_candidates(
 @pytest.mark.parametrize("filter_kind", ["ignore", "glob"])
 @pytest.mark.parametrize("interrupt", ["timeout", "cancel"])
 def test_search_interrupts_while_traversing_filtered_entries(
-    tmp_path: Path, monkeypatch, search_run, filter_kind, interrupt
+    tmp_path: Path, monkeypatch, search_task, filter_kind, interrupt
 ) -> None:
     """中断必须发生在遍历途中，不能等到产出候选文件或扫完整棵树。"""
     nested = tmp_path / "tree" / "nested"
@@ -177,14 +177,14 @@ def test_search_interrupts_while_traversing_filtered_entries(
             if interrupt == "timeout":
                 now = 6.0
             else:
-                cancellation_registry.mark_cancelled(search_run)
+                cancellation_registry.request_cancel(search_task)
         return match_file(self, path)
 
     monkeypatch.setattr(GitignoreMatcher, "match_file", interrupt_after_first_entry)
     monkeypatch.setattr(
         "app.core.tools.tool_handler.search.scope.time", SimpleNamespace(monotonic=lambda: now)
     )
-    scope = SearchScope.from_path(tmp_path, tmp_path / "tree", run_id=search_run, deadline=5.0)
+    scope = SearchScope.from_path(tmp_path, tmp_path / "tree", task_id=search_task, deadline=5.0)
 
     with pytest.raises(SearchTimedOut if interrupt == "timeout" else SearchCancelled):
         list(scope.iter_files("*.py" if filter_kind == "glob" else None))

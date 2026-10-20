@@ -841,8 +841,14 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { task_id: TASK_ID, child_task_id: 501, second_child_task_id: 502 });
     return;
   }
-  if (req.method === "POST" && url.pathname.startsWith("/runs/") && url.pathname.endsWith("/cancel")) {
-    const runId = Number(url.pathname.split("/")[2]);
+  if (req.method === "POST" && /^\/tasks\/\d+\/cancel$/.test(url.pathname)) {
+    // 与后端一致按 task 取消：命中该 Task 的当前 Run。
+    const cancelTaskId = Number(url.pathname.split("/")[2]);
+    const runId = states.get(cancelTaskId)?.current_run_id ?? null;
+    if (runId === null) {
+      jsonResponse(res, 409, { detail: "task has no cancellable execution" });
+      return;
+    }
     cancelledRuns.add(runId);
     if (dropNextCancelledStream) {
       dropCancelledStreams.add(runId);
@@ -860,7 +866,7 @@ const server = createServer(async (req, res) => {
     // the terminal cancelled snapshot before the client receives the ACK and
     // aborts its local request. This mirrors the production projector push.
     await wait(160);
-    jsonResponse(res, 200, { accepted: true });
+    jsonResponse(res, 200, { task_id: cancelTaskId, cancelled: true });
     return;
   }
   if (req.method === "GET" && /^\/tasks\/\d+$/.test(url.pathname)) {

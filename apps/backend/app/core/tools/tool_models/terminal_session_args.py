@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config.constant import Constant
-from app.service.terminal.interaction import TerminalInput
+from app.service.terminal.interaction import InputKey, InputLine
 
 
 class TerminalListArgs(BaseModel):
@@ -66,7 +66,9 @@ class TerminalWriteArgs(BaseModel):
             f"most recent {Constant.Terminal.MAX_WRITE_OPERATION_CACHE} accepted writes."
         ),
     )
-    input: TerminalInput = Field(
+    # 两个互斥的 type 字面量保留原校验语义；普通 union 导出 strict 支持的 anyOf，
+    # 不把领域层判别联合的 discriminator/oneOf 泄漏到模型 schema。
+    input: InputLine | InputKey = Field(
         description=(
             "Submit one line with Enter, or send one platform-supported control key. "
             "No input arrays, embedded newlines, or text/key mixing. A line may be "

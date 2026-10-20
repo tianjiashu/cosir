@@ -36,19 +36,23 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from queue import Empty, SimpleQueue
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
-from app.service.depends import get_task_service, get_workspace_service
+from openai.types.shared_params import FunctionDefinition
+from pydantic import TypeAdapter
+
 from app.models.runtime_notice import RuntimeNotice
+from app.service.depends import get_task_service, get_workspace_service
 from app.utils.host_platform import host_platform_name
 
 if TYPE_CHECKING:
     from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
     from app.core.agents.agent_profile import AgentProfile
-    from app.core.context.runtime_context_manager import RuntimeContextManager
+    from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
     from app.models import TaskRecord, WorkspaceRecord
 
 _T = TypeVar("_T")
+_tool_schemas_adapter = TypeAdapter(list[FunctionDefinition])
 
 
 def _weak_ref(obj: _T) -> weakref.ReferenceType[_T]:
@@ -78,7 +82,7 @@ class TaskRuntimeSpace:
 
     task_id: int
     lock: threading.Lock = field(init=False)
-    _context_manager: weakref.ReferenceType[RuntimeContextManager] | None = field(
+    _context_manager: weakref.ReferenceType[RuntimeMessageContextManager] | None = field(
         default=None, init=False
     )
     # snapshot 是 TypedDict（运行时即 dict），无法被弱引用包裹，因此按 task 维度强引用缓存，
@@ -91,12 +95,12 @@ class TaskRuntimeSpace:
     _notice_queue: SimpleQueue[RuntimeNotice] = field(
         default_factory=SimpleQueue, init=False, repr=False, compare=False
     )
-    agent_profile: AgentProfile = None
-    current_workspace: WorkspaceRecord = None
-    current_task: TaskRecord = None
+    agent_profile: AgentProfile | None = None
+    current_workspace: WorkspaceRecord = field(init=False)
+    current_task: TaskRecord = field(init=False)
 
     @property
-    def task_tool_schemas(self) -> tuple[dict[str, Any], ...]:
+    def task_tool_schemas(self) -> tuple[FunctionDefinition, ...]:
         """返回 Task 创建时固化的模型工具 schema 快照。
 
         返回:
@@ -104,12 +108,18 @@ class TaskRuntimeSpace:
             将其传给模型绑定逻辑而不修改 TaskRecord 工作副本。
 
         异常:
-            ValueError: Task 记录中的 schema 缺少合法工具名时抛出，表示持久化事实损坏。
+            ValueError: Task 记录中的 SDK schema 不合法、工具名为空或不是 strict 契约。
+                旧快照不自动补标记；调用方需新建 Task，不能原地改变固定模型前缀。
 
         副作用:
             无；该属性只读当前 Task 记录，不读取数据库，也不修改运行时状态。
         """
-        return tuple(copy.deepcopy(self.current_task.tool_schemas or []))
+        schemas = _tool_schemas_adapter.validate_python(self.current_task.tool_schemas, strict=True)
+        if any(not schema["name"].strip() for schema in schemas):
+            raise ValueError("Task 工具 schema 的 name 不得为空")
+        if any(schema.get("strict") is not True for schema in schemas):
+            raise ValueError("Task 工具 schema 必须为 strict 契约，请新建 Task")
+        return tuple(copy.deepcopy(schemas))
 
     def __post_init__(self) -> None:
         """初始化统一执行闸门与 context manager 槽位锁。"""
@@ -191,7 +201,7 @@ class TaskRuntimeSpace:
     def unload_context_manager(self) -> None:
         """卸载当前 Task 的进程内 context manager 引用。
 
-        当前 ``RuntimeContextManager`` 不持有外部句柄，卸载只需清除引用；调用方必须
+        当前 ``RuntimeMessageContextManager`` 不持有外部句柄，卸载只需清除引用；调用方必须
         在 Task 已经停止接受新操作且不再有运行持锁时调用本方法。
         """
 
@@ -199,7 +209,7 @@ class TaskRuntimeSpace:
             self._context_manager = None
 
     def get_snapshot(
-            self, loader: Callable[[], ConversationStateSnapshot]
+        self, loader: Callable[[], ConversationStateSnapshot]
     ) -> ConversationStateSnapshot:
         """返回 task snapshot；首次调用时从 canonical records 懒加载重建。
 
@@ -230,7 +240,7 @@ class TaskRuntimeSpace:
         return copy.deepcopy(self._snapshot)
 
     def get_working_snapshot(
-            self, loader: Callable[[], ConversationStateSnapshot]
+        self, loader: Callable[[], ConversationStateSnapshot]
     ) -> ConversationStateSnapshot:
         """Return the task-local mutable snapshot to its owning state service.
 
@@ -277,21 +287,22 @@ class TaskRuntimeSpace:
         self._snapshot = None
 
     def get_context_manager(
-            self,
-            *,
-            agent_profile: AgentProfile | None = None,
-    ) -> RuntimeContextManager:
+        self,
+        *,
+        agent_profile: AgentProfile | None = None,
+    ) -> RuntimeMessageContextManager:
         """返回 task context manager；首次执行时才创建并加载它。
 
         参数:
-            agent_profile: 当前 task 使用的 Agent 画像，决定 context 装配策略。
+            agent_profile: 首次装配必需；之后可复用已保留的 Agent 画像。
 
         返回:
-            已创建或已缓存的 ``RuntimeContextManager`` 实例。该 manager 恢复 Task 已持久化的
+            已创建或已缓存的 ``RuntimeMessageContextManager`` 实例。该 manager 恢复 Task 已持久化的
             固定系统提示词；当前 profile 只用于首次创建 Task 提示词。
 
         异常:
-            ``RuntimeContextManager`` 构造失败时原样向上抛出，本方法不兜底；此时 space 不会缓存
+            RuntimeError: 首次装配没有 Agent 画像。
+            ``RuntimeMessageContextManager`` 构造失败时原样向上抛出，本方法不兜底；此时 space 不会缓存
             半成品引用，由调用方处理。
 
         副作用:
@@ -313,16 +324,22 @@ class TaskRuntimeSpace:
             manager_ref = self._context_manager
             manager = manager_ref() if manager_ref is not None else None
             if manager is None:
-                from app.core.context.runtime_context_manager import RuntimeContextManager
+                from app.core.context.runtime_message_context_manager import (
+                    RuntimeMessageContextManager,
+                )
 
                 if agent_profile is not None:
                     self.agent_profile = agent_profile
 
-                manager = RuntimeContextManager(
+                if self.agent_profile is None:
+                    raise RuntimeError("首次装配 Task context 必须提供 Agent profile")
+                from app.service.depends import get_conversation_task_context_service
+
+                manager = RuntimeMessageContextManager(
                     current_task_id=self.current_task.id,
                     agent_profile=self.agent_profile,
-                    workspace_root=self.current_workspace.root_path,
-                    is_fork=self.current_task.task_type == "fork",
+                    workspace=self.current_workspace,
+                    context_service=get_conversation_task_context_service(),
                 )
                 self._context_manager = _weak_ref(manager)
             return manager
@@ -361,8 +378,7 @@ class TaskRuntimeSpace:
         return (
             f"system_hint: host OS is {host_platform_name()}; the lines below are runtime "
             "notices injected by the system, not user input. Take them into account, but do "
-            "not reply to, acknowledge, or quote them."
-            + hint
+            "not reply to, acknowledge, or quote them." + hint
         )
 
     def has_runtime_notices(self) -> bool:

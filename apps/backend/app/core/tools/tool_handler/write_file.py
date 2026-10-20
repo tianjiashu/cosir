@@ -153,7 +153,7 @@ class WriteFileTool(HandlerBase):
                 )
 
         try:
-            if cancellation_registry.is_cancelled(execution_context.run_id):
+            if cancellation_registry.is_cancelled(execution_context.task_id):
                 return tool_cancelled(
                     tool_name=self.name,
                 )

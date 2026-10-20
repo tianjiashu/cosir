@@ -357,10 +357,9 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
     # worker 路径只有宿主环境变量一个来源，测试沿用同一配置边界。
     monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(_worker_path()))
     terminal = TerminalSessionService(status_observer=lambda _change: None)
-    cancelled_runs: set[int] = set()
-    dependencies = ToolRuntimeDependencies(
-        terminal_session_service=terminal, is_run_cancelled=lambda run: run in cancelled_runs
-    )
+    from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+
+    dependencies = ToolRuntimeDependencies(terminal_session_service=terminal)
     first = ToolExecutionContext(
         task_id=1,
         workspace_id=1,
@@ -401,8 +400,10 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
             == "success"
         )
         await ReactLikeWorkflow().finalize_run(1)
-        cancelled_runs.add(1)
+        cancellation_registry.request_cancel(1)
         assert TerminalReadTool().execute(session_id, execution_context=first).status == "cancelled"
+        # 第一个 Run 的执行释放取走 Task 信号；同一 Task 的后续 Run 复用终端不受影响。
+        cancellation_registry.consume(1)
         listed = TerminalListTool().execute(execution_context=second)
         payload = json.loads(listed.content.split("\n", 1)[1])
         assert payload["sessions"][0]["session_id"] == session_id
@@ -428,5 +429,6 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
                 output += result["screen"]["text"]
         assert "STATE:kept" in output
     finally:
+        cancellation_registry.consume(1)
         terminal.shutdown()
     assert terminal.list_sessions(task_id=1, workspace_id=1) == []

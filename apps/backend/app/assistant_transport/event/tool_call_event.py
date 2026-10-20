@@ -17,19 +17,19 @@ from pydantic import Field
 from app.assistant_transport.event.conversation_event_envelope import (
     ConversationEventEnvelope,
 )
+from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import ConversationStateToolCallPart
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.models.enums.tool_call_status import ToolCallEventStatus
+from app.models.message_metadata import ToolMessageMetadata
 
 # 工具状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）丢弃并留痕。
-# ``cancelled -> completed/failed`` 是「占位被真实结果覆盖」的合法迁移：取消或崩溃时
-# ``RuntimeContextManager.load_message``（以及启动恢复的
-# ``ConversationTaskContextService.close_unclosed_tool_calls_for_run``）会为未配对的调用补一条
-# ``cancelled`` 占位行，该 run 续跑重放后真实结果经 ``RuntimeContextManager.add_message`` 按
-# ``plan_tool_call_closure`` 配对规则命中该行并原地覆盖；若在此丢弃该迁移，数据库已是真实终态而
+# ``cancelled -> completed/failed`` 是「占位被真实结果覆盖」的合法迁移：
+# ``RuntimeMessageContextManager.add_message`` 可能按调用身份用真实结果覆盖此前的取消占位；
+# 若在此丢弃该迁移，数据库已是真实终态而
 # snapshot 会永久停在 ``cancelled``
 # （与 ``RunStatusChangedEvent`` 的 ``cancelled -> running`` 例外同源）。``completed`` / ``failed``
 # 仍不可逆，避免迟到事件把已结束的调用拉回 active。
@@ -56,7 +56,8 @@ class ToolCallCreatedEvent(ConversationEventEnvelope):
         tool_name: 被调用工具名。
         presentation: 「怎么展示」的静态外壳声明，由 ``ToolDefinition.display``
             （``ToolDisplayHints``）经 ``to_dict()`` 序列化得到，**同一种工具每次调用
-            完全相同**。只含字面量字段（``verb`` 动词、``icon`` 图标、``variant`` 语义变体、``surface`` 展示面、
+            完全相同**。只含字面量字段（``verb`` 动词、``icon`` 图标、``variant`` 语义变体、
+            ``surface`` 展示面、
             ``expandable`` 是否可展开、``expand_layout`` 展开布局、``default_open`` 默认展开、
             ``show_result`` 是否展示模型结果）；
             不含 Callable、摘要文本或条目内容。前端据此决定外壳布局与图标。
@@ -144,7 +145,7 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
 
     时序：终态由两处发出——**执行出口投影**（``ToolExecutor.execute`` 的单一出口，早于
     ``ToolMessage`` 落 canonical context，使前端不必等整批工具结束）与**结算兜底**
-    （``ToolCallLifecycleManager.settle``，在写 ``ToolMessage`` 之后）。取消不得早于执行层的
+    （``settle_observations``，在写 ``ToolMessage`` 之后）。取消不得早于执行层的
     强杀与输出排空：执行层在检出取消的瞬间只产出观察与日志，不发状态事件，避免断言一个尚未
     成立的事实（见 ``tool_terminal_projection`` 的时序说明）。两处对同一调用产生相同终态，
     按自迁移幂等吸收。
@@ -238,44 +239,35 @@ class ToolCallStatusChangedEvent(ConversationEventEnvelope):
                 return []
             raise ValueError(f"invalid tool transition {current} -> {self.status}")
         base = ("runs", run_index, "messages", message_index, "parts", part_index)
-        mutations: list[ConversationStateMutation] = [
-            ConversationStateMutation("set", (*base, "status"), self.status),
-            ConversationStateMutation(
-                "set",
-                (*base, "error"),
-                self.error if self.status in {"failed", "cancelled"} else None,
-            ),
-            ConversationStateMutation("set", (*base, "isError"), self.status == "failed"),
+        fields = project_tool_result(
+            ToolMessageMetadata(
+                status=self.status,
+                error=self.error,
+                display_data=self.display_data,
+                team_run_id=self.team_run_id,
+            )
+        )
+        display = fields["display_data"]
+        current_display = part.get("display_data")
+        if (
+            display is not None
+            and display.get("kind") == "terminal-result"
+            and isinstance(current_display, dict)
+            and current_display.get("kind") == "terminal-result"
+            and "terminal_output_seq" in part
+        ):
+            # 实时终端预览独立累计完整输出，最终模型正文可能被截断。
+            streamed_output = current_display.get("output")
+            if isinstance(streamed_output, str):
+                display["output"] = streamed_output
+        mutations = [
+            ConversationStateMutation("set", (*base, key), value) for key, value in fields.items()
         ]
         if self.args is not None:
-            mutations.insert(
-                1,
-                ConversationStateMutation("set", (*base, "args"), copy.deepcopy(self.args)),
-            )
-        if self.team_run_id is not None:
             mutations.append(
-                ConversationStateMutation("set", (*base, "team_run_id"), self.team_run_id)
+                ConversationStateMutation("set", (*base, "args"), copy.deepcopy(self.args))
             )
-        if self.display_data is not None:
-            display_data = copy.deepcopy(self.display_data)
-            current_display_data = part.get("display_data")
-            has_streamed_terminal_output = (
-                display_data.get("kind") == "terminal-result"
-                and isinstance(current_display_data, dict)
-                and current_display_data.get("kind") == "terminal-result"
-                and isinstance(current_display_data.get("output"), str)
-                and "terminal_output_seq" in part
-            )
-            if has_streamed_terminal_output:
-                # The model-facing content may be budgeted separately. Keep the complete UI
-                # stream already projected into the snapshot.
-                streamed_output = current_display_data.get("output")
-                if isinstance(streamed_output, str):
-                    display_data["output"] = streamed_output
-            mutations.insert(
-                2,
-                ConversationStateMutation("set", (*base, "display_data"), display_data),
-            )
+
         return mutations
 
 

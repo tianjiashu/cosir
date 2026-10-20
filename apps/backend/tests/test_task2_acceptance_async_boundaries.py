@@ -30,6 +30,18 @@ class _ThreadCheckedRunService:
             raise AssertionError("canonical get_run ran on the event-loop thread")
         return self.run
 
+    def get_task(self, task_id: int) -> SimpleNamespace:
+        self._assert_off_loop("get_task")
+        return SimpleNamespace(id=task_id)
+
+    def get_latest_run(self, _task_id: int) -> SimpleNamespace:
+        self._assert_off_loop("get_latest_run")
+        return self.run
+
+    def _assert_off_loop(self, name: str) -> None:
+        if threading.get_ident() == self.owner_thread:
+            raise AssertionError(f"canonical {name} ran on the event-loop thread")
+
     def cancel_run_if_running(self, *_args: Any, **_kwargs: Any) -> None:
         return None
 
@@ -79,6 +91,7 @@ def _executor(run_service: object) -> ConversationRunExecutor:
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = run_service
     executor._run_state_service = run_service
+    executor._task_service = run_service
     executor._event_projector = None
     executor._signal = cancellation_registry
     executor._executions = {}
@@ -100,9 +113,9 @@ def _patch_execute_drivers(
 
 @pytest.fixture(autouse=True)
 def _clear_run_signal() -> None:
-    cancellation_registry.clear(_RUN_ID)
+    cancellation_registry.consume(7)
     yield
-    cancellation_registry.clear(_RUN_ID)
+    cancellation_registry.consume(7)
 
 
 @pytest.mark.asyncio
@@ -145,11 +158,24 @@ async def test_executor_tool_settlement_reads_canonical_run_off_event_loop(
 
 
 @pytest.mark.asyncio
-async def test_executor_cancel_reads_canonical_run_off_event_loop() -> None:
-    service = _ThreadCheckedRunService()
+async def test_executor_cancel_reads_canonical_run_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import nullcontext
+
+    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+    monkeypatch.setattr(
+        task_runtime_spaces,
+        "get_or_create",
+        lambda _: SimpleNamespace(async_operation=lambda **kw: nullcontext()),
+    )
+    service = _ThreadCheckedRunService(status=ConversationRunStatus.COMPLETED.value)
     executor = _executor(service)
 
-    assert await executor.cancel(_RUN_ID) is True
+    # 无执行者时需要读 canonical Run 判定是否等待态；所有读取都必须离开事件循环线程。
+    assert await executor.cancel(7) is False
+    assert service.get_calls == 1
 
 
 @pytest.mark.asyncio

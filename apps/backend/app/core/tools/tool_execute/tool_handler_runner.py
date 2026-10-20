@@ -645,13 +645,12 @@ class ToolHandlerRunner:
             execution_context: 本次执行的运行时边界，直接作为关键字参数注入 handler
                 （同进程，无需 pickle 序列化）。
             tool_call_id: 关联本次执行的模型工具调用 id。
-            should_cancel: 可选取消检查回调；本方法仅在 handler 执行**前**与执行**后**
-                两个边界检查，命中即返回取消观察，但**不中止正在执行的同步 handler**
-                —— 中途打断交由 process 隔离路径的硬超时强杀负责。
+            should_cancel: 可选取消检查回调；本方法只在 handler 执行**前**检查，命中即返回取消
+                观察；**不中止正在执行的同步 handler**，handler 跑完后也不推翻其真实结果。
 
         返回:
             归一化后的 :class:`ToolObservation`：成功为 status="success"；handler 抛
-            异常为 status="error"；执行前后任一边界检出取消为 status="cancelled"。
+            异常为 status="error"；执行前检出取消为 status="cancelled"。
 
         异常:
             不向上抛出：handler 抛出的任意异常被捕获并归一化为
@@ -661,10 +660,10 @@ class ToolHandlerRunner:
             在调用方线程内同步执行 handler；直接用主进程 ``log`` 单例；**不启动
             子进程、不建 Queue、不挂载日志桥、不做硬超时强杀**。`execution_mode
             != "process"` 时 ``tool.timeout_seconds`` 仅作元数据，本方法不据此
-            监控 / 强杀线程。取消检查仅发生在 handler 调用前后两个边界，长耗时
+            监控 / 强杀线程。取消检查仅发生在 handler 调用前，长耗时
             同步 handler 执行中途不会被本方法中断。
         """
-        # 执行前边界：run 或本次调用已取消则不进入 handler，直接返回取消观察。
+        # 执行前边界：Task 或本次调用已取消则不进入 handler，直接返回取消观察。
         if should_cancel is not None and should_cancel():
             return self._cancelled_observation(
                 tool, tool_call_id, "在开始前中止", execution_context
@@ -690,11 +689,8 @@ class ToolHandlerRunner:
                 retryable=False,
                 tool_call_id=tool_call_id,
             )
-        # 执行后边界：handler 已跑完但执行期间被取消，丢弃结果转取消观察。
-        if should_cancel is not None and should_cancel():
-            return self._cancelled_observation(
-                tool, tool_call_id, "在完成后转取消", execution_context
-            )
+        # handler 已跑完即保留真实结果：副作用已经发生，改判为取消会让模型误以为操作未执行；
+        # run 级停止交给循环的下一个检查点收敛。
         return self._normalize_result(tool, result, tool_call_id)
 
     # Internal helpers
@@ -708,7 +704,8 @@ class ToolHandlerRunner:
 
         同时观察两类进程内信号：
 
-        - **run 级取消**（``cancellation_registry``）：整个 run 停止，工具调用一并中止；
+        - **Task 级取消**（``cancellation_registry``，按 task_id）：整个 Task 的当前执行停止，
+          工具调用一并中止；
         - **工具级取消**（``tool_call_cancellation_registry``）：只中止本次工具调用，
           run 与 Agent 继续执行。
 
@@ -717,13 +714,14 @@ class ToolHandlerRunner:
         启动瞬间之后的取消将永远查不到，取消分支形同死代码。
 
         参数:
-            execution_context: 本次执行的运行时边界；其 ``run_id`` 界定 run 级取消范围。
+            execution_context: 本次执行的运行时边界；``task_id`` 界定 Task 级取消范围，
+                ``run_id`` 与工具调用 id 共同界定工具级取消范围。
             tool_call_id: 本次工具调用标识，界定工具级取消范围；为空时回退到
                 ``execution_context.tool_call_id``，两者都为空则只观察 run 级信号
                 （没有工具调用身份时不构成可取消范围）。
 
         返回:
-            绑定 ``run_id``（以及可能存在的 ``tool_call_id``）的 ``() -> bool`` 取消
+            绑定 ``task_id``（以及可能存在的 ``tool_call_id``）的 ``() -> bool`` 取消
             查询回调；``execution_context`` 为 None 或 ``run_id <= 0``（无 run 绑定的
             直接调用）时返回 None，调用方视为「不可取消」。
 
@@ -736,18 +734,16 @@ class ToolHandlerRunner:
 
         if execution_context is None or execution_context.run_id <= 0:
             return None
-        # partial 冻结查询目标（run_id / tool_call_id）而非查询结果：每次调用都重新读注册表。
-        run_id = execution_context.run_id
-        is_run_cancelled = execution_context.runtime_dependencies.is_run_cancelled
-        run_check: Callable[[], bool] = (
-            partial(is_run_cancelled, run_id)
-            if is_run_cancelled is not None
-            else partial(cancellation_registry.is_cancelled, run_id)
+        # partial 冻结查询目标（task_id / tool_call_id）而非查询结果：每次调用都重新读注册表。
+        run_check: Callable[[], bool] = partial(
+            cancellation_registry.is_cancelled, execution_context.task_id
         )
         call_id = tool_call_id or execution_context.tool_call_id
         if not call_id:
             return run_check
-        tool_check = partial(tool_call_cancellation_registry.is_cancelled, run_id, call_id)
+        tool_check = partial(
+            tool_call_cancellation_registry.is_cancelled, execution_context.run_id, call_id
+        )
         return lambda: run_check() or tool_check()
 
     @staticmethod
@@ -793,9 +789,6 @@ class ToolHandlerRunner:
         调用方只应在**已确定取消**的路径上调用：正常执行路径不应调用本方法，以免在
         高频轮询里多读一次注册表。
 
-        run 级判定优先使用注入的查询入口（与 :meth:`_build_cancel_check` 的取消判定同源），
-        未注入时才回落到进程内单例；否则注入替身时日志记录的来源会与实际判定不一致。
-
         参数:
             execution_context: 本次执行的运行时边界；提供 run 绑定与工具调用身份。
             tool_call_id: 本次工具调用标识；为空时回退到
@@ -815,14 +808,8 @@ class ToolHandlerRunner:
         if execution_context is None or execution_context.run_id <= 0:
             return False, False
         call_id = tool_call_id or execution_context.tool_call_id
-        is_run_cancelled = execution_context.runtime_dependencies.is_run_cancelled
-        run_cancelled = (
-            is_run_cancelled(execution_context.run_id)
-            if is_run_cancelled is not None
-            else cancellation_registry.is_cancelled(execution_context.run_id)
-        )
         return (
-            run_cancelled,
+            cancellation_registry.is_cancelled(execution_context.task_id),
             tool_call_cancellation_registry.is_cancelled(execution_context.run_id, call_id),
         )
 

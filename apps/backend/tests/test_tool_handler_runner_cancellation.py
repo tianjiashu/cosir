@@ -130,11 +130,14 @@ def _make_tool(
     )
 
 
+_TASK_ID = 1
+
+
 def _make_context(run_id: int) -> ToolExecutionContext:
-    """构造绑定了指定 run_id 的执行上下文。"""
+    """构造绑定了指定 run_id 的执行上下文；Task 级取消信号按 ``_TASK_ID`` 记录。"""
 
     return ToolExecutionContext(
-        task_id=1,
+        task_id=_TASK_ID,
         workspace_id=1,
         workspace_root=Path("."),
         run_id=run_id,
@@ -188,20 +191,20 @@ def test_build_cancel_check_is_live_not_snapshot() -> None:
     """
 
     run_id = 900001
-    cancellation_registry.clear(run_id)
+    cancellation_registry.consume(_TASK_ID)
     try:
         check = ToolHandlerRunner._build_cancel_check(_make_context(run_id))
         assert check is not None
         # mark 之前：False
         assert check() is False
         # mark 之后：同一回调返回 True（实时读取注册表）
-        cancellation_registry.mark_cancelled(run_id)
+        cancellation_registry.request_cancel(_TASK_ID)
         assert check() is True
         # clear 之后：又变回 False
-        cancellation_registry.clear(run_id)
+        cancellation_registry.consume(_TASK_ID)
         assert check() is False
     finally:
-        cancellation_registry.clear(run_id)
+        cancellation_registry.consume(_TASK_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +298,7 @@ def test_process_mode_cancelled_mid_execution_kills_child(tmp_path: Path) -> Non
     """
 
     run_id = 900002
-    cancellation_registry.clear(run_id)
+    cancellation_registry.consume(_TASK_ID)
     marker = tmp_path / "marker.txt"
     sleep_seconds = 5.0
 
@@ -306,7 +309,7 @@ def test_process_mode_cancelled_mid_execution_kills_child(tmp_path: Path) -> Non
         timeout_seconds=30.0,
     )
 
-    timer = threading.Timer(0.3, cancellation_registry.mark_cancelled, args=(run_id,))
+    timer = threading.Timer(0.3, cancellation_registry.request_cancel, args=(_TASK_ID,))
     timer.start()
     started = time.monotonic()
     try:
@@ -316,7 +319,7 @@ def test_process_mode_cancelled_mid_execution_kills_child(tmp_path: Path) -> Non
         elapsed = time.monotonic() - started
     finally:
         timer.cancel()
-        cancellation_registry.clear(run_id)
+        cancellation_registry.consume(_TASK_ID)
 
     _assert_runtime_cancelled(observation)
     # 耗时必须远小于 handler 自身睡眠时间（证明是被强杀，而非跑完）。
@@ -338,8 +341,8 @@ def test_process_mode_cancelled_before_start_does_not_spawn() -> None:
     """
 
     run_id = 900003
-    cancellation_registry.clear(run_id)
-    cancellation_registry.mark_cancelled(run_id)
+    cancellation_registry.consume(_TASK_ID)
+    cancellation_registry.request_cancel(_TASK_ID)
     try:
         tool = _make_tool(
             _handler_returns_string,
@@ -353,7 +356,7 @@ def test_process_mode_cancelled_before_start_does_not_spawn() -> None:
         )
         elapsed = time.monotonic() - started
     finally:
-        cancellation_registry.clear(run_id)
+        cancellation_registry.consume(_TASK_ID)
 
     _assert_runtime_cancelled(observation)
     # 不派生进程：远小于一次 spawn 的启动成本。
@@ -369,15 +372,15 @@ def test_thread_mode_cancelled_before_execution() -> None:
     """thread 模式执行前已取消 -> status="cancelled"，handler 不执行。"""
 
     run_id = 900004
-    cancellation_registry.clear(run_id)
-    cancellation_registry.mark_cancelled(run_id)
+    cancellation_registry.consume(_TASK_ID)
+    cancellation_registry.request_cancel(_TASK_ID)
     try:
         tool = _make_tool(_handler_returns_string, name="thread_pre", execution_mode="thread")
         observation = ToolHandlerRunner().execute(
             tool, {}, _make_context(run_id), tool_call_id="call-thread-pre"
         )
     finally:
-        cancellation_registry.clear(run_id)
+        cancellation_registry.consume(_TASK_ID)
 
     _assert_runtime_cancelled(observation)
 
@@ -419,7 +422,7 @@ def test_process_mode_timeout_still_kills_child() -> None:
     """
 
     run_id = 900005
-    cancellation_registry.clear(run_id)
+    cancellation_registry.consume(_TASK_ID)
     tool = _make_tool(
         partial(_handler_sleeps, 10.0),
         name="proc_timeout",
@@ -430,7 +433,7 @@ def test_process_mode_timeout_still_kills_child() -> None:
     started = time.monotonic()
     observation = ToolHandlerRunner().execute(tool, {}, _make_context(run_id))
     elapsed = time.monotonic() - started
-    cancellation_registry.clear(run_id)
+    cancellation_registry.consume(_TASK_ID)
 
     assert observation.status == "error"
     assert elapsed < 3.0, f"超时强杀耗时 {elapsed:.2f}s 过长，疑似未强杀"
@@ -833,27 +836,23 @@ def test_thread_handler_exception_returns_error() -> None:
     assert observation.retryable is False
 
 
-def test_thread_mode_post_cancel_discards_result() -> None:
-    """thread 模式执行后边界取消：handler 已跑完但检测到取消 -> 丢弃结果转 cancelled。
+def test_thread_mode_keeps_result_when_cancelled_during_execution() -> None:
+    """thread 模式：handler 已跑完就保留真实结果；执行期间到达的取消交给循环下一个检查点。
 
-    潜在缺陷：只在执行前检查，运行期取消后仍返回过期结果。
+    改判为 cancelled 会让模型以为写盘等副作用没有发生而重复执行。
     """
 
-    run_id = 900006
-    cancellation_registry.clear(run_id)
-
     def _handler_marks_cancel(execution_context=None, **_kwargs):
-        # 在 handler 执行期间标记取消（模拟运行中收到取消信号）。
-        cancellation_registry.mark_cancelled(run_id)
-        return "should-be-discarded"
+        cancellation_registry.request_cancel(_TASK_ID)
+        return "kept"
 
     tool = _make_tool(_handler_marks_cancel, name="thread_post", execution_mode="thread")
     try:
-        observation = ToolHandlerRunner().execute(tool, {}, _make_context(run_id))
+        observation = ToolHandlerRunner().execute(tool, {}, _make_context(900006))
     finally:
-        cancellation_registry.clear(run_id)
+        cancellation_registry.consume(_TASK_ID)
 
-    _assert_runtime_cancelled(observation)
+    assert observation.status == "success"
 
 
 def test_execute_in_process_uses_runtime_output_channel_factory(monkeypatch) -> None:

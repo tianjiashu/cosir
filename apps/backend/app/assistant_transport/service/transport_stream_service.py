@@ -48,8 +48,8 @@ class AssistantTransportStreamService:
 
     @staticmethod
     def _run_with_index(
-            state: ConversationStateSnapshot,
-            run_id: int,
+        state: ConversationStateSnapshot,
+        run_id: int,
     ) -> tuple[int, dict[str, Any]]:
         """从 full 状态帧中返回目标 run 的稳定数组下标与记录。"""
 
@@ -67,7 +67,8 @@ class AssistantTransportStreamService:
         """先产出原子的 full 帧，随后产出有界的 mutation/control 帧。
 
         超时仅用于取消/删除/终态检查。安静的模型或工具执行会保持连接打开。当 subscriber 超出其
-        有界队列时，产出 ``resync_required`` 帧并结束连接，以便客户端重新 attach 并收到新的 full 帧。
+        有界队列时，产出 ``resync_required`` 帧并结束连接，以便客户端重新 attach 并收到新的
+        full 帧。
         """
 
         subscriber = None
@@ -96,7 +97,10 @@ class AssistantTransportStreamService:
                 if is_cancelled():
                     log.info(
                         "assistant_sse_client_cancelled",
-                        extra={"msg": "Assistant frame SSE 检测到客户端取消", "data": {"task_id": task_id, "run_id": run_id}},
+                        extra={
+                            "msg": "Assistant frame SSE 检测到客户端取消",
+                            "data": {"task_id": task_id, "run_id": run_id},
+                        },
                     )
                     return
                 try:
@@ -138,13 +142,19 @@ class AssistantTransportStreamService:
         except asyncio.CancelledError:
             log.warning(
                 "assistant_sse_stream_cancelled",
-                extra={"msg": "Assistant frame SSE 协程被取消", "data": {"task_id": task_id, "run_id": run_id}},
+                extra={
+                    "msg": "Assistant frame SSE 协程被取消",
+                    "data": {"task_id": task_id, "run_id": run_id},
+                },
             )
             raise
         except Exception:
             log.exception(
                 "assistant_sse_stream_failed",
-                extra={"msg": "Assistant frame SSE 状态流异常结束", "data": {"task_id": task_id, "run_id": run_id}},
+                extra={
+                    "msg": "Assistant frame SSE 状态流异常结束",
+                    "data": {"task_id": task_id, "run_id": run_id},
+                },
             )
             raise
         finally:
@@ -152,10 +162,29 @@ class AssistantTransportStreamService:
                 unsubscribe()
             log.info(
                 "assistant_sse_stream_closed",
-                extra={"msg": "Assistant frame SSE 状态流已关闭", "data": {"task_id": task_id, "run_id": run_id},},
+                extra={
+                    "msg": "Assistant frame SSE 状态流已关闭",
+                    "data": {"task_id": task_id, "run_id": run_id},
+                },
             )
 
-    async def stream_envelopes(
+    async def stream_envelopes(self, task_id: int, run_id: int, is_cancelled):
+        """订阅跨正常完成的 Run 交接；恢复仍须显式业务命令。"""
+        from app.service.depends import get_conversation_run_executor, get_task_service
+
+        while True:
+            async for envelope in self._run_envelopes(task_id, run_id, is_cancelled):
+                yield envelope
+            run = self._run_service.get_run(run_id)
+            if run.status != "completed" or is_cancelled():
+                return
+            await get_conversation_run_executor().wait_released(run_id)
+            latest = get_task_service().get_latest_run(task_id)
+            if latest is None or latest.id == run_id:
+                return
+            run_id = latest.id
+
+    async def _run_envelopes(
         self,
         task_id: int,
         run_id: int,
@@ -169,6 +198,7 @@ class AssistantTransportStreamService:
 
         target_status: str | None = None
         target_run_index: int | None = None
+
         async def is_terminal() -> bool:
             """仅在连接安静轮询节拍上检查目标 Run。"""
 

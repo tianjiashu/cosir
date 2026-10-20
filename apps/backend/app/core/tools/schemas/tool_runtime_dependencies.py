@@ -1,14 +1,16 @@
 """工具 handler 可用的运行期依赖。"""
+
+from __future__ import annotations
+
 import asyncio
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.core.agents.agent_profile import AgentProfile
-from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
 
 if TYPE_CHECKING:
+    from app.core.agents.agent_profile import AgentProfile
+    from app.core.agents.agent_profile_registry import AgentProfileRegistry
     from app.service.terminal.terminal_session_service import TerminalSessionService
 
 
@@ -33,5 +35,4 @@ class ToolRuntimeDependencies:
     runtime_event_loop: asyncio.AbstractEventLoop | None = None
     process_tool_output_channel_factory: ProcessToolOutputChannelFactory | None = None
     # 仅供同进程 terminal_session handler 使用；process execution 必须清空。
-    terminal_session_service: "TerminalSessionService | None" = None
-    is_run_cancelled: Callable[[int], bool] | None = None
+    terminal_session_service: TerminalSessionService | None = None

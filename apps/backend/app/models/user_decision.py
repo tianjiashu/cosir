@@ -1,4 +1,4 @@
-"""用户对「要求用户决定才能继续的调用」所作出的结构化决定。
+"""用户对待决调用的结构化决定；供工具、工作流和 Run 持久进度共用。
 
 工具层与工作流层共用的纯值对象：``ToolCall.user_decision`` 与
 ``ToolExecutionContext.user_decision`` 据此把「本调用已被用户批准」交给 handler，
@@ -37,9 +37,9 @@ class UserDecisionKind(str, Enum):
     FORCE_REJECT = "force_reject"
 
 
-
 # 决定是否真正「执行调用」的判据收口在此，避免各调用点各自比较枚举字面量。
 EXECUTING_DECISION_KINDS: frozenset[UserDecisionKind] = frozenset({UserDecisionKind.APPROVE})
+
 
 class UserDecision(BaseModel):
     """一次等待请求的用户决定。
@@ -60,44 +60,8 @@ class UserDecision(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
-def build_resume_payload(decision: UserDecision | None) -> dict[str, Any]:
-    """把单个领域决定投影为 graph 恢复载荷。
-
-    恢复载荷以 ``decision`` 承载一个请求的决定；``None`` 表示空恢复，等待节点据此重新挂起。
-    Assistant Transport wire 字段映射由各自边界负责，不让工作流依赖 wire command 模型。**不要改用
-    ``model_dump()``**：那会产出领域键 ``kind``，与解析端期望的 ``decision`` 不一致，
-    导致真实链路（而非手写测试载荷）在节点内抛错。
-
-    参数:
-        decision: 本次续跑携带的决定；为 ``None`` 表示「用户尚未作答」。
-
-    返回:
-        形如 ``{"decision": {"request_id": ..., "decision": ..., "data": {...}}}``，
-        或空决定 ``{"decision": None}`` 的普通 dict，可直接作为 ``Command(resume=...)`` 的载荷。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    return {
-        "decision": (
-            {
-                "request_id": decision.request_id,
-                "decision": decision.kind.value,
-                "data": dict(decision.data),
-            }
-            if decision is not None
-            else None
-        )
-    }
-
-
 __all__ = [
     "EXECUTING_DECISION_KINDS",
     "UserDecision",
     "UserDecisionKind",
-    "build_resume_payload",
 ]

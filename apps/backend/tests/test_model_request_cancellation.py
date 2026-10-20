@@ -16,7 +16,7 @@ from app.core.runtime.conversation_run_cancellation_registry import (
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.execution_state.step_context import StepContext
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming_module
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import model_node, structured_output_node
@@ -145,11 +145,11 @@ def bind_node(monkeypatch, model):
     runtime = SimpleNamespace(
         run=SimpleNamespace(id=7),
         model=model,
-        max_steps=3,
+        step_limit=3,
         thinking_channel="",
         usage_stats=ConversationRunUsageStats(),
         structured_output=None,
-        step_context=StepContext(),
+        batch=ToolBatch(),
         operations=SimpleNamespace(
             get_current_task=lambda: SimpleNamespace(id=1, workspace_id=1),
             get_current_run=lambda: SimpleNamespace(id=7),
@@ -180,7 +180,6 @@ def bind_node(monkeypatch, model):
         step_count=0,
         tool_error_count=0,
         next_node=ReactRoute.MODEL,
-        last_tool_results={},
     )
     return SimpleNamespace(
         registry=registry,
@@ -204,14 +203,14 @@ async def test_user_cancel_waits_for_sdk_boundary_without_masking_errors(
     driver = asyncio.create_task(model_node._model_node(bound.state))
     try:
         await asyncio.wait_for(body.reading.wait(), 1)
-        await asyncio.to_thread(bound.registry.mark_cancelled, 7)
+        await asyncio.to_thread(bound.registry.request_cancel, 7)
         assert not driver.done()
         assert len(bound.snapshots) == int(first_chunk)
         assert not body.closed.is_set()
         assert not bound.cancellations
         body.resume_read.set()
         await asyncio.wait_for(body.closing.wait(), 1)
-        bound.registry.mark_cancelled(7)
+        bound.registry.request_cancel(7)
         assert not driver.done()
         assert not bound.cancellations
         body.release_close.set()
@@ -271,11 +270,11 @@ async def test_cancel_settles_after_stream_close_and_part_flush(monkeypatch, can
     try:
         await asyncio.wait_for(body.reading.wait(), 1)
         if cancel_at == "reading":
-            bound.registry.mark_cancelled(7)
+            bound.registry.request_cancel(7)
         body.resume_read.set()
         await asyncio.wait_for(body.closing.wait(), 1)
         if cancel_at == "closing":
-            bound.registry.mark_cancelled(7)
+            bound.registry.request_cancel(7)
         assert not driver.done()
         assert order == []
         assert not bound.cancellations
@@ -319,7 +318,7 @@ async def test_timeout_before_headers_is_failure_even_when_cancel_requested(monk
     try:
         await asyncio.wait_for(reading.wait(), 1)
         if cancelled:
-            await asyncio.to_thread(bound.registry.mark_cancelled, 7)
+            await asyncio.to_thread(bound.registry.request_cancel, 7)
         assert not driver.done()
         resume_read.set()
         with pytest.raises(APITimeoutError):
@@ -340,7 +339,7 @@ async def test_executor_cancellation_still_waits_for_sdk_close(monkeypatch, user
     try:
         await asyncio.wait_for(body.reading.wait(), 1)
         if user_cancel_first:
-            bound.registry.mark_cancelled(7)
+            bound.registry.request_cancel(7)
         driver.cancel()
         await asyncio.wait_for(body.closing.wait(), 1)
         assert not driver.done()
@@ -369,7 +368,7 @@ async def test_completed_run_structured_branch_ignores_late_cancel(monkeypatch, 
     driver = asyncio.create_task(structured_output_node._structured_output_node(bound.state))
     try:
         await asyncio.wait_for(body.reading.wait(), 1)
-        await asyncio.to_thread(bound.registry.mark_cancelled, 7)
+        await asyncio.to_thread(bound.registry.request_cancel, 7)
         assert not driver.done()
         assert bound.snapshots == []
         assert not body.closed.is_set()
@@ -395,7 +394,7 @@ async def test_cancel_during_input_resolution_does_not_open_request(monkeypatch)
     bound = bind_node(monkeypatch, model)
 
     def resolve(messages, **kwargs):
-        bound.registry.mark_cancelled(7)
+        bound.registry.request_cancel(7)
         return messages
 
     monkeypatch.setattr(model_node, "resolve_messages_for_model", resolve)

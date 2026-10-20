@@ -9,16 +9,17 @@ import pytest
 
 import app.core.runtime.conversation_run_executor as executor_module
 from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.runtime.conversation_run_executor import ConversationRunExecutor
+from app.core.runtime.conversation_run_executor import ConversationRunExecutor, _Execution
 
 _RUN_ID = 1
+_TASK_ID = 7
 
 
 class _RunService:
     """只实现执行器读取 run 所需的最小语义。"""
 
     def __init__(self, status: str = "running") -> None:
-        self.run = SimpleNamespace(id=_RUN_ID, task_id=7, status=status)
+        self.run = SimpleNamespace(id=_RUN_ID, task_id=_TASK_ID, status=status)
 
     def get_run(self, _run_id: int) -> SimpleNamespace:
         return self.run
@@ -32,6 +33,7 @@ def _build_executor(service: object) -> ConversationRunExecutor:
 
     executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
     executor._run_service = service
+    executor._task_service = service
     executor._signal = cancellation_registry
     executor._event_projector = None
     executor._executions = {}
@@ -64,9 +66,9 @@ def _patch_drivers(
 def _isolated_signal_registry():
     """每个用例前后清空进程内取消信号，避免用例间串扰。"""
 
-    cancellation_registry.clear(_RUN_ID)
+    cancellation_registry.consume(_TASK_ID)
     yield
-    cancellation_registry.clear(_RUN_ID)
+    cancellation_registry.consume(_TASK_ID)
 
 
 @pytest.mark.asyncio
@@ -85,8 +87,8 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
 
     execution = await executor.start(_RUN_ID, "fresh")
     try:
-        assert await asyncio.wait_for(executor.cancel(_RUN_ID), timeout=1.0) is True
-        assert cancellation_registry.is_cancelled(_RUN_ID) is True
+        assert await asyncio.wait_for(executor.cancel(_TASK_ID), timeout=1.0) is True
+        assert cancellation_registry.is_cancelled(_TASK_ID) is True
         # 取消只发信号：不落库 run 终态，也不取消后台执行 task。
         assert service.run.status == "running"
     finally:
@@ -101,8 +103,11 @@ async def test_cancel_preserves_task_terminal(monkeypatch, tmp_path) -> None:
     terminal, workers = make_service(monkeypatch)
     session = terminal.start(task_id=7, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
     executor = _build_executor(_RunService(status="running"))
+    executor._executions[_RUN_ID] = _Execution(
+        task_id=_TASK_ID, thread_task=asyncio.current_task()
+    )
     try:
-        assert await executor.cancel(_RUN_ID) is True
+        assert await executor.cancel(_TASK_ID) is True
         assert not workers[0].closed
         terminal.write(
             str(session["session_id"]),
@@ -117,28 +122,33 @@ async def test_cancel_preserves_task_terminal(monkeypatch, tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_is_idempotent_for_already_marked_run() -> None:
-    """同一 run 重复取消返回 False，不重复标记。"""
+async def test_cancel_is_idempotent_while_execution_is_active() -> None:
+    """同一 Task 重复停止都被接受，信号只有一份。"""
 
     executor = _build_executor(_RunService(status="running"))
+    executor._executions[_RUN_ID] = _Execution(
+        task_id=_TASK_ID, thread_task=asyncio.current_task()
+    )
 
-    assert await executor.cancel(_RUN_ID) is True
-    assert await executor.cancel(_RUN_ID) is False
+    assert await executor.cancel(_TASK_ID) is True
+    assert await executor.cancel(_TASK_ID) is True
+    assert executor._release(_RUN_ID) is True
+    assert cancellation_registry.is_cancelled(_TASK_ID) is False
 
 
 @pytest.mark.asyncio
-async def test_cancel_rolls_back_signal_when_run_missing() -> None:
-    """run 不存在时撤销已标记的信号并抛 KeyError，API 据此映射 404。"""
+async def test_cancel_missing_task_raises_without_signal() -> None:
+    """task 不存在时抛 KeyError（API 映射 404），且不登记信号。"""
 
-    class _MissingRunService(_RunService):
-        def get_run(self, _run_id: int) -> SimpleNamespace:
-            raise KeyError(_run_id)
+    class _MissingTaskService(_RunService):
+        def get_task(self, task_id: int) -> SimpleNamespace:
+            raise KeyError(task_id)
 
-    executor = _build_executor(_MissingRunService())
+    executor = _build_executor(_MissingTaskService())
 
     with pytest.raises(KeyError):
-        await executor.cancel(_RUN_ID)
-    assert cancellation_registry.is_cancelled(_RUN_ID) is False
+        await executor.cancel(_TASK_ID)
+    assert cancellation_registry.is_cancelled(_TASK_ID) is False
 
 
 @pytest.mark.asyncio

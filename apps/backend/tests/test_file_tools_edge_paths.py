@@ -307,15 +307,14 @@ def test_move_honours_run_cancellation(tmp_path: Path) -> None:
     source = tmp_path / "s.txt"
     source.write_text("s\n", encoding="utf-8")
     run_id = 7_700_001
-    cancellation_registry.clear(run_id)
     context = _context(tmp_path, run_id=run_id)
-    cancellation_registry.mark_cancelled(run_id)
+    cancellation_registry.request_cancel(context.task_id)
     try:
         observation = MoveTool().execute(
             context, source_path="s.txt", destination_path="d.txt"
         )
     finally:
-        cancellation_registry.clear(run_id)
+        cancellation_registry.consume(context.task_id)
 
     assert observation.status == "cancelled"
     assert source.exists()

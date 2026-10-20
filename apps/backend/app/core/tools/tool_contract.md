@@ -1,5 +1,18 @@
 # Tool 契约
 
+## 模型可见参数契约
+
+- 所有工具统一导出 `strict=True` 的 function 定义。参数 schema 复用 OpenAI SDK
+  `pydantic_function_tool` 生成：对象封闭、所有属性列入 `required`；可空字段用 `null` 表达。
+- 平台描述与枚举收窄基于统一 strict schema 生成；注册后随 Task 固化，模型调用期间不重写。
+  旧 Task schema 不升级或补标记，需要新建 Task。
+- 模型须显式填写所有字段；参数模型的默认值仍服务本地调用。模型侧 strict 不替代工具入口的
+  Pydantic 校验与业务约束，也不同于下文的本地参数宽容归一。
+- MCP 的开放参数通过 `arguments` JSON 对象字符串传入，在参数入口解析为对象；Agent Team
+  的节点目标通过包含 `node_id`、`goal`、`summary` 的列表传入，再转换为领域映射。
+  两者均不接受旧模型输入格式。Team 的用户批准数据与持久化领域映射不变。
+- 上下文保存模型原始参数，归一化后的执行参数不反写上下文；本次契约不改变等待与恢复边界。
+
 ## 工具结果构建契约
 
 核心原则：工具返回不是越详细越好，而是要让模型知道当前发生了什么、是否还能尝试，以及下一步应该做什么。
@@ -41,7 +54,8 @@ reason: <处理建议，不要包含must 等强制要求的信息>
 - 统一使用 `reason="the tool call was cancelled before completion; no result was produced."`；
 - `content` 和 `error` 均为 `None`；
 - 不携带错误重试提示；
-- 如果底层消息框架不支持 `cancelled` 状态，在边界层做兼容映射，但必须保留取消语义。
+- 模型侧使用 OpenAI SDK 的 `tool` 消息格式，取消语义写入正文；生命周期状态由 observation 与
+  Transport 各自的既有契约承载，不向 SDK 消息追加 `status` 字段。
 
 ## 工具参数宽容归一契约
 

@@ -276,7 +276,7 @@ def test_terminal_list_projects_each_session_without_mutating_service_snapshots(
         workspace_id=2,
         run_id=3,
         runtime_dependencies=SimpleNamespace(
-            terminal_session_service=service, is_run_cancelled=None
+            terminal_session_service=service
         ),
     )
     observation = TerminalListTool().execute(context)

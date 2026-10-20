@@ -7,13 +7,13 @@ from dataclasses import asdict
 import pytest
 
 from app.core.tools.schemas.tool_observation import ToolObservation
-from app.core.tools.schemas.user_decision import UserDecision, UserDecisionKind
 from app.core.tools.schemas.user_input_request import UserInputRequest
 from app.core.workflow.node_helper.user_input_projection import (
     apply_decision_to_observations,
     extract_request,
     request_call_id,
 )
+from app.models.user_decision import UserDecision, UserDecisionKind
 
 
 def _observation(request: object = ...) -> dict[str, object]:

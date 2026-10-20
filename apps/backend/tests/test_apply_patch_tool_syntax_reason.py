@@ -240,15 +240,14 @@ def test_cancelled_run_returns_cancelled_without_writing(tmp_path: Path) -> None
         )
     )
     run_id = 7_700_777
-    cancellation_registry.clear(run_id)
     context = ToolExecutionContext(
         task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=run_id
     )
-    cancellation_registry.mark_cancelled(run_id)
+    cancellation_registry.request_cancel(context.task_id)
     try:
         observation = ApplyPatchTool().execute(context, patch=patch)
     finally:
-        cancellation_registry.clear(run_id)
+        cancellation_registry.consume(context.task_id)
 
     assert observation.status == "cancelled"
     assert target.read_bytes() == b"old\n"

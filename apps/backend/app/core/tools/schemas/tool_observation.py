@@ -77,7 +77,7 @@ class ToolObservation:
         user_input_request: 工具要求用户先作出决定才能继续时的请求（human-in-the-loop 的请求侧）。
             它是**工作流控制流事实**——``wait_user`` 据此决定是否挂起图、要问用户什么；因此既
             不进模型上下文，也不随 ``display_data`` 下发给前端，投影载荷由
-            ``ToolCallLifecycleManager.project_user_input_request`` 组装。``None`` 表示本次调用
+            ``project_waiting_request`` 组装。``None`` 表示本次调用
             不需要用户决定。
         artifact_data: 工具执行产出的内部产物数据；不进入事件、快照或模型上下文。
             文件展示数据不代表持久化的变更事实。

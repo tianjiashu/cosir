@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
-from app.core.tools.schemas.user_decision import UserDecision
+from app.models.user_decision import UserDecision
 from app.models.workspace_record import WorkspaceRecord
 
 

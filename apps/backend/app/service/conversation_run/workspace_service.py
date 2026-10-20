@@ -9,6 +9,7 @@
 - 不负责：直接 SQL 操作（委托给 ``WorkspaceCrud``/``TaskCrud``）；单任务粒度的级联删除细节
   （委托给 ``TaskService``）。
 """
+
 import copy
 from contextlib import ExitStack
 from pathlib import Path
@@ -274,7 +275,6 @@ class WorkspaceService:
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc
 
-
     def _main_agent_tool_schemas(self) -> list[dict[str, object]]:
         """从主 Agent profile 固化新 Task 的模型工具 schema。
 
@@ -311,7 +311,7 @@ class WorkspaceService:
 
         删除前先校验工作区存在（不存在则抛 ``KeyError``），取得 workspace 闸门和所有现存 task
         的 task 闸门，再在单个 ``BEGIN IMMEDIATE`` 事务内重新读取 task 树。所有 task 产物与
-        workspace 行必须一并提交；任一步失败都会整体回滚。提交后才回收 checkpoint 和卸载
+        workspace 行必须一并提交；任一步失败都会整体回滚。提交后才卸载
         进程内 runtime space。
 
         参数:
@@ -327,7 +327,7 @@ class WorkspaceService:
 
         副作用:
             删除工作区下全部 task 树（task / turn / run / trace / delegation / context）及其
-            孤儿 checkpoint；并删除 ``workspaces`` 表记录（旧 Runtime
+            运行期引用；并删除 ``workspaces`` 表记录（旧 Runtime
             事件体系已删除，不再参与级联删除）；提交后卸载该根路径在 Agent profile 与
             Agent Team 配置注册表中的作用域缓存（见 :meth:`_drop_workspace_config_scopes`）。
         """
@@ -349,7 +349,6 @@ class WorkspaceService:
                         },
                     )
                     deleted_task_ids: set[int] = set()
-                    orphan_threads: set[str] = set()
                     with begin_immediate(main_session_factory()) as session:
                         workspace_record = self._workspace.get_in_session(session, workspace_id)
                         root_task_ids = self._task_crud.list_root_ids_by_workspace(
@@ -360,11 +359,8 @@ class WorkspaceService:
                                 task_id, session
                             )
                             deleted_task_ids.update(result.task_ids)
-                            orphan_threads.update(result.orphan_checkpoint_threads)
                         remaining_task_ids = set(
-                            self._task_crud.list_ids_by_workspace(
-                                workspace_id, session=session
-                            )
+                            self._task_crud.list_ids_by_workspace(workspace_id, session=session)
                         )
                         if remaining_task_ids:
                             raise RuntimeError(
@@ -375,7 +371,6 @@ class WorkspaceService:
                 self._task_service.finalize_deleted_task_spaces(
                     TaskDeletionResult(
                         task_ids=frozenset(deleted_task_ids),
-                        orphan_checkpoint_threads=frozenset(orphan_threads),
                     )
                 )
                 if service_depends.get_workspace_file_watcher.cache_info().currsize:
@@ -395,7 +390,7 @@ class WorkspaceService:
         为什么需要：两类配置注册表都按「作用域只装载一次」缓存（见
         ``AgentProfileRegistry`` / ``AgentTeamConfigurationRegistry``）。workspace 删除后同一
         路径可能被重新创建（``create_workspace`` 复用同路径记录），若保留缓存就再也读不到新目录
-        内容，已删除的 Agent / Team 也会一直留在进程内。清理在数据库提交成功后进行，与 checkpoint
+        内容，已删除的 Agent / Team 也会一直留在进程内。清理在数据库提交成功后进行，与运行期缓存
         回收同一时机。
 
         参数:

@@ -1130,38 +1130,18 @@ def test_process_event_swallows_projector_failure() -> None:
     assert operations.process_event(SimpleNamespace(type="probe")) is None
 
 
-def test_is_current_run_cancelled_prefers_injected_dependency() -> None:
-    """取消判定：注入的 ``is_run_cancelled`` 优先，未注入时回退 run 级注册表。"""
+def test_is_current_run_cancelled_reads_task_signal() -> None:
+    """取消判定只按当前 Task 读进程内信号：同一 Task 的执行串行，命中即当前执行。"""
+    from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 
     operations = _operations_with_executor(_SleepingExecutor())
-    operations._current_run = SimpleNamespace(id=42)
-
-    # 未绑定执行上下文 → 回退进程内 run 级取消注册表（未取消）。
+    operations._current_task = SimpleNamespace(id=9_100_001)
     assert operations.is_current_run_cancelled() is False
-
-    # 未绑定 run → 一律 False（无 run 可取消）。
-    operations._current_run = None
-    assert operations.is_current_run_cancelled() is False
-    operations._current_run = SimpleNamespace(id=42)
-
-    operations._execution_context = ToolExecutionContext(
-        task_id=1,
-        workspace_id=1,
-        workspace_root=Path("."),
-        run_id=42,
-    )
-    assert operations.is_current_run_cancelled() is False
-
-    from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
-
-    operations._execution_context = ToolExecutionContext(
-        task_id=1,
-        workspace_id=1,
-        workspace_root=Path("."),
-        run_id=42,
-        runtime_dependencies=ToolRuntimeDependencies(is_run_cancelled=lambda run_id: run_id == 42),
-    )
-    assert operations.is_current_run_cancelled() is True
+    cancellation_registry.request_cancel(9_100_001)
+    try:
+        assert operations.is_current_run_cancelled() is True
+    finally:
+        cancellation_registry.consume(9_100_001)
 
 
 def test_run_state_transitions_delegate_to_state_service() -> None:

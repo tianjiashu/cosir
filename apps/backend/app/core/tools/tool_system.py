@@ -46,7 +46,7 @@ from app.core.tools.tool_handler.web_extract import build_web_extract_definition
 from app.core.tools.tool_handler.web_search import build_web_search_definition
 from app.core.tools.tool_handler.write_file import build_write_file_definition
 from app.core.tools.tool_registry import ToolRegistry
-from app.core.workflows.react.node_helper.user_input_decision_handlers import (
+from app.core.workflow.node_helper import (
     UserInputDecisionHandlers,
 )
 from app.service.agent_team.agent_team_run_service import reject_agent_team_confirmation
@@ -131,7 +131,7 @@ class ToolSystem:
         registry.register(build_child_agent_status_definition())
         registry.register(build_child_agent_wait_definition())
         registry.register(build_propose_agent_configuration_definition())
-        # Team 配置生成只按本 Run 请求临时开放；Team 执行工具保持未注册。
+        # Team 工具统一注册；是否对当前 Agent 开放由工具选择与 Run 授权决定。
         registry.register(build_propose_agent_team_configuration_definition())
         registry.register(build_agent_team_run_definition())
         registry.register(build_mcp_definition())
