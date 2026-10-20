@@ -15,15 +15,13 @@ from app.models import ConversationRunRecord
 
 @dataclass
 class RuntimeContext:
-    """节点共享的模型、工具门面与计数器。恢复时重新装配，数据进度从 Run 读取。"""
+    """一次驱动共享的运行依赖与用量累计；恢复时从 Run 重新装配。"""
 
     operations: WorkflowOperations
     run: ConversationRunRecord
     model: OpenAIChatModel
     max_steps: int
-    allows_tools: tuple[str, ...] = ()
     structured_output: StructuredOutputSpec | None = None
-    start_time: float = 0.0
     usage_stats: ConversationRunUsageStats = field(default_factory=ConversationRunUsageStats)
     thinking_channel: str = ""
     user_input_decision_handlers: UserInputDecisionHandlers = field(

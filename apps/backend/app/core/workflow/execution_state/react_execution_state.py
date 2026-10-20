@@ -3,10 +3,10 @@
 from typing import Any
 
 from openai.types.chat import ChatCompletionMessageFunctionToolCallParam
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from app.core.tools.schemas.user_decision import UserDecision
 from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.node_helper.tool_call_lifecycle import ToolCallLifecycleManager
 
 
 class ReactExecutionState(BaseModel):
@@ -18,5 +18,5 @@ class ReactExecutionState(BaseModel):
     next_node: ReactRoute
     instruction: str = ""
     last_tool_results: dict[str, Any]
-    calls:list[ChatCompletionMessageFunctionToolCallParam] = []
-    tool_call_lifecycle: ToolCallLifecycleManager | None = None
+    calls: list[ChatCompletionMessageFunctionToolCallParam] = Field(default_factory=list)
+    replay_decision: UserDecision | None = None

@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import aclosing
+from typing import cast
 
 from openai.lib.streaming.chat import ParsedChatCompletionSnapshot
 from openai.types.chat import (
@@ -32,11 +33,11 @@ from app.models.runtime_notice import RuntimeNotice
 from app.utils.message_content import content_to_text
 
 
-async def _model_node(state: ReactExecutionState) -> dict:
-    """调用 Run 独占的 SDK 模型，逐帧替换持久化响应，完整准入后纳入上下文。
-    取消覆盖首字节等待及流式读取：部分输出留作展示但不进入模型上下文；不派发半截工具。
-    完整工具请求经生命周期准入后交 tools；无工具调用时，任意非 None 完成原因都落定 Run。
-    缺少完成原因的响应仅供展示，下一步重新请求模型。"""
+async def _model_node(state: ReactExecutionState) -> dict[str, object]:
+    """调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文。
+    取消覆盖首字节等待及流式读取：部分输出留作展示，不进入模型上下文或工具执行。
+    工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，完成原因落定 Run。
+    无保留调用且缺少完成原因时，输出仅供展示并重新请求模型。"""
 
     rc = _runtime_context()
     operations = rc.operations
@@ -97,11 +98,13 @@ async def _model_node(state: ReactExecutionState) -> dict:
     rc.step_context = StepContext()
     parts = StreamingPartStateMachine(task_id=task_id, run_id=run_id, step_id=step_id)
 
+    # 流式展示与最终入 context 使用同一工具目录过滤规则；禁用工具仍由执行层拒绝。
+    registered_tool_names = frozenset(definition.name for definition in operations.all_vaild_tools)
     # SDK 快照负责聚合；context 只保存请求正文副本和独立响应元数据。
     aggregated_message: ParsedChatCompletionSnapshot | None = None
 
     try:
-        async with (aclosing(model.stream(messages)) as chunks):
+        async with aclosing(model.stream(messages)) as chunks:
             async for event in chunks:
                 if operations.is_current_run_cancelled():
                     raise RunStopped()
@@ -109,6 +112,7 @@ async def _model_node(state: ReactExecutionState) -> dict:
                 _message_context().save_model_response(
                     aggregated_message,
                     include_in_context=False,
+                    registered_tool_names=registered_tool_names,
                 )
 
                 delta = event.chunk.choices[0].delta if event.chunk.choices else None
@@ -118,7 +122,9 @@ async def _model_node(state: ReactExecutionState) -> dict:
                     else None
                 )
                 # 工具预览使用完整快照里的调用身份；参数只在流结束后解析一次。
-                raw_tool_calls: list[ParsedFunctionToolCall] = aggregated_message.choices[0].message.tool_calls
+                raw_tool_calls: list[ParsedFunctionToolCall] = (
+                    aggregated_message.choices[0].message.tool_calls or []
+                )
                 # 保留通道原始分片，换行和空白也是模型输出的一部分。
                 if delta and delta.content:
                     parts.text(delta.content)
@@ -146,21 +152,41 @@ async def _model_node(state: ReactExecutionState) -> dict:
         # 取消时工具 part 的收敛由状态机按「本请求已投影的调用」完成，不再查询生命周期记录。
         parts.cancel()
         operations.cancel_run_if_running(usage_stats=rc.usage_stats)
+        raise
     finally:
         parts.finish()
 
-    # 流关闭且完整响应准入后才提交上下文；中断时保留最后一帧的展示行。
-    _message_context().save_model_response(aggregated_message, include_in_context=True)
+    # 流关闭后有保留调用或完成原因才提交上下文；其余草稿只保留展示行。
+    if aggregated_message is None:
+        raise RuntimeError("模型流没有产出响应")
+    choice = aggregated_message.choices[0]
+    # SDK 快照的静态类型只列完整原因，流被截断时运行时仍可能为 None。
+    finish_reason = cast(str | None, choice.finish_reason)
     ai_message: ChatCompletionAssistantMessageParam = assistant_message(
-        aggregated_message.choices[0].message
+        choice.message, registered_tool_names
+    )
+    calls = ai_message.get("tool_calls") or []
+
+
+    if not calls and finish_reason is None:
+        parts.cancel()
+        _message_context().abandon_model_response()
+        task_space.defer_runtime_notice(
+            RuntimeNotice(content="请继续未完成的任务", kind="model_continuation", run_id=run_id)
+        )
+        return route_state(step_count, ReactRoute.MODEL)
+
+
+    _message_context().save_model_response(
+        aggregated_message,
+        include_in_context=True,
+        registered_tool_names=registered_tool_names,
     )
 
-    finish_reason = aggregated_message.choices[0].finish_reason
     usage = usage_from_response(aggregated_message.usage)
     rc.usage_stats.add_usage_metadata(usage)
     # 单步 usage 与累计 Run usage 同时记录，便于定位缓存命中变化。
     # 缺失用量不等于零：保留 presence 标记，避免把沿用的累计值误读为本步用量。
-    calls: list[ChatCompletionMessageFunctionToolCallParam] = ai_message.get("tool_calls") or []
 
     log.info(
         "model_node_completed",
@@ -186,41 +212,28 @@ async def _model_node(state: ReactExecutionState) -> dict:
             "calls": calls,
         }
 
-    if finish_reason:
-        # 无工具调用且 finish_reason 非 None：正文可以为空；结构化处理作为已完成 Run 的支线。
-        final_answer = content_to_text(ai_message.get("content"))
-        structured = rc.structured_output is not None
-        log.info(
-            "model_node_final_response",
-            extra={
-                "msg": f"模型给出最终回复，即将落库，step_id={step_id}",
-                "data": {
-                    "step_id": step_id,
-                    "output_text_length": len(final_answer),
-                    "finish_reason": finish_reason,
-                    "structured_output_pending": structured,
-                },
+    # 无工具调用且 finish_reason 非 None：正文可以为空；结构化处理作为已完成 Run 的支线。
+    final_answer = content_to_text(ai_message.get("content"))
+    structured = rc.structured_output is not None
+    log.info(
+        "model_node_final_response",
+        extra={
+            "msg": f"模型给出最终回复，即将落库，step_id={step_id}",
+            "data": {
+                "step_id": step_id,
+                "output_text_length": len(final_answer),
+                "finish_reason": finish_reason,
+                "structured_output_pending": structured,
             },
-        )
-        completed = operations.complete_run_if_running(
-            rc.usage_stats, final_output=final_answer, end_reason=finish_reason
-        )
-        return {
-            **route_state(
-                step_count,
-                ReactRoute.STRUCTURED_OUTPUT if structured and completed else ReactRoute.END,
-            ),
-            "instruction": "",
-        }
-
-    task_space.defer_runtime_notice(
-        RuntimeNotice(
-            content=(
-                "请遵从系统指令以及用户的指令，继续未完成的任务"
-            ),
-            kind="model_continuation",
-            run_id=run_id,
-        )
+        },
     )
-
-    return route_state(step_count, ReactRoute.MODEL)
+    completed = operations.complete_run_if_running(
+        rc.usage_stats, final_output=final_answer, end_reason=finish_reason
+    )
+    return {
+        **route_state(
+            step_count,
+            ReactRoute.STRUCTURED_OUTPUT if structured and completed else ReactRoute.END,
+        ),
+        "instruction": "",
+    }
