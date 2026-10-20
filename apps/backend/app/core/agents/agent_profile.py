@@ -31,7 +31,6 @@ from app.utils.json_utils import read_json_object
 
 if TYPE_CHECKING:
     from app.core.tools.schemas.tool_definition import ToolDefinition
-    from app.core.workflows.agent_workflow import AgentWorkflow
 
 
 class AgentProfileType(str, Enum):
@@ -60,29 +59,6 @@ class AgentProfileConfigError(ValueError):
     （见模块 docstring 的失败语义）。``AgentProfile.vaild_agent_profile`` 也使用本异常标记单个
     文件的校验失败，但会捕获全部异常、写 error 日志后返回 ``None``，不向外抛出。
     """
-
-
-def _default_workflow() -> AgentWorkflow:
-    """返回默认 ReAct-like 工作流实例（延迟导入，打破循环依赖）。
-
-    参数:
-        无。
-
-    返回:
-        新建的 ``ReactLikeWorkflow`` 实例；每个 profile 独享一份，不在 profile 间共享。
-
-    异常:
-        ImportError: 具体 workflow 实现模块不可用（属装配错误，直接向上暴露）。
-        因实现类缺失导致的 ``TypeError`` 等构造期错误同样不在此转换。
-
-    副作用:
-        首次调用会导入 ``app.core.workflows.react``。导入刻意放在函数内：模块级导入会形成
-        ``profile → react → runtime_operations → context → profile`` 的循环。
-    """
-
-    from app.core.workflows.react import ReactLikeWorkflow
-
-    return ReactLikeWorkflow()
 
 
 def _allowed_tool_names() -> frozenset[str]:
@@ -251,7 +227,6 @@ class AgentProfile:
     allowed_tools: list[str] = field(default_factory=list)
     agent_type: AgentProfileType = field(default=AgentProfileType.CHILD)
     description: str | None = field(default=None, kw_only=True)
-    workflow: AgentWorkflow = field(default_factory=_default_workflow)
     model_config_id: int | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings.default_settings)
     structured_output: StructuredOutputSpec | None = None
@@ -295,7 +270,7 @@ class AgentProfile:
         changes["model_config_id"] = (
             run.model_config_id if run.model_config_id is not None else self.model_config_id
         )
-        # 分层合并，优先级从高到低：run.extra.reasoning_effort（下方单独叠加）> 传参
+        # 分层合并，优先级从高到低：run.options.reasoning_effort（下方单独叠加）> 传参
         # （本 Run 由 run.model_config_id 物化的运行时参数）> profile 用户偏好默认值。
         # 只有「本 Run 的运行时参数」能提供 base_url/api_key/model_name 等字段，profile
         # 既不能覆盖也不能顶替它们；传参未设置的偏好项才由 profile 补齐。
@@ -304,10 +279,10 @@ class AgentProfile:
             if model_settings is not None
             else replace(self.model_settings)
         )
-        extra = run.extra
-        if extra is not None and extra.reasoning_effort is not None:
+        options = run.options
+        if options.reasoning_effort is not None:
             effective_model_settings = effective_model_settings.with_overrides(
-                ModelSettings(reasoning_effort=run.extra.reasoning_effort)
+                ModelSettings(reasoning_effort=run.options.reasoning_effort)
             )
         changes["model_settings"] = effective_model_settings
         return replace(self, **changes)
@@ -332,36 +307,6 @@ class AgentProfile:
         """
 
         return [tool for tool in tools if tool.name in self.allowed_tools]
-
-    def to_dict(self) -> dict:
-        """将 Agent profile 转换为可 JSON 序列化的字典。
-
-        字段集与 ``AgentProfileResponse`` 保持一致；``workflow`` 取 Protocol 声明的
-        ``workflow_id``（漏定义在实现侧即类型错误）。不导出 ``system_prompt``、
-        ``model_settings`` 与 ``run``：前者体积大且属内部装配结果，后两者不是展示字段。
-
-        参数:
-            无。
-
-        返回:
-            可直接 JSON 序列化的字典；``agent_type`` 与 ``workflow`` 已转为其字符串取值。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return {
-            "agent_id": self.agent_id,
-            "role": self.role,
-            "description": self.description,
-            "allowed_tools": self.allowed_tools,
-            "agent_type": self.agent_type.value,
-            "workflow": self.workflow.workflow_id,
-            "max_steps": self.max_steps,
-        }
 
     @staticmethod
     def vaild_agent_profile(path: Path) -> AgentProfile | None:

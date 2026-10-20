@@ -15,7 +15,9 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
-from typing import TYPE_CHECKING, Any, get_args, get_type_hints
+from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin, get_type_hints
+
+from app.models.conversation_run_options import ReasoningEffort
 
 if TYPE_CHECKING:
     from app.models.model_config_record import ModelConfigRecord
@@ -48,7 +50,13 @@ def _accepted_value_types() -> dict[str, tuple[type, ...]]:
     for name in _override_fields():
         annotation = type_hints[name]
         members = tuple(member for member in get_args(annotation) if member is not type(None))
-        accepted[name] = members or (annotation,)
+        json_types: list[type] = []
+        for member in members or (annotation,):
+            if get_origin(member) is Literal:
+                json_types.extend(dict.fromkeys(type(value) for value in get_args(member)))
+            else:
+                json_types.append(member)
+        accepted[name] = tuple(json_types)
     return accepted
 
 
@@ -80,7 +88,7 @@ class ModelSettings:
     max_tokens: int | None = None
     drop_params: bool | None = None
     stream: bool | None = None
-    reasoning_effort: str | None = None
+    reasoning_effort: ReasoningEffort | None = None
 
     base_url: str | None = None
     api_key: str | None = field(default=None, repr=False)
@@ -89,6 +97,13 @@ class ModelSettings:
     supports_thinking: bool | None = None
     supports_reasoning_effort: bool | None = None
     supports_image: bool | None = None
+
+    def __post_init__(self) -> None:
+        """配置文件和直接构造都遵守 Run 支持的推理强度，错误在进入执行前暴露。"""
+        if self.reasoning_effort is not None and self.reasoning_effort not in get_args(
+            ReasoningEffort
+        ):
+            raise ModelSettingsError("reasoning_effort 必须是 low/high/max")
 
     @classmethod
     def default_settings(cls) -> ModelSettings:
@@ -164,17 +179,14 @@ class ModelSettings:
         required = (
             "model_name",
             "base_url",
-            "context_window_k",
             "supports_thinking",
             "supports_reasoning_effort",
             "supports_image",
         )
         missing = [name for name in required if getattr(self, name) is None]
         if missing:
-            raise ModelSettingsError(
-                "模型运行配置未物化，缺少字段: " + ", ".join(missing)
-            )
-        if self.context_window_k <= 0:
+            raise ModelSettingsError("模型运行配置未物化，缺少字段: " + ", ".join(missing))
+        if self.context_window_k is None or self.context_window_k <= 0:
             raise ModelSettingsError("模型运行配置的 context_window_k 必须为正整数")
         return self
 
