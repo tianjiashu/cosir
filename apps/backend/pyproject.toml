@@ -10,8 +10,6 @@ dependencies = [
     "httpx==0.28.1",
     "openai==2.46.0",
     "jsonschema==4.23.0",
-    # Langfuse 可观测性（LLM/工具调用 trace；基于 OpenTelemetry，v4 客户端 API）。
-    "langfuse==4.14.1",
     "pydantic==2.12.4",
     "python-dotenv==1.0.1",
     "SQLAlchemy==2.0.36",
@@ -131,7 +129,7 @@ sort_by_size = true
 python_version = "3.11"
 strict = true
 warn_unreachable = true   # strict 未含，显式补充
-ignore_missing_imports = true  # 第三方动态库（langfuse/pydantic）类型不可靠，整包忽略
+ignore_missing_imports = true  # 第三方动态库（pydantic）类型不可靠，整包忽略
 
 # 存量豁免：仅关闭下方列出的宽松项（strict 的 11 项强约束 + extra_checks +
 # 显式补充的 warn_unreachable），其余 strict 项对存量仍生效——warn_redundant_casts /

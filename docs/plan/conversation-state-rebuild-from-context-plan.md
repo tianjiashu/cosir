@@ -64,9 +64,9 @@ delta；它在重启后丢弃，并按持久化事实重新开始，而不是隐
   `TaskRuntimeSpace` 按 taskId 持有。
 - `ConversationEventProjector` 负责把 conversation event 变成 snapshot mutation；
   它不是 Agent 的事实写入入口。
-- `RuntimeContextManager` 会把完整的 AI/tool message 写入 context，但当前重建所需的
+- `RuntimeMessageContextManager` 会把完整的 AI/tool message 写入 context，但当前重建所需的
   UI part 边界、稳定 message id、历史 presentation 和 tool `display_data` 没有全部落库。
-- `RuntimeContextManager.add_message()` 重新构造 `AIMessage` 时只保留
+- `RuntimeMessageContextManager.add_message()` 重新构造 `AIMessage` 时只保留
   `content`、`additional_kwargs`、`tool_calls`，会丢失原消息的 id、usage metadata、
   response metadata 等字段；不能把当前实现误写成“完整原生消息已保存”。
 - 当前流式状态机允许 text/reasoning 交错，并可能产生多个 part；仅从最终
@@ -191,7 +191,7 @@ AI row 必须保存有序 `parts`；Tool row 必须保存 `tool_result`，并通
 写入协议和校验器与 model message 的序列化测试一起实现，不能只新增一个数据库列。
 
 要让“context 本身可重建”，system prompt 也必须有持久化记录。当前
-`RuntimeContextManager.__post_init__` 只在内存创建 system message，改造时应在 Task/
+`RuntimeMessageContextManager.__post_init__` 只在内存创建 system message，改造时应在 Task/
 context 初始化用例中写入 `run_id = null` 的 SystemMessage，并在提示词版本或工具声明
 变化时按明确规则生成新 context 记录；不能在冷启动时用当前环境偷偷替换历史 system prompt。
 
@@ -271,7 +271,7 @@ snapshot 的反查。
 
 ### 4.3 Agent context 重建规则
 
-`RuntimeContextManager` 不再把自己的 in-memory `_entries` 当事实源：
+`RuntimeMessageContextManager` 不再把自己的 in-memory `_entries` 当事实源：
 
 - 初始化时从 `ConversationTaskContextModel` 读取全部需要纳入 context 的 rows；
 - 系统 prompt 也必须来自持久化 SystemMessage；
@@ -422,7 +422,7 @@ projector 继续负责实时 Transport mutation，但删除对 snapshot 表的 u
 - `ConversationTaskContextRecord`、`ConversationRunRecord`、`TaskRecord` 及其 schema/version；
 - `TaskResponse` 等 Task API response，以及 Run 读取/委派 summary 的 response mapping；
 - context、Run、Task CRUD 的 create/update/clone/delete；
-- `ConversationTaskContextService`、`RuntimeContextManager`、`TaskService`；
+- `ConversationTaskContextService`、`RuntimeMessageContextManager`、`TaskService`；
 - Run command/service、workflow operations、所有 completed/failed/cancelled/restart 路径；
 - fork、edit、reset、orphan recovery 和 delegation summary；
 - `store_engines.py` 的 model 注册、表约束和 schema test；

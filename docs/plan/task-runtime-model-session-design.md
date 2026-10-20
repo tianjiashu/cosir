@@ -58,7 +58,7 @@ Python/FastAPI 后端
   └── ToolRegistry / ToolExecutor：进程内工具系统
 ```
 
-SQLite 保存声明式 Run 配置；`BaseChatModel`、Runnable、HTTP client、ToolDefinition handler 和 RuntimeContextManager 都是进程内对象。后端重启后不恢复 Python 对象，只能从 Run.extra 重新物化。
+SQLite 保存声明式 Run 配置；`BaseChatModel`、Runnable、HTTP client、ToolDefinition handler 和 RuntimeMessageContextManager 都是进程内对象。后端重启后不恢复 Python 对象，只能从 Run.extra 重新物化。
 
 ### 2.2 TaskRuntimeSpace 和 Task 锁
 
@@ -101,7 +101,7 @@ SQLite 保存声明式 Run 配置；`BaseChatModel`、Runnable、HTTP client、T
 
 ### 2.5 当前 Context 和 usage 流程
 
-`RuntimeContextManager` 保存 Task 级 canonical context working copy，`begin_run()` 接收当前 Run 的 tool schemas。`ContextUsageComputeListener` 负责按事件重新计算 context usage。
+`RuntimeMessageContextManager` 保存 Task 级 canonical context working copy，`begin_run()` 接收当前 Run 的 tool schemas。`ContextUsageComputeListener` 负责按事件重新计算 context usage。
 
 改造后，Run 开始时从 `RunModelBinding` 设置：
 
@@ -273,7 +273,7 @@ class RunModelBinding:
     context_window: int
 ```
 
-`RunModelBinding` 只存在于当前 backend 进程。它把一次 Run 的模型、工具和能力解析结果固定在一起，避免 model node、tools node、RuntimeContextManager 和 listener 各自读取可变对象。
+`RunModelBinding` 只存在于当前 backend 进程。它把一次 Run 的模型、工具和能力解析结果固定在一起，避免 model node、tools node、RuntimeMessageContextManager 和 listener 各自读取可变对象。
 
 它不是：
 
@@ -404,7 +404,7 @@ child Run:
 
 ### 8.1 Run 开始输入
 
-workflow 使用 binding 初始化 RuntimeContextManager：
+workflow 使用 binding 初始化 RuntimeMessageContextManager：
 
 ```python
 runtime_context.begin_run(
@@ -653,7 +653,7 @@ workflow 不再：
 - 在每个 model step 读取 Task 或 Run 的可变配置；
 - 对 `bind_tools()` 失败静默降级。
 
-workflow 接收固定 `RunModelBinding`，将其中的 Runnable、model_tools、tool schemas 和能力字段注入 `RuntimeConfig` 和 RuntimeContextManager。
+workflow 接收固定 `RunModelBinding`，将其中的 Runnable、model_tools、tool schemas 和能力字段注入 `RuntimeConfig` 和 RuntimeMessageContextManager。
 
 ### 12.6 Model factory
 
@@ -827,7 +827,7 @@ backend 重启时不自动重放旧模型调用或工具调用。遗留 active R
 - `apps/backend/app/task_runtime/task_runtime_space.py`
 - `apps/backend/app/task_runtime/task_runtime_space_registry.py`
 - `apps/backend/app/task_runtime/service/task_service.py`
-- `apps/backend/app/core/context/runtime_context_manager.py`
+- `apps/backend/app/core/context/runtime_message_context_manager.py`
 - `apps/backend/app/core/context/context_listener/context_usage_compute_listener.py`
 - `apps/backend/app/core/context/system_prompt_builder.py`
 - `apps/backend/app/core/tools/tool_registry.py`

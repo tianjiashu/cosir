@@ -3687,7 +3687,12 @@
           "reasoningEffort": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "low",
+                  "high",
+                  "max"
+                ]
               },
               {
                 "type": "null"
@@ -4018,21 +4023,6 @@
             ],
             "title": "Tool Calls"
           },
-          "invalid_tool_calls": {
-            "anyOf": [
-              {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Invalid Tool Calls"
-          },
           "usage_metadata": {
             "anyOf": [
               {
@@ -4104,17 +4094,6 @@
             ],
             "title": "Endreason"
           },
-          "langfuseTraceId": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Langfusetraceid"
-          },
           "contextWindowTotal": {
             "anyOf": [
               {
@@ -4159,7 +4138,6 @@
           "runId",
           "status",
           "endReason",
-          "langfuseTraceId",
           "contextWindowTotal",
           "messages",
           "usage",
@@ -4285,8 +4263,7 @@
         "properties": {
           "queued_messages": {
             "items": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/ConversationStateMessage"
             },
             "type": "array",
             "title": "Queued Messages"

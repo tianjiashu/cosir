@@ -97,7 +97,7 @@ Run 仍为当前 Agent 派生独立 profile 副本，避免并发运行态互相
 
 系统级全局指令层和 workspace 项目指令层仍按现有方式叠加到所有 Agent 提示词中。因此，JSON 中的 `system_prompt` 只描述配置型子 Agent 专属执行协议；跨 Agent 通用规则仍放在全局或 workspace 指令，不复制到每个配置文件。主 Agent 与通用子 Agent 的提示词源码仍分别保存在现有 Markdown 资源中，但运行期 profile 统一持有正文。
 
-子 Agent 目录不进入 `delegate_task` 的工具描述，改由**工具能力目录层**（`<tool_layer>`）下发：仅当 `AgentProfile.allowed_tools` 包含 `delegate_task` 时，拼接进程级 `AgentProfileRegistry.child_agent_summary(workspace_root)`；委派工具不可用（子 Agent 已由 `allows_tools` 收窄、该 workspace 无 CHILD 候选）时整层不出现。该层只消费传入的工具名集合，不自行推导工具可用性；提示词在建 `RuntimeContextManager` 时构建一次（跨 Run 复用沿用构造时快照）。
+子 Agent 目录不进入 `delegate_task` 的工具描述，改由**工具能力目录层**（`<tool_layer>`）下发：仅当 `AgentProfile.allowed_tools` 包含 `delegate_task` 时，拼接进程级 `AgentProfileRegistry.child_agent_summary(workspace_root)`；委派工具不可用（子 Agent 已由 `allows_tools` 收窄、该 workspace 无 CHILD 候选）时整层不出现。该层只消费传入的工具名集合，不自行推导工具可用性；提示词在建 `RuntimeMessageContextManager` 时构建一次（跨 Run 复用沿用构造时快照）。
 
 JSON 空提示词是无效配置；内置 Markdown 资源为空也视为 profile 装配错误。超出既有预算时沿用预算截断规则，并记录 profile ID 与截断情况，不记录提示词正文。
 

@@ -93,7 +93,7 @@ Tauri 桌面应用
 - 后端 lifespan 负责初始化和关闭数据库、Run executor、运行期依赖与观测组件。工具子进程由工具执行层负责取消、超时和进程树清理。
 - 交互终端归 Task 所有，允许同一 Task 的后续 Run 复用。Run 完成、失败、取消或历史 Run 删除不关闭终端；Agent 显式关闭、shell 自然退出、Task 删除提交后或后端退出时清理。活会话由 `TerminalSessionService` 管理，不进入 Run 执行进度，不跨后端重启恢复；前端仅订阅只读预览。
 - 后端崩溃恢复必须有限且串行，不得无限重启。恢复耗尽后由用户显式重启；生命周期 generation 用于防止旧进程或旧线程覆盖当前状态。
-- 后端重启时，遗留 active Run（含 waiting 与 child Run）收敛为 `cancelled`，待决请求失效、inbox 保留；不得隐式重放旧 Agent 执行。进程内 registry、subscriber 和运行任务不跨重启恢复。
+- 后端重启时，遗留 pending/running Run（含 child Run）收敛为 `cancelled`，显式恢复从 model node 重新请求；waiting Run 保留待决请求，用户提交决定后从 wait node 继续。inbox 保留，不得隐式重放旧 Agent 执行。进程内 registry、subscriber 和运行任务不跨重启恢复。
 
 ## 进程间接口边界
 

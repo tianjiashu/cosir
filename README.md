@@ -17,9 +17,9 @@ Cosir 是一个**单用户、本机运行**的桌面应用。它使用 Tauri 承
 - **理解和修改代码**：读取文件、搜索代码、创建或修改文件，并查看变更差异。
 - **执行开发命令**：目前支持在Windows和Mac系统下执行终端命令 或者 开启可交互终端。
 - **处理参考资料**：在对话中附加图片或文件；按需使用网页搜索和内容提取工具。
-- **委派子任务**：子Agent的实现复用了主Agent的runtime，可以委派任务给子Agent，发送消息、等待子Agent结果（各个Agent的上下文隔离，通过`RuntimeContextManager`管理）。
+- **委派子任务**：子Agent的实现复用了主Agent的runtime，可以委派任务给子Agent，发送消息、等待子Agent结果（各个Agent的上下文隔离，通过`RuntimeMessageContextManager`管理）。
 - **对话方式**：支持直接发送消息、取消后继续（中断执行后无需再发消息，点按钮即可继续同一个 Run）、编辑重跑（发现 Agent 偏离任务时，改完消息重新执行本次 Run）。
-- **Agent可观测**：通过配置langfuse API key 可以观察Agent运行轨迹。
+- **Agent可观测**：通过上下文观测页面查看消息、工具调用与用量，通过本地结构化日志排查执行问题。
 - **Fork Task**：从当前任务派生出一个新任务，新任务继承当前任务的上下文和状态。
 
 ## 没有什么
@@ -86,7 +86,7 @@ Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 **运行时与上下文**
 
 - `AgentRuntime`（`runtime/runner.py`）：执行与生命周期引擎——推进任务状态、消费模型流、调度工具、记录运行事件、处理取消与终止保护，并从 LangGraph checkpoint 派生事件。它只负责"跑"，Run 终态由 workflow 落定。
-- `RuntimeContextManager`（`context/runtime_context_manager.py`）：Task 级 Agent 上下文的唯一运行时协调入口——系统提示词构建、上下文修复加载、续跑与恢复、token 计算、上下文序列管理、模型消息落库。它只维护内存工作副本，持久化事实由 conversation context 服务承载。
+- `RuntimeMessageContextManager`（`context/runtime_message_context_manager.py`）：Task 级 Agent 上下文的唯一运行时协调入口——系统提示词构建、上下文修复加载、续跑与恢复、token 计算、上下文序列管理、模型消息落库。它只维护内存工作副本，持久化事实由 conversation context 服务承载。
 - `ContextEntry`（`context/context_entry.py`）：上下文消息单位，记录消息的 `run_id`、内容与 `sequence`。
 
 **工作流（`core/workflows/`）**
@@ -105,7 +105,7 @@ Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 **Hook 与观测**
 
 - Hook（`core/hook/`）：运行期扩展边界——registry 负责注册索引，interceptor 负责触发、匹配、拒绝短路与失败安全；Hook 异常默认记录放行，不阻断主 Run。
-- Observability（`core/observability/`）：可降级的观测旁路，workflow/service 通过窄接口记录 trace；初始化、记录或 flush 失败都不改变 Run 结果。
+- 本地诊断：结构化日志关联前后端执行链路，上下文观测页展示持久化消息、工具调用与用量；日志失败不改变 Run 结果。
 
 **模型接入（`core/llm_provider/`）**
 

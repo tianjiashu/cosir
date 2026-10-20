@@ -269,7 +269,7 @@ Graph 停在 `interrupt()` 时，executor 检查取消事实后不发送 `Comman
   Child runner 应改为读取 child run 的 canonical terminal state/结果，而不是消费 child events。
 - Approval 必须作为持久化请求和决策事实；Transport 可用自定义 command 提交决策，但不得由
   前端直接修改领域状态。
-- `TurnRuntimeMessageStore`、`RuntimeContextManager` 和 `TurnService` 对消息的读写必须迁移到
+- `TurnRuntimeMessageStore`、`RuntimeMessageContextManager` 和 `TurnService` 对消息的读写必须迁移到
   canonical message/part Writer 或其低耦合 port；不能删除事件后继续绕过 Writer 写
   `turn_messages`。LangGraph checkpoint 继续是 Agent 执行状态、节点恢复和 interrupt 的事实，
   不是 Chat UI 事实；它不能替代 Approval 或 Conversation Facts。`response_text` fallback 仅在

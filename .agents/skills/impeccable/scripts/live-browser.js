@@ -8091,7 +8091,7 @@
   // Dedupe per session by pathname - clicking around on the same page doesn't
   // re-fire.
   //
-  // DISABLED: quick-Go workflows pay an extra harness round trip because
+  // DISABLED: quick-Go workflow pay an extra harness round trip because
   // prefetch + generate arrive as two events instead of one. Re-enable with
   // a browser-side debounce (~800-1000ms, cancelled on Go) if we want to
   // resurrect this. Server validator and skill dispatch remain in place so

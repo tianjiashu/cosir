@@ -16,14 +16,13 @@ allowed-tools: Read,Write,Bash
 
 ---
 
-## 0. 三套标识别混用（最先读，最容易误判）
+## 0. 两类标识别混用（最先读，最容易误判）
 
-排查入口是一个 id。本项目并存**三种**标识，形态相近但来源与查询通道完全不同：
+排查入口是一个 id。本项目并存**两类**标识，形态相近但来源与查询通道完全不同：
 
 | 标识 | 是什么 | 产生点 | 落盘/可见位置 | 查询通道 |
 |------|--------|--------|----------------|----------|
 | **链路 trace_id**（32 位小写 hex） | 唯一能**跨前端与后端日志**串起一条请求的键 | 前端 `apps/desktop/lib/trace.ts:newTraceId()`（`crypto.getRandomValues` 128-bit）；后端缺失时由 `new_trace_id()`（`uuid4().hex`）补生成 | 后端固定 JSONL 文件日志 `backend-*.log` 的 `trace_id`；前端 `frontend-*.log` 的 `trace_id` | `query_logs.py trace <ID>` |
-| **Langfuse trace_id**（32 位小写 hex） | LLM/工具调用的可观测 trace，仅用于 Langfuse 平台 | `conversation_run_trace()`（`core/observability/langfuse_tracing.py`）用 `start_as_current_observation(as_type="span")` 建根 span，Langfuse `CallbackHandler` 经 OTel current context 生成该 trace_id，再经 `ConversationRunTraceResult.trace_id` 回读 | 终态 SSE 事件 payload；Langfuse UI。**不落 `app.sqlite3`，也不落后端日志文件** | Langfuse 平台 |
 | **run_id / task_id**（整数） | 业务事实主键：一次 Agent 执行 = 一个 run | `conversation_runs.id` / `tasks.id` | `<数据根>/.cosir/storage/app.sqlite3` | `query_app_db.py` |
 
 **链路 trace_id 的前后端同源链路（照此反查）**：
@@ -34,7 +33,7 @@ allowed-tools: Read,Write,Bash
 **前端日志里的 trace_id 可以直接拿去 `query_logs.py trace` 反查后端全链路**。
 
 **实战要点**：
-- 拿到 32 位 hex **先问来源**：在前端/后端日志里看到的 → 链路 trace_id，用 `query_logs.py trace`；在 Langfuse UI 或 SSE payload 里看到的 → Langfuse trace，**用日志脚本查不到**（数值不同源，纯属巧合才会命中）。
+- 前后端日志中的 32 位 hex 是链路 trace_id，用 `query_logs.py trace` 反查。
 - 排查 Agent 行为/状态一律用整数 `task_id` / `run_id` 走 `query_app_db.py`；不要拿它当 trace_id，反之亦然。
 - 两条链路可同时存在但数值无关，不要用其中一条去校验另一条。
 
@@ -194,7 +193,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 ### 阶段 A — 收集症状与入口
 
 1. 问清/确认：问题现象、最早出现时机、是否必现、用户手头有什么（报错文本、截图、某个 id）。
-2. 若有 id，先按 §0 判定类型：链路 trace_id → 日志脚本；run_id/task_id → 业务库脚本；Langfuse trace → Langfuse 平台。
+2. 若有 id，先按 §0 判定类型：链路 trace_id → 日志脚本；run_id/task_id → 业务库脚本。
 3. 若只有现象没有 id：用 `query_logs.py recent --errors-only` 与 `query_app_db.py stuck` 反查最近的异常与未收敛记录，再向用户确认时间点。
 4. **先用 `Read` / 代码确认相关模块的真实位置**，不要凭记忆猜路径或表名。
 
@@ -294,7 +293,7 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py m
 ## 5. 纪律（不可违反）
 
 - **日志优先于猜想**：任何「可能是 X」的假设，先去日志/业务库里找证据。
-- **三套标识必区分**（见 §0）：链路 trace_id 可跨前后端日志反查；Langfuse trace 只在 Langfuse；业务排查用 run_id/task_id。拿错标识查错通道 = 白查。
+- **两类标识必区分**（见 §0）：链路 trace_id 可跨前后端日志反查；业务排查用 run_id/task_id。拿错标识查错通道 = 白查。
 - **日志不是事实源**：Run / 工具调用等权威状态在业务库（文件变更集能力已整体移除，勿再按该心智排查）；日志只做旁路印证。
 - **复现优先自己来**：pytest > 起后端调 API > 请用户前端复现。能自己复现就别打扰用户。
 - **补日志要合规**：上下文 + 分级 + 不泄密、禁止空 catch；堆栈会落盘但被截断（见 §2），关键因果仍要写进 `data`。
