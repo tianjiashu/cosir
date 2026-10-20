@@ -1,13 +1,13 @@
 """human-in-the-loop 的纯投影函数（观察 ↔ 待决请求 ↔ 用户决定）。
 
 本模块是「工具要求用户先作出决定才能继续」这一横切关注点的**唯一纯函数收口**：从工具观察派生
-待决请求、把外部提交的恢复值解析为领域决定、把决定写回观察。它不接触 ``RuntimeConfig``、不读写
-DB、不发事件、不持有跨调用状态，因此可脱离 graph 单独测试。
+待决请求、把外部提交的恢复值解析为领域决定、把决定写回观察。它不接触 ``RuntimeContext``、不读写
+DB、不发事件、不持有跨调用状态，因此可脱离执行循环单独测试。
 
 设计取舍（不明显但重要）：
 
-- **待决请求不持久化，每次从观察派生**：请求的唯一载体是观察上的 ``user_input_request`` 声明
-  （``ToolObservation.user_input_request`` 在 state 里的投影），「还有没有待决请求」就等于
+- **待决请求不单独持久化，每次从观察派生**：请求的唯一载体是观察上的 ``user_input_request`` 声明
+  （``ToolObservation.user_input_request`` 随 Run 等待数据保存），「还有没有待决请求」就等于
   「观察上还有没有这个声明」。这样不存在「请求列表」这份可与观察分叉的第二事实，也就不需要任何
   合并 / 叠加逻辑。
 - **决定一旦被消费就清掉观察上的声明**：无论批准还是驳回。否则下一次进入 ``wait_user`` 会重新把
@@ -110,56 +110,6 @@ def request_call_id(observations: list[dict[str, Any]], request_id: str) -> str:
     raise KeyError(request_id)
 
 
-def parse_resume_decision(resume_value: object) -> UserDecision | None:
-    """把外部恢复值解析为单个领域决定。
-
-    这是进程外输入（HTTP → LangGraph resume）的**唯一解析点**：恢复值可能为空，因此在此做形状
-    校验并上抛，不把宽容解析扩散到节点内部。
-
-    参数:
-        resume_value: ``interrupt`` 的返回值；缺省/无决定时为 ``None`` 或 ``{"decision": None}``。
-
-    返回:
-        已校验的领域决定；无决定时返回 ``None``（调用方据此重新挂起）。
-
-    异常:
-        ValueError: 恢复值不是预期结构，或决定缺少合法 ``decision``（``FORCE_REJECT`` 之外的
-            决定还须携带非空 ``request_id``）。
-
-    副作用:
-        无（纯函数）。
-    """
-
-    if resume_value is None:
-        return None
-    if not isinstance(resume_value, dict):
-        raise ValueError("恢复值必须是包含 decision 的对象")
-    raw = resume_value.get("decision")
-    if raw is None:
-        return None
-    if not isinstance(raw, dict):
-        raise ValueError("恢复值的 decision 必须是对象")
-    request_id = raw.get("request_id")
-    kind = raw.get("decision")
-    if not isinstance(kind, str):
-        raise ValueError("决定必须携带 decision")
-    try:
-        resolved_kind = UserDecisionKind(kind)
-    except ValueError as exc:
-        raise ValueError(f"未知的决定种类：{kind}") from exc
-    # 强行拒绝（系统取消等待中的 Run 时合成）不定位请求，允许空 request_id；其余决定必须携带，
-    # 否则调用方无从知道它指向哪条待决请求。
-    if resolved_kind is not UserDecisionKind.FORCE_REJECT and (
-        not isinstance(request_id, str) or not request_id
-    ):
-        raise ValueError("决定必须携带非空 request_id")
-    return UserDecision(
-        request_id=request_id if isinstance(request_id, str) else "",
-        kind=resolved_kind,
-        data=_mapping(raw.get("data")),
-    )
-
-
 def apply_decision_to_observations(
     observations: list[dict[str, Any]], decision: UserDecision | None
 ) -> list[dict[str, Any]]:
@@ -223,9 +173,7 @@ def _rewrite_as_cancelled(updated: dict[str, Any], decision: UserDecision) -> No
 
     user_input = json.dumps(decision.data, ensure_ascii=False) if decision.data else ""
     prefix = (
-        _REJECT_REASON_PREFIX
-        if decision.kind is UserDecisionKind.REJECT
-        else _ABORT_REASON_PREFIX
+        _REJECT_REASON_PREFIX if decision.kind is UserDecisionKind.REJECT else _ABORT_REASON_PREFIX
     )
     updated["status"] = "cancelled"
     updated["reason"] = f"{prefix}\nuser input (JSON): {user_input}" if user_input else prefix
@@ -237,16 +185,12 @@ def _rewrite_as_cancelled(updated: dict[str, Any], decision: UserDecision) -> No
     updated["display_data"] = _rejected_display_data(updated, decision)
 
 
-def _rejected_display_data(
-    observation: dict[str, Any], decision: UserDecision
-) -> dict[str, Any]:
+def _rejected_display_data(observation: dict[str, Any], decision: UserDecision) -> dict[str, Any]:
     """构造被驳回/放弃调用的展示数据：保留原展示键并标注用户决定。"""
 
     raw = observation.get("display_data")
     display_data = dict(raw) if isinstance(raw, dict) else {}
-    display_data["status"] = (
-        "rejected" if decision.kind is UserDecisionKind.REJECT else "aborted"
-    )
+    display_data["status"] = "rejected" if decision.kind is UserDecisionKind.REJECT else "aborted"
     display_data["user_decision"] = decision.kind.value
     if decision.data:
         display_data["user_input"] = dict(decision.data)
@@ -279,9 +223,3 @@ def _request_of(observation: object) -> UserInputRequest | None:
     if raw is None:
         return None
     return UserInputRequest.from_dict(raw)
-
-
-def _mapping(raw: object) -> dict[str, Any]:
-    """把可选的映射字段归一为普通 dict；非映射取空 dict。"""
-
-    return dict(raw) if isinstance(raw, dict) else {}

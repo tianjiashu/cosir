@@ -17,16 +17,13 @@ from collections import deque
 from collections.abc import Collection
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from langchain_core.messages import ToolMessage
+from openai.types.chat import ChatCompletionToolMessageParam
+from openai.types.shared_params import FunctionDefinition
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.observability.tool_trace_recorder import (
-    ToolTraceRecorder,
-    _NullToolTraceRecorder,
-)
 from app.core.runtime.conversation_run_cancellation_registry import (
     cancellation_registry,
 )
@@ -43,8 +40,9 @@ from app.core.tools.tool_execute.tool_error import (
     tool_error,
 )
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
-from app.core.workflows.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
+from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.enums.error_kind import ErrorKind
 from app.service.depends import (
     get_conversation_event_projector,
@@ -71,9 +69,8 @@ class WorkflowOperations:
             current_task: TaskRecord,
             current_workspace: WorkspaceRecord,
             execution_context: ToolExecutionContext,
-            allows_tools: Collection[str] | None = None,
+            allows_tools: Collection[str],
             runtime_dependencies: ToolRuntimeDependencies | None = None,
-            tool_trace_recorder: ToolTraceRecorder | None = None,
     ) -> None:
         """初始化运行时操作门面及其私有协作者。
 
@@ -83,15 +80,9 @@ class WorkflowOperations:
             current_run: 当前绑定的 Conversation Run 记录（门面状态单一事实来源）。
             current_task: 当前执行的任务记录。
             current_workspace: 当前工作区记录。
-            model_tools: 当前 Task 中可执行工具的进程内定义列表。
-            allows_tools: 当前 Run 允许执行的工具名快照；未传时默认允许 ``model_tools`` 中
-                的全部工具。
-            execution_context: 当前执行的运行时边界；为 None 时 ``run_tool_calls``
-                日志不注入 ``workspace_id``。
-            runtime_dependencies: 可选的本 run 工具运行期依赖；存在 execution_context 时
-                会合并进 ``ToolExecutionContext.runtime_dependencies`` 透传给 handler。
-            tool_trace_recorder: 可选的工具调用 trace 记录器（依赖倒置）；为 None 时
-                工具执行不产生 trace，行为与集成前一致。
+            allows_tools: 装配方按 Task 固化目录和本 Run 禁用项算出的工具名快照，必须显式传入。
+            execution_context: 已绑定 Task、Run 和工作区的工具执行边界，不允许缺失。
+            runtime_dependencies: 可选的本 Run 工具运行期依赖，合并进执行上下文透传给 handler。
         返回:
             无。
 
@@ -99,7 +90,7 @@ class WorkflowOperations:
             无。
 
         副作用:
-            构造工具执行所需的私有协作者（执行器、可见工具集、并行模式、trace 记录器、
+            构造工具执行所需的私有协作者（执行器、可见工具集、并行模式、
             取消判定），存储执行上下文与 canonical writer，记初始化日志。
         """
 
@@ -115,7 +106,7 @@ class WorkflowOperations:
         self._current_task = current_task
         self._execution_context = (
             replace(execution_context, runtime_dependencies=runtime_dependencies)
-            if execution_context is not None and runtime_dependencies is not None
+            if runtime_dependencies is not None
             else execution_context
         )
         # 运行时动态变化的工具白名单
@@ -123,7 +114,6 @@ class WorkflowOperations:
         self._parallel_mode_by_name = {
             definition.name: definition.parallel_mode for definition in self.all_vaild_tools
         }
-        self._trace_recorder = tool_trace_recorder or _NullToolTraceRecorder()
 
         log.info(
             "runtime_ops_initialized",
@@ -140,9 +130,9 @@ class WorkflowOperations:
         )
 
     @property
-    def task_tool_schemas(self) -> list[dict[str, Any]]:
-        # Task 快照已经是 bind_tools 使用的模型 schema。禁用策略只由
-        # ToolCallLifecycleManager 执行；这里不得按 allows_tools 过滤，否则每 Run 的工具
+    def task_tool_schemas(self) -> list[FunctionDefinition]:
+        # Task 快照已经是 SDK function schema。禁用策略只由
+        # 工具执行层执行；这里不得按 allows_tools 过滤，否则每 Run 的工具
         # schema 都会变化，破坏同一 Task 的模型前缀缓存。
         task_runtime_space = task_runtime_spaces.get_or_create(self._current_task.id)
         return list(task_runtime_space.task_tool_schemas)
@@ -162,6 +152,11 @@ class WorkflowOperations:
         """
 
         return self._allowed_tool_names
+
+    def vaild_tool_name(self, tool_name: str) -> bool:
+        if tool_name is None or tool_name.strip() == "":
+            return False
+        return tool_name in set([tool_definition.name for tool_definition in self.all_vaild_tools])
 
     def get_current_run(self) -> ConversationRunRecord:
         """返回本门面绑定的 Conversation Run 记录。
@@ -257,73 +252,23 @@ class WorkflowOperations:
         current_run = self._current_run
         if current_run is None:
             return False
-        should_cancel = None
-        if self._execution_context is not None:
-            should_cancel = self._execution_context.runtime_dependencies.is_run_cancelled
+        should_cancel = self._execution_context.runtime_dependencies.is_run_cancelled
         if should_cancel is not None:
             return should_cancel(current_run.id)
         return cancellation_registry.is_cancelled(current_run.id)
 
-    def fix_final_if_complete(self, usage_stats: ConversationRunUsageStats | None = None,
-                              final_output: str | None = None,
-                              ) -> ConversationRunRecord | None:
-        """用结构化输出结果改写已 completed 的 Run 的最终回答。
+    def save_execution(self, data: ConversationRunProgress) -> None:
+        """驱动边界保存执行数据；工具和模型节点不直接访问 CRUD。"""
+        from app.service.depends import get_conversation_run_service
 
-        结构化输出节点在 ReAct 收束之后运行：自然语言回复已经 ``complete_run_if_running``
-        落为 ``completed``，所以这里是**终态上的字段改写**而不是状态迁移——只替换
-        ``final_output``（与用量列），不改状态、不发状态事件，也就不会把并发取消 / 失败的
-        Run 重新标成成功。
-
-        参数:
-            usage_stats: 可选运行用量统计；结构化输出这一步的消耗已累加其中，透传给
-                ``ConversationRunStateService`` 以覆盖 Run 行的用量列。
-            final_output: 校验通过的结构化 JSON 文本；为 None 且未传用量时本次没有可改写
-                内容，直接返回 None。
-
-        返回:
-            改写成功时返回更新后的 ConversationRunRecord；Run 已非 ``completed``（并发取消 /
-            失败）或本次无可改写内容时返回 None。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果底层更新失败。
-
-        副作用:
-            Run 处于 ``completed`` 时更新其 ``final_output`` 与用量列；状态变更事件不在此路径
-            发布（终态不重复迁移）。
-        """
-
-        run_id = self._current_run.id
-        log.info(
-            "run_final_output_fix_attempted",
-            extra={
-                "msg": f"尝试用结构化结果改写 completed run 的最终回答，run_id={run_id}",
-                "data": {
-                    "run_id": run_id,
-                    "final_output_provided": final_output is not None,
-                },
-            },
-        )
-        record = self._conversation_run_state_service.fix_final_output_if_completed(
-            run_id, final_output=final_output, usage_stats=usage_stats
-        )
-        if record is None:
-            # 调用方不消费返回值；跳过原因必须落日志，否则「结构化结果没写进去」只能靠猜。
-            log.warning(
-                "run_final_output_fix_skipped",
-                extra={
-                    "msg": f"跳过结构化改写：Run 已非 completed 或无可改写内容，run_id={run_id}",
-                    "data": {
-                        "run_id": run_id,
-                        "final_output_provided": final_output is not None,
-                    },
-                },
-            )
-        return record
+        get_conversation_run_service().save_execution(self._current_run.id, data)
 
     def complete_run_if_running(
             self,
             usage_stats: ConversationRunUsageStats | None = None,
             final_output: str | None = None,
+            *,
+            end_reason: str | None = None,
     ) -> ConversationRunRecord | None:
         """仅当 run 仍处于 running 时把它落定为 completed。
 
@@ -331,6 +276,7 @@ class WorkflowOperations:
             usage_stats: 可选的运行用量统计，透传给 ``ConversationRunStateService`` 以发布
                 带用量的状态事件。
             final_output: 可选，Agent 对该轮次的最终回答文本，随终态一并写入 run 行。
+            end_reason: 可选，模型原始完成原因，随终态一并写入 run 行。
 
         返回:
             成功完成时返回更新后的 ConversationRunRecord；run 已被取消/失败/完成时返回 None。
@@ -352,28 +298,33 @@ class WorkflowOperations:
             },
         )
         record = self._conversation_run_state_service.complete_run_if_running(
-            run_id, final_output=final_output, usage_stats=usage_stats
+            run_id, final_output=final_output, usage_stats=usage_stats, end_reason=end_reason
         )
         return record
 
-    def mark_waiting_for_input_if_running(self,
-                                          usage_stats: ConversationRunUsageStats | None = None) -> ConversationRunRecord | None:
-        """将当前 Run 迁移到等待用户输入状态并发布状态事件。
+    def update_completed_result(
+            self,
+            *,
+            final_output: str | None = None,
+            end_reason: str | None = None,
+            usage_stats: ConversationRunUsageStats | None = None,
+    ) -> ConversationRunRecord | None:
+        """把结构化支线结果写回当前已完成 Run，生命周期保持 completed。"""
 
-        用户输入等待节点在调用 LangGraph ``interrupt`` 前调用本方法。状态事实由
-        ``ConversationRunStateService`` 条件更新并发布；图断点随后由 LangGraph checkpointer
-        保存，执行器会在本次图驱动结束后完成资源收尾。
+        return self._conversation_run_state_service.update_completed_result(
+            self._current_run.id,
+            final_output=final_output,
+            end_reason=end_reason,
+            usage_stats=usage_stats,
+        )
 
-        返回:
-            成功迁移时返回最新 Run 记录；Run 已由并发路径迁移时返回 None。
-
-        异常:
-            KeyError: 当前 Run 不存在。
-            sqlalchemy.exc.SQLAlchemyError: 状态条件更新失败。
-
-        副作用:
-            更新本 Run 状态并在成功后发布 ``waiting_for_input`` 事实事件。
-        """
+    def mark_waiting_for_input_if_running(
+            self,
+            usage_stats: ConversationRunUsageStats | None = None,
+            *,
+            execution_data: ConversationRunProgress,
+    ) -> ConversationRunRecord | None:
+        """将当前待决调用快照与 Run 等待状态原子提交，成功后发布状态事件。"""
 
         run_id = self._current_run.id
         log.info(
@@ -384,7 +335,7 @@ class WorkflowOperations:
             },
         )
         return self._conversation_run_state_service.mark_waiting_for_input_if_running(
-            run_id, usage_stats=usage_stats
+            run_id, usage_stats=usage_stats, execution_data=execution_data
         )
 
     def fail_run_if_running(
@@ -490,7 +441,7 @@ class WorkflowOperations:
 
         执行线程：串行工具调用经 ``asyncio.to_thread`` 移出事件循环线程（避免同步阻塞
         的 thread 模式 handler 占死 loop，连带卡死 SSE 与并发请求）；``to_thread`` 内部以
-        ``copy_context().run`` 提交，保留父 turn 的 OTel/trace 上下文，语义与并行分支的
+        ``copy_context().run`` 提交，保留父 Run 的日志上下文，语义与并行分支的
         ``ThreadPoolExecutor`` 提交一致。并行工具调用组由 ``_run_calls_with_parallel_modes``
         的线程池执行，其**等待同样不占用事件循环线程**（futures 经 ``asyncio.wrap_future``
         回到 loop 上 ``await``）：长并行工具（如 ``delegate_task``）执行期间 loop 仍能服务
@@ -526,7 +477,7 @@ class WorkflowOperations:
         indexed_observations: list[tuple[int, ToolObservation]] = []
         # 串行工具调用经 asyncio.to_thread 移出事件循环线程：thread 模式工具同步阻塞
         # （如大仓库 search_files、重 CPU/IO handler）会连带卡死 SSE 推送与并发请求。
-        # to_thread 内部以 copy_context().run 提交，保留父 turn 的 OTel/trace 上下文，
+        # to_thread 内部以 copy_context().run 提交，保留父 Run 的日志上下文，
         # 与并行分支 copy_context().run 语义一致；逐调用 await 让取消可在工具间被观察到。
         loop = running_loop or asyncio.get_running_loop()
         if self._execution_context is not None:
@@ -565,9 +516,9 @@ class WorkflowOperations:
 
         只处理并行组：``run_tool_calls`` 入口已按工具声明的调度模式完成分流，本方法不再
         包含串行分支。每次线程池提交前用 ``contextvars.copy_context()`` 复制当前线程
-        context（含父 turn 根 observation 的 OTel current span），并经 ``ctx.run`` 包装提交，
-        使 worker 线程在捕获的 context 里执行工具——并行工具（尤其 ``delegate_task``）的
-        tool observation 与子 turn 由此正确嵌套在父 turn trace 下。
+        context（含父 Run 的本地日志关联字段），并经 ``ctx.run`` 包装提交，
+        使 worker 线程在捕获的 context 里执行工具；并行工具及其创建的子 Run
+        由此继承本地日志关联上下文。
 
         **等待必须在事件循环上 ``await``**：本方法是 ``async``，只等 ``asyncio.wrap_future``
         包装后的 futures，绝不在 loop 线程上同步等待。历史实现直接在协程内调用同步
@@ -669,28 +620,25 @@ class WorkflowOperations:
             无。内部异常在本方法内转为 ``ToolObservation``。
 
         副作用:
-            调用底层 ``ToolExecutor``，并记录 trace span。
+            调用底层 ``ToolExecutor``，执行工具副作用。
         """
         try:
-            with self._trace_recorder.span(call, step_id or "") as tool_span:
-                # 逐调用特化：``tool_call_id`` 与 ``user_decision`` 都属于单次调用，
-                # 不能挂在 Run 级共享上下文上（同批调用会互相串味）。
-                execution_context = (
-                    replace(
-                        self._execution_context,
-                        tool_call_id=call.call_id,
-                        user_decision=call.user_decision,
-                    )
-                    if self._execution_context is not None
-                    else None
+            # 逐调用特化：``tool_call_id`` 与 ``user_decision`` 都属于单次调用，
+            # 不能挂在 Run 级共享上下文上（同批调用会互相串味）。
+            execution_context = (
+                replace(
+                    self._execution_context,
+                    tool_call_id=call.call_id,
+                    user_decision=call.user_decision,
                 )
-                observation = self._executor.execute(
-                    call,
-                    execution_context=execution_context,
-                    allowed_tool_names=self._allowed_tool_names,
-                )
-                tool_span.record(observation)
-                return observation
+                if self._execution_context is not None
+                else None
+            )
+            return self._executor.execute(
+                call,
+                execution_context=execution_context,
+                allowed_tool_names=self._allowed_tool_names,
+            )
         except Exception as exc:
             return self._internal_error_observation(task_id, call, exc, step_id)
 
@@ -757,23 +705,22 @@ class WorkflowOperations:
         副作用:
             无。
         """
-        if call.tool_name not in self._parallel_mode_by_name.keys():
+        if call.tool_name not in self._parallel_mode_by_name:
             return False
         return self._parallel_mode_by_name.get(call.tool_name) == "parallel"
 
-    def to_tool_model_message(self, observation: ToolObservation) -> ToolMessage:
+    def to_tool_model_message(self, observation: ToolObservation) -> ChatCompletionToolMessageParam:
         """把已治理的工具观察转为模型上下文消息（``observe`` 节点的共享契约）。
 
-        面向 workflow 节点的公开端口：``observe`` 节点在观察分发阶段（经
-        ``ToolCallLifecycleManager.settle_batch``）调用本方法把观察写回
-        ``RuntimeContextManager``，闭合 ``AIMessage.tool_calls`` 配对。内部委托
+        面向 workflow 节点的公开端口：``observe`` 节点在观察分发阶段调用本方法把观察写回
+        ``RuntimeMessageContextManager``，闭合 ``assistant 消息.tool_calls`` 配对。内部委托
         :meth:`_to_model_message`，序列化规则以其为准。
 
         参数:
             observation: 已治理的工具观察（含正常结果、错误占位、取消占位）。
 
         返回:
-            可并入模型上下文的 ``ToolMessage``。
+            可并入模型上下文的 ``tool 消息``。
 
         异常:
             无（纯序列化）。
@@ -784,7 +731,7 @@ class WorkflowOperations:
 
         return self._to_model_message(observation)
 
-    def _to_model_message(self, observation: ToolObservation) -> ToolMessage:
+    def _to_model_message(self, observation: ToolObservation) -> ChatCompletionToolMessageParam:
         """把工具观察压缩为模型可消费的 ``role="tool"`` 消息。
 
         三类终态使用不同的最小消息契约：
@@ -794,17 +741,14 @@ class WorkflowOperations:
           发送 ``content``（失败观察的 ``content`` 通常就是 ``error`` 的副本）。
         - ``cancelled``：只发送取消说明，不把取消伪装成可重试错误。
 
-        LangChain 当前 ``ToolMessage.status`` 只接受 ``"success"`` / ``"error"``，
-        没有 ``"cancelled"``。取消的真实生命周期仍由 ``ToolObservation.status`` 和
-        Transport 保存；写入模型上下文时将其映射为 ``status="error"``，并通过消息
-        content 中的 ``cancelled`` 标记保留语义，避免构造 ``ToolMessage`` 时抛异常。
+        模型消息只携带协议字段；执行状态保留在 observation 与 Transport metadata。
 
         参数:
             observation: 已产出的工具观察（含正常结果、错误占位、取消占位）。
 
         返回:
-            可并入模型上下文的 ``ToolMessage``，其 ``tool_call_id`` 用于与
-            ``AIMessage.tool_calls`` 配对闭合。
+            可并入模型上下文的 ``tool 消息``，其 ``tool_call_id`` 用于与
+            ``assistant 消息.tool_calls`` 配对闭合。
 
         异常:
             无。
@@ -818,14 +762,11 @@ class WorkflowOperations:
 
         if observation.status == "success":
             content_text = content or "success"
-            message_status = "success"
         elif observation.status == "cancelled":
             cancellation_detail = reason
             content_text = (
                 f"cancelled: {cancellation_detail}" if cancellation_detail else "cancelled"
             )
-            # ToolMessage 没有 cancelled 状态；不能把非法值传给 LangChain。
-            message_status = "error"
         else:
             error_detail = error or "the tool call failed"
             lines = [
@@ -841,8 +782,5 @@ class WorkflowOperations:
             if reason:
                 lines.append(f"reason: {reason}")
             content_text = "\n".join(lines)
-            message_status = "error"
 
-        return ToolMessage(
-            content=content_text, tool_call_id=observation.tool_call_id, status=message_status
-        )
+        return {"role": "tool", "content": content_text, "tool_call_id": observation.tool_call_id}
