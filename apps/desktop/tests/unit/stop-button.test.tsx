@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { CancelRunResult } from "@/lib/assistant/cancel-run";
+import type { CancelTaskResult } from "@/lib/assistant/cancel-task";
 
 const captured = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
-  cancelRun: vi.fn(async (): Promise<CancelRunResult> => ({ accepted: true })),
+  cancelRun: vi.fn(async (): Promise<CancelTaskResult> => ({ accepted: true })),
 }));
 
 vi.mock("@assistant-ui/react", () => ({
@@ -16,8 +16,8 @@ vi.mock("@/components/ui/button", () => ({
     return null;
   },
 }));
-vi.mock("@/lib/assistant/cancel-run", () => ({
-  cancelRun: captured.cancelRun,
+vi.mock("@/lib/assistant/cancel-task", () => ({
+  cancelTask: captured.cancelRun,
 }));
 
 describe("StopButton", () => {
@@ -40,7 +40,7 @@ describe("StopButton", () => {
     expect(onClick).toEqual(expect.any(Function));
 
     (onClick as (event: React.MouseEvent<HTMLButtonElement>) => void)(event);
-    await vi.waitFor(() => expect(captured.cancelRun).toHaveBeenCalledWith(42, 7));
+    await vi.waitFor(() => expect(captured.cancelRun).toHaveBeenCalledWith(42));
 
     expect(assistantCancel).not.toHaveBeenCalled();
     expect(onCancelRequested).toHaveBeenCalledWith(7);
@@ -70,7 +70,7 @@ describe("StopButton", () => {
     );
     const onClick = captured.props?.onClick;
     (onClick as (event: React.MouseEvent<HTMLButtonElement>) => void)({} as React.MouseEvent<HTMLButtonElement>);
-    await vi.waitFor(() => expect(captured.cancelRun).toHaveBeenCalledWith(42, 7));
+    await vi.waitFor(() => expect(captured.cancelRun).toHaveBeenCalledWith(42));
 
     expect(assistantCancel).not.toHaveBeenCalled();
     expect(onCancelRequested).toHaveBeenCalledWith(7);

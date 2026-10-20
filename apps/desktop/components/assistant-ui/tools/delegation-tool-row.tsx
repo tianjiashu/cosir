@@ -3,7 +3,7 @@ import { LoaderCircleIcon, SquareIcon, UsersIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
-import { cancelRun } from "@/lib/assistant/cancel-run";
+import { cancelTask } from "@/lib/assistant/cancel-task";
 import { useWorkbenchActions } from "@/lib/workbench/context";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { DisclosureRow } from "../elements/disclosure-row.aui";
@@ -64,16 +64,16 @@ export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCanc
       data: { parent_run_id: runId, child_task_id: childTaskId, child_run_id: childRunId },
     });
 
-    const result = await cancelRun(null, childRunId);
+    const result = await cancelTask(childTaskId);
     if (result.accepted || result.reason === "not_cancellable") {
-      // A 409 means a cancellation signal already exists. In either case, wait
-      // until the parent delegation tool part receives its canonical final status.
-      void frontendLog("INFO", "delegation_child_run_cancel_signalled", "子 Agent 停止信号已存在或已发出", {
+      // 409 表示子 Task 已没有可停止的执行（多为刚结束）。两种情况都等父委派
+      // 工具 part 收到 canonical 终态，不在这里乐观改状态。
+      void frontendLog("INFO", "delegation_child_run_cancel_signalled", "子 Agent 停止信号已发出或已无可停止的执行", {
         data: {
           parent_run_id: runId,
           child_task_id: childTaskId,
           child_run_id: childRunId,
-          already_signalled: !result.accepted,
+          already_stopped: !result.accepted,
         },
       });
       return;

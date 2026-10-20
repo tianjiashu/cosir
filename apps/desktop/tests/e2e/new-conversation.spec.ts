@@ -262,8 +262,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("stream", { exact: true })).toBeVisible();
   const cancelResponse = page.waitForResponse((response) => (
-    response.url().includes("/runs/")
-    && response.url().endsWith("/cancel")
+    /\/tasks\/\d+\/cancel$/.test(new URL(response.url()).pathname)
     && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "停止" }).click();
@@ -339,8 +338,7 @@ test("取消 ACK 后 SSE 断开时，前端独立读取快照并解除停止状�
   await expect(page.getByText("stream", { exact: true })).toBeVisible();
   const stateReadsBeforeCancel = stateReads.length;
   const cancelResponse = page.waitForResponse((response) => (
-    response.url().includes("/runs/")
-    && response.url().endsWith("/cancel")
+    /\/tasks\/\d+\/cancel$/.test(new URL(response.url()).pathname)
     && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "停止" }).click();
