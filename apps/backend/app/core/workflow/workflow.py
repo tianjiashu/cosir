@@ -1,13 +1,8 @@
-"""业务 ReAct 循环：单一执行者、显式恢复入口；持久进度归 Run。"""
+"""业务 ReAct 循环：按 ``ReactRoute`` 流转的节点注册表；单一执行者、两个恢复点；持久进度归 Run。"""
 
 from __future__ import annotations
 
-import asyncio
-
-from app.config.configuration import get_tool_system
-from app.core.llm_provider.model_factory import ResolvedChatModel, resolve_chat_model
-from app.core.runtime.execution_mode import ExecutionMode
-from app.core.tools.schemas import UserDecision, UserDecisionKind
+from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
@@ -19,120 +14,81 @@ from app.core.workflow.nodes import (
     _structured_output_node,
     _tools_node,
 )
-from app.core.workflow.nodes.wait_user_node import suspend_for_input, wait_user_node
+from app.core.workflow.nodes.wait_user_node import wait_user_node
 from app.core.workflow.tool_continuation import restore_tool_batch
-from app.core.workflow.workflow_operations import WorkflowOperations
 from app.models.conversation_run_progress import ConversationRunProgress
-from app.service.conversation_run.task_input_service import TaskInputService
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.service import depends as service_depends
 
 
 class ReactLikeWorkflow:
-    """仅实现项目需要的 ReAct 顺序，不提供图重放或任意节点恢复。"""
+    """按 ``ReactRoute`` 流转的节点循环；不提供图重放或任意节点恢复。
 
-    async def run(
-        self, operations: WorkflowOperations, execution_mode: ExecutionMode = "fresh"
-    ) -> None:
+    扩展方式：``ReactRoute`` 新增成员，在 ``__init__`` 的节点表里登记对应节点，由上游节点返回
+    该 route 流入。
+    恢复点只有两个：等待恢复从 ``wait_user`` 进入，其余（新 Run、续跑、编辑重跑、交接）都从
+    ``model`` 进入。新增节点必须能在从 ``model`` 重新进入后安全重跑，或在下一次 ``model`` 前完成。
+    """
+
+    def __init__(self) -> None:
+        self._nodes = {
+            ReactRoute.MODEL: _model_node,
+            ReactRoute.TOOLS: _tools_node,
+            ReactRoute.OBSERVE: _observe_node,
+            ReactRoute.WAIT_USER: wait_user_node,
+            ReactRoute.STRUCTURED_OUTPUT: _structured_output_node,
+        }
+
+    async def run(self, rc: RuntimeContext) -> None:
+        """驱动一次 Run：解析本次独占的模型、按持久化进度补齐驱动期状态，再循环节点直到 END。
+
+        ``rc`` 由装配方注入本次 Run 的事实与协作者；模型 schema 用 Task 固化的完整工具 schema，
+        不按本轮准入过滤，避免同一 Task 的请求前缀变化。
+        """
         resolved = resolve_chat_model(
-            agent_profile=operations.agent_profile, tools=operations.task_tool_schemas
+            agent_profile=rc.profile, tools=list(rc.task_space.task_tool_schemas)
         )
+        rc.model = resolved.model
+        rc.thinking_channel = "reasoning_content" if resolved.supports_thinking else ""
         try:
-            await self._drive(operations, resolved, execution_mode)
+            await self._drive(rc)
         except RunStopped:
             return
         finally:
             await resolved.model.close()
 
-    async def finalize_run(self, run_id: int) -> None:
-        """在执行器完成 Run 状态收敛后执行工作流资源收尾（当前无额外动作）。"""
+    async def _drive(self, rc: RuntimeContext) -> None:
+        """入口只由 Run 的持久化进度决定，调用方不传恢复模式。
 
-        return None
-
-    async def _drive(
-        self,
-        operations: WorkflowOperations,
-        resolved: ResolvedChatModel,
-        execution_mode: ExecutionMode,
-    ) -> None:
-        """等待决定从 Run 读取；HTTP 参数不构成另一份恢复事实。"""
-        run = operations.get_current_run()
-        profile = operations.agent_profile
-        context = task_runtime_spaces.get_or_create(run.task_id).get_context_manager(
-            agent_profile=profile
-        )
-        context.begin_run(run)
+        进度里有已绑定决定的待决调用（等待态被决定唤醒）时从 ``wait_user`` 进入，其余（新 Run、
+        续跑、编辑重跑、交接）都从 ``model`` 进入。待决调用只在挂起时写入、决定消费后的第一次
+        进度保存即清空，所以它不会让后续执行误入 ``wait_user``。
+        """
+        context = rc.task_space.get_context_manager(agent_profile=rc.profile)
+        context.begin_run(rc.run)
+        progress = rc.run.execution_data
         # 每次显式执行获得新预算；累计步骤号持续递增，避免恢复后复用流式 part 身份。
-        progress = run.execution_data
-        runtime = RuntimeContext(
-            operations=operations,
-            model=resolved.model,
-            step_limit=progress.step_count + profile.max_steps,
-            structured_output=profile.structured_output,
-            thinking_channel="reasoning_content" if resolved.supports_thinking else "",
-            usage_stats=(
-                ConversationRunUsageStats(**run.usage)
-                if run.usage is not None
-                else ConversationRunUsageStats()
-            ),
-            user_input_decision_handlers=get_tool_system().user_input_decision_handlers,
-        )
+        rc.step_limit = progress.step_count + rc.profile.max_steps
+        if rc.run.usage is not None:
+            rc.usage_stats = ConversationRunUsageStats(**rc.run.usage)
+        entry = ReactRoute.MODEL
+        continuation = progress.continuation
+        if continuation is not None and continuation.decision is not None:
+            rc.batch = restore_tool_batch(continuation)
+            rc.resume_decision = continuation.decision
+            entry = ReactRoute.WAIT_USER
         state = ReactExecutionState(
             step_count=progress.step_count,
             tool_error_count=progress.tool_error_count,
-            next_node=ReactRoute.MODEL,
+            next_node=entry,
         )
-        with execution_scope(runtime, context):
-            if execution_mode == "resume_with_input":
-                continuation = progress.continuation
-                if continuation is None or continuation.decision is None:
-                    raise ValueError("等待恢复缺少已提交的请求或决定")
-                runtime.batch = restore_tool_batch(continuation)
-                state = state.model_copy(update=wait_user_node(state, continuation.decision))
-                self._save_progress(operations, state)
-            while True:
-                if state.next_node == ReactRoute.MODEL:
-                    if operations.is_current_run_cancelled():
-                        operations.cancel_run_if_running(usage_stats=runtime.usage_stats)
-                        return
-                    if state.step_count < runtime.step_limit:
-                        await asyncio.to_thread(
-                            TaskInputService().consume_into_context, context, run.id
-                        )
-                    # 请求前持久化已占用的步骤号，取消后不会复用草稿/part 身份。
-                    operations.save_execution(
-                        ConversationRunProgress(
-                            step_count=state.step_count + 1,
-                            tool_error_count=state.tool_error_count,
-                        )
-                    )
-                    patch = await _model_node(state)
-                elif state.next_node == ReactRoute.TOOLS:
-                    patch = await _tools_node(state)
-                elif state.next_node == ReactRoute.OBSERVE:
-                    patch = await _observe_node(state)
-                elif state.next_node == ReactRoute.WAIT_USER:
-                    if operations.is_current_run_cancelled():
-                        patch = wait_user_node(
-                            state, UserDecision(kind=UserDecisionKind.FORCE_REJECT)
-                        )
-                    else:
-                        suspend_for_input(state)
-                        return
-                elif state.next_node == ReactRoute.STRUCTURED_OUTPUT:
-                    patch = await _structured_output_node(state)
-                elif state.next_node == ReactRoute.END:
-                    # 主线由 model 落 completed；structured 只改结果字段。其余失败节点就地落定，
-                    # 执行态不携带待落库的最终回答；loop 到 END 只停止驱动。
-                    return
-                else:
-                    raise ValueError(f"未知执行步骤：{state.next_node}")
+        with execution_scope(rc, context):
+            # 终态由产出节点就地落定，循环到 END 只停止驱动。
+            while state.next_node != ReactRoute.END:
+                patch = await self._nodes[state.next_node](state)
                 state = state.model_copy(update=patch)
-                self._save_progress(operations, state)
-
-    @staticmethod
-    def _save_progress(operations: WorkflowOperations, state: ReactExecutionState) -> None:
-        operations.save_execution(
-            ConversationRunProgress(
-                step_count=state.step_count, tool_error_count=state.tool_error_count
-            )
-        )
+                service_depends.get_conversation_run_state_service().save_execution(
+                    rc.run.id,
+                    ConversationRunProgress(
+                        step_count=state.step_count, tool_error_count=state.tool_error_count
+                    ),
+                )

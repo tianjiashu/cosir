@@ -111,9 +111,9 @@ class ToolOutputBudget:
     def apply(
         self,
         observation: ToolObservation,
-        execution_context: ToolExecutionContext | None,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        """截断超大输出，并在有 workspace 时保存完整 artifact。
+        """截断超大输出，并在 workspace 内保存完整 artifact。
 
         参数:
             observation: handler 返回的原始观察。
@@ -127,7 +127,7 @@ class ToolOutputBudget:
             无。artifact 写入失败仅记日志并退化为纯截断。
 
         副作用:
-            超限且有 workspace 时在 ``<workspace_root>/.cosir/tool-artifacts`` 写入完整输出。
+            超限时在 ``<workspace_root>/.cosir/tool-artifacts`` 写入完整输出。
         """
 
         content = observation.content or ""
@@ -203,7 +203,7 @@ class ToolOutputBudget:
     def _write_artifact(
         self,
         observation: ToolObservation,
-        execution_context: ToolExecutionContext | None,
+        execution_context: ToolExecutionContext,
     ) -> str:
         """把完整工具输出落盘为 workspace 内的 artifact 文件，返回相对路径。
 
@@ -215,11 +215,11 @@ class ToolOutputBudget:
             observation: 待保存的原始观察，使用其 ``content`` 作为写入内容、
                 ``tool_name`` 仅用于日志诊断。
             execution_context: 当前 task/workspace 上下文，提供 ``workspace_root``
-                作为 artifact 的写入基准与边界；为 ``None`` 时直接返回空串、不落盘。
+                作为 artifact 的写入基准与边界。
 
         返回:
-            相对 workspace 根、POSIX 风格（``/`` 分隔）的 artifact 路径；当上下文
-            缺失、路径解析失败或写入异常时返回空字符串，主流程降级为"不落盘"。
+            相对 workspace 根、POSIX 风格（``/`` 分隔）的 artifact 路径；路径解析失败或
+            写入异常时返回空字符串，主流程降级为"不落盘"。
 
         异常:
             不向上抛出。路径解析与写入阶段捕获 ``OSError`` / ``RuntimeError`` /
@@ -232,8 +232,6 @@ class ToolOutputBudget:
             内部子系统显式豁免；失败时记录异常/错误日志。
         """
 
-        if execution_context is None:
-            return ""
         root = Path(execution_context.workspace_root).resolve()
         target = workspace_tool_artifact_dir(root) / f"{uuid4().hex}.txt"
         resolver = PathResolver(root)

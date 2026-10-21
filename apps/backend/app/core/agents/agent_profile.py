@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from app.config.logging.logger import log
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
+from app.core.tools.schemas.tool_names import ALL_TOOL_NAMES
 from app.models import ConversationRunRecord
 from app.service.depends import get_model_config_service
 from app.utils.json_utils import read_json_object
@@ -70,17 +71,7 @@ def _allowed_tool_names() -> frozenset[str]:
     返回:
         `app/core/tools/schemas/tool_names.py` 中声明的全部工具名集合。
 
-    异常:
-        无（导入失败会直接向上抛出 ImportError，表示工具名清单不可用）。
-
-    副作用:
-        首次调用会导入 ``app.core.tools.schemas`` 包。导入刻意放在函数内：该包的
-        ``__init__`` 会拉起 ``tool_runtime_dependencies`` → ``agent_profile_registry``
-        的装配链，而 registry 反向依赖本模块，模块级导入会在其中任一入口触发模块循环
-        导入；函数级导入发生在运行期，此时相关模块均已初始化完成。
     """
-
-    from app.core.tools.schemas.tool_names import ALL_TOOL_NAMES
 
     return frozenset(ALL_TOOL_NAMES)
 

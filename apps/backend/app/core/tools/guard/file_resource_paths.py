@@ -390,12 +390,12 @@ class FileResourceResolver:
 def resolve_file_resource_paths(
     tool_name: str,
     arguments: Mapping[str, Any],
-    execution_context: ToolExecutionContext | None,
+    execution_context: ToolExecutionContext,
 ) -> FileResourcePaths:
     """从工具名和已校验参数推导文件资源（供调度链调用的薄入口）。
 
-    处理缺 ``execution_context`` 的空资源兜底，并实例化 :class:`FileResourceResolver`
-    委托 :meth:`FileResourceResolver.resolve`；保持原调用点签名不变。
+    以 ``execution_context.workspace_root`` 实例化 :class:`FileResourceResolver` 并委托
+    :meth:`FileResourceResolver.resolve`。
 
     参数:
         tool_name: 当前工具名称。
@@ -403,7 +403,7 @@ def resolve_file_resource_paths(
         execution_context: 当前 task/workspace 执行上下文。
 
     返回:
-        用于 revision、重复调用检测和路径锁的资源路径；缺 context 时返回空资源。
+        用于 revision、重复调用检测和路径锁的资源路径。
 
     异常:
         无。无法解析的 patch_write 文本交由 handler 返回正式错误。
@@ -412,6 +412,4 @@ def resolve_file_resource_paths(
         无。
     """
 
-    if execution_context is None:
-        return FileResourcePaths()
     return FileResourceResolver(execution_context.workspace_root).resolve(tool_name, arguments)

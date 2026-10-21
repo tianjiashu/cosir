@@ -19,8 +19,8 @@ DB、不发事件、不持有跨调用状态，因此可脱离执行循环单独
   的事实一致；用户意见与后续指示放进 ``reason``（模型消息对 cancelled 只取 reason）。
 - **未声明与未匹配一律报错，不静默忽略**：外部提交的决定若指向本批未声明的请求，或使用了
   该请求未声明的决定种类，说明前端/调用方与工具契约已经分叉，必须上抛让整轮失败可排查；
-  静默丢弃会造成「用户以为批了、图却继续挂起」这类无日志的假成功。校验在
-  ``wait_user`` 节点内进行（它同时需要请求对象来判断接受哪些决定）。
+  静默丢弃会造成「用户以为批了、图却继续挂起」这类无日志的假成功。校验只在
+  :func:`bind_decision` 一处进行：决定写进 Run 进度之前就拒绝，``wait_user`` 节点信任已绑定的决定。
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ from app.core.tools.schemas import (
     UserDecisionKind,
     UserInputRequest,
 )
+from app.models.conversation_run_progress import ConversationRunProgress
 
 # 驳回/放弃时写进观察的稳定短文案：cancelled 终态的模型消息只消费 ``reason``，
 # 因此「不要再执行」的指示必须放在 reason 里，而不是 content。
@@ -43,6 +44,39 @@ _REJECT_REASON_PREFIX = (
     "revise the proposal with the user input below before asking again."
 )
 _ABORT_REASON_PREFIX = "the user aborted this tool call; do not retry it."
+
+
+class DecisionMismatch(ValueError):
+    """决定与 Run 当前的待决请求不符（请求不存在、``request_id`` 不同或种类未声明）。"""
+
+
+def bind_decision(
+    progress: ConversationRunProgress, decision: UserDecision
+) -> ConversationRunProgress:
+    """校验决定并把它绑定到等待中 Run 的待决调用，返回恢复执行要写回的进度。
+
+    这是决定校验的唯一位置：外部提交与系统合成（取消、等待时立即发送）都经这里。``FORCE_REJECT``
+    不核对 ``request_id``，也不要求请求声明驳回，这里直接改写为针对当前请求的普通驳回，
+    ``wait_user`` 节点因此只会看到已核对过的决定。
+
+    异常:
+        DecisionMismatch: 进度里没有待决请求，或决定指向别的请求、使用了未声明的种类。
+    """
+    continuation = progress.continuation
+    request = extract_request(continuation.observations) if continuation is not None else None
+    if request is None:
+        raise DecisionMismatch("当前 Run 没有待决请求")
+    if decision.kind is UserDecisionKind.FORCE_REJECT:
+        decision = UserDecision(
+            request_id=request.request_id, kind=UserDecisionKind.REJECT, data=decision.data
+        )
+    elif decision.request_id != request.request_id or not request.accepts(decision.kind):
+        raise DecisionMismatch(
+            f"决定 {decision.kind.value}:{decision.request_id} 不符合待决请求 {request.request_id}"
+        )
+    return progress.model_copy(
+        update={"continuation": continuation.model_copy(update={"decision": decision})}
+    )
 
 
 def extract_request(observations: list[dict[str, Any]]) -> UserInputRequest | None:

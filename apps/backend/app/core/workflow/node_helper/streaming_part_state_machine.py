@@ -25,6 +25,7 @@ from collections.abc import Callable
 
 from openai.types.chat import ParsedFunctionToolCall
 
+from app.config.configuration import get_tool_system
 from app.config.constant import Constant
 from app.core.context.tool_call_closure import build_placeholder_tool_message
 from app.core.events import (
@@ -91,7 +92,7 @@ class StreamingPartStateMachine:
             本实例只在 :meth:`tool_call` 写入、在 :meth:`cancel` 读回。
         """
 
-        self._stream_writer = emit
+        self._emit = emit
         self._task_id: int = task_id
         self._run_id: int = run_id
         self._step_id: str = step_id
@@ -174,7 +175,7 @@ class StreamingPartStateMachine:
                 or call_id in valid_calls
             ):
                 continue
-            if tool_name not in runtime.tool_definitions:
+            if get_tool_system().registry.get_tool_definition(tool_name) is None:
                 continue
             projected = self.create_tool_call(call_id, tool_name)
             valid_calls[call_id] = ValidToolCall(
@@ -212,7 +213,7 @@ class StreamingPartStateMachine:
         for call_id, call in _runtime_context().batch.valid_tool_calls.items():
             if call.projection != "projected":
                 continue
-            self._stream_writer(
+            self._emit(
                 ToolCallStatusChangedEvent(
                     task_id=self._task_id,
                     run_id=self._run_id,
@@ -268,7 +269,7 @@ class StreamingPartStateMachine:
 
         if not self._pending or self._active is None:
             return
-        self._stream_writer(
+        self._emit(
             AssistantTextDeltaEvent(
                 task_id=self._task_id,
                 run_id=self._run_id,
@@ -304,9 +305,13 @@ class StreamingPartStateMachine:
         if tool_name not in runtime.allows_tools:
             return False
         # 只为本轮放行的工具创建卡片；被拦调用仍保留在模型协议中，由执行层返回错误观察。
-        display = runtime.tool_definitions[tool_name].display
+        # 注册表是进程级可变事实（MCP 工具可热更新）：调用方过滤后仍可能被注销，此时不建卡片。
+        definition = get_tool_system().registry.get_tool_definition(tool_name)
+        if definition is None:
+            return False
+        display = definition.display
         presentation: dict[str, object] = display.to_dict() if display is not None else {}
-        self._stream_writer(
+        self._emit(
             ToolCallCreatedEvent(
                 task_id=self._task_id,
                 run_id=self._run_id,
@@ -333,7 +338,7 @@ class StreamingPartStateMachine:
         if self._active is None:
             return
         self._flush_pending()
-        self._stream_writer(
+        self._emit(
             AssistantPartClosedEvent(
                 task_id=self._task_id,
                 run_id=self._run_id,

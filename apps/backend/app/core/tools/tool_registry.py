@@ -1,5 +1,6 @@
 """In-memory registry for tool definitions."""
 
+import inspect
 import threading
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -52,7 +53,11 @@ class ToolRegistry:
             无。
 
         异常:
-            TypeError: 当 definition 不是 ``ToolDefinition`` 实例时抛出。
+            TypeError: definition 不是 ``ToolDefinition`` 实例，或 handler 是协程函数时抛出。
+                执行层（``ToolHandlerRunner``）只同步调用 handler；放行 async handler 会让
+                未 await 的协程对象被 ``str()`` 成 content，错误伪装成成功。
+            ValueError: process 工具的 ``timeout_seconds`` 不是正数时抛出。它是 process 路径硬超时
+                强杀的唯一依据，属于静态配置，在装配期一次校验，执行层不再逐次防御。
 
         副作用:
             同名工具已存在时记录警告日志并跳过，不改变 generation；
@@ -63,6 +68,12 @@ class ToolRegistry:
 
         if not isinstance(definition, ToolDefinition):
             raise TypeError(f"expected ToolDefinition, got {type(definition).__name__}")
+        if inspect.iscoroutinefunction(definition.handler):
+            raise TypeError(f"tool handler must be synchronous: {definition.name}")
+        if definition.execution_mode == "process" and not definition.timeout_seconds > 0:
+            raise ValueError(
+                f"process tool timeout_seconds must be positive: {definition.name}"
+            )
         normalized = definition.normalized()
         with self._lock:
             if normalized.name in self._tool_definitions:

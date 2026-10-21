@@ -1,9 +1,9 @@
 """应用 Git 统一 diff 到已有文件时的严格入参。
 
-仅约定字段级契约：被接受的 diff 格式、hunk 计数规则与最小示例，其唯一事实源都在下方
-``patch`` 字段的描述里。工具描述（``apply_patch_tool.APPLY_PATCH_DESCRIPTION``）只承载工具
-职责及其与 ``write_file`` / ``delete_file`` / ``move_file`` 的边界，绝不重复该格式，从而
-两处文本不会漂移。
+仅约定字段级契约：被接受的 diff 格式与 hunk 计数规则（按正文重算，不要求模型精确计数）
+的唯一事实源是下方 ``patch`` 字段的描述，最小示例随该字段的 ``examples`` 导出。工具描述
+（``apply_patch_tool.APPLY_PATCH_DESCRIPTION``）只承载工具职责及其与 ``write_file`` /
+``delete_file`` / ``move_file`` 的边界，绝不重复该格式，从而两处文本不会漂移。
 """
 
 from pydantic import BaseModel, ConfigDict, Field

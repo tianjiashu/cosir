@@ -21,7 +21,6 @@ class ToolBatch:
     """把有效调用及其投影状态、工具执行与观察结算绑定到同一次模型请求。"""
 
     calls: list[ChatCompletionMessageFunctionToolCallParam] = field(default_factory=list)
-    instruction: str = ""
     observations: list[dict[str, Any]] = field(default_factory=list)
     valid_tool_calls: dict[str, ValidToolCall] = field(default_factory=dict)
     approved_call: tuple[str, UserDecision] | None = None

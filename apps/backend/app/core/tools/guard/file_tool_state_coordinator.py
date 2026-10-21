@@ -282,7 +282,7 @@ class FileToolStateCoordinator:
         self,
         plan: FileToolExecutionPlan,
         tool: ToolDefinition,
-        execution_context: ToolExecutionContext | None,
+        execution_context: ToolExecutionContext,
         *,
         tool_call_id: str,
     ) -> ToolObservation | None:
@@ -307,11 +307,7 @@ class FileToolStateCoordinator:
         """
 
         # 只有依赖已观察内容的写工具才受 revision 保护；删除和移动由 handler 校验目标状态。
-        if (
-            execution_context is None
-            or tool.name not in _STALE_CONTENT_TOOLS
-            or not plan.resources.write_paths
-        ):
+        if tool.name not in _STALE_CONTENT_TOOLS or not plan.resources.write_paths:
             return None
         # 把「内容写路径当前 fingerprint」与 revision registry 里上次观察到的基线比对；
         # 从未记录过的路径不算 stale。
@@ -339,7 +335,7 @@ class FileToolStateCoordinator:
     def lock(
         self,
         plan: FileToolExecutionPlan,
-        execution_context: ToolExecutionContext | None,
+        execution_context: ToolExecutionContext,
     ) -> Iterator[None]:
         """为执行计划中的写路径持锁。
 
@@ -357,8 +353,8 @@ class FileToolStateCoordinator:
             获取并释放 task/path 锁。
         """
 
-        # 无上下文或无待锁路径时是空持锁：直接放行，不做任何锁操作。
-        if execution_context is None or not plan.resources.lock_paths:
+        # 无待锁路径时是空持锁：直接放行，不做任何锁操作。
+        if not plan.resources.lock_paths:
             yield
             return
         # 对本次写路径（含 workspace 祖先链）按稳定顺序获取进程内 RLock，保证同一
@@ -373,7 +369,7 @@ class FileToolStateCoordinator:
         self,
         plan: FileToolExecutionPlan,
         observation: ToolObservation,
-        execution_context: ToolExecutionContext | None,
+        execution_context: ToolExecutionContext,
     ) -> None:
         """成功后刷新 read/write revision。
 
@@ -392,8 +388,6 @@ class FileToolStateCoordinator:
             成功时更新 task revision registry。
         """
 
-        if execution_context is None:
-            return
         # 只在整个调用成功（而非失败/取消）时才回写状态，避免把「失败尝试」当成可复用基线。
         if observation.status != "success":
             return
