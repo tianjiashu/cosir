@@ -1,14 +1,16 @@
 """工具执行入口的调用值对象。"""
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from app.models.user_decision import UserDecision
 
 
 @dataclass(frozen=True)
 class ToolCall:
-    """已解析参数的工具调用。
+    """模型请求的一次工具调用。
+
+    ``arguments`` 是模型产出的原始参数串（可能是残缺 JSON），JSON 解码与 schema 校验都只在
+    ``ToolAccessGate`` 一处发生，调用方不预解析：畸形参数与其它准入拒绝走同一条观察路径。
 
     ``user_decision`` 是框架级（非模型可见）的附加字段：当某个调用在 human-in-the-loop 流程中
     被用户批准后，``tools`` 节点以同一 ``call_id`` 重新发起该调用并带上用户决定，handler 据此
@@ -17,6 +19,6 @@ class ToolCall:
     """
 
     tool_name: str
-    arguments: dict[str, Any] = field(default_factory=dict)
+    arguments: str = ""
     call_id: str = ""
     user_decision: UserDecision | None = None

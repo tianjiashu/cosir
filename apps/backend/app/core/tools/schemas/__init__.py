@@ -36,11 +36,6 @@ from app.core.tools.schemas.tool_names import (
     ToolName,
 )
 from app.core.tools.schemas.tool_observation import ToolObservation
-from app.core.tools.schemas.tool_output import (
-    OutputSink,
-    ProcessToolOutputChannel,
-    ProcessToolOutputChannelFactory,
-)
 from app.core.tools.schemas.user_input_request import (
     DEFAULT_DECISIONS,
     USER_INPUT_REQUEST_KEY,
@@ -84,9 +79,6 @@ __all__ = [
     "TOOL_WEB_SEARCH",
     "TOOL_WRITE_FILE",
     "USER_INPUT_REQUEST_KEY",
-    "OutputSink",
-    "ProcessToolOutputChannel",
-    "ProcessToolOutputChannelFactory",
     "ToolCall",
     "ToolDefinition",
     "ToolDisplayHints",
