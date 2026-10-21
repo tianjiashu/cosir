@@ -5,8 +5,8 @@
 
 from app.core.workflow.node_helper.common import (
     RunStopped,
+    emit,
     execution_scope,
-    get_stream_writer,
     route_state,
 )
 from app.core.workflow.node_helper.streaming_part_state_machine import (
@@ -26,9 +26,9 @@ __all__ = [
     "StreamingPartStateMachine",
     "UserInputDecisionHandlers",
     "apply_decision_to_observations",
+    "emit",
     "execution_scope",
     "extract_request",
-    "get_stream_writer",
     "request_call_id",
     "route_state",
 ]

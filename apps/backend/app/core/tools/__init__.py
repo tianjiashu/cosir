@@ -2,9 +2,9 @@
 
 ``ToolSystem`` 采用**惰性导出**（PEP 562）：任何 ``app.core.tools.<子模块>`` 的导入都会先执行本
 ``__init__``，若在此处 eager 导入 ``tool_system``，纯常量模块（如 ``schemas.tool_names``）的导入就
-会被放大成「整条装配链」加载；该链上的 ``terminal_session`` 等模块又会反向
-导入 ``app.assistant_transport.event``，使该包在自身初始化中途被回头导入而抛 ImportError
-（后端启动即失败）。惰性导出把装配推迟到真正访问 ``ToolSystem`` 时，保留
+会被放大成「整条装配链」加载；该链上的模块又会经 service 层反向导入依赖本包的模块，
+使其在初始化中途被回头导入而抛 ImportError（后端启动即失败）。惰性导出把装配推迟到
+真正访问 ``ToolSystem`` 时，保留
 ``from app.core.tools import ToolSystem`` 这一对外契约不变。
 """
 

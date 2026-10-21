@@ -1,39 +1,21 @@
-"""Assistant Transport protocol types and adapters."""
+"""Assistant Transport 请求的 wire schema。"""
 
-from app.assistant_transport.request.assistant_attach_request import (
-    AssistantAttachRequest,
-)
-from app.assistant_transport.request.assistant_transport_request import (
-    AssistantCommand,
-    AssistantTransportRequest,
-    TransportRequestError,
-)
-from app.assistant_transport.request.command.add_message_command import (
-    AddMessageCommand,
-)
-from app.assistant_transport.request.command.ban_tools_command import (
-    BanToolsCommand,
-    BanToolsPayload,
-)
-from app.assistant_transport.request.command.user_input_decision_command import (
-    UserInputDecisionCommand,
-    UserInputDecisionItem,
-    UserInputDecisionPayload,
-)
+from app.assistant_transport.request.assistant_user_message import AssistantUserMessage
 from app.assistant_transport.request.part.assistant_file_attachment import AssistantFileAttachment
 from app.assistant_transport.request.part.assistant_image_part import AssistantImagePart
+from app.assistant_transport.request.task_command_request import (
+    EditMessageRequest,
+    SendMessageRequest,
+    UserDecisionRequest,
+)
+from app.assistant_transport.request.transport_request_error import TransportRequestError
 
 __all__ = [
-    "AddMessageCommand",
-    "AssistantAttachRequest",
-    "AssistantCommand",
     "AssistantFileAttachment",
     "AssistantImagePart",
-    "AssistantTransportRequest",
-    "BanToolsCommand",
-    "BanToolsPayload",
+    "AssistantUserMessage",
+    "EditMessageRequest",
+    "SendMessageRequest",
     "TransportRequestError",
-    "UserInputDecisionCommand",
-    "UserInputDecisionItem",
-    "UserInputDecisionPayload",
+    "UserDecisionRequest",
 ]
