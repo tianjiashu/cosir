@@ -286,6 +286,17 @@ class TaskRuntimeSpace:
 
         self._snapshot = None
 
+    def live_context_manager(self) -> RuntimeMessageContextManager | None:
+        """只读返回仍存活的 context manager；没有时返回 ``None``，不创建、不读库。
+
+        供只需要「这个 Task 当前是否装配了 context」的读取方（如配置变更广播的作用域过滤）使用：
+        :meth:`get_context_manager` 在槽位为空时会构造 manager（读库、新 Task 还会落库系统提示词），
+        不能拿来做判断。弱引用读取本身是原子的，无需持有 ``_context_guard``。
+        """
+
+        manager_ref = self._context_manager
+        return manager_ref() if manager_ref is not None else None
+
     def get_context_manager(
         self,
         *,
@@ -302,8 +313,8 @@ class TaskRuntimeSpace:
 
         异常:
             RuntimeError: 首次装配没有 Agent 画像。
-            ``RuntimeMessageContextManager`` 构造失败时原样向上抛出，本方法不兜底；此时 space 不会缓存
-            半成品引用，由调用方处理。
+            ``RuntimeMessageContextManager`` 构造失败时原样向上抛出，本方法不兜底；此时 space
+            不会缓存半成品引用，由调用方处理。
 
         副作用:
             首次调用时在持有 ``_context_guard`` 的前提下惰性构造并以**弱引用**缓存 context
@@ -315,11 +326,9 @@ class TaskRuntimeSpace:
             锁内重检避免两个并发访问者分别构造 manager。
         """
 
-        manager_ref = self._context_manager
-        if manager_ref is not None:
-            manager = manager_ref()
-            if manager is not None:
-                return manager
+        manager = self.live_context_manager()
+        if manager is not None:
+            return manager
         with self._context_guard:
             manager_ref = self._context_manager
             manager = manager_ref() if manager_ref is not None else None
@@ -360,7 +369,7 @@ class TaskRuntimeSpace:
             （模型据此区分系统注入与用户输入）并显式声明宿主平台；声明与各条通知
             正文各占一行，格式由本方法统一收口，调用方不得再自行加前缀。
             模型节点把它作为独立 ``SystemMessage`` 落库进 canonical context。
-            注意队列为空时仍返回这段声明文本（不含任何通知正文），返回值因此恒非空。
+            没有可消费的通知时返回空串，调用方据此不写入任何系统消息。
         """
 
         notices: list[RuntimeNotice] = []
