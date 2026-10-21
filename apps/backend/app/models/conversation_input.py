@@ -1,5 +1,7 @@
 """用户消息事实：未消费时归 inbox，消费后归 context，不在 Run 留副本。"""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config.constant import Constant
@@ -53,8 +55,16 @@ class ConversationInput(UserInputPresentation):
         )
 
 
+InputDelivery = Literal["immediate", "after_run"]
+"""运行中发送的投递方式：``immediate`` 在下一个模型边界并入当前 Run；``after_run`` 等当前 Run
+正常完成后交给新 Run。没有活动 Run 时发送一律直接新开 Run。"""
+
+
 class QueuedTaskInput(BaseModel):
-    """输入连同发起配置排队；交接新 Run 时采用配置，消费到 context 时只转移消息。"""
+    """输入连同发起配置排队；交接新 Run 时采用配置，消费到 context 时只转移消息。
+
+    写入 inbox 后不再修改；投递方式是 inbox 行的调度状态，存在 ``task_inputs.delivery`` 列。
+    """
 
     model_config = ConfigDict(extra="forbid")
     message: ConversationInput

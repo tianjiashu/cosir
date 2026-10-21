@@ -1,12 +1,12 @@
 """Conversation Run 失败的稳定 code 与面向用户的受控文案目录。
 
-单一职责：维护「Run 失败 code → 受控用户文案」这一张表，并声明不属于模型调用的流程失败 code。
+单一职责：维护「Run 失败 code → 受控用户文案」这一张表，并把错误终态映射为受控错误契约。
 
 模型调用错误的分类词表是 ``ErrorKind``（``app/models/enums/error_kind.py``）：本模块**不再
 另行定义** ``model_*`` 系列 code，只用 ``ErrorKind`` 成员的稳定字符串值作为文案键，避免同一
 语义出现两套并行事实源。
 
-不负责：把异常归类为 code（见 ``app.core.llm_provider.model_failure``）、状态迁移与持久化
+不负责：把异常归类为 code（见 ``app.core.llm_provider.model_failure``）、持久化
 （见 ``ConversationRunStateService``）、Transport 投影与渲染（见 ``app.assistant_transport.state``
 与前端 renderer）。
 
@@ -21,6 +21,8 @@
 from __future__ import annotations
 
 from app.config.constant import Constant
+from app.models.conversation_run_record import ConversationRunError
+from app.models.enums.conversation_run_status import ERROR_RUN_STATUSES, ConversationRunStatus
 from app.models.enums.error_kind import ErrorKind
 
 # 唯一文案目录：键为失败 code，值为面向用户的受控文案。
@@ -79,6 +81,37 @@ def run_failure_message(code: str | None) -> str:
     return _RUN_FAILURE_MESSAGES.get(code, Constant.Run.DEFAULT_MESSAGE)
 
 
+def run_terminal_error(
+    status: ConversationRunStatus,
+    end_reason: str | None,
+    message: str | None = None,
+) -> ConversationRunError | None:
+    """把迁移目标状态映射为持久化错误契约；只有 ``failed`` / ``cancelled`` 写错误。
+
+    参数:
+        end_reason: 领域侧终态原因；仅当它是合法标识符（``isidentifier()``）时才作为 ``code``
+            落库，避免把自由文本写进受控字段。
+        message: 模型失败时透传的 HTTP 响应体 ``message``；为空或全空白时使用受控文案目录。
+
+    返回:
+        错误终态返回受控的 ``ConversationRunError``，其余状态返回 ``None``。未登记的 code
+        回退通用失败文案，保证 UI 始终拿得到可展示文本。
+    """
+
+    if status not in ERROR_RUN_STATUSES:
+        return None
+    code = end_reason if isinstance(end_reason, str) and end_reason.isidentifier() else None
+    if code is None:
+        code = (
+            Constant.Run.RUN_FAILURE_CODE_CANCELLED
+            if status is ConversationRunStatus.CANCELLED
+            else Constant.Run.RUN_FAILURE_CODE_UNKNOWN
+        )
+    resolved_message = message.strip() if isinstance(message, str) else ""
+    return ConversationRunError(code=code, message=resolved_message or run_failure_message(code))
+
+
 __all__ = [
     "run_failure_message",
+    "run_terminal_error",
 ]
