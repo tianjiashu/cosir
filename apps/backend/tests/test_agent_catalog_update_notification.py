@@ -20,7 +20,7 @@ class _FakeContextManager:
 
     def __init__(self, agent_type: AgentProfileType, allowed_tools: list[str], root: str) -> None:
         self.agent_profile = SimpleNamespace(agent_type=agent_type, allowed_tools=allowed_tools)
-        self.workspace_root = root
+        self.workspace = SimpleNamespace(root_path=root)
 
 
 class _FakeRuntimeSpace:
@@ -30,7 +30,7 @@ class _FakeRuntimeSpace:
         self._manager = manager
         self.messages: list[RuntimeNotice] = []
 
-    def get_context_manager(self) -> _FakeContextManager:
+    def live_context_manager(self) -> _FakeContextManager:
         return self._manager
 
     def defer_runtime_notice(self, message: RuntimeNotice) -> None:

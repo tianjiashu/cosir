@@ -29,7 +29,6 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from app.assistant_transport.event import UserInputAppendedEvent
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -47,6 +46,7 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
+    UserInputConsumedEvent,
 )
 from app.core.tools.schemas import (
     ToolCall,
@@ -62,6 +62,7 @@ from app.core.tools.tool_registry import ToolRegistry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_batch_runner
+from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
 
 _RUN_ID = 960001
@@ -302,11 +303,11 @@ async def test_projection_ordering_kill_then_drain_then_project(
     real_projector = ConversationEventProjector(owner)
     real_projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
     real_projector.process(
-        UserInputAppendedEvent(
+        UserInputConsumedEvent(
             task_id=_TASK_ID,
             run_id=_RUN_ID,
             message_id="user-1",
-            parts=[{"type": "text", "text": "test"}],
+            presentation=UserInputPresentation(display_text="test"),
         )
     )
     real_projector.process(
@@ -513,11 +514,11 @@ def _seed_running_execute_terminal(projector: ConversationEventProjector, call_i
 
     projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
     projector.process(
-        UserInputAppendedEvent(
+        UserInputConsumedEvent(
             task_id=_TASK_ID,
             run_id=_RUN_ID,
             message_id="user-1",
-            parts=[{"type": "text", "text": "test"}],
+            presentation=UserInputPresentation(display_text="test"),
         )
     )
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))

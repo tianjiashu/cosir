@@ -80,11 +80,12 @@ def test_message_context_persists_complete_ai_fields_and_ordered_parts() -> None
 
 
 def test_begin_run_binds_identity_without_rewriting_context() -> None:
+    """begin_run 只读库重建内存列表并绑定身份，不写任何 context 行。"""
     service = _RecordingContextService()
     manager = _runtime_manager(service)
     message = {"role": "user", "content": "existing"}
-    manager._entries = [ContextEntry(message, 11, 1)]
-    manager.begin_run(SimpleNamespace(id=12, task_id=7))
+    service.entries_in_context = lambda _task_id: [ContextEntry(message, 11, 1)]
+    manager.begin_run(SimpleNamespace(id=12, task_id=7), lambda _event: None)
     assert manager.current_run_id == 12
     assert manager._entries[0].message is message
     assert service.appended == []

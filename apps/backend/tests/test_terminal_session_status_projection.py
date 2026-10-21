@@ -214,6 +214,30 @@ def test_async_terminal_exit_updates_existing_snapshot_and_persists_metadata() -
     assert sources.updates == [("exited", "shell_exited", 0)]
 
 
+def test_terminal_exit_does_not_rewrite_rows_removed_from_transport() -> None:
+    """编辑替换掉的历史（不进上下文、不投影）保持冻结：会话后续状态只写回前端可见的卡片行。"""
+    replaced = [
+        replace(row, include_in_context=False, project_to_transport=False) for row in _rows()
+    ]
+    sources = _Sources(replaced)
+    service = _service(sources)
+    service.get_state(1)
+
+    service.refresh_terminal_session(
+        TerminalSessionStatusChange(
+            task_id=1,
+            session_id="term-1",
+            generation="gen-1",
+            status="exited",
+            end_reason="shell_exited",
+            exit_code=0,
+        )
+    )
+
+    assert sources.updates == []
+    assert sources.rows == replaced
+
+
 def test_cold_rebuild_closes_orphaned_running_session_and_keeps_tool_completed() -> None:
     sources = _Sources(_rows())
     sources.status_change = None

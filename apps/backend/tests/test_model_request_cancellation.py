@@ -139,6 +139,7 @@ def bind_node(monkeypatch, model):
         memberships.append(kwargs["include_in_context"])
 
     context = SimpleNamespace(
+        consume_inbox=lambda: [],
         load_message=lambda: [],
         save_model_response=save,
     )
@@ -352,9 +353,11 @@ async def test_completed_run_structured_branch_ignores_late_cancel(monkeypatch, 
     body = BlockingCompletionBody(boundary=boundary)
     model = sdk_model(body)
     bound = bind_node(monkeypatch, model)
-    bound.runtime.profile = SimpleNamespace(
-        structured_output=SimpleNamespace(name="result", json_schema={"type": "object"}),
-        max_steps=10,
+    bound.runtime.agent = SimpleNamespace(
+        definition=SimpleNamespace(
+            structured_output=SimpleNamespace(name="result", json_schema={"type": "object"}),
+            max_steps=10,
+        )
     )
     bound.runtime.structured_output_messages = [{"role": "assistant", "content": "自然回答"}]
     updates = []

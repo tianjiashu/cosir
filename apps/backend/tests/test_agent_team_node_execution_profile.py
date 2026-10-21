@@ -8,10 +8,10 @@
 
 本文件只消费生产代码（``app/**`` 只读），锁定三条行为契约：
 
-1. 节点执行 profile（``AgentTeamCoordinator._build_node_profile`` 合成基础 profile，
-   ``run_driver._resolve_profile`` 按 Run 派生）必须带**已物化**的
+1. 节点运行时配置（``AgentTeamCoordinator._build_node_profile`` 合成节点定义，
+   ``run_driver._runtime_config`` 按 Run 合成 ``AgentRuntimeConfig``）必须带**已物化**的
    模型运行设置（连接与能力字段来自 ``run.model_config_id`` 指向的模型配置），并保留节点快照的
-   用户偏好、采用节点快照的 ``structured_output``、绑定 ``run``；
+   用户偏好、采用节点快照的 ``structured_output``；
 2. 节点快照不是连接字段的来源：快照里出现的任何连接字段都不得影响最终执行 profile；
 3. 准备阶段的节点快照只冻结可持久化的用户偏好，不得把 ``api_key`` 等运行期字段写进
    ``agent_team_runs.state_json``。
@@ -30,6 +30,7 @@ from app.agent_team.coordinator import AgentTeamCoordinator
 from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
+from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.models.conversation_run_options import ConversationRunOptions
@@ -135,11 +136,11 @@ def _node_run_profile(
     registry_profile: AgentProfile,
     node_runtime: AgentTeamRunRuntime,
     node_run: ConversationRunRecord,
-) -> AgentProfile:
-    """生产两段串联：协调器合成节点基础 profile，运行时按节点 Run 派生并物化模型设置。"""
+) -> AgentRuntimeConfig:
+    """生产两段串联：协调器合成节点定义，运行时按节点 Run 合成运行时配置并物化模型设置。"""
 
-    base = AgentTeamCoordinator._build_node_profile(registry_profile, node_runtime)
-    return run_driver._resolve_profile(node_run, SimpleNamespace(root_path=""), base)
+    definition = AgentTeamCoordinator._build_node_profile(registry_profile, node_runtime)
+    return run_driver._runtime_config(node_run, SimpleNamespace(root_path=""), definition)
 
 
 def _create_model_config(*, model_name: str, base_url: str) -> int:
@@ -204,10 +205,10 @@ def _team_configuration() -> dict[str, object]:
     }
 
 
-def _materialized_parent_profile() -> AgentProfile:
-    """构造主 Agent 本次 Run 的 per-run profile（连接字段已物化）。"""
+def _materialized_parent_profile() -> AgentRuntimeConfig:
+    """构造主 Agent 本次 Run 的运行时配置（连接字段已物化）。"""
 
-    return AgentProfile(
+    definition = AgentProfile(
         agent_id="main_agent",
         role="main_agent",
         system_prompt="main system prompt",
@@ -223,6 +224,9 @@ def _materialized_parent_profile() -> AgentProfile:
             supports_reasoning_effort=True,
             supports_image=False,
         ),
+    )
+    return AgentRuntimeConfig(
+        definition=definition, model_settings=definition.model_settings, model_config_id=1
     )
 
 
@@ -249,9 +253,10 @@ def test_node_run_profile_materializes_model_runtime_settings_from_run() -> None
     # run.options 刻意不设置 reasoning_effort：快照偏好必须是唯一的来源。
     node_run = _node_run(config_id, reasoning_effort=None)
 
-    profile = _node_run_profile(registry_profile, node_runtime, node_run)
+    agent = _node_run_profile(registry_profile, node_runtime, node_run)
+    profile = agent.definition
 
-    settings = profile.model_settings
+    settings = agent.model_settings
     # 未物化时这里会抛 ModelSettingsError（模型运行配置未物化，缺少字段: model_name, ...）。
     settings.require_runtime_config()
     assert settings.model_name == "team-node-model"
@@ -278,14 +283,12 @@ def test_node_run_profile_materializes_model_runtime_settings_from_run() -> None
     assert profile.system_prompt == "node system prompt from snapshot"
     assert profile.allowed_tools == ["read_file", "web_search"]
     assert profile.allowed_tools is not node_runtime.allowed_tools
-    # Run 绑定在派生副本上，本次 Run 的模型配置覆盖 profile 的（空）选择。
-    assert profile.run is node_run
-    assert profile.model_config_id == config_id
+    # 本次 Run 的模型配置记在运行时配置上，不回写定义的（空）选择。
+    assert agent.model_config_id == config_id
     assert registry_profile.model_config_id is None
-    # 共享注册表单例不得被本次派生污染。
+    # 共享注册表单例不得被本次合成污染。
     assert registry_profile.model_settings.model_name is None
     assert registry_profile.model_settings.reasoning_effort == "high"
-    assert registry_profile.run is None
 
 
 @pytest.mark.usefixtures("backend_env")
@@ -319,9 +322,9 @@ def test_node_run_profile_takes_connection_fields_from_run_not_from_snapshot() -
     )
     node_run = _node_run(second_config_id)
 
-    profile = _node_run_profile(registry_profile, node_runtime, node_run)
+    agent = _node_run_profile(registry_profile, node_runtime, node_run)
 
-    settings = profile.model_settings.require_runtime_config()
+    settings = agent.model_settings
     assert settings.model_name == "run-model"
     assert settings.base_url == "https://run.example.test"
     assert settings.api_key == "run-model-secret"
@@ -329,7 +332,7 @@ def test_node_run_profile_takes_connection_fields_from_run_not_from_snapshot() -
     assert settings.supports_thinking is True
     # 快照的偏好项仍然是偏好项的唯一来源。
     assert settings.reasoning_effort == "max"
-    assert profile.model_config_id == second_config_id
+    assert agent.model_config_id == second_config_id
 
 
 @pytest.mark.usefixtures("backend_env")
@@ -338,9 +341,8 @@ def test_unmaterialized_registry_settings_would_fail_runtime_context(
 ) -> None:
     """(缺陷证明) 还原修复前「直接用注册表未物化设置」时，上面的断言必然失败。
 
-    目的：证明 ``test_node_run_profile_materializes_model_runtime_settings_from_run`` 的
-    ``require_runtime_config()`` 断言真的能捕获本缺陷——一旦物化被去掉（回到旧行为），
-    合成的 profile 立刻以 ``model_name`` / ``base_url`` 等字段缺失失败。
+    目的：证明物化确实是必要的——一旦物化被去掉（回到旧行为），合成运行时配置就在装配期以
+    ``model_name`` / ``base_url`` 等字段缺失失败，而不是拖到首次模型请求。
     """
 
     config_id = _create_model_config(
@@ -351,15 +353,13 @@ def test_unmaterialized_registry_settings_would_fail_runtime_context(
     node_run = _node_run(config_id)
     # 旧行为：执行 profile 直接沿用注册表 profile 的（未物化）模型设置。
     monkeypatch.setattr(
-        run_driver.ModelSettings,
+        ModelSettings,
         "from_model_config_record",
         staticmethod(lambda _record: registry_profile.model_settings),
     )
 
-    profile = _node_run_profile(registry_profile, node_runtime, node_run)
-
     with pytest.raises(ModelSettingsError) as captured:
-        profile.model_settings.require_runtime_config()
+        _node_run_profile(registry_profile, node_runtime, node_run)
     message = str(captured.value)
     # ``context_window_k`` 改为在缺失字段全部齐备后单独做正整数校验，不进入缺失清单。
     for missing in (
@@ -395,7 +395,6 @@ def test_legacy_registry_profile_construction_reproduces_runtime_failure() -> No
         model_settings=registry_profile.model_settings,
         structured_output=registry_profile.structured_output,
         max_steps=registry_profile.max_steps,
-        run=node_run,
     )
 
     assert legacy_profile.model_config_id is None
@@ -411,11 +410,11 @@ def test_legacy_registry_profile_construction_reproduces_runtime_failure() -> No
 
 
 @pytest.mark.usefixtures("backend_env")
-def test_node_run_without_model_config_keeps_unmaterialized_settings() -> None:
-    """(边界) Run 未绑定模型配置时不得凭空造出连接字段，仍沿用注册表偏好（后续由模型层报错）。
+def test_node_run_without_model_config_fails_at_assembly() -> None:
+    """(边界) Run 未绑定模型配置时在装配期明确失败，不凭空造出连接字段。
 
     潜在缺陷：为「未选模型」的 Run 伪造默认 base_url / model_name，让执行悄悄跑在一个
-    用户从未选择的模型上；或反向在此路径抛未捕获异常。
+    用户从未选择的模型上。
     """
 
     registry_profile = _registry_child_profile()
@@ -423,14 +422,8 @@ def test_node_run_without_model_config_keeps_unmaterialized_settings() -> None:
     node_run = _node_run(1)
     node_run.model_config_id = None
 
-    profile = _node_run_profile(registry_profile, node_runtime, node_run)
-
-    assert profile.model_settings.model_name is None
-    assert profile.model_settings.base_url is None
-    assert profile.model_settings.reasoning_effort == "low"
-    assert profile.model_config_id is None
-    with pytest.raises(ModelSettingsError):
-        profile.model_settings.require_runtime_config()
+    with pytest.raises(RuntimeError, match="has no model config"):
+        _node_run_profile(registry_profile, node_runtime, node_run)
 
 
 # --------------------------------------------------------------------------- #
@@ -474,7 +467,7 @@ def test_preparation_snapshot_freezes_preferences_without_connection_fields(
         parent_task_id=1,
         parent_run_id=2,
         workspace_id=3,
-        parent_agent_profile=parent,
+        parent_agent=parent,
     )
 
     assert set(result.node_runtime_snapshots) == {"develop", "review"}

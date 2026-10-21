@@ -17,6 +17,7 @@ from app.models.enums.conversation_run_status import RunTransition
 from app.models.message_metadata import ToolMessageMetadata
 from app.service.conversation_run.task_input_service import TaskInputService
 from app.service.depends import (
+    get_conversation_event_projector,
     get_conversation_run_service,
     get_conversation_run_state_service,
     get_conversation_task_context_service,
@@ -104,7 +105,9 @@ def _real_context(store, *, run_state=None):
         run=store.crud.get(store.run.id),
         task=store.task,
         workspace=WorkspaceCrud().get(store.task.workspace_id),
-        profile=SimpleNamespace(max_steps=5, structured_output=None),
+        agent=SimpleNamespace(
+            definition=SimpleNamespace(max_steps=5, structured_output=None), model_settings=None
+        ),
         allows_tools=frozenset(),
         task_space=task_runtime_spaces.get_or_create(store.task.id),
         event_sink=get_conversation_event_projector().process,
@@ -132,6 +135,64 @@ def _context_manager(store):
         store.context,
         workspace=SimpleNamespace(id=store.task.workspace_id, root_path=""),
     )
+
+
+def test_consume_inbox_tracks_memory_sequence_and_projects_each_input(store, monkeypatch):
+    """consume_inbox 一次转移整批 immediate 输入：内存列表与序号同步推进，每条经 sink 投影一次。"""
+    from app.core.context.runtime_message_context_manager import SystemPromptBuilder
+    from app.core.events import UserInputConsumedEvent
+
+    monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
+    second = store.inputs.enqueue(
+        store.task.id, ConversationRunCommand(display_text="second"), store.config_id
+    )
+    events: list[object] = []
+    context = _context_manager(store)
+    context.begin_run(store.run, events.append)
+
+    entries = context.consume_inbox()
+
+    assert [e.message["content"] for e in entries] == ["first", "second"]
+    assert [m.get("content") for m in context.load_message()] == ["system", "first", "second"]
+    assert all(isinstance(event, UserInputConsumedEvent) for event in events)
+    assert [(e.message_id, e.presentation.display_text) for e in events] == [
+        (entries[0].message_id, "first"),
+        (second, "second"),
+    ]
+    assert context._message_sequence == entries[-1].sequence + 1
+    # 已消费的输入不会被下一次模型边界重复领取。
+    assert context.consume_inbox() == []
+    assert len(events) == 2
+
+
+def test_edit_needs_no_unload_because_begin_run_rebuilds_memory(store, monkeypatch):
+    """编辑重跑不卸载 manager：同一个对象在下一次 begin_run 时从库重建，只看到编辑后的上下文。"""
+    from app.core.context.runtime_message_context_manager import SystemPromptBuilder
+
+    monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
+    context = _context_manager(store)
+    context.begin_run(store.run, lambda _event: None)
+    [first] = context.consume_inbox()
+    context.add_message({"role": "assistant", "content": "old answer"})
+    store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
+
+    store.inputs.edit_latest(
+        store.task.id,
+        store.run.id,
+        first.message_id,
+        ConversationRunCommand(display_text="edited"),
+        store.config_id,
+        None,
+    )
+    context.begin_run(store.crud.get(store.run.id), lambda _event: None)
+
+    assert [m.get("content") for m in context.load_message()] == ["system", "edited"]
+    context.add_message({"role": "assistant", "content": "new answer"})
+    sequences = [
+        row.sequence
+        for row in ConversationTaskContextCrud().get(store.task.id, include_in_context=False)
+    ]
+    assert len(sequences) == len(set(sequences))
 
 
 def test_atomic_queue_consumption_and_multiple_users_same_run(store):
@@ -196,6 +257,69 @@ def test_consumed_edit_preserves_prefix_and_run_identity(store):
     assert rows[-1].message_id == mid
     assert store.crud.get(store.run.id).status == "running"
     assert store.crud.get(store.run.id).execution_data == ConversationRunProgress(step_count=5)
+
+
+def test_edit_keeps_replaced_history_out_of_context_and_transport(store):
+    """编辑不删旧 context：被替换的行留给观测页，但不进模型上下文、不进快照，也不会被再次编辑命中。"""
+    from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
+
+    store.inputs.consume(store.task.id, store.run.id, 1)
+    store.context.append(
+        store.task.id, store.run.id, {"role": "assistant", "content": "first response"}, 2
+    )
+    mid = store.inputs.enqueue(
+        store.task.id, ConversationRunCommand(display_text="second"), store.config_id
+    )
+    store.inputs.consume(store.task.id, store.run.id, 3)
+    store.context.append(
+        store.task.id, store.run.id, {"role": "assistant", "content": "replaced answer"}, 4
+    )
+    store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
+
+    def edit(text: str) -> None:
+        store.inputs.edit_latest(
+            store.task.id,
+            store.run.id,
+            mid,
+            ConversationRunCommand(display_text=text),
+            store.config_id,
+            None,
+        )
+        store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
+
+    edit("edited once")
+    edit("edited twice")
+
+    rows = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)
+    by_content = {row.message.get("content"): row for row in rows}
+    for replaced in ("second", "replaced answer", "edited once"):
+        row = by_content[replaced]
+        assert (row.include_in_context, row.project_to_transport) == (False, False)
+    latest = by_content["edited twice"]
+    assert (latest.include_in_context, latest.project_to_transport) == (True, True)
+    assert latest.message_id == mid
+    # 被移出的行保留原序号，新消息只追加在最大序号之后。
+    assert latest.sequence == max(row.sequence for row in rows)
+    assert len({row.sequence for row in rows}) == len(rows)
+
+    in_context = store.context.entries_in_context(store.task.id)
+    assert [e.message.get("content") for e in in_context] == [
+        "first",
+        "first response",
+        "edited twice",
+    ]
+    snapshot_texts = [
+        part.get("text")
+        for message in ConversationTaskStateService().rebuild_state(store.task.id)["runs"][0][
+            "messages"
+        ]
+        for part in message["parts"]
+        if part.get("type") == "text"
+    ]
+    assert "replaced answer" not in snapshot_texts
+    assert "second" not in snapshot_texts
+    assert "edited once" not in snapshot_texts
+    assert "edited twice" in snapshot_texts
 
 
 def test_restart_cancels_wait_and_preserves_inbox(store):
@@ -336,7 +460,46 @@ async def test_send_while_running_queues_by_delivery(store):
     executor.start.assert_not_called()
     entries = store.inputs.consume(store.task.id, store.run.id, 1)
     assert [e.message["content"] for e in entries] == ["first", "now"]
-    assert [p.payload.delivery for p in store.inputs.pending(store.task.id)] == ["after_run"]
+    assert [p.delivery for p in store.inputs.pending(store.task.id)] == ["after_run"]
+
+
+def test_release_for_new_run_only_updates_delivery_column(store):
+    """新 Run 放行只把 delivery 列批量改为 immediate，payload 原样不动；随后消费按序领取全部。"""
+    from app.storage.crud.task_input_crud import TaskInputCrud
+    from app.storage.model.task_input_model import TaskInputModel
+
+    later = store.inputs.enqueue(
+        store.task.id,
+        ConversationRunCommand(display_text="later"),
+        store.config_id,
+        None,
+        "after_run",
+    )
+    with main_session_factory()() as session:
+        rows = TaskInputCrud().list_pending(session, store.task.id)
+        before = {row.id: row.payload for row in rows}
+
+    store.inputs.release_for_new_run(store.task.id)
+
+    with main_session_factory()() as session:
+        rows = session.query(TaskInputModel).filter_by(task_id=store.task.id).all()
+        assert {row.delivery for row in rows} == {"immediate"}
+        assert {row.id: row.payload for row in rows} == before
+    assert [p.delivery for p in store.inputs.pending(store.task.id)] == ["immediate", "immediate"]
+    entries = store.inputs.consume(store.task.id, store.run.id, 1)
+    assert [e.message["content"] for e in entries] == ["first", "later"]
+    assert entries[-1].message_id == later
+
+
+def test_task_input_delivery_rejects_unknown_value(store):
+    """delivery 列只接受两种投递方式，持久化边界拒绝其它值。"""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.storage.model.task_input_model import TaskInputModel
+
+    with pytest.raises(IntegrityError):
+        with main_session_factory().begin() as session:
+            session.add(TaskInputModel(task_id=store.task.id, payload={}, delivery="later"))
 
 
 @pytest.mark.asyncio
@@ -366,7 +529,7 @@ async def test_executor_handoff_waits_for_cleanup_and_starts_new_run(store, monk
     states = get_conversation_run_state_service()
     session = WorkflowSession()
 
-    async def drive(run_id, base_profile=None):
+    async def drive(run_id, definition=None):
         order.append(("start", run_id, session.task_execution(store.task.id)))
         sequence = store.context.max_sequence(store.task.id) + 1
         store.inputs.consume(store.task.id, run_id, sequence)
@@ -524,6 +687,7 @@ async def test_queue_commands_during_stream_preserve_output_and_replace_one_row(
             )
             assert [p["text"] for p in parts(cold)] == ["thinking", first + "B"]
             reloaded = _context_manager(store)
+            reloaded.begin_run(store.run, get_conversation_event_projector().process)
             assert [m["role"] for m in reloaded.load_message()] == ["system", "user"]
             before = state_service.get_state(store.task.id)
             assert [p["text"] for p in parts(before)] == [
@@ -633,8 +797,8 @@ def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, 
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     context = _context_manager(store)
-    context.begin_run(store.run)
-    store.inputs.consume_into_context(context, store.run.id)
+    context.begin_run(store.run, get_conversation_event_projector().process)
+    context.consume_inbox()
     user = store.context.entries_in_context(store.task.id)[1]
     assert user.metadata.presentation.display_text == "first"
     assert "input_text" not in user.metadata.presentation.model_dump()
@@ -686,6 +850,7 @@ def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, 
     completed = store.context.entries_in_context(store.task.id)[-1]
     assert (completed.message_id, completed.sequence) == (waiting.message_id, waiting.sequence)
     reloaded = _context_manager(store)
+    reloaded.begin_run(store.run, get_conversation_event_projector().process)
     assert reloaded.load_message() == context.load_message()
     assert [m["role"] for m in reloaded.load_message()] == ["system", "user", "assistant", "tool"]
     assert all(
@@ -708,8 +873,8 @@ async def test_queue_during_tool_preview_keeps_pending_part_executable(store, mo
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     context = _context_manager(store)
-    context.begin_run(store.run)
-    store.inputs.consume_into_context(context, store.run.id)
+    context.begin_run(store.run, get_conversation_event_projector().process)
+    context.consume_inbox()
     state_service = ConversationTaskStateService()
     context.save_model_response(
         sdk_completion(
@@ -768,8 +933,8 @@ def test_cancelled_sdk_output_is_durable_but_excluded_on_resume(store, monkeypat
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     context = _context_manager(store)
-    context.begin_run(store.run)
-    store.inputs.consume_into_context(context, store.run.id)
+    context.begin_run(store.run, get_conversation_event_projector().process)
+    context.consume_inbox()
     events = sdk_events([{"content": "partial"}, {"content": " tail"}], finish_reason=None)
     last_event = list(events)[-1]
     context.save_model_response(
@@ -779,7 +944,7 @@ def test_cancelled_sdk_output_is_durable_but_excluded_on_resume(store, monkeypat
     assert rows[-1].message["content"] == "partial tail"
     assert not rows[-1].include_in_context
     reloaded = _context_manager(store)
-    reloaded.begin_run(store.run)
+    reloaded.begin_run(store.run, get_conversation_event_projector().process)
     assert [m["role"] for m in reloaded.load_message()] == ["system", "user"]
 
 
@@ -851,7 +1016,7 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
         save_execution=states.save_execution,
         update_completed_result=states.update_completed_result,
     )
-    monkeypatch.setattr(run_driver, "_resolve_profile", lambda *_: SimpleNamespace())
+    monkeypatch.setattr(run_driver, "_runtime_config", lambda *_: SimpleNamespace())
     # 每次驱动现读 Run：同一用例先驱动、再续跑同一 Run。
     monkeypatch.setattr(
         run_driver, "_build_context", lambda *_: _real_context(store, run_state=run_state)

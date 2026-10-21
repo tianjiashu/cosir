@@ -19,6 +19,7 @@ def loop(monkeypatch):
     calls = []
     context = SimpleNamespace(
         begin_run=lambda *args: None,
+        consume_inbox=lambda: calls.append("queue"),
         load_message=lambda: [
             {"role": "user", "content": "问题"},
             {"role": "assistant", "content": "自然回答"},
@@ -30,13 +31,12 @@ def loop(monkeypatch):
     operations = runtime_stub(
         run=run,
         task=SimpleNamespace(id=run.task_id),
-        profile=profile,
+        agent=SimpleNamespace(definition=profile, model_settings=None),
         allows_tools=frozenset({"review"}),
         run_state=run_state_stub(
             save_execution=lambda _run_id, value: progress.append(value),
             transition=lambda _run_id, transition, **k: calls.append(transition.name.lower()),
         ),
-        inbox=SimpleNamespace(consume_into_context=lambda *args: calls.append("queue")),
         task_space=SimpleNamespace(task_tool_schemas=(), get_context_manager=lambda **k: context),
     )
     monkeypatch.setattr(
@@ -147,7 +147,7 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
     成功后必须立即结束：回归点是成功写入后又落到失败写入，把 end_reason 覆盖成失败。
     """
     from app.core.workflow.node_helper.common import _runtime_context
-    loop.ops.profile.structured_output = SimpleNamespace(
+    loop.ops.agent.definition.structured_output = SimpleNamespace(
         name="result", json_schema={"type": "object", "required": ["ok"]}
     )
     loop.ops.task = SimpleNamespace(id=2, workspace_id=1)

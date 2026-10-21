@@ -3,7 +3,7 @@
 本文件只校验事件契约本身（判别式路由、字段约束、不可变性与联合穷尽性），不校验任何
 投影行为——投影由后续 applier 承担。
 
-穷尽性断言是本文件的核心价值：新增事件类型时若忘记登记进 ``ConversationEvent`` 判别式
+穷尽性断言是本文件的核心价值：新增事件类型时若忘记登记进 ``WorkflowEvent`` 判别式
 联合，本测试立即失败，避免「事件已定义但消费者永远收不到」的静默缺陷。
 """
 
@@ -12,7 +12,6 @@ from typing import Literal, get_args
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from app.assistant_transport.event import ConversationEvent, UserInputAppendedEvent
 from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
@@ -22,24 +21,26 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
+    UserInputConsumedEvent,
+    WorkflowEvent,
     WorkflowEventEnvelope,
 )
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
-_ADAPTER: TypeAdapter[ConversationEvent] = TypeAdapter(ConversationEvent)
+_ADAPTER: TypeAdapter[WorkflowEvent] = TypeAdapter(WorkflowEvent)
 
 # 每种事件的最小合法载荷与其期望类型；``type`` 是判别式路由的唯一依据。
 _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     ({"type": "run_initialized", "task_id": 1, "run_id": 1}, RunInitializedEvent),
     (
         {
-            "type": "user_input_appended",
+            "type": "user_input_consumed",
             "task_id": 1,
             "run_id": 1,
             "message_id": "message-1",
-            "parts": [{"type": "text", "text": "读一下这个文件", "status": "completed"}],
+            "presentation": {"display_text": "读一下这个文件"},
         },
-        UserInputAppendedEvent,
+        UserInputConsumedEvent,
     ),
     (
         {
@@ -273,14 +274,14 @@ def test_event_is_frozen() -> None:
         无；只做内存内校验。
     """
 
-    event = UserInputAppendedEvent(
+    event = UserInputConsumedEvent(
         task_id=1,
         run_id=1,
         message_id="message-1",
-        parts=[{"type": "text", "text": "原始输入", "status": "completed"}],
+        presentation={"display_text": "原始输入"},
     )
     with pytest.raises(ValidationError):
-        event.parts = []
+        event.message_id = "other"
 
 
 def test_run_status_uses_domain_enumeration() -> None:
@@ -332,7 +333,7 @@ def test_union_covers_every_event_type() -> None:
     """
 
     declared = set(WorkflowEventEnvelope.__subclasses__())
-    registered = set(get_args(get_args(ConversationEvent)[0]))
+    registered = set(get_args(get_args(WorkflowEvent)[0]))
     assert declared == registered
 
 
@@ -340,7 +341,7 @@ def test_every_event_type_has_a_planner() -> None:
     """联合中的每个事件类型都必须注册投影 planner，否则投影时以 KeyError 暴露。"""
     from app.assistant_transport.projection.event_projection import _PLANNERS
 
-    assert set(get_args(get_args(ConversationEvent)[0])) == set(_PLANNERS)
+    assert set(get_args(get_args(WorkflowEvent)[0])) == set(_PLANNERS)
 
 
 def test_event_type_literals_are_unique() -> None:
@@ -360,7 +361,7 @@ def test_event_type_literals_are_unique() -> None:
     """
 
     literals: list[str] = []
-    for member in get_args(get_args(ConversationEvent)[0]):
+    for member in get_args(get_args(WorkflowEvent)[0]):
         args = get_args(member.model_fields["type"].annotation)
         assert args, f"{member.__name__} 的 type 字段缺少 Literal 标注"
         literals.extend(args)
@@ -383,7 +384,7 @@ def test_type_annotation_shape_is_literal() -> None:
         无；只做类型反射。
     """
 
-    event: ConversationEvent = RunInitializedEvent(task_id=1, run_id=1)
+    event: WorkflowEvent = RunInitializedEvent(task_id=1, run_id=1)
     annotation = type(event).model_fields["type"].annotation
     assert get_args(annotation) == ("run_initialized",)
     assert isinstance(event.type, str)

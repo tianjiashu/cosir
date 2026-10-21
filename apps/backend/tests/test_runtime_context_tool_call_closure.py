@@ -862,7 +862,7 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
         next_sequence=2,
     )
     with pytest.raises(ContextProtocolError):
-        TaskInputService().consume_into_context(manager, run.id)
+        manager.consume_inbox()
     requested = []
 
     async def stream(*_args, **_kwargs):

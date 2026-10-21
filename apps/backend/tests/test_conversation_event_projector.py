@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 
-from app.assistant_transport.event import UserInputAppendedEvent
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.projection.user_input_projection import build_user_input_parts
 from app.assistant_transport.service.conversation_event_projector import (
@@ -32,10 +31,12 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
+    UserInputConsumedEvent,
 )
 from app.core.tools.schemas import ToolObservation
 from app.core.tools.tool_execute.tool_terminal_projection import terminal_event
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
 
@@ -113,11 +114,11 @@ def _append_user_input(
     """追加一条已消费用户输入，生成 user 消息与其后的 assistant 占位。"""
 
     projector.process(
-        UserInputAppendedEvent(
+        UserInputConsumedEvent(
             task_id=task_id,
             run_id=run_id,
             message_id=f"user-{run_id}",
-            parts=[{"type": "text", "text": "你好", "status": "completed"}],
+            presentation=UserInputPresentation(display_text="你好"),
         )
     )
 
@@ -214,8 +215,25 @@ def test_user_input_projects_ordered_text_image_and_file_parts(
         {"type": "image", "image": "cosir-attachment://" + "a" * 64},
     ]
 
+    image_id = "a" * 64
     event_projector.process(
-        UserInputAppendedEvent(task_id=1, run_id=1, message_id="user-1", parts=parts)
+        UserInputConsumedEvent(
+            task_id=1,
+            run_id=1,
+            message_id="user-1",
+            presentation=UserInputPresentation(
+                display_text=f"请看[[cosir-file:readme]]和这张图[[cosir-image:{image_id}]]",
+                image_paths=[f"attachments/{image_id}.png"],
+                attachments=[
+                    {
+                        "id": "readme",
+                        "name": "README.md",
+                        "content_type": "text/markdown",
+                        "path": "attachments/readme.md",
+                    }
+                ],
+            ),
+        )
     )
 
     user_parts = _run(snapshots.states[1], 1)["messages"][0]["parts"]
@@ -228,18 +246,21 @@ def test_user_input_supports_attachment_only_and_duplicate_event(
 ) -> None:
     event_projector, snapshots = projector
     _init_run(event_projector)
-    event = UserInputAppendedEvent(
+    event = UserInputConsumedEvent(
         task_id=1,
         run_id=1,
         message_id="user-1",
-        parts=[
-            {
-                "type": "file",
-                "file": "cosir-local-file:only-file",
-                "name": "a.txt",
-                "contentType": "text/plain",
-            }
-        ],
+        presentation=UserInputPresentation(
+            display_text="[[cosir-file:only-file]]",
+            attachments=[
+                {
+                    "id": "only-file",
+                    "name": "a.txt",
+                    "content_type": "text/plain",
+                    "path": "attachments/only-file.txt",
+                }
+            ],
+        ),
     )
 
     first = event_projector.process(event)
@@ -247,7 +268,14 @@ def test_user_input_supports_attachment_only_and_duplicate_event(
 
     assert first is not None
     assert second is None
-    assert _run(snapshots.states[1], 1)["messages"][0]["parts"] == event.parts
+    assert _run(snapshots.states[1], 1)["messages"][0]["parts"] == [
+        {
+            "type": "file",
+            "file": "cosir-local-file:only-file",
+            "name": "a.txt",
+            "contentType": "text/plain",
+        }
+    ]
 
 
 def test_build_user_input_parts_preserves_mixed_composer_order() -> None:
@@ -284,7 +312,12 @@ def test_build_user_input_parts_deduplicates_repeated_attachment_markers() -> No
         f"前[[cosir-image:{image_id}]]中[[cosir-image:{image_id}]]后 "
         "[[cosir-file:readme]][[cosir-file:readme]]",
         [f"attachments/{image_id}.png"],
-        [{"id": "readme", "name": "README.md", "content_type": "text/markdown"}],
+        [{
+                        "id": "readme",
+                        "name": "README.md",
+                        "content_type": "text/markdown",
+                        "path": "attachments/readme.md",
+                    }],
     )
 
     assert [part["type"] for part in parts] == ["text", "image", "text", "text", "file"]
@@ -845,11 +878,11 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
-        lambda: UserInputAppendedEvent(
+        lambda: UserInputConsumedEvent(
             task_id=1,
             run_id=1,
             message_id="user-1",
-            parts=[{"type": "text", "text": "你好", "status": "completed"}],
+            presentation=UserInputPresentation(display_text="你好"),
         ),
     )
     _assert_reapply_changes_nothing(

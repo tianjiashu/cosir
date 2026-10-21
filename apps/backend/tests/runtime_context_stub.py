@@ -105,12 +105,16 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         ),
         task=SimpleNamespace(id=1),
         workspace=SimpleNamespace(id=1, root_path="."),
-        profile=SimpleNamespace(structured_output=None, max_steps=10),
+        agent=SimpleNamespace(
+            definition=SimpleNamespace(structured_output=None, max_steps=10),
+            model_settings=None,
+            model_config_id=1,
+        ),
         allows_tools=frozenset(),
         tool_definitions={},
         tool_executor=None,
         run_state=run_state_stub(),
-        inbox=SimpleNamespace(consume_into_context=lambda *_args: None),
+        inbox=SimpleNamespace(consume=lambda *_args: []),
         task_space=SimpleNamespace(
             task_tool_schemas=(),
             defer_runtime_notice=lambda _notice: None,

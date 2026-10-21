@@ -42,14 +42,14 @@ async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> 
     monkeypatch.setattr(
         run_driver, "get_conversation_event_projector", lambda: SimpleNamespace(process=print)
     )
-    profile = SimpleNamespace()
+    agent = SimpleNamespace()
     result = run_driver._build_context(
         workspace=SimpleNamespace(id=13, root_path="/workspace"),
         task=SimpleNamespace(id=1),
         run=SimpleNamespace(id=7, options=SimpleNamespace(ban_tools=banned)),
-        agent_profile=profile,
+        agent=agent,
     )
-    assert result.profile is profile
+    assert result.agent is agent
     assert result.allows_tools == {"read_file", "write_file"} - set(banned)
     assert len(notices) == 1
     assert isinstance(notices[0], RuntimeNotice)

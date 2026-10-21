@@ -202,7 +202,7 @@ def _make_runtime(
 
     monkeypatch.setattr(run_driver.HookInterceptor, "async_safe_fire", _noop_fire)
     monkeypatch.setattr(run_driver, "_build_context", _build)
-    monkeypatch.setattr(run_driver, "_resolve_profile", lambda *_args: object())
+    monkeypatch.setattr(run_driver, "_runtime_config", lambda *_args: object())
     monkeypatch.setattr(
         run_driver,
         "get_conversation_run_service",

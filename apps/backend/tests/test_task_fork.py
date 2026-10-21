@@ -78,6 +78,34 @@ def test_fork_terminal_history_while_later_run_is_active(fork_store, terminal, l
     assert task_runtime_spaces.existing_spaces() == ()
 
 
+def test_fork_copies_only_projected_rows(fork_store):
+    """不投影的行（编辑替换掉的历史）不进新 Task；只投影不进上下文的行（中断输出）照样复制。"""
+    store = fork_store
+    run = append_run(store, "completed")
+    interrupted_sequence = store.context.max_sequence(store.task.id) + 1
+    store.context.append(
+        store.task.id,
+        run.id,
+        {"role": "assistant", "content": "interrupted"},
+        interrupted_sequence,
+        include_in_context=False,
+    )
+    replaced_sequence = interrupted_sequence + 1
+    store.context.append(
+        store.task.id, run.id, {"role": "user", "content": "replaced"}, replaced_sequence
+    )
+    with store.factory.begin() as session:
+        store.context._crud.exclude_from_sequence(store.task.id, replaced_sequence, session)
+
+    target = asyncio.run(store.service.fork_task(store.task.id, run.id))
+
+    cloned = store.contexts.get(target.id, include_in_context=False)
+    contents = [row.message.get("content") for row in cloned]
+    assert "replaced" not in contents
+    interrupted = next(row for row in cloned if row.message.get("content") == "interrupted")
+    assert (interrupted.include_in_context, interrupted.project_to_transport) == (False, True)
+
+
 @pytest.mark.parametrize("status", ["running", "waiting_for_input"])
 @pytest.mark.parametrize("boundary_is_active", [True, False])
 def test_reject_active_run_anywhere_in_selected_prefix(fork_store, status, boundary_is_active):

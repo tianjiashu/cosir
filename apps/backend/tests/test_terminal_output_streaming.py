@@ -15,7 +15,6 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.assistant_transport.event import UserInputAppendedEvent
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -34,6 +33,7 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
+    UserInputConsumedEvent,
 )
 from app.core.tools.display.terminal_display import build_terminal_display_data
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
@@ -49,6 +49,7 @@ from app.core.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.core.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.core.tools.tool_handler.terminal.output_collector import _OutputCollector
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
+from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
 
 
@@ -357,7 +358,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
             )
 
     sink = lambda _event: None  # noqa: E731
-    profile = SimpleNamespace()
+    agent = SimpleNamespace()
     rc = runtime_stub(
         tool_executor=Executor(),
         allows_tools=frozenset({"execute_terminal"}),
@@ -365,7 +366,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
         run=SimpleNamespace(id=9, task_id=7),
         task=SimpleNamespace(id=7),
         workspace=SimpleNamespace(id=2, root_path=str(tmp_path)),
-        profile=profile,
+        agent=agent,
         event_sink=sink,
     )
 
@@ -378,7 +379,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
     assert (context.task_id, context.run_id, context.workspace_id) == (7, 9, 2)
     assert context.workspace_root == tmp_path
     assert context.step_id == "step-1"
-    assert context.agent_profile is profile
+    assert context.agent is agent
     assert context.event_sink is sink
     assert context.event_loop is loop
 
@@ -505,9 +506,11 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
     projector.process(
-        UserInputAppendedEvent(
-            task_id=7, run_id=9, message_id="user-1",
-            parts=[{"type": "text", "text": "run tool", "status": "completed"}],
+        UserInputConsumedEvent(
+            task_id=7,
+            run_id=9,
+            message_id="user-1",
+            presentation=UserInputPresentation(display_text="run tool"),
         )
     )
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
@@ -546,9 +549,11 @@ def test_final_terminal_status_preserves_complete_streamed_display_output() -> N
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
     projector.process(
-        UserInputAppendedEvent(
-            task_id=7, run_id=9, message_id="user-1",
-            parts=[{"type": "text", "text": "run tool", "status": "completed"}],
+        UserInputConsumedEvent(
+            task_id=7,
+            run_id=9,
+            message_id="user-1",
+            presentation=UserInputPresentation(display_text="run tool"),
         )
     )
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
@@ -638,9 +643,11 @@ def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, Conversat
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
     projector.process(
-        UserInputAppendedEvent(
-            task_id=7, run_id=9, message_id="user-1",
-            parts=[{"type": "text", "text": "run tool", "status": "completed"}],
+        UserInputConsumedEvent(
+            task_id=7,
+            run_id=9,
+            message_id="user-1",
+            presentation=UserInputPresentation(display_text="run tool"),
         )
     )
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))

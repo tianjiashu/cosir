@@ -21,7 +21,7 @@ class _FakeContextManager:
 
     def __init__(self, agent_type: AgentProfileType, workspace_root: str) -> None:
         self.agent_profile = SimpleNamespace(agent_type=agent_type)
-        self.workspace_root = workspace_root
+        self.workspace = SimpleNamespace(root_path=workspace_root)
 
 
 @pytest.fixture(autouse=True)
@@ -169,3 +169,48 @@ def test_broadcast_notice_is_unchanged_across_tasks_and_message_conversion() -> 
     assert first_hint.count(notice.content) == 1
     assert notice.to_hint_text() == notice.content
     assert delta.to_notice() == notice
+
+
+@pytest.mark.parametrize("remembered_profile", [True, False])
+def test_unmaterialized_context_space_is_skipped_without_creating_manager(
+    monkeypatch: pytest.MonkeyPatch, remembered_profile: bool
+) -> None:
+    """未装配 context 的 space：两个广播都不通知，且过滤判断不得顺带创建 manager。
+
+    回归：过滤曾调用 ``get_context_manager()``。space 记得 Agent profile 时它会为一次判断构造
+    manager（读库，新 Task 还会落库系统提示词）；没有 profile 时直接抛 ``RuntimeError``，让整次
+    广播中断。
+    """
+    from app.core.context import runtime_message_context_manager as manager_module
+    from app.task_runtime.agent_catalog_change import AgentCatalogChange
+    from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
+        broadcast_agent_catalog_change,
+    )
+
+    def forbid_creation(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("广播过滤不得创建 context manager")
+
+    monkeypatch.setattr(manager_module, "RuntimeMessageContextManager", forbid_creation)
+    space = task_runtime_spaces.get_or_create(40)
+    if remembered_profile:
+        space.agent_profile = SimpleNamespace(
+            agent_type=AgentProfileType.MAIN, allowed_tools=["delegate_task"]
+        )
+    delta = build_system_prompt_delta(
+        source=SystemPromptDeltaSource.GLOBAL_INSTRUCTIONS,
+        previous="旧全局规则\n",
+        current="新全局规则\n",
+    )
+    assert delta is not None
+    change = AgentCatalogChange(
+        scope=None,
+        action="created",
+        agent_id="writer",
+        previous_description=None,
+        current_description="编写文档",
+    )
+
+    assert broadcast_system_prompt_delta(delta) == 0
+    assert broadcast_agent_catalog_change(change) == 0
+    assert space.live_context_manager() is None
+    assert space.take_runtime_notices() == ""

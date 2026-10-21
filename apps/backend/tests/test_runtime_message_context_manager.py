@@ -86,29 +86,26 @@ def _ai_message(*call_ids: str) -> ChatCompletionAssistantMessageParam:
 
 
 def test_runtime_message_context_manager_owns_next_sequence_after_run_restart() -> None:
-    """序号游标由 manager 独占：构造时从持久化最大序号推进一步，之后只由写入自增。"""
+    """序号游标由 manager 独占：begin_run 从持久化最大序号推进一步，之后只由写入自增。"""
 
     context_service = _ContextService(max_sequence=1)
-    manager = _manager(context_service, next_sequence=2)
-    manager.begin_run(
-        SimpleNamespace(task_id=7, id=2),
-    )
+    manager = _manager(context_service, next_sequence=0)
+    manager.begin_run(SimpleNamespace(task_id=7, id=2), lambda _event: None)
     manager.add_message({"role": "user", "content": "second message"})
 
     assert context_service.appended[0][3] == 2
     assert manager._message_sequence == 3
 
 
-def test_runtime_message_context_manager_resume_keeps_persisted_run_entries() -> None:
+def test_begin_run_rebuilds_memory_entries_from_persisted_context() -> None:
+    """begin_run 无条件从库重建内存列表与序号：上一个 Run 留下的过时内存不会被沿用。"""
     context_service = _ContextService(max_sequence=4)
     context_service.loaded = [
         ContextEntry({"role": "user", "content": "existing"}, 2, 3),
     ]
-    manager = _manager(context_service, next_sequence=5)
-    manager._entries = list(context_service.loaded)
-    manager.begin_run(
-        SimpleNamespace(task_id=7, id=2),
-    )
+    manager = _manager(context_service, next_sequence=1)
+    manager._entries = [ContextEntry({"role": "user", "content": "stale"}, 1, 1)]
+    manager.begin_run(SimpleNamespace(task_id=7, id=2), lambda _event: None)
 
     assert context_service.deleted == []
     assert manager.current_run_id == 2
@@ -168,7 +165,7 @@ def test_save_model_response_writes_once_and_controls_context_membership(include
     assert len(context_service.appended) == 1
     assert context_service.appended[0][2]["content"] == "最后收到的内容"
     assert context_service.appended[0][4] is include_in_context
-    assert manager.next_sequence == 6
+    assert manager._message_sequence == 6
     assert len(manager._entries) == int(include_in_context)
 
 
@@ -186,7 +183,7 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
         include_in_context=False,
         registered_tool_names=set(),
     )
-    assert manager.next_sequence == 6
+    assert manager._message_sequence == 6
     assert manager._entries == []
     record = service.appended[-1][2]
     assert record.message_id == identity
@@ -200,7 +197,7 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
     )
     assert service.appended[-1][2].include_in_context
     assert manager._entries == [entry]
-    assert manager.next_sequence == 6
+    assert manager._message_sequence == 6
     # 提交即结束本次草稿：下一次调用必须新起一行。
     assert manager._draft_response is None
 

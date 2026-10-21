@@ -123,7 +123,7 @@ def test_team_list_converts_to_domain_map_and_approved_replay_uses_decision(monk
     received = []
     profile = object()
     context = SimpleNamespace(
-        agent_profile=profile,
+        agent=profile,
         event_loop=SimpleNamespace(is_closed=lambda: False),
         user_decision=None,
     )

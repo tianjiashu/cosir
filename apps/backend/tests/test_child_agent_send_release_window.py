@@ -36,7 +36,7 @@ class _Runtime:
     def __init__(self) -> None:
         self.started: list[int] = []
 
-    async def drive(self, run_id: int, base_profile=None) -> None:
+    async def drive(self, run_id: int, definition=None) -> None:
         run = ConversationRunCrud().get(run_id)
         with main_session_factory().begin() as session:
             crud = TaskInputCrud()

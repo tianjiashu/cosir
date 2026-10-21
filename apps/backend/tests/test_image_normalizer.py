@@ -3,11 +3,11 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from app.assistant_transport.event import UserInputAppendedEvent
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_task_state_service import _apply_mutation
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
-from app.core.events import RunInitializedEvent
+from app.core.events import RunInitializedEvent, UserInputConsumedEvent
+from app.models.conversation_input import UserInputPresentation
 from app.service.attachment.image_normalizer import (
     ImageNormalizationError,
     normalize_image,
@@ -73,7 +73,14 @@ def test_run_initialized_has_no_messages_and_input_event_projects_image() -> Non
 
     image_part = {"type": "image", "image": "cosir-attachment://" + "1" * 64}
     snapshot = _apply_planned(
-        UserInputAppendedEvent(task_id=1, run_id=1, message_id="user-1", parts=[image_part]),
+        UserInputConsumedEvent(
+            task_id=1,
+            run_id=1,
+            message_id="user-1",
+            presentation=UserInputPresentation(
+                display_text="", image_paths=[f"attachments/{'1' * 64}.png"]
+            ),
+        ),
         snapshot,
     )
     user_message, assistant_message = snapshot["runs"][0]["messages"]

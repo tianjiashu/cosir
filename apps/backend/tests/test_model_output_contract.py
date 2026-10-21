@@ -109,6 +109,7 @@ class _ModelHarness:
                 )
 
         self.runtime_context = SimpleNamespace(
+            consume_inbox=lambda: [],
             load_message=lambda: [],
             add_message=add_message,
             save_model_response=save_model_response,

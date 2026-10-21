@@ -24,6 +24,7 @@ from app.agent_team.registry import AgentTeamConfigurationRegistry
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_tool_system
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
+from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings
 from app.core.tools.schemas import (
     EXECUTING_DECISION_KINDS,
@@ -113,7 +114,7 @@ def _bare_tool() -> AgentTeamRunTool:
 def _context(user_decision: UserDecision | None = None) -> ToolExecutionContext:
     """构造带父 Run 事实的执行上下文。
 
-    生产上下文的 ``agent_profile`` 由 runtime 注入本次 Run 的 per-run
+    生产上下文的 ``agent`` 由 runtime 注入本次 Run 的
     profile；工具依赖它准备节点模型设置，因此这里默认注入一份已物化的父 profile；批准分支
     还要求父 Run 事件循环可用，因此一并注入未关闭的循环身份。需要验证
     「未注入」口径的用例直接自行构造 ``ToolExecutionContext``。
@@ -126,7 +127,7 @@ def _context(user_decision: UserDecision | None = None) -> ToolExecutionContext:
         workspace_root=Path("C:/ws-root"),
         run_id=2,
         user_decision=user_decision,
-        agent_profile=_parent_run_profile(),
+        agent=_parent_run_profile(),
         event_loop=_OPEN_LOOP,
     )
 
@@ -176,21 +177,33 @@ def _materialized_model_settings() -> ModelSettings:
     )
 
 
-def _parent_run_profile() -> AgentProfile:
-    """构造本次 Run 由运行时注入的父 Agent profile（主 Agent + 已物化模型设置）。
+def _runtime(definition: AgentProfile) -> AgentRuntimeConfig:
+    """把定义包成运行时配置：沿用定义自带的模型设置与选择，测试不经 ``for_run`` 物化。"""
+
+    return AgentRuntimeConfig(
+        definition=definition,
+        model_settings=definition.model_settings,
+        model_config_id=definition.model_config_id or 1,
+    )
+
+
+def _parent_run_profile() -> AgentRuntimeConfig:
+    """构造本次 Run 由运行时注入的父 Agent 运行时配置（主 Agent + 已物化模型设置）。
 
     潜在缺陷：若调用方改用注册表共享单例（内置 profile 的 ``model_settings`` 只有偏好项、
     ``model_config_id`` 为空），节点模型设置回落会走 ``get_config(None)`` 抛 ``KeyError``。
     """
 
-    return AgentProfile(
-        agent_id="main_agent",
-        role="main_agent",
-        system_prompt="main system prompt",
-        allowed_tools=["agent_team", "read_file"],
-        agent_type=AgentProfileType.MAIN,
-        model_config_id=1,
-        model_settings=_materialized_model_settings(),
+    return _runtime(
+        AgentProfile(
+            agent_id="main_agent",
+            role="main_agent",
+            system_prompt="main system prompt",
+            allowed_tools=["agent_team", "read_file"],
+            agent_type=AgentProfileType.MAIN,
+            model_config_id=1,
+            model_settings=_materialized_model_settings(),
+        )
     )
 
 
@@ -431,9 +444,9 @@ def test_approve_decision_routes_to_start_branch_only() -> None:
     row = SimpleNamespace(id=7, status=AgentTeamRunStatus.RUNNING.value, team_id="code-quality")
 
     def confirm_and_start(
-        team_run_id, configuration, *, goal, node_goals, parent_agent_profile, event_loop
+        team_run_id, configuration, *, goal, node_goals, parent_agent, event_loop
     ):
-        calls.append((team_run_id, configuration, goal, node_goals, parent_agent_profile))
+        calls.append((team_run_id, configuration, goal, node_goals, parent_agent))
         return row
 
     tool.agent_team_run_service = SimpleNamespace(confirm_and_start=confirm_and_start)
@@ -462,7 +475,7 @@ def test_approve_decision_routes_to_start_branch_only() -> None:
             _configuration(),
             "交付报告",
             _node_goal_map(develop="实现", review="审查"),
-            context.agent_profile,
+            context.agent,
         )
     ]
 
@@ -773,7 +786,7 @@ def test_preparation_service_builds_preview_nodes_and_runtime_snapshots(monkeypa
         parent_task_id=1,
         parent_run_id=2,
         workspace_id=3,
-        parent_agent_profile=child,
+        parent_agent=_runtime(child),
     )
 
     assert set(result.node_runtime_snapshots) == {"develop", "review"}
@@ -803,7 +816,7 @@ def test_preparation_service_rejects_blank_goal(monkeypatch) -> None:
             parent_task_id=1,
             parent_run_id=2,
             workspace_id=3,
-            parent_agent_profile=child,
+            parent_agent=_runtime(child),
         )
 
     assert captured.value.retryable is True
@@ -838,7 +851,7 @@ def test_preparation_service_validates_node_goal_coverage(
             parent_task_id=1,
             parent_run_id=2,
             workspace_id=3,
-            parent_agent_profile=child,
+            parent_agent=_runtime(child),
         )
 
     assert expected in str(captured.value)

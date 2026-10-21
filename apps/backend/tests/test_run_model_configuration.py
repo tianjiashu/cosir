@@ -3,10 +3,12 @@ from datetime import UTC, datetime
 import pytest
 
 from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.llm_provider import model_factory
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.conversation_run_record import ConversationRunRecord
+from app.models.model_config_record import ModelConfigRecord
 
 
 def _run(*, reasoning_effort: ReasoningEffort | None) -> ConversationRunRecord:
@@ -25,21 +27,26 @@ def _run(*, reasoning_effort: ReasoningEffort | None) -> ConversationRunRecord:
 
 
 def _profile() -> AgentProfile:
+    """Agent 定义只带用户偏好；连接与能力字段来自本 Run 选中的模型配置。"""
     return AgentProfile(
         agent_id="main_agent",
         role="主 Agent",
         system_prompt="system",
-        model_settings=ModelSettings(
-            temperature=0.2,
-            reasoning_effort="high",
-            base_url="https://example.test",
-            api_key="secret",
-            model_name="profile-model",
-            context_window_k=64,
-            supports_thinking=False,
-            supports_reasoning_effort=True,
-            supports_image=False,
-        ),
+        model_settings=ModelSettings(temperature=0.2, reasoning_effort="high"),
+    )
+
+
+def _model_config() -> ModelConfigRecord:
+    return ModelConfigRecord(
+        id=7,
+        config_name="run",
+        base_url="https://example.test",
+        api_key="secret",
+        model_name="profile-model",
+        context_window_k=64,
+        supports_thinking=False,
+        supports_reasoning_effort=True,
+        supports_image=False,
     )
 
 
@@ -75,9 +82,9 @@ def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
         _build_chat_model,
     )
 
-    derived = _profile().derive_for_run(_run(reasoning_effort="low"))
+    agent = AgentRuntimeConfig.for_run(_profile(), _run(reasoning_effort="low"), _model_config())
     resolved = model_factory.resolve_chat_model(
-        agent_profile=derived,
+        model_settings=agent.model_settings,
         tools=[{"name": "read_file"}],
     )
 

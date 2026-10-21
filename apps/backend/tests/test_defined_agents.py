@@ -17,10 +17,12 @@ from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
+from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.core.agents.model_settings import ModelSettings
 from app.core.context.system_prompt_builder import SystemPromptBuilder
 from app.models.conversation_run_options import ConversationRunOptions
+from app.models.model_config_record import ModelConfigRecord
 
 
 def _code_defined_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list:
@@ -188,18 +190,27 @@ def test_builtin_children_leave_model_route_to_parent_run(
 
 
 def test_child_profile_model_settings_keep_custom_overrides() -> None:
-    """per-run 派生保留 profile 自有模型参数覆盖，不原地写共享单例。"""
+    """运行时配置保留定义自有的模型偏好，不原地写共享定义。"""
 
     child = general_child_agent()
     custom = ModelSettings(temperature=0.2)
     child.model_settings = custom
 
-    derived = child.derive_for_run(
-        run=SimpleNamespace(model_config_id=7, options=ConversationRunOptions())
+    agent = AgentRuntimeConfig.for_run(
+        child,
+        SimpleNamespace(options=ConversationRunOptions()),  # type: ignore[arg-type]
+        ModelConfigRecord(
+            id=7,
+            config_name="run",
+            base_url="https://run.test",
+            api_key="key",
+            model_name="run-model",
+            context_window_k=64,
+        ),
     )
 
-    assert derived.model_settings.temperature == 0.2
-    assert derived.model_settings is not custom
-    assert derived.model_config_id == 7
+    assert agent.model_settings.temperature == 0.2
+    assert agent.model_settings is not custom
+    assert agent.model_config_id == 7
     assert child.model_config_id is None
-    assert child.run is None
+    assert child.model_settings is custom

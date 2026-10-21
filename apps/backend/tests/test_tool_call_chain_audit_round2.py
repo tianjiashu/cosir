@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 
-from app.assistant_transport.event import UserInputAppendedEvent
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -29,8 +28,10 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
+    UserInputConsumedEvent,
 )
 from app.core.tools.schemas import ToolObservation
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 
@@ -129,11 +130,11 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
     projector.process(
-        UserInputAppendedEvent(
+        UserInputConsumedEvent(
             task_id=_TASK_ID,
             run_id=_RUN_ID,
             message_id="u1",
-            parts=[{"type": "text", "text": "test", "status": "completed"}],
+            presentation=UserInputPresentation(display_text="test"),
         )
     )
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))

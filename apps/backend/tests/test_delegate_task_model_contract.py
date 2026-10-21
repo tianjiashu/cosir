@@ -142,7 +142,6 @@ def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_c
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=2,
-        agent_profile=registry.resolve("system", "main_agent"),
     )
 
     result = tool.execute(
