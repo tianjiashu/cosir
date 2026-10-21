@@ -170,7 +170,11 @@ def test_release_after_late_cancel_on_completed_run_skips_handoff(
     services = _StubServices(ConversationRunStatus.COMPLETED.value)
     session, executor, started = _build(monkeypatch, services)
     handoffs: list[int] = []
-    monkeypatch.setattr(session, "open_queued_run", handoffs.append)
+
+    async def record_handoff(task_id: int) -> None:
+        handoffs.append(task_id)
+
+    monkeypatch.setattr(session, "_open_run", record_handoff)
 
     async def scenario() -> None:
         _register_execution(executor, asyncio.current_task())

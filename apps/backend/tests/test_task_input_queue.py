@@ -1,5 +1,7 @@
+
 """真实 SQLite 验证 inbox 转移、编辑和重启边界。"""
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -176,7 +178,7 @@ def test_edit_needs_no_unload_because_begin_run_rebuilds_memory(store, monkeypat
     context.add_message({"role": "assistant", "content": "old answer"})
     store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
 
-    store.inputs.edit_latest(
+    store.service.edit_latest(
         store.task.id,
         store.run.id,
         first.message_id,
@@ -243,7 +245,7 @@ def test_consumed_edit_preserves_prefix_and_run_identity(store):
         ("running",),
         execution_data=ConversationRunProgress(step_count=5, tool_error_count=2),
     )
-    store.inputs.edit_latest(
+    store.service.edit_latest(
         store.task.id,
         store.run.id,
         mid,
@@ -277,7 +279,7 @@ def test_edit_keeps_replaced_history_out_of_context_and_transport(store):
     store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
 
     def edit(text: str) -> None:
-        store.inputs.edit_latest(
+        store.service.edit_latest(
             store.task.id,
             store.run.id,
             mid,
@@ -409,7 +411,7 @@ def test_completed_run_handoff_claims_next_batch_without_duplicating_input(store
         store.task.id, ConversationRunCommand(display_text="next"), store.config_id
     )
     store.crud.update_status_if_in(store.run.id, "completed", ("running",))
-    run = _session()[0].open_queued_run(store.task.id)
+    run = asyncio.run(_session()[0]._open_run(store.task.id))
     assert run.id != store.run.id
     assert run.status == "running"
     assert [p.message_id for p in store.inputs.pending(store.task.id)] == [message_id]
@@ -463,8 +465,8 @@ async def test_send_while_running_queues_by_delivery(store):
     assert [p.delivery for p in store.inputs.pending(store.task.id)] == ["after_run"]
 
 
-def test_release_for_new_run_only_updates_delivery_column(store):
-    """新 Run 放行只把 delivery 列批量改为 immediate，payload 原样不动；随后消费按序领取全部。"""
+def test_release_all_immediate_only_updates_delivery_column(store):
+    """放行只把 delivery 列批量改为 immediate，payload 原样不动；随后消费按序领取全部。"""
     from app.storage.crud.task_input_crud import TaskInputCrud
     from app.storage.model.task_input_model import TaskInputModel
 
@@ -479,7 +481,8 @@ def test_release_for_new_run_only_updates_delivery_column(store):
         rows = TaskInputCrud().list_pending(session, store.task.id)
         before = {row.id: row.payload for row in rows}
 
-    store.inputs.release_for_new_run(store.task.id)
+    with main_session_factory().begin() as session:
+        TaskInputCrud().release_all_immediate(session, store.task.id)
 
     with main_session_factory()() as session:
         rows = session.query(TaskInputModel).filter_by(task_id=store.task.id).all()
@@ -1055,7 +1058,7 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
         assert not draft.include_in_context
         user = next(row for row in rows if row.message["role"] == "user")
         if edit:
-            store.inputs.edit_latest(
+            store.service.edit_latest(
                 store.task.id,
                 store.run.id,
                 user.message_id,
@@ -1101,7 +1104,7 @@ def test_queued_options_only_apply_when_handing_off_to_new_run(store):
         store.config_id,
     )
     store.crud.update_status_if_in(store.run.id, "completed", ("running",))
-    run = _session()[0].open_queued_run(store.task.id)
+    run = asyncio.run(_session()[0]._open_run(store.task.id))
     assert run is not None
     assert run.id != store.run.id
     assert run.options.ban_tools == ["read_file"]
@@ -1157,7 +1160,7 @@ def test_consumed_edit_uses_its_own_attachment_and_keeps_run_options(store, tmp_
         store.task.id, store.run.id, {"role": "assistant", "content": "discard"}, 3
     )
     store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
-    store.inputs.edit_latest(
+    store.service.edit_latest(
         store.task.id,
         store.run.id,
         second_id,
@@ -1230,7 +1233,7 @@ def test_edit_can_remove_an_attachment_deleted_since_original_message(store, tmp
     store.inputs.consume(store.task.id, store.run.id, 1)
     attachment.unlink()
     store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
-    store.inputs.edit_latest(
+    store.service.edit_latest(
         store.task.id,
         store.run.id,
         message_id,

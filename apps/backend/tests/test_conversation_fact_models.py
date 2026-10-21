@@ -28,7 +28,6 @@ from app.service.conversation_run.conversation_run_state_service import (
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
-from app.service.conversation_run.task_input_service import TaskInputService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -279,7 +278,7 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
 
 def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
     from app.service.conversation_run import conversation_input_preparation_service as preparation
-    from app.service.conversation_run import task_input_service
+    from app.service.conversation_run import conversation_run_service
 
     attachment_path = Path(__file__)
     previous = ConversationInput(
@@ -296,7 +295,9 @@ def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
     )
     service = ConversationInputPreparationService.__new__(ConversationInputPreparationService)
     service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
-    monkeypatch.setattr(task_input_service, "ConversationInputPreparationService", lambda: service)
+    monkeypatch.setattr(
+        conversation_run_service, "ConversationInputPreparationService", lambda: service
+    )
     monkeypatch.setattr(
         preparation,
         "get_model_config_service",
@@ -316,7 +317,7 @@ def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
             )
         ],
     )
-    prepared = TaskInputService._prepare_edit_payload(7, command, 3, None, previous)
+    prepared = ConversationRunService._prepare_edit_payload(7, command, 3, None, previous)
     assert prepared.message.input_text == f"请再次阅读 {attachment_path}"
     assert prepared.message.attachments[0]["path"] == str(attachment_path)
 

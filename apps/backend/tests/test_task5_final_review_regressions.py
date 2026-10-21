@@ -91,7 +91,7 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[object] = []
-    run = SimpleNamespace(id=11, task_id=7)
+    run = SimpleNamespace(id=11, task_id=7, context_window_total=128_000)
 
     class RunCrud:
         def create(self, *_args: Any, **_kwargs: Any) -> Any:
@@ -115,6 +115,8 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     service._session_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
     queued = []
     monkeypatch.setattr(TaskInputCrud, "append", lambda self, *args: queued.append(args))
+    monkeypatch.setattr(TaskInputCrud, "release_all_immediate", lambda self, *args: None)
+    monkeypatch.setattr(TaskInputCrud, "list_pending", lambda self, *args: list(queued))
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: Projector())
     monkeypatch.setattr(
         "app.service.conversation_run.conversation_run_service.get_model_config_service",
