@@ -7,7 +7,8 @@ from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper.common import _runtime_context
 from app.core.workflow.node_helper.tool_observation_projection import settle_observations
-from app.core.workflow.run_state_machine import RunTransition
+from app.models.enums.conversation_run_status import RunTransition
+from app.service import depends as service_depends
 
 
 async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
@@ -43,7 +44,7 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
     )
 
     if tool_error_count >= Constant.Workflow.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
-        failed_run = rc.run_state.transition(
+        failed_run = service_depends.get_conversation_run_state_service().transition(
             run_id,
             RunTransition.FAIL,
             end_reason=Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT,
