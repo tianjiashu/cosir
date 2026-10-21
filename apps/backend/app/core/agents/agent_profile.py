@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,7 +26,6 @@ from app.config.logging.logger import log
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.tools.schemas.tool_names import ALL_TOOL_NAMES
-from app.models import ConversationRunRecord
 from app.service.depends import get_model_config_service
 from app.utils.json_utils import read_json_object
 
@@ -191,7 +190,9 @@ def _require_tool_names(document: Mapping[str, Any], source: Path) -> list[str]:
 @dataclass
 class AgentProfile:
     """
-    描述某个任务的 Agent 执行主体（能力事实源）。
+    Agent 定义（能力事实源）：来自内置定义、JSON 配置或 Team 节点的冻结快照，由注册表共享，
+    运行期不修改。一次 Run 实际执行所用的配置是 ``AgentRuntimeConfig``（定义 + 本 Run 物化的
+    完整模型配置），二者不要混用。
     description 应该是"选择指南"，system_prompt 应该是"执行协议"，而本次
     delegate_task.message 才是"具体工作单"。
 
@@ -201,14 +202,12 @@ class AgentProfile:
         description: 子 Agent 的职责/能力/适用场景与约束描述（delegate_task 中暴露给父 Agent）；
             主 Agent 不设置此字段。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
-        workflow: 执行策略（默认 ReAct-like，延迟导入打破循环依赖）。
-        model_config_id: 该 Agent 的模型选择元数据，不参与模型构建。
-        model_settings: 已物化的模型运行配置，供模型工厂唯一消费。
+        model_config_id: 该 Agent 的默认模型选择，不参与模型构建。
+        model_settings: 用户可写的模型偏好覆盖项；不含连接与能力字段（``api_key`` 不落盘），
+            完整配置只在 ``AgentRuntimeConfig.model_settings``。
         structured_output: 可选的最终 JSON Schema 契约；为空时沿用普通文本最终输出。
         agent_type: Agent 分类（``AgentProfileType``），决定其在运行时的暴露与调度方式。
         max_steps: 单 run 最大步骤数。
-        run: 当前所属 Conversation Run 记录（经 ``derive_for_run`` 注入 per-run 副本；
-            单例上不原地写）。
         system_prompt: 已装配到内存中的完整 Agent 系统提示词正文；来源读取和文件路径不进入 profile。
     """
 
@@ -222,61 +221,6 @@ class AgentProfile:
     model_settings: ModelSettings = field(default_factory=ModelSettings.default_settings)
     structured_output: StructuredOutputSpec | None = None
     max_steps: int = 100
-    run: ConversationRunRecord | None = None
-
-    def derive_for_run(
-        self,
-        run: ConversationRunRecord,
-        *,
-        model_settings: ModelSettings | None = None,
-    ) -> AgentProfile:
-        """为一次独立的 Conversation Run 执行派生 per-run 副本。
-
-        并发隔离收口：AgentProfile 是注册表共享单例，禁止调用方对其原地写运行时字段
-        （并发 run 会互相覆盖）。每次 run 执行必须先经本方法派生独立副本，副本承载本次
-        执行的 ``run``；工具 schema 与本次 Run 的 ``allows_tools`` 由运行时独立持有，
-        不写回共享 profile。
-
-        参数:
-            run: 本次执行的 Conversation Run 记录（必填，写入副本的 ``run`` 字段）；其
-                ``model_config_id`` 用于记录本次 Run 选择的模型配置。
-            model_settings: 本次 Run 已物化的完整运行配置（由 ``run.model_config_id``
-                解析而来），即本次执行的运行时参数，优先级高于本 profile：其连接与能力
-                字段独占结果（不回落 profile），其已设置的用户偏好也优先。profile 只在
-                传参未设置某项偏好时充当默认值，因此传参方必须提供含连接与能力字段的
-                对象。``None`` 表示本 Run 未物化配置，沿用 profile 自身的设置（未物化时
-                后续 ``require_runtime_config`` 会失败）。
-
-        返回:
-            绑定当前 run 的独立 ``AgentProfile`` 副本；``self`` 原实例不被修改。
-
-        异常:
-            无。
-
-        副作用:
-            无（纯值替换，不写数据库、不触碰注册表）。
-        """
-
-        changes: dict = {"run": run}
-        changes["model_config_id"] = (
-            run.model_config_id if run.model_config_id is not None else self.model_config_id
-        )
-        # 分层合并，优先级从高到低：run.options.reasoning_effort（下方单独叠加）> 传参
-        # （本 Run 由 run.model_config_id 物化的运行时参数）> profile 用户偏好默认值。
-        # 只有「本 Run 的运行时参数」能提供 base_url/api_key/model_name 等字段，profile
-        # 既不能覆盖也不能顶替它们；传参未设置的偏好项才由 profile 补齐。
-        effective_model_settings = (
-            model_settings.with_preference_defaults(self.model_settings)
-            if model_settings is not None
-            else replace(self.model_settings)
-        )
-        options = run.options
-        if options.reasoning_effort is not None:
-            effective_model_settings = effective_model_settings.with_overrides(
-                ModelSettings(reasoning_effort=run.options.reasoning_effort)
-            )
-        changes["model_settings"] = effective_model_settings
-        return replace(self, **changes)
 
     def select_tools(self, tools: Iterable[ToolDefinition]) -> list[ToolDefinition]:
         """从候选工具中筛选本 Agent 可运行的工具集合。
@@ -318,7 +262,7 @@ class AgentProfile:
 
         返回:
             校验通过的 CHILD profile：``agent_type`` 固定为 ``CHILD``，workflow 使用默认
-            实现，``run`` 为空（由 ``derive_for_run`` 在运行时派生），JSON 未声明
+            实现，JSON 未声明
             ``max_steps`` 时沿用 ``AgentProfile.max_steps`` 字段默认值。
 
             任一步骤失败时返回 ``None``：文件不可读/编码无效、JSON 语法错误、顶层非对象、
