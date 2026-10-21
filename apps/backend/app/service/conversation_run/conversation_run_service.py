@@ -2,9 +2,9 @@
 
 from sqlalchemy.orm import Session
 
-from app.assistant_transport.event import RunInitializedEvent
 from app.config.logging.logger import log
 from app.core.context.tool_call_closure import ContextProtocolError
+from app.core.events import RunInitializedEvent
 from app.models import (
     ConversationRunCommand,
     ConversationRunRecord,
@@ -13,11 +13,11 @@ from app.models import (
 from app.models.conversation_input import QueuedTaskInput
 from app.models.conversation_run_options import ReasoningEffort
 from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.enums.conversation_run_status import RunTransition
 from app.service import depends as service_depends
 from app.service.conversation_run.conversation_input_preparation_service import (
     ConversationInputPreparationService,
 )
-from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
@@ -46,6 +46,7 @@ class ConversationRunService:
 
         self._task = service_depends.get_task_crud()
         self._run = service_depends.get_conversation_run_crud()
+        self._run_state = service_depends.get_conversation_run_state_service()
         self._context = ConversationTaskContextService()
         self._session_factory = main_session_factory()
 
@@ -53,14 +54,15 @@ class ConversationRunService:
         self,
         task_id: int,
         agent_id: str | None = None,
-        status: str = "pending",
         model_config_id: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
         session: Session | None = None,
         run_command: ConversationRunCommand | None = None,
         queued_input: QueuedTaskInput | None = None,
     ) -> ConversationRunRecord:
-        """同一事务创建 Run、初始 inbox 输入和 Task 当前 Run 指针。
+        """同一事务创建 running Run、初始 inbox 输入和 Task 当前 Run 指针。
+
+        只由 ``WorkflowSession`` 在 Task 闸门内调用并随即交给执行器，因此直接以 running 创建。
         队列交接只创建 Run，不再次插入已存在的输入；调用方有外部事务时负责提交后投影。"""
         if queued_input is not None:
             payload = queued_input
@@ -77,7 +79,7 @@ class ConversationRunService:
         def persist_facts(persist_session: Session) -> ConversationRunRecord:
             run = self._run.create(
                 task_id,
-                status,
+                ConversationRunStatus.RUNNING.value,
                 agent_id=agent_id,
                 model_config_id=model_config_id,
                 context_window_total=context_window_total,
@@ -123,21 +125,13 @@ class ConversationRunService:
         for run in self._run.list_recoverable():
             repaired_tool_call_ids: list[str] = []
             with self._session_factory.begin() as session:
-                record = self._run.update_status_if_in(
-                    run_id=run.id,
-                    target_status=ConversationRunStatus.CANCELLED.value,
-                    allowed_statuses=(
-                        ConversationRunStatus.PENDING.value,
-                        ConversationRunStatus.RUNNING.value,
-                    ),
+                record = self._run_state.transition(
+                    run.id,
+                    RunTransition.CANCEL,
                     end_reason=end_reason,
                     execution_data=ConversationRunProgress(
                         step_count=run.execution_data.step_count,
                         tool_error_count=run.execution_data.tool_error_count,
-                    ),
-                    usage=None,
-                    error=ConversationRunStateService.terminal_error(
-                        ConversationRunStatus.CANCELLED, end_reason
                     ),
                     session=session,
                 )
@@ -190,10 +184,6 @@ class ConversationRunService:
                     },
                 )
         return recovered
-
-    def save_execution(self, run_id: int, data: ConversationRunProgress) -> None:
-        """保存恢复必要进度，不创建第二套生命周期状态。"""
-        self._run.save_execution(run_id, data)
 
     def get_run(self, run_id: int) -> ConversationRunRecord:
         """按标识读取单个 Run 记录。
