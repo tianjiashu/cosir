@@ -63,6 +63,21 @@ Tauri 桌面应用
 - 理由：这类写法让「看似在清理 / 通知、实际什么都没做」的静默失效同时骗过调用点、被调用方和测试，只有行为不成立（典型后果：`TaskService` 曾用该写法调用两个并不存在的方法，导致进程内状态永不释放且无任何日志暴露）。凡是注释里承诺了清理 / 通知意图的钩子，必须能在运行时被验证到效果。
 - 例外：仅适用于读取第三方或标准库对象的**数据属性**（如 `getattr(exc, "errno", None)`、按平台探测 `os.killpg`），不适用于探测本仓自有类型上的方法。
 
+### 抽象按需引入（不预留接口）
+
+默认直接写具体类与函数。抽象基类（`ABC`）、`Protocol`、抽象接口及配套工厂，只在以下情形引入：
+
+- **已有多个真实实现**：同一契约当前就有两个及以上生产实现在使用；测试替身不算，「将来可能扩展」「方便替换」也不构成理由。
+- **设计模式或架构边界确实需要**：如注册表 / 插件需按同一契约装配多种实现、策略需在运行期切换，或为遵守依赖方向必须做依赖倒置（例：`core` 经 `EventSink` 回调把事件交给 `assistant_transport`，不能反向 import）。
+
+配套约束：
+
+- 单一实现不配工厂类或工厂函数，调用方直接构造、直接使用该实现。
+- 测试替身依靠鸭子类型与 monkeypatch 注入，不为可测试性新增抽象。
+- 发现只剩一个实现的抽象时，按第零铁律评估后删除，类型标注改回具体类；出现第二个真实实现时再提取接口。
+
+理由：单实现抽象让读者多跳一层才能找到真实逻辑，签名改动要同步两处，还常伴随「预留但从未使用」的扩展点，抬升维护成本却换不来可替换性。
+
 ### 不层层防御校验（链路契约）
 
 加校验、守卫或 `try/except` 前，先顺着调用链路判断「这一层是否该守、上游是否已保证」：
@@ -111,7 +126,7 @@ Tauri 桌面应用
 - 领域 JSON API 统一通过前端 `lib/http/client.ts` 处理动态基地址、`no-store`、`X-Trace-Id` 和非 2xx 错误。Assistant SSE、业务 resume 和资源请求由各自 transport/resource 边界管理，但仍须遵守动态地址和 trace 规则。
 - Assistant UI wire schema 只属于 `apps/backend/app/assistant_transport/`，不得泄漏到 workflow、领域 service 或 storage。
 - 命令只对 Task 或消息寻址，不携带 run_id：`POST /tasks/{id}/messages`（发送）、`/messages/{message_id}/edit`（编辑重跑）、`/resume`（恢复）、`/decisions`（HIL 决定）、`/cancel`（停止）、`/tool-calls/{call_id}/cancel`（取消单个工具调用），返回 JSON 回执；`/assistant/attach` 只订阅 Task 当前 Run；`/assistant/state` 读取 canonical snapshot。Run 身份由后端按 Task 最新 Run 解析，前端只把 Run 用于渲染分组。
-- 调度规则只在 `WorkflowSession`（`service/conversation_run/workflow_session.py`）：每个入口在 Task 闸门内「读状态 → 条件迁移 → 启动执行」。它是新建 Run 与启动执行的唯一路径，子 Agent、Team 节点经 `open_run` 进入；Run 直接以 running 创建，没有待认领态。它同时持有执行登记（每个 Task 至多一个后台执行）：执行结束后先完成交接、等待态取消与取消传播，再释放登记并取走 Task 取消信号（信号的唯一清理点）。单次 Run 由 `service/conversation_run/run_driver.py` 的 `drive_run` 装配 `RuntimeContext`（本次 Run 的事实、协作者与驱动期状态）并驱动 core 的 `ReactLikeWorkflow`，它也是 Run 失败的唯一异常边界；workflow 节点直接读 `RuntimeContext`、直接调用注入的服务实例，不经转发门面，也不在节点里调用全局 service getter。同一 task 同时只允许一个 active Run 和一个执行者。Run、初始 inbox 输入和 Task 当前 Run 指针由同一用例事务保护；snapshot 在提交后投影。
+- 调度规则只在 `WorkflowSession`（`service/conversation_run/workflow_session.py`）：每个入口在 Task 闸门内「读状态 → 条件迁移 → 启动执行」。它是新建 Run 与启动执行的唯一路径，子 Agent、Team 节点经 `open_run` 进入；Run 直接以 running 创建，没有待认领态。它同时持有执行登记（每个 Task 至多一个后台执行）：执行结束后先完成交接、等待态取消与取消传播，再释放登记并取走 Task 取消信号（信号的唯一清理点）。单次 Run 由 `service/conversation_run/run_driver.py` 的 `drive_run` 装配 `RuntimeContext`（只含本次 Run / Task 级事实与对象、事件回调和驱动期状态）并驱动 core 的 `ReactLikeWorkflow`，它也是 Run 失败的唯一异常边界；进程级单例（Run 状态写入、inbox、工具系统、Agent registry、终端会话服务等）由 workflow 节点与工具 handler 经 `app.service.depends` / `app.config.configuration` 直接取用，不经 `RuntimeContext` 或 `ToolExecutionContext` 转手；Run / Task 级事实与跨层回调（如 `EventSink`）才经它们注入，不经转发门面。同一 task 同时只允许一个 active Run 和一个执行者。Run、初始 inbox 输入和 Task 当前 Run 指针由同一用例事务保护；snapshot 在提交后投影。
 - HTTP/SSE 断开只表示订阅中断，不自动取消或重放业务 Run。前端可以重新 attach 已有 Run；只有明确的 business resume 才能继续业务执行。
 
 ## 数据与事实所有权
@@ -177,7 +192,7 @@ Tauri 桌面应用
 - `apps/backend/app/agent_team/`：Agent Team 领域（配置、状态、注册表、协调器），不含 HTTP 与用例编排。
 - `apps/backend/app/models/`：ORM 记录与枚举（`ConversationRunModel`、`*_record` 等）。
 - `apps/backend/app/storage/`：SQLite engine、schema、CRUD 与事务；`task_runtime/`：进程内 task/workspace 并发协调。
-- `apps/backend/app/core/`：agents/context/llm_provider/workflow/tools/hook/events，覆盖 Agent 定义、上下文、模型供应、workflow（含取消信号）、工具、运行期扩展与执行事件。`core` 不依赖 `assistant_transport`：执行事件只定义事实，经 `EventSink` 回调交给消费方；workflow 的其余协作者直接使用具体类型，不为单一实现预留 Protocol 端口；Transport snapshot 的投影在 `assistant_transport/projection/`。
+- `apps/backend/app/core/`：agents/context/llm_provider/workflow/tools/hook/events，覆盖 Agent 定义、上下文、模型供应、workflow（含取消信号）、工具、运行期扩展与执行事件。`core` 不依赖 `assistant_transport`：执行事件只定义事实，经 `EventSink` 回调交给消费方；workflow 与工具的其余协作者直接使用具体类型（见「抽象按需引入」）；Transport snapshot 的投影在 `assistant_transport/projection/`。
 - `apps/backend/app/config/`：进程配置；`utils/`：路径等通用工具；`lifespan.py`/`app.py`/`bootstate.py`：应用装配与启动。
 
 ## docstring 约定【必须中文】【**主线任务**执行用户指令，**支线任务**发现docString漂移，并向用户说明，不擅自主动改】
