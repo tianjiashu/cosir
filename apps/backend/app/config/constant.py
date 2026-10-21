@@ -106,11 +106,6 @@ class Constant:
         # 未知 code 的统一兜底用户文案。
         DEFAULT_MESSAGE: str = "对话运行失败，请重试或查看日志"
 
-        # 视为「终态」的 Run 状态集合（用于识别 terminal 类 run 是否已结束，取值来自
-        # ``ConversationRunStatus`` 的稳定字符串值）。**唯一事实源**：fork 校验、
-        # child_task 工具与 SSE 终止判定一律引用本集合，禁止在各处另立副本。
-        TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
-
     class LLM:
         """模型请求的全局参数：所有模型统一，Agent 级 ``ModelSettings`` **无**对应覆盖字段。"""
 
