@@ -3,7 +3,6 @@ import asyncio
 import json
 from typing import ClassVar
 
-from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileConfigError, AgentProfileType
 from app.core.tools.display.child_agent_display import build_child_agent_result_display_data
@@ -20,24 +19,21 @@ from app.core.tools.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.child_task import ChildAgentSendArgs
 from app.models import ConversationRunCommand
+from app.service.conversation_run.workflow_session import SessionConflictError
 from app.service.depends import (
-    get_conversation_run_executor,
     get_conversation_run_service,
-    get_conversation_run_state_service,
     get_task_service,
+    get_workflow_session,
     get_workspace_service,
 )
 
-# 只等 executor 完成「登记 + 建后台 task」这一段，不等子 Agent 跑完。
-_START_ACK_TIMEOUT_SECONDS = 10.0
-
 
 class ChildAgentSendTool(HandlerBase):
-    """给已有子任务追加一条输入，并为它建立一个新 Run 后交给执行器后台运行。
+    """给已有子任务追加一条输入，并经调度入口为它新开一个后台 Run。
 
-    职责边界：本类不直接执行 Agent，只做「解析 child 运行参数 → 建 Run → 认领 → 交
-    ``ConversationRunExecutor`` 后台执行」这条编排；也不持有进程内会话，重复调用即追加
-    新轮次。子 Agent 的运行终态由它自己的 workflow 落定。
+    职责边界：本类只解析 child 运行参数，建 Run 与启动交给 ``WorkflowSession.open_run``——
+    闸门内判定子 Task 是否仍有活动 Run（含正在收尾的执行），因此不会与上一轮或其交接并发。
+    子 Agent 的运行终态由它自己的 workflow 落定。
     """
 
     name: str = TOOL_CHILD_AGENT_SEND
@@ -51,63 +47,38 @@ class ChildAgentSendTool(HandlerBase):
     group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
-        """构造发送工具，装配任务、Run 与执行器服务。
-
-        参数:
-            无。
-
-        返回:
-            无（构造函数）。
-
-        异常:
-            无。
-
-        副作用:
-            从依赖装配取得任务、工作区、Run 与执行器 service 单例引用。
-        """
+        """装配任务、工作区与 Run 读取服务。"""
 
         self._task_service = get_task_service()
         self._workspace_service = get_workspace_service()
         self._run_service = get_conversation_run_service()
-        self._run_state_service = get_conversation_run_state_service()
-        self._run_executor = get_conversation_run_executor()
 
     def execute(
         self,
         child_task_id: int,
         message: str,
-        execution_context: ToolExecutionContext | None = None,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """为指定子任务创建一个新 Run 并启动后台执行。
 
         参数:
             child_task_id: 目标子任务标识（``delegate_task`` 返回的 ``child_task_id``）。
             message: 追加给子 Agent 的自由文本输入；原样作为新 Run 的输入。
-            child_agent_id: 可选的 child Agent 标识；缺省沿用该子任务最近一个 Run 使用的
-                agent。子任务尚无任何 Run 且此处为空时返回错误观察。
             execution_context: 父工具执行边界，提供事件循环与父 Run 事实。
 
         返回:
             成功时返回包含 ``child_task_id`` / ``child_run_id`` / ``status`` 的 JSON 文本；
-            缺少执行上下文或运行期事件循环、参数非法、子任务不存在、无法确定 child Agent、
-            建 Run 或启动失败时返回错误观察。
+            父事件循环不可用、子任务不存在、无法确定 child Agent、子 Agent
+            仍未结束、建 Run 或启动失败时返回错误观察。
 
         异常:
-            无。配置无效、profile 已不可用、``ValidationError``、``KeyError`` 或执行器启动
-            异常均归一化为错误观察；profile 校验失败时不创建 Run。
+            无。配置无效、profile 已不可用、调度冲突或启动异常均归一化为错误观察；profile
+            校验失败时不创建 Run。
 
         副作用:
-            在目标子任务下创建一个 ``pending`` Run、认领为 ``running``，并在父 Run 的事件
-            循环上登记一次后台执行；不等待子 Agent 执行结束。
+            在父 Run 的事件循环上经调度入口为子任务新开 running Run 并启动；不等待子 Agent
+            执行结束。
         """
-
-        if execution_context is None:
-            return tool_error(
-                self.name,
-                "child_agent_send requires an execution context.",
-                reason="Call this tool from inside a running turn instead of directly.",
-            )
-
 
         try:
             # 存在性校验：子任务不存在时直接返回确定性错误，不再继续创建 Run。
@@ -134,18 +105,7 @@ class ChildAgentSendTool(HandlerBase):
                 retryable=True,
             )
 
-        current_run_id = child_task.current_run_id
-        current_run = self._run_service.get_run(current_run_id)
-        if current_run.status not in Constant.Run.TERMINAL_STATUSES:
-            return tool_error(
-                tool_name=self.name,
-                error="error",
-                reason=(
-                    "the child agent is still running; inspect it with child_agent_status or "
-                    "wait for its conclusion with child_agent_wait, and call this tool again "
-                    "only after it reaches a terminal state."
-                ),
-            )
+        current_run = self._run_service.get_run(child_task.current_run_id)
 
         try:
             workspace = self._workspace_service.get_workspace(child_task.workspace_id)
@@ -182,51 +142,44 @@ class ChildAgentSendTool(HandlerBase):
                 retryable=False,
             )
 
-        try:
-            reasoning_effort = (current_profile.model_settings.reasoning_effort
-                                if current_profile.model_settings is not None
-                                else None)
-            model_config_id = current_profile.model_config_id or current_run.model_config_id
-            child_run = self._run_service.create_run(
-                task_id=child_task_id,
-                agent_id=current_run.agent_id,
-                model_config_id=model_config_id,
-                reasoning_effort=reasoning_effort,
-                run_command=ConversationRunCommand(display_text=message),
+        loop = execution_context.event_loop
+        if loop is None or loop.is_closed():
+            return tool_error(
+                self.name,
+                "delegate_task_runtime_unavailable",
+                reason=(
+                    "the parent runtime event loop is unavailable, so the child run "
+                    "cannot be started; retry from a normal turn."
+                ),
+                retryable=False,
             )
-            claimed = self._run_state_service.claim_pending_run(child_run.id)
-            if claimed is None:
-                return tool_error(
-                    self.name,
-                    "child_agent_send_run_not_claimable",
-                    reason=(
-                        "the new child run is not claimable (already terminal or claimed); "
-                        "read its status before deciding what to do next."
-                    ),
-                    retryable=False,
-                )
-
-            # 执行器入口是协程：在父 Run 的事件循环上调度，并只等待登记完成。
-            loop = execution_context.runtime_dependencies.runtime_event_loop
-            if loop is None or loop.is_closed():
-                return tool_error(
-                    self.name,
-                    "delegate_task_runtime_unavailable",
-                    reason=(
-                        "the parent runtime event loop is unavailable, so the child run "
-                        "cannot be started; retry from a normal turn."
-                    ),
-                    retryable=False,
-                )
-            # 执行器入口是协程：在父 Run 的事件循环上调度，并只等待登记完成。
-            future = asyncio.run_coroutine_threadsafe(
-                self._run_executor.start(
-                    child_run.id,
-                    "fresh",
+        reasoning_effort = (
+            current_profile.model_settings.reasoning_effort
+            if current_profile.model_settings is not None
+            else None
+        )
+        try:
+            # 经调度入口在 Task 闸门内开 Run：子 Run 仍在运行或收尾时由闸门拒绝，不会并发执行。
+            child_run = asyncio.run_coroutine_threadsafe(
+                get_workflow_session().open_run(
+                    child_task_id,
+                    ConversationRunCommand(display_text=message),
+                    agent_id=current_run.agent_id or "",
+                    model_config_id=current_profile.model_config_id or current_run.model_config_id,
+                    reasoning_effort=reasoning_effort,
                 ),
                 loop,
+            ).result()
+        except SessionConflictError:
+            return tool_error(
+                tool_name=self.name,
+                error="error",
+                reason=(
+                    "the child agent is still running; inspect it with child_agent_status or "
+                    "wait for its conclusion with child_agent_wait, and call this tool again "
+                    "only after it reaches a terminal state."
+                ),
             )
-            future.result(timeout=_START_ACK_TIMEOUT_SECONDS)
         except Exception as exc:
             log.exception(
                 "child_agent_send_failed",

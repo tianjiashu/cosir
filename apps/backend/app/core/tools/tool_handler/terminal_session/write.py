@@ -14,7 +14,6 @@ from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.core.tools.tool_handler.terminal_session.common import (
     cancelled,
     cancelled_observation,
-    require_service,
     success_observation,
     with_terminal_errors,
 )
@@ -24,6 +23,7 @@ from app.core.tools.tool_handler.terminal_session.descriptions import (
 )
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import TerminalWriteArgs
+from app.service import depends as service_depends
 
 
 class TerminalWriteTool(HandlerBase):
@@ -52,16 +52,15 @@ class TerminalWriteTool(HandlerBase):
         operation_id: str,
         input: dict[str, str],
         wait_ms: int = 500,
-        execution_context: ToolExecutionContext | None = None,
+        *,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """输入由参数边界校验；接受后的取消仍返回接受事实，避免模型重发。"""
-        if execution_context is None:
-            raise ValueError("terminal_write requires execution context")
         if cancelled(execution_context):
             return cancelled_observation(self.name)
 
         def action() -> ToolObservation:
-            service = require_service(execution_context)
+            service = service_depends.get_terminal_session_service()
             result = service.write(
                 session_id,
                 task_id=execution_context.task_id,

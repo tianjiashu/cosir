@@ -14,7 +14,6 @@ edit_file 逻辑。成功后的文件变更展示由 display_data 提供，不�
 
 from pathlib import Path
 
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.core.tools.schemas import (
@@ -44,6 +43,7 @@ from app.core.tools.tool_handler.patch_write.patch_diff import FileDiffResult
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.replace_args import ReplaceArgs
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 REPLACE_DESCRIPTION = (
     "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. "

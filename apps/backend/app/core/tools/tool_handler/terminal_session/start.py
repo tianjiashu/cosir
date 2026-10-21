@@ -18,7 +18,6 @@ from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.core.tools.tool_handler.terminal_session.common import (
     cancelled,
     cancelled_observation,
-    require_service,
     success_observation,
     with_terminal_errors,
 )
@@ -28,6 +27,7 @@ from app.core.tools.tool_handler.terminal_session.descriptions import (
 )
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import TerminalStartArgs
+from app.service import depends as service_depends
 
 
 class TerminalStartTool(HandlerBase):
@@ -60,7 +60,8 @@ class TerminalStartTool(HandlerBase):
         cwd: str | None = None,
         label: str | None = None,
         integration: str = "auto",
-        execution_context: ToolExecutionContext | None = None,
+        *,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """创建交互终端 session 并返回其元数据。
 
@@ -68,8 +69,7 @@ class TerminalStartTool(HandlerBase):
             shell: 目标 shell；``auto`` 由 ``ShellResolver`` 按宿主平台解析。
             cwd: 会话初始目录，相对工作区根；None 表示工作区根。
             label: 可选用途标签，供后续 Run 通过 terminal_list 发现会话。
-            execution_context: 执行上下文；为 None 时直接报错，因为缺少 workspace、
-                task/run 标识与取消查询边界。
+            execution_context: 执行上下文；提供会话归属（task / workspace）与取消查询边界。
 
         返回:
             成功时为携带 session 元数据的成功观察；run 已取消时为取消观察；领域错误经
@@ -83,13 +83,11 @@ class TerminalStartTool(HandlerBase):
             service；不向前端发送任何输入。
         """
 
-        if execution_context is None:
-            raise ValueError("terminal_start requires a workspace execution context")
         if cancelled(execution_context):
             return cancelled_observation(self.name)
 
         def action() -> ToolObservation:
-            service = require_service(execution_context)
+            service = service_depends.get_terminal_session_service()
             payload = service.start(
                 task_id=execution_context.task_id,
                 workspace_id=execution_context.workspace_id,

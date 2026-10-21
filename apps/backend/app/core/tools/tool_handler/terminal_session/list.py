@@ -15,11 +15,11 @@ from app.core.tools.tool_handler.terminal_session.common import (
     agent_session_payload,
     cancelled,
     cancelled_observation,
-    require_service,
     success_observation,
 )
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import TerminalListArgs
+from app.service import depends as service_depends
 
 
 class TerminalListTool(HandlerBase):
@@ -39,14 +39,12 @@ class TerminalListTool(HandlerBase):
     timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_TERMINAL_SESSION
 
-    def execute(self, execution_context: ToolExecutionContext | None = None) -> ToolObservation:
-        """归属取自执行上下文；缺少上下文属于装配错误，取消时不读取服务。"""
+    def execute(self, execution_context: ToolExecutionContext) -> ToolObservation:
+        """归属取自执行上下文；取消时不读取服务。"""
 
-        if execution_context is None:
-            raise ValueError("terminal_list requires a workspace execution context")
         if cancelled(execution_context):
             return cancelled_observation(self.name)
-        sessions = require_service(execution_context).list_sessions(
+        sessions = service_depends.get_terminal_session_service().list_sessions(
             task_id=execution_context.task_id,
             workspace_id=execution_context.workspace_id,
         )

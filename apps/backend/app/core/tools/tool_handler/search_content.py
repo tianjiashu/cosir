@@ -20,9 +20,10 @@ from app.core.tools.tool_grouping import TOOL_GROUP_SEARCH
 from app.core.tools.tool_handler.search.content_engine import search_content
 from app.core.tools.tool_handler.search.errors import (
     InvalidSearchPattern,
+    SearchCancelled,
     SearchPathNotFound,
     SearchPathUnreadable,
-    SearchTimedOut, SearchCancelled,
+    SearchTimedOut,
 )
 from app.core.tools.tool_handler.search.scope import SearchScope
 from app.core.tools.tool_handler.security.path_resolver import PathResolver

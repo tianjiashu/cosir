@@ -12,6 +12,7 @@
 import os
 import platform
 import shutil
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import get_args
@@ -28,7 +29,6 @@ from app.core.tools.policy.terminal_denylist_configuration import (
 )
 from app.core.tools.schemas import (
     TOOL_EXECUTE_TERMINAL,
-    OutputSink,
     ToolDefinition,
     ToolDisplayHints,
     ToolExecutionContext,
@@ -239,8 +239,9 @@ class ExecuteTerminalTool(HandlerBase):
         shell: ExecuteTerminalShell = "auto",
         timeout: float | None = None,
         workdir: str | None = None,
-        execution_context: ToolExecutionContext | None = None,
-        output_sink: OutputSink | None = None,
+        *,
+        execution_context: ToolExecutionContext,
+        output_sink: Callable[[str], None] | None = None,
     ) -> ToolObservation:
         """在本机 shell 同步执行一条命令并返回归一化观测。
 
@@ -285,14 +286,6 @@ class ExecuteTerminalTool(HandlerBase):
                 "data": {"command_preview": command[:200]},
             },
         )
-
-        if execution_context is None:
-            return tool_error(
-                self.name,
-                "could not run the command: execution context is missing",
-                reason="continue without retrying until the runtime supplies an execution context.",
-                retryable=False,
-            )
 
         if shell not in self._available_shells:
             return tool_error(

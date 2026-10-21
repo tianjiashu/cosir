@@ -4,8 +4,6 @@ import json
 import time
 from typing import ClassVar
 
-from app.config.constant import Constant
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.child_agent_display import build_child_agent_wait_display_data
 from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_WAIT,
@@ -20,6 +18,8 @@ from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.child_task import ChildAgentWaitArgs
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
 from app.service.depends import get_conversation_run_service, get_task_service
 
 # 轮询间隔：子 Agent 完成一轮通常以秒到分钟计，1 秒足以兼顾及时性与查询开销。
@@ -69,7 +69,8 @@ class ChildAgentWaitTool(HandlerBase):
         self,
         child_task_id: int,
         timeout_seconds: float = 60.0,
-        execution_context: ToolExecutionContext | None = None,
+        *,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """阻塞轮询指定子任务的当前 Run，直到拿到最终输出或超时。
 
@@ -82,7 +83,7 @@ class ChildAgentWaitTool(HandlerBase):
 
         返回:
             拿到最终输出时返回包含 ``timed_out=False`` 与 ``final_output`` 的 JSON 文本；
-            超时返回 ``timed_out=True`` 与当前状态；缺少执行上下文、参数非法、子任务不存在、
+            超时返回 ``timed_out=True`` 与当前状态；参数非法、子任务不存在、
             尚无 Run、Run 终态却没有最终输出、或父 Run 已取消时返回对应观察（取消为
             ``cancelled``，其余为 ``error``）。
 
@@ -92,13 +93,6 @@ class ChildAgentWaitTool(HandlerBase):
         副作用:
             在工具线程内按间隔重复只读查询 task 与 run 记录（不写库）；父 Run 取消时提前返回。
         """
-
-        if execution_context is None:
-            return tool_error(
-                self.name,
-                "child_agent_wait requires an execution context.",
-                reason="Call this tool from inside a running turn instead of directly.",
-            )
 
         try:
             child_task = self._task_service.get_task(child_task_id)
@@ -157,7 +151,7 @@ class ChildAgentWaitTool(HandlerBase):
                         timed_out=False,
                     ),
                 )
-            if run.status in Constant.Run.TERMINAL_STATUSES:
+            if run.status in TERMINAL_RUN_STATUSES:
                 return tool_error(
                     self.name,
                     f"child run {run.id} finished without final output ({run.status})",

@@ -10,7 +10,6 @@ UI 展示通道也不进入模型通道，因此本模块只对源文件做**有
 
 import os
 
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.schemas import (
     TOOL_MOVE_FILE,
@@ -31,6 +30,7 @@ from app.core.tools.tool_handler.security.file_operation_paths import (
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.move_file_args import MoveFileArgs
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 MOVE_FILE_DESCRIPTION = (
     "Move one existing UTF-8 text file to a new path inside the active workspace. Directories "

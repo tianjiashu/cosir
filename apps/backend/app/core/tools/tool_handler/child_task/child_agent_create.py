@@ -1,7 +1,7 @@
 """delegate_task 工具 handler：把一次委派请求落地为 child Task/Run 并启动 child workflow。
 
-职责：解析 child Agent profile、建立 child Task 与 Run、经 ConversationRunExecutor 调度 child 执行器，
-返回「已启动」观察（携带 child locator），并把子 Agent 的运行期工具允许集合交给执行器。
+职责：解析 child Agent profile、建立 child Task，经 ``WorkflowSession.open_run`` 新开并启动 child
+Run，返回「已启动」观察（携带 child locator）。
 
 不负责：child workflow 的实际运行与完成观测（父侧用 ``child_agent_wait`` / ``child_agent_status``
 查询）；参数校验与准入门禁（``ToolAccessGate``）；委派展示数据构造
@@ -18,7 +18,6 @@ from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileType,
 )
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.delegation_display import build_delegation_display_data
 from app.core.tools.schemas import (
     TOOL_DELEGATE_TASK,
@@ -33,22 +32,19 @@ from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import DelegateTaskArgs
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models import ConversationRunCommand
 from app.service.depends import (
-    get_conversation_run_executor,
     get_conversation_run_service,
-    get_conversation_run_state_service,
     get_task_service,
+    get_workflow_session,
 )
-
-# 只等 executor 完成「登记 + 建后台 task」这一段，不等子 Agent 跑完。
-_START_ACK_TIMEOUT_SECONDS = 10.0
 
 
 class DelegateTaskTool(HandlerBase):
     """把一次 delegate_task 调用落地为已启动的 child Task/Run。
 
-    职责：检查运行期依赖可用性、解析 child profile、创建 child Task/Run 并调度执行器，全程以
+    职责：检查父 Run 事实可用性、解析 child profile、创建 child Task 并经调度入口启动 Run，全程以
     ``ToolObservation`` 返回结果。不等待 child 执行结束——完成情况由 ``child_agent_wait`` /
     ``child_agent_status`` 查询。
     """
@@ -83,21 +79,19 @@ class DelegateTaskTool(HandlerBase):
             无（依赖由工具系统装配层提供；服务未初始化时由依赖装配层抛出异常）。
 
         副作用:
-            在实例上绑定 Task 服务、Run 创建服务、Run 状态服务与 Run 执行器；构造即解析依赖
-            单例，因此必须晚于存储与运行期装配。
+            在实例上绑定 Task 服务与 Run 读取服务；构造即解析依赖单例，因此必须晚于存储与运行期
+            装配。
         """
 
         self._task_service = get_task_service()
-        self.run_setvice = get_conversation_run_service()
-        self.run_state_service = get_conversation_run_state_service()
-        self.run_exector = get_conversation_run_executor()
+        self._run_service = get_conversation_run_service()
 
     def execute(
             self,
             child_agent_id: str,
             agent_name: str,
             message: str,
-            execution_context: ToolExecutionContext | None = None,
+            execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """委派一个自由文本子任务给指定 child Agent，并返回启动结果观察。
 
@@ -105,11 +99,11 @@ class DelegateTaskTool(HandlerBase):
             child_agent_id: 要运行的 child agent profile 标识。
             agent_name: Agent 名称，用作 child Task 标题（展示与可追溯）。
             message: 面向子 Agent 的自由文本任务契约，原样作为 child turn 的输入。
-            execution_context: 父工具执行边界，提供运行期依赖与父 Run 事实。
+            execution_context: 父工具执行边界，提供父 Run 事实（profile、事件循环）。
 
         返回:
-            child 启动成功时返回携带稳定 locator 的 success 观察；缺少执行上下文、缺少父
-            profile、run 已取消、child 无法解析、父执行器不可用或启动失败时返回确定性的
+            child 启动成功时返回携带稳定 locator 的 success 观察；缺少父
+            profile、run 已取消、child 无法解析、父事件循环不可用或启动失败时返回确定性的
             error/cancelled 观察。
 
         异常:
@@ -118,20 +112,11 @@ class DelegateTaskTool(HandlerBase):
             ``delegate_task_exception`` 日志，不向上抛异常。
 
         副作用:
-            创建 child Task 与 pending Run、认领该 Run，并请求 ConversationRunExecutor 在父
-            Run 的事件循环上调度 child 执行（只等待启动登记，不等待 child 执行结束）；写日志。
+            创建 child Task，并在父 Run 的事件循环上经调度入口新开 running Run 并启动（不等待
+            child 执行结束）；写日志。
         """
 
-        if execution_context is None:
-            return tool_error(
-                self.name,
-                "delegate_task requires an execution context.",
-                reason="Provide the parent task execution context before delegating work.",
-                retryable=False,
-            )
-
-        runtime_dependencies = execution_context.runtime_dependencies
-        parent_profile = runtime_dependencies.parent_agent_profile
+        parent_profile = execution_context.agent_profile
         if parent_profile is None:
             return tool_error(
                 self.name,
@@ -144,17 +129,11 @@ class DelegateTaskTool(HandlerBase):
                 tool_name=self.name,
             )
 
-        agent_registry = runtime_dependencies.agent_profile_registry
-        if agent_registry is None:
-            return tool_error(
-                self.name,
-                "delegate_task_catalog_unavailable",
-                reason="The child agent catalog for this workspace is unavailable.",
-                retryable=False,
-            )
+        from app.config.configuration import get_agent_registry
+
         # ``resolve`` 的契约是不抛配置异常：坏配置由装载来源记日志后按「无配置」降级
         # （见 ``AgentProfileScopeSource``），因此这里只有「解析不到」这一条失败路径。
-        child_agent_profile: AgentProfile | None = agent_registry.resolve(
+        child_agent_profile: AgentProfile | None = get_agent_registry().resolve(
             execution_context.workspace_root,
             child_agent_id,
         )
@@ -183,10 +162,22 @@ class DelegateTaskTool(HandlerBase):
                 retryable=True,
             )
 
+        loop = execution_context.event_loop
+        if loop is None or loop.is_closed():
+            return tool_error(
+                self.name,
+                "delegate_task_runtime_unavailable",
+                reason=(
+                    "the parent runtime event loop is unavailable, so the child run "
+                    "cannot be started; retry from a normal turn."
+                ),
+                retryable=False,
+            )
+
         try:
             from app.config.configuration import get_tool_system
 
-            parent_run = self.run_setvice.get_run(execution_context.run_id)
+            parent_run = self._run_service.get_run(execution_context.run_id)
             child_task_tools = child_agent_profile.select_tools(
                 get_tool_system().executor.list_tools()
             )
@@ -214,36 +205,16 @@ class DelegateTaskTool(HandlerBase):
                                 else None)
             child_agent_model_config_id = child_agent_profile.model_config_id
             model_config_id = child_agent_model_config_id or parent_run.model_config_id
-            child_run = self.run_setvice.create_run(
-                task_id=child_task.id,
-                agent_id=child_agent_id,
-                model_config_id=model_config_id,
-                reasoning_effort=reasoning_effort,
-                run_command=ConversationRunCommand(display_text=message),
-            )
-
-            child_run = self.run_state_service.claim_pending_run(child_run.id)
-
-            # 执行器入口是协程：在父 Run 的事件循环上调度，并只等待登记完成。
-            loop = execution_context.runtime_dependencies.runtime_event_loop
-            if loop is None or loop.is_closed():
-                return tool_error(
-                    self.name,
-                    "delegate_task_runtime_unavailable",
-                    reason=(
-                        "the parent runtime event loop is unavailable, so the child run "
-                        "cannot be started; retry from a normal turn."
-                    ),
-                    retryable=False,
-                )
-            future = asyncio.run_coroutine_threadsafe(
-                self.run_exector.start(
-                    child_run.id,
-                    start_mode="fresh",
+            child_run = asyncio.run_coroutine_threadsafe(
+                get_workflow_session().open_run(
+                    child_task.id,
+                    ConversationRunCommand(display_text=message),
+                    agent_id=child_agent_id,
+                    model_config_id=model_config_id,
+                    reasoning_effort=reasoning_effort,
                 ),
                 loop,
-            )
-            future.result(timeout=_START_ACK_TIMEOUT_SECONDS)
+            ).result()
 
         except Exception as e:
             log.exception(
@@ -345,7 +316,7 @@ def build_delegate_task_definition() -> ToolDefinition | None:
         无。
 
     副作用:
-        创建 `DelegateTaskTool` 实例（解析 Task/Run 服务与 Run 执行器单例）并生成基础
+        创建 `DelegateTaskTool` 实例（解析 Task/Run 服务单例）并生成基础
         `ToolDefinition`；不创建 child Task、不启动委派。
     """
 

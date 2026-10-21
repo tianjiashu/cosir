@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.tool_handler.search.errors import (
     SearchCancelled,
     SearchPathNotFound,
@@ -18,6 +17,7 @@ from app.core.tools.tool_handler.search.errors import (
 )
 from app.core.tools.tool_handler.search.file_walker import iter_files
 from app.core.tools.tool_handler.search.ignore_rules import load_search_ignore_rules
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 ScopeKind = Literal["file", "directory"]
 

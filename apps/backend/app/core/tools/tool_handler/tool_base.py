@@ -38,8 +38,9 @@ class HandlerBase(ABC):
     **调用约定**：
     ``ToolHandlerRunner`` 通过 ``handler(**arguments, execution_context=ec)`` 调用 execute，
     其中 ``arguments`` 是已通过 pydantic 校验的参数字典。子类的 execute 签名可以
-    按工具需要声明具体参数，但最终的一个关键字参数必须是
-    ``execution_context: ToolExecutionContext | None = None``。
+    按工具需要声明具体参数，但必须接受关键字参数 ``execution_context``。runner 总会传入
+    非 ``None`` 的上下文：消费它的 handler 声明为必填 ``ToolExecutionContext`` 且不判空；
+    不消费它的 handler 可声明 ``ToolExecutionContext | None = None`` 以便脱离 runner 直接调用。
 
     参数:
         无（子类无需调用 ``super().__init__()``；HandlerBase 本身无实例状态，
@@ -71,8 +72,7 @@ class HandlerBase(ABC):
         """执行工具逻辑，返回结构化观测结果。
 
         子类必须实现此方法。具体参数签名按工具需要声明，但必须接受
-        ``execution_context`` 关键字参数（``ToolExecutionContext | None``），
-        由 :class:`ToolHandlerRunner` 在调用时强制注入。
+        ``execution_context`` 关键字参数，由 :class:`ToolHandlerRunner` 在调用时强制注入。
 
         参数:
             args / kwargs: 由 :class:`ToolHandlerRunner` 按工具的参数模型

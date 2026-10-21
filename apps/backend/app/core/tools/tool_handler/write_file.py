@@ -13,7 +13,6 @@ success content 提供简短警告，不改变写入成功状态。
 
 from pathlib import Path
 
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.core.tools.schemas import (
@@ -39,6 +38,7 @@ from app.core.tools.tool_handler.patch_write.patch_diff import FileDiffResult
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.write_file_args import WriteFileArgs
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
 class WriteFileTool(HandlerBase):

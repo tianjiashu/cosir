@@ -6,10 +6,9 @@
 
 import codecs
 import locale
+from collections.abc import Callable
 from threading import RLock
 from typing import Any
-
-from app.core.tools.schemas.tool_output import OutputSink
 
 
 class _IncrementalOutputDecoder:
@@ -88,7 +87,7 @@ class _OutputCollector:
     def __init__(
         self,
         stream: Any,
-        sink: OutputSink | None = None,
+        sink: Callable[[str], None] | None = None,
     ) -> None:
         """构造输出采集器。
 
@@ -139,7 +138,7 @@ class _OutputCollector:
             except Exception:
                 self._stream_closed = True
 
-    def _stream_sink_locked(self) -> OutputSink | None:
+    def _stream_sink_locked(self) -> Callable[[str], None] | None:
         """Return the live callback while it is open and ``_state_lock`` is held."""
         if self._stream_closed:
             return None

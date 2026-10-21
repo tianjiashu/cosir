@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import time
 from fnmatch import fnmatchcase
 
-from app.core.tools.tool_handler.search.errors import SearchTimedOut, SearchCancelled
 from app.core.tools.tool_handler.search.result import FileSearchMatch, FileSearchPage
 from app.core.tools.tool_handler.search.scope import SearchScope
 

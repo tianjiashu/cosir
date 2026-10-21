@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+
 from app.core.tools.tool_handler.search.errors import (
     InvalidSearchPattern,
 )

@@ -1,6 +1,6 @@
 """交互终端工具族的共享辅助函数。
 
-这里集中 terminal handler 共用的四类小能力：取进程内 session service、统一的取消检查、
+这里集中 terminal handler 共用的三类小能力：统一的取消检查、
 把领域错误与成功结果归一化为 ``ToolObservation``。展示字段投影由
 ``core/tools/display/terminal_display.py`` 负责；本模块不持有会话状态，也不实现 PTY 能力。
 """
@@ -9,46 +9,19 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.service.terminal.errors import TerminalRepeatedReadError, TerminalSessionError
-
-if TYPE_CHECKING:
-    from app.service.terminal.terminal_session_service import TerminalSessionService
-
-
-def require_service(context: ToolExecutionContext) -> TerminalSessionService:
-    """取得仅供同进程 terminal handler 使用的 session service。
-
-    参数:
-        context: 本次工具调用的执行上下文，其 ``runtime_dependencies`` 携带注入的 service。
-
-    返回:
-        当前进程的 ``TerminalSessionService``。
-
-    异常:
-        TerminalSessionError: 运行期依赖未注入该 service 时抛出，属装配缺失而非调用方参数
-            错误。
-
-    副作用:
-        无；只读取执行上下文上的依赖引用。
-    """
-
-    service = context.runtime_dependencies.terminal_session_service
-    if service is None:
-        raise TerminalSessionError("terminal session service is not available")
-    return service
 
 
 def cancelled(context: ToolExecutionContext) -> bool:
-    """查询本工具所属 Task 是否收到停止信号；无 run 绑定的直接调用视为不可取消。"""
+    """查询本工具所属 Task 是否收到停止信号。"""
 
-    return context.run_id > 0 and cancellation_registry.is_cancelled(context.task_id)
+    return cancellation_registry.is_cancelled(context.task_id)
 
 
 def cancelled_observation(tool_name: str) -> ToolObservation:

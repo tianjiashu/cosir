@@ -18,7 +18,6 @@ from app.core.tools.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.core.tools.tool_handler.terminal_session.common import (
     cancelled,
     cancelled_observation,
-    require_service,
     success_observation,
     with_terminal_errors,
 )
@@ -28,6 +27,7 @@ from app.core.tools.tool_handler.terminal_session.descriptions import (
 )
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models import TerminalCloseArgs
+from app.service import depends as service_depends
 
 
 class TerminalCloseTool(HandlerBase):
@@ -50,14 +50,13 @@ class TerminalCloseTool(HandlerBase):
     def execute(
         self,
         session_id: str,
-        execution_context: ToolExecutionContext | None = None,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """显式关闭指定 session，并返回关闭后的 session 快照。
 
         参数:
             session_id: ``terminal_start`` 返回的会话标识。
-            execution_context: 执行上下文；为 None 时直接报错，因为缺少 workspace、
-                task/run 标识与取消查询边界。
+            execution_context: 执行上下文；提供会话归属（task / workspace）与取消查询边界。
 
         返回:
             成功时为携带终态 session 快照的成功观察；run 已取消时为取消观察；领域错误经
@@ -71,13 +70,11 @@ class TerminalCloseTool(HandlerBase):
             操作，会话也不会因预览退出而关闭。
         """
 
-        if execution_context is None:
-            raise ValueError("terminal_close requires a workspace execution context")
         if cancelled(execution_context):
             return cancelled_observation(self.name)
 
         def action() -> ToolObservation:
-            payload = require_service(execution_context).close(
+            payload = service_depends.get_terminal_session_service().close(
                 session_id,
                 task_id=execution_context.task_id,
                 workspace_id=execution_context.workspace_id,

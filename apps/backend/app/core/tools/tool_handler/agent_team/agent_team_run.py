@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import ClassVar
 
 from pydantic import ValidationError
 
-from app.agent_team.registry import get_agent_team_registry
 from app.agent_team.node_goal import AgentTeamNodeGoal
+from app.agent_team.registry import get_agent_team_registry
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
@@ -80,7 +81,7 @@ class AgentTeamRunTool(HandlerBase):
             team_id: str,
             goal: str,
             node_goals: list[dict[str, str]],
-            execution_context: ToolExecutionContext | None = None,
+            execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """准备待确认方案，或在用户批准后真正启动该 TeamRun。
 
@@ -95,13 +96,7 @@ class AgentTeamRunTool(HandlerBase):
         抛 ``KeyError``，使准备阶段整体失败。
         """
 
-        if execution_context is None:
-            return tool_error(
-                self.name,
-                "agent_team requires an execution context.",
-                reason="Run the tool from an active Agent context.",
-            )
-        parent_agent_profile = execution_context.runtime_dependencies.parent_agent_profile
+        parent_agent_profile = execution_context.agent_profile
         if parent_agent_profile is None:
             log.warning(
                 "agent_team_parent_profile_unavailable",
@@ -125,7 +120,11 @@ class AgentTeamRunTool(HandlerBase):
             )
         decision = execution_context.user_decision
         if decision is not None and decision.kind in EXECUTING_DECISION_KINDS:
-            return self._start_confirmed_run(decision, parent_agent_profile)
+            return self._start_confirmed_run(
+                decision,
+                parent_agent_profile,
+                execution_context.event_loop,
+            )
         # 参数入口已检查 node_id 唯一性；只在准备阶段转换，批准阶段消费持久化决定。
         goals_by_node = {
             item["node_id"]: AgentTeamNodeGoal(goal=item["goal"], summary=item["summary"])
@@ -169,8 +168,11 @@ class AgentTeamRunTool(HandlerBase):
                 return tool_error(
                     self.name,
                     error="agent_team_run_creation_invalid",
-                    reason=f"The Team configuration does not exist: {team_id}; please confirm whether this Team has been created",
-                    retryable=False
+                    reason=(
+                        f"The Team configuration does not exist: {team_id}; "
+                        "please confirm whether this Team has been created"
+                    ),
+                    retryable=False,
                 )
             preparation = self.agent_team_preparation_service.prepare(
                 configuration,
@@ -227,7 +229,10 @@ class AgentTeamRunTool(HandlerBase):
             return tool_error(
                 self.name,
                 "agent_team_run_creation_invalid",
-                reason=f"Failed to create the Team execution plan. Please check the Team configuration or retry later. error:{str(exc)}",
+                reason=(
+                    "Failed to create the Team execution plan. Please check the Team "
+                    f"configuration or retry later. error:{exc!s}"
+                ),
                 retryable=exc.retryable,
             )
         except Exception as exc:
@@ -259,6 +264,7 @@ class AgentTeamRunTool(HandlerBase):
             self,
             decision: UserDecision,
             parent_agent_profile: AgentProfile,
+            event_loop: asyncio.AbstractEventLoop | None,
     ) -> ToolObservation:
         """第二遍：用户批准后启动 TeamRun 并返回启动结果。
 
@@ -293,7 +299,14 @@ class AgentTeamRunTool(HandlerBase):
         try:
             inputs = AgentTeamApproveInput.model_validate(decision.data)
         except ValidationError as exc:
-            return self._confirmation_error(f"Invalid confirmation input: {exc.error_count()} field errors")
+            return self._confirmation_error(
+                f"Invalid confirmation input: {exc.error_count()} field errors"
+            )
+        # 节点 Run 经执行器在父 Run 的事件循环上执行，本工具线程等待 Team 落定。
+        if event_loop is None or event_loop.is_closed():
+            return self._confirmation_error(
+                "The parent runtime event loop is unavailable, so the Team cannot be started."
+            )
         try:
             row = self.agent_team_run_service.confirm_and_start(
                 team_run_id,
@@ -301,6 +314,7 @@ class AgentTeamRunTool(HandlerBase):
                 goal=inputs.goal,
                 node_goals=inputs.node_goals,
                 parent_agent_profile=parent_agent_profile,
+                event_loop=event_loop,
             )
         except KeyError:
             return self._confirmation_error(
@@ -327,7 +341,8 @@ class AgentTeamRunTool(HandlerBase):
         }:
             # 条件迁移未生效且行已终态：多为 Team 已被取消（主 Run 停止或任务删除），或节点执行在
             # 本次调用内就失败并收敛。此时不能报告成功，否则模型会继续等一个永远不会运行的 Team；
-            # ``end_reason`` 必须一起回传，否则模型只能把「节点已失败」误读成「运行时状态问题」。
+            # 必须带上 ``team_run_id``，由 ``_confirmation_error`` 附上运行档案的 read_file 指引，
+            # 否则模型只能把「节点已失败」误读成「运行时状态问题」。
             return self._confirmation_error(
                 f"The Team run ended with status {row.status}.",
                 team_run_id=row.id,
@@ -337,7 +352,11 @@ class AgentTeamRunTool(HandlerBase):
             tool_name=self.name,
             content=json.dumps(
                 {
-                    "hint": "Review the node outputs in the saved run history against the goal." if row.status == AgentTeamRunStatus.COMPLETED.value else "The Team run is still active.",
+                    "hint": (
+                        "Review the node outputs in the saved run history against the goal."
+                        if row.status == AgentTeamRunStatus.COMPLETED.value
+                        else "The Team run is still active."
+                    ),
                     "status": row.status,
                     "team": inputs.configuration["name"],
                     "trace_file": archive_path,

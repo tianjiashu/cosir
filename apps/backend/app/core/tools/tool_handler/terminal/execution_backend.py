@@ -6,8 +6,8 @@
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 
-from app.core.tools.schemas.tool_output import OutputSink
 from app.core.tools.tool_handler.terminal.execution_result import ExecutionResult
 
 
@@ -24,7 +24,7 @@ class ExecutionBackend(ABC):
         command: str,
         cwd: str,
         timeout: float,
-        output_sink: OutputSink | None = None,
+        output_sink: Callable[[str], None] | None = None,
         shell: str = "auto",
     ) -> ExecutionResult:
         """在宿主机上同步执行一条命令并返回归一化结果。

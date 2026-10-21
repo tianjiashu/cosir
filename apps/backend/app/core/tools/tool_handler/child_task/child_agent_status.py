@@ -3,6 +3,7 @@
 import json
 from typing import ClassVar
 
+from app.core.tools.display.child_agent_display import build_child_agent_result_display_data
 from app.core.tools.schemas import (
     TOOL_CHILD_AGENT_STATUS,
     ToolDefinition,
@@ -10,7 +11,6 @@ from app.core.tools.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tools.display.child_agent_display import build_child_agent_result_display_data
 from app.core.tools.tool_execute.tool_error import tool_error
 from app.core.tools.tool_execute.tool_success import tool_success
 from app.core.tools.tool_grouping import TOOL_GROUP_CHILD_AGENT
@@ -59,7 +59,7 @@ class ChildAgentStatusTool(HandlerBase):
     def execute(
         self,
         child_task_id: int,
-        execution_context: ToolExecutionContext | None = None,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """读取指定子任务当前 Run 的状态投影。
 
@@ -69,8 +69,7 @@ class ChildAgentStatusTool(HandlerBase):
 
         返回:
             成功时返回包含 ``child_task_id`` / ``child_run_id`` / ``status`` /
-            ``final_output`` / ``end_reason`` / ``agent_id`` 的 JSON 文本；缺少执行上下文、
-            参数非法、子任务不存在或尚无 Run 时返回错误观察。
+            ``final_output`` / ``end_reason`` / ``agent_id`` 的 JSON 文本；参数非法、子任务不存在或尚无 Run 时返回错误观察。
 
         异常:
             无。``ValidationError`` 与 ``KeyError`` 均在本方法内归一化为错误观察。
@@ -78,13 +77,6 @@ class ChildAgentStatusTool(HandlerBase):
         副作用:
             各一次只读查询：读取 task 记录与其当前 Run 记录；不写任何事实。
         """
-
-        if execution_context is None:
-            return tool_error(
-                self.name,
-                "child_agent_status requires an execution context.",
-                reason="Call this tool from inside a running turn instead of directly.",
-            )
 
         try:
             child_task = self._task_service.get_task(child_task_id)

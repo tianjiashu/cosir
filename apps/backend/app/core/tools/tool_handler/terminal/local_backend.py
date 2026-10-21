@@ -17,8 +17,8 @@ import shutil
 import signal
 import subprocess
 import threading
+from collections.abc import Callable
 
-from app.core.tools.schemas.tool_output import OutputSink
 from app.core.tools.tool_handler.terminal.execution_backend import ExecutionBackend
 from app.core.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.core.tools.tool_handler.terminal.output_collector import (
@@ -40,7 +40,7 @@ class LocalExecutionBackend(ExecutionBackend):
         command: str,
         cwd: str,
         timeout: float,
-        output_sink: OutputSink | None = None,
+        output_sink: Callable[[str], None] | None = None,
         shell: str = "auto",
     ) -> ExecutionResult:
         """在宿主机同步执行一条命令并回收完整输出。
