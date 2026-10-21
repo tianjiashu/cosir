@@ -6,7 +6,7 @@
 「准入决策」这一职责，故收口在本模块，不在管线门面里平铺。
 
 职责边界：
-- 负责：解析工具定义、按 ``allowed_tool_names`` 做 Agent 级门禁、参数校验、PreToolUse
+- 负责：解析工具定义、按 ``allowed_tool_names`` 做 Agent 级门禁、参数解码与校验、PreToolUse
   Hook 拦截（DENY 短路、modified_arguments 改写），并把四类拒绝各自的原因文案归一为
   面向模型的富文本观察。
 - 不负责：文件状态协调、隔离执行与硬超时强杀、输出预算（以上归
@@ -19,6 +19,7 @@ from typing import Any
 
 from app.config.logging.logger import log
 from app.core.hook import HookContext, HookDecision, HookEvent, HookInterceptor, HookResult
+from app.core.llm_provider.message_codec import decode_tool_arguments
 from app.core.tools.schemas import (
     ToolCall,
     ToolDefinition,
@@ -47,7 +48,7 @@ class ToolGateOutcome:
     """
 
     tool: ToolDefinition | None = None
-    arguments: dict[str, Any] = field(default_factory=dict)
+    arguments: dict[str, object] = field(default_factory=dict)
     denial: ToolObservation | None = None
 
     @property
@@ -99,12 +100,12 @@ class ToolAccessGate:
     ) -> ToolGateOutcome:
         """按顺序执行四段准入检查并返回判定结果。
 
-        检查顺序：注册表命中 → Agent profile 权限门禁 → 参数校验 → PreToolUse Hook。
+        检查顺序：注册表命中 → Agent profile 权限门禁 → 参数解码与校验 → PreToolUse Hook。
         任一环节拒绝即短路返回 ``denial``，不继续后续检查、不执行工具、不触发
         PostToolUse Hook。全部通过时返回 ``admitted=True`` 的判定结果。
 
         参数:
-            call: 模型请求的工具调用，含工具名、参数与调用 id。
+            call: 模型请求的工具调用，含工具名、原始参数串与调用 id。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由
                 ``ToolExecutor`` 保证非 None，用于构造 Hook 上下文。
             allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
@@ -132,9 +133,7 @@ class ToolAccessGate:
                     f"unknown tool: {call.tool_name}",
                     reason=(
                         f"the tool '{call.tool_name}' is not registered in the tool "
-                        f"system; this is deterministic, so check the tool name for "
-                        f"typos or register the tool before calling it again. The same "
-                        f"name will always be rejected."
+                        f"system;"
                     ),
                     tool_call_id=call.call_id,
                     retryable=False,
@@ -155,8 +154,23 @@ class ToolAccessGate:
                 )
             )
 
+        try:
+            arguments = decode_tool_arguments(call.arguments)
+        except ValueError:
+            return ToolGateOutcome(
+                denial=tool_error(
+                    tool.name,
+                    "Invalid tool arguments",
+                    reason=(
+                        "Tool arguments must be a valid JSON object; correct them before retrying."
+                    ),
+                    tool_call_id=call.call_id,
+                    retryable=True,
+                )
+            )
+
         validation = validate_tool_arguments(
-            call.arguments,
+            arguments,
             tool.parameters_schema,
             tool.args_model,
         )
@@ -166,9 +180,9 @@ class ToolAccessGate:
                     tool.name,
                     f"invalid tool arguments: {validation.error}",
                     reason=(
-                        f"this is deterministic, so fix the argument values/types per "
-                        f"the tool's parameter schema and call again. The same "
-                        f"arguments will always be rejected."
+                        "this is deterministic, so fix the argument values/types per "
+                        "the tool's parameter schema and call again. The same "
+                        "arguments will always be rejected."
                     ),
                     tool_call_id=call.call_id,
                     retryable=True,

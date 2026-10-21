@@ -38,7 +38,7 @@ class ToolObservationBudget:
     def apply(
             self,
             observation: ToolObservation,
-            execution_context: ToolExecutionContext | None,
+            execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """对任意成功、失败或提前返回观察的模型内容应用输出预算。
 
@@ -46,8 +46,7 @@ class ToolObservationBudget:
 
         参数:
             observation: 待返回给上层的工具观察。
-            execution_context: 当前 workspace 上下文；为 None 时 artifact 不落盘，
-                退化为纯截断。
+            execution_context: 当前 workspace 上下文，决定 artifact 落盘位置。
 
         返回:
             受模型内容预算约束的观察；工具内容保持原文。
@@ -57,7 +56,7 @@ class ToolObservationBudget:
             无。artifact 写入失败由 :class:`ToolOutputBudget` 内部退化处理。
 
         副作用:
-            超限且有 workspace 时可能写入 artifact；execute_terminal artifact 保存原始输出。
+            超限时写入 artifact；execute_terminal artifact 保存原始输出。
         """
 
         return self._output_budget.apply(observation, execution_context)

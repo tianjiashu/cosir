@@ -119,32 +119,6 @@ def blocked_device_reason(action: str) -> str:
     return "use a regular file path inside the project instead."
 
 
-def internal_execution_error_reason(header: str) -> str:
-    """构造「执行链内部错误（非工具语义失败）」的富文本 ``reason`` 共享尾部。
-
-    该助手是执行器在调用 ``ToolExecutor.execute`` 时捕获到**非工具语义异常**（即
-    执行链自身 bug：执行管线内部、事件构造、trace span、序列化等抛出的意外异常，而非
-    工具 handler 主动返回的业务失败）的唯一收口：区分于工具语义失败，明确告诉模型
-    「工具本体没跑起来，是 runtime 出了内部错误」，并给出停止或处理建议。
-
-    参数:
-        header: 已点明失败位置与人读原因的英文短句（如 ``"internal execution error
-            before the tool ran: ..."``），作为说明前缀。
-
-    返回:
-        面向模型的富文本说明（只提供处理建议，不重复 ``header`` 的错误事实）。
-
-    异常:
-        无。
-
-    副作用:
-        无（纯函数）。
-    """
-    return (
-        "the tool itself never ran because the runtime failed; inspect and fix the "
-        "runtime issue before calling the tool again."
-    )
-
 
 def handler_exception_reason(header: str) -> str:
     """构造「handler 抛异常 / 进程崩溃」类失败富文本 ``reason`` 的共享尾部。

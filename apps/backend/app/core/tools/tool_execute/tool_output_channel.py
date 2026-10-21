@@ -7,12 +7,16 @@ import threading
 from collections.abc import Callable, Iterator
 
 from app.config.logging.logger import log
-from app.core.tools.schemas.tool_output import ProcessToolOutputChannel
+from app.core.events import TerminalOutputDeltaData, ToolCallRuntimeUpdateEvent
+from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
+from app.core.tools.schemas.tool_names import TOOL_EXECUTE_TERMINAL
 
 _BATCH_INTERVAL_SECONDS = 0.075
+# 单个终端输出事件的文本上限；超长输出由通道切成多帧。
+_EVENT_TEXT_LIMIT = 4096
 
 
-class BufferedProcessToolOutputChannel(ProcessToolOutputChannel):
+class BufferedProcessToolOutputChannel:
     """把工作线程产生的文本合并后，按序投递到指定事件循环。
 
     本类只负责线程安全缓冲、合并、分帧及投递时序，不依赖 Assistant Transport 的事件
@@ -197,4 +201,44 @@ class BufferedProcessToolOutputChannel(ProcessToolOutputChannel):
             yield "".join(parts)
 
 
-__all__ = ["BufferedProcessToolOutputChannel"]
+def create_process_output_channel(
+    tool_name: str,
+    execution_context: ToolExecutionContext,
+) -> BufferedProcessToolOutputChannel | None:
+    """为进程工具调用建实时输出通道，把输出增量作为运行期事件交给 Run 的 ``event_sink``。
+
+    只有 ``execute_terminal`` 有实时输出视图，其余进程工具返回 ``None``，只产出最终
+    observation。``event_loop`` / ``event_sink`` 缺失（进程隔离副本或无 Run 的直接调用）时
+    同样返回 ``None``。
+    """
+
+    loop = execution_context.event_loop
+    sink = execution_context.event_sink
+    if tool_name != TOOL_EXECUTE_TERMINAL or loop is None or sink is None:
+        return None
+    task_id = execution_context.task_id
+    run_id = execution_context.run_id
+    tool_call_id = execution_context.tool_call_id
+
+    def publish(seq: int, text: str) -> None:
+        sink(
+            ToolCallRuntimeUpdateEvent(
+                task_id=task_id,
+                run_id=run_id,
+                tool_call_id=tool_call_id,
+                seq=seq,
+                data=TerminalOutputDeltaData(kind="terminal_output_delta", text=text),
+            )
+        )
+
+    return BufferedProcessToolOutputChannel(
+        task_id=task_id,
+        run_id=run_id,
+        tool_call_id=tool_call_id,
+        loop=loop,
+        publish=publish,
+        max_chunk_chars=_EVENT_TEXT_LIMIT,
+    )
+
+
+__all__ = ["BufferedProcessToolOutputChannel", "create_process_output_channel"]
