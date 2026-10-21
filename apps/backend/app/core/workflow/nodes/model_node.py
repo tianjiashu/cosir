@@ -13,6 +13,8 @@ from openai.types.chat import (
     ParsedFunctionToolCall,
 )
 
+from app.config.configuration import get_tool_system
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
@@ -29,32 +31,63 @@ from app.core.workflow.node_helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflow.node_helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
+from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.enums.conversation_run_status import RunTransition
 from app.models.runtime_notice import RuntimeNotice
+from app.service import depends as service_depends
 from app.utils.message_content import content_to_text
 
 
+def _cancel_before_request(step_id: str, run_id: int) -> None:
+    """在发起模型请求前落定 cancelled 并结束本次驱动。"""
+    rc = _runtime_context()
+    log.info(
+        "model_node_cancelled_before_request",
+        extra={
+            "msg": f"模型请求前检测到 run 已取消，跳过模型调用，step_id={step_id}",
+            "data": {"step_id": step_id, "run_id": run_id},
+        },
+    )
+    service_depends.get_conversation_run_state_service().transition(
+        run_id,
+        RunTransition.CANCEL,
+        end_reason=Constant.Run.RUN_END_REASON_RUNTIME_CANCELLED,
+        usage_stats=rc.usage_stats,
+    )
+    raise RunStopped()
+
+
 async def _model_node(state: ReactExecutionState) -> dict[str, object]:
-    """调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文。
-    取消覆盖首字节等待及流式读取：部分输出留作展示，不进入模型上下文或工具执行。
-    工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，完成原因落定 Run。
-    无保留调用且缺少完成原因时，输出仅供展示并重新请求模型。"""
+    """模型边界：取消落定、inbox 并入与模型请求的唯一入口。
+
+    取消只在这里落定：其它节点检出 Task 取消信号后只负责流转回 model。检查分两处——进入时
+    （此时尚未并入 inbox，取消不会吞掉排队消息）与上下文加载后、开请求前（加载含附件读取，
+    窗口不可忽略）；请求期间由流式读取边界检查。
+    调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文；部分输出留作展示，
+    不进入模型上下文或工具执行。工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，
+    完成原因落定 Run；缺少完成原因时，输出仅供展示并重新请求模型。"""
 
     rc = _runtime_context()
-    operations = rc.operations
     model = rc.model
 
     step_count = state.step_count + 1
-    task_id = operations.get_current_task().id
-    run_id = operations.get_current_run().id
+    task_id = rc.task.id
+    run_id = rc.run.id
     step_id = f"step-{step_count}"
 
+    if rc.is_cancelled():
+        _cancel_before_request(step_id, run_id)
     # 超配额时不再发起推理，落定 max_steps_reached 失败终态。
     if step_count > rc.step_limit:
         return await _finalize_max_steps(step_count)
-    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-
+    await asyncio.to_thread(service_depends.get_task_input_service().consume_into_context, _message_context(), run_id)
+    # 请求前持久化已占用的步骤号，取消后不会复用草稿/part 身份。
+    service_depends.get_conversation_run_state_service().save_execution(
+        run_id,
+        ConversationRunProgress(step_count=step_count, tool_error_count=state.tool_error_count),
+    )
     # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
-    task_space = task_runtime_spaces.get_or_create(task_id)
+    task_space = rc.task_space
     # 运行期通知（其它层经 tools / runner / 配置变更广播投递）统一在这里消费：归属过滤由
     # ``take_runtime_notices(run_id=...)`` 在出队时完成（属于其它 Run 的通知在此被丢弃），此处不再
     # 重复判定。取回的是压成一段的提示文本（队列为空时也含声明行），作为独立 ``system 消息``
@@ -69,18 +102,10 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     messages: list[ChatCompletionMessageParam] = await asyncio.to_thread(
         _message_context().load_message
     )
-    registered_tool_names = frozenset(definition.name for definition in operations.all_vaild_tools)
+    registered_tool_names = frozenset(get_tool_system().registry.get_all_tool_names())
 
-    if operations.is_current_run_cancelled():
-        log.info(
-            "model_node_cancelled_before_request",
-            extra={
-                "msg": f"模型请求前检测到 run 已取消，跳过模型调用，step_id={step_id}",
-                "data": {"step_id": step_id, "run_id": run_id},
-            },
-        )
-        operations.cancel_run_if_running(usage_stats=rc.usage_stats)
-        raise RunStopped()
+    if rc.is_cancelled():
+        _cancel_before_request(step_id, run_id)
 
     log.info(
         "model_node_started",
@@ -104,7 +129,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     try:
         async with aclosing(model.stream(messages)) as chunks:
             async for event in chunks:
-                if operations.is_current_run_cancelled():
+                if rc.is_cancelled():
                     raise RunStopped()
                 aggregated_message = event.snapshot
                 _message_context().save_model_response(
@@ -132,8 +157,13 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
                     # 一个 chunk 可能并行携带多个 tool call，逐条处理已有的 name/id 身份。
                     parts.tool_call(raw_tool_calls)
             # 最后一帧之后仍可能收到取消信号，进入完成判定前再检查一次。
-            if operations.is_current_run_cancelled():
+            if rc.is_cancelled():
                 raise RunStopped()
+        if aggregated_message is None:
+            raise RuntimeError("模型流没有产出响应")
+        # 最终快照是调用身份的权威集合：在 finish 收口前补记最后一帧才完整的身份。只在流正常
+        # 结束时做；取消路径已由 parts.cancel() 收敛，失败路径没有可信快照。
+        parts.tool_call(aggregated_message.choices[0].message.tool_calls or [])
     except RunStopped:
         log.info(
             "model_node_cancelled_usage_summary",
@@ -149,14 +179,15 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         )
         # 取消时工具 part 的收敛由状态机按「本请求已投影的调用」完成，不再查询生命周期记录。
         parts.cancel()
-        operations.cancel_run_if_running(usage_stats=rc.usage_stats)
+        service_depends.get_conversation_run_state_service().transition(
+            run_id,
+            RunTransition.CANCEL,
+            end_reason=Constant.Run.RUN_END_REASON_RUNTIME_CANCELLED,
+            usage_stats=rc.usage_stats,
+        )
         raise
     finally:
         parts.finish()
-
-    # 流关闭后有保留调用或完成原因才提交上下文；其余草稿只保留展示行。
-    if aggregated_message is None:
-        raise RuntimeError("模型流没有产出响应")
     choice = aggregated_message.choices[0]
     # SDK 快照的静态类型只列完整原因，流被截断时运行时仍可能为 None。
     finish_reason = cast(str | None, choice.finish_reason)
@@ -167,9 +198,6 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         cast(ChatCompletionMessageFunctionToolCallParam, call)
         for call in ai_message.get("tool_calls") or []
     ]
-    if calls:
-        # 最终消息是有效调用的权威集合；补记最后一帧才完整的身份。
-        parts.tool_call(choice.message.tool_calls or [])
 
     if not calls and finish_reason is None:
         parts.cancel()
@@ -201,17 +229,14 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
 
     if calls:
         # 有任意有效工具调用都进 tools 节点；参数是否合法由执行边界决定，失败由 observe 结算；
-        # 工具结果是否回流 model 也由 observe 决定。``instruction`` 把模型同时给出的说明文本带给
-        # 下游，使工具执行与错误排查能看到模型当时的意图。
+        # 工具结果是否回流 model 也由 observe 决定。
         rc.batch.calls = calls
-        content = ai_message.get("content")
-        rc.batch.instruction = content if isinstance(content, str) else ""
         return route_state(step_count, ReactRoute.TOOLS)
 
     # 无工具调用且 finish_reason 非 None：正文可以为空；结构化处理作为已完成 Run 的支线。
     final_answer = content_to_text(ai_message.get("content"))
     rc.batch = ToolBatch()
-    structured = rc.structured_output is not None
+    structured = rc.profile.structured_output is not None
     log.info(
         "model_node_final_response",
         extra={
@@ -224,8 +249,12 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             },
         },
     )
-    completed = operations.complete_run_if_running(
-        rc.usage_stats, final_output=final_answer, end_reason=finish_reason
+    completed = service_depends.get_conversation_run_state_service().transition(
+        run_id,
+        RunTransition.COMPLETE,
+        usage_stats=rc.usage_stats,
+        final_output=final_answer,
+        end_reason=finish_reason,
     )
     return route_state(
         step_count,
