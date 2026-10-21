@@ -8,7 +8,7 @@ import errno
 import os
 
 from app.config.logging.logger import log
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
 from app.core.tools.schemas import (
@@ -33,7 +33,6 @@ from app.core.tools.tool_handler.patch_write.patch_parser import (
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
-
 
 
 def _is_patch_retryable_after_correction(error: PatchApplyError) -> bool:

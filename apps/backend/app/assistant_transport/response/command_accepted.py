@@ -6,8 +6,7 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 
 
 class CommandAccepted(BaseModel):
-    """queued 表示本次提交未启动执行者；state 是提交时的读取快照。"""
+    """``queued`` 表示消息只进了 inbox、本次未启动执行；``state`` 是提交后的读取快照。"""
 
-    runId: int
     state: ConversationStateSnapshot
     queued: bool
