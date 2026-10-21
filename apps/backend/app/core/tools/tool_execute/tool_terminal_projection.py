@@ -42,6 +42,7 @@ from collections.abc import Mapping
 from typing import Literal
 
 from app.config.logging.logger import log
+from app.core.events import ToolCallStatusChangedEvent
 from app.core.tools.schemas import ToolObservation
 from app.service.depends import get_conversation_event_projector
 
@@ -213,11 +214,6 @@ def _project(
         )
         return False
     try:
-        # 延迟导入：``app.assistant_transport.event`` 包初始化会经 tool_names → ``app.core.tools``
-        # 包 → tool_system → tool_executor 反向回到本模块，模块级导入会在 event 包尚未导出该事件时
-        # 触发 ImportError（后端启动即失败）。投影属运行期路径，此处导入时 event 包已完全就绪。
-        from app.assistant_transport.event import ToolCallStatusChangedEvent
-
         # 工具执行期间立即投影，终端提前返回无需等待整批工具结束。
         get_conversation_event_projector().process(
             ToolCallStatusChangedEvent(
@@ -325,7 +321,7 @@ def project_unhandled_tool_failure(
     """把「执行管线自身抛出未归一化异常」的调用投影为 ``failed`` 终态。
 
     该路径没有 :class:`ToolObservation`（异常发生在观察归一化之前或之外），上游
-    ``WorkflowOperations`` 会另造一条内部错误观察交给 ``observe`` 结算。本投影只负责让前端
+    ``run_tool_batch`` 会另造一条内部错误观察交给 ``observe`` 结算。本投影只负责让前端
     立刻看到终态，因此按 ``failed`` 投出、**不携带** ``display_data``（不覆盖已流出的输出、
     也不伪造展示载荷），短提示沿用失败兜底文案。
 

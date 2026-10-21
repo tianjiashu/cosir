@@ -1,14 +1,10 @@
-"""把进程工具输出通道适配为 Assistant Transport 运行期事件。"""
+"""把进程工具输出通道适配为运行期事件。"""
 
 from __future__ import annotations
 
 import asyncio
 
-from app.assistant_transport.event import (
-    TerminalOutputDeltaData,
-    ToolCallRuntimeUpdateEvent,
-)
-from app.assistant_transport.event.dispatch import dispatch_conversation_event
+from app.core.events import EventSink, TerminalOutputDeltaData, ToolCallRuntimeUpdateEvent
 from app.core.tools.schemas.tool_names import TOOL_EXECUTE_TERMINAL
 from app.core.tools.schemas.tool_output import (
     ProcessToolOutputChannel,
@@ -22,7 +18,10 @@ _EVENT_TEXT_LIMIT = 4096
 
 
 class ToolRuntimeOutputChannelFactory(ProcessToolOutputChannelFactory):
-    """为终端进程工具创建带 Assistant Transport 事件发布函数的输出通道。"""
+    """为终端进程工具创建输出通道，把输出增量作为运行期事件交给注入的 sink。"""
+
+    def __init__(self, event_sink: EventSink) -> None:
+        self._event_sink = event_sink
 
     def create(
         self,
@@ -43,7 +42,7 @@ class ToolRuntimeOutputChannelFactory(ProcessToolOutputChannelFactory):
             return None
 
         def publish(seq: int, text: str) -> None:
-            dispatch_conversation_event(
+            self._event_sink(
                 ToolCallRuntimeUpdateEvent(
                     task_id=task_id,
                     run_id=run_id,

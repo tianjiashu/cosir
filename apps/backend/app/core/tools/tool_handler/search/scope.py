@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.tool_handler.search.errors import (
     SearchCancelled,
     SearchPathNotFound,
