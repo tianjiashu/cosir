@@ -9,18 +9,9 @@ from typing import Any
 
 import pytest
 
-from app.assistant_transport.event import (
-    AssistantPartClosedEvent,
-    AssistantTextDeltaEvent,
-    RunInitializedEvent,
-    RunResultUpdatedEvent,
-    RunStatusChangedEvent,
-    ToolCallCreatedEvent,
-    ToolCallsSettledEvent,
-    ToolCallStatusChangedEvent,
-    UserInputAppendedEvent,
-    build_user_input_parts,
-)
+from app.assistant_transport.event import UserInputAppendedEvent
+from app.assistant_transport.projection.event_projection import plan_event
+from app.assistant_transport.projection.user_input_projection import build_user_input_parts
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
@@ -32,6 +23,16 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.stream import TransportFrame
 from app.config.constant import Constant
+from app.core.events import (
+    AssistantPartClosedEvent,
+    AssistantTextDeltaEvent,
+    RunInitializedEvent,
+    RunResultUpdatedEvent,
+    RunStatusChangedEvent,
+    ToolCallCreatedEvent,
+    ToolCallsSettledEvent,
+    ToolCallStatusChangedEvent,
+)
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
@@ -51,7 +52,7 @@ class InMemorySnapshotService:
 
         task_id = event.task_id
         state = self.get_state(task_id)
-        mutations = tuple(event.plan(copy.deepcopy(state)))
+        mutations = tuple(plan_event(event, copy.deepcopy(state)))
         for mutation in mutations:
             _apply_mutation(state, mutation)
         validate_snapshot(state)
@@ -551,7 +552,7 @@ def test_late_previous_run_events_cannot_overwrite_current_run(
         RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.FAILED)
     )
     state = snapshots.states[1]
-    assert _run(state, 2)["status"] == "pending"
+    assert _run(state, 2)["status"] == "running"
     assert _run(state, 1)["status"] == "completed"
     assert _run(state, 1)["usage"] is None
 
@@ -613,7 +614,7 @@ def test_historical_run_status_event_updates_its_own_run(
     assert _run(state, 1)["status"] == "completed"
     assert _run(state, 1)["endReason"] == "late_failure"
     assert _run(state, 1)["usage"]["total_tokens"] == 6
-    assert _run(state, 2)["status"] == "pending"
+    assert _run(state, 2)["status"] == "running"
 
 
 def test_unknown_run_event_raises_and_is_not_projected(

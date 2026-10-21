@@ -123,7 +123,10 @@ def test_team_list_converts_to_domain_map_and_approved_replay_uses_decision(monk
     received = []
     profile = object()
     context = SimpleNamespace(
-        runtime_dependencies=SimpleNamespace(parent_agent_profile=profile),
+        runtime_dependencies=SimpleNamespace(
+            parent_agent_profile=profile,
+            runtime_event_loop=SimpleNamespace(is_closed=lambda: False),
+        ),
         user_decision=None,
     )
 
@@ -140,7 +143,7 @@ def test_team_list_converts_to_domain_map_and_approved_replay_uses_decision(monk
 
     decision.kind = next(iter(EXECUTING_DECISION_KINDS))
     context.user_decision = decision
-    monkeypatch.setattr(tool, "_start_confirmed_run", lambda d, p: (d, p))
+    monkeypatch.setattr(tool, "_start_confirmed_run", lambda d, p, _loop: (d, p))
     assert tool.execute(**result.arguments, execution_context=context) == (decision, profile)
     assert len(received) == 1
 

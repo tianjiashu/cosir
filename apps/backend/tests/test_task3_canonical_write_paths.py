@@ -10,10 +10,11 @@ from typing import Any
 import pytest
 from test_task5_acceptance import canonical_store as canonical_store
 
-from app.assistant_transport.event import RunStatusChangedEvent
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
+from app.core.events import RunStatusChangedEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.run_state_machine import RunTransition
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_progress import ConversationRunProgress
@@ -154,6 +155,7 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
             usage: object = None,
             error: object = None,
             session: object = None,
+            clear_terminal_fields: bool = False,
             execution_data: object = None,
         ) -> object:
             assert session is not None
@@ -176,6 +178,9 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
     service._run = _RunCrud()
     service._context = _ContextService()
     service._session_factory = _SessionFactory()
+    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
+    service._run_state._run = service._run
+    service._run_state._session_factory = service._session_factory
 
     assert service.recover_orphaned_runs() == [recovered_run]
     assert order == ["begin", "run", "context", "commit"]
@@ -198,6 +203,9 @@ def _creation_service(store, monkeypatch, projector):
         )
     service = ConversationRunService.__new__(ConversationRunService)
     service._run = store.runs
+    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
+    service._run_state._run = store.runs
+    service._run_state._session_factory = store.factory
     service._task = store.tasks
     service._context = store.context
     service._session_factory = store.factory
@@ -334,8 +342,8 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
     depends_getter = depends.get_conversation_event_projector
     depends.get_conversation_event_projector = lambda: _Projector()
     try:
-        result = service.fail_run_if_running(
-            11,
+        result = service.transition(
+            11, RunTransition.FAIL,
             end_reason="tool_error_limit_reached",
             usage_stats=ConversationRunUsageStats(
                 input_tokens=3,
@@ -378,7 +386,7 @@ def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> 
     try:
         # 终态落库先于投影：投影失败向上传播，但已提交的 Run 事实完好。
         with pytest.raises(RuntimeError, match="transport unavailable"):
-            service.complete_run_if_running(11, final_output="done")
+            service.transition(11, RunTransition.COMPLETE, final_output="done")
     finally:
         depends.get_conversation_event_projector = original_getter
 

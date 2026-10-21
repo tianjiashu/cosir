@@ -23,7 +23,7 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   const businessWrites: string[] = [];
   page.on("request", (request) => {
     if (request.url().endsWith("/tasks/501/assistant/attach") && request.method() === "POST") attachRequests.push(request.url());
-    if (request.method() === "POST" && (request.url().endsWith("/assistant") || request.url().includes("/cancel"))) businessWrites.push(request.url());
+    if (request.method() === "POST" && (/\/tasks\/\d+\/(messages|resume|decisions)/.test(request.url()) || request.url().includes("/cancel"))) businessWrites.push(request.url());
   });
 
   await page.goto("/tasks/42");

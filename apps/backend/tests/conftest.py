@@ -25,9 +25,7 @@ from app.agent_team.registry import AgentTeamConfigurationRegistry
 from app.config import configuration
 from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_config, agent_profile_source
-from app.core.runtime.runner import AgentRuntime
 from app.core.tools.tool_system import ToolSystem
-from app.service import depends as depends_module
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -199,7 +197,7 @@ def isolated_storage(tmp_path: Path) -> Iterator[None]:
 
 @pytest.fixture
 def install_process_singletons(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
-    """返回「装配进程级单例（agent 目录 + 工具系统 + 运行时）」的安装函数。
+    """返回「装配进程级单例（agent 目录 + 工具系统）」的安装函数。
 
     为什么做成安装函数而不是夹具：``ToolSystem`` 的装配期会构造 ``delegate_task``，它依赖已初始化的
     存储单例，因此安装必须**晚于** ``init_storage()``；夹具的参数化依赖无法表达这种顺序，只能由
@@ -232,8 +230,6 @@ def install_process_singletons(monkeypatch: pytest.MonkeyPatch) -> Callable[[], 
             AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource()),
         )
         monkeypatch.setattr(configuration, "_TOOL_SYSTEM", ToolSystem.build_tool_system())
-        # 运行时构造期会取工具系统 / agent 目录 / 存储单例，必须在上面三者就绪之后构建。
-        monkeypatch.setattr(depends_module, "_RUNTIME", AgentRuntime())
 
     return install
 
@@ -242,12 +238,11 @@ def install_process_singletons(monkeypatch: pytest.MonkeyPatch) -> Callable[[], 
 def backend_env(
     isolated_storage: None, install_process_singletons: Callable[[], None]
 ) -> Iterator[None]:
-    """标准后端测试环境：隔离主库 + 进程级单例（agent 目录 / 工具系统 / 运行时）。
+    """标准后端测试环境：隔离主库 + 进程级单例（agent 目录 / 工具系统）。
 
     供整份测试文件需要「真实服务层」的用例用模块级
     ``pytestmark = pytest.mark.usefixtures("backend_env")`` 统一请求；单个用例需要时也可以直接
-    作为参数请求。装配顺序由 ``isolated_storage`` 依赖保证：主库先就绪，再构建依赖它的工具系统与
-    运行时。
+    作为参数请求。装配顺序由 ``isolated_storage`` 依赖保证：主库先就绪，再构建依赖它的工具系统。
 
     参数:
         isolated_storage: 隔离主库夹具（先执行）。
@@ -257,7 +252,7 @@ def backend_env(
         无（夹具上下文）。
 
     异常:
-        RuntimeError: 工具系统或运行时装配期依赖未就绪。
+        RuntimeError: 工具系统装配期依赖未就绪。
 
     副作用:
         初始化隔离主库并安装进程级单例；退出时由两个依赖夹具各自复原。

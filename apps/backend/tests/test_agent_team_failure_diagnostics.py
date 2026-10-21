@@ -10,11 +10,12 @@ from app.agent_team.state.agent_team_run_state import (
     AgentTeamRunState,
 )
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
-from app.assistant_transport.event.tool_call_event import ToolCallStatusChangedEvent
+from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
+from app.core.events import ToolCallStatusChangedEvent
 from app.core.tools.schemas import UserDecision, UserDecisionKind
 from app.core.tools.tool_handler.agent_team.agent_team_run import AgentTeamRunTool
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -24,6 +25,9 @@ from app.service.agent_team import agent_team_run_service as run_service_module
 from app.service.agent_team.agent_team_execution_timeline import project_node_visits
 from app.service.agent_team.agent_team_run_archive_service import AgentTeamRunArchiveService
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
+
+# 节点 Run 在父 Run 事件循环上执行；这里只需一个未关闭的循环身份。
+_OPEN_LOOP = SimpleNamespace(is_closed=lambda: False)
 
 
 def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None:
@@ -70,7 +74,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
         team_run_id=17,
     )
 
-    for mutation in event.plan(state):
+    for mutation in plan_event(event, state):
         target = state
         for key in mutation.path[:-1]:
             target = target[key]
@@ -324,7 +328,7 @@ def test_confirmed_failed_team_returns_error_with_run_locator() -> None:
         },
     )
 
-    observation = tool._start_confirmed_run(decision, SimpleNamespace())
+    observation = tool._start_confirmed_run(decision, SimpleNamespace(), _OPEN_LOOP)
 
     assert observation.status == "error"
     assert observation.team_run_id == 17

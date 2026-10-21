@@ -224,7 +224,7 @@ def test_success_with_broken_python_reports_english_syntax_content(tmp_path: Pat
 
 # A cancelled run must short-circuit to ``cancelled`` before any hunk is written.
 def test_cancelled_run_returns_cancelled_without_writing(tmp_path: Path) -> None:
-    from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+    from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
     from app.core.tools.schemas import ToolExecutionContext
 
     target = tmp_path / "a.txt"

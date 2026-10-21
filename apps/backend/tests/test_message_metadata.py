@@ -3,10 +3,11 @@
 import pytest
 from pydantic import ValidationError
 
-from app.assistant_transport.event.tool_call_event import ToolCallStatusChangedEvent
+from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
+from app.core.events import ToolCallStatusChangedEvent
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata, parse_message_metadata
 
@@ -140,7 +141,7 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
         display_data=metadata.display_data,
         team_run_id=metadata.team_run_id,
     )
-    for mutation in event.plan(state):
+    for mutation in plan_event(event, state):
         initial[mutation.path[-1]] = mutation.value
     restored = ConversationTaskContextRecord._from_model(result._to_model())
     cold = ConversationTaskStateRebuilder.build_pair_tool_part([call, restored])["call-1"]
@@ -169,7 +170,7 @@ def test_final_tool_metadata_keeps_accumulated_terminal_preview():
         status="completed",
         display_data={"kind": "terminal-result", "output": "truncated"},
     )
-    for mutation in event.plan(state):
+    for mutation in plan_event(event, state):
         part[mutation.path[-1]] = mutation.value
     assert part["status"] == "completed"
     assert part["display_data"]["output"] == "full output"

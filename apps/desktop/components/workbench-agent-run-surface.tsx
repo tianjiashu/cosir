@@ -53,14 +53,11 @@ function AgentRunTransport({ taskId, initialState, onError, onStateCommit, onFin
   const runtime = useTaskAssistantReadonlyTransportRuntime(taskId, {
     initialState,
     readonly: true,
-    api: `${backendRuntime.backendBaseUrl}/assistant`,
-    resumeApi: `${backendRuntime.backendBaseUrl}/tasks/${taskId}/assistant/attach`,
+    baseUrl: backendRuntime.backendBaseUrl,
     headers: async () => ({
       Accept: "text/event-stream",
-      "Content-Type": "application/json",
       "X-Trace-Id": traceId,
     }),
-    body: async () => ({ taskId, threadId: `conversation_run-${taskId}`, runId }),
     onError: async (error) => onError(error),
     onAttachReady: attachController.setAttach,
     onStateCommit,

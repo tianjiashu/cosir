@@ -151,16 +151,35 @@ def _symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool) -> 
         pytest.skip(f"当前平台无法创建符号链接: {type(exc).__name__}: {exc}")
 
 
-def _run_threads(targets: list, timeout: float = _JOIN_TIMEOUT) -> None:
-    """启动并 join 一批线程，返回后断言没有线程仍在运行（防死锁）。"""
+def _run_threads(
+    workers: list,
+    *,
+    pollers: list | None = None,
+    stop: threading.Event | None = None,
+    timeout: float = _JOIN_TIMEOUT,
+) -> None:
+    """并发运行有限步的 ``workers`` 与循环到 ``stop`` 的 ``pollers``，结束后断言无线程残留。
 
-    threads = [threading.Thread(target=target) for target in targets]
-    for thread in threads:
+    workers 全部结束后由本函数置位 ``stop``，pollers 才会退出；pollers 自身不能依赖「只在失败时
+    置位」的信号，否则成功路径会永远空转。线程设为 daemon：真死锁时用例按超时失败，残留线程不会
+    在解释器退出阶段拖住整个 pytest 进程。
+    """
+
+    pollers = pollers or []
+    worker_threads = [threading.Thread(target=target, daemon=True) for target in workers]
+    poller_threads = [threading.Thread(target=target, daemon=True) for target in pollers]
+    for thread in [*worker_threads, *poller_threads]:
         thread.start()
     deadline = time.monotonic() + timeout
-    for thread in threads:
+    for thread in worker_threads:
         thread.join(timeout=max(0.0, deadline - time.monotonic()))
-    assert not any(thread.is_alive() for thread in threads), "存在未在超时内结束的线程（疑似死锁）"
+    if stop is not None:
+        stop.set()
+    for thread in poller_threads:
+        thread.join(timeout=max(0.0, deadline - time.monotonic()))
+    assert not any(
+        thread.is_alive() for thread in [*worker_threads, *poller_threads]
+    ), "存在未在超时内结束的线程（疑似死锁）"
 
 
 def _count_source(counter: dict[str, int], lock: threading.Lock) -> type[AgentProfileScopeSource]:
@@ -280,14 +299,11 @@ def test_reader_writer_drop_interleaving_never_raises(tmp_path: Path) -> None:
             failures.append(exc)
             done.set()
 
-    targets = [
-        lambda: writer("w1"),
-        lambda: writer("w2"),
-        reader,
-        reader,
-        dropper,
-    ]
-    _run_threads(targets)
+    _run_threads(
+        [lambda: writer("w1"), lambda: writer("w2")],
+        pollers=[reader, reader, dropper],
+        stop=done,
+    )
 
     assert not failures, f"并发交错出现异常: {failures!r}"
 
@@ -372,8 +388,7 @@ def test_team_registry_concurrent_read_and_write_no_exception(tmp_path: Path) ->
             failures.append(exc)
             done.set()
 
-    targets = [writer, reader, reader]
-    _run_threads(targets)
+    _run_threads([writer], pollers=[reader, reader], stop=done)
     assert not failures, f"Team 注册表并发出现异常: {failures!r}"
 
 

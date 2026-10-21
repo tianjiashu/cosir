@@ -1,253 +1,18 @@
-"""僵尸 running 防治测试：executor 兜底收敛 + 命令服务 claim 后失败当场收敛。
+"""僵尸 running 防治：快照分叉时的丢弃必须留痕。
 
-对应修复的不变量：**谁把 run 翻成 active，谁就负责保证它最终落终态**——要么成功
-移交能保证落终态的执行体（workflow / executor），要么当场收敛。覆盖两条链路：
-
-- ``ConversationRunExecutor._execute``：驱动结束（runner 抛错 / 被取消）但 run 仍
-  pending/running 时，经 ``_converge_unfinished_run`` 条件收敛为 ``cancelled``
-  （``run_execution_cancelled``）；「驱动异常死亡」与「关闭期取消」共用同一条收敛路径，
-  前者若已由 ``AgentRuntime`` 落定为 failed，条件更新自然落空、不覆盖；
-- ``ConversationRunCommandService``：``start_run``（编辑重跑复用同一条新建路径）事务
-  提交后的投影、认领、快照重读任一步失败时，以 ``run_setup_failed`` 当场收敛再抛出。
+执行释放与 Run 失败边界的不变量见 ``test_workflow_session_execution`` 与
+``test_run_failure_settlement``。
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections.abc import Awaitable, Callable
-from types import SimpleNamespace
-from typing import Any
 
-import pytest
-
-import app.core.runtime.conversation_run_executor as executor_module
-from app.assistant_transport.event import RunInitializedEvent
-from app.assistant_transport.service import conversation_run_command_service as command_module
-from app.assistant_transport.service.conversation_run_command_service import (
-    ConversationRunCommandInput,
-    ConversationRunCommandService,
-)
+from app.assistant_transport.projection.event_projection import plan_event
 from app.config.logging.logger import log
-from app.core.runtime.conversation_run_executor import ConversationRunExecutor
+from app.core.events import RunInitializedEvent
 
-_RUN_ID = 1
 _TASK_ID = 7
-
-
-# --------------------------------------------------------------------------- executor
-
-
-class _ExecutorRunService:
-    """复刻执行器所需的 run service / run 状态服务语义，记录条件收敛入口的调用。"""
-
-    def __init__(self, status: str = "running") -> None:
-        self.run = SimpleNamespace(id=_RUN_ID, task_id=_TASK_ID, status=status)
-        self.cancelled: list[tuple[int, str]] = []
-
-    def get_run(self, _run_id: int) -> SimpleNamespace:
-        return self.run
-
-    def cancel_run_if_running(
-        self, run_id: int, end_reason: str = "user_cancelled", **_kwargs: Any
-    ) -> SimpleNamespace:
-        self.cancelled.append((run_id, end_reason))
-        return self.run
-
-
-def _build_executor(
-    service: _ExecutorRunService,
-) -> ConversationRunExecutor:
-    """绕过依赖装配构造执行器实例，显式注入它捕获的协作者（projector 置空跳过工具投影）。
-
-    执行器在 ``__init__`` 中捕获 run service / run 状态服务，因此这里必须
-    逐个注入；``get_runtime`` 是调用期解析（见 ``_patch_drivers``），不需要注入。
-    """
-
-    executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
-    executor._run_service = service
-    executor._run_state_service = service
-    executor._event_projector = None
-    executor._executions = {}
-    return executor
-
-
-class _StubRuntime:
-    """替代真实 AgentRuntime：``run_agent`` 的驱动行为由用例注入。"""
-
-    def __init__(self, behavior: Callable[[], Awaitable[None]]) -> None:
-        self._behavior = behavior
-        self.calls: list[dict[str, Any]] = []
-
-    def resolve_agent_profile_for_run(self, _run: Any) -> Any:
-        return object()
-
-    async def run_agent(self, _agent: Any, **kwargs: Any) -> None:
-        self.calls.append(kwargs)
-        await self._behavior()
-
-    async def finalize_run(self, _agent: Any, _run_id: int) -> None:
-        """模拟无额外资源的工作流收尾。"""
-
-
-def _patch_drivers(
-    monkeypatch: pytest.MonkeyPatch,
-    behavior: Callable[[], Awaitable[None]],
-) -> _StubRuntime:
-    """把执行器依赖的 runtime 替换为可控替身。"""
-
-    runtime = _StubRuntime(behavior)
-    monkeypatch.setattr(executor_module, "get_runtime", lambda: runtime)
-    return runtime
-
-
-@pytest.mark.asyncio
-async def test_executor_converges_run_when_runner_raises_before_terminal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """runner（含 workflow 进入前的 setup 步骤）抛错且 run 未落终态时，兜底收敛为 cancelled。"""
-
-    service = _ExecutorRunService()
-    executor = _build_executor(service)
-
-    async def runner() -> None:
-        raise RuntimeError("setup died before workflow")
-
-    _patch_drivers(monkeypatch, runner)
-
-    # ``_execute`` 在内部收口驱动期异常（不外抛），由兜底收敛把仍未落终态的 run 收敛。
-    await executor._execute(_RUN_ID, "fresh")
-
-    assert service.cancelled == [(_RUN_ID, "run_execution_cancelled")]
-
-
-@pytest.mark.asyncio
-async def test_executor_converges_run_when_task_cancelled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """后台 task 被取消（优雅关闭路径）时，兜底收敛为 cancelled 而不是遗留 running。"""
-
-    service = _ExecutorRunService()
-    executor = _build_executor(service)
-
-    async def runner() -> None:
-        await asyncio.Event().wait()
-
-    _patch_drivers(monkeypatch, runner)
-
-    execution = await executor.start(_RUN_ID, "fresh")
-    # 先让后台 task 真正开始驱动，再取消：未调度就取消会让 _execute 整体不执行。
-    await asyncio.sleep(0.05)
-    execution.cancel()
-    # ``_execute`` 吞掉 CancelledError 并以 cancelled 兜底收敛，后台 task 正常结束。
-    await asyncio.gather(execution, return_exceptions=True)
-
-    assert service.cancelled == [(_RUN_ID, "run_execution_cancelled")]
-
-
-@pytest.mark.asyncio
-async def test_executor_cleanup_failures_do_not_skip_later_cleanup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """驱动期异常被内部收口；工作流收尾失败也不能跳过 registry 移除与兜底收敛。"""
-
-    service = _ExecutorRunService()
-    calls: list[str] = []
-    executor = _build_executor(service)
-
-    async def runner() -> None:
-        executor._executions[_RUN_ID] = SimpleNamespace(thread_task=asyncio.current_task())
-        calls.append("runner")
-        raise RuntimeError("runner failed")
-
-    runtime = _patch_drivers(monkeypatch, runner)
-
-    async def fail_finalize(_agent, _run_id):
-        calls.append("workflow_finalize")
-        raise RuntimeError("workflow finalize failed")
-
-    monkeypatch.setattr(runtime, "finalize_run", fail_finalize)
-
-    # 驱动期异常与清理失败都在执行器内收口为日志，收尾仍按序执行。
-    await executor._execute(_RUN_ID, "fresh")
-
-    assert calls == ["runner", "workflow_finalize"]
-    assert executor._executions == {}
-    assert service.cancelled == [(_RUN_ID, "run_execution_cancelled")]
-
-
-# --------------------------------------------------------------------- command service
-
-
-class _FakeTransaction:
-    def __enter__(self) -> object:
-        return object()
-
-    def __exit__(self, *_args: object) -> None:
-        return None
-
-
-class _FakeSessionFactory:
-    def begin(self) -> _FakeTransaction:
-        return _FakeTransaction()
-
-
-class _CommandServiceRunState:
-    """记录命令服务侧用到的状态迁移语义。"""
-
-    def __init__(self, *, claim_raises: bool = False) -> None:
-        self.claim_raises = claim_raises
-        self.settled: list[tuple[int, str]] = []
-        self.claimed: list[int] = []
-
-    def has_active_run(self, _task_id: int, session: object = None) -> bool:
-        return False
-
-    def claim_pending_run(self, run_id: int) -> SimpleNamespace:
-        if self.claim_raises:
-            raise RuntimeError("claim dispatch failed")
-        self.claimed.append(run_id)
-        return SimpleNamespace(id=run_id, task_id=_TASK_ID, status="running")
-
-    def cancel_run_if_running(
-        self, run_id: int, end_reason: str = "user_cancelled", **_kwargs: Any
-    ) -> SimpleNamespace:
-        self.settled.append((run_id, end_reason))
-        return SimpleNamespace(id=run_id, task_id=_TASK_ID, status="cancelled")
-
-
-class _Projector:
-    def __init__(self, *, raises: bool = False) -> None:
-        self._raises = raises
-
-    def process(self, _event: object, **_kwargs: Any) -> None:
-        if self._raises:
-            raise RuntimeError("projection failed")
-
-
-def _build_command_service(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    run_state: _CommandServiceRunState,
-    projector: _Projector,
-    state_service: object,
-) -> ConversationRunCommandService:
-    """构造只注入替身依赖的命令服务，并把会话工厂与 projector 装配替换为替身。"""
-
-    monkeypatch.setattr(command_module, "main_session_factory", lambda: _FakeSessionFactory())
-    monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: projector)
-    service = ConversationRunCommandService.__new__(ConversationRunCommandService)
-    service._conversation_run = SimpleNamespace(
-        create_run=lambda **_kwargs: SimpleNamespace(id=11, task_id=_TASK_ID, status="pending"),
-    )
-    service._run_state = run_state
-    service._state = state_service
-    service._task = SimpleNamespace(
-        get_latest_run=lambda _task_id: SimpleNamespace(id=11, status="cancelled"),
-        get_context_window_total=lambda _task_id: None,
-    )
-    return service
-
 
 _SNAPSHOT = {
     "runs": [],
@@ -256,159 +21,6 @@ _SNAPSHOT = {
     "context_window_total": None,
     "error": None,
 }
-
-
-def _snapshot_with_run(run_id: int = 11) -> dict[str, object]:
-    """返回含指定 run 的合法快照。
-
-    编排层在 ``claim_pending_run`` **之前**会复核该 run 在快照里可见（缺失即判定为快照分叉
-    并自愈），因此命令服务用例的替身快照必须包含刚提交的 run。
-    """
-
-    return {
-        **_SNAPSHOT,
-        "current_run_id": run_id,
-        "runs": [
-            {
-                "runId": run_id,
-                "status": "pending",
-                "endReason": None,
-                "messages": [],
-                "usage": None,
-                "error": None,
-            }
-        ],
-    }
-
-
-def _state_service(
-    snapshot: dict[str, object],
-    *,
-    fail_after_reads: int | None = None,
-) -> SimpleNamespace:
-    """构造满足当前契约的状态服务替身（``get_state`` / ``rebuild_state`` / ``publish_state``）。
-
-    ``fail_after_reads`` 让第 N 次之后的 ``get_state`` 抛错，用于精确命中「认领完成后的快照
-    重读失败」：第 1 次读是认领前的可见性复核，第 2 次读是取 ``initial_state``。
-    """
-
-    reads = {"count": 0}
-
-    def _get_state(_task_id: int) -> dict[str, object]:
-        reads["count"] += 1
-        if fail_after_reads is not None and reads["count"] > fail_after_reads:
-            raise RuntimeError("snapshot read failed")
-        return snapshot
-
-    return SimpleNamespace(
-        get_state=_get_state,
-        rebuild_state=lambda _task_id: snapshot,
-        publish_state=lambda *_args: None,
-    )
-
-
-def test_start_run_settles_run_when_projection_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """提交后的 ``RunInitializedEvent`` 投影失败：当场收敛 run 为 cancelled 并原样抛出。"""
-
-    run_state = _CommandServiceRunState()
-    service = _build_command_service(
-        monkeypatch,
-        run_state=run_state,
-        projector=_Projector(raises=True),
-        state_service=_state_service(_snapshot_with_run()),
-    )
-
-    with pytest.raises(RuntimeError, match="projection failed"):
-        service.start_run(
-            commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
-            model_config_id=None,
-            task_id=_TASK_ID,
-            run_command=SimpleNamespace(),  # type: ignore[arg-type]
-        )
-
-    assert run_state.settled == [(11, "run_setup_failed")]
-    assert run_state.claimed == []
-
-
-def test_start_run_settles_run_when_claim_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``claim_pending_run`` 自身抛错（状态已提交、事件发布失败）：同样必须当场收敛。"""
-
-    run_state = _CommandServiceRunState(claim_raises=True)
-    service = _build_command_service(
-        monkeypatch,
-        run_state=run_state,
-        projector=_Projector(),
-        state_service=_state_service(_snapshot_with_run()),
-    )
-
-    with pytest.raises(RuntimeError, match="claim dispatch failed"):
-        service.start_run(
-            commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
-            model_config_id=None,
-            task_id=_TASK_ID,
-            run_command=SimpleNamespace(),  # type: ignore[arg-type]
-        )
-
-    assert run_state.settled == [(11, "run_setup_failed")]
-
-
-def test_start_run_settles_run_when_snapshot_reread_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """认领成功后快照重读失败：run 已是 running，仍必须收敛，不得留下无执行器的 active run。"""
-
-    run_state = _CommandServiceRunState()
-    service = _build_command_service(
-        monkeypatch,
-        run_state=run_state,
-        projector=_Projector(),
-        # 第 1 次读（认领前的可见性复核）成功，第 2 次读（认领后取 initial_state）失败。
-        state_service=_state_service(_snapshot_with_run(), fail_after_reads=1),
-    )
-
-    with pytest.raises(RuntimeError, match="snapshot read failed"):
-        service.start_run(
-            commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
-            model_config_id=None,
-            task_id=_TASK_ID,
-            run_command=SimpleNamespace(),  # type: ignore[arg-type]
-        )
-
-    assert run_state.claimed == [11]
-    assert run_state.settled == [(11, "run_setup_failed")]
-
-
-def test_settle_converge_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """收敛写库自身失败只记日志：不得覆盖调用方原始异常。"""
-
-    run_state = _CommandServiceRunState()
-
-    def _cancel(*_args: Any, **_kwargs: Any) -> Any:
-        raise RuntimeError("database unavailable")
-
-    run_state.cancel_run_if_running = _cancel  # type: ignore[method-assign]
-    service = _build_command_service(
-        monkeypatch,
-        run_state=run_state,
-        projector=_Projector(raises=True),
-        state_service=_state_service(_snapshot_with_run()),
-    )
-
-    # 原始异常仍是投影失败，而不是收敛过程中的数据库异常
-    with pytest.raises(RuntimeError, match="projection failed"):
-        service.start_run(
-            commands=[ConversationRunCommandInput(command_id="cmd-1", command_type="new")],
-            model_config_id=None,
-            task_id=_TASK_ID,
-            run_command=SimpleNamespace(),  # type: ignore[arg-type]
-        )
-
-
-# ------------------------------------------------------------------ 分叉丢弃可观测性
 
 
 def _capture_warnings() -> tuple[list[logging.LogRecord], logging.Handler]:
@@ -444,7 +56,7 @@ def test_run_initialized_skeleton_drop_is_logged() -> None:
     }
     records, handler = _capture_warnings()
     try:
-        assert RunInitializedEvent(task_id=_TASK_ID, run_id=11).plan(diverged) == []
+        assert plan_event(RunInitializedEvent(task_id=_TASK_ID, run_id=11), diverged) == []
     finally:
         log.removeHandler(handler)
     assert any(
@@ -457,7 +69,7 @@ def test_run_initialized_skeleton_drop_is_logged() -> None:
 def test_run_status_transition_drop_is_logged() -> None:
     """终态迁移被白名单丢弃时同样必须留痕（completed 不可逆分支）。"""
 
-    from app.assistant_transport.event import RunStatusChangedEvent
+    from app.core.events import RunStatusChangedEvent
     from app.models.enums.conversation_run_status import ConversationRunStatus
 
     settled = {
@@ -477,9 +89,12 @@ def test_run_status_transition_drop_is_logged() -> None:
     records, handler = _capture_warnings()
     try:
         assert (
-            RunStatusChangedEvent(
-                task_id=_TASK_ID, run_id=11, status=ConversationRunStatus.RUNNING
-            ).plan(settled)
+            plan_event(
+                RunStatusChangedEvent(
+                    task_id=_TASK_ID, run_id=11, status=ConversationRunStatus.RUNNING
+                ),
+                settled,
+            )
             == []
         )
     finally:

@@ -174,7 +174,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 
 **状态词表（唯一事实源）**：
 
-- Run：典型路径 `pending → running → completed | failed | cancelled`（`cancelled` 允许在用户明确操作后再次转 `running`，用于续跑恢复）。**权威迁移白名单在 `assistant_transport/event/run_event.py:_ALLOWED_RUN_STATUS_TRANSITIONS`**（投影层闸门）：若后端已落定终态但 UI 状态不更新，优先怀疑该白名单把事件丢弃了（`completed` / `failed` 不可逆，迟到的 active 事件会被丢弃）。
+- Run：典型路径 `pending → running → completed | failed | cancelled`（`cancelled` 允许在用户明确操作后再次转 `running`，用于续跑恢复）。**领域迁移表在 `core/workflow/run_state_machine.py:RunTransition`**（数据库条件更新的唯一依据）；**投影层另有白名单 `assistant_transport/projection/run_event_projection.py:_ALLOWED_RUN_STATUS_TRANSITIONS`**：若后端已落定终态但 UI 状态不更新，优先怀疑该白名单把事件丢弃了（`completed` / `failed` 不可逆，迟到的 active 事件会被丢弃）。
 - 工具调用生命周期：`pending / running / completed / failed / cancelled`（Transport `transport_metadata_json.status`）。
   **判读口径**：run 被取消或后端重启恢复时，`ConversationTaskContextService.close_unclosed_tool_calls_for_run`
   （配合 `ConversationRunService.recover_orphaned_runs`）会为未闭合调用**补一行占位 ToolMessage** 并记

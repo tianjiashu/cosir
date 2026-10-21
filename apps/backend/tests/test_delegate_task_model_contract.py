@@ -39,8 +39,6 @@ def base_delegate_definition(monkeypatch) -> ToolDefinition:
 
     monkeypatch.setattr(child_agent_create, "get_task_service", lambda: object())
     monkeypatch.setattr(child_agent_create, "get_conversation_run_service", lambda: object())
-    monkeypatch.setattr(child_agent_create, "get_conversation_run_state_service", lambda: object())
-    monkeypatch.setattr(child_agent_create, "get_conversation_run_executor", lambda: object())
     definition = child_agent_create.build_delegate_task_definition()
     assert definition is not None
     return definition
@@ -136,8 +134,6 @@ def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_c
     task_spy = _TaskSpy()
     monkeypatch.setattr(child_agent_create, "get_task_service", lambda: task_spy)
     monkeypatch.setattr(child_agent_create, "get_conversation_run_service", lambda: object())
-    monkeypatch.setattr(child_agent_create, "get_conversation_run_state_service", lambda: object())
-    monkeypatch.setattr(child_agent_create, "get_conversation_run_executor", lambda: object())
     tool = child_agent_create.DelegateTaskTool()
     runtime_dependencies = ToolRuntimeDependencies(
         parent_agent_profile=configuration.build_agent_registry().resolve("system", "main_agent"),

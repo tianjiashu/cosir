@@ -7,7 +7,9 @@ import pytest
 
 import app.core.workflow.workflow as module
 from app.core.workflow.execution_state.react_route import ReactRoute
+from app.core.workflow.run_state_machine import RunTransition
 from app.models.conversation_run_progress import ConversationRunProgress
+from tests.runtime_context_stub import run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 
 
@@ -16,36 +18,25 @@ def loop(monkeypatch):
     progress = []
     calls = []
     context = SimpleNamespace(begin_run=lambda *args: None)
-    monkeypatch.setattr(
-        module,
-        "TaskInputService",
-        lambda: SimpleNamespace(consume_into_context=lambda *args: calls.append("queue")),
-    )
     model = SimpleNamespace(close=AsyncMock())
     profile = SimpleNamespace(max_steps=10, structured_output=None)
     run = SimpleNamespace(id=1, task_id=2, execution_data=ConversationRunProgress(), usage=None)
-    operations = SimpleNamespace(
-        get_current_run=lambda: run,
-        agent_profile=profile,
-        task_tool_schemas=[],
-        is_current_run_cancelled=lambda: False,
-        save_execution=lambda value: progress.append(value),
-        complete_run_if_running=lambda *a, **k: calls.append("complete"),
-        cancel_run_if_running=lambda **k: calls.append("cancel"),
-        allows_tools={"review"},
+    operations = runtime_stub(
+        run=run,
+        task=SimpleNamespace(id=run.task_id),
+        profile=profile,
+        allows_tools=frozenset({"review"}),
+        run_state=run_state_stub(
+            save_execution=lambda _run_id, value: progress.append(value),
+            transition=lambda _run_id, transition, **k: calls.append(transition.name.lower()),
+        ),
+        inbox=SimpleNamespace(consume_into_context=lambda *args: calls.append("queue")),
+        task_space=SimpleNamespace(task_tool_schemas=(), get_context_manager=lambda **k: context),
     )
     monkeypatch.setattr(
         module,
         "resolve_chat_model",
         lambda **kw: SimpleNamespace(model=model, supports_thinking=False),
-    )
-    monkeypatch.setattr(
-        module, "get_tool_system", lambda: SimpleNamespace(user_input_decision_handlers=None)
-    )
-    monkeypatch.setattr(
-        module.task_runtime_spaces,
-        "get_or_create",
-        lambda _: SimpleNamespace(get_context_manager=lambda **k: context),
     )
     return SimpleNamespace(run=run, ops=operations, progress=progress, calls=calls, model=model)
 
@@ -75,8 +66,8 @@ async def test_queue_only_at_model_boundary_and_end_stops_driving(loop, monkeypa
     monkeypatch.setattr(module, "_tools_node", tools)
     monkeypatch.setattr(module, "_observe_node", observe)
     await module.ReactLikeWorkflow().run(loop.ops)
-    # 终态由产出节点就地落定，loop 到 END 只停止驱动，不再二次落库。
-    assert loop.calls == ["queue", "model", "tools", "observe", "queue", "model"]
+    # 终态由产出节点就地落定，loop 到 END 只停止驱动；inbox 并入属于 model 节点，循环不再参与。
+    assert loop.calls == ["model", "tools", "observe", "model"]
     loop.model.close.assert_awaited_once()
 
 
@@ -95,14 +86,14 @@ async def test_cancelled_resume_does_not_replay_old_tools(loop, monkeypatch):
     monkeypatch.setattr(
         module, "_tools_node", AsyncMock(side_effect=AssertionError("工具不应重放"))
     )
-    await module.ReactLikeWorkflow().run(loop.ops, execution_mode="resume")
-    assert loop.calls == ["queue"]
-    assert loop.progress[0].step_count == 4
+    await module.ReactLikeWorkflow().run(loop.ops)
+    assert loop.progress[0].step_count == 3
 
 
 @pytest.mark.asyncio
 async def test_cancellation_before_model_does_not_consume_queue(loop):
-    loop.ops.is_current_run_cancelled = lambda: True
+    """取消在 model 节点入口落定，早于 inbox 并入，排队消息不会被吞进已取消的 Run。"""
+    loop.ops.cancelled = True
     await module.ReactLikeWorkflow().run(loop.ops)
     assert loop.calls == ["cancel"]
     loop.model.close.assert_awaited_once()
@@ -113,10 +104,17 @@ async def test_wait_returns_without_extra_model_or_queue(loop, monkeypatch):
     async def model(state):
         return {"next_node": ReactRoute.WAIT_USER}
 
+    from app.core.workflow.nodes import wait_user_node as wait_user_module
+
     monkeypatch.setattr(module, "_model_node", model)
-    monkeypatch.setattr(module, "suspend_for_input", lambda _: loop.calls.append("wait"))
+    monkeypatch.setattr(
+        wait_user_module, "suspend_for_input", lambda _: loop.calls.append("wait")
+    )
+    progress_before = len(loop.progress)
     await module.ReactLikeWorkflow().run(loop.ops)
-    assert loop.calls == ["queue", "wait"]
+    assert loop.calls == ["wait"]
+    # 挂起后不再保存进度，避免覆盖刚冻结的待决请求。
+    assert len(loop.progress) == progress_before + 1
     loop.model.close.assert_awaited_once()
 
 
@@ -138,17 +136,15 @@ async def test_wait_returns_without_extra_model_or_queue(loop, monkeypatch):
 async def test_structured_output_updates_completed_run_result(loop, monkeypatch, outcome):
     """主线先完成；结构化支线只替换最终输出或失败原因，不重复迁移 Run。"""
     from app.core.workflow.node_helper.common import _runtime_context
-    from app.core.workflow.nodes import structured_output_node as structured
-
-    monkeypatch.setattr(structured, "resolve_messages_for_model", lambda messages, **kw: messages)
-    loop.ops.agent_profile.structured_output = SimpleNamespace(
+    loop.ops.profile.structured_output = SimpleNamespace(
         name="result", json_schema={"type": "object", "required": ["ok"]}
     )
-    loop.ops.get_current_task = lambda: SimpleNamespace(workspace_id=1)
+    loop.ops.task = SimpleNamespace(id=2, workspace_id=1)
     timeline = []
     updates = []
 
-    def finish(*args, **kwargs):
+    def finish(transition, **kwargs):
+        assert transition is RunTransition.COMPLETE
         timeline.append(("complete", kwargs["final_output"]))
         return SimpleNamespace(status="completed")
 
@@ -159,17 +155,24 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
             raise OSError("storage unavailable")
         return SimpleNamespace(status="completed")
 
-    loop.ops.complete_run_if_running = finish
-    loop.ops.update_completed_result = update
+    loop.ops.run_state.transition = lambda _run_id, transition, **kwargs: finish(
+        transition, **kwargs
+    )
+    loop.ops.run_state.update_completed_result = lambda _run_id, **kwargs: update(**kwargs)
 
     async def model(state):
         runtime = _runtime_context()
         runtime.structured_output_messages = (
             None if outcome == "missing_context" else [{"role": "assistant", "content": "自然回答"}]
         )
-        # 主线先完成：落定 completed 后再走结构化支线（未取消时直接 complete_run_if_running）。
+        # 主线先完成：落定 completed 后再走结构化支线。
         assert (
-            runtime.operations.complete_run_if_running(runtime.usage_stats, final_output="自然回答")
+            runtime.run_state.transition(
+                runtime.run.id,
+                RunTransition.COMPLETE,
+                usage_stats=runtime.usage_stats,
+                final_output="自然回答",
+            )
             is not None
         )
         return {"next_node": ReactRoute.STRUCTURED_OUTPUT}
@@ -195,7 +198,7 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
         if outcome == "error":
             raise ConnectionError("provider unavailable")
         if outcome == "late_cancel":
-            loop.ops.is_current_run_cancelled = lambda: True
+            loop.ops.cancelled = True
         return sdk_completion(
             '{"ok":true}' if outcome != "invalid" else "invalid",
             finish_reason="length" if outcome == "truncated" else "stop",
@@ -259,14 +262,8 @@ async def test_wait_resume_roundtrip_only_reopens_decided_call(loop, monkeypatch
     loop.run.execution_data = ConversationRunProgress.model_validate_json(
         progress.model_dump_json()
     )
-    monkeypatch.setattr(
-        module,
-        "get_tool_system",
-        lambda: SimpleNamespace(
-            user_input_decision_handlers=SimpleNamespace(
-                handle_rejection=lambda request, answer: loop.calls.append("reject"),
-            ),
-        ),
+    loop.ops.user_input_decision_handlers = SimpleNamespace(
+        handle_rejection=lambda request, answer: loop.calls.append("reject"),
     )
 
     async def tools(state):
@@ -291,7 +288,7 @@ async def test_wait_resume_roundtrip_only_reopens_decided_call(loop, monkeypatch
     monkeypatch.setattr(
         module, "_model_node", AsyncMock(side_effect=AssertionError("不应先请求模型"))
     )
-    await module.ReactLikeWorkflow().run(loop.ops, execution_mode="resume_with_input")
+    await module.ReactLikeWorkflow().run(loop.ops)
     assert loop.calls == [
         "approved_tool" if decision_kind == "approve" else "reject",
         "observe",
@@ -301,7 +298,7 @@ async def test_wait_resume_roundtrip_only_reopens_decided_call(loop, monkeypatch
 
 @pytest.mark.asyncio
 async def test_cancel_waiting_resume_rejects_then_stops_at_model(loop, monkeypatch):
-    """停止等待态：以强制拒绝恢复，拒绝结算待决调用后在 MODEL 检查点落定取消。"""
+    """停止等待态：以强制拒绝恢复（绑定时归一为驳回），结算待决调用后在 MODEL 检查点落定取消。"""
     from app.models.conversation_run_progress import ToolContinuation
     from app.models.user_decision import UserDecision, UserDecisionKind
 
@@ -327,18 +324,12 @@ async def test_cancel_waiting_resume_rejects_then_stops_at_model(loop, monkeypat
                 "type": "function",
                 "function": {"name": "review", "arguments": "{}"},
             },
-            decision=UserDecision(kind=UserDecisionKind.FORCE_REJECT, request_id="request"),
+            decision=UserDecision(kind=UserDecisionKind.REJECT, request_id="request"),
         ),
     )
-    loop.ops.is_current_run_cancelled = lambda: True
-    monkeypatch.setattr(
-        module,
-        "get_tool_system",
-        lambda: SimpleNamespace(
-            user_input_decision_handlers=SimpleNamespace(
-                handle_rejection=lambda request, answer: loop.calls.append(answer.kind.value),
-            ),
-        ),
+    loop.ops.cancelled = True
+    loop.ops.user_input_decision_handlers = SimpleNamespace(
+        handle_rejection=lambda request, answer: loop.calls.append(answer.kind.value),
     )
 
     async def observe(state):
@@ -347,7 +338,6 @@ async def test_cancel_waiting_resume_rejects_then_stops_at_model(loop, monkeypat
 
     monkeypatch.setattr(module, "_observe_node", observe)
     monkeypatch.setattr(module, "_tools_node", AsyncMock(side_effect=AssertionError("不应执行")))
-    monkeypatch.setattr(module, "_model_node", AsyncMock(side_effect=AssertionError("不应请求")))
-    await module.ReactLikeWorkflow().run(loop.ops, execution_mode="resume_with_input")
-    # 强制拒绝归一为普通驳回，领域收尾（如待确认 Team）与真实驳回同构；之后不消费 inbox。
+    await module.ReactLikeWorkflow().run(loop.ops)
+    # 驳回的领域收尾（如待确认 Team）与真实驳回同构；之后不消费 inbox。
     assert loop.calls == ["reject", "observe", "cancel"]

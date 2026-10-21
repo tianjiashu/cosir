@@ -5,7 +5,7 @@
 - ``ToolExecutor.execute_async`` / ``_execute_inner_async`` / ``_run_async_handler`` /
   ``_wait_for_cancellation`` / ``_await_cancelled_task``，以及 ``execute`` 内
   ``handler_kind != "sync"`` 断言；
-- ``WorkflowOperations._handler_kind_by_name`` / ``_execute_async_tool_call``（串行调用统一走
+- 工具批次调度里的 ``_handler_kind_by_name`` / ``_execute_async_tool_call``（串行调用统一走
   ``asyncio.to_thread(self._execute_tool_call, ...)``），``_is_parallel_call`` 改为只看
   ``parallel_mode``；
 - ``ToolRegistry._validate_handler_contract``（注册期不再校验 handler 与 coroutine 一致性）；
@@ -30,12 +30,11 @@ from collections.abc import Mapping
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
-import app.core.workflow.workflow_operations as workflow_operations_module
 from app.core.tools.schemas import (
     ToolCall,
     ToolDefinition,
@@ -45,7 +44,8 @@ from app.core.tools.schemas import (
 from app.core.tools.schemas import tool_definition as tool_definition_module
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_registry import ToolRegistry
-from app.core.workflow.workflow_operations import WorkflowOperations
+from app.core.workflow.node_helper import tool_batch_runner
+from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
@@ -130,15 +130,20 @@ def _operations_with_executor(
     parallel_modes: Mapping[str, str] | None = None,
     allowed: frozenset[str] | None = None,
     execution_context: ToolExecutionContext | None = None,
-) -> WorkflowOperations:
-    """绕过 ``__init__``（不需要模型/DB 依赖）装配只含调度所需字段的门面。"""
+) -> SimpleNamespace:
+    """只装配批次执行用到的运行上下文字段，不需要模型与数据库依赖。"""
 
-    operations = WorkflowOperations.__new__(WorkflowOperations)
-    operations._executor = cast(ToolExecutor, executor)
-    operations._execution_context = execution_context
-    operations._allowed_tool_names = frozenset(allowed or ())
-    operations._parallel_mode_by_name = dict(parallel_modes or {})
-    return operations
+    return SimpleNamespace(
+        tool_executor=executor,
+        execution_context=execution_context
+        or ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=Path("."), run_id=0),
+        allows_tools=frozenset(allowed or ()),
+        tool_definitions={
+            name: SimpleNamespace(parallel_mode=mode)
+            for name, mode in (parallel_modes or {}).items()
+        },
+        task=SimpleNamespace(id=1),
+    )
 
 
 def _call(name: str, call_id: str, arguments: dict[str, Any] | None = None) -> ToolCall:
@@ -442,7 +447,7 @@ def test_get_schema_returns_static_schema_and_none_for_unknown() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 分组 3：WorkflowOperations.run_tool_calls（串行统一 to_thread / 未知工具 / 并行批次）
+# 分组 3：run_tool_batch（串行统一 to_thread / 未知工具 / 并行批次）
 # --------------------------------------------------------------------------- #
 
 
@@ -467,12 +472,8 @@ def test_unknown_tool_name_yields_unknown_tool_observation_without_keyerror(
     )
 
     async def scenario() -> list[ToolObservation]:
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[_call("ghost_tool", "call-ghost")],
-            step_id="step-1",
-        )
-        return result.observations
+        result = await run_tool_batch(operations, [_call("ghost_tool", "call-ghost")], "step-1")
+        return result
 
     observations = asyncio.run(scenario())
 
@@ -504,16 +505,12 @@ def test_unknown_tool_alongside_known_serial_tool_keeps_order_and_count(
     )
 
     async def scenario() -> list[ToolObservation]:
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[
+        result = await run_tool_batch(operations, [
                 _call("known_tool", "call-1", {"message": "hi"}),
                 _call("ghost_tool", "call-2"),
                 _call("known_tool", "call-3", {"message": "again"}),
-            ],
-            step_id="step-1",
-        )
-        return result.observations
+            ], "step-1")
+        return result
 
     observations = asyncio.run(scenario())
 
@@ -536,12 +533,8 @@ def test_serial_batch_preserves_input_order_and_count() -> None:
     )
 
     async def scenario() -> list[str]:
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[_call("serial_tool", f"call-{index}") for index in range(4)],
-            step_id="step-1",
-        )
-        return [observation.tool_call_id for observation in result.observations]
+        result = await run_tool_batch(operations, [_call("serial_tool", f"call-{index}") for index in range(4)], "step-1")
+        return [observation.tool_call_id for observation in result]
 
     assert asyncio.run(scenario()) == ["call-0", "call-1", "call-2", "call-3"]
 
@@ -570,16 +563,12 @@ def test_serial_batch_runs_off_the_event_loop_thread_and_keeps_loop_responsive()
                 ticks += 1
 
         pulse = asyncio.create_task(heartbeat())
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[_call("serial_tool", "call-0"), _call("serial_tool", "call-1")],
-            step_id="step-1",
-        )
+        result = await run_tool_batch(operations, [_call("serial_tool", "call-0"), _call("serial_tool", "call-1")], "step-1")
         ticks_during_batch = ticks
         pulse.cancel()
         with pytest.raises(asyncio.CancelledError):
             await pulse
-        return ticks_during_batch, len(result.observations)
+        return ticks_during_batch, len(result)
 
     ticks_during_batch, observation_count = asyncio.run(scenario())
 
@@ -608,12 +597,8 @@ def test_internal_error_observation_when_executor_raises() -> None:
     operations = _operations_with_executor(_RaisingExecutor())
 
     async def scenario() -> list[ToolObservation]:
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[_call("boom_tool", "call-boom")],
-            step_id="step-1",
-        )
-        return result.observations
+        result = await run_tool_batch(operations, [_call("boom_tool", "call-boom")], "step-1")
+        return result
 
     observations = asyncio.run(scenario())
 
@@ -646,16 +631,12 @@ def test_parallel_batch_runs_concurrently_off_the_event_loop_thread() -> None:
                 ticks += 1
 
         pulse = asyncio.create_task(heartbeat())
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[_call("parallel_tool", f"call-{index}") for index in range(3)],
-            step_id="step-1",
-        )
+        result = await run_tool_batch(operations, [_call("parallel_tool", f"call-{index}") for index in range(3)], "step-1")
         ticks_during_batch = ticks
         pulse.cancel()
         with pytest.raises(asyncio.CancelledError):
             await pulse
-        return ticks_during_batch, len(result.observations)
+        return ticks_during_batch, len(result)
 
     ticks_during_batch, observation_count = asyncio.run(scenario())
 
@@ -679,17 +660,13 @@ def test_mixed_serial_and_parallel_batch_yields_one_observation_per_call() -> No
     )
 
     async def scenario() -> list[str]:
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[
+        result = await run_tool_batch(operations, [
                 _call("serial_tool", "s-0"),
                 _call("parallel_tool", "p-0"),
                 _call("serial_tool", "s-1"),
                 _call("parallel_tool", "p-1"),
-            ],
-            step_id="step-1",
-        )
-        return [observation.tool_call_id for observation in result.observations]
+            ], "step-1")
+        return [observation.tool_call_id for observation in result]
 
     observation_ids = asyncio.run(scenario())
 
@@ -699,18 +676,6 @@ def test_mixed_serial_and_parallel_batch_yields_one_observation_per_call() -> No
     assert observation_ids[:2] == ["s-0", "s-1"]
 
 
-def test_run_tool_calls_does_not_write_handler_kind_state_on_instance() -> None:
-    """门面实例上不得再存在 ``_handler_kind_by_name`` 调度状态（防半删残留字段）。"""
-
-    operations = _operations_with_executor(
-        _SleepingExecutor(),
-        parallel_modes={"serial_tool": "serial"},
-        allowed=frozenset({"serial_tool"}),
-    )
-
-    assert not hasattr(operations, "_handler_kind_by_name")
-
-
 def test_empty_batch_returns_no_observations() -> None:
     """空批次边界：不得抛异常，返回空观察列表。"""
 
@@ -718,23 +683,11 @@ def test_empty_batch_returns_no_observations() -> None:
     operations = _operations_with_executor(executor)
 
     async def scenario() -> list[ToolObservation]:
-        result = await operations.run_tool_calls(task_id=1, calls=[], step_id="step-1")
-        return result.observations
+        result = await run_tool_batch(operations, [], "step-1")
+        return result
 
     assert asyncio.run(scenario()) == []
     assert executor.call_order == []
-
-
-def test_parallel_helper_returns_empty_list_for_empty_calls() -> None:
-    """``_run_calls_with_parallel_modes`` 空入参短路返回 []，不建线程池。"""
-
-    executor = _SleepingExecutor()
-    operations = _operations_with_executor(executor)
-
-    async def scenario() -> list[tuple[int, ToolObservation]]:
-        return await operations._run_calls_with_parallel_modes(1, [], "step-1")
-
-    assert asyncio.run(scenario()) == []
 
 
 def test_serial_batch_cancellation_propagates_without_waiting_for_handler() -> None:
@@ -754,11 +707,7 @@ def test_serial_batch_cancellation_propagates_without_waiting_for_handler() -> N
         started = time.monotonic()
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(
-                operations.run_tool_calls(
-                    task_id=1,
-                    calls=[_call("serial_tool", "call-0")],
-                    step_id="step-1",
-                ),
+                run_tool_batch(operations, [_call("serial_tool", "call-0")], "step-1"),
                 timeout=0.15,
             )
         return time.monotonic() - started
@@ -766,56 +715,21 @@ def test_serial_batch_cancellation_propagates_without_waiting_for_handler() -> N
     assert asyncio.run(scenario()) < 0.5
 
 
-def test_run_tool_calls_binds_running_event_loop_into_execution_context(
-    tmp_path: Path,
-) -> None:
-    """状态副作用：调用后 ``execution_context`` 的运行期依赖必须绑定到当前事件循环。
-
-    串行统一走 to_thread 后，进程工具的输出通道由 ToolHandlerRunner 在工具执行线程
-    按这一绑定创建（该线程内取不到运行中循环），不能因删除 async 分支而丢失。
-    """
-
-    executor = _SleepingExecutor()
-    context = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
-    operations = _operations_with_executor(
-        executor,
-        parallel_modes={"serial_tool": "serial"},
-        allowed=frozenset({"serial_tool"}),
-        execution_context=context,
-    )
-    assert context.runtime_dependencies.runtime_event_loop is None
-
-    async def scenario() -> object:
-        await operations.run_tool_calls(
-            task_id=1,
-            calls=[_call("serial_tool", "call-0")],
-            step_id="step-1",
-        )
-        bound_context = operations._execution_context
-        assert bound_context is not None
-        return bound_context.runtime_dependencies.runtime_event_loop
-
-    bound_loop = asyncio.run(scenario())
-
-    assert bound_loop is not None
-    assert isinstance(bound_loop, asyncio.AbstractEventLoop)
-
-
 # --------------------------------------------------------------------------- #
-# 分组 4：_is_parallel_call 改为只依据 parallel_mode
+# 分组 4：并行判定只依据 parallel_mode
 # --------------------------------------------------------------------------- #
 
 
 def test_is_parallel_call_returns_false_for_unregistered_tool_name() -> None:
-    """未在 ``_parallel_mode_by_name`` 中的工具名一律判为串行（不得抛 KeyError）。"""
+    """未注册的工具名一律判为串行（不得抛 KeyError）。"""
 
     operations = _operations_with_executor(
         _SleepingExecutor(),
         parallel_modes={"parallel_tool": "parallel"},
     )
 
-    assert operations._is_parallel_call(_call("ghost_tool", "call-1")) is False
-    assert operations._is_parallel_call(_call("", "call-2")) is False
+    assert tool_batch_runner._is_parallel(operations, _call("ghost_tool", "call-1")) is False
+    assert tool_batch_runner._is_parallel(operations, _call("", "call-2")) is False
 
 
 def test_is_parallel_call_true_only_for_parallel_mode() -> None:
@@ -826,9 +740,9 @@ def test_is_parallel_call_true_only_for_parallel_mode() -> None:
         parallel_modes={"parallel_tool": "parallel", "serial_tool": "serial"},
     )
 
-    assert operations._is_parallel_call(_call("parallel_tool", "call-1")) is True
-    assert operations._is_parallel_call(_call("serial_tool", "call-2")) is False
-    assert operations._is_parallel_call(_call("unknown", "call-3")) is False
+    assert tool_batch_runner._is_parallel(operations, _call("parallel_tool", "call-1")) is True
+    assert tool_batch_runner._is_parallel(operations, _call("serial_tool", "call-2")) is False
+    assert tool_batch_runner._is_parallel(operations, _call("unknown", "call-3")) is False
 
 
 # --------------------------------------------------------------------------- #
@@ -909,7 +823,7 @@ def test_removed_executor_and_scheduler_attributes_are_absent() -> None:
     ):
         assert not hasattr(ToolExecutor, attribute), f"ToolExecutor.{attribute} 仍存在"
 
-    assert not hasattr(WorkflowOperations, "_execute_async_tool_call")
+    assert not hasattr(tool_batch_runner, "_execute_async_tool_call")
     assert not hasattr(ToolRegistry, "_validate_handler_contract")
 
 
@@ -987,194 +901,31 @@ def test_tool_executor_execute_requires_execution_context() -> None:
         executor.execute(_call("probe_tool", "call-1"), execution_context=None)
 
 
-def test_workflow_operations_init_derives_maps_without_handler_kind(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``__init__`` 只派生 allowed/parallel_mode 两张表，不得再派生 handler_kind 表。"""
+def test_emit_swallows_projector_failure() -> None:
+    """事件 sink 失败只能记录降级，不得把异常带回工作流节点。"""
+    from app.core.events import AssistantPartClosedEvent
+    from app.core.workflow.node_helper.common import emit, execution_scope
 
-    monkeypatch.setattr(
-        workflow_operations_module,
-        "get_conversation_run_state_service",
-        lambda: SimpleNamespace(),
-    )
-    monkeypatch.setattr(
-        workflow_operations_module,
-        "get_conversation_event_projector",
-        lambda: SimpleNamespace(),
-    )
-    run = SimpleNamespace(id=7)
-    task = SimpleNamespace(id=11)
-    workspace = SimpleNamespace(id=13, root_path=".")
+    def failing_sink(_event: object) -> None:
+        raise RuntimeError("projector exploded")
 
-    operations = WorkflowOperations(
-        tool_executor=ToolExecutor(
-            registry=ToolRegistry(
-                [
-                    _make_definition(
-                        name="serial_tool",
-                        parameters_schema={"type": "object"},
-                        parallel_mode="serial",
-                    ),
-                    _make_definition(
-                        name="parallel_tool",
-                        parameters_schema={"type": "object"},
-                        parallel_mode="parallel",
-                    ),
-                ]
-            )
-        ),
-        agent_profile=SimpleNamespace(agent_id="agent-1"),
-        current_run=run,
-        current_task=task,
-        current_workspace=workspace,
-        model_tools=[
-            _make_definition(
-                name="serial_tool", parameters_schema={"type": "object"}, parallel_mode="serial"
-            ),
-            _make_definition(
-                name="parallel_tool", parameters_schema={"type": "object"}, parallel_mode="parallel"
-            ),
-        ],
-    )
-
-    assert operations._allowed_tool_names == frozenset({"serial_tool", "parallel_tool"})
-    assert operations._parallel_mode_by_name == {
-        "serial_tool": "serial",
-        "parallel_tool": "parallel",
-    }
-    assert not hasattr(operations, "_handler_kind_by_name")
-    assert operations.get_current_run() is run
-    assert operations.get_current_task() is task
-    assert operations.get_current_workspace() is workspace
+    with execution_scope(SimpleNamespace(event_sink=failing_sink), SimpleNamespace()):
+        emit(AssistantPartClosedEvent(task_id=1, run_id=1, part="text"))
 
 
-def test_to_model_message_success_and_cancelled_branches() -> None:
-    """观察 → ToolMessage 的成功/取消分支契约（不涉及本次改动，用于锁定模块行为）。"""
-
-    operations = _operations_with_executor(_SleepingExecutor())
-
-    success_empty = ToolObservation(tool_name="probe_tool", status="success", content="   ")
-    message = operations.to_tool_model_message(success_empty)
-    assert message.content == "success"
-    assert message.status == "success"
-    assert message.tool_call_id == ""
-
-    success_body = ToolObservation(
-        tool_name="probe_tool", status="success", content="body", tool_call_id="c-1"
-    )
-    message = operations.to_tool_model_message(success_body)
-    assert message.content == "body"
-    assert message.status == "success"
-    assert message.tool_call_id == "c-1"
-
-    cancelled = ToolObservation(
-        tool_name="probe_tool",
-        status="cancelled",
-        reason="user stopped the run",
-        tool_call_id="c-2",
-    )
-    message = operations.to_tool_model_message(cancelled)
-    assert message.content == "cancelled: user stopped the run"
-    # LangChain 不接受 cancelled，取消在消息层映射为 error 且保留语义标记。
-    assert message.status == "error"
-
-    cancelled_without_reason = ToolObservation(
-        tool_name="probe_tool", status="cancelled", tool_call_id="c-3"
-    )
-    assert operations.to_tool_model_message(cancelled_without_reason).content == "cancelled"
-
-
-def test_to_model_message_error_branch_keeps_diagnostic_fields() -> None:
-    """错误观察 → ToolMessage：status 为 error，且保留 error/hint/reason 三要素。"""
-
-    operations = _operations_with_executor(_SleepingExecutor())
-
-    retryable_observation = ToolObservation(
-        tool_name="probe_tool",
-        status="error",
-        error="provider unavailable",
-        reason="retry after a short delay",
-        retryable=True,
-        tool_call_id="c-1",
-    )
-    message = operations.to_tool_model_message(retryable_observation)
-    assert message.status == "error"
-    assert message.tool_call_id == "c-1"
-    assert message.content.startswith("error: provider unavailable\n")
-    assert "hint: " in message.content
-    assert message.content.endswith("reason: retry after a short delay")
-
-    non_retryable_observation = ToolObservation(
-        tool_name="probe_tool",
-        status="error",
-        error="bad patch",
-        reason="fix the patch format",
-        retryable=False,
-        tool_call_id="c-2",
-    )
-    message = operations.to_tool_model_message(non_retryable_observation)
-    assert "hint: do not retry this tool call." in message.content
-    assert "reason: fix the patch format" in message.content
-
-
-def test_process_event_swallows_projector_failure() -> None:
-    """Transport 投影失败只能降级为 None，不得把异常带回工作流节点。"""
-
-    class _FailingProjector:
-        def process(self, event: object) -> object | None:
-            raise RuntimeError("projector exploded")
-
-    operations = _operations_with_executor(_SleepingExecutor())
-    operations._event_projector = _FailingProjector()
-
-    assert operations.process_event(SimpleNamespace(type="probe")) is None
-
-
-def test_is_current_run_cancelled_reads_task_signal() -> None:
+def test_is_cancelled_reads_task_signal() -> None:
     """取消判定只按当前 Task 读进程内信号：同一 Task 的执行串行，命中即当前执行。"""
-    from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+    from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+        cancellation_registry,
+    )
+    from app.core.workflow.execution_state.runtime_context import RuntimeContext
 
-    operations = _operations_with_executor(_SleepingExecutor())
-    operations._current_task = SimpleNamespace(id=9_100_001)
-    assert operations.is_current_run_cancelled() is False
+    context = SimpleNamespace(task=SimpleNamespace(id=9_100_001))
+    assert RuntimeContext.is_cancelled(context) is False
     cancellation_registry.request_cancel(9_100_001)
     try:
-        assert operations.is_current_run_cancelled() is True
+        assert RuntimeContext.is_cancelled(context) is True
     finally:
         cancellation_registry.consume(9_100_001)
 
 
-def test_run_state_transitions_delegate_to_state_service() -> None:
-    """终态迁移方法必须原样委托状态服务并透传参数（门面不得自行发事件）。"""
-
-    recorded: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
-
-    class _RecordingStateService:
-        def _record(self, name: str, *args: Any, **kwargs: Any) -> str:
-            recorded.append((name, args, kwargs))
-            return f"{name}:ok"
-
-        def complete_run_if_running(self, *args: Any, **kwargs: Any) -> str:
-            return self._record("complete", *args, **kwargs)
-
-        def fail_run_if_running(self, *args: Any, **kwargs: Any) -> str:
-            return self._record("fail", *args, **kwargs)
-
-        def cancel_run_if_running(self, *args: Any, **kwargs: Any) -> str:
-            return self._record("cancel", *args, **kwargs)
-
-    operations = _operations_with_executor(_SleepingExecutor())
-    operations._current_run = SimpleNamespace(id=99)
-    operations._conversation_run_state_service = _RecordingStateService()
-
-    assert operations.complete_run_if_running(final_output="done") == "complete:ok"
-    assert operations.fail_run_if_running("boom", final_output="failed") == "fail:ok"
-    assert operations.cancel_run_if_running(end_reason="user stopped") == "cancel:ok"
-
-    assert recorded[0] == ("complete", (99,), {"final_output": "done", "usage_stats": None})
-    assert recorded[1] == ("fail", (99, "boom"), {"final_output": "failed", "usage_stats": None})
-    assert recorded[2] == (
-        "cancel",
-        (99, "user stopped"),
-        {"final_output": None, "usage_stats": None},
-    )

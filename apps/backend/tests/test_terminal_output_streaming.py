@@ -14,19 +14,11 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
-from app.assistant_transport.event import (
-    RunInitializedEvent,
-    RunStatusChangedEvent,
-    TerminalOutputDeltaData,
-    ToolCallCreatedEvent,
-    ToolCallRuntimeUpdateEvent,
-    ToolCallStatusChangedEvent,
-    UserInputAppendedEvent,
-    tool_runtime_output_adapter,
-)
+from app.assistant_transport.event import UserInputAppendedEvent
 from app.assistant_transport.event.tool_runtime_output_adapter import (
     ToolRuntimeOutputChannelFactory,
 )
+from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
@@ -37,11 +29,18 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.stream import TransportFrame
 from app.config.constant import Constant
+from app.core.events import (
+    RunInitializedEvent,
+    RunStatusChangedEvent,
+    TerminalOutputDeltaData,
+    ToolCallCreatedEvent,
+    ToolCallRuntimeUpdateEvent,
+    ToolCallStatusChangedEvent,
+)
 from app.core.tools.display.terminal_display import build_terminal_display_data
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.schemas import ToolCall, ToolExecutionContext, ToolObservation
 from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
-from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
 from app.core.tools.tool_execute.tool_output_channel import (
     BufferedProcessToolOutputChannel,
@@ -50,7 +49,7 @@ from app.core.tools.tool_handler import execute_terminal as execute_terminal_mod
 from app.core.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.core.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.core.tools.tool_handler.terminal.output_collector import _OutputCollector
-from app.core.workflow.workflow_operations import WorkflowOperations
+from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 
 
 class ChunkStream:
@@ -281,9 +280,7 @@ def test_runtime_update_event_uses_a_strict_payload_discriminator() -> None:
 
 
 @pytest.mark.asyncio
-async def test_output_channel_batches_thread_output_and_flushes_in_sequence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_output_channel_batches_thread_output_and_flushes_in_sequence() -> None:
     loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
     events: list[ToolCallRuntimeUpdateEvent] = []
@@ -294,10 +291,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence(
         dispatch_threads.append(threading.get_ident())
         return "stream"
 
-    monkeypatch.setattr(
-        tool_runtime_output_adapter, "dispatch_conversation_event", capture
-    )
-    channel = ToolRuntimeOutputChannelFactory().create(
+    channel = ToolRuntimeOutputChannelFactory(capture).create(
         task_id=7,
         run_id=9,
         tool_call_id="call-1",
@@ -329,13 +323,11 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence(
 
 
 @pytest.mark.asyncio
-async def test_workflow_binds_running_loop_for_process_output_channel(
-    tmp_path: Path,
-) -> None:
-    """workflow 把当前事件循环登记进运行期依赖，runner 才能在工具执行线程建输出通道。
+async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Path) -> None:
+    """装配方登记的事件循环随执行上下文透传给工具，且工具执行发生在循环线程之外。
 
-    通道本身由 ``ToolHandlerRunner`` 在工具执行线程按该登记创建（不沿执行链传参）；
-    本用例守住 workflow 这一侧的义务：登记的是当前运行中循环，且工具执行发生在循环线程之外。
+    通道本身由 ``ToolHandlerRunner`` 在工具执行线程按该登记创建（不沿执行链传参）；登记由
+    ``run_driver._build_context`` 完成（见 ``test_runtime_notice``），本用例守住批次执行这一侧。
     """
     loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
@@ -345,15 +337,10 @@ async def test_workflow_binds_running_loop_for_process_output_channel(
         workspace_root=tmp_path,
         run_id=9,
         runtime_dependencies=ToolRuntimeDependencies(
-            process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(),
+            runtime_event_loop=loop,
+            process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(lambda _event: None),
         ),
     )
-    operations = WorkflowOperations.__new__(WorkflowOperations)
-    operations._current_run = SimpleNamespace(id=9)
-    operations._execution_context = context
-    operations._allowed_tool_names = frozenset({"execute_terminal"})
-    operations._parallel_mode_by_name = {"execute_terminal": "serial"}
-
     bound_loops: list[object] = []
 
     class Executor:
@@ -365,9 +352,7 @@ async def test_workflow_binds_running_loop_for_process_output_channel(
         ) -> ToolObservation:
             assert threading.get_ident() != loop_thread
             assert allowed_tool_names == {"execute_terminal"}
-            bound_loops.append(
-                execution_context.runtime_dependencies.runtime_event_loop
-            )
+            bound_loops.append(execution_context.runtime_dependencies.runtime_event_loop)
             return ToolObservation(
                 tool_name=call.tool_name,
                 tool_call_id=call.call_id,
@@ -375,14 +360,19 @@ async def test_workflow_binds_running_loop_for_process_output_channel(
                 content="done",
             )
 
-    operations._executor = cast(ToolExecutor, Executor())
-
-    result = await operations.run_tool_calls(
-        task_id=7,
-        calls=[ToolCall(tool_name="execute_terminal", arguments={}, call_id="call-1")],
+    rc = SimpleNamespace(
+        tool_executor=Executor(),
+        execution_context=context,
+        allows_tools=frozenset({"execute_terminal"}),
+        tool_definitions={"execute_terminal": SimpleNamespace(parallel_mode="serial")},
+        task=SimpleNamespace(id=7),
     )
 
-    assert len(result.observations) == 1
+    observations = await run_tool_batch(
+        rc, [ToolCall(tool_name="execute_terminal", arguments={}, call_id="call-1")], "step-1"
+    )
+
+    assert len(observations) == 1
     assert bound_loops == [loop]
 
 
@@ -404,7 +394,7 @@ async def test_process_output_channel_is_built_from_worker_thread(tmp_path: Path
         run_id=9,
         runtime_dependencies=ToolRuntimeDependencies(
             runtime_event_loop=loop,
-            process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(),
+            process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(lambda _event: None),
         ),
     )
 
@@ -612,7 +602,7 @@ class _MemorySnapshotOwner:
         return copy.deepcopy(self.state)
 
     def apply_planned(self, event: Any) -> TransportFrame:
-        mutations = tuple(event.plan(copy.deepcopy(self.state)))
+        mutations = tuple(plan_event(event, copy.deepcopy(self.state)))
         for mutation in mutations:
             parent: Any = self.state
             if not mutation.path:

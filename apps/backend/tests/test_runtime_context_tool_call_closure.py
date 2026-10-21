@@ -30,6 +30,7 @@ from app.core.context.tool_call_closure import ContextProtocolError
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
@@ -39,6 +40,7 @@ from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import initialize_app_schema
+from tests.runtime_context_stub import runtime_stub
 
 _TOOL_STATUS_VALUES = {"pending", "running", "completed", "failed", "cancelled"}
 
@@ -277,7 +279,7 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
 
     形状与生产一致（未闭合调用是上一个 Run 的**最后几个**工具调用）：run N 的
     ``AIMessage(tool_calls)`` 是它最后一条消息，随后用户发新消息 → run N+1 的
-    ``HumanMessage`` 在 Run 准备阶段先落库（``ConversationRunCommandService``），
+    ``HumanMessage`` 在 Run 准备阶段先落库（``WorkflowSession``），
     再进入 run N+1 的 ``model_node`` 取数，此时才补占位。
     """
 
@@ -626,6 +628,9 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     service._run = run_crud
     service._context = env.context
     service._session_factory = env.factory
+    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
+    service._run_state._run = run_crud
+    service._run_state._session_factory = env.factory
 
     recovered = service.recover_orphaned_runs()
 
@@ -669,6 +674,9 @@ def test_recover_orphaned_runs_preserves_waiting_run(env: SimpleNamespace) -> No
     service._run = run_crud
     service._context = env.context
     service._session_factory = env.factory
+    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
+    service._run_state._run = run_crud
+    service._run_state._session_factory = env.factory
 
     recovered = service.recover_orphaned_runs()
 
@@ -727,7 +735,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
     from openai.types.chat import ParsedFunctionToolCall
 
     import app.core.workflow.node_helper.streaming_part_state_machine as machine_module
-    from app.assistant_transport.event import ToolCallStatusChangedEvent
+    from app.core.events import ToolCallStatusChangedEvent
     from app.core.workflow.execution_state.tool_batch import ToolBatch
     from app.core.workflow.node_helper import StreamingPartStateMachine
     from tests.sdk_fixtures import sdk_completion
@@ -744,16 +752,15 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
     manager.save_model_response(
         completion, include_in_context=False, registered_tool_names={"read_file"}
     )
-    operations = SimpleNamespace(
-        vaild_tool_name=lambda name: name == "read_file",
-        all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
-        allows_tools=frozenset({"read_file"}),
-    )
     events: list[object] = []
     monkeypatch.setattr(machine_module, "_message_context", lambda: manager)
-    runtime = SimpleNamespace(operations=operations, batch=ToolBatch())
+    runtime = SimpleNamespace(
+        tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
+        allows_tools=frozenset({"read_file"}),
+        batch=ToolBatch(),
+    )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
-    monkeypatch.setattr(machine_module, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(machine_module, "emit", events.append)
     machine = StreamingPartStateMachine(
         task_id=env.task.id,
         run_id=run.id,
@@ -806,6 +813,9 @@ def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
     service._run = _bind(ConversationRunCrud, env.factory)
     service._context = env.context
     service._session_factory = env.factory
+    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
+    service._run_state._run = service._run
+    service._run_state._session_factory = env.factory
     recovered = service.recover_orphaned_runs()
     assert [run.id for run in recovered] == [broken.id]
     assert service._run.get(healthy.id).status == "waiting_for_input"
@@ -861,15 +871,13 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
         requested.append(True)
         yield None
 
-    rc = SimpleNamespace(
+    rc = runtime_stub(
         step_limit=10,
         model=SimpleNamespace(stream=stream),
-        operations=SimpleNamespace(
-            get_current_task=lambda: env.task,
-            get_current_run=lambda: run,
-            get_current_workspace=lambda: SimpleNamespace(id=1),
-            is_current_run_cancelled=lambda: False,
-        ),
+        task=env.task,
+        run=run,
+        inbox=TaskInputService(),
+        task_space=SimpleNamespace(take_runtime_notices=lambda **_kw: None),
     )
     monkeypatch.setattr(model_node, "_runtime_context", lambda: rc)
     monkeypatch.setattr(model_node, "_message_context", lambda: manager)

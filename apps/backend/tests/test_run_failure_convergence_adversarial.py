@@ -2,7 +2,7 @@
 
 本模块**不**重复既有正向契约测试，而是从对抗视角攻击本次修复声称的四条不变量：
 
-1. 落定链路（``AgentRuntime._settle_failed_run`` / ``AgentRuntime._failure_code_for``）在
+1. 落定链路（``run_driver.drive_run`` / ``run_driver._failure_code_for``）在
    「落定自身失败」「Run 已被别处落终态」「异常是 ``BaseException`` 子类」「异常文本不可
    读」等边界下都必须保证：**Run 先落 failed 再抛原异常**，且不得替换/掩盖原始异常。
 2. 分类器 ``classify_model_failure`` **只按异常类型名**识别传输层失败（超时 / 连接）：
@@ -23,7 +23,6 @@ from typing import Any, cast
 
 import pytest
 
-import app.core.runtime.runner as runner_module
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
@@ -35,7 +34,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.config.constant import Constant
 from app.core.llm_provider.model_failure import classify_model_failure
-from app.core.runtime.runner import AgentRuntime
+from app.core.workflow.run_state_machine import RunTransition
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models import conversation_run_failure as failure_catalog
 from app.models.conversation_run_failure import (
@@ -44,6 +43,7 @@ from app.models.conversation_run_failure import (
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.enums.error_kind import ErrorKind
+from app.service.conversation_run import run_driver
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 
 # --------------------------------------------------------------------------------------
@@ -52,16 +52,18 @@ from app.service.conversation_run.conversation_run_state_service import Conversa
 
 
 class _RecordingRunStateService:
-    """记录 ``fail_run_if_running`` 入参的假 run 级状态服务；可模拟抛异常 / 条件更新落空。"""
+    """记录 ``transition(FAIL)`` 入参的假 run 级状态服务；可模拟抛异常 / 条件更新落空。"""
 
     def __init__(self, *, settles: bool = True, failure: BaseException | None = None) -> None:
         self.calls: list[dict[str, object]] = []
         self._settles = settles
         self._failure = failure
 
-    def fail_run_if_running(
+    def transition(
         self,
         run_id: int,
+        transition: RunTransition,
+        *,
         end_reason: str | None = None,
         final_output: str | None = None,
         usage_stats: object = None,
@@ -78,26 +80,20 @@ class _RecordingRunStateService:
         )
         if self._failure is not None:
             raise self._failure
-        return SimpleNamespace(id=run_id) if self._settles else None
+        return SimpleNamespace(id=run_id, task_id=3) if self._settles else None
 
 
-def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) -> SimpleNamespace:
-    """构造带失败 workflow 的 agent profile 替身（``run`` 必须非 None）。"""
+def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) -> int:
+    """让 workflow 抛出给定异常，返回待驱动的 run_id。"""
 
     class _StubWorkflow:
         async def run(self, *_args: object, **_kwargs: object) -> None:
             raise workflow_error
 
-        async def finalize_run(self, _run_id: int) -> None:
-            return None
-
     monkeypatch.setattr(
         "app.core.workflow.workflow.ReactLikeWorkflow", _StubWorkflow
     )
-    return SimpleNamespace(
-        agent_id="main_agent",
-        run=SimpleNamespace(id=7, task_id=3),
-    )
+    return 7
 
 
 def _make_runtime(
@@ -105,34 +101,41 @@ def _make_runtime(
     run_state_service: _RecordingRunStateService,
     *,
     operations_available: bool = True,
-) -> AgentRuntime:
-    """构造只保留 ``run_agent`` 异常边界所需协作者的 AgentRuntime 替身。
+) -> SimpleNamespace:
+    """把 ``drive_run`` 依赖的 service、hook 与观测替换为最小替身。
 
     ``operations_available`` 为假时模拟「门面尚未构造就失败」：门面构造抛错，落定必须仍然发生
     （它只依赖 run 级状态服务）。
     """
 
-    runtime = AgentRuntime.__new__(AgentRuntime)
-    runtime._task_service = SimpleNamespace(
-        get_task=lambda task_id: SimpleNamespace(id=task_id, workspace_id=9)
-    )
-    runtime._workspace_service = SimpleNamespace(
-        get_workspace=lambda workspace_id: SimpleNamespace(id=workspace_id)
-    )
-    runtime._conversation_run_state_service = run_state_service
+    tasks = SimpleNamespace(get_task=lambda task_id: SimpleNamespace(id=task_id, workspace_id=9))
+    workspaces = SimpleNamespace(get_workspace=lambda ws_id: SimpleNamespace(id=ws_id))
+    monkeypatch.setattr(run_driver, "get_task_service", lambda: tasks)
+    monkeypatch.setattr(run_driver, "get_workspace_service", lambda: workspaces)
+    monkeypatch.setattr(run_driver, "get_conversation_run_state_service", lambda: run_state_service)
 
     async def _noop_fire(_context: object) -> None:
         return None
 
-
-    def _build(_self: AgentRuntime, *_args: object, **_kwargs: object) -> object:
+    def _build(*_args: object, **_kwargs: object) -> object:
         if operations_available:
             return SimpleNamespace()
         raise RuntimeError("operations unavailable")
 
-    monkeypatch.setattr(runner_module.HookInterceptor, "async_safe_fire", _noop_fire)
-    monkeypatch.setattr(AgentRuntime, "_build_operations", _build)
-    return runtime
+    monkeypatch.setattr(run_driver.HookInterceptor, "async_safe_fire", _noop_fire)
+    monkeypatch.setattr(run_driver, "_build_context", _build)
+    monkeypatch.setattr(run_driver, "_resolve_profile", lambda *_args: object())
+    monkeypatch.setattr(
+        run_driver,
+        "get_conversation_run_service",
+        lambda: SimpleNamespace(get_run=lambda run_id: SimpleNamespace(id=run_id, task_id=3)),
+    )
+    monkeypatch.setattr(
+        run_driver,
+        "get_conversation_event_projector",
+        lambda: SimpleNamespace(process=lambda _event: None),
+    )
+    return SimpleNamespace(run_agent=run_driver.drive_run)
 
 
 def _record_state() -> ConversationStateSnapshot:
@@ -485,7 +488,7 @@ def test_terminal_error_message_is_non_empty_and_controlled() -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 4. ``AgentRuntime`` 失败收口链路对抗测试
+# 4. ``run_driver.drive_run`` 失败收口链路对抗测试
 # --------------------------------------------------------------------------------------
 
 
@@ -544,9 +547,9 @@ def test_run_agent_does_not_swallow_base_exception(
 def test_run_agent_settles_with_profile_run_id_without_operations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """落定目标取 ``agent.run.id``，不依赖门面：门面构造失败时同样能落定。
+    """落定目标取驱动的 run_id，不依赖门面：门面构造失败时同样能落定。
 
-    历史缺陷：落定入口曾要求已构造的 ``WorkflowOperations``，于是「workflow 还没进入就失败」
+    历史缺陷：落定入口曾要求已构造的运行门面，于是「workflow 还没进入就失败」
     这条路径无人落终态，留下僵尸 running。
     """
 
@@ -588,7 +591,7 @@ def test_failure_code_for_ignores_exception_text() -> None:
             raise RuntimeError("__str__ exploded")
 
     assert (
-        AgentRuntime._failure_code_for(_BoomClassifier())
+        run_driver._failure_code_for(_BoomClassifier())
         == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
     )
 
@@ -597,7 +600,7 @@ def test_failure_code_for_returns_graph_failed_for_value_error() -> None:
     """``model_config_id`` 缺失一类 ``ValueError`` 走中性兜底，不伪装成模型错误。"""
 
     assert (
-        AgentRuntime._failure_code_for(ValueError("Conversation Run model_config_id is required"))
+        run_driver._failure_code_for(ValueError("Conversation Run model_config_id is required"))
         == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
     )
 
@@ -608,7 +611,7 @@ def test_failure_code_for_reads_exception_chain() -> None:
     wrapped = RuntimeError("langchain wrapper")
     wrapped.__cause__ = TimeoutError("underlying timeout")
 
-    assert AgentRuntime._failure_code_for(wrapped) == ErrorKind.MODEL_TIMEOUT.value
+    assert run_driver._failure_code_for(wrapped) == ErrorKind.MODEL_TIMEOUT.value
 
 
 # --------------------------------------------------------------------------------------

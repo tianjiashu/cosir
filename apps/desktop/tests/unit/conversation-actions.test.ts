@@ -5,7 +5,6 @@ import {
   getLatestUserMessageId,
   getTransportRunId,
   isEditableLatestRunUserMessage,
-  isLatestUserMessage,
   canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
 import type { TransportMessage, TransportState } from "@/lib/assistant/contract";
@@ -38,8 +37,6 @@ describe("conversation actions", () => {
       current_run_id: 2,
     });
     expect(getLatestUserMessageId(snapshot)).toBe("u2");
-    expect(isLatestUserMessage(snapshot, "u1")).toBe(false);
-    expect(isLatestUserMessage(snapshot, "u2")).toBe(true);
   });
 
   it("only allows editing the latest user message from the current run", () => {
@@ -53,6 +50,9 @@ describe("conversation actions", () => {
     expect(isEditableLatestRunUserMessage(snapshot, "u1")).toBe(false);
     expect(isEditableLatestRunUserMessage(snapshot, "u2")).toBe(true);
     expect(isEditableLatestRunUserMessage({ ...snapshot, current_run_id: 3 }, "u2")).toBe(false);
+    for (const status of ["pending", "running", "waiting_for_input"]) {
+      expect(isEditableLatestRunUserMessage({ ...snapshot, runs: [snapshot.runs[0], run(2, status, snapshot.runs[1].messages)] }, "u2")).toBe(false);
+    }
   });
 
   it("allows a cancelled current run to resume", () => {
@@ -79,18 +79,18 @@ describe("conversation actions", () => {
   });
 });
 
-it("keeps only the newest queued message editable while the Run is active", () => {
+it("never exposes queued messages for editing and blocks editing while inputs are queued", () => {
   const snapshot = state({
-    runs: [run(1, "running", [{ id: "consumed", role: "user", parts: [] }])],
+    runs: [run(1, "cancelled", [{ id: "consumed", role: "user", parts: [] }])],
     current_run_id: 1,
     queued_messages: [
-      { id: "q1", role: "user", parts: [] },
-      { id: "q2", role: "user", parts: [] },
+      { id: "q1", role: "user", parts: [], delivery: "after_run" },
+      { id: "q2", role: "user", parts: [], delivery: "immediate" },
     ],
   });
-  expect(getLatestUserMessageId(snapshot)).toBe("q2");
+  expect(getLatestUserMessageId(snapshot)).toBe("consumed");
   expect(isEditableLatestRunUserMessage(snapshot, "consumed")).toBe(false);
-  expect(isEditableLatestRunUserMessage(snapshot, "q1")).toBe(false);
-  expect(isEditableLatestRunUserMessage(snapshot, "q2")).toBe(true);
-  expect(canResumeStoppedRun(state({ runs: [run(1, "failed")], current_run_id: 1, queued_messages: [{ id: "q", role: "user", parts: [] }] }))).toBe(true);
+  expect(isEditableLatestRunUserMessage(snapshot, "q2")).toBe(false);
+  expect(isEditableLatestRunUserMessage({ ...snapshot, queued_messages: [] }, "consumed")).toBe(true);
+  expect(canResumeStoppedRun(state({ runs: [run(1, "failed")], current_run_id: 1, queued_messages: [{ id: "q", role: "user", parts: [], delivery: "after_run" }] }))).toBe(true);
 });

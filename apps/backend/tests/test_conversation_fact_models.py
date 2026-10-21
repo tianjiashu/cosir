@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.assistant_transport.event import RunStatusChangedEvent
+from app.core.events import RunStatusChangedEvent
 from app.models.conversation_input import ConversationInput
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
@@ -22,6 +22,9 @@ from app.service.conversation_run.conversation_input_preparation_service import 
     ConversationInputPreparationService,
 )
 from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.conversation_run.conversation_run_state_service import (
+    ConversationRunStateService,
+)
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
@@ -494,6 +497,10 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
         context_service._crud = context_crud
         service = ConversationRunService.__new__(ConversationRunService)
         service._run = run_crud
+        run_state = ConversationRunStateService.__new__(ConversationRunStateService)
+        run_state._run = run_crud
+        run_state._session_factory = factory
+        service._run_state = run_state
         service._context = context_service
         service._session_factory = factory
         projected: list[RunStatusChangedEvent] = []

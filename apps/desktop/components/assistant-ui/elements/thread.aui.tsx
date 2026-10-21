@@ -2,7 +2,7 @@
 
 import { isTerminalRunStatus } from "@/lib/assistant/contract";
 
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, ListEndIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon, ZapIcon } from "lucide-react";
 import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FC, type MutableRefObject, type ReactNode } from "react";
 import {
   AuiIf,
@@ -71,7 +71,8 @@ import {
   takePendingEditComposerDraft,
   type EditDraftAttachment,
 } from "@/lib/assistant/edit-composer-draft";
-import type { TransportRun, TransportToolStatus } from "@/lib/assistant/contract";
+import type { InputDelivery, TransportRun, TransportToolStatus } from "@/lib/assistant/contract";
+import { readStoredInputDelivery, writeStoredInputDelivery } from "@/lib/input-delivery-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
@@ -334,6 +335,8 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  // 投递方式只在运行中有意义；偏好存于 storage，提交时由 Transport 宿主读取同一份值。
+  const [delivery, setDelivery] = useState<InputDelivery>(readStoredInputDelivery);
   // toast「重试」持有旧闭包：用 ref 读取当下是否仍可继续、是否已有请求在途，避免重复 business resume。
   const resumingRef = useRef(false);
   const actionRef = useRef(action);
@@ -418,11 +421,55 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
 
   return (
     <div className="flex items-center gap-2">
+      {isRunning && (
+        <DeliveryToggle
+          delivery={delivery}
+          onChange={(next) => {
+            writeStoredInputDelivery(next);
+            setDelivery(next);
+          }}
+        />
+      )}
       {isRunning && <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} onCancelRequested={onCancelRequested} onCancelResult={onCancelResult} />} />}
-      <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label={isRunning ? "加入队列" : "发送"} />}>
+      <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label={isRunning ? DELIVERY_LABELS[delivery].send : "发送"} />}>
         <ArrowUpIcon className="size-4" />
       </ComposerPrimitive.Send>
     </div>
+  );
+};
+
+const DELIVERY_LABELS: Record<InputDelivery, { toggle: string; send: string; title: string; queued: string }> = {
+  immediate: {
+    toggle: "立即",
+    send: "立即发送",
+    title: "立即发送：在下一步并入当前运行；等待审批时视为驳回并附上这条消息",
+    queued: "下一步并入",
+  },
+  after_run: {
+    toggle: "排队",
+    send: "加入队列",
+    title: "排队发送：当前运行正常结束后再开始新一轮",
+    queued: "本轮结束后发送",
+  },
+};
+
+/** 运行中发送消息时切换「立即并入 / 本轮结束后」；无活动 Run 时后端直接新开 Run，不显示。 */
+const DeliveryToggle: FC<{ delivery: InputDelivery; onChange: (delivery: InputDelivery) => void }> = ({ delivery, onChange }) => {
+  const labels = DELIVERY_LABELS[delivery];
+  const Icon = delivery === "immediate" ? ZapIcon : ListEndIcon;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-8 gap-1 rounded-full px-2 text-xs text-muted-foreground"
+      aria-label={`发送方式：${labels.toggle}`}
+      title={labels.title}
+      onClick={() => onChange(delivery === "immediate" ? "after_run" : "immediate")}
+    >
+      <Icon className="size-3.5" />
+      {labels.toggle}
+    </Button>
   );
 };
 
@@ -465,7 +512,7 @@ const UserMessageView: FC = () => {
   const hasText = useAuiState((state) => state.message.parts.some(
     (part) => part.type === "text" && part.text.trim().length > 0,
   ));
-  const isQueued = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages?.some((message) => message.id === messageId) ?? false);
+  const queuedDelivery = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages?.find((message) => message.id === messageId)?.delivery ?? null);
   const readonly = useContext(ThreadContext).readonly === true;
   const canEdit = useAuiState((state) => {
     if (readonly || !isEditableLatestRunUserMessage(
@@ -487,7 +534,7 @@ const UserMessageView: FC = () => {
       className="group flex flex-col items-end px-2 [content-visibility:auto] [contain-intrinsic-size:auto_6rem]"
     >
       <div className="flex max-w-[85%] flex-col items-end gap-2">
-        {isQueued && <span className="text-xs text-muted-foreground">已排队</span>}
+        {queuedDelivery && <span className="text-xs text-muted-foreground">{DELIVERY_LABELS[queuedDelivery].queued}</span>}
         <UserMessageAttachments />
         {hasText && (
           <div className="bg-primary/10 text-foreground rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">

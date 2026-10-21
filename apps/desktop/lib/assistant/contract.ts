@@ -196,9 +196,18 @@ export function isTerminalRunStatus(status: string | null | undefined): boolean 
   return status !== null && status !== undefined && TERMINAL_RUN_STATUSES.has(status);
 }
 
+/**
+ * 活动 Run 期间发送消息的投递方式：`immediate` 在下个模型边界并入本轮，`after_run` 等本轮
+ * 正常结束后交接新 Run。无活动 Run 时后端忽略该字段直接新开 Run。
+ */
+export type InputDelivery = "immediate" | "after_run";
+
+/** 尚未被模型边界消费的排队用户输入，事实仍在后端 inbox。 */
+export type TransportQueuedMessage = TransportMessage & { delivery: InputDelivery };
+
 /** Task 级 Transport state；Run 事实全部按 Run 保存在 `runs` 中。 */
 export type TransportState = {
-  queued_messages?: TransportMessage[];
+  queued_messages?: TransportQueuedMessage[];
   runs: TransportRun[];
   current_run_id: number | null;
   /** 审批预留；当前固定为空对象。 */

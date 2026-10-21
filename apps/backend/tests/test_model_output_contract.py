@@ -13,9 +13,10 @@ import app.core.workflow.node_helper.streaming_part_state_machine as streaming_m
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.nodes import model_node as model_module
+from app.core.workflow.run_state_machine import RunTransition
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from tests.runtime_context_stub import run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion, sdk_event
 
 
@@ -71,44 +72,30 @@ class _ModelHarness:
         self._chunks = chunks if chunks is not None else [{"content": ""}]
         self.saved_responses = []
 
-        def complete_run_if_running(*_args: Any, **kwargs: Any) -> object:
-            self.completed = True
-            self.completion_fields = kwargs
+        def transition_run(transition: RunTransition, **kwargs: Any) -> object:
+            if transition is RunTransition.COMPLETE:
+                self.completed = True
+                kwargs.pop("usage_stats")
+                self.completion_fields = kwargs
+            elif transition is RunTransition.FAIL:
+                self.failed = True
+            else:
+                raise AssertionError(f"unexpected transition {transition}")
             return object()
 
-        def fail_run_if_running(*_args: Any, **_kwargs: Any) -> object:
-            self.failed = True
-            return object()
-
-        self.operations = SimpleNamespace(
-            task_tool_schemas=[],
-            model_tools=[SimpleNamespace(name="read_file", display=None)],
-            all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
+        self.runtime_config = runtime_stub(
             allows_tools=frozenset({"read_file"}),
-            vaild_tool_name=lambda name: name == "read_file",
-            # model / tools 节点按「当前 task 维度」取上下文，故桩必须暴露 get_current_task。
-            get_current_task=lambda: SimpleNamespace(id=1),
-            get_current_run=lambda: SimpleNamespace(task_id=1, id=2),
-            get_current_workspace=lambda: SimpleNamespace(id=1),
-            is_current_run_cancelled=lambda: False,
-            complete_run_if_running=complete_run_if_running,
-            fail_run_if_running=fail_run_if_running,
-        )
-        self.runtime_config = SimpleNamespace(
-            operations=self.operations,
+            tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
+            run_state=run_state_stub(transition=lambda _run_id, transition, **kw: transition_run(
+                transition, **kw
+            )),
+            task_space=task_runtime_spaces.get_or_create(1),
             model=SimpleNamespace(stream=self._astream),
-            final_model=SimpleNamespace(stream=self._astream),
-            structured_output=None,
-            step_limit=10,
-            workspace_id=1,
-            thinking_channel="",
-            # model 节点读 WorkflowOperations.allows_tools 构造生命周期允许集合。
-            run=SimpleNamespace(task_id=1, id=2, extra=None),
             usage_stats=SimpleNamespace(
                 add_usage_metadata=lambda _metadata: None,
                 to_dict=lambda: {},
             ),
-            batch=ToolBatch(),
+            event_sink=self.events.append,
         )
 
         def add_message(message: Any, **_kwargs: Any) -> None:
@@ -138,7 +125,7 @@ def _patch_model_runtime(monkeypatch: Any, harness: _ModelHarness) -> None:
 
     monkeypatch.setattr(streaming_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(streaming_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(streaming_module, "emit", harness.events.append)
 
 
 def test_empty_model_stream_fails_loudly_without_finalizing(monkeypatch: Any) -> None:
@@ -151,7 +138,6 @@ def test_empty_model_stream_fails_loudly_without_finalizing(monkeypatch: Any) ->
     _patch_model_runtime(monkeypatch, harness)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
 
     with pytest.raises(RuntimeError):
         asyncio.run(model_module._model_node(_state()))
@@ -185,10 +171,11 @@ def test_model_filters_unusable_calls_without_rejecting_batch(
     )
     harness = _ModelHarness(response)
     # 已注册但本轮禁用的调用仍留在模型协议中，由执行层拒绝。
-    harness.operations.all_vaild_tools.append(SimpleNamespace(name="write_file", display=None))
+    harness.runtime_config.tool_definitions["write_file"] = SimpleNamespace(
+        name="write_file", display=None
+    )
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
@@ -209,7 +196,6 @@ def test_filtered_calls_do_not_prevent_retry_without_finish_reason(monkeypatch):
     harness = _ModelHarness(response)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
@@ -225,7 +211,6 @@ def test_finish_reason_completes_final_response(monkeypatch: Any) -> None:
     harness = _ModelHarness(message)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
@@ -248,7 +233,6 @@ def test_any_finish_reason_without_tool_calls_completes_run(
     harness = _ModelHarness(message)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
@@ -271,7 +255,6 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     harness = _ModelHarness(message)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
@@ -292,7 +275,6 @@ def test_empty_content_with_finish_reason_completes_run(monkeypatch: Any) -> Non
     harness = _ModelHarness(sdk_completion(content="", finish_reason="stop"))
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
@@ -310,7 +292,6 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
     harness = _ModelHarness(message)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_model_runtime(monkeypatch, harness)
 
     result = asyncio.run(model_module._model_node(_state()))
@@ -339,7 +320,6 @@ def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None
     harness.runtime_config.model.stream = stream
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_model_runtime(monkeypatch, harness)
     result = asyncio.run(model_module._model_node(_state()))
     assert result["next_node"] is ReactRoute.END
@@ -353,7 +333,6 @@ def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None
 def test_invalid_tool_arguments_preserved_and_never_dispatched(monkeypatch, arguments):
     from unittest.mock import AsyncMock
 
-    from app.core.runtime.run_result import ToolRunResult
     from app.core.workflow.nodes import tools_node as tools_module
 
     response = sdk_completion(
@@ -370,17 +349,19 @@ def test_invalid_tool_arguments_preserved_and_never_dispatched(monkeypatch, argu
     harness = _ModelHarness(response)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_model_runtime(monkeypatch, harness)
     patch = asyncio.run(model_module._model_node(_state()))
     assert patch["next_node"] == ReactRoute.TOOLS
     assert harness.messages[-1]["tool_calls"][0]["function"]["arguments"] == arguments
     assert harness.runtime_config.batch.calls[0]["function"]["arguments"] == arguments
-    harness.operations.run_tool_calls = AsyncMock(return_value=ToolRunResult(observations=[]))
-    harness.operations.all_vaild_tools[0].need_HIL = False
+    run_batch = AsyncMock(return_value=[])
+    monkeypatch.setattr(tools_module, "run_tool_batch", run_batch)
+    harness.runtime_config.tool_definitions["read_file"].need_HIL = False
     monkeypatch.setattr(tools_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(tools_module, "emit", harness.events.append)
     result = asyncio.run(tools_module._tools_node(_state().model_copy(update=patch)))
-    assert harness.operations.run_tool_calls.call_count == 0
+    # 畸形参数在模型与工具边界就形成观察，不交给执行器。
+    assert run_batch.call_args.args[1] == []
     observations = harness.runtime_config.batch.observations
     assert observations[0]["status"] == "error"
     assert observations[0]["tool_call_id"] == "call"
@@ -399,7 +380,6 @@ def test_tool_calls_take_priority_over_finish_reason(monkeypatch, finish_reason)
     harness = _ModelHarness(response)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
     _patch_model_runtime(monkeypatch, harness)
     result = asyncio.run(model_module._model_node(_state()))
     assert result["next_node"] is ReactRoute.TOOLS

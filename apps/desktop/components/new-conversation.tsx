@@ -30,7 +30,7 @@ import { removeStoredToolGroupSelection, writeStoredToolGroupSelection } from "@
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
 import { getLocalAttachment, getLocalAttachmentById, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
-import { submitAssistantTransport, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-assistant-transport";
+import { submitNewConversationMessage, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-new-conversation-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import {
   Dialog,
@@ -242,10 +242,9 @@ export function NewConversation({
       });
       provisionalTask = task;
       writeStoredToolGroupSelection(task.task_id, selectedToolGroups);
-      await submitAssistantTransport({
+      await submitNewConversationMessage({
         taskId: task.task_id,
         workspaceId: selectedWorkspaceId,
-        commandId: creationCommandId,
         text: trimmedText,
         imageAttachments: sendAttachments.map((attachment) => ({ file: attachment.file, name: attachment.name })),
         banTools: toolGroups

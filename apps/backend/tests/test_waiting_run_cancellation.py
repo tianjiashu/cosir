@@ -1,4 +1,7 @@
-"""Task 级取消：只发信号；等待态以强制拒绝恢复后交循环收敛；释放边界是信号唯一清理点。"""
+"""Task 级取消：只发信号；等待态以强制拒绝恢复后交循环收敛；释放边界是信号唯一清理点。
+
+执行登记、等待态取消与 Run 结束后的调度都在 ``WorkflowSession``。
+"""
 
 from __future__ import annotations
 
@@ -8,12 +11,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.runtime.conversation_run_executor import ConversationRunExecutor, _Execution
-from app.core.workflow.node_helper import user_input_projection
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.run_state_machine import RunTransition
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.user_decision import UserDecisionKind
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.service.conversation_run import workflow_session as session_module
+from app.service.conversation_run.workflow_session import WorkflowSession, _Execution
 
 _TASK_ID = 11
 _RUN_ID = 7
@@ -37,7 +40,10 @@ class _StubServices:
             ),
         )
 
-    def resume_waiting_run(self, run_id: int, *, user_decision: object) -> object | None:
+    def transition(
+        self, run_id: int, transition: RunTransition, *, user_decision: object
+    ) -> object | None:
+        assert transition is RunTransition.RESUME_WITH_DECISION
         self.resume_calls.append((run_id, user_decision))
         if not self.resumable:
             return None
@@ -54,36 +60,27 @@ class _StubServices:
         return []
 
 
-def _build_executor(
+def _build(
     monkeypatch: pytest.MonkeyPatch, services: _StubServices
-) -> tuple[ConversationRunExecutor, list[tuple[int, str]]]:
-    """绕过依赖装配构造执行器，并把 ``start`` 换成记录器（不真的建后台 task）。"""
+) -> tuple[WorkflowSession, WorkflowSession, list[int]]:
+    """绕过装配的调度入口；``_start`` 换成记录器，不真的建后台 task。"""
 
-    executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
-    executor._run_service = services
-    executor._run_state_service = services
-    executor._task_service = services
-    executor._event_projector = None
-    executor._executions = {}
-    executor._signal = cancellation_registry
-    executor._closing = False
+    session = WorkflowSession.__new__(WorkflowSession)
+    session._executions = {}
+    session._closing = False
+    session._runs = services
+    session._run_state = services
+    session._tasks = services
     monkeypatch.setattr(
-        task_runtime_spaces,
+        session_module.task_runtime_spaces,
         "get_or_create",
         lambda _: SimpleNamespace(async_operation=lambda **kw: nullcontext()),
     )
+    started: list[int] = []
     monkeypatch.setattr(
-        user_input_projection,
-        "extract_request",
-        lambda _observations: SimpleNamespace(request_id="req-1"),
+        session, "_start", lambda run, **_kw: started.append(run.id)
     )
-    started: list[tuple[int, str]] = []
-
-    async def _start(run_id: int, start_mode: str) -> None:
-        started.append((run_id, start_mode))
-
-    monkeypatch.setattr(executor, "start", _start)
-    return executor, started
+    return session, session, started
 
 
 @pytest.fixture(autouse=True)
@@ -92,7 +89,7 @@ def _clear_signal() -> None:
     cancellation_registry.consume(_TASK_ID)
 
 
-def _register_execution(executor: ConversationRunExecutor, task: asyncio.Task) -> None:
+def _register_execution(executor: WorkflowSession, task: asyncio.Task) -> None:
     executor._executions[_RUN_ID] = _Execution(task_id=_TASK_ID, thread_task=task)
 
 
@@ -100,11 +97,11 @@ def test_cancel_with_active_execution_only_marks_task_signal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     services = _StubServices(ConversationRunStatus.RUNNING.value)
-    executor, started = _build_executor(monkeypatch, services)
+    session, executor, started = _build(monkeypatch, services)
 
     async def scenario() -> bool:
         _register_execution(executor, asyncio.current_task())
-        return await executor.cancel(_TASK_ID)
+        return await session.cancel(_TASK_ID)
 
     assert asyncio.run(scenario()) is True
     assert cancellation_registry.is_cancelled(_TASK_ID) is True
@@ -115,23 +112,23 @@ def test_cancel_with_active_execution_only_marks_task_signal(
 def test_cancel_terminal_run_leaves_no_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     """已结束的 Run 没有执行者：不登记信号，否则下一次编辑或续跑会一启动就被取消。"""
     services = _StubServices(ConversationRunStatus.COMPLETED.value)
-    executor, started = _build_executor(monkeypatch, services)
+    session, _, started = _build(monkeypatch, services)
 
-    assert asyncio.run(executor.cancel(_TASK_ID)) is False
+    assert asyncio.run(session.cancel(_TASK_ID)) is False
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
     assert started == []
 
 
 def test_cancel_waiting_run_resumes_with_force_reject(monkeypatch: pytest.MonkeyPatch) -> None:
     services = _StubServices(ConversationRunStatus.WAITING_FOR_INPUT.value)
-    executor, started = _build_executor(monkeypatch, services)
+    session, _, started = _build(monkeypatch, services)
 
-    assert asyncio.run(executor.cancel(_TASK_ID)) is True
+    assert asyncio.run(session.cancel(_TASK_ID)) is True
 
     [(run_id, decision)] = services.resume_calls
     assert run_id == _RUN_ID
     assert decision.kind is UserDecisionKind.FORCE_REJECT
-    assert started == [(_RUN_ID, "resume_with_input")]
+    assert started == [_RUN_ID]
     # 信号留给恢复后的循环在 MODEL 检查点消费。
     assert cancellation_registry.is_cancelled(_TASK_ID) is True
 
@@ -141,17 +138,17 @@ def test_cancel_waiting_run_that_lost_resume_race_drops_signal(
 ) -> None:
     """提交决定先赢得 waiting → running 迁移：取消不登记残留信号，返回不可取消。"""
     services = _StubServices(ConversationRunStatus.WAITING_FOR_INPUT.value, resumable=False)
-    executor, started = _build_executor(monkeypatch, services)
+    session, _, started = _build(monkeypatch, services)
 
-    assert asyncio.run(executor.cancel(_TASK_ID)) is False
+    assert asyncio.run(session.cancel(_TASK_ID)) is False
     assert started == []
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
 
 
-def test_release_consumes_signal_only_for_own_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_release_consumes_signal_only_for_own_execution() -> None:
     """等待态取消以同一 run_id 登记新执行：旧执行的释放不得误删它或取走它的信号。"""
-    services = _StubServices(ConversationRunStatus.RUNNING.value)
-    executor, _ = _build_executor(monkeypatch, services)
+    executor = WorkflowSession.__new__(WorkflowSession)
+    executor._executions = {}
 
     async def scenario() -> tuple[bool, bool]:
         other = asyncio.get_running_loop().create_future()
@@ -172,17 +169,14 @@ def test_release_after_late_cancel_on_completed_run_skips_handoff(
 ) -> None:
     """最后检查点之后才到的停止：Run 已完成，释放时不为 inbox 接续新 Run。"""
     services = _StubServices(ConversationRunStatus.COMPLETED.value)
-    executor, started = _build_executor(monkeypatch, services)
+    session, executor, started = _build(monkeypatch, services)
     handoffs: list[int] = []
-    monkeypatch.setattr(
-        "app.service.depends.get_conversation_run_command_service",
-        lambda: SimpleNamespace(start_queued_run=lambda task_id: handoffs.append(task_id)),
-    )
+    monkeypatch.setattr(session, "open_queued_run", handoffs.append)
 
     async def scenario() -> None:
         _register_execution(executor, asyncio.current_task())
         cancellation_registry.request_cancel(_TASK_ID)
-        await executor._release_and_handoff(_RUN_ID)
+        await session._after_run(services.get_run(_RUN_ID))
 
     asyncio.run(scenario())
     assert handoffs == []
@@ -196,24 +190,14 @@ def test_release_after_cancel_during_suspend_resumes_for_cancel(
 ) -> None:
     """取消落在 running → waiting 窗口：释放时接手，以强制拒绝恢复，而不是留在等待态。"""
     services = _StubServices(ConversationRunStatus.WAITING_FOR_INPUT.value)
-    executor, started = _build_executor(monkeypatch, services)
+    session, executor, started = _build(monkeypatch, services)
 
     async def scenario() -> None:
         _register_execution(executor, asyncio.current_task())
         cancellation_registry.request_cancel(_TASK_ID)
-        await executor._release_and_handoff(_RUN_ID)
+        await session._after_run(services.get_run(_RUN_ID))
 
     asyncio.run(scenario())
-    assert started == [(_RUN_ID, "resume_with_input")]
+    assert started == [_RUN_ID]
     assert services.resume_calls[0][1].kind is UserDecisionKind.FORCE_REJECT
     assert cancellation_registry.is_cancelled(_TASK_ID) is True
-
-
-def test_cancel_running_run_without_executor_marks_signal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Agent Team 节点 Run 不经执行器驱动：停止同样只登记信号，由 Coordinator 取走。"""
-    services = _StubServices(ConversationRunStatus.RUNNING.value)
-    executor, started = _build_executor(monkeypatch, services)
-
-    assert asyncio.run(executor.cancel(_TASK_ID)) is True
-    assert cancellation_registry.is_cancelled(_TASK_ID) is True
-    assert started == []

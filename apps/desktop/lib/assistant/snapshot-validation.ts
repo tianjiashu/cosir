@@ -234,9 +234,9 @@ function validatePart(value: unknown, path: string): void {
   if (part.approvalRequestId !== null && part.approvalRequestId !== undefined) throw new TransportSnapshotValidationError(`${path}.approvalRequestId`, "null 或 undefined");
 }
 
-function validateMessage(value: unknown, path: string, seenIds: Set<string>): void {
+function validateMessage(value: unknown, path: string, seenIds: Set<string>, extraKeys: readonly string[] = []): void {
   const message = requireRecord(value, path);
-  requireExactKeys(message, ["id", "role", "parts"], path);
+  requireExactKeys(message, ["id", "role", "parts", ...extraKeys], path);
   const id = requireString(message.id, `${path}.id`);
   if (id === "" || seenIds.has(id)) throw new TransportSnapshotValidationError(`${path}.id`, "非空且在 Run 内唯一");
   seenIds.add(id);
@@ -251,7 +251,13 @@ export function parseTransportState(value: unknown): TransportState {
   if (state.queued_messages !== undefined) {
     if (!Array.isArray(state.queued_messages)) throw new TransportSnapshotValidationError("queued_messages", "数组");
     const ids = new Set<string>();
-    state.queued_messages.forEach((message, index) => validateMessage(message, `queued_messages[${index}]`, ids));
+    state.queued_messages.forEach((message, index) => {
+      const path = `queued_messages[${index}]`;
+      validateMessage(message, path, ids, ["delivery"]);
+      const { delivery, role } = message as { delivery: unknown; role: unknown };
+      if (delivery !== "immediate" && delivery !== "after_run") throw new TransportSnapshotValidationError(`${path}.delivery`, "immediate 或 after_run");
+      if (role !== "user") throw new TransportSnapshotValidationError(`${path}.role`, "user");
+    });
   }
   if (!Array.isArray(state.runs)) throw new TransportSnapshotValidationError("runs", "数组");
   const runIds = new Set<number>();

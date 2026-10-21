@@ -8,7 +8,8 @@
 
 本文件只消费生产代码（``app/**`` 只读），锁定三条行为契约：
 
-1. ``AgentTeamCoordinator._build_node_run_profile`` 合成的 per-run profile 必须带**已物化**的
+1. 节点执行 profile（``AgentTeamCoordinator._build_node_profile`` 合成基础 profile，
+   ``run_driver._resolve_profile`` 按 Run 派生）必须带**已物化**的
    模型运行设置（连接与能力字段来自 ``run.model_config_id`` 指向的模型配置），并保留节点快照的
    用户偏好、采用节点快照的 ``structured_output``、绑定 ``run``；
 2. 节点快照不是连接字段的来源：快照里出现的任何连接字段都不得影响最终执行 profile；
@@ -36,7 +37,8 @@ from app.service.agent_team import agent_team_preparation_service as prep_module
 from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationService,
 )
-from app.service.depends import get_model_config_service, get_runtime
+from app.service.conversation_run import run_driver
+from app.service.depends import get_model_config_service
 
 # --------------------------------------------------------------------------- #
 # 构造助手
@@ -94,6 +96,7 @@ def _node_runtime(
         agent_id="general-assistant",
         role=role,
         node_goal="实现登录",
+        node_goal_summary="实现登录",
         system_prompt="node system prompt from snapshot",
         allowed_tools=["read_file", "web_search"],
         structured_output=_node_structured_output().to_document(),
@@ -127,10 +130,15 @@ def _node_run(
     )
 
 
-def _coordinator() -> AgentTeamCoordinator:
-    """装配真实 Coordinator：``_runner`` 取自进程级运行时单例（真实 ``AgentRuntime``）。"""
+def _node_run_profile(
+    registry_profile: AgentProfile,
+    node_runtime: AgentTeamRunRuntime,
+    node_run: ConversationRunRecord,
+) -> AgentProfile:
+    """生产两段串联：协调器合成节点基础 profile，运行时按节点 Run 派生并物化模型设置。"""
 
-    return AgentTeamCoordinator()
+    base = AgentTeamCoordinator._build_node_profile(registry_profile, node_runtime)
+    return run_driver._resolve_profile(node_run, SimpleNamespace(root_path=""), base)
 
 
 def _create_model_config(*, model_name: str, base_url: str) -> int:
@@ -240,7 +248,7 @@ def test_node_run_profile_materializes_model_runtime_settings_from_run() -> None
     # run.options 刻意不设置 reasoning_effort：快照偏好必须是唯一的来源。
     node_run = _node_run(config_id, reasoning_effort=None)
 
-    profile = _coordinator()._build_node_run_profile(registry_profile, node_runtime, node_run)
+    profile = _node_run_profile(registry_profile, node_runtime, node_run)
 
     settings = profile.model_settings
     # 未物化时这里会抛 ModelSettingsError（模型运行配置未物化，缺少字段: model_name, ...）。
@@ -310,7 +318,7 @@ def test_node_run_profile_takes_connection_fields_from_run_not_from_snapshot() -
     )
     node_run = _node_run(second_config_id)
 
-    profile = _coordinator()._build_node_run_profile(registry_profile, node_runtime, node_run)
+    profile = _node_run_profile(registry_profile, node_runtime, node_run)
 
     settings = profile.model_settings.require_runtime_config()
     assert settings.model_name == "run-model"
@@ -340,15 +348,14 @@ def test_unmaterialized_registry_settings_would_fail_runtime_context(
     registry_profile = _registry_child_profile()
     node_runtime = _node_runtime(config_id)
     node_run = _node_run(config_id)
-    runtime = get_runtime()
     # 旧行为：执行 profile 直接沿用注册表 profile 的（未物化）模型设置。
     monkeypatch.setattr(
-        runtime,
-        "materialize_run_model_settings",
-        lambda run: registry_profile.model_settings,
+        run_driver.ModelSettings,
+        "from_model_config_record",
+        staticmethod(lambda _record: registry_profile.model_settings),
     )
 
-    profile = _coordinator()._build_node_run_profile(registry_profile, node_runtime, node_run)
+    profile = _node_run_profile(registry_profile, node_runtime, node_run)
 
     with pytest.raises(ModelSettingsError) as captured:
         profile.model_settings.require_runtime_config()
@@ -415,7 +422,7 @@ def test_node_run_without_model_config_keeps_unmaterialized_settings() -> None:
     node_run = _node_run(1)
     node_run.model_config_id = None
 
-    profile = _coordinator()._build_node_run_profile(registry_profile, node_runtime, node_run)
+    profile = _node_run_profile(registry_profile, node_runtime, node_run)
 
     assert profile.model_settings.model_name is None
     assert profile.model_settings.base_url is None

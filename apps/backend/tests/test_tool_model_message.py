@@ -1,12 +1,10 @@
-from openai.types.chat import ChatCompletionToolMessageParam
+"""工具观察转模型可见 tool 消息的最小契约。"""
 
 from app.core.tools.schemas import ToolObservation
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
-from app.core.workflow.workflow_operations import WorkflowOperations
-
-
-def _to_message(observation: ToolObservation) -> ChatCompletionToolMessageParam:
-    return WorkflowOperations._to_model_message(object(), observation)
+from app.core.workflow.node_helper.tool_observation_projection import (
+    to_tool_model_message as _to_message,
+)
 
 
 def test_success_message_only_contains_output_or_success_fallback() -> None:

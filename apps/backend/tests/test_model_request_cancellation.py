@@ -10,17 +10,17 @@ from openai import APITimeoutError, AsyncOpenAI
 
 from app.config.constant import Constant
 from app.core.llm_provider.openai_model import OpenAIChatModel
-from app.core.runtime.conversation_run_cancellation_registry import (
+from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     ConversationRunCancellationRegistry,
 )
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming_module
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import model_node, structured_output_node
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.core.workflow.run_state_machine import RunTransition
+from tests.runtime_context_stub import run_state_stub, runtime_stub
 
 
 class BlockingBody(httpx.AsyncByteStream):
@@ -142,40 +142,29 @@ def bind_node(monkeypatch, model):
         load_message=lambda: [],
         save_model_response=save,
     )
-    runtime = SimpleNamespace(
-        run=SimpleNamespace(id=7),
+
+    def transition_run(_run_id, transition, **kwargs):
+        if transition is RunTransition.CANCEL:
+            cancellations.append(kwargs)
+        return SimpleNamespace(status=transition.spec.target.value)
+
+    runtime = runtime_stub(
+        run=SimpleNamespace(id=7, task_id=1),
+        task=SimpleNamespace(id=1, workspace_id=1),
         model=model,
         step_limit=3,
-        thinking_channel="",
         usage_stats=ConversationRunUsageStats(),
-        structured_output=None,
-        batch=ToolBatch(),
-        operations=SimpleNamespace(
-            get_current_task=lambda: SimpleNamespace(id=1, workspace_id=1),
-            get_current_run=lambda: SimpleNamespace(id=7),
-            get_current_workspace=lambda: SimpleNamespace(id=1),
-            is_current_run_cancelled=lambda: registry.is_cancelled(7),
-            cancel_run_if_running=lambda **kw: cancellations.append(kw),
-            allows_tools=(),
-            all_vaild_tools=[],
-            vaild_tool_name=lambda _name: True,
-            task_tool_schemas=[],
-        ),
+        run_state=run_state_stub(transition=transition_run),
+        task_space=SimpleNamespace(take_runtime_notices=lambda **kw: None),
     )
+    runtime.is_cancelled = lambda: registry.is_cancelled(7)
     for module in (model_node, structured_output_node):
         monkeypatch.setattr(module, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(model_node, "_message_context", lambda: context)
     monkeypatch.setattr(streaming_module, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(streaming_module, "_message_context", lambda: context)
     monkeypatch.setattr(structured_output_node, "_message_context", lambda: context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: lambda event: None)
-    monkeypatch.setattr(
-        task_runtime_spaces,
-        "get_or_create",
-        lambda task_id: SimpleNamespace(
-            take_runtime_notices=lambda **kw: None,
-        ),
-    )
+    monkeypatch.setattr(streaming_module, "emit", lambda event: None)
     state = ReactExecutionState(
         step_count=0,
         tool_error_count=0,
@@ -185,6 +174,7 @@ def bind_node(monkeypatch, model):
         registry=registry,
         state=state,
         runtime=runtime,
+        context=context,
         snapshots=snapshots,
         memberships=memberships,
         cancellations=cancellations,
@@ -256,16 +246,17 @@ async def test_cancel_settles_after_stream_close_and_part_flush(monkeypatch, can
         order.append("cancel_tools")
         return result
 
-    original_cancel_run = bound.runtime.operations.cancel_run_if_running
+    original_transition_run = bound.runtime.run_state.transition
 
-    def cancel_run(**kwargs):
-        assert order[-1] == "cancel_tools"
-        order.append("cancel_run")
-        original_cancel_run(**kwargs)
+    def cancel_run(run_id, transition, **kwargs):
+        if transition is RunTransition.CANCEL:
+            assert order[-1] == "cancel_tools"
+            order.append("cancel_run")
+        return original_transition_run(run_id, transition, **kwargs)
 
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: project)
+    monkeypatch.setattr(streaming_module, "emit", project)
     monkeypatch.setattr(streaming_module.StreamingPartStateMachine, "cancel", cancel_tools)
-    bound.runtime.operations.cancel_run_if_running = cancel_run
+    bound.runtime.run_state.transition = cancel_run
     driver = asyncio.create_task(model_node._model_node(bound.state))
     try:
         await asyncio.wait_for(body.reading.wait(), 1)
@@ -361,10 +352,15 @@ async def test_completed_run_structured_branch_ignores_late_cancel(monkeypatch, 
     body = BlockingCompletionBody(boundary=boundary)
     model = sdk_model(body)
     bound = bind_node(monkeypatch, model)
-    bound.runtime.structured_output = SimpleNamespace(name="result", json_schema={"type": "object"})
+    bound.runtime.profile = SimpleNamespace(
+        structured_output=SimpleNamespace(name="result", json_schema={"type": "object"}),
+        max_steps=10,
+    )
     bound.runtime.structured_output_messages = [{"role": "assistant", "content": "自然回答"}]
     updates = []
-    bound.runtime.operations.update_completed_result = lambda **kwargs: updates.append(kwargs)
+    bound.runtime.run_state.update_completed_result = lambda _run_id, **kwargs: updates.append(
+        kwargs
+    )
     driver = asyncio.create_task(structured_output_node._structured_output_node(bound.state))
     try:
         await asyncio.wait_for(body.reading.wait(), 1)
@@ -393,11 +389,12 @@ async def test_cancel_during_input_resolution_does_not_open_request(monkeypatch)
     model = sdk_model(body)
     bound = bind_node(monkeypatch, model)
 
-    def resolve(messages, **kwargs):
+    def load_message():
+        # 附件解析已收口到 ``load_message``：取消发生在取上下文这条边界上。
         bound.registry.request_cancel(7)
-        return messages
+        return []
 
-    monkeypatch.setattr(model_node, "resolve_messages_for_model", resolve)
+    monkeypatch.setattr(bound.context, "load_message", load_message)
     try:
         with pytest.raises(RunStopped):
             await model_node._model_node(bound.state)

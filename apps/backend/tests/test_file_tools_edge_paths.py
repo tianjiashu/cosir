@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.tool_handler.move_tool import (
     MOVE_FILE_DESCRIPTION,

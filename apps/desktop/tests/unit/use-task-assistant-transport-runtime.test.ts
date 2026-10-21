@@ -25,10 +25,8 @@ function TransportStateProbe() {
 function RuntimeHarness() {
   const runtime = useTaskAssistantTransportRuntime(501, {
     initialState: INITIAL_STATE,
-    api: "http://127.0.0.1:1/assistant",
-    resumeApi: "http://127.0.0.1:1/assistant/attach",
+    baseUrl: "http://127.0.0.1:1",
     headers: () => ({}),
-    body: () => ({}),
   });
   return createElement(
     AssistantRuntimeProvider,

@@ -5,6 +5,12 @@ type FrontendLog = {
   data?: Record<string, unknown>;
 };
 
+/** Task 级业务命令端点：发送、编辑、恢复与用户决定（attach / state 不算命令）。 */
+const TASK_COMMAND_PATH = /\/tasks\/\d+\/(?:messages(?:\/[^/]+\/edit)?|resume|decisions)$/;
+function isTaskCommand(url: string): boolean {
+  return TASK_COMMAND_PATH.test(new URL(url).pathname);
+}
+
 test.beforeEach(async ({ request }) => {
   await request.post("http://127.0.0.1:8000/__test__/reset");
 });
@@ -17,7 +23,7 @@ test("新对话 Assistant Transport 被拒绝时不导航、不丢输入并清�
       JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
     );
   });
-  await page.route("http://127.0.0.1:8000/assistant", async (route) => {
+  await page.route("http://127.0.0.1:8000/tasks/*/messages", async (route) => {
     await route.fulfill({
       status: 409,
       contentType: "application/json",
@@ -54,11 +60,11 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
       JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
     );
   });
-  const assistantRequests: Array<{ body: Record<string, unknown>; status: number }> = [];
+  const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
   page.on("response", (response) => {
-    if (!response.url().endsWith("/assistant")) return;
-    const body = response.request().postDataJSON() as Record<string, unknown>;
-    assistantRequests.push({ body, status: response.status() });
+    if (!isTaskCommand(response.url())) return;
+    const body = (response.request().postDataJSON() ?? {}) as Record<string, unknown>;
+    assistantRequests.push({ url: response.url(), body, status: response.status() });
   });
   await page.route("http://127.0.0.1:8000/model-configs", async (route) => {
     await route.fulfill({
@@ -108,15 +114,12 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await expect(page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "你好" })).toBeVisible();
   await expect(page.getByRole("button", { name: "刷新工作区" })).toHaveCount(0);
   expect(assistantRequests[0]?.status).toBe(200);
-  expect(assistantRequests[0]?.body.workspaceId).toBe(7);
-  expect(assistantRequests[0]?.body.modelConfigId).toBe(1);
-  expect(assistantRequests[0]?.body.taskId).toBe(42);
-  expect(assistantRequests[0]?.body.commands).toHaveLength(2);
-  expect((assistantRequests[0]?.body.commands as Array<{ message?: { parts?: Array<{ text?: string }> } }>)[0]?.message?.parts?.[0]?.text).toBe("你好");
-  expect((assistantRequests[0]?.body.commands as Array<{ type?: string; name?: string; payload?: { ban_tools?: string[] } }>)[1]).toMatchObject({
-    type: "custom",
-    name: "ban-tools",
-    payload: { ban_tools: ["read_file"] },
+  expect(assistantRequests[0]?.url).toMatch(/\/tasks\/42\/messages$/);
+  expect(assistantRequests[0]?.body).toMatchObject({
+    message: { role: "user", parts: [{ type: "text", text: "你好" }] },
+    modelConfigId: 1,
+    banTools: ["read_file"],
+    delivery: "immediate",
   });
   await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("cosir:tool-group-selection:task:42"))).toBe(
@@ -128,11 +131,9 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await expect(page.getByRole("button", { name: "发送", exact: true })).toBeVisible();
 
   const messageInput = page.getByLabel("消息输入");
-  const secondResponsePromise = page.waitForResponse((response) => {
-    if (!response.url().endsWith("/assistant") || response.request().method() !== "POST") return false;
-    const body = response.request().postDataJSON() as { taskId?: number };
-    return body.taskId === 42;
-  });
+  const secondResponsePromise = page.waitForResponse((response) => (
+    response.url().endsWith("/tasks/42/messages") && response.request().method() === "POST"
+  ));
   await messageInput.fill("请继续");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
@@ -142,13 +143,9 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   const streamBody = await (await request.get(streamLogUrl)).text();
   await expect.poll(() => assistantRequests.length).toBe(2);
   expect(assistantRequests[1]?.status).toBe(200);
-  expect(assistantRequests[1]?.body.taskId).toBe(42);
+  expect(assistantRequests[1]?.url).toMatch(/\/tasks\/42\/messages$/);
   expect(assistantRequests[1]?.body.state).toBeUndefined();
-  expect(assistantRequests[1]?.body.commands).toContainEqual(expect.objectContaining({
-    type: "custom",
-    name: "ban-tools",
-    payload: { ban_tools: ["read_file"] },
-  }));
+  expect(assistantRequests[1]?.body.banTools).toEqual(["read_file"]);
   expect(streamBody).toContain('"kind":"mutation"');
   expect(streamBody).toContain('"kind":"append-text"');
   expect(streamBody).toContain("streaming response");
@@ -169,8 +166,8 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   const telemetry = await (await request.get("http://127.0.0.1:8000/__test__/telemetry")).json() as {
     clientCancelCount: number;
   };
-  // 新会话首条命令在 accepted barrier 后主动关闭订阅；测试服务统计连接关闭次数，不代表 Run 被取消。
-  expect(telemetry.clientCancelCount).toBe(1);
+  // 命令回执是 JSON，不再携带需要主动关闭的订阅；正常完成的 attach 流不计入连接中断。
+  expect(telemetry.clientCancelCount).toBe(0);
 });
 
 test("任务页面重挂载时自动恢复未结束的 run", async ({ page, request }) => {
@@ -240,7 +237,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
     );
   });
 
-  const assistantRequests: Array<{ body: Record<string, unknown>; status: number }> = [];
+  const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
   const assistantStateRequests: string[] = [];
   const attachRequests: string[] = [];
   page.on("request", (request) => {
@@ -248,9 +245,10 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
     if (request.url().endsWith("/assistant/attach") && request.method() === "POST") attachRequests.push(request.url());
   });
   page.on("response", (response) => {
-    if (!response.url().endsWith("/assistant")) return;
+    if (!isTaskCommand(response.url())) return;
     assistantRequests.push({
-      body: response.request().postDataJSON() as Record<string, unknown>,
+      url: response.url(),
+      body: (response.request().postDataJSON() ?? {}) as Record<string, unknown>,
       status: response.status(),
     });
   });
@@ -281,7 +279,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await request.post("http://127.0.0.1:8000/__test__/fail-next-attach");
 
   const resumeResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/assistant") && response.request().method() === "POST"
+    response.url().endsWith("/tasks/102/resume") && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "继续运行" }).click();
   await expect((await resumeResponse).status()).toBe(200);
@@ -290,8 +288,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   // canonical snapshot, so a second attach is unnecessary and would only duplicate a finished run.
   await expect.poll(() => attachRequests.length).toBe(1);
   await expect.poll(() => assistantRequests.length).toBe(2);
-  expect(assistantRequests[1]?.body.runId).toBe(1);
-  expect(assistantRequests[1]?.body.commands).toHaveLength(0);
+  expect(assistantRequests[1]?.url).toMatch(/\/tasks\/102\/resume$/);
 
   await page.goto("/tasks/102");
   await expect(page.getByText("cancel-me", { exact: true })).toBeVisible();
@@ -301,7 +298,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await expect(page.getByText("after-stop", { exact: true })).toHaveCount(1);
   await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
   await expect.poll(() => assistantRequests.length).toBe(3);
-  expect(assistantRequests[2]?.body.commands).toHaveLength(2);
+  expect(assistantRequests[2]?.url).toMatch(/\/tasks\/102\/messages$/);
   await page.reload();
   await expect(page.getByText("after-stop", { exact: true })).toHaveCount(1);
   await expect.poll(() => assistantRequests.length).toBe(3);
@@ -359,10 +356,10 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
     );
   });
 
-  const assistantRequests: Array<{ body: Record<string, unknown>; status: number }> = [];
+  const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
   page.on("response", (response) => {
-    if (!response.url().endsWith("/assistant")) return;
-    assistantRequests.push({ body: response.request().postDataJSON() as Record<string, unknown>, status: response.status() });
+    if (!isTaskCommand(response.url())) return;
+    assistantRequests.push({ url: response.url(), body: (response.request().postDataJSON() ?? {}) as Record<string, unknown>, status: response.status() });
   });
 
   await page.goto("/tasks/103");
@@ -400,17 +397,18 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
   await expect(editInput).toHaveText("second");
   await editInput.fill("second-edited");
   const rerunResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/assistant") && response.request().method() === "POST"
+    response.url().endsWith("/messages/user-2/edit") && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "重跑" }).click();
   await expect((await rerunResponse).status()).toBe(200);
   await expect(page.getByText("second-edited", { exact: true })).toBeVisible();
   await expect.poll(() => assistantRequests.length).toBe(3);
 
-  const rerunCommand = (assistantRequests[2]?.body.commands as Array<{ sourceId?: string; message?: { parts?: Array<{ text?: string }> } }>)[0];
-  expect(rerunCommand?.sourceId).toBe("user-2");
-  expect(rerunCommand?.message?.parts?.[0]?.text).toBe("second-edited");
-  expect(assistantRequests[2]?.body.runId).toBe(2);
+  // 编辑按消息寻址：目标在路径里，请求体不携带 runId 或投递方式。
+  expect(assistantRequests[2]?.url).toMatch(/\/tasks\/103\/messages\/user-2\/edit$/);
+  expect(assistantRequests[2]?.body).toMatchObject({ message: { parts: [{ type: "text", text: "second-edited" }] } });
+  expect(assistantRequests[2]?.body.runId).toBeUndefined();
+  expect(assistantRequests[2]?.body.delivery).toBeUndefined();
   expect(assistantRequests[2]?.status).toBe(200);
 });
 
@@ -442,18 +440,16 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   const editInput = page.getByRole("textbox", { name: "编辑消息" });
   await editInput.fill("edit-failure");
   const failureRequest = page.waitForRequest((request) => (
-    request.url().endsWith("/assistant") && request.method() === "POST"
+    request.url().endsWith("/tasks/104/messages/user-2/edit") && request.method() === "POST"
   ));
   const failureResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/assistant") && response.request().method() === "POST"
+    response.url().endsWith("/tasks/104/messages/user-2/edit") && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "重跑" }).click();
   const failedRequestBody = (await failureRequest).postDataJSON() as {
-    commands: Array<{ sourceId?: string; message?: { parts?: Array<{ type?: string; text?: string }> } }>;
+    message?: { parts?: Array<{ type?: string; text?: string }> };
   };
-  const failedEditCommand = failedRequestBody.commands[0];
-  expect(failedEditCommand?.sourceId).toBe("user-2");
-  expect(failedEditCommand?.message?.parts?.find((part) => part.type === "text")?.text).toBe("edit-failure");
+  expect(failedRequestBody.message?.parts?.find((part) => part.type === "text")?.text).toBe("edit-failure");
   await expect((await failureResponse).status()).toBe(409);
 
   await expect(page.getByRole("dialog")).toContainText("编辑重跑被测试后端拒绝");

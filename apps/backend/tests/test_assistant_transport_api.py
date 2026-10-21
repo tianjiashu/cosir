@@ -10,19 +10,14 @@ from fastapi.routing import APIRoute
 
 from app.api.tasks_api import get_task
 from app.app import app
-from app.assistant_transport.assistant_api import (
-    assistant_transport_attach,
-    assistant_transport_state,
-)
-from app.assistant_transport.request import AddMessageCommand, AssistantAttachRequest
+from app.assistant_transport.assistant_api import assistant_transport_state
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
-from app.assistant_transport.service.conversation_run_command_service import (
-    _build_ordered_display_text,
-)
+from app.assistant_transport.request.task_command_request import _ordered_display_text
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
 )
 from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.conversation_run.workflow_session import WorkflowSession
 from app.service.depends import get_workspace_service
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -57,7 +52,7 @@ def test_ordered_display_text_encodes_image_between_text_parts() -> None:
     """Transport 入口必须把 composer 中图片位置编码进既有展示文本。"""
 
     image_id = "b" * 64
-    display_text = _build_ordered_display_text(
+    display_text = _ordered_display_text(
         [
             AssistantTextPart(type="text", text="前"),
             AssistantImagePart(type="image", image=f"cosir-attachment://{image_id}"),
@@ -72,7 +67,7 @@ def test_ordered_display_text_does_not_duplicate_image_marker_from_edit_text() -
     """编辑草稿已有图片 marker 时，附件 parts 不能再追加第二个 marker。"""
 
     image_id = "c" * 64
-    display_text = _build_ordered_display_text(
+    display_text = _ordered_display_text(
         [
             AssistantTextPart(type="text", text=f"前[[cosir-image:{image_id}]]后"),
             AssistantImagePart(type="image", image=f"cosir-attachment://{image_id}"),
@@ -80,27 +75,6 @@ def test_ordered_display_text_does_not_duplicate_image_marker_from_edit_text() -
     )
 
     assert display_text == f"前[[cosir-image:{image_id}]]后"
-
-
-@pytest.mark.parametrize(
-    ("run_id", "expected"),
-    [(None, "new"), (42, "edit")],
-)
-def test_assistant_command_batch_classifies_message_modes(
-    run_id: int | None,
-    expected: str,
-) -> None:
-    command = AddMessageCommand(
-        type="add-message",
-        commandId="command-1",
-        message={"role": "user", "parts": [{"type": "text", "text": "hello"}]},
-    )
-
-    assert TransportAssistantService.classify_run_command(command, run_id) == expected
-
-
-def test_assistant_command_batch_classifies_empty_resume() -> None:
-    assert TransportAssistantService.classify_run_command(None, 42) == "resume"
 
 
 def test_task_route_has_one_get_method() -> None:
@@ -160,77 +134,55 @@ def test_attach_route_is_separate_from_business_resume() -> None:
     assert routes[0].methods == {"POST"}
 
 
-@pytest.mark.asyncio
-async def test_attach_run_only_subscribes_existing_executor() -> None:
-    state = _snapshot(7, "running")
-
-    class _RunService:
-        def get_run(self, _run_id: int) -> object:
-            return SimpleNamespace(id=7, task_id=1, status="running")
-
+def _attach_service(state: dict[str, object]) -> TransportAssistantService:
     class _SnapshotService:
         def get_state(self, _task_id: int) -> dict[str, object]:
             return state
-
-    service = TransportAssistantService.__new__(TransportAssistantService)
-    service._run_service = _RunService()
-    service._snapshots = _SnapshotService()
 
     async def _stream_envelopes(*_args: object, **_kwargs: object):
         yield "data: {}\n\n"
 
+    service = TransportAssistantService.__new__(TransportAssistantService)
+    service._snapshots = _SnapshotService()
     service._stream = SimpleNamespace(stream_envelopes=_stream_envelopes)
+    return service
 
-    result = await service.attach_run(task_id=1, thread_id="conversation_run-1", run_id=7)
+
+def test_attach_subscribes_task_current_run() -> None:
+    """attach 只按 Task 订阅当前 Run，不需要也不接受 run_id。"""
+
+    result = _attach_service(_snapshot(7, "running")).attach(1)
 
     assert result.media_type == "text/event-stream"
     assert result.headers["X-Cosir-Task-Id"] == "1"
-    assert result.headers["X-Cosir-Thread-Id"] == "conversation_run-1"
 
 
-@pytest.mark.asyncio
-async def test_attach_run_rejects_terminal_run_even_when_snapshot_matches() -> None:
-    state = _snapshot(7, "cancelled")
-
-    class _RunService:
-        def get_run(self, _run_id: int) -> object:
-            return SimpleNamespace(id=7, task_id=1, status="cancelled")
-
-    class _SnapshotService:
-        def get_state(self, _task_id: int) -> dict[str, object]:
-            return state
-
-    service = TransportAssistantService.__new__(TransportAssistantService)
-    service._run_service = _RunService()
-    service._snapshots = _SnapshotService()
-
+def test_attach_without_any_run_is_conflict() -> None:
     with pytest.raises(HTTPException) as error:
-        await service.attach_run(task_id=1, thread_id="conversation_run-1", run_id=7)
+        _attach_service(_snapshot()).attach(1)
 
     assert error.value.status_code == 409
-    assert error.value.detail["error"]["code"] == "RUN_NOT_ATTACHABLE"
+    assert error.value.detail["error"]["code"] == "NO_RUN"
 
 
-@pytest.mark.asyncio
-async def test_attach_endpoint_rejects_business_commands() -> None:
-    class _TaskService:
-        def get_task(self, _task_id: int) -> object:
-            return object()
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/tasks/{task_id}/messages",
+        "/tasks/{task_id}/messages/{message_id}/edit",
+        "/tasks/{task_id}/resume",
+        "/tasks/{task_id}/decisions",
+        "/tasks/{task_id}/cancel",
+        "/tasks/{task_id}/tool-calls/{tool_call_id}/cancel",
+    ],
+)
+def test_task_commands_are_addressed_by_task(path: str) -> None:
+    """命令只对 Task 或消息寻址；统一入口 ``/assistant`` 与按 run 寻址的端点不复存在。"""
 
-    with pytest.raises(HTTPException) as error:
-        await assistant_transport_attach(
-            1,
-            AssistantAttachRequest(
-                commands=[{"type": "add-message"}],
-                taskId=1,
-                threadId="conversation_run-1",
-                runId=7,
-            ),
-            _TaskService(),
-            object(),  # type: ignore[arg-type]
-        )
-
-    assert error.value.status_code == 400
+    paths = {route.path for route in app.routes if isinstance(route, APIRoute)}
+    assert path in paths
+    assert "/assistant" not in paths
+    assert not any(p.startswith("/runs/") for p in paths)
 
 
 def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
@@ -324,41 +276,10 @@ async def test_state_endpoint_returns_nested_run_snapshot() -> None:
     }
 
 
-def test_settle_run_start_failure_cancels_active_run() -> None:
-    """执行器启动失败后，run 必须被收敛为终态，不能残留 active run。"""
-
-    cancelled: list[tuple[int, str]] = []
-
-    class _RunService:
-        def cancel_run_if_running(self, run_id: int, end_reason: str = "user_cancelled") -> object:
-            cancelled.append((run_id, end_reason))
-            return SimpleNamespace(id=run_id, task_id=1, status="cancelled")
-
-    service = TransportAssistantService.__new__(TransportAssistantService)
-    service._runs = _RunService()
-
-    service.settle_run_start_failure(7)
-
-    assert cancelled == [(7, "run_start_failed")]
-
-
-def test_settle_run_start_failure_swallows_settle_errors() -> None:
-    """收敛自身失败只记日志，不能覆盖原始启动异常。"""
-
-    class _RunService:
-        def cancel_run_if_running(self, *_args: object, **_kwargs: object) -> object:
-            raise RuntimeError("database unavailable")
-
-    service = TransportAssistantService.__new__(TransportAssistantService)
-    service._runs = _RunService()
-
-    service.settle_run_start_failure(7)
-
-
-async def test_task_run_operation_waits_without_blocking_event_loop(tmp_path: Path) -> None:
+async def test_task_gate_waits_without_blocking_event_loop(tmp_path: Path) -> None:
     """闸门排队必须发生在工作线程：等待期间事件循环仍要能调度其它协程。
 
-    ``task_run_operation`` 要跨越 ``prepare_run_start`` 的 ``await``；若用同步
+    Task 闸门要跨越 ``WorkflowSession`` 内的 ``await``；若用同步
     ``operation()`` 在事件循环线程上抢锁，同一 task 的并发请求会把事件循环整体卡在
     ``acquire`` 上，而持锁者又必须回到事件循环才能释放闸门，等待者遂只能等满超时。
     本用例断言等待期间心跳协程仍在推进。
@@ -369,7 +290,6 @@ async def test_task_run_operation_waits_without_blocking_event_loop(tmp_path: Pa
     root.mkdir()
     workspace = workspace_service.create_workspace("gate-test", str(root))
     task = workspace_service.create_task(workspace.id, "gate-test")
-    service = TransportAssistantService.__new__(TransportAssistantService)
     space = task_runtime_spaces.get_or_create(task.id)
     acquired = threading.Event()
     release = threading.Event()
@@ -395,7 +315,7 @@ async def test_task_run_operation_waits_without_blocking_event_loop(tmp_path: Pa
     try:
         assert await asyncio.to_thread(acquired.wait, 3)
         beating = asyncio.create_task(_heartbeat())
-        async with service.task_run_operation(task_id=task.id):
+        async with WorkflowSession._gate(task.id):
             # 必须由心跳推进到主动释放，不能依靠持锁线程的保底超时。
             assert ticks == 5
     finally:

@@ -16,22 +16,20 @@ import {
 } from "@/lib/assistant/transport-frame-store";
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
 import { cancelTask } from "@/lib/assistant/cancel-task";
-import { parseTransportState } from "@/lib/assistant/snapshot-validation";
+import type { TaskCommandAccepted } from "@/lib/assistant/task-commands";
 import { parseHttpError } from "@/lib/http/errors";
 
 export type TaskAssistantTransportOptions = {
   initialState: TransportState;
   adapters?: ExternalStoreAdapter<FrameStoreItem>["adapters"];
-  api: string;
-  resumeApi: string;
+  /** 本机后端基地址；attach / state 端点按 taskId 拼接。 */
+  baseUrl: string;
   headers: () => Promise<Record<string, string>> | Record<string, string>;
-  body: () => Promise<Record<string, unknown>> | Record<string, unknown>;
-  prepareSendCommandsRequest?: (body: {
-    commands: readonly unknown[];
-    state: TransportState;
-    config?: unknown;
-    parentId?: string | null;
-  }) => Promise<Record<string, unknown>> | Record<string, unknown>;
+  /**
+   * 提交一条用户消息（`sourceId` 存在即编辑重跑），返回后端回执。宿主负责请求体组装与
+   * 端点选择；本 hook 只负责 pending 展示、回执 snapshot 导入与后续 attach。只读 runtime 不提供。
+   */
+  submitMessage?: (command: UserAddMessageCommand) => Promise<TaskCommandAccepted>;
   onResponse?: (response: Response) => void;
   onFinish?: (status: { targetRunId: number | null; targetRunStatus: string | null }) => void;
   onError?: (
@@ -120,22 +118,21 @@ function useTaskAssistantTransportAdapter(
     if (activeStreamRef.current === callbacks) store.flushScheduledPublication();
   }, [store]);
 
-  const openStream = useCallback(async (
-    url: string,
-    requestBody: Record<string, unknown>,
-    commands: readonly unknown[],
-  ) => {
+  const attachApi = `${options.baseUrl}/tasks/${taskId}/assistant/attach`;
+  const stateApi = `${options.baseUrl}/tasks/${taskId}/assistant/state`;
+
+  /** attach 只订阅 Task 当前 Run，不携带请求体，也不触发业务执行。 */
+  const openStream = useCallback(async (commands: readonly unknown[]) => {
     closeActiveStream();
     const controller = new AbortController();
     const callbacks: StreamCallbacks = { commands, controller, performanceStarted: false };
     activeStreamRef.current = callbacks;
     let accepted = false;
     try {
-      const response = await fetch(url, {
+      const response = await fetch(attachApi, {
         cache: "no-store",
         method: "POST",
         headers: await optionsRef.current.headers(),
-        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -181,77 +178,38 @@ function useTaskAssistantTransportAdapter(
         clearPendingCommands: () => store.clearPendingCommands(commands as UserAddMessageCommand[]),
       });
     }
-  }, [closeActiveStream, readSse, store]);
+  }, [attachApi, closeActiveStream, readSse, store]);
 
-  const sendCommands = useCallback(async (commands: readonly unknown[]) => {
-    let requestBody: Record<string, unknown>;
+  const sendMessage = useCallback(async (command: UserAddMessageCommand) => {
+    const submit = optionsRef.current.submitMessage;
+    if (!submit) throw new Error("只读 Transport runtime 不接受消息提交");
+    store.setPendingCommands([command]);
     try {
-      const body = await optionsRef.current.body();
-      requestBody = optionsRef.current.prepareSendCommandsRequest
-        ? await optionsRef.current.prepareSendCommandsRequest({
-            ...body,
-            commands,
-            state: store.getSnapshot().state,
-          })
-        : { ...body, commands };
+      const accepted = await submit(command);
+      store.clearPendingCommands([command]);
+      // 已有订阅接收提交事件，不能用较早的 HTTP 快照覆盖正在到达的流式帧。
+      if (!activeStreamRef.current || !accepted.queued) {
+        if (!activeStreamRef.current) store.importState(accepted.state);
+        const run = accepted.state.runs.find((candidate) => candidate.runId === accepted.state.current_run_id);
+        if (run && ["pending", "running", "waiting_for_input"].includes(run.status)) void openStream([]);
+      }
     } catch (error) {
-      // 请求尚未发出（如附件已失效）：与后端拒绝同属 request-rejected，交给同一个 onError
-      // 恢复草稿并提示；否则这里的异常会脱离错误通道，变成无人处理的 rejection。
+      // 请求未发出（如附件已失效）与后端拒绝同属 request-rejected，交给同一个 onError 恢复草稿并提示。
+      store.clearPendingCommands([command]);
       await optionsRef.current.onError?.(error instanceof Error ? error : new Error(String(error)), {
-        commands,
+        commands: [command],
         phase: "request-rejected",
         updateState: (updater) => store.importState(updater(store.getSnapshot().state)),
-        clearPendingCommands: () => store.clearPendingCommands(commands.filter(isAddMessageCommand) as UserAddMessageCommand[]),
-      });
-      return;
-    }
-    const addCommands = commands.filter(isAddMessageCommand) as UserAddMessageCommand[];
-    if (addCommands.length > 0) store.setPendingCommands(addCommands);
-    let acceptedByBackend = false;
-    try {
-      const response = await fetch(optionsRef.current.api, {
-        cache: "no-store",
-        method: "POST", headers: await optionsRef.current.headers(),
-        body: JSON.stringify(requestBody),
-      });
-      if (!response.ok) throw await parseHttpError(response);
-      acceptedByBackend = true;
-      const accepted = await response.json();
-      const state = parseTransportState(accepted.state);
-      store.clearPendingCommands(addCommands);
-      // 已有订阅接收提交事件，不能用较早的 HTTP 快照覆盖正在到达的流式帧。
-      if (!activeStreamRef.current || accepted.queued === false) {
-        if (!activeStreamRef.current) store.importState(state);
-        const run = state.runs.find((candidate) => candidate.runId === state.current_run_id);
-        if (run && ["pending", "running", "waiting_for_input"].includes(run.status)) {
-          void openStream(optionsRef.current.resumeApi, {
-            ...await optionsRef.current.body(), commands: [], runId: run.runId,
-            taskId, threadId: `conversation_run-${taskId}`,
-          }, []);
-        }
-      }
-      optionsRef.current.onResponse?.(response);
-    } catch (error) {
-      store.clearPendingCommands(addCommands);
-      await optionsRef.current.onError?.(error instanceof Error ? error : new Error(String(error)), {
-        commands, phase: acceptedByBackend ? "accepted-stream-failed" : "request-rejected",
-        updateState: (updater) => store.importState(updater(store.getSnapshot().state)),
-        clearPendingCommands: () => store.clearPendingCommands(addCommands),
+        clearPendingCommands: () => store.clearPendingCommands([command]),
       });
     }
-  }, [openStream, store, taskId]);
+  }, [openStream, store]);
 
   const attach = useCallback(async () => {
     const state = store.getSnapshot();
-    const body = await optionsRef.current.body();
-    const runId = state.targetRunId ?? state.state.current_run_id;
-    if (runId === null) return;
-    await openStream(
-      optionsRef.current.resumeApi,
-      { ...body, commands: [], runId, taskId, threadId: `conversation_run-${taskId}` },
-      [],
-    );
-  }, [openStream, store, taskId]);
+    if ((state.targetRunId ?? state.state.current_run_id) === null) return;
+    await openStream([]);
+  }, [openStream, store]);
 
   useEffect(() => {
     options.onAttachReady?.(attach);
@@ -264,12 +222,10 @@ function useTaskAssistantTransportAdapter(
 
   useEffect(() => () => closeActiveStream(), [closeActiveStream]);
 
+  // 编辑与新消息共用提交路径：`sourceId` 随命令进入宿主，由宿主选择编辑端点。
   const onNew = useCallback((message: AppendMessage) => {
-    return sendCommands([toAddMessageCommand(message)]);
-  }, [sendCommands]);
-  const onEdit = useCallback((message: AppendMessage) => {
-    return sendCommands([toAddMessageCommand(message)]);
-  }, [sendCommands]);
+    return sendMessage(toAddMessageCommand(message));
+  }, [sendMessage]);
   const onCancel = useCallback(async () => {
     const commands = store.getSnapshot().pendingCommands;
     const result = await cancelTask(taskId);
@@ -287,12 +243,13 @@ function useTaskAssistantTransportAdapter(
       await attach();
       return;
     }
-    const response = await fetch(`${optionsRef.current.api.replace(/\/assistant$/, "")}/tasks/${taskId}/assistant/state`, {
+    const response = await fetch(stateApi, {
+      cache: "no-store",
       headers: await optionsRef.current.headers(),
     });
-    if (!response.ok) throw new Error(`Assistant snapshot request failed: ${response.status}`);
+    if (!response.ok) throw await parseHttpError(response);
     store.importState(await response.json() as TransportState);
-  }, [store, taskId]);
+  }, [attach, stateApi, store]);
 
   const adapter = useMemo<ExternalStoreAdapter<FrameStoreItem>>(() => {
     const base = {
@@ -301,7 +258,7 @@ function useTaskAssistantTransportAdapter(
       isDisabled: options.readonly,
       isSendDisabled: options.readonly,
       state: view.state as unknown as ReadonlyJSONValue,
-      ...(options.readonly ? {} : { onNew, onEdit, onCancel }),
+      ...(options.readonly ? {} : { onNew, onEdit: onNew, onCancel }),
       onRefetchThread,
       onLoadExternalState: (state: unknown) => {
         if (isTransportStateLike(state)) store.importState(state);
@@ -312,7 +269,7 @@ function useTaskAssistantTransportAdapter(
     // 库类型把 onNew 建模为 writable runtime 的必填项；readonly runtime 有意在运行时省略，
     // 使 Assistant UI 不暴露写入处理器。
     return base as unknown as ExternalStoreAdapter<FrameStoreItem>;
-  }, [onCancel, onEdit, onNew, onRefetchThread, options.adapters, options.readonly, store, view]);
+  }, [onCancel, onNew, onRefetchThread, options.adapters, options.readonly, store, view]);
 
   return adapter;
 }
@@ -339,10 +296,6 @@ export function useTaskAssistantReadonlyTransportRuntime(
 ) {
   const adapter = useTaskAssistantTransportAdapter(taskId, options);
   return useExternalStoreRuntime(adapter);
-}
-
-function isAddMessageCommand(value: unknown): value is UserAddMessageCommand {
-  return typeof value === "object" && value !== null && (value as { type?: unknown }).type === "add-message";
 }
 
 export function toAddMessageCommand(message: AppendMessage): UserAddMessageCommand {

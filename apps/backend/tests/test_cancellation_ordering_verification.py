@@ -25,15 +25,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from app.assistant_transport.event import (
-    RunInitializedEvent,
-    RunStatusChangedEvent,
-    TerminalOutputDeltaData,
-    ToolCallCreatedEvent,
-    ToolCallRuntimeUpdateEvent,
-    ToolCallStatusChangedEvent,
-    UserInputAppendedEvent,
-)
+from app.assistant_transport.event import UserInputAppendedEvent
+from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
@@ -43,7 +36,15 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.assistant_transport.stream import TransportFrame
-from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
+from app.core.events import (
+    RunInitializedEvent,
+    RunStatusChangedEvent,
+    TerminalOutputDeltaData,
+    ToolCallCreatedEvent,
+    ToolCallRuntimeUpdateEvent,
+    ToolCallStatusChangedEvent,
+)
+from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.tools.schemas import (
     ToolCall,
     ToolDefinition,
@@ -156,7 +157,7 @@ class _MemorySnapshotOwner:
     def apply_planned(self, event: Any) -> TransportFrame:
         import copy
 
-        mutations = tuple(event.plan(copy.deepcopy(self.state)))
+        mutations = tuple(plan_event(event, copy.deepcopy(self.state)))
         for mutation in mutations:
             parent: Any = self.state
             if not mutation.path:

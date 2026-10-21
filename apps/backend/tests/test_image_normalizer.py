@@ -3,13 +3,16 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from app.assistant_transport.event import RunInitializedEvent, UserInputAppendedEvent
+from app.assistant_transport.event import UserInputAppendedEvent
+from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
-from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
+from app.core.events import RunInitializedEvent
 from app.service.attachment.image_normalizer import (
     ImageNormalizationError,
     normalize_image,
 )
+from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
+
 
 def test_normalize_rejects_unsupported_bmp(tmp_path: Path) -> None:
     source = tmp_path / "source.bmp"
@@ -57,7 +60,7 @@ def test_normalize_uses_unified_image_policy_as_format_source() -> None:
 
 def test_run_initialized_creates_empty_user_skeleton_and_input_event_projects_image() -> None:
     initialized = RunInitializedEvent(task_id=1, run_id=1)
-    initialized_snapshot = initialized.plan(empty_snapshot())[0].value
+    initialized_snapshot = plan_event(initialized, empty_snapshot())[0].value
     assert initialized_snapshot["messages"][0]["parts"] == []
 
     input_event = UserInputAppendedEvent(
@@ -67,7 +70,7 @@ def test_run_initialized_creates_empty_user_skeleton_and_input_event_projects_im
     )
     input_snapshot = dict(initialized_snapshot)
     input_snapshot["runs"] = [initialized_snapshot]
-    mutations = input_event.plan(input_snapshot)
+    mutations = plan_event(input_event, input_snapshot)
     assert mutations[0].value == [
         {"type": "image", "image": "cosir-attachment://" + "1" * 64}
     ]

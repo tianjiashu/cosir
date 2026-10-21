@@ -15,6 +15,7 @@ from app.core.workflow.node_helper import tool_observation_projection as project
 from app.core.workflow.nodes import tools_node, wait_user_node
 from app.core.workflow.tool_continuation import freeze_tool_continuation, restore_tool_batch
 from app.models.conversation_run_progress import ToolContinuation
+from tests.runtime_context_stub import runtime_stub
 from tests.sdk_fixtures import sdk_completion
 
 
@@ -51,15 +52,15 @@ def test_assistant_message_filters_identity_and_registry_only() -> None:
 
 def test_streaming_preview_only_creates_allowed_registered_tool(monkeypatch) -> None:
     events = []
-    operations = SimpleNamespace(
-        vaild_tool_name=lambda name: name in {"read_file", "write_file"},
+    runtime = SimpleNamespace(
         allows_tools={"read_file"},
-        all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
+        tool_definitions={
+            "read_file": SimpleNamespace(name="read_file", display=None),
+            "write_file": SimpleNamespace(name="write_file", display=None),
+        },
     )
-    monkeypatch.setattr(
-        streaming, "_runtime_context", lambda: SimpleNamespace(operations=operations)
-    )
-    monkeypatch.setattr(streaming, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(streaming, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(streaming, "emit", events.append)
     parts = streaming.StreamingPartStateMachine(task_id=1, run_id=2, step_id="step-1")
 
     assert parts.create_tool_call("visible", "read_file") is True
@@ -72,24 +73,18 @@ def test_tools_node_decodes_arguments_and_preserves_approved_decision(monkeypatc
     events = []
     decision = UserDecision(request_id="review-1", kind=UserDecisionKind.APPROVE)
 
-    async def run_calls(_task_id, calls, _step_id, _loop):
+    async def run_calls(_rc, calls, _step_id):
         received.extend(calls)
-        return SimpleNamespace(
-            observations=[
-                ToolObservation(
-                    tool_name="read_file", status="success", tool_call_id="call-1", content="ok"
-                )
-            ]
-        )
+        return [
+            ToolObservation(
+                tool_name="read_file", status="success", tool_call_id="call-1", content="ok"
+            )
+        ]
 
-    operations = SimpleNamespace(
-        get_current_task=lambda: SimpleNamespace(id=3),
-        get_current_run=lambda: SimpleNamespace(id=4, task_id=3),
-        all_vaild_tools=[SimpleNamespace(name="read_file", need_HIL=False)],
-        run_tool_calls=run_calls,
-    )
-    runtime = SimpleNamespace(
-        operations=operations,
+    runtime = runtime_stub(
+        task=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, task_id=3),
+        tool_definitions={"read_file": SimpleNamespace(name="read_file", need_HIL=False)},
         batch=ToolBatch(
             calls=[_raw(arguments='{"path":"a.py"}')],
             valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")},
@@ -97,7 +92,8 @@ def test_tools_node_decodes_arguments_and_preserves_approved_decision(monkeypatc
         ),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
-    monkeypatch.setattr(tools_node, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(tools_node, "run_tool_batch", run_calls)
+    monkeypatch.setattr(tools_node, "emit", events.append)
     patch = asyncio.run(tools_node._tools_node(_state()))
 
     assert len(received) == 1
@@ -116,22 +112,18 @@ def test_banned_registered_call_reaches_executor_without_tool_card(monkeypatch) 
     received = []
     events = []
 
-    async def run_calls(_task_id, calls, _step_id, _loop):
+    async def run_calls(_rc, calls, _step_id):
         received.extend(calls)
-        return SimpleNamespace(observations=[])
+        return []
 
-    operations = SimpleNamespace(
-        get_current_task=lambda: SimpleNamespace(id=3),
-        get_current_run=lambda: SimpleNamespace(id=4, task_id=3),
-        all_vaild_tools=[
-            SimpleNamespace(name="read_file", need_HIL=False),
-            SimpleNamespace(name="write_file", need_HIL=False),
-        ],
-        run_tool_calls=run_calls,
-    )
     banned = {**_raw("banned"), "function": {"name": "write_file", "arguments": "{}"}}
-    runtime = SimpleNamespace(
-        operations=operations,
+    runtime = runtime_stub(
+        task=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, task_id=3),
+        tool_definitions={
+            "read_file": SimpleNamespace(name="read_file", need_HIL=False),
+            "write_file": SimpleNamespace(name="write_file", need_HIL=False),
+        },
         batch=ToolBatch(
             calls=[_raw("visible"), banned],
             valid_tool_calls={
@@ -141,7 +133,8 @@ def test_banned_registered_call_reaches_executor_without_tool_card(monkeypatch) 
         ),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
-    monkeypatch.setattr(tools_node, "get_stream_writer", lambda: events.append)
+    monkeypatch.setattr(tools_node, "run_tool_batch", run_calls)
+    monkeypatch.setattr(tools_node, "emit", events.append)
 
     asyncio.run(tools_node._tools_node(_state()))
 
@@ -150,28 +143,24 @@ def test_banned_registered_call_reaches_executor_without_tool_card(monkeypatch) 
 
 
 def test_unmarked_wait_request_cannot_suspend_a_multi_call_batch(monkeypatch) -> None:
-    async def run_calls(_task_id, _calls, _step_id, _loop):
-        return SimpleNamespace(
-            observations=[
-                ToolObservation(
-                    tool_name="read_file",
-                    status="success",
-                    tool_call_id="call-1",
-                    user_input_request=UserInputRequest(request_id="review", kind="approval"),
-                )
-            ]
-        )
+    async def run_calls(_rc, _calls, _step_id):
+        return [
+            ToolObservation(
+                tool_name="read_file",
+                status="success",
+                tool_call_id="call-1",
+                user_input_request=UserInputRequest(request_id="review", kind="approval"),
+            )
+        ]
 
-    runtime = SimpleNamespace(
-        operations=SimpleNamespace(
-            get_current_task=lambda: SimpleNamespace(id=3),
-            get_current_run=lambda: SimpleNamespace(id=4, task_id=3),
-            all_vaild_tools=[SimpleNamespace(name="read_file", need_HIL=False)],
-            run_tool_calls=run_calls,
-        ),
+    runtime = runtime_stub(
+        task=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, task_id=3),
+        tool_definitions={"read_file": SimpleNamespace(name="read_file", need_HIL=False)},
         batch=ToolBatch(calls=[_raw("call-1"), _raw("call-2")]),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(tools_node, "run_tool_batch", run_calls)
 
     with pytest.raises(ValueError, match="待决请求必须独占工具批次"):
         asyncio.run(tools_node._tools_node(_state()))
@@ -179,20 +168,22 @@ def test_unmarked_wait_request_cannot_suspend_a_multi_call_batch(monkeypatch) ->
 
 def test_malformed_json_never_reaches_tool_executor(monkeypatch) -> None:
     called = []
-    operations = SimpleNamespace(
-        get_current_task=lambda: SimpleNamespace(id=3),
-        get_current_run=lambda: SimpleNamespace(id=4, task_id=3),
-        all_vaild_tools=[SimpleNamespace(name="read_file", need_HIL=False)],
-        run_tool_calls=lambda *args: called.append(args),
-    )
-    runtime = SimpleNamespace(
-        operations=operations,
+
+    async def run_calls(_rc, calls, _step_id):
+        called.extend(calls)
+        return []
+
+    runtime = runtime_stub(
+        task=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, task_id=3),
+        tool_definitions={"read_file": SimpleNamespace(name="read_file", need_HIL=False)},
         batch=ToolBatch(
             calls=[_raw(arguments='{"path":')],
             valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")},
         ),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(tools_node, "run_tool_batch", run_calls)
 
     asyncio.run(tools_node._tools_node(_state()))
 
@@ -227,7 +218,7 @@ def test_waiting_continuation_restores_only_projected_target() -> None:
 def test_waiting_card_is_persisted_before_live_event(monkeypatch) -> None:
     order = []
     runtime = SimpleNamespace(
-        operations=SimpleNamespace(get_current_run=lambda: SimpleNamespace(id=4, task_id=3)),
+        run=SimpleNamespace(id=4, task_id=3),
         batch=ToolBatch(
             valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")}
         ),
@@ -238,9 +229,7 @@ def test_waiting_card_is_persisted_before_live_event(monkeypatch) -> None:
         "_message_context",
         lambda: SimpleNamespace(add_message=lambda *_args, **_kwargs: order.append("persist")),
     )
-    monkeypatch.setattr(
-        projection, "get_stream_writer", lambda: lambda _event: order.append("event")
-    )
+    monkeypatch.setattr(projection, "emit", lambda _event: order.append("event"))
     projection.project_waiting_request(
         {
             "tool_call_id": "call-1",
@@ -277,22 +266,20 @@ def test_approval_replays_one_call_and_rejection_only_settles(monkeypatch) -> No
         "user_input_request": request,
     }
     runtime = SimpleNamespace(
-        operations=SimpleNamespace(
-            allows_tools={"read_file"},
-            get_current_run=lambda: SimpleNamespace(id=4),
-        ),
+        allows_tools={"read_file"},
+        run=SimpleNamespace(id=4),
         batch=ToolBatch(calls=[_raw(), _raw("call-2")], observations=[observation]),
         user_input_decision_handlers=SimpleNamespace(handle_rejection=lambda *_: None),
     )
     monkeypatch.setattr(wait_user_node, "_runtime_context", lambda: runtime)
     state = _state()
 
-    approved = wait_user_node.wait_user_node(
+    approved = wait_user_node.apply_user_decision(
         state, UserDecision(request_id="review-1", kind=UserDecisionKind.APPROVE)
     )
     approved_calls = [call["id"] for call in runtime.batch.calls]
     runtime.batch = ToolBatch(calls=[_raw(), _raw("call-2")], observations=[observation])
-    rejected = wait_user_node.wait_user_node(
+    rejected = wait_user_node.apply_user_decision(
         state, UserDecision(request_id="review-1", kind=UserDecisionKind.REJECT)
     )
 
@@ -306,14 +293,6 @@ def test_observation_persists_before_event_and_hides_unprojected_calls(monkeypat
     order = []
     runtime = SimpleNamespace(
         run=SimpleNamespace(id=4, task_id=3),
-        operations=SimpleNamespace(
-            get_current_run=lambda: SimpleNamespace(id=4, task_id=3),
-            to_tool_model_message=lambda obs: {
-                "role": "tool",
-                "tool_call_id": obs.tool_call_id,
-                "content": obs.content,
-            },
-        ),
         batch=ToolBatch(
             valid_tool_calls={
                 "visible": ValidToolCall(name="read_file", projection="projected"),
@@ -332,9 +311,7 @@ def test_observation_persists_before_event_and_hides_unprojected_calls(monkeypat
     monkeypatch.setattr(
         projection, "_message_context", lambda: SimpleNamespace(add_message=add_message)
     )
-    monkeypatch.setattr(
-        projection, "get_stream_writer", lambda: lambda event: order.append(event.tool_call_id)
-    )
+    monkeypatch.setattr(projection, "emit", lambda event: order.append(event.tool_call_id))
 
     def summary(call_id: str) -> dict:
         return {

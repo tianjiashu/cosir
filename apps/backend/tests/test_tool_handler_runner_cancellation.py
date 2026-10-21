@@ -27,7 +27,7 @@ from typing import ClassVar
 import pytest
 from pydantic import BaseModel
 
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext
 from app.core.tools.schemas.tool_output import (
     ProcessToolOutputChannel,

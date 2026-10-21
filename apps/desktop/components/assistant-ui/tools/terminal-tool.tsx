@@ -45,11 +45,12 @@ function shellBadge(value: unknown): string | null {
  * 增量；最终输出与退出码由 terminal 终态 display_data 收口。
  */
 type TerminalToolProps = ToolCallMessagePartProps & {
-  runId?: number | null;
+  /** 工具取消按 Task 寻址：后端命中 Task 当前执行中的这次调用。 */
+  taskId?: number;
   runCancelling?: boolean;
 };
 
-export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact, runId = null, runCancelling = false }: TerminalToolProps) {
+export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact, taskId, runCancelling = false }: TerminalToolProps) {
   const artifact = readToolArtifact(rawArtifact);
   const data = artifact.display_data ?? {};
   const argRecord = asRecord(args);
@@ -63,7 +64,7 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
   const timedOut = data.timed_out === true;
   const status = artifact.backendStatus;
   const isActive = status === "pending" || status === "running";
-  const canCancel = toolName === "execute_terminal" && status === "running" && runId !== null && !runCancelling;
+  const canCancel = toolName === "execute_terminal" && status === "running" && taskId !== undefined && !runCancelling;
   const [open, setOpen] = useToolDisclosure(status);
   const [cancellationPending, setCancellationPending] = useState(false);
   const [cancellationError, setCancellationError] = useState<string | null>(null);
@@ -80,7 +81,7 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
     setCancellationPending(true);
     setCancellationError(null);
 
-    const result = await cancelToolCall(runId, toolCallId);
+    const result = await cancelToolCall(taskId, toolCallId);
     if (result.kind === "signalled" || result.kind === "already_signalled") {
       // HTTP acknowledges only an in-process signal. Keep this UI-only pending
       // state until the canonical tool status in a Transport snapshot settles.

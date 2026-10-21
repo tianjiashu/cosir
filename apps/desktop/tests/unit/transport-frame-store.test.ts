@@ -389,7 +389,7 @@ describe("TransportFrameStore", () => {
 it("moves a queued message into its Run without duplicating its stable identity", () => {
   const queued: TransportMessage = { id: "q1", role: "user", parts: [{ type: "text", text: "later", status: "completed" }] };
   const initial = state([baseMessage("a1", "working")]);
-  initial.queued_messages = [queued];
+  initial.queued_messages = [{ ...queued, delivery: "immediate" }];
   const store = new TransportFrameStore(initial);
   expect(store.getSnapshot().items.filter((item) => item.kind === "canonical").map((item) => item.message.id)).toEqual(["a1", "q1"]);
   store.applyFrame({

@@ -9,15 +9,8 @@ from typing import Any
 
 import pytest
 
-from app.assistant_transport.event import (
-    RunInitializedEvent,
-    RunStatusChangedEvent,
-    TerminalOutputDeltaData,
-    ToolCallCreatedEvent,
-    ToolCallRuntimeUpdateEvent,
-    ToolCallStatusChangedEvent,
-    UserInputAppendedEvent,
-)
+from app.assistant_transport.event import UserInputAppendedEvent
+from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
@@ -29,6 +22,14 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import TransportFrame
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
+from app.core.events import (
+    RunInitializedEvent,
+    RunStatusChangedEvent,
+    TerminalOutputDeltaData,
+    ToolCallCreatedEvent,
+    ToolCallRuntimeUpdateEvent,
+    ToolCallStatusChangedEvent,
+)
 from app.core.tools.schemas import ToolObservation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
@@ -57,7 +58,7 @@ class _FakeStreamWriter:
 
 
 def _observation(**overrides: Any) -> ToolObservation:
-    """构造最小 ``ToolObservation``（供假 ``run_tool_calls`` 返回）。"""
+    """构造最小 ``ToolObservation``（供假工具批次执行返回）。"""
 
     base: dict[str, Any] = {
         "tool_name": "read_file",
@@ -100,7 +101,7 @@ class _MemorySnapshotOwner:
         return copy.deepcopy(self.state)
 
     def apply_planned(self, event: Any) -> TransportFrame:
-        mutations = tuple(event.plan(copy.deepcopy(self.state)))
+        mutations = tuple(plan_event(event, copy.deepcopy(self.state)))
         for mutation in mutations:
             parent: Any = self.state
             for key in mutation.path[:-1]:

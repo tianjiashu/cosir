@@ -351,13 +351,12 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
         TerminalStartTool,
         TerminalWriteTool,
     )
-    from app.core.workflow.workflow import ReactLikeWorkflow
     from app.service.terminal.terminal_session_service import TerminalSessionService
 
     # worker 路径只有宿主环境变量一个来源，测试沿用同一配置边界。
     monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(_worker_path()))
     terminal = TerminalSessionService(status_observer=lambda _change: None)
-    from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+    from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
     dependencies = ToolRuntimeDependencies(terminal_session_service=terminal)
     first = ToolExecutionContext(
@@ -399,7 +398,6 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
             .status
             == "success"
         )
-        await ReactLikeWorkflow().finalize_run(1)
         cancellation_registry.request_cancel(1)
         assert TerminalReadTool().execute(session_id, execution_context=first).status == "cancelled"
         # 第一个 Run 的执行释放取走 Task 信号；同一 Task 的后续 Run 复用终端不受影响。

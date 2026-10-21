@@ -9,14 +9,11 @@ from typing import Any
 import pytest
 
 import app.core.tools.tool_execute.tool_access_gate as gate_module
-from app.assistant_transport.event import (
-    ToolCallCreatedEvent,
-    ToolCallStatusChangedEvent,
-)
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
+from app.core.events import ToolCallCreatedEvent, ToolCallStatusChangedEvent
 from app.core.hook.hook_event import HookDecision
 from app.core.hook.hook_result import HookResult
 from app.core.tools.schemas import (
@@ -53,7 +50,7 @@ class _FakeStreamWriter:
 
 
 def _observation(**overrides: Any) -> ToolObservation:
-    """构造最小 ``ToolObservation``（供假 ``run_tool_calls`` 返回）。"""
+    """构造最小 ``ToolObservation``（供假工具批次执行返回）。"""
 
     base: dict[str, Any] = {
         "tool_name": "read_file",

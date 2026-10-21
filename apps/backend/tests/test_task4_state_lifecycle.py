@@ -14,6 +14,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
+from app.core.workflow.run_state_machine import RunTransition
 from app.models import ConversationRunStatus
 from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_record import ConversationRunRecord
@@ -335,10 +336,10 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
     ]
 
 
-def test_claim_run_propagates_post_commit_projector_failure(
+def test_transition_propagates_post_commit_projector_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """认领 Run 在原子更新成功之后投影失败必须向上传播（与 create_run/complete_run 一致）。"""
+    """状态迁移在原子更新成功之后投影失败必须向上传播（与 create_run 一致）。"""
 
     class RunCrud:
         def update_status_if_in(self, **_kwargs: object) -> SimpleNamespace:
@@ -360,7 +361,7 @@ def test_claim_run_propagates_post_commit_projector_failure(
     service._run = RunCrud()
 
     with pytest.raises(RuntimeError, match="transport unavailable"):
-        service.claim_pending_run(7)
+        service.transition(7, RunTransition.COMPLETE)
     monkeypatch.undo()
 
 

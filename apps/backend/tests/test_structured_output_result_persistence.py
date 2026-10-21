@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app.assistant_transport.event import RunResultUpdatedEvent, RunStatusChangedEvent
+from app.core.events import RunResultUpdatedEvent, RunStatusChangedEvent
+from app.core.workflow.run_state_machine import RunTransition
 from app.service.conversation_run import conversation_run_state_service as state_module
 from app.service.depends import (
     get_conversation_run_crud,
@@ -28,7 +29,7 @@ def test_structured_result_only_updates_completed_fields(
     run = run_crud.create(task.id, status="running")
     state = get_conversation_run_state_service()
 
-    state.complete_run_if_running(run.id, final_output="自然回答", end_reason="stop")
+    state.transition(run.id, RunTransition.COMPLETE, final_output="自然回答", end_reason="stop")
     if succeeds:
         state.update_completed_result(run.id, final_output='{"ok":true}')
     else:
@@ -59,8 +60,8 @@ def test_completion_persists_empty_output_and_finish_reason(
     run_crud = get_conversation_run_crud()
     run = run_crud.create(task.id, status="running")
 
-    get_conversation_run_state_service().complete_run_if_running(
-        run.id, final_output="", end_reason="content_filter"
+    get_conversation_run_state_service().transition(
+        run.id, RunTransition.COMPLETE, final_output="", end_reason="content_filter"
     )
 
     stored = run_crud.get(run.id)

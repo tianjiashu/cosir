@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef } from "react";
 
-import { jsonRequestInit, requestRaw } from "@/lib/http/client";
+import { HttpError } from "@/lib/http/errors";
 import { createTimeoutAbort, isCancelledAbort } from "@/lib/async/abort-timeout";
 import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
+import { resumeTask } from "@/lib/assistant/task-commands";
 import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
-import { frontendLog } from "@/lib/logging/frontend-log";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 const BUSINESS_RESUME_TIMEOUT_MS = 15_000;
 
@@ -25,7 +26,7 @@ type UncertainBusinessResume = {
  * Own the explicit business-resume request independently from Assistant UI's
  * attach-only transport resume.
  *
- * The POST /assistant request continues the persisted business Run. Once that
+ * POST /tasks/{id}/resume continues the persisted business Run. Once that
  * request is accepted, `onBusinessResumeAccepted` performs the separate
  * attach-only stage. Only one business-resume request may be in flight for a
  * session; stale responses are ignored by the local generation and runtime
@@ -178,32 +179,15 @@ export function useBusinessResume(
     const request = (async () => {
       let requestDefinitivelyRejected = false;
       try {
-        const response = await requestRaw("/assistant", jsonRequestInit({
-          commands: [],
-          taskId: context.taskId,
-          threadId: `task-${context.taskId}`,
-          runId,
-          ...(context.workspaceId != null ? { workspaceId: context.workspaceId } : {}),
-        }, {
-          method: "POST",
-          signal,
-          traceId: context.traceId,
-          headers: { Accept: "application/json" },
-        }));
-        if (!response.ok) {
-          requestDefinitivelyRejected = true;
-          throw new UserFacingError(`继续运行失败（HTTP ${response.status}）`);
-        }
         try {
-          await response.body?.cancel();
+          await resumeTask(context.taskId, { signal, traceId: context.traceId });
         } catch (error) {
-          // The business request has already been accepted. A local stream
-          // cleanup failure must not prevent the attach-only follow-up.
-          void frontendLog("WARNING", "assistant_business_resume_body_cancel_failed", "继续运行响应清理失败，将继续尝试只读订阅", {
-            traceId: context.traceId,
-            data: { taskId: context.taskId, runId },
-            error,
-          });
+          // HttpError 是后端明确拒绝；网络层失败时结果未知，交给下方 uncertain 对账。
+          if (error instanceof HttpError) {
+            requestDefinitivelyRejected = true;
+            throw new UserFacingError(userErrorMessage(error, `继续运行失败（HTTP ${error.status}）`));
+          }
+          throw error;
         }
         if (isCurrent()) {
           uncertainResumeRef.current = null;

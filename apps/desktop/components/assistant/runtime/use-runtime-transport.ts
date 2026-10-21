@@ -3,13 +3,13 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   extractUserAddMessageAttachments,
   extractUserAddMessageText,
-  getOrCreateTransportCommandId,
   getUserAddMessageSourceId,
+  type UserAddMessageCommand,
 } from "@/lib/assistant/converter";
-import { modelContextToTransportFields, selectionToTransportFields } from "@/lib/assistant/model-request-adapter";
 import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
+import { editTaskMessage, sendTaskMessage, type TaskMessageRequest } from "@/lib/assistant/task-commands";
 import { HttpError } from "@/lib/http/errors";
-import { getModelCatalogSnapshot } from "@/lib/model-catalog";
+import { readStoredInputDelivery } from "@/lib/input-delivery-storage";
 import { readStoredSelection } from "@/lib/model-selection-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { TransportState } from "@/lib/assistant/contract";
@@ -21,6 +21,7 @@ import { useTaskAssistantTransportRuntime } from "@/lib/assistant/use-task-assis
 import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
 import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
 
 type RuntimeTransport = ReturnType<typeof useTaskAssistantTransportRuntime>;
 const RECOVERY_FEEDBACK_DELAY_MS = 350;
@@ -162,7 +163,7 @@ export function useRuntimeTransport(
       params.updateState(() => snapshot);
       if (!attachOnly) return;
       // attach 失败后：Run 已结束则快照即最终结果；仍在运行则回到有界 recovery 重新订阅，
-      // 不能重新进入 business-resume 的 POST /assistant 请求。
+      // 不能重新进入 business-resume 的 POST /tasks/{id}/resume 请求。
       const run = currentTransportRun(snapshot);
       if (run && !isTerminalRunStatus(run.status)) {
         void recovery.reconcileAfterTransportFinish({ runId: run.runId, status: run.status });
@@ -224,103 +225,45 @@ export function useRuntimeTransport(
   return useTaskAssistantTransportRuntime(context.taskId, {
     initialState: context.initialState,
     adapters: attachmentAdapter == null ? undefined : { attachments: attachmentAdapter },
-    api: `${context.backendBaseUrl}/assistant`,
-    resumeApi: `${context.backendBaseUrl}/tasks/${context.taskId}/assistant/attach`,
+    baseUrl: context.backendBaseUrl,
     headers: async () => ({
       Accept: "text/event-stream",
-      "Content-Type": "application/json",
       "X-Trace-Id": context.traceId,
     }),
-    body: async () => {
-      const selection = readStoredSelection({ kind: "task", id: context.taskId });
-      const completeSelection = selection?.modelConfigId !== undefined
-        ? {
-            modelConfigId: selection.modelConfigId,
-            reasoningEffort: selection.reasoningEffort ?? null,
-          }
-        : null;
-      return {
-        taskId: context.taskId,
-        threadId: `task-${context.taskId}`,
-        ...(context.workspaceId != null ? { workspaceId: context.workspaceId } : {}),
-        ...selectionToTransportFields(completeSelection),
-      };
-    },
-    prepareSendCommandsRequest: (body) => {
+    submitMessage: async (command) => {
       errorSnapshotGenerationRef.current += 1;
       errorSnapshotAbortControllerRef.current?.abort();
-      const backendRequest = Object.fromEntries(
-        Object.entries(body).filter(([key]) => key !== "state"),
-      );
-      const contextModel = modelContextToTransportFields(
-        body.config,
-        getModelCatalogSnapshot().catalog,
-      );
-      if (contextModel) {
-        delete backendRequest.config;
-        delete backendRequest.modelConfigId;
-        delete backendRequest.reasoningEffort;
-        Object.assign(backendRequest, contextModel);
-      }
-
-      if (body.commands.length === 0 && context.latestStateRef.current.current_run_id !== null) {
-        backendRequest.runId = context.latestStateRef.current.current_run_id;
-      }
-
-      const commands = body.commands.map((command) => {
-        const key = command as object;
-        const commandId = getOrCreateTransportCommandId(key);
-        const prepared = prepareUserCommand(command);
-        return prepared && typeof prepared === "object" && "type" in prepared && prepared.type === "add-message"
-          ? { ...prepared, commandId }
-          : prepared;
-      });
-      const addMessage = commands.find((command) => (
-        typeof command === "object" && command !== null && "type" in command
-        && command.type === "add-message"
-      )) as { commandId?: string } | undefined;
-      if (addMessage?.commandId) {
-        commands.push({
-          type: "custom",
-          name: "ban-tools",
-          commandId: `${addMessage.commandId}-ban-tools`,
-          payload: { ban_tools: [...selectedBanTools] },
-        });
-      }
-      // 新用户命令开始新的 Transport recovery 预算；空 command batch 属于 attach/resume，
-      // 不能重置有界 EOF 保护。
-      if (commands.length > 0) recovery.resetTransportRecoveryBudget();
-      const hasEditCommand = commands.some((command) => getUserAddMessageSourceId(command) !== null);
-      const requestRunId = commands.length === 0 || hasEditCommand
-        ? context.latestStateRef.current.current_run_id
-        : null;
-
+      const selection = readStoredSelection({ kind: "task", id: context.taskId });
+      if (selection?.modelConfigId === undefined) throw new UserFacingError("请先选择模型后再发送");
+      // prepareUserCommand 已剔除 composer-only 的 file part，并为普通文件补齐带路径的描述符。
+      const prepared = prepareUserCommand(command) as UserAddMessageCommand;
+      const request: TaskMessageRequest = {
+        message: prepared.message as TaskMessageRequest["message"],
+        modelConfigId: selection.modelConfigId,
+        reasoningEffort: selection.reasoningEffort ?? null,
+        banTools: [...selectedBanTools],
+      };
+      const sourceId = getUserAddMessageSourceId(command);
+      const delivery = readStoredInputDelivery();
+      // 新用户命令开始新的 Transport recovery 预算。
+      recovery.resetTransportRecoveryBudget();
       context.lastTransportErrorRef.current = null;
-      void frontendLog("INFO", "assistant_transport_request_prepared", "Assistant Transport 请求已准备发送", {
+      void frontendLog("INFO", "assistant_task_command_prepared", "Task 命令已准备发送", {
         traceId: context.traceId,
         data: {
           taskId: context.taskId,
-          threadId: `task-${context.taskId}`,
-          commandCount: commands.length,
-          runId: requestRunId,
-          commandTypes: commands.map((command) => (
-            typeof command === "object" && command !== null && "type" in command
-              ? command.type
-              : "unknown"
-          )),
-          stateStripped: Object.prototype.hasOwnProperty.call(body, "state"),
-          parentIdPresent: Object.prototype.hasOwnProperty.call(body, "parentId"),
+          operation: sourceId === null ? "send" : "edit",
+          delivery: sourceId === null ? delivery : null,
+          partCount: request.message.parts.length,
+          attachmentCount: request.message.attachments?.length ?? 0,
         },
-    });
-
-      return {
-        ...backendRequest,
-        commands,
-        taskId: context.taskId,
-        threadId: `task-${context.taskId}`,
-        ...(requestRunId != null ? { runId: requestRunId } : {}),
-        ...(context.workspaceId != null ? { workspaceId: context.workspaceId } : {}),
-      };
+      });
+      const accepted = sourceId === null
+        ? await sendTaskMessage(context.taskId, { ...request, delivery }, { traceId: context.traceId })
+        : await editTaskMessage(context.taskId, sourceId, request, { traceId: context.traceId });
+      clearRecoveryIssueTimer();
+      context.setIssue(null);
+      return accepted;
     },
     onResponse: (response) => {
       void frontendLog("INFO", "assistant_transport_response_received", "Assistant Transport 已收到响应头", {
@@ -330,7 +273,6 @@ export function useRuntimeTransport(
           status: response.status,
           contentType: response.headers.get("content-type"),
           taskHeader: response.headers.get("x-cosir-task-id"),
-          threadHeader: response.headers.get("x-cosir-thread-id"),
           traceHeader: response.headers.get("x-trace-id"),
         },
       });

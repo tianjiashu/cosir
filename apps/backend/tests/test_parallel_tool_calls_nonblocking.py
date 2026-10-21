@@ -1,8 +1,7 @@
 """并行工具批次的等待必须离开事件循环线程。
 
-本模块只覆盖一个契约：``WorkflowOperations._run_calls_with_parallel_modes`` 在等待并行
-工具完成时**不得占用事件循环线程**。历史实现直接在协程内调用同步 ``concurrent.futures.wait``，
-并行批次里只要有一个长工具（``delegate_task`` 可跑数分钟），整个后端 loop 就被占死：HTTP
+本模块只覆盖一个契约：``run_tool_batch`` 在等待并行工具完成时**不得占用事件循环线程**。
+历史实现直接在协程内调用同步 ``concurrent.futures.wait``，并行批次里只要有一个长工具（``delegate_task`` 可跑数分钟），整个后端 loop 就被占死：HTTP
 全部无响应（前端「停止运行」的 ``POST /runs/{id}/cancel`` 根本到不了后端）、SSE 快照推送
 停摆。因此这里用「心跳协程在批次期间是否能推进」作为判据，而不是只看返回值。
 """
@@ -12,14 +11,14 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from typing import cast
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from app.config.constant import Constant
-from app.core.tools.schemas import ToolCall, ToolObservation
-from app.core.tools.tool_execute.tool_executor import ToolExecutor
-from app.core.workflow.workflow_operations import WorkflowOperations
+from app.core.tools.schemas import ToolCall, ToolExecutionContext, ToolObservation
+from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 
 _PARALLEL_TOOL = "fake_parallel_tool"
 
@@ -97,30 +96,17 @@ class _FakeToolExecutor:
         )
 
 
-def _make_operations(executor: _FakeToolExecutor) -> WorkflowOperations:
-    """装配只依赖执行器的 ``WorkflowOperations`` 门面。
-
-    参数:
-        executor: 假工具执行器。
-
-    返回:
-        属性已注入、可直接调用 ``run_tool_calls`` 的门面实例；其余协作者（模型、run、task）
-        与本模块的并行调度契约无关，故不装配。
-
-    异常:
-        无。
-
-    副作用:
-        无；不触碰数据库、日志之外的全局状态。
-    """
-    operations = WorkflowOperations.__new__(WorkflowOperations)
-    # 门面声明的 ``_executor`` 是真实 ``ToolExecutor``；本模块只消费它的 ``execute`` 语义，
-    # 故用 ``cast`` 注入替身，而不是为假执行器伪造整条执行管线。
-    operations._executor = cast(ToolExecutor, executor)
-    operations._execution_context = None
-    operations._allowed_tool_names = frozenset({_PARALLEL_TOOL})
-    operations._parallel_mode_by_name = {_PARALLEL_TOOL: "parallel"}
-    return operations
+def _make_operations(executor: _FakeToolExecutor) -> SimpleNamespace:
+    """只装配批次执行用到的运行上下文字段（执行器、准入、注册表、执行边界）。"""
+    return SimpleNamespace(
+        tool_executor=executor,
+        execution_context=ToolExecutionContext(
+            task_id=1, workspace_id=1, workspace_root=Path("."), run_id=1
+        ),
+        allows_tools=frozenset({_PARALLEL_TOOL}),
+        tool_definitions={_PARALLEL_TOOL: SimpleNamespace(parallel_mode="parallel")},
+        task=SimpleNamespace(id=1),
+    )
 
 
 def _parallel_call(index: int) -> ToolCall:
@@ -160,16 +146,12 @@ def test_parallel_batch_does_not_block_event_loop() -> None:
                 ticks += 1
 
         pulse = asyncio.create_task(heartbeat())
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[_parallel_call(0), _parallel_call(1)],
-            step_id="step-1",
-        )
+        result = await run_tool_batch(operations, [_parallel_call(0), _parallel_call(1)], "step-1")
         ticks_during_batch = ticks
         pulse.cancel()
         with pytest.raises(asyncio.CancelledError):
             await pulse
-        return ticks_during_batch, len(result.observations)
+        return ticks_during_batch, len(result)
 
     ticks_during_batch, observation_count = asyncio.run(scenario())
 
@@ -188,12 +170,9 @@ def test_parallel_batch_respects_constant_max_parallel_calls(
     operations = _make_operations(executor)
 
     async def scenario() -> int:
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[_parallel_call(index) for index in range(4)],
-            step_id="step-1",
-        )
-        return len(result.observations)
+        calls = [_parallel_call(index) for index in range(4)]
+        result = await run_tool_batch(operations, calls, "step-1")
+        return len(result)
 
     assert asyncio.run(scenario()) == 4
     assert executor.max_active == 2
@@ -209,12 +188,9 @@ def test_parallel_batch_submits_pending_calls_in_argument_order(
     operations = _make_operations(executor)
 
     async def scenario() -> int:
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[_parallel_call(0), _parallel_call(1), _parallel_call(2)],
-            step_id="step-1",
-        )
-        return len(result.observations)
+        calls = [_parallel_call(0), _parallel_call(1), _parallel_call(2)]
+        result = await run_tool_batch(operations, calls, "step-1")
+        return len(result)
 
     assert asyncio.run(scenario()) == 3
     # 前两个 worker 的启动先后由线程调度决定，故只比较集合；第三个必须是入参顺序里的 call-2。
@@ -222,20 +198,16 @@ def test_parallel_batch_submits_pending_calls_in_argument_order(
     assert executor.started_order[2] == "call-2"
 
 
-def test_parallel_batch_results_follow_completion_order() -> None:
-    """观察顺序保持「实际完成顺序」契约（未按原始下标重排）。"""
+def test_parallel_batch_results_follow_argument_order() -> None:
+    """观察与调用按入参顺序一一对应，与谁先完成无关。"""
     executor = _FakeToolExecutor({"call-0": 0.3, "call-1": 0.05})
     operations = _make_operations(executor)
 
     async def scenario() -> list[str]:
-        result = await operations.run_tool_calls(
-            task_id=1,
-            calls=[_parallel_call(0), _parallel_call(1)],
-            step_id="step-1",
-        )
-        return [observation.tool_call_id for observation in result.observations]
+        result = await run_tool_batch(operations, [_parallel_call(0), _parallel_call(1)], "step-1")
+        return [observation.tool_call_id for observation in result]
 
-    assert asyncio.run(scenario()) == ["call-1", "call-0"]
+    assert asyncio.run(scenario()) == ["call-0", "call-1"]
 
 
 def test_parallel_batch_cancellation_returns_without_waiting_for_workers() -> None:
@@ -248,11 +220,7 @@ def test_parallel_batch_cancellation_returns_without_waiting_for_workers() -> No
         started = time.monotonic()
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(
-                operations.run_tool_calls(
-                    task_id=1,
-                    calls=[_parallel_call(0), _parallel_call(1)],
-                    step_id="step-1",
-                ),
+                run_tool_batch(operations, [_parallel_call(0), _parallel_call(1)], "step-1"),
                 timeout=0.2,
             )
         elapsed = time.monotonic() - started

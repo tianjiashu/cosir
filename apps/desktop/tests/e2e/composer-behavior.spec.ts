@@ -123,14 +123,14 @@ for (const mode of ["new", "task"] as const) {
     await expect(send).toBeDisabled();
     await input.press(undo);
     await expect(input).toContainText("notes.md");
-    let submitted: { commands: { message: { attachments?: { path: string }[] } }[] } | undefined;
-    await page.route(`${api}/assistant`, async route => {
+    let submitted: { message: { attachments?: { path: string }[] } } | undefined;
+    await page.route(`${api}/tasks/*/messages`, async route => {
       submitted = route.request().postDataJSON();
       await route.fulfill({ status: 409, json: { error: { code: "TASK_BUSY", message: "回归测试拒绝发送", retryable: true } } });
     });
     await send.click();
     await expect(page.getByRole("dialog")).toContainText("回归测试拒绝发送");
-    expect(submitted?.commands[0]?.message.attachments).toEqual([expect.objectContaining({ path: "/tmp/notes.md" })]);
+    expect(submitted?.message.attachments).toEqual([expect.objectContaining({ path: "/tmp/notes.md" })]);
     await page.getByRole("dialog").getByRole("button", { name: "关闭" }).click();
     await expect(input).toContainText("notes.md");
     await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
@@ -175,7 +175,7 @@ test("Task 草稿离开后恢复普通文件，原生选择迟到结果不会写
 test("Shift+Enter 换行，组合输入 Enter 不提交，普通 Enter 只发送一次", async ({ page }) => {
   const { input } = await openComposer(page, "task");
   let sends = 0;
-  page.on("request", req => { if (req.url() === `${api}/assistant` && req.method() === "POST") sends++; });
+  page.on("request", req => { if (req.url() === `${api}/tasks/100/messages` && req.method() === "POST") sends++; });
   await input.fill("第一行");
   await input.press("End");
   await input.press("Shift+Enter");
@@ -229,14 +229,15 @@ test("重载后的历史普通文件可编辑、撤销移除并重跑，路径�
   await input.getByRole("button", { name: "移除附件 history.md" }).click();
   await input.press(undo);
   await expect(input).toContainText("history.md");
-  const request = page.waitForRequest(req => req.url() === `${api}/assistant` && req.method() === "POST");
-  await page.route(`${api}/assistant`, async route => {
+  const editUrl = `${api}/tasks/100/messages/history-user/edit`;
+  const request = page.waitForRequest(req => req.url() === editUrl && req.method() === "POST");
+  await page.route(editUrl, async route => {
     await route.fulfill({ status: 409, json: { error: { code: "EDIT_REJECTED", message: "历史编辑回归拒绝", retryable: true } } });
   });
   await page.getByRole("button", { name: "重跑", exact: true }).click();
   const body = (await request).postDataJSON();
-  expect(body.commands[0]).toMatchObject({ sourceId: "history-user", message: { parts: [{ type: "text", text: expect.stringContaining("[[cosir-file:historical]]") }] } });
-  expect(body.commands[0].message.attachments).toBeUndefined();
+  expect(body).toMatchObject({ message: { parts: [{ type: "text", text: expect.stringContaining("[[cosir-file:historical]]") }] } });
+  expect(body.message.attachments).toBeUndefined();
   await expect(page.getByRole("dialog")).toContainText("历史编辑回归拒绝");
   await page.getByRole("dialog").getByRole("button", { name: "关闭" }).click();
   await expect(input).toContainText("history.md");
@@ -253,11 +254,11 @@ test("Task 图片上传成功但消息提交失败后，正文与完整图片附
   await page.route(`${api}/workspaces/7/attachments/${assetId}*`, route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9X8AAAAASUVORK5CYII=", "base64") }));
   await transfer(input, "paste", "uploaded.png", "image/png", "图片失败恢复");
   await expect(page.locator(".aui-composer-attachments .aui-attachment-root")).toHaveCount(1);
-  const request = page.waitForRequest(req => req.url() === `${api}/assistant` && req.method() === "POST");
-  await page.route(`${api}/assistant`, route => route.fulfill({ status: 409, json: { error: { code: "TASK_BUSY", message: "图片消息回归拒绝", retryable: true } } }));
+  const request = page.waitForRequest(req => req.url() === `${api}/tasks/100/messages` && req.method() === "POST");
+  await page.route(`${api}/tasks/100/messages`, route => route.fulfill({ status: 409, json: { error: { code: "TASK_BUSY", message: "图片消息回归拒绝", retryable: true } } }));
   await send.click();
   const body = (await request).postDataJSON();
-  expect(body.commands[0].message.parts).toContainEqual({ type: "image", image: locator });
+  expect(body.message.parts).toContainEqual({ type: "image", image: locator });
   await expect(page.getByRole("dialog")).toContainText("图片消息回归拒绝");
   await page.getByRole("dialog").getByRole("button", { name: "关闭" }).click();
   await expect(input).toHaveText("图片失败恢复");

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
+from app.core.events import RunInitializedEvent
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
@@ -327,7 +328,8 @@ def test_event_projection_persists_status_when_parent_tool_row_arrives_after_chi
     service.get_state(1)
 
     sources.runs[2][0].status = "completed"
-    change = service.apply_planned(SimpleNamespace(task_id=1, run_id=10, plan=lambda _state: []))
+    # 任意真实事件都会触发子 Agent 状态对账；重复的 Run 初始化本身不产生变更。
+    change = service.apply_planned(RunInitializedEvent(task_id=1, run_id=10))
 
     assert change.mutations
     assert _display_by_call(service.get_state(1), "delegate-call")["status"] == "completed"

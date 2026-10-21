@@ -30,7 +30,9 @@ from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import RunStopped
 from app.core.workflow.nodes import model_node as model_module
+from app.core.workflow.run_state_machine import RunTransition
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from tests.runtime_context_stub import run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion, sdk_event, sdk_usage
 
 EVENT_NAME = "model_usage_recorded"
@@ -137,48 +139,42 @@ class _ModelHarness:
         self._cancel_after_first_chunk = cancel_after_first_chunk
         self._chunk_consumed = False
 
-        def complete_run_if_running(*_args: Any, **_kwargs: Any) -> object | None:
-            self.completed = True
-            return complete_result if complete_result is not _UNSET else object()
-
-        def fail_run_if_running(*_args: Any, **_kwargs: Any) -> object | None:
-            self.failed = True
-            return fail_result if fail_result is not _UNSET else object()
-
-        def cancel_run_if_running(*_args: Any, **_kwargs: Any) -> None:
+        def transition_run(transition: RunTransition, **_kwargs: Any) -> object | None:
+            if transition is RunTransition.COMPLETE:
+                self.completed = True
+                return complete_result if complete_result is not _UNSET else object()
+            if transition is RunTransition.FAIL:
+                self.failed = True
+                return fail_result if fail_result is not _UNSET else object()
+            assert transition is RunTransition.CANCEL
             self.cancelled = True
+            return None
 
-        def is_current_run_cancelled() -> bool:
+        def is_cancelled() -> bool:
             if self._cancel_before_request:
                 return True
             return self._cancel_after_first_chunk and self._chunk_consumed
 
-        self.operations = SimpleNamespace(
-            task_tool_schemas=[],
-            all_vaild_tools=[SimpleNamespace(name=name, display=None) for name in registered_tools],
-            allows_tools=allows_tools,
-            vaild_tool_name=lambda name: name in registered_tools,
-            get_current_task=lambda: SimpleNamespace(id=task_id),
-            get_current_run=lambda: SimpleNamespace(task_id=task_id, id=run_id),
-            get_current_workspace=lambda: SimpleNamespace(id=1),
-            is_current_run_cancelled=is_current_run_cancelled,
-            complete_run_if_running=complete_run_if_running,
-            fail_run_if_running=fail_run_if_running,
-            cancel_run_if_running=cancel_run_if_running,
-        )
-        self.runtime_config = SimpleNamespace(
-            operations=self.operations,
-            model=SimpleNamespace(stream=self._astream),
-            final_model=SimpleNamespace(stream=self._astream),
-            structured_output=structured_output,
-            structured_output_messages=None,
-            workspace_id=1,
-            thinking_channel=thinking_channel,
+        self.runtime_config = runtime_stub(
             run=SimpleNamespace(task_id=task_id, id=run_id, extra=None),
+            task=SimpleNamespace(id=task_id),
+            profile=SimpleNamespace(structured_output=structured_output, max_steps=max_steps),
+            allows_tools=allows_tools,
+            tool_definitions={
+                name: SimpleNamespace(name=name, display=None) for name in registered_tools
+            },
+            run_state=run_state_stub(
+                transition=lambda _run_id, transition, **kw: transition_run(transition, **kw)
+            ),
+            task_space=task_runtime_spaces.get_or_create(task_id),
+            model=SimpleNamespace(stream=self._astream),
+            structured_output_messages=None,
+            thinking_channel=thinking_channel,
             usage_stats=self.usage_stats,
             step_limit=max_steps,
-            batch=ToolBatch(),
+            event_sink=self.events.append,
         )
+        self.runtime_config.is_cancelled = is_cancelled
 
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
@@ -209,7 +205,7 @@ def _install(monkeypatch: Any, harness: _ModelHarness) -> None:
         monkeypatch.setattr(module, "_runtime_context", lambda: harness.runtime_config)
     for module in (model_module, streaming_module):
         monkeypatch.setattr(module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(streaming_module, "get_stream_writer", lambda: harness.events.append)
+    monkeypatch.setattr(streaming_module, "emit", harness.events.append)
     monkeypatch.setattr(finalize_module, "_runtime_context", lambda: harness.runtime_config)
 
 
@@ -285,7 +281,7 @@ def test_single_step_records_exactly_one_event_with_consistent_context(
     assert harness.completed is True
 
     data = _single_usage_data(caplog)
-    # 定位字段必须与运行上下文（operations 的当前 task / run 与 state 步号）逐一对齐。
+    # 定位字段必须与运行上下文（当前 task / run 与 state 步号）逐一对齐。
     assert data["task_id"] == TASK_ID
     assert data["run_id"] == RUN_ID
     assert data["task_id"] != data["run_id"], "task_id / run_id 必须来自各自来源，不得互相顶替"
@@ -981,7 +977,7 @@ def test_length_output_records_usage_event_exactly_once(
 def test_final_response_race_lost_records_usage_event_exactly_once(
     monkeypatch: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """test_purpose: 最终回答落定时 run 已非 running（``complete_run_if_running`` 返回 None）仍按
+    """test_purpose: 最终回答落定时 run 已非 running（``transition_run(COMPLETE)`` 返回 None）仍按
     END 收口，用量事件不重不漏（潜在缺陷：race-lost 分支重复记录或漏记用量）。"""
 
     caplog.set_level(logging.DEBUG, logger=BACKEND_LOGGER)

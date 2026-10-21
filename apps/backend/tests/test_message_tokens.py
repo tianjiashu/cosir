@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from app.assistant_transport.event.run_event import build_user_input_parts
+from app.assistant_transport.projection.user_input_projection import build_user_input_parts
 from app.models.conversation_run_command import ConversationRunCommand
 from app.service.conversation_run.conversation_input_preparation_service import (
     ConversationInputPreparationService,

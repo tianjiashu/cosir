@@ -21,7 +21,7 @@ test("直接打开不存在的 Task 会显示错误而不是永久等待", async
 
 test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输入", async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "拒绝发送回归" } });
-  await page.route("http://127.0.0.1:8000/assistant", async (route) => {
+  await page.route("http://127.0.0.1:8000/tasks/42/messages", async (route) => {
     await route.fulfill({
       status: 409,
       contentType: "application/json",
@@ -253,9 +253,10 @@ test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", 
   await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)$/, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
   await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)\/assistant\/state/, (route) => route.fulfill({ json: emptyState() }));
   await page.route("http://127.0.0.1:8000/model-configs", (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
-  const requestBodies: Array<Record<string, unknown>> = [];
-  await page.route("http://127.0.0.1:8000/assistant", async (route) => {
-    requestBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+  // Task 由路径寻址，workspace 归属由后端从 Task 事实解析；这里只需核对请求命中的 Task。
+  const requestUrls: string[] = [];
+  await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/\d+\/messages$/, async (route) => {
+    requestUrls.push(route.request().url());
     await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "TASK_WORKSPACE_MISMATCH", message: "mismatch", retryable: false } }) });
   });
   await page.addInitScript(() => {
@@ -276,8 +277,8 @@ test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", 
   await page.getByLabel("消息输入").fill("跨工作区请求");
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
-  await expect.poll(() => requestBodies.length).toBeGreaterThan(0);
-  expect(requestBodies.every((body) => body.taskId === 43 && body.workspaceId === 8)).toBe(true);
+  await expect.poll(() => requestUrls.length).toBeGreaterThan(0);
+  expect(requestUrls.every((url) => url.endsWith("/tasks/43/messages"))).toBe(true);
 });
 
 test("同一侧栏内切换 Task 不会重新加载整个侧栏", async ({ page, request }) => {
@@ -319,7 +320,7 @@ test("Assistant Transport 会展示后端结构化错误", async ({ page, reques
     window.localStorage.clear();
     window.localStorage.setItem("cosir:model-config-selection:task:103", JSON.stringify({ modelConfigId: 2, reasoningEffort: null }));
   });
-  await page.route("http://127.0.0.1:8000/assistant", (route) => route.fulfill({
+  await page.route("http://127.0.0.1:8000/tasks/103/messages", (route) => route.fulfill({
     status: 400,
     contentType: "application/json",
     body: JSON.stringify({ detail: { error: { code: "MODEL_SELECTION_REQUIRED", message: "请先选择模型和模型提供商", retryable: false } } }),
@@ -350,9 +351,10 @@ test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace �
   await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)$/, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
   await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)\/assistant\/state/, (route) => route.fulfill({ json: emptyState() }));
   await page.route("http://127.0.0.1:8000/model-configs", (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
-  const requestBodies: Array<Record<string, unknown>> = [];
-  await page.route("http://127.0.0.1:8000/assistant", async (route) => {
-    requestBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+  // Task 由路径寻址，workspace 归属由后端从 Task 事实解析；这里只需核对请求命中的 Task。
+  const requestUrls: string[] = [];
+  await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/\d+\/messages$/, async (route) => {
+    requestUrls.push(route.request().url());
     await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: { error: { code: "TASK_WORKSPACE_MISMATCH", message: "mismatch", retryable: false } } }) });
   });
   await page.addInitScript(() => {
@@ -369,6 +371,6 @@ test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace �
   await page.getByLabel("消息输入").fill("直接路由切换");
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
-  await expect.poll(() => requestBodies.length).toBeGreaterThan(0);
-  expect(requestBodies.every((body) => body.taskId === 43 && body.workspaceId === 8)).toBe(true);
+  await expect.poll(() => requestUrls.length).toBeGreaterThan(0);
+  expect(requestUrls.every((url) => url.endsWith("/tasks/43/messages"))).toBe(true);
 });

@@ -1,5 +1,6 @@
 """运行时通知的不可变性与消息边界契约。"""
 
+import asyncio
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -24,40 +25,53 @@ def test_notice_freezes_metadata_and_keeps_routing_out_of_message_kwargs() -> No
 
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])
-def test_runner_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> None:
-    """工具准入的三条分支都生产领域通知，不在 runner 构造模型消息。"""
+async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> None:
+    """工具准入的三条分支都生产领域通知，不在装配方构造模型消息。"""
     from types import SimpleNamespace
 
-    from app.core.runtime import runner as runner_module
+    from app.service.conversation_run import run_driver
 
     notices: list[RuntimeNotice] = []
     space = SimpleNamespace(
         task_tool_schemas=({"name": "read_file"}, {"name": "write_file"}),
         defer_runtime_notice=notices.append,
     )
-    monkeypatch.setattr(runner_module.task_runtime_spaces, "get_or_create", lambda _id: space)
+    monkeypatch.setattr(run_driver.task_runtime_spaces, "get_or_create", lambda _id: space)
     monkeypatch.setattr(
-        runner_module, "WorkflowOperations", lambda **kwargs: SimpleNamespace(**kwargs)
+        run_driver, "RuntimeContext", lambda **kwargs: SimpleNamespace(**kwargs)
     )
     registry = object()
     terminal_sessions = object()
-    monkeypatch.setattr(runner_module, "get_agent_registry", lambda: registry)
-    monkeypatch.setattr(runner_module, "get_terminal_session_service", lambda: terminal_sessions)
-    runtime = runner_module.AgentRuntime.__new__(runner_module.AgentRuntime)
-    runtime._tool_executor = object()
-    runtime._process_tool_output_channel_factory = None
-    result = runtime._build_operations(
+    monkeypatch.setattr(run_driver, "get_agent_registry", lambda: registry)
+    monkeypatch.setattr(run_driver, "get_terminal_session_service", lambda: terminal_sessions)
+    monkeypatch.setattr(
+        run_driver,
+        "get_tool_system",
+        lambda: SimpleNamespace(
+            executor=object(),
+            registry=SimpleNamespace(get_all_definitions=list),
+            user_input_decision_handlers=object(),
+        ),
+    )
+    monkeypatch.setattr(
+        run_driver, "get_conversation_event_projector", lambda: SimpleNamespace(process=print)
+    )
+    monkeypatch.setattr(run_driver, "get_conversation_run_state_service", lambda: object())
+    result = run_driver._build_context(
         workspace=SimpleNamespace(id=13, root_path="/workspace"),
         task=SimpleNamespace(id=1),
-        run=SimpleNamespace(id=7, extra=SimpleNamespace(ban_tools=banned)),
+        run=SimpleNamespace(id=7, options=SimpleNamespace(ban_tools=banned)),
         agent_profile=SimpleNamespace(),
     )
     assert result.execution_context.task_id == 1
     assert result.execution_context.run_id == 7
     assert result.execution_context.workspace_id == 13
     assert str(result.execution_context.workspace_root) == "/workspace"
-    assert result.runtime_dependencies.agent_profile_registry is registry
-    assert result.runtime_dependencies.terminal_session_service is terminal_sessions
+    dependencies = result.execution_context.runtime_dependencies
+    assert dependencies.agent_profile_registry is registry
+    assert dependencies.terminal_session_service is terminal_sessions
+    # 工具线程经该循环调度子 Run，装配时必须登记当前运行中的事件循环。
+    assert dependencies.runtime_event_loop is asyncio.get_running_loop()
     assert result.allows_tools == {"read_file", "write_file"} - set(banned)
     assert len(notices) == 1
     assert isinstance(notices[0], RuntimeNotice)

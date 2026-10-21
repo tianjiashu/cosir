@@ -6,7 +6,7 @@
    清理与并发不串扰；
 2. ``ToolHandlerRunner``：工具级信号命中即中止本次调用、不误伤同 run 的兄弟调用、
    不写 run 级注册表、不投影 Transport 终态、信号释放；
-3. ``ConversationRunExecutor.cancel_tool_call`` 与 HTTP 端点的状态码映射。
+3. ``WorkflowSession.cancel_tool_call`` 与 HTTP 端点的状态码映射。
 
 终态投影的时序属于「执行出口」契约，本文件只断言它**不发生在执行层**：终态必须晚于
 ``ToolHandlerRunner`` 的强杀与输出排空（见 ``ToolExecutor`` 的出口投影与
@@ -22,17 +22,16 @@ import json
 import threading
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from app.assistant_transport.event.tool_call_event import ToolCallStatusChangedEvent
-from app.core.runtime.conversation_run_executor import ConversationRunExecutor
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
-from app.core.runtime.tool_call_cancellation_registry import tool_call_cancellation_registry
+from app.assistant_transport.projection.event_projection import plan_event
+from app.core.events import ToolCallStatusChangedEvent
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.core.tools.tool_execute import tool_handler_runner
 from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
@@ -124,29 +123,14 @@ def _make_context(
     )
 
 
-class _RunService:
-    """只实现执行器读取 run 所需的最小语义。"""
+def _session_with_execution(task_id: int, run_id: int) -> object:
+    """只含一条执行登记的调度入口（不装配领域服务）。"""
+    from app.service.conversation_run.workflow_session import WorkflowSession
 
-    def __init__(self, run_id: int = _RUN_EXECUTOR) -> None:
-        """构造一条可读取的 running run。"""
-
-        self.run = SimpleNamespace(id=run_id, task_id=7, status="running")
-
-    def get_run(self, _run_id: int) -> SimpleNamespace:
-        """返回预置 run 记录。"""
-
-        return self.run
-
-
-def _build_executor(run_service: object) -> ConversationRunExecutor:
-    """绕过依赖装配构造只注入 run service 与进程内信号源的执行器实例。"""
-
-    executor = ConversationRunExecutor.__new__(ConversationRunExecutor)
-    executor._run_service = run_service
-    executor._signal = cancellation_registry
-    executor._event_projector = None
-    executor._executions = {}
-    return executor
+    session = WorkflowSession.__new__(WorkflowSession)
+    session._executions = {}
+    session.task_execution = lambda candidate: run_id if candidate == task_id else None
+    return session
 
 
 @pytest.fixture(autouse=True)
@@ -501,72 +485,48 @@ def test_build_cancel_check_watches_both_signal_sources() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. 执行器与 HTTP 端点
+# 3. 调度入口与 HTTP 端点
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_cancel_tool_call_marks_signal_and_rejects_duplicate() -> None:
-    """首次取消返回 True 并标记信号；同一调用重复取消返回 False；不触碰 run 级信号。"""
+    """首次取消返回所属 run_id 并标记信号；重复取消返回 None；不触碰 Task 级信号。"""
 
-    executor = _build_executor(_RunService())
+    session = _session_with_execution(_TASK_ID, _RUN_EXECUTOR)
 
-    assert await executor.cancel_tool_call(_RUN_EXECUTOR, "call-1") is True
+    assert session.cancel_tool_call(_TASK_ID, "call-1") == _RUN_EXECUTOR
     assert tool_call_cancellation_registry.is_cancelled(_RUN_EXECUTOR, "call-1") is True
-    assert await executor.cancel_tool_call(_RUN_EXECUTOR, "call-1") is False
+    assert session.cancel_tool_call(_TASK_ID, "call-1") is None
+    assert session.cancel_tool_call(_TASK_ID + 1, "call-1") is None
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
 
 
 @pytest.mark.asyncio
-async def test_cancel_tool_call_rolls_back_signal_when_run_missing() -> None:
-    """run 不存在时撤销已标记的信号并抛 KeyError，API 据此映射 404。"""
-
-    class _MissingRunService(_RunService):
-        def get_run(self, _run_id: int) -> SimpleNamespace:
-            raise KeyError(_run_id)
-
-    executor = _build_executor(_MissingRunService())
-
-    with pytest.raises(KeyError):
-        await executor.cancel_tool_call(_RUN_EXECUTOR, "call-1")
-    assert tool_call_cancellation_registry.is_cancelled(_RUN_EXECUTOR, "call-1") is False
-
-
-@pytest.mark.asyncio
 async def test_cancel_tool_call_endpoint_maps_status_codes() -> None:
-    """端点把首次取消映射为 200、重复取消映射为 409、run 缺失映射为 404。"""
+    """端点按 Task 当前执行解析 run_id：首次取消 200、重复取消 409、没有执行 409。"""
 
     from app.assistant_transport.assistant_api import cancel_tool_call
 
-    executor = _build_executor(_RunService())
+    session = _session_with_execution(11, _RUN_EXECUTOR)
 
-    response = await cancel_tool_call(_RUN_EXECUTOR, "call-1", executor)
+    response = await cancel_tool_call(11, "call-1", session)
 
     assert response.status_code == 200
-    assert json.loads(response.body) == {
-        "run_id": _RUN_EXECUTOR,
-        "tool_call_id": "call-1",
-        "cancelled": True,
-    }
+    assert json.loads(response.body) == {"task_id": 11, "tool_call_id": "call-1"}
+    assert tool_call_cancellation_registry.is_cancelled(_RUN_EXECUTOR, "call-1") is True
 
     with pytest.raises(HTTPException) as duplicate:
-        await cancel_tool_call(_RUN_EXECUTOR, "call-1", executor)
+        await cancel_tool_call(11, "call-1", session)
     assert duplicate.value.status_code == 409
 
-    class _MissingRunService(_RunService):
-        def get_run(self, _run_id: int) -> SimpleNamespace:
-            raise KeyError(_run_id)
-
-    missing_executor = _build_executor(_MissingRunService())
-    with pytest.raises(HTTPException) as missing:
-        await cancel_tool_call(_RUN_EXECUTOR, "call-2", missing_executor)
-    assert missing.value.status_code == 404
-    # 404 路径不得留下脏信号。
-    assert tool_call_cancellation_registry.is_cancelled(_RUN_EXECUTOR, "call-2") is False
+    with pytest.raises(HTTPException) as idle:
+        await cancel_tool_call(12, "call-2", session)
+    assert idle.value.status_code == 409
 
 
 def test_cancel_tool_call_endpoint_is_registered() -> None:
-    """工具级取消端点必须注册在真实 app 上，且与 run 级取消端点同级。"""
+    """工具级取消端点必须注册在真实 app 上，且与 Task 级取消端点同级。"""
 
     from app.app import app
 
@@ -574,7 +534,7 @@ def test_cancel_tool_call_endpoint_is_registered() -> None:
         (route.path, tuple(sorted(getattr(route, "methods", None) or ()))) for route in app.routes
     }
 
-    assert ("/runs/{run_id}/tool-calls/{tool_call_id}/cancel", ("POST",)) in routes
+    assert ("/tasks/{task_id}/tool-calls/{tool_call_id}/cancel", ("POST",)) in routes
     assert ("/tasks/{task_id}/cancel", ("POST",)) in routes
 
 
@@ -629,7 +589,8 @@ def test_cancelled_event_mutates_running_part_to_cancelled() -> None:
     )
 
     mutations = {
-        mutation.path: mutation.value for mutation in event.plan(_running_tool_state("call-1"))
+        mutation.path: mutation.value
+        for mutation in plan_event(event, _running_tool_state("call-1"))
     }
     base = ("runs", 0, "messages", 0, "parts", 0)
 
@@ -649,7 +610,7 @@ def test_cancelled_observation_plan_tolerates_missing_tool_part() -> None:
         error="已取消",
     )
 
-    assert list(event.plan({"current_run_id": _RUN_A, "runs": []})) == []
+    assert list(plan_event(event, {"current_run_id": _RUN_A, "runs": []})) == []
 
 
 def _tool_state_with_status(status: str, tool_call_id: str) -> dict[str, Any]:
@@ -680,7 +641,7 @@ def test_placeholder_overwrite_transition_cancelled_to_completed_is_applied() ->
 
     mutations = {
         mutation.path: mutation.value
-        for mutation in event.plan(_tool_state_with_status("cancelled", "call-1"))
+        for mutation in plan_event(event, _tool_state_with_status("cancelled", "call-1"))
     }
     base = ("runs", 0, "messages", 0, "parts", 0)
 
@@ -701,7 +662,7 @@ def test_late_event_cannot_revive_a_completed_part_and_is_logged(caplog: Any) ->
     )
 
     with caplog.at_level("WARNING"):
-        mutations = list(event.plan(_tool_state_with_status("completed", "call-1")))
+        mutations = list(plan_event(event, _tool_state_with_status("completed", "call-1")))
 
     assert mutations == []
     assert [

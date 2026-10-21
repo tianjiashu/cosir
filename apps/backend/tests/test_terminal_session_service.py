@@ -936,12 +936,10 @@ def test_list_sessions_is_task_scoped_and_keeps_recent_exits(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_workflow_finalization_preserves_task_sessions(monkeypatch, tmp_path: Path) -> None:
-    from app.core.workflow.workflow import ReactLikeWorkflow
-
+async def test_task_sessions_survive_run_end(monkeypatch, tmp_path: Path) -> None:
+    """Run 结束不关闭终端：同一 Task 的后续 Run 仍能发现并写入。"""
     service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)
-    await ReactLikeWorkflow().finalize_run(1)
     discovered = service.list_sessions(task_id=1, workspace_id=1)
     assert discovered[0]["session_id"] == session["session_id"]
     service.write(

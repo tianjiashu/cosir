@@ -32,20 +32,9 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
             return SimpleNamespace(id=3, root_path=str(tmp_path))
 
     class _RunService:
-        created = False
-
-        def create_run(self, **_kwargs) -> None:
-            self.created = True
-            raise AssertionError("非 CHILD profile 不得创建 follow-up Run")
-
-    class _RunStateService:
         def get_run(self, _run_id: int) -> SimpleNamespace:
             return SimpleNamespace(
-                id=11,
-                status="completed",
-                agent_id="main_agent",
-                model_config_id=1,
-                reasoning_effort=None,
+                id=11, status="completed", agent_id="main_agent", model_config_id=1
             )
 
     task_service = _TaskService()
@@ -53,12 +42,8 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
     monkeypatch.setattr(child_agent_send, "get_task_service", lambda: task_service)
     monkeypatch.setattr(child_agent_send, "get_workspace_service", _WorkspaceService)
     monkeypatch.setattr(child_agent_send, "get_conversation_run_service", lambda: run_service)
-    monkeypatch.setattr(
-        child_agent_send,
-        "get_conversation_run_state_service",
-        _RunStateService,
-    )
-    monkeypatch.setattr(child_agent_send, "get_conversation_run_executor", object)
+    # 非 CHILD profile 在开 Run 之前就被拒绝，调度入口不得被触达。
+    monkeypatch.setattr(child_agent_send, "get_workflow_session", lambda: pytest.fail("opened run"))
     base_registry = configuration.build_agent_registry()
     assert base_registry.resolve("system", "main_agent").agent_type is AgentProfileType.MAIN
     monkeypatch.setattr(configuration, "get_agent_registry", lambda: base_registry)
@@ -74,4 +59,3 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
     result = tool.execute(11, "Continue this task.", execution_context=context)
 
     assert result.status == "error"
-    assert run_service.created is False

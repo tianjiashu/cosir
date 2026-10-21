@@ -198,7 +198,7 @@ test("引用：片段原文、打开来源、删除来源、拒绝发送保留�
   await capsule.getByRole("button").first().click();
   await expect(surface.locator(".cm-content")).toContainText("after update");
   const sent: unknown[] = [];
-  await page.route("**/assistant", (route) => {
+  await page.route("**/tasks/*/messages", (route) => {
     sent.push(route.request().postDataJSON());
     return route.fulfill({
       status: 409,
@@ -281,17 +281,15 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史及编辑重�
   }, text);
   await expect(input.locator("[data-workspace-reference]")).toHaveCount(3);
   const sent: Array<{
-    commands: Array<{
-      sourceId?: string;
-      message: {
-        parts: Array<{ type: string; text?: string }>;
-        attachments?: unknown[];
-      };
-    }>;
+    url: string;
+    message: {
+      parts: Array<{ type: string; text?: string }>;
+      attachments?: unknown[];
+    };
   }> = [];
   page.on("request", (req) => {
-    if (req.url().endsWith("/assistant") && req.method() === "POST")
-      sent.push(req.postDataJSON());
+    if (/\/tasks\/\d+\/messages(\/[^/]+\/edit)?$/.test(req.url()) && req.method() === "POST")
+      sent.push({ url: req.url(), ...req.postDataJSON() });
   });
   await page.getByRole("button", { name: "开始对话", exact: true }).click();
   await expect(page).toHaveURL(/\/tasks\/\d+/);
@@ -302,10 +300,10 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史及编辑重�
     page.getByRole("button", { name: "发送", exact: true }),
   ).toBeVisible();
   expect(
-    sent[0].commands[0].message.parts.every((part) => part.type === "text"),
+    sent[0].message.parts.every((part) => part.type === "text"),
   ).toBe(true);
-  expect(sent[0].commands[0].message.attachments).toBeUndefined();
-  const sentText = sent[0].commands[0].message.parts
+  expect(sent[0].message.attachments).toBeUndefined();
+  const sentText = sent[0].message.parts
     .map((part) => part.text)
     .join("");
   expect(sentText).toContain("cosir-snippet:src/main.py#L1-L2");
@@ -322,9 +320,9 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史及编辑重�
   await expect(edit.locator("[data-workspace-reference]")).toHaveCount(3);
   await page.getByRole("button", { name: "重跑", exact: true }).click();
   await expect.poll(() => sent.length).toBe(2);
-  expect(sent[1].commands[0].sourceId).toBeTruthy();
+  expect(sent[1].url).toMatch(/\/messages\/[^/]+\/edit$/);
   expect(
-    sent[1].commands[0].message.parts
+    sent[1].message.parts
       .map((part) => part.text)
       .join("")
       .trimEnd(),

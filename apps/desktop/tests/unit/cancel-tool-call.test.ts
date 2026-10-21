@@ -7,13 +7,13 @@ import { cancelToolCall } from "@/lib/assistant/cancel-tool-call";
 describe("cancelToolCall", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("posts to the run-scoped tool cancellation endpoint", async () => {
+  it("posts to the task-scoped tool cancellation endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(cancelToolCall(12, "call/1")).resolves.toEqual({ kind: "signalled" });
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringMatching(/\/runs\/12\/tool-calls\/call%2F1\/cancel$/),
+      expect.stringMatching(/\/tasks\/12\/tool-calls\/call%2F1\/cancel$/),
       expect.objectContaining({
         method: "POST",
         cache: "no-store",
@@ -28,9 +28,9 @@ describe("cancelToolCall", () => {
     await expect(cancelToolCall(12, "call-1")).resolves.toEqual({ kind: "already_signalled" });
   });
 
-  it("reports a missing run and network failure without claiming cancellation", async () => {
+  it("reports a rejection and network failure without claiming cancellation", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
-    await expect(cancelToolCall(12, "call-1")).resolves.toMatchObject({ kind: "failed", reason: "run_not_found" });
+    await expect(cancelToolCall(12, "call-1")).resolves.toMatchObject({ kind: "failed", reason: "rejected" });
 
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
     await expect(cancelToolCall(12, "call-1")).resolves.toMatchObject({ kind: "failed", reason: "network" });
@@ -40,7 +40,7 @@ describe("cancelToolCall", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(cancelToolCall(null, "call-1")).resolves.toMatchObject({ kind: "failed", reason: "invalid_target" });
+    await expect(cancelToolCall(undefined, "call-1")).resolves.toMatchObject({ kind: "failed", reason: "invalid_target" });
     await expect(cancelToolCall(12, "   ")).resolves.toMatchObject({ kind: "failed", reason: "invalid_target" });
     expect(fetchMock).not.toHaveBeenCalled();
   });

@@ -123,11 +123,14 @@ def test_all_domain_routes_registered_on_same_app() -> None:
         "/model-configs",
         "/model-configs/{config_id}",
         "/model-configs/test",
-        "/assistant",
+        "/tasks/{task_id}/messages",
+        "/tasks/{task_id}/messages/{message_id}/edit",
+        "/tasks/{task_id}/resume",
+        "/tasks/{task_id}/decisions",
         "/tasks/{task_id}/assistant/attach",
         "/tasks/{task_id}/assistant/state",
         "/tasks/{task_id}/cancel",
-        "/runs/{run_id}/tool-calls/{tool_call_id}/cancel",
+        "/tasks/{task_id}/tool-calls/{tool_call_id}/cancel",
         "/configuration/terminal-denylist",
     }
     missing = expected - oa_paths
@@ -767,7 +770,7 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     )
     monkeypatch.setattr(
         lifespan_module,
-        "get_conversation_run_executor",
+        "get_workflow_session",
         record("get_executor", _Executor()),
     )
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", record("close_deps"))
@@ -786,11 +789,6 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         lifespan_module,
         "set_agent_team_configuration_service",
         record("set_agent_team_configuration_service"),
-    )
-    monkeypatch.setattr(lifespan_module, "set_runtime", record("set_runtime"))
-    monkeypatch.setattr(lifespan_module, "AgentRuntime", record("agent_runtime", "runtime"))
-    monkeypatch.setattr(
-        lifespan_module, "ToolRuntimeOutputChannelFactory", record("output_channel_factory")
     )
     monkeypatch.setattr(lifespan_module.HookInterceptor, "safe_fire", _safe_fire_stub(recorder))
 

@@ -45,6 +45,9 @@ from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationService,
 )
 
+# 节点 Run 在父 Run 事件循环上执行；这里只需一个未关闭的循环身份。
+_OPEN_LOOP = SimpleNamespace(is_closed=lambda: False)
+
 
 # --------------------------------------------------------------------------- #
 # 夹具与构造助手
@@ -436,7 +439,9 @@ def test_approve_decision_routes_to_start_branch_only() -> None:
     calls: list[tuple] = []
     row = SimpleNamespace(id=7, status=AgentTeamRunStatus.RUNNING.value, team_id="code-quality")
 
-    def confirm_and_start(team_run_id, configuration, *, goal, node_goals, parent_agent_profile):
+    def confirm_and_start(
+        team_run_id, configuration, *, goal, node_goals, parent_agent_profile, event_loop
+    ):
         calls.append((team_run_id, configuration, goal, node_goals, parent_agent_profile))
         return row
 
@@ -546,7 +551,7 @@ def test_confirmed_start_returns_running_observation() -> None:
     row = SimpleNamespace(id=11, status=AgentTeamRunStatus.RUNNING.value, team_id="code-quality")
     tool = _start_branch_tool(lambda *a, **k: row)
 
-    observation = tool._start_confirmed_run(_approve_decision(), _parent_run_profile())
+    observation = tool._start_confirmed_run(_approve_decision(), _parent_run_profile(), _OPEN_LOOP)
 
     assert observation.status == "success"
     assert json.loads(observation.content) == {"status": "running", "team_id": "code-quality"}
@@ -563,7 +568,7 @@ def test_confirmed_start_rejects_non_numeric_request_id() -> None:
     tool = _start_branch_tool(lambda *a, **k: pytest.fail("非法 request_id 不得触达启动服务"))
     decision = UserDecision(request_id="not-a-number", kind=UserDecisionKind.APPROVE, data={})
 
-    observation = tool._start_confirmed_run(decision, _parent_run_profile())
+    observation = tool._start_confirmed_run(decision, _parent_run_profile(), _OPEN_LOOP)
 
     assert observation.status == "error"
     assert observation.error == "agent_team_confirmation_invalid"
@@ -582,7 +587,7 @@ def test_confirmed_start_rejects_malformed_payload() -> None:
         request_id="7", kind=UserDecisionKind.APPROVE, data={"goal": "交付报告"}
     )
 
-    observation = tool._start_confirmed_run(decision, _parent_run_profile())
+    observation = tool._start_confirmed_run(decision, _parent_run_profile(), _OPEN_LOOP)
 
     assert observation.status == "error"
     assert observation.error == "agent_team_confirmation_invalid"
@@ -600,7 +605,7 @@ def test_confirmed_start_maps_missing_pending_run_to_error() -> None:
         raise KeyError(7)
 
     observation = _start_branch_tool(confirm_and_start)._start_confirmed_run(
-        _approve_decision(), _parent_run_profile()
+        _approve_decision(), _parent_run_profile(), _OPEN_LOOP
     )
 
     assert observation.status == "error"
@@ -619,7 +624,7 @@ def test_confirmed_start_surfaces_domain_value_error() -> None:
         raise ValueError("确认配置的 team_id 与待确认 Team 不一致")
 
     observation = _start_branch_tool(confirm_and_start)._start_confirmed_run(
-        _approve_decision(), _parent_run_profile()
+        _approve_decision(), _parent_run_profile(), _OPEN_LOOP
     )
 
     assert observation.status == "error"
@@ -646,7 +651,7 @@ def test_confirmed_start_does_not_report_success_for_terminal_runs(terminal_stat
         end_reason="节点 draft 执行失败",
     )
     observation = _start_branch_tool(lambda *a, **k: row)._start_confirmed_run(
-        _approve_decision(), _parent_run_profile()
+        _approve_decision(), _parent_run_profile(), _OPEN_LOOP
     )
 
     assert observation.status == "error"

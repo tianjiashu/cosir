@@ -24,6 +24,8 @@ let nextRunId = 1;
 let nextResumeRunId = 900;
 let testGeneration = 0;
 const cancelledRuns = new Set();
+// taskId -> 下一次 attach 要推送的本轮输出；由命令回执登记，attach 消费一次。
+const pendingStreams = new Map();
 const dropCancelledStreams = new Set();
 let dropNextCancelledStream = false;
 let failNextAttach = false;
@@ -38,6 +40,7 @@ function resetTestState() {
   tasks.clear();
   states.clear();
   cancelledRuns.clear();
+  pendingStreams.clear();
   dropCancelledStreams.clear();
   dropNextCancelledStream = false;
   failNextAttach = false;
@@ -326,7 +329,7 @@ function jsonResponse(res, status, value) {
     "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
     "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    "Access-Control-Expose-Headers": "X-Cosir-Task-Id, X-Cosir-Thread-Id",
+    "Access-Control-Expose-Headers": "X-Cosir-Task-Id",
     "Content-Type": "application/json; charset=utf-8",
   });
   res.end(JSON.stringify(value));
@@ -379,7 +382,7 @@ async function streamState(res, initialState, finalState, assistantIndex, chunks
     "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
     "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    "Access-Control-Expose-Headers": "X-Cosir-Task-Id, X-Cosir-Thread-Id",
+    "Access-Control-Expose-Headers": "X-Cosir-Task-Id",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -481,7 +484,7 @@ async function streamToolLifecycle(res, initialState, finalState, runId, generat
     "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
     "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    "Access-Control-Expose-Headers": "X-Cosir-Task-Id, X-Cosir-Thread-Id",
+    "Access-Control-Expose-Headers": "X-Cosir-Task-Id",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
     "Content-Type": "text/event-stream; charset=utf-8",
@@ -524,24 +527,26 @@ function readJson(req) {
 }
 
 function commandText(body) {
-  return body?.commands?.[0]?.message?.parts
+  return body?.message?.parts
     ?.filter((part) => part?.type === "text" && typeof part.text === "string")
     .map((part) => part.text)
     .join("\n") ?? "";
 }
 
-async function handleAssistant(req, res, body) {
-  telemetry.requestBodies.push(body);
+/**
+ * 模拟 POST /tasks/{id}/messages 与 /messages/{messageId}/edit：只返回 JSON 回执，把本轮输出登记为
+ * 待推流，由随后的 attach 订阅推送；与生产「命令回执 + attach 订阅」的两段语义一致。
+ */
+function handleMessage(res, body, taskId, sourceId) {
+  telemetry.requestBodies.push({ ...body, taskId, ...(sourceId ? { sourceId } : {}) });
   const text = commandText(body);
   if (!text.trim()) {
     jsonResponse(res, 400, { error: { code: "INVALID_MESSAGE", message: "message is required", retryable: false } });
     return;
   }
 
-  const taskId = Number.isInteger(body.taskId) ? body.taskId : TASK_ID;
   const runId = nextRunId++;
   const previous = states.get(taskId) ?? emptyState();
-  const sourceId = body?.commands?.find((command) => command?.type === "add-message")?.sourceId;
   if (typeof sourceId === "string" && text === "edit-failure") {
     jsonResponse(res, 409, {
       error: { code: "EDIT_REJECTED", message: "编辑重跑被测试后端拒绝", retryable: true },
@@ -572,9 +577,8 @@ async function handleAssistant(req, res, body) {
     const finalToolStatus = finalStatus === "completed" ? "completed" : finalStatus;
     const toolFinalState = toolLifecycleState(branchBase, text, runId, finalStatus, finalToolStatus);
     states.set(taskId, toolFinalState);
-    res.setHeader("X-Cosir-Task-Id", String(taskId));
-    res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
-    await streamToolLifecycle(res, toolInitialState, toolFinalState, runId, testGeneration, taskId);
+    pendingStreams.set(taskId, (attachRes) => streamToolLifecycle(attachRes, toolInitialState, toolFinalState, runId, testGeneration, taskId));
+    jsonResponse(res, 200, { state: toolInitialState, queued: false });
     return;
   }
 
@@ -587,25 +591,23 @@ async function handleAssistant(req, res, body) {
     applyUsageFixture(finalState, runId, text.includes("second"));
   }
   states.set(taskId, finalState);
-
-  res.setHeader("X-Cosir-Task-Id", String(taskId));
-  res.setHeader("X-Cosir-Thread-Id", `task-${taskId}`);
-  await streamState(res, initialState, finalState, assistantIndex, chunks, runId, testGeneration, taskId);
+  pendingStreams.set(taskId, (attachRes) => streamState(attachRes, initialState, finalState, assistantIndex, chunks, runId, testGeneration, taskId));
+  jsonResponse(res, 200, { state: initialState, queued: false });
 }
 
-async function handleResume(req, res, body, threadIdPrefix = "task") {
-  const taskId = Number.isInteger(body.taskId) ? body.taskId : TASK_ID;
+/**
+ * 计算续跑的初始与最终快照。``business`` 为真时模拟 POST /tasks/{id}/resume（只接受用户取消的
+ * Run），否则模拟 attach 订阅一个仍在执行的 seeded Run。不可续跑时返回 null。
+ */
+function resumePlan(taskId, { business }) {
   const previous = states.get(taskId);
   const previousRun = previous?.runs.find((run) => run.runId === previous.current_run_id);
   const lastMessage = previousRun?.messages.at(-1);
   const resumableCancelled = previousRun?.status === "cancelled"
     && lastMessage?.role === "assistant"
     && previousRun.endReason === "user_cancelled";
-  if (!previous || (!resumableCancelled && previousRun?.status !== "pending" && previousRun?.status !== "running")) {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
+  const running = previousRun?.status === "pending" || previousRun?.status === "running";
+  if (!previous || (business ? !resumableCancelled : !running && !resumableCancelled)) return null;
 
   const runId = previous.current_run_id ?? nextResumeRunId++;
   cancelledRuns.delete(runId);
@@ -625,13 +627,32 @@ async function handleResume(req, res, body, threadIdPrefix = "task") {
   finalState.runs[runIndex].status = "completed";
   finalState.runs[runIndex].endReason = "stop";
   states.set(taskId, finalState);
-  res.setHeader("X-Cosir-Task-Id", String(taskId));
-  res.setHeader("X-Cosir-Thread-Id", `${threadIdPrefix}-${taskId}`);
-  await streamState(res, initialState, finalState, assistantIndex, ["resumed", " response"], runId, testGeneration, taskId);
+  return (attachRes) => streamState(attachRes, initialState, finalState, assistantIndex, ["resumed", " response"], runId, testGeneration, taskId);
 }
 
-async function handleAttach(req, res, body) {
-  const taskId = Number.isInteger(body.taskId) ? body.taskId : TASK_ID;
+function handleBusinessResume(res, taskId) {
+  const stream = resumePlan(taskId, { business: true });
+  if (!stream) {
+    jsonResponse(res, 409, { error: { code: "RUN_NOT_RESUMABLE", message: "当前运行不可恢复", retryable: true } });
+    return;
+  }
+  // 续跑前状态已迁回 running：回执快照与随后 attach 的首帧一致。
+  const state = structuredClone(states.get(taskId));
+  const run = state.runs.find((candidate) => candidate.runId === state.current_run_id);
+  run.status = "running";
+  run.endReason = null;
+  pendingStreams.set(taskId, stream);
+  jsonResponse(res, 200, { state, queued: false });
+}
+
+async function handleAttach(res, taskId) {
+  res.setHeader("X-Cosir-Task-Id", String(taskId));
+  const pending = pendingStreams.get(taskId);
+  if (pending) {
+    pendingStreams.delete(taskId);
+    await pending(res);
+    return;
+  }
   const previous = states.get(taskId);
   const previousRun = previous?.runs.find((run) => run.runId === previous.current_run_id);
   const lastMessage = previousRun?.messages.at(-1);
@@ -640,19 +661,22 @@ async function handleAttach(req, res, body) {
   // the result merely because the two local HTTP streams are independent.
   if (previousRun?.status === "completed" && lastMessage?.role === "assistant") {
     const assistantIndex = previousRun.messages.length - 1;
-    res.setHeader("X-Cosir-Task-Id", String(taskId));
-    res.setHeader("X-Cosir-Thread-Id", `conversation_run-${taskId}`);
     await streamState(res, previous, previous, assistantIndex, [], previousRun.runId, testGeneration, taskId);
     return;
   }
-  await handleResume(req, res, body, "conversation_run");
+  const stream = resumePlan(taskId, { business: false });
+  if (!stream) {
+    jsonResponse(res, 409, { error: { code: "NO_RUN", message: "当前对话没有可订阅的运行", retryable: false } });
+    return;
+  }
+  await stream(res);
 }
 
 const server = createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:4173");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Trace-Id");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Expose-Headers", "X-Cosir-Task-Id, X-Cosir-Thread-Id");
+  res.setHeader("Access-Control-Expose-Headers", "X-Cosir-Task-Id");
 
   if (req.method === "OPTIONS") {
     res.writeHead(204);
@@ -888,39 +912,32 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, states.get(taskId));
     return;
   }
+  const taskRoute = url.pathname.match(/^\/tasks\/(\d+)\/(messages|resume|messages\/([^/]+)\/edit)$/);
+  if (req.method === "POST" && taskRoute) {
+    const routeTaskId = Number(taskRoute[1]);
+    try {
+      if (taskRoute[2] === "resume") handleBusinessResume(res, routeTaskId);
+      else handleMessage(res, await readJson(req), routeTaskId, taskRoute[3] ? decodeURIComponent(taskRoute[3]) : null);
+    } catch {
+      jsonResponse(res, 400, { error: { code: "INVALID_REQUEST", message: "invalid request", retryable: false } });
+    }
+    return;
+  }
   if (req.method === "POST" && /^\/tasks\/\d+\/assistant\/attach$/.test(url.pathname)) {
     try {
-      const body = await readJson(req);
       if (failNextAttach) {
         failNextAttach = false;
         jsonResponse(res, 503, { error: { code: "ATTACH_TEMPORARY_FAILURE", message: "attach temporarily unavailable", retryable: true } });
         return;
       }
-      // The fixture models an already-running local executor. In production
-      // this endpoint only attaches the UI stream; it must not be confused
-      // with the user-triggered business resume on /assistant.
-      await handleAttach(req, res, body);
+      // attach 只订阅：命令回执登记的待推流优先，否则订阅 seeded 的运行中 Run。
+      await handleAttach(res, Number(url.pathname.split("/")[2]));
     } catch {
       if (!res.headersSent) jsonResponse(res, 400, { error: { code: "INVALID_REQUEST", message: "invalid request", retryable: false } });
       else res.destroy();
     }
     return;
   }
-  if (req.method === "POST" && url.pathname === "/assistant") {
-    try {
-      const body = await readJson(req);
-      if (Array.isArray(body.commands) && body.commands.length === 0) {
-        await handleResume(req, res, body);
-      } else {
-        await handleAssistant(req, res, body);
-      }
-    } catch {
-      if (!res.headersSent) jsonResponse(res, 400, { error: { code: "INVALID_REQUEST", message: "invalid request", retryable: false } });
-      else res.destroy();
-    }
-    return;
-  }
-
   jsonResponse(res, 404, { detail: "not found" });
 });
 

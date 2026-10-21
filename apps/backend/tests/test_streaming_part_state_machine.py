@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from openai.types.chat import ParsedFunctionToolCall
 
-from app.assistant_transport.event import (
+from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
     ToolCallCreatedEvent,
@@ -48,8 +48,8 @@ class _Harness:
     ) -> None:
         self.clock = clock or _Clock()
         self.events: list[Any] = []
-        # stream_writer 在构造期从运行上下文取得，测试用替身提供收集器。
-        with patch.object(machine_module, "get_stream_writer", lambda: self.events.append):
+        # 事件出口在构造期绑定（生产为 ``emit``），测试用替身提供收集器。
+        with patch.object(machine_module, "emit", self.events.append):
             self.machine = StreamingPartStateMachine(task_id=1, run_id=2, step_id="step-1")
         # 合并阈值与时钟是构造期固化的实现细节（生产取 Constant + time.monotonic），测试按用例
         # 白盒注入，才能在字符阈值与时间阈值两个维度上可控。
@@ -253,15 +253,14 @@ def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> No
 
     harness = _Harness(min_chars=1_000, max_interval=1_000.0)
     written: list[Any] = []
-    operations = SimpleNamespace(
-        vaild_tool_name=lambda name: name in {"read_file", "write_file"},
-        all_vaild_tools=[
-            SimpleNamespace(name="read_file", display=None),
-            SimpleNamespace(name="write_file", display=None),
-        ],
+    runtime = SimpleNamespace(
+        tool_definitions={
+            "read_file": SimpleNamespace(name="read_file", display=None),
+            "write_file": SimpleNamespace(name="write_file", display=None),
+        },
         allows_tools=frozenset({"read_file"}),
+        batch=ToolBatch(),
     )
-    runtime = SimpleNamespace(operations=operations, batch=ToolBatch())
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
         machine_module,
@@ -289,13 +288,12 @@ def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> No
 def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monkeypatch) -> None:
     """同一请求内重复帧只投影一次；请求边界清空记账后同一 id 才会重新投影。"""
 
-    operations = SimpleNamespace(
-        vaild_tool_name=lambda name: name == "read_file",
-        all_vaild_tools=[SimpleNamespace(name="read_file", display=None)],
-        allows_tools=frozenset({"read_file"}),
-    )
     written: list[Any] = []
-    runtime = SimpleNamespace(operations=operations, batch=ToolBatch())
+    runtime = SimpleNamespace(
+        tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
+        allows_tools=frozenset({"read_file"}),
+        batch=ToolBatch(),
+    )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
         machine_module,
@@ -314,7 +312,7 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
     # 请求边界：model_node 清空记账，同一 id 属于新请求，必须重新投影。
     runtime.batch = ToolBatch()
     second_events: list[Any] = []
-    with patch.object(machine_module, "get_stream_writer", lambda: second_events.append):
+    with patch.object(machine_module, "emit", second_events.append):
         second = StreamingPartStateMachine(task_id=1, run_id=2, step_id="step-2")
     second.tool_call([_tool_call("c1", "read_file")])
 

@@ -7,11 +7,11 @@ type RenderOptions = {
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
   args?: Record<string, string>;
   display_data?: Record<string, unknown> | null;
-  runId?: number | null;
+  taskId?: number;
   runCancelling?: boolean;
 };
 
-function renderTerminal({ status, args = {}, display_data = null, runId = null, runCancelling = false }: RenderOptions): string {
+function renderTerminal({ status, args = {}, display_data = null, taskId, runCancelling = false }: RenderOptions): string {
   return renderToStaticMarkup(
     <TerminalTool
       type="tool-call"
@@ -23,7 +23,7 @@ function renderTerminal({ status, args = {}, display_data = null, runId = null, 
       addResult={() => undefined}
       resume={() => undefined}
       respondToApproval={() => undefined}
-      runId={runId}
+      taskId={taskId}
       runCancelling={runCancelling}
       artifact={{
         backendStatus: status,
@@ -90,10 +90,10 @@ describe("TerminalTool", () => {
   });
 
   it("shows a separate stop action only for a running terminal call with its run identity", () => {
-    const running = renderTerminal({ status: "running", runId: 24 });
-    const pending = renderTerminal({ status: "pending", runId: 24 });
+    const running = renderTerminal({ status: "running", taskId: 24 });
+    const pending = renderTerminal({ status: "pending", taskId: 24 });
     const missingRun = renderTerminal({ status: "running" });
-    const wholeRunCancelling = renderTerminal({ status: "running", runId: 24, runCancelling: true });
+    const wholeRunCancelling = renderTerminal({ status: "running", taskId: 24, runCancelling: true });
 
     expect(running).toContain('aria-label="停止终端命令"');
     expect(running).toContain("停止</span>");
@@ -104,7 +104,7 @@ describe("TerminalTool", () => {
 
   it("hides the stop action after the tool reaches a terminal status", () => {
     for (const status of ["completed", "failed", "cancelled"] as const) {
-      const html = renderTerminal({ status, runId: 24 });
+      const html = renderTerminal({ status, taskId: 24 });
       expect(html).not.toContain('aria-label="停止终端命令"');
     }
   });

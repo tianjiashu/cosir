@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon, UsersIcon } from "lucide-react";
 
-import { submitUserInputDecision } from "@/lib/assistant/submit-user-input-decision";
+import { submitTaskDecision } from "@/lib/assistant/task-commands";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { Alert } from "@/components/ui/alert";
@@ -217,19 +217,15 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
       setMessage("运行状态尚未就绪，请稍后重试");
       return;
     }
-    if (runId === undefined || runId === null || taskId === undefined) {
+    if (taskId === undefined) {
       setState("failed");
-      setMessage("无法定位该执行方案所属的运行，请刷新页面后重试");
+      setMessage("无法定位该执行方案所属的对话，请刷新页面后重试");
       return;
     }
     setState(phase);
     setMessage("");
     try {
-      await submitUserInputDecision({
-        taskId,
-        runId,
-        decision: { request_id: review.requestId, decision, data },
-      });
+      await submitTaskDecision(taskId, { requestId: review.requestId, decision, data });
       setState(decision === "approve" ? "confirmed" : "rejected");
       setMessage(
         decision === "approve"

@@ -12,18 +12,17 @@ from typing import Literal, get_args
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from app.assistant_transport.event import (
+from app.assistant_transport.event import ConversationEvent, UserInputAppendedEvent
+from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
-    ConversationEvent,
-    ConversationEventEnvelope,
     RunInitializedEvent,
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
-    UserInputAppendedEvent,
+    WorkflowEventEnvelope,
 )
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
@@ -323,9 +322,16 @@ def test_union_covers_every_event_type() -> None:
         无；只做类型反射。
     """
 
-    declared = set(ConversationEventEnvelope.__subclasses__())
+    declared = set(WorkflowEventEnvelope.__subclasses__())
     registered = set(get_args(get_args(ConversationEvent)[0]))
     assert declared == registered
+
+
+def test_every_event_type_has_a_planner() -> None:
+    """联合中的每个事件类型都必须注册投影 planner，否则投影时以 KeyError 暴露。"""
+    from app.assistant_transport.projection.event_projection import _PLANNERS
+
+    assert set(get_args(get_args(ConversationEvent)[0])) == set(_PLANNERS)
 
 
 def test_event_type_literals_are_unique() -> None:
