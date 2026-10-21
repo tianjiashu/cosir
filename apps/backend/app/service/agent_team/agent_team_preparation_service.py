@@ -383,8 +383,8 @@ class AgentTeamPreparationService:
                 "structured_output": structured_output.to_document(),
                 "model_config_id": profile.model_config_id or parent_agent_profile.model_config_id,
                 # 快照只冻结可持久化的用户偏好项：运行期连接与能力字段（尤其 ``api_key``）按
-                # ``ModelSettings`` 契约只在进程内存在，不得随快照落库；节点执行时由
-                # ``run.model_config_id`` 经 ``AgentRuntime.materialize_run_model_settings`` 现取。
+                # ``ModelSettings`` 契约只在进程内存在，不得随快照落库；节点执行时由运行时按
+                # ``run.model_config_id`` 物化（``run_driver._resolve_profile``）。
                 "model_settings": model_settings.to_dict(),
             }
             resolved_nodes.append(

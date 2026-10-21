@@ -13,7 +13,7 @@
 管线只做编排：每个阶段的实现各自收口在对应协作者中，本模块不含隔离执行细节、
 门禁规则或预算算法。门禁拒绝、状态协调提前返回和执行器返回的观察都会经过模型输出预算；
 只有通过准入、未在状态准备或 stale 检查阶段提前返回并调用 ``ToolHandlerRunner`` 的路径会触发
-PostToolUse Hook，包括 Runner 在 handler 启动前返回取消观察的情况。上层（``WorkflowOperations``）
+PostToolUse Hook，包括 Runner 在 handler 启动前返回取消观察的情况。上层（``run_tool_batch``）
 只依赖 ``execute`` 一个入口，正常返回时拿到 :class:`ToolObservation`。
 
 本模块还承载工具终态向进程内 Transport snapshot 提前投影的唯一落点：普通观察只在
@@ -319,7 +319,7 @@ class ToolExecutor:
                 该路径不产生观察因而不触发终态投影。
             Exception: :meth:`_execute_inner` 抛出的任何其它异常都会原样上抛；上抛前已把该
                 调用投影为 ``failed`` 终态，避免前端停留在 ``running``。上游
-                ``WorkflowOperations`` 随后自行把该异常归一化为内部错误观察。
+                ``run_tool_batch`` 随后自行把该异常归一化为内部错误观察。
 
         副作用:
             除 :meth:`_execute_inner` 的副作用外，普通观察额外把工具终态直投进进程内 snapshot；
