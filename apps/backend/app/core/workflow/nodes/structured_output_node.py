@@ -16,6 +16,7 @@ from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, route_state
+from app.service import depends as service_depends
 from app.utils.message_content import content_to_text
 
 
@@ -167,7 +168,7 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
                 choice.message, spec.json_schema
             )
             if final_output is not None:
-                runtime.run_state.update_completed_result(
+                service_depends.get_conversation_run_state_service().update_completed_result(
                     run_id,
                     final_output=final_output,
                     usage_stats=runtime.usage_stats,
@@ -199,7 +200,7 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
                 },
             },
         )
-    runtime.run_state.update_completed_result(
+    service_depends.get_conversation_run_state_service().update_completed_result(
         run_id,
         end_reason=Constant.Workflow.STRUCTURED_OUTPUT_FAILURE_REASON,
         usage_stats=runtime.usage_stats,
