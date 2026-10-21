@@ -10,7 +10,7 @@ UI 展示通道也不进入模型通道，因此本模块只对源文件做**有
 
 import os
 
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_change_display_data
 from app.core.tools.schemas import (
     TOOL_MOVE_FILE,

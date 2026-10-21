@@ -16,19 +16,12 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_event_projector import (
         ConversationEventProjector,
     )
-    from app.assistant_transport.service.conversation_run_command_service import (
-        ConversationRunCommandService,
-    )
     from app.assistant_transport.service.conversation_task_state_service import (
         ConversationTaskStateService,
     )
     from app.assistant_transport.service.transport_assistant_service import (
         TransportAssistantService,
     )
-    from app.core.runtime.conversation_run_executor import (
-        ConversationRunExecutor,
-    )
-    from app.core.runtime.runner import AgentRuntime
     from app.service.conversation_run.conversation_run_service import ConversationRunService
     from app.service.conversation_run.conversation_run_state_service import (
         ConversationRunStateService,
@@ -36,6 +29,7 @@ if TYPE_CHECKING:
     from app.service.conversation_run.conversation_task_context_service import (
         ConversationTaskContextService,
     )
+    from app.service.conversation_run.workflow_session import WorkflowSession
     from app.service.conversation_run.workspace_service import WorkspaceService
     from app.service.model_config import ModelConfigService
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
@@ -48,50 +42,6 @@ if TYPE_CHECKING:
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.task_runtime.service.task_service import TaskService
-
-
-_RUNTIME: AgentRuntime | None = None
-
-
-def set_runtime(runtime: AgentRuntime) -> None:
-    """设置进程级运行时单例。
-
-    参数:
-        runtime: 已构建的运行时实例，由应用启动时构建并注入。
-
-    返回:
-        无。
-
-    异常:
-        无。
-
-    副作用:
-        替换模块级运行时单例。
-    """
-
-    global _RUNTIME
-    _RUNTIME = runtime
-
-
-def get_runtime() -> AgentRuntime:
-    """返回进程级运行时单例。
-
-    参数:
-        无。
-
-    返回:
-        已配置的 ``AgentRuntime`` 实例。
-
-    异常:
-        RuntimeError: 如果运行时尚未初始化（未调用 ``set_runtime``）。
-
-    副作用:
-        无。
-    """
-
-    if _RUNTIME is None:
-        raise RuntimeError("runtime has not been initialized")
-    return _RUNTIME
 
 
 def initialize_service_dependencies() -> None:
@@ -358,14 +308,12 @@ def get_transport_assistant_service() -> TransportAssistantService:
 
 
 @lru_cache(maxsize=1)
-def get_conversation_run_command_service() -> ConversationRunCommandService:
-    """返回进程级 Transport command 接收与 Conversation Run 编排 service 单例。"""
+def get_workflow_session() -> WorkflowSession:
+    """返回进程级 Task 调度入口：调度规则与执行登记都在这里，执行登记不跨实例。"""
 
-    from app.assistant_transport.service.conversation_run_command_service import (
-        ConversationRunCommandService,
-    )
+    from app.service.conversation_run.workflow_session import WorkflowSession
 
-    return ConversationRunCommandService()
+    return WorkflowSession()
 
 
 @lru_cache(maxsize=1)
@@ -426,25 +374,6 @@ def get_conversation_event_projector() -> ConversationEventProjector:
     return ConversationEventProjector()
 
 
-@lru_cache(maxsize=1)
-def get_conversation_run_executor() -> ConversationRunExecutor:
-    """返回进程级后台运行执行器。
-
-    无参数：执行器只依赖 run service。取消信号不再经 service 层注入端口——它由 core 的
-    ``cancellation_registry`` 承载，由 ``ConversationRunExecutor.cancel`` 标记。
-
-    返回:
-        已装配 run service 的 ConversationRunExecutor 单例（``lru_cache`` 缓存）。
-
-    异常:
-        RuntimeError: 若存储初始化失败。
-    """
-    from app.core.runtime.conversation_run_executor import ConversationRunExecutor
-
-    executor = ConversationRunExecutor()
-    return executor
-
-
 def reset_service_dependencies() -> None:
     """Clear service-layer dependency singletons.
 
@@ -482,10 +411,9 @@ def reset_service_dependencies() -> None:
     get_task_crud.cache_clear()
     get_model_config_crud.cache_clear()
     get_conversation_task_context_crud.cache_clear()
-    get_conversation_run_command_service.cache_clear()
+    get_workflow_session.cache_clear()
     get_conversation_run_state_service.cache_clear()
     get_transport_assistant_service.cache_clear()
-    get_conversation_run_executor.cache_clear()
     get_conversation_event_projector.cache_clear()
     get_conversation_task_state_service.cache_clear()
     get_conversation_task_context_service.cache_clear()
@@ -497,17 +425,15 @@ def _shutdown_cached_runtime_before_reset() -> None:
     """Close process-local runtime owners before dropping their cached identities.
 
     ``reset_service_dependencies`` is synchronous and is used by tests and storage-path
-    reconfiguration.  It therefore uses ``ConversationRunExecutor.close_sync`` as its explicit
+    reconfiguration.  It therefore uses ``WorkflowSession.close_sync`` as its explicit
     deterministic contract: terminal workers are fenced, task cancellation is posted to owner
     loops, and process-local indexes are cleared before caches are discarded.  The normal
     application lifespan uses the awaitable close path instead.
     """
 
-    executor = None
-    if get_conversation_run_executor.cache_info().currsize:
-        executor = get_conversation_run_executor()
+    if get_workflow_session.cache_info().currsize:
         try:
-            executor.close_sync()
+            get_workflow_session().close_sync()
         except BaseException as exc:
             log.error(
                 "service_dependency_runtime_reset_failed",

@@ -3,8 +3,8 @@
 包含任务查询、事件与运行期缓存 取消端点。所有端点通过模块级 ``@app.*`` 装饰器
 直接注册到 ``app.api.app.app`` 单例中。
 
-分层约定：任务查询、轮次列表与事件回放均依赖业务 service；取消与健康检查属于
-运行时执行 / 生命周期职责，仍依赖 ``AgentRuntime``。
+分层约定：任务查询、轮次列表与事件回放均依赖业务 service；删除前停止执行经
+``WorkflowSession``。
 """
 
 import asyncio
@@ -19,7 +19,6 @@ from app.api.schemas import (
     TaskResponse,
 )
 from app.app import app
-from app.core.runtime.conversation_run_executor import ConversationRunExecutor
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
     ProvisionalTaskCleanupConflictError,
@@ -29,10 +28,11 @@ from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
+from app.service.conversation_run.workflow_session import WorkflowSession
 from app.service.depends import (
-    get_conversation_run_executor,
     get_conversation_task_context_service,
     get_task_service,
+    get_workflow_session,
 )
 from app.task_runtime.service.task_service import TaskService
 
@@ -108,7 +108,7 @@ async def fork_task(
 async def delete_task(
     task_id: int,
     task_service: TaskService = Depends(get_task_service),
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+    workflow_session: WorkflowSession = Depends(get_workflow_session),
     creation_command_id: str | None = Query(default=None, alias="creationCommandId"),
 ) -> DeleteTaskResponse:
     """删除单个任务及其级联的轮次与运行时事件。
@@ -140,7 +140,7 @@ async def delete_task(
             # 先在删除闸门外停止整棵任务树的执行并等其释放，否则工作流会在已删除的 Task 上
             # 继续请求模型、执行工具。
             task_ids = await asyncio.to_thread(task_service.collect_task_tree_ids, task_id)
-            await run_executor.stop_tasks(task_ids)
+            await workflow_session.stop_tasks(task_ids)
             await asyncio.to_thread(task_service.delete_task, task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc

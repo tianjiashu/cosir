@@ -12,10 +12,9 @@
 - 两组单例均为 ``None`` 起步，由应用启动（``api/app.py`` 的 lifespan / ``create_app``）
   经对应 ``set_*`` 注入；未注入即 ``get_*`` 会抛出一致的 ``RuntimeError``，避免散落的
   模块级全局变量与 ``global`` 声明。
-- 本模块仅收口轻量配置层可安全持有的 agent 目录与工具系统；运行时（``AgentRuntime``）
-  单例（``set_runtime`` / ``get_runtime``）因依赖 service 装配与 ``RuntimeContextBuilder``，
-  收口在 ``app.service.depends``；领域 service 与底层 CRUD/Store 单例同样由 ``app.service.depends``
-  统一管理。本模块均不持有，避免 ``config`` 层耦合 service / core 装配。
+- 本模块仅收口轻量配置层可安全持有的 agent 目录与工具系统；领域 service 与底层 CRUD/Store
+  单例由 ``app.service.depends`` 统一管理。本模块均不持有，避免 ``config`` 层耦合
+  service / core 装配。
 """
 
 from __future__ import annotations

@@ -17,7 +17,13 @@ from tests.sdk_fixtures import sdk_completion
 def loop(monkeypatch):
     progress = []
     calls = []
-    context = SimpleNamespace(begin_run=lambda *args: None)
+    context = SimpleNamespace(
+        begin_run=lambda *args: None,
+        load_message=lambda: [
+            {"role": "user", "content": "问题"},
+            {"role": "assistant", "content": "自然回答"},
+        ],
+    )
     model = SimpleNamespace(close=AsyncMock())
     profile = SimpleNamespace(max_steps=10, structured_output=None)
     run = SimpleNamespace(id=1, task_id=2, execution_data=ConversationRunProgress(), usage=None)
@@ -38,7 +44,9 @@ def loop(monkeypatch):
         "resolve_chat_model",
         lambda **kw: SimpleNamespace(model=model, supports_thinking=False),
     )
-    return SimpleNamespace(run=run, ops=operations, progress=progress, calls=calls, model=model)
+    return SimpleNamespace(
+        run=run, ops=operations, progress=progress, calls=calls, model=model, context=context
+    )
 
 
 @pytest.mark.asyncio
@@ -134,7 +142,10 @@ async def test_wait_returns_without_extra_model_or_queue(loop, monkeypatch):
     ],
 )
 async def test_structured_output_updates_completed_run_result(loop, monkeypatch, outcome):
-    """主线先完成；结构化支线只替换最终输出或失败原因，不重复迁移 Run。"""
+    """主线先完成；结构化支线成功只替换最终输出，失败（含结果写入失败）只记录失败原因。
+
+    成功后必须立即结束：回归点是成功写入后又落到失败写入，把 end_reason 覆盖成失败。
+    """
     from app.core.workflow.node_helper.common import _runtime_context
     loop.ops.profile.structured_output = SimpleNamespace(
         name="result", json_schema={"type": "object", "required": ["ok"]}
@@ -151,9 +162,16 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
     def update(**kwargs):
         timeline.append(("update", kwargs.get("final_output"), kwargs.get("end_reason")))
         updates.append(kwargs)
-        if outcome == "persist_error":
+        if outcome == "persist_error" and kwargs.get("final_output") is not None:
             raise OSError("storage unavailable")
         return SimpleNamespace(status="completed")
+
+    if outcome == "missing_context":
+
+        def missing_context():
+            raise RuntimeError("context unavailable")
+
+        loop.context.load_message = missing_context
 
     loop.ops.run_state.transition = lambda _run_id, transition, **kwargs: finish(
         transition, **kwargs
@@ -162,9 +180,6 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
 
     async def model(state):
         runtime = _runtime_context()
-        runtime.structured_output_messages = (
-            None if outcome == "missing_context" else [{"role": "assistant", "content": "自然回答"}]
-        )
         # 主线先完成：落定 completed 后再走结构化支线。
         assert (
             runtime.run_state.transition(
@@ -207,19 +222,26 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
     loop.model.complete = complete
     monkeypatch.setattr(module, "_model_node", model)
     await module.ReactLikeWorkflow().run(loop.ops)
-    assert loop.calls.count("queue") == 1
     assert loop.calls.count("format") == (
         0
         if outcome == "missing_context"
         else 4
-        if outcome in {"invalid", "tools", "tools_empty", "truncated"}
+        if outcome in {"invalid", "tools_empty"}
         else 1
     )
-    assert len(updates) == 1
-    if outcome in {"success", "late_cancel", "persist_error"}:
+    # 正文合规即采纳：多余 tool_calls 与 length 截断都不丢弃可用结果。
+    if outcome in {"success", "late_cancel", "tools", "truncated"}:
+        assert len(updates) == 1
         assert updates[0]["final_output"] == '{"ok":true}'
         assert updates[0].get("end_reason") is None
+    elif outcome == "persist_error":
+        # 结构化结果没能落库：记一次失败原因，不保留成功写入的假象。
+        assert [update.get("end_reason") for update in updates] == [
+            None,
+            "structured_output_failed",
+        ]
     else:
+        assert len(updates) == 1
         assert updates[0]["end_reason"] == "structured_output_failed"
         assert updates[0].get("final_output") is None
     assert timeline[0] == ("complete", "自然回答")

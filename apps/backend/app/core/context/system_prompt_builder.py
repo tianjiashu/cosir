@@ -218,7 +218,7 @@ class SystemPromptBuilder:
         blocks: list[str] = []
         if TOOL_DELEGATE_TASK in available_tool_names:
             # 函数内延迟导入：``app.config.configuration`` 模块级导入 ``app.core.tools``，而工具装配
-            # 链会反向导入 ``app.core.context`` / ``app.assistant_transport.event``，
+            # 链会反向导入 ``app.core.context``，
             # 顶层导入会形成环
             # （详见 ``app/core/tools/__init__.py`` 的 PEP 562 惰性导出说明）。
             from app.config.configuration import get_agent_registry

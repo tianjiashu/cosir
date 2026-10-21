@@ -139,8 +139,8 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
     """
 
     runtime = _runtime_context()
-    operations = runtime.operations
-    spec = runtime.structured_output
+    run_id = runtime.run.id
+    spec = runtime.profile.structured_output
     if spec is None:
         raise RuntimeError("structured_output 节点缺少输出契约")
 
@@ -149,7 +149,6 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
         context_messages = await asyncio.to_thread(_message_context().load_message)
         # 非流式 JSON 模式；本地 schema 校验最终输出契约。
         retry_feedback: str | None = None
-        final_output: str | None = None
         for attempt in range(1, Constant.Workflow.STRUCTURED_OUTPUT_MAX_ATTEMPTS + 1):
             context_messages.append(
                 {
@@ -168,17 +167,20 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
                 choice.message, spec.json_schema
             )
             if final_output is not None:
-                operations.update_completed_result(
+                runtime.run_state.update_completed_result(
+                    run_id,
                     final_output=final_output,
                     usage_stats=runtime.usage_stats,
                 )
-                break
+                # 成功即结束：循环之后的写入只属于「重试用尽或异常」，落到那里会把成功结果的
+                # end_reason 覆盖成失败。
+                return route_state(state.step_count, ReactRoute.END)
             log.warning(
                 "structured_output_validation_failed",
                 extra={
                     "msg": "结构化输出未通过校验，将按限制重试",
                     "data": {
-                        "run_id": operations.get_current_run().id,
+                        "run_id": run_id,
                         "schema_name": spec.name,
                         "attempt": attempt,
                         "reason": retry_feedback,
@@ -191,13 +193,14 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
             extra={
                 "msg": "结构化输出支线异常，保留自然语言最终回复",
                 "data": {
-                    "run_id": operations.get_current_run().id,
+                    "run_id": run_id,
                     "schema_name": spec.name,
                     "error_type": type(exc).__name__,
                 },
             },
         )
-    operations.update_completed_result(
+    runtime.run_state.update_completed_result(
+        run_id,
         end_reason=Constant.Workflow.STRUCTURED_OUTPUT_FAILURE_REASON,
         usage_stats=runtime.usage_stats,
     )

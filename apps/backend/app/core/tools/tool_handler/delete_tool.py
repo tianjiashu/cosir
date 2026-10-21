@@ -8,7 +8,7 @@
 删除代价不随文件体积增长。
 """
 
-from app.core.runtime.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.display.file_change_display import build_file_delete_display_data
 from app.core.tools.schemas import (
     TOOL_DELETE_FILE,

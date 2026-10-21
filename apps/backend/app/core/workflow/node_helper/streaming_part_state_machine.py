@@ -25,19 +25,17 @@ from collections.abc import Callable
 
 from openai.types.chat import ParsedFunctionToolCall
 
-from app.assistant_transport.event import (
+from app.config.constant import Constant
+from app.core.context.tool_call_closure import build_placeholder_tool_message
+from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
     AssistantTextPartKind,
     ToolCallCreatedEvent,
     ToolCallStatusChangedEvent,
 )
-from app.config.constant import Constant
-from app.core.context.tool_call_closure import build_placeholder_tool_message
 from app.core.workflow.execution_state.tool_batch import ValidToolCall
-from app.core.workflow.node_helper import get_stream_writer
-from app.core.workflow.node_helper.common import _message_context, _runtime_context
-from app.core.workflow.workflow_operations import WorkflowOperations
+from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.message_metadata import ToolMessageMetadata
 
 # 单次事件合并的最小字符数；≤0 时该阈值恒满足，合并退化为每次增量立即发出。
@@ -93,7 +91,7 @@ class StreamingPartStateMachine:
             本实例只在 :meth:`tool_call` 写入、在 :meth:`cancel` 读回。
         """
 
-        self._stream_writer = get_stream_writer()
+        self._stream_writer = emit
         self._task_id: int = task_id
         self._run_id: int = run_id
         self._step_id: str = step_id
@@ -176,7 +174,7 @@ class StreamingPartStateMachine:
                 or call_id in valid_calls
             ):
                 continue
-            if not runtime.operations.vaild_tool_name(tool_name):
+            if tool_name not in runtime.tool_definitions:
                 continue
             projected = self.create_tool_call(call_id, tool_name)
             valid_calls[call_id] = ValidToolCall(
@@ -302,15 +300,12 @@ class StreamingPartStateMachine:
     def create_tool_call(self, call_id: str, tool_name: str) -> bool:
         """为已通过身份和注册表过滤的调用创建卡片；本轮禁用则留给工具层拒绝。"""
 
-        operations: WorkflowOperations = _runtime_context().operations
-        if tool_name not in operations.allows_tools:
+        runtime = _runtime_context()
+        if tool_name not in runtime.allows_tools:
             return False
         # 只为本轮放行的工具创建卡片；被拦调用仍保留在模型协议中，由执行层返回错误观察。
-        presentation: dict[str, object] = {}
-        for definition in operations.all_vaild_tools:
-            if definition.name == tool_name and definition.display is not None:
-                presentation = definition.display.to_dict()
-                break
+        display = runtime.tool_definitions[tool_name].display
+        presentation: dict[str, object] = display.to_dict() if display is not None else {}
         self._stream_writer(
             ToolCallCreatedEvent(
                 task_id=self._task_id,

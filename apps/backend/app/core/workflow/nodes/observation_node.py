@@ -7,6 +7,7 @@ from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper.common import _runtime_context
 from app.core.workflow.node_helper.tool_observation_projection import settle_observations
+from app.core.workflow.run_state_machine import RunTransition
 
 
 async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
@@ -15,12 +16,10 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
     工具结果先持久化再发终态；未创建卡片的调用只闭合模型协议。连续不可重试失败
     达上限时由 Run 状态服务落定失败，其余情况返回模型节点。
     """
-    rc = _runtime_context()  # 取运行时配置（本节点只用其中的 operations 与 usage_stats）
-    operations = rc.operations  # 领域操作
+    rc = _runtime_context()
     batch = rc.batch
     observations = batch.observations
-    instruction = batch.instruction
-    run_id = operations.get_current_run().id
+    run_id = rc.run.id
     step_id = f"step-{state.step_count}"  # 工具是 model 步的延续，复用同一步 step_id
     # 写 canonical tool 消息后再投影终态，冷重建与实时快照使用同一份结果。
     tool_error_count, error_count = settle_observations(
@@ -44,7 +43,9 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
     )
 
     if tool_error_count >= Constant.Workflow.TOOL_ERROR_LIMIT:  # 连续工具错误达上限
-        failed_run = operations.fail_run_if_running(
+        failed_run = rc.run_state.transition(
+            run_id,
+            RunTransition.FAIL,
             end_reason=Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT,
             usage_stats=rc.usage_stats,
         )
@@ -71,7 +72,6 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
                     "step_id": step_id,
                     "tool_error_count": tool_error_count,
                     "limit": Constant.Workflow.TOOL_ERROR_LIMIT,
-                    "instruction": instruction,
                 },
             },
         )
