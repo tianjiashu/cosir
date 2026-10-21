@@ -18,7 +18,18 @@ import pytest
 
 from app.config.constant import Constant
 from app.core.tools.schemas import ToolCall, ToolExecutionContext, ToolObservation
+from app.core.tools.tool_execute import tool_executor as tool_executor_module
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
+from tests.runtime_context_stub import runtime_stub
+from tests.tool_executor_fakes import emit_running
+
+
+@pytest.fixture(autouse=True)
+def _silence_executor_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    """替身执行器按真实契约发 running；本模块只测调度，不在 workflow 作用域内，事件丢弃即可。"""
+
+    monkeypatch.setattr(tool_executor_module, "emit", lambda _event: None)
+
 
 _PARALLEL_TOOL = "fake_parallel_tool"
 
@@ -58,14 +69,14 @@ class _FakeToolExecutor:
     def execute(
         self,
         call: ToolCall,
-        execution_context: object = None,
-        allowed_tool_names: object = None,
+        execution_context: object,
+        allowed_tool_names: object,
     ) -> ToolObservation:
         """模拟一次同步阻塞的工具执行。
 
         参数:
             call: 本次工具调用；只用其 ``call_id`` 与 ``tool_name``。
-            execution_context: 假执行器忽略。
+            execution_context: 本次调用的执行边界；只用于按真实执行器契约发出 running。
             allowed_tool_names: 假执行器忽略。
 
         返回:
@@ -77,6 +88,7 @@ class _FakeToolExecutor:
         副作用:
             占用一个并发位并在其 ``delays`` 时长内阻塞当前 worker 线程。
         """
+        emit_running(call, execution_context)
         with self._lock:
             self.active += 1
             self.max_active = max(self.max_active, self.active)
@@ -97,15 +109,18 @@ class _FakeToolExecutor:
 
 
 def _make_operations(executor: _FakeToolExecutor) -> SimpleNamespace:
-    """只装配批次执行用到的运行上下文字段（执行器、准入、注册表、执行边界）。"""
-    return SimpleNamespace(
+    """只装配批次执行用到的运行上下文字段（执行器、准入、注册表、执行边界）。
+
+    默认 ``ToolBatch()`` 对这些调用 ``was_projected`` 为 False，不触发 Transport 投影。
+    """
+    return runtime_stub(
         tool_executor=executor,
         execution_context=ToolExecutionContext(
+            step_id="step-1",
             task_id=1, workspace_id=1, workspace_root=Path("."), run_id=1
         ),
         allows_tools=frozenset({_PARALLEL_TOOL}),
         tool_definitions={_PARALLEL_TOOL: SimpleNamespace(parallel_mode="parallel")},
-        task=SimpleNamespace(id=1),
     )
 
 
@@ -124,7 +139,7 @@ def _parallel_call(index: int) -> ToolCall:
     副作用:
         无。
     """
-    return ToolCall(tool_name=_PARALLEL_TOOL, arguments={}, call_id=f"call-{index}")
+    return ToolCall(tool_name=_PARALLEL_TOOL, arguments='{}', call_id=f"call-{index}")
 
 
 def test_parallel_batch_does_not_block_event_loop() -> None:

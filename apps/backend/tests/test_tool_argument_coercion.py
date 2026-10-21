@@ -152,22 +152,14 @@ class TestValidationIntegration:
         assert result.arguments["timeout"] == 30.0
         assert [item.field for item in result.coercions] == ["timeout"]
 
-    def test_terminal_cursor_is_opaque_and_old_fields_are_rejected(self) -> None:
-        """观察游标原样传递，不能沿用预览整数序号。"""
-        result = validate_tool_arguments(
-            {"session_id": "term_x", "cursor": "g:2:0"},
-            {},
-            TerminalReadArgs,
-        )
+    def test_terminal_read_rejects_removed_paging_fields(self) -> None:
+        """终端观察只返回当前画面、不提供分页：旧的 ``cursor`` / ``after_seq`` 字段一律拒绝。"""
+        result = validate_tool_arguments({"session_id": "term_x"}, {}, TerminalReadArgs)
         assert result.ok is True
-        assert result.arguments["cursor"] == "g:2:0"
         assert result.coercions == ()
-        old = validate_tool_arguments(
-            {"session_id": "term_x", "after_seq": 2},
-            {},
-            TerminalReadArgs,
-        )
-        assert old.ok is False
+        for removed in ({"cursor": "g:2:0"}, {"after_seq": 2}):
+            old = validate_tool_arguments({"session_id": "term_x", **removed}, {}, TerminalReadArgs)
+            assert old.ok is False
 
     def test_native_arguments_have_no_fact(self) -> None:
         """deepseek 形态（``timeout: 30`` 原生数字）通过且不产生事实。"""

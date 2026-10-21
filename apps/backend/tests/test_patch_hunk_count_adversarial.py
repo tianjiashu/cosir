@@ -132,7 +132,7 @@ def _legacy_count_rejection(error: str | None) -> bool:
 
 
 def _context(root: Path) -> ToolExecutionContext:
-    return ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=root, run_id=4242)
+    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=4242)
 
 
 # --------------------------------------------------------------------------------------

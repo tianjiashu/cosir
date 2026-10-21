@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -47,7 +48,7 @@ from app.utils.path.validation import is_within_cosir
 def _ctx(root: Path) -> ToolExecutionContext:
     """构造绑定到给定 workspace 根的执行上下文。"""
 
-    return ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=root, run_id=1)
+    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=1)
 
 
 def _symlinks_supported(base: Path) -> bool:
@@ -640,15 +641,6 @@ def test_artifact_not_written_to_coding_agent(tmp_path: Path) -> None:
     assert not (root / ".coding-agent").exists()
 
 
-def test_artifact_no_context_returns_empty(tmp_path: Path) -> None:
-    """无 execution_context 时不落盘，返回空 artifact_path。"""
-
-    budget = ToolOutputBudget(max_chars=5)
-    obs = ToolObservation(tool_name="t", status="success", content="x" * 500)
-    result = budget.apply(obs, None)
-    assert (result.artifact_data or {}).get("artifact_path", "") == ""
-
-
 def test_artifact_when_cosir_is_a_file_degrades(tmp_path: Path) -> None:
     """`.cosir` 位置被同名文件占据时，artifact 落盘必须降级（不抛异常、path 为空）。"""
 
@@ -765,24 +757,21 @@ def test_ensure_system_cosir_dir_degrades_when_name_is_file(tmp_path: Path) -> N
 # --- I. `.coding-agent` 退场复核 -----------------------------------------------
 
 
+# 系统提示词已不再渲染工作区目录树（随之删除 ``_IGNORED_DIRS``），跳过集只剩搜索工具的默认集合。
 def test_coding_agent_removed_from_ignored_dirs() -> None:
-    """ignore_rules 默认集合与 system_prompt_builder._IGNORED_DIRS 不得再含 `.coding-agent`。"""
+    """ignore_rules 默认跳过集合不得再含 `.coding-agent`。"""
 
-    from app.core.context.system_prompt_builder import _IGNORED_DIRS as prompt_ignored
     from app.core.tools.tool_handler.search.ignore_rules import DEFAULT_IGNORED_DIR_NAMES
 
     assert ".coding-agent" not in DEFAULT_IGNORED_DIR_NAMES
-    assert ".coding-agent" not in prompt_ignored
 
 
 def test_cosir_not_in_ignored_dirs_by_design() -> None:
     """按设计，`.cosir` 允许被遍历/读取，故不得出现在跳过集里。"""
 
-    from app.core.context.system_prompt_builder import _IGNORED_DIRS as prompt_ignored
     from app.core.tools.tool_handler.search.ignore_rules import DEFAULT_IGNORED_DIR_NAMES
 
     assert ".cosir" not in DEFAULT_IGNORED_DIR_NAMES
-    assert ".cosir" not in prompt_ignored
 
 
 def test_no_coding_agent_literal_in_backend_app() -> None:
@@ -797,10 +786,13 @@ def test_no_coding_agent_literal_in_backend_app() -> None:
     assert hits == [], f"仍引用 .coding-agent 的文件：{hits}"
 
 
-def test_allow_reserved_only_used_by_two_internal_call_sites() -> None:
-    """全仓 grep：`allow_reserved=True` 仅应出现在 terminal_session 与 tool_output_budget。
+def test_allow_reserved_only_used_by_internal_call_sites() -> None:
+    """全仓 grep：`allow_reserved=True` 仅应出现在后端内部写 `.cosir` 的白名单调用点。
 
-    为避免命中 docstring，这里只统计真实调用点 ``allow_reserved=True`` 形态。
+    白名单：交互终端 cwd、工具输出 artifact 落盘、Agent Team 运行档案落盘；均为系统自身写入，
+    不经模型工具入参。为避免命中 docstring，只统计关键字实参 ``allow_reserved=True``
+    （调用可能跨行，故实参后允许 ``,`` / ``)`` / 行尾；docstring 里的 ``allow_reserved=True``
+    后跟反引号，不会命中）。
     """
 
     backend_root = Path(__file__).resolve().parents[1]
@@ -813,11 +805,12 @@ def test_allow_reserved_only_used_by_two_internal_call_sites() -> None:
             stripped = line.strip()
             if stripped.startswith("#"):
                 continue
-            if "allow_reserved=True)" in stripped.replace(" ", ""):
+            if re.search(r"allow_reserved=True\s*(,|\)|$)", stripped):
                 call_sites.append(f"{path.relative_to(app_dir)}:{lineno}")
     expected = {
         "service/terminal/terminal_session_service.py",
         "core/tools/guard/tool_output_budget.py",
+        "service/agent_team/agent_team_run_archive_service.py",
     }
     actual = {site.split(":", 1)[0].replace("\\", "/") for site in call_sites}
     assert actual == expected, f"allow_reserved=True 调用面异常：{call_sites}"
@@ -907,13 +900,15 @@ def test_resolve_within_workspace_returns_error_on_resolve_failure(
 # --- M. 设计一致性复核（文档契约） ---------------------------------------------
 
 
-def test_gitignore_ignores_cosir_and_not_coding_agent() -> None:
-    """`.gitignore` 必须忽略 `.cosir/`，且不得再保留 `.coding-agent` 条目。"""
+def test_gitignore_has_no_coding_agent_entry() -> None:
+    """`.gitignore` 不得再保留 `.coding-agent` 条目。
+
+    `.cosir/` 整体忽略规则已按设计移除（工作区级 `.cosir` 配置可入库），不再断言。
+    """
 
     gitignore = Path(__file__).resolve().parents[3] / ".gitignore"
     assert gitignore.is_file(), gitignore
     lines = {line.strip() for line in gitignore.read_text(encoding="utf-8").splitlines()}
-    assert ".cosir/" in lines
     assert not any(line.startswith(".coding-agent") for line in lines)
 
 
@@ -921,7 +916,6 @@ def test_system_prompt_describes_cosir_as_read_only() -> None:
     """系统提示词必须把 `.cosir/` 描述为「可读、禁写/改/删/移动」的只读保留区。"""
 
     import app.core.context.system_prompt_builder as spb
-    from app.core.context.system_prompt_builder import _IGNORED_DIRS  # noqa: F401
 
     source = Path(spb.__file__).read_text(encoding="utf-8")
     assert ".cosir/ is a reserved read-only area" in source

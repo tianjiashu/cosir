@@ -499,7 +499,8 @@ def test_boot_markers_are_noop_without_env(monkeypatch: pytest.MonkeyPatch, tmp_
     lifespan_module._mark_boot_failed(RuntimeError("env-unset"))
 
     after = sorted(p.name for p in tmp_path.iterdir())
-    assert before == after == []
+    # tmp_path 已含模块级 ``backend_env`` 隔离主库建出的目录，只断言标记函数未新增任何文件。
+    assert before == after
 
 
 def test_boot_markers_noop_when_env_is_empty_string(

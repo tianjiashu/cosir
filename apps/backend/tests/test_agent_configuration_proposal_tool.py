@@ -8,6 +8,8 @@ from app.core.tools.tool_handler.agent_team.propose_agent_team_configuration imp
 from app.core.tools.tool_handler.child_task.propose_agent_configuration import (
     ProposeAgentConfigurationTool,
 )
+
+
 def test_team_proposal_tool_returns_only_an_unsaved_configuration_draft(monkeypatch) -> None:
     """生成工具只投影 Team 配置草稿，不落盘或启动运行。"""
     from types import SimpleNamespace

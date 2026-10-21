@@ -24,9 +24,9 @@ from app.assistant_transport.service.transport_stream_service import (
 )
 from app.core.events import AssistantTextDeltaEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.run_state_machine import RunTransition
 from app.models import ConversationRunError, ConversationRunStatus
 from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata
 from app.service.conversation_run.conversation_run_service import ConversationRunService
@@ -430,7 +430,6 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     service._session_factory = store.factory
     service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run_state._run = store.runs
-    service._run_state._session_factory = store.factory
     recovered = service.recover_orphaned_runs()
     assert [item.id for item in recovered] == [run.id]
     assert service.recover_orphaned_runs() == []

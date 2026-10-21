@@ -56,15 +56,17 @@ def test_empty_list_is_a_valid_explicit_configuration(denylist_service):
 
 def test_process_execution_context_does_not_carry_denylist_configuration(tmp_path):
     context = ToolExecutionContext(
+        step_id="step-1",
         task_id=1,
         workspace_id=2,
         workspace_root=tmp_path,
+        run_id=3,
     )
 
     process_context = context.for_process_execution()
 
     assert not hasattr(process_context, "terminal_deny_patterns")
-    assert not hasattr(process_context.runtime_dependencies, "terminal_denylist_reader")
+    assert not hasattr(process_context, "terminal_denylist_reader")
 
 
 def test_terminal_tool_reader_creates_defaults_then_reads_each_update(tmp_path, monkeypatch):

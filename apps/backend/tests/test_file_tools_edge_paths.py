@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.tool_handler.move_tool import (
     MOVE_FILE_DESCRIPTION,
@@ -29,10 +28,11 @@ from app.core.tools.tool_handler.security.file_operation_paths import (
     resolve_workspace_relative_path,
 )
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
 def _context(root: Path, run_id: int = 4242) -> ToolExecutionContext:
-    return ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
+    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
 
 
 # --- resolve_workspace_relative_path -------------------------------------------

@@ -212,7 +212,7 @@ def test_success_with_broken_python_reports_english_syntax_content(tmp_path: Pat
             "+def f(]",
         )
     )
-    context = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
+    context = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
 
     observation = ApplyPatchTool().execute(context, patch=patch)
 
@@ -224,8 +224,10 @@ def test_success_with_broken_python_reports_english_syntax_content(tmp_path: Pat
 
 # A cancelled run must short-circuit to ``cancelled`` before any hunk is written.
 def test_cancelled_run_returns_cancelled_without_writing(tmp_path: Path) -> None:
-    from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
     from app.core.tools.schemas import ToolExecutionContext
+    from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+        cancellation_registry,
+    )
 
     target = tmp_path / "a.txt"
     target.write_bytes(b"old\n")
@@ -241,6 +243,7 @@ def test_cancelled_run_returns_cancelled_without_writing(tmp_path: Path) -> None
     )
     run_id = 7_700_777
     context = ToolExecutionContext(
+        step_id="step-1",
         task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=run_id
     )
     cancellation_registry.request_cancel(context.task_id)

@@ -36,13 +36,12 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.config.constant import Constant
 from app.core.events import RunStatusChangedEvent
-from app.core.workflow.run_state_machine import RunTransition
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models.conversation_run_failure import (
     run_failure_message,
 )
 from app.models.conversation_run_record import ConversationRunRecord
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.models.enums.error_kind import ErrorKind
 from app.service.conversation_run import run_driver
 

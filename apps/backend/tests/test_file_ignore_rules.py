@@ -212,6 +212,7 @@ def test_prepare_observed_paths_follows_workspace_fileignore(tmp_path: Path) -> 
     _touch(tmp_path / "generated" / "gen.py")
     definition = FindFilesTool().to_definition()
     context = ToolExecutionContext(
+        step_id="step-1",
         task_id=1,
         workspace_id=1,
         workspace_root=tmp_path,

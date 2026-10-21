@@ -32,7 +32,7 @@ from app.service.terminal.terminal_session_service import TerminalSessionService
 def _context(root: Path) -> ToolExecutionContext:
     """构造绑定到给定 workspace 根的执行上下文。"""
 
-    return ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=root, run_id=1)
+    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=1)
 
 
 # --- 1. PathResolver 单元行为 -------------------------------------------------

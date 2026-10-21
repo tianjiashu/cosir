@@ -344,7 +344,6 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
 
     from app.config.constant import Constant
     from app.core.tools.schemas import ToolExecutionContext
-    from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
     from app.core.tools.tool_handler.terminal_session import (
         TerminalListTool,
         TerminalReadTool,
@@ -356,22 +355,28 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
     # worker 路径只有宿主环境变量一个来源，测试沿用同一配置边界。
     monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(_worker_path()))
     terminal = TerminalSessionService(status_observer=lambda _change: None)
-    from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+    from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+        cancellation_registry,
+    )
+    from app.service import depends as service_depends
+    from tests.runtime_context_stub import singleton_getter
 
-    dependencies = ToolRuntimeDependencies(terminal_session_service=terminal)
+    monkeypatch.setattr(
+        service_depends, "get_terminal_session_service", singleton_getter(lambda: terminal)
+    )
     first = ToolExecutionContext(
+        step_id="step-1",
         task_id=1,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=1,
-        runtime_dependencies=dependencies,
     )
     second = ToolExecutionContext(
+        step_id="step-1",
         task_id=1,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=2,
-        runtime_dependencies=dependencies,
     )
     try:
         started = TerminalStartTool().execute(

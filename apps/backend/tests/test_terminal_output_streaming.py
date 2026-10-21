@@ -7,17 +7,15 @@ import copy
 import queue
 import threading
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
 from app.assistant_transport.event import UserInputAppendedEvent
-from app.assistant_transport.event.tool_runtime_output_adapter import (
-    ToolRuntimeOutputChannelFactory,
-)
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -40,16 +38,18 @@ from app.core.events import (
 from app.core.tools.display.terminal_display import build_terminal_display_data
 from app.core.tools.guard.tool_output_budget import ToolOutputBudget
 from app.core.tools.schemas import ToolCall, ToolExecutionContext, ToolObservation
-from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
 from app.core.tools.tool_execute.tool_output_channel import (
     BufferedProcessToolOutputChannel,
+    create_process_output_channel,
 )
+from app.core.tools.tool_execute.tool_terminal_projection import terminal_event
 from app.core.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.core.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.core.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.core.tools.tool_handler.terminal.output_collector import _OutputCollector
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
+from tests.runtime_context_stub import runtime_stub
 
 
 class ChunkStream:
@@ -233,7 +233,7 @@ def test_terminal_output_budget_preserves_raw_content_and_artifact(
     tmp_path: Path,
 ) -> None:
     raw_output = "token=visible-secret\n" + ("x" * 300)
-    context = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path)
+    context = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
     observation = ToolObservation(
         tool_name="execute_terminal",
         status="success",
@@ -291,12 +291,18 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
         dispatch_threads.append(threading.get_ident())
         return "stream"
 
-    channel = ToolRuntimeOutputChannelFactory(capture).create(
-        task_id=7,
-        run_id=9,
-        tool_call_id="call-1",
-        tool_name="execute_terminal",
-        loop=loop,
+    channel = create_process_output_channel(
+        "execute_terminal",
+        ToolExecutionContext(
+            step_id="step-1",
+            task_id=7,
+            workspace_id=1,
+            workspace_root=Path("."),
+            run_id=9,
+            event_loop=loop,
+            event_sink=capture,
+            tool_call_id="call-1",
+        ),
     )
     assert isinstance(channel, BufferedProcessToolOutputChannel)
     expected = "x" * (Constant.Tools.MAX_OUTPUT_CHARS + 1)
@@ -324,35 +330,25 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
 
 @pytest.mark.asyncio
 async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Path) -> None:
-    """装配方登记的事件循环随执行上下文透传给工具，且工具执行发生在循环线程之外。
+    """``run_tool_batch`` 在事件循环线程按批次构造执行边界，工具执行发生在循环线程之外。
 
-    通道本身由 ``ToolHandlerRunner`` 在工具执行线程按该登记创建（不沿执行链传参）；登记由
-    ``run_driver._build_context`` 完成（见 ``test_runtime_notice``），本用例守住批次执行这一侧。
+    通道本身由 ``ToolHandlerRunner`` 在工具执行线程按 ``event_loop`` / ``event_sink`` 创建；本用例
+    守住这两项与 Run / step 事实确实由批次入口从 ``RuntimeContext`` 取得并透传。
     """
     loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
-    context = ToolExecutionContext(
-        task_id=7,
-        workspace_id=2,
-        workspace_root=tmp_path,
-        run_id=9,
-        runtime_dependencies=ToolRuntimeDependencies(
-            runtime_event_loop=loop,
-            process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(lambda _event: None),
-        ),
-    )
-    bound_loops: list[object] = []
+    received: list[ToolExecutionContext] = []
 
     class Executor:
         def execute(
             self,
             call: Any,
-            execution_context: Any = None,
-            allowed_tool_names: Any = None,
+            execution_context: Any,
+            allowed_tool_names: Any,
         ) -> ToolObservation:
             assert threading.get_ident() != loop_thread
             assert allowed_tool_names == {"execute_terminal"}
-            bound_loops.append(execution_context.runtime_dependencies.runtime_event_loop)
+            received.append(execution_context)
             return ToolObservation(
                 tool_name=call.tool_name,
                 tool_call_id=call.call_id,
@@ -360,51 +356,59 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
                 content="done",
             )
 
-    rc = SimpleNamespace(
+    sink = lambda _event: None  # noqa: E731
+    profile = SimpleNamespace()
+    rc = runtime_stub(
         tool_executor=Executor(),
-        execution_context=context,
         allows_tools=frozenset({"execute_terminal"}),
         tool_definitions={"execute_terminal": SimpleNamespace(parallel_mode="serial")},
+        run=SimpleNamespace(id=9, task_id=7),
         task=SimpleNamespace(id=7),
+        workspace=SimpleNamespace(id=2, root_path=str(tmp_path)),
+        profile=profile,
+        event_sink=sink,
     )
 
     observations = await run_tool_batch(
-        rc, [ToolCall(tool_name="execute_terminal", arguments={}, call_id="call-1")], "step-1"
+        rc, [ToolCall(tool_name="execute_terminal", arguments='{}', call_id="call-1")], "step-1"
     )
 
     assert len(observations) == 1
-    assert bound_loops == [loop]
+    [context] = received
+    assert (context.task_id, context.run_id, context.workspace_id) == (7, 9, 2)
+    assert context.workspace_root == tmp_path
+    assert context.step_id == "step-1"
+    assert context.agent_profile is profile
+    assert context.event_sink is sink
+    assert context.event_loop is loop
 
 
 @pytest.mark.asyncio
 async def test_process_output_channel_is_built_from_worker_thread(tmp_path: Path) -> None:
-    """工具执行线程里必须能按 ``runtime_event_loop`` 建出逐调用通道。
+    """工具执行线程里必须能按 ``event_loop`` 建出逐调用通道。
 
-    回归：工厂一度不再接收 ``loop``（改从 ``asyncio.get_running_loop()`` 取），而
-    ``ToolHandlerRunner._create_process_output_channel`` 在 ``asyncio.to_thread`` 的
+    回归：通道创建一度不再接收 ``loop``（改从 ``asyncio.get_running_loop()`` 取），而
+    ``create_process_output_channel`` 在 ``asyncio.to_thread`` 的
     工作线程里调用它——工作线程内没有运行中循环，于是每次 ``execute_terminal`` 都抛
     ``TypeError``、只记一条 ERROR 日志，实时输出静默消失。
     """
 
     loop = asyncio.get_running_loop()
     context = ToolExecutionContext(
+        step_id="step-1",
         task_id=7,
         workspace_id=2,
         workspace_root=tmp_path,
         run_id=9,
-        runtime_dependencies=ToolRuntimeDependencies(
-            runtime_event_loop=loop,
-            process_tool_output_channel_factory=ToolRuntimeOutputChannelFactory(lambda _event: None),
-        ),
+        event_loop=loop,
+        event_sink=lambda _event: None,
     )
 
     def build_channel() -> Any:
         with pytest.raises(RuntimeError):
             asyncio.get_running_loop()
-        return ToolHandlerRunner._create_process_output_channel(
-            cast(Any, SimpleNamespace(name="execute_terminal")),
-            context,
-            "call-1",
+        return create_process_output_channel(
+            "execute_terminal", replace(context, tool_call_id="call-1")
         )
 
     channel = await asyncio.to_thread(build_channel)
@@ -439,6 +443,7 @@ def test_output_queue_completion_waits_for_tail_without_dropping_chunks() -> Non
         RunningProcess(),
         result_queue,
         timeout=1,
+        is_cancelled=lambda: False,
         output_queue=output_queue,
         output_sink=sink,
     )
@@ -479,7 +484,7 @@ def test_handler_process_backpressures_full_queue_without_dropping_output(
     output_queue = ClosableQueue(maxsize=1)
     worker = threading.Thread(
         target=ToolHandlerRunner._execute_handler,
-        args=(handler, {}, result_queue, None, None, output_queue),
+        args=(handler, {}, result_queue, None, None, "", output_queue),
     )
     worker.start()
     first_item = output_queue.get(timeout=1)
@@ -625,3 +630,98 @@ class _MemorySnapshotOwner:
             mutations=mutations,
             source_run_id=getattr(event, "run_id", None),
         )
+
+
+def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, ConversationEventProjector, str]:
+    """建一个已实时流出终端输出、仍在 running 的 ``execute_terminal`` part。"""
+    state = empty_snapshot()
+    projector = ConversationEventProjector(_MemorySnapshotOwner(state))
+    projector.process(RunInitializedEvent(task_id=7, run_id=9))
+    projector.process(
+        UserInputAppendedEvent(
+            task_id=7, run_id=9, message_id="user-1",
+            parts=[{"type": "text", "text": "run tool", "status": "completed"}],
+        )
+    )
+    projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
+    projector.process(
+        ToolCallCreatedEvent(
+            task_id=7, run_id=9, tool_call_id="call-1", tool_name="execute_terminal"
+        )
+    )
+    projector.process(
+        ToolCallStatusChangedEvent(
+            task_id=7, run_id=9, tool_call_id="call-1", status="running",
+            args={"command": "emit a lot"},
+        )
+    )
+    streamed_output = "streamed line\n" * 600
+    for seq, start in enumerate(range(0, len(streamed_output), 4096)):
+        projector.process(_terminal_output_update(seq, streamed_output[start : start + 4096]))
+    return state, projector, streamed_output
+
+
+@pytest.mark.parametrize(
+    ("observation", "expected_status", "expected_error"),
+    [
+        (
+            ToolObservation(
+                tool_name="execute_terminal",
+                status="success",
+                content="bounded",
+                display_data={
+                    "kind": "terminal-result",
+                    "output": "bounded final observation",
+                    "exit_code": 0,
+                },
+            ),
+            "completed",
+            None,
+        ),
+        (
+            ToolObservation(
+                tool_name="execute_terminal",
+                status="cancelled",
+                display_data={"status_hint": "已取消"},
+            ),
+            "cancelled",
+            "已取消",
+        ),
+        (
+            ToolObservation(
+                tool_name="execute_terminal",
+                status="error",
+                error="boom",
+                display_data={"status_hint": "命令失败"},
+            ),
+            "failed",
+            "命令失败",
+        ),
+    ],
+    ids=["completed", "cancelled", "failed"],
+)
+def test_terminal_replay_is_idempotent_for_streamed_part(
+    observation: ToolObservation, expected_status: str, expected_error: str | None
+) -> None:
+    """同一观察的终态投两次（实时一次、结算一次）：第二次不改快照，已流出的输出不丢、不叠加。
+
+    两条路径都经 ``terminal_event`` 由同一份观察构造终态，消费方必须按自迁移幂等吸收；终端
+    part 的终态会与实时输出合并，是最容易在重放时被覆盖或重复拼接的形态。
+    """
+    state, projector, streamed_output = _streamed_terminal_projector()
+
+    def replay() -> None:
+        projector.process(
+            terminal_event(observation, task_id=7, run_id=9, step_id="step-1", tool_call_id="call-1")
+        )
+
+    replay()
+    after_first = copy.deepcopy(state)
+    replay()
+
+    assert state == after_first
+    part = state["runs"][0]["messages"][1]["parts"][0]
+    assert part["status"] == expected_status
+    assert part.get("error") == expected_error
+    assert part["display_data"]["kind"] == "terminal-result"
+    assert part["display_data"]["output"] == streamed_output

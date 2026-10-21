@@ -499,7 +499,6 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
         service._run = run_crud
         run_state = ConversationRunStateService.__new__(ConversationRunStateService)
         run_state._run = run_crud
-        run_state._session_factory = factory
         service._run_state = run_state
         service._context = context_service
         service._session_factory = factory

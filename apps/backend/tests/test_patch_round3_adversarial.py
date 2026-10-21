@@ -116,7 +116,7 @@ def _run_tool(tmp_path: pathlib.Path, patch: str, content: str) -> tuple[str, by
     target = tmp_path / "m.txt"
     target.write_bytes(content.encode("utf-8"))
     observation = ApplyPatchTool().execute(
-        ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=11),
+        ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=11),
         patch=patch,
     )
     after = target.read_bytes() if target.exists() else b""
@@ -426,12 +426,15 @@ def test_blank_line_position_decides_git_verdict(git_oracle) -> None:
 
 
 def _documented_sample() -> str:
-    """Extract the 8-line diff block shown as the minimal accepted example."""
+    """返回模型可见的最小样例，原样不做任何加工。
 
-    description = ApplyPatchArgs.model_fields["patch"].description or ""
-    lines = description.split("\n")
-    start = next(index for index, line in enumerate(lines) if line.startswith("diff --git "))
-    return "\n".join(lines[start : start + 8]) + "\n"
+    样例已从 ``patch`` 描述正文迁到字段 ``examples``（随 strict schema 导出给模型）；模型照抄的
+    就是这段原文，因此这里不补换行、不裁剪，按原文验证其可接受性。
+    """
+
+    examples = ApplyPatchArgs.model_fields["patch"].examples or []
+    assert len(examples) == 1, f"参数样例应恰好一份，实际 {len(examples)}"
+    return examples[0]
 
 
 # 目的：把描述里的「最小可接受样例」当作真实补丁喂给解析器。样例头部声明 ``+10,4``
@@ -465,7 +468,7 @@ def test_copying_the_documented_sample_verbatim_succeeds(tmp_path: pathlib.Path)
     (pkg / "mod.py").write_text(filler + "\n", encoding="utf-8")
 
     observation = ApplyPatchTool().execute(
-        ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=12),
+        ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=12),
         patch=_documented_sample(),
     )
 
@@ -626,7 +629,7 @@ def test_rejected_patch_writes_nothing_and_requests_no_lock(tmp_path: pathlib.Pa
 
     for name, patch in rejected_shapes.items():
         observation = ApplyPatchTool().execute(
-            ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=13),
+            ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=13),
             patch=patch,
         )
         resources = FileResourceResolver(tmp_path).resolve("apply_patch", {"patch": patch})
@@ -648,7 +651,7 @@ def test_context_mismatch_fails_validation_without_writing(tmp_path: pathlib.Pat
     target.write_bytes(b"a\n")
 
     observation = ApplyPatchTool().execute(
-        ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=14),
+        ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=14),
         patch=patch,
     )
 
@@ -667,7 +670,7 @@ def test_successful_patch_emits_file_change_display_payload(tmp_path: pathlib.Pa
     target.write_bytes(b"a\n")
 
     observation = ApplyPatchTool().execute(
-        ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=15),
+        ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=15),
         patch=patch,
     )
 

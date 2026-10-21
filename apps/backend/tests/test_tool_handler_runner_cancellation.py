@@ -1,12 +1,12 @@
 """ToolHandlerRunner 取消链路 + process/thread 执行边界的独立单元测试。
 
 覆盖：
-1. ``_build_cancel_check`` 的返回契约与**实时性**（防「布尔快照」回退 bug）；
+1. ``_is_cancelled`` 的**实时性**（防「布尔快照」回退 bug）；
 2. process 模式正常执行（回归：不再抛 ``TypeError: 'bool' object is not callable``）；
 3. process 模式执行途中取消：强杀子进程、耗时远小于 handler 睡眠、标记文件不产生；
 4. process 模式启动前已取消：不派生进程、耗时极短；
 5. thread 模式执行前取消 / 正常执行；
-6. 边界：``execution_context=None`` 不抛 AttributeError；超时强杀仍有效。
+6. 边界：超时强杀仍有效。
 
 Windows 上 multiprocessing 为 spawn：自定义 handler 必须是**模块级函数**
 （本例用 ``functools.partial`` 绑定参数），且测试模块导入时不得有任何副作用
@@ -27,14 +27,10 @@ from typing import ClassVar
 import pytest
 from pydantic import BaseModel
 
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.schemas import ToolDefinition, ToolExecutionContext
-from app.core.tools.schemas.tool_output import (
-    ProcessToolOutputChannel,
-    ProcessToolOutputChannelFactory,
-)
-from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
+from app.core.tools.tool_execute import tool_handler_runner as runner_module
 from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
 @pytest.fixture(autouse=True)
@@ -133,68 +129,38 @@ def _make_tool(
 _TASK_ID = 1
 
 
-def _make_context(run_id: int) -> ToolExecutionContext:
-    """构造绑定了指定 run_id 的执行上下文；Task 级取消信号按 ``_TASK_ID`` 记录。"""
+def _make_context(run_id: int, *, tool_call_id: str = "") -> ToolExecutionContext:
+    """构造绑定了指定 run_id 与调用身份的执行上下文；Task 级取消信号按 ``_TASK_ID`` 记录。
+
+    runner 只从 ``execution_context.tool_call_id`` 读取调用身份，不再接收单独的参数。
+    """
 
     return ToolExecutionContext(
+        step_id="step-1",
         task_id=_TASK_ID,
         workspace_id=1,
         workspace_root=Path("."),
         run_id=run_id,
+        tool_call_id=tool_call_id,
     )
 
 
 # ---------------------------------------------------------------------------
-# 用例 1: _build_cancel_check 契约与实时性
+# 用例 1: _is_cancelled 实时性
 # ---------------------------------------------------------------------------
 
 
-def test_build_cancel_check_none_context_returns_none() -> None:
-    """execution_context=None -> 返回 None（视为不可取消）。
+def test_is_cancelled_is_live_not_snapshot() -> None:
+    """实时性：同一个绑定了上下文的检查在 mark 前后返回值翻转，clear 后又变回 False。
 
-    潜在缺陷：未做 None 守卫，构造期访问 run_id 抛 AttributeError。
-    """
-
-    assert ToolHandlerRunner._build_cancel_check(None) is None
-
-
-def test_build_cancel_check_zero_run_id_returns_none() -> None:
-    """run_id=0（无 run 绑定）-> 返回 None。
-
-    潜在缺陷：漏判 0 边界，返回了永远 False 的回调。
-    """
-
-    assert ToolHandlerRunner._build_cancel_check(_make_context(0)) is None
-
-
-def test_build_cancel_check_negative_run_id_returns_none() -> None:
-    """run_id<0 -> 返回 None（<=0 边界）。
-
-    潜在缺陷：仅判 ==0 漏掉负值。
-    """
-
-    assert ToolHandlerRunner._build_cancel_check(_make_context(-5)) is None
-
-
-def test_build_cancel_check_positive_run_id_returns_callable() -> None:
-    """run_id>0 -> 返回可调用对象。"""
-
-    check = ToolHandlerRunner._build_cancel_check(_make_context(123456))
-    assert callable(check)
-
-
-def test_build_cancel_check_is_live_not_snapshot() -> None:
-    """实时性：mark 前后同一回调返回值翻转，clear 后又变回 False。
-
-    潜在缺陷：把「布尔快照」当作回调返回（构造前只读一次 run 状态），导致工具启动
+    潜在缺陷：把「布尔快照」当作检查结果（执行开始时只读一次），导致工具启动
     之后的取消永远查不到，取消分支形同死代码。
     """
 
     run_id = 900001
     cancellation_registry.consume(_TASK_ID)
     try:
-        check = ToolHandlerRunner._build_cancel_check(_make_context(run_id))
-        assert check is not None
+        check = partial(ToolHandlerRunner._is_cancelled, _make_context(run_id))
         # mark 之前：False
         assert check() is False
         # mark 之后：同一回调返回 True（实时读取注册表）
@@ -222,38 +188,29 @@ def test_process_mode_normal_execution_returns_success() -> None:
     tool = _make_tool(
         _handler_returns_string, name="proc_norm", execution_mode="process", timeout_seconds=10.0
     )
-    observation = ToolHandlerRunner().execute(tool, {}, _make_context(0), tool_call_id="call-1")
+    observation = ToolHandlerRunner().execute(tool, {}, _make_context(0, tool_call_id="call-1"))
 
     assert observation.status == "success"
     assert observation.content == "hello-from-process"
     assert observation.tool_call_id == "call-1"
 
 
-def test_process_mode_flushes_terminal_output_before_return() -> None:
+def test_process_mode_flushes_terminal_output_before_return(monkeypatch: pytest.MonkeyPatch) -> None:
     """真实 multiprocessing 队列在工具返回前 flush 通用输出通道。"""
     received: list[str] = []
     finished: list[bool] = []
 
-    class Channel(ProcessToolOutputChannel):
+    class Channel:
         def emit(self, text: str) -> None:
             received.append(text)
 
         def finish(self) -> None:
             finished.append(True)
 
-    class Factory(ProcessToolOutputChannelFactory):
-        def create(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            tool_call_id: str,
-            tool_name: str,
-            loop: asyncio.AbstractEventLoop,
-        ) -> ProcessToolOutputChannel | None:
-            return Channel()
-
     loop = asyncio.new_event_loop()
+    monkeypatch.setattr(
+        runner_module, "create_process_output_channel", lambda _tool_name, _context: Channel()
+    )
     tool = _make_tool(
         _handler_emits_output,
         name="proc_output",
@@ -264,17 +221,12 @@ def test_process_mode_flushes_terminal_output_before_return() -> None:
     context = replace(
         _make_context(0),
         tool_call_id="call-output",
-        runtime_dependencies=ToolRuntimeDependencies(
-            runtime_event_loop=loop,
-            process_tool_output_channel_factory=Factory(),
-        ),
     )
     try:
         observation = ToolHandlerRunner().execute(
             tool,
             {},
             context,
-            tool_call_id="call-output",
         )
     finally:
         loop.close()
@@ -314,7 +266,7 @@ def test_process_mode_cancelled_mid_execution_kills_child(tmp_path: Path) -> Non
     started = time.monotonic()
     try:
         observation = ToolHandlerRunner().execute(
-            tool, {}, _make_context(run_id), tool_call_id="call-cancel"
+            tool, {}, _make_context(run_id, tool_call_id="call-cancel")
         )
         elapsed = time.monotonic() - started
     finally:
@@ -352,7 +304,7 @@ def test_process_mode_cancelled_before_start_does_not_spawn() -> None:
         )
         started = time.monotonic()
         observation = ToolHandlerRunner().execute(
-            tool, {}, _make_context(run_id), tool_call_id="call-pre"
+            tool, {}, _make_context(run_id, tool_call_id="call-pre")
         )
         elapsed = time.monotonic() - started
     finally:
@@ -377,7 +329,7 @@ def test_thread_mode_cancelled_before_execution() -> None:
     try:
         tool = _make_tool(_handler_returns_string, name="thread_pre", execution_mode="thread")
         observation = ToolHandlerRunner().execute(
-            tool, {}, _make_context(run_id), tool_call_id="call-thread-pre"
+            tool, {}, _make_context(run_id, tool_call_id="call-thread-pre")
         )
     finally:
         cancellation_registry.consume(_TASK_ID)
@@ -390,7 +342,7 @@ def test_thread_mode_normal_execution_returns_success() -> None:
 
     tool = _make_tool(_handler_returns_string, name="thread_norm", execution_mode="thread")
     observation = ToolHandlerRunner().execute(
-        tool, {}, _make_context(0), tool_call_id="call-thread"
+        tool, {}, _make_context(0, tool_call_id="call-thread")
     )
 
     assert observation.status == "success"
@@ -400,19 +352,6 @@ def test_thread_mode_normal_execution_returns_success() -> None:
 # ---------------------------------------------------------------------------
 # 用例 6: 边界
 # ---------------------------------------------------------------------------
-
-
-def test_execute_with_none_context_does_not_raise_attribute_error() -> None:
-    """execution_context=None 调 execute() 不应抛 AttributeError。
-
-    潜在缺陷：_build_cancel_check / 分支方法未做 None 守卫。
-    """
-
-    tool = _make_tool(_handler_returns_string, name="none_ctx", execution_mode="thread")
-    observation = ToolHandlerRunner().execute(tool, {}, None, tool_call_id="call-nonectx")
-
-    assert observation.status == "success"
-    assert observation.content == "hello-from-process"
 
 
 def test_process_mode_timeout_still_kills_child() -> None:
@@ -444,37 +383,6 @@ def test_process_mode_timeout_still_kills_child() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_process_mode_missing_timeout_returns_error_without_spawn() -> None:
-    """timeout_seconds=None -> 直接返回 error，不派生进程（防御性归一化分支）。
-
-    潜在缺陷：未拦截 None 超时导致无限等待或抛 ValueError。
-    """
-
-    tool = ToolDefinition(
-        name="no_timeout",
-        group="probe",
-        description="d",
-        handler=_handler_returns_string,
-        args_model=_NoArgs,
-        timeout_seconds=None,
-        execution_mode="process",
-    )
-    observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
-
-    assert observation.status == "error"
-    assert observation.retryable is False
-
-
-def test_process_mode_non_positive_timeout_returns_error() -> None:
-    """timeout_seconds<=0 -> 返回 error（<=0 边界）。"""
-
-    tool = _make_tool(
-        _handler_returns_string, name="zero_timeout", execution_mode="process", timeout_seconds=0.0
-    )
-    observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
-    assert observation.status == "error"
-
-
 def test_normalize_result_wraps_scalar_and_structured_payloads() -> None:
     """_normalize_result：标量走 str()，dict/list 走 json.dumps。
 
@@ -501,40 +409,6 @@ def test_normalize_result_wraps_scalar_and_structured_payloads() -> None:
     passed = runner._normalize_result(tool, existing, "cid3")
     assert passed.tool_call_id == "cid3"
     assert replace(existing, tool_call_id="cid3") == passed
-
-
-def test_drain_output_queue_none_is_noop() -> None:
-    """_drain_output_queue：队列或 sink 为 None 时直接返回，不抛异常。"""
-
-    ToolHandlerRunner._drain_output_queue(None, None)
-    ToolHandlerRunner._drain_output_queue(None, lambda *_: None)
-
-
-def test_drain_output_queue_sink_failure_is_swallowed() -> None:
-    """sink 抛异常不影响结果获取：drain 静默结束（旁路通道不得反压执行）。"""
-
-    import queue as _queue
-
-    q = _queue.Queue()
-    q.put(("delta", "a"))
-    q.put(("delta", "b"))
-    q.put(("complete",))
-    seen: list[str] = []
-
-    def _bad_sink(text):
-        seen.append(text)
-        raise RuntimeError("sink down")
-
-    # 不应抛出。
-    completed = ToolHandlerRunner._drain_output_queue(q, _bad_sink)
-    assert seen == ["a"]  # 首个片段触发异常后停止推送
-    assert completed is True
-
-
-# ---------------------------------------------------------------------------
-# 附加：用「进程内 fake」覆盖 process 分支（start() 之后的归一化 / 等待逻辑），
-# 保证在无法真实 spawn 的环境（--cov 插桩）下也能验证这些分支。
-# ---------------------------------------------------------------------------
 
 
 class _FakeProcess:
@@ -591,7 +465,7 @@ def test_execute_in_process_with_fake_process_success(monkeypatch) -> None:
     tool = _make_tool(
         _handler_returns_string, name="fake_success", execution_mode="process", timeout_seconds=5.0
     )
-    observation = ToolHandlerRunner().execute(tool, {}, _make_context(0), tool_call_id="fake-1")
+    observation = ToolHandlerRunner().execute(tool, {}, _make_context(0, tool_call_id="fake-1"))
 
     assert observation.status == "success"
     assert observation.content == "hello-from-process"
@@ -652,11 +526,13 @@ def test_wait_for_result_raises_timeout_when_process_alive(monkeypatch) -> None:
 
     q = _make_fake_queue_factory()(maxsize=1)
     with pytest.raises(TimeoutError):
-        mod.ToolHandlerRunner._wait_for_result(_AliveForever(), q, timeout=0.2)
+        mod.ToolHandlerRunner._wait_for_result(
+            _AliveForever(), q, timeout=0.2, is_cancelled=lambda: False
+        )
 
 
-def test_wait_for_result_raises_cancelled_when_should_cancel_true() -> None:
-    """_wait_for_result：should_cancel 命中 -> 抛内部 _ToolExecutionCancelled。
+def test_wait_for_result_raises_cancelled_when_is_cancelled_true() -> None:
+    """_wait_for_result：is_cancelled 命中 -> 抛内部 _ToolExecutionCancelled。
 
     潜在缺陷：取消检查被放在阻塞 get 之后，导致取消无法及时中断等待。
     """
@@ -670,7 +546,7 @@ def test_wait_for_result_raises_cancelled_when_should_cancel_true() -> None:
     q = _make_fake_queue_factory()(maxsize=1)
     with pytest.raises(mod._ToolExecutionCancelled):
         mod.ToolHandlerRunner._wait_for_result(
-            _AliveForever(), q, timeout=5.0, should_cancel=lambda: True
+            _AliveForever(), q, timeout=5.0, is_cancelled=lambda: True
         )
 
 
@@ -817,15 +693,6 @@ def test_process_oserror_path_returns_error_not_raise(monkeypatch) -> None:
     assert observation.retryable is False
 
 
-def test_force_kill_none_pid_is_noop() -> None:
-    """_force_kill：pid 为 None 时直接返回（进程未启动），不抛异常。"""
-
-    class _NoPid:
-        pid = None
-
-    ToolHandlerRunner()._force_kill(_NoPid())  # 不应抛出
-
-
 def test_thread_handler_exception_returns_error() -> None:
     """thread 模式 handler 抛异常 -> status="error"（thread 异常归一化分支）。"""
 
@@ -866,24 +733,12 @@ def test_execute_in_process_uses_runtime_output_channel_factory(monkeypatch) -> 
     seen: list[tuple[str, bool]] = []
     finished = threading.Event()
 
-    class Channel(ProcessToolOutputChannel):
+    class Channel:
         def emit(self, text: str) -> None:
             seen.append((text, False))
 
         def finish(self) -> None:
             finished.set()
-
-    class Factory(ProcessToolOutputChannelFactory):
-        def create(
-            self,
-            *,
-            task_id: int,
-            run_id: int,
-            tool_call_id: str,
-            tool_name: str,
-            loop: asyncio.AbstractEventLoop,
-        ) -> ProcessToolOutputChannel | None:
-            return Channel()
 
     def _handler_emits(execution_context=None, output_sink=None, **_kwargs):
         # 子进程入口会把 output_sink 注入 handler（本 fake 在同线程运行）。
@@ -895,13 +750,12 @@ def test_execute_in_process_uses_runtime_output_channel_factory(monkeypatch) -> 
         _handler_emits, name="sink_tool", execution_mode="process", timeout_seconds=5.0
     )
     loop = asyncio.new_event_loop()
+    monkeypatch.setattr(
+        runner_module, "create_process_output_channel", lambda _tool_name, _context: Channel()
+    )
     context = replace(
         _make_context(0),
         tool_call_id="call-output",
-        runtime_dependencies=ToolRuntimeDependencies(
-            runtime_event_loop=loop,
-            process_tool_output_channel_factory=Factory(),
-        ),
     )
     observation = ToolHandlerRunner().execute(
         tool,

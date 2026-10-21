@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.tool_handler.find_files import FindFilesTool
 from app.core.tools.tool_handler.search.content_engine import search_content
@@ -14,10 +13,12 @@ from app.core.tools.tool_handler.search.gitignore_rules import GitignoreMatcher
 from app.core.tools.tool_handler.search.result import ContentSearchPage
 from app.core.tools.tool_handler.search.scope import SearchScope
 from app.core.tools.tool_handler.search_content import SearchContentTool
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
 def _context(root: Path, *, task_id: int = 1) -> ToolExecutionContext:
     return ToolExecutionContext(
+        step_id="step-1",
         task_id=task_id,
         workspace_id=1,
         workspace_root=root,

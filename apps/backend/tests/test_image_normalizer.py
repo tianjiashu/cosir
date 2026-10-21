@@ -5,6 +5,7 @@ from PIL import Image
 
 from app.assistant_transport.event import UserInputAppendedEvent
 from app.assistant_transport.projection.event_projection import plan_event
+from app.assistant_transport.service.conversation_task_state_service import _apply_mutation
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
 from app.core.events import RunInitializedEvent
 from app.service.attachment.image_normalizer import (
@@ -58,22 +59,28 @@ def test_normalize_uses_unified_image_policy_as_format_source() -> None:
     }
 
 
-def test_run_initialized_creates_empty_user_skeleton_and_input_event_projects_image() -> None:
-    initialized = RunInitializedEvent(task_id=1, run_id=1)
-    initialized_snapshot = plan_event(initialized, empty_snapshot())[0].value
-    assert initialized_snapshot["messages"][0]["parts"] == []
+def _apply_planned(event, snapshot):
+    for mutation in plan_event(event, snapshot):
+        _apply_mutation(snapshot, mutation)
+    return snapshot
 
-    input_event = UserInputAppendedEvent(
-        task_id=1,
-        run_id=1,
-        parts=[{"type": "image", "image": "cosir-attachment://" + "1" * 64}],
+
+def test_run_initialized_has_no_messages_and_input_event_projects_image() -> None:
+    """Run 骨架不预置 user 消息；用户输入事件把图片 locator 原样投影为独立 user 消息。"""
+
+    snapshot = _apply_planned(RunInitializedEvent(task_id=1, run_id=1), empty_snapshot())
+    assert snapshot["runs"][0]["messages"] == []
+
+    image_part = {"type": "image", "image": "cosir-attachment://" + "1" * 64}
+    snapshot = _apply_planned(
+        UserInputAppendedEvent(task_id=1, run_id=1, message_id="user-1", parts=[image_part]),
+        snapshot,
     )
-    input_snapshot = dict(initialized_snapshot)
-    input_snapshot["runs"] = [initialized_snapshot]
-    mutations = plan_event(input_event, input_snapshot)
-    assert mutations[0].value == [
-        {"type": "image", "image": "cosir-attachment://" + "1" * 64}
-    ]
+    user_message, assistant_message = snapshot["runs"][0]["messages"]
+    assert user_message["role"] == "user"
+    assert user_message["parts"] == [image_part]
+    assert assistant_message["role"] == "assistant"
+    assert assistant_message["parts"] == []
 
 
 def test_normalizer_does_not_follow_existing_target_symlink(tmp_path: Path) -> None:

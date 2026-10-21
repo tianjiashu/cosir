@@ -7,8 +7,8 @@ import pytest
 
 import app.core.workflow.workflow as module
 from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.run_state_machine import RunTransition
 from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.enums.conversation_run_status import RunTransition
 from tests.runtime_context_stub import run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 

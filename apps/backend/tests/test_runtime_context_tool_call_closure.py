@@ -40,7 +40,7 @@ from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import initialize_app_schema
-from tests.runtime_context_stub import runtime_stub
+from tests.runtime_context_stub import install_runtime_singletons, runtime_stub
 
 _TOOL_STATUS_VALUES = {"pending", "running", "completed", "failed", "cancelled"}
 
@@ -630,7 +630,6 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     service._session_factory = env.factory
     service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run_state._run = run_crud
-    service._run_state._session_factory = env.factory
 
     recovered = service.recover_orphaned_runs()
 
@@ -676,7 +675,6 @@ def test_recover_orphaned_runs_preserves_waiting_run(env: SimpleNamespace) -> No
     service._session_factory = env.factory
     service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run_state._run = run_crud
-    service._run_state._session_factory = env.factory
 
     recovered = service.recover_orphaned_runs()
 
@@ -760,6 +758,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
         batch=ToolBatch(),
     )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
+    install_runtime_singletons(runtime)
     monkeypatch.setattr(machine_module, "emit", events.append)
     machine = StreamingPartStateMachine(
         task_id=env.task.id,
@@ -815,7 +814,6 @@ def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
     service._session_factory = env.factory
     service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run_state._run = service._run
-    service._run_state._session_factory = env.factory
     recovered = service.recover_orphaned_runs()
     assert [run.id for run in recovered] == [broken.id]
     assert service._run.get(healthy.id).status == "waiting_for_input"

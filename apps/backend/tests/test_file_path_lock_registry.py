@@ -57,14 +57,18 @@ def test_shared_workspace_path_lock_serializes_different_tasks(tmp_path: Path) -
         observed_paths=(),
     )
     first_context = ToolExecutionContext(
+        step_id="step-1",
         task_id=101,
         workspace_id=1,
         workspace_root=workspace,
+        run_id=1,
     )
     second_context = ToolExecutionContext(
+        step_id="step-1",
         task_id=202,
         workspace_id=1,
         workspace_root=workspace,
+        run_id=1,
     )
     first_coordinator = FileToolStateCoordinator()
     second_coordinator = FileToolStateCoordinator()

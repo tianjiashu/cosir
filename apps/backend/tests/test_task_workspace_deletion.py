@@ -70,8 +70,8 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
         task_type="delegate_task",
         parent_task_id=root.id,
     )
-    root_run = get_conversation_run_crud().create(root.id, "root input", status="completed")
-    child_run = get_conversation_run_crud().create(child.id, "child input", status="failed")
+    root_run = get_conversation_run_crud().create(root.id, status="completed")
+    child_run = get_conversation_run_crud().create(child.id, status="failed")
     context_crud = get_conversation_task_context_crud()
     context_crud.create(
         ConversationTaskContextRecord(
@@ -140,8 +140,8 @@ def test_task_delete_rolls_back_all_rows_when_tree_delete_fails(
         task_type="delegate_task",
         parent_task_id=root.id,
     )
-    get_conversation_run_crud().create(root.id, "root input", status="completed")
-    get_conversation_run_crud().create(child.id, "child input", status="completed")
+    get_conversation_run_crud().create(root.id, status="completed")
+    get_conversation_run_crud().create(child.id, status="completed")
     service = get_task_service()
     original_delete = service._delete_single_task_in_session
     calls: list[int] = []
@@ -291,9 +291,29 @@ def test_workspace_delete_serializes_task_creation(
     assert root.id > 0
 
 
+class _FakeWorkflowSession:
+    """记录删除前停止的 Task 集合；删除端点先停执行、再删事实。"""
+
+    def __init__(self) -> None:
+        self.stopped: list[set[int]] = []
+
+    async def stop_tasks(self, task_ids: set[int]) -> None:
+        self.stopped.append(set(task_ids))
+
+
+class _FakeTaskTree:
+    """只提供删除端点停止执行所需的任务树读取。"""
+
+    def collect_task_tree_ids(self, task_id: int) -> set[int]:
+        return {task_id}
+
+    def list_task_ids_for_workspace(self, _workspace_id: int) -> set[int]:
+        return set()
+
+
 @pytest.mark.asyncio
 async def test_delete_endpoints_return_404_and_busy_409(storage) -> None:
-    class MissingTask:
+    class MissingTask(_FakeTaskTree):
         def delete_task(self, _task_id: int) -> None:
             raise KeyError(_task_id)
 
@@ -301,14 +321,15 @@ async def test_delete_endpoints_return_404_and_busy_409(storage) -> None:
         def delete_workspace(self, _workspace_id: int) -> None:
             raise KeyError(_workspace_id)
 
+    session = _FakeWorkflowSession()
     with pytest.raises(HTTPException) as task_404:
-        await delete_task_endpoint(1, MissingTask())
+        await delete_task_endpoint(1, MissingTask(), session, None)
     with pytest.raises(HTTPException) as workspace_404:
-        await delete_workspace_endpoint(1, MissingWorkspace())
+        await delete_workspace_endpoint(1, MissingWorkspace(), _FakeTaskTree(), session)
     assert task_404.value.status_code == 404
     assert workspace_404.value.status_code == 404
 
-    class BusyTask:
+    class BusyTask(_FakeTaskTree):
         def delete_task(self, _task_id: int) -> None:
             raise DeletionBusyError("task", _task_id)
 
@@ -317,30 +338,35 @@ async def test_delete_endpoints_return_404_and_busy_409(storage) -> None:
             raise DeletionBusyError("workspace", _workspace_id)
 
     with pytest.raises(HTTPException) as task_409:
-        await delete_task_endpoint(1, BusyTask())
+        await delete_task_endpoint(1, BusyTask(), session, None)
     with pytest.raises(HTTPException) as workspace_409:
-        await delete_workspace_endpoint(1, BusyWorkspace())
+        await delete_workspace_endpoint(1, BusyWorkspace(), _FakeTaskTree(), session)
     assert task_409.value.status_code == 409
     assert task_409.value.detail["code"] == "TASK_BUSY"
     assert workspace_409.value.status_code == 409
     assert workspace_409.value.detail["code"] == "WORKSPACE_BUSY"
+    # 普通删除在删除闸门外先停止任务树执行。
+    assert {1} in session.stopped
 
 
 @pytest.mark.asyncio
 async def test_delete_task_endpoint_routes_creation_marker_to_guarded_cleanup(storage) -> None:
     calls: list[tuple[int, str]] = []
 
-    class ProvisionalTask:
+    class ProvisionalTask(_FakeTaskTree):
         def cleanup_provisional_task(self, task_id: int, creation_command_id: str) -> None:
             calls.append((task_id, creation_command_id))
 
         def delete_task(self, _task_id: int) -> None:
             raise AssertionError("provisional cleanup must not use ordinary deletion")
 
-    result = await delete_task_endpoint(7, ProvisionalTask(), "creation-7")
+    session = _FakeWorkflowSession()
+    result = await delete_task_endpoint(7, ProvisionalTask(), session, "creation-7")
 
     assert result.task_id == 7
     assert calls == [(7, "creation-7")]
+    # 临时 Task 的守卫清理不走「先停执行」的普通删除链路。
+    assert session.stopped == []
 
 
 @pytest.mark.parametrize("delete_workspace", [False, True])

@@ -207,13 +207,9 @@ def test_p2_terminal_result_keeps_streamed_output() -> None:
     assert part["display_data"]["exit_code"] == 0
 
 
-def test_p2_empty_display_data_wipes_streamed_terminal_output() -> None:
-    """P2-b：终态事件的 ``display_data`` 为空 ``dict`` 时，已流出的终端输出**被清空**。
-
-    被测行为：取消 / 失败观察的 ``display_data`` 默认是 ``{}`` 而非 ``None``，会通过
-    ``if self.display_data is not None`` 守卫整体覆盖 part 的 ``display_data``。
-    缺陷判定：**缺陷**（``tool_terminal_projection.py`` 模块 docstring 自述「已知缺陷（未修）」）。
-    """
+def test_p2_empty_display_data_keeps_streamed_terminal_output() -> None:
+    """P2-b：终态事件的 ``display_data`` 为空 ``dict``（取消 / 失败观察的默认形态）时，已流出的
+    终端输出保留，终态只叠加自带字段。"""
 
     state, projector = _seed_tool_part()
     assert _tool_part(state)["display_data"]["output"] == "streamed"
@@ -224,21 +220,17 @@ def test_p2_empty_display_data_wipes_streamed_terminal_output() -> None:
             run_id=_RUN_ID,
             tool_call_id="call-1",
             status="cancelled",
-            display_data={},  # 取消观察的默认形态
+            display_data={},
         )
     )
 
     part = _tool_part(state)
-    assert part["display_data"] == {}, f"实际={part['display_data']}"
-    assert "output" not in part["display_data"], "已流出的输出被清空（缺陷）"
+    assert part["status"] == "cancelled"
+    assert part["display_data"]["output"] == "streamed"
 
 
-def test_p2_non_terminal_result_kind_is_also_wiped() -> None:
-    """P2-c：``kind`` 不是 ``terminal-result`` 时，补偿分支不生效，输出同样被清空。
-
-    被测行为：``has_streamed_terminal_output`` 要求**新旧双方**都是 ``terminal-result``。
-    缺陷判定：**缺陷**（补偿只覆盖一种形状）。
-    """
+def test_p2_explicit_kind_display_replaces_streamed_terminal_output() -> None:
+    """P2-c：带明确 ``kind`` 的终态展示是权威结果，照常整体替换，不与旧的 terminal-result 拼接。"""
 
     state, projector = _seed_tool_part()
 
@@ -257,7 +249,7 @@ def test_p2_non_terminal_result_kind_is_also_wiped() -> None:
         "kind": "terminal-session",
         "status_hint": "执行失败",
     }, f"实际={part['display_data']}"
-    assert "output" not in part["display_data"], "非 terminal-result 形状的输出不被保留（缺陷）"
+    assert "output" not in part["display_data"]
 
 
 # ============================================================================

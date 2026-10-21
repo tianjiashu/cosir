@@ -120,7 +120,7 @@ def test_browser_settings_never_change_agent_tools(files, tmp_path):
     (tmp_path / "src/secret.py").write_text("unique_needle\n")
     files.change_visibility(1, ["src"], ignored=True)
     assert search_paths(files, "*.py") == set()
-    context = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
+    context = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
     found = FindFilesTool().execute(pattern="*.py", path=".", execution_context=context)
     content = SearchContentTool().execute(
         pattern="unique_needle", path="src", execution_context=context

@@ -8,12 +8,12 @@ from app.core.tools.tool_handler.child_task.child_agent_wait import ChildAgentWa
 
 
 def test_child_agent_tools_declare_standalone_details_rows() -> None:
-    """Child Agent 工具声明 standalone 展示面；仅 delegate_task 允许展开安全细节。
+    """Child Agent 工具声明 standalone 展示面，且都不可展开。
 
     目的：固化 child_task/ 四个工具当前的 ``ToolDisplayHints`` 契约——四个工具都在
-    独立区域强调结果（``standalone``），``expand_layout`` 统一为 ``details``，且**都不**
-    把模型结果正文暴露给客户端（``show_result=False``）；其中只有发起委派的
-    ``delegate_task`` 可展开（携带 child locator 的委派生命周期细节）。
+    独立区域强调结果（``standalone``），``expand_layout`` 统一为 ``details``，**都不**
+    把模型结果正文暴露给客户端（``show_result=False``），也都不提供展开面
+    （``delegate_task`` 的委派生命周期由独立卡片直接呈现，不再展开细节）。
     潜在缺陷：某个工具漏声明 ``display``，或展开面/结果暴露面与 UI 契约漂移，
     导致前端无法按 ``kind`` / ``expand_layout`` 正确路由。
     """
@@ -32,8 +32,9 @@ def test_child_agent_tools_declare_standalone_details_rows() -> None:
         assert display.expand_layout == "details"
         assert display.show_result is False
 
-    assert delegate.display.expandable is True
-    assert all(definition.display.expandable is False for definition in (send, status, wait))
+    assert all(
+        definition.display.expandable is False for definition in (delegate, send, status, wait)
+    )
 
 
 def test_agent_team_run_tool_advertises_only_running_existing_teams() -> None:
@@ -48,8 +49,8 @@ def test_agent_team_run_tool_advertises_only_running_existing_teams() -> None:
 
     definition = AgentTeamRunTool.to_definition(object.__new__(AgentTeamRunTool))
 
-    assert "must already exist" in definition.description
-    assert "cannot create or modify" in definition.description
+    assert definition.description.startswith("Run an existing Agent Team")
+    assert "cannot create or edit Team configurations" in definition.description
 
     display = definition.display
     assert display is not None

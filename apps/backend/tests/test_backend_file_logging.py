@@ -8,7 +8,6 @@ from pathlib import Path
 from app.config.logging.configuration import configure_logging, shutdown_logging
 from app.config.logging.context.log_context_store import merge_log_context, reset_log_context
 from app.config.logging.logger import log
-from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
 
 
 def test_configure_logging_writes_fixed_jsonl_record(tmp_path: Path) -> None:
@@ -59,13 +58,3 @@ def test_shutdown_logging_does_not_close_unmanaged_handlers(tmp_path: Path) -> N
         logger.removeHandler(unmanaged)
         shutdown_logging()
 
-
-def test_process_tool_context_preserves_trace_id() -> None:
-    context = ToolExecutionContext(
-        task_id=1,
-        workspace_id=2,
-        workspace_root=Path("."),
-        trace_id="b" * 32,
-    )
-
-    assert context.for_process_execution().trace_id == "b" * 32

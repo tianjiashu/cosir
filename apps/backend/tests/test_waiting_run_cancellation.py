@@ -12,8 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.core.workflow.run_state_machine import RunTransition
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.models.user_decision import UserDecisionKind
 from app.service.conversation_run import workflow_session as session_module
 from app.service.conversation_run.workflow_session import WorkflowSession, _Execution

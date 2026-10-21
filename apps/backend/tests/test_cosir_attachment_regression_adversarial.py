@@ -56,7 +56,7 @@ _ASSET = "a" * 64
 def _ctx(root: Path) -> ToolExecutionContext:
     """构造绑定到给定 workspace 根的执行上下文。"""
 
-    return ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=root, run_id=1)
+    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=1)
 
 
 def _png_bytes(size: tuple[int, int] = (4, 3)) -> bytes:

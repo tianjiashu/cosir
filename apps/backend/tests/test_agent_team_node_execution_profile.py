@@ -27,6 +27,7 @@ import pytest
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.coordinator import AgentTeamCoordinator
+from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
@@ -360,10 +361,10 @@ def test_unmaterialized_registry_settings_would_fail_runtime_context(
     with pytest.raises(ModelSettingsError) as captured:
         profile.model_settings.require_runtime_config()
     message = str(captured.value)
+    # ``context_window_k`` 改为在缺失字段全部齐备后单独做正整数校验，不进入缺失清单。
     for missing in (
         "model_name",
         "base_url",
-        "context_window_k",
         "supports_thinking",
         "supports_reasoning_effort",
         "supports_image",
@@ -404,7 +405,7 @@ def test_legacy_registry_profile_construction_reproduces_runtime_failure() -> No
     with pytest.raises(ModelSettingsError) as captured:
         legacy_profile.model_settings.require_runtime_config()
     assert str(captured.value) == (
-        "模型运行配置未物化，缺少字段: model_name, base_url, context_window_k, "
+        "模型运行配置未物化，缺少字段: model_name, base_url, "
         "supports_thinking, supports_reasoning_effort, supports_image"
     )
 
@@ -465,7 +466,10 @@ def test_preparation_snapshot_freezes_preferences_without_connection_fields(
     result = AgentTeamPreparationService().prepare(
         AgentTeamConfiguration.model_validate(_team_configuration()),
         goal="交付报告",
-        node_goals={"develop": "实现", "review": "审查"},
+        node_goals={
+            "develop": AgentTeamNodeGoal(goal="实现", summary="实现"),
+            "review": AgentTeamNodeGoal(goal="审查", summary="审查"),
+        },
         workspace_root="ws",
         parent_task_id=1,
         parent_run_id=2,

@@ -53,9 +53,9 @@ def test_delete_middle_run_removes_only_its_data(storage) -> None:
     task = get_task_crud().create(workspace.id, "root")
     context_crud = get_conversation_task_context_crud()
 
-    run_a = get_conversation_run_crud().create(task.id, "a", status="completed")
-    run_b = get_conversation_run_crud().create(task.id, "b", status="completed")
-    run_c = get_conversation_run_crud().create(task.id, "c", status="completed")
+    run_a = get_conversation_run_crud().create(task.id, status="completed")
+    run_b = get_conversation_run_crud().create(task.id, status="completed")
+    run_c = get_conversation_run_crud().create(task.id, status="completed")
     get_task_crud().set_current_run_id(task.id, run_c.id)
 
     for seq, run in ((1, run_a), (2, run_b), (3, run_c)):
@@ -107,8 +107,8 @@ def test_delete_middle_run_removes_only_its_data(storage) -> None:
 def test_delete_run_rejected_when_task_has_active_run(storage) -> None:
     workspace = get_workspace_crud().create("review", str(Path.cwd()))
     task = get_task_crud().create(workspace.id, "root")
-    done_run = get_conversation_run_crud().create(task.id, "done", status="completed")
-    get_conversation_run_crud().create(task.id, "running", status="running")
+    done_run = get_conversation_run_crud().create(task.id, status="completed")
+    get_conversation_run_crud().create(task.id, status="running")
 
     with pytest.raises(RunDeletionConflictError):
         get_task_service().delete_run(task.id, done_run.id)
@@ -121,7 +121,7 @@ def test_delete_run_missing_or_foreign_run_raises_key_error(storage) -> None:
     workspace = get_workspace_crud().create("review", str(Path.cwd()))
     task = get_task_crud().create(workspace.id, "root")
     other_task = get_task_crud().create(workspace.id, "other")
-    foreign_run = get_conversation_run_crud().create(other_task.id, "foreign", status="completed")
+    foreign_run = get_conversation_run_crud().create(other_task.id, status="completed")
 
     with pytest.raises(KeyError):
         get_task_service().delete_run(task.id, 987654)
@@ -168,7 +168,7 @@ def test_delete_creator_run_preserves_task_terminal(storage, tmp_path, monkeypat
 
     workspace = get_workspace_crud().create("terminal", str(tmp_path))
     task = get_task_crud().create(workspace.id, "terminal owner")
-    run = get_conversation_run_crud().create(task.id, "start shell", status="completed")
+    run = get_conversation_run_crud().create(task.id, status="completed")
     terminal, workers = make_service(monkeypatch)
     session = terminal.start(
         task_id=task.id, workspace_id=workspace.id, workspace_root=str(tmp_path), run_id=run.id

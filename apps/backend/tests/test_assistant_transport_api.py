@@ -16,6 +16,8 @@ from app.assistant_transport.request.task_command_request import _ordered_displa
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
 )
+from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.enums.conversation_run_status import RunTransition
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.workflow_session import WorkflowSession
 from app.service.depends import get_workspace_service
@@ -188,7 +190,8 @@ def test_task_commands_are_addressed_by_task(path: str) -> None:
 def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
     """重启恢复只写持久化事实（Run 终态 + 工具收口），不触碰 snapshot。"""
 
-    calls: list[tuple[int, str | None]] = []
+    calls: list[tuple[int, RunTransition, str | None]] = []
+    invalidated: list[tuple[int, int]] = []
     repaired: list[tuple[int, int]] = []
 
     class _Transaction:
@@ -204,24 +207,32 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
 
     class _RunCrud:
         def list_recoverable(self) -> list[object]:
-            return [SimpleNamespace(id=7, task_id=1), SimpleNamespace(id=8, task_id=2)]
+            return [
+                SimpleNamespace(
+                    id=run_id, task_id=task_id, execution_data=ConversationRunProgress()
+                )
+                for run_id, task_id in ((7, 1), (8, 2))
+            ]
 
-        def update_status_if_in(
+    class _RunStateService:
+        def transition(
             self,
             run_id: int,
-            target_status: str,
-            allowed_statuses: tuple[str, ...],
+            transition: RunTransition,
+            *,
             end_reason: str | None = None,
-            final_output: str | None = None,
-            usage: object = None,
-            error: object = None,
+            execution_data: object = None,
             session: object = None,
         ) -> object:
             assert session is not None
-            calls.append((run_id, end_reason))
+            calls.append((run_id, transition, end_reason))
             return SimpleNamespace(id=run_id)
 
     class _ContextService:
+        def invalidate_waiting_calls(self, task_id: int, run_id: int, session: object) -> None:
+            assert session is not None
+            invalidated.append((task_id, run_id))
+
         def close_unclosed_tool_calls_for_run(
             self, task_id: int, run_id: int, session: object = None
         ) -> list[str]:
@@ -231,13 +242,18 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
 
     service = ConversationRunService.__new__(ConversationRunService)
     service._run = _RunCrud()
+    service._run_state = _RunStateService()
     service._context = _ContextService()
     service._session_factory = _SessionFactory()
 
     result = service.recover_orphaned_runs()
 
     assert [record.id for record in result] == [7, 8]
-    assert calls == [(7, "runtime_restarted"), (8, "runtime_restarted")]
+    assert calls == [
+        (7, RunTransition.CANCEL, "runtime_restarted"),
+        (8, RunTransition.CANCEL, "runtime_restarted"),
+    ]
+    assert invalidated == [(1, 7), (2, 8)]
     assert repaired == [(1, 7), (2, 8)]
 
 

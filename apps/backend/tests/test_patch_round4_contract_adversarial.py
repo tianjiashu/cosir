@@ -39,6 +39,8 @@ from app.core.tools.tool_handler.patch_write.patch_parser import (
 from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
 PARAM_DESCRIPTION = ApplyPatchArgs.model_fields["patch"].description or ""
+# 最小样例已从描述正文迁到字段 ``examples``（随 strict schema 一并导出给模型）。
+PARAM_EXAMPLES: list[str] = list(ApplyPatchArgs.model_fields["patch"].examples or [])
 
 # 工具描述的事实源已从模块级常量 ``APPLY_PATCH_DESCRIPTION`` 迁移为类属性
 # ``ApplyPatchTool.description``（模块不再导出该名字）。此处只做「测试内别名」，把断言指向新位置，
@@ -57,7 +59,7 @@ def _valid_patch(path: str = "m.txt") -> str:
 
 
 def _context(root: pathlib.Path, run_id: int = 4001) -> ToolExecutionContext:
-    return ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
+    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
 
 
 def _execute(root: pathlib.Path, patch: str, run_id: int = 4001):
@@ -69,34 +71,20 @@ def _execute(root: pathlib.Path, patch: str, run_id: int = 4001):
 # ---------------------------------------------------------------------------
 
 
-# 目的：计数规则即使留在唯一事实源（参数描述）里，也必须保持**可判定**的精确措辞；把
-# 「must match ... exactly」弱化成模棱两可的措辞同样是契约缺陷（上一轮事故根因）。
-# 缺陷类型：唯一事实源被削弱（信息仍在但不再可执行）。
-def test_count_rule_in_the_parameter_description_stays_precise() -> None:
-    exact_sentence = (
-        "numbers in '@@ -start,count +start,count @@' must match that hunk body exactly"
-    )
-
-    assert exact_sentence in PARAM_DESCRIPTION, "计数规则措辞被削弱或改写"
-    assert "a count may be omitted only when it is 1" in PARAM_DESCRIPTION
-    assert "must match" not in APPLY_PATCH_DESCRIPTION, "计数规则不得回到工具描述"
-
-
-# 目的：收敛后模型必须仍能仅凭「工具描述 + 参数描述」推导出全部必需约束。
+# 目的：收敛后模型必须仍能仅凭「工具描述 + 参数描述 + 参数样例」推导出全部必需约束。
+# 计数契约已改为「差异块行数按正文重算」（解析器修复而非拒绝不符的计数），故不再要求旧的
+# 「计数必须精确匹配」规则，而是要求新规则本身被声明。
 # 缺陷类型：去重把某条必需信息一并删掉（信息丢失）。
 def test_every_required_constraint_survives_the_deduplication() -> None:
     both = APPLY_PATCH_DESCRIPTION + "\n" + PARAM_DESCRIPTION
     required = {
-        "prefix rule: context/removed/added start chars": "every line starts with",
-        "count rule stated as a rule": "must match",
-        "source count definition": "context plus '-' lines",
-        "target count definition": "context plus '+' lines",
-        "omission rule": "omitted only when it is 1",
-        "minimal accepted example marker": "Minimal accepted example",
-        "sample 'diff --git' line": "diff --git a/pkg/mod.py b/pkg/mod.py",
-        "sample '@@' header": "@@ -10,3 +10,3 @@",
+        "prefix rule: context/removed/added start chars": (
+            "差异块正文行以 ' '（上下文）、'-'（删除）或 '+'（新增）开头"
+        ),
+        "count rule: recomputed from the body": "差异块行数按正文重算",
+        "structure rule: at least one content hunk": "至少一个内容差异块",
         "'*** Begin Patch' prohibition": "*** Begin Patch",
-        "path identity (a/ and b/ same file)": "same workspace-relative path",
+        "path identity (a/ and b/ same file)": "同一个归一化的工作区相对路径",
         "unsupported: cannot create": "cannot create",
         "unsupported: cannot delete": "delete",
         "unsupported: cannot move": "move",
@@ -109,41 +97,48 @@ def test_every_required_constraint_survives_the_deduplication() -> None:
     missing = [name for name, needle in required.items() if needle not in both]
 
     assert not missing, f"去重丢失了模型必需的信息: {missing}"
+    # 最小样例已从描述正文迁到 ``examples``，仍须对模型可见。
+    sample = "\n".join(PARAM_EXAMPLES)
+    assert "diff --git a/pkg/mod.py b/pkg/mod.py" in sample
+    assert "@@ -10,3 +10,3 @@" in sample
 
 
 # 目的：工具描述声明的指针（「格式由 patch 参数描述定义」）必须真实成立，否则指针把模型引向
 # 不存在的内容。缺陷类型：指针悬空（指向的描述里没有该内容）。
 def test_tool_description_pointer_points_at_the_parameter_description() -> None:
     assert "its description defines the accepted format" in APPLY_PATCH_DESCRIPTION
-    for promised in ("diff --git a/", "must match", "Minimal accepted example"):
+    for promised in ("'diff --git' 头", "至少一个内容差异块", "差异块行数按正文重算"):
         assert promised in PARAM_DESCRIPTION, f"指针承诺的格式内容缺失: {promised!r}"
+    assert PARAM_EXAMPLES, "指针承诺的最小样例缺失"
     # 指针方向唯一：参数描述不得反向指向工具描述（互指即两份事实源）。
     assert "tool description" not in PARAM_DESCRIPTION
+    assert "工具描述" not in PARAM_DESCRIPTION
 
 
-# 目的：两段不得互相矛盾——计数规则只由参数描述承载，工具描述不得复述；能力边界只由工具描述
-# 承载，参数描述不得复述。缺陷类型：同一事实两处表述、一处宽一处窄。
+# 目的：两段不得互相矛盾——计数与格式规则只由参数描述承载，工具描述不得复述；能力边界与替代
+# 工具由工具描述承载（参数描述按当前设计也可点名替代工具，二者措辞一致即可）。
+# 缺陷类型：同一事实两处表述、一处宽一处窄。
 def test_the_two_texts_do_not_contradict_each_other() -> None:
     # 计数规则只有参数描述一处事实源；工具描述不得复述（复述即漂移风险）。
     assert "must match" not in APPLY_PATCH_DESCRIPTION
     assert "counts" not in APPLY_PATCH_DESCRIPTION
     assert "@@" not in APPLY_PATCH_DESCRIPTION
-    # 参数描述明确说「必填」，不得出现可选措辞来争夺语义。
-    assert "Required Git-style unified diff" in PARAM_DESCRIPTION
+    # 参数描述明确说「只传入原始 diff」，不得出现可选措辞来争夺语义。
+    assert "只传入原始 Git 统一 diff 文本" in PARAM_DESCRIPTION
     assert "optional" not in PARAM_DESCRIPTION.lower()
-    # 能力边界与替代工具只由工具描述承载；参数描述不得复述。
+    assert "可选" not in PARAM_DESCRIPTION
     for tool in ("write_file", "delete_file", "move_file"):
         assert tool in APPLY_PATCH_DESCRIPTION, f"工具描述缺少替代工具 {tool}"
-        assert tool not in PARAM_DESCRIPTION, f"参数描述重复了替代工具指引 {tool}"
-    assert "cannot create" not in PARAM_DESCRIPTION
 
 
 # 目的：结构规则声明必须能被实现证实；且 diff 标记（section / 文件头 / hunk 头）的唯一事实源
-# 在参数描述，工具描述只讲职责、不得出现任何标记。
+# 在参数描述（含样例），工具描述只讲职责、不得出现任何标记。
 # 缺陷类型：契约承诺了实现拒绝的形状（虚假契约），或语法描述散落两处导致漂移。
 def test_documented_structure_claim_is_accepted_by_the_parser() -> None:
-    for token in ("diff --git", "---", "+++", "@@"):
+    for token in ("diff --git", "---", "+++"):
         assert token in PARAM_DESCRIPTION, token
+    assert "@@" in "\n".join(PARAM_EXAMPLES), "hunk 头标记须由参数样例展示"
+    for token in ("diff --git", "---", "+++", "@@"):
         assert token not in APPLY_PATCH_DESCRIPTION, f"工具描述出现 diff 标记: {token!r}"
 
     operations, error = parse_git_unified_diff(_section("m.txt", "@@ -1,1 +1,1 @@", "-a", "+A"))
@@ -168,24 +163,22 @@ def test_parameter_description_nothing_but_the_diff_is_enforced(wrapper: str) ->
     assert error is not None
 
 
-# 目的：样例只允许存在于唯一事实源（参数描述）里，且只允许一份；工具描述不得内嵌与参数描述
-# 并列的第二份样例（并列样例是上一轮样例计数错事故的温床）。缺陷类型：样例再次重复。
+# 目的：样例只允许存在于唯一事实源（参数 ``examples``）里，且只允许一份；描述正文与工具描述都
+# 不得内嵌并列的第二份样例（并列样例是上一轮样例计数错事故的温床）。缺陷类型：样例再次重复。
 def test_the_sample_exists_once_in_the_parameter_description() -> None:
-    assert (
-        PARAM_DESCRIPTION.count("diff --git a/pkg/mod.py b/pkg/mod.py") == 1
-    ), "参数描述里样例必须只有一份"
+    sample_header = "diff --git a/pkg/mod.py b/pkg/mod.py"
+    assert len(PARAM_EXAMPLES) == 1, "参数样例必须只有一份"
+    assert PARAM_EXAMPLES[0].count(sample_header) == 1, "参数样例里样例必须只有一份"
+    assert sample_header not in PARAM_DESCRIPTION, "描述正文不得再内嵌第二份样例"
     assert "diff --git a/pkg/mod.py" not in APPLY_PATCH_DESCRIPTION, "工具描述不得内嵌样例"
 
 
 # 目的：参数描述不得比工具描述更宽松地承诺「接受面」，例如不得出现工具描述没有的
 # 「多个文件 / 新建文件」措辞。缺陷类型：参数描述放宽了支持面。
 def test_parameter_description_does_not_widen_the_supported_surface() -> None:
-    lowered = PARAM_DESCRIPTION.lower()
-
-    assert "not supported" in lowered
-    assert "new file" not in lowered
-    assert "creates files" not in lowered
-    assert "any path" not in lowered
+    assert "均不支持" in PARAM_DESCRIPTION
+    for widened in ("可以创建", "可新建", "任意路径"):
+        assert widened not in PARAM_DESCRIPTION, widened
 
 
 # ---------------------------------------------------------------------------
@@ -261,9 +254,12 @@ def test_parse_error_reason_is_actionable_for_a_missing_header() -> None:
     observation = _execute(pathlib.Path("."), "not a diff", 4105)
 
     assert observation.status == "error"
+    # 具体诊断（缺失的头部类型）由 ``error`` 承载；``reason`` 已统一为通用指引，必须把模型
+    # 引向 ``error`` 里的诊断，而不是引向改计数之类的无关方向。
     assert "expected a Git 'diff --git' header" in observation.error
     reason = observation.reason or ""
-    assert "diff --git" in reason, "reason 必须点名缺失的头部类型，否则模型无从修正"
+    assert "reported in error" in reason, "reason 必须把模型引向 error 中的具体诊断"
+    assert "count" not in reason.lower(), "reason 不得把缺头部误导为改计数"
 
 
 # ---------------------------------------------------------------------------

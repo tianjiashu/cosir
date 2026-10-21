@@ -49,13 +49,11 @@ PARAM_DESCRIPTION = ApplyPatchArgs.model_fields["patch"].description or ""
 # 不要求 app 重新导出旧符号。
 APPLY_PATCH_DESCRIPTION = ApplyPatchTool.description
 
-# Every phrase the tool description uses to state the structure rule. The rule is only
-# meaningful if all three clauses are present and no clause is weakened.
+# 参数描述陈述结构规则所用的每个子句（描述已改为中文）。三个子句缺一或被削弱，规则即失去意义。
 STRUCTURE_CLAUSES = (
-    "each file section must carry exactly",
-    "one '---' header",
-    "exactly one '+++'",
-    "at least one '@@' hunk",
+    "每个文件段需要 'diff --git' 头",
+    "一对匹配的 '---' / '+++'",
+    "至少一个内容差异块",
 )
 
 
@@ -70,7 +68,7 @@ def _valid_patch(path: str = "m.txt") -> str:
 
 
 def _context(root: pathlib.Path, run_id: int = 5001) -> ToolExecutionContext:
-    return ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
+    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
 
 
 def _execute(root: pathlib.Path, patch: str, run_id: int = 5001):
@@ -126,10 +124,11 @@ def test_documented_hunk_rule_is_framed_as_this_tool_acceptance_surface() -> Non
         assert operations == [], f"{name}: 本工具不得接受无内容 hunk 的 section"
         assert "not supported" in str(error), f"{name}: 拒绝理由须为能力限制，实际 {error!r}"
 
-    # 描述里的结构规则必须写在「本工具只接受内容 hunk」之后，作为接受面限制而非 Git 格式规则。
-    framing = PARAM_DESCRIPTION.index("accepts content hunks only")
-    rule = PARAM_DESCRIPTION.index("at least one '@@' hunk")
-    assert framing < rule, "结构规则须作为本工具接受面限制表述，而不是 Git 的格式规则"
+    # 描述须把结构规则表述为本工具的接受面限制：要求「内容」差异块，并把仅改模式等无内容
+    # 形状明确列为「不支持」，而不是声称它们不是 Git diff。
+    assert "至少一个内容差异块" in PARAM_DESCRIPTION
+    unsupported = PARAM_DESCRIPTION.index("均不支持")
+    assert PARAM_DESCRIPTION.index("仅改模式") < unsupported, "无内容形状须作为能力限制表述"
 
 
 # Purpose: the structure rule must have exactly one wording. A second, weaker statement
@@ -142,13 +141,15 @@ def test_structure_rule_is_stated_once_and_unhedged() -> None:
     missing = [clause for clause in STRUCTURE_CLAUSES if clause not in PARAM_DESCRIPTION]
 
     assert not missing, f"结构规则的必需子句缺失: {missing}"
-    assert PARAM_DESCRIPTION.count("at least one '@@' hunk") == 1, "结构规则重复陈述"
+    assert PARAM_DESCRIPTION.count("至少一个内容差异块") == 1, "结构规则重复陈述"
     # No hedge that would let the model skip headers/hunks.
     hedges = (
         "optional '@@'",
         "no '@@' hunk is needed",
         "headers are optional",
         "no '---' is required",
+        "可选",
+        "无需差异块",
     )
     for hedge in hedges:
         assert hedge.lower() not in lowered, f"结构规则被对冲: {hedge!r}"
@@ -157,11 +158,11 @@ def test_structure_rule_is_stated_once_and_unhedged() -> None:
 # Purpose: the structure rule lives only in the parameter description (single source of truth),
 # and the tool description must not carry any of its fragments. Defect type: duplicated rule.
 def test_structure_rule_lives_only_in_the_parameter_description() -> None:
-    for needle in ("diff --git", "---", "+++", "@@", "exactly one"):
+    for needle in ("diff --git", "---", "+++", "一对匹配", "至少一个内容差异块"):
         assert needle in PARAM_DESCRIPTION, f"参数描述缺少 {needle!r}"
     for token in (
-        "exactly one '---'",
-        "exactly one '+++'",
+        "一对匹配",
+        "差异块",
         "at least one '@@'",
         "---",
         "+++",
@@ -245,10 +246,9 @@ def test_rejection_message_matches_the_documented_rule_wording() -> None:
 
     assert error is not None
     assert "exactly one '---', one '+++', and at least one '@@' hunk" in error
-    # The parameter description states the same rule with the same cardinalities.
-    assert "exactly one '---' header" in PARAM_DESCRIPTION
-    assert "exactly one '+++'" in PARAM_DESCRIPTION
-    assert "at least one '@@' hunk" in PARAM_DESCRIPTION
+    # 参数描述（中文）以相同基数陈述同一规则：一对（各一个）'---' / '+++'，至少一个差异块。
+    assert "一对匹配的 '---' / '+++'" in PARAM_DESCRIPTION
+    assert "至少一个内容差异块" in PARAM_DESCRIPTION
 
 
 # ---------------------------------------------------------------------------
@@ -454,10 +454,11 @@ def test_semantic_guard_blocks_every_format_rule_paraphrase(paraphrase: str) -> 
 # prefixes (context / removed / added), and nowhere else. Defect type: information loss or
 # dual source during de-duplication.
 def test_prefix_rule_lives_in_the_parameter_description() -> None:
-    assert "every line starts with" in PARAM_DESCRIPTION
-    for prefix in ("-", "+", " "):
-        assert f"'{prefix}'" in PARAM_DESCRIPTION, f"前缀规则缺少 {prefix!r}"
+    assert "差异块正文行以" in PARAM_DESCRIPTION
+    for prefix, meaning in (("-", "删除"), ("+", "新增"), (" ", "上下文")):
+        assert f"'{prefix}'（{meaning}）" in PARAM_DESCRIPTION, f"前缀规则缺少 {prefix!r}"
     assert "every line starts with" not in APPLY_PATCH_DESCRIPTION
+    assert "差异块正文行以" not in APPLY_PATCH_DESCRIPTION
 
 
 # Purpose: the parser must implement exactly the prefix set the description teaches: a body
@@ -955,7 +956,8 @@ def test_legacy_patch_markers_are_rejected() -> None:
 
     assert operations == []
     assert error is not None
-    assert "diff --git" in error
+    # 解析器对包裹标记有专门的拒绝诊断，点名被禁止的标记本身。
+    assert "*** Begin Patch" in error
 
 
 # Purpose: a duplicate section for the same path must be rejected (one update per file per

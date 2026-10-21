@@ -21,6 +21,7 @@ import threading
 from pathlib import Path
 
 import pytest
+
 from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
 from app.agent_team.registry import AgentTeamConfigurationRegistry
 from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument

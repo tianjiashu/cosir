@@ -97,7 +97,7 @@ def test_cleanup_provisional_task_rejects_accepted_run(storage: Path) -> None:
         "new task",
         creation_command_id="creation-1",
     )
-    get_conversation_run_crud().create(task.id, "accepted", status="pending")
+    get_conversation_run_crud().create(task.id, status="running")
 
     with pytest.raises(ProvisionalTaskCleanupConflictError):
         get_task_service().cleanup_provisional_task(task.id, "creation-1")

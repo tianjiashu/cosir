@@ -20,6 +20,7 @@ from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.core.agents.model_settings import ModelSettings
 from app.core.context.system_prompt_builder import SystemPromptBuilder
+from app.models.conversation_run_options import ConversationRunOptions
 
 
 def _code_defined_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list:
@@ -51,7 +52,7 @@ def test_generic_child_profile_keeps_code_prompt(monkeypatch) -> None:
     # 本用例只验证 Agent 预设层，故注入一个不含 CHILD 的空目录（该层因此不生成）。
     monkeypatch.setattr(
         "app.config.configuration.get_agent_registry",
-        AgentProfileRegistry,
+        lambda: AgentProfileRegistry(AgentProfileScopeSource()),
     )
     profile = general_child_agent()
     prompt = SystemPromptBuilder.build(profile, str(Path(__file__).resolve()))
@@ -135,6 +136,12 @@ def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools
         "app.config.configuration.get_agent_registry",
         lambda: registry,
     )
+    # 主 Agent 同时声明 agent_team，工具层还会读取 Team 目录；本用例只关心 Agent 目录，
+    # 注入空 Team 目录以免依赖宿主机器上的 Team 配置。
+    monkeypatch.setattr(
+        "app.agent_team.registry.get_agent_team_registry",
+        lambda: SimpleNamespace(team_summary=lambda _workspace_root: ""),
+    )
     prompt_with_delegation = SystemPromptBuilder.build(profile, workspace_root)
 
     assert profile.description is None
@@ -187,7 +194,9 @@ def test_child_profile_model_settings_keep_custom_overrides() -> None:
     custom = ModelSettings(temperature=0.2)
     child.model_settings = custom
 
-    derived = child.derive_for_run(run=SimpleNamespace(model_config_id=7, extra=None))
+    derived = child.derive_for_run(
+        run=SimpleNamespace(model_config_id=7, options=ConversationRunOptions())
+    )
 
     assert derived.model_settings.temperature == 0.2
     assert derived.model_settings is not custom

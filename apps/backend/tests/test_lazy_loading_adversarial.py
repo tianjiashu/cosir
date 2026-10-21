@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 
 import pytest
+
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
 from app.agent_team.registry import AgentTeamConfigurationRegistry
@@ -36,8 +37,8 @@ from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
+from app.core.agents.define_agents import general_child_agent, main_agent
 from app.service.configuration.agent_configuration_service import (
-    AgentConfigurationError,
     AgentConfigurationService,
 )
 from app.service.configuration.agent_team_configuration_service import (
@@ -246,7 +247,7 @@ def test_concurrent_distinct_scopes_isolate_and_load_once_each(tmp_path: Path) -
         try:
             ids = registry.list_agent_ids(workspaces[index])
             seen[index] = set(ids)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     _run_threads([lambda index=index: worker(index) for index in range(len(workspaces))])
@@ -277,7 +278,7 @@ def test_reader_writer_drop_interleaving_never_raises(tmp_path: Path) -> None:
                 agent_id = f"{prefix}-{index}"
                 registry.register(scope, _file_profile(agent_id, role="writer"))
                 registry.unregister(scope, agent_id)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             failures.append(exc)
             done.set()
 
@@ -287,7 +288,7 @@ def test_reader_writer_drop_interleaving_never_raises(tmp_path: Path) -> None:
                 assert all(item.agent_id for item in registry.list(scope))
                 registry.resolve(scope, "absent")
                 registry.list_workspace_sub_agents(scope)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             failures.append(exc)
             done.set()
 
@@ -295,7 +296,7 @@ def test_reader_writer_drop_interleaving_never_raises(tmp_path: Path) -> None:
         try:
             while not done.is_set():
                 registry.drop_scope(scope)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             failures.append(exc)
             done.set()
 
@@ -317,10 +318,12 @@ def test_drop_scope_waits_for_inflight_load_without_deadlock(tmp_path: Path) -> 
 
     load_started = threading.Event()
     release_load = threading.Event()
+    workspace_loads: list[str] = []
 
     class _BlockingSource(AgentProfileScopeSource):
         def load(self, scope: str) -> list[AgentProfile]:
             if scope != SYSTEM_SCOPE:
+                workspace_loads.append(scope)
                 load_started.set()
                 assert release_load.wait(timeout=_JOIN_TIMEOUT), "装载未被放行"
             return super().load(scope)
@@ -353,10 +356,12 @@ def test_drop_scope_waits_for_inflight_load_without_deadlock(tmp_path: Path) -> 
     drop_thread.join(timeout=_JOIN_TIMEOUT)
     assert not resolve_thread.is_alive() and not drop_thread.is_alive()
 
-    # drop 发生在装载之后：该作用域应重新变为「未装载且索引为空」。
+    # drop 发生在装载之后：该作用域应重新变为「未装载」。读原语都会懒装载，因此以「再次读取
+    # 是否重新读盘」验证已装载标记被清除，而不是读出一个空列表。
     assert resolve_result == [None] or resolve_result[0] is not None
-    assert registry.list_workspace_sub_agents(workspace) == []
+    assert len(workspace_loads) == 1
     assert registry.resolve(workspace, "disk-agent") is not None, "drop 后应能重新装载磁盘内容"
+    assert len(workspace_loads) == 2, "drop 后仍标记已装载，未重新读盘"
 
 
 def test_team_registry_concurrent_read_and_write_no_exception(tmp_path: Path) -> None:
@@ -375,7 +380,7 @@ def test_team_registry_concurrent_read_and_write_no_exception(tmp_path: Path) ->
                     _team_document(f"t-{index}", "workspace")
                 )
                 registry.register(configuration, workspace_root=workspace)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             failures.append(exc)
             done.set()
 
@@ -384,7 +389,7 @@ def test_team_registry_concurrent_read_and_write_no_exception(tmp_path: Path) ->
             while not done.is_set():
                 assert all(item.team_id for item in registry.list_visible(workspace))
                 registry.list_scope("workspace", workspace_root=workspace)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             failures.append(exc)
             done.set()
 
@@ -881,8 +886,8 @@ def test_builtin_profiles_survive_same_id_system_files(
     main = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
     general = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "general-assistant")
     assert main is not None and main.agent_type is AgentProfileType.MAIN
-    assert general is not None and general.role == "general-assistant"
-    assert main.role == "main_agent"
+    assert general is not None and general.role == general_child_agent().role
+    assert main.role == main_agent().role
     assert "agent_profile_duplicate_skipped" in {record.message for record in caplog.records}
 
 
@@ -1125,7 +1130,7 @@ def test_normalize_workspace_rejects_empty_and_whitespace() -> None:
     with pytest.raises(ValueError):
         AgentProfileRegistry.normalize_workspace("   ")
     with pytest.raises(ValueError):
-        AgentProfileRegistry.normalize_scope("workspace", "")
+        AgentTeamConfigurationRegistry.normalize_scope("workspace", "")
 
 
 def test_normalize_workspace_none_is_not_silently_stringified() -> None:

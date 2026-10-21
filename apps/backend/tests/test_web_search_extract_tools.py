@@ -1174,13 +1174,13 @@ def test_extract_search_only_only_registered_no_backend_gives_search_only_error(
     assert "No web extraction provider configured." not in obs.error
 
 
-def test_search_provider_without_search_support_is_not_registrable(
+def test_search_provider_without_search_support_rejects_at_execution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """显式选中不支持 search 的 provider 时 web_search 不可注册（能力判定已前移到 avaliable）。
+    """显式选中不支持 search 的 provider 时，web_search 在执行期拒绝且不可重试。
 
-    ``to_definition_if_avaliable`` 契约变更后，能力不匹配不再在 ``execute`` 内返回运行时错误，
-    而是在装配期由 ``avaliable()`` 判定并隐藏该工具；此处即断言新的门控契约。
+    可用性判定位于 ``execute`` 前置检查（``tool_avaliable``），不在装配期隐藏工具：
+    工具始终可注册，能力不匹配作为配置类失败返回 ``retryable=False`` 的错误观察。
     """
 
     monkeypatch.setattr(Settings, "WEB_SEARCH_BACKEND", "nosupport")
@@ -1188,8 +1188,12 @@ def test_search_provider_without_search_support_is_not_registrable(
     provider = FakeProvider(name="nosupport", supports_search=False, available=True)
     tool = WebSearchTool(_registry_with(provider))
 
-    assert tool.avaliable() is False
-    assert tool.to_definition_if_avaliable() is None
+    assert tool.to_definition_if_avaliable() is not None
+
+    obs = tool.execute(query="hello")
+
+    assert obs.status == "error"
+    assert obs.retryable is False
 
 
 # ---------------------------------------------------------------------------

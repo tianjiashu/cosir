@@ -14,7 +14,7 @@ from app.core.llm_provider.message_codec import assistant_message
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.nodes import model_node as model_module
-from app.core.workflow.run_state_machine import RunTransition
+from app.models.enums.conversation_run_status import RunTransition
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from tests.runtime_context_stub import run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion, sdk_event
@@ -330,7 +330,8 @@ def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None
 
 
 @pytest.mark.parametrize("arguments", ['{"path":', "[1]", "null", '{"n":NaN}'])
-def test_invalid_tool_arguments_preserved_and_never_dispatched(monkeypatch, arguments):
+def test_invalid_tool_arguments_reach_executor_unparsed(monkeypatch, arguments):
+    """模型与 tools 节点都不解析参数：原始参数串原样交给执行器，由准入门禁判定。"""
     from unittest.mock import AsyncMock
 
     from app.core.workflow.nodes import tools_node as tools_module
@@ -358,13 +359,10 @@ def test_invalid_tool_arguments_preserved_and_never_dispatched(monkeypatch, argu
     monkeypatch.setattr(tools_module, "run_tool_batch", run_batch)
     harness.runtime_config.tool_definitions["read_file"].need_HIL = False
     monkeypatch.setattr(tools_module, "_runtime_context", lambda: harness.runtime_config)
-    monkeypatch.setattr(tools_module, "emit", harness.events.append)
-    result = asyncio.run(tools_module._tools_node(_state().model_copy(update=patch)))
-    # 畸形参数在模型与工具边界就形成观察，不交给执行器。
-    assert run_batch.call_args.args[1] == []
-    observations = harness.runtime_config.batch.observations
-    assert observations[0]["status"] == "error"
-    assert observations[0]["tool_call_id"] == "call"
+    asyncio.run(tools_module._tools_node(_state().model_copy(update=patch)))
+    (call,) = run_batch.call_args.args[1]
+    assert call.call_id == "call"
+    assert call.arguments == arguments
 
 
 @pytest.mark.parametrize("finish_reason", ["length", None])

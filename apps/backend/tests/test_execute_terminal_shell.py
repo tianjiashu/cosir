@@ -5,6 +5,8 @@ import shutil
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
+
 from app.core.tools.tool_handler.terminal.local_backend import (
     LocalExecutionBackend,
     _resolve_command,
@@ -14,7 +16,6 @@ from app.core.tools.tool_models.execute_terminal_args import (
     WindowsExecuteTerminalArgs,
     resolve_execute_terminal_args_model,
 )
-from pydantic import ValidationError
 
 
 def test_windows_args_default_to_auto_and_reject_posix_shells() -> None:

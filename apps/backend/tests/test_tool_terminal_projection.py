@@ -1,10 +1,17 @@
-"""工具终态投影与传输快照的边界测试。"""
+"""工具终态映射与单次调用生命周期投影的边界测试。
+
+终态映射（``tool_terminal_projection``）是纯函数；单次调用的 ``running`` / 终态事件由
+``tool_batch_runner._execute_call`` 发出（执行器本身不再投影任何 Transport 状态），这里用
+``runtime_stub`` 搭最小 Run 作用域，并替换 ``tool_batch_runner.emit`` 捕获事件。
+"""
 
 from __future__ import annotations
 
 import copy
+import json
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -36,17 +43,25 @@ from app.core.tools.schemas import (
     ToolObservation,
     UserInputRequest,
 )
+from app.core.tools.tool_execute import tool_executor as tool_executor_module
 from app.core.tools.tool_execute import tool_terminal_projection as projection_module
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_execute.tool_terminal_projection import (
     normalize_display_data,
-    project_tool_terminal_state,
-    project_unhandled_tool_failure,
     terminal_error_hint,
+    terminal_event,
     terminal_status,
 )
 from app.core.tools.tool_handler.read_file import ReadFileTool
 from app.core.tools.tool_registry import ToolRegistry
+from app.core.workflow.execution_state.tool_batch import ValidToolCall
+from app.core.workflow.node_helper import tool_batch_runner
+from app.core.workflow.node_helper.common import execution_scope
+from tests.runtime_context_stub import runtime_stub
+from tests.tool_executor_fakes import emit_running
+
+# 同步用例没有运行中的事件循环；只有进程工具的实时输出与子 Run 调度会用到它。
+_NO_LOOP: Any = None
 
 # ---------------------------------------------------------------------------
 # 共享测试替身
@@ -94,27 +109,27 @@ def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStat
         parent[key] = copy.deepcopy(mutation.value)
 
 
-class _RecordingProjector:
-    """记录每次 ``process`` 调用的 projector 替身（用于断言「是否被调用」/「恰一次」）。"""
+class _EventRecorder:
+    """线程安全的事件记录器；替换 ``tool_batch_runner.emit`` 使用。"""
 
-    def __init__(self, state_service: Any | None = None, fail: bool = False) -> None:
-        self.events: list[Any] = []
-        self._fail = fail
-        self._owner = state_service
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.events: list[ToolCallStatusChangedEvent] = []
 
-    def process(self, raw_event: object) -> TransportFrame | None:
-        self.events.append(raw_event)
-        if self._fail:
-            raise RuntimeError("projector exploded")
-        if self._owner is not None:
-            return self._owner.apply_planned(raw_event)
-        return None
+    def __call__(self, event: ToolCallStatusChangedEvent) -> None:
+        with self._lock:
+            self.events.append(event)
+
+    def statuses(self, call_id: str) -> list[str]:
+        return [e.status for e in self.events if e.tool_call_id == call_id]
 
 
-def _install_projector(monkeypatch: pytest.MonkeyPatch, projector: Any) -> None:
-    """把投影模块取用的 projector 工厂替换为常量替身。"""
-
-    monkeypatch.setattr(projection_module, "get_conversation_event_projector", lambda: projector)
+def _install_recorder(monkeypatch: pytest.MonkeyPatch) -> _EventRecorder:
+    """running 由执行器发出、终态由批次入口发出：两个出口接到同一记录器，按发生顺序断言。"""
+    recorder = _EventRecorder()
+    monkeypatch.setattr(tool_batch_runner, "emit", recorder)
+    monkeypatch.setattr(tool_executor_module, "emit", recorder)
+    return recorder
 
 
 def _make_context(tmp_path: Path, **overrides: Any) -> ToolExecutionContext:
@@ -122,7 +137,8 @@ def _make_context(tmp_path: Path, **overrides: Any) -> ToolExecutionContext:
         "task_id": 1,
         "workspace_id": 1,
         "workspace_root": tmp_path,
-        "run_id": 1,
+        "run_id": 2,
+        "step_id": "step-1",
     }
     base.update(overrides)
     return ToolExecutionContext(**base)
@@ -130,8 +146,31 @@ def _make_context(tmp_path: Path, **overrides: Any) -> ToolExecutionContext:
 
 def _make_read_file_executor(tmp_path: Path) -> ToolExecutor:
     (tmp_path / "sample.txt").write_text("hello world", encoding="utf-8")
-    registry = ToolRegistry([ReadFileTool().to_definition()])
-    return ToolExecutor(registry=registry)
+    return ToolExecutor(ToolRegistry([ReadFileTool().to_definition()]))
+
+
+def _runtime(
+    tmp_path: Path,
+    executor: Any,
+    *,
+    projected: dict[str, str] | None = None,
+    banned: tuple[str, ...] = (),
+    allows: frozenset[str] = frozenset({"read_file"}),
+    **overrides: Any,
+) -> SimpleNamespace:
+    """搭一个 Run 作用域替身：``projected`` 为本步已建卡片的 call_id → 工具名。"""
+
+    rc = runtime_stub(
+        tool_executor=executor,
+        workspace=SimpleNamespace(id=1, root_path=str(tmp_path)),
+        allows_tools=allows,
+        **overrides,
+    )
+    for call_id, name in (projected or {}).items():
+        rc.batch.valid_tool_calls[call_id] = ValidToolCall(name=name, projection="projected")
+    for call_id in banned:
+        rc.batch.valid_tool_calls[call_id] = ValidToolCall(name="read_file", projection="banned")
+    return rc
 
 
 def _observation(
@@ -152,8 +191,14 @@ def _observation(
     )
 
 
+class _ProbeArgs(BaseModel):
+    """探针工具的入参模型（无字段，便于门禁参数校验通过）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
 # ---------------------------------------------------------------------------
-# A. 三态映射 + 提前投影 / settle 兜底同值
+# A. 三态映射与终态事件载荷（纯函数）
 # ---------------------------------------------------------------------------
 
 
@@ -178,324 +223,79 @@ def test_terminal_error_hint_three_states() -> None:
     assert terminal_error_hint("failed", None) == "执行失败"
 
 
-def test_project_records_terminal_state_event_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """提前投影投出的终态事件字段与契约一致（status/error/display_data）。"""
+def test_terminal_event_payload_matches_contract() -> None:
+    """终态事件字段与契约一致：身份取调用方显式传入值，status/error/display_data 按映射。"""
 
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-    observation = _observation("error", display_data={"status_hint": "读取失败", "extra": 1})
-
-    # 目标：确认投影构造的 event 三字段与预期同值（不是弱断言）。
-    result = project_tool_terminal_state(
-        task_id=3,
-        run_id=4,
-        tool_call_id="call-x",
-        observation=observation,
+    observation = _observation(
+        "error", display_data={"status_hint": "读取失败", "extra": 1}, tool_call_id="stale-id"
     )
 
-    assert result is True
-    assert len(projector.events) == 1
-    event = projector.events[0]
+    event = terminal_event(
+        observation, task_id=3, run_id=4, step_id="step-7", tool_call_id="call-x"
+    )
+
     assert isinstance(event, ToolCallStatusChangedEvent)
-    assert (event.task_id, event.run_id, event.tool_call_id) == (3, 4, "call-x")
+    # 身份不读 observation.tool_call_id（失败工厂未必回填）。
+    assert (event.task_id, event.run_id, event.step_id, event.tool_call_id) == (
+        3,
+        4,
+        "step-7",
+        "call-x",
+    )
     assert event.status == "failed"
     assert event.error == "读取失败"
     assert event.display_data == {"status_hint": "读取失败", "extra": 1}
-    # 深拷贝隔离：投影不得让 event 与 observation 共享同一 dict 对象。
+    # 深拷贝隔离：事件不得与 observation 共享同一 dict 对象。
     assert event.display_data is not observation.display_data
 
 
-# ---------------------------------------------------------------------------
-# A（续）. 同一 observation 走两条路径等值
-# ---------------------------------------------------------------------------
-
-
-def _summary_from_observation(observation: ToolObservation) -> dict[str, Any]:
-    """按 ``tools`` 节点的 dataclasses.asdict 口径把 observation 转为摘要。"""
-
-    return {
-        "tool_call_id": observation.tool_call_id,
-        "tool_name": observation.tool_name,
-        "status": observation.status,
-        "error": observation.error,
-        "reason": observation.reason,
-        "content": observation.content,
-        "retryable": observation.retryable,
-        "display_data": observation.display_data,
-    }
-
-
-def test_projection_and_settle_agree_display_data_is_deep_copied(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """判据 A：两路径的 display_data 都应是深拷贝，互不共享源结构（防跨路径漂移）。"""
+def test_terminal_event_display_data_is_deep_copied() -> None:
+    """终态事件的 display_data 是深拷贝，改写事件不得影响源结构（防跨路径漂移）。"""
 
     source = {"status_hint": "读取失败", "nested": {"k": [1, 2]}}
-    observation = _observation("error", display_data=source)
-
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-    assert project_tool_terminal_state(
-        task_id=1, run_id=2, tool_call_id="call-1", observation=observation
+    event = terminal_event(
+        _observation("error", display_data=source),
+        task_id=1,
+        run_id=2,
+        step_id="s",
+        tool_call_id="call-1",
     )
 
-    advance_event = projector.events[0]
-    advance_event.display_data["nested"]["k"].append(999)
-    assert source["nested"]["k"] == [1, 2], "提前投影与源 display_data 共享了嵌套结构"
+    event.display_data["nested"]["k"].append(999)
+    assert source["nested"]["k"] == [1, 2], "终态事件与源 display_data 共享了嵌套结构"
 
 
-# ---------------------------------------------------------------------------
-# B. early-return 全覆盖（四条分支各投出恰一次终态）
-# ---------------------------------------------------------------------------
-
-
-def _count_projections(monkeypatch: pytest.MonkeyPatch) -> _RecordingProjector:
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-    return projector
-
-
-def test_unknown_tool_projects_exactly_one_failed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+@pytest.mark.parametrize(
+    ("status", "expected_status", "expected_error"),
+    [("success", "completed", None), ("cancelled", "cancelled", "已取消")],
+)
+def test_terminal_event_success_and_cancelled(
+    status: str, expected_status: str, expected_error: str | None
 ) -> None:
-    """判据 B：未注册工具（门禁拒绝）经单一出口投出恰一次 failed 终态。"""
+    """成功与取消观察分别映射为 completed（无 error）与 cancelled（已取消）。"""
 
-    projector = _count_projections(monkeypatch)
-    executor = _make_read_file_executor(tmp_path)
-
-    observation = executor.execute(
-        ToolCall(tool_name="no_such_tool", arguments={}, call_id="call-unknown"),
-        execution_context=_make_context(tmp_path),
+    event = terminal_event(
+        _observation(status, display_data={"kind": "read-file-meta"}),
+        task_id=1,
+        run_id=2,
+        step_id="s",
+        tool_call_id="call-1",
     )
 
-    assert observation.status == "error"
-    assert len(projector.events) == 1
-    event = projector.events[0]
-    assert event.tool_call_id == "call-unknown"
-    assert event.status == "failed"
-    # tool_error 的默认 status_hint 为工具级兜底（未知工具无工具名映射 → 执行失败）。
-    assert event.error == "执行失败"
+    assert event.status == expected_status
+    assert event.error == expected_error
+    assert event.display_data == {"kind": "read-file-meta"}
 
 
-def test_profile_denied_tool_projects_exactly_one_failed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_terminal_event_keeps_status_when_display_data_is_not_a_mapping(
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """判据 B：Agent profile 权限拒绝经单一出口投出恰一次 failed 终态。"""
+    """缺陷类型：展示数据畸形时若放弃终态，前端会一直停在 running。
 
-    projector = _count_projections(monkeypatch)
-    executor = _make_read_file_executor(tmp_path)
-
-    observation = executor.execute(
-        ToolCall(tool_name="read_file", arguments={"path": "sample.txt"}, call_id="call-denied"),
-        execution_context=_make_context(tmp_path),
-        allowed_tool_names={"other_tool"},
-    )
-
-    assert observation.status == "error"
-    assert len(projector.events) == 1
-    assert projector.events[0].status == "failed"
-    assert projector.events[0].error == "读取失败"
-
-
-def test_invalid_arguments_projects_exactly_one_failed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """判据 B：参数非法经单一出口投出恰一次 failed 终态。"""
-
-    projector = _count_projections(monkeypatch)
-    executor = _make_read_file_executor(tmp_path)
-
-    observation = executor.execute(
-        ToolCall(tool_name="read_file", arguments={"nonexistent": 1}, call_id="call-badargs"),
-        execution_context=_make_context(tmp_path),
-    )
-
-    assert observation.status == "error"
-    assert len(projector.events) == 1
-    assert projector.events[0].status == "failed"
-
-
-def test_missing_execution_context_raises_and_does_not_project(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """判据 B：execution_context 为 None 抛 ValueError，且**不**投影。"""
-
-    projector = _count_projections(monkeypatch)
-    executor = _make_read_file_executor(tmp_path)
-
-    with pytest.raises(ValueError):
-        executor.execute(
-            ToolCall(tool_name="read_file", arguments={"path": "sample.txt"}, call_id="call-none"),
-            execution_context=None,
-        )
-
-    assert projector.events == []
-
-
-def test_success_path_projects_exactly_one_completed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """判据 B 补：成功路径经单一出口投出恰一次 completed 终态（display_data 不丢）。"""
-
-    projector = _count_projections(monkeypatch)
-    executor = _make_read_file_executor(tmp_path)
-
-    observation = executor.execute(
-        ToolCall(tool_name="read_file", arguments={"path": "sample.txt"}, call_id="call-ok"),
-        execution_context=_make_context(tmp_path),
-    )
-
-    assert observation.status == "success"
-    assert len(projector.events) == 1
-    assert projector.events[0].status == "completed"
-    assert projector.events[0].error is None
-
-
-# ---------------------------------------------------------------------------
-# C. 未绑定 run / 空 tool_call_id 必须跳过
-# ---------------------------------------------------------------------------
-
-
-def test_skips_when_run_id_not_positive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """判据 C：run_id<=0（无 run 绑定）时 projector 不被调用，返回 False。"""
-
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-
-    for run_id in (0, -1):
-        result = project_tool_terminal_state(
-            task_id=1,
-            run_id=run_id,
-            tool_call_id="call-1",
-            observation=_observation("success"),
-        )
-        assert result is False
-    assert projector.events == []
-
-
-def test_skips_when_task_id_not_positive(monkeypatch: pytest.MonkeyPatch) -> None:
-    """判据 C 补：task_id<=0 同样跳过。"""
-
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-
-    assert (
-        project_tool_terminal_state(
-            task_id=0,
-            run_id=1,
-            tool_call_id="call-1",
-            observation=_observation("success"),
-        )
-        is False
-    )
-    assert projector.events == []
-
-
-def test_skips_when_tool_call_id_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """判据 C：空 tool_call_id 时跳过投影（避免 min_length 校验静默丢终态）。"""
-
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-
-    assert (
-        project_tool_terminal_state(
-            task_id=1,
-            run_id=2,
-            tool_call_id="",
-            observation=_observation("success"),
-        )
-        is False
-    )
-    assert projector.events == []
-
-
-def test_executor_falls_back_to_context_tool_call_id(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """判据 C 补：call_id 为空时回退 execution_context.tool_call_id；两者都空则跳过。"""
-
-    projector = _count_projections(monkeypatch)
-    executor = _make_read_file_executor(tmp_path)
-
-    # call_id 为空，但 context 提供了 tool_call_id → 应投影。
-    executor.execute(
-        ToolCall(tool_name="read_file", arguments={"path": "sample.txt"}, call_id=""),
-        execution_context=_make_context(tmp_path, tool_call_id="ctx-call"),
-    )
-    assert [e.tool_call_id for e in projector.events] == ["ctx-call"]
-
-    # 两者都空 → 跳过。
-    projector.events.clear()
-    executor.execute(
-        ToolCall(tool_name="read_file", arguments={"path": "sample.txt"}, call_id=""),
-        execution_context=_make_context(tmp_path, tool_call_id=""),
-    )
-    assert projector.events == []
-
-
-# ---------------------------------------------------------------------------
-# D. 投影失败：吞异常、返回 False、不改写 observation、写 error 日志
-# ---------------------------------------------------------------------------
-
-
-def test_projection_failure_is_swallowed_and_logged(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """判据 D：projector 抛异常时不向上抛、返回 False、observation 不被改写、写 error 日志。"""
-
-    projector = _RecordingProjector(fail=True)
-    _install_projector(monkeypatch, projector)
-    observation = _observation("error", display_data={"status_hint": "读取失败"})
-    before = copy.deepcopy(observation)
-
-    with caplog.at_level("ERROR", logger="coding_agent.backend"):
-        result = project_tool_terminal_state(
-            task_id=1,
-            run_id=2,
-            tool_call_id="call-1",
-            observation=observation,
-        )
-
-    assert result is False
-    # observation 字段逐字段不变。
-    assert observation == before
-    record_names = {record.message for record in caplog.records}
-    assert "tool_terminal_state_projection_failed" in record_names
-    assert record_names, "未写入 error 日志，投影失败不可排查"
-
-
-def test_executor_returns_observation_verbatim_when_projection_fails(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """判据 D 补：execute 单出口投影失败时仍原样返回 observation（不阻断执行链）。"""
-
-    _install_projector(monkeypatch, _RecordingProjector(fail=True))
-    executor = _make_read_file_executor(tmp_path)
-
-    observation = executor.execute(
-        ToolCall(tool_name="read_file", arguments={"path": "sample.txt"}, call_id="call-ok"),
-        execution_context=_make_context(tmp_path),
-    )
-
-    assert observation.status == "success"
-    assert "hello world" in observation.content
-
-
-def test_projection_still_projects_when_display_data_is_not_a_mapping(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """缺陷类型：展示数据畸形时若放弃投影，前端会一直停在 running（判据 D/A）。
-
-    契约（第二轮确认）：展示数据不可用**不改变返回值**——状态仍是有效事实，
-    仍投出终态事件（``display_data=None``，跳过展示字段更新）、返回 True，
+    契约：状态仍是有效事实，终态照常构造（``display_data=None``，跳过展示字段更新），
     仅额外写一条 ``tool_display_data_dropped`` warning（只记类型名，不记载荷）。
-    核心断言仍是「不得抛异常」。
     """
 
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
     observation = ToolObservation(
         tool_name="read_file",
         status="error",
@@ -506,40 +306,30 @@ def test_projection_still_projects_when_display_data_is_not_a_mapping(
     )
 
     with caplog.at_level("WARNING", logger="coding_agent.backend"):
-        # 契约：不向上抛出（核心），且仍投出终态（display_data=None），返回 True。
-        result = project_tool_terminal_state(
-            task_id=1, run_id=2, tool_call_id="call-1", observation=observation
-        )
+        event = terminal_event(observation, task_id=1, run_id=2, step_id="s", tool_call_id="call-1")
 
-    assert result is True
-    assert len(projector.events) == 1, "展示数据畸形不得放弃状态投影"
-    event = projector.events[0]
     assert event.status == "failed"
     assert event.display_data is None, "不可用展示数据必须跳过展示字段更新，而非伪造载荷"
     # error 短提示仍按无效 display_data 走失败兜底。
     assert event.error == "执行失败"
-    record_names = {record.message for record in caplog.records}
-    assert "tool_display_data_dropped" in record_names
-    # warning 只记类型名，不得记载荷内容（防泄漏）。
-    dropped = next(r for r in caplog.records if r.message == "tool_display_data_dropped")
-    assert dropped.data["display_data_type"] == "list"
+    dropped = _dropped_records(caplog)
+    assert len(dropped) == 1
+    assert dropped[0].data["display_data_type"] == "list"
 
 
-def test_projection_still_projects_when_deepcopy_fails(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_terminal_event_keeps_status_when_deepcopy_fails(
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """缺陷类型：不可深拷贝的 Mapping 若导致投影被放弃/异常逃逸（判据 D/A）。
+    """缺陷类型：不可深拷贝的 Mapping 让终态构造异常逃逸。
 
-    契约（第二轮确认）：深拷贝失败视为展示数据不可用，仍投出终态（``display_data=None``）、
-    返回 True，并写 ``tool_display_data_dropped`` warning；核心断言是「不得抛异常」。
+    契约：深拷贝失败视为展示数据不可用，终态照常构造（``display_data=None``），并写
+    ``tool_display_data_dropped`` warning。
     """
 
     class _Undeepcopyable:
         def __deepcopy__(self, _memo: Any) -> Any:
             raise RuntimeError("cannot deep copy")
 
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
     observation = ToolObservation(
         tool_name="read_file",
         status="error",
@@ -547,57 +337,38 @@ def test_projection_still_projects_when_deepcopy_fails(
     )
 
     with caplog.at_level("WARNING", logger="coding_agent.backend"):
-        result = project_tool_terminal_state(
-            task_id=1, run_id=2, tool_call_id="call-1", observation=observation
-        )
+        event = terminal_event(observation, task_id=1, run_id=2, step_id="s", tool_call_id="call-1")
 
-    assert result is True
-    assert len(projector.events) == 1
-    assert projector.events[0].status == "failed"
-    assert projector.events[0].display_data is None
-    record_names = {record.message for record in caplog.records}
-    assert "tool_display_data_dropped" in record_names
+    assert event.status == "failed"
+    assert event.display_data is None
+    assert _dropped_records(caplog), "深拷贝失败未留痕"
 
 
-def test_execute_does_not_raise_when_handler_returns_malformed_display_data(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """判据 D 加强（execute 级）：投影失败不得中断工具链路，execute 必须仍返回 observation。
+def test_dropped_log_carries_full_identity(caplog: pytest.LogCaptureFixture) -> None:
+    """畸形载荷的 warning 含 task_id/run_id/tool_call_id，且不记载荷内容。"""
 
-    用自定义 handler 返回 ``display_data`` 为非映射的 observation（``ToolObservation`` 是
-    dataclass，无运行期类型校验，故此类 payload 可达投影）。若投影在 try 之外做 ``dict()``，
-    异常会从 ``ToolExecutor.execute`` 逃逸，直接中断整个工具链路。
-    """
+    observation = _observation("error", display_data=["not", "a", "mapping"])
 
-    from app.core.tools.schemas import ToolDefinition
+    with caplog.at_level("WARNING"):
+        terminal_event(observation, task_id=11, run_id=22, step_id="s", tool_call_id="call-early")
 
-    _install_projector(monkeypatch, _RecordingProjector())
+    dropped = _dropped_records(caplog)
+    assert len(dropped) == 1, "应恰写一条 tool_display_data_dropped"
+    data = dropped[0].data
+    assert data["task_id"] == 11
+    assert data["run_id"] == 22
+    assert data["tool_call_id"] == "call-early"
+    assert data["display_data_type"] == "list"
+    # 不记载荷内容：warning 的 data 不得出现原载荷元素。
+    assert "not" not in str(data)
 
-    def _bad_handler(**_kwargs: Any) -> ToolObservation:
-        return ToolObservation(
-            tool_name="bad_display",
-            status="error",
-            content="boom",
-            display_data=["not", "a", "mapping"],  # type: ignore[arg-type]
-        )
 
-    definition = ToolDefinition(
-        name="bad_display",
-        group="probe",
-        description="handler returning malformed display_data",
-        handler=_bad_handler,
-        args_model=_ProbeArgs,
-        execution_mode="thread",
-    )
-    executor = ToolExecutor(registry=ToolRegistry([definition]))
+def test_projection_module_does_not_reach_global_projector() -> None:
+    """边界：core/tools 的终态映射是纯函数，不得再持有进程级 projector 入口。"""
 
-    observation = executor.execute(
-        ToolCall(tool_name="bad_display", arguments={}, call_id="call-bad-display"),
-        execution_context=_make_context(tmp_path),
-    )
-
-    assert observation.status == "error"
-    assert observation.tool_call_id == "call-bad-display"
+    assert not hasattr(projection_module, "get_conversation_event_projector")
+    assert not hasattr(projection_module, "project_tool_terminal_state")
+    assert not hasattr(projection_module, "project_unhandled_tool_failure")
 
 
 # ---------------------------------------------------------------------------
@@ -728,14 +499,344 @@ def test_terminal_error_hint_mapping_without_hint_key() -> None:
 
 
 # ---------------------------------------------------------------------------
-# G. process 隔离工具：父进程投影 + 终态不清空已流出 output
+# B. _execute_call 生命周期：准入后才 running，执行后恰一次终态
 # ---------------------------------------------------------------------------
 
 
-class _ProbeArgs(BaseModel):
-    """process 隔离探针的入参模型（无字段，便于门禁参数校验通过）。"""
+def test_success_emits_running_then_completed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """成功路径：先 running（携带展示参数），后恰一次 completed（display_data 不丢）。"""
 
-    model_config = ConfigDict(extra="forbid")
+    recorder = _install_recorder(monkeypatch)
+    rc = _runtime(tmp_path, _make_read_file_executor(tmp_path), projected={"call-ok": "read_file"})
+
+    observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"), "step-1", _NO_LOOP
+    )
+
+    assert observation.status == "success"
+    assert recorder.statuses("call-ok") == ["running", "completed"]
+    running, terminal = recorder.events
+    # running 展示准入后的最终参数（含 schema 默认值）。
+    assert running.args is not None and running.args["path"] == "sample.txt"
+    assert (running.task_id, running.run_id, running.step_id) == (1, 2, "step-1")
+    assert terminal.error is None
+    assert terminal.step_id == "step-1"
+    assert isinstance(terminal.display_data, dict) and terminal.display_data, "成功终态丢了展示数据"
+
+
+def test_running_is_emitted_only_after_admission(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """running 由执行器在交给 handler 前发出：handler 运行时 running 已在、终态尚未发出。"""
+
+    recorder = _install_recorder(monkeypatch)
+    seen_during_handler: list[list[str]] = []
+
+    def _handler(*, execution_context: Any, output_sink: Any = None) -> ToolObservation:
+        seen_during_handler.append(recorder.statuses("call-probe"))
+        return ToolObservation(
+            tool_name="probe", status="success", content="ok", display_data={"kind": "probe"}
+        )
+
+    definition = ToolDefinition(
+        name="probe",
+        group="probe",
+        description="lifecycle probe",
+        handler=_handler,
+        args_model=_ProbeArgs,
+    )
+    rc = _runtime(
+        tmp_path,
+        ToolExecutor(ToolRegistry([definition])),
+        projected={"call-probe": "probe"},
+        allows=frozenset({"probe"}),
+    )
+
+    tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-probe"), "s", _NO_LOOP
+    )
+
+    assert seen_during_handler == [["running"]]
+    assert recorder.statuses("call-probe") == ["running", "completed"]
+
+
+def test_unknown_tool_emits_failed_without_running(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """未注册工具（门禁拒绝）：不发 running，恰一次 failed 终态。"""
+
+    recorder = _install_recorder(monkeypatch)
+    rc = _runtime(
+        tmp_path, _make_read_file_executor(tmp_path), projected={"call-unknown": "no_such_tool"}
+    )
+
+    observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-unknown"), "s", _NO_LOOP
+    )
+
+    assert observation.status == "error"
+    assert recorder.statuses("call-unknown") == ["failed"]
+    # 未知工具无工具名映射 → 执行失败。
+    assert recorder.events[0].error == "执行失败"
+
+
+def test_profile_denied_tool_emits_failed_without_running(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Agent profile 权限拒绝：不发 running，恰一次 failed 终态（工具级短提示）。"""
+
+    recorder = _install_recorder(monkeypatch)
+    rc = _runtime(
+        tmp_path,
+        _make_read_file_executor(tmp_path),
+        projected={"call-denied": "read_file"},
+        allows=frozenset({"other_tool"}),
+    )
+
+    observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-denied"), "s", _NO_LOOP
+    )
+
+    assert observation.status == "error"
+    assert recorder.statuses("call-denied") == ["failed"]
+    assert recorder.events[0].error == "读取失败"
+
+
+def test_invalid_arguments_emit_failed_without_running(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """参数非法：门禁拒绝，不发 running，恰一次 failed 终态。"""
+
+    recorder = _install_recorder(monkeypatch)
+    rc = _runtime(tmp_path, _make_read_file_executor(tmp_path), projected={"call-bad": "read_file"})
+
+    observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="read_file", arguments='{"nonexistent": 1}', call_id="call-bad"), "s", _NO_LOOP
+    )
+
+    assert observation.status == "error"
+    assert recorder.statuses("call-bad") == ["failed"]
+
+
+@pytest.mark.parametrize("arguments", ['{"path": "sample.txt"}', '{"nonexistent": 1}'])
+def test_invisible_call_emits_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: str
+) -> None:
+    """本步未建卡片的调用（未注册工具名，或本轮 banned）：都不发任何生命周期事件。
+
+    未建卡片 ⇔ 未注册或不在本轮准入名单，二者都在准入门禁被拒，执行器因此不会发 running；
+    批次入口只为已建卡片的调用发终态。
+    """
+
+    recorder = _install_recorder(monkeypatch)
+    rc = _runtime(
+        tmp_path,
+        _make_read_file_executor(tmp_path),
+        banned=("call-banned",),
+        allows=frozenset(),
+    )
+
+    for tool_name, call_id in (("no_such_tool", "call-unregistered"), ("read_file", "call-banned")):
+        tool_batch_runner._execute_call(
+            rc, ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id), "s", _NO_LOOP
+        )
+
+    assert recorder.events == []
+
+
+def test_execute_call_specializes_context_per_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """执行上下文按调用特化 tool_call_id，不沿用 Run 级共享上下文上的值（防同批串味）。"""
+
+    _install_recorder(monkeypatch)
+    received: list[str] = []
+
+    def _handler(*, execution_context: Any, output_sink: Any = None) -> ToolObservation:
+        received.append(execution_context.tool_call_id)
+        return ToolObservation(tool_name="probe", status="success", content="ok")
+
+    definition = ToolDefinition(
+        name="probe",
+        group="probe",
+        description="context specialization probe",
+        handler=_handler,
+        args_model=_ProbeArgs,
+    )
+    rc = _runtime(
+        tmp_path,
+        ToolExecutor(ToolRegistry([definition])),
+        projected={"call-a": "probe"},
+        allows=frozenset({"probe"}),
+    )
+
+    tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-a"), "s", _NO_LOOP
+    )
+
+    assert received == ["call-a"]
+
+
+def test_malformed_display_data_still_emits_failed_terminal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """handler 返回非映射 display_data：调用照常返回观察，终态仍发出且跳过展示字段。"""
+
+    recorder = _install_recorder(monkeypatch)
+
+    def _bad_handler(**_kwargs: Any) -> ToolObservation:
+        return ToolObservation(
+            tool_name="bad_display",
+            status="error",
+            content="boom",
+            display_data=["not", "a", "mapping"],  # type: ignore[arg-type]
+        )
+
+    definition = ToolDefinition(
+        name="bad_display",
+        group="probe",
+        description="handler returning malformed display_data",
+        handler=_bad_handler,
+        args_model=_ProbeArgs,
+        execution_mode="thread",
+    )
+    rc = _runtime(
+        tmp_path,
+        ToolExecutor(ToolRegistry([definition])),
+        projected={"call-bad-display": "bad_display"},
+        allows=frozenset({"bad_display"}),
+    )
+
+    observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="bad_display", arguments="{}", call_id="call-bad-display"), "s", _NO_LOOP
+    )
+
+    assert observation.status == "error"
+    assert recorder.statuses("call-bad-display") == ["running", "failed"]
+    assert recorder.events[-1].display_data is None
+
+
+def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
+    """观测是旁路：真实 ``emit`` 下 sink 抛异常，``_execute_call`` 仍原样返回观察。"""
+
+    calls: list[Any] = []
+
+    def _exploding_sink(event: Any) -> None:
+        calls.append(event)
+        raise RuntimeError("sink exploded")
+
+    rc = _runtime(
+        tmp_path,
+        _make_read_file_executor(tmp_path),
+        projected={"call-ok": "read_file"},
+        event_sink=_exploding_sink,
+    )
+
+    with execution_scope(rc, SimpleNamespace()):  # type: ignore[arg-type]
+        observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"), "s", _NO_LOOP
+    )
+
+    assert observation.status == "success"
+    assert "hello world" in observation.content
+    assert [e.status for e in calls] == ["running", "completed"]
+
+
+# ---------------------------------------------------------------------------
+# C. 执行链异常：收口为 error 观察并发出 failed 终态
+# ---------------------------------------------------------------------------
+
+
+class _RaisingExecutor:
+    """执行器替身：可选先按真实契约发出 running，再抛出未归一化异常。"""
+
+    def __init__(self, exc: Exception, *, start_first: bool = False) -> None:
+        self._exc = exc
+        self._start_first = start_first
+
+    def execute(self, call, execution_context, allowed_tool_names):
+        if self._start_first:
+            emit_running(call, execution_context)
+        raise self._exc
+
+
+def test_executor_exception_becomes_error_observation_and_failed_terminal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """缺陷类型：执行链抛未归一化异常时前端永远停在 running。
+
+    契约：异常不向上抛，收口为 error 观察（只带异常类型名），并恰发出一次 failed 终态；
+    异常发生在准入前时不发 running。
+    """
+
+    recorder = _install_recorder(monkeypatch)
+    rc = _runtime(
+        tmp_path,
+        _RaisingExecutor(RuntimeError("inner pipeline exploded")),
+        projected={"call-boom": "read_file"},
+    )
+
+    with caplog.at_level("ERROR"):
+        observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-boom"), "s", _NO_LOOP
+    )
+
+    assert observation.status == "error"
+    assert observation.tool_call_id == "call-boom"
+    assert observation.error == "internal execution error in the tool pipeline: RuntimeError"
+    assert "inner pipeline exploded" not in (observation.error or "")
+    assert observation.retryable is False
+    assert recorder.statuses("call-boom") == ["failed"]
+    event = recorder.events[0]
+    assert event.tool_call_id == "call-boom"
+    assert event.error == "读取失败"
+    assert "tool_call_internal_error" in {r.message for r in caplog.records}
+
+
+def test_executor_exception_after_start_closes_running_card(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """已发 running 后执行链抛异常：必须补发 failed 终态封闭卡片。"""
+
+    recorder = _install_recorder(monkeypatch)
+    rc = _runtime(
+        tmp_path,
+        _RaisingExecutor(ValueError("late failure"), start_first=True),
+        projected={"call-late": "read_file"},
+    )
+
+    observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-late"), "s", _NO_LOOP
+    )
+
+    assert observation.error == "internal execution error in the tool pipeline: ValueError"
+    assert recorder.statuses("call-late") == ["running", "failed"]
+
+
+def test_executor_exception_on_invisible_call_emits_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """未建卡片的调用执行链异常：仍收口为 error 观察，但不发任何事件。
+
+    未建卡片的调用过不了准入门禁，执行器不会为它发 running，替身因此在准入前即抛出。
+    """
+
+    recorder = _install_recorder(monkeypatch)
+    rc = _runtime(tmp_path, _RaisingExecutor(RuntimeError("x")))
+
+    observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-hidden"), "s", _NO_LOOP
+    )
+
+    assert observation.status == "error"
+    assert recorder.events == []
+
+
+# ---------------------------------------------------------------------------
+# D. process 隔离工具与待用户决定
+# ---------------------------------------------------------------------------
 
 
 def _process_isolated_probe_handler(
@@ -780,17 +881,15 @@ def _user_input_probe_handler(
 def test_projection_happens_in_parent_for_process_isolated_tool(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """判据 G：process 隔离工具的终态投影发生在父进程，恰一次（子进程内不投影）。
+    """process 隔离工具的生命周期事件只在父进程发出：running 与终态各恰一次。
 
     用模块级可 pickle handler 注册一个 ``execution_mode="process"`` 工具，走真实
-    ``ToolHandlerRunner`` 的子进程链路；投影器记录到父进程线程信息。
+    ``ToolHandlerRunner`` 的子进程链路；记录器只存在于父进程。
     """
 
-    from app.core.tools.schemas import ToolDefinition
+    import os
 
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-
+    recorder = _install_recorder(monkeypatch)
     definition = ToolDefinition(
         name="process_probe",
         group="probe",
@@ -800,35 +899,33 @@ def test_projection_happens_in_parent_for_process_isolated_tool(
         execution_mode="process",
         timeout_seconds=30.0,
     )
-    executor = ToolExecutor(registry=ToolRegistry([definition]))
-
-    import os
-
-    observation = executor.execute(
-        ToolCall(tool_name="process_probe", arguments={}, call_id="call-proc"),
-        execution_context=_make_context(tmp_path),
+    rc = _runtime(
+        tmp_path,
+        ToolExecutor(ToolRegistry([definition])),
+        projected={"call-proc": "process_probe"},
+        allows=frozenset({"process_probe"}),
     )
 
-    # 无论子进程链路是否成功（Windows + coverage 下 spawn 可能因 WinError 6 失败，属环境限制，
-    # 非产品缺陷），父进程都必须在单一出口恰投出一次与该观察同值的终态。
-    assert len(projector.events) == 1, "父进程应恰投出一次终态"
-    assert projector.events[0].tool_call_id == "call-proc"
-    assert projector.events[0].status == terminal_status(observation.status)
+    observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="process_probe", arguments="{}", call_id="call-proc"), "s", _NO_LOOP
+    )
+
+    # 无论子进程链路是否成功（Windows + coverage 下 spawn 可能失败，属环境限制），父进程都必须
+    # 恰发出一次 running 与一次与该观察同值的终态。
+    assert recorder.statuses("call-proc") == ["running", terminal_status(observation.status)]
     if observation.status == "success":
-        assert projector.events[0].status == "completed"
-        assert projector.events[0].display_data == {"kind": "probe"}
-        # handler 在独立子进程中运行（PID 与父进程不同），投影只发生在父进程。
+        assert recorder.events[-1].display_data == {"kind": "probe"}
+        # handler 在独立子进程中运行（PID 与父进程不同）。
         assert f"pid={os.getpid()}" not in (observation.content or "")
         assert "probe body pid=" in (observation.content or "")
 
 
-def test_tool_with_user_input_defers_terminal_projection_until_decision(
+def test_tool_with_user_input_defers_terminal_until_decision(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """待用户决定的观察先投影审批载荷，工具终态留给 wait_user 的决定分支。"""
+    """待用户决定的观察只发 running，不发终态；终态留给 wait_user 的决定分支。"""
 
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
+    recorder = _install_recorder(monkeypatch)
     definition = ToolDefinition(
         name="user_input_probe",
         group="probe",
@@ -836,16 +933,20 @@ def test_tool_with_user_input_defers_terminal_projection_until_decision(
         handler=_user_input_probe_handler,
         args_model=_ProbeArgs,
     )
-    executor = ToolExecutor(registry=ToolRegistry([definition]))
+    rc = _runtime(
+        tmp_path,
+        ToolExecutor(ToolRegistry([definition])),
+        projected={"call-user-input": "user_input_probe"},
+        allows=frozenset({"user_input_probe"}),
+    )
 
-    observation = executor.execute(
-        ToolCall(tool_name="user_input_probe", arguments={}, call_id="call-user-input"),
-        execution_context=_make_context(tmp_path),
+    observation = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="user_input_probe", arguments="{}", call_id="call-user-input"), "s", _NO_LOOP
     )
 
     assert observation.status == "success"
     assert observation.user_input_request is not None
-    assert projector.events == []
+    assert recorder.statuses("call-user-input") == ["running"]
 
 
 def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
@@ -925,22 +1026,16 @@ def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
 def test_parallel_batch_projects_each_call_independently(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """判据 H：多线程并发执行 batch 时，每个 call 各自投出恰一次、call_id/status 不串台。"""
+    """多线程并发执行同批调用时，每个 call 各自 running→completed，call_id 不串台。"""
 
     (tmp_path / "a.txt").write_text("AAA", encoding="utf-8")
     (tmp_path / "b.txt").write_text("BBB", encoding="utf-8")
-
-    lock = threading.Lock()
-    events: list[Any] = []
-
-    class _ThreadSafeProjector:
-        def process(self, raw_event: object) -> None:
-            with lock:
-                events.append(raw_event)
-
-    _install_projector(monkeypatch, _ThreadSafeProjector())
-
-    executor = _make_read_file_executor(tmp_path)
+    recorder = _install_recorder(monkeypatch)
+    rc = _runtime(
+        tmp_path,
+        _make_read_file_executor(tmp_path),
+        projected={f"call-{i}": "read_file" for i in range(4)},
+    )
     results: dict[str, ToolObservation] = {}
     barrier = threading.Barrier(4)
 
@@ -948,10 +1043,9 @@ def test_parallel_batch_projects_each_call_independently(
         name = "a.txt" if index % 2 == 0 else "b.txt"
         call_id = f"call-{index}"
         barrier.wait()
-        results[call_id] = executor.execute(
-            ToolCall(tool_name="read_file", arguments={"path": name}, call_id=call_id),
-            execution_context=_make_context(tmp_path),
-        )
+        results[call_id] = tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="read_file", arguments=json.dumps({"path": name}), call_id=call_id), "s", _NO_LOOP
+    )
 
     threads = [threading.Thread(target=run, args=(i,)) for i in range(4)]
     for thread in threads:
@@ -960,68 +1054,51 @@ def test_parallel_batch_projects_each_call_independently(
         thread.join(timeout=10)
 
     assert all(not thread.is_alive() for thread in threads)
-    assert len(events) == 4, f"每个调用应各投一态，实际 {len(events)}"
-    assert sorted(e.tool_call_id for e in events) == [f"call-{i}" for i in range(4)]
-    assert all(e.status == "completed" for e in events)
-    # 每个 observation 与其 call_id 对应（无串台）。
+    assert len(recorder.events) == 8, f"每个调用应各投两态，实际 {len(recorder.events)}"
     for index in range(4):
-        assert results[f"call-{index}"].tool_call_id == f"call-{index}"
+        call_id = f"call-{index}"
+        assert recorder.statuses(call_id) == ["running", "completed"]
+        # 每个 observation 与其 call_id 对应（无串台）。
+        assert results[call_id].tool_call_id == call_id
 
 
-def test_parallel_batch_distinct_statuses_do_not_cross_talk(
+def test_mixed_batch_distinct_statuses_do_not_cross_talk(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """判据 H 补：混合成功/失败批次下，每个 call 的终态与自身结果一致，互不串台。"""
+    """混合成功/失败批次下，每个 call 的终态与自身结果一致，互不串台。"""
 
     (tmp_path / "good.txt").write_text("ok", encoding="utf-8")
-
-    events: list[Any] = []
-
-    class _ThreadSafeProjector:
-        def process(self, raw_event: object) -> None:
-            events.append(raw_event)
-
-    _install_projector(monkeypatch, _ThreadSafeProjector())
-    executor = _make_read_file_executor(tmp_path)
-
-    executor.execute(
-        ToolCall(tool_name="read_file", arguments={"path": "good.txt"}, call_id="call-good"),
-        execution_context=_make_context(tmp_path),
-    )
-    executor.execute(
-        ToolCall(tool_name="no_such_tool", arguments={}, call_id="call-bad"),
-        execution_context=_make_context(tmp_path),
+    recorder = _install_recorder(monkeypatch)
+    rc = _runtime(
+        tmp_path,
+        _make_read_file_executor(tmp_path),
+        projected={"call-good": "read_file", "call-bad": "no_such_tool"},
     )
 
-    by_id = {e.tool_call_id: e for e in events}
-    assert set(by_id) == {"call-good", "call-bad"}
-    assert by_id["call-good"].status == "completed"
-    assert by_id["call-bad"].status == "failed"
+    tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="read_file", arguments='{"path": "good.txt"}', call_id="call-good"), "s", _NO_LOOP
+    )
+    tool_batch_runner._execute_call(
+        rc, ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-bad"), "s", _NO_LOOP
+    )
+
+    assert recorder.statuses("call-good") == ["running", "completed"]
+    assert recorder.statuses("call-bad") == ["failed"]
 
 
 # ---------------------------------------------------------------------------
-# 附加：真实 storage 端到端（若可用）
+# 附加：真实 storage 端到端
 # ---------------------------------------------------------------------------
 
 
-def test_module_reads_projector_from_service_depends() -> None:
-    """判据 E 加强：投影模块的 projector 取自 ``app.service.depends``（进程级唯一收口）。"""
-
-    assert (
-        projection_module.get_conversation_event_projector
-        is __import__("app.service.depends", fromlist=["x"]).get_conversation_event_projector
-    )
-
-
-def test_real_storage_backed_projection_updates_snapshot(
-    monkeypatch: pytest.MonkeyPatch,
+def test_real_storage_backed_terminal_event_updates_snapshot(
     backend_env: None,
     tmp_path: Path,
 ) -> None:
-    """判据 E 真实 storage：经真实 state service 投影后，快照终态落值。
+    """真实 state service：终态事件经真实 projector 投影后，快照终态落值。
 
-    任务运行时空间在构造时会从主库读 task / workspace，因此这里先经真实服务建出容器，再用它们
-    的 id 驱动投影（不再硬编码一个不存在的 task_id）。
+    任务运行时空间在构造时会从主库读 task / workspace，因此先经真实服务建出容器，再用它们
+    的 id 驱动投影（不硬编码一个不存在的 task_id）。
     """
 
     from app.assistant_transport.service.conversation_task_state_service import (
@@ -1031,7 +1108,6 @@ def test_real_storage_backed_projection_updates_snapshot(
 
     ConversationTaskStateService.clear_process_state()
     projector = ConversationEventProjector()
-    _install_projector(monkeypatch, projector)
 
     root = tmp_path / "projection-workspace"
     root.mkdir()
@@ -1071,14 +1147,16 @@ def test_real_storage_backed_projection_updates_snapshot(
     state["current_run_id"] = 5
     projector.state_service.publish_state(task_id, state)
 
-    ok = project_tool_terminal_state(
-        task_id=task_id,
-        run_id=5,
-        tool_call_id="call-r",
-        observation=_observation("success", display_data={"kind": "read-file-meta"}),
+    projector.process(
+        terminal_event(
+            _observation("success", display_data={"kind": "read-file-meta"}),
+            task_id=task_id,
+            run_id=5,
+            step_id="s",
+            tool_call_id="call-r",
+        )
     )
 
-    assert ok is True
     part = _part_from_state(projector.state_service.get_state(task_id), 5, "call-r")
     assert part["status"] == "completed"
     assert part["display_data"] == {"kind": "read-file-meta"}
@@ -1168,154 +1246,7 @@ def test_normalize_display_data_is_pure_and_does_not_mutate_input() -> None:
 
 
 # ---------------------------------------------------------------------------
-# J. project_unhandled_tool_failure（第二轮新增）
-# ---------------------------------------------------------------------------
-
-
-def test_unhandled_failure_projects_failed_with_no_display_data(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """缺陷类型：管线异常路径不投终态，前端停在 running（判据 B/D）。"""
-
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-
-    result = project_unhandled_tool_failure(task_id=5, run_id=6, tool_call_id="call-x")
-
-    assert result is True
-    assert len(projector.events) == 1
-    event = projector.events[0]
-    assert event.status == "failed"
-    assert event.display_data is None, "未归一化异常路径不得伪造/覆盖展示数据"
-    assert event.error == "执行失败"
-
-
-def test_unhandled_failure_skips_when_identity_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """缺陷类型：run_id<=0 / 空 tool_call_id 时仍强行投影（判据 C）。"""
-
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-
-    assert project_unhandled_tool_failure(task_id=1, run_id=0, tool_call_id="c") is False
-    assert project_unhandled_tool_failure(task_id=1, run_id=1, tool_call_id="") is False
-    assert project_unhandled_tool_failure(task_id=0, run_id=1, tool_call_id="c") is False
-    assert projector.events == []
-
-
-def test_unhandled_failure_swallows_projection_error(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """缺陷类型：兜底投影自身失败时抛异常，遮蔽原始异常（判据 D）。"""
-
-    _install_projector(monkeypatch, _RecordingProjector(fail=True))
-    with caplog.at_level("ERROR", logger="coding_agent.backend"):
-        result = project_unhandled_tool_failure(task_id=1, run_id=1, tool_call_id="c")
-
-    assert result is False
-    assert "tool_terminal_state_projection_failed" in {r.message for r in caplog.records}
-
-
-def test_execute_projects_failed_then_reraises_when_inner_raises(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """缺陷类型：_execute_inner 抛未归一化异常时，前端永远停在 running（核心新增路径）。
-
-    契约：异常原样上抛、失败终态事件恰好投出一次（status=failed、display_data=None）。
-    """
-
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-    executor = _make_read_file_executor(tmp_path)
-
-    def _boom(*_args: Any, **_kwargs: Any) -> ToolObservation:
-        raise RuntimeError("inner pipeline exploded")
-
-    monkeypatch.setattr(executor, "_execute_inner", _boom, raising=True)
-
-    with pytest.raises(RuntimeError, match="inner pipeline exploded"):
-        executor.execute(
-            ToolCall(tool_name="read_file", arguments={"path": "sample.txt"}, call_id="call-boom"),
-            execution_context=_make_context(tmp_path),
-        )
-
-    assert len(projector.events) == 1, "管线异常路径应恰投出一次 failed 终态"
-    event = projector.events[0]
-    assert event.tool_call_id == "call-boom"
-    assert event.status == "failed"
-    assert event.display_data is None
-
-
-def test_execute_does_not_let_projection_error_mask_original_exception(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """缺陷类型：兜底投影失败抛出的新异常遮蔽原始异常（判据 D 关键）。"""
-
-    _install_projector(monkeypatch, _RecordingProjector(fail=True))
-    executor = _make_read_file_executor(tmp_path)
-
-    def _boom(*_args: Any, **_kwargs: Any) -> ToolObservation:
-        raise ValueError("original failure")
-
-    monkeypatch.setattr(executor, "_execute_inner", _boom, raising=True)
-
-    # 必须抛出原始 ValueError，而不是投影抛出的 RuntimeError。
-    with pytest.raises(ValueError, match="original failure"):
-        executor.execute(
-            ToolCall(tool_name="read_file", arguments={"path": "sample.txt"}, call_id="call-mask"),
-            execution_context=_make_context(tmp_path),
-        )
-
-
-def test_execute_without_context_does_not_project_unhandled_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """缺陷类型：execution_context 为 None 时兜底投影仍被调用（无身份可投）。"""
-
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-    executor = _make_read_file_executor(tmp_path)
-
-    with pytest.raises(ValueError):
-        executor.execute(
-            ToolCall(tool_name="read_file", arguments={"path": "sample.txt"}, call_id="call-none"),
-            execution_context=None,
-        )
-
-    assert projector.events == []
-
-
-def test_execute_falls_back_to_context_tool_call_id_on_unhandled_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """缺陷类型：异常兜底未回退 context.tool_call_id，导致终态丢失（判据 C 补）。"""
-
-    projector = _RecordingProjector()
-    _install_projector(monkeypatch, projector)
-    executor = _make_read_file_executor(tmp_path)
-
-    def _boom(*_args: Any, **_kwargs: Any) -> ToolObservation:
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(executor, "_execute_inner", _boom, raising=True)
-
-    with pytest.raises(RuntimeError):
-        executor.execute(
-            ToolCall(tool_name="read_file", arguments={"path": "sample.txt"}, call_id=""),
-            execution_context=_make_context(tmp_path, tool_call_id="ctx-call"),
-        )
-
-    assert [e.tool_call_id for e in projector.events] == ["ctx-call"]
-
-
-# ---------------------------------------------------------------------------
-# K. 畸形 display_data 下「两路径同值」仍成立（判据 A 加强，第二轮）
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# M. 第三轮：丢弃留痕同源（真实日志捕获）、无日志噪声、keyword-only 签名
+# M. 丢弃留痕：无日志噪声、keyword-only 签名
 # ---------------------------------------------------------------------------
 
 
@@ -1323,31 +1254,6 @@ def _dropped_records(caplog: pytest.LogCaptureFixture) -> list[Any]:
     """从真实捕获的日志记录里挑出 ``tool_display_data_dropped`` warning。"""
 
     return [r for r in caplog.records if r.message == "tool_display_data_dropped"]
-
-
-def test_dropped_留痕_early_path_carries_full_identity(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """判据 A：提前投影路径对畸形载荷写 warning，且 data 含 task_id/run_id/tool_call_id。"""
-
-    _install_projector(monkeypatch, _RecordingProjector())
-    observation = _observation("error", display_data=["not", "a", "mapping"])
-
-    with caplog.at_level("WARNING"):
-        result = project_tool_terminal_state(
-            task_id=11, run_id=22, tool_call_id="call-early", observation=observation
-        )
-
-    assert result is True
-    dropped = _dropped_records(caplog)
-    assert len(dropped) == 1, "提前投影路径应恰写一条 tool_display_data_dropped"
-    data = dropped[0].data
-    assert data["task_id"] == 11
-    assert data["run_id"] == 22
-    assert data["tool_call_id"] == "call-early"
-    assert data["display_data_type"] == "list"
-    # 不记载荷内容：warning 的 data 不得出现原载荷元素。
-    assert "not" not in str(data)
 
 
 @pytest.mark.parametrize("value", [None, {}, {"kind": "read-file-meta"}, {"a": 1, "b": [2]}])

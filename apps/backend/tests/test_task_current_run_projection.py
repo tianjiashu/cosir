@@ -41,7 +41,7 @@ def store(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "status", ["pending", "running", "waiting_for_input", "completed", "failed", "cancelled"]
+    "status", ["running", "waiting_for_input", "completed", "failed", "cancelled"]
 )
 def test_uses_current_pointer_instead_of_latest_created_run(store, status):
     task = store.tasks.create(store.workspace.id, "子任务", task_type="delegate_task")
@@ -69,7 +69,7 @@ def test_resume_and_replacement_are_read_without_cached_state(store):
     assert store.reads.get(task.id).execution_status == "cancelled"
     store.runs.update_status_if_in(run.id, "running", ("cancelled",))
     assert store.reads.get(task.id).execution_status == "running"
-    later = store.runs.create(task.id, status="pending")
+    later = store.runs.create(task.id, status="running")
     store.tasks.set_current_run_id(task.id, later.id)
     assert store.reads.get(task.id).current_run_id == later.id
 

@@ -268,17 +268,13 @@ def test_agent_projection_removes_only_preview_watermarks_and_preserves_display(
     assert payload["first_available_seq"] == 1 and payload["next_seq"] == 4
 
 
-def test_terminal_list_projects_each_session_without_mutating_service_snapshots():
+def test_terminal_list_projects_each_session_without_mutating_service_snapshots(monkeypatch):
+    from app.service import depends as service_depends
+
     snapshots = [{"session_id": "s", "first_available_seq": 1, "next_seq": 4}]
     service = SimpleNamespace(list_sessions=lambda **kwargs: snapshots)
-    context = SimpleNamespace(
-        task_id=1,
-        workspace_id=2,
-        run_id=3,
-        runtime_dependencies=SimpleNamespace(
-            terminal_session_service=service
-        ),
-    )
+    monkeypatch.setattr(service_depends, "get_terminal_session_service", lambda: service)
+    context = SimpleNamespace(task_id=1, workspace_id=2, run_id=3)
     observation = TerminalListTool().execute(context)
     content = json.loads(observation.content.split("\n", 1)[1])
     assert content == {"sessions": [{"session_id": "s"}]}

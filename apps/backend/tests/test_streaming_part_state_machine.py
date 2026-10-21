@@ -17,6 +17,7 @@ from app.core.workflow.node_helper import (
     StreamingPartStateMachine,
 )
 from app.core.workflow.node_helper import streaming_part_state_machine as machine_module
+from tests.runtime_context_stub import install_runtime_singletons
 
 
 class _Clock:
@@ -262,6 +263,7 @@ def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> No
         batch=ToolBatch(),
     )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
+    install_runtime_singletons(runtime)
     monkeypatch.setattr(
         machine_module,
         "_message_context",
@@ -295,6 +297,7 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
         batch=ToolBatch(),
     )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
+    install_runtime_singletons(runtime)
     monkeypatch.setattr(
         machine_module,
         "_message_context",

@@ -19,7 +19,7 @@ from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming_module
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import model_node, structured_output_node
-from app.core.workflow.run_state_machine import RunTransition
+from app.models.enums.conversation_run_status import RunTransition
 from tests.runtime_context_stub import run_state_stub, runtime_stub
 
 
@@ -146,7 +146,7 @@ def bind_node(monkeypatch, model):
     def transition_run(_run_id, transition, **kwargs):
         if transition is RunTransition.CANCEL:
             cancellations.append(kwargs)
-        return SimpleNamespace(status=transition.spec.target.value)
+        return SimpleNamespace(status=transition.target.value)
 
     runtime = runtime_stub(
         run=SimpleNamespace(id=7, task_id=1),

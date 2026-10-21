@@ -14,11 +14,10 @@ from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.events import RunStatusChangedEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.run_state_machine import RunTransition
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_progress import ConversationRunProgress
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from tests.sdk_fixtures import sdk_completion
@@ -180,7 +179,6 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
     service._session_factory = _SessionFactory()
     service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run_state._run = service._run
-    service._run_state._session_factory = service._session_factory
 
     assert service.recover_orphaned_runs() == [recovered_run]
     assert order == ["begin", "run", "context", "commit"]
@@ -205,7 +203,6 @@ def _creation_service(store, monkeypatch, projector):
     service._run = store.runs
     service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
     service._run_state._run = store.runs
-    service._run_state._session_factory = store.factory
     service._task = store.tasks
     service._context = store.context
     service._session_factory = store.factory

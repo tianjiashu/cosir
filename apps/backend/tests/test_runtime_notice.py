@@ -1,6 +1,5 @@
 """运行时通知的不可变性与消息边界契约。"""
 
-import asyncio
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -40,38 +39,17 @@ async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> 
     monkeypatch.setattr(
         run_driver, "RuntimeContext", lambda **kwargs: SimpleNamespace(**kwargs)
     )
-    registry = object()
-    terminal_sessions = object()
-    monkeypatch.setattr(run_driver, "get_agent_registry", lambda: registry)
-    monkeypatch.setattr(run_driver, "get_terminal_session_service", lambda: terminal_sessions)
-    monkeypatch.setattr(
-        run_driver,
-        "get_tool_system",
-        lambda: SimpleNamespace(
-            executor=object(),
-            registry=SimpleNamespace(get_all_definitions=list),
-            user_input_decision_handlers=object(),
-        ),
-    )
     monkeypatch.setattr(
         run_driver, "get_conversation_event_projector", lambda: SimpleNamespace(process=print)
     )
-    monkeypatch.setattr(run_driver, "get_conversation_run_state_service", lambda: object())
+    profile = SimpleNamespace()
     result = run_driver._build_context(
         workspace=SimpleNamespace(id=13, root_path="/workspace"),
         task=SimpleNamespace(id=1),
         run=SimpleNamespace(id=7, options=SimpleNamespace(ban_tools=banned)),
-        agent_profile=SimpleNamespace(),
+        agent_profile=profile,
     )
-    assert result.execution_context.task_id == 1
-    assert result.execution_context.run_id == 7
-    assert result.execution_context.workspace_id == 13
-    assert str(result.execution_context.workspace_root) == "/workspace"
-    dependencies = result.execution_context.runtime_dependencies
-    assert dependencies.agent_profile_registry is registry
-    assert dependencies.terminal_session_service is terminal_sessions
-    # 工具线程经该循环调度子 Run，装配时必须登记当前运行中的事件循环。
-    assert dependencies.runtime_event_loop is asyncio.get_running_loop()
+    assert result.profile is profile
     assert result.allows_tools == {"read_file", "write_file"} - set(banned)
     assert len(notices) == 1
     assert isinstance(notices[0], RuntimeNotice)

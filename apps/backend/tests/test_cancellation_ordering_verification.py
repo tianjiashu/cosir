@@ -4,22 +4,26 @@
 用例与思路，而是从**真实执行链路 + 时间戳事件流**的角度独立验证用户声明的规则：
 
     取消终态不得在检出取消的瞬间变更，必须晚于 ``_force_kill`` 与输出排空，
-    由 ``ToolExecutor.execute`` 的单一出口投影。
+    由 ``tool_batch_runner._execute_call`` 在 ``executor.execute`` 返回后经
+    ``terminal_event`` + ``emit`` 单一出口发出。
 
 反循环论证说明：本文件不对被测函数做「替身替换」再断言调用栈，而是
 **包装真实函数 + 委托原实现**，在被测函数真实进入的瞬间记录
 ``time.monotonic()`` 时间戳到共享事件流。因此断言的是真实执行时序，
-而非「谁在假实现在被调用的顺序」。投影点既记录 ``_project`` 的进入，
-又记录真实 ``projector.process`` 的调用，二者都指向同一条真实事件。
+而非「谁在假实现在被调用的顺序」。事件出口 ``emit`` 只被替换为「记录时间戳后转交真实
+projector」的 sink（生产中 ``emit`` 也只是把事件交给装配方注入的 sink），记录点与真实
+``projector.process`` 指向同一条真实事件。
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -44,21 +48,21 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
 )
-from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.tools.schemas import (
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
 )
-from app.core.tools.schemas.tool_output import ProcessToolOutputChannelFactory
-from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_execute import tool_handler_runner as runner_module
 from app.core.tools.tool_execute import tool_terminal_projection as projection_module
+from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
-from app.core.tools.tool_execute.tool_output_channel import (
-    BufferedProcessToolOutputChannel,
-)
+from app.core.tools.tool_execute.tool_output_channel import BufferedProcessToolOutputChannel
 from app.core.tools.tool_registry import ToolRegistry
+from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
+from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.node_helper import tool_batch_runner
+from tests.runtime_context_stub import runtime_stub
 
 _RUN_ID = 960001
 _TASK_ID = 12
@@ -186,76 +190,39 @@ def _instrument_real_calls(monkeypatch: pytest.MonkeyPatch, timeline: _Timeline)
     """包装真实函数：进入时记录时间戳后委托原实现（不改行为）。"""
 
     original_force_kill = runner_module.ToolHandlerRunner._force_kill
-    original_finish = runner_module.ToolHandlerRunner._finish_process_output_channel
-    original_project = projection_module._project
+    original_finish = BufferedProcessToolOutputChannel.finish
 
-    def _force_kill(self: Any, process: Any) -> None:
+    def _force_kill(process: Any) -> None:
         timeline.record("force_kill")
-        return original_force_kill(self, process)
+        return original_force_kill(process)
 
-    def _finish(output_channel: Any) -> None:
+    def _finish(self: BufferedProcessToolOutputChannel) -> None:
         timeline.record("finish_output_channel")
-        return original_finish(output_channel)
+        return original_finish(self)
 
-    def _project(**kwargs: Any) -> bool:
-        timeline.record("_project")
-        return original_project(**kwargs)
-
-    monkeypatch.setattr(runner_module.ToolHandlerRunner, "_force_kill", _force_kill)
-    monkeypatch.setattr(
-        runner_module.ToolHandlerRunner,
-        "_finish_process_output_channel",
-        staticmethod(_finish),
-    )
-    monkeypatch.setattr(projection_module, "_project", _project)
+    monkeypatch.setattr(runner_module.ToolHandlerRunner, "_force_kill", staticmethod(_force_kill))
+    monkeypatch.setattr(BufferedProcessToolOutputChannel, "finish", _finish)
 
 
-class _LoopBackedChannelFactory(ProcessToolOutputChannelFactory):
-    """真实输出通道工厂。
+class _RecordingStreamSink:
+    """真实输出通道的事件出口。
 
-    ``publish`` 走真实生产路径：把增量包成 ``ToolCallRuntimeUpdateEvent`` 投给真实
-    projector（``on_publish`` 由用例注入），从而让 snapshot 累积真实的流式 output，
-    用于验证取消终态是否保留它。``streamed`` 同步留存原始文本便于断言。
+    通道由生产路径 ``create_process_output_channel`` 创建，它把增量包成
+    ``ToolCallRuntimeUpdateEvent`` 交给本 sink；本 sink 再转交真实 projector（``on_publish``
+    由用例注入），从而让 snapshot 累积真实的流式 output，用于验证取消终态是否保留它。
+    ``streamed`` 同步留存原始文本便于断言。
     """
 
-    def __init__(
-        self,
-        timeline: _Timeline,
-        *,
-        on_publish: Any = None,
-    ) -> None:
+    def __init__(self, timeline: _Timeline, *, on_publish: Any = None) -> None:
         self._timeline = timeline
         self._on_publish = on_publish
         self.streamed: list[str] = []
-        self.task_id = 0
-        self.run_id = 0
-        self.tool_call_id = ""
 
-    def create(
-        self,
-        *,
-        task_id: int,
-        run_id: int,
-        tool_call_id: str,
-        tool_name: str,
-        loop: asyncio.AbstractEventLoop,
-    ) -> BufferedProcessToolOutputChannel | None:
-        self.task_id, self.run_id, self.tool_call_id = task_id, run_id, tool_call_id
-
-        def publish(seq: int, text: str) -> None:
-            self.streamed.append(text)
-            if self._on_publish is not None:
-                self._on_publish(seq, text)
-            self._timeline.record("stream_publish")
-
-        return BufferedProcessToolOutputChannel(
-            task_id=task_id,
-            run_id=run_id,
-            tool_call_id=tool_call_id,
-            loop=loop,
-            publish=publish,
-            max_chunk_chars=4096,
-        )
+    def __call__(self, event: Any) -> None:
+        self.streamed.append(event.data.text)
+        if self._on_publish is not None:
+            self._on_publish(event)
+        self._timeline.record("stream_publish")
 
 
 # 真实流式 output 只对 ``execute_terminal`` 投影（见 ToolCallRuntimeUpdateEvent.plan），
@@ -272,6 +239,32 @@ def _make_process_tool(name: str, *, timeout_seconds: float = 60.0) -> ToolDefin
         args_model=_ProbeArgs,
         execution_mode="process",
         timeout_seconds=timeout_seconds,
+    )
+
+
+def _batch_runtime(
+    executor: Any,
+    *call_ids: str,
+    workspace_root: Path = Path("."),
+    event_sink: Any = None,
+) -> Any:
+    """``_execute_call`` 所需的最小 ``RuntimeContext``：给定调用均视为本步已创建工具卡片。
+
+    执行上下文由 ``_execute_call`` 按调用从这里的 run / task / workspace / event_sink 构造。
+    """
+
+    return runtime_stub(
+        run=SimpleNamespace(id=_RUN_ID, task_id=_TASK_ID),
+        task=SimpleNamespace(id=_TASK_ID),
+        workspace=SimpleNamespace(id=1, root_path=str(workspace_root)),
+        event_sink=event_sink or (lambda _event: None),
+        tool_executor=executor,
+        allows_tools=frozenset({_STREAMING_TOOL_NAME}),
+        batch=ToolBatch(
+            valid_tool_calls={
+                call_id: ValidToolCall(_STREAMING_TOOL_NAME, "projected") for call_id in call_ids
+            }
+        ),
     )
 
 
@@ -292,13 +285,13 @@ async def test_projection_ordering_kill_then_drain_then_project(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """真实 process 工具中途取消：真实时间戳证明 kill → drain → project，且投影恰一次。
+    """真实 process 工具经 ``_execute_call`` 中途取消：真实时间戳证明 kill → drain → project。
 
-    缺陷类型：若取消终态在检出瞬间投影（即时旁路回归），``_project`` 时间戳会落在
-    ``force_kill`` 之前；若投影缺失，projector 事件数为 0。
+    running 由执行器在 handler 启动前发出恰一次，终态由 ``_execute_call`` 在
+    ``executor.execute`` 返回后发出恰一次。缺陷类型：若取消终态在检出瞬间投影（即时旁路
+    回归），终态时间戳会落在 ``force_kill`` 之前；若投影缺失，终态事件数为 0。
     """
 
-    import asyncio
 
     asyncio.get_running_loop()
     timeline = _Timeline()
@@ -327,45 +320,21 @@ async def test_projection_ordering_kill_then_drain_then_project(
             tool_name=_STREAMING_TOOL_NAME,
         )
     )
-    real_projector.process(
-        ToolCallStatusChangedEvent(
-            task_id=_TASK_ID,
-            run_id=_RUN_ID,
-            tool_call_id="call-cancel",
-            status="running",
-            args={},
-        )
-    )
     projector = _TimelineProjector(timeline, real_projector)
-    monkeypatch.setattr(projection_module, "get_conversation_event_projector", lambda: projector)
+
+    def _emit(event: Any) -> None:
+        """事件出口：记录工具生命周期事件的时间戳后转交真实 projector。"""
+
+        if isinstance(event, ToolCallStatusChangedEvent):
+            timeline.record(f"emit:{event.status}")
+        projector.process(event)
+
+    monkeypatch.setattr(tool_batch_runner, "emit", _emit)
     _instrument_real_calls(monkeypatch, timeline)
-
-    def _dispatch_stream_delta(seq: int, text: str) -> None:
-        """把真实增量包成真实运行期事件投给真实 projector（生产同路径）。"""
-
-        real_projector.process(
-            ToolCallRuntimeUpdateEvent(
-                task_id=_TASK_ID,
-                run_id=_RUN_ID,
-                tool_call_id="call-cancel",
-                seq=seq,
-                data=TerminalOutputDeltaData(kind="terminal_output_delta", text=text),
-            )
-        )
 
     tool = _make_process_tool(_STREAMING_TOOL_NAME)
     executor = ToolExecutor(registry=ToolRegistry([tool]))
-    channel_factory = _LoopBackedChannelFactory(timeline, on_publish=_dispatch_stream_delta)
-    context = ToolExecutionContext(
-        task_id=_TASK_ID,
-        workspace_id=1,
-        workspace_root=tmp_path,
-        run_id=_RUN_ID,
-        runtime_dependencies=ToolRuntimeDependencies(
-            runtime_event_loop=asyncio.get_running_loop(),
-            process_tool_output_channel_factory=channel_factory,
-        ),
-    )
+    stream_sink = _RecordingStreamSink(timeline, on_publish=real_projector.process)
 
     # 定时器在子进程运行途中标记工具级取消（真实跨线程信号）。
     # 取消窗口取足够长（Windows spawn 需重新 import 整个 app，约 2~3s 才进入 handler），
@@ -379,13 +348,17 @@ async def test_projection_ordering_kill_then_drain_then_project(
     timer.start()
     try:
         observation = await asyncio.to_thread(
-            executor.execute,
+            tool_batch_runner._execute_call,
+            _batch_runtime(
+                executor, "call-cancel", workspace_root=tmp_path, event_sink=stream_sink
+            ),
             ToolCall(
                 tool_name=_STREAMING_TOOL_NAME,
-                arguments={"marker_path": str(marker)},
+                arguments=json.dumps({"marker_path": str(marker)}),
                 call_id="call-cancel",
             ),
-            execution_context=context,
+            "step-1",
+            asyncio.get_running_loop(),
         )
     finally:
         timer.cancel()
@@ -405,23 +378,26 @@ async def test_projection_ordering_kill_then_drain_then_project(
     labels = timeline.labels()
     assert "force_kill" in labels, "取消路径未强杀子进程（时序无法成立）"
     assert "finish_output_channel" in labels, "取消路径未收尾输出通道"
-    assert "projector.process" in labels, "取消终态从未投影"
+    assert "emit:cancelled" in labels, "取消终态从未投影"
+    running_idx = labels.index("emit:running")
     kill_idx = labels.index("force_kill")
     drain_idx = labels.index("finish_output_channel")
-    project_idx = labels.index("projector.process")
-    assert kill_idx < drain_idx < project_idx, f"时序违例：期望 kill<drain<project，实际 {labels}"
+    project_idx = labels.index("emit:cancelled")
+    assert (
+        running_idx < kill_idx < drain_idx < project_idx
+    ), f"时序违例：期望 running<kill<drain<project，实际 {labels}"
 
     # 时间戳层面的量化间隔（更强的非循环证据）。
     ordered = sorted(timeline.entries, key=lambda item: item[0])
     kill_ts = next(ts for ts, label in ordered if label == "force_kill")
     drain_ts = next(ts for ts, label in ordered if label == "finish_output_channel")
-    project_ts = next(ts for ts, label in ordered if label == "projector.process")
+    project_ts = next(ts for ts, label in ordered if label == "emit:cancelled")
     assert kill_ts <= drain_ts <= project_ts
     assert project_ts >= kill_ts, "投影时间戳早于强杀"
 
     # 输出排空的实质证据：真实流出的增量已发布，且最后一条发布的时间戳早于投影。
     # 这排除「只验证调用顺序」的循环论证——此处验证的是真实数据被推送的时间点。
-    streamed_len = len("".join(channel_factory.streamed))
+    streamed_len = len("".join(stream_sink.streamed))
     assert streamed_len > 0, "取消前已产生的实时输出未到达输出通道（排空未发生）"
     last_publish_ts = max(ts for ts, label in ordered if label == "stream_publish")
     assert last_publish_ts <= project_ts, "实时输出排空晚于终态投影，前端会先看到终态再补输出"
@@ -436,22 +412,23 @@ async def test_projection_ordering_kill_then_drain_then_project(
         for event in projector.events
         if isinstance(event, ToolCallStatusChangedEvent) and event.tool_call_id == "call-cancel"
     ]
-    assert len(status_events) == 1, f"终态投影应恰一次，实际 {len(status_events)}"
-    assert status_events[0].status == "cancelled"
-    assert status_events[0].error == "已取消"
+    assert [event.status for event in status_events] == [
+        "running",
+        "cancelled",
+    ], f"running 与终态应各投影恰一次，实际 {[event.status for event in status_events]}"
+    assert status_events[1].error == "已取消"
 
     # 真实 snapshot 的 part 终态。
     part = owner.state["runs"][0]["messages"][1]["parts"][0]
     assert part["status"] == "cancelled"
 
     # 端到端：取消期间确实流出过真实实时输出（排空有实质内容），且被投影进 snapshot。
-    streamed_text = "".join(channel_factory.streamed)
+    streamed_text = "".join(stream_sink.streamed)
     assert streamed_text, "取消前未流出任何实时输出，无法验证保留性"
     assert part.get("terminal_output_seq", -1) >= 0, "流式增量从未投影进 snapshot"
 
-    # 注意：取消终态会整体覆盖 display_data（已知缺陷，权威描述见
-    # ``tool_terminal_projection`` 模块 docstring 的「已知缺陷（未修）」段），该行为由下方专门
-    # 用例 ``test_cancel_terminal_event_wipes_streamed_output_preexisting`` 固定，此处不重复断言。
+    # 取消终态不得清空已流出的输出（细节见 ``test_real_cancel_projection_keeps_streamed_output``）。
+    assert part["display_data"].get("output"), "取消终态清空了已流出的实时输出"
 
 
 # ---------------------------------------------------------------------------
@@ -464,45 +441,36 @@ async def test_cancel_path_never_touches_shared_projection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """取消执行期间监视 ``_project`` 与 ``get_conversation_event_projector``，证明无触达。
+    """取消执行期间监视工作流事件出口与终态映射，证明执行层（runner）无触达。
 
-    缺陷类型：有人把即时通知旁路重新接回执行层（例如在 runner 内投影），这里会立刻非零。
+    缺陷类型：有人把即时通知旁路重新接回执行层（例如在 runner 内构造终态或调用 ``emit``），
+    这里会立刻非零。
     """
 
-    import asyncio
 
-    hits: list[str] = []
-    getter_calls: list[int] = []
+    emitted: list[Any] = []
+    mapped: list[str] = []
+    original_terminal_event = projection_module.terminal_event
 
-    original_project = projection_module._project
+    def _spy_terminal_event(observation: Any, **kwargs: Any) -> Any:
+        mapped.append(kwargs["tool_call_id"])
+        return original_terminal_event(observation, **kwargs)
 
-    def _spy_project(**kwargs: Any) -> bool:
-        hits.append("_project")
-        return original_project(**kwargs)
-
-    monkeypatch.setattr(projection_module, "_project", _spy_project)
-
-    sentinel = object()
-
-    def _spy_getter() -> Any:
-        getter_calls.append(1)
-        return sentinel
-
-    monkeypatch.setattr(projection_module, "get_conversation_event_projector", _spy_getter)
-    # 若执行层自行 import 投影工厂，同样会命中（防绕过）。
-    monkeypatch.setattr(
-        runner_module, "get_conversation_event_projector", _spy_getter, raising=False
-    )
+    monkeypatch.setattr(tool_batch_runner, "emit", emitted.append)
+    monkeypatch.setattr(projection_module, "terminal_event", _spy_terminal_event)
+    monkeypatch.setattr(tool_batch_runner, "terminal_event", _spy_terminal_event)
 
     tool = _make_process_tool("probe_no_projection")
     context = ToolExecutionContext(
+        step_id="step-1",
         task_id=_TASK_ID,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=_RUN_ID,
+        tool_call_id="call-cancel",
     )
 
-    # 直接调 runner（执行层）而非 executor，从而隔离出「取消路径本身是否投影」。
+    # 直接调 runner（执行层）而非 ``_execute_call``，从而隔离出「取消路径本身是否投影」。
     timer = threading.Timer(
         0.3,
         tool_call_cancellation_registry.mark_cancelled,
@@ -515,7 +483,6 @@ async def test_cancel_path_never_touches_shared_projection(
             tool,
             {"marker_path": str(tmp_path / "m.txt")},
             context,
-            "call-cancel",
         )
     finally:
         timer.cancel()
@@ -527,10 +494,13 @@ async def test_cancel_path_never_touches_shared_projection(
         )
 
     assert observation.status == "cancelled"
-    assert hits == [], f"取消路径触达了共享投影收口：{hits}"
-    assert getter_calls == [], "取消路径解析了 projector 工厂"
-    # 旧的通知旁路实体必须不存在（第二层护栏）。
+    assert emitted == [], f"取消路径触达了工作流事件出口：{emitted}"
+    assert mapped == [], "取消路径在执行层构造了终态事件"
+    # 旧的通知旁路实体与 core/tools 内的全局 projector 依赖必须不存在（第二层护栏）。
     assert not hasattr(runner_module.ToolHandlerRunner, "_notify_tool_call_cancelled")
+    assert not hasattr(runner_module, "get_conversation_event_projector")
+    assert not hasattr(projection_module, "get_conversation_event_projector")
+    assert not hasattr(projection_module, "project_tool_terminal_state")
 
 
 # ---------------------------------------------------------------------------
@@ -570,109 +540,49 @@ def _seed_running_execute_terminal(projector: ConversationEventProjector, call_i
     )
 
 
-def _project_cancelled_via_real_projection(
+def _project_cancelled_via_real_path(
     monkeypatch: pytest.MonkeyPatch,
     projector: ConversationEventProjector,
     call_id: str,
 ) -> ToolCallStatusChangedEvent:
-    """用真实 ``project_tool_terminal_state`` 产出取消终态事件并投给 projector。
+    """经真实 ``_execute_call`` 终态出口产出取消终态事件并投给 projector。
 
-    这是**取消路径的真实事件来源**：``ToolObservation.status="cancelled"`` ->
-    ``project_tool_terminal_state`` -> ``ToolCallStatusChangedEvent`` -> projector。
-    比手工构造事件更接近生产，避免「事件构造与生产不一致」的假阴性。
+    这是**取消路径的真实事件来源**：执行器返回 ``ToolObservation.status="cancelled"`` ->
+    ``_execute_call`` -> ``terminal_event`` -> ``emit`` -> projector。执行器替换为直接返回取消
+    观察的桩（取消观察本身由 ``tool_cancelled`` 产出，与 runner 同源），比手工构造事件更接近
+    生产，避免「事件构造与生产不一致」的假阴性。
     """
-
-    from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
-    from app.core.tools.tool_execute.tool_terminal_projection import (
-        project_tool_terminal_state,
-    )
 
     observation = tool_cancelled("execute_terminal", tool_call_id=call_id)
     captured: list[ToolCallStatusChangedEvent] = []
 
-    def _capture(event: Any) -> None:
+    def _emit(event: Any) -> None:
         captured.append(event)
         projector.process(event)
 
-    monkeypatch.setattr(
-        projection_module,
-        "get_conversation_event_projector",
-        lambda: _CaptureProxy(_capture),
-    )
-    project_tool_terminal_state(
-        task_id=_TASK_ID, run_id=_RUN_ID, tool_call_id=call_id, observation=observation
+    class _CancelledExecutor:
+        def execute(self, _call: ToolCall, **_kwargs: Any) -> Any:
+            return observation
+
+    monkeypatch.setattr(tool_batch_runner, "emit", _emit)
+    tool_batch_runner._execute_call(
+        _batch_runtime(_CancelledExecutor(), call_id),
+        ToolCall(tool_name="execute_terminal", arguments="{}", call_id=call_id),
+        "step-1",
+        None,
     )
     assert len(captured) == 1
     return captured[0]
 
 
-class _CaptureProxy:
-    """把 ``process`` 转交给回调的轻量 projector 代理。"""
-
-    def __init__(self, handler: Any) -> None:
-        self._handler = handler
-
-    def process(self, event: Any) -> Any:
-        return self._handler(event)
-
-
-def test_cancel_event_without_display_data_preserves_streamed_output() -> None:
-    """对照用例：取消事件**不带** display_data 时，真实 plan 不覆盖已流出 output。
-
-    这是 ``plan`` 中 ``if self.display_data is not None`` 守卫的正向证据：
-    只有当事件显式携带 display_data 时才会改写展示字段。
-    """
-
-    owner = _MemorySnapshotOwner(empty_snapshot())
-    projector = ConversationEventProjector(owner)
-    _seed_running_execute_terminal(projector, "call-t")
-    streamed = "partial live output\n" * 500
-    for seq, start in enumerate(range(0, len(streamed), 4096)):
-        projector.process(
-            ToolCallRuntimeUpdateEvent(
-                task_id=_TASK_ID,
-                run_id=_RUN_ID,
-                tool_call_id="call-t",
-                seq=seq,
-                data=TerminalOutputDeltaData(
-                    kind="terminal_output_delta",
-                    text=streamed[start : start + 4096],
-                ),
-            )
-        )
-    assert owner.state["runs"][0]["messages"][1]["parts"][0]["display_data"]["output"] == streamed
-
-    projector.process(
-        ToolCallStatusChangedEvent(
-            task_id=_TASK_ID,
-            run_id=_RUN_ID,
-            tool_call_id="call-t",
-            status="cancelled",
-            error="已取消",
-            display_data=None,
-        )
-    )
-    part = owner.state["runs"][0]["messages"][1]["parts"][0]
-    assert part["status"] == "cancelled"
-    assert part["display_data"]["output"] == streamed
-    assert part["terminal_output_seq"] >= 0
-
-
-def test_real_cancel_projection_wipes_streamed_output_preexisting_defect(
+def test_real_cancel_projection_keeps_streamed_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """缺陷①（既有）复现：取消路径**真实**投影会清空已流出的 display_data.output。
+    """取消终态经真实路径投影后，已流出的终端输出仍保留在卡片上。
 
-    证据链：
-    1. ``tool_cancelled(...)`` 的 ``display_data`` 默认为 ``{}``（非 None）；
-    2. ``normalize_display_data({})`` 返回 ``{}``（非 None），故取消终态事件携带
-       ``display_data={}``；
-    3. ``ToolCallStatusChangedEvent.plan`` 见 ``display_data is not None`` 且
-       ``kind != "terminal-result"``，遂 ``set display_data = {}``，清空流式输出。
-
-    该行为由 ``tool_observation.ToolObservation.display_data`` 默认值与
-    ``tool_call_event.plan`` 的合并条件决定，二者**均不在本次改动范围内**，属既有缺陷。
-    本用例断言该现状（即缺陷确实存在），用于追踪，不掩盖为通过。
+    取消观察的 ``display_data`` 是空 dict（不带成功态展示），终态事件因此携带 ``{}``；
+    ``plan_tool_call_status_changed`` 对已流出输出的 terminal-result part 保留实时展示，只叠加
+    终态自带字段，不能整体覆盖成空。
     """
 
     owner = _MemorySnapshotOwner(empty_snapshot())
@@ -690,17 +600,15 @@ def test_real_cancel_projection_wipes_streamed_output_preexisting_defect(
     )
     assert owner.state["runs"][0]["messages"][1]["parts"][0]["display_data"]["output"] == streamed
 
-    event = _project_cancelled_via_real_projection(monkeypatch, projector, "call-t")
+    event = _project_cancelled_via_real_path(monkeypatch, projector, "call-t")
 
-    # 真实取消事件确实携带空 dict 展示载荷（缺陷根因的输入侧证据）。
+    # 取消事件本身不带成功态展示；保留输出是投影侧的职责。
     assert event.status == "cancelled"
     assert event.error == "已取消"
-    assert event.display_data == {}, "取消终态事件未携带空 display_data，根因假设需修正"
+    assert event.display_data == {}
 
     part = owner.state["runs"][0]["messages"][1]["parts"][0]
     assert part["status"] == "cancelled"
-    # 记录既有缺陷现状：已流出的 output 被空 display_data 覆盖。
-    assert (
-        part["display_data"] == {}
-    ), "取消终态未清空已流出输出；缺陷①可能已被修复，请更新本用例与结论"
-    assert "output" not in part["display_data"]
+    assert part["error"] == "已取消"
+    assert part["display_data"]["kind"] == "terminal-result"
+    assert part["display_data"]["output"] == streamed

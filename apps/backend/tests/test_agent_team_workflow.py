@@ -3,8 +3,12 @@
 from dataclasses import asdict
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
+
 import app.agent_team.coordinator as coordinator_module
 from app.agent_team.coordinator import AgentTeamCoordinator
+from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.core.agents.model_settings import ModelSettings
 from app.core.tools.display.agent_team_display import (
@@ -30,7 +34,10 @@ def _preview_fields() -> dict[str, object]:
         "team_id": "code-quality",
         "name": "代码质量 Team",
         "goal": "交付报告",
-        "node_goals": {"develop": "实现", "review": "审查"},
+        "node_goals": {
+            "develop": {"goal": "实现", "summary": "实现"},
+            "review": {"goal": "审查", "summary": "审查"},
+        },
         "start_node": "develop",
         "nodes": [],
         "edges": [],
@@ -62,7 +69,10 @@ def test_agent_team_preview_separates_display_from_review_request() -> None:
     assert request.draft_schema == AGENT_TEAM_REVIEW_DRAFT_SCHEMA
     assert request.draft == {
         "goal": "交付报告",
-        "node_goals": {"develop": "实现", "review": "审查"},
+        "node_goals": {
+            "develop": {"goal": "实现", "summary": "实现"},
+            "review": {"goal": "审查", "summary": "审查"},
+        },
         "configuration": {"team_id": "code-quality"},
     }
 
@@ -94,16 +104,17 @@ def test_confirmed_team_display_data_stops_requesting_user_input() -> None:
         team_run_id=17,
         team_id="code-quality",
         goal="交付报告",
-        node_goals={"develop": "实现"},
+        node_goals={"develop": AgentTeamNodeGoal(goal="实现功能", summary="实现")},
     )
 
     assert display_data["kind"] == "agent-team-execution"
+    assert display_data["node_goals"] == {"develop": {"goal": "实现功能", "summary": "实现"}}
     assert "requires_user_input" not in display_data
     assert "user_input_request" not in display_data
 
 
 def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> None:
-    """父 Run 取消时，pending TeamRun 也要原子收敛并写完整终态信息。"""
+    """父 Run 取消时，pending TeamRun 也要原子收敛、写完整终态信息并落终态运行档案。"""
 
     row = SimpleNamespace(id=17, status=AgentTeamRunStatus.PENDING.value, state_json={})
     updated = SimpleNamespace(
@@ -134,6 +145,9 @@ def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> 
 
     coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
     coordinator._team_run_crud = _Crud()
+    coordinator._run_archive_service = SimpleNamespace(
+        write_terminal_archive=lambda run_id: captured.update(archived=run_id)
+    )
     monkeypatch.setattr(
         coordinator_module,
         "AgentTeamRunState",
@@ -150,6 +164,8 @@ def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> 
     assert captured["target"] == AgentTeamRunStatus.CANCELLED.value
     assert captured["end_reason"] == AgentTeamRunEndReason.CANCELLED.value
     assert captured["ended"] is True
+    assert captured["signalled"] is True
+    assert captured["archived"] == 17
 
 
 def test_team_run_view_is_typed_and_does_not_accept_runtime_state() -> None:
@@ -165,8 +181,6 @@ def test_team_run_view_is_typed_and_does_not_accept_runtime_state() -> None:
             "role": "审查", "goal_summary": "检查改动", "status": "running",
             "visits": [{
                 "visit_number": 1, "conversation_run_id": 10, "status": "completed",
-                "business_status": "needs_tests", "business_status_color": "#123456",
-                "failure_message": None,
                 "agents": [{
                     "task_id": 9, "title": "Review", "agent_id": "reviewer",
                     "role": "审查", "status": "completed",
@@ -174,12 +188,13 @@ def test_team_run_view_is_typed_and_does_not_accept_runtime_state() -> None:
             }],
         }],
         "current_node_id": "review",
-        "end_reason": None,
-        "failure_node_id": None,
     }
     view = AgentTeamRunResponse.model_validate(payload)
     assert view.nodes[0].visits[0].agents[0].task_id == 9
     assert "state" not in view.model_dump()
+    # 恢复执行用的内部 state 不得经响应契约下发。
+    with pytest.raises(ValidationError):
+        AgentTeamRunResponse.model_validate({**payload, "state": {"node_runtime": {}}})
 
 
 def test_team_model_snapshot_falls_back_to_parent_materialized_settings() -> None:

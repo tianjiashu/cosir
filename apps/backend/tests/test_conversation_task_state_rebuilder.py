@@ -313,7 +313,7 @@ def test_rebuild_does_not_invent_user_message_from_run() -> None:
     run = ConversationRunRecord(
         id=1,
         task_id=7,
-        status="pending",
+        status="running",
         created_at=timestamp,
         updated_at=timestamp,
     )

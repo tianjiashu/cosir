@@ -25,7 +25,7 @@ from app.core.tools.schemas import ToolExecutionContext, ToolObservation
 def _ctx(root: Path) -> ToolExecutionContext:
     """构造绑定到给定 workspace 根的执行上下文（与既有对抗性测试同一口径）。"""
 
-    return ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=root, run_id=1)
+    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=1)
 
 
 def _obs(content: str | None) -> ToolObservation:
@@ -175,16 +175,3 @@ def test_tiny_budget_still_writes_full_artifact(tmp_path: Path) -> None:
     assert isinstance(artifact_path, str) and artifact_path
     assert (root / artifact_path).read_text(encoding="utf-8") == content
 
-
-def test_without_workspace_marker_says_output_unavailable() -> None:
-    """无 workspace 时不落盘，标记明确说明完整输出不可取回。"""
-
-    budget = ToolOutputBudget(max_chars=200)
-    content = "x" * 5000
-
-    result = budget.apply(_obs(content), None)
-
-    assert result.content is not None
-    assert len(result.content) <= 200
-    assert "full output unavailable" in result.content
-    assert (result.artifact_data or {}).get("artifact_path") == ""

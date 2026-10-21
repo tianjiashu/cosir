@@ -1,5 +1,4 @@
 import os
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -15,9 +14,6 @@ from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
 from app.core.tools.tool_models.delete_file_args import DeleteFileArgs
 from app.core.tools.tool_models.move_file_args import MoveFileArgs
 from app.core.tools.tool_system import ToolSystem
-from app.service.depends import close_service_dependencies
-from app.storage.store_engines import init_storage
-from app.utils.path import system_cosir as paths
 
 # 工具描述的事实源已从模块级常量 ``APPLY_PATCH_DESCRIPTION`` 迁移为类属性
 # ``ApplyPatchTool.description``（模块不再导出该名字）。这里只做「测试内别名」，把下文的
@@ -25,30 +21,8 @@ from app.utils.path import system_cosir as paths
 APPLY_PATCH_DESCRIPTION = ApplyPatchTool.description
 
 
-@pytest.fixture
-def storage(tmp_path: Path) -> Iterator[None]:
-    """为需要真实注册表/服务单例的用例提供隔离的主库与 checkpoint 路径。
-
-    与 ``tests/test_child_agent_close_removal_contract.py`` 同一约定：``ToolSystem``
-    的装配期会构造 ``delegate_task``，而它依赖已初始化的存储单例；不初始化就只会得到
-    ``storage not initialized``，与「工具是否被注册」这一被测能力无关。
-    """
-
-    close_service_dependencies()
-    db_dir = tmp_path / "storage"
-    db_dir.mkdir()
-    paths.override(
-        DATABASE_FILE=db_dir / "app.sqlite3",
-        LOG_DIR=db_dir / "logs",
-    )
-    init_storage()
-    yield
-    close_service_dependencies()
-    paths.reset()
-
-
 def _context(root: Path) -> ToolExecutionContext:
-    return ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=root, run_id=991)
+    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=991)
 
 
 def _patch(path: str = "existing.txt") -> str:
@@ -77,8 +51,8 @@ def test_file_tool_descriptions_and_arguments_express_separate_responsibilities(
     assert "delete_file" in APPLY_PATCH_DESCRIPTION
     assert "move_file" in APPLY_PATCH_DESCRIPTION
     # 参数描述只讲「这个值要填什么格式」。
-    assert "unified diff" in patch_description
-    assert "diff --git a/" in patch_description
+    assert "统一 diff" in patch_description
+    assert "'diff --git' 头" in patch_description
     assert "Directories are not supported" in DELETE_FILE_DESCRIPTION
     assert "Directories" in delete_description
     assert "directories" in move_source_description.lower()
@@ -88,20 +62,22 @@ def test_file_tool_descriptions_and_arguments_express_separate_responsibilities(
 
 
 # 模型可见契约必须自带可用样例与行数规则；2026-09-21 的真实故障正是模型在无样例时
-# 只能靠猜（先吐 '*** Begin Patch'，再手写 @@ 计数且算错）。这些内容唯一落在参数描述里。
+# 只能靠猜（先吐 '*** Begin Patch'，再手写 @@ 计数且算错）。这些内容唯一落在 ``patch`` 参数里：
+# 规则在描述正文，最小样例在字段 ``examples``（随 strict schema 导出）。
 def test_apply_patch_contract_documents_the_exact_accepted_diff_format() -> None:
-    patch_description = ApplyPatchArgs.model_fields["patch"].description or ""
+    field = ApplyPatchArgs.model_fields["patch"]
+    patch_description = field.description or ""
+    sample = "\n".join(field.examples or [])
 
-    assert "diff --git a/" in patch_description
-    assert "@@ -" in patch_description
+    assert "diff --git a/" in sample
+    assert "@@ -" in sample
     assert "*** Begin Patch" in patch_description
-    assert "must match" in patch_description
-    assert "Minimal accepted example" in patch_description
+    assert "差异块行数按正文重算" in patch_description
     # 工具描述不得回抄任何格式细节（回抄即两处事实源）。
     assert "diff --git" not in APPLY_PATCH_DESCRIPTION
     assert "@@" not in APPLY_PATCH_DESCRIPTION
     assert "*** Begin Patch" not in APPLY_PATCH_DESCRIPTION
-    assert "Minimal accepted example" not in APPLY_PATCH_DESCRIPTION
+    assert "diff --git a/pkg/mod.py" not in APPLY_PATCH_DESCRIPTION
 
 
 # 行数规则只允许有一处事实源（参数描述）：2026-09-21 的样例计数写错事故正是「同一规则散落在
@@ -109,9 +85,8 @@ def test_apply_patch_contract_documents_the_exact_accepted_diff_format() -> None
 def test_patch_count_rule_is_stated_only_in_the_parameter_description() -> None:
     patch_description = ApplyPatchArgs.model_fields["patch"].description or ""
 
-    assert "must match" in patch_description
-    assert "context plus '-' lines" in patch_description
-    assert "omitted only when it is 1" in patch_description
+    # 计数契约已改为「按正文重算」（解析器修复不符的计数并回报备注），规则本身仍只在参数描述。
+    assert "差异块行数按正文重算" in patch_description
     # 结构性断言：工具描述不得出现计数或 hunk 语法语义，同义改写也拦得住。
     for leaked in (
         "must match",
@@ -120,11 +95,16 @@ def test_patch_count_rule_is_stated_only_in_the_parameter_description() -> None:
         "context plus",
         "source count",
         "omitted only when",
+        "行数",
+        "重算",
     ):
         assert leaked not in APPLY_PATCH_DESCRIPTION, leaked
 
 
-def test_handlers_inherit_base_and_new_tools_are_registered(storage: None) -> None:
+# ``backend_env``（conftest）按生产装配顺序准备主库与 Agent Team 注册表；
+# ``ToolSystem`` 装配期依赖二者。
+@pytest.mark.usefixtures("backend_env")
+def test_handlers_inherit_base_and_new_tools_are_registered() -> None:
     assert all(
         issubclass(handler, HandlerBase) for handler in (ApplyPatchTool, DeleteTool, MoveTool)
     )

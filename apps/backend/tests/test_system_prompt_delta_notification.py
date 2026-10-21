@@ -6,8 +6,8 @@ import weakref
 from types import SimpleNamespace
 
 import pytest
+
 from app.core.agents.agent_profile import AgentProfileType
-from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
     broadcast_system_prompt_delta,
     build_system_prompt_delta,
@@ -92,13 +92,13 @@ def test_task_space_returns_delta_as_a_runtime_notice() -> None:
 
     space.defer_runtime_notice(delta.to_notice())
 
-    messages = space.take_runtime_notices()
-    assert len(messages) == 1
-    assert isinstance(messages[0], RuntimeNotice)
-    assert "-旧规则" in messages[0].content
-    assert "+新规则" in messages[0].content
-    assert messages[0].kind == "system_prompt_delta"
-    assert space.take_runtime_notices() == []
+    hint = space.take_runtime_notices()
+    # 消费边界把通知压成一段以 ``system_hint:`` 起始的文本，正文原样拼接在声明之后。
+    assert hint.startswith("system_hint:")
+    assert hint.endswith("\n" + delta.to_notice().content)
+    assert "-旧规则" in hint
+    assert "+新规则" in hint
+    assert space.take_runtime_notices() == ""
 
 
 def test_main_agent_delta_only_reaches_main_agent_spaces() -> None:
@@ -119,8 +119,8 @@ def test_main_agent_delta_only_reaches_main_agent_spaces() -> None:
 
     assert broadcast_system_prompt_delta(delta) == 1
 
-    assert len(main_space.take_runtime_notices()) == 1
-    assert child_space.take_runtime_notices() == []
+    assert "+新主 Agent 规则" in main_space.take_runtime_notices()
+    assert child_space.take_runtime_notices() == ""
 
 
 def test_global_delta_reaches_all_materialized_context_spaces() -> None:
@@ -140,8 +140,8 @@ def test_global_delta_reaches_all_materialized_context_spaces() -> None:
     assert delta is not None
 
     assert broadcast_system_prompt_delta(delta) == 2
-    assert len(first.take_runtime_notices()) == 1
-    assert len(second.take_runtime_notices()) == 1
+    assert "+新全局规则" in first.take_runtime_notices()
+    assert "+新全局规则" in second.take_runtime_notices()
 
 
 def test_broadcast_notice_is_unchanged_across_tasks_and_message_conversion() -> None:
@@ -159,14 +159,13 @@ def test_broadcast_notice_is_unchanged_across_tasks_and_message_conversion() -> 
     )
     assert delta is not None
     assert broadcast_system_prompt_delta(delta) == 2
-    first_notice = first.take_runtime_notices()[0]
-    second_notice = second.take_runtime_notices()[0]
-    assert first_notice is second_notice
-    assert first_notice == delta.to_notice()
-    first_hint = first_notice.to_hint_text()
-    second_hint = second_notice.to_hint_text()
-    assert first_hint == second_hint == "system_hint:" + first_notice.content
-    # 两个 Task 取到的通知是同一对象，但 hint 文本为不可变值，互不污染。
-    first_hint = "changed"
-    assert second_hint == "system_hint:" + first_notice.content
-    assert first_notice == delta.to_notice()
+    notice = delta.to_notice()
+    first_hint = first.take_runtime_notices()
+    second_hint = second.take_runtime_notices()
+    # 同一通知广播到多个 Task：各自消费出的文本一致，``system_hint:`` 只由消费边界加一次，
+    # 通知正文本身不被任何一侧改写或累加前缀。
+    assert first_hint == second_hint
+    assert first_hint.count("system_hint:") == 1
+    assert first_hint.count(notice.content) == 1
+    assert notice.to_hint_text() == notice.content
+    assert delta.to_notice() == notice

@@ -8,12 +8,12 @@ import pytest
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
-from app.core.workflow.run_state_machine import RunTransition
 from app.models import ConversationRunCommand
 from app.models.conversation_run_progress import (
     ConversationRunProgress,
     ToolContinuation,
 )
+from app.models.enums.conversation_run_status import RunTransition
 from app.models.message_metadata import ToolMessageMetadata
 from app.service.conversation_run.task_input_service import TaskInputService
 from app.service.depends import (
@@ -78,21 +78,34 @@ def _starts(executor) -> list[int]:
 
 
 def _real_context(store, *, run_state=None):
-    """真实 Run 状态服务、inbox、Task 运行空间与 projector 组成的运行上下文；不装配工具。"""
-    from app.core.workflow.execution_state.runtime_context import RuntimeContext
-    from app.service.depends import get_conversation_event_projector
+    """真实 Run 状态服务、inbox、Task 运行空间与 projector 组成的运行上下文；工具系统为空注册表。
 
+    ``run_state`` 非空时替换节点直接取用的 Run 状态单例（经 ``SINGLETONS``，用例结束后复原）。
+    """
+    from app.config import configuration
+    from app.core.tools.tool_registry import ToolRegistry
+    from app.core.workflow.execution_state.runtime_context import RuntimeContext
+    from app.service import depends as service_depends
+    from app.service.depends import get_conversation_event_projector
+    from tests.runtime_context_stub import SINGLETONS, singleton_getter
+
+    if run_state is not None:
+        SINGLETONS.setattr(
+            service_depends,
+            "get_conversation_run_state_service",
+            singleton_getter(lambda: run_state),
+        )
+    SINGLETONS.setattr(
+        configuration,
+        "_TOOL_SYSTEM",
+        SimpleNamespace(registry=ToolRegistry(), executor=None, user_input_decision_handlers=None),
+    )
     return RuntimeContext(
         run=store.crud.get(store.run.id),
         task=store.task,
         workspace=WorkspaceCrud().get(store.task.workspace_id),
         profile=SimpleNamespace(max_steps=5, structured_output=None),
         allows_tools=frozenset(),
-        tool_definitions={},
-        tool_executor=None,
-        execution_context=None,
-        run_state=run_state or get_conversation_run_state_service(),
-        inbox=TaskInputService(),
         task_space=task_runtime_spaces.get_or_create(store.task.id),
         event_sink=get_conversation_event_projector().process,
     )

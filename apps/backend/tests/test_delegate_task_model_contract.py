@@ -14,7 +14,6 @@ import pytest
 from app.config import configuration
 from app.core.tools.schemas.tool_definition import ToolDefinition
 from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
-from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 
 child_agent_create = import_module("app.core.tools.tool_handler.child_task.child_agent_create")
@@ -135,16 +134,15 @@ def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_c
     monkeypatch.setattr(child_agent_create, "get_task_service", lambda: task_spy)
     monkeypatch.setattr(child_agent_create, "get_conversation_run_service", lambda: object())
     tool = child_agent_create.DelegateTaskTool()
-    runtime_dependencies = ToolRuntimeDependencies(
-        parent_agent_profile=configuration.build_agent_registry().resolve("system", "main_agent"),
-        agent_profile_registry=configuration.build_agent_registry(),
-    )
+    registry = configuration.build_agent_registry()
+    monkeypatch.setattr(configuration, "get_agent_registry", lambda: registry)
     context = ToolExecutionContext(
+        step_id="step-1",
         task_id=1,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=2,
-        runtime_dependencies=runtime_dependencies,
+        agent_profile=registry.resolve("system", "main_agent"),
     )
 
     result = tool.execute(

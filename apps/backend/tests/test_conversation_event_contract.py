@@ -36,6 +36,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
             "type": "user_input_appended",
             "task_id": 1,
             "run_id": 1,
+            "message_id": "message-1",
             "parts": [{"type": "text", "text": "读一下这个文件", "status": "completed"}],
         },
         UserInputAppendedEvent,
@@ -182,7 +183,13 @@ def test_envelope_defaults_and_optional_fields() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"type": "user_input_appended", "task_id": 1, "run_id": 1, "parts": []},
+        {
+            "type": "user_input_appended",
+            "task_id": 1,
+            "run_id": 1,
+            "message_id": "message-1",
+            "parts": [],
+        },
         {"type": "assistant_text_delta", "task_id": 1, "run_id": 1, "part": "text", "delta": ""},
         {
             "type": "assistant_text_delta",
@@ -213,6 +220,7 @@ def test_envelope_defaults_and_optional_fields() -> None:
             "type": "user_input_appended",
             "task_id": 1,
             "run_id": 1,
+            "message_id": "message-1",
             "text": "旧契约字段",
         },
     ],
@@ -268,6 +276,7 @@ def test_event_is_frozen() -> None:
     event = UserInputAppendedEvent(
         task_id=1,
         run_id=1,
+        message_id="message-1",
         parts=[{"type": "text", "text": "原始输入", "status": "completed"}],
     )
     with pytest.raises(ValidationError):

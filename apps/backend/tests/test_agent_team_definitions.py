@@ -12,6 +12,7 @@ from app.agent_team import configuration_scope_source
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
 from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.agent_team.registry import AgentTeamConfigurationRegistry
 from app.agent_team.state.agent_team_run_state import (
     AgentTeamNodeExecution,
@@ -155,23 +156,29 @@ def test_approval_input_carries_final_configuration_instead_of_preview_fingerpri
     """
 
     configuration = _configuration()
+    node_goals = {
+        "develop": {"goal": "实现", "summary": "实现"},
+        "review": {"goal": "审查", "summary": "审查"},
+    }
     payload = AgentTeamApproveInput.model_validate(
         {
             "configuration": configuration,
             "goal": "交付代码质量报告",
-            "node_goals": {"develop": "实现", "review": "审查"},
+            "node_goals": node_goals,
         }
     )
 
     assert payload.configuration == configuration
     assert payload.goal == "交付代码质量报告"
-    assert payload.node_goals == {"develop": "实现", "review": "审查"}
+    assert payload.node_goals == {
+        node_id: AgentTeamNodeGoal(**node_goal) for node_id, node_goal in node_goals.items()
+    }
     with pytest.raises(ValidationError):
         AgentTeamApproveInput.model_validate(
             {
                 "configuration": configuration,
                 "goal": "交付代码质量报告",
-                "node_goals": {"develop": "实现", "review": "审查"},
+                "node_goals": node_goals,
                 "preview_fingerprint": "f" * 64,
             }
         )
@@ -511,8 +518,7 @@ def test_team_run_crud_round_trips_persisted_confirmation_state(
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "waiting": None,
-                "decision": None,
+                "continuation": None,
             },
             task_id=task.id,
             status="waiting_for_input",
@@ -529,7 +535,7 @@ def test_team_run_crud_round_trips_persisted_confirmation_state(
         parent_task_id=task.id,
         parent_run_id=run.id,
         goal="检查代码",
-        node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
+        node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
     )
 
     restored = crud.get_by_id(created.id)
@@ -558,8 +564,7 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "waiting": None,
-                "decision": None,
+                "continuation": None,
             },
             task_id=task.id,
             status="waiting_for_input",
@@ -575,7 +580,7 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
         parent_task_id=task.id,
         parent_run_id=run.id,
         goal="检查代码",
-        node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
+        node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
     )
 
     updated = crud.update_status_if_in(
@@ -583,7 +588,7 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
         "running",
         ("pending",),
         state=AgentTeamRunState.initial(
-            {"develop": {"agent_id": "general-assistant"}},
+            {"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
             AgentTeamConfiguration.model_validate(_configuration()),
         ),
         started=True,
@@ -647,8 +652,7 @@ def test_create_pending_confirmation_supersedes_previous_pending(tmp_path: Path)
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "waiting": None,
-                "decision": None,
+                "continuation": None,
             },
             task_id=task.id,
             status="waiting_for_input",
@@ -664,7 +668,7 @@ def test_create_pending_confirmation_supersedes_previous_pending(tmp_path: Path)
     service._team_run_crud = crud
     preparation = AgentTeamPreparationResult(
         preview_fields={},
-        node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
+        node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
     )
 
     first = service.create_pending_confirmation(
@@ -709,8 +713,7 @@ def test_supersede_pending_for_parent_unblocks_reproposal(tmp_path: Path) -> Non
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "waiting": None,
-                "decision": None,
+                "continuation": None,
             },
             task_id=task.id,
             status="waiting_for_input",
@@ -728,7 +731,7 @@ def test_supersede_pending_for_parent_unblocks_reproposal(tmp_path: Path) -> Non
         parent_task_id=task_id,
         parent_run_id=run_id,
         goal="第一版",
-        node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
+        node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
     )
 
     with factory.begin() as session:
@@ -743,7 +746,7 @@ def test_supersede_pending_for_parent_unblocks_reproposal(tmp_path: Path) -> Non
             parent_task_id=task_id,
             parent_run_id=run_id,
             goal="第二版",
-            node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
+            node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
             session=session,
         )
 
@@ -798,8 +801,7 @@ def test_user_rejection_ends_pending_team_run_idempotently(tmp_path: Path) -> No
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "waiting": None,
-                "decision": None,
+                "continuation": None,
             },
             task_id=task.id,
             status="waiting_for_input",
@@ -816,7 +818,7 @@ def test_user_rejection_ends_pending_team_run_idempotently(tmp_path: Path) -> No
         parent_task_id=task_id,
         parent_run_id=parent_run_id,
         goal="交付报告",
-        node_runtime_snapshots={"develop": {"agent_id": "general-assistant"}},
+        node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
     )
     service = AgentTeamRunService.__new__(AgentTeamRunService)
     service._team_run_crud = crud
@@ -832,8 +834,15 @@ def test_user_rejection_ends_pending_team_run_idempotently(tmp_path: Path) -> No
     assert replayed.end_reason == rejected.end_reason
 
 
-def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: None) -> None:
-    """TeamRun 查询按节点 Task 及其委派子任务投影 Agent 数与可打开的 Task 标识。"""
+def test_team_run_view_projects_node_and_child_agent_counts(
+    isolated_storage: None, install_process_singletons
+) -> None:
+    """TeamRun 查询按节点访问聚合节点 Task 及其委派子任务，并投影可打开的 Task 标识。
+
+    Agent 角色按配置从进程级 Agent 注册表解析，因此先按生产装配顺序安装进程单例。
+    """
+
+    install_process_singletons()
 
     factory = main_session_factory()
     with factory.begin() as session:
@@ -848,8 +857,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "waiting": None,
-                "decision": None,
+                "continuation": None,
             },
             task_id=parent_task.id,
             status="running",
@@ -871,8 +879,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "waiting": None,
-                "decision": None,
+                "continuation": None,
             },
             task_id=node_task.id,
             status="running",
@@ -894,8 +901,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "waiting": None,
-                "decision": None,
+                "continuation": None,
             },
             task_id=child_task.id,
             status="completed",
@@ -924,10 +930,12 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
                     "develop": AgentTeamRunRuntime(
                         agent_id="general-assistant",
                         node_goal="实现与验证功能",
+                        node_goal_summary="实现",
                     ),
                     "review": AgentTeamRunRuntime(
                         agent_id="general-assistant",
                         node_goal="独立审查结果",
+                        node_goal_summary="审查",
                     ),
                 },
             ).to_json(),
@@ -936,6 +944,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
         session.flush()
         team_run_id = team_run.id
         expected_node_task_id = node_task.id
+        expected_node_run_id = node_run.id
         expected_child_task_id = child_task.id
 
     service = AgentTeamRunService.__new__(AgentTeamRunService)
@@ -944,16 +953,21 @@ def test_team_run_view_projects_node_and_child_agent_counts(isolated_storage: No
     view = service.get_view(team_run_id)
 
     develop = next(node for node in view["nodes"] if node["node_id"] == "develop")
-    assert develop["task_id"] == expected_node_task_id
-    assert develop["agent_count"] == 2
-    assert develop["child_agents"] == [
-        {
-            "task_id": expected_child_task_id,
-            "title": "搜索资料",
-            "status": "completed",
-        }
+    # 节点视图只给展示摘要，完整子目标属于节点运行快照，不进入前端读模型。
+    assert develop["goal_summary"] == "实现"
+    assert develop["status"] == "running"
+    [visit] = develop["visits"]
+    assert visit["conversation_run_id"] == expected_node_run_id
+    # 一次节点访问 = 节点 Agent 自身 + 该次节点 Run 委派出的子 Agent，均携带可打开的 Task 标识。
+    assert [
+        (agent["task_id"], agent["title"], agent["status"]) for agent in visit["agents"]
+    ] == [
+        (expected_node_task_id, "开发", "running"),
+        (expected_child_task_id, "搜索资料", "completed"),
     ]
-    assert view["execution_steps"][0]["child_agents"] == develop["child_agents"]
-    assert view["execution_steps"][0]["goal"] == "实现与验证功能"
+    review = next(node for node in view["nodes"] if node["node_id"] == "review")
+    assert review["visits"] == []
+    assert review["status"] == "queued"
+    assert view["current_node_id"] == "develop"
     assert "state" not in view
     assert "node_runtime" not in view

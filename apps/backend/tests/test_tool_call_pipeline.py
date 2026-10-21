@@ -6,17 +6,26 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.llm_provider.message_codec import assistant_message
-from app.core.tools.schemas import ToolObservation, UserDecision, UserDecisionKind, UserInputRequest
+from app.core.tools.schemas import (
+    ToolCall,
+    ToolObservation,
+    UserDecision,
+    UserDecisionKind,
+    UserInputRequest,
+)
+from app.core.tools.tool_execute import tool_executor as tool_executor_module
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming
+from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper import tool_observation_projection as projection
 from app.core.workflow.nodes import tools_node, wait_user_node
 from app.core.workflow.tool_continuation import freeze_tool_continuation, restore_tool_batch
 from app.models.conversation_run_progress import ToolContinuation
-from tests.runtime_context_stub import runtime_stub
+from tests.runtime_context_stub import install_runtime_singletons, runtime_stub
 from tests.sdk_fixtures import sdk_completion
+from tests.tool_executor_fakes import emit_running
 
 
 def _raw(call_id: str = "call-1", arguments: str = "{}") -> dict:
@@ -60,6 +69,7 @@ def test_streaming_preview_only_creates_allowed_registered_tool(monkeypatch) -> 
         },
     )
     monkeypatch.setattr(streaming, "_runtime_context", lambda: runtime)
+    install_runtime_singletons(runtime)
     monkeypatch.setattr(streaming, "emit", events.append)
     parts = streaming.StreamingPartStateMachine(task_id=1, run_id=2, step_id="step-1")
 
@@ -68,9 +78,8 @@ def test_streaming_preview_only_creates_allowed_registered_tool(monkeypatch) -> 
     assert [event.tool_call_id for event in events] == ["visible"]
 
 
-def test_tools_node_decodes_arguments_and_preserves_approved_decision(monkeypatch) -> None:
+def test_tools_node_passes_raw_arguments_and_preserves_approved_decision(monkeypatch) -> None:
     received = []
-    events = []
     decision = UserDecision(request_id="review-1", kind=UserDecisionKind.APPROVE)
 
     async def run_calls(_rc, calls, _step_id):
@@ -92,15 +101,15 @@ def test_tools_node_decodes_arguments_and_preserves_approved_decision(monkeypatc
         ),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "run_tool_batch", run_calls)
-    monkeypatch.setattr(tools_node, "emit", events.append)
     patch = asyncio.run(tools_node._tools_node(_state()))
 
     assert len(received) == 1
-    assert received[0].arguments == {"path": "a.py"}
+    assert received[0].arguments == '{"path":"a.py"}'
     assert received[0].user_decision == decision
     assert runtime.batch.approved_call is None
-    assert events[0].status == "running"
+    assert runtime.batch.observations[0]["tool_call_id"] == "call-1"
     assert patch["next_node"] is ReactRoute.OBSERVE
 
     runtime.batch = ToolBatch(calls=[_raw("next-call")])
@@ -108,9 +117,9 @@ def test_tools_node_decodes_arguments_and_preserves_approved_decision(monkeypatc
     assert received[-1].user_decision is None
 
 
-def test_banned_registered_call_reaches_executor_without_tool_card(monkeypatch) -> None:
+def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
+    """tools 节点不按投影状态过滤：未建卡片（banned）的已注册调用同样交给执行器，由门禁拒绝。"""
     received = []
-    events = []
 
     async def run_calls(_rc, calls, _step_id):
         received.extend(calls)
@@ -133,13 +142,129 @@ def test_banned_registered_call_reaches_executor_without_tool_card(monkeypatch) 
         ),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "run_tool_batch", run_calls)
-    monkeypatch.setattr(tools_node, "emit", events.append)
 
     asyncio.run(tools_node._tools_node(_state()))
 
     assert [call.call_id for call in received] == ["visible", "banned"]
-    assert [event.tool_call_id for event in events] == ["visible"]
+
+
+class _StartingExecutor:
+    """执行器替身：记录收到的调用，并像真实执行器一样在「handler 运行前」自行发出 running。"""
+
+    def __init__(self, order: list[str]) -> None:
+        self.order = order
+        self.calls: list[ToolCall] = []
+
+    def execute(self, call, execution_context, allowed_tool_names):
+        self.calls.append(call)
+        emit_running(call, execution_context)
+        self.order.append(f"handler:{call.call_id}")
+        return ToolObservation(
+            tool_name=call.tool_name,
+            status="success",
+            tool_call_id=execution_context.tool_call_id,
+            content="ok",
+        )
+
+
+def _batch_runtime(executor, calls: list[dict], projections: dict[str, str]):
+    return runtime_stub(
+        task=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, task_id=3),
+        tool_definitions={
+            "read_file": SimpleNamespace(name="read_file", parallel_mode="serial"),
+            "write_file": SimpleNamespace(name="write_file", parallel_mode="serial"),
+        },
+        tool_executor=executor,
+        batch=ToolBatch(
+            calls=calls,
+            valid_tool_calls={
+                call_id: ValidToolCall(name="read_file", projection=projection)
+                for call_id, projection in projections.items()
+            },
+        ),
+    )
+
+
+def _tool_calls(raw_calls: list[dict]) -> list[ToolCall]:
+    return [
+        ToolCall(
+            tool_name=raw["function"]["name"],
+            arguments=raw["function"]["arguments"],
+            call_id=raw["id"],
+        )
+        for raw in raw_calls
+    ]
+
+
+def test_run_tool_batch_orders_executor_running_before_batch_terminal(monkeypatch) -> None:
+    """running 由执行器在 handler 前发出，终态由批次入口在执行后发出，二者落在同一时间线；
+    终态只投影本步已建卡片的调用。"""
+    order: list[str] = []
+    events = []
+
+    def record(event) -> None:
+        events.append(event)
+        order.append(f"{event.status}:{event.tool_call_id}")
+
+    monkeypatch.setattr(tool_batch_runner, "emit", record)
+    monkeypatch.setattr(tool_executor_module, "emit", record)
+    raw_calls = [
+        _raw("visible", '{"path":"a.py"}'),
+        {**_raw("banned"), "function": {"name": "write_file", "arguments": "{}"}},
+    ]
+    executor = _StartingExecutor(order)
+    runtime = _batch_runtime(executor, raw_calls, {"visible": "projected", "banned": "banned"})
+
+    observations = asyncio.run(
+        tool_batch_runner.run_tool_batch(runtime, _tool_calls(raw_calls), "step-1")
+    )
+
+    assert [call.call_id for call in executor.calls] == ["visible", "banned"]
+    assert [observation.tool_call_id for observation in observations] == ["visible", "banned"]
+    # 替身执行器对两个调用都发 running（真实执行器会在准入门禁拒绝 banned）；批次入口只为
+    # 已建卡片的 visible 发终态。
+    assert order == [
+        "running:visible",
+        "handler:visible",
+        "completed:visible",
+        "running:banned",
+        "handler:banned",
+    ]
+    assert events[0].step_id == "step-1"
+
+
+def test_run_tool_batch_projects_only_terminal_when_executor_never_starts(monkeypatch) -> None:
+    """执行器未发 running（门禁拒绝等）时批次入口只发终态；执行器异常收口为 failed。"""
+    events = []
+    monkeypatch.setattr(tool_batch_runner, "emit", events.append)
+
+    class _Executor:
+        def execute(self, call, execution_context, allowed_tool_names):
+            if call.call_id == "denied":
+                return ToolObservation(
+                    tool_name=call.tool_name,
+                    status="error",
+                    tool_call_id=call.call_id,
+                    error="Invalid tool arguments",
+                )
+            raise RuntimeError("boom")
+
+    raw_calls = [_raw("denied"), _raw("broken")]
+    runtime = _batch_runtime(_Executor(), raw_calls, {"denied": "projected", "broken": "projected"})
+
+    observations = asyncio.run(
+        tool_batch_runner.run_tool_batch(runtime, _tool_calls(raw_calls), "step-1")
+    )
+
+    assert [(event.tool_call_id, event.status) for event in events] == [
+        ("denied", "failed"),
+        ("broken", "failed"),
+    ]
+    assert observations[1].status == "error"
+    assert observations[1].tool_call_id == "broken"
 
 
 def test_unmarked_wait_request_cannot_suspend_a_multi_call_batch(monkeypatch) -> None:
@@ -160,13 +285,15 @@ def test_unmarked_wait_request_cannot_suspend_a_multi_call_batch(monkeypatch) ->
         batch=ToolBatch(calls=[_raw("call-1"), _raw("call-2")]),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "run_tool_batch", run_calls)
 
     with pytest.raises(ValueError, match="待决请求必须独占工具批次"):
         asyncio.run(tools_node._tools_node(_state()))
 
 
-def test_malformed_json_never_reaches_tool_executor(monkeypatch) -> None:
+def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
+    """tools 节点不解析参数：残缺 JSON 原样交给执行器，由准入门禁形成错误观察。"""
     called = []
 
     async def run_calls(_rc, calls, _step_id):
@@ -183,12 +310,12 @@ def test_malformed_json_never_reaches_tool_executor(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "run_tool_batch", run_calls)
 
     asyncio.run(tools_node._tools_node(_state()))
 
-    assert called == []
-    assert runtime.batch.observations[0]["status"] == "error"
+    assert [call.arguments for call in called] == ['{"path":']
 
 
 def test_internal_artifact_does_not_enter_tool_batch_snapshot() -> None:
@@ -224,6 +351,7 @@ def test_waiting_card_is_persisted_before_live_event(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(projection, "_runtime_context", lambda: runtime)
+    install_runtime_singletons(runtime)
     monkeypatch.setattr(
         projection,
         "_message_context",
@@ -272,15 +400,15 @@ def test_approval_replays_one_call_and_rejection_only_settles(monkeypatch) -> No
         user_input_decision_handlers=SimpleNamespace(handle_rejection=lambda *_: None),
     )
     monkeypatch.setattr(wait_user_node, "_runtime_context", lambda: runtime)
-    state = _state()
+    install_runtime_singletons(runtime)
 
     approved = wait_user_node.apply_user_decision(
-        state, UserDecision(request_id="review-1", kind=UserDecisionKind.APPROVE)
+        UserDecision(request_id="review-1", kind=UserDecisionKind.APPROVE)
     )
     approved_calls = [call["id"] for call in runtime.batch.calls]
     runtime.batch = ToolBatch(calls=[_raw(), _raw("call-2")], observations=[observation])
     rejected = wait_user_node.apply_user_decision(
-        state, UserDecision(request_id="review-1", kind=UserDecisionKind.REJECT)
+        UserDecision(request_id="review-1", kind=UserDecisionKind.REJECT)
     )
 
     assert approved["next_node"] is ReactRoute.TOOLS
@@ -308,6 +436,8 @@ def test_observation_persists_before_event_and_hides_unprojected_calls(monkeypat
         return "appended"
 
     monkeypatch.setattr(projection, "_runtime_context", lambda: runtime)
+
+    install_runtime_singletons(runtime)
     monkeypatch.setattr(
         projection, "_message_context", lambda: SimpleNamespace(add_message=add_message)
     )

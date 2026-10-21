@@ -11,8 +11,8 @@
 - ``ToolRegistry._validate_handler_contract``（注册期不再校验 handler 与 coroutine 一致性）；
 - ``ToolDefinition.parallel_group``（零消费者声明式字段）与 ``delegate_task_group`` 分组声明；
 - ``ToolHandlerRunner`` 的 public 包装层 ``normalize_result`` / ``build_cancellation_check`` /
-  ``cleanup_cancellation_signal``，调用点下沉到私有 ``_build_cancel_check`` /
-  ``_clear_tool_call_cancellation``。
+  ``cleanup_cancellation_signal``，调用点下沉到私有 ``_is_cancelled``，信号释放直接在
+  ``execute`` 的 ``finally`` 里完成。
 
 本模块从「删除后仍须成立的不变量」出发做对抗性验证：残留符号、投影保真、注册语义、
 调度分支（串行/并行/未知工具）与状态副作用。测试只断言现状，不修改生产代码。
@@ -22,10 +22,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import gc
+import json
 import threading
 import time
-import warnings
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -42,10 +41,21 @@ from app.core.tools.schemas import (
     ToolObservation,
 )
 from app.core.tools.schemas import tool_definition as tool_definition_module
+from app.core.tools.tool_execute import tool_executor as tool_executor_module
 from app.core.tools.tool_execute.tool_executor import ToolExecutor
 from app.core.tools.tool_registry import ToolRegistry
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
+from tests.runtime_context_stub import runtime_stub
+from tests.tool_executor_fakes import emit_running
+
+
+@pytest.fixture(autouse=True)
+def _silence_executor_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    """替身执行器按真实契约发 running；本模块只测调度，不在 workflow 作用域内，事件丢弃即可。"""
+
+    monkeypatch.setattr(tool_executor_module, "emit", lambda _event: None)
+
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
@@ -100,10 +110,11 @@ class _SleepingExecutor:
     def execute(
         self,
         call: ToolCall,
-        execution_context: object = None,
-        allowed_tool_names: object = None,
+        execution_context: object,
+        allowed_tool_names: object,
     ) -> ToolObservation:
-        del execution_context, allowed_tool_names
+        del allowed_tool_names
+        emit_running(call, execution_context)
         with self._lock:
             self.call_order.append(call.call_id)
             self.thread_idents.append(threading.get_ident())
@@ -131,12 +142,16 @@ def _operations_with_executor(
     allowed: frozenset[str] | None = None,
     execution_context: ToolExecutionContext | None = None,
 ) -> SimpleNamespace:
-    """只装配批次执行用到的运行上下文字段，不需要模型与数据库依赖。"""
+    """只装配批次执行用到的运行上下文字段，不需要模型与数据库依赖。
 
-    return SimpleNamespace(
+    基于共享 ``runtime_stub``：默认 ``ToolBatch()`` 对未知调用 ``was_projected`` 为 False，
+    因此本模块关注的调度行为不会触发 Transport 投影（``emit``）。
+    """
+
+    return runtime_stub(
         tool_executor=executor,
         execution_context=execution_context
-        or ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=Path("."), run_id=0),
+        or ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=Path("."), run_id=0),
         allows_tools=frozenset(allowed or ()),
         tool_definitions={
             name: SimpleNamespace(parallel_mode=mode)
@@ -147,7 +162,7 @@ def _operations_with_executor(
 
 
 def _call(name: str, call_id: str, arguments: dict[str, Any] | None = None) -> ToolCall:
-    return ToolCall(tool_name=name, arguments=arguments or {}, call_id=call_id)
+    return ToolCall(tool_name=name, arguments=json.dumps(arguments or {}), call_id=call_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -367,30 +382,6 @@ def test_registry_no_longer_validates_handler_contract() -> None:
     assert not hasattr(ToolRegistry, "_validate_handler_contract")
 
 
-def test_register_accepts_coroutine_handler_without_raising() -> None:
-    """删除注册期校验后，async handler 不再被拒（记录行为变更：注册期不再拦截异步 handler）。
-
-    潜在缺陷类型：丢失「async handler 必须 parallel_mode=serial」与
-    「声明与实现一致」两类守卫，异步 handler 会被静默放行。
-    """
-
-    async def async_handler(**kwargs: Any) -> ToolObservation:
-        del kwargs
-        return ToolObservation(tool_name="async_tool", status="success", content="ok")
-
-    registry = ToolRegistry()
-    definition = _make_definition(
-        name="async_tool", handler=async_handler, parallel_mode="parallel"
-    )
-
-    registry.register(definition)  # 删除前此处会抛 ValueError/TypeError
-
-    stored = registry.get_tool_definition("async_tool")
-    assert stored is not None
-    assert stored.parallel_mode == "parallel"
-    assert registry.generation == 1
-
-
 def test_concurrent_registration_of_same_name_increments_generation_once() -> None:
     """并发同名注册的副作用必须收敛：generation 恰好为 1，且只存一份定义。
 
@@ -463,7 +454,7 @@ def test_unknown_tool_name_yields_unknown_tool_observation_without_keyerror(
         [_make_definition(name="known_tool", parameters_schema={"type": "object"})]
     )
     executor = ToolExecutor(registry=registry)
-    context = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
+    context = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
     operations = _operations_with_executor(
         executor,
         parallel_modes={"known_tool": "serial"},
@@ -496,7 +487,7 @@ def test_unknown_tool_alongside_known_serial_tool_keeps_order_and_count(
         [_make_definition(name="known_tool", parameters_schema={"type": "object"})]
     )
     executor = ToolExecutor(registry=registry)
-    context = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
+    context = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
     operations = _operations_with_executor(
         executor,
         parallel_modes={"known_tool": "serial"},
@@ -588,8 +579,8 @@ def test_internal_error_observation_when_executor_raises() -> None:
         def execute(
             self,
             call: ToolCall,
-            execution_context: object = None,
-            allowed_tool_names: object = None,
+            execution_context: object,
+            allowed_tool_names: object,
         ) -> ToolObservation:
             del call, execution_context, allowed_tool_names
             raise RuntimeError("pipeline exploded")
@@ -607,7 +598,7 @@ def test_internal_error_observation_when_executor_raises() -> None:
     assert observation.status == "error"
     assert observation.retryable is False
     assert observation.tool_call_id == "call-boom"
-    assert observation.error == "internal execution error before the tool ran: RuntimeError"
+    assert observation.error == "internal execution error in the tool pipeline: RuntimeError"
 
 
 def test_parallel_batch_runs_concurrently_off_the_event_loop_thread() -> None:
@@ -723,26 +714,28 @@ def test_serial_batch_cancellation_propagates_without_waiting_for_handler() -> N
 def test_is_parallel_call_returns_false_for_unregistered_tool_name() -> None:
     """未注册的工具名一律判为串行（不得抛 KeyError）。"""
 
-    operations = _operations_with_executor(
+    # 装配替身单例（工具注册表），``_is_parallel`` 直接读取进程级工具系统。
+    _operations_with_executor(
         _SleepingExecutor(),
         parallel_modes={"parallel_tool": "parallel"},
     )
 
-    assert tool_batch_runner._is_parallel(operations, _call("ghost_tool", "call-1")) is False
-    assert tool_batch_runner._is_parallel(operations, _call("", "call-2")) is False
+    assert tool_batch_runner._is_parallel(_call("ghost_tool", "call-1")) is False
+    assert tool_batch_runner._is_parallel(_call("", "call-2")) is False
 
 
 def test_is_parallel_call_true_only_for_parallel_mode() -> None:
     """``parallel_mode="parallel"`` 返回 True；"serial" 与空映射均返回 False。"""
 
-    operations = _operations_with_executor(
+    # 装配替身单例（工具注册表），``_is_parallel`` 直接读取进程级工具系统。
+    _operations_with_executor(
         _SleepingExecutor(),
         parallel_modes={"parallel_tool": "parallel", "serial_tool": "serial"},
     )
 
-    assert tool_batch_runner._is_parallel(operations, _call("parallel_tool", "call-1")) is True
-    assert tool_batch_runner._is_parallel(operations, _call("serial_tool", "call-2")) is False
-    assert tool_batch_runner._is_parallel(operations, _call("unknown", "call-3")) is False
+    assert tool_batch_runner._is_parallel(_call("parallel_tool", "call-1")) is True
+    assert tool_batch_runner._is_parallel(_call("serial_tool", "call-2")) is False
+    assert tool_batch_runner._is_parallel(_call("unknown", "call-3")) is False
 
 
 # --------------------------------------------------------------------------- #
@@ -832,46 +825,21 @@ def test_removed_executor_and_scheduler_attributes_are_absent() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_async_handler_is_silently_reported_as_success_at_execution(tmp_path: Path) -> None:
-    """删除注册期协调器后，async handler 会被当作同步 handler 执行并「静默成功」。
-
-    删除前：注册期即拒绝（handler_kind/协程不一致）。
-    删除后：注册放行，执行期把未 await 的 coroutine 对象 ``str()`` 成 content，
-    观察状态仍为 ``success``——错误被伪装成成功。
-
-    本用例只记录现状（不作为本次改动引入的失败点），用于暴露该守卫缺失的残余风险。
-    """
+def test_async_handler_is_rejected_at_registration() -> None:
+    """执行层只同步调用 handler：async handler 必须在注册边界被拒，而不是执行时「静默成功」。"""
 
     async def async_handler(**kwargs: Any) -> ToolObservation:
         del kwargs
         return ToolObservation(tool_name="async_tool", status="success", content="real")
 
-    registry = ToolRegistry(
-        [
-            _make_definition(
-                name="async_tool", handler=async_handler, parameters_schema={"type": "object"}
-            )
-        ]
-    )
-    executor = ToolExecutor(registry=registry)
-    context = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
-
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        observation = executor.execute(
-            _call("async_tool", "call-async"),
-            execution_context=context,
-            allowed_tool_names=frozenset({"async_tool"}),
+    with pytest.raises(TypeError, match="async_tool"):
+        ToolRegistry(
+            [
+                _make_definition(
+                    name="async_tool", handler=async_handler, parameters_schema={"type": "object"}
+                )
+            ]
         )
-        # 强制回收未被 await 的协程，确保 RuntimeWarning 在捕获窗口内发出。
-        gc.collect()
-
-    assert observation.status == "success", "当前实现把未 await 的协程当作成功结果"
-    assert observation.content is not None
-    assert "<coroutine" in observation.content
-    assert any(
-        issubclass(warning.category, RuntimeWarning) for warning in caught
-    ), "应至少发出「coroutine was never awaited」RuntimeWarning"
 
 
 # --------------------------------------------------------------------------- #
@@ -879,26 +847,15 @@ def test_async_handler_is_silently_reported_as_success_at_execution(tmp_path: Pa
 # --------------------------------------------------------------------------- #
 
 
-def test_tool_executor_read_surface_and_missing_definition(tmp_path: Path) -> None:
-    """删除 async 入口后，执行器的只读面与缺失定义语义不变。"""
+def test_tool_executor_read_surface(tmp_path: Path) -> None:
+    """删除 async 入口后，执行器的只读面（list_tools / clear_task_state）不变。"""
 
     definition = _make_definition(name="known_tool", parameters_schema={"type": "object"})
     executor = ToolExecutor(registry=ToolRegistry([definition]))
 
     assert [tool.name for tool in executor.list_tools()] == ["known_tool"]
-    assert executor.get_tool_definition("known_tool") is not None
-    assert executor.get_tool_definition("ghost_tool") is None
     # clear_task_state 只清进程内文件状态，对未登记 task 必须是静默 no-op。
     assert executor.clear_task_state(12345) is None
-
-
-def test_tool_executor_execute_requires_execution_context() -> None:
-    """``execute`` 是唯一执行入口：缺 execution_context 时必须抛 ValueError（装配错误）。"""
-
-    executor = ToolExecutor(registry=ToolRegistry([_make_definition()]))
-
-    with pytest.raises(ValueError, match="execution_context is required"):
-        executor.execute(_call("probe_tool", "call-1"), execution_context=None)
 
 
 def test_emit_swallows_projector_failure() -> None:

@@ -9,7 +9,7 @@ from app.core.tools.tool_handler.patch_write.patch_apply import PatchApplyError
 
 
 def _context(tmp_path: Path) -> ToolExecutionContext:
-    return ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=917)
+    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=917)
 
 
 def _valid_patch() -> str:
@@ -31,9 +31,10 @@ def test_invalid_diff_is_retryable_with_tool_specific_guidance(tmp_path: Path) -
     assert observation.status == "error"
     assert observation.retryable is True
     assert "Git unified diff" in observation.error
-    assert "write_file" in observation.reason
-    assert "delete_file" in observation.reason
-    assert "move_file" in observation.reason
+    # 解析失败的 reason 已统一为通用指引：具体诊断看 ``error``，不支持的操作改用对应文件工具
+    # （替代工具的名字由工具描述承载）。
+    assert "reported in error" in observation.reason
+    assert "matching file tool" in observation.reason
 
 
 def test_success_returns_success_without_repeating_the_patch(monkeypatch, tmp_path: Path) -> None:

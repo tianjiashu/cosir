@@ -27,6 +27,9 @@ from pydantic import ValidationError
 
 # 打破在途重构中的循环导入：先 import 包本体，再导入其子模块。
 import app.core.tools as _tools_pkg
+from app.agent_team import registry as agent_team_registry_module
+from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.agent_team.registry import AgentTeamConfigurationRegistry
 from app.config.constant import Constant
 from app.core.tools.schemas import ALL_TOOL_NAMES, ToolName
 from app.core.tools.tool_handler.child_task.child_agent_send import (
@@ -111,9 +114,18 @@ _CONDITIONALLY_SKIPPED_TOOLS = frozenset({"web_search", "web_extract"})
 
 
 @pytest.fixture
-def storage(tmp_path: Path) -> Iterator[None]:
-    """为需要真实注册表/服务单例的用例提供隔离的主库与 checkpoint 路径。"""
+def storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """为需要真实注册表/服务单例的用例提供隔离的主库，并按 lifespan 顺序注入 Team 注册表。
 
+    ``ToolSystem.build_tool_system()`` 装配期会构造 ``agent_team`` 工具，它读取进程级 Team
+    注册表；未注入时按契约抛 ``RuntimeError``，因此须先于工具系统装配注入。
+    """
+
+    monkeypatch.setattr(
+        agent_team_registry_module,
+        "_REGISTRY",
+        AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource()),
+    )
     close_service_dependencies()
     db_dir = tmp_path / "storage"
     db_dir.mkdir()
@@ -507,25 +519,6 @@ def test_banned_tools_all_exist_in_live_registry(storage: None) -> None:
     registered = set(ToolSystem.build_tool_system().registry.get_all_tool_names())
     unbacked = set(Constant.Tools.CHILD_DISALLOWED_TOOLS) - registered
     assert unbacked <= _CONDITIONALLY_SKIPPED_TOOLS, f"禁用清单指向不存在的工具: {unbacked}"
-
-
-def test_child_tool_error_observation_contract_when_context_missing(storage: None) -> None:
-    """目的：存留 child 工具在缺少执行上下文时归一化为错误观察（防御性契约/状态副作用）。
-
-    潜在缺陷类型：删除改动破坏 tool_error 归一化，异常逃逸到执行管线；或错误观察的
-    content/status 字段与约定不符。
-    """
-
-    tool = ChildAgentStatusTool()
-    observation = tool.execute(child_task_id=1, execution_context=None)
-
-    assert observation.status == "error"
-    assert observation.content is None
-    assert observation.error == "child_agent_status requires an execution context."
-    assert observation.tool_name == "child_agent_status"
-    assert isinstance(observation.display_data, dict)
-    # 错误通道不承载成功内容：display_data 只保留 UI 短提示。
-    assert set(observation.display_data or {}) == {"status_hint"}
 
 
 def test_tool_system_package_export_is_intact() -> None:

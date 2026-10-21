@@ -97,10 +97,10 @@ def test_broken_registry_admits_invalid_id_through_gate(
     """
 
     gate = ToolAccessGate(delegate_registry)
-    ctx = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=Path.cwd())
+    ctx = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=Path.cwd(), run_id=1)
     call = ToolCall(
         tool_name="delegate_task",
-        arguments={"child_agent_id": "fake-id", "agent_name": "t", "message": "p"},
+        arguments='{"child_agent_id": "fake-id", "agent_name": "t", "message": "p"}',
         call_id="c1",
     )
 

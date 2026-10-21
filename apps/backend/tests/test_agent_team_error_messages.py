@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, ValidationError
 import pytest
+from pydantic import BaseModel, Field, ValidationError
 
 from app.api.configuration.agent_team_error_messages import (
     agent_team_configuration_error_message,

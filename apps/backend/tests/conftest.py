@@ -120,6 +120,18 @@ def restore_backend_logging_state() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def reset_runtime_singletons() -> Iterator[None]:
+    """复原 ``runtime_stub`` 为节点测试装上的进程级单例补丁，避免泄漏到后续用例。"""
+
+    from tests.runtime_context_stub import SINGLETONS
+
+    try:
+        yield
+    finally:
+        SINGLETONS.undo()
+
+
+@pytest.fixture(autouse=True)
 def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """把系统作用域的配置文件目录隔离到用例临时目录。
 

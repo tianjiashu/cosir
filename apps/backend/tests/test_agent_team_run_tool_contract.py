@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from app.agent_team import registry as team_registry_module
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.agent_team.registry import AgentTeamConfigurationRegistry
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_tool_system
@@ -31,7 +32,6 @@ from app.core.tools.schemas import (
     UserDecisionKind,
 )
 from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM
-from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_grouping import TOOL_GROUP_AGENT_TEAM
 from app.core.tools.tool_handler.agent_team.agent_team_run import (
     AgentTeamRunTool,
@@ -57,6 +57,11 @@ _OPEN_LOOP = SimpleNamespace(is_closed=lambda: False)
 def _node_inputs(**goals: str) -> list[dict[str, str]]:
     """模型输入使用显式节点列表；领域服务与批准输入仍使用节点映射。"""
     return [{"node_id": node_id, "goal": goal, "summary": goal} for node_id, goal in goals.items()]
+
+
+def _node_goal_map(**goals: str) -> dict[str, AgentTeamNodeGoal]:
+    """准备服务消费的节点目标映射（目标与展示摘要同文）。"""
+    return {node_id: AgentTeamNodeGoal(goal=goal, summary=goal) for node_id, goal in goals.items()}
 
 
 def _configuration(**overrides: object) -> dict[str, object]:
@@ -106,22 +111,23 @@ def _bare_tool() -> AgentTeamRunTool:
 
 
 def _context(user_decision: UserDecision | None = None) -> ToolExecutionContext:
-    """构造带运行时依赖的执行上下文。
+    """构造带父 Run 事实的执行上下文。
 
-    生产上下文的 ``runtime_dependencies.parent_agent_profile`` 由 runtime 注入本次 Run 的 per-run
-    profile；工具依赖它准备节点模型设置，因此这里默认注入一份已物化的父 profile。需要验证
+    生产上下文的 ``agent_profile`` 由 runtime 注入本次 Run 的 per-run
+    profile；工具依赖它准备节点模型设置，因此这里默认注入一份已物化的父 profile；批准分支
+    还要求父 Run 事件循环可用，因此一并注入未关闭的循环身份。需要验证
     「未注入」口径的用例直接自行构造 ``ToolExecutionContext``。
     """
 
     return ToolExecutionContext(
+        step_id="step-1",
         task_id=1,
         workspace_id=1,
         workspace_root=Path("C:/ws-root"),
         run_id=2,
         user_decision=user_decision,
-        runtime_dependencies=ToolRuntimeDependencies(
-            parent_agent_profile=_parent_run_profile()
-        ),
+        agent_profile=_parent_run_profile(),
+        event_loop=_OPEN_LOOP,
     )
 
 
@@ -129,7 +135,10 @@ def _approve_decision(**data_overrides: object) -> UserDecision:
     data: dict[str, object] = {
         "configuration": _configuration(),
         "goal": "交付报告",
-        "node_goals": {"develop": "实现", "review": "审查"},
+        "node_goals": {
+            "develop": {"goal": "实现", "summary": "实现"},
+            "review": {"goal": "审查", "summary": "审查"},
+        },
     }
     data.update(data_overrides)
     return UserDecision(request_id="7", kind=UserDecisionKind.APPROVE, data=data)
@@ -229,10 +238,10 @@ def test_definition_advertises_only_running_existing_teams() -> None:
     assert definition.execution_mode == "thread"
     assert definition.display is not None
 
-    # 必须显式否定「创建 / 修改配置」的能力，并声明 Team 必须已存在。
-    assert "must already exist" in definition.description
-    assert "cannot create or modify" in definition.description
-    assert "Team configurations" in definition.description
+    # 必须显式否定「创建 / 修改配置」的能力，并声明 Team 不存在时先让用户创建。
+    assert "Run an existing Agent Team configuration" in definition.description
+    assert "cannot create or edit Team configurations" in definition.description
+    assert "if the Team does not exist, ask the user to create it first" in definition.description
     # 回归守卫：旧文案（把本工具说成「准备一份已配置 Team 的执行方案」）不得回归。
     assert "Prepare a configured Agent Team execution plan" not in definition.description
 
@@ -249,7 +258,7 @@ def test_model_facing_projection_carries_the_new_contract() -> None:
     """(契约) 模型可见投影（name/description/parameters）与定义同源。
 
     潜在缺陷：投影用 args_model 类名或旧描述，导致模型实际收到的仍是旧文案；
-    或 team_id 入参说明不再提示「必须是已存在的 Team」。
+    或 team_id 入参说明不再提示「必须取自可用 Team 目录」。
     """
 
     definition = _definition()
@@ -262,7 +271,7 @@ def test_model_facing_projection_carries_the_new_contract() -> None:
     assert set(parameters["required"]) == {"team_id", "goal", "node_goals"}
     team_id_description = parameters["properties"]["team_id"]["description"]
     assert team_id_description
-    assert "existing" in team_id_description.lower()
+    assert "available agent teams catalog" in team_id_description.lower()
 
 
 @pytest.mark.usefixtures("isolated_storage")
@@ -322,24 +331,6 @@ def test_assembled_tool_system_exposes_identical_agent_team_definition(
 # --------------------------------------------------------------------------- #
 # execute()：执行上下文 / 准备分支 / 决定分流
 # --------------------------------------------------------------------------- #
-
-
-def test_execute_without_context_is_a_non_retryable_error() -> None:
-    """(异常) 缺少执行上下文时返回 error 观察而非抛异常。
-
-    潜在缺陷：``execution_context is None`` 时抛 ``AttributeError``，或把 retryable 置真。
-    """
-
-    observation = _bare_tool().execute(
-        team_id="code-quality",
-        goal="交付报告",
-        node_goals=_node_inputs(develop='实现'),
-        execution_context=None,
-    )
-
-    assert observation.status == "error"
-    assert observation.error == "agent_team requires an execution context."
-    assert observation.retryable is False
 
 
 def test_prepare_branch_reports_missing_team_as_non_retryable_creation_invalid() -> None:
@@ -424,7 +415,7 @@ def test_decision_kinds_are_exposed_through_a_module_level_enum() -> None:
 
     assert not hasattr(UserDecision, "Kind")
     assert UserDecision.model_fields["kind"].annotation is UserDecisionKind
-    assert EXECUTING_DECISION_KINDS == frozenset({UserDecisionKind.APPROVE})
+    assert frozenset({UserDecisionKind.APPROVE}) == EXECUTING_DECISION_KINDS
 
 
 def test_approve_decision_routes_to_start_branch_only() -> None:
@@ -446,6 +437,7 @@ def test_approve_decision_routes_to_start_branch_only() -> None:
         return row
 
     tool.agent_team_run_service = SimpleNamespace(confirm_and_start=confirm_and_start)
+    tool.agent_team_run_archive_service = SimpleNamespace(existing_archive_path=lambda _id: None)
     tool.team_register = SimpleNamespace(resolve=lambda *a: pytest.fail("准备分支不应被触达"))
     context = _context(_approve_decision())
 
@@ -457,8 +449,11 @@ def test_approve_decision_routes_to_start_branch_only() -> None:
     )
 
     assert observation.status == "success"
-    assert json.loads(observation.content) == {"status": "running", "team_id": "code-quality"}
+    content = json.loads(observation.content)
+    assert content["status"] == "running"
+    assert content["team"] == "代码质量 Team"
     assert observation.display_data["kind"] == "agent-team-execution"
+    assert observation.team_run_id == 7
     # 启动分支不得再向工作流下发待决请求，否则会形成无法结束的挂起。
     assert observation.user_input_request is None
     assert calls == [
@@ -466,8 +461,8 @@ def test_approve_decision_routes_to_start_branch_only() -> None:
             7,
             _configuration(),
             "交付报告",
-            {"develop": "实现", "review": "审查"},
-            context.runtime_dependencies.parent_agent_profile,
+            _node_goal_map(develop="实现", review="审查"),
+            context.agent_profile,
         )
     ]
 
@@ -480,8 +475,9 @@ def test_execute_reports_runtime_unavailable_without_injected_parent_profile() -
     """
 
     tool = _bare_tool()
-    # 刻意不经 ``_context``：这里要构造「runtime_dependencies 为空」的真实缺失形态。
+    # 刻意不经 ``_context``：这里要构造「未注入父 profile」的真实缺失形态。
     context = ToolExecutionContext(
+        step_id="step-1",
         task_id=1,
         workspace_id=1,
         workspace_root=Path("C:/ws-root"),
@@ -539,9 +535,26 @@ def test_non_approve_decision_never_starts_a_run(kind: UserDecisionKind) -> None
 # --------------------------------------------------------------------------- #
 
 
-def _start_branch_tool(confirm_and_start) -> AgentTeamRunTool:
+def _start_branch_tool(
+    confirm_and_start,
+    *,
+    stored_status: str = AgentTeamRunStatus.PENDING.value,
+    archive_path: str | None = None,
+) -> AgentTeamRunTool:
+    """装配启动分支所需的最小协作对象。
+
+    ``stored_status`` 是失败路径回查 TeamRun 时读到的状态，``archive_path`` 是已终结运行的档案
+    相对路径；二者共同决定错误观察是否带上运行定位信息。
+    """
+
     tool = _bare_tool()
-    tool.agent_team_run_service = SimpleNamespace(confirm_and_start=confirm_and_start)
+    tool.agent_team_run_service = SimpleNamespace(
+        confirm_and_start=confirm_and_start,
+        get=lambda team_run_id: SimpleNamespace(id=team_run_id, status=stored_status),
+    )
+    tool.agent_team_run_archive_service = SimpleNamespace(
+        existing_archive_path=lambda team_run_id: archive_path
+    )
     return tool
 
 
@@ -554,8 +567,13 @@ def test_confirmed_start_returns_running_observation() -> None:
     observation = tool._start_confirmed_run(_approve_decision(), _parent_run_profile(), _OPEN_LOOP)
 
     assert observation.status == "success"
-    assert json.loads(observation.content) == {"status": "running", "team_id": "code-quality"}
+    content = json.loads(observation.content)
+    assert content["status"] == "running"
+    assert content["hint"] == "The Team run is still active."
+    # 运行中尚无档案：不得给出伪造的读取路径。
+    assert content["trace_file"] is None
     assert observation.display_data["team_run_id"] == 11
+    assert observation.team_run_id == 11
     assert observation.user_input_request is None
 
 
@@ -612,6 +630,8 @@ def test_confirmed_start_maps_missing_pending_run_to_error() -> None:
     assert observation.error == "agent_team_confirmation_invalid"
     assert observation.retryable is False
     assert "does not exist" in (observation.reason or "")
+    # 待确认行仍为 pending（非终态）时不暴露运行定位，避免把确认错误显示为执行失败。
+    assert observation.team_run_id is None
 
 
 def test_confirmed_start_surfaces_domain_value_error() -> None:
@@ -637,27 +657,24 @@ def test_confirmed_start_surfaces_domain_value_error() -> None:
     [AgentTeamRunStatus.CANCELLED.value, AgentTeamRunStatus.FAILED.value],
 )
 def test_confirmed_start_does_not_report_success_for_terminal_runs(terminal_status: str) -> None:
-    """(对抗) 条件迁移未生效且行已终态时不得报告成功，且必须透出终结原因。
+    """(对抗) 条件迁移未生效且行已终态时不得报告成功，且必须指向该运行的档案以便查明原因。
 
     潜在缺陷：把 cancelled/failed 的 TeamRun 当成功返回，模型会等一个永远不会运行的 Team；
-    只回「已终结」而不带 ``end_reason`` 时，模型会把「节点执行失败」误读成「运行时状态问题」，
-    转而向用户输出猜测性解释而不是真实原因。
+    只回「已终结」而不给定位信息时，模型会把「节点执行失败」误读成「运行时状态问题」，
+    转而向用户输出猜测性解释而不是读取档案里的真实原因。
     """
 
-    row = SimpleNamespace(
-        id=7,
-        status=terminal_status,
-        team_id="code-quality",
-        end_reason="节点 draft 执行失败",
-    )
-    observation = _start_branch_tool(lambda *a, **k: row)._start_confirmed_run(
-        _approve_decision(), _parent_run_profile(), _OPEN_LOOP
-    )
+    row = SimpleNamespace(id=7, status=terminal_status, team_id="code-quality")
+    archive_path = ".cosir/agent_team_runs/7.json"
+    observation = _start_branch_tool(
+        lambda *a, **k: row, stored_status=terminal_status, archive_path=archive_path
+    )._start_confirmed_run(_approve_decision(), _parent_run_profile(), _OPEN_LOOP)
 
     assert observation.status == "error"
     assert observation.error == "agent_team_confirmation_invalid"
+    assert observation.team_run_id == 7
     assert terminal_status in (observation.reason or "")
-    assert "节点 draft 执行失败" in (observation.reason or "")
+    assert f'read_file(path="{archive_path}"' in (observation.reason or "")
 
 
 # --------------------------------------------------------------------------- #
@@ -751,7 +768,7 @@ def test_preparation_service_builds_preview_nodes_and_runtime_snapshots(monkeypa
     result = AgentTeamPreparationService().prepare(
         AgentTeamConfiguration.model_validate(_configuration()),
         goal="交付报告",
-        node_goals={"develop": "实现", "review": "审查"},
+        node_goals=_node_goal_map(develop="实现", review="审查"),
         workspace_root="ws",
         parent_task_id=1,
         parent_run_id=2,
@@ -781,7 +798,7 @@ def test_preparation_service_rejects_blank_goal(monkeypatch) -> None:
         AgentTeamPreparationService().prepare(
             AgentTeamConfiguration.model_validate(_configuration()),
             goal="   ",
-            node_goals={"develop": "实现", "review": "审查"},
+            node_goals=_node_goal_map(develop="实现", review="审查"),
             workspace_root="ws",
             parent_task_id=1,
             parent_run_id=2,
@@ -796,17 +813,17 @@ def test_preparation_service_rejects_blank_goal(monkeypatch) -> None:
 @pytest.mark.parametrize(
     ("node_goals", "expected"),
     [
-        ({"develop": "实现"}, "must define every node"),
-        ({"develop": "实现", "review": "审查", "ghost": "多余"}, "unknown nodes"),
-        ({"develop": "   ", "review": "审查"}, "must not be blank"),
+        (_node_goal_map(develop="实现"), "must define every node"),
+        (_node_goal_map(develop="实现", review="审查", ghost="多余"), "unknown nodes"),
     ],
 )
 def test_preparation_service_validates_node_goal_coverage(
-    monkeypatch, node_goals: dict[str, str], expected: str
+    monkeypatch, node_goals: dict[str, AgentTeamNodeGoal], expected: str
 ) -> None:
-    """(边界) node_goals 必须与节点集合一一对应且非空白。
+    """(边界) node_goals 必须与节点集合一一对应。
 
-    潜在缺陷：漏节点 / 多节点 / 空白子目标被放过，运行期才在节点输入处炸开。
+    潜在缺陷：漏节点 / 多节点被放过，运行期才在节点输入处炸开。空白子目标在
+    ``AgentTeamNodeGoal`` 构造边界即被拒绝，见下方用例。
     """
 
     child = _child_profile()
@@ -826,3 +843,14 @@ def test_preparation_service_validates_node_goal_coverage(
 
     assert expected in str(captured.value)
     assert captured.value.retryable is True
+
+
+@pytest.mark.parametrize(("goal", "summary"), [("   ", "实现"), ("实现", "   ")])
+def test_node_goal_rejects_blank_goal_or_summary(goal: str, summary: str) -> None:
+    """(边界) 空白子目标或摘要在节点目标值对象边界被拒绝，不会流入准备服务。
+
+    潜在缺陷：空白子目标被当成节点 user input 冻结进运行快照。
+    """
+
+    with pytest.raises(ValidationError, match="must not be blank"):
+        AgentTeamNodeGoal(goal=goal, summary=summary)

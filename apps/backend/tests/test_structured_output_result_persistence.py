@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.core.events import RunResultUpdatedEvent, RunStatusChangedEvent
-from app.core.workflow.run_state_machine import RunTransition
+from app.models.enums.conversation_run_status import RunTransition
 from app.service.conversation_run import conversation_run_state_service as state_module
 from app.service.depends import (
     get_conversation_run_crud,

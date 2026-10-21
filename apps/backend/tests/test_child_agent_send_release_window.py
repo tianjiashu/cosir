@@ -8,18 +8,16 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.schemas.tool_runtime_dependencies import ToolRuntimeDependencies
 from app.core.tools.tool_handler.child_task.child_agent_send import ChildAgentSendTool
-from app.core.workflow.run_state_machine import RunTransition
 from app.models import ConversationRunCommand
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.service.conversation_run import workflow_session as session_module
 from app.service.depends import get_conversation_run_state_service, get_workflow_session
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
@@ -116,12 +114,13 @@ async def test_send_during_release_window_never_runs_two_executions(child_task):
     # 首个 Run 已完成但执行仍登记：这正是 child_agent_wait 返回、父 Agent 追加输入的窗口。
     assert executions() == 1
 
-    context = ToolExecutionContext.from_workspace(child_task.parent.id, child_task.workspace)
-    context = replace(
-        context,
-        runtime_dependencies=ToolRuntimeDependencies(
-            runtime_event_loop=asyncio.get_running_loop()
-        ),
+    context = ToolExecutionContext(
+        task_id=child_task.parent.id,
+        workspace_id=child_task.workspace.id,
+        workspace_root=Path(child_task.workspace.root_path),
+        step_id="step-1",
+        run_id=0,
+        event_loop=asyncio.get_running_loop(),
     )
     observation = await asyncio.to_thread(
         ChildAgentSendTool().execute,

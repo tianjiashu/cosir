@@ -51,7 +51,6 @@ def test_delete_model_config_keeps_run_history(storage) -> None:
     task = get_task_crud().create(workspace.id, "root")
     run = get_conversation_run_crud().create(
         task.id,
-        "你好",
         status="failed",
         model_config_id=config.id,
     )

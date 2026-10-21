@@ -824,19 +824,6 @@ def test_append_available_shells_joins_with_single_space(
 # ----------------------------------------------------------------------
 
 
-def test_execute_rejects_shell_outside_detected_set_without_running(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """execute 要按本机实测结果复核 shell；未注入 execution_context 时先报上下文缺失。"""
-
-    _patch_windows_environment(monkeypatch, cmd=True, powershell=False, pwsh=False)
-    tool = ExecuteTerminalTool()
-
-    missing_context = tool.execute(command="echo hi")
-    assert missing_context.status == "error"
-    assert "execution context is missing" in missing_context.error
-
-
 def test_execute_reports_unavailable_shell_before_any_execution(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
@@ -847,7 +834,7 @@ def test_execute_reports_unavailable_shell_before_any_execution(
 
     _patch_windows_environment(monkeypatch, cmd=True, powershell=False, pwsh=False)
     tool = ExecuteTerminalTool()
-    context = ToolExecutionContext(task_id=1, workspace_id=1, workspace_root=tmp_path)
+    context = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
 
     obs = tool.execute(  # noqa: S604 - 显式 shell 取值，harness 不启动真实 shell
         command="echo hi", shell="powershell", execution_context=context

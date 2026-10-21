@@ -50,6 +50,7 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
 
     tool = child_agent_send.ChildAgentSendTool()
     context = ToolExecutionContext(
+        step_id="step-1",
         task_id=7,
         workspace_id=3,
         workspace_root=tmp_path,

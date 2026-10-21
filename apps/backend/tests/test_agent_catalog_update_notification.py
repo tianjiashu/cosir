@@ -7,11 +7,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
+from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.agent_catalog_change import AgentCatalogChange
 from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
     broadcast_agent_catalog_change,
 )
-from app.models.runtime_notice import RuntimeNotice
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 

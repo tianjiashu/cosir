@@ -462,12 +462,13 @@ def _restore_paths_after_each() -> None:
 
 
 def test_all_exports_cover_derivers_plus_helpers() -> None:
-    # 目的：__all__ 应恰好等于推导表键 + {override, reset}。
-    # 潜在缺陷：__all__ 手抄漂移致缺失/多余导出。
-    assert set(paths.__all__) == set(paths._DERIVERS) | {
-        "override",
-        "reset",
-    }
+    # 目的：__all__ 必须覆盖推导表键 + {override, reset}，且其余导出（系统级路径辅助函数与
+    # ``.cosir`` 文件名常量）都是模块真实存在的属性、无重复。
+    # 潜在缺陷：__all__ 手抄漂移致缺失导出，或残留已删除的名字。
+    exported = set(paths.__all__)
+    assert set(paths._DERIVERS) | {"override", "reset"} <= exported
+    assert len(paths.__all__) == len(exported)
+    assert [name for name in paths.__all__ if not hasattr(paths, name)] == []
 
 
 def test_derivers_keys_match_module_constant_names() -> None:
