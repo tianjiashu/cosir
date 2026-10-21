@@ -40,6 +40,4 @@ class ConversationRunModel(StorageBase):
     final_output: Mapped[str | None] = mapped_column(Text)
     usage_json: Mapped[str | None] = mapped_column(Text)
     error_json: Mapped[str | None] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=ConversationRunStatus.PENDING.value
-    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)

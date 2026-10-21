@@ -27,11 +27,22 @@ class StorageBase(DeclarativeBase):
     子类只需声明自身业务列；``id`` / ``created_at`` / ``updated_at`` 由基类统一
     管理，避免每个模型重复定义并手动填充时间戳。``id`` 为自增整数主键（SQLite 仅
     对 ``INTEGER PRIMARY KEY`` 生效 AUTOINCREMENT，故用 ``Integer`` 而非 ``BigInteger``，
-    并启用 ``sqlite_autoincrement``）；各业务外键列（如 ``task_id`` / ``run_id``）为
+    并由 :meth:`__init_subclass__` 为每张表启用 ``sqlite_autoincrement``）；各业务外键列
+    （如 ``task_id`` / ``run_id``）为
     ``int`` 类型，由子类声明 ``ForeignKey`` 指向关联表的 ``id``。
     """
 
-    __table_args__: Any = ({"sqlite_autoincrement": True},)
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """映射完成后给每张表开启 ``sqlite_autoincrement``。
+
+        不放在基类 ``__table_args__``：子类一声明自己的索引 / 约束就会整体覆盖它，表退化成
+        SQLite 默认的「复用已删除最大 id」，而 Run、Task、inbox 等表的行 id 是对外身份，复用会
+        让新行与已删除行撞 id。在这里设置后，子类可以自由声明 ``__table_args__``。
+        """
+        super().__init_subclass__(**kwargs)
+        table = cls.__dict__.get("__table__")
+        if table is not None:
+            table.dialect_kwargs["sqlite_autoincrement"] = True
 
     id: Mapped[int] = mapped_column(
         Integer,

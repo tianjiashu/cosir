@@ -351,13 +351,19 @@ class ConversationTaskContextCrud:
         )
         session.execute(statement)
 
-    def delete_from_sequence(self, task_id: int, sequence: int, session: Session) -> None:
-        """由编辑用例决定截断位置；保留严格早于目标消息的历史。"""
+    def exclude_from_sequence(self, task_id: int, sequence: int, session: Session) -> None:
+        """把 ``sequence`` 及其后的行移出模型上下文与前端投影；行本身保留，供观测页查看。
+
+        由编辑用例决定位置。行不删除，所以新消息必须追加在 :meth:`max_sequence` 之后，不得复用
+        这里任何行的序号。
+        """
         session.execute(
-            delete(ConversationTaskContextModel).where(
+            update(ConversationTaskContextModel)
+            .where(
                 ConversationTaskContextModel.task_id == task_id,
                 ConversationTaskContextModel.sequence >= sequence,
             )
+            .values(include_in_context=False, project_to_transport=False)
         )
 
     def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:

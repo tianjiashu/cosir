@@ -21,7 +21,7 @@ from app.models import ConversationRunError, ConversationRunRecord
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.conversation_run_usage import ConversationRunUsage
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES, ConversationRunStatus
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import to_text
@@ -119,7 +119,7 @@ class ConversationRunCrud:
     def create(
         self,
         task_id: int,
-        status: str = ConversationRunStatus.PENDING.value,
+        status: str,
         agent_id: str | None = None,
         model_config_id: int | None = None,
         context_window_total: int | None = None,
@@ -305,7 +305,7 @@ class ConversationRunCrud:
         """在给定事务内判断某任务是否存在处于指定状态集合的 run。
 
         纯存在性检查：仅投影 ``id`` 并 ``LIMIT 1``，不加载完整 run 记录，也不返回
-        匹配行。供 service 层判断任务是否已有处于特定状态（如 pending/running）的 run，
+        匹配行。供 service 层判断任务是否已有处于特定状态（如 running/waiting_for_input）的 run，
         避免为"仅判存在"而取出整行。
 
         参数:
@@ -399,18 +399,13 @@ class ConversationRunCrud:
         return ConversationRunRecord.from_model(row)
 
     def list_recoverable(self) -> list[ConversationRunRecord]:
-        """读取失去执行者的 pending/running Run；waiting 保留待决请求。"""
+        """读取失去执行者的 running Run；waiting 保留待决请求。"""
         with self._session_factory() as session:
             rows = (
                 session.execute(
                     select(ConversationRunModel)
                     .where(
-                        ConversationRunModel.status.in_(
-                            (
-                                ConversationRunStatus.PENDING.value,
-                                ConversationRunStatus.RUNNING.value,
-                            )
-                        )
+                        ConversationRunModel.status == ConversationRunStatus.RUNNING.value
                     )
                     .order_by(
                         asc(ConversationRunModel.created_at),
@@ -423,20 +418,14 @@ class ConversationRunCrud:
         return [ConversationRunRecord.from_model(row) for row in rows]
 
     def has_active_for_task(self, task_id: int) -> bool:
-        """判断 conversation_run 是否存在 pending、running 或 waiting_for_input Run。"""
+        """判断 Task 是否存在活跃（running 或 waiting_for_input）Run。"""
 
         with self._session_factory() as session:
             row_id = session.execute(
                 select(ConversationRunModel.id)
                 .where(ConversationRunModel.task_id == task_id)
                 .where(
-                    ConversationRunModel.status.in_(
-                        (
-                            ConversationRunStatus.PENDING.value,
-                            ConversationRunStatus.RUNNING.value,
-                            ConversationRunStatus.WAITING_FOR_INPUT.value,
-                        )
-                    )
+                    ConversationRunModel.status.in_(ACTIVE_RUN_STATUSES)
                 )
                 .limit(1)
             ).scalar_one_or_none()
