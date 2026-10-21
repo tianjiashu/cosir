@@ -4,7 +4,7 @@ from fastapi import File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from app.app import app
-from app.service.attachment.attachment_service import AttachmentService, AttachmentDescriptor
+from app.service.attachment.attachment_service import AttachmentDescriptor, AttachmentService
 from app.service.attachment.image_normalizer import ImageNormalizationError
 
 

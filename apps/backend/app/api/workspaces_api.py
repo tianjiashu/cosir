@@ -17,14 +17,12 @@ from app.api.schemas import (
     WorkspaceResponse,
 )
 from app.app import app
-from app.core.runtime.conversation_run_executor import ConversationRunExecutor
-from app.core.runtime.runner import AgentRuntime
 from app.models.errors.deletion_errors import DeletionBusyError
+from app.service.conversation_run.workflow_session import WorkflowSession
 from app.service.conversation_run.workspace_service import WorkspaceService
 from app.service.depends import (
-    get_conversation_run_executor,
-    get_runtime,
     get_task_service,
+    get_workflow_session,
     get_workspace_service,
 )
 from app.task_runtime.service.task_service import TaskService
@@ -32,19 +30,11 @@ from app.utils.datetime_utils import TASK_TITLE_LIMIT, preview
 
 
 @app.get("/health")
-async def get_health(runtime: AgentRuntime = Depends(get_runtime)) -> HealthResponse:
+async def get_health() -> HealthResponse:
     """后端存活探针（liveness check）。
 
-    当前为占位实现：仅确认进程已启动并响应，不探测子系统就绪态。
-    ``runtime`` 依赖已注入但本占位实现暂未使用，保留以便后续升级为真实探针。
-
-    真实探针（TODO，尚未实现）：聚合 storage 连通性与模型配置中心
-    （默认 Agent 的默认模型是否可解析 + Key 是否就位），产出不含 secret 明文的健康摘要。
-    届时将改为注入
-    ``HealthProbeService`` 并移除无用的 ``runtime`` 参数。
-
-    参数:
-        runtime: 通过依赖注入的运行时单例；当前占位实现未使用。
+    当前为占位实现：仅确认进程已启动并响应，不探测子系统就绪态。真实探针（TODO）将聚合
+    storage 连通性与模型配置中心，产出不含 secret 明文的健康摘要。
 
     返回:
         表示进程存活的 ``HealthResponse``（不含任何 secret 或子系统详情）。
@@ -129,7 +119,7 @@ async def delete_workspace(
     workspace_id: int,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
     task_service: TaskService = Depends(get_task_service),
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+    workflow_session: WorkflowSession = Depends(get_workflow_session),
 ) -> DeleteWorkspaceResponse:
     """删除工作区及其下游任务、轮次与运行记录。
 
@@ -153,7 +143,7 @@ async def delete_workspace(
         # 移出 event loop，避免冻结其它 task 的 turn 调度。
         # 先在删除闸门外停止工作区内全部 Task 的执行并等其释放，再级联删除。
         task_ids = await asyncio.to_thread(task_service.list_task_ids_for_workspace, workspace_id)
-        await run_executor.stop_tasks(task_ids)
+        await workflow_session.stop_tasks(task_ids)
         await asyncio.to_thread(workspace_service.delete_workspace, workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc

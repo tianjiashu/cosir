@@ -26,8 +26,8 @@ from app.app import app
 from app.service.depends import get_workspace_file_watcher, get_workspace_files_service
 from app.service.workspace_files import (
     FileConflictError,
-    WorkspaceFileWatcher,
     WorkspaceFilesService,
+    WorkspaceFileWatcher,
 )
 
 Files = Annotated[WorkspaceFilesService, Depends(get_workspace_files_service)]

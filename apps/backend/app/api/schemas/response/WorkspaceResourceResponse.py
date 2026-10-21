@@ -10,10 +10,10 @@ from fastapi import HTTPException
 from starlette.responses import Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 
-from app.service.workspace_files.file_content import version_of
 from app.service.workspace_files.file_access import regular_file
-from app.service.workspace_files.image_preview import image_preview
+from app.service.workspace_files.file_content import version_of
 from app.service.workspace_files.file_models import FileInfo
+from app.service.workspace_files.image_preview import image_preview
 
 
 class WorkspaceResourceResponse(Response):

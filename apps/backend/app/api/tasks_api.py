@@ -116,15 +116,20 @@ async def delete_task(
     参数:
         task_id: 来自路由的任务标识。
         task_service: 通过依赖注入的任务 service（负责级联清理）。
+        workflow_session: 普通删除前用于停止整棵任务树的执行并等待释放。
+        creation_command_id: 前端在首条命令未被接受时回收 provisional Task 的创建标记；
+            提供时走受控清理，任务树此时尚无 Run，故不经停止执行。
 
     返回:
         删除结果 ``DeleteTaskResponse``。
 
     异常:
-        HTTPException: 当任务不存在时抛出。
+        HTTPException: 任务不存在时 404；删除闸门忙时 409（可重试）；创建标记不匹配或
+            任务已被接受时 409（不可重试）。
 
     副作用:
-        先停止任务树内的活动执行并等待释放，再级联删除该任务下的轮次、运行时事件与任务自身。
+        普通删除先停止任务树内的活动执行并等待释放，再级联删除该任务下的轮次、运行时事件与
+        任务自身。
     """
 
     try:
