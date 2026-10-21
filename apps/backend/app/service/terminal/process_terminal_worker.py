@@ -7,7 +7,15 @@
 
 from __future__ import annotations
 
-import json, os, platform, queue, struct, subprocess, sys, threading, uuid
+import json
+import os
+import platform
+import queue
+import struct
+import subprocess
+import sys
+import threading
+import uuid
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -17,10 +25,11 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.terminal.errors import (
     TerminalWorkerBackpressureError,
+    TerminalWorkerHandshakeError,
     TerminalWorkerProtocolError,
     TerminalWorkerSignalFailedError,
     TerminalWorkerSignalUnsupportedError,
-    TerminalWorkerUnavailableError, TerminalWorkerHandshakeError,
+    TerminalWorkerUnavailableError,
 )
 from app.service.terminal.shell_resolver import ShellSpec
 
