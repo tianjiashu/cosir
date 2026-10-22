@@ -289,7 +289,6 @@ describe("assistant transport converter", () => {
     const delegation = toToolCallPart(tool("running", {
       toolName: "delegate_task",
       child_task_id: 22,
-      child_run_id: 220,
     }));
 
     expect(pending).toMatchObject({ type: "tool-call", argsText: '{\n  "command": "npm test"\n}', artifact: { backendStatus: "pending" } });
@@ -300,7 +299,7 @@ describe("assistant transport converter", () => {
     expect(failed).toMatchObject({ result: { kind: "tool-terminal", status: "failed" } });
     expect(cancelled).toMatchObject({ isError: false, artifact: { backendStatus: "cancelled", error: "已取消" } });
     expect(cancelled).toMatchObject({ result: { kind: "tool-terminal", status: "cancelled" } });
-    expect(delegation).toMatchObject({ artifact: { child_task_id: 22, child_run_id: 220 } });
+    expect(delegation).toMatchObject({ artifact: { child_task_id: 22 } });
   });
 
   it("hides a tool result when the generic presentation disables it", () => {

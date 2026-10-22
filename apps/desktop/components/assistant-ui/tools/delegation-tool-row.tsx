@@ -28,12 +28,10 @@ export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCanc
   const title = display?.title ?? "子 Agent";
   const role = artifact.agent_role ?? display?.role ?? null;
   const childTaskId = artifact.child_task_id ?? display?.childTaskId;
-  const childRunId = artifact.child_run_id ?? display?.childRunId;
   const status = display?.status ?? artifact.backendStatus;
   const isActive = status === "pending" || status === "running";
   const canOpen = childTaskId !== undefined && actions !== null && actions.workspaceId !== null;
   const canCancel = childTaskId !== undefined
-    && childRunId !== undefined
     && isActive
     && runId !== null
     && !runCancelling;
@@ -57,11 +55,11 @@ export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCanc
     }
   };
   const requestCancellation = async () => {
-    if (!canCancel || childTaskId === undefined || childRunId === undefined || cancellationPending) return;
+    if (!canCancel || childTaskId === undefined || cancellationPending) return;
     setCancellationPending(true);
     setCancellationError(null);
     void frontendLog("INFO", "delegation_child_run_cancel_requested", "用户请求停止子 Agent", {
-      data: { parent_run_id: runId, child_task_id: childTaskId, child_run_id: childRunId },
+      data: { parent_run_id: runId, child_task_id: childTaskId },
     });
 
     const result = await cancelTask(childTaskId);
@@ -72,7 +70,6 @@ export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCanc
         data: {
           parent_run_id: runId,
           child_task_id: childTaskId,
-          child_run_id: childRunId,
           already_stopped: !result.accepted,
         },
       });
@@ -85,7 +82,6 @@ export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCanc
       data: {
         parent_run_id: runId,
         child_task_id: childTaskId,
-        child_run_id: childRunId,
         reason: result.reason,
       },
     });

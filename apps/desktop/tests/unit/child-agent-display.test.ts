@@ -10,7 +10,6 @@ describe("child agent display projections", () => {
       kind: "child-agent-result",
       operation: "status",
       child_task_id: 2,
-      child_run_id: 3,
       status: "completed",
       agent_id: "reviewer",
       agent_name: "Review",
@@ -21,7 +20,6 @@ describe("child agent display projections", () => {
       kind: "child-agent-result",
       operation: "status",
       child_task_id: 2,
-      child_run_id: 3,
       status: "completed",
       prompt: "must not render",
     })).not.toHaveProperty("prompt");
@@ -31,7 +29,7 @@ describe("child agent display projections", () => {
     expect(readChildAgentWaitDisplay({
       kind: "child-agent-wait-result",
       timed_out: false,
-      messages: [{ child_task_id: 2, child_run_id: 3, status: "failed", final_output: null, end_reason: "child_failed" }],
+      messages: [{ child_task_id: 2, status: "failed", final_output: null, end_reason: "child_failed" }],
       pending: [],
       interrupted_by: null,
     })?.messages[0].endReason).toBe("child_failed");

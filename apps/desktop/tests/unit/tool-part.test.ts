@@ -50,9 +50,8 @@ describe("tool renderer routing", () => {
     expect(routeToolPart("delegate_task", {
       backendStatus: "running",
       presentation: { surface: "standalone", expand_layout: "none" },
-      display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501, child_run_id: 902 },
+      display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501 },
       child_task_id: 501,
-      child_run_id: 902,
       agent_role: "Reviewer",
     })).toBe("delegation");
   });

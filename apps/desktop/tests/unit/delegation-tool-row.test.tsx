@@ -8,7 +8,6 @@ function renderDelegationRow(runId?: number, displayData: Record<string, unknown
   kind: "delegation-result",
   title: "审查代码",
   child_task_id: 501,
-  child_run_id: 902,
   status: "running",
   role: "Reviewer",
 }) {
@@ -24,7 +23,6 @@ function renderDelegationRow(runId?: number, displayData: Record<string, unknown
       error: null,
       errorCode: null,
       child_task_id: 501,
-      child_run_id: 902,
     },
   } as unknown as ToolCallMessagePartProps;
 
@@ -38,7 +36,6 @@ describe("DelegationToolRow", () => {
       title: "审查代码",
       child_agent_id: "delegate_reviewer",
       child_task_id: 501,
-      child_run_id: 902,
       role: "Reviewer",
       status: "running",
       prompt: "不应显示的原始 prompt",
@@ -59,7 +56,6 @@ describe("DelegationToolRow", () => {
       kind: "delegation-result",
       title: "审查代码",
       child_task_id: 501,
-      child_run_id: 903,
       role: "Reviewer",
       status: "completed",
       prompt: "隐藏 prompt",
@@ -79,7 +75,6 @@ describe("DelegationToolRow", () => {
       kind: "delegation-result",
       title: "审查代码",
       child_task_id: 501,
-      child_run_id: 904,
       role: "Reviewer",
       status,
       error: "raw exception must stay hidden",

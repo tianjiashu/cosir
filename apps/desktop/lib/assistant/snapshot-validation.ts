@@ -54,7 +54,7 @@ function requireOptionalNonEmptyString(value: unknown, path: string): void {
 
 function validateDelegationDisplayData(data: Record<string, unknown>, path: string): void {
   const allowed = [
-    "kind", "title", "child_agent_id", "delegation_id", "child_task_id", "child_run_id",
+    "kind", "title", "child_agent_id", "delegation_id", "child_task_id",
     "status", "role",
   ];
   if (Object.keys(data).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
@@ -63,7 +63,6 @@ function validateDelegationDisplayData(data: Record<string, unknown>, path: stri
   requireOptionalNonEmptyString(data.role, `${path}.role`);
   if (data.delegation_id !== undefined) requirePositiveInteger(data.delegation_id, `${path}.delegation_id`);
   if (data.child_task_id !== undefined) requirePositiveInteger(data.child_task_id, `${path}.child_task_id`);
-  if (data.child_run_id !== undefined) requirePositiveInteger(data.child_run_id, `${path}.child_run_id`);
   if (data.status !== undefined) requireKnownChildStatus(data.status, `${path}.status`);
 }
 
@@ -73,9 +72,8 @@ function validateChildWaitDisplayData(data: Record<string, unknown>, path: strin
   if (!Array.isArray(data.messages)) throw new TransportSnapshotValidationError(`${path}.messages`, "数组");
   data.messages.forEach((value, index) => {
     const message = requireRecord(value, `${path}.messages[${index}]`);
-    requireExactKeys(message, ["child_task_id", "child_run_id", "status", "final_output", "end_reason"], `${path}.messages[${index}]`);
+    requireExactKeys(message, ["child_task_id", "status", "final_output", "end_reason"], `${path}.messages[${index}]`);
     requirePositiveInteger(message.child_task_id, `${path}.messages[${index}].child_task_id`);
-    requirePositiveInteger(message.child_run_id, `${path}.messages[${index}].child_run_id`);
     if (message.status !== "completed" && message.status !== "failed" && message.status !== "cancelled") {
       throw new TransportSnapshotValidationError(`${path}.messages[${index}].status`, "completed、failed 或 cancelled");
     }
@@ -99,11 +97,10 @@ function validateChildWaitDisplayData(data: Record<string, unknown>, path: strin
 
 function validateChildAgentResultDisplayData(data: Record<string, unknown>, path: string): void {
   requireExactKeys(data, [
-    "kind", "operation", "child_task_id", "child_run_id", "status", "agent_id", "agent_name", "final_output", "end_reason",
+    "kind", "operation", "child_task_id", "status", "agent_id", "agent_name", "final_output", "end_reason",
   ], path);
   if (data.operation !== "send" && data.operation !== "status") throw new TransportSnapshotValidationError(`${path}.operation`, "send 或 status");
   requirePositiveInteger(data.child_task_id, `${path}.child_task_id`);
-  requirePositiveInteger(data.child_run_id, `${path}.child_run_id`);
   requireKnownChildStatus(data.status, `${path}.status`);
   if (data.agent_id !== null && (typeof data.agent_id !== "string" || data.agent_id.trim() === "")) throw new TransportSnapshotValidationError(`${path}.agent_id`, "非空字符串或 null");
   if (data.agent_name !== null && (typeof data.agent_name !== "string" || data.agent_name.trim() === "")) throw new TransportSnapshotValidationError(`${path}.agent_name`, "非空字符串或 null");
@@ -212,7 +209,7 @@ function validatePart(value: unknown, path: string): void {
     return;
   }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
-  const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "presentation", "display_data", "team_run_id", "isError", "approvalRequestId", "child_task_id", "child_run_id", "agent_role", "terminal_output_seq"];
+  const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "presentation", "display_data", "team_run_id", "isError", "approvalRequestId", "child_task_id", "agent_role", "terminal_output_seq"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   requireString(part.toolCallId, `${path}.toolCallId`);
   requireString(part.toolName, `${path}.toolName`);
@@ -228,7 +225,6 @@ function validatePart(value: unknown, path: string): void {
   if (hasOwn(part, "isError") && part.isError !== null && typeof part.isError !== "boolean") throw new TransportSnapshotValidationError(`${path}.isError`, "布尔值或 null");
   if (hasOwn(part, "child_task_id") && (!Number.isInteger(part.child_task_id) || (part.child_task_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_task_id`, "正整数");
   if (hasOwn(part, "team_run_id") && (!Number.isInteger(part.team_run_id) || (part.team_run_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.team_run_id`, "正整数");
-  if (hasOwn(part, "child_run_id") && (!Number.isInteger(part.child_run_id) || (part.child_run_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_run_id`, "正整数");
   if (hasOwn(part, "agent_role") && (typeof part.agent_role !== "string" || !part.agent_role.trim())) throw new TransportSnapshotValidationError(`${path}.agent_role`, "非空字符串");
   if (hasOwn(part, "terminal_output_seq") && (!Number.isInteger(part.terminal_output_seq) || (part.terminal_output_seq as number) < 0)) throw new TransportSnapshotValidationError(`${path}.terminal_output_seq`, "非负整数");
   if (part.approvalRequestId !== null && part.approvalRequestId !== undefined) throw new TransportSnapshotValidationError(`${path}.approvalRequestId`, "null 或 undefined");

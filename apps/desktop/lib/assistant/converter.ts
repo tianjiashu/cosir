@@ -311,7 +311,6 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
       : backendStatus === "failed" ? statusHint : null,
     errorCode: part.errorCode ?? null,
     child_task_id: part.child_task_id,
-    child_run_id: part.child_run_id,
     agent_role: part.agent_role,
     terminal_output_seq: part.terminal_output_seq,
   };

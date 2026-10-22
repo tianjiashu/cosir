@@ -115,8 +115,6 @@ export type TransportToolCallPart = {
   isError?: boolean | null;
   /** Runtime-only child task locator for Workbench; never rendered as text. */
   child_task_id?: number;
-  /** Runtime-only child Run locator for cancellation; never rendered as text. */
-  child_run_id?: number;
   /** Current AgentProfile.role resolved by the backend. */
   agent_role?: string;
   terminal_output_seq?: number;

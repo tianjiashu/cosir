@@ -7,13 +7,11 @@ export type DelegationDisplay = {
   role?: string;
   childAgentId?: string;
   childTaskId?: number;
-  childRunId?: number;
   status?: ChildAgentLifecycleStatus;
 };
 
 type ChildAgentWaitMessage = {
   childTaskId: number;
-  childRunId: number;
   status: Extract<ChildAgentLifecycleStatus, "completed" | "failed" | "cancelled">;
   finalOutput?: string;
   endReason?: string;
@@ -22,7 +20,6 @@ type ChildAgentWaitMessage = {
 export type ChildAgentResultDisplay = {
   operation: "send" | "status";
   childTaskId: number;
-  childRunId: number;
   status: ChildAgentLifecycleStatus;
   agentId?: string;
   agentName?: string;
@@ -81,13 +78,11 @@ export function readDelegationDisplay(value: unknown): DelegationDisplay | null 
   if (data.role !== undefined && nonEmptyString(data.role) === undefined) return null;
   if (data.child_agent_id !== undefined && nonEmptyString(data.child_agent_id) === undefined) return null;
   if (data.child_task_id !== undefined && positiveId(data.child_task_id) === undefined) return null;
-  if (data.child_run_id !== undefined && positiveId(data.child_run_id) === undefined) return null;
   return {
     title: nonEmptyString(data.title),
     role: nonEmptyString(data.role),
     childAgentId: nonEmptyString(data.child_agent_id),
     childTaskId: positiveId(data.child_task_id),
-    childRunId: positiveId(data.child_run_id),
     status: statusValue,
   };
 }
@@ -100,8 +95,7 @@ export function readChildAgentResultDisplay(value: unknown): ChildAgentResultDis
   const status = childAgentStatus(data.status);
   if (!status) return null;
   const childTaskId = positiveId(data.child_task_id);
-  const childRunId = positiveId(data.child_run_id);
-  if (childTaskId === undefined || childRunId === undefined) return null;
+  if (childTaskId === undefined) return null;
   if (data.agent_id !== null && data.agent_id !== undefined && nonEmptyString(data.agent_id) === undefined) return null;
   if (data.agent_name !== null && data.agent_name !== undefined && nonEmptyString(data.agent_name) === undefined) return null;
   if (data.final_output !== null && data.final_output !== undefined && typeof data.final_output !== "string") return null;
@@ -109,7 +103,6 @@ export function readChildAgentResultDisplay(value: unknown): ChildAgentResultDis
   return {
     operation: data.operation,
     childTaskId,
-    childRunId,
     status,
     agentId: nonEmptyString(data.agent_id),
     agentName: nonEmptyString(data.agent_name),
@@ -134,13 +127,12 @@ export function readChildAgentWaitDisplay(value: unknown): ChildAgentWaitDisplay
   for (const raw of data.messages) {
     const message = record(raw);
     const status = message ? message.status : undefined;
-    if (!message || positiveId(message.child_task_id) === undefined || positiveId(message.child_run_id) === undefined) return null;
+    if (!message || positiveId(message.child_task_id) === undefined) return null;
     if (status !== "completed" && status !== "failed" && status !== "cancelled") return null;
     if (message.final_output !== undefined && message.final_output !== null && typeof message.final_output !== "string") return null;
     if (message.end_reason !== undefined && message.end_reason !== null && typeof message.end_reason !== "string") return null;
     messages.push({
       childTaskId: positiveId(message.child_task_id)!,
-      childRunId: positiveId(message.child_run_id)!,
       status,
       finalOutput: typeof message.final_output === "string" ? message.final_output : undefined,
       endReason: typeof message.end_reason === "string" ? message.end_reason : undefined,

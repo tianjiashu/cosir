@@ -44,7 +44,6 @@ describe("DetailsTool", () => {
       timed_out: false,
       messages: [{
         child_task_id: 501,
-        child_run_id: 903,
         status: "completed",
         final_output: "子 Agent 已完成审查。",
         end_reason: "stop",
@@ -55,7 +54,7 @@ describe("DetailsTool", () => {
 
     expect(html).toContain("子 Agent 已完成审查。");
     expect(html).toContain("task 501");
-    expect(html).toContain("run 903");
+    expect(html).not.toContain("run ");
     expect(html).toContain("工具 · 已完成");
     expect(html).toContain("结束原因：stop");
   });

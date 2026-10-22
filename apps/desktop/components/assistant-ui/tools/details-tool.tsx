@@ -224,11 +224,9 @@ function ChildAgentWaitResult({ data }: { data: Record<string, unknown> }) {
       {result.interruptedBy && <p className="text-warning">{interruptionLabel(result.interruptedBy)}</p>}
       {result.timedOut && <p className="text-warning">等待已超时，未完成的子 Agent 未被取消。</p>}
       {result.messages.map((message) => (
-        <div key={`${message.childTaskId}:${message.childRunId}`} className="rounded border px-2.5 py-2">
+        <div key={message.childTaskId} className="rounded border px-2.5 py-2">
           <div className="text-foreground/80 flex items-center gap-2">
             <span>task {message.childTaskId}</span>
-            <span aria-hidden="true">·</span>
-            <span>run {message.childRunId}</span>
             <span className="ml-auto">{childAgentStatusLabel(message.status)}</span>
           </div>
           {message.endReason && <p className="text-warning mt-1">结束原因：{message.endReason}</p>}
@@ -249,7 +247,7 @@ function ChildAgentResult({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="space-y-1 text-xs">
       <p className="text-muted-foreground">
-        {result.agentName ?? "子 Agent"} · task {result.childTaskId} · run {result.childRunId} · {childAgentStatusLabel(result.status)}
+        {result.agentName ?? "子 Agent"} · task {result.childTaskId} · {childAgentStatusLabel(result.status)}
       </p>
       {result.endReason && <p className="text-warning">{result.endReason}</p>}
       {result.finalOutput && <p className="whitespace-pre-wrap break-words text-muted-foreground">{result.finalOutput}</p>}

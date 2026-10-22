@@ -72,16 +72,15 @@ describe("Transport snapshot validation", () => {
         status: "running",
         args: {},
         child_task_id: 501,
-        child_run_id: 902,
       }],
     }] }];
     snapshot.current_run_id = 1;
 
     expect(parseTransportState(snapshot)).toBe(snapshot);
     const invalidSnapshot = structuredClone(snapshot);
-    const toolPart = invalidSnapshot.runs[0].messages[0].parts[0] as { child_run_id: number };
-    toolPart.child_run_id = 0;
-    expect(() => parseTransportState(invalidSnapshot)).toThrow("child_run_id");
+    const toolPart = invalidSnapshot.runs[0].messages[0].parts[0] as { child_task_id: number };
+    toolPart.child_task_id = 0;
+    expect(() => parseTransportState(invalidSnapshot)).toThrow("child_task_id");
   });
 
   it("accepts the minimal child session display contract", () => {
@@ -100,7 +99,6 @@ describe("Transport snapshot validation", () => {
           title: "审查代码",
           role: "Reviewer",
           child_task_id: 501,
-          child_run_id: 903,
           status: "completed",
         },
       }],
@@ -124,7 +122,7 @@ describe("Transport snapshot validation", () => {
         display_data: {
           kind: "child-agent-wait-result",
           timed_out: false,
-          messages: [{ child_task_id: 501, child_run_id: 903, status: "completed", final_output: "完成", end_reason: "stop" }],
+          messages: [{ child_task_id: 501, status: "completed", final_output: "完成", end_reason: "stop" }],
           pending: [],
           interrupted_by: null,
         },
@@ -159,7 +157,6 @@ describe("Transport snapshot validation", () => {
           kind: "child-agent-result",
           operation: "status",
           child_task_id: 501,
-          child_run_id: 903,
           status: "completed",
           agent_id: "reviewer",
           agent_name: "审查代码",
@@ -187,7 +184,6 @@ describe("Transport snapshot validation", () => {
           kind: "delegation-result",
           title: "审查代码",
           child_task_id: 501,
-          child_run_id: 903,
           status: "completed",
           final_output: "不应进入父级委派卡片",
         },
