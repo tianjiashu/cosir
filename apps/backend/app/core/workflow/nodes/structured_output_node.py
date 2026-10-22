@@ -141,7 +141,7 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
 
     runtime = _runtime_context()
     run_id = runtime.run.id
-    spec = runtime.profile.structured_output
+    spec = runtime.agent.structured_output
     if spec is None:
         raise RuntimeError("structured_output 节点缺少输出契约")
 

@@ -87,5 +87,5 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
     # （否则会被连带重新结算，见上文批次边界说明）。
     return {
         "tool_error_count": tool_error_count,
-        "next_node": ReactRoute.MODEL,
+        "next_node": ReactRoute.PREPARE_INPUT,
     }

@@ -9,7 +9,6 @@ from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
     ChatCompletionMessageFunctionToolCallParam,
     ChatCompletionMessageParam,
-    ChatCompletionSystemMessageParam,
     ParsedFunctionToolCall,
 )
 
@@ -58,10 +57,10 @@ def _cancel_before_request(step_id: str, run_id: int) -> None:
 
 
 async def _model_node(state: ReactExecutionState) -> dict[str, object]:
-    """模型边界：取消落定、inbox 并入与模型请求的唯一入口。
+    """模型边界：取消落定与模型请求的唯一入口；本步输入已由 prepare_input 节点组装。
 
-    取消只在这里落定：其它节点检出 Task 取消信号后只负责流转回 model。检查分两处——进入时
-    （此时尚未并入 inbox，取消不会吞掉排队消息）与上下文加载后、开请求前（加载含附件读取，
+    取消只在这里落定：其它节点检出 Task 取消信号后只负责流转回 model（prepare_input 遇取消不并入
+    inbox，取消不会吞掉排队消息）。检查分两处——进入时与上下文加载后、开请求前（加载含附件读取，
     窗口不可忽略）；请求期间由流式读取边界检查。
     调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文；部分输出留作展示，
     不进入模型上下文或工具执行。工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，
@@ -80,25 +79,8 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     # 超配额时不再发起推理，落定 max_steps_reached 失败终态。
     if step_count > rc.step_limit:
         return await _finalize_max_steps(step_count)
-    await asyncio.to_thread(service_depends.get_task_input_service().consume_into_context, _message_context(), run_id)
-    # 请求前持久化已占用的步骤号，取消后不会复用草稿/part 身份。
-    service_depends.get_conversation_run_state_service().save_execution(
-        run_id,
-        ConversationRunProgress(step_count=step_count, tool_error_count=state.tool_error_count),
-    )
-    # load_message() 出口已归一化 assistant 消息，此处直接取用，不再重复 sanitize。
-    task_space = rc.task_space
-    # 运行期通知（其它层经 tools / runner / 配置变更广播投递）统一在这里消费：归属过滤由
-    # ``take_runtime_notices(run_id=...)`` 在出队时完成（属于其它 Run 的通知在此被丢弃），此处不再
-    # 重复判定。取回的是压成一段的提示文本（队列为空时也含声明行），作为独立 ``system 消息``
-    # 落库进 canonical context——它成为历史固定行后，后续 Run 的请求前缀才不会在此分叉，因此必须
-    # 重新 ``load_message()`` 才能让本步请求带上它。
-    notice = task_space.take_runtime_notices(run_id=run_id)
-    if notice:
-        _message_context().add_message(
-            ChatCompletionSystemMessageParam(role="system", content=notice)
-        )
-    # load_message 含附件读取，必须离开事件循环。
+    # inbox 输入与运行期通知已由 prepare_input 节点写入；load_message() 出口已归一化 assistant
+    # 消息。load_message 含附件读取，必须离开事件循环。
     messages: list[ChatCompletionMessageParam] = await asyncio.to_thread(
         _message_context().load_message
     )
@@ -202,10 +184,10 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     if not calls and finish_reason is None:
         parts.cancel()
         _message_context().abandon_model_response()
-        task_space.defer_runtime_notice(
+        rc.task_space.defer_runtime_notice(
             RuntimeNotice(content="请继续未完成的任务", kind="model_continuation", run_id=run_id)
         )
-        return route_state(step_count, ReactRoute.MODEL)
+        return route_state(step_count, ReactRoute.PREPARE_INPUT)
 
     _message_context().save_model_response(
         aggregated_message,
@@ -236,7 +218,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     # 无工具调用且 finish_reason 非 None：正文可以为空；结构化处理作为已完成 Run 的支线。
     final_answer = content_to_text(ai_message.get("content"))
     rc.batch = ToolBatch()
-    structured = rc.profile.structured_output is not None
+    structured = rc.agent.structured_output is not None
     log.info(
         "model_node_final_response",
         extra={
