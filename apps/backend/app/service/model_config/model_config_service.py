@@ -1,7 +1,8 @@
 """模型连接配置领域服务。"""
 
 from app.config.logging.logger import log
-from app.core.agents.model_settings import ModelSettings
+from app.core.agents.model_settings import ModelSettingsError
+from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.llm_provider.model_probe import (
     ModelProbeFailureKind,
     ModelProbeOutcome,
@@ -88,7 +89,7 @@ class ModelConfigService:
         """对完整的未保存表单执行一次真实探活，不写数据库。
 
         ``config_name`` 只用于保证调用契约与保存表单一致，探活本身不需要读取或记录它。
-        其余字段会物化为与保存后运行期一致的 ``ModelSettings``，然后复用统一的流式探活
+        其余字段经与运行期相同的 ``resolve_model`` 解析为 ``ResolvedModel``，然后复用统一的流式探活
         入口，避免测试成功与实际运行使用两套请求逻辑。
 
         参数:
@@ -117,22 +118,42 @@ class ModelConfigService:
         # 契约时出现未被发现的参数漂移。
         if not config_name.strip():
             return self._failure_result(None, ModelProbeFailureKind.INVALID_CONFIG, 0)
-        settings = ModelSettings(
-            base_url=base_url.strip() or None,
-            api_key=api_key,
-            model_name=model_name.strip() or None,
-            context_window_k=context_window_k,
-            supports_thinking=supports_thinking,
-            supports_reasoning_effort=supports_reasoning_effort,
-            supports_image=supports_image,
-        )
+        try:
+            settings = resolve_model(
+                ModelConfigRecord(
+                    config_name=config_name,
+                    base_url=base_url.strip(),
+                    api_key=api_key,
+                    model_name=model_name.strip(),
+                    context_window_k=context_window_k,
+                    supports_thinking=supports_thinking,
+                    supports_reasoning_effort=supports_reasoning_effort,
+                    supports_image=supports_image,
+                )
+            )
+        except ModelSettingsError as exc:
+            log.warning(
+                "model_config_connection_test_failed",
+                extra={
+                    "msg": "模型连接测试失败：表单配置不完整，未发出请求",
+                    "data": {
+                        "config_id": None,
+                        "source": "draft",
+                        "model": model_name,
+                        "base_url": base_url,
+                        "failure_kind": ModelProbeFailureKind.INVALID_CONFIG.value,
+                        "detail": str(exc),
+                    },
+                },
+            )
+            return self._failure_result(None, ModelProbeFailureKind.INVALID_CONFIG, 0)
         outcome = await probe_chat_model(settings)
         return self._outcome_result(None, settings, outcome, source="draft")
 
     def _outcome_result(
         self,
         config_id: int | None,
-        settings: ModelSettings,
+        settings: ResolvedModel,
         outcome: ModelProbeOutcome,
         *,
         source: str,
