@@ -9,7 +9,6 @@ def build_delegation_display_data(
     child_agent_id: str,
     delegation_id: int | None = None,
     child_task_id: int | None = None,
-    child_run_id: int | None = None,
     status: str,
     role: str | None = None,
 ) -> dict[str, Any]:
@@ -31,6 +30,4 @@ def build_delegation_display_data(
         data["delegation_id"] = delegation_id
     if child_task_id is not None:
         data["child_task_id"] = child_task_id
-    if child_run_id is not None:
-        data["child_run_id"] = child_run_id
     return data
