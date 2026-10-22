@@ -6,4 +6,4 @@ from app.service.workspace_files.workspace_files_service import (
     WorkspaceFilesService,
 )
 
-__all__ = ["WorkspaceFilesService", "FileConflictError", "WorkspaceFileWatcher"]
+__all__ = ["FileConflictError", "WorkspaceFileWatcher", "WorkspaceFilesService"]

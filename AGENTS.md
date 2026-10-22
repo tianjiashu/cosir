@@ -108,7 +108,7 @@ Tauri 桌面应用
 - 后端 lifespan 负责初始化和关闭数据库、`WorkflowSession` 的 Run 执行、运行期依赖与观测组件。工具子进程由工具执行层负责取消、超时和进程树清理。
 - 交互终端归 Task 所有，允许同一 Task 的后续 Run 复用。Run 完成、失败、取消或历史 Run 删除不关闭终端；Agent 显式关闭、shell 自然退出、Task 删除提交后或后端退出时清理。活会话由 `TerminalSessionService` 管理，不进入 Run 执行进度，不跨后端重启恢复；前端仅订阅只读预览。
 - 后端崩溃恢复必须有限且串行，不得无限重启。恢复耗尽后由用户显式重启；生命周期 generation 用于防止旧进程或旧线程覆盖当前状态。
-- 后端重启时，遗留 running Run（含 child Run）收敛为 `cancelled`，显式恢复从 model node 重新请求；waiting Run 保留待决请求，用户提交决定后从 wait node 继续。入口节点由 workflow 按 Run 持久化进度推导（待决调用已绑定决定 → wait node，其余 → model node），调用方不传恢复模式。inbox 保留，不得隐式重放旧 Agent 执行。进程内 registry、subscriber 和运行任务不跨重启恢复。
+- 后端重启时，遗留 running Run（含 child Run）收敛为 `cancelled`，显式恢复从 prepare_input node 重新进入模型循环；waiting Run 保留待决请求，用户提交决定后从 wait node 继续。入口节点由 workflow 按 Run 持久化进度推导（待决调用已绑定决定 → wait node，其余 → prepare_input node），调用方不传恢复模式。inbox 保留，不得隐式重放旧 Agent 执行。进程内 registry、subscriber 和运行任务不跨重启恢复。
 
 ## 进程间接口边界
 
@@ -126,7 +126,7 @@ Tauri 桌面应用
 - 领域 JSON API 统一通过前端 `lib/http/client.ts` 处理动态基地址、`no-store`、`X-Trace-Id` 和非 2xx 错误。Assistant SSE、业务 resume 和资源请求由各自 transport/resource 边界管理，但仍须遵守动态地址和 trace 规则。
 - Assistant UI wire schema 只属于 `apps/backend/app/assistant_transport/`，不得泄漏到 workflow、领域 service 或 storage。
 - 命令只对 Task 或消息寻址，不携带 run_id：`POST /tasks/{id}/messages`（发送）、`/messages/{message_id}/edit`（编辑重跑）、`/resume`（恢复）、`/decisions`（HIL 决定）、`/cancel`（停止）、`/tool-calls/{call_id}/cancel`（取消单个工具调用），返回 JSON 回执；`/assistant/attach` 只订阅 Task 当前 Run；`/assistant/state` 读取 canonical snapshot。Run 身份由后端按 Task 最新 Run 解析，前端只把 Run 用于渲染分组。
-- 调度规则只在 `WorkflowSession`（`service/conversation_run/workflow_session.py`）：每个入口在 Task 闸门内「读状态 → 条件迁移 → 启动执行」。它是新建 Run 与启动执行的唯一路径，子 Agent、Team 节点经 `open_run` 进入；Run 直接以 running 创建，没有待认领态。它同时持有执行登记（每个 Task 至多一个后台执行）：执行结束后先完成交接、等待态取消与取消传播，再释放登记并取走 Task 取消信号（信号的唯一清理点）。单次 Run 由 `service/conversation_run/run_driver.py` 的 `drive_run` 装配 `RuntimeContext`（只含本次 Run / Task 级事实与对象、事件回调和驱动期状态）并驱动 core 的 `ReactLikeWorkflow`，它也是 Run 失败的唯一异常边界；进程级单例（Run 状态写入、inbox、工具系统、Agent registry、终端会话服务等）由 workflow 节点与工具 handler 经 `app.service.depends` / `app.config.configuration` 直接取用，不经 `RuntimeContext` 或 `ToolExecutionContext` 转手；Run / Task 级事实与跨层回调（如 `EventSink`）才经它们注入，不经转发门面。同一 task 同时只允许一个 active Run 和一个执行者。Run、初始 inbox 输入和 Task 当前 Run 指针由同一用例事务保护；snapshot 在提交后投影。
+- 调度规则只在 `WorkflowSession`（`service/conversation_run/workflow_session.py`）：每个入口在 Task 闸门内「读状态 → 条件迁移 → 启动执行」。它是新建 Run 与启动执行的唯一路径；对外入口按语义只有接收消息（`submit`，用户发送、编辑、子 Agent 委派与追加、Team 节点都经它进入：一律先入 inbox、新消息不拒，再由统一推进 `_advance` 决定是否新建 Run——Task 静止且 inbox 非空时从队首交接；Run 正常完成释放后也经它交接）、等待态决定、取消后恢复、取消与工具取消；Run 直接以 running 创建，没有待认领态。`ConversationRunService.create_run` 只从 inbox 队首交接（Agent 身份、模型与选项随输入入队），不接收本次输入。子 Agent 与 Team 节点只按 Task 寻址：回执不带 run_id，等结论用 `wait_idle(task_id)`（静止 = 无执行者且最新 Run 已到终态，等待审批不算），再读 Task 最新 Run；工具展示数据只带 `child_task_id`，委派卡片状态跟随子 Task 最新 Run。它同时持有执行登记（每个 Task 至多一个后台执行）：执行结束后先完成交接、等待态取消与取消传播，再释放登记并取走 Task 取消信号（信号的唯一清理点）。单次 Run 由 `service/conversation_run/run_driver.py` 的 `drive_run` 装配 `RuntimeContext`（只含本次 Run / Task 级事实与对象、事件回调和驱动期状态）并驱动 core 的 `ReactLikeWorkflow`，它也是 Run 失败的唯一异常边界；进程级单例（Run 状态写入、inbox、工具系统、Agent registry、终端会话服务等）由 workflow 节点与工具 handler 经 `app.service.depends` / `app.config.configuration` 直接取用，不经 `RuntimeContext` 或 `ToolExecutionContext` 转手；Run / Task 级事实与跨层回调（如 `EventSink`）才经它们注入，不经转发门面。同一 task 同时只允许一个 active Run 和一个执行者。Run 与 Task 当前 Run 指针由同一事务保护（同时放行剩余输入）；snapshot 在提交后投影。
 - HTTP/SSE 断开只表示订阅中断，不自动取消或重放业务 Run。前端可以重新 attach 已有 Run；只有明确的 business resume 才能继续业务执行。
 
 ## 数据与事实所有权
@@ -140,8 +140,8 @@ Tauri 桌面应用
 - 模型流式输出由 SDK 聚合，同一次调用持续替换同一条 context 记录，流式期间不纳入模型上下文；响应完整且通过工具准入后才设置 `include_in_context=True`。中断输出保留供 Transport 重建，续跑不加载；不维护另一份流式聚合缓存。inbox 变更只投影排队消息，不以全量重建覆盖正在输出的 Transport 内容。
 - context 与 Transport snapshot 允许短暂不一致，以最终一致性收敛。snapshot 普通读取不重复重建；数据库写入后由 projector 或明确的 rebuild 边界更新内存 snapshot。不得为了消除流式时序差异而强行把 Run、context、snapshot 放入一个全局事务。
 - Run 同时拥有生命周期、冻结执行选项与持久执行进度，不保存用户正文、图片或附件副本，也不维护独立 checkpoint。普通续跑从模型边界继续，等待恢复只消费已持久化的当前请求及决定；不重放已执行工具。
-- Task inbox 持久化尚未消费的用户输入、发起配置与投递方式（`immediate` / `after_run`）；发起配置仅用于交接新 Run，不修改正在执行的 Run，也不进入 context。每次普通模型调用前，将当前批次的 `immediate` 输入按序原子转入 context；`after_run` 输入等当前 Run 正常完成后交给新 Run，新 Run 开始时全部待消费输入转为 `immediate`。一条 Run 可包含多条 user message。最终回答结束当前 Run，旧执行者释放后才为剩余 inbox 新建 Run（收到停止请求时不交接）。没有活动 Run（含取消、失败后）时发送直接新开 Run；等待审批时 `immediate` 发送按驳回结算待决调用，消息作为反馈并入。
-- 编辑定位稳定消息身份，只允许 Task 已到终态、目标为最新一条已消费的用户消息：截断其后 context 并重置同一 Run，从模型节点重跑；排队中的消息不可编辑。外部工具副作用不回滚。
+- Task inbox 持久化尚未消费的用户输入、发起配置与投递方式（`immediate` / `after_run`）；发起配置仅用于交接新 Run，不修改正在执行的 Run，也不进入 context。每次普通模型调用前，由 workflow 的 `prepare_input` 节点把当前批次原子转入 context：`immediate` 输入中从队首起连续、与当前 Run 模型一致的部分，遇到第一条换模型的输入即停（保持顺序）；换模型的输入与 `after_run` 输入等当前 Run 正常完成后交给新 Run，新 Run 开始时全部待消费输入转为 `immediate`。一条 Run 可包含多条 user message。最终回答结束当前 Run，旧执行者释放后才为剩余 inbox 新建 Run（收到停止请求时不交接）。没有活动 Run（含取消、失败后）时发送即推进出新 Run；等待审批时同模型的 `immediate` 发送按驳回结算待决调用、消息作为反馈并入，换模型的只入队。
+- 编辑 = 改 context + 接收消息：只允许 Task 已到终态、目标为最新一条已投影的用户消息；它及其后 context 不删除，移出模型上下文与前端投影（保留供观测页查看，fork 不复制），编辑后的消息以新消息身份入队，移出与入队同一事务提交，随后推进出新 Run。Run 只会前进，不重置旧 Run；排队中的消息不可编辑。外部工具副作用不回滚。
 - `task_runtime`、取消 registry、snapshot subscriber 等属于当前后端进程内的协调状态，不是持久化事实。
 - WebView `localStorage` 只保存用户偏好（模型选择、最近 workspace、收藏提示词等）；各类偏好由对应 storage module 管理，不得存储任务或对话事实。
 
@@ -178,7 +178,7 @@ Tauri 桌面应用
 - 模型工具统一导出 strict function schema，复用 OpenAI SDK 从参数模型生成，再做必要的平台收窄并固化到 Task；模型请求不临时重写 schema。工具执行入口仍负责本地业务校验。
 - provider/model 配置是数据库事实，由 model config service（`ModelConfigService`）管理；运行时模型构建只消费解析后的配置。能力目录不等于连接可用性，provider 连接测试也不等于 Agent Run。
 - 诊断使用本地结构化日志与上下文观测页，不接入外部 tracing；日志失败不得改变 Run 结果，上下文仍由既有持久化事实管理。
-- RuntimeMessageContextManager 是 Task 上下文的运行时协调入口与 working copy owner，负责系统提示词、消息序列、SDK 消息持久化和工具协议闭合；持久化事实归 context 表。输入服务负责 inbox 原子转移，Transport 服务负责提交后投影，Run service 负责生命周期与恢复决策。
+- RuntimeMessageContextManager 是 Task 上下文的运行时协调入口与 working copy owner，负责系统提示词、内存消息列表（每次 `begin_run` 从库重建，改库用例无需通知或卸载它）、消息序列、SDK 消息持久化与工具协议闭合；持久化事实归 context 表。inbox 由 `WorkflowSession` 经输入服务投递，消费由 workflow 的 `prepare_input` 节点在 Task 闸门内发起：输入服务按 manager 的下一序号原子转移，manager 校验序号连续后接纳为内存条目；节点再经 `EventSink` 发 `UserInputConsumedEvent` 投影。Run service 负责生命周期与恢复决策。
     - ContextEntry 作为上下文消息单位，承载稳定消息身份、Run 归属与排序；正文采用 OpenAI SDK 请求消息格式，附属信息按消息角色使用单一强类型 metadata 保存；用户展示绑定、模型响应信息和工具展示事实不进入模型请求。
 - context 和 snapshot不需要事务保持强一致性，只需要在读取的时候，保持最终一致性即可
 
