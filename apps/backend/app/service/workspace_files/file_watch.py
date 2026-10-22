@@ -12,7 +12,6 @@ from watchdog.observers.api import BaseObserver, ObservedWatch
 
 from app.config.logging.logger import log
 from app.service.depends import get_workspace_files_service
-from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
 
 
 @dataclass(eq=False)
