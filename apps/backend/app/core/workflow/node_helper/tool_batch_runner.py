@@ -104,7 +104,7 @@ def _execution_context(
         workspace_root=Path(rc.workspace.root_path),
         step_id=step_id,
         run_id=rc.run.id,
-        agent_profile=rc.profile,
+        agent=rc.agent,
         event_loop=loop,
         event_sink=rc.event_sink,
         tool_call_id=call.call_id,

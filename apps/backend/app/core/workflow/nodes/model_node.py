@@ -26,34 +26,13 @@ from app.core.workflow.node_helper.common import (
     _runtime_context,
     route_state,
 )
-from app.core.workflow.node_helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflow.node_helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
-from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.runtime_notice import RuntimeNotice
 from app.service import depends as service_depends
 from app.utils.message_content import content_to_text
-
-
-def _cancel_before_request(step_id: str, run_id: int) -> None:
-    """在发起模型请求前落定 cancelled 并结束本次驱动。"""
-    rc = _runtime_context()
-    log.info(
-        "model_node_cancelled_before_request",
-        extra={
-            "msg": f"模型请求前检测到 run 已取消，跳过模型调用，step_id={step_id}",
-            "data": {"step_id": step_id, "run_id": run_id},
-        },
-    )
-    service_depends.get_conversation_run_state_service().transition(
-        run_id,
-        RunTransition.CANCEL,
-        end_reason=Constant.Run.RUN_END_REASON_RUNTIME_CANCELLED,
-        usage_stats=rc.usage_stats,
-    )
-    raise RunStopped()
 
 
 async def _model_node(state: ReactExecutionState) -> dict[str, object]:
@@ -74,20 +53,12 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     run_id = rc.run.id
     step_id = f"step-{step_count}"
 
-    if rc.is_cancelled():
-        _cancel_before_request(step_id, run_id)
-    # 超配额时不再发起推理，落定 max_steps_reached 失败终态。
-    if step_count > rc.step_limit:
-        return await _finalize_max_steps(step_count)
     # inbox 输入与运行期通知已由 prepare_input 节点写入；load_message() 出口已归一化 assistant
     # 消息。load_message 含附件读取，必须离开事件循环。
     messages: list[ChatCompletionMessageParam] = await asyncio.to_thread(
         _message_context().load_message
     )
     registered_tool_names = frozenset(get_tool_system().registry.get_all_tool_names())
-
-    if rc.is_cancelled():
-        _cancel_before_request(step_id, run_id)
 
     log.info(
         "model_node_started",

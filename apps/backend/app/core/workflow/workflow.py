@@ -14,6 +14,7 @@ from app.core.workflow.nodes import (
     _structured_output_node,
     _tools_node,
 )
+from app.core.workflow.nodes.prepare_input_node import _prepare_input_node
 from app.core.workflow.nodes.wait_user_node import wait_user_node
 from app.core.workflow.tool_continuation import restore_tool_batch
 from app.models.conversation_run_progress import ConversationRunProgress
@@ -26,11 +27,13 @@ class ReactLikeWorkflow:
     扩展方式：``ReactRoute`` 新增成员，在 ``__init__`` 的节点表里登记对应节点，由上游节点返回
     该 route 流入。
     恢复点只有两个：等待恢复从 ``wait_user`` 进入，其余（新 Run、续跑、编辑重跑、交接）都从
-    ``model`` 进入。新增节点必须能在从 ``model`` 重新进入后安全重跑，或在下一次 ``model`` 前完成。
+    ``prepare_input`` 进入，由它并入 inbox 后流向 ``model``。新增节点必须能在重新进入后安全重跑，
+    或在下一次模型请求前完成。
     """
 
     def __init__(self) -> None:
         self._nodes = {
+            ReactRoute.PREPARE_INPUT: _prepare_input_node,
             ReactRoute.MODEL: _model_node,
             ReactRoute.TOOLS: _tools_node,
             ReactRoute.OBSERVE: _observe_node,
@@ -45,7 +48,7 @@ class ReactLikeWorkflow:
         不按本轮准入过滤，避免同一 Task 的请求前缀变化。
         """
         resolved = resolve_chat_model(
-            agent_profile=rc.profile, tools=list(rc.task_space.task_tool_schemas)
+            model=rc.agent.model, tools=list(rc.task_space.task_tool_schemas)
         )
         rc.model = resolved.model
         rc.thinking_channel = "reasoning_content" if resolved.supports_thinking else ""
@@ -60,17 +63,17 @@ class ReactLikeWorkflow:
         """入口只由 Run 的持久化进度决定，调用方不传恢复模式。
 
         进度里有已绑定决定的待决调用（等待态被决定唤醒）时从 ``wait_user`` 进入，其余（新 Run、
-        续跑、编辑重跑、交接）都从 ``model`` 进入。待决调用只在挂起时写入、决定消费后的第一次
-        进度保存即清空，所以它不会让后续执行误入 ``wait_user``。
+        续跑、编辑重跑、交接）都从 ``prepare_input`` 进入。待决调用只在挂起时写入、决定消费后的
+        第一次进度保存即清空，所以它不会让后续执行误入 ``wait_user``。
         """
-        context = rc.task_space.get_context_manager(agent_profile=rc.profile)
+        context = rc.task_space.get_context_manager(agent=rc.agent)
         context.begin_run(rc.run)
         progress = rc.run.execution_data
         # 每次显式执行获得新预算；累计步骤号持续递增，避免恢复后复用流式 part 身份。
-        rc.step_limit = progress.step_count + rc.profile.max_steps
+        rc.step_limit = progress.step_count + rc.agent.max_steps
         if rc.run.usage is not None:
             rc.usage_stats = ConversationRunUsageStats(**rc.run.usage)
-        entry = ReactRoute.MODEL
+        entry = ReactRoute.PREPARE_INPUT
         continuation = progress.continuation
         if continuation is not None and continuation.decision is not None:
             rc.batch = restore_tool_batch(continuation)

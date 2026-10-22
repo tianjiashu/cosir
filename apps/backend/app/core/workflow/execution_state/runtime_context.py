@@ -15,7 +15,7 @@ from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.models.user_decision import UserDecision
 
 if TYPE_CHECKING:
-    from app.core.agents.agent_profile import AgentProfile
+    from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.llm_provider.openai_model import OpenAIChatModel
     from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 
@@ -35,7 +35,8 @@ class RuntimeContext:
     run: ConversationRunRecord
     task: TaskRecord
     workspace: WorkspaceRecord
-    profile: AgentProfile
+    # 本次 Run 的 Agent 运行时配置：Agent 定义与模型选择的最终解析，模型字段已完整。
+    agent: AgentRuntimeConfig
     # 本轮准入的工具名；只在模型返回调用后拦截，模型绑定仍用 Task 固化的完整 schema。
     allows_tools: frozenset[str]
     task_space: TaskRuntimeSpace

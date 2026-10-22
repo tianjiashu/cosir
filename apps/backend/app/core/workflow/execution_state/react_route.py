@@ -6,6 +6,7 @@ from enum import Enum
 class ReactRoute(str, Enum):
     """由循环显式派发的有限步骤；END 表示本次驱动返回。"""
 
+    PREPARE_INPUT = "prepare_input"
     MODEL = "model"
     TOOLS = "tools"
     OBSERVE = "observe"
