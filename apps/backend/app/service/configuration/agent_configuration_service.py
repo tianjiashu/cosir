@@ -247,8 +247,8 @@ class AgentConfigurationService:
     ) -> AgentConfigurationDocument:
         """将注册表 profile 与配置文件中的模型选择字段投影为配置中心文档。
 
-        ``AgentProfile`` 同时保存模型选择 ID 和已物化的 ``ModelSettings``；配置中心直接
-        投影选择 ID，避免重新读取配置文件。
+        ``AgentProfile`` 保存模型选择 ID 与请求偏好（``ModelSettings``）；配置中心直接投影选择 ID，
+        避免重新读取配置文件。
         """
 
         is_builtin = (

@@ -210,7 +210,7 @@ class EnvironmentConfigurationService:
         替换 Registry 中的主 Agent profile。主 Agent 的 ``max_steps`` 属于 profile 配置，不能
         只更新 ``Settings``；否则 Registry 仍会继续向后续 Run 提供旧值。
 
-        只替换共享 Registry 中的 profile，不改动已经派生出 per-run profile 或 workflow state 的
+        只替换共享 Registry 中的 profile，不改动已经合成出运行时配置或 workflow state 的
         执行过程，因此新 ``max_steps`` 只对下一轮新建 Run 生效。
 
         返回:
