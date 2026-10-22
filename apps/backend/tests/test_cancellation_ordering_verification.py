@@ -159,6 +159,10 @@ class _MemorySnapshotOwner:
 
         return copy.deepcopy(self.state)
 
+    def refresh_parent_delegation(self, _child_task_id: int, _run_id: int, _status: str) -> None:
+        """单任务内存 owner 没有父委派卡片可同步；生产实现见 ConversationTaskStateService。"""
+        return None
+
     def apply_planned(self, event: Any) -> TransportFrame:
         import copy
 

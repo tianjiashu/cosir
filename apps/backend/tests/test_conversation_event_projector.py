@@ -50,6 +50,10 @@ class InMemorySnapshotService:
         state = self.states.setdefault(task_id, empty_snapshot())
         return copy.deepcopy(state)
 
+    def refresh_parent_delegation(self, _child_task_id: int, _run_id: int, _status: str) -> None:
+        """单任务内存 owner 没有父委派卡片可同步；生产实现见 ConversationTaskStateService。"""
+        return None
+
     def apply_planned(self, event: object) -> TransportFrame:
         """按生产口径投影一条事件：由事件自带 ``plan`` 产出 mutation 后落回进程内状态。"""
 
