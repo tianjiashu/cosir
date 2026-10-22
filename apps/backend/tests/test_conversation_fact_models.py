@@ -278,7 +278,7 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
 
 def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
     from app.service.conversation_run import conversation_input_preparation_service as preparation
-    from app.service.conversation_run import conversation_run_service
+    from app.service.conversation_run.task_input_service import _reuse_attachments
 
     attachment_path = Path(__file__)
     previous = ConversationInput(
@@ -295,9 +295,6 @@ def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
     )
     service = ConversationInputPreparationService.__new__(ConversationInputPreparationService)
     service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
-    monkeypatch.setattr(
-        conversation_run_service, "ConversationInputPreparationService", lambda: service
-    )
     monkeypatch.setattr(
         preparation,
         "get_model_config_service",
@@ -317,7 +314,7 @@ def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
             )
         ],
     )
-    prepared = ConversationRunService._prepare_edit_payload(7, command, 3, None, previous)
+    prepared = service.prepare_input(7, _reuse_attachments(command, previous), 3, None)
     assert prepared.message.input_text == f"请再次阅读 {attachment_path}"
     assert prepared.message.attachments[0]["path"] == str(attachment_path)
 

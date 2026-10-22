@@ -21,7 +21,6 @@ from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.core.agents.model_settings import ModelSettings
 from app.core.context.system_prompt_builder import SystemPromptBuilder
-from app.models.conversation_run_options import ConversationRunOptions
 from app.models.model_config_record import ModelConfigRecord
 
 
@@ -186,7 +185,6 @@ def test_builtin_children_leave_model_route_to_parent_run(
     profiles = _code_defined_profiles(monkeypatch, tmp_path)
 
     assert all(profile.model_config_id is None for profile in profiles)
-    assert all(profile.model_settings.model_name is None for profile in profiles)
 
 
 def test_child_profile_model_settings_keep_custom_overrides() -> None:
@@ -196,9 +194,8 @@ def test_child_profile_model_settings_keep_custom_overrides() -> None:
     custom = ModelSettings(temperature=0.2)
     child.model_settings = custom
 
-    agent = AgentRuntimeConfig.for_run(
+    agent = AgentRuntimeConfig.resolve(
         child,
-        SimpleNamespace(options=ConversationRunOptions()),  # type: ignore[arg-type]
         ModelConfigRecord(
             id=7,
             config_name="run",
@@ -209,8 +206,7 @@ def test_child_profile_model_settings_keep_custom_overrides() -> None:
         ),
     )
 
-    assert agent.model_settings.temperature == 0.2
-    assert agent.model_settings is not custom
-    assert agent.model_config_id == 7
+    assert agent.model.temperature == 0.2
+    assert agent.model.model_config_id == 7
     assert child.model_config_id is None
     assert child.model_settings is custom

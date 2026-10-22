@@ -543,11 +543,10 @@ def test_t4_get_tool_display_uses_declaration_when_present(
 def test_t4_delegation_display_data_backfills_child_locators(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4-h：委派结果的展示数据回填 child_task_id / child_run_id / agent_role。
+    """T4-h：委派结果的展示数据回填 child_task_id / agent_role（子 Agent 按 Task 寻址，无 run_id）。
 
-    实际观测：``display_data.kind == "delegation-result"`` 时，part 上出现 ``child_task_id``
-    与 ``child_run_id``；``display_data`` 使用持久化 role，
-    并把 role 写回 ``display_data["role"]`` 与 ``part["agent_role"]``。
+    实际观测：``display_data.kind == "delegation-result"`` 时，part 上出现 ``child_task_id``；
+    ``display_data`` 使用持久化 role，并把 role 写回 ``display_data["role"]`` 与 ``part["agent_role"]``。
     是否符合预期：符合（旧委派记录的 role 回填既定行为）。
     """
 
@@ -583,7 +582,6 @@ def test_t4_delegation_display_data_backfills_child_locators(
                 "display_data": {
                     "kind": "delegation-result",
                     "child_task_id": 22,
-                    "child_run_id": 220,
                     "child_agent_id": "reviewer",
                     "role": "workspace-reviewer",
                 },
@@ -596,6 +594,5 @@ def test_t4_delegation_display_data_backfills_child_locators(
     part = ConversationTaskStateRebuilder.build_pair_tool_part(rows)["delegate-1"]
 
     assert part["child_task_id"] == 22
-    assert part["child_run_id"] == 220
     assert part["agent_role"] == "workspace-reviewer"
     assert part["display_data"]["role"] == "workspace-reviewer"

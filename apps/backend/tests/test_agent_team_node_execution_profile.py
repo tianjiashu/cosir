@@ -8,7 +8,7 @@
 
 本文件只消费生产代码（``app/**`` 只读），锁定三条行为契约：
 
-1. 节点运行时配置（``AgentTeamCoordinator._build_node_profile`` 合成节点定义，
+1. 节点运行时配置（``agent_team.node_profile.build_node_profile`` 合成节点定义，
    ``run_driver._runtime_config`` 按 Run 合成 ``AgentRuntimeConfig``）必须带**已物化**的
    模型运行设置（连接与能力字段来自 ``run.model_config_id`` 指向的模型配置），并保留节点快照的
    用户偏好、采用节点快照的 ``structured_output``；
@@ -22,19 +22,21 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.agent_team.coordinator import AgentTeamCoordinator
 from app.agent_team.node_goal import AgentTeamNodeGoal
+from app.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY
 from app.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
-from app.core.agents.model_settings import ModelSettings, ModelSettingsError
+from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_run_record import ConversationRunRecord
+from app.models.model_config_record import ModelConfigRecord
 from app.service.agent_team import agent_team_preparation_service as prep_module
 from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationService,
@@ -137,10 +139,12 @@ def _node_run_profile(
     node_runtime: AgentTeamRunRuntime,
     node_run: ConversationRunRecord,
 ) -> AgentRuntimeConfig:
-    """生产两段串联：协调器合成节点定义，运行时按节点 Run 合成运行时配置并物化模型设置。"""
+    """生产链路：run_driver 从节点 Task 的冻结快照与注册表身份合成定义，再按节点 Run 物化。"""
 
-    definition = AgentTeamCoordinator._build_node_profile(registry_profile, node_runtime)
-    return run_driver._runtime_config(node_run, SimpleNamespace(root_path=""), definition)
+    task = SimpleNamespace(extra={NODE_PROFILE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json")})
+    registry = SimpleNamespace(resolve=lambda *_args: registry_profile)
+    with patch.object(run_driver, "get_agent_registry", lambda: registry):
+        return run_driver._runtime_config(node_run, task, SimpleNamespace(root_path=""))
 
 
 def _create_model_config(*, model_name: str, base_url: str) -> int:
@@ -205,8 +209,20 @@ def _team_configuration() -> dict[str, object]:
     }
 
 
+_PARENT_MODEL_CONFIG = ModelConfigRecord(
+    id=1,
+    config_name="main",
+    base_url="http://127.0.0.1/v1",
+    api_key="main-secret",
+    model_name="main-model",
+    context_window_k=32,
+    supports_thinking=True,
+    supports_reasoning_effort=True,
+)
+
+
 def _materialized_parent_profile() -> AgentRuntimeConfig:
-    """构造主 Agent 本次 Run 的运行时配置（连接字段已物化）。"""
+    """构造主 Agent 本次 Run 的运行时配置（已解析出完整模型）。"""
 
     definition = AgentProfile(
         agent_id="main_agent",
@@ -215,19 +231,8 @@ def _materialized_parent_profile() -> AgentRuntimeConfig:
         allowed_tools=["agent_team", "read_file"],
         agent_type=AgentProfileType.MAIN,
         model_config_id=1,
-        model_settings=ModelSettings(
-            base_url="http://127.0.0.1/v1",
-            api_key="main-secret",
-            model_name="main-model",
-            context_window_k=32,
-            supports_thinking=True,
-            supports_reasoning_effort=True,
-            supports_image=False,
-        ),
     )
-    return AgentRuntimeConfig(
-        definition=definition, model_settings=definition.model_settings, model_config_id=1
-    )
+    return AgentRuntimeConfig.resolve(definition, _PARENT_MODEL_CONFIG)
 
 
 # --------------------------------------------------------------------------- #
@@ -254,11 +259,9 @@ def test_node_run_profile_materializes_model_runtime_settings_from_run() -> None
     node_run = _node_run(config_id, reasoning_effort=None)
 
     agent = _node_run_profile(registry_profile, node_runtime, node_run)
-    profile = agent.definition
+    profile = agent
 
-    settings = agent.model_settings
-    # 未物化时这里会抛 ModelSettingsError（模型运行配置未物化，缺少字段: model_name, ...）。
-    settings.require_runtime_config()
+    settings = agent.model
     assert settings.model_name == "team-node-model"
     assert settings.base_url == "https://team.example.test/v1"
     assert settings.api_key == "team-node-model-secret"
@@ -281,13 +284,11 @@ def test_node_run_profile_materializes_model_runtime_settings_from_run() -> None
     assert registry_profile.role == "general-assistant"
     # 提示词与工具名来自节点快照，且工具名是可独立修改的副本。
     assert profile.system_prompt == "node system prompt from snapshot"
-    assert profile.allowed_tools == ["read_file", "web_search"]
-    assert profile.allowed_tools is not node_runtime.allowed_tools
-    # 本次 Run 的模型配置记在运行时配置上，不回写定义的（空）选择。
-    assert agent.model_config_id == config_id
+    assert profile.allowed_tools == ("read_file", "web_search")
+    # 本次 Run 的模型配置记在解析出的模型上，不回写定义的（空）选择。
+    assert agent.model.model_config_id == config_id
     assert registry_profile.model_config_id is None
-    # 共享注册表单例不得被本次合成污染。
-    assert registry_profile.model_settings.model_name is None
+    # 共享注册表单例不得被本次解析污染。
     assert registry_profile.model_settings.reasoning_effort == "high"
 
 
@@ -324,7 +325,7 @@ def test_node_run_profile_takes_connection_fields_from_run_not_from_snapshot() -
 
     agent = _node_run_profile(registry_profile, node_runtime, node_run)
 
-    settings = agent.model_settings
+    settings = agent.model
     assert settings.model_name == "run-model"
     assert settings.base_url == "https://run.example.test"
     assert settings.api_key == "run-model-secret"
@@ -332,81 +333,7 @@ def test_node_run_profile_takes_connection_fields_from_run_not_from_snapshot() -
     assert settings.supports_thinking is True
     # 快照的偏好项仍然是偏好项的唯一来源。
     assert settings.reasoning_effort == "max"
-    assert agent.model_config_id == second_config_id
-
-
-@pytest.mark.usefixtures("backend_env")
-def test_unmaterialized_registry_settings_would_fail_runtime_context(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """(缺陷证明) 还原修复前「直接用注册表未物化设置」时，上面的断言必然失败。
-
-    目的：证明物化确实是必要的——一旦物化被去掉（回到旧行为），合成运行时配置就在装配期以
-    ``model_name`` / ``base_url`` 等字段缺失失败，而不是拖到首次模型请求。
-    """
-
-    config_id = _create_model_config(
-        model_name="team-node-model", base_url="https://team.example.test/v1"
-    )
-    registry_profile = _registry_child_profile()
-    node_runtime = _node_runtime(config_id)
-    node_run = _node_run(config_id)
-    # 旧行为：执行 profile 直接沿用注册表 profile 的（未物化）模型设置。
-    monkeypatch.setattr(
-        ModelSettings,
-        "from_model_config_record",
-        staticmethod(lambda _record: registry_profile.model_settings),
-    )
-
-    with pytest.raises(ModelSettingsError) as captured:
-        _node_run_profile(registry_profile, node_runtime, node_run)
-    message = str(captured.value)
-    # ``context_window_k`` 改为在缺失字段全部齐备后单独做正整数校验，不进入缺失清单。
-    for missing in (
-        "model_name",
-        "base_url",
-        "supports_thinking",
-        "supports_reasoning_effort",
-        "supports_image",
-    ):
-        assert missing in message
-
-
-def test_legacy_registry_profile_construction_reproduces_runtime_failure() -> None:
-    """(缺陷证据) 复刻修复前 ``_start_node`` 的 profile 构造方式，稳定复现线上失败签名。
-
-    修复前的节点执行 profile 直接取自注册表共享子 profile 的
-    ``model_config_id`` / ``model_settings`` / ``structured_output``，并用未物化的
-    ``model_settings`` 执行。这里用等价构造证明：该路径必然在
-    ``require_runtime_config`` 抛 ``ModelSettingsError``（与线上日志
-    ``core/llm_provider/model_factory.py`` → ``model_settings.require_runtime_config`` 一致），
-    且节点快照的结构化输出契约被整体丢弃——即上面两条用例的断言确有区分度。
-    """
-
-    registry_profile = _registry_child_profile()
-    node_run = _node_run(1)
-    legacy_profile = AgentProfile(
-        agent_id="general-assistant",
-        role=registry_profile.role,
-        system_prompt="node system prompt from snapshot",
-        allowed_tools=["read_file", "web_search"],
-        agent_type=registry_profile.agent_type,
-        model_config_id=registry_profile.model_config_id,
-        model_settings=registry_profile.model_settings,
-        structured_output=registry_profile.structured_output,
-        max_steps=registry_profile.max_steps,
-    )
-
-    assert legacy_profile.model_config_id is None
-    # 快照里明确存在的结构化输出契约被旧构造丢弃。
-    assert legacy_profile.structured_output is None
-    assert _node_structured_output().json_schema == _NODE_SCHEMA
-    with pytest.raises(ModelSettingsError) as captured:
-        legacy_profile.model_settings.require_runtime_config()
-    assert str(captured.value) == (
-        "模型运行配置未物化，缺少字段: model_name, base_url, "
-        "supports_thinking, supports_reasoning_effort, supports_image"
-    )
+    assert agent.model.model_config_id == second_config_id
 
 
 @pytest.mark.usefixtures("backend_env")
@@ -454,6 +381,11 @@ def test_preparation_snapshot_freezes_preferences_without_connection_fields(
 
     child = _registry_child_profile()
     _stub_preparation_registry(monkeypatch, child)
+    monkeypatch.setattr(
+        prep_module,
+        "get_model_config_service",
+        lambda: SimpleNamespace(get_config=lambda _config_id: _PARENT_MODEL_CONFIG),
+    )
     parent = _materialized_parent_profile()
 
     result = AgentTeamPreparationService().prepare(
@@ -485,5 +417,5 @@ def test_preparation_snapshot_freezes_preferences_without_connection_fields(
         assert "main-secret" not in serialized
         assert "http://127.0.0.1/v1" not in serialized
         # 连接来源以 ``model_config_id`` 表达，由主 Agent 本次 Run 的配置补全。
-        assert snapshot["model_config_id"] == parent.model_config_id
+        assert snapshot["model_config_id"] == parent.model.model_config_id
         assert snapshot["agent_id"] == "general-assistant"

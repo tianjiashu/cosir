@@ -5,6 +5,7 @@ import pytest
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
+from app.core.agents.resolved_model import ResolvedModel
 from app.core.llm_provider import model_factory
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.conversation_run_record import ConversationRunRecord
@@ -65,7 +66,7 @@ def test_run_options_serializes_explicit_reasoning_effort_without_capability_sna
 def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def _build_chat_model(model_settings: ModelSettings, *, tools):
+    def _build_chat_model(model_settings: ResolvedModel, *, tools):
         captured.update(
             {
                 "model_name": model_settings.model_name,
@@ -82,9 +83,9 @@ def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
         _build_chat_model,
     )
 
-    agent = AgentRuntimeConfig.for_run(_profile(), _run(reasoning_effort="low"), _model_config())
+    agent = AgentRuntimeConfig.resolve(_profile(), _model_config(), reasoning_effort="low")
     resolved = model_factory.resolve_chat_model(
-        model_settings=agent.model_settings,
+        model=agent.model,
         tools=[{"name": "read_file"}],
     )
 

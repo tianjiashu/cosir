@@ -66,6 +66,7 @@ def _build(
 
     session = WorkflowSession.__new__(WorkflowSession)
     session._executions = {}
+    session._release_signals = {}
     session._closing = False
     session._runs = services
     session._run_state = services
@@ -148,6 +149,7 @@ def test_release_consumes_signal_only_for_own_execution() -> None:
     """等待态取消以同一 run_id 登记新执行：旧执行的释放不得误删它或取走它的信号。"""
     executor = WorkflowSession.__new__(WorkflowSession)
     executor._executions = {}
+    executor._release_signals = {}
 
     async def scenario() -> tuple[bool, bool]:
         other = asyncio.get_running_loop().create_future()
@@ -174,7 +176,7 @@ def test_release_after_late_cancel_on_completed_run_skips_handoff(
     async def record_handoff(task_id: int) -> None:
         handoffs.append(task_id)
 
-    monkeypatch.setattr(session, "_open_run", record_handoff)
+    monkeypatch.setattr(session, "_advance", record_handoff)
 
     async def scenario() -> None:
         _register_execution(executor, asyncio.current_task())

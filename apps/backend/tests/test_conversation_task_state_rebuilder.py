@@ -192,7 +192,7 @@ def test_rebuild_keeps_interrupted_output_when_run_is_cancelled() -> None:
     ]
 
 
-def test_rebuild_restores_child_run_locator_and_workspace_role_from_display_data(
+def test_rebuild_restores_child_task_locator_and_workspace_role_from_display_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _ToolRegistry:
@@ -244,7 +244,6 @@ def test_rebuild_restores_child_run_locator_and_workspace_role_from_display_data
                 "display_data": {
                     "kind": "delegation-result",
                     "child_task_id": 22,
-                    "child_run_id": 220,
                     "child_agent_id": "reviewer",
                     "role": "workspace-reviewer",
                 },
@@ -257,8 +256,6 @@ def test_rebuild_restores_child_run_locator_and_workspace_role_from_display_data
     )["delegate-1"]
 
     assert tool_part["child_task_id"] == 22
-    assert tool_part["child_run_id"] == 220
-    assert tool_part["display_data"]["child_run_id"] == 220
     assert tool_part["agent_role"] == "workspace-reviewer"
     assert tool_part["display_data"]["role"] == "workspace-reviewer"
 

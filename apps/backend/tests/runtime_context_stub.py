@@ -106,9 +106,9 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         task=SimpleNamespace(id=1),
         workspace=SimpleNamespace(id=1, root_path="."),
         agent=SimpleNamespace(
-            definition=SimpleNamespace(structured_output=None, max_steps=10),
-            model_settings=None,
-            model_config_id=1,
+            structured_output=None,
+            max_steps=10,
+            model=SimpleNamespace(model_config_id=1),
         ),
         allows_tools=frozenset(),
         tool_definitions={},

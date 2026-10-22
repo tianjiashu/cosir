@@ -1,4 +1,3 @@
-
 """真实 SQLite 验证 inbox 转移、编辑和重启边界。"""
 
 import asyncio
@@ -50,18 +49,26 @@ def store(isolated_storage, tmp_path):
         session.flush()
         config_id = config.id
     service = get_conversation_run_service()
-    run = service.create_run(
-        task.id, model_config_id=config_id, run_command=ConversationRunCommand(display_text="first")
-    )
+    inputs = TaskInputService()
+    inputs.enqueue(task.id, ConversationRunCommand(display_text="first"), config_id)
+    run = service.create_run(task.id)
     return SimpleNamespace(
         task=task,
         config_id=config_id,
         run=run,
-        inputs=TaskInputService(),
+        inputs=inputs,
         service=service,
         context=get_conversation_task_context_service(),
         crud=ConversationRunCrud(),
     )
+
+
+def _open_run(store, command, model_config_id, *, replaced_message_id=None):
+    """生产口径的新建 Run：先入队（编辑时同事务移出旧 context），再从 inbox 队首交接。"""
+    store.inputs.enqueue(
+        store.task.id, command, model_config_id, replaced_message_id=replaced_message_id
+    )
+    return store.service.create_run(store.task.id)
 
 
 def _session():
@@ -89,7 +96,6 @@ def _real_context(store, *, run_state=None):
     from app.core.tools.tool_registry import ToolRegistry
     from app.core.workflow.execution_state.runtime_context import RuntimeContext
     from app.service import depends as service_depends
-    from app.service.depends import get_conversation_event_projector
     from tests.runtime_context_stub import SINGLETONS, singleton_getter
 
     if run_state is not None:
@@ -107,9 +113,7 @@ def _real_context(store, *, run_state=None):
         run=store.crud.get(store.run.id),
         task=store.task,
         workspace=WorkspaceCrud().get(store.task.workspace_id),
-        agent=SimpleNamespace(
-            definition=SimpleNamespace(max_steps=5, structured_output=None), model_settings=None
-        ),
+        agent=SimpleNamespace(max_steps=5, structured_output=None, model=None),
         allows_tools=frozenset(),
         task_space=task_runtime_spaces.get_or_create(store.task.id),
         event_sink=get_conversation_event_projector().process,
@@ -139,8 +143,33 @@ def _context_manager(store):
     )
 
 
-def test_consume_inbox_tracks_memory_sequence_and_projects_each_input(store, monkeypatch):
-    """consume_inbox 一次转移整批 immediate 输入：内存列表与序号同步推进，每条经 sink 投影一次。"""
+async def _prepare_input(store, context, *, run=None, sink=None):
+    """跑真实 prepare_input 节点并入 inbox，返回本次被 manager 接纳的条目。
+
+    ``sink`` 默认交真实 projector，与生产装配一致；用例要断言消费事件时传入收集器。
+    """
+    from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+    from app.core.workflow.execution_state.react_route import ReactRoute
+    from app.core.workflow.node_helper.common import execution_scope
+    from app.core.workflow.nodes.prepare_input_node import _prepare_input_node
+
+    rc = _real_context(store)
+    rc.run = run or rc.run
+    rc.step_limit = 10
+    if sink is not None:
+        rc.event_sink = sink
+    before = len(context._entries)
+    with execution_scope(rc, context):
+        await _prepare_input_node(
+            ReactExecutionState(
+                step_count=0, tool_error_count=0, next_node=ReactRoute.PREPARE_INPUT
+            )
+        )
+    return context._entries[before:]
+
+
+def test_prepare_input_tracks_memory_sequence_and_projects_each_input(store, monkeypatch):
+    """prepare_input 一次转移整批 immediate 输入：内存列表与序号同步推进，每条经 sink 投影一次。"""
     from app.core.context.runtime_message_context_manager import SystemPromptBuilder
     from app.core.events import UserInputConsumedEvent
 
@@ -150,9 +179,9 @@ def test_consume_inbox_tracks_memory_sequence_and_projects_each_input(store, mon
     )
     events: list[object] = []
     context = _context_manager(store)
-    context.begin_run(store.run, events.append)
+    context.begin_run(store.run)
 
-    entries = context.consume_inbox()
+    entries = asyncio.run(_prepare_input(store, context, sink=events.append))
 
     assert [e.message["content"] for e in entries] == ["first", "second"]
     assert [m.get("content") for m in context.load_message()] == ["system", "first", "second"]
@@ -163,7 +192,7 @@ def test_consume_inbox_tracks_memory_sequence_and_projects_each_input(store, mon
     ]
     assert context._message_sequence == entries[-1].sequence + 1
     # 已消费的输入不会被下一次模型边界重复领取。
-    assert context.consume_inbox() == []
+    assert asyncio.run(_prepare_input(store, context, sink=events.append)) == []
     assert len(events) == 2
 
 
@@ -173,20 +202,19 @@ def test_edit_needs_no_unload_because_begin_run_rebuilds_memory(store, monkeypat
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     context = _context_manager(store)
-    context.begin_run(store.run, lambda _event: None)
-    [first] = context.consume_inbox()
+    context.begin_run(store.run)
+    [first] = asyncio.run(_prepare_input(store, context))
     context.add_message({"role": "assistant", "content": "old answer"})
     store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
 
-    store.service.edit_latest(
-        store.task.id,
-        store.run.id,
-        first.message_id,
+    new_run = _open_run(
+        store,
         ConversationRunCommand(display_text="edited"),
         store.config_id,
-        None,
+        replaced_message_id=first.message_id,
     )
-    context.begin_run(store.crud.get(store.run.id), lambda _event: None)
+    context.begin_run(new_run)
+    asyncio.run(_prepare_input(store, context, run=new_run))
 
     assert [m.get("content") for m in context.load_message()] == ["system", "edited"]
     context.add_message({"role": "assistant", "content": "new answer"})
@@ -197,17 +225,29 @@ def test_edit_needs_no_unload_because_begin_run_rebuilds_memory(store, monkeypat
     assert len(sequences) == len(set(sequences))
 
 
+def _edit(store, message_id, command):
+    """编辑 = 移出旧 context + 新建 Run（生产经 ``WorkflowSession.submit`` 在闸门内调用）。
+
+    返回新 Run 与模型边界消费进 context 的编辑后消息。
+    """
+    run = _open_run(store, command, store.config_id, replaced_message_id=message_id)
+    entries = store.inputs.consume(
+        store.task.id, run.id, store.config_id, store.context.max_sequence(store.task.id) + 1
+    )
+    return run, entries
+
+
 def test_atomic_queue_consumption_and_multiple_users_same_run(store):
     second = store.inputs.enqueue(
         store.task.id, ConversationRunCommand(display_text="second"), store.config_id
     )
     pending = store.inputs.pending(store.task.id)
     assert [p.payload.message.input_text for p in pending] == ["first", "second"]
-    entries = store.inputs.consume(store.task.id, store.run.id, 1)
+    entries = store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     assert [e.message.get("content") for e in entries] == ["first", "second"]
     assert entries[-1].message_id == second
     assert all(e.run_id == store.run.id for e in entries)
-    assert store.inputs.consume(store.task.id, store.run.id, 3) == []
+    assert store.inputs.consume(store.task.id, store.run.id, store.config_id, 3) == []
     assert [e.message_id for e in store.context.entries_in_context(store.task.id)] == [
         p.message_id for p in pending
     ]
@@ -222,20 +262,21 @@ def test_consume_failure_rolls_back_inbox_and_context(store, monkeypatch):
 
     monkeypatch.setattr(store.context, "append", fail)
     with pytest.raises(RuntimeError):
-        store.inputs.consume(store.task.id, store.run.id, 1)
+        store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     assert len(store.inputs.pending(store.task.id)) == 1
     assert store.context.entries_in_context(store.task.id) == []
 
 
-def test_consumed_edit_preserves_prefix_and_run_identity(store):
-    entries = store.inputs.consume(store.task.id, store.run.id, 1)
+def test_edit_keeps_prefix_and_opens_new_run(store):
+    """编辑 = 改 context + 接收消息：旧 Run 保持终态，编辑后的消息以新身份进入新 Run。"""
+    entries = store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     store.context.append(
         store.task.id, store.run.id, {"role": "assistant", "content": "first response"}, 2
     )
     mid = store.inputs.enqueue(
         store.task.id, ConversationRunCommand(display_text="second"), store.config_id
     )
-    store.inputs.consume(store.task.id, store.run.id, 3)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 3)
     store.context.append(
         store.task.id, store.run.id, {"role": "assistant", "content": "discard"}, 4
     )
@@ -245,52 +286,42 @@ def test_consumed_edit_preserves_prefix_and_run_identity(store):
         ("running",),
         execution_data=ConversationRunProgress(step_count=5, tool_error_count=2),
     )
-    store.service.edit_latest(
-        store.task.id,
-        store.run.id,
-        mid,
-        ConversationRunCommand(display_text="edited"),
-        store.config_id,
-        None,
-    )
+    new_run, [edited] = _edit(store, mid, ConversationRunCommand(display_text="edited"))
     rows = store.context.entries_in_context(store.task.id)
     assert [e.message.get("content") for e in rows] == ["first", "first response", "edited"]
     assert rows[0].message_id == entries[0].message_id
-    assert rows[-1].message_id == mid
-    assert store.crud.get(store.run.id).status == "running"
-    assert store.crud.get(store.run.id).execution_data == ConversationRunProgress(step_count=5)
+    assert edited.message_id != mid
+    assert edited.run_id == new_run.id != store.run.id
+    assert new_run.status == "running"
+    assert new_run.execution_data == ConversationRunProgress()
+    assert store.crud.get(store.run.id).status == "cancelled"
+    assert TaskCrud().get(store.task.id).current_run_id == new_run.id
 
 
 def test_edit_keeps_replaced_history_out_of_context_and_transport(store):
     """编辑不删旧 context：被替换的行留给观测页，但不进模型上下文、不进快照，也不会被再次编辑命中。"""
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 
-    store.inputs.consume(store.task.id, store.run.id, 1)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     store.context.append(
         store.task.id, store.run.id, {"role": "assistant", "content": "first response"}, 2
     )
     mid = store.inputs.enqueue(
         store.task.id, ConversationRunCommand(display_text="second"), store.config_id
     )
-    store.inputs.consume(store.task.id, store.run.id, 3)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 3)
     store.context.append(
         store.task.id, store.run.id, {"role": "assistant", "content": "replaced answer"}, 4
     )
     store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
 
-    def edit(text: str) -> None:
-        store.service.edit_latest(
-            store.task.id,
-            store.run.id,
-            mid,
-            ConversationRunCommand(display_text=text),
-            store.config_id,
-            None,
-        )
-        store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
+    def edit(message_id: str, text: str) -> str:
+        run, [edited] = _edit(store, message_id, ConversationRunCommand(display_text=text))
+        store.crud.update_status_if_in(run.id, "cancelled", ("running",))
+        return edited.message_id
 
-    edit("edited once")
-    edit("edited twice")
+    once = edit(mid, "edited once")
+    twice = edit(once, "edited twice")
 
     rows = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)
     by_content = {row.message.get("content"): row for row in rows}
@@ -299,7 +330,7 @@ def test_edit_keeps_replaced_history_out_of_context_and_transport(store):
         assert (row.include_in_context, row.project_to_transport) == (False, False)
     latest = by_content["edited twice"]
     assert (latest.include_in_context, latest.project_to_transport) == (True, True)
-    assert latest.message_id == mid
+    assert latest.message_id == twice
     # 被移出的行保留原序号，新消息只追加在最大序号之后。
     assert latest.sequence == max(row.sequence for row in rows)
     assert len({row.sequence for row in rows}) == len(rows)
@@ -310,14 +341,16 @@ def test_edit_keeps_replaced_history_out_of_context_and_transport(store):
         "first response",
         "edited twice",
     ]
+    snapshot = ConversationTaskStateService().rebuild_state(store.task.id)
     snapshot_texts = [
         part.get("text")
-        for message in ConversationTaskStateService().rebuild_state(store.task.id)["runs"][0][
-            "messages"
-        ]
+        for run in snapshot["runs"]
+        for message in run["messages"]
         for part in message["parts"]
         if part.get("type") == "text"
     ]
+    # 第一次编辑开出的 Run 已整段移出投影，不留空分组；首个 Run 仍保留未被替换的前缀。
+    assert len(snapshot["runs"]) == 2
     assert "replaced answer" not in snapshot_texts
     assert "second" not in snapshot_texts
     assert "edited once" not in snapshot_texts
@@ -325,7 +358,7 @@ def test_edit_keeps_replaced_history_out_of_context_and_transport(store):
 
 
 def test_restart_cancels_wait_and_preserves_inbox(store):
-    store.inputs.consume(store.task.id, store.run.id, 1)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     store.context.append(
         store.task.id,
         store.run.id,
@@ -384,12 +417,12 @@ def test_restart_cancels_wait_and_preserves_inbox(store):
 
 
 def test_snapshot_groups_multiple_users_and_pending_inputs(store):
-    store.inputs.consume(store.task.id, store.run.id, 1)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     store.context.append(store.task.id, store.run.id, {"role": "assistant", "content": "reply"}, 2)
     second = store.inputs.enqueue(
         store.task.id, ConversationRunCommand(display_text="second"), store.config_id
     )
-    store.inputs.consume(store.task.id, store.run.id, 3)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 3)
     store.context.append(store.task.id, store.run.id, {"role": "assistant", "content": "reply2"}, 4)
     queued = store.inputs.enqueue(
         store.task.id, ConversationRunCommand(display_text="third"), store.config_id
@@ -406,16 +439,16 @@ def test_snapshot_groups_multiple_users_and_pending_inputs(store):
 
 
 def test_completed_run_handoff_claims_next_batch_without_duplicating_input(store):
-    store.inputs.consume(store.task.id, store.run.id, 1)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     message_id = store.inputs.enqueue(
         store.task.id, ConversationRunCommand(display_text="next"), store.config_id
     )
     store.crud.update_status_if_in(store.run.id, "completed", ("running",))
-    run = asyncio.run(_session()[0]._open_run(store.task.id))
+    run = asyncio.run(_session()[0]._advance(store.task.id))
     assert run.id != store.run.id
     assert run.status == "running"
     assert [p.message_id for p in store.inputs.pending(store.task.id)] == [message_id]
-    entries = store.inputs.consume(store.task.id, run.id, 2)
+    entries = store.inputs.consume(store.task.id, run.id, store.config_id, 2)
     assert entries[0].run_id == run.id
     assert entries[0].message_id == message_id
 
@@ -424,9 +457,13 @@ def test_completed_run_handoff_claims_next_batch_without_duplicating_input(store
 @pytest.mark.parametrize("status", ["cancelled", "failed"])
 async def test_send_after_cancel_or_failure_opens_new_run_with_leftover_queue(store, status):
     """取消或失败后发消息不排队：直接新开 Run，残留的「排队」消息按序一并并入。"""
-    store.inputs.consume(store.task.id, store.run.id, 1)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     leftover = store.inputs.enqueue(
-        store.task.id, ConversationRunCommand(display_text="later"), store.config_id, None, "after_run"
+        store.task.id,
+        ConversationRunCommand(display_text="later"),
+        store.config_id,
+        None,
+        "after_run",
     )
     store.crud.update_status_if_in(store.run.id, status, ("running",))
     session, executor = _session()
@@ -441,7 +478,7 @@ async def test_send_after_cancel_or_failure_opens_new_run_with_leftover_queue(st
     [run_id] = _starts(executor)
     assert run_id != store.run.id
     assert store.crud.get(store.run.id).status == status
-    entries = store.inputs.consume(store.task.id, run_id, 2)
+    entries = store.inputs.consume(store.task.id, run_id, store.config_id, 2)
     assert [e.message_id for e in entries][0] == leftover
     assert [e.message["content"] for e in entries] == ["later", "now"]
 
@@ -460,9 +497,80 @@ async def test_send_while_running_queues_by_delivery(store):
         )
         assert receipt.queued
     executor.start.assert_not_called()
-    entries = store.inputs.consume(store.task.id, store.run.id, 1)
+    entries = store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     assert [e.message["content"] for e in entries] == ["first", "now"]
     assert [p.delivery for p in store.inputs.pending(store.task.id)] == ["after_run"]
+
+
+@pytest.mark.asyncio
+async def test_background_agent_submit_joins_active_run_or_opens_one_with_its_identity(store):
+    """子 Agent / Team 节点与用户发送同一入口：活动时并入当前 Run，终态时按自身身份新开 Run。"""
+    session, executor = _session()
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
+    joined = await session.submit(
+        store.task.id,
+        ConversationRunCommand(display_text="follow up"),
+        model_config_id=store.config_id,
+        reasoning_effort=None,
+        agent_id="child_agent",
+    )
+    assert joined.queued is True
+    executor.start.assert_not_called()
+
+    store.crud.update_status_if_in(store.run.id, "completed", ("running",))
+    opened = await session.submit(
+        store.task.id,
+        ConversationRunCommand(display_text="next round"),
+        model_config_id=store.config_id,
+        reasoning_effort=None,
+        agent_id="child_agent",
+    )
+    assert opened.queued is False
+    [opened_run_id] = _starts(executor)
+    assert TaskCrud().get(store.task.id).current_run_id == opened_run_id
+    assert store.crud.get(opened_run_id).agent_id == "child_agent"
+
+
+@pytest.mark.asyncio
+async def test_edit_requires_stopped_task(store):
+    """编辑只在 Task 已停止时进行：仍有活动 Run 时拒绝，不移出任何 context。"""
+    from app.service.conversation_run.workflow_session import SessionConflictError
+
+    [first] = store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
+    with pytest.raises(SessionConflictError) as caught:
+        await _session()[0].submit(
+            store.task.id,
+            ConversationRunCommand(display_text="edited"),
+            model_config_id=store.config_id,
+            reasoning_effort=None,
+            replaced_message_id=first.message_id,
+        )
+    assert caught.value.code == "RUN_NOT_STOPPED"
+    assert [e.message_id for e in store.context.entries_in_context(store.task.id)] == [
+        first.message_id
+    ]
+
+
+def test_failed_edit_keeps_original_message(store):
+    """移出旧 context 与建 Run 同一事务：建 Run 失败时原消息仍在上下文与投影里，不丢输入。"""
+    [first] = store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
+    store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
+    runs_before = store.crud.list_by_task(store.task.id)
+
+    with pytest.raises(KeyError):
+        _open_run(
+            store,
+            ConversationRunCommand(display_text="edited"),
+            store.config_id + 999,
+            replaced_message_id=first.message_id,
+        )
+
+    rows = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)
+    assert [(r.message_id, r.include_in_context, r.project_to_transport) for r in rows] == [
+        (first.message_id, True, True)
+    ]
+    assert store.crud.list_by_task(store.task.id) == runs_before
+    assert store.inputs.pending(store.task.id) == []
 
 
 def test_release_all_immediate_only_updates_delivery_column(store):
@@ -489,7 +597,7 @@ def test_release_all_immediate_only_updates_delivery_column(store):
         assert {row.delivery for row in rows} == {"immediate"}
         assert {row.id: row.payload for row in rows} == before
     assert [p.delivery for p in store.inputs.pending(store.task.id)] == ["immediate", "immediate"]
-    entries = store.inputs.consume(store.task.id, store.run.id, 1)
+    entries = store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     assert [e.message["content"] for e in entries] == ["first", "later"]
     assert entries[-1].message_id == later
 
@@ -506,17 +614,35 @@ def test_task_input_delivery_rejects_unknown_value(store):
 
 
 @pytest.mark.asyncio
-async def test_immediate_send_while_running_cannot_switch_model(store):
-    from app.service.conversation_run.workflow_session import SessionConflictError
+async def test_send_with_another_model_is_queued_for_the_next_run(store):
+    """换模型的消息不拒：运行中只入队、不并入当前 Run；等待审批时也不打断审批。"""
+    other_id = _other_model()
+    session, executor = _session()
+    receipt = await session.submit(
+        store.task.id,
+        ConversationRunCommand(display_text="now"),
+        model_config_id=other_id,
+        reasoning_effort=None,
+    )
+    assert receipt.queued is True
+    entries = store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
+    assert [e.message["content"] for e in entries] == ["first"]
+    assert [p.payload.message.input_text for p in store.inputs.pending(store.task.id)] == ["now"]
 
-    with pytest.raises(SessionConflictError):
-        await _session()[0].submit(
-            store.task.id,
-            ConversationRunCommand(display_text="now"),
-            model_config_id=store.config_id + 1,
-            reasoning_effort=None,
-            delivery="immediate",
-        )
+    store.crud.update_status_if_in(store.run.id, "waiting_for_input", ("running",))
+    waiting = await session.submit(
+        store.task.id,
+        ConversationRunCommand(display_text="later"),
+        model_config_id=other_id,
+        reasoning_effort=None,
+    )
+    assert waiting.queued is True
+    assert store.crud.get(store.run.id).status == "waiting_for_input"
+    executor.start.assert_not_called()
+
+    store.crud.update_status_if_in(store.run.id, "cancelled", ("waiting_for_input",))
+    run = await session._advance(store.task.id)
+    assert run.model_config_id == other_id
 
 
 @pytest.mark.asyncio
@@ -535,7 +661,7 @@ async def test_executor_handoff_waits_for_cleanup_and_starts_new_run(store, monk
     async def drive(run_id, definition=None):
         order.append(("start", run_id, session.task_execution(store.task.id)))
         sequence = store.context.max_sequence(store.task.id) + 1
-        store.inputs.consume(store.task.id, run_id, sequence)
+        store.inputs.consume(store.task.id, run_id, store.config_id, sequence)
         if run_id == store.run.id:
             store.inputs.enqueue(
                 store.task.id,
@@ -690,7 +816,7 @@ async def test_queue_commands_during_stream_preserve_output_and_replace_one_row(
             )
             assert [p["text"] for p in parts(cold)] == ["thinking", first + "B"]
             reloaded = _context_manager(store)
-            reloaded.begin_run(store.run, get_conversation_event_projector().process)
+            reloaded.begin_run(store.run)
             assert [m["role"] for m in reloaded.load_message()] == ["system", "user"]
             before = state_service.get_state(store.task.id)
             assert [p["text"] for p in parts(before)] == [
@@ -738,7 +864,7 @@ async def test_wait_decision_is_validated_before_transition_and_committed_with_r
     from app.core.tools.schemas import UserDecision, UserDecisionKind
     from app.service.conversation_run.workflow_session import SessionConflictError
 
-    store.inputs.consume(store.task.id, store.run.id, 1)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     request = {
         "kind": "approval",
         "request_id": "current",
@@ -800,8 +926,8 @@ def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, 
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     context = _context_manager(store)
-    context.begin_run(store.run, get_conversation_event_projector().process)
-    context.consume_inbox()
+    context.begin_run(store.run)
+    asyncio.run(_prepare_input(store, context))
     user = store.context.entries_in_context(store.task.id)[1]
     assert user.metadata.presentation.display_text == "first"
     assert "input_text" not in user.metadata.presentation.model_dump()
@@ -853,7 +979,7 @@ def test_sdk_context_roundtrip_keeps_identity_metadata_and_raw_arguments(store, 
     completed = store.context.entries_in_context(store.task.id)[-1]
     assert (completed.message_id, completed.sequence) == (waiting.message_id, waiting.sequence)
     reloaded = _context_manager(store)
-    reloaded.begin_run(store.run, get_conversation_event_projector().process)
+    reloaded.begin_run(store.run)
     assert reloaded.load_message() == context.load_message()
     assert [m["role"] for m in reloaded.load_message()] == ["system", "user", "assistant", "tool"]
     assert all(
@@ -876,8 +1002,8 @@ async def test_queue_during_tool_preview_keeps_pending_part_executable(store, mo
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     context = _context_manager(store)
-    context.begin_run(store.run, get_conversation_event_projector().process)
-    context.consume_inbox()
+    context.begin_run(store.run)
+    await _prepare_input(store, context)
     state_service = ConversationTaskStateService()
     context.save_model_response(
         sdk_completion(
@@ -936,8 +1062,8 @@ def test_cancelled_sdk_output_is_durable_but_excluded_on_resume(store, monkeypat
 
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     context = _context_manager(store)
-    context.begin_run(store.run, get_conversation_event_projector().process)
-    context.consume_inbox()
+    context.begin_run(store.run)
+    asyncio.run(_prepare_input(store, context))
     events = sdk_events([{"content": "partial"}, {"content": " tail"}], finish_reason=None)
     last_event = list(events)[-1]
     context.save_model_response(
@@ -947,7 +1073,7 @@ def test_cancelled_sdk_output_is_durable_but_excluded_on_resume(store, monkeypat
     assert rows[-1].message["content"] == "partial tail"
     assert not rows[-1].include_in_context
     reloaded = _context_manager(store)
-    reloaded.begin_run(store.run, get_conversation_event_projector().process)
+    reloaded.begin_run(store.run)
     assert [m["role"] for m in reloaded.load_message()] == ["system", "user"]
 
 
@@ -1058,13 +1184,12 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
         assert not draft.include_in_context
         user = next(row for row in rows if row.message["role"] == "user")
         if edit:
-            store.service.edit_latest(
-                store.task.id,
-                store.run.id,
-                user.message_id,
+            # 编辑开出新 Run；后续驱动、上下文装配与断言都转向它（旧 Run 保持终态）。
+            store.run = _open_run(
+                store,
                 ConversationRunCommand(display_text="edited"),
                 store.config_id,
-                None,
+                replaced_message_id=user.message_id,
             )
         else:
             assert [p.payload.message.input_text for p in store.inputs.pending(store.task.id)] == [
@@ -1094,7 +1219,7 @@ def test_queued_options_only_apply_when_handing_off_to_new_run(store):
         ConversationRunCommand(display_text="during", ban_tools=["write_file"]),
         store.config_id,
     )
-    entries = store.inputs.consume(store.task.id, store.run.id, 1)
+    entries = store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     assert [entry.message["content"] for entry in entries] == ["first", "during"]
     assert store.crud.get(store.run.id).options.ban_tools == []
     assert all("ban_tools" not in entry.metadata.presentation.model_dump() for entry in entries)
@@ -1104,12 +1229,12 @@ def test_queued_options_only_apply_when_handing_off_to_new_run(store):
         store.config_id,
     )
     store.crud.update_status_if_in(store.run.id, "completed", ("running",))
-    run = asyncio.run(_session()[0]._open_run(store.task.id))
+    run = asyncio.run(_session()[0]._advance(store.task.id))
     assert run is not None
     assert run.id != store.run.id
     assert run.options.ban_tools == ["read_file"]
     assert store.inputs.pending(store.task.id)[0].message_id == next_id
-    transferred = store.inputs.consume(store.task.id, run.id, 3)
+    transferred = store.inputs.consume(store.task.id, run.id, store.config_id, 3)
     assert len(transferred) == 1
     assert transferred[0].run_id == run.id
     assert transferred[0].message_id == next_id
@@ -1139,7 +1264,7 @@ def test_consumed_edit_uses_its_own_attachment_and_keeps_run_options(store, tmp_
         ),
         store.config_id,
     )
-    store.inputs.consume(store.task.id, store.run.id, 1)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     second_id = store.inputs.enqueue(
         store.task.id,
         ConversationRunCommand(
@@ -1155,24 +1280,23 @@ def test_consumed_edit_uses_its_own_attachment_and_keeps_run_options(store, tmp_
         ),
         store.config_id,
     )
-    store.inputs.consume(store.task.id, store.run.id, 2)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 2)
     store.context.append(
         store.task.id, store.run.id, {"role": "assistant", "content": "discard"}, 3
     )
     store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
-    store.service.edit_latest(
-        store.task.id,
-        store.run.id,
+    new_run, [edited] = _edit(
+        store,
         second_id,
         ConversationRunCommand(display_text="edited [[cosir-file:file]]", ban_tools=["write_file"]),
-        store.config_id,
-        None,
     )
     rows = store.context.entries_in_context(store.task.id)
-    assert [row.message_id for row in rows] == [first_id, second_id]
+    assert [row.message_id for row in rows] == [first_id, edited.message_id]
     assert rows[0].message["content"] == f"first {first_path}"
     assert rows[1].message["content"] == f"edited {second_path}"
     assert rows[1].metadata.presentation.attachments[0]["path"] == str(second_path)
+    # 编辑开出的新 Run 采用本次输入的配置；旧 Run 的配置不变。
+    assert new_run.options.ban_tools == ["write_file"]
     assert store.crud.get(store.run.id).options.ban_tools == []
 
 
@@ -1230,17 +1354,10 @@ def test_edit_can_remove_an_attachment_deleted_since_original_message(store, tmp
         ),
         store.config_id,
     )
-    store.inputs.consume(store.task.id, store.run.id, 1)
+    store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
     attachment.unlink()
     store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
-    store.service.edit_latest(
-        store.task.id,
-        store.run.id,
-        message_id,
-        ConversationRunCommand(display_text="ignore that file"),
-        store.config_id,
-        None,
-    )
+    _edit(store, message_id, ConversationRunCommand(display_text="ignore that file"))
     row = store.context.entries_in_context(store.task.id)[0]
     assert row.message == {"role": "user", "content": "ignore that file"}
     assert row.metadata.presentation.attachments == []
@@ -1274,3 +1391,111 @@ async def test_concurrent_sends_to_idle_task_open_one_run_and_queue_the_other(st
     assert sorted(receipt.queued for receipt in receipts) == [False, True]
     assert len(started) == 1
     assert len(store.crud.list_by_task(store.task.id)) == 2
+
+
+def _other_model() -> int:
+    """再建一份模型配置，模拟用户在 Run 进行中切换模型。"""
+    with main_session_factory().begin() as session:
+        other = ModelConfigModel(
+            config_name="other",
+            base_url="https://example.invalid",
+            api_key="test",
+            model_name="other",
+            context_window_k=32,
+        )
+        session.add(other)
+        session.flush()
+        return other.id
+
+
+def test_consume_stops_at_first_input_that_current_run_cannot_take(store):
+    """当前批次只取队首连续的「立即投递且模型一致」输入：换模型的输入及其后输入都留给新 Run。"""
+    other_id = _other_model()
+    store.inputs.enqueue(store.task.id, ConversationRunCommand(display_text="switch"), other_id)
+    store.inputs.enqueue(
+        store.task.id, ConversationRunCommand(display_text="same"), store.config_id
+    )
+
+    entries = store.inputs.consume(store.task.id, store.run.id, store.config_id, 1)
+
+    assert [e.message["content"] for e in entries] == ["first"]
+    assert [p.payload.message.input_text for p in store.inputs.pending(store.task.id)] == [
+        "switch",
+        "same",
+    ]
+
+
+def test_accept_committed_rejects_sequence_gap(store, monkeypatch):
+    """inbox 转移必须从 manager 的下一序号开始写，否则内存列表与库序号会错位。"""
+    from app.core.context.runtime_message_context_manager import SystemPromptBuilder
+
+    monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
+    context = _context_manager(store)
+    context.begin_run(store.run)
+    entries = store.inputs.consume(
+        store.task.id, store.run.id, store.config_id, context.next_sequence + 1
+    )
+
+    with pytest.raises(ValueError, match="序号"):
+        context.accept_committed(entries)
+
+
+def test_prepare_input_skips_inbox_when_cancelled(store, monkeypatch):
+    """取消后 prepare_input 不并入 inbox，直接流向 model 由其落定取消，排队消息不会被吞。"""
+    from app.core.context.runtime_message_context_manager import SystemPromptBuilder
+    from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+    from app.core.workflow.execution_state.react_route import ReactRoute
+    from app.core.workflow.node_helper.common import execution_scope
+    from app.core.workflow.nodes.prepare_input_node import _prepare_input_node
+
+    monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
+    context = _context_manager(store)
+    context.begin_run(store.run)
+    rc = _real_context(store)
+    rc.step_limit = 10
+    monkeypatch.setattr(type(rc), "is_cancelled", lambda _self: True)
+    with execution_scope(rc, context):
+        patch = asyncio.run(
+            _prepare_input_node(
+                ReactExecutionState(
+                    step_count=0, tool_error_count=0, next_node=ReactRoute.PREPARE_INPUT
+                )
+            )
+        )
+
+    assert patch["next_node"] == ReactRoute.MODEL
+    assert len(store.inputs.pending(store.task.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_wait_idle_requires_no_executor_and_terminal_latest_run(store):
+    """静止 = 无执行者且最新 Run 已到终态；运行中与等待审批都不算静止。"""
+    session, _ = _session()
+    assert await session.wait_idle(store.task.id, 0.05) is False
+
+    store.crud.update_status_if_in(store.run.id, "waiting_for_input", ("running",))
+    assert await session.wait_idle(store.task.id, 0.05) is False
+
+    store.crud.update_status_if_in(store.run.id, "completed", ("waiting_for_input",))
+    assert await session.wait_idle(store.task.id, 0.05) is True
+
+
+@pytest.mark.asyncio
+async def test_wait_idle_wakes_when_execution_releases(store):
+    """执行释放即唤醒等待方，不必等到超时；判定按 Task，与等的是哪条 Run 无关。"""
+    import time
+
+    from app.service.conversation_run.workflow_session import _Execution
+
+    session, _ = _session()
+    store.crud.update_status_if_in(store.run.id, "completed", ("running",))
+
+    async def finish() -> None:
+        await asyncio.sleep(0.05)
+        session._release(store.run.id)
+
+    execution = asyncio.create_task(finish())
+    session._executions[store.run.id] = _Execution(task_id=store.task.id, thread_task=execution)
+    started = time.monotonic()
+    assert await session.wait_idle(store.task.id, 5) is True
+    assert time.monotonic() - started < 1

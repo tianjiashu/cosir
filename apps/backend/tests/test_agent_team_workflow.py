@@ -9,6 +9,7 @@ from pydantic import ValidationError
 import app.agent_team.coordinator as coordinator_module
 from app.agent_team.coordinator import AgentTeamCoordinator
 from app.agent_team.node_goal import AgentTeamNodeGoal
+from app.agent_team.team_tool_error import TeamToolError
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.core.agents.model_settings import ModelSettings
 from app.core.tools.display.agent_team_display import (
@@ -23,7 +24,7 @@ from app.core.workflow.node_helper.user_input_projection import extract_request
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_preparation_service import (
-    resolve_effective_model_settings,
+    resolve_node_model,
 )
 
 
@@ -197,30 +198,64 @@ def test_team_run_view_is_typed_and_does_not_accept_runtime_state() -> None:
         AgentTeamRunResponse.model_validate({**payload, "state": {"node_runtime": {}}})
 
 
-def test_team_model_snapshot_falls_back_to_parent_materialized_settings() -> None:
-    """没有独立 model_config 的子 Agent 使用主 Run 已物化模型并保留自身偏好。"""
+def test_team_node_model_falls_back_to_parent_model_config_and_keeps_own_preferences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没有独立模型配置的节点：沿用主 Run 选用的模型配置，节点偏好覆盖、主 Agent 偏好补缺。"""
+    from app.core.agents.resolved_model import ResolvedModel
+    from app.models.model_config_record import ModelConfigRecord
+    from app.service.agent_team import agent_team_preparation_service as preparation
 
-    child_profile = SimpleNamespace(
-        agent_id="general-assistant",
-        model_config_id=None,
-        model_settings=ModelSettings.default_settings(),
-    )
-    parent_materialized = ModelSettings(
+    config = ModelConfigRecord(
+        config_name="local",
         base_url="http://127.0.0.1/v1",
         api_key="secret",
         model_name="local-model",
         context_window_k=32,
         supports_thinking=True,
         supports_reasoning_effort=True,
-        supports_image=False,
+        id=9,
     )
-    parent_profile = SimpleNamespace(
-        model_settings=parent_materialized,
+    monkeypatch.setattr(
+        preparation,
+        "get_model_config_service",
+        lambda: SimpleNamespace(get_config=lambda config_id: config),
+    )
+    child_profile = SimpleNamespace(
+        agent_id="general-assistant",
         model_config_id=None,
+        model_settings=ModelSettings(reasoning_effort="high"),
+    )
+    parent_agent = SimpleNamespace(
+        model=ResolvedModel(
+            model_config_id=9,
+            base_url=config.base_url,
+            api_key=config.api_key,
+            model_name=config.model_name,
+            context_window_k=32,
+            supports_thinking=True,
+            supports_reasoning_effort=True,
+            supports_image=False,
+            temperature=0.3,
+            reasoning_effort="low",
+        )
     )
 
-    effective = resolve_effective_model_settings(child_profile, parent_profile)
+    node_model = resolve_node_model(child_profile, parent_agent)
 
-    assert effective.model_name == "local-model"
-    assert effective.base_url == parent_materialized.base_url
-    assert effective.reasoning_effort == "high"
+    assert node_model.model_config_id == 9
+    assert node_model.model_name == "local-model"
+    assert node_model.reasoning_effort == "high"
+    assert node_model.temperature == 0.3
+
+
+def test_team_node_without_any_model_config_is_rejected() -> None:
+    child_profile = SimpleNamespace(
+        agent_id="general-assistant",
+        model_config_id=None,
+        model_settings=ModelSettings.default_settings(),
+    )
+
+    with pytest.raises(TeamToolError):
+        resolve_node_model(child_profile, None)
+

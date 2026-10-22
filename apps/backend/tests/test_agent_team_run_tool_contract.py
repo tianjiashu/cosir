@@ -25,7 +25,6 @@ from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_tool_system
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
-from app.core.agents.model_settings import ModelSettings
 from app.core.tools.schemas import (
     EXECUTING_DECISION_KINDS,
     ToolExecutionContext,
@@ -41,6 +40,7 @@ from app.core.tools.tool_handler.agent_team.agent_team_run import (
 from app.core.tools.tool_models import AgentTeamArgs
 from app.core.tools.tool_registry import ToolRegistry
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
+from app.models.model_config_record import ModelConfigRecord
 from app.service.agent_team import agent_team_preparation_service as prep_module
 from app.service.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationService,
@@ -146,7 +146,7 @@ def _approve_decision(**data_overrides: object) -> UserDecision:
 
 
 def _child_profile() -> AgentProfile:
-    """构造一个已物化模型设置的 CHILD profile，使准备阶段能通过模型配置解析。"""
+    """构造一个选定了模型配置的 CHILD profile，使准备阶段能通过模型配置解析。"""
 
     return AgentProfile(
         agent_id="general-assistant",
@@ -155,36 +155,28 @@ def _child_profile() -> AgentProfile:
         system_prompt="child system prompt",
         allowed_tools=["read_file"],
         agent_type=AgentProfileType.CHILD,
-        model_settings=_materialized_model_settings(),
+        model_config_id=1,
     )
 
 
-def _materialized_model_settings() -> ModelSettings:
-    """构造「已物化连接与能力字段」的模型运行设置。
-
-    真实链路由 ``run.model_config_id`` 经 ``ModelSettings.from_model_config_record`` 物化；
-    测试用等价的显式值，避免用例依赖数据库中的模型配置记录。
-    """
-
-    return ModelSettings(
-        base_url="http://127.0.0.1/v1",
-        api_key="secret",
-        model_name="local-model",
-        context_window_k=32,
-        supports_thinking=True,
-        supports_reasoning_effort=True,
-        supports_image=False,
-    )
+# 测试用模型配置：真实链路由 ``model_config_id`` 从模型配置 service 读出，这里用等价记录，
+# 避免用例依赖数据库。
+_MODEL_CONFIG = ModelConfigRecord(
+    id=1,
+    config_name="local",
+    base_url="http://127.0.0.1/v1",
+    api_key="secret",
+    model_name="local-model",
+    context_window_k=32,
+    supports_thinking=True,
+    supports_reasoning_effort=True,
+)
 
 
 def _runtime(definition: AgentProfile) -> AgentRuntimeConfig:
-    """把定义包成运行时配置：沿用定义自带的模型设置与选择，测试不经 ``for_run`` 物化。"""
+    """按测试模型配置解析运行时配置。"""
 
-    return AgentRuntimeConfig(
-        definition=definition,
-        model_settings=definition.model_settings,
-        model_config_id=definition.model_config_id or 1,
-    )
+    return AgentRuntimeConfig.resolve(definition, _MODEL_CONFIG)
 
 
 def _parent_run_profile() -> AgentRuntimeConfig:
@@ -202,7 +194,6 @@ def _parent_run_profile() -> AgentRuntimeConfig:
             allowed_tools=["agent_team", "read_file"],
             agent_type=AgentProfileType.MAIN,
             model_config_id=1,
-            model_settings=_materialized_model_settings(),
         )
     )
 
@@ -216,6 +207,11 @@ def _stub_preparation_lookups(monkeypatch: pytest.MonkeyPatch, child: AgentProfi
 
     registry = SimpleNamespace(resolve=lambda scope, agent_id: child)
     monkeypatch.setattr(prep_module, "get_agent_registry", lambda: registry)
+    monkeypatch.setattr(
+        prep_module,
+        "get_model_config_service",
+        lambda: SimpleNamespace(get_config=lambda _config_id: _MODEL_CONFIG),
+    )
 
 
 @pytest.fixture

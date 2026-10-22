@@ -20,7 +20,7 @@ class _FakeContextManager:
     """供广播过滤测试使用的可弱引用 context manager 外壳。"""
 
     def __init__(self, agent_type: AgentProfileType, workspace_root: str) -> None:
-        self.agent_profile = SimpleNamespace(agent_type=agent_type)
+        self.agent = SimpleNamespace(agent_type=agent_type)
         self.workspace = SimpleNamespace(root_path=workspace_root)
 
 
@@ -193,7 +193,7 @@ def test_unmaterialized_context_space_is_skipped_without_creating_manager(
     monkeypatch.setattr(manager_module, "RuntimeMessageContextManager", forbid_creation)
     space = task_runtime_spaces.get_or_create(40)
     if remembered_profile:
-        space.agent_profile = SimpleNamespace(
+        space.agent = SimpleNamespace(
             agent_type=AgentProfileType.MAIN, allowed_tools=["delegate_task"]
         )
     delta = build_system_prompt_delta(

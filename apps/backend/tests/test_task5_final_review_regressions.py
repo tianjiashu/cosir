@@ -18,7 +18,6 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.core.events import RunInitializedEvent
-from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
@@ -110,13 +109,23 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     service._task = TaskCrud()
     from contextlib import nullcontext
 
+    from app.models.conversation_input import ConversationInput, QueuedTaskInput
+    from app.models.conversation_run_options import ConversationRunOptions
     from app.storage.crud.task_input_crud import TaskInputCrud
 
     service._session_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
-    queued = []
-    monkeypatch.setattr(TaskInputCrud, "append", lambda self, *args: queued.append(args))
+    head = QueuedTaskInput(
+        message=ConversationInput(input_text="hello", display_text="hello"),
+        model_config_id=1,
+        options=ConversationRunOptions(),
+        agent_id="child_agent",
+    )
     monkeypatch.setattr(TaskInputCrud, "release_all_immediate", lambda self, *args: None)
-    monkeypatch.setattr(TaskInputCrud, "list_pending", lambda self, *args: list(queued))
+    monkeypatch.setattr(
+        TaskInputCrud,
+        "list_pending",
+        lambda self, *args: [SimpleNamespace(payload=head.model_dump(mode="json"))],
+    )
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: Projector())
     monkeypatch.setattr(
         "app.service.conversation_run.conversation_run_service.get_model_config_service",
@@ -128,33 +137,7 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
             )
         ),
     )
-    monkeypatch.setattr(
-        "app.service.conversation_run.conversation_input_preparation_service.get_model_config_service",
-        lambda: SimpleNamespace(
-            get_config=lambda _config_id: SimpleNamespace(
-                supports_reasoning_effort=False,
-                supports_image=False,
-                context_window_k=128,
-            )
-        ),
-    )
-
-    from app.service.conversation_run.conversation_input_preparation_service import (
-        ConversationInputPreparationService,
-    )
-
-    preparation = ConversationInputPreparationService.__new__(ConversationInputPreparationService)
-    preparation._task = SimpleNamespace(get=lambda _id: SimpleNamespace(workspace_id=None))
-    monkeypatch.setattr(
-        "app.service.conversation_run.conversation_run_service.ConversationInputPreparationService",
-        lambda: preparation,
-    )
-    service.create_run(
-        7,
-        model_config_id=1,
-        run_command=ConversationRunCommand(display_text="hello"),
-        agent_id="child_agent",
-    )
+    service.create_run(7)
 
     assert [getattr(event, "type", None) for event in events] == ["run_initialized"]
 

@@ -19,19 +19,17 @@ def loop(monkeypatch):
     calls = []
     context = SimpleNamespace(
         begin_run=lambda *args: None,
-        consume_inbox=lambda: calls.append("queue"),
         load_message=lambda: [
             {"role": "user", "content": "问题"},
             {"role": "assistant", "content": "自然回答"},
         ],
     )
     model = SimpleNamespace(close=AsyncMock())
-    profile = SimpleNamespace(max_steps=10, structured_output=None)
     run = SimpleNamespace(id=1, task_id=2, execution_data=ConversationRunProgress(), usage=None)
     operations = runtime_stub(
         run=run,
         task=SimpleNamespace(id=run.task_id),
-        agent=SimpleNamespace(definition=profile, model_settings=None),
+        agent=SimpleNamespace(max_steps=10, structured_output=None, model=None),
         allows_tools=frozenset({"review"}),
         run_state=run_state_stub(
             save_execution=lambda _run_id, value: progress.append(value),
@@ -39,6 +37,13 @@ def loop(monkeypatch):
         ),
         task_space=SimpleNamespace(task_tool_schemas=(), get_context_manager=lambda **k: context),
     )
+    async def prepare_input(state):
+        """inbox 并入节点替身：不触碰真实 inbox，只记录经过并流向 model。"""
+        if not operations.cancelled:
+            calls.append("queue")
+        return {"next_node": ReactRoute.MODEL}
+
+    monkeypatch.setattr(module, "_prepare_input_node", prepare_input)
     monkeypatch.setattr(
         module,
         "resolve_chat_model",
@@ -68,14 +73,14 @@ async def test_queue_only_at_model_boundary_and_end_stops_driving(loop, monkeypa
 
     async def observe(state):
         loop.calls.append("observe")
-        return {"next_node": ReactRoute.MODEL}
+        return {"next_node": ReactRoute.PREPARE_INPUT}
 
     monkeypatch.setattr(module, "_model_node", model)
     monkeypatch.setattr(module, "_tools_node", tools)
     monkeypatch.setattr(module, "_observe_node", observe)
     await module.ReactLikeWorkflow().run(loop.ops)
-    # 终态由产出节点就地落定，loop 到 END 只停止驱动；inbox 并入属于 model 节点，循环不再参与。
-    assert loop.calls == ["model", "tools", "observe", "model"]
+    # 终态由产出节点就地落定，loop 到 END 只停止驱动；每次模型请求前先经 prepare_input 并入 inbox。
+    assert loop.calls == ["queue", "model", "tools", "observe", "queue", "model"]
     loop.model.close.assert_awaited_once()
 
 
@@ -100,7 +105,7 @@ async def test_cancelled_resume_does_not_replay_old_tools(loop, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cancellation_before_model_does_not_consume_queue(loop):
-    """取消在 model 节点入口落定，早于 inbox 并入，排队消息不会被吞进已取消的 Run。"""
+    """取消时 prepare_input 不并入 inbox，由 model 节点入口落定取消，排队消息不进已取消的 Run。"""
     loop.ops.cancelled = True
     await module.ReactLikeWorkflow().run(loop.ops)
     assert loop.calls == ["cancel"]
@@ -120,9 +125,9 @@ async def test_wait_returns_without_extra_model_or_queue(loop, monkeypatch):
     )
     progress_before = len(loop.progress)
     await module.ReactLikeWorkflow().run(loop.ops)
-    assert loop.calls == ["wait"]
+    assert loop.calls == ["queue", "wait"]
     # 挂起后不再保存进度，避免覆盖刚冻结的待决请求。
-    assert len(loop.progress) == progress_before + 1
+    assert len(loop.progress) == progress_before + 2
     loop.model.close.assert_awaited_once()
 
 
@@ -147,7 +152,7 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
     成功后必须立即结束：回归点是成功写入后又落到失败写入，把 end_reason 覆盖成失败。
     """
     from app.core.workflow.node_helper.common import _runtime_context
-    loop.ops.agent.definition.structured_output = SimpleNamespace(
+    loop.ops.agent.structured_output = SimpleNamespace(
         name="result", json_schema={"type": "object", "required": ["ok"]}
     )
     loop.ops.task = SimpleNamespace(id=2, workspace_id=1)
@@ -356,7 +361,7 @@ async def test_cancel_waiting_resume_rejects_then_stops_at_model(loop, monkeypat
 
     async def observe(state):
         loop.calls.append("observe")
-        return {"next_node": ReactRoute.MODEL}
+        return {"next_node": ReactRoute.PREPARE_INPUT}
 
     monkeypatch.setattr(module, "_observe_node", observe)
     monkeypatch.setattr(module, "_tools_node", AsyncMock(side_effect=AssertionError("不应执行")))

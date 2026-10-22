@@ -1,4 +1,4 @@
-"""Child Run lifecycle projection regressions for parent Transport state."""
+"""子 Task 最新 Run 状态投影到父任务委派卡片的回归：卡片按 child_task_id 定位，不跟踪某条 Run。"""
 
 from __future__ import annotations
 
@@ -105,11 +105,12 @@ class _Sources:
     def __init__(self, rows: list[ConversationTaskContextRecord]) -> None:
         self.tasks = {
             1: _task(1, current_run_id=10),
-            2: _task(2, parent_task_id=1, current_run_id=20),
+            2: _task(2, parent_task_id=1, current_run_id=21),
         }
         self.runs = {
-            1: [_run(10, 1, "completed")],
-            2: [_run(20, 2, "running"), _run(21, 2, "running")],
+            10: _run(10, 1, "completed"),
+            20: _run(20, 2, "completed"),
+            21: _run(21, 2, "running"),
         }
         self.rows = rows
         self.metadata_updates: list[tuple[int, int, str]] = []
@@ -124,14 +125,13 @@ class _Sources:
         return list(self.rows)
 
     def list_by_task(self, task_id: int) -> list[ConversationRunRecord]:
-        return list(self.runs[task_id])
+        return [run for run in self.runs.values() if run.task_id == task_id]
 
     def update_child_display_status(
         self,
         task_id: int,
         sequence: int,
         child_task_id: int,
-        child_run_id: int,
         status: str,
     ) -> None:
         self.metadata_updates.append((task_id, sequence, status))
@@ -139,19 +139,29 @@ class _Sources:
             if row.task_id == task_id and row.sequence == sequence:
                 metadata = row.metadata.model_dump()
                 display = dict(metadata.get("display_data") or {})
-                if (
-                    display.get("child_task_id") == child_task_id
-                    and display.get("child_run_id") == child_run_id
-                ):
+                if display.get("child_task_id") == child_task_id:
                     display["status"] = status
                     metadata["display_data"] = display
                     self.rows[index] = replace(row, metadata=metadata)
 
 
+class _RunSource:
+    """Run 读取替身：``get`` 与 Task / context 读取同名，单独成对象避免签名冲突。"""
+
+    def __init__(self, sources: _Sources) -> None:
+        self._sources = sources
+
+    def get(self, run_id: int) -> ConversationRunRecord:
+        return self._sources.runs[run_id]
+
+    def list_by_task(self, task_id: int) -> list[ConversationRunRecord]:
+        return self._sources.list_by_task(task_id)
+
+
 def _service(sources: _Sources) -> ConversationTaskStateService:
     service = ConversationTaskStateService.__new__(ConversationTaskStateService)
     service._task_source = sources
-    service._run_source = sources
+    service._run_source = _RunSource(sources)
     service._context_source = sources
     return service
 
@@ -189,7 +199,7 @@ def _reset_task_runtime_spaces(monkeypatch: pytest.MonkeyPatch) -> None:
     ConversationTaskStateService.clear_process_state()
 
 
-def test_cold_rebuild_reconciles_live_child_statuses_by_exact_run_locator() -> None:
+def test_cold_rebuild_shows_child_task_latest_run_status() -> None:
     rows = _tool_rows(
         (
             "delegate-call",
@@ -197,7 +207,6 @@ def test_cold_rebuild_reconciles_live_child_statuses_by_exact_run_locator() -> N
                 "kind": "delegation-result",
                 "title": "Review",
                 "child_task_id": 2,
-                "child_run_id": 20,
                 "status": "running",
             },
         ),
@@ -207,7 +216,6 @@ def test_cold_rebuild_reconciles_live_child_statuses_by_exact_run_locator() -> N
                 "kind": "child-agent-result",
                 "operation": "send",
                 "child_task_id": 2,
-                "child_run_id": 21,
                 "status": "running",
             },
         ),
@@ -217,25 +225,24 @@ def test_cold_rebuild_reconciles_live_child_statuses_by_exact_run_locator() -> N
                 "kind": "child-agent-result",
                 "operation": "status",
                 "child_task_id": 2,
-                "child_run_id": 20,
                 "status": "running",
             },
         ),
     )
     sources = _Sources(rows)
-    sources.runs[2][0].status = "completed"
-    sources.runs[2][1].status = "failed"
+    sources.runs[21].status = "failed"
 
     state = _service(sources).get_state(1)
 
-    assert _display_by_call(state, "delegate-call")["status"] == "completed"
+    # 委派卡片与追加消息卡片都展示子 Task 最新 Run 的状态，与委派时是哪条 Run 无关。
+    assert _display_by_call(state, "delegate-call")["status"] == "failed"
     assert _display_by_call(state, "send-call")["status"] == "failed"
     # status is a point-in-time query result, not a live child status card.
     assert _display_by_call(state, "status-call")["status"] == "running"
     assert sources.metadata_updates == []
 
 
-def test_live_refresh_updates_delegate_and_send_without_overwriting_old_run() -> None:
+def test_live_refresh_follows_child_task_latest_run_and_ignores_old_run_events() -> None:
     rows = _tool_rows(
         (
             "delegate-call",
@@ -243,7 +250,6 @@ def test_live_refresh_updates_delegate_and_send_without_overwriting_old_run() ->
                 "kind": "delegation-result",
                 "title": "Review",
                 "child_task_id": 2,
-                "child_run_id": 20,
                 "status": "running",
             },
         ),
@@ -253,7 +259,6 @@ def test_live_refresh_updates_delegate_and_send_without_overwriting_old_run() ->
                 "kind": "child-agent-result",
                 "operation": "send",
                 "child_task_id": 2,
-                "child_run_id": 21,
                 "status": "running",
             },
         ),
@@ -263,7 +268,6 @@ def test_live_refresh_updates_delegate_and_send_without_overwriting_old_run() ->
                 "kind": "child-agent-result",
                 "operation": "status",
                 "child_task_id": 2,
-                "child_run_id": 20,
                 "status": "running",
             },
         ),
@@ -273,19 +277,18 @@ def test_live_refresh_updates_delegate_and_send_without_overwriting_old_run() ->
     state = service.get_state(1)
     assert _display_by_call(state, "delegate-call")["status"] == "running"
 
-    sources.runs[2][0].status = "completed"
-    service.refresh_parent_delegation(2, 20, "running")
-    state = service.get_state(1)
-    assert _display_by_call(state, "delegate-call")["status"] == "completed"
-    assert _display_by_call(state, "send-call")["status"] == "running"
+    # 旧 Run 的迟到事件不改卡片：卡片只跟子 Task 的最新 Run。
+    assert service.refresh_parent_delegation(2, 20, "completed") is None
+    assert sources.metadata_updates == []
 
-    sources.runs[2][1].status = "cancelled"
+    sources.runs[21].status = "cancelled"
     service.refresh_parent_delegation(2, 21, "running")
     state = service.get_state(1)
-    assert _display_by_call(state, "delegate-call")["status"] == "completed"
+    assert _display_by_call(state, "delegate-call")["status"] == "cancelled"
     assert _display_by_call(state, "send-call")["status"] == "cancelled"
+    assert _display_by_call(state, "status-call")["status"] == "running"
     assert [sequence for _, sequence, _ in sources.metadata_updates] == [2, 3]
-    assert [status for _, _, status in sources.metadata_updates] == ["completed", "cancelled"]
+    assert {status for _, _, status in sources.metadata_updates} == {"cancelled"}
 
 
 def test_event_projection_persists_status_when_parent_tool_row_arrives_after_child_completion() -> (
@@ -298,7 +301,6 @@ def test_event_projection_persists_status_when_parent_tool_row_arrives_after_chi
                 "kind": "delegation-result",
                 "title": "Review",
                 "child_task_id": 2,
-                "child_run_id": 20,
                 "status": "running",
             },
         ),
@@ -308,7 +310,6 @@ def test_event_projection_persists_status_when_parent_tool_row_arrives_after_chi
                 "kind": "child-agent-result",
                 "operation": "send",
                 "child_task_id": 2,
-                "child_run_id": 21,
                 "status": "running",
             },
         ),
@@ -318,7 +319,6 @@ def test_event_projection_persists_status_when_parent_tool_row_arrives_after_chi
                 "kind": "child-agent-result",
                 "operation": "status",
                 "child_task_id": 2,
-                "child_run_id": 20,
                 "status": "running",
             },
         ),
@@ -327,13 +327,13 @@ def test_event_projection_persists_status_when_parent_tool_row_arrives_after_chi
     service = _service(sources)
     service.get_state(1)
 
-    sources.runs[2][0].status = "completed"
+    sources.runs[21].status = "completed"
     # 任意真实事件都会触发子 Agent 状态对账；重复的 Run 初始化本身不产生变更。
     change = service.apply_planned(RunInitializedEvent(task_id=1, run_id=10))
 
     assert change.mutations
     assert _display_by_call(service.get_state(1), "delegate-call")["status"] == "completed"
-    assert [sequence for _, sequence, _ in sources.metadata_updates] == [2]
+    assert [sequence for _, sequence, _ in sources.metadata_updates] == [2, 3]
 
 
 def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_metadata() -> None:
@@ -346,7 +346,6 @@ def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_met
             "display_data": {
                 "kind": "delegation-result",
                 "child_task_id": 2,
-                "child_run_id": 20,
                 "status": "running",
             },
             "team_run_id": 77,
@@ -367,7 +366,7 @@ def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_met
             )
             session.flush()
 
-            crud.update_child_display_status(1, 2, 2, 20, "failed", session=session)
+            crud.update_child_display_status(1, 2, 2, "failed", session=session)
             row = session.scalar(
                 select(ConversationTaskContextModel).where(
                     ConversationTaskContextModel.task_id == 1,

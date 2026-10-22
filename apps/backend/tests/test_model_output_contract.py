@@ -109,7 +109,6 @@ class _ModelHarness:
                 )
 
         self.runtime_context = SimpleNamespace(
-            consume_inbox=lambda: [],
             load_message=lambda: [],
             add_message=add_message,
             save_model_response=save_model_response,
@@ -201,7 +200,7 @@ def test_filtered_calls_do_not_prevent_retry_without_finish_reason(monkeypatch):
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["next_node"] is ReactRoute.MODEL
+    assert result["next_node"] is ReactRoute.PREPARE_INPUT
     assert [included for _, included in harness.saved_responses] == [False]
 
 
@@ -260,7 +259,7 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["next_node"] is ReactRoute.MODEL
+    assert result["next_node"] is ReactRoute.PREPARE_INPUT
     assert harness.completed is False
     # 展示行保留，但没有进入下一步模型的 canonical context。
     assert harness.messages == []
@@ -302,7 +301,8 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
 
 
 def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None:
-    """通知经 context 持久化后参与下一次模型请求，不改写用户原文。"""
+    """prepare_input 把通知经 context 持久化，参与紧随其后的模型请求，不改写用户原文。"""
+    from app.core.workflow.nodes import prepare_input_node as prepare_module
 
     from tests.sdk_fixtures import sdk_completion
 
@@ -321,7 +321,12 @@ def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None
     harness.runtime_config.model.stream = stream
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(prepare_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(prepare_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(prepare_module, "_consume_inbox", lambda _rc: [])
     _patch_model_runtime(monkeypatch, harness)
+    prepared = asyncio.run(prepare_module._prepare_input_node(_state()))
+    assert prepared["next_node"] is ReactRoute.MODEL
     result = asyncio.run(model_module._model_node(_state()))
     assert result["next_node"] is ReactRoute.END
     assert requested[-1]["role"] == "system"

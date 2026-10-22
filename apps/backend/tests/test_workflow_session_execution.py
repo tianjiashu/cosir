@@ -20,6 +20,7 @@ def _session() -> WorkflowSession:
     """只用执行登记的会话：不装配领域服务。"""
     session = WorkflowSession.__new__(WorkflowSession)
     session._executions = {}
+    session._release_signals = {}
     session._closing = False
     return session
 

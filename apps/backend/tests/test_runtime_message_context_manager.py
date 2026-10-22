@@ -90,7 +90,7 @@ def test_runtime_message_context_manager_owns_next_sequence_after_run_restart() 
 
     context_service = _ContextService(max_sequence=1)
     manager = _manager(context_service, next_sequence=0)
-    manager.begin_run(SimpleNamespace(task_id=7, id=2), lambda _event: None)
+    manager.begin_run(SimpleNamespace(task_id=7, id=2))
     manager.add_message({"role": "user", "content": "second message"})
 
     assert context_service.appended[0][3] == 2
@@ -105,7 +105,7 @@ def test_begin_run_rebuilds_memory_entries_from_persisted_context() -> None:
     ]
     manager = _manager(context_service, next_sequence=1)
     manager._entries = [ContextEntry({"role": "user", "content": "stale"}, 1, 1)]
-    manager.begin_run(SimpleNamespace(task_id=7, id=2), lambda _event: None)
+    manager.begin_run(SimpleNamespace(task_id=7, id=2))
 
     assert context_service.deleted == []
     assert manager.current_run_id == 2

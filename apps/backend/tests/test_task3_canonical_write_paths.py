@@ -85,7 +85,7 @@ def test_begin_run_binds_identity_without_rewriting_context() -> None:
     manager = _runtime_manager(service)
     message = {"role": "user", "content": "existing"}
     service.entries_in_context = lambda _task_id: [ContextEntry(message, 11, 1)]
-    manager.begin_run(SimpleNamespace(id=12, task_id=7), lambda _event: None)
+    manager.begin_run(SimpleNamespace(id=12, task_id=7))
     assert manager.current_run_id == 12
     assert manager._entries[0].message is message
     assert service.appended == []
@@ -249,46 +249,10 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
             events.append(event)
 
     service = _creation_service(store, monkeypatch, Projector())
-    run = service.create_run(
-        store.task.id,
-        model_config_id=1,
-        run_command=ConversationRunCommand(display_text="hello"),
-    )
+    TaskInputService().enqueue(store.task.id, ConversationRunCommand(display_text="hello"), 1)
+    run = service.create_run(store.task.id)
     assert len(events) == 1
     assert events[0].run_id == run.id
-
-
-def test_create_run_with_external_session_defers_initialization_events_to_owner(
-    request,
-    monkeypatch,
-):
-    """外部事务内的 Run/inbox/指针不可提前暴露，回滚不留下任何一项。"""
-    from app.service.conversation_run.task_input_service import TaskInputService
-    from app.storage.crud.task_input_crud import TaskInputCrud
-
-    store = request.getfixturevalue("canonical_store")
-    events = []
-    service = _creation_service(store, monkeypatch, SimpleNamespace(process=events.append))
-    with store.factory() as session:
-        service.create_run(
-            store.task.id,
-            model_config_id=1,
-            run_command=ConversationRunCommand(display_text="hello"),
-            session=session,
-        )
-        assert (
-            TaskInputCrud().list_pending(session, store.task.id)[0].payload["message"]["input_text"]
-            == "hello"
-        )
-        assert store.runs.list_by_task(store.task.id) == []
-        assert store.tasks.get(store.task.id).current_run_id is None
-        assert TaskInputService().pending(store.task.id) == []
-        assert events == []
-        session.rollback()
-    assert store.runs.list_by_task(store.task.id) == []
-    assert TaskInputService().pending(store.task.id) == []
-    assert store.tasks.get(store.task.id).current_run_id is None
-    assert events == []
 
 
 def _run_record() -> SimpleNamespace:

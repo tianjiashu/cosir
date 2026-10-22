@@ -43,7 +43,6 @@ def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> Non
     result = build_child_agent_result_display_data(
         operation="status",
         child_task_id=2,
-        child_run_id=3,
         status="completed",
         agent_id="reviewer",
         agent_name="Review",
@@ -52,7 +51,6 @@ def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> Non
     )
     wait = build_child_agent_wait_display_data(
         child_task_id=2,
-        child_run_id=3,
         status="completed",
         final_output="summary",
         end_reason=None,
@@ -63,7 +61,6 @@ def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> Non
         "kind": "child-agent-result",
         "operation": "status",
         "child_task_id": 2,
-        "child_run_id": 3,
         "status": "completed",
         "agent_id": "reviewer",
         "agent_name": "Review",
@@ -79,7 +76,6 @@ def test_parent_delegation_display_never_carries_child_output() -> None:
         title="Review",
         child_agent_id="reviewer",
         child_task_id=2,
-        child_run_id=3,
         status="completed",
         role="Reviewer",
     )
@@ -89,7 +85,6 @@ def test_parent_delegation_display_never_carries_child_output() -> None:
         "title": "Review",
         "child_agent_id": "reviewer",
         "child_task_id": 2,
-        "child_run_id": 3,
         "status": "completed",
         "role": "Reviewer",
     }
@@ -146,7 +141,6 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
                         "title": "Review",
                         "child_agent_id": "reviewer",
                         "child_task_id": 2,
-                        "child_run_id": 20,
                         "status": "running",
                     },
                 }

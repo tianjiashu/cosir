@@ -19,7 +19,7 @@ class _FakeContextManager:
     """供目录通知过滤测试使用的最小 context manager 外壳。"""
 
     def __init__(self, agent_type: AgentProfileType, allowed_tools: list[str], root: str) -> None:
-        self.agent_profile = SimpleNamespace(agent_type=agent_type, allowed_tools=allowed_tools)
+        self.agent = SimpleNamespace(agent_type=agent_type, allowed_tools=allowed_tools)
         self.workspace = SimpleNamespace(root_path=root)
 
 

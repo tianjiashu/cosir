@@ -83,7 +83,6 @@ def test_storage_boundary_rejects_role_mismatch_and_obsolete_shapes(role, metada
             display_data={
                 "kind": "delegation-result",
                 "child_task_id": 2,
-                "child_run_id": 3,
                 "role": "saved role",
             },
         ),

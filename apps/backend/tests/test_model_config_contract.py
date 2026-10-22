@@ -7,7 +7,7 @@ import pytest
 from app.api.schemas.request.ModelConfigCreateRequest import ModelConfigCreateRequest
 from app.api.schemas.request.ModelConfigTestRequest import ModelConfigTestRequest
 from app.api.schemas.response.ModelConfigResponse import ModelConfigResponse
-from app.core.agents.model_settings import ModelSettings
+from app.core.agents.resolved_model import ResolvedModel
 from app.core.llm_provider.model_probe import ModelProbeFailureKind, ModelProbeOutcome
 from app.models.model_config_record import ModelConfigRecord
 from app.service.model_config.model_config_service import ModelConfigService
@@ -93,11 +93,11 @@ def test_model_config_response_returns_api_key_for_local_edit_form() -> None:
 async def test_draft_connection_test_uses_the_submitted_endpoint_and_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """未保存测试必须把完整表单物化后送入真实探活入口。"""
+    """未保存测试必须把完整表单解析为 ``ResolvedModel`` 后送入真实探活入口。"""
 
-    captured: list[ModelSettings] = []
+    captured: list[ResolvedModel] = []
 
-    async def fake_probe(model_settings: ModelSettings, **kwargs: object) -> ModelProbeOutcome:
+    async def fake_probe(model_settings: ResolvedModel, **kwargs: object) -> ModelProbeOutcome:
         captured.append(model_settings)
         return ModelProbeOutcome(ok=True, elapsed_ms=12)
 
@@ -132,12 +132,42 @@ async def test_draft_connection_test_uses_the_submitted_endpoint_and_model(
 
 
 @pytest.mark.asyncio
+async def test_incomplete_draft_is_invalid_config_without_probing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """表单缺 Base URL 等必需字段：解析即失败、映射为 invalid_config，不发出探测请求。"""
+
+    async def fake_probe(*_args: object, **_kwargs: object) -> ModelProbeOutcome:
+        raise AssertionError("配置不完整时不得探活")
+
+    monkeypatch.setattr(
+        "app.service.model_config.model_config_service.probe_chat_model",
+        fake_probe,
+    )
+    service = object.__new__(ModelConfigService)
+
+    result = await service.test_draft(
+        config_name="本地模型",
+        base_url="   ",
+        api_key="secret",
+        model_name="demo-model",
+        context_window_k=128,
+        supports_thinking=False,
+        supports_reasoning_effort=False,
+        supports_image=False,
+    )
+
+    assert result.success is False
+    assert result.error_code == "invalid_config"
+
+
+@pytest.mark.asyncio
 async def test_connection_failure_exposes_stable_code_and_controlled_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """探活失败必须透出稳定 error_code 与受控文案，且不得泄漏探活细节。"""
 
-    async def fake_probe(model_settings: ModelSettings, **kwargs: object) -> ModelProbeOutcome:
+    async def fake_probe(model_settings: ResolvedModel, **kwargs: object) -> ModelProbeOutcome:
         return ModelProbeOutcome(
             ok=False,
             elapsed_ms=608,

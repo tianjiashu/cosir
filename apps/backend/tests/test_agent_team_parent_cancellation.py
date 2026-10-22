@@ -1,4 +1,4 @@
-"""Agent Team 节点经调度入口启动；Coordinator 等待节点释放时检查父 Task 的停止信号。"""
+"""Agent Team 节点经调度入口启动；Coordinator 按 Task 等节点静止时检查父 Task 的停止信号。"""
 
 import asyncio
 import threading
@@ -30,14 +30,18 @@ def main_loop() -> Iterator[asyncio.AbstractEventLoop]:
 
 
 class _Node:
-    """调度入口替身：节点执行在被取消前一直不释放。"""
+    """调度入口替身：节点 Task 在被取消前一直不静止。"""
 
     def __init__(self) -> None:
         self.cancelled: list[int] = []
         self._released = asyncio.Event()
 
-    async def wait_released(self, _run_id: int) -> None:
-        await self._released.wait()
+    async def wait_idle(self, _task_id: int, wait_seconds: float) -> bool:
+        try:
+            await asyncio.wait_for(self._released.wait(), wait_seconds)
+        except TimeoutError:
+            return False
+        return True
 
     async def cancel(self, task_id: int) -> bool:
         self.cancelled.append(task_id)
@@ -50,11 +54,11 @@ def test_node_wait_stops_node_when_parent_is_cancelled(
 ) -> None:
     node = _Node()
     monkeypatch.setattr(coordinator_module, "get_workflow_session", lambda: node)
-    # 节点启动后父 Task 才被停止：等待释放的轮询应检出并经调度入口停止节点。
+    # 节点启动后父 Task 才被停止：分段等待静止的间隙应检出并经调度入口停止节点。
     threading.Timer(0.3, cancellation_registry.request_cancel, args=(_PARENT_TASK,)).start()
 
     AgentTeamCoordinator.__new__(AgentTeamCoordinator)._wait_node(
-        main_loop, 5, _PARENT_TASK, _NODE_TASK
+        main_loop, _PARENT_TASK, _NODE_TASK
     )
 
     assert node.cancelled == [_NODE_TASK]

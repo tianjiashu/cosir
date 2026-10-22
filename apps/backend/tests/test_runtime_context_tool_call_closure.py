@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TypeVar, cast
@@ -861,8 +862,15 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
         entries=env.context.entries_in_context(env.task.id),
         next_sequence=2,
     )
+    from app.core.workflow.nodes import prepare_input_node
+
+    monkeypatch.setattr(prepare_input_node, "_message_context", lambda: manager)
     with pytest.raises(ContextProtocolError):
-        manager.consume_inbox()
+        prepare_input_node._consume_inbox(
+            SimpleNamespace(
+                task=env.task, run=run, task_space=SimpleNamespace(operation=nullcontext)
+            )
+        )
     requested = []
 
     async def stream(*_args, **_kwargs):
