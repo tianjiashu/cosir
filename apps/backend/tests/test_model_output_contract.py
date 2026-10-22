@@ -15,32 +15,8 @@ from app.core.workflow.execution_state.react_execution_state import ReactExecuti
 from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.nodes import model_node as model_module
 from app.models.enums.conversation_run_status import RunTransition
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from tests.runtime_context_stub import run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion, sdk_event
-
-
-@pytest.fixture(autouse=True)
-def _patch_task_space(monkeypatch: Any):
-    """为 model 节点提供不依赖数据库的延迟消息队列。"""
-
-    class TaskSpace:
-        def __init__(self) -> None:
-            self.messages: list[Any] = []
-
-        def take_runtime_notices(self, **_kwargs: Any) -> list[Any]:
-            messages, self.messages = self.messages, []
-            return messages
-
-        def defer_runtime_notice(self, message: Any) -> None:
-            self.messages.append(message)
-
-        def has_runtime_notices(self) -> bool:
-            return bool(self.messages)
-
-    task_space = TaskSpace()
-    monkeypatch.setattr(task_runtime_spaces, "get_or_create", lambda _task_id: task_space)
-    return task_space
 
 
 def _state(**overrides: Any) -> ReactExecutionState:
@@ -89,7 +65,6 @@ class _ModelHarness:
             run_state=run_state_stub(transition=lambda _run_id, transition, **kw: transition_run(
                 transition, **kw
             )),
-            task_space=task_runtime_spaces.get_or_create(1),
             model=SimpleNamespace(stream=self._astream),
             usage_stats=SimpleNamespace(
                 add_usage_metadata=lambda _metadata: None,
@@ -245,7 +220,7 @@ def test_any_finish_reason_without_tool_calls_completes_run(
         "end_reason": finish_reason,
     }
     assert [item["role"] for item in harness.messages] == ["assistant"]
-    assert task_runtime_spaces.get_or_create(1).take_runtime_notices() == []
+    assert harness.runtime_config.mailbox.drain() == []
 
 
 def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) -> None:
@@ -264,9 +239,9 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     # 展示行保留，但没有进入下一步模型的 canonical context。
     assert harness.messages == []
     assert [include for _, include in harness.saved_responses] == [False]
-    deferred_system_messages = task_runtime_spaces.get_or_create(1).take_runtime_notices()
-    assert len(deferred_system_messages) == 1
-    assert deferred_system_messages[0].kind == "model_continuation"
+    [notice] = harness.runtime_config.mailbox.drain()
+    assert notice.id is None
+    assert notice.kind == "model_continuation"
 
 
 def test_empty_content_with_finish_reason_completes_run(monkeypatch: Any) -> None:
@@ -301,8 +276,12 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
 
 
 def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None:
-    """prepare_input 把通知经 context 持久化，参与紧随其后的模型请求，不改写用户原文。"""
+    """prepare_input 把 mailbox 里的通知合成一条 system 消息经 context 持久化，参与紧随其后的
+    模型请求，不改写用户原文。"""
+    from contextlib import nullcontext
+
     from app.core.workflow.nodes import prepare_input_node as prepare_module
+    from app.models.task_message import NoticeMessage
 
     from tests.sdk_fixtures import sdk_completion
 
@@ -310,8 +289,13 @@ def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None
     harness = _ModelHarness(sdk_completion(content="完成", finish_reason="stop"))
     harness.runtime_context.load_message = lambda: [base, *harness.messages]
     requested: list[Any] = []
-    space = task_runtime_spaces.get_or_create(1)
-    monkeypatch.setattr(space, "take_runtime_notices", lambda **kw: "环境已更新")
+    harness.runtime_config.mailbox.post(NoticeMessage(id=None, content="环境已更新", kind="test"))
+    # Run 内通知没有外部队列行，确认集合为空；事务只是写入边界，不触碰真实数据库。
+    monkeypatch.setattr(
+        prepare_module,
+        "main_session_factory",
+        lambda: SimpleNamespace(begin=lambda: nullcontext(None)),
+    )
 
     async def stream(messages: list[Any], **kwargs: Any) -> AsyncIterator[ChunkEvent]:
         requested.extend(messages)
@@ -323,14 +307,14 @@ def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(prepare_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(prepare_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(prepare_module, "_consume_inbox", lambda _rc: [])
     _patch_model_runtime(monkeypatch, harness)
     prepared = asyncio.run(prepare_module._prepare_input_node(_state()))
     assert prepared["next_node"] is ReactRoute.MODEL
     result = asyncio.run(model_module._model_node(_state()))
     assert result["next_node"] is ReactRoute.END
     assert requested[-1]["role"] == "system"
-    assert requested[-1]["content"] == "环境已更新"
+    assert requested[-1]["content"].startswith("system_hint:")
+    assert requested[-1]["content"].endswith("\n环境已更新")
     assert harness.messages[0] == requested[-1]
     assert base["content"] == "你好"
 
@@ -389,4 +373,4 @@ def test_tool_calls_take_priority_over_finish_reason(monkeypatch, finish_reason)
     assert result["next_node"] is ReactRoute.TOOLS
     assert harness.messages[-1]["tool_calls"][0]["id"] == "call"
     assert [included for _, included in harness.saved_responses] == [False, True]
-    assert not task_runtime_spaces.get_or_create(1).has_runtime_notices()
+    assert harness.runtime_config.mailbox.drain() == []

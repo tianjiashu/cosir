@@ -232,8 +232,8 @@ def _creation_service(store, monkeypatch, projector):
 
 
 def test_create_run_commits_inbox_and_current_run_before_projector(request, monkeypatch):
-    """独立连接在事件发布时已能看到整组事实，context 留待模型边界消费。"""
-    from app.service.conversation_run.task_input_service import TaskInputService
+    """独立连接在事件发布时已能看到整组事实，context 留待模型边界并入。"""
+    from app.service.conversation_run.task_message_queue import TaskMessageQueue
 
     store = request.getfixturevalue("canonical_store")
     events = []
@@ -243,13 +243,14 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
             assert store.tasks.get(store.task.id).current_run_id == event.run_id
             assert store.runs.get(event.run_id).context_window_total == 128000
             assert (
-                TaskInputService().pending(store.task.id)[0].payload.message.input_text == "hello"
+                TaskMessageQueue().pending_users(store.task.id)[0].payload.message.input_text
+                == "hello"
             )
             assert store.contexts.get(store.task.id, include_in_context=False) == []
             events.append(event)
 
     service = _creation_service(store, monkeypatch, Projector())
-    TaskInputService().enqueue(store.task.id, ConversationRunCommand(display_text="hello"), 1)
+    TaskMessageQueue().put_user(store.task.id, ConversationRunCommand(display_text="hello"), 1)
     run = service.create_run(store.task.id)
     assert len(events) == 1
     assert events[0].run_id == run.id

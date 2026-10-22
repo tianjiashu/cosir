@@ -1,4 +1,4 @@
-"""系统提示词 diff 的进程内通知测试。"""
+"""系统提示词 diff 的通知广播测试：命中的 Task 经 ``WorkflowSession.post_notices`` 入外部队列。"""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
+from app.models.task_message import NoticeMessage, notices_to_system_message
+from app.task_runtime.broadcaster import runtime_notice_broadcaster
 from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
     broadcast_system_prompt_delta,
     build_system_prompt_delta,
@@ -26,7 +28,7 @@ class _FakeContextManager:
 
 @pytest.fixture(autouse=True)
 def clear_runtime_spaces(monkeypatch):
-    """使用真实队列与广播，只替换无关的 Task/Workspace 存储读取。"""
+    """使用真实 runtime space 与广播，只替换无关的 Task/Workspace 存储读取。"""
 
     import app.task_runtime.task_runtime_space as space_module
 
@@ -47,6 +49,24 @@ def clear_runtime_spaces(monkeypatch):
     task_runtime_spaces.close()
     yield
     task_runtime_spaces.close()
+
+
+@pytest.fixture(autouse=True)
+def posted(monkeypatch) -> dict[int, list[NoticeMessage]]:
+    """记录广播交给 ``post_notices`` 的通知，按 Task 归档。"""
+
+    by_task: dict[int, list[NoticeMessage]] = {}
+
+    def post_notices(task_ids: list[int], notice: NoticeMessage) -> None:
+        for task_id in task_ids:
+            by_task.setdefault(task_id, []).append(notice)
+
+    monkeypatch.setattr(
+        runtime_notice_broadcaster,
+        "get_workflow_session",
+        lambda: SimpleNamespace(post_notices=post_notices),
+    )
+    return by_task
 
 
 def test_build_system_prompt_delta_only_contains_changed_lines() -> None:
@@ -79,37 +99,40 @@ def test_build_system_prompt_delta_only_contains_changed_lines() -> None:
     )
 
 
-def test_task_space_returns_delta_as_a_runtime_notice() -> None:
-    """系统提示词通知只消费一次，并交给模型节点沿既有路径写入 Task context。"""
+def test_delta_notice_becomes_one_system_hint_message() -> None:
+    """通知合并为一条 system 消息：``system_hint:`` 声明只加一次，正文原样拼在声明之后。"""
 
-    space = task_runtime_spaces.get_or_create(1)
     delta = build_system_prompt_delta(
         source=SystemPromptDeltaSource.GLOBAL_INSTRUCTIONS,
         previous="旧规则\n",
         current="新规则\n",
     )
     assert delta is not None
+    notice = delta.to_notice()
 
-    space.defer_runtime_notice(delta.to_notice())
+    message = notices_to_system_message([notice, notice])
 
-    hint = space.take_runtime_notices()
-    # 消费边界把通知压成一段以 ``system_hint:`` 起始的文本，正文原样拼接在声明之后。
-    assert hint.startswith("system_hint:")
-    assert hint.endswith("\n" + delta.to_notice().content)
-    assert "-旧规则" in hint
-    assert "+新规则" in hint
-    assert space.take_runtime_notices() == ""
+    assert message["role"] == "system"
+    assert message["content"].startswith("system_hint:")
+    assert message["content"].count("system_hint:") == 1
+    assert message["content"].endswith(f"\n{notice.content}\n{notice.content}")
+    assert "-旧规则" in notice.content
+    assert "+新规则" in notice.content
 
 
-def test_main_agent_delta_only_reaches_main_agent_spaces() -> None:
+def _materialize(task_id: int, manager: _FakeContextManager):
+    space = task_runtime_spaces.get_or_create(task_id)
+    space._context_manager = weakref.ref(manager)
+    return space
+
+
+def test_main_agent_delta_only_reaches_main_agent_spaces(posted) -> None:
     """主 Agent prompt 变更只通知 AgentProfileType.MAIN 的已物化 space。"""
 
-    main_space = task_runtime_spaces.get_or_create(10)
-    child_space = task_runtime_spaces.get_or_create(11)
     main_manager = _FakeContextManager(AgentProfileType.MAIN, "/workspace/main")
     child_manager = _FakeContextManager(AgentProfileType.CHILD, "/workspace/main")
-    main_space._context_manager = weakref.ref(main_manager)
-    child_space._context_manager = weakref.ref(child_manager)
+    _materialize(10, main_manager)
+    _materialize(11, child_manager)
     delta = build_system_prompt_delta(
         source=SystemPromptDeltaSource.MAIN_AGENT_PROMPT,
         previous="旧主 Agent 规则\n",
@@ -119,19 +142,17 @@ def test_main_agent_delta_only_reaches_main_agent_spaces() -> None:
 
     assert broadcast_system_prompt_delta(delta) == 1
 
-    assert "+新主 Agent 规则" in main_space.take_runtime_notices()
-    assert child_space.take_runtime_notices() == ""
+    assert list(posted) == [10]
+    assert "+新主 Agent 规则" in posted[10][0].content
 
 
-def test_global_delta_reaches_all_materialized_context_spaces() -> None:
-    """系统级 AGENTS.md 变更通知所有已创建 context manager 的 space。"""
+def test_global_delta_reaches_all_materialized_context_spaces(posted) -> None:
+    """系统级 AGENTS.md 变更通知所有已创建 context manager 的 space，同一条通知不被改写。"""
 
-    first = task_runtime_spaces.get_or_create(20)
-    second = task_runtime_spaces.get_or_create(21)
     first_manager = _FakeContextManager(AgentProfileType.CHILD, "/workspace/one")
     second_manager = _FakeContextManager(AgentProfileType.MAIN, "/workspace/two")
-    first._context_manager = weakref.ref(first_manager)
-    second._context_manager = weakref.ref(second_manager)
+    _materialize(20, first_manager)
+    _materialize(21, second_manager)
     delta = build_system_prompt_delta(
         source=SystemPromptDeltaSource.GLOBAL_INSTRUCTIONS,
         previous="旧全局规则\n",
@@ -140,35 +161,10 @@ def test_global_delta_reaches_all_materialized_context_spaces() -> None:
     assert delta is not None
 
     assert broadcast_system_prompt_delta(delta) == 2
-    assert "+新全局规则" in first.take_runtime_notices()
-    assert "+新全局规则" in second.take_runtime_notices()
-
-
-def test_broadcast_notice_is_unchanged_across_tasks_and_message_conversion() -> None:
-    """同一通知广播后，每个 Task 转换出的消息互不影响，也不累加前缀。"""
-    first = task_runtime_spaces.get_or_create(30)
-    second = task_runtime_spaces.get_or_create(31)
-    first_manager = _FakeContextManager(AgentProfileType.MAIN, "/workspace/one")
-    second_manager = _FakeContextManager(AgentProfileType.MAIN, "/workspace/two")
-    first._context_manager = weakref.ref(first_manager)
-    second._context_manager = weakref.ref(second_manager)
-    delta = build_system_prompt_delta(
-        source=SystemPromptDeltaSource.GLOBAL_INSTRUCTIONS,
-        previous="旧规则\n",
-        current="新规则\n",
-    )
-    assert delta is not None
-    assert broadcast_system_prompt_delta(delta) == 2
-    notice = delta.to_notice()
-    first_hint = first.take_runtime_notices()
-    second_hint = second.take_runtime_notices()
-    # 同一通知广播到多个 Task：各自消费出的文本一致，``system_hint:`` 只由消费边界加一次，
-    # 通知正文本身不被任何一侧改写或累加前缀。
-    assert first_hint == second_hint
-    assert first_hint.count("system_hint:") == 1
-    assert first_hint.count(notice.content) == 1
-    assert notice.to_hint_text() == notice.content
-    assert delta.to_notice() == notice
+    assert sorted(posted) == [20, 21]
+    assert posted[20] == posted[21] == [delta.to_notice()]
+    assert posted[20][0].id is None
+    assert "+新全局规则" in posted[20][0].content
 
 
 @pytest.mark.parametrize("remembered_profile", [True, False])
@@ -213,4 +209,3 @@ def test_unmaterialized_context_space_is_skipped_without_creating_manager(
     assert broadcast_system_prompt_delta(delta) == 0
     assert broadcast_agent_catalog_change(change) == 0
     assert space.live_context_manager() is None
-    assert space.take_runtime_notices() == ""

@@ -72,7 +72,12 @@ def _context_row(
         message=message,
         include_in_context=True,
         sequence=sequence,
-        metadata=parse_message_metadata(message["role"], metadata or {}),
+        metadata=parse_message_metadata(
+            message["role"],
+            metadata
+            # 落库的 user 行必须带展示绑定；测试用正文作展示文本。
+            or ({"presentation": {"display_text": message["content"]}} if message["role"] == "user" else {}),
+        ),
     )
 
 
@@ -111,7 +116,8 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
 
     from app.models.conversation_input import ConversationInput, QueuedTaskInput
     from app.models.conversation_run_options import ConversationRunOptions
-    from app.storage.crud.task_input_crud import TaskInputCrud
+    from app.models.task_message import UserMessage
+    from app.storage.crud.task_message_crud import TaskMessageCrud
 
     service._session_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
     head = QueuedTaskInput(
@@ -120,11 +126,11 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
         options=ConversationRunOptions(),
         agent_id="child_agent",
     )
-    monkeypatch.setattr(TaskInputCrud, "release_all_immediate", lambda self, *args: None)
+    monkeypatch.setattr(TaskMessageCrud, "release_all_immediate", lambda self, *args: None)
     monkeypatch.setattr(
-        TaskInputCrud,
+        TaskMessageCrud,
         "list_pending",
-        lambda self, *args: [SimpleNamespace(payload=head.model_dump(mode="json"))],
+        lambda self, *args, **kwargs: [UserMessage(id=1, payload=head, delivery="immediate")],
     )
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: Projector())
     monkeypatch.setattr(

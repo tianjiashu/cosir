@@ -25,10 +25,11 @@ from app.assistant_transport.service.transport_stream_service import (
 from app.core.events import AssistantTextDeltaEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunError, ConversationRunStatus
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.service.conversation_run.conversation_task_context_service import (
@@ -76,7 +77,7 @@ def canonical_store(tmp_path: Path, monkeypatch):
     initialize_app_schema(engine)
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     monkeypatch.setattr(
-        "app.service.conversation_run.task_input_service.main_session_factory", lambda: factory
+        "app.service.conversation_run.task_message_queue.main_session_factory", lambda: factory
     )
     workspaces = _bind(WorkspaceCrud, factory)
     tasks = _bind(TaskCrud, factory)
@@ -150,6 +151,11 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
     """
 
     sequence = store.context.max_sequence(store.task.id) + 1
+    if metadata is None and message["role"] == "user":
+        # 落库的 user 行必须带展示绑定；测试用正文作展示文本。
+        metadata = UserMessageMetadata(
+            presentation=UserInputPresentation(display_text=message["content"])
+        )
     store.context.append(store.task.id, run_id, message, sequence, True, metadata)
 
 

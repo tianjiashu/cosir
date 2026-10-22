@@ -105,8 +105,6 @@ async def test_task_endpoint_returns_task_response_without_task_level_fork_gate(
         context_window_total=None,
         task_type="user",
         parent_task_id=None,
-        parent_run_id=None,
-        delegation_id=None,
         created_at=now,
         updated_at=now,
     )

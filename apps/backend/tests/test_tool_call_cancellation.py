@@ -135,11 +135,12 @@ def _make_context(
 
 def _session_with_execution(task_id: int, run_id: int) -> object:
     """只含一条执行登记的调度入口（不装配领域服务）。"""
-    from app.service.conversation_run.workflow_session import WorkflowSession
+    from types import SimpleNamespace
+
+    from app.service.conversation_run.workflow_session import WorkflowSession, _Execution
 
     session = WorkflowSession.__new__(WorkflowSession)
-    session._executions = {}
-    session.task_execution = lambda candidate: run_id if candidate == task_id else None
+    session._executions = {task_id: _Execution(run=SimpleNamespace(id=run_id, task_id=task_id))}
     return session
 
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -34,6 +35,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.config.constant import Constant
 from app.core.llm_provider.model_failure import classify_model_failure
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models import conversation_run_failure as failure_catalog
 from app.models.conversation_run_failure import (
@@ -95,6 +97,17 @@ def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) 
     return 7
 
 
+async def _no_initial_delivery() -> None:
+    return None
+
+
+def _drive_run(
+    run_id: int, initial_delivery: Callable[[], Awaitable[None]] = _no_initial_delivery
+) -> Awaitable[None]:
+    """以空 mailbox 驱动；初始投递默认为空操作，单测按需替换。"""
+    return run_driver.drive_run(run_id, RunMailbox(), initial_delivery)
+
+
 def _make_runtime(
     monkeypatch: pytest.MonkeyPatch,
     run_state_service: _RecordingRunStateService,
@@ -134,7 +147,7 @@ def _make_runtime(
         "get_conversation_event_projector",
         lambda: SimpleNamespace(process=lambda _event: None),
     )
-    return SimpleNamespace(run_agent=run_driver.drive_run)
+    return SimpleNamespace(run_agent=_drive_run)
 
 
 def _record_state() -> ConversationStateSnapshot:

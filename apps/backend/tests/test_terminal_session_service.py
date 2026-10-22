@@ -1,12 +1,10 @@
 import base64
 from pathlib import Path
-from queue import SimpleQueue
 from typing import ClassVar
 
 import pytest
 
 from app.config.constant import Constant
-from app.models.runtime_notice import RuntimeNotice
 from app.service.terminal.errors import (
     TerminalSessionError,
     TerminalSessionNotFoundError,
@@ -22,8 +20,6 @@ from app.service.terminal.shell_resolver import ShellResolver
 from app.service.terminal.terminal_session_service import (
     TerminalSessionService,
 )
-from app.task_runtime.task_runtime_space import TaskRuntimeSpace
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 class FakeWorker:
@@ -169,11 +165,8 @@ def test_session_agent_operations_and_readers_are_cursor_based(monkeypatch, tmp_
     assert reread["screen"] == result["screen"]
 
 
-def test_input_backpressure_does_not_notify_the_creator_run(tmp_path: Path, monkeypatch) -> None:
+def test_input_backpressure_rejects_each_write(tmp_path: Path, monkeypatch) -> None:
     task_id = 987654
-    task_space = _queue_space(task_id)
-    monkeypatch.setattr(task_runtime_spaces, "get_or_create", lambda _task_id: task_space)
-    task_space.take_runtime_notices()
     service, workers = make_service(monkeypatch, worker_type=BackpressureWorker)
     first_snapshot = service.start(
         task_id=task_id,
@@ -209,10 +202,6 @@ def test_input_backpressure_does_not_notify_the_creator_run(tmp_path: Path, monk
             input={"type": "line", "text": "echo"},
             operation_id="test-243",
         )
-    first_messages = task_space.take_runtime_notices(run_id=1)
-
-    assert "\n" not in first_messages
-    assert "\n" not in task_space.take_runtime_notices()
     service.shutdown()
 
 
@@ -241,45 +230,6 @@ def test_backpressure_does_not_consume_the_write_operation_id(tmp_path: Path, mo
         assert worker.writes == [b"echo\r"]
     finally:
         service.shutdown()
-
-
-def test_runtime_notices_drop_stale_run_scoped_notices() -> None:
-    task_space = _queue_space(987655)
-    task_space.take_runtime_notices()
-    task_space.defer_runtime_notice(RuntimeNotice(content="old", kind="test", run_id=1))
-    task_space.defer_runtime_notice(RuntimeNotice(content="current", kind="test", run_id=2))
-
-    messages = task_space.take_runtime_notices(run_id=2)
-
-    assert messages.splitlines()[1:] == ["current"]
-    assert "\n" not in task_space.take_runtime_notices()
-
-
-def test_take_only_discards_stale_run_scoped_messages_keeps_task_and_other_run() -> None:
-    """取队列只丢弃「非当前 run」的 run 绑定消息，task 级与其它 run 的消息按规则留存。
-
-    队列里同时存在三种消息：绑定旧 run_id=2 的（edit/重跑后属于过期反馈，必须丢弃）、
-    无 run_id 的 task 级修复提示（任何 run 都可消费，必须保留）、绑定 run_id=3 的
-    （尚未被消费，必须保留）。以 run_id=3 取队列时只应拿到后两者，且旧 run_id=2 的消息
-    不得再被后续任何一次取队列看到。
-    """
-
-    task_space = _queue_space(987656)
-    task_space.take_runtime_notices()
-    task_space.defer_runtime_notice(
-        RuntimeNotice(content="previous run feedback", kind="test", run_id=2)
-    )
-    task_space.defer_runtime_notice(RuntimeNotice(content="task scoped", kind="test"))
-    task_space.defer_runtime_notice(RuntimeNotice(content="other run", kind="test", run_id=3))
-
-    remaining = task_space.take_runtime_notices(run_id=3)
-
-    assert remaining.splitlines()[1:] == [
-        "task scoped",
-        "other run",
-    ]
-    # 旧 run_id=2 的消息已在上面那次取队列时被丢弃，不会被任何后续 run 再消费。
-    assert "\n" not in task_space.take_runtime_notices(run_id=2)
 
 
 def test_write_operation_id_is_idempotent_and_payload_bound(monkeypatch, tmp_path: Path) -> None:
@@ -954,14 +904,6 @@ async def test_task_sessions_survive_run_end(monkeypatch, tmp_path: Path) -> Non
     assert workers[0].closed
     with pytest.raises(TerminalSessionStateError, match="shutting down"):
         service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=2)
-
-
-def _queue_space(task_id: int) -> TaskRuntimeSpace:
-    """队列契约不依赖数据库，显式构造只包含队列的 Task 空间。"""
-    space = TaskRuntimeSpace.__new__(TaskRuntimeSpace)
-    space.task_id = task_id
-    space._notice_queue = SimpleQueue()
-    return space
 
 
 @pytest.mark.parametrize("cleanup", ["delete", "shutdown"])

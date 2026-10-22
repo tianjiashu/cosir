@@ -16,6 +16,13 @@ _TASK_ID = 7
 _RUN = SimpleNamespace(id=_RUN_ID, task_id=_TASK_ID, status="running")
 
 
+def _execution(thread_task, run_id: int = _RUN_ID) -> _Execution:
+    """按 Task 登记的执行替身：只带登记判定需要的 run 身份与后台 task。"""
+    execution = _Execution(run=SimpleNamespace(id=run_id, task_id=_TASK_ID))
+    execution.thread_task = thread_task
+    return execution
+
+
 def _session() -> WorkflowSession:
     """只用执行登记的会话：不装配领域服务。"""
     session = WorkflowSession.__new__(WorkflowSession)
@@ -26,7 +33,7 @@ def _session() -> WorkflowSession:
 
 
 def _drive(behavior: Callable[[], Awaitable[None]]):
-    async def drive(_run_id: int, **_kwargs: Any) -> None:
+    async def drive(_run_id: int, *_args: Any) -> None:
         await behavior()
 
     return drive
@@ -53,7 +60,7 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
     monkeypatch.setattr(session_module, "drive_run", _drive(runner))
     session = _session()
     session._start(_RUN)
-    execution = session._executions[_RUN_ID].thread_task
+    execution = session._executions[_TASK_ID].thread_task
     try:
         assert await asyncio.wait_for(session.cancel(_TASK_ID), 1.0) is True
         assert cancellation_registry.is_cancelled(_TASK_ID) is True
@@ -74,7 +81,7 @@ async def test_cancel_preserves_task_terminal(monkeypatch, tmp_path) -> None:
         task_id=7, workspace_id=1, workspace_root=str(tmp_path), run_id=1
     )
     session = _session()
-    session._executions[_RUN_ID] = _Execution(task_id=_TASK_ID, thread_task=asyncio.current_task())
+    session._executions[_TASK_ID] = _execution(asyncio.current_task())
     try:
         assert await session.cancel(_TASK_ID) is True
         assert not workers[0].closed
@@ -95,11 +102,11 @@ async def test_cancel_is_idempotent_while_execution_is_active() -> None:
     """同一 Task 重复停止都被接受，信号只有一份，释放时一并取走。"""
 
     session = _session()
-    session._executions[_RUN_ID] = _Execution(task_id=_TASK_ID, thread_task=asyncio.current_task())
+    session._executions[_TASK_ID] = _execution(asyncio.current_task())
 
     assert await session.cancel(_TASK_ID) is True
     assert await session.cancel(_TASK_ID) is True
-    assert session._release(_RUN_ID) is True
+    assert session._release(_TASK_ID) is True
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
 
 
@@ -123,11 +130,11 @@ async def test_start_rejects_second_execution_on_same_task() -> None:
     """同一 Task 至多一个执行：第二次登记直接拒绝，不覆盖已有执行。"""
 
     session = _session()
-    session._executions[_RUN_ID] = _Execution(task_id=_TASK_ID, thread_task=asyncio.current_task())
+    session._executions[_TASK_ID] = _execution(asyncio.current_task())
 
     with pytest.raises(ValueError):
         session._start(SimpleNamespace(id=2, task_id=_TASK_ID))
-    assert list(session._executions) == [_RUN_ID]
+    assert session._executions[_TASK_ID].run.id == _RUN_ID
 
 
 @pytest.mark.asyncio
@@ -148,10 +155,10 @@ async def test_execution_releases_and_runs_after_run_when_driver_raises(
 
     monkeypatch.setattr(session, "_after_run", after_run)
     session._start(_RUN)
-    await session.wait_released(_RUN_ID)
+    await session.wait_released(_TASK_ID)
 
     assert after == [_RUN_ID]
-    assert session.task_execution(_TASK_ID) is None
+    assert _TASK_ID not in session._executions
 
 
 @pytest.mark.asyncio
@@ -168,9 +175,9 @@ async def test_after_run_failure_still_releases(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(session, "_after_run", after_run)
     session._start(_RUN)
     cancellation_registry.request_cancel(_TASK_ID)
-    await session.wait_released(_RUN_ID)
+    await session.wait_released(_TASK_ID)
 
-    assert session.task_execution(_TASK_ID) is None
+    assert _TASK_ID not in session._executions
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
 
 
@@ -196,5 +203,5 @@ async def test_close_cancels_and_releases_without_after_run(
     await session.close()
 
     assert after == []
-    assert session.task_execution(_TASK_ID) is None
+    assert _TASK_ID not in session._executions
     assert cancellation_registry.is_cancelled(_TASK_ID) is False

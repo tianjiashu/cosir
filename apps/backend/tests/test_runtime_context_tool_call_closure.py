@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TypeVar, cast
@@ -28,8 +27,9 @@ from app.core.agents.agent_profile import AgentProfile
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.context.tool_call_closure import ContextProtocolError
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
 from app.service.conversation_run.conversation_task_context_service import (
@@ -46,6 +46,11 @@ from tests.runtime_context_stub import install_runtime_singletons, runtime_stub
 _TOOL_STATUS_VALUES = {"pending", "running", "completed", "failed", "cancelled"}
 
 _CrudT = TypeVar("_CrudT")
+
+
+def _user_metadata(message: dict) -> UserMessageMetadata:
+    """落库的 user 行必须带展示绑定；测试用正文作展示文本。"""
+    return UserMessageMetadata(presentation=UserInputPresentation(display_text=message["content"]))
 
 
 def _ai_message(*call_ids: str) -> ChatCompletionAssistantMessageParam:
@@ -289,7 +294,9 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
     ai_message = _ai_message("call-1")
     human_message = {"role": "user", "content": "继续"}
     env.context.append(env.task.id, previous_run.id, ai_message, 1, True)
-    env.context.append(env.task.id, current_run.id, human_message, 2, True)
+    env.context.append(
+        env.task.id, current_run.id, human_message, 2, True, _user_metadata(human_message)
+    )
 
     manager = _manager(
         context_service=env.context,
@@ -620,7 +627,7 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     ai_message = _ai_message("call-1", "call-2")
     settled = {"role": "tool", "content": "a done", "tool_call_id": "call-1"}
     human = {"role": "user", "content": "user input"}
-    env.context.append(env.task.id, run.id, human, 1, True)
+    env.context.append(env.task.id, run.id, human, 1, True, _user_metadata(human))
     env.context.append(env.task.id, run.id, ai_message, 2, True)
     env.context.append(env.task.id, run.id, settled, 3, True, {"status": "completed"})
 
@@ -693,7 +700,8 @@ def test_cold_reload_normalizes_earlier_batches_without_rewriting_facts(env):
     first = env.seed_run("cancelled")
     current = env.seed_run("running")
     env.context.append(env.task.id, first.id, _ai_message("old-call"), 1, True)
-    env.context.append(env.task.id, current.id, {"role": "user", "content": "继续"}, 2, True)
+    resume = {"role": "user", "content": "继续"}
+    env.context.append(env.task.id, current.id, resume, 2, True, _user_metadata(resume))
     manager = _manager(
         context_service=env.context,
         task_id=env.task.id,
@@ -825,16 +833,15 @@ def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
 
 
 @pytest.mark.asyncio
-async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, monkeypatch):
-    """在模型请求和 inbox 消费前失败，原始结果与未消费输入都保持原状。"""
+async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeypatch):
+    """上下文有孤儿结果时模型请求前即失败：原始结果与外部队列中的输入都保持原状。"""
     from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
     from app.core.workflow.execution_state.react_route import ReactRoute
     from app.core.workflow.nodes import model_node
     from app.models.conversation_input import ConversationInput, QueuedTaskInput
     from app.models.conversation_run_options import ConversationRunOptions
-    from app.service.conversation_run.task_input_service import TaskInputService
-    from app.storage.crud.task_input_crud import TaskInputCrud
-    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+    from app.models.task_message import UserMessage
+    from app.storage.crud.task_message_crud import TaskMessageCrud
 
     run = env.seed_run("running")
     env.context.append(
@@ -846,7 +853,7 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
         metadata=ToolMessageMetadata(status="completed"),
     )
     with env.factory.begin() as session:
-        TaskInputCrud().append(
+        TaskMessageCrud().append_user(
             session,
             env.task.id,
             QueuedTaskInput(
@@ -862,15 +869,6 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
         entries=env.context.entries_in_context(env.task.id),
         next_sequence=2,
     )
-    from app.core.workflow.nodes import prepare_input_node
-
-    monkeypatch.setattr(prepare_input_node, "_message_context", lambda: manager)
-    with pytest.raises(ContextProtocolError):
-        prepare_input_node._consume_inbox(
-            SimpleNamespace(
-                task=env.task, run=run, task_space=SimpleNamespace(operation=nullcontext)
-            )
-        )
     requested = []
 
     async def stream(*_args, **_kwargs):
@@ -882,16 +880,9 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
         model=SimpleNamespace(stream=stream),
         task=env.task,
         run=run,
-        inbox=TaskInputService(),
-        task_space=SimpleNamespace(take_runtime_notices=lambda **_kw: None),
     )
     monkeypatch.setattr(model_node, "_runtime_context", lambda: rc)
     monkeypatch.setattr(model_node, "_message_context", lambda: manager)
-    monkeypatch.setattr(
-        task_runtime_spaces,
-        "get_or_create",
-        lambda _id: SimpleNamespace(take_runtime_notices=lambda **_kw: None),
-    )
     with pytest.raises(ContextProtocolError):
         await model_node._model_node(
             ReactExecutionState(
@@ -902,8 +893,10 @@ async def test_orphan_context_blocks_model_request_and_inbox_consumption(env, mo
         )
     assert requested == []
     with env.factory() as session:
-        queued = TaskInputCrud().list_pending(session, env.task.id)
-        assert [item.payload["message"]["input_text"] for item in queued] == ["新消息"]
+        queued = TaskMessageCrud().list_pending(session, env.task.id)
+        assert [
+            item.payload.message.input_text for item in queued if isinstance(item, UserMessage)
+        ] == ["新消息"]
     assert len(_rows(env)) == 1
 
 

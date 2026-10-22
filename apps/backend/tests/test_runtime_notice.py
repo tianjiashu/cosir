@@ -1,40 +1,19 @@
-"""运行时通知的不可变性与消息边界契约。"""
+"""Run 内通知的投递契约：只进本次执行的 mailbox，不落库、不需要确认。"""
 
-from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
 
 import pytest
 
-from app.models.runtime_notice import RuntimeNotice
-
-
-def test_notice_freezes_metadata_and_keeps_routing_out_of_message_kwargs() -> None:
-    metadata: dict[str, str | None] = {"source": "global", "scope": None}
-    notice = RuntimeNotice(
-        content="规则变化", kind="system_prompt_delta", run_id=7, metadata=metadata
-    )
-    metadata["source"] = "changed"
-    assert notice.metadata == {"source": "global", "scope": None}
-    with pytest.raises(FrozenInstanceError):
-        notice.content = "changed"
-    with pytest.raises(TypeError):
-        notice.metadata["source"] = "changed"
-    # 投递边界（kind / run_id 路由信息）由模型节点消费时据此判断，不在此处落地为消息字段。
-    assert notice.content == "规则变化"
-    assert notice.to_hint_text() == "规则变化"
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.models.task_message import NoticeMessage
 
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])
 async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> None:
-    """工具准入的三条分支都生产领域通知，不在装配方构造模型消息。"""
-    from types import SimpleNamespace
-
+    """工具准入的三条分支都向 mailbox 投递领域通知，不在装配方构造模型消息。"""
     from app.service.conversation_run import run_driver
 
-    notices: list[RuntimeNotice] = []
-    space = SimpleNamespace(
-        task_tool_schemas=({"name": "read_file"}, {"name": "write_file"}),
-        defer_runtime_notice=notices.append,
-    )
+    space = SimpleNamespace(task_tool_schemas=({"name": "read_file"}, {"name": "write_file"}))
     monkeypatch.setattr(run_driver.task_runtime_spaces, "get_or_create", lambda _id: space)
     monkeypatch.setattr(
         run_driver, "RuntimeContext", lambda **kwargs: SimpleNamespace(**kwargs)
@@ -43,15 +22,36 @@ async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> 
         run_driver, "get_conversation_event_projector", lambda: SimpleNamespace(process=print)
     )
     agent = SimpleNamespace()
+    mailbox = RunMailbox()
     result = run_driver._build_context(
         workspace=SimpleNamespace(id=13, root_path="/workspace"),
         task=SimpleNamespace(id=1),
         run=SimpleNamespace(id=7, options=SimpleNamespace(ban_tools=banned)),
         agent=agent,
+        mailbox=mailbox,
     )
     assert result.agent is agent
+    assert result.mailbox is mailbox
     assert result.allows_tools == {"read_file", "write_file"} - set(banned)
-    assert len(notices) == 1
-    assert isinstance(notices[0], RuntimeNotice)
-    assert notices[0].kind == "tool_availability"
-    assert notices[0].run_id == 7
+    [notice] = mailbox.drain()
+    assert isinstance(notice, NoticeMessage)
+    assert notice.id is None
+    assert notice.kind == "tool_availability"
+
+
+def test_mailbox_dedupes_persisted_rows_but_keeps_every_run_notice() -> None:
+    """同一外部队列行在一次执行内只收一次；Run 内通知没有行 id，逐条保留。"""
+    mailbox = RunMailbox()
+    persisted = NoticeMessage(id=5, content="broadcast", kind="test")
+    transient = NoticeMessage(id=None, content="continue", kind="test")
+
+    mailbox.post(persisted)
+    mailbox.post(persisted)
+    mailbox.post(transient)
+    mailbox.post(transient)
+
+    assert mailbox.drain() == [persisted, transient, transient]
+    assert mailbox.drain() == []
+    # 取光后同一行再次投递仍被忽略：它已在本次执行中处理过。
+    mailbox.post(persisted)
+    assert mailbox.drain() == []

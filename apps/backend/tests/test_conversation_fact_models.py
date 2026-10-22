@@ -278,7 +278,7 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
 
 def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
     from app.service.conversation_run import conversation_input_preparation_service as preparation
-    from app.service.conversation_run.task_input_service import _reuse_attachments
+    from app.service.conversation_run.task_message_queue import _reuse_attachments
 
     attachment_path = Path(__file__)
     previous = ConversationInput(
@@ -577,7 +577,6 @@ def test_task_crud_new_task_has_no_current_run() -> None:
                 title="empty",
                 task_type="user",
                 parent_task_id=None,
-                parent_run_id=None,
                 creation_command_id=None,
                 extra=None,
             )

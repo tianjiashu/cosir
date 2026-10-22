@@ -1,4 +1,4 @@
-"""子 Agent 目录变更的延迟通知测试。"""
+"""子 Agent 目录变更的通知广播测试：命中的 Task 经 ``WorkflowSession.post_notices`` 入外部队列。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.models.runtime_notice import RuntimeNotice
+from app.models.task_message import NoticeMessage
+from app.task_runtime.broadcaster import runtime_notice_broadcaster
 from app.task_runtime.agent_catalog_change import AgentCatalogChange
 from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
     broadcast_agent_catalog_change,
@@ -24,22 +25,14 @@ class _FakeContextManager:
 
 
 class _FakeRuntimeSpace:
-    """不依赖 SQLite 的 runtime space 队列外壳。"""
+    """不依赖 SQLite 的 runtime space 外壳，只提供匹配所需的 Task 身份与 live manager。"""
 
-    def __init__(self, manager: _FakeContextManager) -> None:
+    def __init__(self, task_id: int, manager: _FakeContextManager) -> None:
+        self.task_id = task_id
         self._manager = manager
-        self.messages: list[RuntimeNotice] = []
 
     def live_context_manager(self) -> _FakeContextManager:
         return self._manager
-
-    def defer_runtime_notice(self, message: RuntimeNotice) -> None:
-        self.messages.append(message)
-
-    def take_runtime_notices(self) -> list[RuntimeNotice]:
-        messages = self.messages
-        self.messages = []
-        return messages
 
 
 @pytest.fixture(autouse=True)
@@ -51,15 +44,32 @@ def clear_runtime_spaces():
     task_runtime_spaces.close()
 
 
+@pytest.fixture(autouse=True)
+def posted(monkeypatch) -> dict[int, list[NoticeMessage]]:
+    """记录广播交给 ``post_notices`` 的通知，按 Task 归档。"""
+
+    by_task: dict[int, list[NoticeMessage]] = {}
+
+    def post_notices(task_ids: list[int], notice: NoticeMessage) -> None:
+        for task_id in task_ids:
+            by_task.setdefault(task_id, []).append(notice)
+
+    monkeypatch.setattr(
+        runtime_notice_broadcaster,
+        "get_workflow_session",
+        lambda: SimpleNamespace(post_notices=post_notices),
+    )
+    return by_task
+
+
 def _install_manager(task_id: int, manager: _FakeContextManager) -> None:
     """把测试 manager 安装到不依赖 SQLite 的 runtime space 外壳。"""
 
-    space = _FakeRuntimeSpace(manager)
-    task_runtime_spaces._spaces[task_id] = space
+    task_runtime_spaces._spaces[task_id] = _FakeRuntimeSpace(task_id, manager)
 
 
-def test_agent_catalog_change_reaches_only_delegating_agents_in_scope() -> None:
-    """目录变更只进入拥有委派工具且命中作用域的 Agent 队列。"""
+def test_agent_catalog_change_reaches_only_delegating_agents_in_scope(posted) -> None:
+    """目录变更只投给拥有委派工具且命中作用域的 Agent 所在 Task。"""
 
     matching_main = _FakeContextManager(
         AgentProfileType.MAIN, ["delegate_task"], "/workspace/one"
@@ -88,21 +98,17 @@ def test_agent_catalog_change_reaches_only_delegating_agents_in_scope() -> None:
 
     assert broadcast_agent_catalog_change(change) == 2
 
-    matching_messages = [
-        task_runtime_spaces.get(task_id).take_runtime_notices()
-        for task_id in (1, 2)
-    ]
-    assert all(len(messages) == 1 for messages in matching_messages)
-    message = matching_messages[0][0]
-    assert isinstance(message, RuntimeNotice)
+    assert sorted(posted) == [1, 2]
+    assert all(len(posted[task_id]) == 1 for task_id in (1, 2))
+    message = posted[1][0]
+    assert isinstance(message, NoticeMessage)
+    assert message.id is None
     assert message.kind == "agent_catalog_change"
     assert "旧描述" in message.content
     assert "新描述" in message.content
-    for task_id in (3, 4, 5):
-        assert task_runtime_spaces.get(task_id).take_runtime_notices() == []
 
 
-def test_system_agent_catalog_change_reaches_all_delegating_agents() -> None:
+def test_system_agent_catalog_change_reaches_all_delegating_agents(posted) -> None:
     """系统级目录变更跨 workspace 通知所有可委派 Agent。"""
 
     first = _FakeContextManager(AgentProfileType.MAIN, ["delegate_task"], "/workspace/one")
@@ -119,5 +125,4 @@ def test_system_agent_catalog_change_reaches_all_delegating_agents() -> None:
     )
 
     assert broadcast_agent_catalog_change(change) == 2
-    assert len(task_runtime_spaces.get(10).take_runtime_notices()) == 1
-    assert len(task_runtime_spaces.get(11).take_runtime_notices()) == 1
+    assert {task_id: len(notices) for task_id, notices in posted.items()} == {10: 1, 11: 1}

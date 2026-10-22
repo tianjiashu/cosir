@@ -31,7 +31,10 @@ def fake_registry(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _run(run_id: int, agent_id: str, status: str = "completed") -> SimpleNamespace:
-    return SimpleNamespace(id=run_id, status=status, final_output=None, agent_id=agent_id)
+    # 以 run_id 充当创建时间：子 Agent 归组只依赖 created_at 的相对顺序。
+    return SimpleNamespace(
+        id=run_id, status=status, final_output=None, agent_id=agent_id, created_at=run_id
+    )
 
 
 def test_visits_resolve_role_from_registry_by_agent_id(fake_registry: None) -> None:
@@ -87,8 +90,8 @@ def test_visits_resolve_role_from_registry_by_agent_id(fake_registry: None) -> N
     }
     child_tasks_by_parent = {
         100: [
-            SimpleNamespace(id=301, title="本轮起草助手", parent_run_id=10, current_run_id=201),
-            SimpleNamespace(id=302, title="返工起草助手", parent_run_id=12, current_run_id=202),
+            SimpleNamespace(id=301, title="本轮起草助手", created_at=10.5, current_run_id=201),
+            SimpleNamespace(id=302, title="返工起草助手", created_at=12.5, current_run_id=202),
         ]
     }
 
@@ -109,6 +112,9 @@ def test_visits_resolve_role_from_registry_by_agent_id(fake_registry: None) -> N
     # 子 Agent 同样按 agent_id 解析角色。
     assert draft_visits[0]["agents"][1]["agent_id"] == "writer"
     assert draft_visits[0]["agents"][1]["role"] == "role:writer"
+    # 子 Agent 按创建时间归入所在的那次节点访问。
+    assert [a["task_id"] for a in draft_visits[0]["agents"][1:]] == [301]
+    assert [a["task_id"] for a in draft_visits[1]["agents"][1:]] == [302]
 
     verify_visits = visits_by_node["verify"]
     assert verify_visits[0]["agents"][0]["role"] == "role:reviewer"

@@ -3,8 +3,8 @@
 用例只覆盖它关心的字段（``runtime_stub(allows_tools=..., run_state=...)``）；其余字段给出不会
 触发真实依赖的默认值。取消判定读 ``cancelled`` 标志，用例直接改它即可。
 
-生产节点直接取用进程级单例（Run 状态写入、inbox、工具系统），不经 ``RuntimeContext``。本替身
-仍接受 ``run_state`` / ``inbox`` / ``tool_executor`` / ``tool_definitions`` /
+生产节点直接取用进程级单例（Run 状态写入、外部消息队列、工具系统），不经 ``RuntimeContext``。
+本替身仍接受 ``run_state`` / ``message_queue`` / ``tool_executor`` / ``tool_definitions`` /
 ``user_input_decision_handlers`` 这些覆盖项，并把它们装为对应单例（经 :data:`SINGLETONS`
 打补丁，``conftest`` 在每个用例结束后复原），保证节点测试不触碰真实数据库与工具系统。
 """
@@ -20,6 +20,7 @@ from app.config import configuration
 from app.core.workflow.execution_state.conversation_run_usage_stats import (
     ConversationRunUsageStats,
 )
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models.conversation_run_progress import ConversationRunProgress
 from app.service import depends as service_depends
@@ -94,7 +95,9 @@ def install_runtime_singletons(rc: SimpleNamespace) -> None:
         "get_conversation_run_state_service",
         singleton_getter(lambda: rc.run_state),
     )
-    SINGLETONS.setattr(service_depends, "get_task_input_service", singleton_getter(lambda: rc.inbox))
+    SINGLETONS.setattr(
+        service_depends, "get_task_message_queue", singleton_getter(lambda: rc.message_queue)
+    )
     SINGLETONS.setattr(configuration, "_TOOL_SYSTEM", _StubToolSystem(rc))
 
 
@@ -114,12 +117,9 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         tool_definitions={},
         tool_executor=None,
         run_state=run_state_stub(),
-        inbox=SimpleNamespace(consume=lambda *_args: []),
-        task_space=SimpleNamespace(
-            task_tool_schemas=(),
-            defer_runtime_notice=lambda _notice: None,
-            take_runtime_notices=lambda **_kwargs: "",
-        ),
+        message_queue=SimpleNamespace(ack=lambda _session, ids: set(ids)),
+        mailbox=RunMailbox(),
+        task_space=SimpleNamespace(task_tool_schemas=()),
         event_sink=lambda _event: None,
         user_input_decision_handlers=SimpleNamespace(handle_rejection=lambda *_args: None),
         model=None,

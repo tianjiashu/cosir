@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import cast
 
@@ -36,6 +37,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.config.constant import Constant
 from app.core.events import RunStatusChangedEvent
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models.conversation_run_failure import (
     run_failure_message,
@@ -173,6 +175,17 @@ def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) 
     return 7
 
 
+async def _no_initial_delivery() -> None:
+    return None
+
+
+def _drive_run(
+    run_id: int, initial_delivery: Callable[[], Awaitable[None]] = _no_initial_delivery
+) -> Awaitable[None]:
+    """以空 mailbox 驱动；初始投递默认为空操作，单测按需替换。"""
+    return run_driver.drive_run(run_id, RunMailbox(), initial_delivery)
+
+
 def _make_runtime(
     monkeypatch: pytest.MonkeyPatch,
     operations: object | None,
@@ -213,7 +226,7 @@ def _make_runtime(
         "get_conversation_event_projector",
         lambda: SimpleNamespace(process=lambda _event: None),
     )
-    return SimpleNamespace(run_agent=run_driver.drive_run)
+    return SimpleNamespace(run_agent=_drive_run)
 
 
 @pytest.mark.asyncio
@@ -292,6 +305,25 @@ async def test_run_agent_propagates_settlement_failure(
         await runtime.run_agent(_make_agent(monkeypatch, RuntimeError("node exploded")))
 
     assert len(run_state_service.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_agent_settles_when_initial_delivery_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """初始投递在失败边界内：读库失败同样落定 failed，不留下没有执行者的 running Run。"""
+
+    run_state_service = _RecordingRunStateService()
+    runtime = _make_runtime(monkeypatch, object(), run_state_service=run_state_service)
+
+    async def broken_delivery() -> None:
+        raise RuntimeError("queue unavailable")
+
+    await runtime.run_agent(_make_agent(monkeypatch, AssertionError("不应进入 workflow")),
+                            broken_delivery)
+
+    assert len(run_state_service.calls) == 1
+    assert run_state_service.calls[0]["end_reason"] == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
 
 
 def test_status_changed_event_projects_controlled_error() -> None:

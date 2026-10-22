@@ -869,7 +869,6 @@ def test_team_run_view_projects_node_and_child_agent_counts(
             title="开发节点",
             task_type="agent_team_node",
             parent_task_id=parent_task.id,
-            parent_run_id=parent_run.id,
             tool_schemas=[],
         )
         session.add(node_task)
@@ -891,7 +890,6 @@ def test_team_run_view_projects_node_and_child_agent_counts(
             title="搜索资料",
             task_type="delegate_task",
             parent_task_id=node_task.id,
-            parent_run_id=node_run.id,
             tool_schemas=[],
         )
         session.add(child_task)

@@ -59,6 +59,13 @@ class _StubServices:
         return []
 
 
+def _execution(thread_task, run_id: int = _RUN_ID) -> _Execution:
+    """按 Task 登记的执行替身：只带登记判定需要的 run 身份与后台 task。"""
+    execution = _Execution(run=SimpleNamespace(id=run_id, task_id=_TASK_ID))
+    execution.thread_task = thread_task
+    return execution
+
+
 def _build(
     monkeypatch: pytest.MonkeyPatch, services: _StubServices
 ) -> tuple[WorkflowSession, WorkflowSession, list[int]]:
@@ -90,7 +97,7 @@ def _clear_signal() -> None:
 
 
 def _register_execution(executor: WorkflowSession, task: asyncio.Task) -> None:
-    executor._executions[_RUN_ID] = _Execution(task_id=_TASK_ID, thread_task=task)
+    executor._executions[_TASK_ID] = _execution(task)
 
 
 def test_cancel_with_active_execution_only_marks_task_signal(
@@ -146,18 +153,18 @@ def test_cancel_waiting_run_that_lost_resume_race_drops_signal(
 
 
 def test_release_consumes_signal_only_for_own_execution() -> None:
-    """等待态取消以同一 run_id 登记新执行：旧执行的释放不得误删它或取走它的信号。"""
+    """等待态取消为同一 Task 登记新执行：旧执行的释放不得误删它或取走它的信号。"""
     executor = WorkflowSession.__new__(WorkflowSession)
     executor._executions = {}
     executor._release_signals = {}
 
     async def scenario() -> tuple[bool, bool]:
         other = asyncio.get_running_loop().create_future()
-        executor._executions[_RUN_ID] = _Execution(task_id=_TASK_ID, thread_task=other)
+        executor._executions[_TASK_ID] = _execution(other)
         cancellation_registry.request_cancel(_TASK_ID)
-        foreign = executor._release(_RUN_ID)
+        foreign = executor._release(_TASK_ID)
         _register_execution(executor, asyncio.current_task())
-        own = executor._release(_RUN_ID)
+        own = executor._release(_TASK_ID)
         other.cancel()
         return foreign, own
 
@@ -186,7 +193,7 @@ def test_release_after_late_cancel_on_completed_run_skips_handoff(
     asyncio.run(scenario())
     assert handoffs == []
     assert started == []
-    assert _RUN_ID not in executor._executions
+    assert _TASK_ID not in executor._executions
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
 
 

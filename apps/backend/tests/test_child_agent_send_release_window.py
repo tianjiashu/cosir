@@ -22,7 +22,7 @@ from app.service.conversation_run import workflow_session as session_module
 from app.service.depends import get_conversation_run_state_service, get_workflow_session
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.task_crud import TaskCrud
-from app.storage.crud.task_input_crud import TaskInputCrud
+from app.storage.crud.task_message_crud import TaskMessageCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.model.model_config_model import ModelConfigModel
 from app.storage.store_engines import main_session_factory
@@ -31,16 +31,18 @@ _RELEASE_WINDOW_SECONDS = 0.3
 
 
 class _Runtime:
-    """消费本 Run 的输入并立即完成；首个 Run 完成后继续占住执行，制造收尾窗口。"""
+    """确认本次执行投递的输入并立即完成；首个 Run 完成后继续占住执行，制造收尾窗口。"""
 
     def __init__(self) -> None:
         self.started: list[int] = []
 
-    async def drive(self, run_id: int, definition=None) -> None:
-        run = ConversationRunCrud().get(run_id)
+    async def drive(self, run_id: int, mailbox, initial_delivery) -> None:
+        await initial_delivery()
+        # 只确认本次执行收到的投递，与 prepare_input 一致。
         with main_session_factory().begin() as session:
-            crud = TaskInputCrud()
-            crud.delete(session, [row.id for row in crud.list_pending(session, run.task_id)])
+            TaskMessageCrud().delete_returning(
+                session, [m.id for m in mailbox.drain() if m.id is not None]
+            )
         get_conversation_run_state_service().transition(
             run_id, RunTransition.COMPLETE, final_output="done"
         )
