@@ -204,10 +204,10 @@ ToolObservation.status == "cancelled" → tool-call status "cancelled"，error �
 | `terminal_signal` / `terminal_close` | `standalone`、不可展开、`none` | `terminal-session` | session/status 元数据；signal 额外提供受控的 `signal` |
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
-| `delegate_task` | `standalone`、不可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、`child_run_id`、状态 |
-| `child_agent_send` | `standalone`、不可展开、`details`、`send` | `child-agent-result` | `operation`、child task/run locator、状态、agent 标识、最终摘要、终态原因 |
-| `child_agent_status` | `standalone`、不可展开、`details`、`info` | `child-agent-result` | `operation`、child task/run locator、状态、agent 标识、最终摘要、终态原因 |
-| `child_agent_wait` | `standalone`、不可展开、`details`、`clock` | `child-agent-wait-result` | `timed_out`、终态 messages、pending locator、`interrupted_by` |
+| `delegate_task` | `standalone`、不可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、状态 |
+| `child_agent_send` | `standalone`、不可展开、`details`、`send` | `child-agent-result` | `operation`、`child_task_id`、状态、agent 标识、最终摘要、终态原因 |
+| `child_agent_status` | `standalone`、不可展开、`details`、`info` | `child-agent-result` | `operation`、`child_task_id`、状态、agent 标识、最终摘要、终态原因 |
+| `wait_messages` | `standalone`、不可展开、`none`、`clock` | 无（空 `display_data`，走通用卡片） | — |
 | `propose_agent_configuration` | `standalone`、只读草稿卡、`bot` | `agent-configuration-draft` | `status=draft`、`agent_id`、`role`、`description`、`system_prompt` |
 
 交互式 terminal handler 已注册到 Agent tool schema，并继续复用现有 renderer 路由；静态
@@ -398,16 +398,18 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
   "child_agent_id": "reviewer",
   "delegation_id": 12,
   "child_task_id": 34,
-  "child_run_id": 56,
   "status": "completed"
 }
 ```
 
-如果客户端支持跳转 child task，只使用明确的 `child_task_id`，不从文本中解析链接。
+子 Agent 一律按 Task 寻址：展示数据只携带 `child_task_id`，不携带 run_id。消息交给子任务后
+并入哪条 Run 由后端调度决定；`delegation-result` 与 `child-agent-result(operation=send)` 的
+`status` 是子 Task 最新 Run 的状态，由后端随子 Run 状态事件刷新。如果客户端支持跳转 child
+task，只使用明确的 `child_task_id`，不从文本中解析链接。
 
 `child_agent_send` 与 `child_agent_status` 使用同一安全结果形状，仅通过 `operation` 区分
-「启动新 Run」与「读取当前 Run」；`child_agent_wait` 使用固定数组形状，超时只进入
-`pending`，不会把未完成 Run 伪装成终态。
+「提交消息」与「读取最新 Run」。子 Agent 的结论不经工具展示：每次子 Run 到终态由调度层以
+`agent_result` 消息回投父 Task；`wait_messages` 只让父 Agent 挂起，调用当步闭合，没有展示数据。
 
 ## 4. 展示数据构建位置
 

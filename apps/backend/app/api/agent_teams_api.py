@@ -1,8 +1,7 @@
 """Agent Team 配置保存与本地状态查询接口。
 
-TeamRun 的「确认 / 驳回」不在本模块：用户决定走通用 human-in-the-loop 通道（Assistant
-Transport 的 ``user-input-decision`` 命令 → ``wait_user`` 节点 → ``tools`` 节点重执行被批准的
-调用），使每个提问工具都不需要自带端点和「等主 Run 挂起」的轮询。
+TeamRun 的「确认 / 驳回」不在本模块：决定按 Task 寻址走 ``POST /tasks/{id}/decisions``，由
+``AgentTeamDecisionService`` 确定性执行并以消息唤醒主 Agent。
 """
 
 from __future__ import annotations

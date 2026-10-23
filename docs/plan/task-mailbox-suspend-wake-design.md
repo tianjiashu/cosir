@@ -66,13 +66,11 @@
 
 ### 3. 运行期配置锁定
 
-一个 Run 一个模型配置（模型、Agent、选项），活动期间（`running` / `suspended`）不可更换。校验只在入队的 API 边界做一次，不合规直接 409：
+一个 Run 一个模型配置（模型、Agent、选项），活动期间（`running` / `suspended`）不可更换。
 
-- `immediate` 的 `user_input`：配置必须等于活动 Run 的配置；
-- `next_run` 的 `user_input`：配置必须与队列中已有的 `next_run` 用户输入一致（下一个 Run 的配置由第一条决定）；
-- 前端在运行中切换模型时，把该条消息强制为 `next_run`。
-
-由此交接新 Run 时无需再过滤：队列中所有用户输入的配置要么等于当前 Run，要么彼此一致。
+- **前端是主防线，锁控件而不比较**：活动 Run 期间 composer 的模型与工具控件只读、显示 Run 冻结的 `launch`，发送（`immediate` 与 `next_run`）都用这份配置；想换配置须先停止。用户因此无从发出配置不同的消息，前端不做配置比较、不改写投递方式（`lib/assistant/run-launch.ts`）。
+- **排队消息编辑沿用原配置**：原地编辑只改正文与附件，发起配置与 `delivery` 保持发送时的值，后端忽略请求带来的配置，也就无需锁定校验；编辑框对排队消息不显示配置控件。已并入消息的编辑会开新 Run，按本次选择的配置。
+- **后端入队边界不校验配置**：`immediate` 输入按 `delivery` 直接并入当前 Run；`next_run` 输入交给下一个 Run，新 Run 取队列中最后一条用户输入的配置。
 
 ### 4. 投影
 
@@ -130,7 +128,7 @@ running ──SUSPEND──▶ suspended ──WAKE──▶ running
 
 `decide`、`_advance`、等待态恢复三条路径合并于此。workflow 只剩一个入口 `prepare_input`。
 
-新建 Run 的配置来源：队列中有 `user_input` 时取**最后一条**用户输入——全部输入都会并入这个 Run，最后一条是用户最新的选择（活动期间入队的输入受配置锁定约束、彼此一致；取消后残留的旧输入让位于新发送）；只有结果消息唤醒已完成 Task 时，继承最新 Run 的 Agent 身份、`model_config_id` 与选项。
+新建 Run 的配置来源：队列中有 `user_input` 时取**最后一条**用户输入——全部输入都会并入这个 Run，最后一条是用户最新的选择（取消后残留的旧输入、先排队的 `next_run` 输入都让位于最新一次发送）；只有结果消息唤醒已完成 Task 时，继承最新 Run 的 Agent 身份、`model_config_id` 与选项。
 
 ### 8. 审批（Agent Team）
 
@@ -171,7 +169,7 @@ running ──SUSPEND──▶ suspended ──WAKE──▶ running
 
 | 情况 | 目标 | 处理 |
 |---|---|---|
-| A. 编辑排队消息 | 仍在外部队列、未并入 context 的 `user_input` | 原地更新队列行，保留身份与 `delivery`；编辑后的内容按第 3 节重新校验。不影响 Run |
+| A. 编辑排队消息 | 仍在外部队列、未并入 context 的 `user_input` | 原地更新队列行，保留身份、`delivery` 与发起配置，只改正文与附件（见第 3 节）。不影响 Run |
 | B. 运行中编辑已消费消息 | 最新一条已投影的 `user_input`，最新 Run 活动中 | 停止当前 Run（同取消：中断 Agent、工具与下游，`end_reason = edited`，**不**投递「用户已取消」）→ 闸门外等执行释放 → 进入情况 C |
 | C. 静止时编辑 | 最新一条已投影的 `user_input`，最新 Run 已终态 | 目标及其后 context 移出模型上下文与投影，编辑后的消息以新身份入队，同一事务提交，随后推进出新 Run；可更换配置 |
 
@@ -238,7 +236,6 @@ class TaskMessage:
 ```python
 Deliver(messages) | Wake() | StartRun(launch) | Stay()
 
-def check_launch(body, delivery, latest, pending) -> None   # 第 3 节，违反抛 CONFIG_LOCKED
 def admit(body, latest) -> bool                             # 第 9 节丢弃规则（第三期）
 def next_action(latest, has_executor, pending) -> Deliver | Wake | StartRun | Stay   # 第 7 节规则表唯一实现
 ```
@@ -249,7 +246,7 @@ def next_action(latest, has_executor, pending) -> Deliver | Wake | StartRun | St
 
 | 入口 | 职责 |
 |---|---|
-| `submit(task_id, body, delivery)` | 闸门内 `check_launch` → 入队 → 排队投影 → `_advance` |
+| `submit(task_id, body, delivery)` | 闸门内入队 → 排队投影 → `_advance` |
 | `post(task_id, message)` | 系统生产者（通知、决定、结果），任意线程；闸门内 `admit` → 入队 → `_advance`；取代 `post_notices` |
 | `edit(task_id, message_id, body)` | A 队列原地更新；B `_stop(reason="edited")` → 等释放 → C；C 闸门内移出 + 入队同事务 → `_advance` |
 | `cancel(task_id)` | 有执行者发信号；挂起中闸门内直接 `CANCEL` 并传播、投「用户已取消」 |
@@ -281,7 +278,7 @@ def next_action(latest, has_executor, pending) -> Deliver | Wake | StartRun | St
 
 ### 前端
 
-`lib/assistant/task-commands.ts` 运行中切模型强制 `next_run`；决定命令带 `team_run_id`；按 `kind` 渲染；Team 卡片按 `team_run_id` 读 TeamRun；排队消息与已消费消息的编辑入口。
+`lib/assistant/run-launch.ts` 活动 Run 期间锁定配置控件并以 Run 的 `launch` 发送；决定命令带 `team_run_id`；按 `kind` 渲染；Team 卡片按 `team_run_id` 读 TeamRun；排队消息与已消费消息的编辑入口。
 
 ### 分期对应
 
@@ -314,7 +311,7 @@ def next_action(latest, has_executor, pending) -> Deliver | Wake | StartRun | St
 | `core/tools/tool_handler/agent_team/`、`service/agent_team/`、`agent_team/coordinator.py` | 提交审批即返回；批准后后台执行；结果投递 |
 | `core/tools/tool_handler/child_task/` | `wait_messages` 取代阻塞等待 |
 | `assistant_transport/`（api、projection、rebuilder） | 入队时的配置锁定校验；按 `project_to_transport` 投影；`/decisions` 入队；排队消息编辑；新 kind 的 wire 表达 |
-| 前端 | 运行中切模型时强制 `next_run`；按 kind 渲染；Team 卡片绑定 `team_run_id`；排队消息与运行中消息的编辑入口 |
+| 前端 | 活动 Run 期间锁定配置控件、以 Run 的 `launch` 发送；按 kind 渲染；Team 卡片绑定 `team_run_id`；排队消息与运行中消息的编辑入口 |
 | `AGENTS.md` | 更新「wait node 续跑」「等待审批的发送按驳回结算」「两级队列」「编辑只允许终态」等描述 |
 
 绿地项目：数据库与快照结构直接破坏性变更，不做迁移与兼容。
