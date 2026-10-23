@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import threading
+from typing import Literal
 
 from app.config.logging.logger import log
+
+CancelReason = Literal["user", "edited", "parent"]
+"""取消原因：用户停止、运行中编辑、上游（父 Agent / Team）停止。只有用户停止会给 Agent 留下
+「用户已取消」通知；三者都让下游结果不再回投。"""
 
 
 class ConversationRunCancellationRegistry:
@@ -21,30 +26,31 @@ class ConversationRunCancellationRegistry:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._cancelled_task_ids: set[int] = set()
+        # task_id → 首个取消原因；重复请求不覆盖，释放时连同原因一起取走。
+        self._reasons: dict[int, CancelReason] = {}
 
-    def request_cancel(self, task_id: int) -> None:
-        """记录取消意图；幂等，可从工具线程调用。"""
+    def request_cancel(self, task_id: int, reason: CancelReason = "user") -> None:
+        """记录取消意图与原因；幂等（保留首个原因），可从工具线程调用。"""
         with self._lock:
-            if task_id in self._cancelled_task_ids:
+            if task_id in self._reasons:
                 return
-            self._cancelled_task_ids.add(task_id)
+            self._reasons[task_id] = reason
         log.info(
             "task_cancellation_requested",
-            extra={"msg": "Task 取消信号已登记", "data": {"task_id": task_id}},
+            extra={
+                "msg": "Task 取消信号已登记",
+                "data": {"task_id": task_id, "reason": reason},
+            },
         )
 
     def is_cancelled(self, task_id: int) -> bool:
         with self._lock:
-            return task_id in self._cancelled_task_ids
+            return task_id in self._reasons
 
-    def consume(self, task_id: int) -> bool:
-        """取走信号并返回取走前是否存在；只由执行释放边界调用。"""
+    def consume(self, task_id: int) -> CancelReason | None:
+        """取走信号并返回取走前的原因（没有信号为 ``None``）；只由执行释放边界调用。"""
         with self._lock:
-            if task_id not in self._cancelled_task_ids:
-                return False
-            self._cancelled_task_ids.discard(task_id)
-            return True
+            return self._reasons.pop(task_id, None)
 
 
 cancellation_registry = ConversationRunCancellationRegistry()
