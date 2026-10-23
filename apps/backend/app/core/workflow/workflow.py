@@ -1,4 +1,4 @@
-"""业务 ReAct 循环：按 ``ReactRoute`` 流转的节点注册表；单一执行者、两个恢复点；持久进度归 Run。"""
+"""业务 ReAct 循环：按 ``ReactRoute`` 流转的节点注册表；单一执行者、单一入口；持久进度归 Run。"""
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from app.core.workflow.nodes import (
     _tools_node,
 )
 from app.core.workflow.nodes.prepare_input_node import _prepare_input_node
-from app.core.workflow.nodes.wait_user_node import wait_user_node
-from app.core.workflow.tool_continuation import restore_tool_batch
 from app.models.conversation_run_progress import ConversationRunProgress
 from app.service import depends as service_depends
 
@@ -26,9 +24,9 @@ class ReactLikeWorkflow:
 
     扩展方式：``ReactRoute`` 新增成员，在 ``__init__`` 的节点表里登记对应节点，由上游节点返回
     该 route 流入。
-    恢复点只有两个：等待恢复从 ``wait_user`` 进入，其余（新 Run、续跑、编辑重跑、交接）都从
-    ``prepare_input`` 进入，由它并入 inbox 后流向 ``model``。新增节点必须能在重新进入后安全重跑，
-    或在下一次模型请求前完成。
+    入口只有 ``prepare_input``：新 Run、续跑、唤醒、编辑重跑、交接都从它进入，由它并入 mailbox 中
+    的消息后流向 ``model``。挂起时工具调用已在本步闭合，Run 进度不冻结任何调用。新增节点必须能在
+    重新进入后安全重跑，或在下一次模型请求前完成。
     """
 
     def __init__(self) -> None:
@@ -37,7 +35,6 @@ class ReactLikeWorkflow:
             ReactRoute.MODEL: _model_node,
             ReactRoute.TOOLS: _tools_node,
             ReactRoute.OBSERVE: _observe_node,
-            ReactRoute.WAIT_USER: wait_user_node,
             ReactRoute.STRUCTURED_OUTPUT: _structured_output_node,
         }
 
@@ -60,12 +57,7 @@ class ReactLikeWorkflow:
             await resolved.model.close()
 
     async def _drive(self, rc: RuntimeContext) -> None:
-        """入口只由 Run 的持久化进度决定，调用方不传恢复模式。
-
-        进度里有已绑定决定的待决调用（等待态被决定唤醒）时从 ``wait_user`` 进入，其余（新 Run、
-        续跑、编辑重跑、交接）都从 ``prepare_input`` 进入。待决调用只在挂起时写入、决定消费后的
-        第一次进度保存即清空，所以它不会让后续执行误入 ``wait_user``。
-        """
+        """从 ``prepare_input`` 进入，循环节点直到 END；调用方不传恢复模式。"""
         context = rc.task_space.get_context_manager(agent=rc.agent)
         context.begin_run(rc.run)
         progress = rc.run.execution_data
@@ -73,16 +65,10 @@ class ReactLikeWorkflow:
         rc.step_limit = progress.step_count + rc.agent.max_steps
         if rc.run.usage is not None:
             rc.usage_stats = ConversationRunUsageStats(**rc.run.usage)
-        entry = ReactRoute.PREPARE_INPUT
-        continuation = progress.continuation
-        if continuation is not None and continuation.decision is not None:
-            rc.batch = restore_tool_batch(continuation)
-            rc.resume_decision = continuation.decision
-            entry = ReactRoute.WAIT_USER
         state = ReactExecutionState(
             step_count=progress.step_count,
             tool_error_count=progress.tool_error_count,
-            next_node=entry,
+            next_node=ReactRoute.PREPARE_INPUT,
         )
         with execution_scope(rc, context):
             # 终态由产出节点就地落定，循环到 END 只停止驱动。
