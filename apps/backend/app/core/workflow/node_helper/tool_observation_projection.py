@@ -7,56 +7,12 @@ from typing import Any
 from openai.types.chat import ChatCompletionToolMessageParam
 
 from app.config.logging.logger import log
-from app.core.context.tool_call_closure import build_waiting_input_tool_message
-from app.core.events import ToolCallStatusChangedEvent
-from app.core.tools.schemas import USER_INPUT_REQUEST_KEY, ToolObservation, UserInputRequest
+from app.core.tools.schemas import ToolObservation
 from app.core.tools.tool_execute.tool_terminal_projection import (
-    normalize_display_data,
     terminal_event,
 )
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.message_metadata import ToolMessageMetadata
-
-
-def project_waiting_request(summary: dict[str, Any], *, step_id: str) -> None:
-    """挂起前物化审批卡片与占位结果，重启后可从 context 重建同一表单。"""
-    runtime = _runtime_context()
-    batch = runtime.batch
-    call_id = summary["tool_call_id"]
-    if not batch.was_projected(call_id):
-        raise ValueError(f"待决调用没有可供用户作答的工具卡片：{call_id}")
-    request = UserInputRequest.from_dict(summary[USER_INPUT_REQUEST_KEY])
-    display_data = dict(
-        normalize_display_data(summary.get("display_data"), tool_call_id=call_id) or {}
-    )
-    display_data[USER_INPUT_REQUEST_KEY] = request.to_request_payload()
-    canonical_write = _message_context().add_message(
-        build_waiting_input_tool_message(call_id, summary["tool_name"]),
-        metadata=ToolMessageMetadata(status="running", display_data=display_data),
-        run_id=runtime.run.id,
-    )
-    log.info(
-        "user_input_request_transport_persisted",
-        extra={
-            "msg": "待决请求已投影并持久化",
-            "data": {
-                "run_id": runtime.run.id,
-                "tool_call_id": call_id,
-                "request_id": request.request_id,
-                "canonical_write": canonical_write,
-            },
-        },
-    )
-    emit(
-        ToolCallStatusChangedEvent(
-            task_id=runtime.run.task_id,
-            run_id=runtime.run.id,
-            step_id=step_id,
-            tool_call_id=call_id,
-            status="running",
-            display_data=display_data,
-        )
-    )
 
 
 def settle_observations(

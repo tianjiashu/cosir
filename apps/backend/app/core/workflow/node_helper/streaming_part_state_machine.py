@@ -229,7 +229,6 @@ class StreamingPartStateMachine:
                     display_data=None,
                     error=None,
                 ),
-                run_id=self._run_id,
                 include_in_context=False,
             )
 

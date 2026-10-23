@@ -2,8 +2,7 @@
 
 每个调用自己投影生命周期：通过准入、即将交给 handler 时发 ``running``，结束（含执行链异常）
 时立即发终态，所以排队中的串行调用不会先显示为运行中，并行组里先跑完的调用先变色。只投影
-本步创建过工具卡片的调用（``was_projected``）；带待决用户输入的观察不发终态，由 wait_user
-收口。
+本步创建过工具卡片的调用（``was_projected``）。
 
 两条路径都不在事件循环线程上同步等待：同步阻塞的 thread 模式 handler（大仓库搜索、长时间
 ``delegate_task``）若占住事件循环，HTTP、SSE 与「停止」请求都会无响应。并行组使用本批专属的
@@ -94,7 +93,7 @@ def _is_parallel(call: ToolCall) -> bool:
 def _execution_context(
         rc: RuntimeContext, call: ToolCall, step_id: str, loop: asyncio.AbstractEventLoop
 ) -> ToolExecutionContext:
-    """单次调用的完整执行边界：Run / step 事实取自 ``rc``，调用身份与用户决定只取自 ``call``。
+    """单次调用的完整执行边界：Run / step 事实取自 ``rc``，调用身份只取自 ``call``。
 
     每个调用各建一份不可变上下文，同批调用因此不可能共享调用身份；执行器直接信任它，不再特化。
     """
@@ -108,7 +107,6 @@ def _execution_context(
         event_loop=loop,
         event_sink=rc.event_sink,
         tool_call_id=call.call_id,
-        user_decision=call.user_decision,
     )
 
 
@@ -126,7 +124,7 @@ def _execute_call(
         )
     except Exception as exc:
         observation = _internal_error(execution_context, call, exc)
-    if rc.batch.was_projected(call.call_id) and observation.user_input_request is None:
+    if rc.batch.was_projected(call.call_id):
         emit(
             terminal_event(
                 observation,
