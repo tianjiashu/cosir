@@ -153,8 +153,7 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
     sequence = store.context.max_sequence(store.task.id) + 1
     if metadata is None and message["role"] == "user":
         # 落库的 user 行必须带展示绑定；测试用正文作展示文本。
-        metadata = UserMessageMetadata(
-            presentation=UserInputPresentation(display_text=message["content"])
+        metadata = UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(display_text=message["content"])
         )
     store.context.append(store.task.id, run_id, message, sequence, True, metadata)
 

@@ -1,6 +1,5 @@
 """Agent Team 预览展示契约与结果投影测试。"""
 
-from dataclasses import asdict
 from types import SimpleNamespace
 
 import pytest
@@ -8,19 +7,10 @@ from pydantic import ValidationError
 
 import app.agent_team.coordinator as coordinator_module
 from app.agent_team.coordinator import AgentTeamCoordinator
-from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.agent_team.team_tool_error import TeamToolError
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.core.agents.model_settings import ModelSettings
-from app.core.tools.display.agent_team_display import (
-    build_agent_team_preview_display_data,
-    build_agent_team_run_display_data,
-)
-from app.core.tools.tool_handler.agent_team.review_request import (
-    AGENT_TEAM_REVIEW_DRAFT_SCHEMA,
-    build_team_review_request,
-)
-from app.core.workflow.node_helper.user_input_projection import extract_request
+from app.core.tools.display.agent_team_display import build_agent_team_preview_display_data
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_preparation_service import (
@@ -49,67 +39,13 @@ def _preview_fields() -> dict[str, object]:
     }
 
 
-def test_agent_team_preview_separates_display_from_review_request() -> None:
-    """待确认事实挂在观察的专用字段上，展示数据只承载卡片内容。
-
-    请求经 ``dataclasses.asdict`` 进 workflow state 后由 ``extract_requests`` 派生；展示数据里
-    没有（也不应有）待决声明——那是工作流控制流事实，不是展示数据。
-    """
+def test_agent_team_preview_carries_only_card_content() -> None:
+    """展示数据只承载卡片内容与 TeamRun 定位；「待确认」由 TeamRun 的 pending 状态表达。"""
 
     display_data = build_agent_team_preview_display_data(_preview_fields(), team_run_id=17)
-    request = build_team_review_request(_preview_fields(), team_run_id=17)
 
     assert display_data["kind"] == "agent-team-approval"
     assert display_data["team_run_id"] == 17
-    assert "requires_user_input" not in display_data
-    assert "user_input_request" not in display_data
-
-    assert request.kind == "agent_team_review"
-    assert request.request_id == "17"
-    assert [kind.value for kind in request.decisions] == ["approve", "reject"]
-    assert request.draft_schema == AGENT_TEAM_REVIEW_DRAFT_SCHEMA
-    assert request.draft == {
-        "goal": "交付报告",
-        "node_goals": {
-            "develop": {"goal": "实现", "summary": "实现"},
-            "review": {"goal": "审查", "summary": "审查"},
-        },
-        "configuration": {"team_id": "code-quality"},
-    }
-
-    observations = [
-        {
-            "tool_name": "agent_team",
-            "status": "success",
-            "content": "{}",
-            "error": "",
-            "reason": "",
-            "retryable": False,
-            "tool_call_id": "call-1",
-            "display_data": display_data,
-            # 工作流看到的形状就是 asdict 投影后的普通 dict。
-            "user_input_request": asdict(request),
-        }
-    ]
-    derived = extract_request(observations)
-    assert derived is not None
-    assert derived.request_id == "17"
-    assert [kind.value for kind in derived.decisions] == ["approve", "reject"]
-    assert derived.draft == request.draft
-
-
-def test_confirmed_team_display_data_stops_requesting_user_input() -> None:
-    """启动分支的展示数据与观察都不再携带待决声明，否则会形成无法结束的挂起。"""
-
-    display_data = build_agent_team_run_display_data(
-        team_run_id=17,
-        team_id="code-quality",
-        goal="交付报告",
-        node_goals={"develop": AgentTeamNodeGoal(goal="实现功能", summary="实现")},
-    )
-
-    assert display_data["kind"] == "agent-team-execution"
-    assert display_data["node_goals"] == {"develop": {"goal": "实现功能", "summary": "实现"}}
     assert "requires_user_input" not in display_data
     assert "user_input_request" not in display_data
 

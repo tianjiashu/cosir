@@ -15,7 +15,7 @@ const completedRun = (runId: number, messages: TransportMessage[] = []): Transpo
   runId,
   status: "completed",
   endReason: null,
-  contextWindowTotal: null,
+  contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
   messages,
   usage: null,
   error: null,

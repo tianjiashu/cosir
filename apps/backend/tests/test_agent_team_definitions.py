@@ -22,7 +22,7 @@ from app.agent_team.state.agent_team_run_state import (
 from app.core.tools.tool_handler.agent_team.propose_agent_team_configuration import (
     ProposeAgentTeamConfigurationTool,
 )
-from app.core.tools.tool_models import AgentTeamApproveInput
+from app.service.agent_team.agent_team_approve_input import AgentTeamApproveInput
 from app.core.tools.tool_models.agent_team.propose_agent_team_configuration_args import (
     ProposeAgentTeamConfigurationArgs,
 )
@@ -518,10 +518,9 @@ def test_team_run_crud_round_trips_persisted_confirmation_state(
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "continuation": None,
             },
             task_id=task.id,
-            status="waiting_for_input",
+            status="suspended",
         )
         session.add(run)
         session.flush()
@@ -564,10 +563,9 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "continuation": None,
             },
             task_id=task.id,
-            status="waiting_for_input",
+            status="suspended",
         )
         session.add(run)
         session.flush()
@@ -608,29 +606,20 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
     )
 
 
-def test_team_confirmation_accepts_running_parent_run() -> None:
-    """批准发生在主 Run 已恢复为 ``running`` 之后：确认边界不得再要求 ``waiting_for_input``。
-
-    这是 human-in-the-loop 主路径的准入条件：旧 REST 流程靠 ``wait_for_parent_input`` 先等主 Run
-    进入等待态，专用端点删除后该前置消失，若此校验仍要求等待态，则每次真实批准都会失败。
-    """
+def test_team_confirmation_only_checks_parent_ownership() -> None:
+    """确认边界只校验归属：主 Agent 在等审批期间可能被唤醒并完成，pending 的 Team 仍可批准。"""
 
     service = AgentTeamRunService.__new__(AgentTeamRunService)
-    stubbed = SimpleNamespace(get_run=lambda _run_id: SimpleNamespace(task_id=2, status="running"))
-
-    service._run_service = stubbed
-    service._validate_parent_run(2, 1)  # 不抛即通过
+    for status in ("suspended", "running", "completed"):
+        service._run_service = SimpleNamespace(
+            get_run=lambda _run_id, status=status: SimpleNamespace(task_id=2, status=status)
+        )
+        service._validate_parent_run(2, 1)  # 不抛即通过
 
     service._run_service = SimpleNamespace(
-        get_run=lambda _run_id: SimpleNamespace(task_id=9, status="running")
+        get_run=lambda _run_id: SimpleNamespace(task_id=9, status="suspended")
     )
     with pytest.raises(ValueError, match="不属于指定主 Agent Task"):
-        service._validate_parent_run(2, 1)
-
-    service._run_service = SimpleNamespace(
-        get_run=lambda _run_id: SimpleNamespace(task_id=2, status="cancelled")
-    )
-    with pytest.raises(ValueError, match="已结束"):
         service._validate_parent_run(2, 1)
 
 
@@ -652,10 +641,9 @@ def test_create_pending_confirmation_supersedes_previous_pending(tmp_path: Path)
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "continuation": None,
             },
             task_id=task.id,
-            status="waiting_for_input",
+            status="suspended",
         )
         session.add(run)
         session.flush()
@@ -713,10 +701,9 @@ def test_supersede_pending_for_parent_unblocks_reproposal(tmp_path: Path) -> Non
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "continuation": None,
             },
             task_id=task.id,
-            status="waiting_for_input",
+            status="suspended",
         )
         session.add(run)
         session.flush()
@@ -801,10 +788,9 @@ def test_user_rejection_ends_pending_team_run_idempotently(tmp_path: Path) -> No
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "continuation": None,
             },
             task_id=task.id,
-            status="waiting_for_input",
+            status="suspended",
         )
         session.add(parent_run)
         session.flush()
@@ -857,7 +843,6 @@ def test_team_run_view_projects_node_and_child_agent_counts(
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "continuation": None,
             },
             task_id=parent_task.id,
             status="running",
@@ -878,7 +863,6 @@ def test_team_run_view_projects_node_and_child_agent_counts(
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "continuation": None,
             },
             task_id=node_task.id,
             status="running",
@@ -899,7 +883,6 @@ def test_team_run_view_projects_node_and_child_agent_counts(
             execution_data={
                 "step_count": 0,
                 "tool_error_count": 0,
-                "continuation": None,
             },
             task_id=child_task.id,
             status="completed",

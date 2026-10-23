@@ -17,7 +17,6 @@ from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
 from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 
 child_agent_create = import_module("app.core.tools.tool_handler.child_task.child_agent_create")
-child_agent_wait = import_module("app.core.tools.tool_handler.child_task.child_agent_wait")
 
 
 def _model_payload(definition: ToolDefinition) -> dict:
@@ -73,10 +72,9 @@ def test_base_delegate_definition_does_not_freeze_candidates(
     assert "Available child agents" not in payload["description"]
     assert "enum" not in child_property
     assert "{ids}" not in child_property["description"]
-    # 同回复内并行委派仍是工具调用契约：delegate_task 声明工具级并行，等待多个 child 的
-    # 「同一回复里批量调用」提示由 child_agent_wait 承载（描述从 delegate_task 迁到了那里）。
+    # 同回复内并行委派仍是工具调用契约：delegate_task 声明工具级并行；结论逐条以消息回投，
+    # 等待由 wait_messages 挂起承担，不再需要「同一回复里批量等待」的提示。
     assert base_delegate_definition.parallel_mode == "parallel"
-    assert "one reply" in child_agent_wait.ChildAgentWaitTool.description
 
 
 def test_workspace_profiles_do_not_cross_workspace_boundaries(

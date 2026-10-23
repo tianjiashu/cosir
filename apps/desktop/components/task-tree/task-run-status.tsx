@@ -13,7 +13,7 @@ const PRESENTATION: Record<string, Presentation> = {
   completed: { label: "已完成", tone: "success", active: false },
   pending: { label: "排队中", tone: "info", active: true },
   running: { label: "运行中", tone: "info", active: true },
-  waiting_for_input: { label: "等待确认", tone: "warning", active: false },
+  suspended: { label: "等待中", tone: "warning", active: false },
   failed: { label: "运行失败", tone: "destructive", active: false },
   cancelled: { label: "已停止", tone: "neutral", active: false },
 };

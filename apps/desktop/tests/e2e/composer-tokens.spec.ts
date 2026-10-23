@@ -30,7 +30,7 @@ test.beforeEach(async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/reset");
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 100, title: "行内标签" } });
   await page.route("**/tasks/100/assistant/state", route => route.fulfill({ json: {
-    runs: [{ runId: 70, status: "completed", endReason: "stop", contextWindowTotal: null, usage: null, error: null,
+    runs: [{ runId: 70, status: "completed", endReason: "stop", contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] }, usage: null, error: null,
       messages: [
         { id: "history-user", role: "user", parts: [{ type: "text", text: "查看 [src/main.ts](cosir-file:src/main.ts)", status: "completed" }] },
         { id: "history-assistant", role: "assistant", parts: [{ type: "text", text: "历史回复", status: "completed" }] },

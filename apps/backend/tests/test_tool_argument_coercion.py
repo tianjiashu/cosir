@@ -16,7 +16,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.tools.tool_models.child_task.child_agent_send_args import ChildAgentSendArgs
 from app.core.tools.tool_models.child_task.child_agent_status_args import ChildAgentStatusArgs
-from app.core.tools.tool_models.child_task.child_agent_wait_args import ChildAgentWaitArgs
 from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
 from app.core.tools.tool_models.execute_terminal_args import (
     MacExecuteTerminalArgs,
@@ -24,6 +23,7 @@ from app.core.tools.tool_models.execute_terminal_args import (
 )
 from app.core.tools.tool_models.list_directory_args import ListDirectoryArgs
 from app.core.tools.tool_models.terminal_session_args import TerminalReadArgs, TerminalWriteArgs
+from app.core.tools.tool_models.wait_messages_args import WaitMessagesArgs
 from app.core.tools.tool_models.web_extract_args import WebExtractArgs
 from app.core.tools.validation.argument_coercion import coerce_tool_arguments
 from app.core.tools.validation.arguments import validate_tool_arguments
@@ -275,7 +275,7 @@ class TestChildTaskStrictAlignment:
 
     @pytest.mark.parametrize(
         "model",
-        [DelegateTaskArgs, ChildAgentSendArgs, ChildAgentStatusArgs, ChildAgentWaitArgs],
+        [DelegateTaskArgs, ChildAgentSendArgs, ChildAgentStatusArgs, WaitMessagesArgs],
     )
     def test_child_task_models_keep_strict_config(self, model: type[BaseModel]) -> None:
         """潜在缺陷：漏配 strict 会让该工具退化为宽松校验，与其它工具口径分叉。"""

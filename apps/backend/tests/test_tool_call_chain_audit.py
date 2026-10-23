@@ -24,6 +24,7 @@ from app.core.tools.schemas import (
 from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
 from app.core.tools.tool_handler.read_file import ReadFileTool
 from app.core.tools.tool_registry import ToolRegistry
+from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_task_context import ConversationTaskContextRecord
 
 # ============================================================================
@@ -405,6 +406,8 @@ def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
         error=None,
         input_text="",
         context_window_total=None,
+        model_config_id=None,
+        options=ConversationRunOptions(),
         image_paths=None,
         extra=None,
         created_at=None,

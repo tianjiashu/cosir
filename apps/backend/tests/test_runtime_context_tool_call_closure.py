@@ -50,7 +50,7 @@ _CrudT = TypeVar("_CrudT")
 
 def _user_metadata(message: dict) -> UserMessageMetadata:
     """落库的 user 行必须带展示绑定；测试用正文作展示文本。"""
-    return UserMessageMetadata(presentation=UserInputPresentation(display_text=message["content"]))
+    return UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(display_text=message["content"]))
 
 
 def _ai_message(*call_ids: str) -> ChatCompletionAssistantMessageParam:
@@ -124,6 +124,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
         return SimpleNamespace(
             id=record.id,
             context_window_total=record.context_window_total,
+            model_config_id=record.model_config_id,
+            options=record.options,
             status=status,
             end_reason=None,
             usage=None,
@@ -673,7 +675,7 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
 def test_recover_orphaned_runs_preserves_waiting_run(env: SimpleNamespace) -> None:
     """重启只收敛失去执行者的 running；waiting 留待用户提交决定。"""
 
-    waiting = env.seed_run("waiting_for_input")
+    waiting = env.seed_run("suspended")
     running = env.seed_run("running")
 
     run_crud = _bind(ConversationRunCrud, env.factory)
@@ -688,7 +690,7 @@ def test_recover_orphaned_runs_preserves_waiting_run(env: SimpleNamespace) -> No
 
     assert [record.id for record in recovered] == [running.id]
     assert run_crud.get(running.id).status == "cancelled"
-    assert run_crud.get(waiting.id).status == "waiting_for_input"
+    assert run_crud.get(waiting.id).status == "suspended"
     assert run_crud.get(waiting.id).end_reason is None
     assert [row for row in _rows(env) if row.run_id == waiting.id] == []
     # 幂等：重复恢复不再把 waiting 收进来。
@@ -806,7 +808,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
 def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
     """无法安全补配对的 running 仍取消；独立 waiting 保留原请求。"""
     broken = env.seed_run("running")
-    healthy = env.seed_run("waiting_for_input")
+    healthy = env.seed_run("suspended")
     env.context.append(
         env.task.id,
         broken.id,
@@ -825,7 +827,7 @@ def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
     service._run_state._run = service._run
     recovered = service.recover_orphaned_runs()
     assert [run.id for run in recovered] == [broken.id]
-    assert service._run.get(healthy.id).status == "waiting_for_input"
+    assert service._run.get(healthy.id).status == "suspended"
     assert _rows(env)[0] == original
     assert _rows(env)[-1].message["tool_calls"][0]["id"] == "pending"
     assert service.recover_orphaned_runs() == []
@@ -838,9 +840,8 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
     from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
     from app.core.workflow.execution_state.react_route import ReactRoute
     from app.core.workflow.nodes import model_node
-    from app.models.conversation_input import ConversationInput, QueuedTaskInput
-    from app.models.conversation_run_options import ConversationRunOptions
-    from app.models.task_message import UserMessage
+    from app.models.conversation_input import ConversationInput
+    from app.models.task_message import RunLaunch, TaskMessage, UserInputBody
     from app.storage.crud.task_message_crud import TaskMessageCrud
 
     run = env.seed_run("running")
@@ -853,15 +854,11 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
         metadata=ToolMessageMetadata(status="completed"),
     )
     with env.factory.begin() as session:
-        TaskMessageCrud().append_user(
-            session,
-            env.task.id,
-            QueuedTaskInput(
-                message=ConversationInput(input_text="新消息", display_text="新消息"),
-                model_config_id=1,
-                options=ConversationRunOptions(),
-            ),
+        body = UserInputBody(
+            message=ConversationInput(input_text="新消息", display_text="新消息"),
+            launch=RunLaunch(model_config_id=1),
         )
+        TaskMessageCrud().append(session, [(env.task.id, TaskMessage.of(body))])
     manager = _manager(
         context_service=env.context,
         task_id=env.task.id,
@@ -895,7 +892,9 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
     with env.factory() as session:
         queued = TaskMessageCrud().list_pending(session, env.task.id)
         assert [
-            item.payload.message.input_text for item in queued if isinstance(item, UserMessage)
+            item.body.message.input_text
+            for item in queued
+            if isinstance(item.body, UserInputBody)
         ] == ["新消息"]
     assert len(_rows(env)) == 1
 

@@ -28,7 +28,7 @@ const STATUS_LABELS: Record<string, string> = {
   queued: "待执行",
   pending: "等待中",
   running: "执行中",
-  waiting_for_input: "等待输入",
+  suspended: "等待输入",
   completed: "已完成",
   failed: "失败",
   cancelled: "已取消",
@@ -56,7 +56,7 @@ function AgentStatusIcon({ status }: { status: string }) {
   if (status === "cancelled") {
     return <BanIcon className="size-4 shrink-0 text-muted-foreground" aria-label={label} />;
   }
-  if (status === "waiting_for_input") {
+  if (status === "suspended") {
     return <PauseCircleIcon className="size-4 shrink-0 animate-pulse text-warning motion-reduce:animate-none" aria-label={label} />;
   }
   if (status === "pending" || status === "queued") {

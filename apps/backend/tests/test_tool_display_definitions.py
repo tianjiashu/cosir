@@ -4,13 +4,13 @@ from app.core.tools.tool_handler.agent_team.agent_team_run import AgentTeamRunTo
 from app.core.tools.tool_handler.child_task.child_agent_create import DelegateTaskTool
 from app.core.tools.tool_handler.child_task.child_agent_send import ChildAgentSendTool
 from app.core.tools.tool_handler.child_task.child_agent_status import ChildAgentStatusTool
-from app.core.tools.tool_handler.child_task.child_agent_wait import ChildAgentWaitTool
+from app.core.tools.tool_handler.wait_messages import WaitMessagesTool
 
 
 def test_child_agent_tools_declare_standalone_details_rows() -> None:
     """Child Agent 工具声明 standalone 展示面，且都不可展开。
 
-    目的：固化 child_task/ 四个工具当前的 ``ToolDisplayHints`` 契约——四个工具都在
+    目的：固化 child_task/ 三个工具当前的 ``ToolDisplayHints`` 契约——三个工具都在
     独立区域强调结果（``standalone``），``expand_layout`` 统一为 ``details``，**都不**
     把模型结果正文暴露给客户端（``show_result=False``），也都不提供展开面
     （``delegate_task`` 的委派生命周期由独立卡片直接呈现，不再展开细节）。
@@ -18,14 +18,13 @@ def test_child_agent_tools_declare_standalone_details_rows() -> None:
     导致前端无法按 ``kind`` / ``expand_layout`` 正确路由。
     """
 
-    delegate, send, status, wait = (
+    delegate, send, status = (
         DelegateTaskTool.to_definition(object.__new__(DelegateTaskTool)),
         ChildAgentSendTool.to_definition(object.__new__(ChildAgentSendTool)),
         ChildAgentStatusTool.to_definition(object.__new__(ChildAgentStatusTool)),
-        ChildAgentWaitTool.to_definition(object.__new__(ChildAgentWaitTool)),
     )
 
-    for definition in (delegate, send, status, wait):
+    for definition in (delegate, send, status):
         display = definition.display
         assert display is not None
         assert display.surface == "standalone"
@@ -33,8 +32,17 @@ def test_child_agent_tools_declare_standalone_details_rows() -> None:
         assert display.show_result is False
 
     assert all(
-        definition.display.expandable is False for definition in (delegate, send, status, wait)
+        definition.display.expandable is False for definition in (delegate, send, status)
     )
+
+
+def test_wait_messages_declares_a_plain_row_without_result() -> None:
+    """挂起只是控制流：等待工具只显示动词与状态，不展开、不暴露结果正文、不产出展示 kind。"""
+
+    display = WaitMessagesTool.to_definition(object.__new__(WaitMessagesTool)).display
+    assert display is not None
+    assert (display.surface, display.expand_layout) == ("standalone", "none")
+    assert display.expandable is False and display.show_result is False
 
 
 def test_agent_team_run_tool_advertises_only_running_existing_teams() -> None:

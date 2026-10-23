@@ -41,7 +41,7 @@ def store(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "status", ["running", "waiting_for_input", "completed", "failed", "cancelled"]
+    "status", ["running", "suspended", "completed", "failed", "cancelled"]
 )
 def test_uses_current_pointer_instead_of_latest_created_run(store, status):
     task = store.tasks.create(store.workspace.id, "子任务", task_type="delegate_task")
@@ -77,7 +77,7 @@ def test_resume_and_replacement_are_read_without_cached_state(store):
 def test_workspace_projection_is_one_query_and_keeps_catalog_filter(store):
     for kind in ("user", "fork", "delegate_task"):
         task = store.tasks.create(store.workspace.id, kind, task_type=kind)
-        run = store.runs.create(task.id, status="waiting_for_input")
+        run = store.runs.create(task.id, status="suspended")
         store.tasks.set_current_run_id(task.id, run.id)
     statements = []
 
@@ -91,4 +91,4 @@ def test_workspace_projection_is_one_query_and_keeps_catalog_filter(store):
         event.remove(store.engine, "before_cursor_execute", record_query)
     assert len(statements) == 1
     assert {record.task_type for record in records} == {"user", "fork"}
-    assert all(record.execution_status == "waiting_for_input" for record in records)
+    assert all(record.execution_status == "suspended" for record in records)

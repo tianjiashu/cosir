@@ -189,7 +189,6 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
     """重启恢复只写持久化事实（Run 终态 + 工具收口），不触碰 snapshot。"""
 
     calls: list[tuple[int, RunTransition, str | None]] = []
-    invalidated: list[tuple[int, int]] = []
     repaired: list[tuple[int, int]] = []
 
     class _Transaction:
@@ -227,10 +226,6 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
             return SimpleNamespace(id=run_id)
 
     class _ContextService:
-        def invalidate_waiting_calls(self, task_id: int, run_id: int, session: object) -> None:
-            assert session is not None
-            invalidated.append((task_id, run_id))
-
         def close_unclosed_tool_calls_for_run(
             self, task_id: int, run_id: int, session: object = None
         ) -> list[str]:
@@ -251,7 +246,6 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
         (7, RunTransition.CANCEL, "runtime_restarted"),
         (8, RunTransition.CANCEL, "runtime_restarted"),
     ]
-    assert invalidated == [(1, 7), (2, 8)]
     assert repaired == [(1, 7), (2, 8)]
 
 

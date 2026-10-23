@@ -1,4 +1,4 @@
-"""失败的 Agent Team 仍可由工具调用定位，并能读取节点诊断。"""
+"""失败的 Agent Team 仍可定位，并能读取节点诊断。"""
 
 import json
 from types import SimpleNamespace
@@ -16,8 +16,6 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tools.schemas import UserDecision, UserDecisionKind
-from app.core.tools.tool_handler.agent_team.agent_team_run import AgentTeamRunTool
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 from app.service.agent_team import agent_team_execution_timeline
@@ -25,9 +23,6 @@ from app.service.agent_team import agent_team_run_service as run_service_module
 from app.service.agent_team.agent_team_execution_timeline import project_node_visits
 from app.service.agent_team.agent_team_run_archive_service import AgentTeamRunArchiveService
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
-
-# 节点 Run 在父 Run 事件循环上执行；这里只需一个未关闭的循环身份。
-_OPEN_LOOP = SimpleNamespace(is_closed=lambda: False)
 
 
 def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None:
@@ -56,6 +51,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
                     }
                 ],
                 "contextWindowTotal": None,
+                "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
                 "usage": None,
                 "error": None,
             }
@@ -304,32 +300,21 @@ def test_invalid_node_output_is_not_an_unhandled_exception() -> None:
     assert coordinator.struct_out_put("not json") is None
 
 
-def test_confirmed_failed_team_returns_error_with_run_locator() -> None:
-    """同步启动后立即失败时保留工具失败语义，同时让 UI 找回整个 TeamRun。"""
+def test_failed_background_team_result_carries_run_locator_and_archive_hint() -> None:
+    """后台 Team 失败时，回投给主 Agent 的结果保留 TeamRun 定位、状态与档案读取指引。"""
+    from app.service.agent_team.agent_team_decision_service import AgentTeamDecisionService
 
-    row = SimpleNamespace(
-        id=17,
-        team_id="quality",
-        status="failed",
-        end_reason="node_run_failed",
-    )
-    tool = AgentTeamRunTool.__new__(AgentTeamRunTool)
-    tool.agent_team_run_service = SimpleNamespace(
-        confirm_and_start=lambda *_args, **_kwargs: row,
-    )
-    tool.agent_team_run_archive_service = SimpleNamespace(existing_archive_path=lambda _id: None)
-    decision = UserDecision(
-        request_id="17",
-        kind=UserDecisionKind.APPROVE,
-        data={
-            "configuration": {},
-            "goal": "完成审查",
-            "node_goals": {"review": {"goal": "检查代码", "summary": "审查代码"}},
-        },
+    row = SimpleNamespace(id=17, status="failed", end_reason="node_run_failed")
+    service = AgentTeamDecisionService.__new__(AgentTeamDecisionService)
+    service._archives = SimpleNamespace(
+        existing_archive_path=lambda _id: ".cosir/agent-team-runs/17.json"
     )
 
-    observation = tool._start_confirmed_run(decision, SimpleNamespace(), _OPEN_LOOP)
+    body = service._result_body(row)
 
-    assert observation.status == "error"
-    assert observation.team_run_id == 17
-    assert observation.display_data == {"status_hint": "执行失败"}
+    assert (body.job, body.job_id, body.status) == ("agent_team", 17, "failed")
+    payload = json.loads(body.content)
+    assert payload["end_reason"] == "node_run_failed"
+    assert payload["trace_file"] == ".cosir/agent-team-runs/17.json"
+    assert "read_file" in payload["read_instructions"]
+    assert "hint" not in payload

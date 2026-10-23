@@ -43,7 +43,7 @@ function isActiveRun(status: AgentTeamRun["status"] | undefined): boolean {
  * 不重试。重试耗尽后查询进入 error 态，refetchInterval 随之停止——不能只看缓存里的旧
  * status，否则仍是 running 的旧数据会让失败查询每秒重拉、永不停止。用户可从卡片手动重试。
  */
-function useAgentTeamRunPolling(teamRunId: number | undefined) {
+export function useAgentTeamRunPolling(teamRunId: number | undefined) {
   const query = useQuery({
     queryKey: queryKeys.agentTeamRun(teamRunId ?? 0),
     queryFn: ({ signal }) => getAgentTeamRun(teamRunId as number, { signal }),

@@ -13,7 +13,7 @@ import { AgentTeamExecutionCard } from "./agent-team-execution-card";
 import { AgentTeamConfigurationTool } from "./agent-team-configuration-tool";
 import { readAgentTeamConfigurationDraftDisplay, readAgentTeamPreviewDisplay } from "./agent-team-display";
 import { readAgentConfigurationDraftDisplay } from "./agent-configuration-draft-display";
-import { readChildAgentResultDisplay, readChildAgentWaitDisplay, readDelegationDisplay } from "./child-agent-display";
+import { readChildAgentResultDisplay, readDelegationDisplay } from "./child-agent-display";
 import { asRecord, readToolArtifact, type ToolArtifact } from "./types";
 
 export type ToolPartRoute =
@@ -64,7 +64,6 @@ const KNOWN_DISPLAY_KINDS = new Set([
   "terminal-result",
   "terminal-session",
   "delegation-result",
-  "child-agent-wait-result",
   "child-agent-result",
   "repeated-call",
   "agent-configuration-draft",
@@ -178,7 +177,6 @@ export function resolveToolRenderer(
   const fallback = FALLBACK_RENDERER;
   if (kind !== undefined && !KNOWN_DISPLAY_KINDS.has(kind)) return fallback;
   if (kind === "delegation-result" && readDelegationDisplay(artifact.display_data) === null) return fallback;
-  if (kind === "child-agent-wait-result" && readChildAgentWaitDisplay(artifact.display_data) === null) return fallback;
   if (kind === "child-agent-result" && readChildAgentResultDisplay(artifact.display_data) === null) return fallback;
 
   const context = { toolName, artifact, kind };

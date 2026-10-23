@@ -106,6 +106,7 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
                 "status": "completed",
                 "endReason": None,
                 "contextWindowTotal": None,
+                "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
                 "usage": None,
                 "error": None,
                 "messages": [
@@ -286,7 +287,7 @@ def test_rebuild_restores_ordinary_file_from_context_input() -> None:
         task_id=7,
         run_id=1,
         message={"role": "user", "content": message.input_text},
-        metadata=UserMessageMetadata(presentation=message.presentation()),
+        metadata=UserMessageMetadata(kind="user_input", presentation=message.presentation()),
         include_in_context=True,
         sequence=1,
     )

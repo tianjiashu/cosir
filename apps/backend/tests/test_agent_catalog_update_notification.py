@@ -1,4 +1,4 @@
-"""子 Agent 目录变更的通知广播测试：命中的 Task 经 ``WorkflowSession.post_notices`` 入外部队列。"""
+"""子 Agent 目录变更的通知广播测试：命中的 Task 经 ``WorkflowSession.post`` 入外部队列。"""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.models.task_message import NoticeMessage
-from app.task_runtime.broadcaster import runtime_notice_broadcaster
+from app.models.task_message import NoticeBody
 from app.task_runtime.agent_catalog_change import AgentCatalogChange
+from app.task_runtime.broadcaster import runtime_notice_broadcaster
 from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
     broadcast_agent_catalog_change,
 )
@@ -45,19 +45,19 @@ def clear_runtime_spaces():
 
 
 @pytest.fixture(autouse=True)
-def posted(monkeypatch) -> dict[int, list[NoticeMessage]]:
-    """记录广播交给 ``post_notices`` 的通知，按 Task 归档。"""
+def posted(monkeypatch) -> dict[int, list[NoticeBody]]:
+    """记录广播交给 ``post`` 的通知，按 Task 归档。"""
 
-    by_task: dict[int, list[NoticeMessage]] = {}
+    by_task: dict[int, list[NoticeBody]] = {}
 
-    def post_notices(task_ids: list[int], notice: NoticeMessage) -> None:
+    def post(task_ids: list[int], notice: NoticeBody) -> None:
         for task_id in task_ids:
             by_task.setdefault(task_id, []).append(notice)
 
     monkeypatch.setattr(
         runtime_notice_broadcaster,
         "get_workflow_session",
-        lambda: SimpleNamespace(post_notices=post_notices),
+        lambda: SimpleNamespace(post=post),
     )
     return by_task
 
@@ -101,9 +101,8 @@ def test_agent_catalog_change_reaches_only_delegating_agents_in_scope(posted) ->
     assert sorted(posted) == [1, 2]
     assert all(len(posted[task_id]) == 1 for task_id in (1, 2))
     message = posted[1][0]
-    assert isinstance(message, NoticeMessage)
-    assert message.id is None
-    assert message.kind == "agent_catalog_change"
+    assert isinstance(message, NoticeBody)
+    assert message.notice_kind == "agent_catalog_change"
     assert "旧描述" in message.content
     assert "新描述" in message.content
 

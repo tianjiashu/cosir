@@ -42,7 +42,7 @@ test.beforeEach(async ({ request }) => {
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: 43, title: "另一个任务" } });
 });
 
-for (const status of ["running", "pending", "waiting_for_input"]) {
+for (const status of ["running", "pending", "suspended"]) {
   test(`后续 ${status} Run 不阻止 fork 已结束历史`, async ({ page }) => {
     const calls: unknown[] = [];
     await page.route(`${origin}/tasks/42/fork`, async (route) => {

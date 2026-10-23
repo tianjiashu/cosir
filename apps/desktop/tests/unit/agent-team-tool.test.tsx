@@ -4,7 +4,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { AgentTeamTool } from "@/components/assistant-ui/tools/agent-team-tool";
+import type { AgentTeamRun } from "@/lib/api/agent-teams";
 import { createQueryClient } from "@/lib/query/query-client";
+import { queryKeys } from "@/lib/query/query-keys";
 
 /** 方案预览的完整载荷（字段要求见 readAgentTeamPreviewDisplay 的严格解析）。 */
 const PREVIEW: Record<string, unknown> = {
@@ -35,96 +37,74 @@ const PREVIEW: Record<string, unknown> = {
   ],
 };
 
-/** 后端在挂起前投影进 tool part 的待决请求载荷。 */
-const REVIEW_REQUEST: Record<string, unknown> = {
-  request_id: "17",
-  request_kind: "agent_team_review",
-  prompt: "确认执行方案",
-  decisions: ["approve", "reject"],
-  draft_schema: "agent-team-review-v2",
-  draft: { goal: "交付报告" },
-};
-
-function renderAgentTeamTool(
-  displayData: Record<string, unknown>,
-  backendStatus: string = "running",
-  runStatus: string = "waiting_for_input",
-): string {
+/** 卡片按 TeamRun 状态渲染；静态渲染不发请求，用预置的查询缓存模拟后端返回。 */
+function renderAgentTeamTool(teamRun: Partial<AgentTeamRun> | null): string {
   const part = {
     toolName: "agent_team",
     toolCallId: "call-1",
     args: {},
     result: undefined,
     artifact: {
-      backendStatus,
+      backendStatus: "completed",
       presentation: {},
-      display_data: displayData,
+      display_data: PREVIEW,
       error: null,
       errorCode: null,
     },
   } as unknown as ToolCallMessagePartProps;
-
-  // 执行卡用 TanStack Query 轮询 TeamRun；静态渲染不会发起请求，只需提供 QueryClient。
+  const client = createQueryClient();
+  if (teamRun) {
+    client.setQueryData(queryKeys.agentTeamRun(17), {
+      id: 17,
+      team_id: "code-quality",
+      goal: "交付报告",
+      status: "pending",
+      end_reason: null,
+      nodes: [],
+      current_node_id: null,
+      ...teamRun,
+    });
+  }
   return renderToStaticMarkup(
-    <QueryClientProvider client={createQueryClient()}>
-      <AgentTeamTool {...part} runId={2} runStatus={runStatus} taskId={3} />
+    <QueryClientProvider client={client}>
+      <AgentTeamTool {...part} runId={2} taskId={3} />
     </QueryClientProvider>,
   );
 }
 
-describe("AgentTeamTool 待确认态", () => {
-  it("Run 等待输入且请求有效时显示审批表单，即使 tool part 已完成", () => {
-    const html = renderAgentTeamTool({ ...PREVIEW, user_input_request: REVIEW_REQUEST }, "completed");
+describe("AgentTeamTool 按 TeamRun 状态渲染", () => {
+  it("TeamRun 待确认时显示可提交的审批表单，与工具调用已完成无关", () => {
+    const html = renderAgentTeamTool({ status: "pending" });
 
     expect(html).toContain("等待确认");
-    expect(html).not.toContain("执行中");
-    // 可编辑表单仍在：等待态提示不能挤掉用户作答的入口。
-    expect(html).toContain("确认执行");
-    expect(html).toContain("驳回并重新生成");
+    expect(html).not.toContain("Agent Team 执行进度");
+    expect(html).toMatch(/<button(?![^>]*disabled="")[^>]*>确认执行<\/button>/);
+    expect(html).toMatch(/<button(?![^>]*disabled="")[^>]*>驳回并重新生成<\/button>/);
   });
 
-  it("请求载荷存在但无法识别时显示格式不兼容提示，不回退成执行卡", () => {
-    const html = renderAgentTeamTool(
-      { ...PREVIEW, user_input_request: { ...REVIEW_REQUEST, draft_schema: "agent-team-review-v0" } },
-      "completed",
-    );
+  it("TeamRun 状态尚未读到时保留审批卡但禁止提交", () => {
+    const html = renderAgentTeamTool(null);
 
-    expect(html).toContain("审批请求格式不兼容");
-    expect(html).not.toContain("Agent Team 执行进度");
-    expect(html).not.toContain("确认执行");
-  });
-
-  it("Run 未处于等待态时保留审批卡但禁止提交决定", () => {
-    // 请求存在决定是否展示审批卡；Run 状态只决定能否提交。
-    const html = renderAgentTeamTool(
-      { ...PREVIEW, user_input_request: REVIEW_REQUEST },
-      "completed",
-      "running",
-    );
-
-    expect(html).toContain("正在准备确认");
-    expect(html).not.toContain("Agent Team 执行进度");
+    expect(html).toContain("正在同步方案状态");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>确认执行<\/button>/);
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>驳回并重新生成<\/button>/);
   });
 
-  it("执行态由独立执行卡渲染，不再挤进审批卡", () => {
-    const html = renderAgentTeamTool({
-      ...PREVIEW,
-      status: "rejected",
-      user_decision: "reject",
-    }, "running", "running");
+  it("用户驳回后显示驳回结果，不回退成执行卡", () => {
+    const html = renderAgentTeamTool({ status: "cancelled", end_reason: "user_rejected" });
 
-    expect(html).not.toContain("等待确认");
     expect(html).toContain("已驳回");
-    expect(html).toContain("主 Agent 正在根据审阅意见重新生成方案");
+    expect(html).not.toContain("确认执行");
+    expect(html).not.toContain("Agent Team 执行进度");
   });
 
-  it("已同意后从历史消息恢复时显示执行卡，不把旧预览误判为驳回", () => {
-    const html = renderAgentTeamTool({ ...PREVIEW, status: "pending" }, "running", "running");
+  it("批准后（运行中或已结束）交给执行卡渲染", () => {
+    for (const status of ["running", "completed", "cancelled"] as const) {
+      const html = renderAgentTeamTool({ status, end_reason: status === "cancelled" ? "cancelled" : null });
 
-    expect(html).not.toContain("等待确认");
-    expect(html).toContain("Agent Team 执行进度");
-    expect(html).not.toContain("已驳回");
+      expect(html).not.toContain("等待确认");
+      expect(html).not.toContain("已驳回");
+      expect(html).toContain("Agent Team 执行进度");
+    }
   });
 });

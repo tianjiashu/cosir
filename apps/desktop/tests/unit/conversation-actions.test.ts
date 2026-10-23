@@ -5,6 +5,7 @@ import {
   getLatestUserMessageId,
   getTransportRunId,
   isEditableLatestRunUserMessage,
+  isQueuedUserMessage,
   canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
 import type { TransportMessage, TransportState } from "@/lib/assistant/contract";
@@ -21,7 +22,7 @@ const run = (runId: number, status: string = "completed", messages: TransportMes
   runId,
   status,
   endReason: null,
-  contextWindowTotal: null,
+  contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
   messages,
   usage: null,
   error: null,
@@ -79,18 +80,20 @@ describe("conversation actions", () => {
   });
 });
 
-it("never exposes queued messages for editing and blocks editing while inputs are queued", () => {
+it("edits queued messages in place and still allows editing the latest consumed message", () => {
   const snapshot = state({
     runs: [run(1, "cancelled", [{ id: "consumed", role: "user", parts: [] }])],
     current_run_id: 1,
     queued_messages: [
-      { id: "q1", role: "user", parts: [], delivery: "after_run" },
+      { id: "q1", role: "user", parts: [], delivery: "next_run" },
       { id: "q2", role: "user", parts: [], delivery: "immediate" },
     ],
   });
   expect(getLatestUserMessageId(snapshot)).toBe("consumed");
-  expect(isEditableLatestRunUserMessage(snapshot, "consumed")).toBe(false);
+  expect(isEditableLatestRunUserMessage(snapshot, "consumed")).toBe(true);
   expect(isEditableLatestRunUserMessage(snapshot, "q2")).toBe(false);
+  expect(isQueuedUserMessage(snapshot, "q2")).toBe(true);
+  expect(isQueuedUserMessage(snapshot, "consumed")).toBe(false);
   expect(isEditableLatestRunUserMessage({ ...snapshot, queued_messages: [] }, "consumed")).toBe(true);
-  expect(canResumeStoppedRun(state({ runs: [run(1, "failed")], current_run_id: 1, queued_messages: [{ id: "q", role: "user", parts: [], delivery: "after_run" }] }))).toBe(true);
+  expect(canResumeStoppedRun(state({ runs: [run(1, "failed")], current_run_id: 1, queued_messages: [{ id: "q", role: "user", parts: [], delivery: "next_run" }] }))).toBe(true);
 });

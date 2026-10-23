@@ -19,7 +19,7 @@ type RuntimeCancellationDependencies = Pick<RuntimeRecovery, "reconcileAfterTran
 
 // 停止等待用户决定的 Run 时，后端以强制拒绝恢复它（waiting → running → cancelled），
 // 迟到的 waiting 帧不能被当作「已收敛」。
-const UNSETTLED_RUN_STATUSES = new Set(["pending", "running", "waiting_for_input"]);
+const UNSETTLED_RUN_STATUSES = new Set(["pending", "running", "suspended"]);
 
 /**
  * Coordinate the cancellation signal with the local Assistant UI runtime.

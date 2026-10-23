@@ -1,8 +1,6 @@
 import { asRecord } from "./types";
 import type { AgentTeamConfiguration, AgentTeamStatusConfiguration } from "@/lib/api/agent-teams";
 
-const AGENT_TEAM_REVIEW_KIND = "agent_team_review";
-const AGENT_TEAM_REVIEW_DRAFT_SCHEMA = "agent-team-review-v2";
 
 type AgentTeamNodePreview = {
   nodeId: string;
@@ -33,16 +31,6 @@ export type AgentTeamPreviewDisplay = {
   configuration: Record<string, unknown>;
 };
 
-/** Team 审批请求允许的用户决定。 */
-type AgentTeamReviewDecision = "approve" | "reject";
-
-/** 后端对一次「待用户决定」请求的声明（工具展示契约的 human-in-the-loop 部分）。 */
-export type AgentTeamReviewRequest = {
-  requestId: string;
-  decisions: AgentTeamReviewDecision[];
-  draftSchema: string;
-};
-
 /** 已批准后的运行态展示（同一张卡从「待确认」翻到「运行中」，没有可编辑草稿）。 */
 export type AgentTeamRunDisplay = {
   teamRunId: number;
@@ -64,29 +52,12 @@ function positiveId(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-/**
- * 载荷是否带着待决请求声明。
- *
- * `user_input_request` 的存在本身就是「这张卡等待用户作答」的标记：后端的展示投影只在该调用
- * 待作答时把它并进载荷，因此这里不再需要第二个布尔字段（两个表示会各自漂移）。
- */
-export function hasAgentTeamReviewRequest(value: unknown): boolean {
-  const data = asRecord(value);
-  return Object.prototype.hasOwnProperty.call(data, "user_input_request");
-}
-
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function positiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
-function stringList(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((item) => typeof item === "string")
-    ? value as string[]
-    : undefined;
 }
 
 function statusList(value: unknown): AgentTeamStatusConfiguration[] | undefined {
@@ -171,37 +142,10 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
   };
 }
 
-/**
- * 严格读取「待用户决定」请求标识。
- *
- * 前端提交决定时用 `request_id` 定位请求（不是从 `team_run_id` 反推）：请求标识是后端与前端
- * 之间的稳定契约，工具可以改变内部标识（例如未来不再用 TeamRun 主键）。
- */
-export function readAgentTeamReviewRequest(value: unknown): AgentTeamReviewRequest | null {
-  const data = asRecord(value);
-  if (!hasAgentTeamReviewRequest(data)) return null;
-  const request = asRecord(data.user_input_request);
-  const requestId = text(request.request_id);
-  const draftSchema = text(request.draft_schema);
-  if (
-    !requestId
-    || request.request_kind !== AGENT_TEAM_REVIEW_KIND
-    || draftSchema !== AGENT_TEAM_REVIEW_DRAFT_SCHEMA
-  ) return null;
-  const decisions = stringList(request.decisions);
-  if (
-    !decisions
-    || decisions.length === 0
-    || decisions.some((decision) => decision !== "approve" && decision !== "reject")
-  ) return null;
-  return { requestId, decisions: decisions as AgentTeamReviewDecision[], draftSchema };
-}
-
 /** 读取「用户已批准、Team 已启动」的运行态展示。 */
 export function readAgentTeamRunDisplay(value: unknown): AgentTeamRunDisplay | null {
   const data = asRecord(value);
   if (data.kind !== "agent-team-execution") return null;
-  if (hasAgentTeamReviewRequest(data)) return null;
   const teamRunId = positiveId(data.team_run_id);
   const teamId = text(data.team_id);
   if (teamRunId === undefined || !teamId) return null;

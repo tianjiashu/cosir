@@ -50,6 +50,7 @@ import {
   deriveComposerAction,
   getTransportRunId,
   isEditableLatestRunUserMessage,
+  isQueuedUserMessage,
   canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
 import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
@@ -445,11 +446,11 @@ const DELIVERY_LABELS: Record<InputDelivery, { toggle: string; send: string; tit
     title: "立即发送：在下一步并入当前运行；等待审批时视为驳回并附上这条消息",
     queued: "下一步并入",
   },
-  after_run: {
+  next_run: {
     toggle: "排队",
     send: "加入队列",
-    title: "排队发送：当前运行正常结束后再开始新一轮",
-    queued: "本轮结束后发送",
+    title: "排队发送：交给下一轮，当前运行正常结束后开始；运行中更换模型的消息总是这样发送",
+    queued: "下一轮处理",
   },
 };
 
@@ -465,7 +466,7 @@ const DeliveryToggle: FC<{ delivery: InputDelivery; onChange: (delivery: InputDe
       className="h-8 gap-1 rounded-full px-2 text-xs text-muted-foreground"
       aria-label={`发送方式：${labels.toggle}`}
       title={labels.title}
-      onClick={() => onChange(delivery === "immediate" ? "after_run" : "immediate")}
+      onClick={() => onChange(delivery === "immediate" ? "next_run" : "immediate")}
     >
       <Icon className="size-3.5" />
       {labels.toggle}
@@ -515,10 +516,11 @@ const UserMessageView: FC = () => {
   const queuedDelivery = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages?.find((message) => message.id === messageId)?.delivery ?? null);
   const readonly = useContext(ThreadContext).readonly === true;
   const canEdit = useAuiState((state) => {
-    if (readonly || !isEditableLatestRunUserMessage(
-      readRuntimeTransportState(state.thread.state),
-      messageId,
-    )) return false;
+    if (readonly) return false;
+    const transportState = readRuntimeTransportState(state.thread.state);
+    // 排队中的消息原地编辑，不影响正在运行的 Run。
+    if (isQueuedUserMessage(transportState, messageId)) return true;
+    if (!isEditableLatestRunUserMessage(transportState, messageId)) return false;
 
     // Transport runtime 可能在 canonical snapshot 到达前乐观渲染新的用户命令；
     // 此期间不能因为旧 snapshot 仍在，就把上一条用户消息重新标记为可编辑。
@@ -561,7 +563,7 @@ const UserMessageView: FC = () => {
           className="flex h-6 gap-1 opacity-0 transition-opacity pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
         >
           {canEdit && (
-            <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip="编辑并重跑" aria-label="编辑并重跑" size="sm" />}>
+            <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip={queuedDelivery ? "编辑" : "编辑并重跑"} aria-label={queuedDelivery ? "编辑" : "编辑并重跑"} size="sm" />}>
               <PencilIcon />
             </ActionBarPrimitive.Edit>
           )}

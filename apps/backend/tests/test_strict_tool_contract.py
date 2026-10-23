@@ -113,7 +113,7 @@ def _team_input():
     }
 
 
-def test_team_list_converts_to_domain_map_and_approved_replay_uses_decision(monkeypatch):
+def test_team_list_converts_to_domain_map(monkeypatch):
     raw = _team_input()
     schema = strict_parameters_schema(AgentTeamArgs)
     Draft202012Validator(schema).validate(raw)
@@ -121,29 +121,15 @@ def test_team_list_converts_to_domain_map_and_approved_replay_uses_decision(monk
     assert result.ok
     tool = object.__new__(AgentTeamRunTool)
     received = []
-    profile = object()
-    context = SimpleNamespace(
-        agent=profile,
-        event_loop=SimpleNamespace(is_closed=lambda: False),
-        user_decision=None,
-    )
+    context = SimpleNamespace(agent=object())
 
     def prepare(team_id, goal, node_goals, execution_context, parent_profile):
         received.append({key: value.model_dump() for key, value in node_goals.items()})
-        return "waiting"
+        return "awaiting_review"
 
     monkeypatch.setattr(tool, "_prepare_pending_run", prepare)
-    assert tool.execute(**result.arguments, execution_context=context) == "waiting"
+    assert tool.execute(**result.arguments, execution_context=context) == "awaiting_review"
     assert received == [{"develop": {"goal": "实现功能", "summary": "开发"}}]
-    decision = SimpleNamespace(kind="agent_team_review")
-    # 使用生产决定种类；批准后的输入来自已持久化决定，不从模型列表重建。
-    from app.core.tools.tool_handler.agent_team.agent_team_run import EXECUTING_DECISION_KINDS
-
-    decision.kind = next(iter(EXECUTING_DECISION_KINDS))
-    context.user_decision = decision
-    monkeypatch.setattr(tool, "_start_confirmed_run", lambda d, p, _loop: (d, p))
-    assert tool.execute(**result.arguments, execution_context=context) == (decision, profile)
-    assert len(received) == 1
 
 
 @pytest.mark.parametrize("kind", ["old_map", "duplicate", "reserved"])

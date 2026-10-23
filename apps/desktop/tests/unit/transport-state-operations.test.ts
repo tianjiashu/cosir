@@ -16,7 +16,7 @@ function state(): TransportState {
         runId: 1,
         status: "running",
         endReason: null,
-        contextWindowTotal: null,
+        contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
         messages: [{
           id: "assistant-1",
           role: "assistant",
@@ -32,7 +32,7 @@ function state(): TransportState {
         runId: 2,
         status: "completed",
         endReason: null,
-        contextWindowTotal: null,
+        contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
         messages: [{ id: "assistant-2", role: "assistant", parts: [] }],
         usage: null,
         error: null,
@@ -77,7 +77,7 @@ describe("runtime transport state 读取契约", () => {
 });
 
 const measuredRun = (runId: number, used: number | null, total: number | null): TransportState["runs"][number] => ({
-  runId, status: "completed", endReason: "stop", contextWindowTotal: total,
+  runId, status: "completed", endReason: "stop", contextWindowTotal: total, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
   messages: [], error: null, usage: { input_tokens: used, output_tokens: null, total_tokens: null,
     cache_hit_tokens: null, cache_miss_tokens: null, reasoning_tokens: null },
 });

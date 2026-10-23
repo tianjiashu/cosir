@@ -8,7 +8,7 @@ export function readStoredInputDelivery(): InputDelivery {
   if (typeof window === "undefined") return DEFAULT_DELIVERY;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw === "immediate" || raw === "after_run" ? raw : DEFAULT_DELIVERY;
+    return raw === "immediate" || raw === "next_run" ? raw : DEFAULT_DELIVERY;
   } catch {
     return DEFAULT_DELIVERY;
   }

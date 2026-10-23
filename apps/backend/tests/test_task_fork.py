@@ -51,7 +51,7 @@ def append_run(store, status):
 
 
 @pytest.mark.parametrize("terminal", ["completed", "failed", "cancelled"])
-@pytest.mark.parametrize("later_status", ["running", "waiting_for_input"])
+@pytest.mark.parametrize("later_status", ["running", "suspended"])
 def test_fork_terminal_history_while_later_run_is_active(fork_store, terminal, later_status):
     store = fork_store
     first = append_run(store, "completed")
@@ -106,7 +106,7 @@ def test_fork_copies_only_projected_rows(fork_store):
     assert (interrupted.include_in_context, interrupted.project_to_transport) == (False, True)
 
 
-@pytest.mark.parametrize("status", ["running", "waiting_for_input"])
+@pytest.mark.parametrize("status", ["running", "suspended"])
 @pytest.mark.parametrize("boundary_is_active", [True, False])
 def test_reject_active_run_anywhere_in_selected_prefix(fork_store, status, boundary_is_active):
     store = fork_store

@@ -1,4 +1,4 @@
-"""系统提示词 diff 的通知广播测试：命中的 Task 经 ``WorkflowSession.post_notices`` 入外部队列。"""
+"""系统提示词 diff 的通知广播测试：命中的 Task 经 ``WorkflowSession.post`` 入外部队列。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.models.task_message import NoticeMessage, notices_to_system_message
+from app.models.task_message import NoticeBody, notices_to_context
 from app.task_runtime.broadcaster import runtime_notice_broadcaster
 from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
     broadcast_system_prompt_delta,
@@ -52,19 +52,19 @@ def clear_runtime_spaces(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def posted(monkeypatch) -> dict[int, list[NoticeMessage]]:
-    """记录广播交给 ``post_notices`` 的通知，按 Task 归档。"""
+def posted(monkeypatch) -> dict[int, list[NoticeBody]]:
+    """记录广播交给 ``post`` 的通知，按 Task 归档。"""
 
-    by_task: dict[int, list[NoticeMessage]] = {}
+    by_task: dict[int, list[NoticeBody]] = {}
 
-    def post_notices(task_ids: list[int], notice: NoticeMessage) -> None:
+    def post(task_ids: list[int], notice: NoticeBody) -> None:
         for task_id in task_ids:
             by_task.setdefault(task_id, []).append(notice)
 
     monkeypatch.setattr(
         runtime_notice_broadcaster,
         "get_workflow_session",
-        lambda: SimpleNamespace(post_notices=post_notices),
+        lambda: SimpleNamespace(post=post),
     )
     return by_task
 
@@ -99,8 +99,8 @@ def test_build_system_prompt_delta_only_contains_changed_lines() -> None:
     )
 
 
-def test_delta_notice_becomes_one_system_hint_message() -> None:
-    """通知合并为一条 system 消息：``system_hint:`` 声明只加一次，正文原样拼在声明之后。"""
+def test_delta_notice_becomes_one_tagged_user_message() -> None:
+    """通知合并为一条带 ``<system_notice>`` 标签的 user 消息：声明只加一次，正文原样拼在后面。"""
 
     delta = build_system_prompt_delta(
         source=SystemPromptDeltaSource.GLOBAL_INSTRUCTIONS,
@@ -110,12 +110,15 @@ def test_delta_notice_becomes_one_system_hint_message() -> None:
     assert delta is not None
     notice = delta.to_notice()
 
-    message = notices_to_system_message([notice, notice])
+    message, metadata = notices_to_context([notice, notice])
 
-    assert message["role"] == "system"
-    assert message["content"].startswith("system_hint:")
-    assert message["content"].count("system_hint:") == 1
-    assert message["content"].endswith(f"\n{notice.content}\n{notice.content}")
+    assert message["role"] == "user"
+    assert metadata.kind == "notice" and metadata.presentation is None
+    content = message["content"]
+    assert isinstance(content, str)
+    assert content.startswith("<system_notice>")
+    assert content.count("<system_notice>") == 1
+    assert content.endswith(f"\n{notice.content}\n{notice.content}\n</system_notice>")
     assert "-旧规则" in notice.content
     assert "+新规则" in notice.content
 
@@ -162,8 +165,6 @@ def test_global_delta_reaches_all_materialized_context_spaces(posted) -> None:
 
     assert broadcast_system_prompt_delta(delta) == 2
     assert sorted(posted) == [20, 21]
-    assert posted[20] == posted[21] == [delta.to_notice()]
-    assert posted[20][0].id is None
     assert "+新全局规则" in posted[20][0].content
 
 

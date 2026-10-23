@@ -149,6 +149,16 @@ type ConversationStateUsage = {
   reasoning_tokens: number | null;
 };
 
+/**
+ * Run 冻结的发起配置（运行期锁定）：活动 Run 期间配置不同的发送只能交给下一个 Run。
+ * `modelConfigId` 在模型配置被删除后为 null。
+ */
+export type TransportRunLaunch = {
+  modelConfigId: number | null;
+  reasoningEffort: string | null;
+  banTools: string[];
+};
+
 /** 一个 Run 的完整 Transport 事实，包括其消息、生命周期和 token usage。 */
 export type TransportRun = {
   runId: number;
@@ -156,6 +166,7 @@ export type TransportRun = {
   endReason: string | null;
   /** 创建 Run 时冻结的模型上下文窗口上限。 */
   contextWindowTotal: number | null;
+  launch: TransportRunLaunch;
   messages: TransportMessage[];
   usage: ConversationStateUsage | null;
   /**
@@ -195,10 +206,10 @@ export function isTerminalRunStatus(status: string | null | undefined): boolean 
 }
 
 /**
- * 活动 Run 期间发送消息的投递方式：`immediate` 在下个模型边界并入本轮，`after_run` 等本轮
- * 正常结束后交接新 Run。无活动 Run 时后端忽略该字段直接新开 Run。
+ * 活动 Run 期间发送消息的投递方式：`immediate` 在下个模型边界并入本轮，`next_run` 交给下一个
+ * Run（本轮结束后）。无活动 Run 时后端忽略该字段直接新开 Run。
  */
-export type InputDelivery = "immediate" | "after_run";
+export type InputDelivery = "immediate" | "next_run";
 
 /** 尚未被模型边界消费的排队用户输入，事实仍在后端 inbox。 */
 export type TransportQueuedMessage = TransportMessage & { delivery: InputDelivery };

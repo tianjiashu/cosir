@@ -140,7 +140,8 @@ def _session_with_execution(task_id: int, run_id: int) -> object:
     from app.service.conversation_run.workflow_session import WorkflowSession, _Execution
 
     session = WorkflowSession.__new__(WorkflowSession)
-    session._executions = {task_id: _Execution(run=SimpleNamespace(id=run_id, task_id=task_id))}
+    execution = _Execution(run=SimpleNamespace(id=run_id, task_id=task_id), fresh_run=False)
+    session._executions = {task_id: execution}
     return session
 
 

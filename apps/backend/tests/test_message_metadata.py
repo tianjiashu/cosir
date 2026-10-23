@@ -17,10 +17,10 @@ from app.models.message_metadata import ToolMessageMetadata, parse_message_metad
     [
         ({"role": "system", "content": "system"}, {}),
         ({"role": "developer", "content": "policy"}, {}),
-        ({"role": "user", "content": "internal notice"}, {}),
+        ({"role": "user", "content": "internal notice"}, {"kind": "notice"}),
         (
             {"role": "user", "content": "resolved text"},
-            {"presentation": {"display_text": "visible text"}},
+            {"kind": "user_input", "presentation": {"display_text": "visible text"}},
         ),
         (
             {"role": "assistant", "content": "answer"},
@@ -64,7 +64,7 @@ def test_role_metadata_round_trip_without_polluting_sdk_message(message, metadat
     [
         ("tool", {}),
         ("user", {"status": "completed"}),
-        ("assistant", {"presentation": {"display_text": "wrong role"}}),
+        ("assistant", {"kind": "user_input", "presentation": {"display_text": "wrong role"}}),
         ("system", {"usage": {}}),
         ("user", {"user_input": {"display_text": "old wrapper"}}),
         ("tool", {"status": "completed", "status_hint": "obsolete"}),

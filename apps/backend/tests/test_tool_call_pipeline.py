@@ -1,4 +1,4 @@
-"""工具批次的新边界：解析、执行、等待恢复和 canonical 结果投影。"""
+"""工具批次的边界：解析、执行、挂起判定和 canonical 结果投影。"""
 
 import asyncio
 from types import SimpleNamespace
@@ -6,13 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.llm_provider.message_codec import assistant_message
-from app.core.tools.schemas import (
-    ToolCall,
-    ToolObservation,
-    UserDecision,
-    UserDecisionKind,
-    UserInputRequest,
-)
+from app.core.tools.schemas import ToolCall, ToolObservation
 from app.core.tools.tool_execute import tool_executor as tool_executor_module
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
@@ -20,9 +14,8 @@ from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCal
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper import tool_observation_projection as projection
-from app.core.workflow.nodes import tools_node, wait_user_node
-from app.core.workflow.tool_continuation import freeze_tool_continuation, restore_tool_batch
-from app.models.conversation_run_progress import ToolContinuation
+from app.core.workflow.nodes import observation_node, tools_node
+from app.models.enums.conversation_run_status import RunTransition
 from tests.runtime_context_stub import install_runtime_singletons, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 from tests.tool_executor_fakes import emit_running
@@ -78,9 +71,8 @@ def test_streaming_preview_only_creates_allowed_registered_tool(monkeypatch) -> 
     assert [event.tool_call_id for event in events] == ["visible"]
 
 
-def test_tools_node_passes_raw_arguments_and_preserves_approved_decision(monkeypatch) -> None:
+def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -> None:
     received = []
-    decision = UserDecision(request_id="review-1", kind=UserDecisionKind.APPROVE)
 
     async def run_calls(_rc, calls, _step_id):
         received.extend(calls)
@@ -97,7 +89,6 @@ def test_tools_node_passes_raw_arguments_and_preserves_approved_decision(monkeyp
         batch=ToolBatch(
             calls=[_raw(arguments='{"path":"a.py"}')],
             valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")},
-            approved_call=("call-1", decision),
         ),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
@@ -107,14 +98,9 @@ def test_tools_node_passes_raw_arguments_and_preserves_approved_decision(monkeyp
 
     assert len(received) == 1
     assert received[0].arguments == '{"path":"a.py"}'
-    assert received[0].user_decision == decision
-    assert runtime.batch.approved_call is None
     assert runtime.batch.observations[0]["tool_call_id"] == "call-1"
+    assert runtime.batch.suspends() is False
     assert patch["next_node"] is ReactRoute.OBSERVE
-
-    runtime.batch = ToolBatch(calls=[_raw("next-call")])
-    asyncio.run(tools_node._tools_node(_state()))
-    assert received[-1].user_decision is None
 
 
 def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
@@ -267,29 +253,64 @@ def test_run_tool_batch_projects_only_terminal_when_executor_never_starts(monkey
     assert observations[1].tool_call_id == "broken"
 
 
-def test_unmarked_wait_request_cannot_suspend_a_multi_call_batch(monkeypatch) -> None:
+def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
+    """挂起由工具声明：同批其它调用照常执行与闭合，任一观察带 suspend 即整批挂起。"""
+
     async def run_calls(_rc, _calls, _step_id):
         return [
+            ToolObservation(tool_name="read_file", status="success", tool_call_id="call-1"),
             ToolObservation(
-                tool_name="read_file",
-                status="success",
-                tool_call_id="call-1",
-                user_input_request=UserInputRequest(request_id="review", kind="approval"),
-            )
+                tool_name="read_file", status="success", tool_call_id="call-2", suspend=True
+            ),
         ]
 
     runtime = runtime_stub(
         task=SimpleNamespace(id=3),
         run=SimpleNamespace(id=4, task_id=3),
-        tool_definitions={"read_file": SimpleNamespace(name="read_file", need_HIL=False)},
         batch=ToolBatch(calls=[_raw("call-1"), _raw("call-2")]),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "run_tool_batch", run_calls)
 
-    with pytest.raises(ValueError, match="待决请求必须独占工具批次"):
-        asyncio.run(tools_node._tools_node(_state()))
+    asyncio.run(tools_node._tools_node(_state()))
+
+    assert [item["suspend"] for item in runtime.batch.observations] == [False, True]
+    assert runtime.batch.suspends() is True
+
+
+@pytest.mark.parametrize("suspend", [False, True])
+def test_observe_node_suspends_after_settling_the_batch(monkeypatch, suspend) -> None:
+    """observe 是挂起的唯一决策点：先结算观察，再落定 suspended 并结束驱动。"""
+    transitions = []
+    runtime = SimpleNamespace(
+        run=SimpleNamespace(id=4, task_id=3),
+        usage_stats=None,
+        batch=ToolBatch(
+            calls=[_raw()],
+            observations=[{"tool_call_id": "call-1", "suspend": suspend}],
+        ),
+    )
+    monkeypatch.setattr(observation_node, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(observation_node, "settle_observations", lambda *_a, **_k: (0, 0))
+    monkeypatch.setattr(
+        observation_node.service_depends,
+        "get_conversation_run_state_service",
+        lambda: SimpleNamespace(
+            transition=lambda run_id, transition, **_k: transitions.append((run_id, transition))
+            or SimpleNamespace(id=run_id)
+        ),
+    )
+
+    patch = asyncio.run(observation_node._observe_node(_state()))
+
+    assert runtime.batch.observations == []
+    if suspend:
+        assert transitions == [(4, RunTransition.SUSPEND)]
+        assert patch["next_node"] is ReactRoute.END
+    else:
+        assert transitions == []
+        assert patch["next_node"] is ReactRoute.PREPARE_INPUT
 
 
 def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
@@ -326,95 +347,6 @@ def test_internal_artifact_does_not_enter_tool_batch_snapshot() -> None:
         artifact_data={"secret": "internal"},
     )
     assert "artifact_data" not in tools_node._summary(observation)
-
-
-def test_waiting_continuation_restores_only_projected_target() -> None:
-    batch = ToolBatch(
-        calls=[_raw()],
-        observations=[{"tool_call_id": "call-1", "status": "running"}],
-        valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")},
-    )
-    frozen = freeze_tool_continuation(batch, _raw())
-    persisted = ToolContinuation.model_validate_json(frozen.model_dump_json())
-    restored = restore_tool_batch(persisted)
-    assert [call["id"] for call in restored.calls] == ["call-1"]
-    assert restored.observations == batch.observations
-    assert restored.was_projected("call-1")
-
-
-def test_waiting_card_is_persisted_before_live_event(monkeypatch) -> None:
-    order = []
-    runtime = SimpleNamespace(
-        run=SimpleNamespace(id=4, task_id=3),
-        batch=ToolBatch(
-            valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")}
-        ),
-    )
-    monkeypatch.setattr(projection, "_runtime_context", lambda: runtime)
-    install_runtime_singletons(runtime)
-    monkeypatch.setattr(
-        projection,
-        "_message_context",
-        lambda: SimpleNamespace(add_message=lambda *_args, **_kwargs: order.append("persist")),
-    )
-    monkeypatch.setattr(projection, "emit", lambda _event: order.append("event"))
-    projection.project_waiting_request(
-        {
-            "tool_call_id": "call-1",
-            "tool_name": "read_file",
-            "display_data": {},
-            "user_input_request": {
-                "kind": "approval",
-                "request_id": "review-1",
-                "prompt": "continue?",
-                "decisions": ["approve", "reject"],
-            },
-        },
-        step_id="step-1",
-    )
-    assert order == ["persist", "event"]
-
-
-def test_approval_replays_one_call_and_rejection_only_settles(monkeypatch) -> None:
-    request = {
-        "kind": "approval",
-        "request_id": "review-1",
-        "prompt": "continue?",
-        "decisions": ["approve", "reject"],
-    }
-    observation = {
-        "tool_call_id": "call-1",
-        "tool_name": "read_file",
-        "status": "success",
-        "content": "",
-        "error": "",
-        "reason": "",
-        "retryable": False,
-        "display_data": {},
-        "user_input_request": request,
-    }
-    runtime = SimpleNamespace(
-        allows_tools={"read_file"},
-        run=SimpleNamespace(id=4),
-        batch=ToolBatch(calls=[_raw(), _raw("call-2")], observations=[observation]),
-        user_input_decision_handlers=SimpleNamespace(handle_rejection=lambda *_: None),
-    )
-    monkeypatch.setattr(wait_user_node, "_runtime_context", lambda: runtime)
-    install_runtime_singletons(runtime)
-
-    approved = wait_user_node.apply_user_decision(
-        UserDecision(request_id="review-1", kind=UserDecisionKind.APPROVE)
-    )
-    approved_calls = [call["id"] for call in runtime.batch.calls]
-    runtime.batch = ToolBatch(calls=[_raw(), _raw("call-2")], observations=[observation])
-    rejected = wait_user_node.apply_user_decision(
-        UserDecision(request_id="review-1", kind=UserDecisionKind.REJECT)
-    )
-
-    assert approved["next_node"] is ReactRoute.TOOLS
-    assert approved_calls == ["call-1"]
-    assert rejected["next_node"] is ReactRoute.OBSERVE
-    assert runtime.batch.observations[0]["status"] == "cancelled"
 
 
 def test_observation_persists_before_event_and_hides_unprojected_calls(monkeypatch) -> None:

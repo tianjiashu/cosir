@@ -40,15 +40,15 @@ from app.core.tools.tool_handler.child_task.child_agent_status import (
     ChildAgentStatusTool,
     build_child_agent_status_definition,
 )
-from app.core.tools.tool_handler.child_task.child_agent_wait import (
-    ChildAgentWaitTool,
-    build_child_agent_wait_definition,
+from app.core.tools.tool_handler.wait_messages import (
+    WaitMessagesTool,
+    build_wait_messages_definition,
 )
 from app.core.tools.tool_models.child_task import (
     ChildAgentSendArgs,
     ChildAgentStatusArgs,
-    ChildAgentWaitArgs,
 )
+from app.core.tools.tool_models.wait_messages_args import WaitMessagesArgs
 from app.core.tools.tool_system import ToolSystem
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
@@ -81,11 +81,11 @@ _CHILD_TOOL_SPECS = [
         10.0,
     ),
     (
-        "child_agent_wait",
-        ChildAgentWaitTool,
-        ChildAgentWaitArgs,
-        build_child_agent_wait_definition,
-        300.0,
+        "wait_messages",
+        WaitMessagesTool,
+        WaitMessagesArgs,
+        build_wait_messages_definition,
+        10.0,
     ),
 ]
 
@@ -100,7 +100,7 @@ _EXPECTED_BANNED_TOOLS = frozenset(
         "propose_agent_configuration",
         "child_agent_status",
         "child_agent_send",
-        "child_agent_wait",
+        "wait_messages",
         "terminal_start",
         "terminal_write",
         "terminal_read",
@@ -310,7 +310,7 @@ def test_registry_exposes_three_remaining_child_tools(storage: None) -> None:
     """
 
     names = set(ToolSystem.build_tool_system().registry.get_all_tool_names())
-    assert {"child_agent_send", "child_agent_status", "child_agent_wait"} <= names
+    assert {"child_agent_send", "child_agent_status", "wait_messages"} <= names
     assert "delegate_task" in names
 
 
@@ -464,32 +464,12 @@ def test_child_status_args_model_boundaries() -> None:
             ChildAgentStatusArgs(child_task_id=bad_id)
 
 
-def test_child_wait_args_model_boundaries_and_default() -> None:
-    """目的：child_agent_wait 参数模型边界（timeout 默认 300、>0 且 <=3000）未被破坏。
+def test_wait_messages_takes_no_arguments() -> None:
+    """目的：等待工具没有参数——等什么由挂起时 Task 上未完成的工作决定，模型不能指定超时。"""
 
-    潜在缺陷类型：等待参数上下界漂移（允许 0/负数或超过工具级超时）。
-    """
-
-    assert ChildAgentWaitArgs(child_task_id=1).timeout_seconds == 300.0
-    assert ChildAgentWaitArgs(child_task_id=1, timeout_seconds=3000.0).timeout_seconds == 3000.0
-    for bad_timeout in (0.0, -1.0, 3000.0001):
-        with pytest.raises(ValidationError):
-            ChildAgentWaitArgs(child_task_id=1, timeout_seconds=bad_timeout)
-
-
-def test_child_wait_timeout_ceiling_vs_tool_level_timeout_documented_gap() -> None:
-    """目的：以断言固化边界事实，暴露**既有**契约不一致（非本次删除引入，仅记录不修复）。
-
-    参数模型允许模型请求最长 3000s 的等待，但工具级 timeout 仅 300s；
-    模型据此认为可等待 3000s，实际会在工具层被提前中断——潜在缺陷类型：参数上限与
-    工具执行超时不一致，长等待语义不可达。
-    """
-
-    args_ceiling = ChildAgentWaitArgs(child_task_id=1, timeout_seconds=3000.0).timeout_seconds
-    tool_level_timeout = ChildAgentWaitTool.timeout_seconds
-    assert args_ceiling == 3000.0
-    assert tool_level_timeout == 300.0
-    assert tool_level_timeout < args_ceiling, "参数上限未超过工具级超时，gap 已消失（契约变更）"
+    WaitMessagesArgs()
+    with pytest.raises(ValidationError):
+        WaitMessagesArgs.model_validate({"timeout_seconds": 10})
 
 
 def test_child_banned_tools_invariants() -> None:

@@ -104,11 +104,11 @@ test("非激活标签刷新、收起暂停、展开更新、关闭不取消 Run"
   expect(agent.states.get(501)?.runs[0].status).toBe("running");
 });
 
-test("等待输入继续订阅，SSE 状态变化刷新标签，后续新 Run 自动接续", async ({ page, agent }, testInfo) => {
-  agent.states.set(501, snapshot(1, "waiting_for_input", "等待确认内容"));
+test("挂起继续订阅，SSE 状态变化刷新标签，后续新 Run 自动接续", async ({ page, agent }, testInfo) => {
+  agent.states.set(501, snapshot(1, "suspended", "等待确认内容"));
   await open(page, [501]);
   await expect.poll(() => agent.attaches.get(501)).toBe(1);
-  await expect(tab(page, 501)).toHaveAccessibleName("等待确认 Agent501");
+  await expect(tab(page, 501)).toHaveAccessibleName("等待中 Agent501");
   await tab(page, 501).focus();
   await page.screenshot({ path: testInfo.outputPath("agent-waiting.png") });
   const count = agent.snapshots.get(501);

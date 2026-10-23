@@ -65,24 +65,19 @@ describe("tool renderer routing", () => {
     })).toBe("agent-team-execution");
   });
 
-  it("routes child_agent_wait results by stable display kind", () => {
-    expect(routeToolPart("child_agent_wait", {
+  it("routes wait_messages, which has no display data, to the generic fallback card", () => {
+    // 挂起只是控制流；卡片只需动词与状态，不需要专用 kind。
+    expect(routeToolPart("wait_messages", {
       backendStatus: "completed",
-      presentation: { expand_layout: "details" },
-      display_data: {
-        kind: "child-agent-wait-result",
-        timed_out: false,
-        messages: [],
-        pending: [],
-        interrupted_by: null,
-      },
-    })).toBe("details");
+      presentation: { expand_layout: "none", verb: "等待结果" },
+      display_data: {},
+    })).toBe("fallback");
   });
 
   it("sends malformed display data to the fallback without trusting presentation", () => {
-    expect(routeToolPart("child_agent_wait", {
+    expect(routeToolPart("child_agent_status", {
       backendStatus: "completed",
-      presentation: { expand_layout: "details", verb: "等待子 Agent" },
+      presentation: { expand_layout: "details", verb: "读取子 Agent 状态" },
       display_data: { kind: 42, messages: "not-an-array" },
     })).toBe("fallback");
   });

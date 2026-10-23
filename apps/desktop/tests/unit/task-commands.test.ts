@@ -5,13 +5,13 @@ import {
   editTaskMessage,
   resumeTask,
   sendTaskMessage,
-  submitTaskDecision,
+  submitTeamDecision,
   type TaskMessageRequest,
 } from "@/lib/assistant/task-commands";
 import { HttpError } from "@/lib/http/errors";
 
 const STATE: TransportState = {
-  runs: [{ runId: 4, status: "running", endReason: null, contextWindowTotal: null, messages: [], usage: null, error: null }],
+  runs: [{ runId: 4, status: "running", endReason: null, contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] }, messages: [], usage: null, error: null }],
   current_run_id: 4,
   approvals: {},
   error: null,
@@ -38,11 +38,11 @@ describe("task commands", () => {
   it("发送消息只按 Task 寻址，携带投递方式而不携带 runId", async () => {
     vi.stubGlobal("fetch", accepted(true));
 
-    await expect(sendTaskMessage(7, { ...REQUEST, delivery: "after_run" })).resolves.toEqual({ state: STATE, queued: true });
+    await expect(sendTaskMessage(7, { ...REQUEST, delivery: "next_run" })).resolves.toEqual({ state: STATE, queued: true });
 
     const [url, init] = lastCall();
     expect(url).toMatch(/\/tasks\/7\/messages$/);
-    expect(JSON.parse(String(init.body))).toEqual({ ...REQUEST, delivery: "after_run" });
+    expect(JSON.parse(String(init.body))).toEqual({ ...REQUEST, delivery: "next_run" });
   });
 
   it("编辑按消息寻址，请求体不含投递方式", async () => {
@@ -62,20 +62,20 @@ describe("task commands", () => {
     expect(lastCall()[0]).toMatch(/\/tasks\/7\/resume$/);
     expect(lastCall()[1].body).toBeUndefined();
 
-    await submitTaskDecision(7, { requestId: "17", decision: "approve", data: { goal: "交付" } });
+    await submitTeamDecision(7, { teamRunId: 17, decision: "approve", data: { goal: "交付" } });
     expect(lastCall()[0]).toMatch(/\/tasks\/7\/decisions$/);
-    expect(JSON.parse(String(lastCall()[1].body))).toEqual({ requestId: "17", decision: "approve", data: { goal: "交付" } });
+    expect(JSON.parse(String(lastCall()[1].body))).toEqual({ teamRunId: 17, decision: "approve", data: { goal: "交付" } });
   });
 
   it("非 2xx 抛出带后端原因的 HttpError", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({ error: { code: "RUN_NOT_WAITING", message: "当前没有等待中的审批", retryable: true } }),
+      JSON.stringify({ error: { code: "TASK_STATE_CONFLICT", message: "该 Agent Team 方案已处理", retryable: true } }),
       { status: 409, headers: { "Content-Type": "application/json" } },
     )));
 
-    const error = await submitTaskDecision(7, { requestId: "17", decision: "reject" }).catch((cause: unknown) => cause);
+    const error = await submitTeamDecision(7, { teamRunId: 17, decision: "reject" }).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(HttpError);
     expect((error as HttpError).status).toBe(409);
-    expect((error as HttpError).message).toBe("当前没有等待中的审批");
+    expect((error as HttpError).message).toBe("该 Agent Team 方案已处理");
   });
 });

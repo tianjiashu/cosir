@@ -6,7 +6,7 @@ import { useWorkbenchAgentStatus } from "@/lib/workbench/agent-status";
 const STATUS_ICONS = {
   pending: ClockIcon,
   running: LoaderCircleIcon,
-  waiting_for_input: CircleHelpIcon,
+  suspended: CircleHelpIcon,
   completed: CheckIcon,
   failed: CircleAlertIcon,
   cancelled: SquareIcon,

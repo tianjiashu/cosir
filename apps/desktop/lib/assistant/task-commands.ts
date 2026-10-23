@@ -26,14 +26,14 @@ export type TaskMessageRequest = {
   banTools: readonly string[];
 };
 
-/** 用户对一次等待请求作出的决定（与后端 `UserDecisionKind` 对齐，不含系统合成的 force_reject）。 */
-export type TaskDecision = {
-  requestId: string;
-  decision: "approve" | "reject" | "abort";
+/** 用户对一个待确认 Agent Team 方案的决定；`data` 批准时为最终运行输入，驳回时带 `feedback`。 */
+export type TeamDecision = {
+  teamRunId: number;
+  decision: "approve" | "reject";
   data?: Record<string, unknown>;
 };
 
-/** `queued` 为真表示消息只进了 inbox，本次没有启动或恢复执行。 */
+/** `queued` 为真表示消息只进了 inbox，本次没有启动或唤醒执行。 */
 export type TaskCommandAccepted = {
   state: TransportState;
   queued: boolean;
@@ -57,7 +57,7 @@ export function sendTaskMessage(
   return postTaskCommand(`/tasks/${taskId}/messages`, request, init);
 }
 
-/** 编辑最新一条已消费用户消息；后端只在 Task 已到终态时接受。 */
+/** 编辑用户消息：排队中的原地更新；最新一条已消费的移出后重跑（运行中后端先停止当前 Run）。 */
 export function editTaskMessage(
   taskId: number,
   messageId: string,
@@ -67,12 +67,12 @@ export function editTaskMessage(
   return postTaskCommand(`/tasks/${taskId}/messages/${encodeURIComponent(messageId)}/edit`, request, init);
 }
 
-/** 最新 Run 已取消或失败时从模型节点续跑。 */
+/** 最新 Run 已取消或失败时续跑同一个 Run。 */
 export function resumeTask(taskId: number, init?: CommandInit): Promise<TaskCommandAccepted> {
   return postTaskCommand(`/tasks/${taskId}/resume`, undefined, init);
 }
 
-/** 回答等待中的审批请求，Run 从 wait_user 节点继续；调用方随后需重新 attach 才能收到输出。 */
-export function submitTaskDecision(taskId: number, decision: TaskDecision, init?: CommandInit): Promise<TaskCommandAccepted> {
+/** 对待确认的 Agent Team 方案作出决定；后端执行决定后以消息唤醒主 Agent，调用方需重新 attach 才能收到输出。 */
+export function submitTeamDecision(taskId: number, decision: TeamDecision, init?: CommandInit): Promise<TaskCommandAccepted> {
   return postTaskCommand(`/tasks/${taskId}/decisions`, decision, init);
 }

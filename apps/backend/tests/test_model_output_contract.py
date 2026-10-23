@@ -241,7 +241,7 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     assert [include for _, include in harness.saved_responses] == [False]
     [notice] = harness.runtime_config.mailbox.drain()
     assert notice.id is None
-    assert notice.kind == "model_continuation"
+    assert notice.body.notice_kind == "model_continuation"
 
 
 def test_empty_content_with_finish_reason_completes_run(monkeypatch: Any) -> None:
@@ -275,21 +275,22 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
     assert harness.completed is True
 
 
-def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None:
-    """prepare_input 把 mailbox 里的通知合成一条 system 消息经 context 持久化，参与紧随其后的
-    模型请求，不改写用户原文。"""
+def test_runtime_notice_is_persisted_as_tagged_user_message(monkeypatch: Any) -> None:
+    """prepare_input 把 mailbox 里的通知合成一条带标签的 user 消息经 context 持久化，参与紧随其后
+    的模型请求，不改写用户原文。"""
     from contextlib import nullcontext
 
     from app.core.workflow.nodes import prepare_input_node as prepare_module
-    from app.models.task_message import NoticeMessage
-
+    from app.models.task_message import NoticeBody, TaskMessage
     from tests.sdk_fixtures import sdk_completion
 
     base = {"role": "user", "content": "你好"}
     harness = _ModelHarness(sdk_completion(content="完成", finish_reason="stop"))
     harness.runtime_context.load_message = lambda: [base, *harness.messages]
     requested: list[Any] = []
-    harness.runtime_config.mailbox.post(NoticeMessage(id=None, content="环境已更新", kind="test"))
+    harness.runtime_config.mailbox.post(
+        TaskMessage.of(NoticeBody(content="环境已更新", notice_kind="test"))
+    )
     # Run 内通知没有外部队列行，确认集合为空；事务只是写入边界，不触碰真实数据库。
     monkeypatch.setattr(
         prepare_module,
@@ -312,9 +313,9 @@ def test_runtime_notice_is_persisted_as_system_message(monkeypatch: Any) -> None
     assert prepared["next_node"] is ReactRoute.MODEL
     result = asyncio.run(model_module._model_node(_state()))
     assert result["next_node"] is ReactRoute.END
-    assert requested[-1]["role"] == "system"
-    assert requested[-1]["content"].startswith("system_hint:")
-    assert requested[-1]["content"].endswith("\n环境已更新")
+    assert requested[-1]["role"] == "user"
+    assert requested[-1]["content"].startswith("<system_notice>")
+    assert requested[-1]["content"].endswith("\n环境已更新\n</system_notice>")
     assert harness.messages[0] == requested[-1]
     assert base["content"] == "你好"
 

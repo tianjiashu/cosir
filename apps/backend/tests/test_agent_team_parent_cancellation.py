@@ -1,4 +1,4 @@
-"""Agent Team 节点经调度入口启动；Coordinator 按 Task 等节点静止时检查父 Task 的停止信号。"""
+"""Agent Team 在后台执行；Coordinator 以 TeamRun 自身状态判定取消，等待节点静止时检出即停止节点。"""
 
 import asyncio
 import threading
@@ -9,10 +9,9 @@ import pytest
 
 from app.agent_team import coordinator as coordinator_module
 from app.agent_team.coordinator import AgentTeamCoordinator
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 
-_PARENT_TASK = 9_200_001
+_TEAM_RUN = 3
 _NODE_TASK = 9_200_002
 
 
@@ -26,7 +25,6 @@ def main_loop() -> Iterator[asyncio.AbstractEventLoop]:
     loop.call_soon_threadsafe(loop.stop)
     thread.join(5)
     loop.close()
-    cancellation_registry.consume(_PARENT_TASK)
 
 
 class _Node:
@@ -43,41 +41,46 @@ class _Node:
             return False
         return True
 
-    async def cancel(self, task_id: int) -> bool:
+    async def cancel(self, task_id: int, reason: str = "user") -> bool:
+        assert reason == "parent"
         self.cancelled.append(task_id)
         self._released.set()
         return True
 
 
-def test_node_wait_stops_node_when_parent_is_cancelled(
+class _TeamRuns:
+    """TeamRun CRUD 替身：状态可被另一线程改写，模拟父 Agent 或用户取消 Team。"""
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+
+    def get_by_id(self, _team_run_id: int) -> SimpleNamespace:
+        return SimpleNamespace(status=self.status)
+
+
+def test_node_wait_stops_node_when_team_run_is_cancelled(
     monkeypatch: pytest.MonkeyPatch, main_loop: asyncio.AbstractEventLoop
 ) -> None:
     node = _Node()
     monkeypatch.setattr(coordinator_module, "get_workflow_session", lambda: node)
-    # 节点启动后父 Task 才被停止：分段等待静止的间隙应检出并经调度入口停止节点。
-    threading.Timer(0.3, cancellation_registry.request_cancel, args=(_PARENT_TASK,)).start()
+    runs = _TeamRuns(AgentTeamRunStatus.RUNNING.value)
+    coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
+    coordinator._team_run_crud = runs
+    # 节点启动后 TeamRun 才被取消：分段等待静止的间隙应检出并经调度入口停止节点。
+    threading.Timer(0.3, setattr, args=(runs, "status", AgentTeamRunStatus.CANCELLED.value)).start()
 
-    AgentTeamCoordinator.__new__(AgentTeamCoordinator)._wait_node(
-        main_loop, _PARENT_TASK, _NODE_TASK
-    )
+    coordinator._wait_node(main_loop, _TEAM_RUN, _NODE_TASK)
 
     assert node.cancelled == [_NODE_TASK]
 
 
-def test_team_is_cancelled_when_parent_task_is_stopped() -> None:
-    updates: list[tuple[int, str, str | None]] = []
+@pytest.mark.parametrize(
+    ("status", "stopped"),
+    [("running", False), ("cancelled", True), ("failed", True), ("completed", True)],
+)
+def test_coordinator_stops_once_team_run_leaves_running(status: str, stopped: bool) -> None:
+    """取消以 TeamRun 状态为准：Team 后台执行时父 Run 可能挂起，没有可读的父 Task 信号。"""
     coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
-    coordinator._team_run_crud = SimpleNamespace(
-        update_status_if_in=lambda team_run_id, status, _sources, **kwargs: updates.append(
-            (team_run_id, status, kwargs.get("end_reason"))
-        )
-    )
-    team_run = SimpleNamespace(id=3, parent_task_id=_PARENT_TASK)
+    coordinator._team_run_crud = _TeamRuns(status)
 
-    assert coordinator._cancel_for_parent(team_run, SimpleNamespace()) is False
-    cancellation_registry.request_cancel(_PARENT_TASK)
-    try:
-        assert coordinator._cancel_for_parent(team_run, SimpleNamespace()) is True
-    finally:
-        cancellation_registry.consume(_PARENT_TASK)
-    assert [update[:2] for update in updates] == [(3, AgentTeamRunStatus.CANCELLED.value)]
+    assert coordinator._stopped(_TEAM_RUN) is stopped

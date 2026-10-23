@@ -42,6 +42,8 @@ export type AgentTeamRun = {
   id: number;
   team_id: string;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  /** 终态原因；`user_rejected` 表示用户在审批卡片上驳回。 */
+  end_reason?: string | null;
   goal: string;
   nodes: Array<{
     node_id: string;

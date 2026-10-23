@@ -10,13 +10,6 @@ export type DelegationDisplay = {
   status?: ChildAgentLifecycleStatus;
 };
 
-type ChildAgentWaitMessage = {
-  childTaskId: number;
-  status: Extract<ChildAgentLifecycleStatus, "completed" | "failed" | "cancelled">;
-  finalOutput?: string;
-  endReason?: string;
-};
-
 export type ChildAgentResultDisplay = {
   operation: "send" | "status";
   childTaskId: number;
@@ -27,25 +20,12 @@ export type ChildAgentResultDisplay = {
   endReason?: string;
 };
 
-export type ChildAgentWaitDisplay = {
-  timedOut: boolean;
-  messages: ChildAgentWaitMessage[];
-  pending: Array<{ childTaskId: number; status?: ChildAgentLifecycleStatus }>;
-  interruptedBy: "parent_cancelled" | "session_closed" | "shutdown" | null;
-};
-
 const CHILD_AGENT_STATUSES = new Set<ChildAgentLifecycleStatus>([
   "pending",
   "running",
   "completed",
   "failed",
   "cancelled",
-]);
-
-const INTERRUPTIONS = new Set<NonNullable<ChildAgentWaitDisplay["interruptedBy"]>>([
-  "parent_cancelled",
-  "session_closed",
-  "shutdown",
 ]);
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -111,45 +91,6 @@ export function readChildAgentResultDisplay(value: unknown): ChildAgentResultDis
   };
 }
 
-/** Strictly parse the generic child-agent wait result before rendering it. */
-export function readChildAgentWaitDisplay(value: unknown): ChildAgentWaitDisplay | null {
-  const data = record(value);
-  if (!data || data.kind !== "child-agent-wait-result" || typeof data.timed_out !== "boolean") return null;
-  if (!Array.isArray(data.messages) || !Array.isArray(data.pending)) return null;
-  const interruptedBy = data.interrupted_by === null
-    ? null
-    : INTERRUPTIONS.has(data.interrupted_by as NonNullable<ChildAgentWaitDisplay["interruptedBy"]>)
-      ? data.interrupted_by as NonNullable<ChildAgentWaitDisplay["interruptedBy"]>
-      : undefined;
-  if (interruptedBy === undefined) return null;
-
-  const messages: ChildAgentWaitMessage[] = [];
-  for (const raw of data.messages) {
-    const message = record(raw);
-    const status = message ? message.status : undefined;
-    if (!message || positiveId(message.child_task_id) === undefined) return null;
-    if (status !== "completed" && status !== "failed" && status !== "cancelled") return null;
-    if (message.final_output !== undefined && message.final_output !== null && typeof message.final_output !== "string") return null;
-    if (message.end_reason !== undefined && message.end_reason !== null && typeof message.end_reason !== "string") return null;
-    messages.push({
-      childTaskId: positiveId(message.child_task_id)!,
-      status,
-      finalOutput: typeof message.final_output === "string" ? message.final_output : undefined,
-      endReason: typeof message.end_reason === "string" ? message.end_reason : undefined,
-    });
-  }
-
-  const pending: ChildAgentWaitDisplay["pending"] = [];
-  for (const raw of data.pending) {
-    const item = record(raw);
-    if (!item || positiveId(item.child_task_id) === undefined) return null;
-    const status = item.status === undefined || item.status === null ? undefined : childAgentStatus(item.status);
-    if (item.status !== undefined && item.status !== null && status === undefined) return null;
-    pending.push({ childTaskId: positiveId(item.child_task_id)!, status });
-  }
-  return { timedOut: data.timed_out, messages, pending, interruptedBy };
-}
-
 export function childAgentStatusLabel(status: ChildAgentLifecycleStatus): string {
   switch (status) {
     case "pending": return "准备执行";
@@ -160,10 +101,3 @@ export function childAgentStatusLabel(status: ChildAgentLifecycleStatus): string
   }
 }
 
-export function interruptionLabel(value: NonNullable<ChildAgentWaitDisplay["interruptedBy"]>): string {
-  switch (value) {
-    case "parent_cancelled": return "父运行已取消";
-    case "session_closed": return "子会话已关闭";
-    case "shutdown": return "后端已关闭";
-  }
-}

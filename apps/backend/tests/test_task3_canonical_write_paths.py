@@ -14,7 +14,6 @@ from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.events import RunStatusChangedEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
@@ -233,6 +232,8 @@ def _creation_service(store, monkeypatch, projector):
 
 def test_create_run_commits_inbox_and_current_run_before_projector(request, monkeypatch):
     """独立连接在事件发布时已能看到整组事实，context 留待模型边界并入。"""
+    from app.models.conversation_input import ConversationInput
+    from app.models.task_message import RunLaunch, TaskMessage, UserInputBody
     from app.service.conversation_run.task_message_queue import TaskMessageQueue
 
     store = request.getfixturevalue("canonical_store")
@@ -242,16 +243,19 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
         def process(self, event):
             assert store.tasks.get(store.task.id).current_run_id == event.run_id
             assert store.runs.get(event.run_id).context_window_total == 128000
-            assert (
-                TaskMessageQueue().pending_users(store.task.id)[0].payload.message.input_text
-                == "hello"
-            )
+            [queued] = TaskMessageQueue().pending(store.task.id)
+            assert isinstance(queued.body, UserInputBody)
+            assert queued.body.message.input_text == "hello"
             assert store.contexts.get(store.task.id, include_in_context=False) == []
             events.append(event)
 
     service = _creation_service(store, monkeypatch, Projector())
-    TaskMessageQueue().put_user(store.task.id, ConversationRunCommand(display_text="hello"), 1)
-    run = service.create_run(store.task.id)
+    body = UserInputBody(
+        message=ConversationInput(input_text="hello", display_text="hello"),
+        launch=RunLaunch(model_config_id=1),
+    )
+    TaskMessageQueue().put(store.task.id, TaskMessage.of(body))
+    run = service.create_run(store.task.id, body.launch)
     assert len(events) == 1
     assert events[0].run_id == run.id
 

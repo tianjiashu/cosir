@@ -232,9 +232,9 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch) -> None
         3,
         "high",
     )
-    assert queued.options.ban_tools == ["execute_terminal"]
-    assert queued.options.reasoning_effort == "high"
-    assert queued.model_config_id == 3
+    assert queued.launch.options.ban_tools == ["execute_terminal"]
+    assert queued.launch.options.reasoning_effort == "high"
+    assert queued.launch.model_config_id == 3
     assert set(queued.message.model_dump()) == {
         "input_text",
         "display_text",
@@ -278,7 +278,7 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment() -> None:
 
 def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
     from app.service.conversation_run import conversation_input_preparation_service as preparation
-    from app.service.conversation_run.task_message_queue import _reuse_attachments
+    from app.service.conversation_run.message_edit import reuse_attachments
 
     attachment_path = Path(__file__)
     previous = ConversationInput(
@@ -314,7 +314,9 @@ def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
             )
         ],
     )
-    prepared = service.prepare_input(7, _reuse_attachments(command, previous), 3, None)
+    prepared = service.prepare_input(
+        7, reuse_attachments(command, previous.presentation()), 3, None
+    )
     assert prepared.message.input_text == f"请再次阅读 {attachment_path}"
     assert prepared.message.attachments[0]["path"] == str(attachment_path)
 

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
-from app.models.task_message import NoticeMessage
+from app.models.task_message import NoticeBody, TaskMessage
 
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])
@@ -34,16 +34,16 @@ async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> 
     assert result.mailbox is mailbox
     assert result.allows_tools == {"read_file", "write_file"} - set(banned)
     [notice] = mailbox.drain()
-    assert isinstance(notice, NoticeMessage)
+    assert isinstance(notice.body, NoticeBody)
     assert notice.id is None
-    assert notice.kind == "tool_availability"
+    assert notice.body.notice_kind == "tool_availability"
 
 
 def test_mailbox_dedupes_persisted_rows_but_keeps_every_run_notice() -> None:
     """同一外部队列行在一次执行内只收一次；Run 内通知没有行 id，逐条保留。"""
     mailbox = RunMailbox()
-    persisted = NoticeMessage(id=5, content="broadcast", kind="test")
-    transient = NoticeMessage(id=None, content="continue", kind="test")
+    persisted = TaskMessage.of(NoticeBody(content="broadcast", notice_kind="test"), message_id=5)
+    transient = TaskMessage.of(NoticeBody(content="continue", notice_kind="test"))
 
     mailbox.post(persisted)
     mailbox.post(persisted)

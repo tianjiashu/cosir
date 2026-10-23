@@ -112,6 +112,7 @@ def _running_state() -> ConversationStateSnapshot:
             messages=[],
             usage=None,
             contextWindowTotal=None,
+            launch={"modelConfigId": None, "reasoningEffort": None, "banTools": []},
             error=None,
         )
     ]

@@ -191,7 +191,7 @@ function useTaskAssistantTransportAdapter(
       if (!activeStreamRef.current || !accepted.queued) {
         if (!activeStreamRef.current) store.importState(accepted.state);
         const run = accepted.state.runs.find((candidate) => candidate.runId === accepted.state.current_run_id);
-        if (run && ["pending", "running", "waiting_for_input"].includes(run.status)) void openStream([]);
+        if (run && ["pending", "running", "suspended"].includes(run.status)) void openStream([]);
       }
     } catch (error) {
       // 请求未发出（如附件已失效）与后端拒绝同属 request-rejected，交给同一个 onError 恢复草稿并提示。
@@ -239,7 +239,7 @@ function useTaskAssistantTransportAdapter(
   }, [store, taskId]);
   const onRefetchThread = useCallback(async () => {
     const currentSnapshot = store.getSnapshot();
-    if (currentSnapshot.targetRunStatus === "pending" || currentSnapshot.targetRunStatus === "running" || currentSnapshot.targetRunStatus === "waiting_for_input") {
+    if (currentSnapshot.targetRunStatus === "pending" || currentSnapshot.targetRunStatus === "running" || currentSnapshot.targetRunStatus === "suspended") {
       await attach();
       return;
     }

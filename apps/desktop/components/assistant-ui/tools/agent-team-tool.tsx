@@ -2,29 +2,22 @@ import { useEffect, useState } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon, UsersIcon } from "lucide-react";
 
-import { submitTaskDecision } from "@/lib/assistant/task-commands";
+import { submitTeamDecision } from "@/lib/assistant/task-commands";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { statusColorStyle } from "@/lib/agent-team-status";
-import { AgentTeamExecutionCard } from "./agent-team-execution-card";
-import { asRecord, readToolArtifact } from "./types";
-import {
-  hasAgentTeamReviewRequest,
-  readAgentTeamPreviewDisplay,
-  readAgentTeamReviewRequest,
-  type AgentTeamPreviewDisplay,
-} from "./agent-team-display";
+import { AgentTeamExecutionCard, useAgentTeamRunPolling } from "./agent-team-execution-card";
+import { readToolArtifact } from "./types";
+import { readAgentTeamPreviewDisplay, type AgentTeamPreviewDisplay } from "./agent-team-display";
 
-/** 渲染器额外收到所属 Run / Task：提交用户决定必须定位到具体 Run。 */
+/** 渲染器额外收到所属 Task：提交决定按 Task 与 TeamRun 寻址。 */
 type AgentTeamToolProps = ToolCallMessagePartProps & {
   runId?: number | null;
-  runStatus?: string | null;
   taskId?: number;
   onAttachTransport?: () => Promise<void>;
 };
@@ -50,7 +43,7 @@ function validateReviewedInputs(
   return null;
 }
 
-/** 待确认态的卡片状态文案：它不是工具生命周期状态，只是「这张卡在等用户」的展示提示。 */
+/** 待确认态的卡片状态文案：它来自 TeamRun 的 `pending`，不是工具生命周期状态。 */
 const AWAITING_REVIEW_LABEL = "等待确认";
 
 function NodeStatusBadge({ status }: { status: AgentTeamPreviewDisplay["nodes"][number]["statuses"][number] }) {
@@ -65,9 +58,8 @@ function NodeStatusBadge({ status }: { status: AgentTeamPreviewDisplay["nodes"][
 /**
  * 待确认提示。
  *
- * 为什么不复用 ``ToolStatus``：该组件渲染的是**工具生命周期状态**（此时确实是 ``running``——
- * 调用尚未结算），而用户此刻看到的是「等我确认」。两者不是同一维度，因此这里显式给一个展示提示，
- * 不改动状态语义（后端状态机里没有、也不需要 ``waiting``）。
+ * 为什么不复用 ``ToolStatus``：工具调用早已闭合（``completed``），而用户此刻看到的是「等我确认」。
+ * 两者不是同一维度，确认态只来自 TeamRun 的 ``pending``。
  */
 function AwaitingReviewStatus({ label = AWAITING_REVIEW_LABEL, className }: { label?: string; className?: string }) {
   return (
@@ -78,123 +70,41 @@ function AwaitingReviewStatus({ label = AWAITING_REVIEW_LABEL, className }: { la
   );
 }
 
-/** Agent Team 方案预览卡；确认时把用户决定交回等待中的 Run，由后端在确认边界重新校验。 */
+/**
+ * Agent Team 方案卡：按 TeamRun 状态渲染，不依附工具调用生命周期。
+ *
+ * `pending` 显示可编辑的审批表单；用户驳回（`cancelled` + `user_rejected`）显示驳回结果；其余状态
+ * 交给执行卡。决定提交后后端确定性执行（批准即后台运行 Team），再以消息唤醒主 Agent。
+ */
 export function AgentTeamTool(props: AgentTeamToolProps) {
-  const { artifact: rawArtifact, runId, runStatus, taskId, toolCallId, onAttachTransport } = props;
+  const { artifact: rawArtifact, runId, taskId, toolCallId, onAttachTransport } = props;
   const artifact = readToolArtifact(rawArtifact);
   const preview = readAgentTeamPreviewDisplay(artifact.display_data);
-  const review = readAgentTeamReviewRequest(artifact.display_data);
-  const [state, setState] = useState<"idle" | "confirming" | "rejecting" | "confirmed" | "rejected" | "failed">("idle");
+  const runQuery = useAgentTeamRunPolling(preview?.teamRunId);
+  const teamRun = runQuery.data ?? null;
+  const [state, setState] = useState<"idle" | "confirming" | "rejecting" | "failed">("idle");
   const [message, setMessage] = useState("");
   const [goal, setGoal] = useState(preview?.goal ?? "");
   const [nodeGoals, setNodeGoals] = useState<AgentTeamPreviewDisplay["nodeGoals"]>(preview?.nodeGoals ?? {});
   const [feedback, setFeedback] = useState("");
-  // 请求存在决定审批卡是否展示；Run 状态只决定何时允许把决定提交给后端。
-  const isWaitingForInput = runStatus === "waiting_for_input";
-  const displayData = asRecord(artifact.display_data);
-  const rawReviewRequest = asRecord(displayData.user_input_request);
-  const reviewRequestPresent = hasAgentTeamReviewRequest(displayData);
-  const displayDataKeys = Object.keys(displayData).sort().join(",");
-  const reviewRequestKeys = Object.keys(rawReviewRequest).sort().join(",");
-  const requestId = typeof rawReviewRequest.request_id === "string" ? rawReviewRequest.request_id : null;
-  const requestKind = typeof rawReviewRequest.request_kind === "string" ? rawReviewRequest.request_kind : null;
-  const draftSchema = typeof rawReviewRequest.draft_schema === "string" ? rawReviewRequest.draft_schema : null;
-  const parserAcceptedRequest = review !== null;
-  const formDisabled = !isWaitingForInput
-    || state === "confirming"
-    || state === "rejecting"
-    || state === "confirmed"
-    || state === "rejected";
-  const reviewStatusLabel = isWaitingForInput
+  const isPending = teamRun?.status === "pending";
+  const formDisabled = !isPending || state === "confirming" || state === "rejecting";
+  const reviewStatusLabel = isPending
     ? AWAITING_REVIEW_LABEL
-    : runStatus === "running" || runStatus === "pending"
-      ? "正在准备确认"
-      : runStatus === "completed" || runStatus === "failed" || runStatus === "cancelled"
-        ? "运行已结束，审批不可提交"
-        : "正在同步运行状态";
+    : runQuery.isError
+      ? "无法读取方案状态"
+      : "正在同步方案状态";
+  const teamRunStatus = teamRun?.status ?? null;
 
   useEffect(() => {
-    if (!reviewRequestPresent) return;
-    const logMessage = parserAcceptedRequest
-      ? "前端已读到有效 Team 审批请求"
-      : "前端收到无法识别的 Team 审批请求";
-    void frontendLog(
-      parserAcceptedRequest ? "INFO" : "WARNING",
-      "agent_team_approval_payload_observed",
-      logMessage,
-      {
-        data: {
-          taskId,
-          runId,
-          toolCallId,
-          runStatus,
-          teamRunId: preview?.teamRunId ?? null,
-          backendStatus: artifact.backendStatus,
-          displayDataPresent: artifact.display_data !== null,
-          displayDataKeys: displayDataKeys ? displayDataKeys.split(",") : [],
-          requestObjectPresent: reviewRequestPresent,
-          requestKeys: reviewRequestKeys ? reviewRequestKeys.split(",") : [],
-          requestId,
-          requestKind,
-          draftSchema,
-          parserAcceptedRequest,
-        },
-      },
-    );
-  }, [
-    artifact.backendStatus,
-    displayDataKeys,
-    draftSchema,
-    preview?.teamRunId,
-    reviewRequestPresent,
-    requestId,
-    requestKind,
-    parserAcceptedRequest,
-    reviewRequestKeys,
-    runId,
-    toolCallId,
-    runStatus,
-    taskId,
-  ]);
-
-  if (state === "confirmed" && preview) {
-    return (
-      <AgentTeamExecutionCard
-        {...props}
-        displayOverride={{
-          teamRunId: preview.teamRunId,
-          teamId: preview.teamId,
-          goal,
-        }}
-      />
-    );
-  }
+    if (!preview || teamRunStatus === null) return;
+    void frontendLog("INFO", "agent_team_card_status_observed", "Team 方案卡已读到 TeamRun 状态", {
+      data: { taskId, runId, toolCallId, teamRunId: preview.teamRunId, status: teamRunStatus },
+    });
+  }, [preview?.teamRunId, runId, taskId, teamRunStatus, toolCallId]);
 
   if (!preview) return null;
-  if (reviewRequestPresent && review === null) {
-    return (
-      <Alert
-        tone="warning"
-        role="status"
-        aria-label="Agent Team 审批请求无法识别"
-        title="审批请求格式不兼容"
-        className="rounded-xl p-3 shadow-sm"
-      >
-        <p className="text-xs">当前客户端无法识别这份 Team 审批请求，请刷新对话后重试。</p>
-      </Alert>
-    );
-  }
-  if (!review) {
-    if (displayData.user_decision !== "reject") {
-      // 审批决定已消费后，后端会移除待决请求；是否拒绝只由后端投影的决定记录判定。
-      // 同意后从历史消息恢复时也走 canonical TeamRun 查询，避免把旧审批预览误显示为拒绝。
-      return (
-        <AgentTeamExecutionCard
-          {...props}
-          displayOverride={{ teamRunId: preview.teamRunId, teamId: preview.teamId, goal: "" }}
-        />
-      );
-    }
+  if (teamRun && teamRun.status === "cancelled" && teamRun.end_reason === "user_rejected") {
     return (
       <div className="space-y-2 rounded-xl border border-border/70 bg-card p-3 shadow-sm" aria-label="已驳回的 Agent Team 方案">
         <div className="flex items-center gap-2">
@@ -202,21 +112,25 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
           <span className="font-medium text-sm">{preview.name}</span>
           <span className="text-xs text-muted-foreground">已驳回</span>
         </div>
-        <p className="text-muted-foreground text-xs">主 Agent 正在根据审阅意见重新生成方案。</p>
+        <p className="text-muted-foreground text-xs">主 Agent 会根据审阅意见重新生成方案。</p>
       </div>
     );
   }
+  if (teamRun && teamRun.status !== "pending") {
+    return (
+      <AgentTeamExecutionCard
+        {...props}
+        displayOverride={{ teamRunId: preview.teamRunId, teamId: preview.teamId, goal: teamRun.goal }}
+      />
+    );
+  }
 
-  /** 提交决定并把控制权交回等待中的 Run；失败只影响本卡片的提示状态。 */
+  /** 提交决定；后端执行后以消息唤醒主 Agent，失败只影响本卡片的提示状态。 */
   const submitDecision = async (
     decision: "approve" | "reject",
     data: Record<string, unknown>,
     phase: "confirming" | "rejecting",
   ) => {
-    if (!isWaitingForInput) {
-      setMessage("运行状态尚未就绪，请稍后重试");
-      return;
-    }
     if (taskId === undefined) {
       setState("failed");
       setMessage("无法定位该执行方案所属的对话，请刷新页面后重试");
@@ -225,17 +139,13 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     setState(phase);
     setMessage("");
     try {
-      await submitTaskDecision(taskId, { requestId: review.requestId, decision, data });
-      setState(decision === "approve" ? "confirmed" : "rejected");
-      setMessage(
-        decision === "approve"
-          ? "已提交确认，Agent Team 正在启动"
-          : "已提交审阅后的目标和驳回意见，主 Agent 正在重新生成方案",
-      );
+      await submitTeamDecision(taskId, { teamRunId: preview.teamRunId, decision, data });
+      setState("idle");
+      void runQuery.refetch();
       if (onAttachTransport) {
         void onAttachTransport().catch((error: unknown) => {
           void frontendLog("WARNING", "agent_team_decision_attach_failed", "Team 审批决定已提交，但重新订阅 Run 失败", {
-            data: { taskId, runId, requestId: review.requestId, decision },
+            data: { taskId, runId, teamRunId: preview.teamRunId, decision },
             error,
           });
           setMessage("决定已提交，但实时连接中断，请刷新对话查看最新结果");
@@ -243,7 +153,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
       }
     } catch (error) {
       void frontendLog("ERROR", "agent_team_decision_submit_failed", "提交 Team 审批决定失败", {
-        data: { taskId, runId, requestId: review.requestId, decision },
+        data: { taskId, runId, teamRunId: preview.teamRunId, decision },
         error,
       });
       setState("failed");
@@ -373,10 +283,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
       <div className="text-muted-foreground text-xs">
         {preview.nodes.length} 个节点 · {preview.edges.length} 条转移
       </div>
-      {state === "rejected" ? (
-        <p className="text-muted-foreground text-xs">{message}</p>
-      ) : (
-        <div className="space-y-2">
+      <div className="space-y-2">
           <label className="text-muted-foreground block text-xs">
             驳回意见
             <Textarea
@@ -389,20 +296,15 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
             />
           </label>
           <div className="flex justify-end gap-2">
-            {review.decisions.includes("reject") && (
-              <Button type="button" size="sm" variant="outline" disabled={formDisabled} onClick={() => void reject()}>
-                {state === "rejecting" ? "正在驳回…" : "驳回并重新生成"}
-              </Button>
-            )}
-            {review.decisions.includes("approve") && (
-              <Button type="button" size="sm" disabled={formDisabled} onClick={() => void confirm()}>
-                {state === "confirming" ? "确认中…" : "确认执行"}
-              </Button>
-            )}
-          </div>
+            <Button type="button" size="sm" variant="outline" disabled={formDisabled} onClick={() => void reject()}>
+              {state === "rejecting" ? "正在驳回…" : "驳回并重新生成"}
+            </Button>
+            <Button type="button" size="sm" disabled={formDisabled} onClick={() => void confirm()}>
+              {state === "confirming" ? "确认中…" : "确认执行"}
+            </Button>
         </div>
-      )}
-      {state === "failed" && <p className="text-destructive text-xs">{message}</p>}
+      </div>
+      {message && <p className={cn("text-xs", state === "failed" ? "text-destructive" : "text-muted-foreground")}>{message}</p>}
     </div>
   );
 }

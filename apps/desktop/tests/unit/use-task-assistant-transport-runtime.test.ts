@@ -11,7 +11,7 @@ import {
 
 const INITIAL_STATE: TransportState = {
   runs: [{ runId: 1, status: "completed", endReason: "stop",
-    contextWindowTotal: 128_000, messages: [], usage: null, error: null }],
+    contextWindowTotal: 128_000, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] }, messages: [], usage: null, error: null }],
   current_run_id: 1,
   approvals: {},
   error: null,

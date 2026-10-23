@@ -76,7 +76,7 @@ def _context_row(
             message["role"],
             metadata
             # 落库的 user 行必须带展示绑定；测试用正文作展示文本。
-            or ({"presentation": {"display_text": message["content"]}} if message["role"] == "user" else {}),
+            or ({"kind": "user_input", "presentation": {"display_text": message["content"]}} if message["role"] == "user" else {}),
         ),
     )
 
@@ -95,7 +95,15 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[object] = []
-    run = SimpleNamespace(id=11, task_id=7, context_window_total=128_000)
+    from app.models.conversation_run_options import ConversationRunOptions
+
+    run = SimpleNamespace(
+        id=11,
+        task_id=7,
+        context_window_total=128_000,
+        model_config_id=1,
+        options=ConversationRunOptions(),
+    )
 
     class RunCrud:
         def create(self, *_args: Any, **_kwargs: Any) -> Any:
@@ -114,24 +122,9 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     service._task = TaskCrud()
     from contextlib import nullcontext
 
-    from app.models.conversation_input import ConversationInput, QueuedTaskInput
-    from app.models.conversation_run_options import ConversationRunOptions
-    from app.models.task_message import UserMessage
-    from app.storage.crud.task_message_crud import TaskMessageCrud
+    from app.models.task_message import RunLaunch
 
     service._session_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
-    head = QueuedTaskInput(
-        message=ConversationInput(input_text="hello", display_text="hello"),
-        model_config_id=1,
-        options=ConversationRunOptions(),
-        agent_id="child_agent",
-    )
-    monkeypatch.setattr(TaskMessageCrud, "release_all_immediate", lambda self, *args: None)
-    monkeypatch.setattr(
-        TaskMessageCrud,
-        "list_pending",
-        lambda self, *args, **kwargs: [UserMessage(id=1, payload=head, delivery="immediate")],
-    )
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: Projector())
     monkeypatch.setattr(
         "app.service.conversation_run.conversation_run_service.get_model_config_service",
@@ -143,7 +136,7 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
             )
         ),
     )
-    service.create_run(7)
+    service.create_run(7, RunLaunch(agent_id="child_agent", model_config_id=1))
 
     assert [getattr(event, "type", None) for event in events] == ["run_initialized"]
 

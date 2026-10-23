@@ -19,17 +19,25 @@ export function getLatestUserMessageId(state: Pick<TransportState, "runs"> | nul
 }
 
 /**
- * 判断指定用户消息是否允许编辑重跑：后端只接受「Task 已到终态、没有排队输入」时编辑最新一条
- * 已消费用户消息，这里与之对齐以免暴露必然被拒的入口。
+ * 判断指定用户消息是否允许编辑重跑：后端只接受「Task 已到终态」时编辑最新一条已消费用户消息，
+ * 这里与之对齐以免暴露必然被拒的入口。排队中的消息另由 {@link isQueuedUserMessage} 判断。
  */
 export function isEditableLatestRunUserMessage(
   state: TransportState | null | undefined,
   messageId: string,
 ): boolean {
-  if (!state || state.current_run_id == null || state.queued_messages?.length) return false;
+  if (!state || state.current_run_id == null) return false;
   const run = state.runs.find((candidate) => candidate.runId === state.current_run_id);
   if (!run || !isTerminalRunStatus(run.status)) return false;
   return getLatestUserMessageId(state) === messageId;
+}
+
+/** 排队中（尚未并入）的消息可随时原地编辑，不影响正在运行的 Run。 */
+export function isQueuedUserMessage(
+  state: TransportState | null | undefined,
+  messageId: string,
+): boolean {
+  return Boolean(state?.queued_messages?.some((message) => message.id === messageId));
 }
 
 /**

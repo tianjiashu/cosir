@@ -113,7 +113,7 @@ async def test_send_during_release_window_never_runs_two_executions(child_task):
         if ConversationRunCrud().get(first_run).status == ConversationRunStatus.COMPLETED.value:
             break
         await asyncio.sleep(0.01)
-    # 首个 Run 已完成但执行仍登记：这正是 child_agent_wait 返回、父 Agent 追加输入的窗口。
+    # 首个 Run 已完成但执行仍登记：这正是子 Run 结论回投、父 Agent 追加输入的窗口。
     assert executions() == 1
 
     context = ToolExecutionContext(

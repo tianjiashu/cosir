@@ -18,7 +18,7 @@ _RUN = SimpleNamespace(id=_RUN_ID, task_id=_TASK_ID, status="running")
 
 def _execution(thread_task, run_id: int = _RUN_ID) -> _Execution:
     """按 Task 登记的执行替身：只带登记判定需要的 run 身份与后台 task。"""
-    execution = _Execution(run=SimpleNamespace(id=run_id, task_id=_TASK_ID))
+    execution = _Execution(run=SimpleNamespace(id=run_id, task_id=_TASK_ID), fresh_run=False)
     execution.thread_task = thread_task
     return execution
 
@@ -59,7 +59,7 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
 
     monkeypatch.setattr(session_module, "drive_run", _drive(runner))
     session = _session()
-    session._start(_RUN)
+    session._start(_RUN, fresh_run=True)
     execution = session._executions[_TASK_ID].thread_task
     try:
         assert await asyncio.wait_for(session.cancel(_TASK_ID), 1.0) is True
@@ -106,7 +106,7 @@ async def test_cancel_is_idempotent_while_execution_is_active() -> None:
 
     assert await session.cancel(_TASK_ID) is True
     assert await session.cancel(_TASK_ID) is True
-    assert session._release(_TASK_ID) is True
+    assert session._release(_TASK_ID) == "user"
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
 
 
@@ -133,7 +133,7 @@ async def test_start_rejects_second_execution_on_same_task() -> None:
     session._executions[_TASK_ID] = _execution(asyncio.current_task())
 
     with pytest.raises(ValueError):
-        session._start(SimpleNamespace(id=2, task_id=_TASK_ID))
+        session._start(SimpleNamespace(id=2, task_id=_TASK_ID), fresh_run=True)
     assert session._executions[_TASK_ID].run.id == _RUN_ID
 
 
@@ -154,7 +154,7 @@ async def test_execution_releases_and_runs_after_run_when_driver_raises(
         after.append(run.id)
 
     monkeypatch.setattr(session, "_after_run", after_run)
-    session._start(_RUN)
+    session._start(_RUN, fresh_run=True)
     await session.wait_released(_TASK_ID)
 
     assert after == [_RUN_ID]
@@ -173,7 +173,7 @@ async def test_after_run_failure_still_releases(monkeypatch: pytest.MonkeyPatch)
         raise RuntimeError("handoff failed")
 
     monkeypatch.setattr(session, "_after_run", after_run)
-    session._start(_RUN)
+    session._start(_RUN, fresh_run=True)
     cancellation_registry.request_cancel(_TASK_ID)
     await session.wait_released(_TASK_ID)
 
@@ -198,7 +198,7 @@ async def test_close_cancels_and_releases_without_after_run(
         after.append(run.id)
 
     monkeypatch.setattr(session, "_after_run", after_run)
-    session._start(_RUN)
+    session._start(_RUN, fresh_run=True)
     await asyncio.sleep(0.01)
     await session.close()
 

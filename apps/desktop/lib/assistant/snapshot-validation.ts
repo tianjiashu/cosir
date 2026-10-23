@@ -66,35 +66,6 @@ function validateDelegationDisplayData(data: Record<string, unknown>, path: stri
   if (data.status !== undefined) requireKnownChildStatus(data.status, `${path}.status`);
 }
 
-function validateChildWaitDisplayData(data: Record<string, unknown>, path: string): void {
-  requireExactKeys(data, ["kind", "timed_out", "messages", "pending", "interrupted_by"], path);
-  if (typeof data.timed_out !== "boolean") throw new TransportSnapshotValidationError(`${path}.timed_out`, "布尔值");
-  if (!Array.isArray(data.messages)) throw new TransportSnapshotValidationError(`${path}.messages`, "数组");
-  data.messages.forEach((value, index) => {
-    const message = requireRecord(value, `${path}.messages[${index}]`);
-    requireExactKeys(message, ["child_task_id", "status", "final_output", "end_reason"], `${path}.messages[${index}]`);
-    requirePositiveInteger(message.child_task_id, `${path}.messages[${index}].child_task_id`);
-    if (message.status !== "completed" && message.status !== "failed" && message.status !== "cancelled") {
-      throw new TransportSnapshotValidationError(`${path}.messages[${index}].status`, "completed、failed 或 cancelled");
-    }
-    if (message.final_output !== null && typeof message.final_output !== "string") throw new TransportSnapshotValidationError(`${path}.messages[${index}].final_output`, "字符串或 null");
-    if (message.end_reason !== null && typeof message.end_reason !== "string") throw new TransportSnapshotValidationError(`${path}.messages[${index}].end_reason`, "字符串或 null");
-  });
-  if (!Array.isArray(data.pending)) throw new TransportSnapshotValidationError(`${path}.pending`, "数组");
-  data.pending.forEach((value, index) => {
-    const pending = requireRecord(value, `${path}.pending[${index}]`);
-    requireExactKeys(pending, ["child_task_id", "status"], `${path}.pending[${index}]`);
-    requirePositiveInteger(pending.child_task_id, `${path}.pending[${index}].child_task_id`);
-    if (pending.status !== null) {
-      if (typeof pending.status !== "string") throw new TransportSnapshotValidationError(`${path}.pending[${index}].status`, "字符串或 null");
-      requireKnownChildStatus(pending.status, `${path}.pending[${index}].status`);
-    }
-  });
-  if (data.interrupted_by !== null && data.interrupted_by !== "parent_cancelled" && data.interrupted_by !== "session_closed" && data.interrupted_by !== "shutdown") {
-    throw new TransportSnapshotValidationError(`${path}.interrupted_by`, "受支持的中断原因或 null");
-  }
-}
-
 function validateChildAgentResultDisplayData(data: Record<string, unknown>, path: string): void {
   requireExactKeys(data, [
     "kind", "operation", "child_task_id", "status", "agent_id", "agent_name", "final_output", "end_reason",
@@ -123,7 +94,6 @@ function validateDisplayData(value: unknown, path: string): void {
   const data = requireRecord(value, path);
   if (data.kind !== undefined && typeof data.kind !== "string") throw new TransportSnapshotValidationError(`${path}.kind`, "字符串");
   if (data.kind === "delegation-result") validateDelegationDisplayData(data, path);
-  if (data.kind === "child-agent-wait-result") validateChildWaitDisplayData(data, path);
   if (data.kind === "child-agent-result") validateChildAgentResultDisplayData(data, path);
   if (data.kind === "agent-configuration-draft") validateAgentConfigurationDraftDisplayData(data, path);
 }
@@ -136,6 +106,14 @@ const USAGE_KEYS = [
   "cache_miss_tokens",
   "reasoning_tokens",
 ] as const;
+
+function validateLaunch(value: unknown, path: string): void {
+  const launch = requireRecord(value, path);
+  requireExactKeys(launch, ["modelConfigId", "reasoningEffort", "banTools"], path);
+  requireNullableNonNegativeInteger(launch.modelConfigId, `${path}.modelConfigId`);
+  if (launch.reasoningEffort !== null && typeof launch.reasoningEffort !== "string") throw new TransportSnapshotValidationError(`${path}.reasoningEffort`, "字符串或 null");
+  if (!Array.isArray(launch.banTools) || !launch.banTools.every((name) => typeof name === "string")) throw new TransportSnapshotValidationError(`${path}.banTools`, "字符串数组");
+}
 
 function requireExactKeys(value: Record<string, unknown>, keys: readonly string[], path: string): void {
   const actual = Object.keys(value).sort();
@@ -251,7 +229,7 @@ export function parseTransportState(value: unknown): TransportState {
       const path = `queued_messages[${index}]`;
       validateMessage(message, path, ids, ["delivery"]);
       const { delivery, role } = message as { delivery: unknown; role: unknown };
-      if (delivery !== "immediate" && delivery !== "after_run") throw new TransportSnapshotValidationError(`${path}.delivery`, "immediate 或 after_run");
+      if (delivery !== "immediate" && delivery !== "next_run") throw new TransportSnapshotValidationError(`${path}.delivery`, "immediate 或 next_run");
       if (role !== "user") throw new TransportSnapshotValidationError(`${path}.role`, "user");
     });
   }
@@ -260,15 +238,16 @@ export function parseTransportState(value: unknown): TransportState {
   const activeRunIds: number[] = [];
   for (const [index, rawRun] of state.runs.entries()) {
     const run = requireRecord(rawRun, `runs[${index}]`);
-    requireExactKeys(run, ["runId", "status", "endReason", "contextWindowTotal", "messages", "usage", "error"], `runs[${index}]`);
+    requireExactKeys(run, ["runId", "status", "endReason", "contextWindowTotal", "launch", "messages", "usage", "error"], `runs[${index}]`);
     const runId = requireNullableNonNegativeInteger(run.runId, `runs[${index}].runId`);
     if (runId === null || runIds.has(runId)) throw new TransportSnapshotValidationError(`runs[${index}].runId`, "唯一的非负整数");
     runIds.add(runId);
     const status = requireString(run.status, `runs[${index}].status`);
-    if (!["idle", "pending", "running", "waiting_for_input", "completed", "failed", "cancelled", "interrupted"].includes(status)) throw new TransportSnapshotValidationError(`runs[${index}].status`, "受支持的运行状态");
-    if (status === "pending" || status === "running" || status === "waiting_for_input") activeRunIds.push(runId);
+    if (!["idle", "pending", "running", "suspended", "completed", "failed", "cancelled", "interrupted"].includes(status)) throw new TransportSnapshotValidationError(`runs[${index}].status`, "受支持的运行状态");
+    if (status === "pending" || status === "running" || status === "suspended") activeRunIds.push(runId);
     if (run.endReason !== null && typeof run.endReason !== "string") throw new TransportSnapshotValidationError(`runs[${index}].endReason`, "字符串或 null");
     requireNullableNonNegativeInteger(run.contextWindowTotal, `runs[${index}].contextWindowTotal`);
+    validateLaunch(run.launch, `runs[${index}].launch`);
     if (!Array.isArray(run.messages)) throw new TransportSnapshotValidationError(`runs[${index}].messages`, "数组");
     const messageIds = new Set<string>();
     run.messages.forEach((message, messageIndex) => validateMessage(message, `runs[${index}].messages[${messageIndex}]`, messageIds));

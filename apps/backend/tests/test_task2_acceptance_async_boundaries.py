@@ -64,7 +64,7 @@ async def test_session_cancel_reads_canonical_run_off_event_loop(
         "get_or_create",
         lambda _: SimpleNamespace(async_operation=lambda **kw: nullcontext()),
     )
-    service = _ThreadCheckedRunService(status=ConversationRunStatus.WAITING_FOR_INPUT.value)
+    service = _ThreadCheckedRunService(status=ConversationRunStatus.SUSPENDED.value)
     session = WorkflowSession.__new__(WorkflowSession)
     session._executions = {}
     session._tasks = service

@@ -6,9 +6,8 @@ from pydantic import ValidationError
 from app.assistant_transport.request import (
     EditMessageRequest,
     SendMessageRequest,
-    UserDecisionRequest,
+    TeamDecisionRequest,
 )
-from app.models.user_decision import UserDecisionKind
 
 
 def _message(text: str = "hello", **extra: object) -> dict[str, object]:
@@ -30,7 +29,7 @@ def test_send_defaults_to_immediate_delivery_and_maps_command() -> None:
     assert command.ban_tools == ["read_file"]
 
 
-@pytest.mark.parametrize("delivery", ["immediate", "after_run"])
+@pytest.mark.parametrize("delivery", ["immediate", "next_run"])
 def test_send_accepts_both_delivery_modes(delivery: str) -> None:
     assert _send(delivery=delivery).delivery == delivery
 
@@ -89,18 +88,23 @@ def test_invalid_reasoning_effort_is_rejected(effort: object) -> None:
         _send(reasoningEffort=effort)
 
 
-def test_decision_maps_to_domain() -> None:
-    decision = UserDecisionRequest.model_validate(
-        {"requestId": "req-1", "decision": "approve", "data": {"note": "ok"}}
-    ).to_user_decision()
+def test_team_decision_addresses_team_run() -> None:
+    decision = TeamDecisionRequest.model_validate(
+        {"teamRunId": 17, "decision": "approve", "data": {"goal": "ok"}}
+    )
 
-    assert decision.request_id == "req-1"
-    assert decision.kind is UserDecisionKind.APPROVE
-    assert decision.data == {"note": "ok"}
+    assert (decision.teamRunId, decision.decision, decision.data) == (17, "approve", {"goal": "ok"})
 
 
-@pytest.mark.parametrize("decision", ["force_reject", "maybe"])
-def test_decision_rejects_system_or_unknown_kinds(decision: str) -> None:
-    """FORCE_REJECT 只由系统合成，客户端不能提交。"""
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"teamRunId": 17, "decision": "force_reject"},
+        {"teamRunId": 17, "decision": "abort"},
+        {"teamRunId": 0, "decision": "approve"},
+        {"requestId": "17", "decision": "approve"},
+    ],
+)
+def test_team_decision_rejects_unknown_shapes(payload: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
-        UserDecisionRequest.model_validate({"requestId": "req-1", "decision": decision})
+        TeamDecisionRequest.model_validate(payload)

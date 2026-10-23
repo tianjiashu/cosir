@@ -10,6 +10,7 @@ import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import { editTaskMessage, sendTaskMessage, type TaskMessageRequest } from "@/lib/assistant/task-commands";
 import { HttpError } from "@/lib/http/errors";
 import { readStoredInputDelivery } from "@/lib/input-delivery-storage";
+import { resolveSendDelivery } from "@/lib/assistant/run-launch";
 import { readStoredSelection } from "@/lib/model-selection-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { TransportState } from "@/lib/assistant/contract";
@@ -244,7 +245,8 @@ export function useRuntimeTransport(
         banTools: [...selectedBanTools],
       };
       const sourceId = getUserAddMessageSourceId(command);
-      const delivery = readStoredInputDelivery();
+      const preferredDelivery = readStoredInputDelivery();
+      const delivery = resolveSendDelivery(context.latestStateRef.current, request, preferredDelivery);
       // 新用户命令开始新的 Transport recovery 预算。
       recovery.resetTransportRecoveryBudget();
       context.lastTransportErrorRef.current = null;
@@ -254,6 +256,7 @@ export function useRuntimeTransport(
           taskId: context.taskId,
           operation: sourceId === null ? "send" : "edit",
           delivery: sourceId === null ? delivery : null,
+          deliveryForcedByLaunch: sourceId === null && delivery !== preferredDelivery,
           partCount: request.message.parts.length,
           attachmentCount: request.message.attachments?.length ?? 0,
         },

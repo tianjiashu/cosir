@@ -41,7 +41,6 @@ from app.core.tools.schemas import (
     ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
-    UserInputRequest,
 )
 from app.core.tools.tool_execute import tool_executor as tool_executor_module
 from app.core.tools.tool_execute import tool_terminal_projection as projection_module
@@ -863,22 +862,18 @@ def _process_isolated_probe_handler(
     )
 
 
-def _user_input_probe_handler(
+def _suspending_probe_handler(
     *, execution_context: Any, output_sink: Any = None
 ) -> ToolObservation:
-    """返回待用户决定的成功观察，验证审批决定前不提前封闭 tool part。"""
+    """返回要求挂起的成功观察，验证挂起不推迟 tool part 的终态。"""
 
     return ToolObservation(
-        tool_name="user_input_probe",
+        tool_name="suspend_probe",
         status="success",
         content="preview",
         tool_call_id=execution_context.tool_call_id,
         display_data={"kind": "probe"},
-        user_input_request=UserInputRequest(
-            request_id="request-1",
-            kind="agent_team_review",
-            prompt="确认执行方案",
-        ),
+        suspend=True,
     )
 
 
@@ -924,33 +919,33 @@ def test_projection_happens_in_parent_for_process_isolated_tool(
         assert "probe body pid=" in (observation.content or "")
 
 
-def test_tool_with_user_input_defers_terminal_until_decision(
+def test_suspending_tool_still_closes_its_call_in_the_same_step(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """待用户决定的观察只发 running，不发终态；终态留给 wait_user 的决定分支。"""
+    """挂起不改变调用生命周期：调用当步闭合，照常发 running 与终态；是否挂起只由 observe 决定。"""
 
     recorder = _install_recorder(monkeypatch)
     definition = ToolDefinition(
-        name="user_input_probe",
+        name="suspend_probe",
         group="probe",
-        description="human input projection probe",
-        handler=_user_input_probe_handler,
+        description="suspend probe",
+        handler=_suspending_probe_handler,
         args_model=_ProbeArgs,
     )
     rc = _runtime(
         tmp_path,
         ToolExecutor(ToolRegistry([definition])),
-        projected={"call-user-input": "user_input_probe"},
-        allows=frozenset({"user_input_probe"}),
+        projected={"call-suspend": "suspend_probe"},
+        allows=frozenset({"suspend_probe"}),
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="user_input_probe", arguments="{}", call_id="call-user-input"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="suspend_probe", arguments="{}", call_id="call-suspend"), "s", _NO_LOOP
     )
 
     assert observation.status == "success"
-    assert observation.user_input_request is not None
-    assert recorder.statuses("call-user-input") == ["running"]
+    assert observation.suspend is True
+    assert recorder.statuses("call-suspend") == ["running", "completed"]
 
 
 def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
@@ -1126,6 +1121,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
             "status": "running",
             "endReason": None,
             "contextWindowTotal": None,
+            "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
             "messages": [
                 {"id": "m0", "role": "user", "parts": []},
                 {
