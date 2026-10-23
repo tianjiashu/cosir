@@ -20,7 +20,6 @@ from app.models.task_message import (
 from app.service.conversation_run import dispatch_policy
 from app.service.conversation_run.dispatch_policy import (
     Deliver,
-    LaunchLockedError,
     StartRun,
     Stay,
     Wake,
@@ -140,22 +139,11 @@ def test_fresh_run_receives_all_pending_resumed_run_only_immediate() -> None:
     assert [m.id for m in resumed] == [1, 3]
 
 
-def test_launch_is_not_locked_when_task_is_static() -> None:
-    dispatch_policy.check_launch(_OTHER, "immediate", _run("completed"), False, [])
-
-
-def test_immediate_input_must_match_active_run() -> None:
-    dispatch_policy.check_launch(_LAUNCH, "immediate", _run("running"), True, [])
-    with pytest.raises(LaunchLockedError):
-        dispatch_policy.check_launch(_OTHER, "immediate", _run("running"), True, [])
-
-
-def test_next_run_inputs_must_share_one_launch() -> None:
-    dispatch_policy.check_launch(_OTHER, "next_run", _run("running"), True, [])
-    queued = [_user(1, _OTHER, "next_run")]
-    dispatch_policy.check_launch(_OTHER, "next_run", _run("running"), True, queued)
-    with pytest.raises(LaunchLockedError):
-        dispatch_policy.check_launch(_LAUNCH, "next_run", _run("running"), True, queued)
+def test_next_run_inputs_hand_off_to_last_launch() -> None:
+    """``next_run`` 属于下一个 Run：配置可以与当前 Run、与其它排队输入都不同，新 Run 取最后一条。"""
+    pending = [_user(1, _OTHER, "next_run"), _user(2, _LAUNCH, "next_run")]
+    action = dispatch_policy.next_action(_run("completed"), False, pending, by_user=False)
+    assert action == StartRun(_LAUNCH)
 
 
 def test_ban_tools_compare_as_set() -> None:

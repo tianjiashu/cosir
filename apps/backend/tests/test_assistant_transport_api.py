@@ -169,7 +169,8 @@ def test_attach_without_any_run_is_conflict() -> None:
     "path",
     [
         "/tasks/{task_id}/messages",
-        "/tasks/{task_id}/messages/{message_id}/edit",
+        "/tasks/{task_id}/queued-messages/{message_id}",
+        "/tasks/{task_id}/messages/{message_id}/rerun",
         "/tasks/{task_id}/resume",
         "/tasks/{task_id}/decisions",
         "/tasks/{task_id}/cancel",
@@ -287,7 +288,7 @@ async def test_state_endpoint_returns_nested_run_snapshot() -> None:
 async def test_task_gate_waits_without_blocking_event_loop(tmp_path: Path) -> None:
     """闸门排队必须发生在工作线程：等待期间事件循环仍要能调度其它协程。
 
-    Task 闸门要跨越 ``WorkflowSession`` 内的 ``await``；若用同步
+    Task 闸门要跨越 ``TaskActor`` 一批信号处理内的 ``await``；若用同步
     ``operation()`` 在事件循环线程上抢锁，同一 task 的并发请求会把事件循环整体卡在
     ``acquire`` 上，而持锁者又必须回到事件循环才能释放闸门，等待者遂只能等满超时。
     本用例断言等待期间心跳协程仍在推进。
@@ -323,7 +324,7 @@ async def test_task_gate_waits_without_blocking_event_loop(tmp_path: Path) -> No
     try:
         assert await asyncio.to_thread(acquired.wait, 3)
         beating = asyncio.create_task(_heartbeat())
-        async with WorkflowSession._gate(task.id):
+        async with space.async_operation(wait_seconds=10):
             # 必须由心跳推进到主动释放，不能依靠持锁线程的保底超时。
             assert ticks == 5
     finally:

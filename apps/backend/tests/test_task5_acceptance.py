@@ -98,7 +98,7 @@ def canonical_store(tmp_path: Path, monkeypatch):
     # ConversationTaskStateService 现在从 depends 取 CRUD 单例；这里把三个 getter 指向本夹具的临时库
     # CRUD，使 state 服务与 store 中的 CRUD 读写同一份临时数据（保留测试隔离，不污染全局库）。
     monkeypatch.setattr(
-        "app.service.conversation_run.conversation_input_preparation_service.get_task_crud",
+        "app.service.conversation_run.user_input_service.get_task_crud",
         lambda: tasks,
     )
     monkeypatch.setattr("app.service.depends.get_task_crud", lambda: tasks)

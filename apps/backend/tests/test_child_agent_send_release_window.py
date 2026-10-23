@@ -1,7 +1,7 @@
 """子 Run 已落定终态、执行器仍在收尾时追加输入，子 Task 上不得出现两个并发执行。
 
 真实 SQLite + 真实调度入口，只替换单次 Run 的驱动：首个 Run 落定 completed 后继续
-占住执行 0.3s，模拟释放边界（交接、收尾）尚未结束的窗口；``child_agent_send`` 在这个窗口里
+占住执行 0.3s，模拟 RunFinished 收尾（交接）尚未开始的窗口；``child_agent_send`` 在这个窗口里
 从工具线程发起。
 """
 
@@ -18,7 +18,7 @@ from app.core.tools.schemas import ToolExecutionContext
 from app.core.tools.tool_handler.child_task.child_agent_send import ChildAgentSendTool
 from app.models import ConversationRunCommand
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
-from app.service.conversation_run import workflow_session as session_module
+from app.service.conversation_run import task_actor as actor_module
 from app.service.depends import get_conversation_run_state_service, get_workflow_session
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -71,7 +71,7 @@ def child_task(isolated_storage, tmp_path, monkeypatch):
         session.flush()
         config_id = config.id
     runtime = _Runtime()
-    monkeypatch.setattr(session_module, "drive_run", runtime.drive)
+    monkeypatch.setattr(actor_module, "drive_run", runtime.drive)
     child_profile = SimpleNamespace(
         agent_type=AgentProfileType.CHILD, model_settings=None, model_config_id=None
     )
@@ -89,7 +89,8 @@ async def test_send_during_release_window_never_runs_two_executions(child_task):
     task_id = child_task.child.id
 
     def executions() -> int:
-        return sum(1 for item in session._executions.values() if item.task_id == task_id)
+        actor = session._actors.get(task_id)
+        return int(actor is not None and actor.execution is not None)
 
     peak = 0
     stop = asyncio.Event()
@@ -132,12 +133,13 @@ async def test_send_during_release_window_never_runs_two_executions(child_task):
     )
     assert observation.status == "success", observation
 
-    for _ in range(500):
-        if executions() == 0:
-            break
-        await asyncio.sleep(0.01)
+    # 收尾的交接在 actor 一批信号内完成：等 Task 静止，而不是等执行登记瞬时为空。
+    assert await session.wait_idle(task_id, 5) is True
     stop.set()
     await watcher
+
+    # actor 常驻挂起在信号队列上：用例结束前随事件循环一起关闭。
+    await session.close()
 
     runs = ConversationRunCrud().list_by_task(task_id)
     assert peak == 1

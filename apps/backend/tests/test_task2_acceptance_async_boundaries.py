@@ -56,23 +56,31 @@ async def test_session_cancel_reads_canonical_run_off_event_loop(
 ) -> None:
     from contextlib import nullcontext
 
-    from app.service.conversation_run import workflow_session as session_module
+    from app.service import depends as service_depends
+    from app.service.conversation_run import task_actor as actor_module
     from app.service.conversation_run.workflow_session import WorkflowSession
 
     monkeypatch.setattr(
-        session_module.task_runtime_spaces,
+        actor_module.task_runtime_spaces,
         "get_or_create",
         lambda _: SimpleNamespace(async_operation=lambda **kw: nullcontext()),
     )
     service = _ThreadCheckedRunService(status=ConversationRunStatus.SUSPENDED.value)
-    session = WorkflowSession.__new__(WorkflowSession)
-    session._executions = {}
-    session._tasks = service
-    session._runs = service
-    session._run_state = service
+    for getter in (
+        "get_conversation_run_service",
+        "get_conversation_run_state_service",
+        "get_task_service",
+        "get_task_message_queue",
+        "get_user_input_service",
+    ):
+        monkeypatch.setattr(service_depends, getter, lambda: service)
+    session = WorkflowSession()
 
-    # 无执行者时需要读 canonical Run 判定是否等待态；所有读取都必须离开事件循环线程。
-    assert await session.cancel(7) is False
+    # 无执行者时由 actor 读 canonical Run 判定是否挂起；所有读取都必须离开事件循环线程。
+    try:
+        assert await session.cancel(7) is False
+    finally:
+        await session.close()
 
 
 @pytest.mark.asyncio

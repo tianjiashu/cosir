@@ -4,7 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.assistant_transport.request import (
-    EditMessageRequest,
+    EditQueuedMessageRequest,
+    RerunMessageRequest,
     SendMessageRequest,
     TeamDecisionRequest,
 )
@@ -49,12 +50,28 @@ def test_send_rejects_invalid_fields(overrides: dict[str, object]) -> None:
         _send(**overrides)
 
 
-def test_edit_rejects_delivery() -> None:
-    """编辑只针对已到终态的 Task，不存在投递方式。"""
+def test_rerun_rejects_delivery() -> None:
+    """重跑只针对已停下的 Task（运行中先停止），不存在投递方式。"""
     with pytest.raises(ValidationError):
-        EditMessageRequest.model_validate(
+        RerunMessageRequest.model_validate(
             {"message": _message(), "modelConfigId": 1, "delivery": "immediate"}
         )
+
+
+@pytest.mark.parametrize(
+    "extra", [{"modelConfigId": 1}, {"reasoningEffort": "high"}, {"banTools": ["read_file"]}]
+)
+def test_queued_edit_carries_no_launch_fields(extra: dict[str, object]) -> None:
+    """排队消息的发起配置在发送时已定：编辑请求不接受配置字段，避免前端误以为能改配置。"""
+    with pytest.raises(ValidationError):
+        EditQueuedMessageRequest.model_validate({"message": _message(), **extra})
+
+
+def test_queued_edit_maps_message_only() -> None:
+    command = EditQueuedMessageRequest.model_validate(
+        {"message": _message("edited")}
+    ).to_run_command()
+    assert (command.display_text, command.ban_tools) == ("edited", [])
 
 
 def test_ordinary_file_attachment_maps_into_command() -> None:

@@ -1,35 +1,62 @@
-"""WorkflowSession 的执行登记：取消信号、释放与「同一 Task 至多一个执行」约束。"""
+"""调度入口与 TaskActor 的执行登记：取消信号、RunFinished 收尾与「同一 Task 至多一个执行」约束。"""
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.service.conversation_run import workflow_session as session_module
-from app.service.conversation_run.workflow_session import WorkflowSession, _Execution
+from app.service import depends as service_depends
+from app.service.conversation_run import task_actor as actor_module
+from app.service.conversation_run.task_actor import Execution, TaskActor
+from app.service.conversation_run.workflow_session import WorkflowSession
 
 _RUN_ID = 1
 _TASK_ID = 7
 _RUN = SimpleNamespace(id=_RUN_ID, task_id=_TASK_ID, status="running")
 
 
-def _execution(thread_task, run_id: int = _RUN_ID) -> _Execution:
-    """按 Task 登记的执行替身：只带登记判定需要的 run 身份与后台 task。"""
-    execution = _Execution(run=SimpleNamespace(id=run_id, task_id=_TASK_ID), fresh_run=False)
-    execution.thread_task = thread_task
-    return execution
+class _Services:
+    """task / run / queue 替身：Task 存在且最新 Run 为 ``_RUN``；``missing`` 时 Task 不存在。"""
+
+    def __init__(self, *, missing: bool = False) -> None:
+        self.missing = missing
+
+    def get_task(self, task_id: int) -> SimpleNamespace:
+        if self.missing:
+            raise KeyError(task_id)
+        return SimpleNamespace(id=task_id, task_type="user", parent_task_id=None)
+
+    def get_latest_run(self, _task_id: int) -> SimpleNamespace:
+        return _RUN
+
+    def get_run(self, _run_id: int) -> SimpleNamespace:
+        return _RUN
+
+    def pending(self, _task_id: int) -> list:
+        return []
 
 
-def _session() -> WorkflowSession:
-    """只用执行登记的会话：不装配领域服务。"""
-    session = WorkflowSession.__new__(WorkflowSession)
-    session._executions = {}
-    session._release_signals = {}
-    session._closing = False
-    return session
+def _session(monkeypatch: pytest.MonkeyPatch, services: _Services | None = None) -> WorkflowSession:
+    """接替身服务的调度入口；actor 闸门换成空上下文。"""
+    services = services or _Services()
+    for getter in (
+        "get_conversation_run_service",
+        "get_conversation_run_state_service",
+        "get_task_service",
+        "get_task_message_queue",
+        "get_user_input_service",
+    ):
+        monkeypatch.setattr(service_depends, getter, lambda: services)
+    monkeypatch.setattr(
+        actor_module.task_runtime_spaces,
+        "get_or_create",
+        lambda _: SimpleNamespace(async_operation=lambda **kw: nullcontext()),
+    )
+    return WorkflowSession()
 
 
 def _drive(behavior: Callable[[], Awaitable[None]]):
@@ -37,6 +64,21 @@ def _drive(behavior: Callable[[], Awaitable[None]]):
         await behavior()
 
     return drive
+
+
+def _start(session: WorkflowSession) -> TaskActor:
+    """在 actor 上启动 ``_RUN`` 的执行，并放行初始投递（生产由启动它的那批信号处理完放行）。"""
+    actor = session._actor(_TASK_ID)
+    actor._start(_RUN, fresh_run=True)
+    actor.execution.ready.set()
+    return actor
+
+
+def _fake_execution(actor: TaskActor) -> Execution:
+    execution = Execution(run=_RUN, fresh_run=False)
+    execution.thread_task = asyncio.current_task()
+    actor.execution = execution
+    return execution
 
 
 @pytest.fixture(autouse=True)
@@ -49,18 +91,15 @@ def _isolated_signal_registry():
 
 
 @pytest.mark.asyncio
-async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(monkeypatch) -> None:
     """runner 永不返回时取消依旧立即返回 True，且只标记进程内信号。"""
 
     async def runner() -> None:
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(session_module, "drive_run", _drive(runner))
-    session = _session()
-    session._start(_RUN, fresh_run=True)
-    execution = session._executions[_TASK_ID].thread_task
+    monkeypatch.setattr(actor_module, "drive_run", _drive(runner))
+    session = _session(monkeypatch)
+    execution = _start(session).execution.thread_task
     try:
         assert await asyncio.wait_for(session.cancel(_TASK_ID), 1.0) is True
         assert cancellation_registry.is_cancelled(_TASK_ID) is True
@@ -68,8 +107,7 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(
         await asyncio.sleep(0)
         assert not execution.done()
     finally:
-        execution.cancel()
-        await asyncio.gather(execution, return_exceptions=True)
+        await session.close()
 
 
 @pytest.mark.asyncio
@@ -80,8 +118,8 @@ async def test_cancel_preserves_task_terminal(monkeypatch, tmp_path) -> None:
     terminal_session = terminal.start(
         task_id=7, workspace_id=1, workspace_root=str(tmp_path), run_id=1
     )
-    session = _session()
-    session._executions[_TASK_ID] = _execution(asyncio.current_task())
+    session = _session(monkeypatch)
+    _fake_execution(session._actor(_TASK_ID))
     try:
         assert await session.cancel(_TASK_ID) is True
         assert not workers[0].closed
@@ -95,113 +133,119 @@ async def test_cancel_preserves_task_terminal(monkeypatch, tmp_path) -> None:
         assert workers[0].writes == [b"next run\r"]
     finally:
         terminal.shutdown()
+        session._actors[_TASK_ID].loop_task.cancel()
 
 
 @pytest.mark.asyncio
-async def test_cancel_is_idempotent_while_execution_is_active() -> None:
-    """同一 Task 重复停止都被接受，信号只有一份，释放时一并取走。"""
+async def test_cancel_is_idempotent_while_execution_is_active(monkeypatch) -> None:
+    """同一 Task 重复停止都被接受，信号只有一份，收尾时一并取走。"""
 
-    session = _session()
-    session._executions[_TASK_ID] = _execution(asyncio.current_task())
+    session = _session(monkeypatch)
+    actor = session._actor(_TASK_ID)
+    _fake_execution(actor)
 
     assert await session.cancel(_TASK_ID) is True
     assert await session.cancel(_TASK_ID) is True
-    assert session._release(_TASK_ID) == "user"
+    assert cancellation_registry.consume(_TASK_ID) == "user"
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
+    actor.loop_task.cancel()
 
 
 @pytest.mark.asyncio
-async def test_cancel_missing_task_raises_without_signal() -> None:
+async def test_cancel_missing_task_raises_without_signal(monkeypatch) -> None:
     """task 不存在时抛 KeyError（API 映射 404），且不登记信号。"""
 
-    def missing(task_id: int) -> None:
-        raise KeyError(task_id)
-
-    session = _session()
-    session._tasks = SimpleNamespace(get_task=missing)
+    session = _session(monkeypatch, _Services(missing=True))
 
     with pytest.raises(KeyError):
         await session.cancel(_TASK_ID)
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
+    await session.close()
 
 
 @pytest.mark.asyncio
-async def test_start_rejects_second_execution_on_same_task() -> None:
+async def test_start_rejects_second_execution_on_same_task(monkeypatch) -> None:
     """同一 Task 至多一个执行：第二次登记直接拒绝，不覆盖已有执行。"""
 
-    session = _session()
-    session._executions[_TASK_ID] = _execution(asyncio.current_task())
+    session = _session(monkeypatch)
+    actor = session._actor(_TASK_ID)
+    _fake_execution(actor)
 
     with pytest.raises(ValueError):
-        session._start(SimpleNamespace(id=2, task_id=_TASK_ID), fresh_run=True)
-    assert session._executions[_TASK_ID].run.id == _RUN_ID
+        actor._start(SimpleNamespace(id=2, task_id=_TASK_ID), fresh_run=True)
+    assert actor.execution.run.id == _RUN_ID
+    actor.loop_task.cancel()
 
 
 @pytest.mark.asyncio
-async def test_execution_releases_and_runs_after_run_when_driver_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """驱动逃逸的异常只记录：Run 结束后的调度照常执行，执行登记照常释放。"""
+async def test_execution_finishes_and_runs_after_run_when_driver_raises(monkeypatch) -> None:
+    """驱动逃逸的异常只记录：执行照常发 RunFinished，收尾照常执行并注销。"""
 
     async def runner() -> None:
         raise RuntimeError("driver died")
 
-    monkeypatch.setattr(session_module, "drive_run", _drive(runner))
-    session = _session()
+    monkeypatch.setattr(actor_module, "drive_run", _drive(runner))
+    session = _session(monkeypatch)
+    actor = session._actor(_TASK_ID)
     after: list[int] = []
 
-    async def after_run(run) -> None:
+    async def after_run(run, _reason) -> None:
         after.append(run.id)
 
-    monkeypatch.setattr(session, "_after_run", after_run)
-    session._start(_RUN, fresh_run=True)
-    await session.wait_released(_TASK_ID)
+    monkeypatch.setattr(actor, "_after_run", after_run)
+    actor._start(_RUN, fresh_run=True)
+    actor.execution.ready.set()
+    settled = actor.execution.settled
+    await asyncio.wait_for(settled.wait(), 1)
 
     assert after == [_RUN_ID]
-    assert _TASK_ID not in session._executions
+    assert actor.execution is None
+    await session.close()
 
 
 @pytest.mark.asyncio
-async def test_after_run_failure_still_releases(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_after_run_failure_still_releases(monkeypatch) -> None:
     async def runner() -> None:
         return None
 
-    monkeypatch.setattr(session_module, "drive_run", _drive(runner))
-    session = _session()
+    monkeypatch.setattr(actor_module, "drive_run", _drive(runner))
+    session = _session(monkeypatch)
+    actor = session._actor(_TASK_ID)
 
-    async def after_run(_run) -> None:
+    async def after_run(_run, _reason) -> None:
         raise RuntimeError("handoff failed")
 
-    monkeypatch.setattr(session, "_after_run", after_run)
-    session._start(_RUN, fresh_run=True)
+    monkeypatch.setattr(actor, "_after_run", after_run)
+    actor._start(_RUN, fresh_run=True)
+    actor.execution.ready.set()
+    settled = actor.execution.settled
     cancellation_registry.request_cancel(_TASK_ID)
-    await session.wait_released(_TASK_ID)
+    await asyncio.wait_for(settled.wait(), 1)
 
-    assert _TASK_ID not in session._executions
+    assert actor.execution is None
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
+    await session.close()
 
 
 @pytest.mark.asyncio
-async def test_close_cancels_and_releases_without_after_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_close_cancels_and_releases_without_after_run(monkeypatch) -> None:
     """关闭期取消：不再调度后续 Run，登记与信号都被清理；遗留 running Run 由重启收敛。"""
 
     async def runner() -> None:
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(session_module, "drive_run", _drive(runner))
-    session = _session()
+    monkeypatch.setattr(actor_module, "drive_run", _drive(runner))
+    session = _session(monkeypatch)
+    actor = _start(session)
     after: list[int] = []
 
-    async def after_run(run) -> None:
+    async def after_run(run, _reason) -> None:
         after.append(run.id)
 
-    monkeypatch.setattr(session, "_after_run", after_run)
-    session._start(_RUN, fresh_run=True)
+    monkeypatch.setattr(actor, "_after_run", after_run)
     await asyncio.sleep(0.01)
     await session.close()
 
     assert after == []
-    assert _TASK_ID not in session._executions
+    assert session._actors == {}
     assert cancellation_registry.is_cancelled(_TASK_ID) is False

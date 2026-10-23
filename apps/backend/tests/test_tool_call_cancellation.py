@@ -137,11 +137,12 @@ def _session_with_execution(task_id: int, run_id: int) -> object:
     """只含一条执行登记的调度入口（不装配领域服务）。"""
     from types import SimpleNamespace
 
-    from app.service.conversation_run.workflow_session import WorkflowSession, _Execution
+    from app.service.conversation_run.task_actor import Execution
+    from app.service.conversation_run.workflow_session import WorkflowSession
 
     session = WorkflowSession.__new__(WorkflowSession)
-    execution = _Execution(run=SimpleNamespace(id=run_id, task_id=task_id), fresh_run=False)
-    session._executions = {task_id: execution}
+    execution = Execution(run=SimpleNamespace(id=run_id, task_id=task_id), fresh_run=False)
+    session._actors = {task_id: SimpleNamespace(execution=execution)}
     return session
 
 

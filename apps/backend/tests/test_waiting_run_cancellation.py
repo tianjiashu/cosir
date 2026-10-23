@@ -1,5 +1,5 @@
-"""Task 级取消：有执行时只发信号；挂起的 Run 没有执行者，闸门内直接落定；释放边界是信号唯一
-清理点。执行登记、挂起态取消与 Run 结束后的调度都在 ``WorkflowSession``。
+"""Task 级取消：有执行时只发信号；挂起的 Run 没有执行者，actor 直接落定；``RunFinished`` 收尾是
+信号唯一清理点。执行登记、挂起态取消与 Run 结束后的调度都在 ``TaskActor``。
 """
 
 from __future__ import annotations
@@ -12,15 +12,17 @@ import pytest
 
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
-from app.service.conversation_run import workflow_session as session_module
-from app.service.conversation_run.workflow_session import WorkflowSession, _Execution
+from app.service import depends as service_depends
+from app.service.conversation_run import task_actor as actor_module
+from app.service.conversation_run.task_actor import Execution, TaskActor
+from app.service.conversation_run.task_signals import Cancel, RunFinished
 
 _TASK_ID = 11
 _RUN_ID = 7
 
 
 class _StubServices:
-    """run / state / task service 替身：记录状态迁移。"""
+    """run / state / task / queue service 替身：记录状态迁移。"""
 
     def __init__(self, status: str) -> None:
         self.status = status
@@ -45,41 +47,57 @@ class _StubServices:
     def get_latest_run(self, _task_id: int) -> SimpleNamespace:
         return self.get_run(_RUN_ID)
 
-
-def _execution(thread_task, run_id: int = _RUN_ID) -> _Execution:
-    """按 Task 登记的执行替身：只带登记判定需要的 run 身份与后台 task。"""
-    execution = _Execution(run=SimpleNamespace(id=run_id, task_id=_TASK_ID), fresh_run=False)
-    execution.thread_task = thread_task
-    return execution
+    def pending(self, _task_id: int) -> list:
+        return []
 
 
 def _build(monkeypatch: pytest.MonkeyPatch, services: _StubServices):
-    """绕过装配的调度入口；``_start``、推进与取消后续都换成记录器。"""
+    """在当前事件循环上拉起一个接替身服务的 actor；推进与取消后续换成记录器。"""
 
-    session = WorkflowSession.__new__(WorkflowSession)
-    session._executions = {}
-    session._release_signals = {}
-    session._closing = False
-    session._runs = services
-    session._run_state = services
-    session._tasks = services
+    for getter in (
+        "get_conversation_run_service",
+        "get_conversation_run_state_service",
+        "get_task_service",
+        "get_task_message_queue",
+    ):
+        monkeypatch.setattr(service_depends, getter, lambda: services)
     monkeypatch.setattr(
-        session_module.task_runtime_spaces,
+        actor_module.task_runtime_spaces,
         "get_or_create",
         lambda _: SimpleNamespace(async_operation=lambda **kw: nullcontext()),
     )
+    session = SimpleNamespace(evict=lambda _actor: None)
+    actor = TaskActor(_TASK_ID, session)
     record = SimpleNamespace(started=[], advanced=[], after_cancelled=[])
-    monkeypatch.setattr(session, "_start", lambda run, **_kw: record.started.append(run.id))
+    monkeypatch.setattr(actor, "_start", lambda run, **_kw: record.started.append(run.id))
 
-    async def advance(task_id: int, *, by_user: bool) -> None:
-        record.advanced.append((task_id, by_user))
+    async def advance(*, by_user: bool, project: bool = False) -> None:
+        record.advanced.append(by_user)
 
     async def after_cancelled(run: SimpleNamespace, reason: str) -> None:
         record.after_cancelled.append((run.id, reason))
 
-    monkeypatch.setattr(session, "_advance", advance)
-    monkeypatch.setattr(session, "_after_cancelled", after_cancelled)
-    return session, record
+    monkeypatch.setattr(actor, "_advance", advance)
+    monkeypatch.setattr(actor, "_after_cancelled", after_cancelled)
+    return actor, record
+
+
+def _register_execution(actor: TaskActor) -> Execution:
+    """按 Task 登记的执行替身：只带收尾需要的 run 身份。"""
+    execution = Execution(run=SimpleNamespace(id=_RUN_ID, task_id=_TASK_ID), fresh_run=False)
+    actor.execution = execution
+    return execution
+
+
+async def _cancel(actor: TaskActor, reason: str = "user") -> bool:
+    receipt = asyncio.get_running_loop().create_future()
+    actor.send(Cancel(reason, receipt=receipt))
+    return await asyncio.wait_for(receipt, 1)
+
+
+async def _finish(actor: TaskActor, execution: Execution) -> None:
+    actor.send(RunFinished(execution))
+    await asyncio.wait_for(execution.settled.wait(), 1)
 
 
 @pytest.fixture(autouse=True)
@@ -88,116 +106,91 @@ def _clear_signal() -> None:
     cancellation_registry.consume(_TASK_ID)
 
 
-def test_cancel_with_active_execution_only_marks_task_signal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.asyncio
+async def test_cancel_with_active_execution_only_marks_task_signal(monkeypatch) -> None:
     services = _StubServices(ConversationRunStatus.RUNNING.value)
-    session, record = _build(monkeypatch, services)
+    actor, record = _build(monkeypatch, services)
+    _register_execution(actor)
 
-    async def scenario() -> bool:
-        session._executions[_TASK_ID] = _execution(asyncio.current_task())
-        return await session.cancel(_TASK_ID)
-
-    assert asyncio.run(scenario()) is True
+    assert await _cancel(actor) is True
     assert cancellation_registry.is_cancelled(_TASK_ID) is True
     assert services.transitions == []
     assert record.after_cancelled == []
+    actor.loop_task.cancel()
 
 
-def test_cancel_terminal_run_leaves_no_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.asyncio
+async def test_cancel_terminal_run_leaves_no_signal(monkeypatch) -> None:
     """已结束的 Run 没有执行者：不登记信号，否则下一次编辑或续跑会一启动就被取消。"""
     services = _StubServices(ConversationRunStatus.COMPLETED.value)
-    session, record = _build(monkeypatch, services)
+    actor, record = _build(monkeypatch, services)
 
-    assert asyncio.run(session.cancel(_TASK_ID)) is False
+    assert await _cancel(actor) is False
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
     assert record.started == []
+    actor.loop_task.cancel()
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("reason", ["user", "edited"])
-def test_cancel_suspended_run_settles_directly_without_starting(
-    monkeypatch: pytest.MonkeyPatch, reason: str
+async def test_cancel_suspended_run_settles_directly_without_starting(
+    monkeypatch, reason: str
 ) -> None:
-    """挂起的 Run 没有执行者：闸门内直接落定 cancelled，不登记信号、不启动执行。"""
+    """挂起的 Run 没有执行者：actor 直接落定 cancelled，不登记信号、不启动执行。"""
     services = _StubServices(ConversationRunStatus.SUSPENDED.value)
-    session, record = _build(monkeypatch, services)
+    actor, record = _build(monkeypatch, services)
 
-    assert asyncio.run(session.cancel(_TASK_ID, reason=reason)) is True
+    assert await _cancel(actor, reason) is True
 
     assert services.transitions == [(_RUN_ID, RunTransition.CANCEL)]
     assert record.started == []
     assert record.after_cancelled == [(_RUN_ID, reason)]
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
+    actor.loop_task.cancel()
 
 
-def test_release_consumes_signal_only_for_own_execution() -> None:
-    """唤醒与交接会为同一 Task 登记新执行：旧执行的释放不得误删它或取走它的信号。"""
-    executor = WorkflowSession.__new__(WorkflowSession)
-    executor._executions = {}
-    executor._release_signals = {}
-
-    async def scenario() -> tuple[object, object]:
-        other = asyncio.get_running_loop().create_future()
-        executor._executions[_TASK_ID] = _execution(other)
-        cancellation_registry.request_cancel(_TASK_ID)
-        foreign = executor._release(_TASK_ID)
-        executor._executions[_TASK_ID] = _execution(asyncio.current_task())
-        own = executor._release(_TASK_ID)
-        other.cancel()
-        return foreign, own
-
-    assert asyncio.run(scenario()) == (None, "user")
-    assert cancellation_registry.is_cancelled(_TASK_ID) is False
-
-
-def test_release_after_late_cancel_on_completed_run_skips_handoff(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """最后检查点之后才到的停止：Run 已完成，释放时不为队列消息接续新 Run。"""
+@pytest.mark.asyncio
+async def test_late_cancel_on_completed_run_skips_handoff(monkeypatch) -> None:
+    """最后检查点之后才到的停止：Run 已完成，收尾时不为队列消息接续新 Run。"""
     services = _StubServices(ConversationRunStatus.COMPLETED.value)
-    session, record = _build(monkeypatch, services)
+    actor, record = _build(monkeypatch, services)
+    execution = _register_execution(actor)
+    cancellation_registry.request_cancel(_TASK_ID)
 
-    async def scenario() -> None:
-        session._executions[_TASK_ID] = _execution(asyncio.current_task())
-        cancellation_registry.request_cancel(_TASK_ID)
-        await session._after_run(services.get_run(_RUN_ID))
+    await _finish(actor, execution)
 
-    asyncio.run(scenario())
     assert record.advanced == []
-    assert _TASK_ID not in session._executions
+    assert actor.execution is None
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
+    actor.loop_task.cancel()
 
 
-def test_suspend_release_rechecks_queue_so_no_wake_is_lost(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """挂起落定后在闸门内释放并推进一次：挂起前后到达的可唤醒消息不会丢。"""
+@pytest.mark.asyncio
+async def test_suspend_settle_rechecks_queue_so_no_wake_is_lost(monkeypatch) -> None:
+    """挂起落定后收尾时推进一次：挂起前后到达的可唤醒消息不会丢。"""
     services = _StubServices(ConversationRunStatus.SUSPENDED.value)
-    session, record = _build(monkeypatch, services)
+    actor, record = _build(monkeypatch, services)
+    execution = _register_execution(actor)
 
-    async def scenario() -> None:
-        session._executions[_TASK_ID] = _execution(asyncio.current_task())
-        await session._after_run(services.get_run(_RUN_ID))
+    await _finish(actor, execution)
 
-    asyncio.run(scenario())
-    assert record.advanced == [(_TASK_ID, False)]
+    assert record.advanced == [False]
     assert services.transitions == []
+    actor.loop_task.cancel()
 
 
-def test_cancel_arriving_while_suspending_settles_cancelled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """取消落在 running → suspended 窗口：释放时取走信号，直接落定 cancelled，不再推进。"""
+@pytest.mark.asyncio
+async def test_cancel_arriving_while_suspending_settles_cancelled(monkeypatch) -> None:
+    """取消落在 running → suspended 窗口：收尾时取走信号，直接落定 cancelled，不再推进。"""
     services = _StubServices(ConversationRunStatus.SUSPENDED.value)
-    session, record = _build(monkeypatch, services)
+    actor, record = _build(monkeypatch, services)
+    execution = _register_execution(actor)
+    cancellation_registry.request_cancel(_TASK_ID)
 
-    async def scenario() -> None:
-        session._executions[_TASK_ID] = _execution(asyncio.current_task())
-        cancellation_registry.request_cancel(_TASK_ID)
-        await session._after_run(services.get_run(_RUN_ID))
+    await _finish(actor, execution)
 
-    asyncio.run(scenario())
     assert services.transitions == [(_RUN_ID, RunTransition.CANCEL)]
     assert record.after_cancelled == [(_RUN_ID, "user")]
     assert record.advanced == []
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
+    actor.loop_task.cancel()

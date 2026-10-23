@@ -11,22 +11,21 @@ import pytest
 from app.core.tools.tool_handler import wait_messages as wait_module
 from app.core.tools.tool_handler.wait_messages import WaitMessagesTool
 from app.models.task_message import AgentResultBody
-from app.service.conversation_run.workflow_session import WorkflowSession
+from app.service.conversation_run.task_actor import TaskActor
 
 _PARENT = 1
 _CHILD = 2
 
 
-def _session(task: SimpleNamespace) -> tuple[WorkflowSession, list[tuple[int, Any]]]:
-    session = WorkflowSession.__new__(WorkflowSession)
-    session._tasks = SimpleNamespace(get_task=lambda _task_id: task)
+def _session(task: SimpleNamespace) -> tuple[TaskActor, list[tuple[int, Any]]]:
+    """只带回投所需协作者的子 Task actor：读 Task 类型，经会话向父 actor 发信号。"""
+    actor = TaskActor.__new__(TaskActor)
+    actor._tasks = SimpleNamespace(get_task=lambda _task_id: task)
     posted: list[tuple[int, Any]] = []
-
-    async def post_async(task_id: int, body: Any) -> None:
-        posted.append((task_id, body))
-
-    session.post_async = post_async  # type: ignore[method-assign]
-    return session, posted
+    actor._session = SimpleNamespace(
+        post_nowait=lambda task_id, body: posted.append((task_id, body))
+    )
+    return actor, posted
 
 
 def _run(status: str, final_output: str | None = "done") -> SimpleNamespace:
