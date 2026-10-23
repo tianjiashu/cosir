@@ -76,7 +76,9 @@ import type { InputDelivery, TransportRun, TransportToolStatus } from "@/lib/ass
 import { readStoredInputDelivery, writeStoredInputDelivery } from "@/lib/input-delivery-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
-import type { ToolGroupCatalog } from "@/lib/api/tools";
+import { toolGroupsForNames, type ToolGroupCatalog } from "@/lib/api/tools";
+import type { TransportRunLaunch } from "@/lib/assistant/contract";
+import { RUN_LAUNCH_LOCKED_HINT, useActiveRunLaunch } from "@/lib/assistant/run-launch";
 import { AttachmentWorkspaceContext } from "@/components/assistant-ui/elements/attachment-context";
 import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/virtualized-thread-messages";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
@@ -271,12 +273,14 @@ const ComposerBoundary = memo(function ComposerBoundary({
 });
 
 const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { autoFocus: boolean; taskId?: number; workspaceRoot?: string }) {
+  // 运行期配置锁定：活动 Run 期间模型与工具显示 Run 冻结的配置且只读，发送也用这份配置。
+  const runLaunch = useActiveRunLaunch();
   return (
     <ComposerInsertionProvider>
       <ComposerFeedbackProvider>
         <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
           <div className="flex min-w-0 items-center px-1">
-            <ThreadComposerPromptToolbar />
+            <ThreadComposerPromptToolbar lock={runLaunch === null ? null : { kind: "run", launch: runLaunch }} />
           </div>
           <div className="min-h-0 min-w-0 w-full">
             <ComposerAttachments />
@@ -295,6 +299,7 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
                 <ComposerControls
                   scope={taskId == null ? undefined : { kind: "task", id: taskId }}
                   runtimeModelContext
+                  locked={runLaunch}
                 />
               </div>
             </div>
@@ -308,17 +313,29 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
   );
 });
 
-const ThreadComposerPromptToolbar: FC<{ disabled?: boolean }> = ({ disabled = false }) => {
+/**
+ * 工具组配置的锁定来源：`run` 为活动 Run 冻结的配置（按其 banTools 回显、只读）；`queued` 为排队
+ * 消息编辑，配置沿用发送时的值且快照不投影它，因此不显示工具组开关。
+ */
+const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
+
+type ToolGroupsLock = { kind: "run"; launch: TransportRunLaunch } | { kind: "queued" } | null;
+
+const ThreadComposerPromptToolbar: FC<{ disabled?: boolean; lock?: ToolGroupsLock }> = ({ disabled = false, lock = null }) => {
   const composer = unstable_useComposerInput();
   const context = useContext(ThreadContext);
+  const toolGroups = context.toolGroups ?? EMPTY_TOOL_GROUPS;
+  const lockedGroups = lock?.kind === "run" ? toolGroupsForNames(lock.launch.banTools, toolGroups) : null;
   return (
     <ComposerPromptToolbar
-      toolGroups={context.toolGroups ?? []}
-      selectedToolGroups={context.selectedToolGroups ?? []}
-      onSelectedToolGroupsChange={context.onSelectedToolGroupsChange}
+      toolGroups={toolGroups}
+      selectedToolGroups={lockedGroups ?? context.selectedToolGroups ?? []}
+      onSelectedToolGroupsChange={lock === null ? context.onSelectedToolGroupsChange : undefined}
       toolGroupsLoading={context.toolGroupsLoading}
       toolGroupsError={context.toolGroupsError}
       disabled={disabled || composer.isDisabled}
+      toolGroupsLockedHint={lockedGroups === null ? undefined : RUN_LAUNCH_LOCKED_HINT}
+      showToolGroups={lock?.kind !== "queued"}
     />
   );
 };
@@ -590,6 +607,8 @@ const UserEditMessage: FC = () => {
   const aui = useAui();
   const message = useAuiState((state) => state.message);
   const { taskId, workspaceRoot } = useContext(ThreadContext);
+  // 排队消息原地编辑只改正文与附件，发起配置由后端沿用发送时的值；已并入的编辑会开新 Run，可改配置。
+  const isQueued = useAuiState((state) => isQueuedUserMessage(readRuntimeTransportState(state.thread.state), message.id));
   const [restoreOverride] = useState(() => takePendingEditComposerDraft(message.id));
   const canonicalEditDraft = useMemo(
     () => message.role === "user" ? toEditableUserMessageDraft(message) : null,
@@ -763,7 +782,7 @@ const UserEditMessage: FC = () => {
         <ComposerFeedbackProvider>
           <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
             <div className="flex min-w-0 items-center px-1">
-              <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} />
+              <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} lock={isQueued ? { kind: "queued" } : null} />
             </div>
             <div className="min-h-0 min-w-0 w-full">
               <ComposerAttachments />
@@ -776,9 +795,13 @@ const UserEditMessage: FC = () => {
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 px-1">
               <div className="min-w-0 flex-1">
-                <ComposerControls
-                  scope={taskId == null ? undefined : { kind: "task", id: taskId }}
-                />
+                {isQueued ? (
+                  <span className="text-muted-foreground text-xs">排队消息沿用发送时的配置</span>
+                ) : (
+                  <ComposerControls
+                    scope={taskId == null ? undefined : { kind: "task", id: taskId }}
+                  />
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <ComposerAttachmentButton workspaceRoot={workspaceRoot} disabled={isHydrating || isRecoveryActive} />

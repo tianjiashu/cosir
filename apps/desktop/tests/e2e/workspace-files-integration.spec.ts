@@ -288,7 +288,7 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史及编辑重�
     };
   }> = [];
   page.on("request", (req) => {
-    if (/\/tasks\/\d+\/messages(\/[^/]+\/edit)?$/.test(req.url()) && req.method() === "POST")
+    if (/\/tasks\/\d+\/messages(\/[^/]+\/rerun)?$/.test(req.url()) && req.method() === "POST")
       sent.push({ url: req.url(), ...req.postDataJSON() });
   });
   await page.getByRole("button", { name: "开始对话", exact: true }).click();
@@ -320,7 +320,7 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史及编辑重�
   await expect(edit.locator("[data-workspace-reference]")).toHaveCount(3);
   await page.getByRole("button", { name: "重跑", exact: true }).click();
   await expect.poll(() => sent.length).toBe(2);
-  expect(sent[1].url).toMatch(/\/messages\/[^/]+\/edit$/);
+  expect(sent[1].url).toMatch(/\/messages\/[^/]+\/rerun$/);
   expect(
     sent[1].message.parts
       .map((part) => part.text)

@@ -20,6 +20,8 @@ type ToolGroupSelectorProps = {
   loading?: boolean;
   error?: string | null;
   disabled?: boolean;
+  /** 只读原因（如运行期配置锁定）：面板仍可打开查看，开关不可改，并显示这条说明。 */
+  lockedHint?: string;
 };
 
 /**
@@ -36,12 +38,14 @@ export const ToolGroupSelector: FC<ToolGroupSelectorProps> = ({
   loading = false,
   error,
   disabled = false,
+  lockedHint,
 }) => {
   const idPrefix = useId();
   const disabledSet = new Set(disabledToolGroups);
   const disabledCount = toolGroups.filter(({ group }) => disabledSet.has(group)).length;
   const enabledCount = toolGroups.length - disabledCount;
   const canEdit = Boolean(onDisabledToolGroupsChange)
+    && lockedHint === undefined
     && !disabled
     && !loading
     && !error
@@ -99,6 +103,7 @@ export const ToolGroupSelector: FC<ToolGroupSelectorProps> = ({
             </Button>
           </div>
         </div>
+        {lockedHint && <p className="text-muted-foreground px-1 pt-2 text-2xs">{lockedHint}</p>}
         {loading && <LoadingState size="compact" label="正在加载工具…" className="px-1" />}
         {error && <Alert tone="destructive" className="mt-2">工具加载失败：{error}</Alert>}
         {!loading && !error && toolGroups.length === 0 && (
@@ -132,7 +137,7 @@ export const ToolGroupSelector: FC<ToolGroupSelectorProps> = ({
                     checked={enabled}
                     aria-labelledby={`${switchId}-name`}
                     aria-describedby={`${switchId}-tools`}
-                    disabled={disabled || !onDisabledToolGroupsChange}
+                    disabled={!canEdit}
                     onClick={() => setGroupEnabled(group, !enabled)}
                   />
                 </label>

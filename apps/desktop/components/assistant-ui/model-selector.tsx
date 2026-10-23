@@ -17,6 +17,8 @@ import {
 } from "@/components/model-selector";
 import { ModelAvailability } from "@/components/model/model-availability";
 import { ModelConfigPanel } from "@/components/assistant-ui/model-config-panel";
+import type { TransportRunLaunch } from "@/lib/assistant/contract";
+import { RUN_LAUNCH_LOCKED_HINT } from "@/lib/assistant/run-launch";
 import { useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
 import {
   scopeSuffix,
@@ -33,6 +35,11 @@ type ModelSelectorProps = {
   className?: string;
   onReadyChange?: (ready: boolean) => void;
   runtimeModelContext?: boolean;
+  /**
+   * 运行期配置锁定：传入时显示这份 Run 冻结的配置且不可更改，也不写回存储的偏好；停止后恢复为
+   * 用户偏好。
+   */
+  locked?: TransportRunLaunch | null;
 };
 
 type SelectionState = {
@@ -81,12 +88,14 @@ function SelectorView({
   catalogModels,
   selection,
   className,
+  disabled = false,
   onSelectionChange,
   onCatalogChanged,
 }: {
   catalogModels: readonly ModelCatalogModel[];
   selection: ModelSelection;
   className?: string;
+  disabled?: boolean;
   onSelectionChange: (selection: ModelSelection) => void;
   onCatalogChanged: () => void;
 }) {
@@ -103,7 +112,10 @@ function SelectorView({
   if (!selectedModel || !selectedOptionId) return null;
 
   return (
-    <div className={cn("flex min-w-0 max-w-full flex-wrap items-center gap-2", className)}>
+    <div
+      className={cn("flex min-w-0 max-w-full flex-wrap items-center gap-2", className)}
+      title={disabled ? RUN_LAUNCH_LOCKED_HINT : undefined}
+    >
       <OfficialModelSelectorRoot
         models={officialModels}
         value={selectedOptionId}
@@ -131,6 +143,7 @@ function SelectorView({
           size="sm"
           className="min-w-0 max-w-full sm:max-w-60"
           aria-label="选择模型"
+          disabled={disabled}
         >
           <SparklesIcon className="text-muted-foreground size-3.5 shrink-0" />
           <OfficialModelSelectorValue className="min-w-0" />
@@ -198,8 +211,34 @@ function useScopedSelection(scope: ModelSelectionScope | undefined) {
   return { ...catalogState, selection, updateSelection };
 }
 
-function StandaloneModelSelector(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
-  const { catalog, status, retry, selection, updateSelection } = useScopedSelection(props.scope);
+/** 锁定配置转成选择器的选择；模型配置已删除时为 null。 */
+function lockedSelection(launch: TransportRunLaunch): ModelSelection | null {
+  if (launch.modelConfigId === null) return null;
+  return {
+    modelConfigId: launch.modelConfigId,
+    reasoningEffort: launch.reasoningEffort as ModelSelection["reasoningEffort"],
+  };
+}
+
+/** 偏好选择或锁定配置，二者择一；锁定时 `locked` 为 true，界面只读。 */
+function useEffectiveSelection(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
+  const scoped = useScopedSelection(props.scope);
+  const locked = props.locked ?? null;
+  const selection = locked === null ? scoped.selection : lockedSelection(locked);
+  const selectedModel = scoped.catalog?.models.find(
+    (model) => model.modelConfigId === selection?.modelConfigId,
+  );
+  return { ...scoped, selection, selectedModel, locked: locked !== null };
+}
+
+function SelectorBody({
+  props,
+  state,
+}: {
+  props: Omit<ModelSelectorProps, "runtimeModelContext">;
+  state: ReturnType<typeof useEffectiveSelection>;
+}) {
+  const { catalog, status, retry, selection, selectedModel, updateSelection, locked } = state;
 
   useEffect(() => {
     props.onReadyChange?.(status === "ready" && selection !== null);
@@ -208,19 +247,24 @@ function StandaloneModelSelector(props: Omit<ModelSelectorProps, "runtimeModelCo
   const configure = <ModelConfigPanel onChanged={() => void retry()} />;
   return (
     <ModelAvailability status={status} modelCount={catalog?.models.length ?? 0} onRetry={() => void retry()} configure={configure}>
+      {locked && !selectedModel && (
+        <span className="text-muted-foreground text-xs">运行中的模型配置已删除，停止后重新选择</span>
+      )}
       {selection && catalog && (
-        <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />
+        <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} disabled={locked} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />
       )}
     </ModelAvailability>
   );
 }
 
+function StandaloneModelSelector(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
+  return <SelectorBody props={props} state={useEffectiveSelection(props)} />;
+}
+
 function RuntimeModelSelector(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
   const aui = useAui();
-  const { catalog, status, retry, selection, updateSelection } = useScopedSelection(props.scope);
-  const selectedModel = catalog?.models.find(
-    (model) => model.modelConfigId === selection?.modelConfigId,
-  );
+  const state = useEffectiveSelection(props);
+  const { selection, selectedModel } = state;
 
   useEffect(() => {
     if (!selectedModel || !selection) return;
@@ -234,18 +278,7 @@ function RuntimeModelSelector(props: Omit<ModelSelectorProps, "runtimeModelConte
     });
   }, [aui, selectedModel, selection]);
 
-  useEffect(() => {
-    props.onReadyChange?.(status === "ready" && selection !== null);
-  }, [props.onReadyChange, selection, status]);
-
-  const configure = <ModelConfigPanel onChanged={() => void retry()} />;
-  return (
-    <ModelAvailability status={status} modelCount={catalog?.models.length ?? 0} onRetry={() => void retry()} configure={configure}>
-      {selection && catalog && (
-        <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />
-      )}
-    </ModelAvailability>
-  );
+  return <SelectorBody props={props} state={state} />;
 }
 
 export function ModelSelector(props: ModelSelectorProps) {

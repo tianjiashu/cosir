@@ -150,7 +150,7 @@ type ConversationStateUsage = {
 };
 
 /**
- * Run 冻结的发起配置（运行期锁定）：活动 Run 期间配置不同的发送只能交给下一个 Run。
+ * Run 冻结的发起配置（运行期锁定）：活动 Run 期间 composer 只读显示这份配置并以它发送。
  * `modelConfigId` 在模型配置被删除后为 null。
  */
 export type TransportRunLaunch = {

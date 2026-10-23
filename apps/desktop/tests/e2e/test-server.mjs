@@ -84,7 +84,8 @@ function stateWithExchange(previous, text, runId, assistantText, status) {
     runId,
     status: terminal ? status : "running",
     endReason: status === "completed" ? "stop" : status === "failed" ? "tool_error_limit_reached" : status === "cancelled" ? "user_cancelled" : null,
-    contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
+    // 与 /model-configs 唯一的模型一致：运行期配置锁定下，运行中发送沿用这份配置。
+    contextWindowTotal: null, launch: { modelConfigId: 2, reasoningEffort: null, banTools: [] },
     messages: [
       textMessage(`user-${runId}`, "user", text, "completed"),
       textMessage(`assistant-${runId}`, "assistant", assistantText, status),
@@ -534,7 +535,7 @@ function commandText(body) {
 }
 
 /**
- * 模拟 POST /tasks/{id}/messages 与 /messages/{messageId}/edit：只返回 JSON 回执，把本轮输出登记为
+ * 模拟 POST /tasks/{id}/messages 与 /messages/{messageId}/rerun：只返回 JSON 回执，把本轮输出登记为
  * 待推流，由随后的 attach 订阅推送；与生产「命令回执 + attach 订阅」的两段语义一致。
  */
 function handleMessage(res, body, taskId, sourceId) {
@@ -912,7 +913,7 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, states.get(taskId));
     return;
   }
-  const taskRoute = url.pathname.match(/^\/tasks\/(\d+)\/(messages|resume|messages\/([^/]+)\/edit)$/);
+  const taskRoute = url.pathname.match(/^\/tasks\/(\d+)\/(messages|resume|messages\/([^/]+)\/rerun)$/);
   if (req.method === "POST" && taskRoute) {
     const routeTaskId = Number(taskRoute[1]);
     try {

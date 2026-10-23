@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import {
-  editTaskMessage,
+  editQueuedTaskMessage,
+  rerunTaskMessage,
   resumeTask,
   sendTaskMessage,
   submitTeamDecision,
@@ -45,13 +46,25 @@ describe("task commands", () => {
     expect(JSON.parse(String(init.body))).toEqual({ ...REQUEST, delivery: "next_run" });
   });
 
-  it("编辑按消息寻址，请求体不含投递方式", async () => {
-    vi.stubGlobal("fetch", accepted());
+  it("编辑排队消息用 PATCH 按消息寻址，只带正文，不带发起配置", async () => {
+    vi.stubGlobal("fetch", accepted(true));
 
-    await editTaskMessage(7, "msg/1", REQUEST);
+    await expect(editQueuedTaskMessage(7, "msg/1", REQUEST.message)).resolves.toEqual({ state: STATE, queued: true });
 
     const [url, init] = lastCall();
-    expect(url).toMatch(/\/tasks\/7\/messages\/msg%2F1\/edit$/);
+    expect(url).toMatch(/\/tasks\/7\/queued-messages\/msg%2F1$/);
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(String(init.body))).toEqual({ message: REQUEST.message });
+  });
+
+  it("编辑重跑按消息寻址，携带发起配置但不含投递方式", async () => {
+    vi.stubGlobal("fetch", accepted());
+
+    await rerunTaskMessage(7, "msg/1", REQUEST);
+
+    const [url, init] = lastCall();
+    expect(url).toMatch(/\/tasks\/7\/messages\/msg%2F1\/rerun$/);
+    expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual(REQUEST);
   });
 

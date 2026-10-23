@@ -25,7 +25,7 @@ export function toolNamesForGroups(groupNames: Iterable<string>, groups: ToolGro
   return names;
 }
 
-/** 将既有工具名称映射为“完整选中”的工具组，供多选框初始化使用。 */
+/** 将既有工具名称映射为“完整选中”的工具组，供多选框初始化与按 Run 冻结的 banTools 回显使用。 */
 export function toolGroupsForNames(toolNames: Iterable<string>, groups: ToolGroupCatalog[]): string[] {
   const selectedTools = new Set(toolNames);
   return groups

@@ -229,7 +229,7 @@ test("重载后的历史普通文件可编辑、撤销移除并重跑，路径�
   await input.getByRole("button", { name: "移除附件 history.md" }).click();
   await input.press(undo);
   await expect(input).toContainText("history.md");
-  const editUrl = `${api}/tasks/100/messages/history-user/edit`;
+  const editUrl = `${api}/tasks/100/messages/history-user/rerun`;
   const request = page.waitForRequest(req => req.url() === editUrl && req.method() === "POST");
   await page.route(editUrl, async route => {
     await route.fulfill({ status: 409, json: { error: { code: "EDIT_REJECTED", message: "历史编辑回归拒绝", retryable: true } } });

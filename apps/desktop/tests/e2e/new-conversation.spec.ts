@@ -6,7 +6,7 @@ type FrontendLog = {
 };
 
 /** Task 级业务命令端点：发送、编辑、恢复与用户决定（attach / state 不算命令）。 */
-const TASK_COMMAND_PATH = /\/tasks\/\d+\/(?:messages(?:\/[^/]+\/edit)?|resume|decisions)$/;
+const TASK_COMMAND_PATH = /\/tasks\/\d+\/(?:messages(?:\/[^/]+\/rerun)?|resume|decisions)$/;
 function isTaskCommand(url: string): boolean {
   return TASK_COMMAND_PATH.test(new URL(url).pathname);
 }
@@ -397,7 +397,7 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
   await expect(editInput).toHaveText("second");
   await editInput.fill("second-edited");
   const rerunResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/messages/user-2/edit") && response.request().method() === "POST"
+    response.url().endsWith("/messages/user-2/rerun") && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "重跑" }).click();
   await expect((await rerunResponse).status()).toBe(200);
@@ -405,7 +405,7 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
   await expect.poll(() => assistantRequests.length).toBe(3);
 
   // 编辑按消息寻址：目标在路径里，请求体不携带 runId 或投递方式。
-  expect(assistantRequests[2]?.url).toMatch(/\/tasks\/103\/messages\/user-2\/edit$/);
+  expect(assistantRequests[2]?.url).toMatch(/\/tasks\/103\/messages\/user-2\/rerun$/);
   expect(assistantRequests[2]?.body).toMatchObject({ message: { parts: [{ type: "text", text: "second-edited" }] } });
   expect(assistantRequests[2]?.body.runId).toBeUndefined();
   expect(assistantRequests[2]?.body.delivery).toBeUndefined();
@@ -440,10 +440,10 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   const editInput = page.getByRole("textbox", { name: "编辑消息" });
   await editInput.fill("edit-failure");
   const failureRequest = page.waitForRequest((request) => (
-    request.url().endsWith("/tasks/104/messages/user-2/edit") && request.method() === "POST"
+    request.url().endsWith("/tasks/104/messages/user-2/rerun") && request.method() === "POST"
   ));
   const failureResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/tasks/104/messages/user-2/edit") && response.request().method() === "POST"
+    response.url().endsWith("/tasks/104/messages/user-2/rerun") && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "重跑" }).click();
   const failedRequestBody = (await failureRequest).postDataJSON() as {

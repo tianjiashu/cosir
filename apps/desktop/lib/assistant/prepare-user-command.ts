@@ -9,11 +9,12 @@ import { materializeSkillMentions } from "@/lib/assistant/skill-mention-token";
 /**
  * Preserve composer-only ordinary-file tokens at the HTTP boundary and attach
  * the selected local-file descriptors explicitly. The backend resolves paths
- * and persists the binding in Run.extra so a reloaded WebView does not depend
- * on the in-memory local attachment registry.
+ * and persists the binding with the message (inbox body, then context
+ * metadata), so a reloaded WebView does not depend on the in-memory local
+ * attachment registry.
  *
  * 缺失登记的 token 按命令类型分流：
- * - 编辑重跑（带 sourceId）：后端会从原 Run 的附件绑定恢复路径，token 原样保留。
+ * - 编辑重跑（带 sourceId）：后端会从目标消息的展示绑定恢复路径，token 原样保留。
  * - 新消息：后端没有可恢复的绑定，必然以「附件不可用」拒绝；这里提前抛
  *   LocalAttachmentUnavailableError（UserFacingError），请求不会发出，调用方据此提示用户重新选择附件。
  *   以前静默丢弃描述符，用户只能看到后端的英文拒绝原因。

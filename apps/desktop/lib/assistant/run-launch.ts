@@ -1,34 +1,23 @@
-import { isTerminalRunStatus, type InputDelivery, type TransportRunLaunch, type TransportState } from "@/lib/assistant/contract";
-import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
+import { useAuiState } from "@assistant-ui/react";
 
-type LaunchRequest = {
-  modelConfigId: number;
-  reasoningEffort: string | null;
-  banTools: readonly string[];
-};
+import { isTerminalRunStatus, type TransportRunLaunch, type TransportState } from "@/lib/assistant/contract";
+import { currentTransportRun, readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
+
+/** 运行期配置锁定时，模型与工具控件上的说明。 */
+export const RUN_LAUNCH_LOCKED_HINT = "运行中不能更换模型配置，停止后可修改";
 
 /**
- * 本次发送的发起配置是否与 Run 冻结的一致；与后端 `dispatch_policy.matches_run` 对齐。
- * banTools 按集合比较（后端入库时排序）。
+ * 运行期配置锁定：Task 当前 Run 未到终态（运行或挂起）时返回它冻结的发起配置，否则 null。
+ *
+ * 锁定期间 composer 显示并发送这份配置，用户想换配置须先停止；锁定只由前端保证，前端不做配置比较，
+ * 后端入队边界也不校验配置。
  */
-export function launchMatchesRun(launch: TransportRunLaunch, request: LaunchRequest): boolean {
-  const requested = new Set(request.banTools);
-  return launch.modelConfigId === request.modelConfigId
-    && launch.reasoningEffort === request.reasoningEffort
-    && launch.banTools.length === requested.size
-    && launch.banTools.every((name) => requested.has(name));
+export function activeRunLaunch(state: TransportState | null): TransportRunLaunch | null {
+  const run = state === null ? undefined : currentTransportRun(state);
+  return run === undefined || isTerminalRunStatus(run.status) ? null : run.launch;
 }
 
-/**
- * 发送的投递方式：活动 Run 期间配置不可更换（运行期配置锁定），配置不同的发送只能交给下一个
- * Run；其余沿用用户偏好。无活动 Run 时后端直接新开 Run，偏好不起作用。
- */
-export function resolveSendDelivery(
-  state: TransportState,
-  request: LaunchRequest,
-  preferred: InputDelivery,
-): InputDelivery {
-  const run = currentTransportRun(state);
-  if (!run || isTerminalRunStatus(run.status)) return preferred;
-  return launchMatchesRun(run.launch, request) ? preferred : "next_run";
+/** 在 Assistant runtime 内订阅 {@link activeRunLaunch}；launch 对象随 snapshot 替换，引用稳定。 */
+export function useActiveRunLaunch(): TransportRunLaunch | null {
+  return useAuiState((state) => activeRunLaunch(readRuntimeTransportState(state.thread.state)));
 }

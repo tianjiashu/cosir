@@ -7,10 +7,16 @@ import {
   type UserAddMessageCommand,
 } from "@/lib/assistant/converter";
 import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
-import { editTaskMessage, sendTaskMessage, type TaskMessageRequest } from "@/lib/assistant/task-commands";
+import {
+  editQueuedTaskMessage,
+  rerunTaskMessage,
+  sendTaskMessage,
+  type TaskMessageRequest,
+} from "@/lib/assistant/task-commands";
+import { isQueuedUserMessage } from "@/lib/assistant/conversation-actions";
 import { HttpError } from "@/lib/http/errors";
 import { readStoredInputDelivery } from "@/lib/input-delivery-storage";
-import { resolveSendDelivery } from "@/lib/assistant/run-launch";
+import { activeRunLaunch } from "@/lib/assistant/run-launch";
 import { readStoredSelection } from "@/lib/model-selection-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { TransportState } from "@/lib/assistant/contract";
@@ -23,6 +29,12 @@ import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attac
 import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
+
+/** 一次 composer 提交解析出的 Task 命令：发送、原地编辑排队消息或编辑重跑。 */
+type PreparedTaskCommand =
+  | { kind: "send"; request: TaskMessageRequest }
+  | { kind: "edit_queued"; messageId: string }
+  | { kind: "rerun"; messageId: string; request: TaskMessageRequest };
 
 type RuntimeTransport = ReturnType<typeof useTaskAssistantTransportRuntime>;
 const RECOVERY_FEEDBACK_DELAY_MS = 350;
@@ -234,19 +246,41 @@ export function useRuntimeTransport(
     submitMessage: async (command) => {
       errorSnapshotGenerationRef.current += 1;
       errorSnapshotAbortControllerRef.current?.abort();
+      const sourceId = getUserAddMessageSourceId(command);
+      const state = context.latestStateRef.current;
+      // 编辑按消息是否仍在排队分两个命令：排队消息原地改（配置由后端沿用），已并入的重跑出新 Run。
+      // 排队状态以后端 snapshot 投影为准；编辑期间恰被并入时后端 409，不会静默转成重跑。
+      const queuedId = sourceId !== null && isQueuedUserMessage(state, sourceId) ? sourceId : null;
+      // 运行期配置锁定：活动 Run 期间发送用它冻结的配置（composer 也只显示这份）；重跑不受锁定——
+      // 它会开新 Run，按用户当前选择。
+      const runLaunch = sourceId === null ? activeRunLaunch(state) : null;
       const selection = readStoredSelection({ kind: "task", id: context.taskId });
-      if (selection?.modelConfigId === undefined) throw new UserFacingError("请先选择模型后再发送");
-      // prepareUserCommand 已剔除 composer-only 的 file part，并为普通文件补齐带路径的描述符。
-      const prepared = prepareUserCommand(command) as UserAddMessageCommand;
-      const request: TaskMessageRequest = {
-        message: prepared.message as TaskMessageRequest["message"],
-        modelConfigId: selection.modelConfigId,
-        reasoningEffort: selection.reasoningEffort ?? null,
+      const launch = runLaunch ?? {
+        modelConfigId: selection?.modelConfigId ?? null,
+        reasoningEffort: selection?.reasoningEffort ?? null,
         banTools: [...selectedBanTools],
       };
-      const sourceId = getUserAddMessageSourceId(command);
-      const preferredDelivery = readStoredInputDelivery();
-      const delivery = resolveSendDelivery(context.latestStateRef.current, request, preferredDelivery);
+      // prepareUserCommand 已剔除 composer-only 的 file part，并为普通文件补齐带路径的描述符。
+      const prepared = prepareUserCommand(command) as UserAddMessageCommand;
+      const message = prepared.message as TaskMessageRequest["message"];
+      let taskCommand: PreparedTaskCommand;
+      if (queuedId !== null) {
+        taskCommand = { kind: "edit_queued", messageId: queuedId };
+      } else {
+        if (launch.modelConfigId === null) {
+          throw new UserFacingError(runLaunch ? "当前运行的模型配置已删除，请停止后重新选择" : "请先选择模型后再发送");
+        }
+        const request: TaskMessageRequest = {
+          message,
+          modelConfigId: launch.modelConfigId,
+          reasoningEffort: launch.reasoningEffort,
+          banTools: launch.banTools,
+        };
+        taskCommand = sourceId === null
+          ? { kind: "send", request }
+          : { kind: "rerun", messageId: sourceId, request };
+      }
+      const delivery = readStoredInputDelivery();
       // 新用户命令开始新的 Transport recovery 预算。
       recovery.resetTransportRecoveryBudget();
       context.lastTransportErrorRef.current = null;
@@ -254,16 +288,19 @@ export function useRuntimeTransport(
         traceId: context.traceId,
         data: {
           taskId: context.taskId,
-          operation: sourceId === null ? "send" : "edit",
-          delivery: sourceId === null ? delivery : null,
-          deliveryForcedByLaunch: sourceId === null && delivery !== preferredDelivery,
-          partCount: request.message.parts.length,
-          attachmentCount: request.message.attachments?.length ?? 0,
+          operation: taskCommand.kind,
+          delivery: taskCommand.kind === "send" ? delivery : null,
+          launchLocked: runLaunch !== null,
+          partCount: message.parts.length,
+          attachmentCount: message.attachments?.length ?? 0,
         },
       });
-      const accepted = sourceId === null
-        ? await sendTaskMessage(context.taskId, { ...request, delivery }, { traceId: context.traceId })
-        : await editTaskMessage(context.taskId, sourceId, request, { traceId: context.traceId });
+      const init = { traceId: context.traceId };
+      const accepted = taskCommand.kind === "edit_queued"
+        ? await editQueuedTaskMessage(context.taskId, taskCommand.messageId, message, init)
+        : taskCommand.kind === "send"
+          ? await sendTaskMessage(context.taskId, { ...taskCommand.request, delivery }, init)
+          : await rerunTaskMessage(context.taskId, taskCommand.messageId, taskCommand.request, init);
       clearRecoveryIssueTimer();
       context.setIssue(null);
       return accepted;
