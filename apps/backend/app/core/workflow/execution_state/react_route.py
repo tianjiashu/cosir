@@ -11,5 +11,4 @@ class ReactRoute(str, Enum):
     TOOLS = "tools"
     OBSERVE = "observe"
     STRUCTURED_OUTPUT = "structured_output"
-    WAIT_USER = "wait_user"
     END = "end"

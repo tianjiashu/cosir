@@ -10,9 +10,9 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     cancellation_registry,
 )
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
-from app.models.user_decision import UserDecision
 
 if TYPE_CHECKING:
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
@@ -22,10 +22,9 @@ if TYPE_CHECKING:
 
 @dataclass
 class RuntimeContext:
-    """每次驱动重新装配，不参与恢复：数据事实在 Run 进度与 Task context，等待批次只在挂起时
-    冻结进 Run 进度。
+    """每次驱动重新装配，不参与恢复：数据事实在 Run 进度与 Task context。
 
-    只承载随 Run / Task 变化的事实与对象；进程级单例（Run 状态写入、inbox、工具系统）由节点经
+    只承载随 Run / Task 变化的事实与对象；进程级单例（Run 状态写入、外部消息队列、工具系统）由节点经
     ``app.service.depends`` / ``app.config.configuration`` 直接取用，不在此转手。事件只经
     ``event_sink`` 回调交出，core 因此不依赖 Assistant Transport；节点用 ``node_helper.emit``
     发事件，sink 失败在那里降级。后一组字段由 ``ReactLikeWorkflow`` 在解析模型、读取进度后补齐。
@@ -41,6 +40,8 @@ class RuntimeContext:
     allows_tools: frozenset[str]
     task_space: TaskRuntimeSpace
     event_sink: EventSink
+    # 本次执行的内部消息队列：调度方投递外部队列消息，节点投递 Run 内通知，prepare_input 取光。
+    mailbox: RunMailbox
 
     # —— workflow 驱动期补齐 / 可变状态 ——
     model: OpenAIChatModel | None = None
@@ -48,8 +49,6 @@ class RuntimeContext:
     step_limit: int = 0
     usage_stats: ConversationRunUsageStats = field(default_factory=ConversationRunUsageStats)
     batch: ToolBatch = field(default_factory=ToolBatch)
-    # 等待恢复入口装入的已绑定决定；wait_user 节点消费一次后清空，其余入口为 None。
-    resume_decision: UserDecision | None = None
 
     def is_cancelled(self) -> bool:
         """本 Task 是否收到停止信号；只读进程内注册表，节点在多个检查点调用，不查库。"""
