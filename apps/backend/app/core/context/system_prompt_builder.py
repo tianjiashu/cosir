@@ -3,12 +3,12 @@
 系统提示词按层构建，每层一块，边界清晰（拼接顺序即下列顺序）：
 
 1. ``<runtime_context>`` 动态变量层：运行期才确定的事实（身份与角色、操作系统、工作区根目录
-   与写入边界、工具集合、用户语言），直接由 ``AgentProfile`` / ``Settings`` / 系统状态注入，
+   与写入边界、工具集合、用户语言），直接由 ``AgentRuntimeConfig`` / ``Settings`` / 系统状态注入，
    不读取任何文件。
 2. ``<agent_layer>`` Agent 系统预设层：所有 profile 都使用装配阶段载入的
-   ``AgentProfile.system_prompt`` 正文。该层是系统预设，与用户无关；本层只负责施加预算，
+   ``AgentRuntimeConfig.system_prompt`` 正文。该层是系统预设，与用户无关；本层只负责施加预算，
    不访问提示词文件或做变量替换。
-T. ``<tool_layer>`` 工具能力目录层：按 ``AgentProfile.allowed_tools`` 投影当前 Agent 可用的
+T. ``<tool_layer>`` 工具能力目录层：按 ``AgentRuntimeConfig.allowed_tools`` 投影当前 Agent 可用的
    子 Agent、Team、MCP 服务和 Skill 目录；只读取对应能力需要的本机配置，不连接 MCP 服务。
    该层只消费调用方传入的工具名集合，不自行推导工具可用性。
 3. ``<global_layer>`` 系统级全局指令层：来源唯一、路径固定为 ``<system_cosir_dir>/AGENTS.md``
@@ -34,10 +34,10 @@ import logging
 from collections.abc import Collection
 from pathlib import Path
 from platform import system
+from typing import TYPE_CHECKING
 
 from app.config.constant import Constant
 from app.config.settings import Settings
-from app.core.agents.agent_profile import AgentProfile
 from app.core.tools.schemas.tool_names import (
     TOOL_AGENT_TEAM,
     TOOL_DELEGATE_TASK,
@@ -49,6 +49,9 @@ from app.utils.file_utils import read_text_file
 from app.utils.path.system_cosir import system_instruction_file
 from app.utils.token_estimator import TokenEstimator
 from app.utils.workspace_instruction import find_workspace_instruction_file
+
+if TYPE_CHECKING:
+    from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +75,13 @@ class SystemPromptBuilder:
 
     @staticmethod
     def build(
-        agent_profile: AgentProfile,
+        agent: AgentRuntimeConfig,
         workspace_root: str,
     ) -> str:
         """构建完整系统提示词文本（五层）。
 
         参数:
-            agent_profile: 当前执行主体的 Agent 档案；其 ``allowed_tools`` 决定工具能力目录层
+            agent: 当前执行主体的 Agent 档案；其 ``allowed_tools`` 决定工具能力目录层
                 是否生成（含委派工具才生成）。
             workspace_root: 当前工作区根目录。
 
@@ -93,10 +96,10 @@ class SystemPromptBuilder:
             读取系统级全局指令文件与 workspace 指令文件（失败均容错）；按可用工具读取对应的
             Agent、Team、MCP 和 Skill 本机目录；Agent 系统提示词已在 profile 装配阶段载入。
         """
-        layer1 = SystemPromptBuilder._build_message_context(agent_profile, workspace_root)
-        layer2 = SystemPromptBuilder._build_agent_layer(agent_profile)
+        layer1 = SystemPromptBuilder._build_message_context(agent, workspace_root)
+        layer2 = SystemPromptBuilder._build_agent_layer(agent)
         tool_layer = SystemPromptBuilder._build_tool_layer(
-            workspace_root, agent_profile.allowed_tools
+            workspace_root, agent.allowed_tools
         )
         global_layer = SystemPromptBuilder._build_global_layer()
         layer3 = SystemPromptBuilder._build_workspace_layer(workspace_root)
@@ -105,14 +108,14 @@ class SystemPromptBuilder:
 
     # --- Layer 1: 动态变量层（运行期事实，不读文件） ---
     @staticmethod
-    def _build_message_context(agent_profile: AgentProfile, workspace_root: str) -> str:
+    def _build_message_context(agent: AgentRuntimeConfig, workspace_root: str) -> str:
         """构建动态变量层：身份与角色、操作系统、工作区根目录与写入边界、工具集合、用户语言。
 
         文案为英文（读者是模型，与工具描述、子 Agent 选择指南保持同一语言）。本层只承载
         当前实现确认的运行期事实。
 
         参数:
-            agent_profile: 当前执行主体的 Agent 档案。
+            agent: 当前执行主体的 Agent 档案。
             workspace_root: 当前工作区根目录。
 
         返回:
@@ -129,7 +132,7 @@ class SystemPromptBuilder:
             "<runtime_context>",
             (
                 "You are cosir, an agent running on the user's local machine "
-                f"(role: {agent_profile.role}). Your input consists of the user's messages, "
+                f"(role: {agent.role}). Your input consists of the user's messages, "
                 "your own earlier messages, and system notices."
             ),
             f"- OS: {system()}",
@@ -157,11 +160,11 @@ class SystemPromptBuilder:
 
     # --- Layer 2: Agent 系统预设层（profile.system_prompt） ---
     @staticmethod
-    def _build_agent_layer(agent_profile: AgentProfile) -> str:
+    def _build_agent_layer(agent: AgentRuntimeConfig) -> str:
         """构建 Agent 系统预设层并施加预算上限。
 
         参数:
-            agent_profile: 当前执行主体的 Agent 档案（取其 ``system_prompt``）。
+            agent: 当前执行主体的 Agent 档案（取其 ``system_prompt``）。
 
         返回:
             包裹在 ``<agent_layer>`` 标签内的系统预设文本。
@@ -172,7 +175,7 @@ class SystemPromptBuilder:
         副作用:
             提示词超预算时记录 Agent ID，不记录提示词正文。
         """
-        raw = agent_profile.system_prompt
+        raw = agent.system_prompt
         if raw is None or raw.strip() == "":
             return ""
         content = SystemPromptBuilder._enforce_budget(
@@ -181,7 +184,7 @@ class SystemPromptBuilder:
         if content != raw:
             logger.warning(
                 "agent_system_prompt_truncated",
-                extra={"data": {"agent_id": agent_profile.agent_id}},
+                extra={"data": {"agent_id": agent.agent_id}},
             )
         return "<agent_layer>\n" + content + "\n</agent_layer>"
 

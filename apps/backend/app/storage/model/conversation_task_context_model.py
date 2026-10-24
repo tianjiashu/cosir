@@ -1,6 +1,6 @@
 """Conversation Task Context 持久化模型。"""
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase
@@ -35,7 +35,7 @@ class ConversationTaskContextModel(StorageBase):
         nullable=True,
         index=True,
     )
-    message_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     metadata_json: Mapped[str] = mapped_column(Text, nullable=False)
     message_json: Mapped[str] = mapped_column(Text, nullable=False)
     include_in_context: Mapped[bool] = mapped_column(default=True, nullable=False)

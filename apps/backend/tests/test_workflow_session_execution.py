@@ -33,6 +33,10 @@ class _Services:
     def get_latest_run(self, _task_id: int) -> SimpleNamespace:
         return _RUN
 
+    def require_latest_run(self, task_id: int) -> SimpleNamespace:
+        self.get_task(task_id)
+        return _RUN
+
     def get_run(self, _run_id: int) -> SimpleNamespace:
         return _RUN
 

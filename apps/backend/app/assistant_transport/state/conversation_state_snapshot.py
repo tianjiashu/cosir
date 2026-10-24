@@ -6,7 +6,9 @@ from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
-from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
+from app.assistant_transport.state.conversation_state_message import (
+    ConversationQueuedMessage,
+)
 from app.config.constant import Constant
 
 _SNAPSHOT_KEYS = {
@@ -20,11 +22,15 @@ _RUN_KEYS = {
     "status",
     "endReason",
     "contextWindowTotal",
+    "launch",
     "messages",
     "usage",
     "error",
 }
 _MESSAGE_KEYS = {"id", "role", "parts"}
+_QUEUED_MESSAGE_KEYS = _MESSAGE_KEYS | {"delivery"}
+_DELIVERIES = {"immediate", "next_run"}
+_LAUNCH_KEYS = {"modelConfigId", "reasoningEffort", "banTools"}
 _TEXT_PART_KEYS = {"type", "text", "status"}
 _IMAGE_PART_KEYS = {"type", "image"}
 _FILE_PART_KEYS = {"type", "file", "name", "contentType"}
@@ -42,7 +48,6 @@ _TOOL_PART_KEYS = {
     "isError",
     "approvalRequestId",
     "child_task_id",
-    "child_run_id",
     "agent_role",
     "terminal_output_seq",
 }
@@ -62,7 +67,7 @@ class ConversationStateSnapshot(TypedDict):
     Run 的消息、生命周期、usage 与窗口上限均位于 ``runs`` 中；上下文占用从 Run 事实派生。
     """
 
-    queued_messages: NotRequired[list[ConversationStateMessage]]
+    queued_messages: NotRequired[list[ConversationQueuedMessage]]
     runs: list[ConversationRunSnapshot]
     current_run_id: int | None
     approvals: dict[str, object]
@@ -125,7 +130,9 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
         raise ValueError("queued_messages must be an array")
     seen_input_ids: set[str] = set()
     for message in queued:
-        _validate_message(message, seen_input_ids)
+        _validate_message(message, seen_input_ids, _QUEUED_MESSAGE_KEYS)
+        if message["delivery"] not in _DELIVERIES:
+            raise ValueError("queued message delivery is invalid")
         if message["role"] != "user":
             raise ValueError("queued_messages must contain user messages")
     seen_run_ids: set[int] = set()
@@ -155,6 +162,7 @@ def _validate_run(run: object, seen_run_ids: set[int]) -> None:
     value = run["contextWindowTotal"]
     if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
         raise ValueError("snapshot run contextWindowTotal must be a non-negative integer or null")
+    _validate_launch(run["launch"])
     if not isinstance(run["messages"], list):
         raise ValueError("snapshot run messages must be an array")
     if run["usage"] is not None:
@@ -166,8 +174,26 @@ def _validate_run(run: object, seen_run_ids: set[int]) -> None:
         _validate_message(message, seen_message_ids)
 
 
-def _validate_message(message: object, seen_message_ids: set[str]) -> None:
-    if not isinstance(message, dict) or set(message) != _MESSAGE_KEYS:
+def _validate_launch(launch: object) -> None:
+    if not isinstance(launch, dict) or set(launch) != _LAUNCH_KEYS:
+        raise ValueError("snapshot run launch is invalid")
+    model_config_id = launch["modelConfigId"]
+    if model_config_id is not None and (
+        not isinstance(model_config_id, int) or isinstance(model_config_id, bool)
+    ):
+        raise ValueError("snapshot run launch modelConfigId must be an integer or null")
+    if launch["reasoningEffort"] is not None and not isinstance(launch["reasoningEffort"], str):
+        raise ValueError("snapshot run launch reasoningEffort must be a string or null")
+    if not isinstance(launch["banTools"], list) or not all(
+        isinstance(name, str) for name in launch["banTools"]
+    ):
+        raise ValueError("snapshot run launch banTools must be an array of strings")
+
+
+def _validate_message(
+    message: object, seen_message_ids: set[str], keys: set[str] = _MESSAGE_KEYS
+) -> None:
+    if not isinstance(message, dict) or set(message) != keys:
         raise ValueError("snapshot contains an invalid message")
     message_id = message["id"]
     if not isinstance(message_id, str) or message_id == "":
@@ -278,12 +304,6 @@ def _validate_part(part: object) -> None:
             or part["child_task_id"] < 1
         ):
             raise ValueError("snapshot child_task_id must be a positive integer")
-        if part.get("child_run_id") is not None and (
-            not isinstance(part.get("child_run_id"), int)
-            or isinstance(part.get("child_run_id"), bool)
-            or part["child_run_id"] < 1
-        ):
-            raise ValueError("snapshot child_run_id must be a positive integer")
         if part.get("agent_role") is not None and (
             not isinstance(part.get("agent_role"), str) or not part["agent_role"].strip()
         ):

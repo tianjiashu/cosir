@@ -3,8 +3,8 @@
 单一职责：承载一个任务的不可变业务数据并提供序列化（to_dict）。
 不负责数据库操作（由 ``storage/crud/task_crud`` 负责）。
 
-任务不再绑定 agent：agent 维度由 turn（用户任务首 turn）与 delegation 记录（子任务）
-承载，``TaskRecord`` 仅描述 task 容器自身状态，不含 agent_id。
+Task 不绑定 Agent：Agent 身份随入队输入走、在建 Run 时固化到 Run，``TaskRecord`` 只描述
+Task 容器自身状态。
 """
 
 from dataclasses import dataclass, field
@@ -29,8 +29,6 @@ class TaskRecord:
     execution_status: str | None = None
     task_type: str = "user"
     parent_task_id: int | None = None
-    parent_run_id: int | None = None
-    delegation_id: int | None = None
     current_run_id: int | None = None
     creation_command_id: str | None = None
 
@@ -60,8 +58,8 @@ class TaskRecord:
             无。
 
         返回:
-            包含任务字段的字典；``current_run_id``、``execution_status``、
-            ``parent_task_id``、``parent_run_id`` 与 ``delegation_id`` 可能为 None。
+            包含任务字段的字典；``current_run_id``、``execution_status`` 与
+            ``parent_task_id`` 可能为 None。
 
         异常:
             无。
@@ -77,8 +75,6 @@ class TaskRecord:
             "extra": self.extra,
             "task_type": self.task_type,
             "parent_task_id": self.parent_task_id,
-            "parent_run_id": self.parent_run_id,
-            "delegation_id": self.delegation_id,
             "current_run_id": self.current_run_id,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
@@ -110,8 +106,6 @@ class TaskRecord:
             updated_at=from_text(row.updated_at),
             task_type=row.task_type,
             parent_task_id=row.parent_task_id,
-            parent_run_id=row.parent_run_id,
-            delegation_id=None,
             current_run_id=row.current_run_id,
             creation_command_id=row.creation_command_id,
         )
@@ -126,7 +120,6 @@ class TaskRecord:
             "tool_schemas": self.tool_schemas or [],
             "task_type": self.task_type,
             "parent_task_id": self.parent_task_id,
-            "parent_run_id": self.parent_run_id,
             "current_run_id": self.current_run_id,
             "creation_command_id": self.creation_command_id,
             "created_at": to_text(self.created_at),

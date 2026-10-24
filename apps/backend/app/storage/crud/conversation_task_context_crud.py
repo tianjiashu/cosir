@@ -226,7 +226,6 @@ class ConversationTaskContextCrud:
         task_id: int,
         sequence: int,
         child_task_id: int,
-        child_run_id: int,
         status: str,
         session: Session | None = None,
     ) -> None:
@@ -240,8 +239,7 @@ class ConversationTaskContextCrud:
             task_id: context 所属任务。
             sequence: 任务内 context 行的稳定序号；仅用于缩小更新目标。
             child_task_id: display_data 中的子任务标识。
-            child_run_id: display_data 中的子 Run 标识。
-            status: canonical child Run 生命周期状态。
+            status: 子任务最新 Run 的 canonical 生命周期状态。
             session: 可选外部事务。
 
         异常:
@@ -258,7 +256,6 @@ class ConversationTaskContextCrud:
                     task_id,
                     sequence,
                     child_task_id,
-                    child_run_id,
                     status,
                     session=owned_session,
                 )
@@ -272,7 +269,6 @@ class ConversationTaskContextCrud:
                 ConversationTaskContextModel.task_id == task_id,
                 ConversationTaskContextModel.sequence == sequence,
                 func.json_extract(metadata_json, "$.display_data.child_task_id") == child_task_id,
-                func.json_extract(metadata_json, "$.display_data.child_run_id") == child_run_id,
                 or_(
                     display_kind == "delegation-result",
                     and_(

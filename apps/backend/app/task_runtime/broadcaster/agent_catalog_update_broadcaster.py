@@ -36,13 +36,14 @@ def broadcast_agent_catalog_change(change: AgentCatalogChange) -> int:
 def _should_notify_space(space: TaskRuntimeSpace, change: AgentCatalogChange) -> bool:
     """判断一个 runtime space 是否能看到本次目录变更。"""
 
-    manager = space.get_context_manager()
+    # 只读仍存活的 manager：过滤判断不得顺带创建 manager（会读库，新 Task 还会落库系统提示词）。
+    manager = space.live_context_manager()
     if manager is None:
         return False
-    if manager.agent_profile.agent_type is AgentProfileType.HIDDEN:
+    if manager.agent.agent_type is AgentProfileType.HIDDEN:
         return False
-    if TOOL_DELEGATE_TASK not in manager.agent_profile.allowed_tools:
+    if TOOL_DELEGATE_TASK not in manager.agent.allowed_tools:
         return False
     if change.scope is None:
         return True
-    return normalize_scope_path(manager.workspace_root) == normalize_scope_path(change.scope)
+    return normalize_scope_path(manager.workspace.root_path) == normalize_scope_path(change.scope)

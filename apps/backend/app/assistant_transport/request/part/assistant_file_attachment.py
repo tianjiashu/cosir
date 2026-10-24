@@ -6,9 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field
 class AssistantFileAttachment(BaseModel):
     """一次用户消息中的普通文件引用。
 
-    ``path`` 在首次发送新文件时必需；编辑重发或 snapshot 恢复后的请求可以只带
-    ``id``，由后端从当前 Run 的 ``extra`` 解析已有引用。该对象只描述本机路径，
-    不上传或保存文件二进制。
+    ``path`` 在首次发送新文件时必需；编辑重发或 snapshot 恢复后的请求可以只带 ``id``，
+    由输入解析从目标消息的展示绑定恢复路径（页面重载后前端已丢失本地附件登记）。该对象只
+    描述本机路径，不上传或保存文件二进制。
     """
 
     model_config = ConfigDict(extra="forbid")

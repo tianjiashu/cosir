@@ -1,7 +1,7 @@
 """执行事件的判别式联合。
 
-只承载「把执行内核产出的事件收成一个可判别、可校验的类型」，不含事件定义本身。消费方需要
-追加自有事件时（例如 Assistant Transport 的用户输入展示事件），在自己的边界扩展联合。
+只承载「把执行内核产出的事件收成一个可判别、可校验的类型」，不含事件定义本身。它同时是
+Assistant Transport 投影接受的全部事件类型。
 """
 
 from typing import Annotated
@@ -20,10 +20,13 @@ from app.core.events.tool_call_event import (
     ToolCallStatusChangedEvent,
 )
 from app.core.events.tool_runtime_event import ToolCallRuntimeUpdateEvent
+from app.core.events.user_input_event import UserInputConsumedEvent
 
-# 按「产生顺序」排列：run 建立 → 状态 → assistant 输出 → 工具，使本清单同时充当一次 run 的时间线。
+# 按「产生顺序」排列：run 建立 → 用户输入 → 状态 → assistant 输出 → 工具，使本清单同时充当一次
+# run 的时间线。
 WorkflowEvent = Annotated[
     RunInitializedEvent
+    | UserInputConsumedEvent
     | RunStatusChangedEvent
     | RunResultUpdatedEvent
     | AssistantTextDeltaEvent

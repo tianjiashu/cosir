@@ -102,7 +102,6 @@ class Constant:
         # 客户端连接断开导致本轮对话中断。
         RUN_FAILURE_CODE_CLIENT_DISCONNECTED: str = "client_disconnected"
         # 该 Run 正在等待用户决定，却被不带决定的续跑拉去跑模型（会静默丢掉待决请求）。
-        RUN_FAILURE_CODE_WAITING_FOR_INPUT: str = "waiting_for_user_input"
         # 未知 code 的统一兜底用户文案。
         DEFAULT_MESSAGE: str = "对话运行失败，请重试或查看日志"
 
@@ -201,6 +200,9 @@ class Constant:
         LOCAL_FILE_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-file:([^\]]+)\]\]")
         # 本地图片占位 token：``[[cosir-image:<id>]]``。
         LOCAL_IMAGE_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-image:([^\]]+)\]\]")
+        # 一次遍历同时识别两类 token：``[[cosir-(file|image):<id>]]``。
+        # 正文替换必须单趟完成——分两趟时第一趟插入的附件路径会被第二趟重新解析。
+        LOCAL_INPUT_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-(file|image):([^\]]+)\]\]")
         # 本地文件 ID 格式：1~128 位安全字符。
         LOCAL_FILE_ID: re.Pattern[str] = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
@@ -298,8 +300,6 @@ class Constant:
         IMAGE_LOCATOR: re.Pattern[str] = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
         # 本地文件资源定位符：``cosir-local-file:<id>``。
         FILE_LOCATOR: re.Pattern[str] = re.compile(r"^cosir-local-file:[A-Za-z0-9._-]{1,128}$")
-        # 用户输入中 cosir file/image token 统一匹配：``[[cosir-(file|image):<id>]]``。
-        INPUT_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-(file|image):([^\]]+)\]\]")
         # 被 HTML 注释包裹的隐藏 cosir token（保留编辑器顺序的同时从渲染文本隐藏）。
         HIDDEN_LOCAL_FILE_TOKEN: re.Pattern[str] = re.compile(
             r"<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->"
@@ -366,7 +366,7 @@ class Constant:
             "delegate_task",
             "child_agent_status",
             "child_agent_send",
-            "child_agent_wait",
+            "wait_messages",
             "agent_team",
             "propose_agent_team_configuration",
             "propose_agent_configuration",

@@ -43,5 +43,7 @@ class AgentTeamRunResponse(BaseModel):
     team_id: str
     goal: str
     status: str
+    # 终态原因；卡片据此区分用户驳回（``user_rejected``）与其它取消。
+    end_reason: str | None = None
     nodes: list[AgentTeamNodeResponse]
     current_node_id: str | None

@@ -75,8 +75,8 @@ def broadcast_system_prompt_delta(delta: SystemPromptDelta) -> int:
         ValueError: ``delta`` 的 diff 为空白时由 ``to_notice`` 抛出。
 
     副作用:
-        读取当前 registry 的 space 快照，并向符合条件的 space 队列投递一条临时通知；不创建
-        新 space，不写数据库，不修改 Registry，不阻塞正在进行的模型请求。
+        读取当前 registry 的 space 快照，为符合条件的 Task 写入一条持久化通知（外部消息队列）；
+        不创建新 space，不启动 Run，不修改 Registry，不阻塞正在进行的模型请求。
     """
 
     return broadcast_runtime_notice(
@@ -95,16 +95,18 @@ def broadcast_system_prompt_delta(delta: SystemPromptDelta) -> int:
 def _should_notify_space(space: TaskRuntimeSpace, delta: SystemPromptDelta) -> bool:
     """按已装配的 context manager 判断一个 space 是否命中通知作用域。"""
 
-    manager = space.get_context_manager()
+    # 只读仍存活的 manager：过滤判断不得顺带创建 manager（会读库，新 Task 还会落库系统提示词）。
+    manager = space.live_context_manager()
     if manager is None:
         return False
     if (
         delta.source is SystemPromptDeltaSource.MAIN_AGENT_PROMPT
-        and manager.agent_profile.agent_type is not AgentProfileType.MAIN
+        and manager.agent.agent_type is not AgentProfileType.MAIN
     ):
         return False
     if delta.source is SystemPromptDeltaSource.WORKSPACE_INSTRUCTIONS:
         if delta.scope is None:
             return False
-        return normalize_scope_path(manager.workspace_root) == normalize_scope_path(delta.scope)
+        workspace_root = normalize_scope_path(manager.workspace.root_path)
+        return workspace_root == normalize_scope_path(delta.scope)
     return True

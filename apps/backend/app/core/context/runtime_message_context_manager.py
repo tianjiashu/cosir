@@ -1,4 +1,4 @@
-"""Task context 的唯一运行时协调入口；SDK 负责模型聚合，本层负责持久化与协议闭合。"""
+"""Task context 的唯一运行时协调入口；SDK 负责模型聚合，本层负责持久化、序号与协议闭合。"""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ from openai.lib.streaming.chat import ParsedChatCompletionSnapshot
 from openai.types.chat import (
     ChatCompletionMessageParam,
 )
+from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
-from app.core.agents.agent_profile import AgentProfile
+from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.context import SystemPromptBuilder
 from app.core.context.context_entry import ContextEntry
 from app.core.context.tool_call_closure import (
@@ -44,10 +45,16 @@ from app.service.conversation_run.conversation_task_context_service import (
 
 @dataclass
 class RuntimeMessageContextManager:
-    """提供一个 task 的 Agent context 读写边界。"""
+    """一个 Task 的 Agent context 读写边界与内存消息列表 owner。
+
+    内存消息列表（``_entries``）是模型请求的唯一来源，``load_message`` 只读它；每次
+    :meth:`begin_run` 从数据库按 ``include_in_context`` 重建一次，编辑重跑、fork 等改库用例因此
+    不必通知或卸载本对象。列表与序号只经 :meth:`_track` 推进，且只接纳已写库的行。
+    """
 
     current_task_id: int
-    agent_profile: AgentProfile
+    # 只用其身份与执行资源（角色、提示词、工具名）构建 Task 首个系统提示词，及供配置广播过滤。
+    agent: AgentRuntimeConfig
     context_service: ConversationTaskContextService
     # 工作区记录：系统提示词取 ``root_path``，模型请求的附件解析取 ``id``。必填——缺工作区
     # 会生成一份没有工作区事实的系统提示词并被持久化成 Task 固定前缀，属于不可逆的静默降级。
@@ -63,7 +70,7 @@ class RuntimeMessageContextManager:
     _draft_response: ContextEntry | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
-        """恢复 Task 固定系统提示词并加载其余 context working copy。
+        """恢复 Task 固定系统提示词；其余消息由 :meth:`begin_run` 加载。
 
         新 Task 使用当前配置构建并持久化完整 system prompt；已有 Task 始终恢复首次持久化的
         内容，因此配置变化不会改写历史 Task 的模型消息前缀。
@@ -72,23 +79,19 @@ class RuntimeMessageContextManager:
         self._system_entry = service.get_system_prompt(self.current_task_id)
         if self._system_entry is None:
             system_prompt_text = SystemPromptBuilder.build(
-                self.agent_profile, self.workspace.root_path
+                self.agent, self.workspace.root_path
             )
             self._system_entry = service.create_system_prompt(
                 self.current_task_id,
                 {"role": "system", "content": system_prompt_text},
             )
-        entries = service.entries_in_context(self.current_task_id)
-        self._entries = [
-            entry for entry in entries if entry.sequence != TASK_SYSTEM_PROMPT_SEQUENCE
-        ]
-        self._message_sequence = self.context_service.max_sequence(self.current_task_id) + 1
 
-    def begin_run(
-        self,
-        run: ConversationRunRecord,
-    ) -> None:
-        """绑定当前 Run；历史上下文已在构造时加载。编辑用例负责事务截断并卸载旧 working copy。"""
+    def begin_run(self, run: ConversationRunRecord) -> None:
+        """绑定当前 Run，并从数据库重建内存消息列表与序号。
+
+        每次都重建而不是沿用上一个 Run 的内存列表：编辑重跑会把旧行移出上下文，fork、删除
+        历史 Run 也会改库，无条件重建让这些用例无需卸载或刷新本对象。代价是每个 Run 多一次读库。
+        """
 
         if run.task_id != self.current_task_id:
             raise ValueError(f"run {run.id} belongs to task {run.task_id}")
@@ -96,6 +99,21 @@ class RuntimeMessageContextManager:
         self.current_run_id = run.id
         # 草稿行属于上一个 Run 的调用栈，绑定新 Run 时不得沿用到本次调用。
         self._draft_response = None
+        entries = self.context_service.entries_in_context(self.current_task_id)
+        self._entries = [
+            entry for entry in entries if entry.sequence != TASK_SYSTEM_PROMPT_SEQUENCE
+        ]
+        self._message_sequence = self.context_service.max_sequence(self.current_task_id) + 1
+
+    def _track(self, entry: ContextEntry, *, in_context: bool) -> None:
+        """内存消息列表与序号的唯一推进入口；调用方保证该行已落库。
+
+        序号按已落库行推进（流式草稿落库即占号，提交时不再推进）；只有进入模型上下文的行才加入
+        内存列表。
+        """
+        self._message_sequence = max(self._message_sequence, entry.sequence + 1)
+        if in_context:
+            self._entries.append(entry)
 
     def add_message(
         self,
@@ -104,9 +122,16 @@ class RuntimeMessageContextManager:
         include_in_context: bool = True,
         metadata: MessageMetadata | None = None,
         project_to_transport: bool = True,
-        run_id: int | None = None,
+        message_id: int | None = None,
+        session: Session | None = None,
     ) -> Literal["appended", "replaced"]:
         """写入完整 SDK 消息；工具结果必须属于当前最后一批调用的同一 Run。
+
+        外部消息队列投递来的用户输入与通知也经本方法写入，不另设接纳入口。
+        ``message_id`` 只有用户输入需要传：沿用队列行身份，排队与已消费阶段前端消息 id 不变；
+        其余消息没有身份。``session`` 让追加加入调用方事务（``prepare_input`` 把队列确认与写入放在
+        同一事务）；内存列表随即推进、不等提交——事务失败会经 Run 失败边界结束本次驱动，下个 Run
+        的 :meth:`begin_run` 从库重建，不会留下错位的 working copy。
 
         既有结果（含等待/中断占位）原地覆盖，保留消息身份和序号；缺少调用依据的新结果
         在写库前报 ContextProtocolError，不伪造调用或丢弃执行结果。流式预览的取消占位
@@ -114,7 +139,7 @@ class RuntimeMessageContextManager:
         替换时提交完整 metadata，旧等待请求和错误展示不会被隐式保留。
         """
 
-        target_run_id = self.current_run_id if run_id is None else run_id
+        target_run_id = self.current_run_id
         # 类型窄化不进入推导式作用域，故先固化标识；后续日志与覆盖分支都复用它。
         tool_call_id = message.get("tool_call_id") if message["role"] == "tool" else ""
         existing: ContextEntry | None = None
@@ -172,7 +197,13 @@ class RuntimeMessageContextManager:
             )
             return "replaced"
         self._append_message(
-            message, target_run_id, include_in_context, resolved_metadata, project_to_transport
+            message,
+            target_run_id,
+            include_in_context,
+            resolved_metadata,
+            project_to_transport,
+            message_id=message_id,
+            session=session,
         )
         return "appended"
 
@@ -183,8 +214,11 @@ class RuntimeMessageContextManager:
         include_in_context: bool,
         metadata: MessageMetadata,
         project_to_transport: bool = True,
+        *,
+        message_id: int | None = None,
+        session: Session | None = None,
     ) -> ContextEntry:
-        """调用方已验证结果归属；落库成功后才推进 working copy 和序号。"""
+        """调用方已验证结果归属；写库成功后才推进内存列表和序号。"""
         entry = self.context_service.append(
             self.current_task_id,
             run_id,
@@ -193,10 +227,10 @@ class RuntimeMessageContextManager:
             include_in_context,
             metadata,
             project_to_transport=project_to_transport,
+            session=session,
+            message_id=message_id,
         )
-        self._message_sequence += 1
-        if include_in_context:
-            self._entries.append(entry)
+        self._track(entry, in_context=include_in_context)
         return entry
 
     def save_model_response(
@@ -249,23 +283,13 @@ class RuntimeMessageContextManager:
         draft.metadata = metadata
         if include_in_context:
             # 提交进模型上下文即本次调用结束：清空草稿身份，下一次调用新起一行。
-            self._entries.append(draft)
+            self._track(draft, in_context=True)
             self._draft_response = None
         return draft
 
     def abandon_model_response(self) -> None:
         """结束未准入的响应草稿；保留数据库展示行，下一次模型请求使用新消息身份。"""
         self._draft_response = None
-
-    @property
-    def next_sequence(self) -> int:
-        """供 inbox 转移事务分配连续序号；调用方必须持有 Task 操作闸门。"""
-        return self._message_sequence
-
-    def accept_committed_inputs(self, entries: list[ContextEntry]) -> None:
-        """接纳已提交的 inbox 转移结果，不重复落库或发送 Transport 事件。"""
-        self._entries.extend(entries)
-        self._message_sequence += len(entries)
 
     def _log_protocol_error(self, error: ContextProtocolError) -> None:
         """记录可定位的上下文完整性错误，不泄露工具正文到 UI 错误通道。"""
@@ -340,7 +364,7 @@ class RuntimeMessageContextManager:
             )
 
     def load_message(self) -> list[ChatCompletionMessageParam]:
-        """闭合工具协议后返回**模型请求副本**：附件定位符已解析为 data URL。
+        """闭合工具协议后，由内存消息列表返回**模型请求副本**：附件定位符已解析为 data URL。
 
         canonical context 只保存 ``cosir-attachment://`` 定位符，解析结果（base64）只存在于返回
         副本，不会回写 working copy。返回副本由 ``resolve_messages_for_model`` 统一深拷贝。

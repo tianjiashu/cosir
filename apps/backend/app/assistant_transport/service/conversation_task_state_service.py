@@ -9,11 +9,11 @@ from contextlib import suppress
 from threading import RLock
 from typing import Any, ClassVar, cast
 
-from app.assistant_transport.event import ConversationEvent
+from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
+from app.assistant_transport.state.conversation_state_message import ConversationQueuedMessage
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
 )
@@ -24,8 +24,9 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
-from app.core.context.context_entry import ContextEntry
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.core.events import WorkflowEvent
+from app.models.message_metadata import ToolMessageMetadata
+from app.models.task_message import UserInputBody
 from app.service.terminal.terminal_session_service import TerminalSessionService
 from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -83,34 +84,6 @@ class ConversationTaskStateService:
         self._context_source = depends.get_conversation_task_context_crud()
         self._terminal_status_source = depends.get_terminal_session_service()
 
-    def project_consumed_inputs(
-        self, task_id: int, run_id: int, entries: list[ContextEntry]
-    ) -> None:
-        """inbox 提交后投影已消费消息；wire parts 的构造留在 Transport 边界。"""
-        from app.assistant_transport.event import UserInputAppendedEvent, build_user_input_parts
-        from app.service.depends import get_conversation_event_projector
-
-        projector = get_conversation_event_projector()
-        for entry in entries:
-            if (
-                not isinstance(entry.metadata, UserMessageMetadata)
-                or entry.metadata.presentation is None
-            ):
-                raise ValueError("已消费用户输入缺少展示绑定")
-            presentation = entry.metadata.presentation
-            projector.process(
-                UserInputAppendedEvent(
-                    task_id=task_id,
-                    run_id=run_id,
-                    message_id=entry.message_id,
-                    parts=build_user_input_parts(
-                        presentation.display_text,
-                        presentation.image_paths,
-                        presentation.attachments,
-                    ),
-                )
-            )
-
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
         """返回已校验的 task 级工作副本，首次访问时懒重建。
 
@@ -155,16 +128,19 @@ class ConversationTaskStateService:
             return copy.deepcopy(state)
 
     @staticmethod
-    def _queued_messages(task_id: int) -> list[ConversationStateMessage]:
-        from app.service.conversation_run.task_input_service import TaskInputService, user_message
+    def _queued_messages(task_id: int) -> list[ConversationQueuedMessage]:
+        from app.service.depends import get_task_message_queue
 
+        # 投影只看消息属性；目前需投影的只有用户输入，其它 kind 有可投影形态时在这里加渲染。
         return [
-            ConversationTaskStateRebuilder.build_user_message(
-                item.message_id,
-                user_message(item.payload.message),
-                UserMessageMetadata(presentation=item.payload.message.presentation()),
+            ConversationQueuedMessage(
+                **ConversationTaskStateRebuilder.build_user_message(
+                    str(item.id), item.body.message.presentation()
+                ),
+                delivery=item.delivery,
             )
-            for item in TaskInputService().pending(task_id)
+            for item in get_task_message_queue().pending(task_id)
+            if item.project_to_transport and isinstance(item.body, UserInputBody)
         ]
 
     def rebuild_state(self, task_id: int) -> ConversationStateSnapshot:
@@ -200,7 +176,7 @@ class ConversationTaskStateService:
             task_runtime_spaces.get_or_create(task_id).unload_snapshot()
             return self.get_state(task_id)
 
-    def apply_planned(self, event: ConversationEvent) -> TransportFrame:
+    def apply_planned(self, event: WorkflowEvent) -> TransportFrame:
         """将实时 projector 计划应用到进程本地状态并通知 subscriber。
 
         若不存在工作副本，canonical 冷读边界提供初始状态。planner 与变更在同一把锁下执行
@@ -211,7 +187,7 @@ class ConversationTaskStateService:
             self._ensure_not_deleted(task_id)
             space = task_runtime_spaces.get_or_create(task_id)
             state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            mutations = list(event.plan(state))
+            mutations = list(plan_event(event, state))
             for mutation in mutations:
                 _apply_mutation(state, mutation)
             # A child can finish before the parent tool 消息 is persisted. Reconcile any
@@ -409,32 +385,26 @@ class ConversationTaskStateService:
     def refresh_parent_delegation(
         self,
         child_task_id: int,
-        child_run_id: int,
+        run_id: int,
         status: str,
     ) -> TransportFrame | None:
-        """把 child Run 的 canonical 状态投影到已物化的父任务委派卡片。
+        """把子 Task 最新 Run 的 canonical 状态投影到已物化的父任务委派卡片。
 
         子 Run 的状态事件先更新子任务自身 snapshot，再调用此方法同步父任务中对应的
-        动态 child display。该方法只处理已经存在且 locator 精确匹配的
-        ``delegation-result`` 与 ``child-agent-result(operation=send)``；状态查询和等待
-        结果是历史快照，不会被异步改写。父任务未物化时仍会先持久化 metadata，后续冷读
-        可以恢复正确状态。
+        动态 child display。卡片按 ``child_task_id`` 定位、展示子 Task 当前（最新 Run）的
+        状态，不跟踪某一条 Run：同一子任务的委派卡片与追加消息卡片一起收敛。``run_id`` 是
+        事件所属 Run，不是子 Task 最新 Run 时（旧 Run 的迟到事件）忽略。只处理已经存在的
+        ``delegation-result`` 与 ``child-agent-result(operation=send)``；状态查询和等待结果
+        是历史快照，不会被异步改写。父任务未物化时仍会先持久化 metadata，后续冷读可以恢复。
         """
 
         with self._lock:
             child_task = self._task_source.get(child_task_id)
             parent_task_id = child_task.parent_task_id
-            if parent_task_id is None:
+            if parent_task_id is None or child_task.current_run_id != run_id:
                 return None
-            child_run = next(
-                (
-                    run
-                    for run in self._run_source.list_by_task(child_task_id)
-                    if run.id == child_run_id
-                ),
-                None,
-            )
-            if child_run is None or child_run.status not in _CHILD_RUN_STATUSES:
+            child_run = self._run_source.get(run_id)
+            if child_run.status not in _CHILD_RUN_STATUSES:
                 return None
             if child_run.status != status:
                 log.debug(
@@ -443,19 +413,14 @@ class ConversationTaskStateService:
                         "msg": "忽略与 canonical child Run 状态不一致的委派状态事件",
                         "data": {
                             "child_task_id": child_task_id,
-                            "child_run_id": child_run_id,
+                            "run_id": run_id,
                             "event_status": status,
                             "canonical_status": child_run.status,
                         },
                     },
                 )
             status = child_run.status
-            self._persist_child_display_status(
-                parent_task_id,
-                child_task_id,
-                child_run_id,
-                status,
-            )
+            self._persist_child_display_status(parent_task_id, child_task_id, status)
             parent_space = task_runtime_spaces.get(parent_task_id)
             if parent_space is None:
                 return None
@@ -470,11 +435,7 @@ class ConversationTaskStateService:
                         if not isinstance(part, dict) or part.get("type") != "tool-call":
                             continue
                         display = part.get("display_data")
-                        if not _matches_dynamic_child_display(
-                            display,
-                            child_task_id,
-                            child_run_id,
-                        ):
+                        if not _matches_dynamic_child_display(display, child_task_id):
                             continue
                         updated_display = dict(display)
                         updated_display["status"] = status
@@ -635,6 +596,9 @@ class ConversationTaskStateService:
         try:
             rows = self._context_source.get(target_task_id, include_in_context=False)
             for row in rows:
+                # 只为前端卡片保持最新状态；已移出投影的行（编辑替换掉的历史）保持冻结。
+                if not row.project_to_transport:
+                    continue
                 if not isinstance(row.metadata, ToolMessageMetadata):
                     continue
                 display = row.metadata.display_data
@@ -703,40 +667,35 @@ class ConversationTaskStateService:
         if persist and parent_task_id is None:
             raise ValueError("parent_task_id is required when persisting child status")
 
-        locators: set[tuple[int, int]] = set()
+        child_task_ids: set[int] = set()
         for run in state["runs"]:
             for message in run["messages"]:
                 for part in message["parts"]:
                     if not isinstance(part, dict):
                         continue
                     display = part.get("display_data")
-                    child_task_id = (
-                        display.get("child_task_id") if isinstance(display, dict) else None
-                    )
-                    child_run_id = (
-                        display.get("child_run_id") if isinstance(display, dict) else None
-                    )
                     if not _is_dynamic_child_display(display):
                         continue
-                    if not _is_positive_int(child_task_id) or not _is_positive_int(child_run_id):
-                        continue
-                    locators.add((child_task_id, child_run_id))
+                    child_task_id = cast(dict[str, object], display).get("child_task_id")
+                    if _is_positive_int(child_task_id):
+                        child_task_ids.add(cast(int, child_task_id))
 
-        statuses_by_locator: dict[tuple[int, int], str] = {}
-        for child_task_id in {task_id for task_id, _ in locators}:
-            child_runs = self._run_source.list_by_task(child_task_id)
-            for child_run in child_runs:
-                locator = (child_task_id, child_run.id)
-                if locator not in locators:
-                    continue
-                if (
-                    child_run.task_id != child_task_id
-                    or child_run.status not in _CHILD_RUN_STATUSES
-                ):
-                    continue
-                statuses_by_locator[locator] = child_run.status
+        # 卡片展示子 Task 最新 Run 的状态：按 Task 的当前 Run 指针取，不跟踪委派时的那条 Run。
+        statuses_by_task: dict[int, str] = {}
+        for child_task_id in child_task_ids:
+            try:
+                current_run_id = self._task_source.get(child_task_id).current_run_id
+            except KeyError:
+                # 子任务可被单独删除，父任务的卡片保留最后一次投影的状态。
+                continue
+            if current_run_id is None:
+                continue
+            child_run = self._run_source.get(current_run_id)
+            if child_run.status in _CHILD_RUN_STATUSES:
+                statuses_by_task[child_task_id] = child_run.status
 
         mutations: list[ConversationStateMutation] = []
+        changed: dict[int, str] = {}
         for run_index, run in enumerate(state["runs"]):
             for message_index, message in enumerate(run["messages"]):
                 for part_index, part in enumerate(message["parts"]):
@@ -746,10 +705,9 @@ class ConversationTaskStateService:
                     if not isinstance(display, dict) or not _is_dynamic_child_display(display):
                         continue
                     child_task_id = display.get("child_task_id")
-                    child_run_id = display.get("child_run_id")
-                    if not _is_positive_int(child_task_id) or not _is_positive_int(child_run_id):
+                    if not _is_positive_int(child_task_id):
                         continue
-                    status = statuses_by_locator.get((child_task_id, child_run_id))
+                    status = statuses_by_task.get(child_task_id)
                     if status is None or display.get("status") == status:
                         continue
                     updated_display = dict(display)
@@ -769,44 +727,38 @@ class ConversationTaskStateService:
                     )
                     _apply_mutation(state, mutation)
                     mutations.append(mutation)
-                    if persist and parent_task_id is not None:
-                        self._persist_child_display_status(
-                            parent_task_id,
-                            child_task_id,
-                            child_run_id,
-                            status,
-                        )
+                    changed[child_task_id] = status
+        if persist and parent_task_id is not None:
+            # 持久化按子 Task 一次写完它的全部卡片，同一子任务的多张卡片不重复写。
+            for child_task_id, status in changed.items():
+                self._persist_child_display_status(parent_task_id, child_task_id, status)
         return mutations
 
     def _persist_child_display_status(
         self,
         parent_task_id: int,
         child_task_id: int,
-        child_run_id: int,
         status: str,
     ) -> None:
-        """持久化父任务中精确 locator 命中的动态 child display 状态。"""
+        """持久化父任务中指向该子 Task 的动态 child display 状态。"""
 
         if status not in _CHILD_RUN_STATUSES:
             return
         try:
             rows = self._context_source.get(parent_task_id, include_in_context=False)
             for row in rows:
+                # 只为前端卡片保持最新状态；已移出投影的行（编辑替换掉的历史）保持冻结。
+                if not row.project_to_transport:
+                    continue
                 if not isinstance(row.metadata, ToolMessageMetadata):
                     continue
                 display = row.metadata.display_data
                 if not isinstance(display, dict) or not _matches_dynamic_child_display(
-                    display,
-                    child_task_id,
-                    child_run_id,
+                    display, child_task_id
                 ):
                     continue
                 self._context_source.update_child_display_status(
-                    parent_task_id,
-                    row.sequence,
-                    child_task_id,
-                    child_run_id,
-                    status,
+                    parent_task_id, row.sequence, child_task_id, status
                 )
         except Exception:
             log.exception(
@@ -816,7 +768,6 @@ class ConversationTaskStateService:
                     "data": {
                         "parent_task_id": parent_task_id,
                         "child_task_id": child_task_id,
-                        "child_run_id": child_run_id,
                         "status": status,
                     },
                 },
@@ -892,7 +843,7 @@ def _is_positive_int(value: object) -> bool:
 
 
 def _is_dynamic_child_display(value: object) -> bool:
-    """Return whether a display payload represents a live child Run reference."""
+    """Return whether a display payload represents a live child Task reference."""
 
     if not isinstance(value, dict):
         return False
@@ -901,16 +852,12 @@ def _is_dynamic_child_display(value: object) -> bool:
     return value.get("kind") == "child-agent-result" and value.get("operation") == "send"
 
 
-def _matches_dynamic_child_display(
-    value: object,
-    child_task_id: int,
-    child_run_id: int,
-) -> bool:
-    """Match a live child display by both task and Run locator."""
+def _matches_dynamic_child_display(value: object, child_task_id: int) -> bool:
+    """Match a live child display by its child Task locator."""
 
     if not _is_dynamic_child_display(value) or not isinstance(value, dict):
         return False
-    return value.get("child_task_id") == child_task_id and value.get("child_run_id") == child_run_id
+    return value.get("child_task_id") == child_task_id
 
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:

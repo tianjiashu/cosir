@@ -28,7 +28,7 @@ TOOL_WEB_EXTRACT: Final[str] = "web_extract"
 TOOL_DELEGATE_TASK: Final[str] = "delegate_task"
 TOOL_CHILD_AGENT_SEND: Final[str] = "child_agent_send"
 TOOL_CHILD_AGENT_STATUS: Final[str] = "child_agent_status"
-TOOL_CHILD_AGENT_WAIT: Final[str] = "child_agent_wait"
+TOOL_WAIT_MESSAGES: Final[str] = "wait_messages"
 TOOL_PROPOSE_AGENT_CONFIGURATION: Final[str] = "propose_agent_configuration"
 TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION: Final[str] = "propose_agent_team_configuration"
 TOOL_AGENT_TEAM: Final[str] = "agent_team"
@@ -57,7 +57,7 @@ ToolName: TypeAlias = Literal[
     "delegate_task",
     "child_agent_send",
     "child_agent_status",
-    "child_agent_wait",
+    "wait_messages",
     "propose_agent_configuration",
     "propose_agent_team_configuration",
     "agent_team",
@@ -87,7 +87,7 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_DELEGATE_TASK,
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_STATUS,
-    TOOL_CHILD_AGENT_WAIT,
+    TOOL_WAIT_MESSAGES,
     TOOL_PROPOSE_AGENT_CONFIGURATION,
     TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
     TOOL_AGENT_TEAM,

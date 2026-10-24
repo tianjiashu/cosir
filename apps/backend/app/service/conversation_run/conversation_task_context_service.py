@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-from uuid import uuid4
 
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionSystemMessageParam
 from sqlalchemy.orm import Session
@@ -75,12 +74,12 @@ class ConversationTaskContextService:
         project_to_transport: bool = True,
         session: Session | None = None,
         *,
-        message_id: str | None = None,
+        message_id: int | None = None,
     ) -> ContextEntry:
         """追加 SDK 正文并返回带稳定身份的 working-copy entry。
 
         有外部 Session 时加入用例事务，不自行提交；否则完成单次存储事务。
-        用户消息沿用 inbox 行 ID 转成的展示身份，其余消息在此分配身份。调用方分配 sequence；
+        用户消息沿用 inbox 行 id 作为身份，其余消息没有身份（``None``）。调用方分配 sequence；
         本层不做工具去重，已有结果的覆盖由 RuntimeMessageContextManager 决定。
         数据库写入失败向上传播。
         """
@@ -89,7 +88,7 @@ class ConversationTaskContextService:
             task_id=task_id,
             run_id=run_id,
             message=message,
-            message_id=message_id or str(uuid4()),
+            message_id=message_id,
             metadata=metadata if metadata is not None else empty_message_metadata(message["role"]),
             include_in_context=include_in_context,
             sequence=seq,
@@ -321,26 +320,6 @@ class ConversationTaskContextService:
             # 外部事务通常关闭 autoflush；编辑用例随后会在同一 session 中重新写入
             # canonical user 消息，先 flush 才能让幂等读取看见删除事实。
             session.flush()
-
-    def invalidate_waiting_calls(self, task_id: int, run_id: int, session: Session) -> None:
-        """等待取消/启动恢复共用：取消占位并移除可点击请求，已完成结果保持原样。"""
-        from dataclasses import replace
-
-        for record in self._crud.get(task_id, include_in_context=False, session=session):
-            if record.run_id != run_id or record.message["role"] != "tool":
-                continue
-            metadata = record.metadata
-            if not isinstance(metadata, ToolMessageMetadata) or metadata.status not in {
-                "pending",
-                "running",
-            }:
-                continue
-            replacement = replace(
-                record,
-                message=build_placeholder_tool_message(record.message["tool_call_id"], "unknown"),
-                metadata=ToolMessageMetadata(status="cancelled", display_data=None, error=None),
-            )
-            self._crud.replace_message(task_id, record.sequence, replacement, session=session)
 
     def close_unclosed_tool_calls_for_run(
         self, task_id: int, run_id: int, session: Session | None = None

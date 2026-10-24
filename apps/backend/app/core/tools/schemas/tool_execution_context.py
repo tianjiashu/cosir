@@ -7,8 +7,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from app.models.user_decision import UserDecision
-
 if TYPE_CHECKING:
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.events import EventSink
@@ -30,7 +28,7 @@ class ToolExecutionContext:
         event_loop: 本次 Run 的事件循环。工具在工作线程执行，线程内取不到运行中循环，
             需要回到循环上调度协程（启动子 Run、投递实时输出）时只能用它。
         event_sink: 本次 Run 的执行事件回调；进程工具的实时输出经它投递。
-        tool_call_id / user_decision: 单次调用身份，构造时取自该调用；每个调用各一份上下文，
+        tool_call_id: 单次调用身份，构造时取自该调用；每个调用各一份上下文，
             同批调用不共享。
     """
 
@@ -43,9 +41,8 @@ class ToolExecutionContext:
     event_loop: asyncio.AbstractEventLoop | None = None
     event_sink: EventSink | None = None
     tool_call_id: str = ""
-    user_decision: UserDecision | None = None
 
     def for_process_execution(self) -> ToolExecutionContext:
-        """返回可安全传入隔离子进程的副本：清空父进程专属的 Run 级对象，保留调用身份与决定。"""
+        """返回可安全传入隔离子进程的副本：清空父进程专属的 Run 级对象，保留调用身份。"""
 
         return replace(self, agent=None, event_loop=None, event_sink=None)

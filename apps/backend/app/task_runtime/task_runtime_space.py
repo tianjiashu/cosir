@@ -35,19 +35,16 @@ import weakref
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
-from queue import Empty, SimpleQueue
 from typing import TYPE_CHECKING, TypeVar, cast
 
 from openai.types.shared_params import FunctionDefinition
 from pydantic import TypeAdapter
 
-from app.models.runtime_notice import RuntimeNotice
 from app.service.depends import get_task_service, get_workspace_service
-from app.utils.host_platform import host_platform_name
 
 if TYPE_CHECKING:
     from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
-    from app.core.agents.agent_profile import AgentProfile
+    from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
     from app.models import TaskRecord, WorkspaceRecord
 
@@ -74,10 +71,8 @@ class TaskRuntimeSpace:
 
     并发边界见模块 docstring：``lock`` 是唯一 Task 操作闸门；snapshot working copy **不**持有
     内部锁（由 ``ConversationTaskStateService._lock`` 统一串行化）；``_context_manager`` 槽位
-    由 ``_context_guard`` 保护；``_notice_queue`` 延迟提示队列（元素恒为 ``RuntimeNotice``，见
-    ``defer_runtime_notice``）由标准库 ``SimpleQueue`` 提供
-    并发安全（内部已加锁，本类不再额外加锁），跨同 task 内 run 共享、run 间串行由
-    Task 操作闸门保证。
+    由 ``_context_guard`` 保护。系统通知不在这里排队：持久化通知归外部消息队列，Run 内通知归本次
+    执行的 ``RunMailbox``。
     """
 
     task_id: int
@@ -90,12 +85,7 @@ class TaskRuntimeSpace:
     # 该字段刻意不配内部锁：所有访问经 ``ConversationTaskStateService._lock`` 串行化。
     _snapshot: ConversationStateSnapshot | None = field(default=None, init=False)
     _context_guard: threading.Lock = field(init=False)
-    # 延迟提示队列（FIFO，元素恒为 RuntimeNotice）：既承载原有修复类提示，也承载系统提示词增量
-    # 通知。队列由标准库 SimpleQueue 提供并发安全；通知消费后由模型节点统一写入 Task context。
-    _notice_queue: SimpleQueue[RuntimeNotice] = field(
-        default_factory=SimpleQueue, init=False, repr=False, compare=False
-    )
-    agent_profile: AgentProfile | None = None
+    agent: AgentRuntimeConfig | None = None
     current_workspace: WorkspaceRecord = field(init=False)
     current_task: TaskRecord = field(init=False)
 
@@ -300,19 +290,19 @@ class TaskRuntimeSpace:
     def get_context_manager(
         self,
         *,
-        agent_profile: AgentProfile | None = None,
+        agent: AgentRuntimeConfig | None = None,
     ) -> RuntimeMessageContextManager:
         """返回 task context manager；首次执行时才创建并加载它。
 
         参数:
-            agent_profile: 首次装配必需；之后可复用已保留的 Agent 画像。
+            agent: 首次装配必需（用于构建 Task 首个系统提示词）；之后可复用已保留的运行时配置。
 
         返回:
             已创建或已缓存的 ``RuntimeMessageContextManager`` 实例。该 manager 恢复 Task 已持久化的
             固定系统提示词；当前 profile 只用于首次创建 Task 提示词。
 
         异常:
-            RuntimeError: 首次装配没有 Agent 画像。
+            RuntimeError: 首次装配没有 Agent 运行时配置。
             ``RuntimeMessageContextManager`` 构造失败时原样向上抛出，本方法不兜底；此时 space
             不会缓存半成品引用，由调用方处理。
 
@@ -337,60 +327,18 @@ class TaskRuntimeSpace:
                     RuntimeMessageContextManager,
                 )
 
-                if agent_profile is not None:
-                    self.agent_profile = agent_profile
+                if agent is not None:
+                    self.agent = agent
 
-                if self.agent_profile is None:
-                    raise RuntimeError("首次装配 Task context 必须提供 Agent profile")
+                if self.agent is None:
+                    raise RuntimeError("首次装配 Task context 必须提供 Agent 运行时配置")
                 from app.service.depends import get_conversation_task_context_service
 
                 manager = RuntimeMessageContextManager(
                     current_task_id=self.current_task.id,
-                    agent_profile=self.agent_profile,
+                    agent=self.agent,
                     workspace=self.current_workspace,
                     context_service=get_conversation_task_context_service(),
                 )
                 self._context_manager = _weak_ref(manager)
             return manager
-
-    def defer_runtime_notice(self, notice: RuntimeNotice) -> None:
-        """投递系统通知；只入队，不修改通知、不构造 Message、不写入 context。"""
-
-        self._notice_queue.put(notice)
-
-    def take_runtime_notices(self, *, run_id: int | None = None) -> str:
-        """按 FIFO 消费当前 Run 的通知，并丢弃其他 Run 遗留的通知。
-
-        无 run_id 的通知属于 Task，任何 Run 均可消费；省略消费参数时取出全部通知。
-        同一 Task 的 Run 由操作闸门串行化，因此非当前 Run 的通知可直接丢弃，避免污染续跑。
-
-        返回:
-            压成一段的提示文本（不再返回领域通知对象）：以 ``system_hint:`` 起始
-            （模型据此区分系统注入与用户输入）并显式声明宿主平台；声明与各条通知
-            正文各占一行，格式由本方法统一收口，调用方不得再自行加前缀。
-            模型节点把它作为独立 ``SystemMessage`` 落库进 canonical context。
-            没有可消费的通知时返回空串，调用方据此不写入任何系统消息。
-        """
-
-        notices: list[RuntimeNotice] = []
-        while True:
-            try:
-                notice = self._notice_queue.get_nowait()
-            except Empty:
-                break
-            if run_id is None or notice.run_id is None or notice.run_id == run_id:
-                notices.append(notice)
-        if not notices:
-            return ""
-
-        hint = "".join(f"\n{n.to_hint_text()}" for n in notices)
-        return (
-            f"system_hint: host OS is {host_platform_name()}; the lines below are runtime "
-            "notices injected by the system, not user input. Take them into account, but do "
-            "not reply to, acknowledge, or quote them." + hint
-        )
-
-    def has_runtime_notices(self) -> bool:
-        """本 Task 是否仍有等待模型节点消费的系统通知。"""
-
-        return not self._notice_queue.empty()

@@ -1,7 +1,9 @@
 """消息正文之外的持久化契约；由 SDK 消息角色选择结构，不保存第二份角色或 Run 状态。"""
 
+from typing import Literal
+
 from openai.types import CompletionUsage
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.tool_call_status import ToolCallEventStatus
@@ -13,11 +15,28 @@ class EmptyMessageMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+MessageKind = Literal["user_input", "notice", "decision", "agent_result", "background_result"]
+"""Task 消息队列的消息种类；并入 context 后记在 user 消息的 metadata 上，后端规则只读它。"""
+
+
 class UserMessageMetadata(BaseModel):
-    """真实用户输入保留展示绑定；内部注入的 user 消息没有编辑器绑定。"""
+    """落库的 user 消息都来自 Task 消息队列：``kind`` 记录来源，用户输入另带展示绑定。
+
+    所有队列消息进模型时都是 user 角色，区分来源只能靠 ``kind``，不解析正文标签：编辑资格、
+    排队与消费投影都据此判断。模型正文经附件解析后有损（附件名、类型、图片位置与编辑器 token
+    顺序都不在其中），snapshot 重建、编辑复用附件与 fork 都只能从 ``presentation`` 取。内部注入
+    的 user 指令（如结构化输出）只拼进请求副本、不落库。
+    """
 
     model_config = ConfigDict(extra="forbid")
+    kind: MessageKind
     presentation: UserInputPresentation | None = None
+
+    @model_validator(mode="after")
+    def _presentation_only_for_user_input(self) -> "UserMessageMetadata":
+        if (self.kind == "user_input") != (self.presentation is not None):
+            raise ValueError("presentation is required for user_input and forbidden otherwise")
+        return self
 
 
 class AssistantMessageMetadata(BaseModel):

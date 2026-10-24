@@ -28,9 +28,6 @@ class TaskModel(StorageBase):
     parent_task_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("tasks.id"), nullable=True
     )
-    parent_run_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("conversation_runs.id"), nullable=True
-    )
     current_run_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("conversation_runs.id", ondelete="SET NULL"),

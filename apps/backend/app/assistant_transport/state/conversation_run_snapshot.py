@@ -5,6 +5,28 @@ from typing_extensions import TypedDict
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
+from app.models.conversation_run_options import ConversationRunOptions
+
+
+class ConversationRunLaunch(TypedDict):
+    """Run 冻结的发起配置；前端据此判断运行中发送能否立即并入（运行期配置锁定）。
+
+    ``modelConfigId`` 在模型配置被删除后为 ``None``。
+    """
+
+    modelConfigId: int | None
+    reasoningEffort: str | None
+    banTools: list[str]
+
+
+def run_launch_snapshot(
+    model_config_id: int | None, options: ConversationRunOptions
+) -> ConversationRunLaunch:
+    return ConversationRunLaunch(
+        modelConfigId=model_config_id,
+        reasoningEffort=options.reasoning_effort,
+        banTools=list(options.ban_tools),
+    )
 
 
 class ConversationRunSnapshot(TypedDict):
@@ -22,6 +44,7 @@ class ConversationRunSnapshot(TypedDict):
     status: str
     endReason: str | None
     contextWindowTotal: int | None
+    launch: ConversationRunLaunch
     messages: list[ConversationStateMessage]
     usage: ConversationStateUsage | None
     error: ConversationStateError | None

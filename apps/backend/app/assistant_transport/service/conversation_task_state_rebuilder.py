@@ -11,12 +11,14 @@ from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
     ChatCompletionMessageFunctionToolCallParam,
     ChatCompletionMessageParam,
-    ChatCompletionUserMessageParam,
 )
 
-from app.assistant_transport.event import build_user_input_parts
 from app.assistant_transport.projection.tool_result import project_tool_result
-from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
+from app.assistant_transport.projection.user_input_projection import build_user_input_parts
+from app.assistant_transport.state.conversation_run_snapshot import (
+    ConversationRunSnapshot,
+    run_launch_snapshot,
+)
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_part import (
@@ -28,9 +30,10 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.config.configuration import get_tool_registry
 from app.core.llm_provider.message_codec import display_arguments
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.message_metadata import MessageMetadata, ToolMessageMetadata, UserMessageMetadata
+from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.models.task_record import TaskRecord
 from app.utils.message_content import content_to_text
 
@@ -44,7 +47,7 @@ class ConversationTaskStateRebuilder:
 
         参数:
             run: 已落库的 Run 记录；其 ``error`` 来自 ``error_json``，由
-                ``ConversationRunStateService.terminal_error`` 写入。
+                ``run_terminal_error`` 写入。
 
         返回:
             ``{"code", "message"}`` 形状的 Transport 错误；``message`` 保留持久化错误契约
@@ -174,30 +177,17 @@ class ConversationTaskStateRebuilder:
 
     @staticmethod
     def build_user_message(
-        message_id: str, message: ChatCompletionUserMessageParam, metadata: MessageMetadata
+        message_id: str, presentation: UserInputPresentation
     ) -> ConversationStateMessage:
-        """用户展示绑定来自记录 metadata，消息身份独立于 SDK 正文与 Run 首条输入。"""
-        payload = metadata.presentation if isinstance(metadata, UserMessageMetadata) else None
-        if payload is None:
-            return ConversationStateMessage(
-                id=message_id,
-                role="user",
-                parts=[
-                    {
-                        "type": "text",
-                        "text": content_to_text(message.get("content")),
-                        "status": "completed",
-                    }
-                ],
-            )
+        """用户消息只按展示绑定投影，不读 SDK 正文（附件解析后的模型正文不适合展示）。"""
         return ConversationStateMessage(
             id=message_id,
             role="user",
             parts=[
                 *build_user_input_parts(
-                    payload.display_text,
-                    payload.image_paths,
-                    payload.attachments,
+                    presentation.display_text,
+                    presentation.image_paths,
+                    presentation.attachments,
                 )
             ],
         )
@@ -243,8 +233,9 @@ class ConversationTaskStateRebuilder:
         snapshot_runs: list[ConversationRunSnapshot] = []
 
         for run in run_records:
-            # Run 没有 context 行也必须出现在快照里：`current_run_id` 必须指向快照中的某个
-            # Run（``validate_snapshot`` 强校验），而新建 Run 在写入首条消息前正是这个状态。
+            # 当前 Run 没有 context 行也必须出现在快照里：`current_run_id` 必须指向快照中的某个
+            # Run（``validate_snapshot`` 强校验），而新建 Run 在写入首条消息前正是这个状态。行全部
+            # 被移出投影的 Run（编辑替换掉的整段旧 Run）不进快照。
             rows: list[ConversationTaskContextRecord] = sorted(
                 run_groups.get(run.id, []), key=lambda row: row.sequence
             )
@@ -263,12 +254,17 @@ class ConversationTaskStateRebuilder:
                     continue
                 message = row.message
                 if message["role"] == "user":
+                    user_metadata = cast(UserMessageMetadata, row.metadata)
+                    # 目前只有用户输入有气泡形态；其它 kind 有可投影形态时在这里加渲染。
+                    if user_metadata.kind != "user_input":
+                        continue
                     has_user_message = True
                     if assistant_message["parts"]:
                         snapshot_messages.append(assistant_message)
                     snapshot_messages.append(
                         ConversationTaskStateRebuilder.build_user_message(
-                            row.message_id, message, row.metadata
+                            str(row.message_id),
+                            cast(UserInputPresentation, user_metadata.presentation),
                         )
                     )
                     assistant_message = ConversationStateMessage(
@@ -307,12 +303,16 @@ class ConversationTaskStateRebuilder:
                             assistant_message["parts"].append(tool_part)
             if has_user_message or assistant_message["parts"]:
                 snapshot_messages.append(assistant_message)
+            if rows and not snapshot_messages and run.id != task.current_run_id:
+                # 编辑把旧 Run 的行全部移出投影后，它不再有可展示内容，不留空分组。
+                continue
             snapshot_runs.append(
                 ConversationRunSnapshot(
                     runId=run.id,
                     status=run.status,
                     endReason=run.end_reason,
                     contextWindowTotal=run.context_window_total,
+                    launch=run_launch_snapshot(run.model_config_id, run.options),
                     messages=snapshot_messages,
                     usage=run.usage,
                     error=ConversationTaskStateRebuilder.build_run_error(run),

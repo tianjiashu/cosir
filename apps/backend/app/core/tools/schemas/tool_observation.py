@@ -9,8 +9,6 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from app.core.tools.schemas.user_input_request import UserInputRequest
-
 
 @dataclass(frozen=False)
 class ToolObservation:
@@ -74,11 +72,9 @@ class ToolObservation:
             Observation 字段推导展示结果。
         team_run_id: 已创建 TeamRun 的定位信息；它与错误短提示分离，供 Transport 在工具失败
             后继续查询持久化执行事实，不代表第二套 Team 状态。
-        user_input_request: 工具要求用户先作出决定才能继续时的请求（human-in-the-loop 的请求侧）。
-            它是**工作流控制流事实**——``wait_user`` 据此决定是否挂起图、要问用户什么；因此既
-            不进模型上下文，也不随 ``display_data`` 下发给前端，投影载荷由
-            ``project_waiting_request`` 组装。``None`` 表示本次调用
-            不需要用户决定。
+        suspend: 本次调用结束后 Agent 应挂起等待消息（等审批、等后台结果）：调用照常闭合，
+            本批观察写入后 Run 迁移为 ``suspended``，不再请求模型，由可唤醒消息继续同一个 Run。
+            它是工作流控制流事实，不进模型上下文、不随 ``display_data`` 下发。
         artifact_data: 工具执行产出的内部产物数据；不进入事件、快照或模型上下文。
             文件展示数据不代表持久化的变更事实。
     """
@@ -105,7 +101,7 @@ class ToolObservation:
     display_data: dict[str, Any] | None = field(default_factory=dict)
     # TeamRun 的稳定定位信息独立于错误展示数据，工具失败后仍可查询执行事实。
     team_run_id: int | None = None
-    # 待用户决定的请求（工作流控制流事实）：``wait_user`` 据此挂起图并投影给前端。
-    user_input_request: UserInputRequest | None = None
+    # 本批观察写入后挂起 Run，等可唤醒消息继续（工作流控制流事实）。
+    suspend: bool = False
     # 工具执行产出的内部结构化事实（产物数据）；不进入 Transport 或模型上下文。
     artifact_data: dict[str, Any] | None = field(default_factory=dict)

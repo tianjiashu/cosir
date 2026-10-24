@@ -305,7 +305,7 @@ class ConversationRunCrud:
         """在给定事务内判断某任务是否存在处于指定状态集合的 run。
 
         纯存在性检查：仅投影 ``id`` 并 ``LIMIT 1``，不加载完整 run 记录，也不返回
-        匹配行。供 service 层判断任务是否已有处于特定状态（如 running/waiting_for_input）的 run，
+        匹配行。供 service 层判断任务是否已有处于特定状态（如 running/suspended）的 run，
         避免为"仅判存在"而取出整行。
 
         参数:
@@ -418,7 +418,7 @@ class ConversationRunCrud:
         return [ConversationRunRecord.from_model(row) for row in rows]
 
     def has_active_for_task(self, task_id: int) -> bool:
-        """判断 Task 是否存在活跃（running 或 waiting_for_input）Run。"""
+        """判断 Task 是否存在活跃（running 或 suspended）Run。"""
 
         with self._session_factory() as session:
             row_id = session.execute(

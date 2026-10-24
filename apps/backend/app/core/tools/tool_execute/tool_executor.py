@@ -182,7 +182,7 @@ class ToolExecutor:
         参数:
             call: 模型请求的工具调用。
             execution_context: 本次调用的完整运行时边界，由调用方按 ``call`` 构造（含
-                ``tool_call_id`` / ``user_decision``）；本方法直接信任，不再特化。
+                ``tool_call_id``）；本方法直接信任，不再特化。
             allowed_tool_names: 本轮准入的工具名；不在其中的已注册工具被拒绝。
             on_start: 确认可以运行、即将交给 handler 时调用一次；调用方据此投影 running，
                 因此排队中或被拒绝的调用不会先显示为运行中。它在文件路径锁内执行，只应做

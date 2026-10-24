@@ -1,10 +1,10 @@
 """delegate_task 工具 handler：把一次委派请求落地为 child Task/Run 并启动 child workflow。
 
-职责：解析 child Agent profile、建立 child Task，经 ``WorkflowSession.open_run`` 新开并启动 child
+职责：解析 child Agent profile、建立 child Task，经 ``WorkflowSession.submit`` 新开并启动 child
 Run，返回「已启动」观察（携带 child locator）。
 
-不负责：child workflow 的实际运行与完成观测（父侧用 ``child_agent_wait`` / ``child_agent_status``
-查询）；参数校验与准入门禁（``ToolAccessGate``）；委派展示数据构造
+不负责：child workflow 的实际运行与完成观测（结论由调度层以消息回投，父侧用 ``wait_messages``
+挂起等待，或 ``child_agent_status`` 查询）；参数校验与准入门禁（``ToolAccessGate``）；委派展示数据构造
 （``build_delegation_display_data``）。
 """
 import asyncio
@@ -44,9 +44,9 @@ from app.service.depends import (
 class DelegateTaskTool(HandlerBase):
     """把一次 delegate_task 调用落地为已启动的 child Task/Run。
 
-    职责：检查父 Run 事实可用性、解析 child profile、创建 child Task 并经调度入口启动 Run，全程以
-    ``ToolObservation`` 返回结果。不等待 child 执行结束——完成情况由 ``child_agent_wait`` /
-    ``child_agent_status`` 查询。
+    职责：解析 child profile、创建 child Task 并经调度入口启动 Run，全程以
+    ``ToolObservation`` 返回结果。不等待 child 执行结束——结论由调度层以 ``agent_result`` 消息回投父
+    Task，父侧用 ``wait_messages`` 挂起等待或 ``child_agent_status`` 查询。
     """
 
     name: str = TOOL_DELEGATE_TASK
@@ -57,7 +57,7 @@ class DelegateTaskTool(HandlerBase):
         "message as input — it cannot see this conversation and cannot delegate further — so "
         "the message must be a self-contained task contract, and the child returns only a "
         "final summary. Delegation is asynchronous: after creating the child, wait for it "
-        "with child_agent_wait or continue other non-interfering work. A failed delegation "
+        "with wait_messages or continue other non-interfering work. A failed delegation "
         "is terminal — adjust the contract or ask the user rather than retrying identical "
         "arguments. Keep inputs within the stated length limits; an oversized call is "
         "rejected as a tool error, so trim or split the task."
@@ -99,11 +99,11 @@ class DelegateTaskTool(HandlerBase):
             child_agent_id: 要运行的 child agent profile 标识。
             agent_name: Agent 名称，用作 child Task 标题（展示与可追溯）。
             message: 面向子 Agent 的自由文本任务契约，原样作为 child turn 的输入。
-            execution_context: 父工具执行边界，提供父 Run 事实（profile、事件循环）。
+            execution_context: 父工具执行边界，提供工作区根与父事件循环。
 
         返回:
-            child 启动成功时返回携带稳定 locator 的 success 观察；缺少父
-            profile、run 已取消、child 无法解析、父事件循环不可用或启动失败时返回确定性的
+            child 启动成功时返回携带稳定 locator 的 success 观察；run 已取消、child 无法解析、
+            父事件循环不可用或启动失败时返回确定性的
             error/cancelled 观察。
 
         异常:
@@ -116,14 +116,6 @@ class DelegateTaskTool(HandlerBase):
             child 执行结束）；写日志。
         """
 
-        parent_profile = execution_context.agent_profile
-        if parent_profile is None:
-            return tool_error(
-                self.name,
-                "delegate_task_runtime_unavailable",
-                reason="Configure the parent agent profile error before delegating work.",
-                retryable=False,
-            )
         if cancellation_registry.is_cancelled(execution_context.task_id):
             return tool_cancelled(
                 tool_name=self.name,
@@ -193,7 +185,6 @@ class DelegateTaskTool(HandlerBase):
                 title=agent_name,
                 task_type="delegate_task",
                 parent_task_id=execution_context.task_id,
-                parent_run_id=execution_context.run_id,
                 tool_schemas=[
                     copy.deepcopy(definition.to_model_tool_definition())
                     for definition in child_final_task_tools
@@ -205,8 +196,8 @@ class DelegateTaskTool(HandlerBase):
                                 else None)
             child_agent_model_config_id = child_agent_profile.model_config_id
             model_config_id = child_agent_model_config_id or parent_run.model_config_id
-            child_run = asyncio.run_coroutine_threadsafe(
-                get_workflow_session().open_run(
+            asyncio.run_coroutine_threadsafe(
+                get_workflow_session().submit(
                     child_task.id,
                     ConversationRunCommand(display_text=message),
                     agent_id=child_agent_id,
@@ -238,9 +229,8 @@ class DelegateTaskTool(HandlerBase):
             tool_name=self.name,
             content=json.dumps(
                 {
-                    "status": "running",
+                    "status": "submitted",
                     "child_task_id": child_task.id,
-                    "child_run_id": child_run.id,
                     "child_agent_id": child_agent_id,
                     "agent_name": agent_name,
                 },
@@ -250,7 +240,6 @@ class DelegateTaskTool(HandlerBase):
                 title=agent_name,
                 child_agent_id=child_agent_id,
                 child_task_id=child_task.id,
-                child_run_id=child_run.id,
                 status="running",
                 role=child_agent_profile.role,
             ),

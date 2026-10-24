@@ -13,6 +13,7 @@ from pydantic import Field, StrictInt
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunError
+from app.models.conversation_run_options import ConversationRunOptions
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
 
@@ -24,6 +25,7 @@ class RunInitializedEvent(WorkflowEventEnvelope):
     Attributes:
         replace_existing: 编辑重跑时是否替换已有 Run 的骨架。
         context_window_total: 创建 Run 时冻结的窗口上限，随该 Run 而非 Task 投影。
+        model_config_id / options: 创建 Run 时冻结的发起配置，供前端执行运行期配置锁定。
 
     异常:
         pydantic.ValidationError: 信封字段非法或出现未声明字段时抛出。
@@ -33,6 +35,8 @@ class RunInitializedEvent(WorkflowEventEnvelope):
     type: Literal["run_initialized"] = "run_initialized"
     replace_existing: bool = False
     context_window_total: StrictInt | None = Field(default=None, ge=0)
+    model_config_id: StrictInt | None = None
+    options: ConversationRunOptions = Field(default_factory=ConversationRunOptions)
 
 
 class RunStatusChangedEvent(WorkflowEventEnvelope):

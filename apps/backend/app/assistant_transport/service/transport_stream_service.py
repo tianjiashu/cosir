@@ -16,8 +16,8 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import SubscriberClosed
-from app.config.constant import Constant
 from app.config.logging.logger import log
+from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
 
 
 class AssistantTransportStreamService:
@@ -29,7 +29,7 @@ class AssistantTransportStreamService:
     """
 
     # 终态判定唯一事实源：与 fork 校验、child_task 工具共用同一份集合，禁止在本类另立副本。
-    terminal_statuses: ClassVar[frozenset[str]] = Constant.Run.TERMINAL_STATUSES
+    terminal_statuses: ClassVar[frozenset[str]] = TERMINAL_RUN_STATUSES
 
     def __init__(self) -> None:
         """绑定进程本地快照持有者与 run 状态数据源。"""
@@ -170,7 +170,7 @@ class AssistantTransportStreamService:
 
     async def stream_envelopes(self, task_id: int, run_id: int, is_cancelled):
         """订阅跨正常完成的 Run 交接；恢复仍须显式业务命令。"""
-        from app.service.depends import get_conversation_run_executor, get_task_service
+        from app.service.depends import get_task_service, get_workflow_session
 
         while True:
             async for envelope in self._run_envelopes(task_id, run_id, is_cancelled):
@@ -178,7 +178,7 @@ class AssistantTransportStreamService:
             run = self._run_service.get_run(run_id)
             if run.status != "completed" or is_cancelled():
                 return
-            await get_conversation_run_executor().wait_released(run_id)
+            await get_workflow_session().wait_run_settled(task_id, run_id)
             latest = get_task_service().get_latest_run(task_id)
             if latest is None or latest.id == run_id:
                 return

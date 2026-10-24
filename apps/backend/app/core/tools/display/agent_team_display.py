@@ -3,7 +3,6 @@
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.core.tools.tool_models import ProposeAgentTeamConfigurationArgs
 
 
@@ -17,9 +16,8 @@ def build_agent_team_preview_display_data(
     ``preview_fields`` 是 preparation service 生成的预览输入，不直接作为 Transport payload；
     本函数集中决定可进入 UI 的字段（目标、节点、边、配置与待确认运行标识）。
 
-    「这张卡需要用户确认」不是展示事实：它由 ``agent_team`` 工具随观察下发的
-    ``ToolObservation.user_input_request`` 表达（见 ``review_request``），投影给前端的载荷由
-    ``project_waiting_request`` 组装。本函数只负责卡片本身。
+    「这张卡需要用户确认」不是展示事实：前端按 ``team_run_id`` 读取 TeamRun 状态，``pending``
+    即待确认。本函数只负责卡片本身。
     """
 
     fields = (
@@ -39,30 +37,6 @@ def build_agent_team_preview_display_data(
         "kind": "agent-team-approval",
         **{key: preview_fields[key] for key in fields},
         "team_run_id": team_run_id,
-    }
-
-
-def build_agent_team_run_display_data(
-    *,
-    team_run_id: int,
-    team_id: str,
-    goal: str,
-    node_goals: Mapping[str, AgentTeamNodeGoal],
-) -> dict[str, Any]:
-    """投影「用户已批准、Team 已启动」的展示数据。
-
-    执行卡使用独立展示种类，审批卡与只读进度卡拥有不同交互边界；运行生命周期仍由 TeamRun 查询提供。
-    """
-
-    return {
-        "kind": "agent-team-execution",
-        "team_id": team_id,
-        "team_run_id": team_run_id,
-        "goal": goal,
-        "node_goals": {
-            node_id: node_goal.model_dump(mode="json")
-            for node_id, node_goal in node_goals.items()
-        },
     }
 
 

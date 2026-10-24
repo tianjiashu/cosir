@@ -1,114 +1,37 @@
-"""Assistant Transport 的 run 状态订阅适配。"""
+"""Assistant Transport 的订阅适配：attach 只订阅 Task 当前 Run，不触发业务执行。"""
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from typing import Literal, NoReturn
+from typing import NoReturn
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.assistant_transport.request import (
-    AddMessageCommand,
-    AssistantTransportRequest,
-)
-from app.assistant_transport.service.conversation_run_command_service import (
-    ConversationRunStartResult,
-)
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
-from app.assistant_transport.state.conversation_state_snapshot import (
-    ConversationStateSnapshot,
-    find_run,
-)
-from app.config.logging.logger import log
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-
-RunCommandMode = Literal["new", "edit", "resume"]
 
 
 class TransportAssistantService:
-    """负责 Assistant Transport 入口的 run 前置校验、生命周期编排与响应构造。
-
-    快照订阅与 SSE 编码已拆分到
-    ``AssistantTransportStreamService``；本类通过 ``self._stream`` 委托其完成流式响应。
-    """
+    """快照订阅与 SSE 编码委托 ``AssistantTransportStreamService``。"""
 
     def __init__(self) -> None:
-        """初始化 run 校验、生命周期与流式订阅依赖。"""
-
         self._snapshots = ConversationTaskStateService()
-        from app.service.depends import get_conversation_run_executor
-
-        self.run_executor = get_conversation_run_executor()
-        from app.service.depends import (
-            get_conversation_run_service,
-            get_conversation_run_state_service,
-        )
-
-        self._runs = get_conversation_run_state_service()
-        self._run_service = get_conversation_run_service()
-        from app.service.depends import get_task_service
-
-        self._tasks = get_task_service()
-        from app.service.depends import get_conversation_run_command_service
-
-        self._commands = get_conversation_run_command_service()
         self._stream = AssistantTransportStreamService()
 
-    @asynccontextmanager
-    async def task_run_operation(self, task_id: int) -> AsyncIterator[None]:
-        """在 task 运行时空间内执行一个带超时的独占操作。
-
-        参数:
-            task_id: 目标任务标识。
-
-        返回:
-            持有该 task 操作闸门的异步上下文管理器。
+    def attach(self, task_id: int) -> StreamingResponse:
+        """订阅 Task 当前 Run；提交与订阅之间发生正常交接时，订阅跟随交接后的当前 Run。
 
         异常:
-            TimeoutError: 10 秒内未取得闸门（该 task 有长任务在执行或收束）。
-
-        副作用:
-            进入上下文后阻止同一 task 的其它 run 创建/编辑/续跑与结构性删除。
-
-        并发:
-            必须用 ``async_operation``（在工作线程中抢锁），**不能**改用同步的
-            ``operation``：本上下文跨越 ``await``（``prepare_run_start`` 经
-            ``asyncio.to_thread`` 落库）。若在事件循环线程上同步抢锁，另一个同 task
-            请求会把事件循环整体阻塞在 ``acquire`` 上，而持锁者必须回到事件循环才能
-            释放闸门，于是等待者只能等满超时、整个进程停顿；此时「task 忙」被放大成
-            「全进程忙」。
+            HTTPException: Task 还没有任何 Run 时返回 409 ``NO_RUN``。
         """
 
-        task_space = task_runtime_spaces.get_or_create(task_id)
-        async with task_space.async_operation(wait_seconds=10):
-            yield
-
-    def build_response(
-        self,
-        *,
-        task_id: int,
-        thread_id: str,
-        run_id: int,
-        state: ConversationStateSnapshot,
-    ) -> StreamingResponse:
-        """为指定 run 构造项目自有的 frame SSE response。
-
-        ``state`` 仅用于验证调用方已解析出目标 run；真正的首帧由 stream service 在
-        subscriber 注册临界区内重新取得，避免首帧与后续 mutation 之间出现 attach gap。
-        """
-
-        try:
-            find_run(state, run_id)
-        except KeyError as exc:
-            raise ValueError(f"快照中不存在 run {run_id}") from exc
+        run_id = self._snapshots.get_state(task_id)["current_run_id"]
+        if run_id is None:
+            _raise_transport_error(409, "NO_RUN", "当前对话还没有运行", retryable=False)
         response = StreamingResponse(
             self._stream.stream_envelopes(task_id, run_id, lambda: False),
             media_type="text/event-stream",
@@ -116,297 +39,7 @@ class TransportAssistantService:
         response.headers["Cache-Control"] = "no-cache"
         response.headers["Connection"] = "keep-alive"
         response.headers["X-Cosir-Task-Id"] = str(task_id)
-        response.headers["X-Cosir-Thread-Id"] = thread_id
         return response
-
-    def settle_run_start_failure(
-        self, run_id: int, *, end_reason: str = "run_start_failed"
-    ) -> None:
-        """收敛「执行器启动失败但仍处于 active」的 run。
-
-        run 在 ``prepare_run_start`` 阶段已被置为 active；若随后执行器启动失败，就只剩一个
-        没有任何执行器驱动的 active run——该 task 之后既无法再发新消息（``already has an
-        active run``），也无法 resume（状态不是 ``cancelled``）。本方法把该 run 条件收敛为
-        ``cancelled``，把「重试入口」还给用户。
-
-        参数:
-            run_id: 启动失败的 Conversation Run 标识。
-            end_reason: 写入持久化事实的收敛原因，默认 ``run_start_failed``。
-
-        返回:
-            无。
-
-        异常:
-            无。收敛本身失败只记录 error 日志并由调用方继续抛出原始启动异常，不覆盖根因。
-
-        副作用:
-            条件更新 run 状态为 cancelled 并发布对应状态变更事件；run 已不是 active 时不做
-            任何写入。
-        """
-
-        try:
-            settled = self._runs.cancel_run_if_running(run_id, end_reason=end_reason)
-        except Exception:
-            log.exception(
-                "run_start_failure_settle_failed",
-                extra={
-                    "msg": "启动失败后收敛 run 失败，该 run 可能残留为 active",
-                    "data": {"run_id": run_id, "end_reason": end_reason},
-                },
-            )
-            return
-        if settled is None:
-            log.info(
-                "run_start_failure_settle_skipped",
-                extra={
-                    "msg": "启动失败的 run 已由其它路径落定终态，无需收敛",
-                    "data": {"run_id": run_id, "end_reason": end_reason},
-                },
-            )
-            return
-        log.warning(
-            "run_start_failure_settled",
-            extra={
-                "msg": "执行器未能启动，已将 run 收敛为 cancelled",
-                "data": {"run_id": run_id, "end_reason": end_reason},
-            },
-        )
-
-    @staticmethod
-    def classify_run_command(
-        command: AddMessageCommand | None,
-        run_id: int | None,
-    ) -> RunCommandMode:
-        """将 Assistant Transport command batch 归一化为本项目的 Run 模式。
-
-        参数:
-            command: 请求中唯一允许的 ``add-message`` 命令；空 batch 时为 ``None``。
-            run_id: 请求根部的 Conversation Run 目标标识。
-
-        返回:
-            ``new`` 表示新建 Conversation Run；``edit`` 表示原地重置最近 Run 后重新执行；
-            ``resume`` 表示恢复可续跑的 Run（``cancelled`` 或 ``waiting_for_input``），
-            并可携带用户决定。
-
-        异常:
-            ValueError: command batch 既没有消息又没有 run_id；正常请求解析已在 Pydantic
-                validator 中拒绝该情况，这里只作为接入层的防御性校验。
-
-        副作用:
-            无；仅根据已解析的 wire 字段分类，不读取数据库，也不判断 run 是否存在。
-        """
-        if command is not None:
-            return "edit" if run_id is not None else "new"
-        if run_id is not None:
-            return "resume"
-        raise ValueError("run command requires a message or run_id")
-
-    def ensure_run_target(
-        self,
-        *,
-        request: AssistantTransportRequest,
-        command: AddMessageCommand | None,
-        mode: RunCommandMode,
-    ) -> int:
-        """校验 assistant 入口 run 前置条件并返回目标 task_id。
-
-        把 ``assistant_api.assistant_transport`` 中散落的任务存在性、resume 前置与
-        workspace 归属读校验收敛到 service 层；API 只负责调用本方法并让
-        ``_raise_transport_error`` 抛出的 ``HTTPException`` 自然向上传播，
-        不再在接入层重复编排这些领域校验。
-
-        参数:
-            request: Assistant Transport 请求（提供 taskId / runId / workspaceId）。
-            command: 归一化后的唯一 add-message 命令（可能为 None）；其 commandId
-                用于结构化错误上下文。
-            mode: ``new`` / ``edit`` / ``resume`` 的 Run 模式。
-
-        返回:
-            校验通过的目标 task_id。
-
-        异常:
-            HTTPException: 经由 ``_raise_transport_error`` 抛出，覆盖 TASK_NOT_FOUND /
-                RUN_ID_REQUIRED / COMMAND_REQUIRED / TASK_WORKSPACE_MISMATCH。
-
-        副作用:
-            仅做读校验与一条 info 日志；不修改 Run / Task / Context。
-        """
-
-        command_id = command.commandId if command is not None else None
-        try:
-            task = self._tasks.get_task(request.taskId)
-        except KeyError:
-            _raise_transport_error(
-                404,
-                "TASK_NOT_FOUND",
-                "对话任务不存在，请重新创建对话",
-                retryable=False,
-                command_id=command_id,
-            )
-
-        if mode == "resume":
-            # 空 commands 只表示业务续跑；Assistant UI 的 transport attach 走独立
-            # resumeApi，不经过本入口。
-            if request.runId is None:
-                _raise_transport_error(
-                    400,
-                    "RUN_ID_REQUIRED",
-                    "请先创建运行切片",
-                    retryable=False,
-                )
-        elif mode == "edit":
-            if request.runId is None:
-                _raise_transport_error(
-                    400,
-                    "RUN_ID_REQUIRED",
-                    "请先创建运行切片",
-                    retryable=False,
-                )
-            if command is None:
-                _raise_transport_error(
-                    400,
-                    "COMMAND_REQUIRED",
-                    "编辑请求需要携带 add-message 命令",
-                    retryable=False,
-                    run_id=request.runId,
-                )
-        else:  # new
-            if command is None:
-                _raise_transport_error(
-                    400,
-                    "COMMAND_REQUIRED",
-                    "请发送消息后再提交",
-                    retryable=False,
-                    command_id=command_id,
-                )
-
-        if request.workspaceId is not None and task.workspace_id != request.workspaceId:
-            _raise_transport_error(
-                409,
-                "TASK_WORKSPACE_MISMATCH",
-                "对话任务不属于当前工作区",
-                retryable=False,
-                command_id=command_id,
-            )
-
-        task_id = task.id
-        log.info(
-            "assistant_transport_run_command_classified",
-            extra={
-                "msg": "Assistant Transport 请求已归一化为 Run 模式",
-                "data": {
-                    "task_id": task_id,
-                    "run_id": request.runId,
-                    "command_id": command_id,
-                    "mode": mode,
-                },
-            },
-        )
-        return task_id
-
-    async def prepare_run_start(
-        self,
-        *,
-        task_id: int,
-        command: AddMessageCommand | None,
-        mode: RunCommandMode,
-        request: AssistantTransportRequest,
-    ) -> ConversationRunStartResult:
-        """在 command service 层原子创建、编辑或恢复 Run，返回启动编排所需的结果。
-
-        ``ensure_run_target`` 已完成全部前置校验；本方法只做 Run 创建/编辑/恢复与基线
-        状态装配，不触发 AgentRuntime 执行。真正的执行由 API 经
-        ``run_executor.start`` 触发。
-
-        参数:
-            task_id: 已校验通过的目标任务标识。
-            command: 归一化后的唯一 add-message 命令（resume 时为 None）。
-            mode: ``new`` / ``edit`` / ``resume`` 的 Run 模式。
-            request: 原始 Assistant Transport 请求，提供 runId / payload / 模型等。
-
-        返回:
-            ``ConversationRunStartResult``：含已占用或创建的 run、初始快照、
-            ``execution_mode`` 与业务模式。
-
-        异常:
-            ValueError: command service 领域校验失败（run 不可续跑 / 不可编辑 / 已有
-                active run 等），交由 API 的 ``except ValueError`` 翻译为对应 transport 错误。
-
-        副作用:
-            仅在 storage 层原子写入 Run / context，并更新 snapshot baseline；不启动执行器、
-            不发布 run-status 事件。
-        """
-
-        if mode == "resume":
-            # ensure_run_target 已校验 run_id 非空；此处 assert 仅做静态类型收窄。
-            assert request.runId is not None
-            # 不指定 ``expected_status``：由领域服务按 Run 当前状态判定续跑源，使「取消后继续」
-            # 与「等待用户决定后带决定继续」走同一条入口（两者继续同一 Run）。
-            return await asyncio.to_thread(
-                self._commands.resume_run,
-                task_id=task_id,
-                run_id=request.runId,
-                user_decision=request.user_decision(),
-            )
-        # 非 resume 模式 command 必非空（详见 _classify_run_command）；assert 仅类型收窄。
-        assert command is not None
-        commands = self._commands.build_command_inputs(request)
-        run_command = self._commands.build_run_command(request, command)
-        model_config_id = request.modelConfigId
-        if mode == "edit":
-            assert request.runId is not None
-            if command.sourceId is None:
-                raise ValueError("编辑请求必须指定用户消息身份")
-            return await asyncio.to_thread(
-                self._commands.edit_input,
-                task_id=task_id,
-                run_id=request.runId,
-                message_id=command.sourceId,
-                run_command=run_command,
-                model_config_id=model_config_id,
-                reasoning_effort=request.reasoningEffort,
-            )
-        return await asyncio.to_thread(
-            self._commands.submit_input,
-            commands=commands,
-            model_config_id=model_config_id,
-            reasoning_effort=request.reasoningEffort,
-            run_command=run_command,
-            task_id=task_id,
-        )
-
-    async def attach_run(
-        self,
-        *,
-        task_id: int,
-        thread_id: str,
-        run_id: int,
-    ) -> StreamingResponse:
-        """订阅 Task 当前 Run。提交与订阅之间发生正常交接时跟随最新切片；不启动执行。"""
-
-        try:
-            run = self._run_service.get_run(run_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="run not found") from exc
-        if run.task_id != task_id:
-            _raise_transport_error(
-                409,
-                "RUN_TASK_MISMATCH",
-                "运行不属于当前任务",
-                retryable=False,
-                run_id=run_id,
-            )
-
-        state = self._snapshots.get_state(task_id)
-        # 提交回执与 attach 之间可能已正常结束并交接下一 Run，订阅跟随 Task 当前切片。
-        if state["current_run_id"] is not None:
-            run_id = state["current_run_id"]
-        return self.build_response(
-            task_id=task_id,
-            thread_id=thread_id,
-            run_id=run_id,
-            state=state,
-        )
 
 
 def _raise_transport_error(
@@ -415,36 +48,10 @@ def _raise_transport_error(
     message: str,
     *,
     retryable: bool,
-    command_id: str | None = None,
-    run_id: int | None = None,
 ) -> NoReturn:
-    """抛出统一的 Assistant Transport HTTP 错误。
+    """抛出统一的 Assistant Transport HTTP 错误；``message`` 是面向用户的安全提示。"""
 
-    参数:
-        status_code: HTTP 状态码。
-        code: 稳定的机器可读错误码。
-        message: 面向用户的安全提示，不包含密钥或异常堆栈。
-        retryable: 客户端是否可以在修正条件后重试。
-        command_id: 可选的 Transport 命令标识。
-        run_id: 可选的后端 Conversation Run 标识。
-
-    返回:
-        无；本函数始终抛出 ``HTTPException``，返回类型标注 ``NoReturn`` 供 mypy
-        把所有调用点所在的 except 分支识别为不可达路径。
-
-    异常:
-        HTTPException: 携带统一 ``error`` 对象的 HTTP 异常。
-
-    副作用:
-        无。
-    """
-    error: dict[str, object] = {
-        "code": code,
-        "message": message,
-        "retryable": retryable,
-    }
-    if command_id is not None:
-        error["commandId"] = command_id
-    if run_id is not None:
-        error["runId"] = run_id
-    raise HTTPException(status_code=status_code, detail={"error": error})
+    raise HTTPException(
+        status_code=status_code,
+        detail={"error": {"code": code, "message": message, "retryable": retryable}},
+    )

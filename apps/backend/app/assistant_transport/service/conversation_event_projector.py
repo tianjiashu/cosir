@@ -4,23 +4,19 @@ from __future__ import annotations
 
 from collections import deque
 from threading import RLock
-from typing import Any
+from typing import Any, cast
 
 from pydantic import TypeAdapter, ValidationError
 
-from app.assistant_transport.event import (
-    ConversationEvent,
-    ConversationEventEnvelope,
-)
 from app.assistant_transport.stream import TransportFrame
 from app.config.constant import Constant
 from app.config.logging.logger import log
+from app.core.events import WorkflowEvent, WorkflowEventEnvelope
 from app.service.depends import get_conversation_task_state_service
 
-_EVENT_ADAPTER: TypeAdapter[ConversationEvent] = TypeAdapter(ConversationEvent)
+_EVENT_ADAPTER: TypeAdapter[WorkflowEvent] = TypeAdapter(WorkflowEvent)
 _KNOWN_EVENT_TYPES = {
     "run_initialized",
-    "run_trace_updated",
     "user_input_appended",
     "run_status_changed",
     "run_result_updated",
@@ -108,14 +104,14 @@ class ConversationEventProjector:
 
     Projector 是 Transport 适配边界：它只读取 event 并维护 snapshot；子 Run 状态投影时，
     state service 会尽力把父委派 display metadata 写回已有 context 行，但不修改
-    ``RuntimeMessageContextManager`` 的消息正文。每个 event 自带 ``plan`` 方法（继承自
-    ``ConversationEventEnvelope`` 的抽象契约），projector 直接调用 ``event.plan(state)``
-    获得 mutation，无需按类型分派。事件在单个 backend 进程内按 workflow 的消费顺序处理。
+    ``RuntimeMessageContextManager`` 的消息正文。事件只承载事实，mutation 由
+    ``assistant_transport.projection.plan_event`` 按事件类型规划。事件在单个 backend 进程内按
+    workflow 的消费顺序处理。
 
     去重与内存边界：所有事件统一按 ``event_id`` 去重（重复事件返回 ``None``，不再重复投影）。
     窗口是进程内**有界** FIFO（容量见 ``Constant.Transport.EVENT_DEDUP_WINDOW``），且不按
     task 分桶，因此既不会被长会话的事件数撑大，也不需要任何按 task 的生命周期清理钩子。
-    窗口淘汰会让极旧事件的重复投递漏网，此时依赖各事件 ``plan`` 的自幂等性兜底；
+    窗口淘汰会让极旧事件的重复投递漏网，此时依赖各事件 planner 的自幂等性兜底；
     ``RunInitializedEvent(replace_existing=True)`` 是唯一的例外（它整体 ``set`` 会重置 run）。
     """
 
@@ -180,46 +176,13 @@ class ConversationEventProjector:
                 )
                 return None
             change = self._state_service.apply_planned(event)
-            if event.type == "tool_call_status_changed" and isinstance(event.display_data, dict):
-                request = event.display_data.get("user_input_request")
-                if isinstance(request, dict):
-                    log.info(
-                        "user_input_request_transport_projected",
-                        extra={
-                            "msg": "待决用户输入载荷已投影到 Assistant Transport snapshot",
-                            "data": {
-                                "task_id": event.task_id,
-                                "run_id": event.run_id,
-                                "tool_call_id": event.tool_call_id,
-                                "request_id": request.get("request_id"),
-                                "request_kind": request.get("request_kind"),
-                                "draft_schema": request.get("draft_schema"),
-                                "display_data_keys": sorted(event.display_data),
-                                "display_data_mutation_applied": any(
-                                    mutation.path[-1:] == ("display_data",)
-                                    for mutation in change.mutations
-                                ),
-                            },
-                        },
-                    )
             if event.type == "run_status_changed":
-                try:
-                    self._state_service.refresh_parent_delegation(
-                        event.task_id,
-                        event.run_id,
-                        event.status.value,
-                    )
-                except AttributeError:
-                    # In-memory projector test owners intentionally implement only the
-                    # snapshot mutation protocol; the production state service owns the
-                    # parent delegation side projection.
-                    log.debug(
-                        "conversation_parent_delegation_refresh_unavailable",
-                        extra={
-                            "msg": "snapshot owner未装配父委派刷新能力",
-                            "data": {"task_id": event.task_id, "run_id": event.run_id},
-                        },
-                    )
+                # 子 Run 状态同步到父任务的委派卡片；是 state service 的契约方法，直接调用。
+                self._state_service.refresh_parent_delegation(
+                    event.task_id,
+                    event.run_id,
+                    event.status.value,
+                )
             # 事件可能先于 run 骨架抵达；空投影不能被永久去重，否则后续无法重放。
             if change.mutations and self._dedup_window.add(event.event_id):
                 log.warning(
@@ -236,11 +199,12 @@ class ConversationEventProjector:
             return change
 
     @staticmethod
-    def _parse(raw_event: object) -> ConversationEvent | None:
+    def _parse(raw_event: object) -> WorkflowEvent | None:
         """把 workflow 输出解析成已知的判别式 event。"""
 
-        if isinstance(raw_event, ConversationEventEnvelope):
-            raw_event = raw_event.model_dump()
+        if isinstance(raw_event, WorkflowEventEnvelope):
+            # 事件模型构造时已完成校验，直接使用，不再转 dict 重新校验。
+            return cast(WorkflowEvent, raw_event)
         if not isinstance(raw_event, dict):
             log.warning(
                 "conversation_event_ignored",

@@ -19,6 +19,9 @@ from app.core.tools.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tools.tool_handler.tool_base import HandlerBase
 from app.core.tools.tool_models.child_task import ChildAgentSendArgs
 from app.models import ConversationRunCommand
+from app.models.conversation_run_options import ConversationRunOptions
+from app.models.task_message import RunLaunch
+from app.service.conversation_run.dispatch_policy import matches_run
 from app.service.conversation_run.workflow_session import SessionConflictError
 from app.service.depends import (
     get_conversation_run_service,
@@ -29,18 +32,19 @@ from app.service.depends import (
 
 
 class ChildAgentSendTool(HandlerBase):
-    """给已有子任务追加一条输入，并经调度入口为它新开一个后台 Run。
+    """给已有子任务追加一条输入：子 Agent 仍在运行时并入它的当前 Run，否则为它新开后台 Run。
 
-    职责边界：本类只解析 child 运行参数，建 Run 与启动交给 ``WorkflowSession.open_run``——
-    闸门内判定子 Task 是否仍有活动 Run（含正在收尾的执行），因此不会与上一轮或其交接并发。
-    子 Agent 的运行终态由它自己的 workflow 落定。
+    职责边界：本类只解析 child 运行参数，接收消息交给 ``WorkflowSession.submit``（与用户发送同一
+    语义，由子 Task 的 actor 串行判定活动 Run，不会并发执行）。子 Agent 的运行终态由它自己的 workflow 落定。
     """
 
     name: str = TOOL_CHILD_AGENT_SEND
     description: str = (
-        "Send a message to a child agent after confirming that it has already produced a "
-        "conclusion in its child task, reusing that child task. Note: if the child agent has "
-        "not reached a terminal conclusion yet, this tool fails."
+        "Send a follow-up message to a child agent, reusing its child task. If the child agent "
+        "is still running, the message is merged into its current run and read at its next "
+        "step; otherwise a new run starts for the child task. Its conclusion arrives as an "
+        "<agent_result> message; use wait_messages to pause until it does, or "
+        "child_agent_status to check on it."
     )
     args_model: type[ChildAgentSendArgs] = ChildAgentSendArgs
     timeout_seconds: ClassVar[float] = 30.0
@@ -59,7 +63,7 @@ class ChildAgentSendTool(HandlerBase):
         message: str,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        """为指定子任务创建一个新 Run 并启动后台执行。
+        """把消息交给子任务：并入其活动 Run，或新开 Run 并启动后台执行。
 
         参数:
             child_task_id: 目标子任务标识（``delegate_task`` 返回的 ``child_task_id``）。
@@ -67,17 +71,17 @@ class ChildAgentSendTool(HandlerBase):
             execution_context: 父工具执行边界，提供事件循环与父 Run 事实。
 
         返回:
-            成功时返回包含 ``child_task_id`` / ``child_run_id`` / ``status`` 的 JSON 文本；
-            父事件循环不可用、子任务不存在、无法确定 child Agent、子 Agent
-            仍未结束、建 Run 或启动失败时返回错误观察。
+            成功时返回包含 ``child_task_id`` 与 ``status=submitted`` 的 JSON 文本（只确认消息已
+            交给子任务；并入哪条 Run 由调度决定，不回传 run_id）；父事件循环不可用、子任务不存在、
+            无法确定 child Agent、调度冲突或提交失败时返回错误观察。
 
         异常:
             无。配置无效、profile 已不可用、调度冲突或启动异常均归一化为错误观察；profile
             校验失败时不创建 Run。
 
         副作用:
-            在父 Run 的事件循环上经调度入口为子任务新开 running Run 并启动；不等待子 Agent
-            执行结束。
+            在父 Run 的事件循环上经调度入口接收消息（并入活动 Run 或新开 running Run 并启动）；
+            不等待子 Agent 执行结束。
         """
 
         try:
@@ -159,25 +163,31 @@ class ChildAgentSendTool(HandlerBase):
             else None
         )
         try:
-            # 经调度入口在 Task 闸门内开 Run：子 Run 仍在运行或收尾时由闸门拒绝，不会并发执行。
-            child_run = asyncio.run_coroutine_threadsafe(
-                get_workflow_session().open_run(
+            launch = RunLaunch(
+                agent_id=current_run.agent_id or "",
+                model_config_id=current_profile.model_config_id or current_run.model_config_id,
+                options=ConversationRunOptions(reasoning_effort=reasoning_effort),
+            )
+            # 与用户发送同一语义：子 Run 仍活动时消息并入它，已终态时新开 Run，不会并发执行。
+            # 子 Agent 配置在子 Run 运行期间变了时，消息只能交给下一个 Run（运行期配置锁定）。
+            asyncio.run_coroutine_threadsafe(
+                get_workflow_session().submit(
                     child_task_id,
                     ConversationRunCommand(display_text=message),
-                    agent_id=current_run.agent_id or "",
-                    model_config_id=current_profile.model_config_id or current_run.model_config_id,
+                    agent_id=launch.agent_id,
+                    model_config_id=launch.model_config_id,
                     reasoning_effort=reasoning_effort,
+                    delivery="immediate" if matches_run(launch, current_run) else "next_run",
                 ),
                 loop,
             ).result()
-        except SessionConflictError:
+        except SessionConflictError as exc:
             return tool_error(
                 tool_name=self.name,
-                error="error",
+                error=f"the child agent cannot accept this message now: {exc}",
                 reason=(
-                    "the child agent is still running; inspect it with child_agent_status or "
-                    "wait for its conclusion with child_agent_wait, and call this tool again "
-                    "only after it reaches a terminal state."
+                    "inspect the child agent with child_agent_status or wait for its conclusion "
+                    "with wait_messages, then send the message again."
                 ),
             )
         except Exception as exc:
@@ -204,10 +214,9 @@ class ChildAgentSendTool(HandlerBase):
             content=json.dumps(
                 {
                     "child_task_id": child_task_id,
-                    "child_run_id": child_run.id,
                     "child_agent_id": current_run.agent_id,
                     "agent_name": child_task.title,
-                    "status": "running",
+                    "status": "submitted",
                 },
                 ensure_ascii=False,
                 separators=(",", ":"),
@@ -215,7 +224,6 @@ class ChildAgentSendTool(HandlerBase):
             display_data=build_child_agent_result_display_data(
                 operation="send",
                 child_task_id=child_task_id,
-                child_run_id=child_run.id,
                 status="running",
                 agent_id=current_run.agent_id,
                 agent_name=child_task.title,

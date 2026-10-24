@@ -11,17 +11,16 @@ from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.config.logging.logger import log
 from app.core.tools.tool_handler.patch_write.atomic_write import atomic_write_text
 from app.core.tools.tool_handler.security.path_resolver import PathResolver
+from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
-from app.models.conversation_run_failure import run_failure_message
 from app.service.depends import get_workspace_service
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.utils.path.workspace_cosir import workspace_agent_team_run_dir
-
 
 _TERMINAL_STATUSES = {
     AgentTeamRunStatus.COMPLETED.value,
@@ -176,10 +175,7 @@ class AgentTeamRunArchiveService:
             status = run.status
             if (
                 row.status == AgentTeamRunStatus.CANCELLED.value
-                and status in {
-                    ConversationRunStatus.PENDING.value,
-                    ConversationRunStatus.RUNNING.value,
-                }
+                and status == ConversationRunStatus.RUNNING.value
             ):
                 status = ConversationRunStatus.CANCELLED.value
             elif (

@@ -29,6 +29,8 @@ if TYPE_CHECKING:
     from app.service.conversation_run.conversation_task_context_service import (
         ConversationTaskContextService,
     )
+    from app.service.conversation_run.task_message_queue import TaskMessageQueue
+    from app.service.conversation_run.user_input_service import UserInputService
     from app.service.conversation_run.workflow_session import WorkflowSession
     from app.service.conversation_run.workspace_service import WorkspaceService
     from app.service.model_config import ModelConfigService
@@ -343,14 +345,14 @@ def get_conversation_run_service() -> ConversationRunService:
 def get_conversation_run_state_service() -> ConversationRunStateService:
     """返回进程级 Conversation Run 状态机单例。
 
-    只负责 Run 状态的条件迁移、对应事件发布与状态查询；Run 创建/编辑编排见
+    只负责 Run 状态的条件迁移、执行进度保存与对应事件发布；Run 创建/编辑编排见
     ``get_conversation_run_service``。
 
     参数:
         无。
 
     返回:
-        已装配 run CRUD 与会话工厂的 ``ConversationRunStateService`` 单例
+        已装配 run CRUD 的 ``ConversationRunStateService`` 单例
         （``lru_cache`` 缓存）。
 
     异常:
@@ -362,6 +364,24 @@ def get_conversation_run_state_service() -> ConversationRunStateService:
     )
 
     return ConversationRunStateService()
+
+
+@lru_cache(maxsize=1)
+def get_task_message_queue() -> TaskMessageQueue:
+    """返回进程级 Task 外部消息队列单例（无进程内状态，只包队列 CRUD）。"""
+
+    from app.service.conversation_run.task_message_queue import TaskMessageQueue
+
+    return TaskMessageQueue()
+
+
+@lru_cache(maxsize=1)
+def get_user_input_service() -> UserInputService:
+    """返回进程级用户输入解析服务单例（无进程内状态）。"""
+
+    from app.service.conversation_run.user_input_service import UserInputService
+
+    return UserInputService()
 
 
 @lru_cache(maxsize=1)
@@ -405,6 +425,8 @@ def reset_service_dependencies() -> None:
     get_workspace_service.cache_clear()
     get_conversation_run_service.cache_clear()
     get_conversation_run_state_service.cache_clear()
+    get_task_message_queue.cache_clear()
+    get_user_input_service.cache_clear()
     get_task_service.cache_clear()
     get_workspace_crud.cache_clear()
     get_conversation_run_crud.cache_clear()

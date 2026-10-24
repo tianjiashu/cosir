@@ -47,6 +47,9 @@ class _StubServices:
     def get_latest_run(self, _task_id: int) -> SimpleNamespace:
         return self.get_run(_RUN_ID)
 
+    def require_latest_run(self, task_id: int) -> SimpleNamespace:
+        return self.get_latest_run(task_id)
+
     def pending(self, _task_id: int) -> list:
         return []
 

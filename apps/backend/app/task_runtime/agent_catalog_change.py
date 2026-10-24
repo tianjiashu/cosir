@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-from app.models.runtime_notice import RuntimeNotice
+from app.models.task_message import NoticeBody
 
 AGENT_CATALOG_CHANGE_NOTICE_TYPE = "agent_catalog_change"
 AgentCatalogChangeAction = Literal["created", "updated", "deleted"]
@@ -29,7 +29,7 @@ class AgentCatalogChange:
         current_description: 变更后描述；删除时为 ``None``。
 
     返回:
-        ``to_notice`` 返回下一次模型节点消费的延迟提示 ``RuntimeNotice``。
+        ``to_notice`` 返回下一次模型节点消费的延迟提示 ``NoticeBody``。
 
     异常:
         无。字段由配置 service 在写入成功后构造，消息编码不会执行文件或网络 IO。
@@ -44,7 +44,7 @@ class AgentCatalogChange:
     previous_description: str | None
     current_description: str | None
 
-    def to_notice(self) -> RuntimeNotice:
+    def to_notice(self) -> NoticeBody:
         """把目录变更转换为不绑定模型消息角色的运行时通知。"""
 
         scope = "system" if self.scope is None else self.scope
@@ -61,9 +61,9 @@ class AgentCatalogChange:
                 "</agent_catalog_update>",
             )
         )
-        return RuntimeNotice(
+        return NoticeBody(
             content=content,
-            kind=AGENT_CATALOG_CHANGE_NOTICE_TYPE,
+            notice_kind=AGENT_CATALOG_CHANGE_NOTICE_TYPE,
             metadata={
                 "action": self.action,
                 "agent_id": self.agent_id,

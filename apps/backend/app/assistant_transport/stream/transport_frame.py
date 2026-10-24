@@ -12,7 +12,6 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
 
-
 FrameKind = Literal["full", "mutation", "resync_required"]
 
 

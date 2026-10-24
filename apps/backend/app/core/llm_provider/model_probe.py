@@ -1,6 +1,6 @@
 """模型连接真实探活：复用运行期模型构建入口做一次最小流式调用。
 
-单一职责：给定一份**已物化**的 ``ModelSettings``，用运行期同一构建入口（``build_chat_model``）
+单一职责：给定一份已解析的 ``ResolvedModel``，用运行期同一构建入口（``build_chat_model``）
 发起一次最小流式请求，判定该配置能否产出生成内容，并把失败归一为稳定的
 :class:`ModelProbeFailureKind`。
 
@@ -38,7 +38,7 @@ from openai.types.chat import ChatCompletionUserMessageParam
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.agents.model_settings import ModelSettings, ModelSettingsError
+from app.core.agents.resolved_model import ResolvedModel
 from app.core.llm_provider.model_factory import build_chat_model
 
 __all__ = [
@@ -55,7 +55,7 @@ class ModelProbeFailureKind(str, Enum):
     service 层的文案目录，避免出现没有文案的裸 code。
     """
 
-    # 设置未物化或基础字段非法（缺 model_name / context_window_k 等），请求未发出。
+    # 配置不完整（缺 Base URL / model_name / context_window_k 等），解析即失败，请求未发出。
     INVALID_CONFIG = "invalid_config"
     # 鉴权失败：Key 缺失、错误或无权访问该模型。
     AUTH_FAILED = "auth_failed"
@@ -108,7 +108,7 @@ _STATUS_KINDS: dict[int, ModelProbeFailureKind] = {
 
 
 async def probe_chat_model(
-    model_settings: ModelSettings,
+    model_settings: ResolvedModel,
     *,
     max_tokens: int = 1,
     timeout_seconds: float = Constant.LLM.REQUEST_TIMEOUT_SECONDS,
@@ -116,8 +116,8 @@ async def probe_chat_model(
     """用运行期构建入口对一份模型配置做一次真实流式探活。
 
     参数:
-        model_settings: 已物化的模型运行设置（``ModelSettings.from_model_config_record``
-            的产物）；未物化时归类为 ``invalid_config``，不发出请求。
+        model_settings: 已解析的模型（``resolve_model`` 的产物）；配置不完整的情况已在解析时由
+            调用方归为 ``invalid_config``，这里不再校验。
         max_tokens: 本次探测的最大生成 token 数；默认 1，读首个 chunk 即结束。
         timeout_seconds: 模型请求阶段（构建之后的流式读取）的超时上限。模型构建是本地同步构造、
             不含网络 I/O，且 ``asyncio`` 超时只能中断 ``await`` 点，因此构建不受该值约束。
@@ -135,11 +135,7 @@ async def probe_chat_model(
     """
 
     started = perf_counter()
-    try:
-        settings = replace(model_settings, max_tokens=max_tokens)
-        settings.require_runtime_config()
-    except ModelSettingsError as exc:
-        return _failure(started, model_settings, ModelProbeFailureKind.INVALID_CONFIG, str(exc))
+    settings = replace(model_settings, max_tokens=max_tokens)
 
     try:
         model = build_chat_model(settings)
@@ -220,7 +216,7 @@ def _elapsed_ms(started: float) -> int:
 
 def _failure(
     started: float,
-    model_settings: ModelSettings,
+    model_settings: ResolvedModel,
     kind: ModelProbeFailureKind,
     detail: str,
 ) -> ModelProbeOutcome:

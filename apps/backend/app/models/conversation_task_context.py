@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from uuid import uuid4
 
 from openai.types.chat import ChatCompletionMessageParam
 
@@ -25,7 +24,8 @@ class ConversationTaskContextRecord:
     message: ChatCompletionMessageParam
     include_in_context: bool
     sequence: int
-    message_id: str = field(default_factory=lambda: str(uuid4()))
+    # 只有用户消息有身份（inbox 行 id）；其余角色为 None。
+    message_id: int | None = None
     metadata: MessageMetadata = field(default_factory=EmptyMessageMetadata)
     # 与 ``include_in_context`` 独立：消息可供模型使用但不对前端投影。
     project_to_transport: bool = True

@@ -5,6 +5,7 @@ from typing import Literal
 from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_state_part import ConversationStatePart
+from app.models.task_message import Delivery
 
 
 class ConversationStateMessage(TypedDict):
@@ -18,3 +19,12 @@ class ConversationStateMessage(TypedDict):
     id: str
     role: Literal["user", "assistant"]
     parts: list[ConversationStatePart]
+
+
+class ConversationQueuedMessage(ConversationStateMessage):
+    """尚未被模型边界消费、需投影的排队消息。
+
+    ``delivery`` 只供前端区分「下个模型边界并入」与「交给下一个 Run」，事实仍在外部队列。
+    """
+
+    delivery: Delivery

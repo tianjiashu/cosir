@@ -1,23 +1,16 @@
-"""Run 创建、队列交接与启动恢复用例；用户输入解析由独立输入边界负责。"""
-
-from sqlalchemy.orm import Session
+"""Run 创建（按调度方选定的发起配置）与启动恢复用例；输入解析、编辑移出与队列不归这里。"""
 
 from app.config.logging.logger import log
 from app.core.context.tool_call_closure import ContextProtocolError
 from app.core.events import RunInitializedEvent
 from app.models import (
-    ConversationRunCommand,
     ConversationRunRecord,
     ConversationRunStatus,
 )
-from app.models.conversation_input import QueuedTaskInput
-from app.models.conversation_run_options import ReasoningEffort
 from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.enums.conversation_run_status import RunTransition
+from app.models.task_message import RunLaunch
 from app.service import depends as service_depends
-from app.service.conversation_run.conversation_input_preparation_service import (
-    ConversationInputPreparationService,
-)
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
@@ -50,74 +43,40 @@ class ConversationRunService:
         self._context = ConversationTaskContextService()
         self._session_factory = main_session_factory()
 
-    def create_run(
-        self,
-        task_id: int,
-        agent_id: str | None = None,
-        model_config_id: int | None = None,
-        reasoning_effort: ReasoningEffort | None = None,
-        session: Session | None = None,
-        run_command: ConversationRunCommand | None = None,
-        queued_input: QueuedTaskInput | None = None,
-    ) -> ConversationRunRecord:
-        """同一事务创建 running Run、初始 inbox 输入和 Task 当前 Run 指针。
+    def create_run(self, task_id: int, launch: RunLaunch) -> ConversationRunRecord:
+        """新建 Run 的唯一路径：同一事务内按发起配置建 running Run → 写 Task 当前 Run 指针。
 
-        只由 ``WorkflowSession`` 在 Task 闸门内调用并随即交给执行器，因此直接以 running 创建。
-        队列交接只创建 Run，不再次插入已存在的输入；调用方有外部事务时负责提交后投影。"""
-        if queued_input is not None:
-            payload = queued_input
-        elif run_command is not None and model_config_id is not None:
-            payload = ConversationInputPreparationService().prepare_input(
-                task_id, run_command, model_config_id, reasoning_effort
-            )
-        else:
-            raise ValueError("创建 Run 必须提供输入命令和模型，或已入队的输入")
-        model_config_id = payload.model_config_id
-        config = get_model_config_service().get_config(model_config_id)
-        context_window_total = config.context_window_k * 1000
-
-        def persist_facts(persist_session: Session) -> ConversationRunRecord:
+        配置由调度方按 ``dispatch_policy.next_action`` 从队列选定，这里不读队列；输入仍在外部
+        队列，由新执行的初始投递交给 ``prepare_input`` 并入。只由 Task 的调度 actor（``TaskActor``）
+        调用并随即交给执行器，因此直接以 running 创建。
+        """
+        config = get_model_config_service().get_config(launch.model_config_id)
+        with self._session_factory.begin() as session:
             run = self._run.create(
                 task_id,
                 ConversationRunStatus.RUNNING.value,
-                agent_id=agent_id,
-                model_config_id=model_config_id,
-                context_window_total=context_window_total,
-                options=payload.options,
-                session=persist_session,
+                agent_id=launch.agent_id,
+                model_config_id=launch.model_config_id,
+                context_window_total=config.context_window_k * 1000,
+                options=launch.options,
+                session=session,
             )
-            from app.storage.crud.task_input_crud import TaskInputCrud
-
-            if queued_input is None:
-                TaskInputCrud().append(persist_session, task_id, payload)
-            self._task.set_current_run_id(
-                task_id,
-                run.id,
-                session=persist_session,
-            )
-            return run
-
-        if session is not None:
-            run = persist_facts(session)
-        else:
-            with self._session_factory.begin() as owned_session:
-                run = persist_facts(owned_session)
-
-        # 外部事务由调用方提交并投影，避免提前暴露未提交事实或重复发布。
-        if session is None:
-            service_depends.get_conversation_event_projector().process(
-                RunInitializedEvent(
-                    task_id=task_id,
-                    run_id=run.id,
-                    context_window_total=context_window_total,
-                ),
-            )
+            self._task.set_current_run_id(task_id, run.id, session=session)
+        service_depends.get_conversation_event_projector().process(
+            RunInitializedEvent(
+                task_id=task_id,
+                run_id=run.id,
+                context_window_total=run.context_window_total,
+                model_config_id=run.model_config_id,
+                options=run.options,
+            ),
+        )
         return run
 
     def recover_orphaned_runs(
         self, end_reason: str = "runtime_restarted"
     ) -> list[ConversationRunRecord]:
-        """启动时取消失去执行者的 pending/running Run；waiting 保留供用户决定。
+        """启动时取消失去执行者的 running Run；suspended 没有执行者、不需要收敛，保留等消息唤醒。
         每个 Run 的状态与工具占位同事务提交；inbox 保留，不自动继续，不发布尚无订阅者的事件。
         配对依据不完整时不补占位，记录错误并提交取消，继续恢复其他 Run。"""
 
@@ -136,7 +95,6 @@ class ConversationRunService:
                     session=session,
                 )
                 if record is not None:
-                    self._context.invalidate_waiting_calls(run.task_id, run.id, session)
                     try:
                         repaired_tool_call_ids = self._context.close_unclosed_tool_calls_for_run(
                             run.task_id, run.id, session=session

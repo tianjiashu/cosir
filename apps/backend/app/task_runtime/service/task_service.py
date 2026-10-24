@@ -16,9 +16,9 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm.session import Session
 
-from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.models import ConversationRunRecord, TaskRecord
+from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
     ProvisionalTaskCleanupConflictError,
@@ -77,7 +77,6 @@ class TaskService:
         creation_command_id: str | None = None,
         task_type: str = "user",
         parent_task_id: int | None = None,
-        parent_run_id: int | None = None,
         session: Session | None = None,
         extra: dict[str, object] | None = None,
         tool_schemas: list[dict[str, object]] | None = None,
@@ -100,7 +99,6 @@ class TaskService:
             creation_command_id: provisional Task 的创建命令标识。
             task_type: Task 类型。
             parent_task_id: 委派子 Task 的父 Task 标识。
-            parent_run_id: 委派子 Task 的父 Run 标识。
             session: 可选的外部数据库事务会话。
             extra: Task 扩展 JSON。
             tool_schemas: 新建 Task 时固化的固定模型工具 schema；传入 ``None`` 会持久化
@@ -128,7 +126,6 @@ class TaskService:
                 title=title,
                 task_type=task_type,
                 parent_task_id=parent_task_id,
-                parent_run_id=parent_run_id,
                 creation_command_id=creation_command_id,
                 extra=extra,
                 tool_schemas=frozen_schemas,
@@ -183,6 +180,19 @@ class TaskService:
         """
 
         return self._turn.get_latest_by_task(task_id)
+
+    def require_latest_run(self, task_id: int) -> ConversationRunRecord | None:
+        """返回存在的任务下最新的 run；任务尚无 run 时返回 ``None``。
+
+        与 :meth:`get_latest_run` 的区别只在存在性：调度入口要让不存在的 Task 以 ``KeyError``
+        上浮（接入层映射为 404），不能把「Task 不存在」误读成「尚无 Run」。
+
+        异常:
+            KeyError: 如果指定任务不存在。
+        """
+
+        self._task.get(task_id)
+        return self.get_latest_run(task_id)
 
     def get_task(self, task_id: int) -> TaskRecord:
         """按标识取单个任务，并附带派生的执行态。
@@ -288,7 +298,7 @@ class TaskService:
             if boundary_index is None:
                 raise KeyError(source_run_id)
             source_prefix = runs[: boundary_index + 1]
-            if any(run.status not in Constant.Run.TERMINAL_STATUSES for run in source_prefix):
+            if any(run.status not in TERMINAL_RUN_STATUSES for run in source_prefix):
                 raise TaskForkConflictError(
                     "RUN_NOT_READY",
                     "all runs in the selected history prefix must be terminal before forking",
@@ -480,9 +490,9 @@ class TaskService:
         先校验 run 属于该 task（否则 ``KeyError``）；再按 workspace → task 锁顺序取得结构性
         写操作闸门。task 内存在 ``pending`` / ``running`` 的 active run 时拒绝删除（抛
         ``RunDeletionConflictError``），该判断在持有 task 闸门后执行，与 run 创建路径互斥。
-        在单个 ``BEGIN IMMEDIATE`` 事务内按外键依赖逆序清理：context → command → delegation →
-            ``tasks.parent_run_id`` 引用 → run 行（``tasks.current_run_id`` 由
-        ``ON DELETE SET NULL`` 自动处理）。执行进度随 Run 行删除。
+        在单个 ``BEGIN IMMEDIATE`` 事务内先删 context 再删 run 行（``tasks.current_run_id`` 由
+        ``ON DELETE SET NULL`` 自动处理，引用该 Run 的 TeamRun 随外键级联删除）。执行进度随 Run
+        行删除。
 
         不新增 run 级进程内 snapshot 失效入口：Transport 快照刷新由前端在删除后重新拉取/重连
         处理（见架构边界：允许 context 与 snapshot 最终一致）。
@@ -501,9 +511,8 @@ class TaskService:
             sqlalchemy.exc.SQLAlchemyError: 如果删除事务失败（回滚）。
 
         副作用:
-            从 ``conversation_task_contexts`` / ``conversation_runs`` 删除该 run 相关行，并把
-            ``tasks`` 中
-            ``parent_run_id`` 指向本 run 的引用置空；执行进度随 Run 行删除。
+            从 ``conversation_task_contexts`` / ``conversation_runs`` 删除该 run 相关行；执行进度
+            随 Run 行删除。
         """
 
         task = self._task.get(task_id)
@@ -537,7 +546,6 @@ class TaskService:
         )
         with begin_immediate(self._session_factory) as session:
             self._context.delete_by_run_id(task_id, run_id, session=session)
-            self._task.clear_parent_run_id_by_run_id(run_id, session=session)
             self._turn.delete_by_ids([run_id], session)
         log.info(
             "run_deleted",
@@ -693,9 +701,6 @@ class TaskService:
         """在调用方事务内删除 Task 与全部子产物；外键级联删除未消费 inbox。"""
 
         self._task.ensure_task(session, task_id)  # 存在性守卫
-        # 解除 tasks.parent_run_id 对 run 的引用。
-        self._task.clear_parent_run_id([task_id], session)
-
         run_ids = self._turn.collect_run_ids_by_task_ids(session, [task_id])
 
         self._task_context_crud.delete_by_task_ids([task_id], session)

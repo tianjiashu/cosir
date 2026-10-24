@@ -1,18 +1,20 @@
-"""Assistant UI Assistant Transport API。
+"""Assistant Transport API：Task 级命令、订阅与 snapshot 读取。
 
-本模块是新的对话传输接入层：接收 assistant-ui ``add-message`` 命令，创建运行切片，
-并把服务端 canonical conversation facts 编码为 Assistant Transport state operations。
-它不把 assistant-ui 类型传入 core、service 或 storage。
+命令只对 Task（或消息）寻址，不携带 run_id，调度规则全部在 ``WorkflowSession``；本模块只做 wire
+映射与错误映射。attach 只订阅 Task 当前 Run，不触发业务执行。
 """
+
+from collections.abc import Awaitable
 
 from fastapi import Depends, HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.app import app
 from app.assistant_transport.request import (
-    AddMessageCommand,
-    AssistantAttachRequest,
-    AssistantTransportRequest,
+    EditQueuedMessageRequest,
+    RerunMessageRequest,
+    SendMessageRequest,
+    TeamDecisionRequest,
 )
 from app.assistant_transport.response.command_accepted import CommandAccepted
 from app.assistant_transport.service.conversation_task_state_service import (
@@ -24,214 +26,190 @@ from app.assistant_transport.service.transport_assistant_service import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
-from app.core.runtime.conversation_run_executor import ConversationRunExecutor
+from app.models.errors.input_errors import UserInputRejectedError
 from app.service.attachment.image_normalizer import ImageNormalizationError
+from app.service.conversation_run.workflow_session import (
+    SessionConflictError,
+    SessionReceipt,
+    WorkflowSession,
+)
 from app.service.depends import (
-    get_conversation_run_executor,
     get_conversation_task_state_service,
     get_task_service,
     get_transport_assistant_service,
+    get_workflow_session,
 )
 from app.task_runtime.service.task_service import TaskService
 
 
-@app.post("/assistant", response_model=CommandAccepted)
-async def assistant_transport(
-    request: AssistantTransportRequest,
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
-    transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
-) -> Response:
-    """提交用户消息、编辑或业务续跑，返回 JSON 接收回执。
-    后台执行独立于请求；输出由 attach SSE 订阅，普通入队不会替换订阅。"""
-
-    command = next(
-        (command for command in request.commands if isinstance(command, AddMessageCommand)),
-        None,
-    )
-    # 确定 run 模式：resume / edit / new
-    mode = transport_service.classify_run_command(command, request.runId)
-
-    # 确保 run 目标存在
-    task_id = transport_service.ensure_run_target(
-        request=request,
-        command=command,
-        mode=mode,
-    )
+async def _accept(
+    task_id: int,
+    operation: str,
+    call: Awaitable[SessionReceipt],
+    state_service: ConversationTaskStateService,
+) -> CommandAccepted:
+    """执行一次 Task 命令，并把领域结果与异常统一映射为回执或 Transport 错误。"""
 
     try:
-        if mode == "resume" and request.runId is not None:
-            import asyncio
-
-            from app.service.depends import get_conversation_run_service
-
-            resume_run = await asyncio.to_thread(
-                get_conversation_run_service().get_run, request.runId
-            )
-            if resume_run.status not in {"waiting_for_input", "cancelled", "failed"}:
-                raise ValueError("Run 当前不可续跑")
-            await run_executor.wait_released(request.runId)
-        if mode == "edit" and request.runId is not None:
-            import asyncio
-
-            from app.service.depends import get_conversation_run_service
-
-            edited_run = await asyncio.to_thread(
-                get_conversation_run_service().get_run, request.runId
-            )
-            if edited_run.status not in {"pending", "running"}:
-                await run_executor.wait_released(request.runId)
-        async with transport_service.task_run_operation(task_id=task_id):
-            # 准备 run 启动结果
-            start_result = await transport_service.prepare_run_start(
-                task_id=task_id,
-                command=command,
-                mode=mode,
-                request=request,
-            )
-            run = start_result.run
-            initial_state = start_result.initial_state
-
-            try:
-                # 状态与决定已原子落库，执行器从 Run 读取恢复事实。
-                if start_result.should_start:
-                    await run_executor.start(run.id, start_result.execution_mode)
-            except Exception:
-                # 真失败：run 已被本次请求置为 active，但执行器没有起来，必须收敛，否则该 task
-                # 会残留一个无执行器的 active run（new 与 resume 都会被状态校验拒绝）。
-                transport_service.settle_run_start_failure(run.id)
-                log.exception(
-                    "assistant_transport_executor_start_failed",
-                    extra={
-                        "msg": "执行器启动失败，已尝试收敛该 run",
-                        "data": {"run_id": run.id, "task_id": task_id},
-                    },
-                )
-                _raise_transport_error(
-                    500,
-                    "RUN_START_FAILED",
-                    "无法启动对话运行，请稍后重试",
-                    retryable=True,
-                    command_id=command.commandId if command is not None else None,
-                    run_id=request.runId,
-                )
-
-            return JSONResponse(
-                {"runId": run.id, "state": initial_state, "queued": not start_result.should_start},
-                headers={"X-Cosir-Task-Id": str(task_id), "X-Cosir-Thread-Id": request.threadId},
-            )
-    except HTTPException:
-        # 由 ``_raise_transport_error`` 抛出的领域冲突响应必须原样到达 FastAPI。
-        # 若把它们转成 RUN_START_FAILED，会掩盖 RUN_NOT_RESUMABLE、TASK_BUSY 等可处理状态。
-        raise
+        receipt = await call
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    except SessionConflictError as exc:
+        _raise_transport_error(409, exc.code, str(exc), retryable=True)
     except ImageNormalizationError as exc:
         _raise_transport_error(
             503 if exc.code == "ATTACHMENT_STORAGE_UNAVAILABLE" else 400,
             exc.code,
             exc.message,
             retryable=exc.code in {"IMAGE_CONVERSION_FAILED", "ATTACHMENT_STORAGE_UNAVAILABLE"},
-            command_id=command.commandId if command is not None else None,
-            run_id=request.runId,
         )
-    except ValueError as exc:
-        operation_code = (
-            "RUN_NOT_RESUMABLE"
-            if mode == "resume"
-            else "RUN_NOT_REPLAYABLE"
-            if mode == "edit"
-            else "RUN_START_CONFLICT"
-        )
+    except UserInputRejectedError as exc:
+        # 输入问题要用户自己改：400 + 具体原因，不要复用「状态冲突、刷新重试」那种误导文案。
+        # ``str(exc)`` 是只进日志的诊断细节（附件 id、缺失资源），线上只回 ``message``。
         log.warning(
-            "assistant_transport_domain_value_error",
+            "task_command_input_rejected",
             extra={
-                "msg": "Assistant Transport 领域校验失败，已使用安全错误文案",
+                "msg": "用户输入在入队前被拒",
                 "data": {
                     "task_id": task_id,
-                    "mode": mode,
-                    "error_type": type(exc).__name__,
+                    "operation": operation,
+                    "code": exc.code,
+                    "detail": str(exc),
                 },
             },
         )
-        _raise_transport_error(
-            409,
-            operation_code,
-            "当前对话状态不允许执行该操作，请刷新后重试",
-            retryable=True,
-            command_id=command.commandId if command is not None else None,
-            run_id=request.runId,
-        )
-    except TimeoutError:
-        # Task 操作闸门 10s 内未释放：该 task 上有另一个执行正持有运行期闸门。这是
-        # "忙"，不是服务故障，映射为可重试的 409 而不是 500。
-        _raise_transport_error(
-            409,
-            "TASK_BUSY",
-            "该对话正在执行其它操作，请稍后重试",
-            retryable=True,
-            command_id=command.commandId if command is not None else None,
-            run_id=request.runId,
-        )
-    except Exception:
-        log.exception(
-            "assistant_transport_run_start_failed",
+        _raise_transport_error(400, exc.code, exc.message, retryable=False)
+    except ValueError as exc:
+        log.warning(
+            "task_command_rejected",
             extra={
-                "msg": "Assistant Transport 命令与运行切片原子创建失败",
-                "data": {
-                    "task_id": task_id,
-                    "command_id": command.commandId if command is not None else None,
-                    "run_id": request.runId,
-                },
+                "msg": "Task 命令领域校验失败，已使用安全错误文案",
+                "data": {"task_id": task_id, "operation": operation, "error": str(exc)},
             },
         )
         _raise_transport_error(
-            500,
-            "RUN_START_FAILED",
-            "无法创建对话运行，请稍后重试",
-            retryable=True,
+            409, "TASK_STATE_CONFLICT", "当前对话状态不允许执行该操作，请刷新后重试", retryable=True
         )
+    log.info(
+        "task_command_accepted",
+        extra={
+            "msg": "Task 命令已接受",
+            "data": {"task_id": task_id, "operation": operation, "queued": receipt.queued},
+        },
+    )
+    return CommandAccepted(state=state_service.get_state(task_id), queued=receipt.queued)
+
+
+@app.post("/tasks/{task_id}/messages", response_model=CommandAccepted)
+async def send_message(
+    task_id: int,
+    request: SendMessageRequest,
+    session: WorkflowSession = Depends(get_workflow_session),
+    state_service: ConversationTaskStateService = Depends(get_conversation_task_state_service),
+) -> CommandAccepted:
+    """发送消息：有活动 Run 时按 ``delivery`` 立即并入或排到本轮之后，否则新开 Run。"""
+
+    return await _accept(
+        task_id,
+        "send",
+        session.submit(
+            task_id,
+            request.to_run_command(),
+            model_config_id=request.modelConfigId,
+            reasoning_effort=request.reasoningEffort,
+            delivery=request.delivery,
+        ),
+        state_service,
+    )
+
+
+@app.patch("/tasks/{task_id}/queued-messages/{message_id}", response_model=CommandAccepted)
+async def edit_queued_message(
+    task_id: int,
+    message_id: int,
+    request: EditQueuedMessageRequest,
+    session: WorkflowSession = Depends(get_workflow_session),
+    state_service: ConversationTaskStateService = Depends(get_conversation_task_state_service),
+) -> CommandAccepted:
+    """原地编辑排队中的用户消息，不影响 Run；消息已被并入时 409 ``MESSAGE_CONSUMED``。"""
+
+    return await _accept(
+        task_id,
+        "edit_queued",
+        session.edit_queued(task_id, message_id, request.to_run_command()),
+        state_service,
+    )
+
+
+@app.post("/tasks/{task_id}/messages/{message_id}/rerun", response_model=CommandAccepted)
+async def rerun_message(
+    task_id: int,
+    message_id: int,
+    request: RerunMessageRequest,
+    session: WorkflowSession = Depends(get_workflow_session),
+    state_service: ConversationTaskStateService = Depends(get_conversation_task_state_service),
+) -> CommandAccepted:
+    """编辑最新一条已并入的用户消息并重跑：运行中先停止当前 Run，它及其后 context 移出，编辑后
+    的消息进入新建的 Run。"""
+
+    return await _accept(
+        task_id,
+        "rerun",
+        session.rerun(
+            task_id,
+            message_id,
+            request.to_run_command(),
+            model_config_id=request.modelConfigId,
+            reasoning_effort=request.reasoningEffort,
+        ),
+        state_service,
+    )
+
+
+@app.post("/tasks/{task_id}/resume", response_model=CommandAccepted)
+async def resume_task(
+    task_id: int,
+    session: WorkflowSession = Depends(get_workflow_session),
+    state_service: ConversationTaskStateService = Depends(get_conversation_task_state_service),
+) -> CommandAccepted:
+    """恢复 Task：最新 Run 为 cancelled / failed 时从模型节点续跑。"""
+
+    return await _accept(task_id, "resume", session.resume(task_id), state_service)
+
+
+@app.post("/tasks/{task_id}/decisions", response_model=CommandAccepted)
+async def submit_decision(
+    task_id: int,
+    request: TeamDecisionRequest,
+    state_service: ConversationTaskStateService = Depends(get_conversation_task_state_service),
+) -> CommandAccepted:
+    """对待确认的 Agent Team 方案作出决定：后端确定性执行（批准即后台运行 Team），再以消息唤醒
+    主 Agent。"""
+    from app.service.agent_team.agent_team_decision_service import AgentTeamDecisionService
+
+    return await _accept(
+        task_id,
+        "decide",
+        AgentTeamDecisionService().submit(
+            task_id, request.teamRunId, request.decision, request.data
+        ),
+        state_service,
+    )
 
 
 @app.post("/tasks/{task_id}/assistant/attach")
 async def assistant_transport_attach(
     task_id: int,
-    request: AssistantAttachRequest,
     task_service: TaskService = Depends(get_task_service),
     transport_service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> StreamingResponse:
-    """重新订阅已有 Run，不触发业务 resume。"""
+    """重新订阅 Task 当前 Run，不触发业务 resume。"""
 
     try:
         task_service.get_task(task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
-    if request.threadId != f"conversation_run-{task_id}":
-        _raise_transport_error(
-            409,
-            "THREAD_TASK_MISMATCH",
-            "threadId 与 task_id 不一致",
-            retryable=False,
-            run_id=request.runId,
-        )
-    if request.taskId is not None and request.taskId != task_id:
-        _raise_transport_error(
-            409,
-            "TASK_ID_MISMATCH",
-            "请求 taskId 与路径不一致",
-            retryable=False,
-            run_id=request.runId,
-        )
-    if request.commands:
-        _raise_transport_error(
-            400,
-            "ATTACH_COMMANDS_UNSUPPORTED",
-            "attach 请求不能携带业务命令",
-            retryable=False,
-            run_id=request.runId,
-        )
-    return await transport_service.attach_run(
-        task_id=task_id,
-        thread_id=request.threadId,
-        run_id=request.runId,
-    )
+    return transport_service.attach(task_id)
 
 
 @app.get("/tasks/{task_id}/assistant/state")
@@ -291,20 +269,20 @@ async def assistant_transport_state(
 @app.post("/tasks/{task_id}/cancel")
 async def cancel_task(
     task_id: int,
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+    session: WorkflowSession = Depends(get_workflow_session),
 ) -> Response:
     """停止 Task 当前的执行。
 
     按 task 而不是 run 取消：同一 Task 内 Run 串行，命中的永远是当前执行，不依赖前端可能
-    滞后的 run_id。本端点只表示**取消信号已被接受**，Run 终态由 workflow 在检查点落定，前端
-    继续以 canonical snapshot 为准；等待用户决定的 Run 会以强制拒绝恢复后同样收敛。重复请求
-    幂等返回 200。HTTP 断连不会调用本端点。
+    滞后的 run_id。运行中的 Run 只打取消信号，终态由 workflow 在检查点落定，前端继续以
+    canonical snapshot 为准；挂起（``suspended``）的 Run 没有执行者，由 Task 调度 actor 直接
+    迁移为 ``cancelled``。执行收尾前的重复请求幂等返回 200。HTTP 断连不会调用本端点。
 
     异常:
         HTTPException: task 不存在时 404；Task 当前没有可停止的执行时 409；内部失败时 500。
     """
     try:
-        accepted = await run_executor.cancel(task_id)
+        accepted = await session.cancel(task_id)
     except KeyError as exc:
         log.warning(
             "task_cancel_not_found",
@@ -330,84 +308,30 @@ async def cancel_task(
     return JSONResponse(content={"task_id": task_id, "cancelled": True})
 
 
-@app.post("/runs/{run_id}/tool-calls/{tool_call_id}/cancel")
+@app.post("/tasks/{task_id}/tool-calls/{tool_call_id}/cancel")
 async def cancel_tool_call(
-    run_id: int,
+    task_id: int,
     tool_call_id: str,
-    run_executor: ConversationRunExecutor = Depends(get_conversation_run_executor),
+    session: WorkflowSession = Depends(get_workflow_session),
 ) -> Response:
-    """显式取消一个正在执行的工具调用（工具级取消）。
+    """只中止 Task 当前执行中的一次工具调用，Run 与 Agent 继续执行。
 
-    表现层只做输入校验、调用业务层与异常映射，不编排取消时序——「向进程内工具级取消
-    信号源标记该工具调用」已收口到 ``ConversationRunExecutor.cancel_tool_call`` 单一入口。
-
-    与 ``POST /tasks/{task_id}/cancel`` 的差别是取消范围：Task 级取消要求当前执行整体停止，
-    run 终态由 workflow 落定；本端点只中止**一次**工具调用，run 与 Agent
-    在其后继续执行。因此本端点只表示**取消信号已被接受**，不表示工具调用已经结束：被
-    点名的工具在执行层检出信号后返回取消观察，其终态与模型侧 ``ToolMessage`` 由 workflow
-    落定，前端需继续以 canonical snapshot 为准。HTTP 断连不会调用本端点。
-
-    响应码的语义边界：信号随该工具调用执行结束被释放，run 收尾时按 run_id 兜底清理，
-    因此 409 只表示「此刻信号已存在」，200 也不保证该调用尚未结束——**调用方不得把
-    200/409 当作幂等去重或执行进度依据**，只能以 404（run 不存在）作为确定性失败。
-
-    参数:
-        run_id: 目标工具调用所属的 Conversation Run 标识。
-        tool_call_id: 目标工具调用标识（模型工具调用 id）。
-        run_executor: 进程内取消信号标记的唯一入口。
-
-    返回:
-        包含 ``run_id``、``tool_call_id`` 与 ``cancelled`` 的 JSON 对象。
+    工具级取消信号仍按 ``(run_id, tool_call_id)`` 记录，run_id 由 Task 当前执行解析。本端点只
+    表示信号已被接受；工具调用终态由工具执行层与 workflow 落定，前端以 canonical snapshot 为准。
 
     异常:
-        HTTPException: run 不存在时返回 404；该工具调用此前已标记过取消（信号已存在）时
-        返回 409；标记内部失败时返回 500。
-
-    副作用:
-        向进程内工具级取消信号源写入 ``(run_id, tool_call_id)``；不落库 run 或工具调用
-        状态、不取消后台执行 task。工具执行层在本次调用结束时释放该信号，run 收尾时按
-        run_id 兜底清理。
+        HTTPException: Task 当前没有执行，或同一调用已标记过取消时 409。
     """
-    try:
-        result = await run_executor.cancel_tool_call(run_id, tool_call_id)
-    except KeyError as exc:
-        log.warning(
-            "tool_call_cancel_run_not_found",
-            extra={
-                "msg": "工具级取消请求未找到 Conversation Run",
-                "data": {"run_id": run_id, "tool_call_id": tool_call_id},
-            },
+    run_id = session.cancel_tool_call(task_id, tool_call_id)
+    if run_id is None:
+        raise HTTPException(
+            status_code=409, detail="task has no running execution or call is already cancelled"
         )
-        raise HTTPException(status_code=404, detail="run not found") from exc
-    except Exception as exc:
-        log.exception(
-            "tool_call_cancel_failed",
-            extra={
-                "msg": "取消工具调用失败",
-                "data": {"run_id": run_id, "tool_call_id": tool_call_id},
-            },
-        )
-        raise HTTPException(status_code=500, detail="failed to cancel tool call") from exc
-    if not result:
-        log.info(
-            "tool_call_cancel_rejected",
-            extra={
-                "msg": "工具调用已存在取消信号，重复取消被拒绝",
-                "data": {"run_id": run_id, "tool_call_id": tool_call_id},
-            },
-        )
-        raise HTTPException(status_code=409, detail="tool call is already cancelled")
     log.info(
         "tool_call_cancelled",
         extra={
             "msg": "工具调用取消信号已接受",
-            "data": {"run_id": run_id, "tool_call_id": tool_call_id},
+            "data": {"task_id": task_id, "run_id": run_id, "tool_call_id": tool_call_id},
         },
     )
-    return JSONResponse(
-        content={
-            "run_id": run_id,
-            "tool_call_id": tool_call_id,
-            "cancelled": result,
-        }
-    )
+    return JSONResponse(content={"task_id": task_id, "tool_call_id": tool_call_id})

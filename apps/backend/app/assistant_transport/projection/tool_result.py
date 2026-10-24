@@ -14,7 +14,6 @@ class ToolResultFields(TypedDict):
     display_data: dict[str, object] | None
     team_run_id: NotRequired[int]
     child_task_id: NotRequired[int]
-    child_run_id: NotRequired[int]
     agent_role: NotRequired[str]
 
 
@@ -31,7 +30,6 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
     display = metadata.display_data
     if display is not None and display.get("kind") == "delegation-result":
         child_task_id = display.get("child_task_id")
-        child_run_id = display.get("child_run_id")
         role = display.get("role")
         if (
             isinstance(child_task_id, int)
@@ -39,12 +37,6 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
             and child_task_id > 0
         ):
             fields["child_task_id"] = child_task_id
-        if (
-            isinstance(child_run_id, int)
-            and not isinstance(child_run_id, bool)
-            and child_run_id > 0
-        ):
-            fields["child_run_id"] = child_run_id
         if isinstance(role, str) and role.strip():
             fields["agent_role"] = role
     return fields

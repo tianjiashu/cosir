@@ -19,13 +19,11 @@ from app.assistant_transport.event.dispatch import dispatch_conversation_event
 from app.config.logging.logger import log
 from app.core.events import RunResultUpdatedEvent, RunStatusChangedEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.node_helper.user_input_projection import bind_decision
 from app.models import ConversationRunRecord
 from app.models.conversation_run_failure import run_terminal_error
 from app.models.conversation_run_progress import ConversationRunProgress
 from app.models.conversation_run_usage import ConversationRunUsage
 from app.models.enums.conversation_run_status import RunTransition
-from app.models.user_decision import UserDecision
 from app.service import depends as service_depends
 
 
@@ -53,7 +51,6 @@ class ConversationRunStateService:
         usage_stats: ConversationRunUsageStats | None = None,
         error_message: str | None = None,
         execution_data: ConversationRunProgress | None = None,
-        user_decision: UserDecision | None = None,
         session: Session | None = None,
     ) -> ConversationRunRecord | None:
         """按迁移表执行一次条件迁移；当前状态不在来源集合内时返回 ``None``，不写库、不发事件。
@@ -61,23 +58,10 @@ class ConversationRunStateService:
         参数:
             end_reason / final_output / usage_stats: 随迁移写入的结果字段，``None`` 表示不改。
             error_message: 失败或取消时覆盖受控错误文案（如模型 HTTP 响应体的 ``message``）。
-            execution_data: 随迁移原子写入的执行进度（挂起时的待决请求、编辑重置后的进度等）。
-            user_decision: 仅 ``RESUME_WITH_DECISION`` 使用：经 ``bind_decision`` 校验后并入已持久化
-                的待决请求，恢复执行只消费这份决定。
+            execution_data: 随迁移原子写入的执行进度（重启收敛时的步骤计数等）。
             session: 外部事务；传入时加入该事务且不发布事件（见模块 docstring）。
-
-        异常:
-            KeyError: run 不存在（``user_decision`` 需要先读取当前进度）。
-            DecisionMismatch: 决定与待决请求不符；此时不写库、不发事件。
         """
 
-        if user_decision is not None:
-            run = (
-                self._run.get_in_session(session, run_id)
-                if session is not None
-                else self._run.get(run_id)
-            )
-            execution_data = bind_decision(run.execution_data, user_decision)
         error = run_terminal_error(transition.target, end_reason, message=error_message)
         record = self._run.update_status_if_in(
             run_id=run_id,

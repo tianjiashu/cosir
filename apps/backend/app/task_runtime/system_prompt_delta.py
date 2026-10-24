@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models.runtime_notice import RuntimeNotice
+from app.models.task_message import NoticeBody
 from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 
 __all__ = ["SYSTEM_PROMPT_DELTA_NOTICE_TYPE", "SystemPromptDelta", "SystemPromptDeltaSource"]
@@ -27,7 +27,7 @@ class SystemPromptDelta:
         scope: 可选的作用域标识，例如 workspace 根目录；仅用于广播过滤和诊断。
 
     返回:
-        :meth:`to_notice` 返回供运行时队列使用的系统通知 ``RuntimeNotice``。
+        :meth:`to_notice` 返回供运行时队列使用的系统通知 ``NoticeBody``。
 
     异常:
         无。调用方应在构造前保证 ``diff`` 非空且来源已通过配置校验。
@@ -40,11 +40,11 @@ class SystemPromptDelta:
     diff: str
     scope: str | None = None
 
-    def to_notice(self) -> RuntimeNotice:
+    def to_notice(self) -> NoticeBody:
         """把增量转换为不绑定模型消息角色的运行时通知。
 
         返回:
-            包含简短覆盖规则与 diff 的 ``RuntimeNotice``。通知通过
+            包含简短覆盖规则与 diff 的 ``NoticeBody``。通知通过
             ``kind`` 与普通工具修复提示区分。
 
         异常:
@@ -69,9 +69,9 @@ class SystemPromptDelta:
             "</diff>\n"
             "</system_prompt_update>"
         )
-        return RuntimeNotice(
+        return NoticeBody(
             content=content,
-            kind=SYSTEM_PROMPT_DELTA_NOTICE_TYPE,
+            notice_kind=SYSTEM_PROMPT_DELTA_NOTICE_TYPE,
             metadata={
                 "source": self.source.value,
                 "scope": self.scope,

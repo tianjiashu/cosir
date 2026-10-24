@@ -32,7 +32,6 @@ class ConversationStateToolCallPart(TypedDict):
     approvalRequestId: NotRequired[None]
     # Runtime delegation locator. It is not rendered as text by the frontend.
     child_task_id: NotRequired[int]
-    child_run_id: NotRequired[int]
     agent_role: NotRequired[str]
     # Runtime terminal output sequence; it guards against stale delta events.
     terminal_output_seq: NotRequired[int]

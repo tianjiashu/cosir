@@ -34,43 +34,7 @@ def build_child_agent_result_display_data(
     return data
 
 
-def build_child_agent_wait_display_data(
-    *,
-    child_task_id: int,
-    status: str,
-    final_output: str | None,
-    end_reason: str | None,
-    timed_out: bool,
-) -> dict[str, Any]:
-    """构造单个 child-agent wait 的严格 Transport 展示数据。"""
-
-    terminal = status if status in {"completed", "failed", "cancelled"} else "completed"
-    if timed_out:
-        return {
-            "kind": "child-agent-wait-result",
-            "timed_out": True,
-            "messages": [],
-            "pending": [{"child_task_id": child_task_id, "status": status}],
-            "interrupted_by": None,
-        }
-    return {
-        "kind": "child-agent-wait-result",
-        "timed_out": False,
-        "messages": [
-            {
-                "child_task_id": child_task_id,
-                "status": terminal,
-                "final_output": final_output,
-                "end_reason": end_reason,
-            }
-        ],
-        "pending": [],
-        "interrupted_by": None,
-    }
-
-
 __all__ = [
     "ChildAgentOperation",
     "build_child_agent_result_display_data",
-    "build_child_agent_wait_display_data",
 ]

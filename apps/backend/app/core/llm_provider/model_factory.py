@@ -1,16 +1,15 @@
-"""按数据库已物化配置构造 OpenAI SDK 模型适配器。"""
+"""按已解析的 ``ResolvedModel`` 构造 OpenAI SDK 模型适配器。"""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from openai import AsyncOpenAI
 from openai.types.shared_params import FunctionDefinition
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.agents.agent_profile import AgentProfile
-from app.core.agents.model_settings import ModelSettings
+from app.core.agents.resolved_model import ResolvedModel
 from app.core.llm_provider.openai_model import OpenAIChatModel
 from app.utils.http_proxy import build_proxy_async_client
 
@@ -25,7 +24,7 @@ __all__ = [
 class ResolvedChatModel:
     """一次 Run 解析后的模型及其能力事实。
 
-    模型对象和能力来自同一个已物化 ``ModelSettings``，供 Workflow 同时使用，避免模型
+    模型对象和能力来自同一个 ``ResolvedModel``，供 Workflow 同时使用，避免模型
     构建与思考通道解析各自读取配置而产生两套口径。该值对象不持有数据库 session，也不
     负责 Run 状态迁移或模型调用。
     """
@@ -39,13 +38,12 @@ class ResolvedChatModel:
 
 
 def build_chat_model(
-    model_settings: ModelSettings, *, tools: Sequence[FunctionDefinition] = ()
+    settings: ResolvedModel, *, tools: Sequence[FunctionDefinition] = ()
 ) -> OpenAIChatModel:
     """构造 Run 独占的 OpenAI SDK client；厂商参数仅在此处适配。"""
-    settings = model_settings.require_runtime_config()
     effort = settings.reasoning_effort if settings.supports_reasoning_effort else "max"
     extra: dict[str, Any] = {"thinking": {"type": "enabled"}, "reasoning_effort": effort}
-    name = cast(str, settings.model_name).lower()
+    name = settings.model_name.lower()
     if "glm" in name:
         extra["thinking"]["clear_thinking"] = False
     if "minimax" in name:
@@ -80,34 +78,32 @@ def build_chat_model(
 
 def resolve_chat_model(
     *,
-    agent_profile: AgentProfile,
+    model: ResolvedModel,
     tools: Sequence[FunctionDefinition],
 ) -> ResolvedChatModel:
-    """从 Agent profile 的已物化 ModelSettings 构建模型及能力事实。
+    """从本次 Run 已解析的完整模型构建模型对象及能力事实。
 
     参数:
-        agent_profile: 本次执行的 per-Run Agent profile；其 ``model_settings`` 必须已包含
-            模型连接字段和能力字段。
+        model: ``AgentRuntimeConfig.model``；解析时已保证连接与能力字段完整。
         tools: Task 固化的工具定义，保持顺序，不按当前 Run 禁用集合过滤。
 
     返回:
         已绑定模型连接配置的 ``ResolvedChatModel``，其中模型对象和能力字段来自同一个
-        ``ModelSettings``。
+        ``ResolvedModel``。
 
     异常:
-        ValueError: profile 未提供或推理强度不被物化的模型能力支持。
+        ValueError: 推理强度不被物化的模型能力支持。
 
     副作用:
-        创建一个供本次 Run 使用的 HTTP client；不修改共享 profile，也不读取配置服务。
+        创建一个供本次 Run 使用的 HTTP client；不读取配置服务。
     """
-    model_settings = agent_profile.model_settings.require_runtime_config()
-    if model_settings.reasoning_effort is not None and not model_settings.supports_reasoning_effort:
+    if model.reasoning_effort is not None and not model.supports_reasoning_effort:
         raise ValueError("reasoning_effort preference is not supported by the selected model")
     return ResolvedChatModel(
-        model=build_chat_model(model_settings, tools=tools),
-        model_name=cast(str, model_settings.model_name),
-        context_window_k=cast(int, model_settings.context_window_k),
-        supports_thinking=model_settings.supports_thinking,
-        supports_reasoning_effort=model_settings.supports_reasoning_effort,
-        supports_image=model_settings.supports_image,
+        model=build_chat_model(model, tools=tools),
+        model_name=model.model_name,
+        context_window_k=model.context_window_k,
+        supports_thinking=model.supports_thinking,
+        supports_reasoning_effort=model.supports_reasoning_effort,
+        supports_image=model.supports_image,
     )

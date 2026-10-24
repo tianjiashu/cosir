@@ -191,8 +191,8 @@ def _require_tool_names(document: Mapping[str, Any], source: Path) -> list[str]:
 class AgentProfile:
     """
     Agent 定义（能力事实源）：来自内置定义、JSON 配置或 Team 节点的冻结快照，由注册表共享，
-    运行期不修改。一次 Run 实际执行所用的配置是 ``AgentRuntimeConfig``（定义 + 本 Run 物化的
-    完整模型配置），二者不要混用。
+    运行期不修改。一次 Run 实际执行所用的是 ``AgentRuntimeConfig``（本定义与本 Run 模型选择的
+    最终解析），二者不要混用。
     description 应该是"选择指南"，system_prompt 应该是"执行协议"，而本次
     delegate_task.message 才是"具体工作单"。
 
@@ -203,8 +203,8 @@ class AgentProfile:
             主 Agent 不设置此字段。
         allowed_tools: 该 Agent 允许使用的工具名或权限名。
         model_config_id: 该 Agent 的默认模型选择，不参与模型构建。
-        model_settings: 用户可写的模型偏好覆盖项；不含连接与能力字段（``api_key`` 不落盘），
-            完整配置只在 ``AgentRuntimeConfig.model_settings``。
+        model_settings: 用户可写的模型请求偏好；不含连接与能力字段（``api_key`` 不落盘），
+            完整模型只在 ``AgentRuntimeConfig.model``。
         structured_output: 可选的最终 JSON Schema 契约；为空时沿用普通文本最终输出。
         agent_type: Agent 分类（``AgentProfileType``），决定其在运行时的暴露与调度方式。
         max_steps: 单 run 最大步骤数。
@@ -318,13 +318,13 @@ def parse_agent_profile_document(
         strict_model_config: 是否拒绝无效模型配置覆盖。
 
     返回:
-    已完成字段、工具名校验，并把可选模型连接配置物化进 ``ModelSettings`` 的 CHILD profile。
+    已完成字段、工具名校验的 CHILD profile；显式模型选择只校验引用存在，不物化连接字段。
 
     异常:
         AgentProfileConfigError: 文档字段、工具、步骤数或严格模型配置校验失败。
 
     副作用:
-        读取进程内模型配置 service 以验证并物化显式模型选择；不写文件、不修改 Registry。
+        读取进程内模型配置 service 以校验显式模型选择；不写文件、不修改 Registry。
     """
 
     _validate_document(document, source)
@@ -335,25 +335,16 @@ def parse_agent_profile_document(
         raise AgentProfileConfigError(f"Agent 配置无效，文件={source}，max_steps 必须是正整数")
     model_settings = ModelSettings.from_json(document.get("model_settings", {}))
     model_config_id = document.get("model_config_id")
-    has_model_config_override = model_config_id is not None
-    model_config_valid = not has_model_config_override
-    if has_model_config_override and model_config_id is not None:
+    if model_config_id is not None:
         try:
-            config = get_model_config_service().get_config(model_config_id)
-            model_settings = ModelSettings.from_model_config_record(config).with_overrides(
-                model_settings
-            )
-            model_config_valid = True
+            get_model_config_service().get_config(model_config_id)
         except KeyError:
-            model_config_valid = False
-    if not model_config_valid and strict_model_config:
-        raise AgentProfileConfigError(
-            f"Agent 配置无效，文件={source}，model_config_id 必须为空或引用有效模型"
-        )
-    if not model_config_valid:
-        # 非严格加载允许无效选择降级为未物化 profile；真正运行时会由 Run 选择配置。
-        model_settings = ModelSettings.from_json(document.get("model_settings", {}))
-        model_config_id = None
+            if strict_model_config:
+                raise AgentProfileConfigError(
+                    f"Agent 配置无效，文件={source}，model_config_id 必须为空或引用有效模型"
+                ) from None
+            # 非严格加载允许无效选择降级为「未选模型」；真正运行时由 Run 选择配置。
+            model_config_id = None
     raw_structured_output = document.get("structured_output")
     structured_output = (
         StructuredOutputSpec.model_validate(raw_structured_output)

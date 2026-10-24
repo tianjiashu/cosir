@@ -57,7 +57,6 @@ class TaskCrud:
             title: str,
             task_type: str = "user",
             parent_task_id: int | None = None,
-            parent_run_id: int | None = None,
             creation_command_id: str | None = None,
             session: Session | None = None,
             extra: dict[str, Any] | None = None,
@@ -65,30 +64,28 @@ class TaskCrud:
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 
-        主键 ``id`` 由存储引擎自增分配，调用方不再提供业务标识。``created_at`` /
-        ``updated_at`` 由本方法以当前 UTC 时间统一填充。``task_type`` 区分用户创建任务
-        （``"user"``）与委派子任务（``"delegate_task"``）；委派子任务通过 ``parent_task_id`` /
-        ``parent_run_id`` / ``delegation_id``（均为整数 id）关联父任务与委派记录。
-
-        任务不再绑定 agent：agent 维度由 turn（用户任务首 turn）与 delegation 记录
-        （子任务）承载，本方法只持久化 task 容器自身字段。
+        主键 ``id`` 由存储引擎自增分配，``created_at`` / ``updated_at`` 由本方法以当前 UTC 时间
+        统一填充。子 Task（委派、Team 节点）只经 ``parent_task_id`` 挂到父 Task，不记录发起它的
+        父 Run：子 Task 会被父 Agent 在后续多个 Run 中复用，创建时的 Run 无法代表归属。Agent
+        身份不落在 Task 上，随入队输入在建 Run 时固化到 Run。
 
         参数:
             workspace_id: 所属工作区标识（整数 id）。
             title: 任务标题。
-            task_type: 任务类型，``"user"`` 或 ``"delegate_task"``，缺省为 ``"user"``。
-            parent_task_id: 父任务标识（整数 id），委派子任务必填，用户任务为 None。
-            parent_run_id: 触发委派的父 turn 标识（整数 id），委派子任务必填，用户任务为 None。
-            delegation_id: 关联的委派记录标识（整数 id），委派子任务必填，用户任务为 None。
-            creation_command_id: 触发建任务的命令标识（整数 id），缺省为 None。
+            task_type: 任务类型，如 ``"user"``、``"fork"``、``"delegate_task"``、
+                ``"agent_team_node"``，缺省为 ``"user"``。
+            parent_task_id: 父任务标识（整数 id），子 Task 必填，用户任务为 None。
+            creation_command_id: 前端创建命令标识，用于首条命令未被接受时回收 provisional Task。
             session: 可选的外部 SQLAlchemy 会话。传入时在本方法内复用该事务（调用方负责提交）；
                 为 None 时由本方法自开事务并自动提交。
+            extra: Task 扩展 JSON（如 fork 来源、Team 节点快照）。
+            tool_schemas: 创建时固化的模型工具 schema。
 
         返回:
             落库成功的 ``TaskRecord``（含自增分配的 id 与填充的创建 / 更新时间）。
 
         异常:
-            sqlalchemy.exc.IntegrityError: 如果违反外键约束或 delegation_id 重复。
+            sqlalchemy.exc.IntegrityError: 如果违反外键约束或同一工作区内 creation_command_id 重复。
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
@@ -102,7 +99,6 @@ class TaskCrud:
                     title,
                     task_type,
                     parent_task_id,
-                    parent_run_id,
                     creation_command_id,
                     extra,
                     tool_schemas,
@@ -113,7 +109,6 @@ class TaskCrud:
             title,
             task_type,
             parent_task_id,
-            parent_run_id,
             creation_command_id,
             extra,
             tool_schemas,
@@ -126,7 +121,6 @@ class TaskCrud:
             title: str,
             task_type: str,
             parent_task_id: int | None,
-            parent_run_id: int | None,
             creation_command_id: str | None,
             extra: dict[str, Any] | None,
             tool_schemas: list[dict[str, Any]] | None = None,
@@ -139,8 +133,6 @@ class TaskCrud:
             title: 任务标题。
             task_type: 任务类型。
             parent_task_id: 委派父任务标识。
-            parent_run_id: 委派父轮次标识。
-            delegation_id: 委派记录标识。
             creation_command_id: 触发建任务的命令标识。
 
         返回:
@@ -157,7 +149,6 @@ class TaskCrud:
             title=title,
             task_type=task_type,
             parent_task_id=parent_task_id,
-            parent_run_id=parent_run_id,
             creation_command_id=creation_command_id,
             extra=extra,
             tool_schemas=tool_schemas or [],
@@ -371,69 +362,3 @@ class TaskCrud:
             return
         with self._session_factory.begin() as session:
             session.execute(delete(TaskModel).where(TaskModel.id.in_(task_ids)))
-
-    def clear_parent_run_id(self, task_ids: list[int], session: Session | None = None) -> None:
-        """把指定 task 的 ``parent_run_id`` 置空，解除与 ``conversation_runs`` 的双向外键环。
-
-        删除单个任务的 run 之前必须先解除该列对 run 的引用，否则 SQLite 即时外键检查会因
-        ``tasks.parent_run_id`` 指向即将被删的 run 而报 ``FOREIGN KEY constraint failed``。
-        本方法只改这一列，不删除行、不触碰其它列。
-
-        参数:
-            task_ids: 待解除 run 引用的 task 整数 id 列表。
-            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时
-                自开事务并自动提交。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            把 ``tasks`` 表中匹配行的 ``parent_run_id`` 置为 NULL；task_ids 为空时静默无操作。
-        """
-
-        if not task_ids:
-            return
-        if session is not None:
-            session.execute(
-                update(TaskModel).where(TaskModel.id.in_(task_ids)).values(parent_run_id=None)
-            )
-            return
-        with self._session_factory.begin() as session:
-            session.execute(
-                update(TaskModel).where(TaskModel.id.in_(task_ids)).values(parent_run_id=None)
-            )
-
-    def clear_parent_run_id_by_run_id(
-            self, run_id: int, session: Session | None = None
-    ) -> None:
-        """把所有指向指定 run 的 ``tasks.parent_run_id`` 置空。
-
-        删除某条 run 时，若其它 task（fork 子任务或委派子任务）的 ``parent_run_id`` 引用它，
-        ``tasks.parent_run_id → conversation_runs.id`` 外键会在删除 run 时报
-        ``FOREIGN KEY constraint failed``。与按 task_ids 清理的 ``clear_parent_run_id`` 不同，
-        本方法按被引用的 run_id 反向解除引用，只置空该列，不删除 task 行。
-
-        参数:
-            run_id: 被引用的 Conversation Run 标识。
-            session: 可选外部事务 session；传入时复用该事务不自行提交，为 None 时自开事务并
-                自动提交。
-
-        返回:
-            无。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果更新失败。
-
-        副作用:
-            把 ``tasks`` 表中 ``parent_run_id`` 命中本 run 的行该列置为 NULL；无匹配时静默无操作。
-        """
-
-        stmt = update(TaskModel).where(TaskModel.parent_run_id == run_id).values(parent_run_id=None)
-        if session is not None:
-            session.execute(stmt)
-            return
-        with self._session_factory.begin() as owned_session:
-            owned_session.execute(stmt)

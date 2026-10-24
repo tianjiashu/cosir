@@ -35,6 +35,10 @@ class _ThreadCheckedRunService:
         self._assert_off_loop("get_latest_run")
         return self.run
 
+    def require_latest_run(self, _task_id: int) -> SimpleNamespace:
+        self._assert_off_loop("require_latest_run")
+        return self.run
+
     def _assert_off_loop(self, name: str) -> None:
         if threading.get_ident() == self.owner_thread:
             raise AssertionError(f"canonical {name} ran on the event-loop thread")

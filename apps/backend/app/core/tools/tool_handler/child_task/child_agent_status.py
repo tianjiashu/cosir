@@ -68,8 +68,9 @@ class ChildAgentStatusTool(HandlerBase):
             execution_context: 父工具执行边界；仅用于确认调用发生在某次 Run 内。
 
         返回:
-            成功时返回包含 ``child_task_id`` / ``child_run_id`` / ``status`` /
-            ``final_output`` / ``end_reason`` / ``agent_id`` 的 JSON 文本；参数非法、子任务不存在或尚无 Run 时返回错误观察。
+            成功时返回包含 ``child_task_id`` / ``status`` / ``final_output`` / ``end_reason`` /
+            ``agent_id`` 的 JSON 文本（取子任务最新 Run，按 Task 寻址、不回传 run_id）；参数非法、
+            子任务不存在或尚无 Run 时返回错误观察。
 
         异常:
             无。``ValidationError`` 与 ``KeyError`` 均在本方法内归一化为错误观察。
@@ -102,14 +103,12 @@ class ChildAgentStatusTool(HandlerBase):
                 ),
                 retryable=True,
             )
-        run_id = child_task.current_run_id
-
         try:
-            run = self._run_service.get_run(run_id)
+            run = self._run_service.get_run(child_task.current_run_id)
         except KeyError:
             return tool_error(
                 self.name,
-                f"child run not found: {run_id}",
+                f"child task {child_task_id} has no run",
                 reason=(
                     "the child task points at a run that no longer exists; re-delegate the "
                     "work instead of retrying this read."
@@ -122,7 +121,6 @@ class ChildAgentStatusTool(HandlerBase):
             content=json.dumps(
                 {
                     "child_task_id": child_task_id,
-                    "child_run_id": run.id,
                     "status": run.status,
                     "final_output": run.final_output,
                     "end_reason": run.end_reason,
@@ -135,7 +133,6 @@ class ChildAgentStatusTool(HandlerBase):
             display_data=build_child_agent_result_display_data(
                 operation="status",
                 child_task_id=child_task_id,
-                child_run_id=run.id,
                 status=run.status,
                 agent_id=run.agent_id,
                 agent_name=child_task.title,

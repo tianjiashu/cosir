@@ -22,13 +22,13 @@ from app.storage.model.base import StorageBase
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.model_config_model import ModelConfigModel
-from app.storage.model.task_input_model import TaskInputModel
+from app.storage.model.task_message_model import TaskMessageModel
 from app.storage.model.task_model import TaskModel
 from app.storage.model.workspace_model import WorkspaceModel
 from app.utils.path import system_cosir as paths
 
 APP_MODELS = (
-    TaskInputModel,
+    TaskMessageModel,
     ModelConfigModel,
     WorkspaceModel,
     TaskModel,

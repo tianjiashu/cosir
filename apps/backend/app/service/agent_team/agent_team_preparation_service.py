@@ -18,7 +18,9 @@ from app.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_agent_registry
 from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
-from app.core.agents.model_settings import ModelSettings, ModelSettingsError
+from app.core.agents.agent_runtime_config import AgentRuntimeConfig
+from app.core.agents.model_settings import ModelSettingsError
+from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.service.depends import get_model_config_service
 
@@ -96,47 +98,37 @@ def materialize_node_tools(profile: AgentProfile) -> list[str]:
     ]
 
 
-def require_model_settings(model_settings: ModelSettings) -> ModelSettings | None:
-    """断言模型设置已具备模型构建所需的物化字段。"""
-    try:
-        return model_settings.require_runtime_config()
-    except ModelSettingsError:
-        return None
-
-
-def resolve_effective_model_settings(
+def resolve_node_model(
         profile: AgentProfile,
-        parent_agent_profile: AgentProfile | None,
-) -> ModelSettings:
-    """解析节点确认时实际使用的完整模型设置。
+        parent_agent: AgentRuntimeConfig | None,
+) -> ResolvedModel:
+    """解析节点确认时实际使用的完整模型，规则与主 Run 相同（``resolve_model``）。
 
-    子 Agent Profile 可能只有用户偏好而没有独立运行配置；此时沿用主 Agent 本次 Run 已
-    物化的模型连接配置，并应用节点偏好覆盖。返回值会进入本次 Team 的冻结运行快照。
+    节点有独立模型配置时用它与节点偏好；没有时沿用主 Agent 本次 Run 选用的模型配置，节点偏好
+    覆盖、主 Agent 生效的偏好补缺。冻结进快照的只有偏好与模型配置 ID，连接与能力字段在节点 Run
+    装配时按其 ``model_config_id`` 重新解析（``api_key`` 不落盘）。
 
     异常:
-        TeamToolError: Profile 和 fallback 都不能提供完整模型运行配置。
+        TeamToolError: 节点与主 Agent 都没有可用的模型配置，或该配置不完整、已不存在。
     """
 
-    model_settings = require_model_settings(profile.model_settings)
-    if model_settings is not None:
-        return model_settings
-    if parent_agent_profile is None:
-        raise TeamToolError(message=f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置", retryable=False) from None
-
-    parent_settings = parent_agent_profile.model_settings
-    parent_model_config_id = parent_agent_profile.model_config_id
-
-    effective = parent_settings.with_preference_defaults(profile.model_settings)
-    model_settings = require_model_settings(effective)
-    if model_settings is not None:
-        return model_settings
-    model_config = get_model_config_service().get_config(profile.model_config_id if profile.model_config_id is not None else parent_model_config_id)
-    if model_config is None:
-        raise TeamToolError(message=f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置", retryable=False) from None
-    model_settings = profile.model_settings.from_model_config_record(model_config)
-    if model_settings is not None:
-        return model_settings
-    raise TeamToolError(message=f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置", retryable=False) from None
+    preferences = profile.model_settings
+    model_config_id = profile.model_config_id
+    if model_config_id is None and parent_agent is not None:
+        model_config_id = parent_agent.model.model_config_id
+        preferences = preferences.with_defaults(parent_agent.model.preferences())
+    if model_config_id is None:
+        raise TeamToolError(
+            message=f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置", retryable=False
+        )
+    try:
+        return resolve_model(
+            get_model_config_service().get_config(model_config_id), preferences
+        )
+    except (KeyError, ModelSettingsError) as exc:
+        raise TeamToolError(
+            message=f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置", retryable=False
+        ) from exc
 
 
 def build_node_structured_output(
@@ -298,7 +290,7 @@ class AgentTeamPreparationService:
             parent_task_id: int,
             parent_run_id: int,
             workspace_id: int,
-            parent_agent_profile: AgentProfile,
+            parent_agent: AgentRuntimeConfig,
     ) -> AgentTeamPreparationResult:
         """一次性解析 Team 节点并生成展示预览、运行快照和指纹。
 
@@ -311,7 +303,7 @@ class AgentTeamPreparationService:
             parent_task_id: 主 Agent Task 标识，写入展示预览。
             parent_run_id: 主 Agent Run 标识，写入展示预览。
             workspace_id: workspace 标识，写入展示预览。
-            parent_agent_profile: 节点缺少独立连接配置时使用的主 Agent Profile。
+            parent_agent: 节点缺少独立连接配置时使用的主 Agent 运行时配置。
 
         返回:
         同一次运行时解析产生的预览文档、节点运行快照和指纹。预览文档只供工具结果展示，
@@ -365,7 +357,7 @@ class AgentTeamPreparationService:
         for node in configuration.nodes:
             profile = node_profiles[node.node_id]
             allowed_tools = materialize_node_tools(profile)
-            model_settings: ModelSettings = resolve_effective_model_settings(profile, parent_agent_profile)
+            node_model = resolve_node_model(profile, parent_agent)
             structured_output = build_node_structured_output(configuration, node)
             node_runtime_snapshots[node.node_id] = {
                 "agent_id": profile.agent_id,
@@ -381,11 +373,11 @@ class AgentTeamPreparationService:
                 ),
                 "allowed_tools": allowed_tools,
                 "structured_output": structured_output.to_document(),
-                "model_config_id": profile.model_config_id or parent_agent_profile.model_config_id,
-                # 快照只冻结可持久化的用户偏好项：运行期连接与能力字段（尤其 ``api_key``）按
-                # ``ModelSettings`` 契约只在进程内存在，不得随快照落库；节点执行时由运行时按
-                # ``run.model_config_id`` 物化（``run_driver._resolve_profile``）。
-                "model_settings": model_settings.to_dict(),
+                "model_config_id": node_model.model_config_id,
+                # 快照只冻结可持久化的请求偏好：连接与能力字段（尤其 ``api_key``）只在进程内
+                # 存在，不得随快照落库；节点执行时按 ``run.model_config_id`` 重新解析
+                # （``AgentRuntimeConfig.resolve``）。
+                "model_settings": node_model.preferences().to_dict(),
             }
             resolved_nodes.append(
                 {
@@ -396,9 +388,8 @@ class AgentTeamPreparationService:
                         "start" if node.node_id == configuration.start_node_id else "middle"
                     ),
                     "role": profile.role,
-                    "model_config_id": profile.model_config_id
-                                       or parent_agent_profile.model_config_id,
-                    "model_name": model_settings.model_name,
+                    "model_config_id": node_model.model_config_id,
+                    "model_name": node_model.model_name,
                     # 与 node_runtime_snapshots 用同一份工具名清单：预览展示的节点工具必须就是
                     # 确认后冻结执行的那一份，否则用户看到的与真正执行的不一致。
                     "tools": list(allowed_tools),

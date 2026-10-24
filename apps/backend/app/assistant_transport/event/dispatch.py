@@ -2,12 +2,12 @@
 
 from typing import Literal
 
-from app.assistant_transport.event.conversation_event import ConversationEvent
+from app.core.events import WorkflowEvent
 
 DispatchChannel = Literal["direct"]
 
 
-def dispatch_conversation_event(event: ConversationEvent) -> DispatchChannel:
+def dispatch_conversation_event(event: WorkflowEvent) -> DispatchChannel:
     """不探测执行框架上下文；所有事件经过同一投影入口。"""
     from app.service.depends import get_conversation_event_projector
 

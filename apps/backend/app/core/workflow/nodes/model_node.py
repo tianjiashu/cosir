@@ -30,7 +30,7 @@ from app.core.workflow.node_helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
 from app.models.enums.conversation_run_status import RunTransition
-from app.models.runtime_notice import RuntimeNotice
+from app.models.task_message import NoticeBody, TaskMessage
 from app.service import depends as service_depends
 from app.utils.message_content import content_to_text
 
@@ -38,8 +38,8 @@ from app.utils.message_content import content_to_text
 async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     """模型边界：取消落定与模型请求的唯一入口；本步输入已由 prepare_input 节点组装。
 
-    取消只在这里落定：其它节点检出 Task 取消信号后只负责流转回 model（prepare_input 遇取消不并入
-    inbox，取消不会吞掉排队消息）。检查分两处——进入时与上下文加载后、开请求前（加载含附件读取，
+    取消只在这里落定：其它节点检出 Task 取消信号后只负责流转回 model（prepare_input 遇取消不取
+    mailbox，取消不会吞掉排队消息）。检查分两处——进入时与上下文加载后、开请求前（加载含附件读取，
     窗口不可忽略）；请求期间由流式读取边界检查。
     调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文；部分输出留作展示，
     不进入模型上下文或工具执行。工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，
@@ -53,7 +53,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     run_id = rc.run.id
     step_id = f"step-{step_count}"
 
-    # inbox 输入与运行期通知已由 prepare_input 节点写入；load_message() 出口已归一化 assistant
+    # 用户输入与运行期通知已由 prepare_input 节点写入；load_message() 出口已归一化 assistant
     # 消息。load_message 含附件读取，必须离开事件循环。
     messages: list[ChatCompletionMessageParam] = await asyncio.to_thread(
         _message_context().load_message
@@ -155,8 +155,13 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     if not calls and finish_reason is None:
         parts.cancel()
         _message_context().abandon_model_response()
-        rc.task_space.defer_runtime_notice(
-            RuntimeNotice(content="请继续未完成的任务", kind="model_continuation", run_id=run_id)
+        rc.mailbox.post(
+            TaskMessage.of(
+                NoticeBody(
+                    content="Please continue the unfinished task.",
+                    notice_kind="model_continuation",
+                )
+            )
         )
         return route_state(step_count, ReactRoute.PREPARE_INPUT)
 

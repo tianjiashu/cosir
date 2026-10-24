@@ -7,7 +7,7 @@ from app.utils.datetime_utils import to_text
 class TaskResponse(BaseModel):
     """校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。
 
-    任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。
+    Task 不绑定 Agent：本响应不含 agent_id，Agent 身份固化在各 Run 上。
 
     参数:
         task_id: 任务标识。
@@ -18,8 +18,6 @@ class TaskResponse(BaseModel):
         task_type: 任务类型，``"user"`` 为用户创建，``"fork"`` 为历史分支，
             ``"delegate_task"`` 为委派子任务。
         parent_task_id: 父任务标识，仅委派子任务有值。
-        parent_run_id: 父轮次标识，仅委派子任务有值。
-        delegation_id: 所属委派标识，仅委派子任务有值。
         created_at: 创建时间文本。
         updated_at: 更新时间文本。
 
@@ -41,8 +39,6 @@ class TaskResponse(BaseModel):
     execution_status: str | None = None
     task_type: str = "user"
     parent_task_id: int | None = None
-    parent_run_id: int | None = None
-    delegation_id: int | None = None
     created_at: str
     updated_at: str
 
@@ -78,8 +74,6 @@ class TaskResponse(BaseModel):
             execution_status=record.execution_status,
             task_type=record.task_type,
             parent_task_id=record.parent_task_id,
-            parent_run_id=record.parent_run_id,
-            delegation_id=record.delegation_id,
             created_at=to_text(record.created_at),
             updated_at=to_text(record.updated_at),
         )

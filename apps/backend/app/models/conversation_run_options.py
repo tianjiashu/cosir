@@ -17,7 +17,7 @@ class ConversationRunOptions(BaseModel):
     @field_validator("ban_tools")
     @classmethod
     def validate_tools(cls, names: list[str]) -> list[str]:
-        """拒绝空标识和重复项，避免授权配置存在歧义。"""
+        """拒绝空标识和重复项，避免授权配置存在歧义；排序后保存，运行期配置锁定按集合比较。"""
         if any(not name for name in names) or len(names) != len(set(names)):
             raise ValueError("ban_tools must contain unique non-empty names")
-        return names
+        return sorted(names)

@@ -1,7 +1,8 @@
 """Agent Team 执行意图与运行生命周期应用服务。
 
-本模块把待确认和运行中的 Team 统一视为同一个持久化 TeamRun，只编排数据库状态迁移和
-Coordinator 启动，不负责节点调度细节，也不维护进程内待确认缓存。
+本模块把待确认和运行中的 Team 统一视为同一个持久化 TeamRun，只编排数据库状态迁移；确认后的
+后台执行由 ``AgentTeamDecisionService`` 交给 Coordinator，节点调度细节不在这里，也不维护进程内
+待确认缓存。
 """
 
 from __future__ import annotations
@@ -15,8 +16,7 @@ from app.agent_team.node_goal import AgentTeamNodeGoal
 from app.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.agent_team.team_tool_error import TeamToolError
 from app.config.logging.logger import log
-from app.core.agents.agent_profile import AgentProfile
-from app.core.tools.schemas import UserDecision, UserInputRequest
+from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_execution_timeline import (
@@ -36,9 +36,6 @@ from app.storage.crud.task_crud import TaskCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
-
-# 主 Run 的终态集合：确认边界只排除它们，不再要求主 Run 停在等待态（见 ``_validate_parent_run``）。
-_TERMINAL_PARENT_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 class AgentTeamRunService:
@@ -217,6 +214,7 @@ class AgentTeamRunService:
             "team_id": row.team_id,
             "goal": row.goal_input,
             "status": row.status,
+            "end_reason": row.end_reason,
             "nodes": node_views,
             "current_node_id": (
                 state.current_node_id if row.status == AgentTeamRunStatus.RUNNING.value else None
@@ -252,36 +250,35 @@ class AgentTeamRunService:
             )
             return current
 
-    def confirm_and_start(
+    def confirm(
         self,
         team_run_id: int,
         configuration_document: dict[str, Any],
         *,
         goal: str,
         node_goals: dict[str, AgentTeamNodeGoal],
-        parent_agent_profile: AgentProfile,
+        parent_agent: AgentRuntimeConfig,
     ) -> AgentTeamRunModel:
-        """使用用户最终配置确认 TeamRun，并在提交后交给 Coordinator 启动。
+        """使用用户最终配置确认 TeamRun：``pending`` 原子迁移为 ``running`` 并写入最终执行计划。
+
+        不启动 Coordinator：确认在 API 边界同步完成，执行由调用方（``AgentTeamDecisionService``）
+        作为后台任务交给 Coordinator。
 
         前端提交工具预览关联的 TeamRun ID 和用户最终配置。后端不信任预览展示数据或
         前端指纹，而是在确认边界重新校验配置、解析节点运行快照并计算指纹，再将最终
         执行计划写入 TeamRun。确认事务会把 TeamRun 从 ``pending`` 原子迁移为 ``running``，
-        并同时写入最终配置和运行快照；事务提交后才启动 Coordinator，因此数据库中的
-        TeamRun 始终是唯一执行事实源。两个并发确认请求中只有一个能够成功迁移状态。
-
-        幂等：条件迁移未命中（``rowcount == 0``）时不再抛错，而是返回该行的当前事实。
-        重复确认必须如实返回「已在运行 / 已结束」，既不重复启动 Coordinator，也不让
-        调用方误判为失败。
+        并同时写入最终配置和运行快照，因此数据库中的 TeamRun 始终是唯一执行事实源。两个并发
+        确认请求中只有一个能够成功迁移状态；落空的一方得到 ``ValueError``，不会重复启动。
 
         参数:
-            parent_agent_profile: 本次确认所属主 Run 的 per-run Agent profile（由运行时注入）。
+            parent_agent: 本次确认所属主 Run 的 Agent 运行时配置（由运行时注入）。
                 节点缺少独立模型连接配置时以它回落，因此必须由调用方传入已物化模型设置的副本；
                 本层不再自行解析注册表（共享单例没有模型连接字段，会让准备阶段抛 ``KeyError``）。
 
         异常:
-            ValueError: TeamRun 不存在、Team 标识或配置无效、主 Run 不可恢复，或同一 pending
-                行被两个并发确认同时命中（真正的竞争，调用方应重试）。
-            KeyError: 关联的主 Agent Run 不存在。
+            ValueError: Team 标识或配置无效、TeamRun 不属于该 Task，或 TeamRun 已不在待确认态
+                （已被确认、驳回或随主 Agent 取消）。
+            KeyError: TeamRun 或关联的主 Agent Run 不存在。
         """
 
         existing = self.get(team_run_id)
@@ -295,7 +292,7 @@ class AgentTeamRunService:
             configuration,
             goal=final_goal,
             node_goals=node_goals,
-            parent_agent_profile=parent_agent_profile,
+            parent_agent=parent_agent,
         )
 
         with begin_immediate(self._session_factory) as session:
@@ -314,26 +311,9 @@ class AgentTeamRunService:
                 goal_input=final_goal,
                 session=session,
             )
-            if updated is None:
-                latest = self._team_run_crud.get_by_id(existing.id, session=session)
-                if latest.status == AgentTeamRunStatus.PENDING.value:
-                    # 事务内读到的状态仍是 pending 却迁移失败，只可能是并发确认刚刚提交；
-                    # 交给调用方重试，不静默返回一个未启动的运行。
-                    raise ValueError("Agent Team 确认竞争失败，请稍后重试")
-                log.info(
-                    "agent_team_confirmation_replayed",
-                    extra={
-                        "msg": "TeamRun 已被确认过，按当前事实返回而不重复启动",
-                        "data": {"team_run_id": existing.id, "status": latest.status},
-                    },
-                )
-                return latest
-
-        from app.agent_team.coordinator import get_agent_team_coordinator
-
-        return get_agent_team_coordinator().start(
-            updated,
-        )
+        if updated is None:
+            raise ValueError("该 Agent Team 方案已处理，不能再确认")
+        return updated
 
     def _prepare_final_plan(
         self,
@@ -342,7 +322,7 @@ class AgentTeamRunService:
         *,
         goal: str,
         node_goals: dict[str, AgentTeamNodeGoal],
-        parent_agent_profile: AgentProfile,
+        parent_agent: AgentRuntimeConfig,
     ) -> AgentTeamPreparationResult:
         """基于确认时的最终配置重新生成执行快照。
 
@@ -350,7 +330,7 @@ class AgentTeamRunService:
         确认事务统一写入 TeamRun；初始工具预览产生的候选快照不作为确认依据。
 
         参数:
-            parent_agent_profile: 与 :meth:`confirm_and_start` 同一份 per-run profile，供节点
+            parent_agent: 与 :meth:`confirm` 同一份父 Agent 运行时配置，供节点
                 在缺少独立模型连接配置时回落。
         """
 
@@ -363,31 +343,17 @@ class AgentTeamRunService:
             parent_task_id=row.parent_task_id,
             parent_run_id=row.parent_run_id,
             workspace_id=row.workspace_id,
-            parent_agent_profile=parent_agent_profile,
+            parent_agent=parent_agent,
         )
 
     def _validate_parent_run(self, parent_task_id: int, parent_run_id: int) -> None:
-        """校验 TeamRun 关联的主 Agent Run 仍属于该 Task 且可继续。
+        """只校验 TeamRun 关联的主 Agent Run 属于该 Task，不要求主 Run 仍在挂起。
 
-        只校验归属与「未终态」：user-input 决定由 graph 重放投递，批准发生在主 Run 已由
-        续跑入口迁移为 ``running`` 之后（``resume_waiting_run``），因此这里**不能**再要求
-        ``waiting_for_input``——那会让每一次真实批准都失败（旧 REST 流程的前置
-        ``wait_for_parent_input`` 已随专用端点删除）。
+        主 Agent 在等待审批期间可能被用户消息唤醒并完成；TeamRun 仍是 pending 时用户照样可以
+        批准，结果以后台结果消息唤醒已完成的 Task。主 Agent 被用户取消时待确认 TeamRun 已随之
+        取消，条件迁移会落空，不需要在这里另判主 Run 状态。
         """
 
         parent_run = self._run_service.get_run(parent_run_id)
         if parent_run.task_id != parent_task_id:
             raise ValueError("TeamRun 不属于指定主 Agent Task")
-        if parent_run.status in _TERMINAL_PARENT_STATUSES:
-            raise ValueError("主 Agent Run 已结束，不能确认 TeamRun")
-
-
-def reject_agent_team_confirmation(request: UserInputRequest, decision: UserDecision) -> None:
-    """把通用 HIL 驳回决定映射到对应 TeamRun 的领域终态。"""
-
-    if decision.kind.value != "reject":
-        raise ValueError("Agent Team 处理器只接收驳回决定")
-    team_run_id = int(request.request_id)
-    if team_run_id <= 0:
-        raise ValueError("Agent Team 确认请求标识无效")
-    AgentTeamRunService().reject_pending_confirmation(team_run_id)
