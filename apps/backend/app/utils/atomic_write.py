@@ -1,19 +1,17 @@
-"""原子写与文件格式检测工具。
+"""原子写与文本格式检测（通用文件工具）。
 
-本模块只负责把文本安全落盘与检测其格式特征，不解析任何业务语义。
+本模块只负责把文本安全落盘与检测其格式特征，不解析任何业务语义；文件工具与
+service（如 Team 归档）共用。
 
 设计边界：
 - ``atomic_write_text``：同目录临时文件 + ``os.replace`` 原子替换，避免进程
   崩溃留下半写文件；按目标文件既有 BOM/CRLF 保留行尾与 BOM，避免 Windows
   文件被 LF 化。
 - ``detect_line_ending`` / ``detect_bom``：检测文本行尾与 BOM。
-- ``looks_like_line_numbered``：识别把 ``read_file`` 输出的 ``N| `` 行号前缀
-  整体回写的内容（行号污染），供 write/edit/apply 落盘前拒绝。
 """
 
 import errno
 import os
-import re
 import tempfile
 from pathlib import Path
 
@@ -195,30 +193,3 @@ def detect_bom(text: str) -> bytes | None:
     if text.startswith(Constant.Text.UTF8_BOM):
         return Constant.Text.UTF8_BOM_BYTES
     return None
-
-
-def looks_like_line_numbered(content: str, threshold: float = 0.5) -> bool:
-    """判断内容是否像把 ``read_file`` 的带行号输出整体回写（行号污染）。
-
-    参数:
-        content: 待检测文本。
-        threshold: 命中行号前缀的行占比阈值，超过则判定为行号污染。
-
-    返回:
-        True 表示内容疑似行号污染，应当拒绝落盘。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    if not content:
-        return False
-    pattern = re.compile(r"^\d+\| ")
-    lines = content.split("\n")
-    if not lines:
-        return False
-    counted = sum(1 for line in lines if pattern.match(line))
-    return (counted / len(lines)) >= threshold

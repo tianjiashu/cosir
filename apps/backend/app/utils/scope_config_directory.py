@@ -15,8 +15,9 @@
 符号链接越出目录一律视为布局不合法，让调用方降级并留痕。拒绝符号链接目录是为了让「配置从哪
 来」在文件系统层面可预测，而不是隐式跟随链接。
 
-已知口径：只识别**小写** ``.json`` 扩展名（沿用 ``Path.glob("*.json")``，因此以点开头的隐藏
-JSON 文件不参与装载）。Windows 文件系统大小写不敏感，故 ``X.JSON`` 在 Windows 上会被匹配、
+已知口径：只识别**小写** ``.json`` 扩展名（``Path.glob("*.json")``），并显式跳过以点开头的
+隐藏文件——``pathlib`` 的 ``*`` 会匹配前导点，不跳过就会把编辑器临时文件、macOS 的 ``._x.json``
+资源分叉文件当成配置装载。Windows 文件系统大小写不敏感，故 ``X.JSON`` 在 Windows 上会被匹配、
 在 macOS/Linux 上不会——写入侧固定写小写扩展名，手工放置时请保持一致。
 """
 
@@ -62,8 +63,8 @@ def read_scope_json_files(directory: str | Path) -> list[Path]:
         root.stat()
     except FileNotFoundError as exc:
         # 同一个布局问题在 POSIX 上是 ENOTDIR（→ ``NotADirectoryError``），在 Windows 上是
-        # ERROR_PATH_NOT_FOUND（→ ``FileNotFoundError``），因此这里还要回看祖先才能区分
-        # 「目录尚不存在」与「祖先被普通文件占位」。
+        # ERROR_PATH_NOT_FOUND（→ ``FileNotFoundError``）；祖先是失效符号链接时各平台也都是
+        # ``FileNotFoundError``。因此这里还要回看祖先才能区分「目录尚不存在」与「布局被破坏」。
         blocking = _nearest_blocking_ancestor(root)
         if blocking is not None:
             raise ScopeDirectoryError(f"配置目录的祖先不是目录: {blocking}") from exc
@@ -81,6 +82,8 @@ def read_scope_json_files(directory: str | Path) -> list[Path]:
         resolved_root = root.resolve(strict=True)
         files: list[Path] = []
         for path in sorted(root.glob("*.json"), key=lambda item: item.name.casefold()):
+            if path.name.startswith("."):
+                continue
             resolved_path = path.resolve(strict=True)
             if not resolved_path.is_relative_to(resolved_root):
                 raise ScopeDirectoryError(f"配置文件符号链接越出配置目录: {path}")
@@ -99,14 +102,15 @@ def _nearest_blocking_ancestor(path: Path) -> Path | None:
     """返回让 ``path`` 无法作为目录访问的最近祖先。
 
     用于区分「配置目录尚不存在」（正常的「没有配置」）与「配置目录的某个祖先被普通文件占位」
-    （布局被破坏，必须留痕）——后者在 Windows 上会让 ``stat`` 抛 ``FileNotFoundError``，与前者
-    的表现完全相同。
+    或是失效符号链接（布局被破坏，必须留痕）——Windows 上的文件占位与各平台的失效符号链接都会
+    让 ``stat`` 抛 ``FileNotFoundError``，与前者的表现完全相同。
 
     参数:
         path: 待检查的配置目录路径。
 
     返回:
-        存在但不是目录的最近祖先；整条路径只是「还不存在」时返回 ``None``。
+        存在但不是目录、或是失效符号链接的最近祖先；整条路径只是「还不存在」时返回 ``None``。
+        失效符号链接必须单独判：``Path.exists`` 跟随链接，会把它当成「还不存在」而放过。
 
     异常:
         无（``Path.exists`` / ``Path.is_dir`` 会吞掉路径解析类错误）。
@@ -119,6 +123,8 @@ def _nearest_blocking_ancestor(path: Path) -> Path | None:
     while True:
         if candidate.exists():
             return None if candidate.is_dir() else candidate
+        if candidate.is_symlink():
+            return candidate
         parent = candidate.parent
         if parent == candidate:
             return None
