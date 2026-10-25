@@ -20,10 +20,10 @@ from app.models.enums.conversation_run_status import ConversationRunStatus
 class RunInitializedEvent(WorkflowEventEnvelope):
     """一个 Run 已被创建并绑定到 Task。
 
-    事实语义：Run 已落库，消费方据此建立 Run 基线；用户输入及 assistant 消息由各自的事件追加。
+    事实语义：Run 已落库，消费方据此把它设为 Task 当前活动；用户输入及 assistant 消息由各自的
+    事件追加。Run 只前进：编辑重跑新建 Run，不替换已有 Run。
 
     Attributes:
-        replace_existing: 编辑重跑时是否替换已有 Run 的骨架。
         context_window_total: 创建 Run 时冻结的窗口上限，随该 Run 而非 Task 投影。
         model_config_id / options: 创建 Run 时冻结的发起配置，供前端执行运行期配置锁定。
 
@@ -33,7 +33,6 @@ class RunInitializedEvent(WorkflowEventEnvelope):
 
     # 判别式字段显式给出默认值：生产者不必重复书写字面量，判别式路由行为不变。
     type: Literal["run_initialized"] = "run_initialized"
-    replace_existing: bool = False
     context_window_total: StrictInt | None = Field(default=None, ge=0)
     model_config_id: StrictInt | None = None
     options: ConversationRunOptions = Field(default_factory=ConversationRunOptions)
