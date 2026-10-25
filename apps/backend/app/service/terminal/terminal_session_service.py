@@ -15,7 +15,7 @@ from typing import Any
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.service.terminal.errors import (
     TerminalSessionCapacityError,
     TerminalSessionError,
