@@ -1,0 +1,252 @@
+"""模型可见的网页搜索工具。"""
+
+import json
+from typing import ClassVar
+
+from app.config.constant import Constant
+from app.config.logging.logger import log
+from app.config.settings import Settings
+from app.core.tool.web.web_display import build_web_search_display_data
+from app.core.tool.schemas import (
+    TOOL_WEB_SEARCH,
+    ToolDefinition,
+    ToolDisplayHints,
+    ToolExecutionContext,
+    ToolObservation,
+)
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.results.tool_success import tool_success
+from app.core.tool.tool_grouping import TOOL_GROUP_WEB
+from app.core.tool.tool_base import HandlerBase
+from app.core.tool.web.providers import default_web_providers
+from app.core.tool.web.web_provider import (
+    WebProvider,
+    WebProviderUnavailableError,
+)
+from app.core.tool.web.web_provider_registry import (
+    WebProviderRegistry,
+    register_default_web_providers,
+)
+from app.core.tool.web.web_search_args import WebSearchArgs
+
+
+class WebSearchTool(HandlerBase):
+    """调用已配置 Provider 并将搜索元数据返回给模型。"""
+
+    name: str = TOOL_WEB_SEARCH
+    description: str = (
+        "Search the web for information. Returns up to "
+        f"{Constant.Web.SEARCH_LIMIT_DEFAULT} results by default with "
+        "titles, URLs, and descriptions. The query is passed through to the configured "
+        "backend, so operators such as site:domain, filetype:pdf, intitle:word, -term, "
+        'and "exact phrase" may work when the backend supports them.'
+    )
+    args_model: type[WebSearchArgs] = WebSearchArgs
+    timeout_seconds: ClassVar[float] = Constant.Web.REQUEST_TIMEOUT_SECONDS + 5
+    group = TOOL_GROUP_WEB
+
+
+    def __init__(self, provider_registry: WebProviderRegistry) -> None:
+        """初始化使用指定 Provider 注册表的搜索工具。
+
+        参数:
+            provider_registry: 当前进程专属的 Web Provider 注册表。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            保留传入注册表的引用，不注册 Provider 且不发起网络请求。
+        """
+
+        self._provider_registry = provider_registry
+
+    def execute(
+        self,
+        query: str,
+        limit: int = Constant.Web.SEARCH_LIMIT_DEFAULT,
+        execution_context: ToolExecutionContext | None = None,
+    ) -> ToolObservation:
+        """执行网页搜索并返回仅含元数据的结构化观察结果。
+
+        参数:
+            query: 非空搜索关键词。
+            limit: 调用方请求的最大结果数，会被钳制到全局安全上限。
+            execution_context: 本次工具执行上下文；本工具不消费该值，但保留以符合 handler 契约。
+
+        返回:
+            搜索成功时返回包含 ``title``、``url``、``description``、``position`` 和
+            ``provider`` 的 JSON 观察结果（远端无结果时为合法的空列表）；无可用
+            Provider、Provider 未配置或调用失败时返回错误观察结果，配置类失败标记
+            ``retryable=False``。
+
+        异常:
+            不向上抛出；Provider 选择、可用性检查或搜索执行异常均归一化为错误观察结果。
+
+        副作用:
+            调用选中 Provider 的本地状态检查，并在成功条件满足时可能发起一次网络搜索。
+            Provider 执行异常会记录结构化错误日志。
+        """
+
+        effective_limit = min(limit, Constant.Web.SEARCH_LIMIT_MAX)
+        backend = Settings.WEB_SEARCH_BACKEND or Settings.WEB_BACKEND
+        provider = self._resolve_search_provider(backend)
+        if isinstance(provider, ToolObservation):
+            return provider
+        try:
+            results = provider.search(query, effective_limit)
+        except WebProviderUnavailableError as exc:
+            log.error(
+                "web_search_provider_unavailable",
+                extra={
+                    "msg": "网页搜索 Provider 未配置",
+                    "data": {"provider": provider.name, "error": str(exc)},
+                },
+            )
+            return tool_error(
+                self.name,
+                str(exc),
+                reason="configure the selected provider locally before continuing.",
+                retryable=False,
+            )
+        except Exception:
+            log.exception(
+                "web_search_provider_failed",
+                extra={
+                    "msg": "网页搜索 Provider 调用失败",
+                    "data": {"provider": provider.name},
+                },
+            )
+            return tool_error(
+                self.name,
+                f"Web search failed using provider '{provider.name}'.",
+                reason="try the search again or choose another configured provider.",
+                retryable=True,
+            )
+        web_results = [
+            {
+                "title": item.title,
+                "url": item.url,
+                "description": item.description,
+                "position": item.position,
+                "provider": provider.name,
+            }
+            for item in results
+        ]
+        return tool_success(
+            tool_name=self.name,
+            content=json.dumps(
+                {"web": web_results},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            display_data=build_web_search_display_data(query=query, results=web_results),
+        )
+
+    def to_definition(self) -> ToolDefinition:
+        """构造可注册的网页搜索工具定义。
+
+        参数:
+            无。
+
+        返回:
+            含模型参数、网络权限、线程执行模式和前端展示元数据的工具定义。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return ToolDefinition(
+            name=self.name,
+            group=self.group,
+            description=self.description,
+            handler=self.execute,
+            args_model=self.args_model,
+            timeout_seconds=self.timeout_seconds,
+            resource_keys=("network",),
+            execution_mode="thread",
+            display=ToolDisplayHints(
+                verb="网页搜索",
+                icon="globe",
+                surface="standalone",
+                expandable=True,
+                expand_layout="list",
+                show_result=False,
+            ),
+        )
+
+    def _resolve_search_provider(self, backend: str) -> WebProvider | ToolObservation:
+        """选择可用于搜索的 Provider，或直接返回带可执行指引的本地配置错误。
+
+        配置类失败必须在这里给出具体原因（哪个 backend 未注册、哪个 Provider 缺什么配置），
+        不能用一句笼统的「不可用」前置拦截：模型与用户都需要据此修正配置。
+
+        参数:
+            backend: 显式指定的 Provider 名称；为空时按注册表回退策略选择。
+
+        返回:
+            选中、支持搜索且本地配置齐全的 Provider；否则返回 ``retryable=False`` 的错误观察。
+
+        异常:
+            无。
+
+        副作用:
+            仅读取 Provider 注册表与本地可用性状态，不发起网络请求。
+        """
+
+        reason = "configure the selected provider locally before continuing."
+        provider = self._provider_registry.active_search_provider(backend)
+        if provider is None:
+            if backend:
+                return tool_error(
+                    self.name,
+                    f"Web search backend '{backend}' is not registered.",
+                    reason=(
+                        "configure WEB_SEARCH_BACKEND or WEB_BACKEND with a registered "
+                        "search provider."
+                    ),
+                )
+            return tool_error(self.name, "No web search provider configured.", reason=reason)
+        if not provider.supports_search():
+            return tool_error(
+                self.name,
+                f"Web search backend '{provider.name}' does not support search.",
+                reason="select a search-capable backend through WEB_SEARCH_BACKEND or WEB_BACKEND.",
+            )
+        if not provider.is_available():
+            return tool_error(self.name, provider.missing_configuration_message(), reason=reason)
+        return provider
+
+
+def build_web_search_definition(
+    provider_registry: WebProviderRegistry | None = None,
+) -> ToolDefinition:
+    """构造使用内置 Provider 的网页搜索工具定义。
+
+    参数:
+        provider_registry: 可选注入的 Provider 注册表；省略时新建并注册内置 Provider。
+            测试可传入 fake 注册表以覆盖 Provider 选择而无需真实网络配置。
+
+    返回:
+        可直接注册到 ``ToolRegistry`` 的 ``web_search`` 工具定义。
+
+    异常:
+        无。
+
+    副作用:
+        当 ``provider_registry`` 为 None 时，创建当前工具定义专属的 Provider 注册表及
+        内置 Provider 实例，但不执行网络请求。
+    """
+
+    if provider_registry is None:
+        provider_registry = register_default_web_providers(
+            WebProviderRegistry(),
+            default_web_providers(),
+        )
+    return WebSearchTool(provider_registry).to_definition_if_avaliable()
