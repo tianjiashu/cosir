@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.config.logging.logger import log
-from app.core.tools.policy.terminal_denylist_configuration import (
+from app.tools.policy.terminal_denylist_configuration import (
     compile_terminal_deny_patterns,
     read_terminal_deny_patterns,
 )

@@ -1,10 +1,10 @@
 """Agent Team 配置的应用服务。
 
 本模块负责 system/workspace 配置的保存、删除和作用域校验，并把已校验配置同步到
-``app.agent_team.registry``。静态字段与图结构由 ``app.agent_team.configuration`` 领域模型
+``app.service.agent_team.registry``。静态字段与图结构由 ``app.models.agent_team.configuration`` 领域模型
 负责；本模块不负责 TeamRun 生命周期、节点执行或主 Agent workflow。
 
-配置的**读取与装载**不在本模块：目录装载由 ``app.agent_team.registry`` 在作用域首次被读取时
+配置的**读取与装载**不在本模块：目录装载由 ``app.service.agent_team.registry`` 在作用域首次被读取时
 经 ``AgentTeamConfigurationScopeSource`` 完成（见该模块说明），本模块只负责写路径与校验，
 避免同一份配置存在「启动期装载」和「按需装载」两套口径。
 """
@@ -16,13 +16,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from app.agent_team.configuration.agent_team_configuration import (
+from app.models.agent_team.configuration.agent_team_configuration import (
     AgentTeamConfiguration,
     TeamScope,
     configuration_document,
 )
-from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.agent_team.registry import AgentTeamConfigurationRegistry
+from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.service.agent_team.registry import AgentTeamConfigurationRegistry
 from app.core.agents.agent_profile import AgentProfileType
 from app.service.configuration.file_store import ConfigurationFileStore
 
@@ -235,7 +235,7 @@ class AgentTeamConfigurationService:
         """校验配置引用的 profile 存在且属于 CHILD 类型。"""
 
         # Agent registry 由生命周期先于配置 service 完成装配，但其模块又会间接装配
-        # ToolSystem。延迟获取可以避免配置 service、ToolSystem 和 Team 工具形成导入环。
+        # 工具注册表。延迟获取可以避免配置 service、工具装配和 Team 工具形成导入环。
         from app.config.configuration import get_agent_registry
 
         profile_scope = "system" if configuration.scope == "system" else str(workspace_root or "")

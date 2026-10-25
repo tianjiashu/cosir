@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from app.config.logging.logger import log
 from app.service.configuration.file_store import ConfigurationFileStore
-from app.service.mcp.mcp_client import (
+from app.core.tool.handler.mcp.mcp_client import (
     MCPConfiguration,
     MCPServerConfig,
     list_server_tools,
