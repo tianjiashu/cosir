@@ -1,4 +1,4 @@
-"""执行当前模型批次的工具调用；结果写入与挂起判定归 observe 节点。
+"""执行当前模型批次的工具调用；结果写入归 observe 节点，挂起判定归 prepare_input。
 
 续跑与唤醒都从模型边界开始，不自动重放工具。工具执行的外部副作用不能随 context 编辑或取消回滚。"""
 
@@ -6,7 +6,7 @@ import dataclasses
 from typing import Any
 
 from app.config.logging.logger import log
-from app.core.tools.schemas import ToolCall, ToolObservation
+from app.core.tool.schemas import ToolCall, ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _runtime_context
@@ -24,7 +24,7 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
     """执行当前模型批次后流转到 observe 节点。
 
     参数串原样交给执行器，解码与校验归 ``ToolAccessGate``，畸形参数在那里形成错误观察。结果只并入
-    本批摘要，canonical tool 消息、终态事件与是否挂起统一由 observe 节点结算。
+    本批摘要，canonical tool 消息与终态事件由 observe 节点结算，是否挂起由 prepare_input 判定。
     """
     rc = _runtime_context()
     batch = rc.batch

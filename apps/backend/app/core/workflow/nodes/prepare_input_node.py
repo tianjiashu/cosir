@@ -1,5 +1,6 @@
-"""模型请求前的输入组装节点：把本次执行 mailbox 里的消息并入 context，再交给 model 节点。
+"""模型请求前的唯一关口：依次判定取消、挂起、步数上限，再把 mailbox 里的消息并入 context。
 
+步与步之间的停止都在这里落定；模型请求中、工具执行中的取消仍由 model 节点与工具运行器就地中断。
 投递归 Task 的调度 actor（外部队列消息）与各节点（Run 内通知），本节点只取光 mailbox 并写入：
 持久化消息的确认（删除外部队列行）与 context 写入同一事务提交，消息不会丢也不会并入两次；不读
 外部队列、不按模型截断、不持 Task 闸门。并入前不必先闭合工具协议：``load_message`` 发请求前会
@@ -36,16 +37,30 @@ from app.storage.store_engines import main_session_factory
 
 
 async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
-    """组装本步模型输入后流转到 model 节点。
+    """按「取消 → 挂起 → 步数上限 → 并入消息」的顺序判定，通过后流转到 model 节点。
 
-    取消或步数已到上限时不取 mailbox，直接落定：持久化消息仍在外部队列，留给后续 Run，不被一个
-    不会再请求模型的 Run 吞掉；Run 内通知随执行丢弃。
+    取消优先于挂起：工具要求等待时 Run 恰好被停，按取消落定。挂起先于步数上限：Agent 明确在等
+    消息时不按「步数用完」失败，唤醒后回到这里再检查上限。挂起前 mailbox 已有外部可唤醒消息（如
+    子 Agent 结论在工具执行期间送达）就直接继续，省掉「挂起 → 复查 → 唤醒」一圈；之后才到达的消息
+    仍由 actor 的挂起后复查兜住。前三类落定都不取 mailbox：持久化消息留在外部队列给后续执行，Run 内
+    通知随执行丢弃。
     """
     rc = _runtime_context()
     step_count = state.step_count + 1
     step_id = f"step-{step_count}"
     if rc.is_cancelled():
         _cancel_before_request(step_id, rc.run.id)
+    if state.suspend_requested:
+        if not rc.mailbox.has_external():
+            _suspend(step_id, rc.run.id)
+            return {"suspend_requested": False, "next_node": ReactRoute.END}
+        log.info(
+            "prepare_input_suspend_skipped",
+            extra={
+                "msg": f"挂起前已有可唤醒消息，直接继续，step_id={step_id}",
+                "data": {"step_id": step_id, "run_id": rc.run.id},
+            },
+        )
     # 超配额时不再发起推理，落定 max_steps_reached 失败终态。
     if step_count > rc.step_limit:
         return await _finalize_max_steps(step_count)
@@ -59,7 +74,7 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
                     task_id=rc.task.id, run_id=rc.run.id, message_id=cast(int, message.id)
                 )
             )
-    return route_state(state.step_count, ReactRoute.MODEL)
+    return {**route_state(state.step_count, ReactRoute.MODEL), "suspend_requested": False}
 
 
 def _write_messages(messages: list[TaskMessage]) -> list[TaskMessage]:
@@ -137,3 +152,18 @@ def _cancel_before_request(step_id: str, run_id: int) -> None:
         usage_stats=rc.usage_stats,
     )
     raise RunStopped()
+
+
+def _suspend(step_id: str, run_id: int) -> None:
+    """工具要求等待且没有现成的可唤醒消息：迁移为 ``suspended``，由 actor 收尾并复查唤醒。"""
+    rc = _runtime_context()
+    suspended = service_depends.get_conversation_run_state_service().transition(
+        run_id, RunTransition.SUSPEND, usage_stats=rc.usage_stats
+    )
+    log.info(
+        "prepare_input_suspended",
+        extra={
+            "msg": f"工具要求挂起，Run 等待消息唤醒，step_id={step_id}",
+            "data": {"step_id": step_id, "run_id": run_id, "applied": suspended is not None},
+        },
+    )

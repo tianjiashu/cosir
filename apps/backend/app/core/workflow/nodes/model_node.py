@@ -38,9 +38,9 @@ from app.utils.message_content import content_to_text
 async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     """模型边界：取消落定与模型请求的唯一入口；本步输入已由 prepare_input 节点组装。
 
-    取消只在这里落定：其它节点检出 Task 取消信号后只负责流转回 model（prepare_input 遇取消不取
-    mailbox，取消不会吞掉排队消息）。检查分两处——进入时与上下文加载后、开请求前（加载含附件读取，
-    窗口不可忽略）；请求期间由流式读取边界检查。
+    取消检查分三段：进入本步之前由 prepare_input 检查并落定（遇取消不取 mailbox，取消不会吞掉排队
+    消息）；上下文加载后、开请求前在这里再查一次（加载含附件读取，窗口不可忽略，漏查会白发一次模型
+    请求）；请求期间由流式读取边界检查。本节点检出的取消统一在 ``except RunStopped`` 里落定。
     调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文；部分输出留作展示，
     不进入模型上下文或工具执行。工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，
     完成原因落定 Run；缺少完成原因时，输出仅供展示并重新请求模型。"""
@@ -80,6 +80,9 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     aggregated_message: ParsedChatCompletionSnapshot | None = None
 
     try:
+        # 加载上下文期间到达的取消：不开模型请求，走下方同一个取消落定分支。
+        if rc.is_cancelled():
+            raise RunStopped()
         async with aclosing(model.stream(messages)) as chunks:
             async for event in chunks:
                 if rc.is_cancelled():

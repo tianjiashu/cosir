@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 from jsonschema import Draft202012Validator
-from openai.types.chat import ChatCompletionMessage
+from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.shared_params import ResponseFormatJSONObject
 
 from app.config.constant import Constant
@@ -152,12 +152,12 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
         retry_feedback: str | None = None
         for attempt in range(1, Constant.Workflow.STRUCTURED_OUTPUT_MAX_ATTEMPTS + 1):
             context_messages.append(
-                {
-                    "role": "user",
-                    "content": _request_instruction(
+                ChatCompletionMessageParam(
+                    role="user",
+                    content=_request_instruction(
                         spec.name, spec.json_schema, retry_feedback=retry_feedback
                     ),
-                }
+                )
             )
             response = await runtime.model.complete(
                 context_messages, response_format=ResponseFormatJSONObject(type="json_object")
